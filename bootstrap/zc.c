@@ -7953,130 +7953,126 @@ static const char _zs4022_d[] = "NULL";
 static const z_t105_StringView_t _zs4022 = { _zs4022_d, 4 };
 static const char _zs4023_d[] = "NULL";
 static const z_t105_StringView_t _zs4023 = { _zs4023_d, 4 };
-static const char _zs4024_d[] = "1";
-static const z_t105_StringView_t _zs4024 = { _zs4024_d, 1 };
-static const char _zs4025_d[] = "0";
-static const z_t105_StringView_t _zs4025 = { _zs4025_d, 1 };
-static const char _zs4026_d[] = "NULL";
-static const z_t105_StringView_t _zs4026 = { _zs4026_d, 4 };
-static const char _zs4027_d[] = "NULL";
-static const z_t105_StringView_t _zs4027 = { _zs4027_d, 4 };
-static const char _zs4028_d[] = "'BORROWED'";
-static const z_t105_StringView_t _zs4028 = { _zs4028_d, 10 };
-static const char _zs4029_d[] = "0";
-static const z_t105_StringView_t _zs4029 = { _zs4029_d, 1 };
-static const char _zs4030_d[] = "NULL";
-static const z_t105_StringView_t _zs4030 = { _zs4030_d, 4 };
-static const char _zs4031_d[] = "NULL";
-static const z_t105_StringView_t _zs4031 = { _zs4031_d, 4 };
-static const char _zs4032_d[] = "param";
-static const z_t105_StringView_t _zs4032 = { _zs4032_d, 5 };
-static const char _zs4033_d[] = "local";
-static const z_t105_StringView_t _zs4033 = { _zs4033_d, 5 };
-static const char _zs4034_d[] = "NULL";
-static const z_t105_StringView_t _zs4034 = { _zs4034_d, 4 };
-static const char _zs4035_d[] = "";
-static const z_t105_StringView_t _zs4035 = { _zs4035_d, 0 };
-static const char _zs4036_d[] = "";
-static const z_t105_StringView_t _zs4036 = { _zs4036_d, 0 };
-static const char _zs4037_d[] = "Error";
-static const z_t105_StringView_t _zs4037 = { _zs4037_d, 5 };
-static const char _zs4038_d[] = "AtomId";
-static const z_t105_StringView_t _zs4038 = { _zs4038_d, 6 };
-static const char _zs4039_d[] = "LabelValue";
-static const z_t105_StringView_t _zs4039 = { _zs4039_d, 10 };
-static const char _zs4040_d[] = "StringChunk";
-static const z_t105_StringView_t _zs4040 = { _zs4040_d, 11 };
-static const char _zs4041_d[] = "BinOp";
-static const z_t105_StringView_t _zs4041 = { _zs4041_d, 5 };
-static const char _zs4042_d[] = "AtomString";
-static const z_t105_StringView_t _zs4042 = { _zs4042_d, 10 };
-static const char _zs4043_d[] = "DottedPath";
+static const char _zs4024_d[] = "NULL";
+static const z_t105_StringView_t _zs4024 = { _zs4024_d, 4 };
+static const char _zs4025_d[] = "NULL";
+static const z_t105_StringView_t _zs4025 = { _zs4025_d, 4 };
+static const char _zs4026_d[] = "'BORROWED'";
+static const z_t105_StringView_t _zs4026 = { _zs4026_d, 10 };
+static const char _zs4027_d[] = "0";
+static const z_t105_StringView_t _zs4027 = { _zs4027_d, 1 };
+static const char _zs4028_d[] = "NULL";
+static const z_t105_StringView_t _zs4028 = { _zs4028_d, 4 };
+static const char _zs4029_d[] = "NULL";
+static const z_t105_StringView_t _zs4029 = { _zs4029_d, 4 };
+static const char _zs4030_d[] = "param";
+static const z_t105_StringView_t _zs4030 = { _zs4030_d, 5 };
+static const char _zs4031_d[] = "local";
+static const z_t105_StringView_t _zs4031 = { _zs4031_d, 5 };
+static const char _zs4032_d[] = "NULL";
+static const z_t105_StringView_t _zs4032 = { _zs4032_d, 4 };
+static const char _zs4033_d[] = "";
+static const z_t105_StringView_t _zs4033 = { _zs4033_d, 0 };
+static const char _zs4034_d[] = "";
+static const z_t105_StringView_t _zs4034 = { _zs4034_d, 0 };
+static const char _zs4035_d[] = "Error";
+static const z_t105_StringView_t _zs4035 = { _zs4035_d, 5 };
+static const char _zs4036_d[] = "AtomId";
+static const z_t105_StringView_t _zs4036 = { _zs4036_d, 6 };
+static const char _zs4037_d[] = "LabelValue";
+static const z_t105_StringView_t _zs4037 = { _zs4037_d, 10 };
+static const char _zs4038_d[] = "StringChunk";
+static const z_t105_StringView_t _zs4038 = { _zs4038_d, 11 };
+static const char _zs4039_d[] = "BinOp";
+static const z_t105_StringView_t _zs4039 = { _zs4039_d, 5 };
+static const char _zs4040_d[] = "AtomString";
+static const z_t105_StringView_t _zs4040 = { _zs4040_d, 10 };
+static const char _zs4041_d[] = "DottedPath";
+static const z_t105_StringView_t _zs4041 = { _zs4041_d, 10 };
+static const char _zs4042_d[] = "Call";
+static const z_t105_StringView_t _zs4042 = { _zs4042_d, 4 };
+static const char _zs4043_d[] = "TypeOfExpr";
 static const z_t105_StringView_t _zs4043 = { _zs4043_d, 10 };
-static const char _zs4044_d[] = "Call";
-static const z_t105_StringView_t _zs4044 = { _zs4044_d, 4 };
-static const char _zs4045_d[] = "TypeOfExpr";
-static const z_t105_StringView_t _zs4045 = { _zs4045_d, 10 };
-static const char _zs4046_d[] = "NamedOperation";
-static const z_t105_StringView_t _zs4046 = { _zs4046_d, 14 };
-static const char _zs4047_d[] = "Data";
-static const z_t105_StringView_t _zs4047 = { _zs4047_d, 4 };
-static const char _zs4048_d[] = "Yield";
-static const z_t105_StringView_t _zs4048 = { _zs4048_d, 5 };
-static const char _zs4049_d[] = "Statement";
-static const z_t105_StringView_t _zs4049 = { _zs4049_d, 9 };
-static const char _zs4050_d[] = "StatementLine";
-static const z_t105_StringView_t _zs4050 = { _zs4050_d, 13 };
-static const char _zs4051_d[] = "Assignment";
-static const z_t105_StringView_t _zs4051 = { _zs4051_d, 10 };
-static const char _zs4052_d[] = "Reassignment";
-static const z_t105_StringView_t _zs4052 = { _zs4052_d, 12 };
-static const char _zs4053_d[] = "Swap";
-static const z_t105_StringView_t _zs4053 = { _zs4053_d, 4 };
-static const char _zs4054_d[] = "Expression";
-static const z_t105_StringView_t _zs4054 = { _zs4054_d, 10 };
-static const char _zs4055_d[] = "If";
-static const z_t105_StringView_t _zs4055 = { _zs4055_d, 2 };
-static const char _zs4056_d[] = "IfClause";
-static const z_t105_StringView_t _zs4056 = { _zs4056_d, 8 };
-static const char _zs4057_d[] = "For";
-static const z_t105_StringView_t _zs4057 = { _zs4057_d, 3 };
-static const char _zs4058_d[] = "Do";
-static const z_t105_StringView_t _zs4058 = { _zs4058_d, 2 };
-static const char _zs4059_d[] = "With";
-static const z_t105_StringView_t _zs4059 = { _zs4059_d, 4 };
-static const char _zs4060_d[] = "Case";
-static const z_t105_StringView_t _zs4060 = { _zs4060_d, 4 };
-static const char _zs4061_d[] = "CaseClause";
-static const z_t105_StringView_t _zs4061 = { _zs4061_d, 10 };
-static const char _zs4062_d[] = "Function";
-static const z_t105_StringView_t _zs4062 = { _zs4062_d, 8 };
-static const char _zs4063_d[] = "ObjectDef";
-static const z_t105_StringView_t _zs4063 = { _zs4063_d, 9 };
+static const char _zs4044_d[] = "NamedOperation";
+static const z_t105_StringView_t _zs4044 = { _zs4044_d, 14 };
+static const char _zs4045_d[] = "Data";
+static const z_t105_StringView_t _zs4045 = { _zs4045_d, 4 };
+static const char _zs4046_d[] = "Yield";
+static const z_t105_StringView_t _zs4046 = { _zs4046_d, 5 };
+static const char _zs4047_d[] = "Statement";
+static const z_t105_StringView_t _zs4047 = { _zs4047_d, 9 };
+static const char _zs4048_d[] = "StatementLine";
+static const z_t105_StringView_t _zs4048 = { _zs4048_d, 13 };
+static const char _zs4049_d[] = "Assignment";
+static const z_t105_StringView_t _zs4049 = { _zs4049_d, 10 };
+static const char _zs4050_d[] = "Reassignment";
+static const z_t105_StringView_t _zs4050 = { _zs4050_d, 12 };
+static const char _zs4051_d[] = "Swap";
+static const z_t105_StringView_t _zs4051 = { _zs4051_d, 4 };
+static const char _zs4052_d[] = "Expression";
+static const z_t105_StringView_t _zs4052 = { _zs4052_d, 10 };
+static const char _zs4053_d[] = "If";
+static const z_t105_StringView_t _zs4053 = { _zs4053_d, 2 };
+static const char _zs4054_d[] = "IfClause";
+static const z_t105_StringView_t _zs4054 = { _zs4054_d, 8 };
+static const char _zs4055_d[] = "For";
+static const z_t105_StringView_t _zs4055 = { _zs4055_d, 3 };
+static const char _zs4056_d[] = "Do";
+static const z_t105_StringView_t _zs4056 = { _zs4056_d, 2 };
+static const char _zs4057_d[] = "With";
+static const z_t105_StringView_t _zs4057 = { _zs4057_d, 4 };
+static const char _zs4058_d[] = "Case";
+static const z_t105_StringView_t _zs4058 = { _zs4058_d, 4 };
+static const char _zs4059_d[] = "CaseClause";
+static const z_t105_StringView_t _zs4059 = { _zs4059_d, 10 };
+static const char _zs4060_d[] = "Function";
+static const z_t105_StringView_t _zs4060 = { _zs4060_d, 8 };
+static const char _zs4061_d[] = "ObjectDef";
+static const z_t105_StringView_t _zs4061 = { _zs4061_d, 9 };
+static const char _zs4062_d[] = "Unit";
+static const z_t105_StringView_t _zs4062 = { _zs4062_d, 4 };
+static const char _zs4063_d[] = "Program";
+static const z_t105_StringView_t _zs4063 = { _zs4063_d, 7 };
 static const char _zs4064_d[] = "Unit";
 static const z_t105_StringView_t _zs4064 = { _zs4064_d, 4 };
-static const char _zs4065_d[] = "Program";
-static const z_t105_StringView_t _zs4065 = { _zs4065_d, 7 };
-static const char _zs4066_d[] = "Unit";
-static const z_t105_StringView_t _zs4066 = { _zs4066_d, 4 };
-static const char _zs4067_d[] = "## ";
-static const z_t105_StringView_t _zs4067 = { _zs4067_d, 3 };
-static const char _zs4068_d[] = "\n";
-static const z_t105_StringView_t _zs4068 = { _zs4068_d, 1 };
-static const char _zs4069_d[] = "\n";
-static const z_t105_StringView_t _zs4069 = { _zs4069_d, 1 };
-static const char _zs4070_d[] = "unit";
-static const z_t105_StringView_t _zs4070 = { _zs4070_d, 4 };
-static const char _zs4071_d[] = "generic_child";
-static const z_t105_StringView_t _zs4071 = { _zs4071_d, 13 };
-static const char _zs4072_d[] = "generic_arg";
-static const z_t105_StringView_t _zs4072 = { _zs4072_d, 11 };
-static const char _zs4073_d[] = "types";
-static const z_t105_StringView_t _zs4073 = { _zs4073_d, 5 };
-static const char _zs4074_d[] = "decl_child";
-static const z_t105_StringView_t _zs4074 = { _zs4074_d, 10 };
-static const char _zs4075_d[] = "conformance";
-static const z_t105_StringView_t _zs4075 = { _zs4075_d, 11 };
-static const char _zs4076_d[] = "NULL";
-static const z_t105_StringView_t _zs4076 = { _zs4076_d, 4 };
-static const char _zs4077_d[] = "scope";
-static const z_t105_StringView_t _zs4077 = { _zs4077_d, 5 };
-static const char _zs4078_d[] = "entry";
-static const z_t105_StringView_t _zs4078 = { _zs4078_d, 5 };
-static const char _zs4079_d[] = "variable";
-static const z_t105_StringView_t _zs4079 = { _zs4079_d, 8 };
-static const char _zs4080_d[] = "narrowed_subtype";
-static const z_t105_StringView_t _zs4080 = { _zs4080_d, 16 };
-static const char _zs4081_d[] = "arg_disposition";
-static const z_t105_StringView_t _zs4081 = { _zs4081_d, 15 };
-static const char _zs4082_d[] = "call_generic_binding";
-static const z_t105_StringView_t _zs4082 = { _zs4082_d, 20 };
-static const char _zs4083_d[] = "?";
-static const z_t105_StringView_t _zs4083 = { _zs4083_d, 1 };
-static const char _zs4084_d[] = "";
-static const z_t105_StringView_t _zs4084 = { _zs4084_d, 0 };
-static const char _zs4085_d[] = "";
-static const z_t105_StringView_t _zs4085 = { _zs4085_d, 0 };
+static const char _zs4065_d[] = "## ";
+static const z_t105_StringView_t _zs4065 = { _zs4065_d, 3 };
+static const char _zs4066_d[] = "\n";
+static const z_t105_StringView_t _zs4066 = { _zs4066_d, 1 };
+static const char _zs4067_d[] = "\n";
+static const z_t105_StringView_t _zs4067 = { _zs4067_d, 1 };
+static const char _zs4068_d[] = "unit";
+static const z_t105_StringView_t _zs4068 = { _zs4068_d, 4 };
+static const char _zs4069_d[] = "generic_child";
+static const z_t105_StringView_t _zs4069 = { _zs4069_d, 13 };
+static const char _zs4070_d[] = "generic_arg";
+static const z_t105_StringView_t _zs4070 = { _zs4070_d, 11 };
+static const char _zs4071_d[] = "types";
+static const z_t105_StringView_t _zs4071 = { _zs4071_d, 5 };
+static const char _zs4072_d[] = "decl_child";
+static const z_t105_StringView_t _zs4072 = { _zs4072_d, 10 };
+static const char _zs4073_d[] = "conformance";
+static const z_t105_StringView_t _zs4073 = { _zs4073_d, 11 };
+static const char _zs4074_d[] = "NULL";
+static const z_t105_StringView_t _zs4074 = { _zs4074_d, 4 };
+static const char _zs4075_d[] = "scope";
+static const z_t105_StringView_t _zs4075 = { _zs4075_d, 5 };
+static const char _zs4076_d[] = "entry";
+static const z_t105_StringView_t _zs4076 = { _zs4076_d, 5 };
+static const char _zs4077_d[] = "variable";
+static const z_t105_StringView_t _zs4077 = { _zs4077_d, 8 };
+static const char _zs4078_d[] = "narrowed_subtype";
+static const z_t105_StringView_t _zs4078 = { _zs4078_d, 16 };
+static const char _zs4079_d[] = "arg_disposition";
+static const z_t105_StringView_t _zs4079 = { _zs4079_d, 15 };
+static const char _zs4080_d[] = "call_generic_binding";
+static const z_t105_StringView_t _zs4080 = { _zs4080_d, 20 };
+static const char _zs4081_d[] = "?";
+static const z_t105_StringView_t _zs4081 = { _zs4081_d, 1 };
+static const char _zs4082_d[] = "";
+static const z_t105_StringView_t _zs4082 = { _zs4082_d, 0 };
+static const char _zs4083_d[] = "";
+static const z_t105_StringView_t _zs4083 = { _zs4083_d, 0 };
 
 typedef struct z_t754_Option_StringView_t z_t754_Option_StringView_t;
 static void z_t754_Option_StringView_destroy(z_t754_Option_StringView_t* p);
@@ -8345,52 +8341,52 @@ static void z_t2969_List_NameTid_destroy(z_t2969_List_NameTid_t* p);
 typedef struct z_t2977_ListView_NameTid_t z_t2977_ListView_NameTid_t;
 typedef struct z_t3063_TmpCtr_t z_t3063_TmpCtr_t;
 static void z_t3063_TmpCtr_destroy(z_t3063_TmpCtr_t* p);
-typedef struct z_t3495_Result_String_IoError_t z_t3495_Result_String_IoError_t;
-static void z_t3495_Result_String_IoError_destroy(z_t3495_Result_String_IoError_t* p);
-typedef struct z_t3501_Result_null_IoError_t z_t3501_Result_null_IoError_t;
-static void z_t3501_Result_null_IoError_destroy(z_t3501_Result_null_IoError_t* p);
-typedef struct z_t3518_Result_filestat_IoError_t z_t3518_Result_filestat_IoError_t;
-static void z_t3518_Result_filestat_IoError_destroy(z_t3518_Result_filestat_IoError_t* p);
-typedef struct z_t3525_List_u8_t z_t3525_List_u8_t;
-static void z_t3525_List_u8_destroy(z_t3525_List_u8_t* p);
-typedef struct z_t3535_ListView_u8_t z_t3535_ListView_u8_t;
-typedef struct z_t3547_Result_u64_IoError_t z_t3547_Result_u64_IoError_t;
-static void z_t3547_Result_u64_IoError_destroy(z_t3547_Result_u64_IoError_t* p);
-typedef struct z_t3610_nodepos_t z_t3610_nodepos_t;
-typedef struct z_t3618_mountinfo_t z_t3618_mountinfo_t;
-typedef struct z_t3622_NullProvider_t z_t3622_NullProvider_t;
-static void z_t3622_NullProvider_destroy(z_t3622_NullProvider_t* p);
-typedef struct z_t3629_StringNode_t z_t3629_StringNode_t;
-static void z_t3629_StringNode_destroy(z_t3629_StringNode_t* p);
-typedef struct z_t3631_StringProvider_t z_t3631_StringProvider_t;
-static void z_t3631_StringProvider_destroy(z_t3631_StringProvider_t* p);
-typedef struct z_t3632_List_StringNode_t z_t3632_List_StringNode_t;
-static void z_t3632_List_StringNode_destroy(z_t3632_List_StringNode_t* p);
-typedef struct z_t3640_ListView_StringNode_t z_t3640_ListView_StringNode_t;
-typedef struct z_t3657_FSNode_t z_t3657_FSNode_t;
-static void z_t3657_FSNode_destroy(z_t3657_FSNode_t* p);
-typedef struct z_t3659_FSProvider_t z_t3659_FSProvider_t;
-static void z_t3659_FSProvider_destroy(z_t3659_FSProvider_t* p);
-typedef struct z_t3660_List_FSNode_t z_t3660_List_FSNode_t;
-static void z_t3660_List_FSNode_destroy(z_t3660_List_FSNode_t* p);
-typedef struct z_t3668_ListView_FSNode_t z_t3668_ListView_FSNode_t;
-typedef struct z_t3696_kwresult_t z_t3696_kwresult_t;
-typedef struct z_t3702_suffixinfo_t z_t3702_suffixinfo_t;
-typedef struct z_t3706_parsedval_t z_t3706_parsedval_t;
-typedef struct z_t3710_ParsedNumber_t z_t3710_ParsedNumber_t;
-static void z_t3710_ParsedNumber_destroy(z_t3710_ParsedNumber_t* p);
-typedef struct z_t3712_cfold_t z_t3712_cfold_t;
-typedef struct z_t3716_ZDumper_t z_t3716_ZDumper_t;
-static void z_t3716_ZDumper_destroy(z_t3716_ZDumper_t* p);
-typedef struct z_t3766_List_zparamownership_t z_t3766_List_zparamownership_t;
-static void z_t3766_List_zparamownership_destroy(z_t3766_List_zparamownership_t* p);
-typedef struct z_t3774_ListView_zparamownership_t z_t3774_ListView_zparamownership_t;
-typedef struct z_t3786_List_never_t z_t3786_List_never_t;
-static void z_t3786_List_never_destroy(z_t3786_List_never_t* p);
-typedef struct z_t3794_ListView_never_t z_t3794_ListView_never_t;
-typedef struct z_t3813_List_zsrcpos_t z_t3813_List_zsrcpos_t;
-static void z_t3813_List_zsrcpos_destroy(z_t3813_List_zsrcpos_t* p);
-typedef struct z_t3821_ListView_zsrcpos_t z_t3821_ListView_zsrcpos_t;
+typedef struct z_t3494_Result_String_IoError_t z_t3494_Result_String_IoError_t;
+static void z_t3494_Result_String_IoError_destroy(z_t3494_Result_String_IoError_t* p);
+typedef struct z_t3500_Result_null_IoError_t z_t3500_Result_null_IoError_t;
+static void z_t3500_Result_null_IoError_destroy(z_t3500_Result_null_IoError_t* p);
+typedef struct z_t3517_Result_filestat_IoError_t z_t3517_Result_filestat_IoError_t;
+static void z_t3517_Result_filestat_IoError_destroy(z_t3517_Result_filestat_IoError_t* p);
+typedef struct z_t3524_List_u8_t z_t3524_List_u8_t;
+static void z_t3524_List_u8_destroy(z_t3524_List_u8_t* p);
+typedef struct z_t3534_ListView_u8_t z_t3534_ListView_u8_t;
+typedef struct z_t3546_Result_u64_IoError_t z_t3546_Result_u64_IoError_t;
+static void z_t3546_Result_u64_IoError_destroy(z_t3546_Result_u64_IoError_t* p);
+typedef struct z_t3609_nodepos_t z_t3609_nodepos_t;
+typedef struct z_t3617_mountinfo_t z_t3617_mountinfo_t;
+typedef struct z_t3621_NullProvider_t z_t3621_NullProvider_t;
+static void z_t3621_NullProvider_destroy(z_t3621_NullProvider_t* p);
+typedef struct z_t3628_StringNode_t z_t3628_StringNode_t;
+static void z_t3628_StringNode_destroy(z_t3628_StringNode_t* p);
+typedef struct z_t3630_StringProvider_t z_t3630_StringProvider_t;
+static void z_t3630_StringProvider_destroy(z_t3630_StringProvider_t* p);
+typedef struct z_t3631_List_StringNode_t z_t3631_List_StringNode_t;
+static void z_t3631_List_StringNode_destroy(z_t3631_List_StringNode_t* p);
+typedef struct z_t3639_ListView_StringNode_t z_t3639_ListView_StringNode_t;
+typedef struct z_t3656_FSNode_t z_t3656_FSNode_t;
+static void z_t3656_FSNode_destroy(z_t3656_FSNode_t* p);
+typedef struct z_t3658_FSProvider_t z_t3658_FSProvider_t;
+static void z_t3658_FSProvider_destroy(z_t3658_FSProvider_t* p);
+typedef struct z_t3659_List_FSNode_t z_t3659_List_FSNode_t;
+static void z_t3659_List_FSNode_destroy(z_t3659_List_FSNode_t* p);
+typedef struct z_t3667_ListView_FSNode_t z_t3667_ListView_FSNode_t;
+typedef struct z_t3695_kwresult_t z_t3695_kwresult_t;
+typedef struct z_t3701_suffixinfo_t z_t3701_suffixinfo_t;
+typedef struct z_t3705_parsedval_t z_t3705_parsedval_t;
+typedef struct z_t3709_ParsedNumber_t z_t3709_ParsedNumber_t;
+static void z_t3709_ParsedNumber_destroy(z_t3709_ParsedNumber_t* p);
+typedef struct z_t3711_cfold_t z_t3711_cfold_t;
+typedef struct z_t3715_ZDumper_t z_t3715_ZDumper_t;
+static void z_t3715_ZDumper_destroy(z_t3715_ZDumper_t* p);
+typedef struct z_t3765_List_zparamownership_t z_t3765_List_zparamownership_t;
+static void z_t3765_List_zparamownership_destroy(z_t3765_List_zparamownership_t* p);
+typedef struct z_t3773_ListView_zparamownership_t z_t3773_ListView_zparamownership_t;
+typedef struct z_t3785_List_never_t z_t3785_List_never_t;
+static void z_t3785_List_never_destroy(z_t3785_List_never_t* p);
+typedef struct z_t3793_ListView_never_t z_t3793_ListView_never_t;
+typedef struct z_t3812_List_zsrcpos_t z_t3812_List_zsrcpos_t;
+static void z_t3812_List_zsrcpos_destroy(z_t3812_List_zsrcpos_t* p);
+typedef struct z_t3820_ListView_zsrcpos_t z_t3820_ListView_zsrcpos_t;
 typedef enum {
     Z_IOERROR_TAG_NOTFOUND,
     Z_IOERROR_TAG_PERMISSIONDENIED,
@@ -8427,8 +8423,8 @@ static void z_t1256_IoError_destroy(z_t1256_IoError_t* u) {
 typedef struct {
     int32_t fd;
     bool closed;
-} z_t3521_File_t;
-static void z_t3521_File_destroy(z_t3521_File_t* p) {
+} z_t3520_File_t;
+static void z_t3520_File_destroy(z_t3520_File_t* p) {
     if (!p) return;
     if (p->closed) return;
     close(p->fd);
@@ -8963,11 +8959,11 @@ typedef enum {
     Z_FILEKIND_TAG_DIR,
     Z_FILEKIND_TAG_SYMLINK,
     Z_FILEKIND_TAG_OTHER,
-} z_t3511_filekind_tag_t;
+} z_t3510_filekind_tag_t;
 typedef struct {
-    z_t3511_filekind_tag_t tag;
-} z_t3511_filekind_t;
-static bool z_t3511_filekind_eq(z_t3511_filekind_t a, z_t3511_filekind_t b) {
+    z_t3510_filekind_tag_t tag;
+} z_t3510_filekind_t;
+static bool z_t3510_filekind_eq(z_t3510_filekind_t a, z_t3510_filekind_t b) {
     return a.tag == b.tag;
 }
 
@@ -8975,11 +8971,11 @@ typedef enum {
     Z_SEEKORIGIN_TAG_START,
     Z_SEEKORIGIN_TAG_CURRENT,
     Z_SEEKORIGIN_TAG_END,
-} z_t3556_seekorigin_tag_t;
+} z_t3555_seekorigin_tag_t;
 typedef struct {
-    z_t3556_seekorigin_tag_t tag;
-} z_t3556_seekorigin_t;
-static bool z_t3556_seekorigin_eq(z_t3556_seekorigin_t a, z_t3556_seekorigin_t b) {
+    z_t3555_seekorigin_tag_t tag;
+} z_t3555_seekorigin_t;
+static bool z_t3555_seekorigin_eq(z_t3555_seekorigin_t a, z_t3555_seekorigin_t b) {
     return a.tag == b.tag;
 }
 
@@ -9014,11 +9010,11 @@ typedef enum {
     Z_ASTKIND_TAG_UNITDEF,
     Z_ASTKIND_TAG_PROGRAM,
     Z_ASTKIND_TAG_PLACEHOLDER,
-} z_t3606_astkind_tag_t;
+} z_t3605_astkind_tag_t;
 typedef struct {
-    z_t3606_astkind_tag_t tag;
-} z_t3606_astkind_t;
-static bool z_t3606_astkind_eq(z_t3606_astkind_t a, z_t3606_astkind_t b) {
+    z_t3605_astkind_tag_t tag;
+} z_t3605_astkind_t;
+static bool z_t3605_astkind_eq(z_t3605_astkind_t a, z_t3605_astkind_t b) {
     return a.tag == b.tag;
 }
 
@@ -9026,16 +9022,16 @@ typedef enum {
     Z_NODEKIND_TAG_DIR,
     Z_NODEKIND_TAG_FILE,
     Z_NODEKIND_TAG_NOTFOUND,
-} z_t3614_nodekind_tag_t;
+} z_t3613_nodekind_tag_t;
 typedef struct {
-    z_t3614_nodekind_tag_t tag;
-} z_t3614_nodekind_t;
-static bool z_t3614_nodekind_eq(z_t3614_nodekind_t a, z_t3614_nodekind_t b) {
+    z_t3613_nodekind_tag_t tag;
+} z_t3613_nodekind_t;
+static bool z_t3613_nodekind_eq(z_t3613_nodekind_t a, z_t3613_nodekind_t b) {
     return a.tag == b.tag;
 }
 
 typedef struct {
-    z_t3511_filekind_t kind;
+    z_t3510_filekind_t kind;
     uint64_t size;
     uint64_t mtimeSeconds;
     uint64_t atimeSeconds;
@@ -9044,13 +9040,13 @@ typedef struct {
     uint64_t device;
     uint64_t inode;
     uint64_t nlink;
-} z_t3510_filestat_t;
-static z_t3510_filestat_t z_t3510_filestat_meta_create(z_t3511_filekind_t kind, uint64_t size, uint64_t mtimeSeconds, uint64_t atimeSeconds, uint64_t ctimeSeconds, uint32_t mode, uint64_t device, uint64_t inode, uint64_t nlink) {
-    z_t3510_filestat_t _this = { kind, size, mtimeSeconds, atimeSeconds, ctimeSeconds, mode, device, inode, nlink };
+} z_t3509_filestat_t;
+static z_t3509_filestat_t z_t3509_filestat_meta_create(z_t3510_filekind_t kind, uint64_t size, uint64_t mtimeSeconds, uint64_t atimeSeconds, uint64_t ctimeSeconds, uint32_t mode, uint64_t device, uint64_t inode, uint64_t nlink) {
+    z_t3509_filestat_t _this = { kind, size, mtimeSeconds, atimeSeconds, ctimeSeconds, mode, device, inode, nlink };
     return _this;
 }
-static bool z_t3510_filestat_eq(z_t3510_filestat_t a, z_t3510_filestat_t b) {
-    return z_t3511_filekind_eq(a.kind, b.kind) && a.size == b.size && a.mtimeSeconds == b.mtimeSeconds && a.atimeSeconds == b.atimeSeconds && a.ctimeSeconds == b.ctimeSeconds && a.mode == b.mode && a.device == b.device && a.inode == b.inode && a.nlink == b.nlink;
+static bool z_t3509_filestat_eq(z_t3509_filestat_t a, z_t3509_filestat_t b) {
+    return z_t3510_filekind_eq(a.kind, b.kind) && a.size == b.size && a.mtimeSeconds == b.mtimeSeconds && a.atimeSeconds == b.atimeSeconds && a.ctimeSeconds == b.ctimeSeconds && a.mode == b.mode && a.device == b.device && a.inode == b.inode && a.nlink == b.nlink;
 }
 
 typedef enum {
@@ -9833,12 +9829,12 @@ static void z_t2924_Option_GenLowered_destroy(z_t2924_Option_GenLowered_t* u) {
 typedef enum {
     Z_RESULT_STRING_IOERROR_TAG_ERR,
     Z_RESULT_STRING_IOERROR_TAG_OK,
-} z_t3495_Result_String_IoError_tag_t;
-struct z_t3495_Result_String_IoError_t {
-    z_t3495_Result_String_IoError_tag_t tag;
+} z_t3494_Result_String_IoError_tag_t;
+struct z_t3494_Result_String_IoError_t {
+    z_t3494_Result_String_IoError_tag_t tag;
     void* data;
 };
-static void z_t3495_Result_String_IoError_destroy(z_t3495_Result_String_IoError_t* u) {
+static void z_t3494_Result_String_IoError_destroy(z_t3494_Result_String_IoError_t* u) {
     if (!u) return;
     if (!u->data) return;
     switch (u->tag) {
@@ -9857,12 +9853,12 @@ static void z_t3495_Result_String_IoError_destroy(z_t3495_Result_String_IoError_
 typedef enum {
     Z_RESULT_NULL_IOERROR_TAG_ERR,
     Z_RESULT_NULL_IOERROR_TAG_OK,
-} z_t3501_Result_null_IoError_tag_t;
-struct z_t3501_Result_null_IoError_t {
-    z_t3501_Result_null_IoError_tag_t tag;
+} z_t3500_Result_null_IoError_tag_t;
+struct z_t3500_Result_null_IoError_t {
+    z_t3500_Result_null_IoError_tag_t tag;
     void* data;
 };
-static void z_t3501_Result_null_IoError_destroy(z_t3501_Result_null_IoError_t* u) {
+static void z_t3500_Result_null_IoError_destroy(z_t3500_Result_null_IoError_t* u) {
     if (!u) return;
     if (!u->data) return;
     switch (u->tag) {
@@ -9877,12 +9873,12 @@ static void z_t3501_Result_null_IoError_destroy(z_t3501_Result_null_IoError_t* u
 typedef enum {
     Z_RESULT_FILESTAT_IOERROR_TAG_ERR,
     Z_RESULT_FILESTAT_IOERROR_TAG_OK,
-} z_t3518_Result_filestat_IoError_tag_t;
-struct z_t3518_Result_filestat_IoError_t {
-    z_t3518_Result_filestat_IoError_tag_t tag;
+} z_t3517_Result_filestat_IoError_tag_t;
+struct z_t3517_Result_filestat_IoError_t {
+    z_t3517_Result_filestat_IoError_tag_t tag;
     void* data;
 };
-static void z_t3518_Result_filestat_IoError_destroy(z_t3518_Result_filestat_IoError_t* u) {
+static void z_t3517_Result_filestat_IoError_destroy(z_t3517_Result_filestat_IoError_t* u) {
     if (!u) return;
     if (!u->data) return;
     switch (u->tag) {
@@ -9900,12 +9896,12 @@ static void z_t3518_Result_filestat_IoError_destroy(z_t3518_Result_filestat_IoEr
 typedef enum {
     Z_RESULT_U64_IOERROR_TAG_ERR,
     Z_RESULT_U64_IOERROR_TAG_OK,
-} z_t3547_Result_u64_IoError_tag_t;
-struct z_t3547_Result_u64_IoError_t {
-    z_t3547_Result_u64_IoError_tag_t tag;
+} z_t3546_Result_u64_IoError_tag_t;
+struct z_t3546_Result_u64_IoError_t {
+    z_t3546_Result_u64_IoError_tag_t tag;
     void* data;
 };
-static void z_t3547_Result_u64_IoError_destroy(z_t3547_Result_u64_IoError_t* u) {
+static void z_t3546_Result_u64_IoError_destroy(z_t3546_Result_u64_IoError_t* u) {
     if (!u) return;
     if (!u->data) return;
     switch (u->tag) {
@@ -10343,62 +10339,62 @@ static void z_t2983_OptionView_NameTid_destroy(z_t2983_OptionView_NameTid_t* u) 
 typedef enum {
     Z_OPTIONVIEW_U8_TAG_NONE,
     Z_OPTIONVIEW_U8_TAG_SOME,
-} z_t3541_OptionView_u8_tag_t;
+} z_t3540_OptionView_u8_tag_t;
 typedef struct {
-    z_t3541_OptionView_u8_tag_t tag;
+    z_t3540_OptionView_u8_tag_t tag;
     void* data;
-} z_t3541_OptionView_u8_t;
-static void z_t3541_OptionView_u8_destroy(z_t3541_OptionView_u8_t* u) { (void)u; }
+} z_t3540_OptionView_u8_t;
+static void z_t3540_OptionView_u8_destroy(z_t3540_OptionView_u8_t* u) { (void)u; }
 
 typedef enum {
     Z_OPTIONVIEW_STRINGNODE_TAG_NONE,
     Z_OPTIONVIEW_STRINGNODE_TAG_SOME,
-} z_t3646_OptionView_StringNode_tag_t;
+} z_t3645_OptionView_StringNode_tag_t;
 typedef struct {
-    z_t3646_OptionView_StringNode_tag_t tag;
+    z_t3645_OptionView_StringNode_tag_t tag;
     void* data;
-} z_t3646_OptionView_StringNode_t;
-static void z_t3646_OptionView_StringNode_destroy(z_t3646_OptionView_StringNode_t* u) { (void)u; }
+} z_t3645_OptionView_StringNode_t;
+static void z_t3645_OptionView_StringNode_destroy(z_t3645_OptionView_StringNode_t* u) { (void)u; }
 
 typedef enum {
     Z_OPTIONVIEW_FSNODE_TAG_NONE,
     Z_OPTIONVIEW_FSNODE_TAG_SOME,
-} z_t3674_OptionView_FSNode_tag_t;
+} z_t3673_OptionView_FSNode_tag_t;
 typedef struct {
-    z_t3674_OptionView_FSNode_tag_t tag;
+    z_t3673_OptionView_FSNode_tag_t tag;
     void* data;
-} z_t3674_OptionView_FSNode_t;
-static void z_t3674_OptionView_FSNode_destroy(z_t3674_OptionView_FSNode_t* u) { (void)u; }
+} z_t3673_OptionView_FSNode_t;
+static void z_t3673_OptionView_FSNode_destroy(z_t3673_OptionView_FSNode_t* u) { (void)u; }
 
 typedef enum {
     Z_OPTIONVIEW_ZPARAMOWNERSHIP_TAG_NONE,
     Z_OPTIONVIEW_ZPARAMOWNERSHIP_TAG_SOME,
-} z_t3780_OptionView_zparamownership_tag_t;
+} z_t3779_OptionView_zparamownership_tag_t;
 typedef struct {
-    z_t3780_OptionView_zparamownership_tag_t tag;
+    z_t3779_OptionView_zparamownership_tag_t tag;
     void* data;
-} z_t3780_OptionView_zparamownership_t;
-static void z_t3780_OptionView_zparamownership_destroy(z_t3780_OptionView_zparamownership_t* u) { (void)u; }
+} z_t3779_OptionView_zparamownership_t;
+static void z_t3779_OptionView_zparamownership_destroy(z_t3779_OptionView_zparamownership_t* u) { (void)u; }
 
 typedef enum {
     Z_OPTIONVIEW_NEVER_TAG_NONE,
     Z_OPTIONVIEW_NEVER_TAG_SOME,
-} z_t3800_OptionView_never_tag_t;
+} z_t3799_OptionView_never_tag_t;
 typedef struct {
-    z_t3800_OptionView_never_tag_t tag;
+    z_t3799_OptionView_never_tag_t tag;
     void* data;
-} z_t3800_OptionView_never_t;
-static void z_t3800_OptionView_never_destroy(z_t3800_OptionView_never_t* u) { (void)u; }
+} z_t3799_OptionView_never_t;
+static void z_t3799_OptionView_never_destroy(z_t3799_OptionView_never_t* u) { (void)u; }
 
 typedef enum {
     Z_OPTIONVIEW_ZSRCPOS_TAG_NONE,
     Z_OPTIONVIEW_ZSRCPOS_TAG_SOME,
-} z_t3827_OptionView_zsrcpos_tag_t;
+} z_t3826_OptionView_zsrcpos_tag_t;
 typedef struct {
-    z_t3827_OptionView_zsrcpos_tag_t tag;
+    z_t3826_OptionView_zsrcpos_tag_t tag;
     void* data;
-} z_t3827_OptionView_zsrcpos_t;
-static void z_t3827_OptionView_zsrcpos_destroy(z_t3827_OptionView_zsrcpos_t* u) { (void)u; }
+} z_t3826_OptionView_zsrcpos_t;
+static void z_t3826_OptionView_zsrcpos_destroy(z_t3826_OptionView_zsrcpos_t* u) { (void)u; }
 
 typedef struct z_t999_ListView_String_t {
     uint64_t length;
@@ -10464,14 +10460,14 @@ static bool z_t1448_ListView_bool_get(z_t1448_ListView_bool_t* _this, uint64_t _
     return _this->data[_idx];
 }
 
-typedef struct z_t3535_ListView_u8_t {
+typedef struct z_t3534_ListView_u8_t {
     uint64_t length;
     uint8_t* data;
-} z_t3535_ListView_u8_t;
+} z_t3534_ListView_u8_t;
 
 
-static uint8_t z_t3535_ListView_u8_get(z_t3535_ListView_u8_t* _this, uint64_t _idx);
-static uint8_t z_t3535_ListView_u8_get(z_t3535_ListView_u8_t* _this, uint64_t _idx) {
+static uint8_t z_t3534_ListView_u8_get(z_t3534_ListView_u8_t* _this, uint64_t _idx);
+static uint8_t z_t3534_ListView_u8_get(z_t3534_ListView_u8_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "ListView get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -10480,14 +10476,14 @@ static uint8_t z_t3535_ListView_u8_get(z_t3535_ListView_u8_t* _this, uint64_t _i
     return _this->data[_idx];
 }
 
-typedef struct z_t3794_ListView_never_t {
+typedef struct z_t3793_ListView_never_t {
     uint64_t length;
     int64_t* data;
-} z_t3794_ListView_never_t;
+} z_t3793_ListView_never_t;
 
 
-static int64_t z_t3794_ListView_never_get(z_t3794_ListView_never_t* _this, uint64_t _idx);
-static int64_t z_t3794_ListView_never_get(z_t3794_ListView_never_t* _this, uint64_t _idx) {
+static int64_t z_t3793_ListView_never_get(z_t3793_ListView_never_t* _this, uint64_t _idx);
+static int64_t z_t3793_ListView_never_get(z_t3793_ListView_never_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "ListView get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -11098,21 +11094,21 @@ static z_t1452_ListIter_bool_t z_t1439_List_bool_iterate(z_t1439_List_bool_t* _t
     return _it;
 }
 
-typedef struct z_t3525_List_u8_t {
+typedef struct z_t3524_List_u8_t {
     uint64_t length;
     uint8_t* data;
     uint64_t capacity;
-} z_t3525_List_u8_t;
+} z_t3524_List_u8_t;
 
-static void z_t3525_List_u8_destroy(z_t3525_List_u8_t* p);
-static void z_t3525_List_u8_destroy(z_t3525_List_u8_t* p) {
+static void z_t3524_List_u8_destroy(z_t3524_List_u8_t* p);
+static void z_t3524_List_u8_destroy(z_t3524_List_u8_t* p) {
     if (!p) return;
     free(p->data);
 }
 
-static z_t3525_List_u8_t z_t3525_List_u8_create(uint64_t _capacity);
-static z_t3525_List_u8_t z_t3525_List_u8_create(uint64_t _capacity) {
-    z_t3525_List_u8_t _this = {0};
+static z_t3524_List_u8_t z_t3524_List_u8_create(uint64_t _capacity);
+static z_t3524_List_u8_t z_t3524_List_u8_create(uint64_t _capacity) {
+    z_t3524_List_u8_t _this = {0};
     _this.capacity = _capacity;
     if (_capacity > 0) {
         _this.data = (uint8_t*)z_xcalloc(_capacity, sizeof(uint8_t));
@@ -11120,8 +11116,8 @@ static z_t3525_List_u8_t z_t3525_List_u8_create(uint64_t _capacity) {
     return _this;
 }
 
-static void z_t3525_List_u8_grow(z_t3525_List_u8_t* _this, uint64_t _needed);
-static void z_t3525_List_u8_grow(z_t3525_List_u8_t* _this, uint64_t _needed) {
+static void z_t3524_List_u8_grow(z_t3524_List_u8_t* _this, uint64_t _needed);
+static void z_t3524_List_u8_grow(z_t3524_List_u8_t* _this, uint64_t _needed) {
     if (_needed <= _this->capacity) return;
     uint64_t newcap = _this->capacity + (_this->capacity >> 1) + 4;
     if (newcap < _needed) newcap = _needed;
@@ -11129,30 +11125,30 @@ static void z_t3525_List_u8_grow(z_t3525_List_u8_t* _this, uint64_t _needed) {
     _this->data = (uint8_t*)z_xrealloc(_this->data, newcap * sizeof(uint8_t));
 }
 
-static void z_t3525_List_u8_append(z_t3525_List_u8_t* _this, uint8_t _val);
-static void z_t3525_List_u8_append(z_t3525_List_u8_t* _this, uint8_t _val) {
-    z_t3525_List_u8_grow(_this, _this->length + 1);
+static void z_t3524_List_u8_append(z_t3524_List_u8_t* _this, uint8_t _val);
+static void z_t3524_List_u8_append(z_t3524_List_u8_t* _this, uint8_t _val) {
+    z_t3524_List_u8_grow(_this, _this->length + 1);
     _this->data[_this->length] = _val;
     _this->length++;
 }
 
-static void z_t3525_List_u8_insert(z_t3525_List_u8_t* _this, uint8_t _val, uint64_t _at);
-static void z_t3525_List_u8_insert(z_t3525_List_u8_t* _this, uint8_t _val, uint64_t _at) {
+static void z_t3524_List_u8_insert(z_t3524_List_u8_t* _this, uint8_t _val, uint64_t _at);
+static void z_t3524_List_u8_insert(z_t3524_List_u8_t* _this, uint8_t _val, uint64_t _at) {
     if (_at >= _this->length + 1) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List insert: index %lu out of bounds (length %lu)", (unsigned long)_at, (unsigned long)_this->length + 1);
         z_panic(_zp_buf);
     }
-    z_t3525_List_u8_grow(_this, _this->length + 1);
+    z_t3524_List_u8_grow(_this, _this->length + 1);
     memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof(uint8_t));
     _this->data[_at] = _val;
     _this->length++;
 }
 
-static void z_t3525_List_u8_extend(z_t3525_List_u8_t* _this, z_t3525_List_u8_t* _from);
-static void z_t3525_List_u8_extend(z_t3525_List_u8_t* _this, z_t3525_List_u8_t* _from) {
+static void z_t3524_List_u8_extend(z_t3524_List_u8_t* _this, z_t3524_List_u8_t* _from);
+static void z_t3524_List_u8_extend(z_t3524_List_u8_t* _this, z_t3524_List_u8_t* _from) {
     if (!_from) return;
-    z_t3525_List_u8_grow(_this, _this->length + _from->length);
+    z_t3524_List_u8_grow(_this, _this->length + _from->length);
     memcpy(&_this->data[_this->length], _from->data, _from->length * sizeof(uint8_t));
     _this->length += _from->length;
     free(_from->data);
@@ -11161,8 +11157,8 @@ static void z_t3525_List_u8_extend(z_t3525_List_u8_t* _this, z_t3525_List_u8_t* 
     _from->capacity = 0;
 }
 
-static uint8_t z_t3525_List_u8_set(z_t3525_List_u8_t* _this, uint64_t _idx, uint8_t _val);
-static uint8_t z_t3525_List_u8_set(z_t3525_List_u8_t* _this, uint64_t _idx, uint8_t _val) {
+static uint8_t z_t3524_List_u8_set(z_t3524_List_u8_t* _this, uint64_t _idx, uint8_t _val);
+static uint8_t z_t3524_List_u8_set(z_t3524_List_u8_t* _this, uint64_t _idx, uint8_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -11173,8 +11169,8 @@ static uint8_t z_t3525_List_u8_set(z_t3525_List_u8_t* _this, uint64_t _idx, uint
     return _old;
 }
 
-static uint8_t z_t3525_List_u8_pop(z_t3525_List_u8_t* _this);
-static uint8_t z_t3525_List_u8_pop(z_t3525_List_u8_t* _this) {
+static uint8_t z_t3524_List_u8_pop(z_t3524_List_u8_t* _this);
+static uint8_t z_t3524_List_u8_pop(z_t3524_List_u8_t* _this) {
     if (_this->length == 0) {
         z_panic("List pop: empty list");
     }
@@ -11182,16 +11178,16 @@ static uint8_t z_t3525_List_u8_pop(z_t3525_List_u8_t* _this) {
     return _this->data[_this->length];
 }
 
-static z_t3535_ListView_u8_t z_t3525_List_u8_listview(z_t3525_List_u8_t* _this) { return *(z_t3535_ListView_u8_t*)_this; }
-static void z_t3525_List_u8_extendView(z_t3525_List_u8_t* _this, z_t3535_ListView_u8_t _from) {
-    z_t3525_List_u8_grow(_this, _this->length + _from.length);
+static z_t3534_ListView_u8_t z_t3524_List_u8_listview(z_t3524_List_u8_t* _this) { return *(z_t3534_ListView_u8_t*)_this; }
+static void z_t3524_List_u8_extendView(z_t3524_List_u8_t* _this, z_t3534_ListView_u8_t _from) {
+    z_t3524_List_u8_grow(_this, _this->length + _from.length);
     memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(uint8_t));
     _this->length += _from.length;
 }
 
 
-static uint8_t z_t3525_List_u8_get(z_t3525_List_u8_t* _this, uint64_t _idx);
-static uint8_t z_t3525_List_u8_get(z_t3525_List_u8_t* _this, uint64_t _idx) {
+static uint8_t z_t3524_List_u8_get(z_t3524_List_u8_t* _this, uint64_t _idx);
+static uint8_t z_t3524_List_u8_get(z_t3524_List_u8_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -11200,75 +11196,75 @@ static uint8_t z_t3525_List_u8_get(z_t3525_List_u8_t* _this, uint64_t _idx) {
     return _this->data[_idx];
 }
 
-static bool z_t3525_List_u8_contains(z_t3525_List_u8_t* _this, uint8_t _needle);
-static bool z_t3525_List_u8_contains(z_t3525_List_u8_t* _this, uint8_t _needle) {
+static bool z_t3524_List_u8_contains(z_t3524_List_u8_t* _this, uint8_t _needle);
+static bool z_t3524_List_u8_contains(z_t3524_List_u8_t* _this, uint8_t _needle) {
     for (uint64_t i = 0; i < _this->length; i++) {
         if (_this->data[i] == _needle) return true;
     }
     return false;
 }
 
-static int z_t3525_List_u8_sort_lt(uint8_t _a, uint8_t _b) { return _a < _b; }
-static void z_t3525_List_u8_sort_merge(uint8_t* data, uint8_t* scratch, uint64_t lo, uint64_t mid, uint64_t hi) {
+static int z_t3524_List_u8_sort_lt(uint8_t _a, uint8_t _b) { return _a < _b; }
+static void z_t3524_List_u8_sort_merge(uint8_t* data, uint8_t* scratch, uint64_t lo, uint64_t mid, uint64_t hi) {
     uint64_t i = lo, j = mid, k = lo;
     while (i < mid && j < hi) {
-        if (!z_t3525_List_u8_sort_lt(data[j], data[i])) scratch[k++] = data[i++];
+        if (!z_t3524_List_u8_sort_lt(data[j], data[i])) scratch[k++] = data[i++];
         else scratch[k++] = data[j++];
     }
     while (i < mid) scratch[k++] = data[i++];
     while (j < hi) scratch[k++] = data[j++];
     memcpy(&data[lo], &scratch[lo], (hi - lo) * sizeof(*data));
 }
-static void z_t3525_List_u8_sort_rec(uint8_t* data, uint8_t* scratch, uint64_t lo, uint64_t hi) {
+static void z_t3524_List_u8_sort_rec(uint8_t* data, uint8_t* scratch, uint64_t lo, uint64_t hi) {
     if (hi - lo <= 1) return;
     uint64_t mid = lo + (hi - lo) / 2;
-    z_t3525_List_u8_sort_rec(data, scratch, lo, mid);
-    z_t3525_List_u8_sort_rec(data, scratch, mid, hi);
-    z_t3525_List_u8_sort_merge(data, scratch, lo, mid, hi);
+    z_t3524_List_u8_sort_rec(data, scratch, lo, mid);
+    z_t3524_List_u8_sort_rec(data, scratch, mid, hi);
+    z_t3524_List_u8_sort_merge(data, scratch, lo, mid, hi);
 }
-static void z_t3525_List_u8_sort(z_t3525_List_u8_t* _this) {
+static void z_t3524_List_u8_sort(z_t3524_List_u8_t* _this) {
     if (_this->length < 2) return;
     uint8_t* scratch = (uint8_t*)z_xmalloc(_this->length * sizeof(uint8_t));
-    z_t3525_List_u8_sort_rec(_this->data, scratch, 0, _this->length);
+    z_t3524_List_u8_sort_rec(_this->data, scratch, 0, _this->length);
     free(scratch);
 }
 
 typedef struct {
-    z_t3525_List_u8_t* list;
+    z_t3524_List_u8_t* list;
     uint64_t idx;
-} z_t3539_ListIter_u8_t;
-static z_t3541_OptionView_u8_t z_t3539_ListIter_u8_call(z_t3539_ListIter_u8_t* _it);
-static z_t3541_OptionView_u8_t z_t3539_ListIter_u8_call(z_t3539_ListIter_u8_t* _it) {
-    z_t3541_OptionView_u8_t _out = {0};
+} z_t3538_ListIter_u8_t;
+static z_t3540_OptionView_u8_t z_t3538_ListIter_u8_call(z_t3538_ListIter_u8_t* _it);
+static z_t3540_OptionView_u8_t z_t3538_ListIter_u8_call(z_t3538_ListIter_u8_t* _it) {
+    z_t3540_OptionView_u8_t _out = {0};
     if (_it->idx >= _it->list->length) { _out.tag = Z_OPTIONVIEW_U8_TAG_NONE; return _out; }
     _out.tag = Z_OPTIONVIEW_U8_TAG_SOME;
     _out.data = &_it->list->data[_it->idx];
     _it->idx++;
     return _out;
 }
-static z_t3539_ListIter_u8_t z_t3525_List_u8_iterate(z_t3525_List_u8_t* _this);
-static z_t3539_ListIter_u8_t z_t3525_List_u8_iterate(z_t3525_List_u8_t* _this) {
-    z_t3539_ListIter_u8_t _it = {0};
+static z_t3538_ListIter_u8_t z_t3524_List_u8_iterate(z_t3524_List_u8_t* _this);
+static z_t3538_ListIter_u8_t z_t3524_List_u8_iterate(z_t3524_List_u8_t* _this) {
+    z_t3538_ListIter_u8_t _it = {0};
     _it.list = _this;
     _it.idx = 0;
     return _it;
 }
 
-typedef struct z_t3786_List_never_t {
+typedef struct z_t3785_List_never_t {
     uint64_t length;
     int64_t* data;
     uint64_t capacity;
-} z_t3786_List_never_t;
+} z_t3785_List_never_t;
 
-static void z_t3786_List_never_destroy(z_t3786_List_never_t* p);
-static void z_t3786_List_never_destroy(z_t3786_List_never_t* p) {
+static void z_t3785_List_never_destroy(z_t3785_List_never_t* p);
+static void z_t3785_List_never_destroy(z_t3785_List_never_t* p) {
     if (!p) return;
     free(p->data);
 }
 
-static z_t3786_List_never_t z_t3786_List_never_create(uint64_t _capacity);
-static z_t3786_List_never_t z_t3786_List_never_create(uint64_t _capacity) {
-    z_t3786_List_never_t _this = {0};
+static z_t3785_List_never_t z_t3785_List_never_create(uint64_t _capacity);
+static z_t3785_List_never_t z_t3785_List_never_create(uint64_t _capacity) {
+    z_t3785_List_never_t _this = {0};
     _this.capacity = _capacity;
     if (_capacity > 0) {
         _this.data = (int64_t*)z_xcalloc(_capacity, sizeof(int64_t));
@@ -11276,8 +11272,8 @@ static z_t3786_List_never_t z_t3786_List_never_create(uint64_t _capacity) {
     return _this;
 }
 
-static void z_t3786_List_never_grow(z_t3786_List_never_t* _this, uint64_t _needed);
-static void z_t3786_List_never_grow(z_t3786_List_never_t* _this, uint64_t _needed) {
+static void z_t3785_List_never_grow(z_t3785_List_never_t* _this, uint64_t _needed);
+static void z_t3785_List_never_grow(z_t3785_List_never_t* _this, uint64_t _needed) {
     if (_needed <= _this->capacity) return;
     uint64_t newcap = _this->capacity + (_this->capacity >> 1) + 4;
     if (newcap < _needed) newcap = _needed;
@@ -11285,30 +11281,30 @@ static void z_t3786_List_never_grow(z_t3786_List_never_t* _this, uint64_t _neede
     _this->data = (int64_t*)z_xrealloc(_this->data, newcap * sizeof(int64_t));
 }
 
-static void z_t3786_List_never_append(z_t3786_List_never_t* _this, int64_t _val);
-static void z_t3786_List_never_append(z_t3786_List_never_t* _this, int64_t _val) {
-    z_t3786_List_never_grow(_this, _this->length + 1);
+static void z_t3785_List_never_append(z_t3785_List_never_t* _this, int64_t _val);
+static void z_t3785_List_never_append(z_t3785_List_never_t* _this, int64_t _val) {
+    z_t3785_List_never_grow(_this, _this->length + 1);
     _this->data[_this->length] = _val;
     _this->length++;
 }
 
-static void z_t3786_List_never_insert(z_t3786_List_never_t* _this, int64_t _val, uint64_t _at);
-static void z_t3786_List_never_insert(z_t3786_List_never_t* _this, int64_t _val, uint64_t _at) {
+static void z_t3785_List_never_insert(z_t3785_List_never_t* _this, int64_t _val, uint64_t _at);
+static void z_t3785_List_never_insert(z_t3785_List_never_t* _this, int64_t _val, uint64_t _at) {
     if (_at >= _this->length + 1) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List insert: index %lu out of bounds (length %lu)", (unsigned long)_at, (unsigned long)_this->length + 1);
         z_panic(_zp_buf);
     }
-    z_t3786_List_never_grow(_this, _this->length + 1);
+    z_t3785_List_never_grow(_this, _this->length + 1);
     memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof(int64_t));
     _this->data[_at] = _val;
     _this->length++;
 }
 
-static void z_t3786_List_never_extend(z_t3786_List_never_t* _this, z_t3786_List_never_t* _from);
-static void z_t3786_List_never_extend(z_t3786_List_never_t* _this, z_t3786_List_never_t* _from) {
+static void z_t3785_List_never_extend(z_t3785_List_never_t* _this, z_t3785_List_never_t* _from);
+static void z_t3785_List_never_extend(z_t3785_List_never_t* _this, z_t3785_List_never_t* _from) {
     if (!_from) return;
-    z_t3786_List_never_grow(_this, _this->length + _from->length);
+    z_t3785_List_never_grow(_this, _this->length + _from->length);
     memcpy(&_this->data[_this->length], _from->data, _from->length * sizeof(int64_t));
     _this->length += _from->length;
     free(_from->data);
@@ -11317,8 +11313,8 @@ static void z_t3786_List_never_extend(z_t3786_List_never_t* _this, z_t3786_List_
     _from->capacity = 0;
 }
 
-static int64_t z_t3786_List_never_set(z_t3786_List_never_t* _this, uint64_t _idx, int64_t _val);
-static int64_t z_t3786_List_never_set(z_t3786_List_never_t* _this, uint64_t _idx, int64_t _val) {
+static int64_t z_t3785_List_never_set(z_t3785_List_never_t* _this, uint64_t _idx, int64_t _val);
+static int64_t z_t3785_List_never_set(z_t3785_List_never_t* _this, uint64_t _idx, int64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -11329,8 +11325,8 @@ static int64_t z_t3786_List_never_set(z_t3786_List_never_t* _this, uint64_t _idx
     return _old;
 }
 
-static int64_t z_t3786_List_never_pop(z_t3786_List_never_t* _this);
-static int64_t z_t3786_List_never_pop(z_t3786_List_never_t* _this) {
+static int64_t z_t3785_List_never_pop(z_t3785_List_never_t* _this);
+static int64_t z_t3785_List_never_pop(z_t3785_List_never_t* _this) {
     if (_this->length == 0) {
         z_panic("List pop: empty list");
     }
@@ -11338,16 +11334,16 @@ static int64_t z_t3786_List_never_pop(z_t3786_List_never_t* _this) {
     return _this->data[_this->length];
 }
 
-static z_t3794_ListView_never_t z_t3786_List_never_listview(z_t3786_List_never_t* _this) { return *(z_t3794_ListView_never_t*)_this; }
-static void z_t3786_List_never_extendView(z_t3786_List_never_t* _this, z_t3794_ListView_never_t _from) {
-    z_t3786_List_never_grow(_this, _this->length + _from.length);
+static z_t3793_ListView_never_t z_t3785_List_never_listview(z_t3785_List_never_t* _this) { return *(z_t3793_ListView_never_t*)_this; }
+static void z_t3785_List_never_extendView(z_t3785_List_never_t* _this, z_t3793_ListView_never_t _from) {
+    z_t3785_List_never_grow(_this, _this->length + _from.length);
     memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(int64_t));
     _this->length += _from.length;
 }
 
 
-static int64_t z_t3786_List_never_get(z_t3786_List_never_t* _this, uint64_t _idx);
-static int64_t z_t3786_List_never_get(z_t3786_List_never_t* _this, uint64_t _idx) {
+static int64_t z_t3785_List_never_get(z_t3785_List_never_t* _this, uint64_t _idx);
+static int64_t z_t3785_List_never_get(z_t3785_List_never_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -11357,21 +11353,21 @@ static int64_t z_t3786_List_never_get(z_t3786_List_never_t* _this, uint64_t _idx
 }
 
 typedef struct {
-    z_t3786_List_never_t* list;
+    z_t3785_List_never_t* list;
     uint64_t idx;
-} z_t3798_ListIter_never_t;
-static z_t3800_OptionView_never_t z_t3798_ListIter_never_call(z_t3798_ListIter_never_t* _it);
-static z_t3800_OptionView_never_t z_t3798_ListIter_never_call(z_t3798_ListIter_never_t* _it) {
-    z_t3800_OptionView_never_t _out = {0};
+} z_t3797_ListIter_never_t;
+static z_t3799_OptionView_never_t z_t3797_ListIter_never_call(z_t3797_ListIter_never_t* _it);
+static z_t3799_OptionView_never_t z_t3797_ListIter_never_call(z_t3797_ListIter_never_t* _it) {
+    z_t3799_OptionView_never_t _out = {0};
     if (_it->idx >= _it->list->length) { _out.tag = Z_OPTIONVIEW_NEVER_TAG_NONE; return _out; }
     _out.tag = Z_OPTIONVIEW_NEVER_TAG_SOME;
     _out.data = &_it->list->data[_it->idx];
     _it->idx++;
     return _out;
 }
-static z_t3798_ListIter_never_t z_t3786_List_never_iterate(z_t3786_List_never_t* _this);
-static z_t3798_ListIter_never_t z_t3786_List_never_iterate(z_t3786_List_never_t* _this) {
-    z_t3798_ListIter_never_t _it = {0};
+static z_t3797_ListIter_never_t z_t3785_List_never_iterate(z_t3785_List_never_t* _this);
+static z_t3797_ListIter_never_t z_t3785_List_never_iterate(z_t3785_List_never_t* _this) {
+    z_t3797_ListIter_never_t _it = {0};
     _it.list = _this;
     _it.idx = 0;
     return _it;
@@ -14268,7 +14264,7 @@ static void z_t1255_OpenResult_destroy(z_t1255_OpenResult_t* u) {
 typedef struct {
     uint32_t (*walk)(void*, z_t105_StringView_t, uint32_t);
     z_t1255_OpenResult_t (*open)(void*, uint32_t);
-    z_t3614_nodekind_t (*stat)(void*, uint32_t);
+    z_t3613_nodekind_t (*stat)(void*, uint32_t);
     z_t74_String_t (*path)(void*, uint32_t);
     void (*addFile)(void*, z_t74_String_t, z_t74_String_t);
 } z_t883_ZVfsProvider_vtable_t;
@@ -14286,65 +14282,65 @@ static void z_t883_ZVfsProvider_destroy(z_t883_ZVfsProvider_t* proto) {
 }
 
 typedef struct {
-    z_t3547_Result_u64_IoError_t (*read)(void*, z_t3525_List_u8_t*, uint64_t);
-} z_t3560_Reader_vtable_t;
+    z_t3546_Result_u64_IoError_t (*read)(void*, z_t3524_List_u8_t*, uint64_t);
+} z_t3559_Reader_vtable_t;
 
 typedef struct {
     void* data;
-    z_t3560_Reader_vtable_t* vtable;
+    z_t3559_Reader_vtable_t* vtable;
     void (*destroy)(void*);
-} z_t3560_Reader_t;
+} z_t3559_Reader_t;
 
-static void z_t3560_Reader_destroy(z_t3560_Reader_t* proto) {
+static void z_t3559_Reader_destroy(z_t3559_Reader_t* proto) {
     if (!proto) return;
     if (proto->destroy) proto->destroy(proto->data);
     proto->destroy = NULL;
 }
 
 typedef struct {
-    z_t3547_Result_u64_IoError_t (*write)(void*, z_t3535_ListView_u8_t*);
-    z_t3501_Result_null_IoError_t (*flush)(void*);
-} z_t3564_Writer_vtable_t;
+    z_t3546_Result_u64_IoError_t (*write)(void*, z_t3534_ListView_u8_t*);
+    z_t3500_Result_null_IoError_t (*flush)(void*);
+} z_t3563_Writer_vtable_t;
 
 typedef struct {
     void* data;
-    z_t3564_Writer_vtable_t* vtable;
+    z_t3563_Writer_vtable_t* vtable;
     void (*destroy)(void*);
-} z_t3564_Writer_t;
+} z_t3563_Writer_t;
 
-static void z_t3564_Writer_destroy(z_t3564_Writer_t* proto) {
+static void z_t3563_Writer_destroy(z_t3563_Writer_t* proto) {
     if (!proto) return;
     if (proto->destroy) proto->destroy(proto->data);
     proto->destroy = NULL;
 }
 
 typedef struct {
-    z_t3501_Result_null_IoError_t (*close)(void*);
-} z_t3569_Closer_vtable_t;
+    z_t3500_Result_null_IoError_t (*close)(void*);
+} z_t3568_Closer_vtable_t;
 
 typedef struct {
     void* data;
-    z_t3569_Closer_vtable_t* vtable;
+    z_t3568_Closer_vtable_t* vtable;
     void (*destroy)(void*);
-} z_t3569_Closer_t;
+} z_t3568_Closer_t;
 
-static void z_t3569_Closer_destroy(z_t3569_Closer_t* proto) {
+static void z_t3568_Closer_destroy(z_t3568_Closer_t* proto) {
     if (!proto) return;
     if (proto->destroy) proto->destroy(proto->data);
     proto->destroy = NULL;
 }
 
 typedef struct {
-    z_t3547_Result_u64_IoError_t (*seek)(void*, int64_t, z_t3556_seekorigin_t);
-} z_t3573_Seeker_vtable_t;
+    z_t3546_Result_u64_IoError_t (*seek)(void*, int64_t, z_t3555_seekorigin_t);
+} z_t3572_Seeker_vtable_t;
 
 typedef struct {
     void* data;
-    z_t3573_Seeker_vtable_t* vtable;
+    z_t3572_Seeker_vtable_t* vtable;
     void (*destroy)(void*);
-} z_t3573_Seeker_t;
+} z_t3572_Seeker_t;
 
-static void z_t3573_Seeker_destroy(z_t3573_Seeker_t* proto) {
+static void z_t3572_Seeker_destroy(z_t3572_Seeker_t* proto) {
     if (!proto) return;
     if (proto->destroy) proto->destroy(proto->data);
     proto->destroy = NULL;
@@ -14361,16 +14357,16 @@ typedef struct {
     uint64_t    sep_len;
     uint64_t    cursor;
     bool        done;
-} z_t3591_Splitter_t;
+} z_t3590_Splitter_t;
 
-typedef z_t3591_Splitter_t z_t3594_LinesIter_t;
+typedef z_t3590_Splitter_t z_t3593_LinesIter_t;
 
 
-static z_t3591_Splitter_t z_t105_StringView_split(
+static z_t3590_Splitter_t z_t105_StringView_split(
     const z_t105_StringView_t* self, const z_t105_StringView_t* sep);
-static z_t3591_Splitter_t z_t105_StringView_split(
+static z_t3590_Splitter_t z_t105_StringView_split(
     const z_t105_StringView_t* self, const z_t105_StringView_t* sep) {
-    z_t3591_Splitter_t s;
+    z_t3590_Splitter_t s;
     s.src = self->data;
     s.src_len = self->length;
     s.sep = sep->data;
@@ -14381,8 +14377,8 @@ static z_t3591_Splitter_t z_t105_StringView_split(
 }
 
 
-static z_t754_Option_StringView_t z_t3591_Splitter_call(z_t3591_Splitter_t* s);
-static z_t754_Option_StringView_t z_t3591_Splitter_call(z_t3591_Splitter_t* s) {
+static z_t754_Option_StringView_t z_t3590_Splitter_call(z_t3590_Splitter_t* s);
+static z_t754_Option_StringView_t z_t3590_Splitter_call(z_t3590_Splitter_t* s) {
     z_t754_Option_StringView_t out = {0};
     if (s->done) {
         out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
@@ -14425,9 +14421,9 @@ static z_t754_Option_StringView_t z_t3591_Splitter_call(z_t3591_Splitter_t* s) {
 }
 
 
-static z_t3594_LinesIter_t z_t105_StringView_lines(const z_t105_StringView_t* self);
-static z_t3594_LinesIter_t z_t105_StringView_lines(const z_t105_StringView_t* self) {
-    z_t3594_LinesIter_t s;
+static z_t3593_LinesIter_t z_t105_StringView_lines(const z_t105_StringView_t* self);
+static z_t3593_LinesIter_t z_t105_StringView_lines(const z_t105_StringView_t* self) {
+    z_t3593_LinesIter_t s;
     s.src = self->data;
     s.src_len = self->length;
     s.sep = NULL;
@@ -14438,8 +14434,8 @@ static z_t3594_LinesIter_t z_t105_StringView_lines(const z_t105_StringView_t* se
 }
 
 
-static z_t754_Option_StringView_t z_t3594_LinesIter_call(z_t3594_LinesIter_t* s);
-static z_t754_Option_StringView_t z_t3594_LinesIter_call(z_t3594_LinesIter_t* s) {
+static z_t754_Option_StringView_t z_t3593_LinesIter_call(z_t3593_LinesIter_t* s);
+static z_t754_Option_StringView_t z_t3593_LinesIter_call(z_t3593_LinesIter_t* s) {
     z_t754_Option_StringView_t out = {0};
     if (s->done) {
         out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
@@ -14874,10 +14870,10 @@ static int z_io_write_all(int fd, const char* data, uint64_t size) {
 
 /* shared helper: path + open flags -> write content -> close.
    path and content are borrowed views; caller retains. */
-static z_t3501_Result_null_IoError_t z_io_write_common(
+static z_t3500_Result_null_IoError_t z_io_write_common(
     z_t105_StringView_t path, z_t105_StringView_t content, int flags
 ) {
-    z_t3501_Result_null_IoError_t result = {0};
+    z_t3500_Result_null_IoError_t result = {0};
     char* path_cstr = z_sv_to_cstr(path);
     int fd = open(path_cstr, flags, 0644);
     free(path_cstr);
@@ -14904,9 +14900,9 @@ static z_t3501_Result_null_IoError_t z_io_write_common(
 }
 
 
-static z_t3547_Result_u64_IoError_t z_io_u64_ok(uint64_t v);
-static z_t3547_Result_u64_IoError_t z_io_u64_ok(uint64_t v) {
-    z_t3547_Result_u64_IoError_t result = {0};
+static z_t3546_Result_u64_IoError_t z_io_u64_ok(uint64_t v);
+static z_t3546_Result_u64_IoError_t z_io_u64_ok(uint64_t v) {
+    z_t3546_Result_u64_IoError_t result = {0};
     uint64_t* boxed = (uint64_t*)z_xmalloc(sizeof(uint64_t));
     *boxed = v;
     result.tag = Z_RESULT_U64_IOERROR_TAG_OK;
@@ -14914,9 +14910,9 @@ static z_t3547_Result_u64_IoError_t z_io_u64_ok(uint64_t v) {
     return result;
 }
 
-static z_t3547_Result_u64_IoError_t z_io_u64_err(int saved_errno);
-static z_t3547_Result_u64_IoError_t z_io_u64_err(int saved_errno) {
-    z_t3547_Result_u64_IoError_t result = {0};
+static z_t3546_Result_u64_IoError_t z_io_u64_err(int saved_errno);
+static z_t3546_Result_u64_IoError_t z_io_u64_err(int saved_errno) {
+    z_t3546_Result_u64_IoError_t result = {0};
     z_t1256_IoError_t* boxed = (z_t1256_IoError_t*)z_xmalloc(sizeof(z_t1256_IoError_t));
     *boxed = z_io_errno_to_IoError(saved_errno);
     result.tag = Z_RESULT_U64_IOERROR_TAG_ERR;
@@ -14925,8 +14921,8 @@ static z_t3547_Result_u64_IoError_t z_io_u64_err(int saved_errno) {
 }
 
 
-static z_t3501_Result_null_IoError_t z_io_wrap_null_Result(int rc, int saved_errno) {
-    z_t3501_Result_null_IoError_t result = {0};
+static z_t3500_Result_null_IoError_t z_io_wrap_null_Result(int rc, int saved_errno) {
+    z_t3500_Result_null_IoError_t result = {0};
     if (rc == 0) {
         result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
         result.data = NULL;
@@ -14943,8 +14939,8 @@ static z_t3501_Result_null_IoError_t z_io_wrap_null_Result(int rc, int saved_err
 /* Populate fs from a struct stat. Shared by z_io_stat / z_io_lstat —
    the only behavioral split between them lives in the syscall call
    site (stat(2) follows symlinks, lstat(2) does not). */
-static void z_io_fill_filestat(z_t3510_filestat_t* fs, const struct stat* sb);
-static void z_io_fill_filestat(z_t3510_filestat_t* fs, const struct stat* sb) {
+static void z_io_fill_filestat(z_t3509_filestat_t* fs, const struct stat* sb);
+static void z_io_fill_filestat(z_t3509_filestat_t* fs, const struct stat* sb) {
     if (S_ISREG(sb->st_mode))       fs->kind.tag = Z_FILEKIND_TAG_FILE;
     else if (S_ISDIR(sb->st_mode))  fs->kind.tag = Z_FILEKIND_TAG_DIR;
     else if (S_ISLNK(sb->st_mode))  fs->kind.tag = Z_FILEKIND_TAG_SYMLINK;
@@ -14973,9 +14969,9 @@ static bool z_io_exists(z_t105_StringView_t path) {
 }
 
 
-static z_t3495_Result_String_IoError_t z_io_readText(z_t105_StringView_t path) {
+static z_t3494_Result_String_IoError_t z_io_readText(z_t105_StringView_t path) {
     /* path is a borrowed view; caller retains ownership */
-    z_t3495_Result_String_IoError_t result = {0};
+    z_t3494_Result_String_IoError_t result = {0};
     char* path_cstr = z_sv_to_cstr(path);
     int fd = open(path_cstr, O_RDONLY);
     free(path_cstr);
@@ -15014,7 +15010,7 @@ static z_t3495_Result_String_IoError_t z_io_readText(z_t105_StringView_t path) {
 }
 
 
-static z_t3501_Result_null_IoError_t z_io_remove(z_t105_StringView_t path) {
+static z_t3500_Result_null_IoError_t z_io_remove(z_t105_StringView_t path) {
     char* path_cstr = z_sv_to_cstr(path);
     /* try unlink first; if EISDIR, fall back to rmdir */
     int rc = unlink(path_cstr);
@@ -15032,9 +15028,9 @@ static z_t3501_Result_null_IoError_t z_io_remove(z_t105_StringView_t path) {
    that arm is reached through z_io_lstat. Returns the filestat
    value by value (not boxed); the compiler-generated result
    destructor frees the ok payload's heap copy. */
-static z_t3518_Result_filestat_IoError_t z_io_stat(z_t105_StringView_t path);
-static z_t3518_Result_filestat_IoError_t z_io_stat(z_t105_StringView_t path) {
-    z_t3518_Result_filestat_IoError_t result = {0};
+static z_t3517_Result_filestat_IoError_t z_io_stat(z_t105_StringView_t path);
+static z_t3517_Result_filestat_IoError_t z_io_stat(z_t105_StringView_t path) {
+    z_t3517_Result_filestat_IoError_t result = {0};
     char* path_cstr = z_sv_to_cstr(path);
     struct stat sb;
     int rc = stat(path_cstr, &sb);
@@ -15047,9 +15043,9 @@ static z_t3518_Result_filestat_IoError_t z_io_stat(z_t105_StringView_t path) {
         result.data = boxed;
         return result;
     }
-    z_t3510_filestat_t fs = {0};
+    z_t3509_filestat_t fs = {0};
     z_io_fill_filestat(&fs, &sb);
-    z_t3510_filestat_t* boxed = (z_t3510_filestat_t*)z_xmalloc(sizeof(z_t3510_filestat_t));
+    z_t3509_filestat_t* boxed = (z_t3509_filestat_t*)z_xmalloc(sizeof(z_t3509_filestat_t));
     *boxed = fs;
     result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_OK;
     result.data = boxed;
@@ -15057,7 +15053,7 @@ static z_t3518_Result_filestat_IoError_t z_io_stat(z_t105_StringView_t path) {
 }
 
 
-static z_t3501_Result_null_IoError_t z_io_writeText(
+static z_t3500_Result_null_IoError_t z_io_writeText(
     z_t105_StringView_t path, z_t105_StringView_t content
 ) {
     return z_io_write_common(path, content, O_WRONLY | O_CREAT | O_TRUNC);
@@ -15065,10 +15061,10 @@ static z_t3501_Result_null_IoError_t z_io_writeText(
 
 
 /* file.close — explicit close that surfaces delayed write errors.
-   Marks the file as closed so z_t3521_File_destroy skips a second close. */
-static z_t3501_Result_null_IoError_t z_t3521_File_close(z_t3521_File_t* p);
-static z_t3501_Result_null_IoError_t z_t3521_File_close(z_t3521_File_t* p) {
-    z_t3501_Result_null_IoError_t result = {0};
+   Marks the file as closed so z_t3520_File_destroy skips a second close. */
+static z_t3500_Result_null_IoError_t z_t3520_File_close(z_t3520_File_t* p);
+static z_t3500_Result_null_IoError_t z_t3520_File_close(z_t3520_File_t* p) {
+    z_t3500_Result_null_IoError_t result = {0};
     if (!p || p->closed) {
         result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
         result.data = NULL;
@@ -15084,11 +15080,11 @@ static z_t3501_Result_null_IoError_t z_t3521_File_close(z_t3521_File_t* p) {
 /* file.write — write all bytes from `src`. Loops on short writes;
    retries on EINTR. Returns total bytes written on success.
    `src` is a listview (layout: length, data*), matching byteview. */
-static z_t3547_Result_u64_IoError_t z_t3521_File_write(
-    z_t3521_File_t* f, z_t3535_ListView_u8_t* src
+static z_t3546_Result_u64_IoError_t z_t3520_File_write(
+    z_t3520_File_t* f, z_t3534_ListView_u8_t* src
 );
-static z_t3547_Result_u64_IoError_t z_t3521_File_write(
-    z_t3521_File_t* f, z_t3535_ListView_u8_t* src
+static z_t3546_Result_u64_IoError_t z_t3520_File_write(
+    z_t3520_File_t* f, z_t3534_ListView_u8_t* src
 ) {
     uint64_t total = 0;
     while (total < src->length) {
@@ -15106,11 +15102,11 @@ static z_t3547_Result_u64_IoError_t z_t3521_File_write(
 /* file.read — read up to `max` bytes, appending to `buf`.
    Grows the list capacity as needed. Returns actual bytes read
    (0 indicates EOF); retries on EINTR. */
-static z_t3547_Result_u64_IoError_t z_t3521_File_read(
-    z_t3521_File_t* f, z_t3525_List_u8_t* buf, uint64_t max
+static z_t3546_Result_u64_IoError_t z_t3520_File_read(
+    z_t3520_File_t* f, z_t3524_List_u8_t* buf, uint64_t max
 );
-static z_t3547_Result_u64_IoError_t z_t3521_File_read(
-    z_t3521_File_t* f, z_t3525_List_u8_t* buf, uint64_t max
+static z_t3546_Result_u64_IoError_t z_t3520_File_read(
+    z_t3520_File_t* f, z_t3524_List_u8_t* buf, uint64_t max
 ) {
     if (buf->capacity < buf->length + max) {
         uint64_t newcap = buf->length + max;
@@ -15132,11 +15128,11 @@ static z_t3547_Result_u64_IoError_t z_t3521_File_read(
 /* file.seek — reposition the fd head. Maps seekorigin to the
    matching POSIX whence constant. Returns the new absolute
    position measured from the start of the file. */
-static z_t3547_Result_u64_IoError_t z_t3521_File_seek(
-    z_t3521_File_t* f, int64_t off, z_t3556_seekorigin_t origin
+static z_t3546_Result_u64_IoError_t z_t3520_File_seek(
+    z_t3520_File_t* f, int64_t off, z_t3555_seekorigin_t origin
 );
-static z_t3547_Result_u64_IoError_t z_t3521_File_seek(
-    z_t3521_File_t* f, int64_t off, z_t3556_seekorigin_t origin
+static z_t3546_Result_u64_IoError_t z_t3520_File_seek(
+    z_t3520_File_t* f, int64_t off, z_t3555_seekorigin_t origin
 ) {
     int whence;
     switch (origin.tag) {
@@ -15154,143 +15150,143 @@ static z_t3547_Result_u64_IoError_t z_t3521_File_seek(
 /* file.flush — no-op for raw file descriptors (POSIX write goes
    directly to the kernel, no userspace buffer to drain). Exists
    so file satisfies the `writer` protocol signature. */
-static z_t3501_Result_null_IoError_t z_t3521_File_flush(z_t3521_File_t* f);
-static z_t3501_Result_null_IoError_t z_t3521_File_flush(z_t3521_File_t* f) {
+static z_t3500_Result_null_IoError_t z_t3520_File_flush(z_t3520_File_t* f);
+static z_t3500_Result_null_IoError_t z_t3520_File_flush(z_t3520_File_t* f) {
     (void)f;
-    z_t3501_Result_null_IoError_t result = {0};
+    z_t3500_Result_null_IoError_t result = {0};
     result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
     result.data = NULL;
     return result;
 }
 
 
-static z_t3547_Result_u64_IoError_t z_t3521_File_Reader_read_wrapper(void* _data, z_t3525_List_u8_t* into, uint64_t max) {
-    z_t3521_File_t* _self = (z_t3521_File_t*)_data;
-    return z_t3521_File_read(_self, into, max);
+static z_t3546_Result_u64_IoError_t z_t3520_File_Reader_read_wrapper(void* _data, z_t3524_List_u8_t* into, uint64_t max) {
+    z_t3520_File_t* _self = (z_t3520_File_t*)_data;
+    return z_t3520_File_read(_self, into, max);
 }
 
-static z_t3560_Reader_vtable_t z_t3521_File_Reader_vtable = {
-    .read = z_t3521_File_Reader_read_wrapper,
+static z_t3559_Reader_vtable_t z_t3520_File_Reader_vtable = {
+    .read = z_t3520_File_Reader_read_wrapper,
 };
 
-static z_t3560_Reader_t z_t3521_File_Reader_create(z_t3521_File_t* val) {
-    z_t3560_Reader_t proto = {0};
+static z_t3559_Reader_t z_t3520_File_Reader_create(z_t3520_File_t* val) {
+    z_t3559_Reader_t proto = {0};
     proto.data = val;
-    proto.vtable = &z_t3521_File_Reader_vtable;
+    proto.vtable = &z_t3520_File_Reader_vtable;
     proto.destroy = NULL;
     return proto;
 }
 
-static void z_t3521_File_Reader_owned_destroy(void* p) {
+static void z_t3520_File_Reader_owned_destroy(void* p) {
     free(p);
 }
 
-static z_t3560_Reader_t z_t3521_File_Reader_create_owned(z_t3521_File_t* val) {
-    z_t3560_Reader_t proto = {0};
-    z_t3521_File_t* boxed = (z_t3521_File_t*)z_xmalloc(sizeof(z_t3521_File_t));
+static z_t3559_Reader_t z_t3520_File_Reader_create_owned(z_t3520_File_t* val) {
+    z_t3559_Reader_t proto = {0};
+    z_t3520_File_t* boxed = (z_t3520_File_t*)z_xmalloc(sizeof(z_t3520_File_t));
     *boxed = *val;
     proto.data = boxed;
-    proto.vtable = &z_t3521_File_Reader_vtable;
-    proto.destroy = z_t3521_File_Reader_owned_destroy;
+    proto.vtable = &z_t3520_File_Reader_vtable;
+    proto.destroy = z_t3520_File_Reader_owned_destroy;
     return proto;
 }
 
-static z_t3547_Result_u64_IoError_t z_t3521_File_Writer_write_wrapper(void* _data, z_t3535_ListView_u8_t* from) {
-    z_t3521_File_t* _self = (z_t3521_File_t*)_data;
-    return z_t3521_File_write(_self, from);
+static z_t3546_Result_u64_IoError_t z_t3520_File_Writer_write_wrapper(void* _data, z_t3534_ListView_u8_t* from) {
+    z_t3520_File_t* _self = (z_t3520_File_t*)_data;
+    return z_t3520_File_write(_self, from);
 }
 
-static z_t3501_Result_null_IoError_t z_t3521_File_Writer_flush_wrapper(void* _data) {
-    z_t3521_File_t* _self = (z_t3521_File_t*)_data;
-    return z_t3521_File_flush(_self);
+static z_t3500_Result_null_IoError_t z_t3520_File_Writer_flush_wrapper(void* _data) {
+    z_t3520_File_t* _self = (z_t3520_File_t*)_data;
+    return z_t3520_File_flush(_self);
 }
 
-static z_t3564_Writer_vtable_t z_t3521_File_Writer_vtable = {
-    .write = z_t3521_File_Writer_write_wrapper,
-    .flush = z_t3521_File_Writer_flush_wrapper,
+static z_t3563_Writer_vtable_t z_t3520_File_Writer_vtable = {
+    .write = z_t3520_File_Writer_write_wrapper,
+    .flush = z_t3520_File_Writer_flush_wrapper,
 };
 
-static z_t3564_Writer_t z_t3521_File_Writer_create(z_t3521_File_t* val) {
-    z_t3564_Writer_t proto = {0};
+static z_t3563_Writer_t z_t3520_File_Writer_create(z_t3520_File_t* val) {
+    z_t3563_Writer_t proto = {0};
     proto.data = val;
-    proto.vtable = &z_t3521_File_Writer_vtable;
+    proto.vtable = &z_t3520_File_Writer_vtable;
     proto.destroy = NULL;
     return proto;
 }
 
-static void z_t3521_File_Writer_owned_destroy(void* p) {
+static void z_t3520_File_Writer_owned_destroy(void* p) {
     free(p);
 }
 
-static z_t3564_Writer_t z_t3521_File_Writer_create_owned(z_t3521_File_t* val) {
-    z_t3564_Writer_t proto = {0};
-    z_t3521_File_t* boxed = (z_t3521_File_t*)z_xmalloc(sizeof(z_t3521_File_t));
+static z_t3563_Writer_t z_t3520_File_Writer_create_owned(z_t3520_File_t* val) {
+    z_t3563_Writer_t proto = {0};
+    z_t3520_File_t* boxed = (z_t3520_File_t*)z_xmalloc(sizeof(z_t3520_File_t));
     *boxed = *val;
     proto.data = boxed;
-    proto.vtable = &z_t3521_File_Writer_vtable;
-    proto.destroy = z_t3521_File_Writer_owned_destroy;
+    proto.vtable = &z_t3520_File_Writer_vtable;
+    proto.destroy = z_t3520_File_Writer_owned_destroy;
     return proto;
 }
 
-static z_t3501_Result_null_IoError_t z_t3521_File_Closer_close_wrapper(void* _data) {
-    z_t3521_File_t* _self = (z_t3521_File_t*)_data;
-    return z_t3521_File_close(_self);
+static z_t3500_Result_null_IoError_t z_t3520_File_Closer_close_wrapper(void* _data) {
+    z_t3520_File_t* _self = (z_t3520_File_t*)_data;
+    return z_t3520_File_close(_self);
 }
 
-static z_t3569_Closer_vtable_t z_t3521_File_Closer_vtable = {
-    .close = z_t3521_File_Closer_close_wrapper,
+static z_t3568_Closer_vtable_t z_t3520_File_Closer_vtable = {
+    .close = z_t3520_File_Closer_close_wrapper,
 };
 
-static z_t3569_Closer_t z_t3521_File_Closer_create(z_t3521_File_t* val) {
-    z_t3569_Closer_t proto = {0};
+static z_t3568_Closer_t z_t3520_File_Closer_create(z_t3520_File_t* val) {
+    z_t3568_Closer_t proto = {0};
     proto.data = val;
-    proto.vtable = &z_t3521_File_Closer_vtable;
+    proto.vtable = &z_t3520_File_Closer_vtable;
     proto.destroy = NULL;
     return proto;
 }
 
-static void z_t3521_File_Closer_owned_destroy(void* p) {
+static void z_t3520_File_Closer_owned_destroy(void* p) {
     free(p);
 }
 
-static z_t3569_Closer_t z_t3521_File_Closer_create_owned(z_t3521_File_t* val) {
-    z_t3569_Closer_t proto = {0};
-    z_t3521_File_t* boxed = (z_t3521_File_t*)z_xmalloc(sizeof(z_t3521_File_t));
+static z_t3568_Closer_t z_t3520_File_Closer_create_owned(z_t3520_File_t* val) {
+    z_t3568_Closer_t proto = {0};
+    z_t3520_File_t* boxed = (z_t3520_File_t*)z_xmalloc(sizeof(z_t3520_File_t));
     *boxed = *val;
     proto.data = boxed;
-    proto.vtable = &z_t3521_File_Closer_vtable;
-    proto.destroy = z_t3521_File_Closer_owned_destroy;
+    proto.vtable = &z_t3520_File_Closer_vtable;
+    proto.destroy = z_t3520_File_Closer_owned_destroy;
     return proto;
 }
 
-static z_t3547_Result_u64_IoError_t z_t3521_File_Seeker_seek_wrapper(void* _data, int64_t to, z_t3556_seekorigin_t from) {
-    z_t3521_File_t* _self = (z_t3521_File_t*)_data;
-    return z_t3521_File_seek(_self, to, from);
+static z_t3546_Result_u64_IoError_t z_t3520_File_Seeker_seek_wrapper(void* _data, int64_t to, z_t3555_seekorigin_t from) {
+    z_t3520_File_t* _self = (z_t3520_File_t*)_data;
+    return z_t3520_File_seek(_self, to, from);
 }
 
-static z_t3573_Seeker_vtable_t z_t3521_File_Seeker_vtable = {
-    .seek = z_t3521_File_Seeker_seek_wrapper,
+static z_t3572_Seeker_vtable_t z_t3520_File_Seeker_vtable = {
+    .seek = z_t3520_File_Seeker_seek_wrapper,
 };
 
-static z_t3573_Seeker_t z_t3521_File_Seeker_create(z_t3521_File_t* val) {
-    z_t3573_Seeker_t proto = {0};
+static z_t3572_Seeker_t z_t3520_File_Seeker_create(z_t3520_File_t* val) {
+    z_t3572_Seeker_t proto = {0};
     proto.data = val;
-    proto.vtable = &z_t3521_File_Seeker_vtable;
+    proto.vtable = &z_t3520_File_Seeker_vtable;
     proto.destroy = NULL;
     return proto;
 }
 
-static void z_t3521_File_Seeker_owned_destroy(void* p) {
+static void z_t3520_File_Seeker_owned_destroy(void* p) {
     free(p);
 }
 
-static z_t3573_Seeker_t z_t3521_File_Seeker_create_owned(z_t3521_File_t* val) {
-    z_t3573_Seeker_t proto = {0};
-    z_t3521_File_t* boxed = (z_t3521_File_t*)z_xmalloc(sizeof(z_t3521_File_t));
+static z_t3572_Seeker_t z_t3520_File_Seeker_create_owned(z_t3520_File_t* val) {
+    z_t3572_Seeker_t proto = {0};
+    z_t3520_File_t* boxed = (z_t3520_File_t*)z_xmalloc(sizeof(z_t3520_File_t));
     *boxed = *val;
     proto.data = boxed;
-    proto.vtable = &z_t3521_File_Seeker_vtable;
-    proto.destroy = z_t3521_File_Seeker_owned_destroy;
+    proto.vtable = &z_t3520_File_Seeker_vtable;
+    proto.destroy = z_t3520_File_Seeker_owned_destroy;
     return proto;
 }
 
@@ -15349,9 +15345,9 @@ static z_t947_Option_String_t z_os_env(z_t105_StringView_t key) {
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
-static z_t3495_Result_String_IoError_t z_os_exePath(void);
-static z_t3495_Result_String_IoError_t z_os_exePath(void) {
-    z_t3495_Result_String_IoError_t out = {0};
+static z_t3494_Result_String_IoError_t z_os_exePath(void);
+static z_t3494_Result_String_IoError_t z_os_exePath(void) {
+    z_t3494_Result_String_IoError_t out = {0};
     char buf[4096];
 #if defined(__APPLE__)
     uint32_t bufsize = (uint32_t)sizeof(buf);
@@ -15517,7 +15513,7 @@ typedef void (*z_t1035_ZVfs_fileTable_ft)(z_t881_ZVfs_t*, z_t1036_List_u32_t*, z
 typedef z_t74_String_t (*z_t1053_ZVfs_path_ft)(z_t881_ZVfs_t*, uint32_t);
 typedef z_t74_String_t (*z_t1054_ZVfs_pathfromprovider_ft)(z_t881_ZVfs_t*, uint32_t);
 typedef z_t74_String_t (*z_t1055_ZVfs_pathfromproviderNative_ft)(z_t881_ZVfs_t*, uint32_t);
-typedef z_t3618_mountinfo_t (*z_t1056_ZVfs__extractMount_ft)(z_t881_ZVfs_t*, uint32_t);
+typedef z_t3617_mountinfo_t (*z_t1056_ZVfs__extractMount_ft)(z_t881_ZVfs_t*, uint32_t);
 typedef z_t1147_StringPool_t (*z_t1148_StringPool_create_ft)(void);
 typedef void (*z_t1149_StringPool_reserve_ft)(z_t1147_StringPool_t*);
 typedef void (*z_t1150_StringPool_rebuild_ft)(z_t1147_StringPool_t*, uint64_t);
@@ -15745,7 +15741,7 @@ typedef void (*z_t2306_main_ft)(void);
 typedef void (*z_t2314_extendraw_ft)(z_t74_String_t*, z_t105_StringView_t);
 typedef uint8_t (*z_t2316_hexvalue_ft)(uint8_t);
 typedef void (*z_t2317_utf8_encode_append_ft)(uint64_t, z_t74_String_t*);
-typedef z_t3696_kwresult_t (*z_t2318_kwlookup_ft)(z_t105_StringView_t);
+typedef z_t3695_kwresult_t (*z_t2318_kwlookup_ft)(z_t105_StringView_t);
 typedef uint8_t (*z_t2321_hexdigit_ft)(uint8_t);
 typedef void (*z_t2322_escapeAppend_ft)(uint8_t, z_t74_String_t*);
 typedef void (*z_t2324_escapeAppendCp_ft)(uint32_t, z_t74_String_t*);
@@ -15759,10 +15755,10 @@ typedef z_t74_String_t (*z_t2352_mangleVarName_ft)(z_t105_StringView_t);
 typedef z_t74_String_t (*z_t2353_composeCname_ft)(uint64_t, z_t105_StringView_t);
 typedef uint64_t (*z_t2357_absI64_ft)(int64_t);
 typedef uint64_t (*z_t2358_bitLength_ft)(uint64_t);
-typedef z_t3702_suffixinfo_t (*z_t2362_numkindByName_ft)(z_t105_StringView_t);
-typedef z_t3702_suffixinfo_t (*z_t2363_suffixInfoOf_ft)(z_t105_StringView_t);
-typedef z_t3710_ParsedNumber_t (*z_t2368_parseNumber_ft)(z_t105_StringView_t);
-typedef z_t3706_parsedval_t (*z_t2370_parseLiteralValue_ft)(z_t105_StringView_t);
+typedef z_t3701_suffixinfo_t (*z_t2362_numkindByName_ft)(z_t105_StringView_t);
+typedef z_t3701_suffixinfo_t (*z_t2363_suffixInfoOf_ft)(z_t105_StringView_t);
+typedef z_t3709_ParsedNumber_t (*z_t2368_parseNumber_ft)(z_t105_StringView_t);
+typedef z_t3705_parsedval_t (*z_t2370_parseLiteralValue_ft)(z_t105_StringView_t);
 typedef void (*z_t2371_main_ft)(void);
 typedef void (*z_t2372_smokeMangleVar_ft)(z_t105_StringView_t);
 typedef void (*z_t2375_smokeParse_ft)(z_t105_StringView_t);
@@ -16049,7 +16045,7 @@ typedef uint64_t (*z_t3139_emitInterpBuild_ft)(z_t1067_Ast_t*, z_t1267_ZSymbolTa
 typedef z_t74_String_t (*z_t3140_numericFormatName_ft)(z_t1067_Ast_t*, z_t1267_ZSymbolTable_t*, z_t2947_Ctx_t*, z_t105_StringView_t);
 typedef z_t74_String_t (*z_t3146_methodReturnByName_ft)(z_t1067_Ast_t*, z_t1267_ZSymbolTable_t*, z_t105_StringView_t);
 typedef void (*z_t3149_emitPrintStmt_ft)(z_t1067_Ast_t*, z_t1267_ZSymbolTable_t*, z_t2947_Ctx_t*, z_t1081_CallData_t*, z_t105_StringView_t, z_t3063_TmpCtr_t*, z_t74_String_t*);
-typedef z_t3712_cfold_t (*z_t3151_foldIfClause9_ft)(z_t1067_Ast_t*, z_t2947_Ctx_t*, z_t1036_List_u32_t*);
+typedef z_t3711_cfold_t (*z_t3151_foldIfClause9_ft)(z_t1067_Ast_t*, z_t2947_Ctx_t*, z_t1036_List_u32_t*);
 typedef void (*z_t3153_emitErrorStmt_ft)(z_t1067_Ast_t*, z_t1267_ZSymbolTable_t*, z_t2947_Ctx_t*, z_t1081_CallData_t*, z_t105_StringView_t, z_t74_String_t*);
 typedef void (*z_t3154_emitPanicStmt_ft)(z_t1067_Ast_t*, z_t1267_ZSymbolTable_t*, z_t2947_Ctx_t*, z_t1081_CallData_t*, z_t105_StringView_t, z_t74_String_t*);
 typedef void (*z_t3164_emitCallStmt_ft)(z_t1067_Ast_t*, z_t1267_ZSymbolTable_t*, z_t2947_Ctx_t*, z_t1081_CallData_t*, z_t105_StringView_t, z_t3063_TmpCtr_t*, z_t74_String_t*);
@@ -16208,43 +16204,43 @@ typedef void (*z_t3459_emitCpFrag_ft)(z_t105_StringView_t, z_t105_StringView_t, 
 typedef z_t74_String_t (*z_t3462_sqlStr_ft)(z_t105_StringView_t);
 typedef uint32_t (*z_t3466_unitdefNodeId_ft)(z_t1067_Ast_t*, uint32_t);
 typedef z_t74_String_t (*z_t3467_schemaSql_ft)(void);
-typedef z_t74_String_t (*z_t3473_cnameSql_ft)(z_t105_StringView_t);
-typedef z_t74_String_t (*z_t3479_argAtomName_ft)(z_t1067_Ast_t*, uint64_t);
-typedef uint64_t (*z_t3480_walkExprStampsAt_ft)(z_t1633_ZTyping_t*, z_t1067_Ast_t*, uint32_t, z_t1422_List_u64_t*, z_t1422_List_u64_t*);
-typedef void (*z_t3482_walkExprStampsOptAt_ft)(z_t1633_ZTyping_t*, z_t1067_Ast_t*, uint32_t, z_t1422_List_u64_t*, z_t1422_List_u64_t*);
-typedef z_t74_String_t (*z_t3486_canonTypeName_ft)(z_t1412_ZTypeRegistry_t*, uint64_t);
-typedef uint32_t (*z_t3623_NullProvider_walk_ft)(z_t3622_NullProvider_t*, z_t105_StringView_t, uint32_t);
-typedef z_t74_String_t (*z_t3626_NullProvider_path_ft)(z_t3622_NullProvider_t*, uint32_t);
-typedef void (*z_t3627_NullProvider_addFile_ft)(z_t3622_NullProvider_t*, z_t74_String_t, z_t74_String_t);
-typedef void (*z_t3650_StringProvider_addChild_ft)(z_t3631_StringProvider_t*, uint32_t, z_t105_StringView_t, uint32_t);
-typedef uint32_t (*z_t3651_StringProvider_walk_ft)(z_t3631_StringProvider_t*, z_t105_StringView_t, uint32_t);
-typedef z_t74_String_t (*z_t3654_StringProvider_path_ft)(z_t3631_StringProvider_t*, uint32_t);
-typedef void (*z_t3655_StringProvider_addFile_ft)(z_t3631_StringProvider_t*, z_t74_String_t, z_t74_String_t);
-typedef uint32_t (*z_t3678_FSProvider_walk_ft)(z_t3659_FSProvider_t*, z_t105_StringView_t, uint32_t);
-typedef z_t74_String_t (*z_t3681_FSProvider_path_ft)(z_t3659_FSProvider_t*, uint32_t);
-typedef void (*z_t3682_FSProvider_addFile_ft)(z_t3659_FSProvider_t*, z_t74_String_t, z_t74_String_t);
-typedef void (*z_t3717_ZDumper_emit_ft)(z_t3716_ZDumper_t*, uint32_t, uint32_t, uint32_t, z_t105_StringView_t, z_t105_StringView_t);
-typedef void (*z_t3718_ZDumper_appendFiles_ft)(z_t3716_ZDumper_t*, z_t881_ZVfs_t*);
-typedef void (*z_t3719_ZDumper_walkOptAt_ft)(z_t3716_ZDumper_t*, z_t1067_Ast_t*, uint32_t, z_t105_StringView_t);
-typedef void (*z_t3725_ZDumper_appendUnitFromNamedOp_ft)(z_t3716_ZDumper_t*, z_t1067_Ast_t*, uint32_t);
-typedef void (*z_t3727_ZDumper_appendUnitRow_ft)(z_t3716_ZDumper_t*, z_t1067_Ast_t*, uint32_t, z_t105_StringView_t, z_t1633_ZTyping_t*);
-typedef void (*z_t3728_ZDumper_appendTypes_ft)(z_t3716_ZDumper_t*, z_t1267_ZSymbolTable_t*, z_t1147_StringPool_t*);
-typedef void (*z_t3729_ZDumper_appendDecls_ft)(z_t3716_ZDumper_t*, z_t1067_Ast_t*, z_t1633_ZTyping_t*);
-typedef void (*z_t3730_ZDumper_appendSynthNodes_ft)(z_t3716_ZDumper_t*, z_t1633_ZTyping_t*);
-typedef void (*z_t3731_ZDumper_appendTypedNodes_ft)(z_t3716_ZDumper_t*, z_t1633_ZTyping_t*);
-typedef void (*z_t3732_ZDumper_appendAtomStamps_ft)(z_t3716_ZDumper_t*, z_t1633_ZTyping_t*);
-typedef void (*z_t3733_ZDumper_appendConformance_ft)(z_t3716_ZDumper_t*, z_t1633_ZTyping_t*);
-typedef void (*z_t3734_ZDumper_appendSymbolTable_ft)(z_t3716_ZDumper_t*, z_t1267_ZSymbolTable_t*);
-typedef void (*z_t3735_ZDumper_emitSection_ft)(z_t3716_ZDumper_t*, z_t105_StringView_t, z_t989_List_String_t*);
-typedef void (*z_t3737_ZDumper_appendGenericChildren_ft)(z_t3716_ZDumper_t*, z_t1267_ZSymbolTable_t*);
-typedef void (*z_t3738_ZDumper_appendGenericArgs_ft)(z_t3716_ZDumper_t*, z_t1267_ZSymbolTable_t*);
-typedef void (*z_t3739_ZDumper_appendGenericChildrenCanon_ft)(z_t3716_ZDumper_t*, z_t105_StringView_t, z_t1267_ZSymbolTable_t*);
-typedef void (*z_t3740_ZDumper_appendGenericArgsCanon_ft)(z_t3716_ZDumper_t*, z_t105_StringView_t, z_t1267_ZSymbolTable_t*);
-typedef void (*z_t3741_ZDumper_appendTypesCanon_ft)(z_t3716_ZDumper_t*, z_t105_StringView_t, z_t1267_ZSymbolTable_t*, z_t1147_StringPool_t*);
-typedef void (*z_t3742_ZDumper_appendDeclChildCanon_ft)(z_t3716_ZDumper_t*, z_t1067_Ast_t*, z_t105_StringView_t, z_t1267_ZSymbolTable_t*);
-typedef void (*z_t3743_ZDumper_appendConformanceCanon_ft)(z_t3716_ZDumper_t*, z_t105_StringView_t, z_t1267_ZSymbolTable_t*);
-typedef void (*z_t3744_ZDumper_appendSymbolTableCanon_ft)(z_t3716_ZDumper_t*, z_t1267_ZSymbolTable_t*);
-typedef void (*z_t3745_ZDumper_appendArgDispositionCanon_ft)(z_t3716_ZDumper_t*, z_t1067_Ast_t*, z_t1267_ZSymbolTable_t*);
+typedef z_t74_String_t (*z_t3472_cnameSql_ft)(z_t105_StringView_t);
+typedef z_t74_String_t (*z_t3478_argAtomName_ft)(z_t1067_Ast_t*, uint64_t);
+typedef uint64_t (*z_t3479_walkExprStampsAt_ft)(z_t1633_ZTyping_t*, z_t1067_Ast_t*, uint32_t, z_t1422_List_u64_t*, z_t1422_List_u64_t*);
+typedef void (*z_t3481_walkExprStampsOptAt_ft)(z_t1633_ZTyping_t*, z_t1067_Ast_t*, uint32_t, z_t1422_List_u64_t*, z_t1422_List_u64_t*);
+typedef z_t74_String_t (*z_t3485_canonTypeName_ft)(z_t1412_ZTypeRegistry_t*, uint64_t);
+typedef uint32_t (*z_t3622_NullProvider_walk_ft)(z_t3621_NullProvider_t*, z_t105_StringView_t, uint32_t);
+typedef z_t74_String_t (*z_t3625_NullProvider_path_ft)(z_t3621_NullProvider_t*, uint32_t);
+typedef void (*z_t3626_NullProvider_addFile_ft)(z_t3621_NullProvider_t*, z_t74_String_t, z_t74_String_t);
+typedef void (*z_t3649_StringProvider_addChild_ft)(z_t3630_StringProvider_t*, uint32_t, z_t105_StringView_t, uint32_t);
+typedef uint32_t (*z_t3650_StringProvider_walk_ft)(z_t3630_StringProvider_t*, z_t105_StringView_t, uint32_t);
+typedef z_t74_String_t (*z_t3653_StringProvider_path_ft)(z_t3630_StringProvider_t*, uint32_t);
+typedef void (*z_t3654_StringProvider_addFile_ft)(z_t3630_StringProvider_t*, z_t74_String_t, z_t74_String_t);
+typedef uint32_t (*z_t3677_FSProvider_walk_ft)(z_t3658_FSProvider_t*, z_t105_StringView_t, uint32_t);
+typedef z_t74_String_t (*z_t3680_FSProvider_path_ft)(z_t3658_FSProvider_t*, uint32_t);
+typedef void (*z_t3681_FSProvider_addFile_ft)(z_t3658_FSProvider_t*, z_t74_String_t, z_t74_String_t);
+typedef void (*z_t3716_ZDumper_emit_ft)(z_t3715_ZDumper_t*, uint32_t, uint32_t, uint32_t, z_t105_StringView_t, z_t105_StringView_t);
+typedef void (*z_t3717_ZDumper_appendFiles_ft)(z_t3715_ZDumper_t*, z_t881_ZVfs_t*);
+typedef void (*z_t3718_ZDumper_walkOptAt_ft)(z_t3715_ZDumper_t*, z_t1067_Ast_t*, uint32_t, z_t105_StringView_t);
+typedef void (*z_t3724_ZDumper_appendUnitFromNamedOp_ft)(z_t3715_ZDumper_t*, z_t1067_Ast_t*, uint32_t);
+typedef void (*z_t3726_ZDumper_appendUnitRow_ft)(z_t3715_ZDumper_t*, z_t1067_Ast_t*, uint32_t, z_t105_StringView_t, z_t1633_ZTyping_t*);
+typedef void (*z_t3727_ZDumper_appendTypes_ft)(z_t3715_ZDumper_t*, z_t1267_ZSymbolTable_t*, z_t1147_StringPool_t*);
+typedef void (*z_t3728_ZDumper_appendDecls_ft)(z_t3715_ZDumper_t*, z_t1067_Ast_t*, z_t1633_ZTyping_t*);
+typedef void (*z_t3729_ZDumper_appendSynthNodes_ft)(z_t3715_ZDumper_t*, z_t1633_ZTyping_t*);
+typedef void (*z_t3730_ZDumper_appendTypedNodes_ft)(z_t3715_ZDumper_t*, z_t1633_ZTyping_t*);
+typedef void (*z_t3731_ZDumper_appendAtomStamps_ft)(z_t3715_ZDumper_t*, z_t1633_ZTyping_t*);
+typedef void (*z_t3732_ZDumper_appendConformance_ft)(z_t3715_ZDumper_t*, z_t1633_ZTyping_t*);
+typedef void (*z_t3733_ZDumper_appendSymbolTable_ft)(z_t3715_ZDumper_t*, z_t1267_ZSymbolTable_t*);
+typedef void (*z_t3734_ZDumper_emitSection_ft)(z_t3715_ZDumper_t*, z_t105_StringView_t, z_t989_List_String_t*);
+typedef void (*z_t3736_ZDumper_appendGenericChildren_ft)(z_t3715_ZDumper_t*, z_t1267_ZSymbolTable_t*);
+typedef void (*z_t3737_ZDumper_appendGenericArgs_ft)(z_t3715_ZDumper_t*, z_t1267_ZSymbolTable_t*);
+typedef void (*z_t3738_ZDumper_appendGenericChildrenCanon_ft)(z_t3715_ZDumper_t*, z_t105_StringView_t, z_t1267_ZSymbolTable_t*);
+typedef void (*z_t3739_ZDumper_appendGenericArgsCanon_ft)(z_t3715_ZDumper_t*, z_t105_StringView_t, z_t1267_ZSymbolTable_t*);
+typedef void (*z_t3740_ZDumper_appendTypesCanon_ft)(z_t3715_ZDumper_t*, z_t105_StringView_t, z_t1267_ZSymbolTable_t*);
+typedef void (*z_t3741_ZDumper_appendDeclChildCanon_ft)(z_t3715_ZDumper_t*, z_t1067_Ast_t*, z_t105_StringView_t, z_t1267_ZSymbolTable_t*);
+typedef void (*z_t3742_ZDumper_appendConformanceCanon_ft)(z_t3715_ZDumper_t*, z_t105_StringView_t, z_t1267_ZSymbolTable_t*);
+typedef void (*z_t3743_ZDumper_appendSymbolTableCanon_ft)(z_t3715_ZDumper_t*, z_t1267_ZSymbolTable_t*);
+typedef void (*z_t3744_ZDumper_appendArgDispositionCanon_ft)(z_t3715_ZDumper_t*, z_t1067_Ast_t*, z_t1267_ZSymbolTable_t*);
 struct z_t875_ErrorData_t {
     uint32_t nodeid;
     uint32_t lineno;
@@ -17346,162 +17342,162 @@ static void z_t3063_TmpCtr_destroy(z_t3063_TmpCtr_t* p) {
     z_t989_List_String_destroy(&p->listFreeVars);
 }
 
-struct z_t3610_nodepos_t {
+struct z_t3609_nodepos_t {
     uint32_t line;
     uint32_t col;
 };
-static z_t3610_nodepos_t z_t3610_nodepos_meta_create(uint32_t line, uint32_t col) {
-    z_t3610_nodepos_t _this = { line, col };
+static z_t3609_nodepos_t z_t3609_nodepos_meta_create(uint32_t line, uint32_t col) {
+    z_t3609_nodepos_t _this = { line, col };
     return _this;
 }
-#define z_t3610_nodepos_create z_t3610_nodepos_meta_create
-static bool z_t3610_nodepos_eq(z_t3610_nodepos_t a, z_t3610_nodepos_t b) {
+#define z_t3609_nodepos_create z_t3609_nodepos_meta_create
+static bool z_t3609_nodepos_eq(z_t3609_nodepos_t a, z_t3609_nodepos_t b) {
     return a.line == b.line && a.col == b.col;
 }
 
-struct z_t3618_mountinfo_t {
+struct z_t3617_mountinfo_t {
     bool is_mount;
     uint32_t first;
     uint32_t second;
     bool has_second;
 };
-static z_t3618_mountinfo_t z_t3618_mountinfo_meta_create(bool is_mount, uint32_t first, uint32_t second, bool has_second) {
-    z_t3618_mountinfo_t _this = { is_mount, first, second, has_second };
+static z_t3617_mountinfo_t z_t3617_mountinfo_meta_create(bool is_mount, uint32_t first, uint32_t second, bool has_second) {
+    z_t3617_mountinfo_t _this = { is_mount, first, second, has_second };
     return _this;
 }
-#define z_t3618_mountinfo_create z_t3618_mountinfo_meta_create
-static bool z_t3618_mountinfo_eq(z_t3618_mountinfo_t a, z_t3618_mountinfo_t b) {
+#define z_t3617_mountinfo_create z_t3617_mountinfo_meta_create
+static bool z_t3617_mountinfo_eq(z_t3617_mountinfo_t a, z_t3617_mountinfo_t b) {
     return a.is_mount == b.is_mount && a.first == b.first && a.second == b.second && a.has_second == b.has_second;
 }
 
-struct z_t3622_NullProvider_t {
+struct z_t3621_NullProvider_t {
     bool _unused;
 };
-static z_t3622_NullProvider_t z_t3622_NullProvider_meta_create(bool _unused) {
-    z_t3622_NullProvider_t _this = { _unused };
+static z_t3621_NullProvider_t z_t3621_NullProvider_meta_create(bool _unused) {
+    z_t3621_NullProvider_t _this = { _unused };
     return _this;
 }
-#define z_t3622_NullProvider_create z_t3622_NullProvider_meta_create
-static void z_t3622_NullProvider_destroy(z_t3622_NullProvider_t* p);
-static void z_t3622_NullProvider_destroy(z_t3622_NullProvider_t* p) {
+#define z_t3621_NullProvider_create z_t3621_NullProvider_meta_create
+static void z_t3621_NullProvider_destroy(z_t3621_NullProvider_t* p);
+static void z_t3621_NullProvider_destroy(z_t3621_NullProvider_t* p) {
     if (!p) return;
 }
 
-struct z_t3629_StringNode_t {
+struct z_t3628_StringNode_t {
     z_t74_String_t path;
-    z_t3614_nodekind_t kind;
+    z_t3613_nodekind_t kind;
     z_t74_String_t content;
 };
-static z_t3629_StringNode_t z_t3629_StringNode_meta_create(z_t74_String_t path, z_t3614_nodekind_t kind, z_t74_String_t content) {
-    z_t3629_StringNode_t _this = { path, kind, content };
+static z_t3628_StringNode_t z_t3628_StringNode_meta_create(z_t74_String_t path, z_t3613_nodekind_t kind, z_t74_String_t content) {
+    z_t3628_StringNode_t _this = { path, kind, content };
     return _this;
 }
-#define z_t3629_StringNode_create z_t3629_StringNode_meta_create
-static void z_t3629_StringNode_destroy(z_t3629_StringNode_t* p);
-static void z_t3629_StringNode_destroy(z_t3629_StringNode_t* p) {
+#define z_t3628_StringNode_create z_t3628_StringNode_meta_create
+static void z_t3628_StringNode_destroy(z_t3628_StringNode_t* p);
+static void z_t3628_StringNode_destroy(z_t3628_StringNode_t* p) {
     if (!p) return;
     z_t74_String_free(&p->path);
     z_t74_String_free(&p->content);
 }
 
-struct z_t3657_FSNode_t {
+struct z_t3656_FSNode_t {
     z_t74_String_t path;
-    z_t3614_nodekind_t kind;
+    z_t3613_nodekind_t kind;
 };
-static z_t3657_FSNode_t z_t3657_FSNode_meta_create(z_t74_String_t path, z_t3614_nodekind_t kind) {
-    z_t3657_FSNode_t _this = { path, kind };
+static z_t3656_FSNode_t z_t3656_FSNode_meta_create(z_t74_String_t path, z_t3613_nodekind_t kind) {
+    z_t3656_FSNode_t _this = { path, kind };
     return _this;
 }
-#define z_t3657_FSNode_create z_t3657_FSNode_meta_create
-static void z_t3657_FSNode_destroy(z_t3657_FSNode_t* p);
-static void z_t3657_FSNode_destroy(z_t3657_FSNode_t* p) {
+#define z_t3656_FSNode_create z_t3656_FSNode_meta_create
+static void z_t3656_FSNode_destroy(z_t3656_FSNode_t* p);
+static void z_t3656_FSNode_destroy(z_t3656_FSNode_t* p) {
     if (!p) return;
     z_t74_String_free(&p->path);
 }
 
-struct z_t3696_kwresult_t {
+struct z_t3695_kwresult_t {
     bool found;
     z_t2082_TT_t tt;
 };
-static z_t3696_kwresult_t z_t3696_kwresult_meta_create(bool found, z_t2082_TT_t tt) {
-    z_t3696_kwresult_t _this = { found, tt };
+static z_t3695_kwresult_t z_t3695_kwresult_meta_create(bool found, z_t2082_TT_t tt) {
+    z_t3695_kwresult_t _this = { found, tt };
     return _this;
 }
-#define z_t3696_kwresult_create z_t3696_kwresult_meta_create
-static bool z_t3696_kwresult_eq(z_t3696_kwresult_t a, z_t3696_kwresult_t b) {
+#define z_t3695_kwresult_create z_t3695_kwresult_meta_create
+static bool z_t3695_kwresult_eq(z_t3695_kwresult_t a, z_t3695_kwresult_t b) {
     return a.found == b.found && z_t2082_TT_eq(a.tt, b.tt);
 }
 
-struct z_t3702_suffixinfo_t {
+struct z_t3701_suffixinfo_t {
     bool has;
     z_t2343_numkind_t kind;
     uint64_t len;
 };
-static z_t3702_suffixinfo_t z_t3702_suffixinfo_meta_create(bool has, z_t2343_numkind_t kind, uint64_t len) {
-    z_t3702_suffixinfo_t _this = { has, kind, len };
+static z_t3701_suffixinfo_t z_t3701_suffixinfo_meta_create(bool has, z_t2343_numkind_t kind, uint64_t len) {
+    z_t3701_suffixinfo_t _this = { has, kind, len };
     return _this;
 }
-#define z_t3702_suffixinfo_create z_t3702_suffixinfo_meta_create
-static bool z_t3702_suffixinfo_eq(z_t3702_suffixinfo_t a, z_t3702_suffixinfo_t b) {
+#define z_t3701_suffixinfo_create z_t3701_suffixinfo_meta_create
+static bool z_t3701_suffixinfo_eq(z_t3701_suffixinfo_t a, z_t3701_suffixinfo_t b) {
     return a.has == b.has && z_t2343_numkind_eq(a.kind, b.kind) && a.len == b.len;
 }
 
-struct z_t3706_parsedval_t {
+struct z_t3705_parsedval_t {
     bool ok;
     bool isFloat;
     uint64_t ival;
     double fval;
 };
-static z_t3706_parsedval_t z_t3706_parsedval_meta_create(bool ok, bool isFloat, uint64_t ival, double fval) {
-    z_t3706_parsedval_t _this = { ok, isFloat, ival, fval };
+static z_t3705_parsedval_t z_t3705_parsedval_meta_create(bool ok, bool isFloat, uint64_t ival, double fval) {
+    z_t3705_parsedval_t _this = { ok, isFloat, ival, fval };
     return _this;
 }
-#define z_t3706_parsedval_create z_t3706_parsedval_meta_create
-static bool z_t3706_parsedval_eq(z_t3706_parsedval_t a, z_t3706_parsedval_t b) {
+#define z_t3705_parsedval_create z_t3705_parsedval_meta_create
+static bool z_t3705_parsedval_eq(z_t3705_parsedval_t a, z_t3705_parsedval_t b) {
     return a.ok == b.ok && a.isFloat == b.isFloat && a.ival == b.ival && a.fval == b.fval;
 }
 
-struct z_t3710_ParsedNumber_t {
+struct z_t3709_ParsedNumber_t {
     z_t2343_numkind_t kind;
     bool isFloat;
     uint64_t ival;
     double fval;
     z_t74_String_t err;
 };
-static z_t3710_ParsedNumber_t z_t3710_ParsedNumber_meta_create(z_t2343_numkind_t kind, bool isFloat, uint64_t ival, double fval, z_t74_String_t err) {
-    z_t3710_ParsedNumber_t _this = { kind, isFloat, ival, fval, err };
+static z_t3709_ParsedNumber_t z_t3709_ParsedNumber_meta_create(z_t2343_numkind_t kind, bool isFloat, uint64_t ival, double fval, z_t74_String_t err) {
+    z_t3709_ParsedNumber_t _this = { kind, isFloat, ival, fval, err };
     return _this;
 }
-#define z_t3710_ParsedNumber_create z_t3710_ParsedNumber_meta_create
-static void z_t3710_ParsedNumber_destroy(z_t3710_ParsedNumber_t* p);
-static void z_t3710_ParsedNumber_destroy(z_t3710_ParsedNumber_t* p) {
+#define z_t3709_ParsedNumber_create z_t3709_ParsedNumber_meta_create
+static void z_t3709_ParsedNumber_destroy(z_t3709_ParsedNumber_t* p);
+static void z_t3709_ParsedNumber_destroy(z_t3709_ParsedNumber_t* p) {
     if (!p) return;
     z_t74_String_free(&p->err);
 }
 
-struct z_t3712_cfold_t {
+struct z_t3711_cfold_t {
     bool ok;
     int64_t val;
 };
-static z_t3712_cfold_t z_t3712_cfold_meta_create(bool ok, int64_t val) {
-    z_t3712_cfold_t _this = { ok, val };
+static z_t3711_cfold_t z_t3711_cfold_meta_create(bool ok, int64_t val) {
+    z_t3711_cfold_t _this = { ok, val };
     return _this;
 }
-#define z_t3712_cfold_create z_t3712_cfold_meta_create
-static bool z_t3712_cfold_eq(z_t3712_cfold_t a, z_t3712_cfold_t b) {
+#define z_t3711_cfold_create z_t3711_cfold_meta_create
+static bool z_t3711_cfold_eq(z_t3711_cfold_t a, z_t3711_cfold_t b) {
     return a.ok == b.ok && a.val == b.val;
 }
 
-struct z_t3716_ZDumper_t {
+struct z_t3715_ZDumper_t {
     z_t74_String_t acc;
 };
-static z_t3716_ZDumper_t z_t3716_ZDumper_meta_create(z_t74_String_t acc) {
-    z_t3716_ZDumper_t _this = { acc };
+static z_t3715_ZDumper_t z_t3715_ZDumper_meta_create(z_t74_String_t acc) {
+    z_t3715_ZDumper_t _this = { acc };
     return _this;
 }
-#define z_t3716_ZDumper_create z_t3716_ZDumper_meta_create
-static void z_t3716_ZDumper_destroy(z_t3716_ZDumper_t* p);
-static void z_t3716_ZDumper_destroy(z_t3716_ZDumper_t* p) {
+#define z_t3715_ZDumper_create z_t3715_ZDumper_meta_create
+static void z_t3715_ZDumper_destroy(z_t3715_ZDumper_t* p);
+static void z_t3715_ZDumper_destroy(z_t3715_ZDumper_t* p) {
     if (!p) return;
     z_t74_String_free(&p->acc);
 }
@@ -17968,14 +17964,14 @@ static z_t2967_NameTid_t* z_t2977_ListView_NameTid_get(z_t2977_ListView_NameTid_
     return &_this->data[_idx];
 }
 
-typedef struct z_t3640_ListView_StringNode_t {
+typedef struct z_t3639_ListView_StringNode_t {
     uint64_t length;
-    z_t3629_StringNode_t* data;
-} z_t3640_ListView_StringNode_t;
+    z_t3628_StringNode_t* data;
+} z_t3639_ListView_StringNode_t;
 
 
-static z_t3629_StringNode_t* z_t3640_ListView_StringNode_get(z_t3640_ListView_StringNode_t* _this, uint64_t _idx);
-static z_t3629_StringNode_t* z_t3640_ListView_StringNode_get(z_t3640_ListView_StringNode_t* _this, uint64_t _idx) {
+static z_t3628_StringNode_t* z_t3639_ListView_StringNode_get(z_t3639_ListView_StringNode_t* _this, uint64_t _idx);
+static z_t3628_StringNode_t* z_t3639_ListView_StringNode_get(z_t3639_ListView_StringNode_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "ListView get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -17984,14 +17980,14 @@ static z_t3629_StringNode_t* z_t3640_ListView_StringNode_get(z_t3640_ListView_St
     return &_this->data[_idx];
 }
 
-typedef struct z_t3668_ListView_FSNode_t {
+typedef struct z_t3667_ListView_FSNode_t {
     uint64_t length;
-    z_t3657_FSNode_t* data;
-} z_t3668_ListView_FSNode_t;
+    z_t3656_FSNode_t* data;
+} z_t3667_ListView_FSNode_t;
 
 
-static z_t3657_FSNode_t* z_t3668_ListView_FSNode_get(z_t3668_ListView_FSNode_t* _this, uint64_t _idx);
-static z_t3657_FSNode_t* z_t3668_ListView_FSNode_get(z_t3668_ListView_FSNode_t* _this, uint64_t _idx) {
+static z_t3656_FSNode_t* z_t3667_ListView_FSNode_get(z_t3667_ListView_FSNode_t* _this, uint64_t _idx);
+static z_t3656_FSNode_t* z_t3667_ListView_FSNode_get(z_t3667_ListView_FSNode_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "ListView get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -18000,14 +17996,14 @@ static z_t3657_FSNode_t* z_t3668_ListView_FSNode_get(z_t3668_ListView_FSNode_t* 
     return &_this->data[_idx];
 }
 
-typedef struct z_t3774_ListView_zparamownership_t {
+typedef struct z_t3773_ListView_zparamownership_t {
     uint64_t length;
     z_t1771_zparamownership_t* data;
-} z_t3774_ListView_zparamownership_t;
+} z_t3773_ListView_zparamownership_t;
 
 
-static z_t1771_zparamownership_t z_t3774_ListView_zparamownership_get(z_t3774_ListView_zparamownership_t* _this, uint64_t _idx);
-static z_t1771_zparamownership_t z_t3774_ListView_zparamownership_get(z_t3774_ListView_zparamownership_t* _this, uint64_t _idx) {
+static z_t1771_zparamownership_t z_t3773_ListView_zparamownership_get(z_t3773_ListView_zparamownership_t* _this, uint64_t _idx);
+static z_t1771_zparamownership_t z_t3773_ListView_zparamownership_get(z_t3773_ListView_zparamownership_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "ListView get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -18016,14 +18012,14 @@ static z_t1771_zparamownership_t z_t3774_ListView_zparamownership_get(z_t3774_Li
     return _this->data[_idx];
 }
 
-typedef struct z_t3821_ListView_zsrcpos_t {
+typedef struct z_t3820_ListView_zsrcpos_t {
     uint64_t length;
     z_t1313_zsrcpos_t* data;
-} z_t3821_ListView_zsrcpos_t;
+} z_t3820_ListView_zsrcpos_t;
 
 
-static z_t1313_zsrcpos_t z_t3821_ListView_zsrcpos_get(z_t3821_ListView_zsrcpos_t* _this, uint64_t _idx);
-static z_t1313_zsrcpos_t z_t3821_ListView_zsrcpos_get(z_t3821_ListView_zsrcpos_t* _this, uint64_t _idx) {
+static z_t1313_zsrcpos_t z_t3820_ListView_zsrcpos_get(z_t3820_ListView_zsrcpos_t* _this, uint64_t _idx);
+static z_t1313_zsrcpos_t z_t3820_ListView_zsrcpos_get(z_t3820_ListView_zsrcpos_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "ListView get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -20660,65 +20656,65 @@ static z_t2981_ListIter_NameTid_t z_t2969_List_NameTid_iterate(z_t2969_List_Name
     return _it;
 }
 
-typedef struct z_t3632_List_StringNode_t {
+typedef struct z_t3631_List_StringNode_t {
     uint64_t length;
-    z_t3629_StringNode_t* data;
+    z_t3628_StringNode_t* data;
     uint64_t capacity;
-} z_t3632_List_StringNode_t;
+} z_t3631_List_StringNode_t;
 
-static void z_t3632_List_StringNode_destroy(z_t3632_List_StringNode_t* p);
-static void z_t3632_List_StringNode_destroy(z_t3632_List_StringNode_t* p) {
+static void z_t3631_List_StringNode_destroy(z_t3631_List_StringNode_t* p);
+static void z_t3631_List_StringNode_destroy(z_t3631_List_StringNode_t* p) {
     if (!p) return;
     for (uint64_t _di = 0; _di < p->length; _di++) {
-        z_t3629_StringNode_destroy(&p->data[_di]);
+        z_t3628_StringNode_destroy(&p->data[_di]);
     }
     free(p->data);
 }
 
-static z_t3632_List_StringNode_t z_t3632_List_StringNode_create(uint64_t _capacity);
-static z_t3632_List_StringNode_t z_t3632_List_StringNode_create(uint64_t _capacity) {
-    z_t3632_List_StringNode_t _this = {0};
+static z_t3631_List_StringNode_t z_t3631_List_StringNode_create(uint64_t _capacity);
+static z_t3631_List_StringNode_t z_t3631_List_StringNode_create(uint64_t _capacity) {
+    z_t3631_List_StringNode_t _this = {0};
     _this.capacity = _capacity;
     if (_capacity > 0) {
-        _this.data = (z_t3629_StringNode_t*)z_xcalloc(_capacity, sizeof(z_t3629_StringNode_t));
+        _this.data = (z_t3628_StringNode_t*)z_xcalloc(_capacity, sizeof(z_t3628_StringNode_t));
     }
     return _this;
 }
 
-static void z_t3632_List_StringNode_grow(z_t3632_List_StringNode_t* _this, uint64_t _needed);
-static void z_t3632_List_StringNode_grow(z_t3632_List_StringNode_t* _this, uint64_t _needed) {
+static void z_t3631_List_StringNode_grow(z_t3631_List_StringNode_t* _this, uint64_t _needed);
+static void z_t3631_List_StringNode_grow(z_t3631_List_StringNode_t* _this, uint64_t _needed) {
     if (_needed <= _this->capacity) return;
     uint64_t newcap = _this->capacity + (_this->capacity >> 1) + 4;
     if (newcap < _needed) newcap = _needed;
     _this->capacity = newcap;
-    _this->data = (z_t3629_StringNode_t*)z_xrealloc(_this->data, newcap * sizeof(z_t3629_StringNode_t));
+    _this->data = (z_t3628_StringNode_t*)z_xrealloc(_this->data, newcap * sizeof(z_t3628_StringNode_t));
 }
 
-static void z_t3632_List_StringNode_append(z_t3632_List_StringNode_t* _this, z_t3629_StringNode_t _val);
-static void z_t3632_List_StringNode_append(z_t3632_List_StringNode_t* _this, z_t3629_StringNode_t _val) {
-    z_t3632_List_StringNode_grow(_this, _this->length + 1);
+static void z_t3631_List_StringNode_append(z_t3631_List_StringNode_t* _this, z_t3628_StringNode_t _val);
+static void z_t3631_List_StringNode_append(z_t3631_List_StringNode_t* _this, z_t3628_StringNode_t _val) {
+    z_t3631_List_StringNode_grow(_this, _this->length + 1);
     _this->data[_this->length] = _val;
     _this->length++;
 }
 
-static void z_t3632_List_StringNode_insert(z_t3632_List_StringNode_t* _this, z_t3629_StringNode_t _val, uint64_t _at);
-static void z_t3632_List_StringNode_insert(z_t3632_List_StringNode_t* _this, z_t3629_StringNode_t _val, uint64_t _at) {
+static void z_t3631_List_StringNode_insert(z_t3631_List_StringNode_t* _this, z_t3628_StringNode_t _val, uint64_t _at);
+static void z_t3631_List_StringNode_insert(z_t3631_List_StringNode_t* _this, z_t3628_StringNode_t _val, uint64_t _at) {
     if (_at >= _this->length + 1) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List insert: index %lu out of bounds (length %lu)", (unsigned long)_at, (unsigned long)_this->length + 1);
         z_panic(_zp_buf);
     }
-    z_t3632_List_StringNode_grow(_this, _this->length + 1);
-    memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof(z_t3629_StringNode_t));
+    z_t3631_List_StringNode_grow(_this, _this->length + 1);
+    memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof(z_t3628_StringNode_t));
     _this->data[_at] = _val;
     _this->length++;
 }
 
-static void z_t3632_List_StringNode_extend(z_t3632_List_StringNode_t* _this, z_t3632_List_StringNode_t* _from);
-static void z_t3632_List_StringNode_extend(z_t3632_List_StringNode_t* _this, z_t3632_List_StringNode_t* _from) {
+static void z_t3631_List_StringNode_extend(z_t3631_List_StringNode_t* _this, z_t3631_List_StringNode_t* _from);
+static void z_t3631_List_StringNode_extend(z_t3631_List_StringNode_t* _this, z_t3631_List_StringNode_t* _from) {
     if (!_from) return;
-    z_t3632_List_StringNode_grow(_this, _this->length + _from->length);
-    memcpy(&_this->data[_this->length], _from->data, _from->length * sizeof(z_t3629_StringNode_t));
+    z_t3631_List_StringNode_grow(_this, _this->length + _from->length);
+    memcpy(&_this->data[_this->length], _from->data, _from->length * sizeof(z_t3628_StringNode_t));
     _this->length += _from->length;
     free(_from->data);
     _from->data = NULL;
@@ -20726,20 +20722,20 @@ static void z_t3632_List_StringNode_extend(z_t3632_List_StringNode_t* _this, z_t
     _from->capacity = 0;
 }
 
-static z_t3629_StringNode_t z_t3632_List_StringNode_set(z_t3632_List_StringNode_t* _this, uint64_t _idx, z_t3629_StringNode_t _val);
-static z_t3629_StringNode_t z_t3632_List_StringNode_set(z_t3632_List_StringNode_t* _this, uint64_t _idx, z_t3629_StringNode_t _val) {
+static z_t3628_StringNode_t z_t3631_List_StringNode_set(z_t3631_List_StringNode_t* _this, uint64_t _idx, z_t3628_StringNode_t _val);
+static z_t3628_StringNode_t z_t3631_List_StringNode_set(z_t3631_List_StringNode_t* _this, uint64_t _idx, z_t3628_StringNode_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
         z_panic(_zp_buf);
     }
-    z_t3629_StringNode_t _old = _this->data[_idx];
+    z_t3628_StringNode_t _old = _this->data[_idx];
     _this->data[_idx] = _val;
     return _old;
 }
 
-static z_t3629_StringNode_t z_t3632_List_StringNode_pop(z_t3632_List_StringNode_t* _this);
-static z_t3629_StringNode_t z_t3632_List_StringNode_pop(z_t3632_List_StringNode_t* _this) {
+static z_t3628_StringNode_t z_t3631_List_StringNode_pop(z_t3631_List_StringNode_t* _this);
+static z_t3628_StringNode_t z_t3631_List_StringNode_pop(z_t3631_List_StringNode_t* _this) {
     if (_this->length == 0) {
         z_panic("List pop: empty list");
     }
@@ -20747,16 +20743,16 @@ static z_t3629_StringNode_t z_t3632_List_StringNode_pop(z_t3632_List_StringNode_
     return _this->data[_this->length];
 }
 
-static z_t3640_ListView_StringNode_t z_t3632_List_StringNode_listview(z_t3632_List_StringNode_t* _this) { return *(z_t3640_ListView_StringNode_t*)_this; }
-static void z_t3632_List_StringNode_extendView(z_t3632_List_StringNode_t* _this, z_t3640_ListView_StringNode_t _from) {
-    z_t3632_List_StringNode_grow(_this, _this->length + _from.length);
-    memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(z_t3629_StringNode_t));
+static z_t3639_ListView_StringNode_t z_t3631_List_StringNode_listview(z_t3631_List_StringNode_t* _this) { return *(z_t3639_ListView_StringNode_t*)_this; }
+static void z_t3631_List_StringNode_extendView(z_t3631_List_StringNode_t* _this, z_t3639_ListView_StringNode_t _from) {
+    z_t3631_List_StringNode_grow(_this, _this->length + _from.length);
+    memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(z_t3628_StringNode_t));
     _this->length += _from.length;
 }
 
 
-static z_t3629_StringNode_t* z_t3632_List_StringNode_get(z_t3632_List_StringNode_t* _this, uint64_t _idx);
-static z_t3629_StringNode_t* z_t3632_List_StringNode_get(z_t3632_List_StringNode_t* _this, uint64_t _idx) {
+static z_t3628_StringNode_t* z_t3631_List_StringNode_get(z_t3631_List_StringNode_t* _this, uint64_t _idx);
+static z_t3628_StringNode_t* z_t3631_List_StringNode_get(z_t3631_List_StringNode_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -20766,85 +20762,85 @@ static z_t3629_StringNode_t* z_t3632_List_StringNode_get(z_t3632_List_StringNode
 }
 
 typedef struct {
-    z_t3632_List_StringNode_t* list;
+    z_t3631_List_StringNode_t* list;
     uint64_t idx;
-} z_t3644_ListIter_StringNode_t;
-static z_t3646_OptionView_StringNode_t z_t3644_ListIter_StringNode_call(z_t3644_ListIter_StringNode_t* _it);
-static z_t3646_OptionView_StringNode_t z_t3644_ListIter_StringNode_call(z_t3644_ListIter_StringNode_t* _it) {
-    z_t3646_OptionView_StringNode_t _out = {0};
+} z_t3643_ListIter_StringNode_t;
+static z_t3645_OptionView_StringNode_t z_t3643_ListIter_StringNode_call(z_t3643_ListIter_StringNode_t* _it);
+static z_t3645_OptionView_StringNode_t z_t3643_ListIter_StringNode_call(z_t3643_ListIter_StringNode_t* _it) {
+    z_t3645_OptionView_StringNode_t _out = {0};
     if (_it->idx >= _it->list->length) { _out.tag = Z_OPTIONVIEW_STRINGNODE_TAG_NONE; return _out; }
     _out.tag = Z_OPTIONVIEW_STRINGNODE_TAG_SOME;
     _out.data = &_it->list->data[_it->idx];
     _it->idx++;
     return _out;
 }
-static z_t3644_ListIter_StringNode_t z_t3632_List_StringNode_iterate(z_t3632_List_StringNode_t* _this);
-static z_t3644_ListIter_StringNode_t z_t3632_List_StringNode_iterate(z_t3632_List_StringNode_t* _this) {
-    z_t3644_ListIter_StringNode_t _it = {0};
+static z_t3643_ListIter_StringNode_t z_t3631_List_StringNode_iterate(z_t3631_List_StringNode_t* _this);
+static z_t3643_ListIter_StringNode_t z_t3631_List_StringNode_iterate(z_t3631_List_StringNode_t* _this) {
+    z_t3643_ListIter_StringNode_t _it = {0};
     _it.list = _this;
     _it.idx = 0;
     return _it;
 }
 
-typedef struct z_t3660_List_FSNode_t {
+typedef struct z_t3659_List_FSNode_t {
     uint64_t length;
-    z_t3657_FSNode_t* data;
+    z_t3656_FSNode_t* data;
     uint64_t capacity;
-} z_t3660_List_FSNode_t;
+} z_t3659_List_FSNode_t;
 
-static void z_t3660_List_FSNode_destroy(z_t3660_List_FSNode_t* p);
-static void z_t3660_List_FSNode_destroy(z_t3660_List_FSNode_t* p) {
+static void z_t3659_List_FSNode_destroy(z_t3659_List_FSNode_t* p);
+static void z_t3659_List_FSNode_destroy(z_t3659_List_FSNode_t* p) {
     if (!p) return;
     for (uint64_t _di = 0; _di < p->length; _di++) {
-        z_t3657_FSNode_destroy(&p->data[_di]);
+        z_t3656_FSNode_destroy(&p->data[_di]);
     }
     free(p->data);
 }
 
-static z_t3660_List_FSNode_t z_t3660_List_FSNode_create(uint64_t _capacity);
-static z_t3660_List_FSNode_t z_t3660_List_FSNode_create(uint64_t _capacity) {
-    z_t3660_List_FSNode_t _this = {0};
+static z_t3659_List_FSNode_t z_t3659_List_FSNode_create(uint64_t _capacity);
+static z_t3659_List_FSNode_t z_t3659_List_FSNode_create(uint64_t _capacity) {
+    z_t3659_List_FSNode_t _this = {0};
     _this.capacity = _capacity;
     if (_capacity > 0) {
-        _this.data = (z_t3657_FSNode_t*)z_xcalloc(_capacity, sizeof(z_t3657_FSNode_t));
+        _this.data = (z_t3656_FSNode_t*)z_xcalloc(_capacity, sizeof(z_t3656_FSNode_t));
     }
     return _this;
 }
 
-static void z_t3660_List_FSNode_grow(z_t3660_List_FSNode_t* _this, uint64_t _needed);
-static void z_t3660_List_FSNode_grow(z_t3660_List_FSNode_t* _this, uint64_t _needed) {
+static void z_t3659_List_FSNode_grow(z_t3659_List_FSNode_t* _this, uint64_t _needed);
+static void z_t3659_List_FSNode_grow(z_t3659_List_FSNode_t* _this, uint64_t _needed) {
     if (_needed <= _this->capacity) return;
     uint64_t newcap = _this->capacity + (_this->capacity >> 1) + 4;
     if (newcap < _needed) newcap = _needed;
     _this->capacity = newcap;
-    _this->data = (z_t3657_FSNode_t*)z_xrealloc(_this->data, newcap * sizeof(z_t3657_FSNode_t));
+    _this->data = (z_t3656_FSNode_t*)z_xrealloc(_this->data, newcap * sizeof(z_t3656_FSNode_t));
 }
 
-static void z_t3660_List_FSNode_append(z_t3660_List_FSNode_t* _this, z_t3657_FSNode_t _val);
-static void z_t3660_List_FSNode_append(z_t3660_List_FSNode_t* _this, z_t3657_FSNode_t _val) {
-    z_t3660_List_FSNode_grow(_this, _this->length + 1);
+static void z_t3659_List_FSNode_append(z_t3659_List_FSNode_t* _this, z_t3656_FSNode_t _val);
+static void z_t3659_List_FSNode_append(z_t3659_List_FSNode_t* _this, z_t3656_FSNode_t _val) {
+    z_t3659_List_FSNode_grow(_this, _this->length + 1);
     _this->data[_this->length] = _val;
     _this->length++;
 }
 
-static void z_t3660_List_FSNode_insert(z_t3660_List_FSNode_t* _this, z_t3657_FSNode_t _val, uint64_t _at);
-static void z_t3660_List_FSNode_insert(z_t3660_List_FSNode_t* _this, z_t3657_FSNode_t _val, uint64_t _at) {
+static void z_t3659_List_FSNode_insert(z_t3659_List_FSNode_t* _this, z_t3656_FSNode_t _val, uint64_t _at);
+static void z_t3659_List_FSNode_insert(z_t3659_List_FSNode_t* _this, z_t3656_FSNode_t _val, uint64_t _at) {
     if (_at >= _this->length + 1) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List insert: index %lu out of bounds (length %lu)", (unsigned long)_at, (unsigned long)_this->length + 1);
         z_panic(_zp_buf);
     }
-    z_t3660_List_FSNode_grow(_this, _this->length + 1);
-    memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof(z_t3657_FSNode_t));
+    z_t3659_List_FSNode_grow(_this, _this->length + 1);
+    memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof(z_t3656_FSNode_t));
     _this->data[_at] = _val;
     _this->length++;
 }
 
-static void z_t3660_List_FSNode_extend(z_t3660_List_FSNode_t* _this, z_t3660_List_FSNode_t* _from);
-static void z_t3660_List_FSNode_extend(z_t3660_List_FSNode_t* _this, z_t3660_List_FSNode_t* _from) {
+static void z_t3659_List_FSNode_extend(z_t3659_List_FSNode_t* _this, z_t3659_List_FSNode_t* _from);
+static void z_t3659_List_FSNode_extend(z_t3659_List_FSNode_t* _this, z_t3659_List_FSNode_t* _from) {
     if (!_from) return;
-    z_t3660_List_FSNode_grow(_this, _this->length + _from->length);
-    memcpy(&_this->data[_this->length], _from->data, _from->length * sizeof(z_t3657_FSNode_t));
+    z_t3659_List_FSNode_grow(_this, _this->length + _from->length);
+    memcpy(&_this->data[_this->length], _from->data, _from->length * sizeof(z_t3656_FSNode_t));
     _this->length += _from->length;
     free(_from->data);
     _from->data = NULL;
@@ -20852,20 +20848,20 @@ static void z_t3660_List_FSNode_extend(z_t3660_List_FSNode_t* _this, z_t3660_Lis
     _from->capacity = 0;
 }
 
-static z_t3657_FSNode_t z_t3660_List_FSNode_set(z_t3660_List_FSNode_t* _this, uint64_t _idx, z_t3657_FSNode_t _val);
-static z_t3657_FSNode_t z_t3660_List_FSNode_set(z_t3660_List_FSNode_t* _this, uint64_t _idx, z_t3657_FSNode_t _val) {
+static z_t3656_FSNode_t z_t3659_List_FSNode_set(z_t3659_List_FSNode_t* _this, uint64_t _idx, z_t3656_FSNode_t _val);
+static z_t3656_FSNode_t z_t3659_List_FSNode_set(z_t3659_List_FSNode_t* _this, uint64_t _idx, z_t3656_FSNode_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
         z_panic(_zp_buf);
     }
-    z_t3657_FSNode_t _old = _this->data[_idx];
+    z_t3656_FSNode_t _old = _this->data[_idx];
     _this->data[_idx] = _val;
     return _old;
 }
 
-static z_t3657_FSNode_t z_t3660_List_FSNode_pop(z_t3660_List_FSNode_t* _this);
-static z_t3657_FSNode_t z_t3660_List_FSNode_pop(z_t3660_List_FSNode_t* _this) {
+static z_t3656_FSNode_t z_t3659_List_FSNode_pop(z_t3659_List_FSNode_t* _this);
+static z_t3656_FSNode_t z_t3659_List_FSNode_pop(z_t3659_List_FSNode_t* _this) {
     if (_this->length == 0) {
         z_panic("List pop: empty list");
     }
@@ -20873,16 +20869,16 @@ static z_t3657_FSNode_t z_t3660_List_FSNode_pop(z_t3660_List_FSNode_t* _this) {
     return _this->data[_this->length];
 }
 
-static z_t3668_ListView_FSNode_t z_t3660_List_FSNode_listview(z_t3660_List_FSNode_t* _this) { return *(z_t3668_ListView_FSNode_t*)_this; }
-static void z_t3660_List_FSNode_extendView(z_t3660_List_FSNode_t* _this, z_t3668_ListView_FSNode_t _from) {
-    z_t3660_List_FSNode_grow(_this, _this->length + _from.length);
-    memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(z_t3657_FSNode_t));
+static z_t3667_ListView_FSNode_t z_t3659_List_FSNode_listview(z_t3659_List_FSNode_t* _this) { return *(z_t3667_ListView_FSNode_t*)_this; }
+static void z_t3659_List_FSNode_extendView(z_t3659_List_FSNode_t* _this, z_t3667_ListView_FSNode_t _from) {
+    z_t3659_List_FSNode_grow(_this, _this->length + _from.length);
+    memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(z_t3656_FSNode_t));
     _this->length += _from.length;
 }
 
 
-static z_t3657_FSNode_t* z_t3660_List_FSNode_get(z_t3660_List_FSNode_t* _this, uint64_t _idx);
-static z_t3657_FSNode_t* z_t3660_List_FSNode_get(z_t3660_List_FSNode_t* _this, uint64_t _idx) {
+static z_t3656_FSNode_t* z_t3659_List_FSNode_get(z_t3659_List_FSNode_t* _this, uint64_t _idx);
+static z_t3656_FSNode_t* z_t3659_List_FSNode_get(z_t3659_List_FSNode_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -20892,41 +20888,41 @@ static z_t3657_FSNode_t* z_t3660_List_FSNode_get(z_t3660_List_FSNode_t* _this, u
 }
 
 typedef struct {
-    z_t3660_List_FSNode_t* list;
+    z_t3659_List_FSNode_t* list;
     uint64_t idx;
-} z_t3672_ListIter_FSNode_t;
-static z_t3674_OptionView_FSNode_t z_t3672_ListIter_FSNode_call(z_t3672_ListIter_FSNode_t* _it);
-static z_t3674_OptionView_FSNode_t z_t3672_ListIter_FSNode_call(z_t3672_ListIter_FSNode_t* _it) {
-    z_t3674_OptionView_FSNode_t _out = {0};
+} z_t3671_ListIter_FSNode_t;
+static z_t3673_OptionView_FSNode_t z_t3671_ListIter_FSNode_call(z_t3671_ListIter_FSNode_t* _it);
+static z_t3673_OptionView_FSNode_t z_t3671_ListIter_FSNode_call(z_t3671_ListIter_FSNode_t* _it) {
+    z_t3673_OptionView_FSNode_t _out = {0};
     if (_it->idx >= _it->list->length) { _out.tag = Z_OPTIONVIEW_FSNODE_TAG_NONE; return _out; }
     _out.tag = Z_OPTIONVIEW_FSNODE_TAG_SOME;
     _out.data = &_it->list->data[_it->idx];
     _it->idx++;
     return _out;
 }
-static z_t3672_ListIter_FSNode_t z_t3660_List_FSNode_iterate(z_t3660_List_FSNode_t* _this);
-static z_t3672_ListIter_FSNode_t z_t3660_List_FSNode_iterate(z_t3660_List_FSNode_t* _this) {
-    z_t3672_ListIter_FSNode_t _it = {0};
+static z_t3671_ListIter_FSNode_t z_t3659_List_FSNode_iterate(z_t3659_List_FSNode_t* _this);
+static z_t3671_ListIter_FSNode_t z_t3659_List_FSNode_iterate(z_t3659_List_FSNode_t* _this) {
+    z_t3671_ListIter_FSNode_t _it = {0};
     _it.list = _this;
     _it.idx = 0;
     return _it;
 }
 
-typedef struct z_t3766_List_zparamownership_t {
+typedef struct z_t3765_List_zparamownership_t {
     uint64_t length;
     z_t1771_zparamownership_t* data;
     uint64_t capacity;
-} z_t3766_List_zparamownership_t;
+} z_t3765_List_zparamownership_t;
 
-static void z_t3766_List_zparamownership_destroy(z_t3766_List_zparamownership_t* p);
-static void z_t3766_List_zparamownership_destroy(z_t3766_List_zparamownership_t* p) {
+static void z_t3765_List_zparamownership_destroy(z_t3765_List_zparamownership_t* p);
+static void z_t3765_List_zparamownership_destroy(z_t3765_List_zparamownership_t* p) {
     if (!p) return;
     free(p->data);
 }
 
-static z_t3766_List_zparamownership_t z_t3766_List_zparamownership_create(uint64_t _capacity);
-static z_t3766_List_zparamownership_t z_t3766_List_zparamownership_create(uint64_t _capacity) {
-    z_t3766_List_zparamownership_t _this = {0};
+static z_t3765_List_zparamownership_t z_t3765_List_zparamownership_create(uint64_t _capacity);
+static z_t3765_List_zparamownership_t z_t3765_List_zparamownership_create(uint64_t _capacity) {
+    z_t3765_List_zparamownership_t _this = {0};
     _this.capacity = _capacity;
     if (_capacity > 0) {
         _this.data = (z_t1771_zparamownership_t*)z_xcalloc(_capacity, sizeof(z_t1771_zparamownership_t));
@@ -20934,8 +20930,8 @@ static z_t3766_List_zparamownership_t z_t3766_List_zparamownership_create(uint64
     return _this;
 }
 
-static void z_t3766_List_zparamownership_grow(z_t3766_List_zparamownership_t* _this, uint64_t _needed);
-static void z_t3766_List_zparamownership_grow(z_t3766_List_zparamownership_t* _this, uint64_t _needed) {
+static void z_t3765_List_zparamownership_grow(z_t3765_List_zparamownership_t* _this, uint64_t _needed);
+static void z_t3765_List_zparamownership_grow(z_t3765_List_zparamownership_t* _this, uint64_t _needed) {
     if (_needed <= _this->capacity) return;
     uint64_t newcap = _this->capacity + (_this->capacity >> 1) + 4;
     if (newcap < _needed) newcap = _needed;
@@ -20943,30 +20939,30 @@ static void z_t3766_List_zparamownership_grow(z_t3766_List_zparamownership_t* _t
     _this->data = (z_t1771_zparamownership_t*)z_xrealloc(_this->data, newcap * sizeof(z_t1771_zparamownership_t));
 }
 
-static void z_t3766_List_zparamownership_append(z_t3766_List_zparamownership_t* _this, z_t1771_zparamownership_t _val);
-static void z_t3766_List_zparamownership_append(z_t3766_List_zparamownership_t* _this, z_t1771_zparamownership_t _val) {
-    z_t3766_List_zparamownership_grow(_this, _this->length + 1);
+static void z_t3765_List_zparamownership_append(z_t3765_List_zparamownership_t* _this, z_t1771_zparamownership_t _val);
+static void z_t3765_List_zparamownership_append(z_t3765_List_zparamownership_t* _this, z_t1771_zparamownership_t _val) {
+    z_t3765_List_zparamownership_grow(_this, _this->length + 1);
     _this->data[_this->length] = _val;
     _this->length++;
 }
 
-static void z_t3766_List_zparamownership_insert(z_t3766_List_zparamownership_t* _this, z_t1771_zparamownership_t _val, uint64_t _at);
-static void z_t3766_List_zparamownership_insert(z_t3766_List_zparamownership_t* _this, z_t1771_zparamownership_t _val, uint64_t _at) {
+static void z_t3765_List_zparamownership_insert(z_t3765_List_zparamownership_t* _this, z_t1771_zparamownership_t _val, uint64_t _at);
+static void z_t3765_List_zparamownership_insert(z_t3765_List_zparamownership_t* _this, z_t1771_zparamownership_t _val, uint64_t _at) {
     if (_at >= _this->length + 1) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List insert: index %lu out of bounds (length %lu)", (unsigned long)_at, (unsigned long)_this->length + 1);
         z_panic(_zp_buf);
     }
-    z_t3766_List_zparamownership_grow(_this, _this->length + 1);
+    z_t3765_List_zparamownership_grow(_this, _this->length + 1);
     memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof(z_t1771_zparamownership_t));
     _this->data[_at] = _val;
     _this->length++;
 }
 
-static void z_t3766_List_zparamownership_extend(z_t3766_List_zparamownership_t* _this, z_t3766_List_zparamownership_t* _from);
-static void z_t3766_List_zparamownership_extend(z_t3766_List_zparamownership_t* _this, z_t3766_List_zparamownership_t* _from) {
+static void z_t3765_List_zparamownership_extend(z_t3765_List_zparamownership_t* _this, z_t3765_List_zparamownership_t* _from);
+static void z_t3765_List_zparamownership_extend(z_t3765_List_zparamownership_t* _this, z_t3765_List_zparamownership_t* _from) {
     if (!_from) return;
-    z_t3766_List_zparamownership_grow(_this, _this->length + _from->length);
+    z_t3765_List_zparamownership_grow(_this, _this->length + _from->length);
     memcpy(&_this->data[_this->length], _from->data, _from->length * sizeof(z_t1771_zparamownership_t));
     _this->length += _from->length;
     free(_from->data);
@@ -20975,8 +20971,8 @@ static void z_t3766_List_zparamownership_extend(z_t3766_List_zparamownership_t* 
     _from->capacity = 0;
 }
 
-static z_t1771_zparamownership_t z_t3766_List_zparamownership_set(z_t3766_List_zparamownership_t* _this, uint64_t _idx, z_t1771_zparamownership_t _val);
-static z_t1771_zparamownership_t z_t3766_List_zparamownership_set(z_t3766_List_zparamownership_t* _this, uint64_t _idx, z_t1771_zparamownership_t _val) {
+static z_t1771_zparamownership_t z_t3765_List_zparamownership_set(z_t3765_List_zparamownership_t* _this, uint64_t _idx, z_t1771_zparamownership_t _val);
+static z_t1771_zparamownership_t z_t3765_List_zparamownership_set(z_t3765_List_zparamownership_t* _this, uint64_t _idx, z_t1771_zparamownership_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -20987,8 +20983,8 @@ static z_t1771_zparamownership_t z_t3766_List_zparamownership_set(z_t3766_List_z
     return _old;
 }
 
-static z_t1771_zparamownership_t z_t3766_List_zparamownership_pop(z_t3766_List_zparamownership_t* _this);
-static z_t1771_zparamownership_t z_t3766_List_zparamownership_pop(z_t3766_List_zparamownership_t* _this) {
+static z_t1771_zparamownership_t z_t3765_List_zparamownership_pop(z_t3765_List_zparamownership_t* _this);
+static z_t1771_zparamownership_t z_t3765_List_zparamownership_pop(z_t3765_List_zparamownership_t* _this) {
     if (_this->length == 0) {
         z_panic("List pop: empty list");
     }
@@ -20996,16 +20992,16 @@ static z_t1771_zparamownership_t z_t3766_List_zparamownership_pop(z_t3766_List_z
     return _this->data[_this->length];
 }
 
-static z_t3774_ListView_zparamownership_t z_t3766_List_zparamownership_listview(z_t3766_List_zparamownership_t* _this) { return *(z_t3774_ListView_zparamownership_t*)_this; }
-static void z_t3766_List_zparamownership_extendView(z_t3766_List_zparamownership_t* _this, z_t3774_ListView_zparamownership_t _from) {
-    z_t3766_List_zparamownership_grow(_this, _this->length + _from.length);
+static z_t3773_ListView_zparamownership_t z_t3765_List_zparamownership_listview(z_t3765_List_zparamownership_t* _this) { return *(z_t3773_ListView_zparamownership_t*)_this; }
+static void z_t3765_List_zparamownership_extendView(z_t3765_List_zparamownership_t* _this, z_t3773_ListView_zparamownership_t _from) {
+    z_t3765_List_zparamownership_grow(_this, _this->length + _from.length);
     memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(z_t1771_zparamownership_t));
     _this->length += _from.length;
 }
 
 
-static z_t1771_zparamownership_t z_t3766_List_zparamownership_get(z_t3766_List_zparamownership_t* _this, uint64_t _idx);
-static z_t1771_zparamownership_t z_t3766_List_zparamownership_get(z_t3766_List_zparamownership_t* _this, uint64_t _idx) {
+static z_t1771_zparamownership_t z_t3765_List_zparamownership_get(z_t3765_List_zparamownership_t* _this, uint64_t _idx);
+static z_t1771_zparamownership_t z_t3765_List_zparamownership_get(z_t3765_List_zparamownership_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -21015,41 +21011,41 @@ static z_t1771_zparamownership_t z_t3766_List_zparamownership_get(z_t3766_List_z
 }
 
 typedef struct {
-    z_t3766_List_zparamownership_t* list;
+    z_t3765_List_zparamownership_t* list;
     uint64_t idx;
-} z_t3778_ListIter_zparamownership_t;
-static z_t3780_OptionView_zparamownership_t z_t3778_ListIter_zparamownership_call(z_t3778_ListIter_zparamownership_t* _it);
-static z_t3780_OptionView_zparamownership_t z_t3778_ListIter_zparamownership_call(z_t3778_ListIter_zparamownership_t* _it) {
-    z_t3780_OptionView_zparamownership_t _out = {0};
+} z_t3777_ListIter_zparamownership_t;
+static z_t3779_OptionView_zparamownership_t z_t3777_ListIter_zparamownership_call(z_t3777_ListIter_zparamownership_t* _it);
+static z_t3779_OptionView_zparamownership_t z_t3777_ListIter_zparamownership_call(z_t3777_ListIter_zparamownership_t* _it) {
+    z_t3779_OptionView_zparamownership_t _out = {0};
     if (_it->idx >= _it->list->length) { _out.tag = Z_OPTIONVIEW_ZPARAMOWNERSHIP_TAG_NONE; return _out; }
     _out.tag = Z_OPTIONVIEW_ZPARAMOWNERSHIP_TAG_SOME;
     _out.data = &_it->list->data[_it->idx];
     _it->idx++;
     return _out;
 }
-static z_t3778_ListIter_zparamownership_t z_t3766_List_zparamownership_iterate(z_t3766_List_zparamownership_t* _this);
-static z_t3778_ListIter_zparamownership_t z_t3766_List_zparamownership_iterate(z_t3766_List_zparamownership_t* _this) {
-    z_t3778_ListIter_zparamownership_t _it = {0};
+static z_t3777_ListIter_zparamownership_t z_t3765_List_zparamownership_iterate(z_t3765_List_zparamownership_t* _this);
+static z_t3777_ListIter_zparamownership_t z_t3765_List_zparamownership_iterate(z_t3765_List_zparamownership_t* _this) {
+    z_t3777_ListIter_zparamownership_t _it = {0};
     _it.list = _this;
     _it.idx = 0;
     return _it;
 }
 
-typedef struct z_t3813_List_zsrcpos_t {
+typedef struct z_t3812_List_zsrcpos_t {
     uint64_t length;
     z_t1313_zsrcpos_t* data;
     uint64_t capacity;
-} z_t3813_List_zsrcpos_t;
+} z_t3812_List_zsrcpos_t;
 
-static void z_t3813_List_zsrcpos_destroy(z_t3813_List_zsrcpos_t* p);
-static void z_t3813_List_zsrcpos_destroy(z_t3813_List_zsrcpos_t* p) {
+static void z_t3812_List_zsrcpos_destroy(z_t3812_List_zsrcpos_t* p);
+static void z_t3812_List_zsrcpos_destroy(z_t3812_List_zsrcpos_t* p) {
     if (!p) return;
     free(p->data);
 }
 
-static z_t3813_List_zsrcpos_t z_t3813_List_zsrcpos_create(uint64_t _capacity);
-static z_t3813_List_zsrcpos_t z_t3813_List_zsrcpos_create(uint64_t _capacity) {
-    z_t3813_List_zsrcpos_t _this = {0};
+static z_t3812_List_zsrcpos_t z_t3812_List_zsrcpos_create(uint64_t _capacity);
+static z_t3812_List_zsrcpos_t z_t3812_List_zsrcpos_create(uint64_t _capacity) {
+    z_t3812_List_zsrcpos_t _this = {0};
     _this.capacity = _capacity;
     if (_capacity > 0) {
         _this.data = (z_t1313_zsrcpos_t*)z_xcalloc(_capacity, sizeof(z_t1313_zsrcpos_t));
@@ -21057,8 +21053,8 @@ static z_t3813_List_zsrcpos_t z_t3813_List_zsrcpos_create(uint64_t _capacity) {
     return _this;
 }
 
-static void z_t3813_List_zsrcpos_grow(z_t3813_List_zsrcpos_t* _this, uint64_t _needed);
-static void z_t3813_List_zsrcpos_grow(z_t3813_List_zsrcpos_t* _this, uint64_t _needed) {
+static void z_t3812_List_zsrcpos_grow(z_t3812_List_zsrcpos_t* _this, uint64_t _needed);
+static void z_t3812_List_zsrcpos_grow(z_t3812_List_zsrcpos_t* _this, uint64_t _needed) {
     if (_needed <= _this->capacity) return;
     uint64_t newcap = _this->capacity + (_this->capacity >> 1) + 4;
     if (newcap < _needed) newcap = _needed;
@@ -21066,30 +21062,30 @@ static void z_t3813_List_zsrcpos_grow(z_t3813_List_zsrcpos_t* _this, uint64_t _n
     _this->data = (z_t1313_zsrcpos_t*)z_xrealloc(_this->data, newcap * sizeof(z_t1313_zsrcpos_t));
 }
 
-static void z_t3813_List_zsrcpos_append(z_t3813_List_zsrcpos_t* _this, z_t1313_zsrcpos_t _val);
-static void z_t3813_List_zsrcpos_append(z_t3813_List_zsrcpos_t* _this, z_t1313_zsrcpos_t _val) {
-    z_t3813_List_zsrcpos_grow(_this, _this->length + 1);
+static void z_t3812_List_zsrcpos_append(z_t3812_List_zsrcpos_t* _this, z_t1313_zsrcpos_t _val);
+static void z_t3812_List_zsrcpos_append(z_t3812_List_zsrcpos_t* _this, z_t1313_zsrcpos_t _val) {
+    z_t3812_List_zsrcpos_grow(_this, _this->length + 1);
     _this->data[_this->length] = _val;
     _this->length++;
 }
 
-static void z_t3813_List_zsrcpos_insert(z_t3813_List_zsrcpos_t* _this, z_t1313_zsrcpos_t _val, uint64_t _at);
-static void z_t3813_List_zsrcpos_insert(z_t3813_List_zsrcpos_t* _this, z_t1313_zsrcpos_t _val, uint64_t _at) {
+static void z_t3812_List_zsrcpos_insert(z_t3812_List_zsrcpos_t* _this, z_t1313_zsrcpos_t _val, uint64_t _at);
+static void z_t3812_List_zsrcpos_insert(z_t3812_List_zsrcpos_t* _this, z_t1313_zsrcpos_t _val, uint64_t _at) {
     if (_at >= _this->length + 1) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List insert: index %lu out of bounds (length %lu)", (unsigned long)_at, (unsigned long)_this->length + 1);
         z_panic(_zp_buf);
     }
-    z_t3813_List_zsrcpos_grow(_this, _this->length + 1);
+    z_t3812_List_zsrcpos_grow(_this, _this->length + 1);
     memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof(z_t1313_zsrcpos_t));
     _this->data[_at] = _val;
     _this->length++;
 }
 
-static void z_t3813_List_zsrcpos_extend(z_t3813_List_zsrcpos_t* _this, z_t3813_List_zsrcpos_t* _from);
-static void z_t3813_List_zsrcpos_extend(z_t3813_List_zsrcpos_t* _this, z_t3813_List_zsrcpos_t* _from) {
+static void z_t3812_List_zsrcpos_extend(z_t3812_List_zsrcpos_t* _this, z_t3812_List_zsrcpos_t* _from);
+static void z_t3812_List_zsrcpos_extend(z_t3812_List_zsrcpos_t* _this, z_t3812_List_zsrcpos_t* _from) {
     if (!_from) return;
-    z_t3813_List_zsrcpos_grow(_this, _this->length + _from->length);
+    z_t3812_List_zsrcpos_grow(_this, _this->length + _from->length);
     memcpy(&_this->data[_this->length], _from->data, _from->length * sizeof(z_t1313_zsrcpos_t));
     _this->length += _from->length;
     free(_from->data);
@@ -21098,8 +21094,8 @@ static void z_t3813_List_zsrcpos_extend(z_t3813_List_zsrcpos_t* _this, z_t3813_L
     _from->capacity = 0;
 }
 
-static z_t1313_zsrcpos_t z_t3813_List_zsrcpos_set(z_t3813_List_zsrcpos_t* _this, uint64_t _idx, z_t1313_zsrcpos_t _val);
-static z_t1313_zsrcpos_t z_t3813_List_zsrcpos_set(z_t3813_List_zsrcpos_t* _this, uint64_t _idx, z_t1313_zsrcpos_t _val) {
+static z_t1313_zsrcpos_t z_t3812_List_zsrcpos_set(z_t3812_List_zsrcpos_t* _this, uint64_t _idx, z_t1313_zsrcpos_t _val);
+static z_t1313_zsrcpos_t z_t3812_List_zsrcpos_set(z_t3812_List_zsrcpos_t* _this, uint64_t _idx, z_t1313_zsrcpos_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -21110,8 +21106,8 @@ static z_t1313_zsrcpos_t z_t3813_List_zsrcpos_set(z_t3813_List_zsrcpos_t* _this,
     return _old;
 }
 
-static z_t1313_zsrcpos_t z_t3813_List_zsrcpos_pop(z_t3813_List_zsrcpos_t* _this);
-static z_t1313_zsrcpos_t z_t3813_List_zsrcpos_pop(z_t3813_List_zsrcpos_t* _this) {
+static z_t1313_zsrcpos_t z_t3812_List_zsrcpos_pop(z_t3812_List_zsrcpos_t* _this);
+static z_t1313_zsrcpos_t z_t3812_List_zsrcpos_pop(z_t3812_List_zsrcpos_t* _this) {
     if (_this->length == 0) {
         z_panic("List pop: empty list");
     }
@@ -21119,16 +21115,16 @@ static z_t1313_zsrcpos_t z_t3813_List_zsrcpos_pop(z_t3813_List_zsrcpos_t* _this)
     return _this->data[_this->length];
 }
 
-static z_t3821_ListView_zsrcpos_t z_t3813_List_zsrcpos_listview(z_t3813_List_zsrcpos_t* _this) { return *(z_t3821_ListView_zsrcpos_t*)_this; }
-static void z_t3813_List_zsrcpos_extendView(z_t3813_List_zsrcpos_t* _this, z_t3821_ListView_zsrcpos_t _from) {
-    z_t3813_List_zsrcpos_grow(_this, _this->length + _from.length);
+static z_t3820_ListView_zsrcpos_t z_t3812_List_zsrcpos_listview(z_t3812_List_zsrcpos_t* _this) { return *(z_t3820_ListView_zsrcpos_t*)_this; }
+static void z_t3812_List_zsrcpos_extendView(z_t3812_List_zsrcpos_t* _this, z_t3820_ListView_zsrcpos_t _from) {
+    z_t3812_List_zsrcpos_grow(_this, _this->length + _from.length);
     memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(z_t1313_zsrcpos_t));
     _this->length += _from.length;
 }
 
 
-static z_t1313_zsrcpos_t z_t3813_List_zsrcpos_get(z_t3813_List_zsrcpos_t* _this, uint64_t _idx);
-static z_t1313_zsrcpos_t z_t3813_List_zsrcpos_get(z_t3813_List_zsrcpos_t* _this, uint64_t _idx) {
+static z_t1313_zsrcpos_t z_t3812_List_zsrcpos_get(z_t3812_List_zsrcpos_t* _this, uint64_t _idx);
+static z_t1313_zsrcpos_t z_t3812_List_zsrcpos_get(z_t3812_List_zsrcpos_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
         snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
@@ -21138,21 +21134,21 @@ static z_t1313_zsrcpos_t z_t3813_List_zsrcpos_get(z_t3813_List_zsrcpos_t* _this,
 }
 
 typedef struct {
-    z_t3813_List_zsrcpos_t* list;
+    z_t3812_List_zsrcpos_t* list;
     uint64_t idx;
-} z_t3825_ListIter_zsrcpos_t;
-static z_t3827_OptionView_zsrcpos_t z_t3825_ListIter_zsrcpos_call(z_t3825_ListIter_zsrcpos_t* _it);
-static z_t3827_OptionView_zsrcpos_t z_t3825_ListIter_zsrcpos_call(z_t3825_ListIter_zsrcpos_t* _it) {
-    z_t3827_OptionView_zsrcpos_t _out = {0};
+} z_t3824_ListIter_zsrcpos_t;
+static z_t3826_OptionView_zsrcpos_t z_t3824_ListIter_zsrcpos_call(z_t3824_ListIter_zsrcpos_t* _it);
+static z_t3826_OptionView_zsrcpos_t z_t3824_ListIter_zsrcpos_call(z_t3824_ListIter_zsrcpos_t* _it) {
+    z_t3826_OptionView_zsrcpos_t _out = {0};
     if (_it->idx >= _it->list->length) { _out.tag = Z_OPTIONVIEW_ZSRCPOS_TAG_NONE; return _out; }
     _out.tag = Z_OPTIONVIEW_ZSRCPOS_TAG_SOME;
     _out.data = &_it->list->data[_it->idx];
     _it->idx++;
     return _out;
 }
-static z_t3825_ListIter_zsrcpos_t z_t3813_List_zsrcpos_iterate(z_t3813_List_zsrcpos_t* _this);
-static z_t3825_ListIter_zsrcpos_t z_t3813_List_zsrcpos_iterate(z_t3813_List_zsrcpos_t* _this) {
-    z_t3825_ListIter_zsrcpos_t _it = {0};
+static z_t3824_ListIter_zsrcpos_t z_t3812_List_zsrcpos_iterate(z_t3812_List_zsrcpos_t* _this);
+static z_t3824_ListIter_zsrcpos_t z_t3812_List_zsrcpos_iterate(z_t3812_List_zsrcpos_t* _this) {
+    z_t3824_ListIter_zsrcpos_t _it = {0};
     _it.list = _this;
     _it.idx = 0;
     return _it;
@@ -22319,37 +22315,37 @@ static void z_t2947_Ctx_destroy(z_t2947_Ctx_t* p) {
     z_t1495_Map_String_bool_destroy(p->borrowedVars);
 }
 
-struct z_t3631_StringProvider_t {
-    z_t3632_List_StringNode_t nodes;
+struct z_t3630_StringProvider_t {
+    z_t3631_List_StringNode_t nodes;
     z_t1006_Map_String_u32_t* children;
 };
-static z_t3631_StringProvider_t z_t3631_StringProvider_meta_create(z_t3632_List_StringNode_t nodes, z_t1006_Map_String_u32_t* children) {
-    z_t3631_StringProvider_t _this = { nodes, children };
+static z_t3630_StringProvider_t z_t3630_StringProvider_meta_create(z_t3631_List_StringNode_t nodes, z_t1006_Map_String_u32_t* children) {
+    z_t3630_StringProvider_t _this = { nodes, children };
     return _this;
 }
-#define z_t3631_StringProvider_create z_t3631_StringProvider_meta_create
-static void z_t3631_StringProvider_destroy(z_t3631_StringProvider_t* p);
-static void z_t3631_StringProvider_destroy(z_t3631_StringProvider_t* p) {
+#define z_t3630_StringProvider_create z_t3630_StringProvider_meta_create
+static void z_t3630_StringProvider_destroy(z_t3630_StringProvider_t* p);
+static void z_t3630_StringProvider_destroy(z_t3630_StringProvider_t* p) {
     if (!p) return;
-    z_t3632_List_StringNode_destroy(&p->nodes);
+    z_t3631_List_StringNode_destroy(&p->nodes);
     z_t1006_Map_String_u32_destroy(p->children);
 }
 
-struct z_t3659_FSProvider_t {
+struct z_t3658_FSProvider_t {
     z_t74_String_t rootpath;
-    z_t3660_List_FSNode_t pathtable;
+    z_t3659_List_FSNode_t pathtable;
     z_t1006_Map_String_u32_t* pathcache;
 };
-static z_t3659_FSProvider_t z_t3659_FSProvider_meta_create(z_t74_String_t rootpath, z_t3660_List_FSNode_t pathtable, z_t1006_Map_String_u32_t* pathcache) {
-    z_t3659_FSProvider_t _this = { rootpath, pathtable, pathcache };
+static z_t3658_FSProvider_t z_t3658_FSProvider_meta_create(z_t74_String_t rootpath, z_t3659_List_FSNode_t pathtable, z_t1006_Map_String_u32_t* pathcache) {
+    z_t3658_FSProvider_t _this = { rootpath, pathtable, pathcache };
     return _this;
 }
-#define z_t3659_FSProvider_create z_t3659_FSProvider_meta_create
-static void z_t3659_FSProvider_destroy(z_t3659_FSProvider_t* p);
-static void z_t3659_FSProvider_destroy(z_t3659_FSProvider_t* p) {
+#define z_t3658_FSProvider_create z_t3658_FSProvider_meta_create
+static void z_t3658_FSProvider_destroy(z_t3658_FSProvider_t* p);
+static void z_t3658_FSProvider_destroy(z_t3658_FSProvider_t* p) {
     if (!p) return;
     z_t74_String_free(&p->rootpath);
-    z_t3660_List_FSNode_destroy(&p->pathtable);
+    z_t3659_List_FSNode_destroy(&p->pathtable);
     z_t1006_Map_String_u32_destroy(p->pathcache);
 }
 
@@ -23382,7 +23378,7 @@ void z_t1212_printNodeType(z_t1120_nodetype_t nt);
 void z_t1213_printCallKind(z_t1207_callkind_t ck);
 void z_t1214_printPoolName(z_t1067_Ast_t* ast, uint32_t ref);
 void z_t1215_printOptChildAt(z_t1067_Ast_t* ast, uint32_t id);
-z_t3610_nodepos_t z_t1216_posOf(z_t1068_Node_t n);
+z_t3609_nodepos_t z_t1216_posOf(z_t1068_Node_t n);
 uint32_t z_t1217_poolFind(z_t1147_StringPool_t* pool, z_t105_StringView_t text);
 uint32_t z_t1218_poolSet(z_t1147_StringPool_t* pool, z_t105_StringView_t text);
 bool z_t1219_poolTextEq(z_t1147_StringPool_t* pool, uint32_t ref, z_t105_StringView_t s);
@@ -23401,210 +23397,210 @@ void z_t1231_tableSet(z_t1067_Ast_t* ast, uint32_t id, z_t1068_Node_t child);
 uint32_t z_t1232_nodeIdOf(z_t1068_Node_t n);
 uint32_t z_t1233_tableAdd(z_t1067_Ast_t* ast, z_t1068_Node_t n);
 z_t1068_Node_t z_t1234_tableTake(z_t1067_Ast_t* ast, uint32_t id);
-z_t3606_astkind_t z_t1235_kindOf(z_t1067_Ast_t* ast, uint32_t id);
+z_t3605_astkind_t z_t1235_kindOf(z_t1067_Ast_t* ast, uint32_t id);
 z_t1036_List_u32_t z_t1236_unitBodyIdsAt(z_t1067_Ast_t* ast, uint32_t unitId);
 static uint32_t z_t987_DentryTable_append(z_t949_DentryTable_t* this, z_t950_dentry_t entry);
-static uint32_t z_t3623_NullProvider_walk(z_t3622_NullProvider_t* this, z_t105_StringView_t name, uint32_t parent);
-static z_t1255_OpenResult_t z_t3624_NullProvider_open(z_t3622_NullProvider_t* this, uint32_t item);
-static z_t3614_nodekind_t z_t3625_NullProvider_stat(z_t3622_NullProvider_t* this, uint32_t item);
-static z_t74_String_t z_t3626_NullProvider_path(z_t3622_NullProvider_t* this, uint32_t item);
-static void z_t3627_NullProvider_addFile(z_t3622_NullProvider_t* this, z_t74_String_t fpath, z_t74_String_t content);
+static uint32_t z_t3622_NullProvider_walk(z_t3621_NullProvider_t* this, z_t105_StringView_t name, uint32_t parent);
+static z_t1255_OpenResult_t z_t3623_NullProvider_open(z_t3621_NullProvider_t* this, uint32_t item);
+static z_t3613_nodekind_t z_t3624_NullProvider_stat(z_t3621_NullProvider_t* this, uint32_t item);
+static z_t74_String_t z_t3625_NullProvider_path(z_t3621_NullProvider_t* this, uint32_t item);
+static void z_t3626_NullProvider_addFile(z_t3621_NullProvider_t* this, z_t74_String_t fpath, z_t74_String_t content);
 static uint32_t z_t1246_ProviderTable_registerNull(z_t1245_ProviderTable_t* this);
 static uint32_t z_t1247_ProviderTable_registerString(z_t1245_ProviderTable_t* this);
 static uint32_t z_t1248_ProviderTable_registerFS(z_t1245_ProviderTable_t* this, z_t74_String_t rootpath, z_t74_String_t parentpath);
-static uint32_t z_t3649_StringProvider_appendNode(z_t3631_StringProvider_t* this, z_t74_String_t fpath, z_t3614_nodekind_t k, z_t74_String_t c);
-static void z_t3650_StringProvider_addChild(z_t3631_StringProvider_t* this, uint32_t parentid, z_t105_StringView_t name, uint32_t childid);
-static uint32_t z_t3651_StringProvider_walk(z_t3631_StringProvider_t* this, z_t105_StringView_t name, uint32_t parent);
-static z_t1255_OpenResult_t z_t3652_StringProvider_open(z_t3631_StringProvider_t* this, uint32_t item);
-static z_t3614_nodekind_t z_t3653_StringProvider_stat(z_t3631_StringProvider_t* this, uint32_t item);
-static z_t74_String_t z_t3654_StringProvider_path(z_t3631_StringProvider_t* this, uint32_t item);
-static void z_t3655_StringProvider_addFile(z_t3631_StringProvider_t* this, z_t74_String_t fpath, z_t74_String_t content);
-static uint32_t z_t3677_FSProvider_appendPath(z_t3659_FSProvider_t* this, z_t74_String_t fpath, z_t3614_nodekind_t k);
-static uint32_t z_t3678_FSProvider_walk(z_t3659_FSProvider_t* this, z_t105_StringView_t name, uint32_t parent);
-static z_t1255_OpenResult_t z_t3679_FSProvider_open(z_t3659_FSProvider_t* this, uint32_t item);
-static z_t3614_nodekind_t z_t3680_FSProvider_stat(z_t3659_FSProvider_t* this, uint32_t item);
-static z_t74_String_t z_t3681_FSProvider_path(z_t3659_FSProvider_t* this, uint32_t item);
-static void z_t3682_FSProvider_addFile(z_t3659_FSProvider_t* this, z_t74_String_t fpath, z_t74_String_t content);
+static uint32_t z_t3648_StringProvider_appendNode(z_t3630_StringProvider_t* this, z_t74_String_t fpath, z_t3613_nodekind_t k, z_t74_String_t c);
+static void z_t3649_StringProvider_addChild(z_t3630_StringProvider_t* this, uint32_t parentid, z_t105_StringView_t name, uint32_t childid);
+static uint32_t z_t3650_StringProvider_walk(z_t3630_StringProvider_t* this, z_t105_StringView_t name, uint32_t parent);
+static z_t1255_OpenResult_t z_t3651_StringProvider_open(z_t3630_StringProvider_t* this, uint32_t item);
+static z_t3613_nodekind_t z_t3652_StringProvider_stat(z_t3630_StringProvider_t* this, uint32_t item);
+static z_t74_String_t z_t3653_StringProvider_path(z_t3630_StringProvider_t* this, uint32_t item);
+static void z_t3654_StringProvider_addFile(z_t3630_StringProvider_t* this, z_t74_String_t fpath, z_t74_String_t content);
+static uint32_t z_t3676_FSProvider_appendPath(z_t3658_FSProvider_t* this, z_t74_String_t fpath, z_t3613_nodekind_t k);
+static uint32_t z_t3677_FSProvider_walk(z_t3658_FSProvider_t* this, z_t105_StringView_t name, uint32_t parent);
+static z_t1255_OpenResult_t z_t3678_FSProvider_open(z_t3658_FSProvider_t* this, uint32_t item);
+static z_t3613_nodekind_t z_t3679_FSProvider_stat(z_t3658_FSProvider_t* this, uint32_t item);
+static z_t74_String_t z_t3680_FSProvider_path(z_t3658_FSProvider_t* this, uint32_t item);
+static void z_t3681_FSProvider_addFile(z_t3658_FSProvider_t* this, z_t74_String_t fpath, z_t74_String_t content);
 static uint32_t z_t1030_ZVfs_registerNull(z_t881_ZVfs_t* this);
 static uint32_t z_t1031_ZVfs_registerString(z_t881_ZVfs_t* this);
 static uint32_t z_t1032_ZVfs_registerFS(z_t881_ZVfs_t* this, z_t74_String_t rootpath, z_t74_String_t parentpath);
 static uint32_t z_t1033_ZVfs_walk(z_t881_ZVfs_t* this, uint32_t parent, z_t105_StringView_t name);
-static z_t3614_nodekind_t z_t1034_ZVfs_arm(z_t881_ZVfs_t* this, uint32_t dentryid);
+static z_t3613_nodekind_t z_t1034_ZVfs_arm(z_t881_ZVfs_t* this, uint32_t dentryid);
 static void z_t1035_ZVfs_fileTable(z_t881_ZVfs_t* this, z_t1036_List_u32_t* outIds, z_t989_List_String_t* outPaths);
 static z_t74_String_t z_t1053_ZVfs_path(z_t881_ZVfs_t* this, uint32_t dentryid);
 static z_t74_String_t z_t1054_ZVfs_pathfromprovider(z_t881_ZVfs_t* this, uint32_t dentryid);
 static z_t74_String_t z_t1055_ZVfs_pathfromproviderNative(z_t881_ZVfs_t* this, uint32_t dentryid);
-static z_t3618_mountinfo_t z_t1056_ZVfs__extractMount(z_t881_ZVfs_t* this, uint32_t dentryid);
+static z_t3617_mountinfo_t z_t1056_ZVfs__extractMount(z_t881_ZVfs_t* this, uint32_t dentryid);
 static bool z_t1057_ZVfs__dentryIsNotFound(z_t881_ZVfs_t* this, uint32_t dentryid);
 static z_t1255_OpenResult_t z_t1058_ZVfs_open(z_t881_ZVfs_t* this, uint32_t dentryid);
 static z_t947_Option_String_t z_t1059_ZVfs_getline(z_t881_ZVfs_t* this, uint32_t dentryid, uint64_t lineno);
 static uint32_t z_t1060_ZVfs_bindRoot(z_t881_ZVfs_t* this, uint32_t newid, z_t1061_bindkind_t kind);
 static uint32_t z_t1065_ZVfs_bind(z_t881_ZVfs_t* this, uint32_t parentid, z_t105_StringView_t name, uint32_t newid, z_t1061_bindkind_t kind);
-static uint32_t z_t3622_NullProvider_ZVfsProvider_walk_wrapper(void* _data, z_t105_StringView_t name, uint32_t parent) {
-    z_t3622_NullProvider_t* _self = (z_t3622_NullProvider_t*)_data;
-    return z_t3623_NullProvider_walk(_self, name, parent);
+static uint32_t z_t3621_NullProvider_ZVfsProvider_walk_wrapper(void* _data, z_t105_StringView_t name, uint32_t parent) {
+    z_t3621_NullProvider_t* _self = (z_t3621_NullProvider_t*)_data;
+    return z_t3622_NullProvider_walk(_self, name, parent);
 }
 
-static z_t1255_OpenResult_t z_t3622_NullProvider_ZVfsProvider_open_wrapper(void* _data, uint32_t item) {
-    z_t3622_NullProvider_t* _self = (z_t3622_NullProvider_t*)_data;
-    return z_t3624_NullProvider_open(_self, item);
+static z_t1255_OpenResult_t z_t3621_NullProvider_ZVfsProvider_open_wrapper(void* _data, uint32_t item) {
+    z_t3621_NullProvider_t* _self = (z_t3621_NullProvider_t*)_data;
+    return z_t3623_NullProvider_open(_self, item);
 }
 
-static z_t3614_nodekind_t z_t3622_NullProvider_ZVfsProvider_stat_wrapper(void* _data, uint32_t item) {
-    z_t3622_NullProvider_t* _self = (z_t3622_NullProvider_t*)_data;
-    return z_t3625_NullProvider_stat(_self, item);
+static z_t3613_nodekind_t z_t3621_NullProvider_ZVfsProvider_stat_wrapper(void* _data, uint32_t item) {
+    z_t3621_NullProvider_t* _self = (z_t3621_NullProvider_t*)_data;
+    return z_t3624_NullProvider_stat(_self, item);
 }
 
-static z_t74_String_t z_t3622_NullProvider_ZVfsProvider_path_wrapper(void* _data, uint32_t item) {
-    z_t3622_NullProvider_t* _self = (z_t3622_NullProvider_t*)_data;
-    return z_t3626_NullProvider_path(_self, item);
+static z_t74_String_t z_t3621_NullProvider_ZVfsProvider_path_wrapper(void* _data, uint32_t item) {
+    z_t3621_NullProvider_t* _self = (z_t3621_NullProvider_t*)_data;
+    return z_t3625_NullProvider_path(_self, item);
 }
 
-static void z_t3622_NullProvider_ZVfsProvider_addFile_wrapper(void* _data, z_t74_String_t fpath, z_t74_String_t content) {
-    z_t3622_NullProvider_t* _self = (z_t3622_NullProvider_t*)_data;
-    z_t3627_NullProvider_addFile(_self, fpath, content);
+static void z_t3621_NullProvider_ZVfsProvider_addFile_wrapper(void* _data, z_t74_String_t fpath, z_t74_String_t content) {
+    z_t3621_NullProvider_t* _self = (z_t3621_NullProvider_t*)_data;
+    z_t3626_NullProvider_addFile(_self, fpath, content);
 }
 
-static z_t883_ZVfsProvider_vtable_t z_t3622_NullProvider_ZVfsProvider_vtable = {
-    .walk = z_t3622_NullProvider_ZVfsProvider_walk_wrapper,
-    .open = z_t3622_NullProvider_ZVfsProvider_open_wrapper,
-    .stat = z_t3622_NullProvider_ZVfsProvider_stat_wrapper,
-    .path = z_t3622_NullProvider_ZVfsProvider_path_wrapper,
-    .addFile = z_t3622_NullProvider_ZVfsProvider_addFile_wrapper,
+static z_t883_ZVfsProvider_vtable_t z_t3621_NullProvider_ZVfsProvider_vtable = {
+    .walk = z_t3621_NullProvider_ZVfsProvider_walk_wrapper,
+    .open = z_t3621_NullProvider_ZVfsProvider_open_wrapper,
+    .stat = z_t3621_NullProvider_ZVfsProvider_stat_wrapper,
+    .path = z_t3621_NullProvider_ZVfsProvider_path_wrapper,
+    .addFile = z_t3621_NullProvider_ZVfsProvider_addFile_wrapper,
 };
 
-static z_t883_ZVfsProvider_t z_t3622_NullProvider_ZVfsProvider_create(z_t3622_NullProvider_t* val) {
+static z_t883_ZVfsProvider_t z_t3621_NullProvider_ZVfsProvider_create(z_t3621_NullProvider_t* val) {
     z_t883_ZVfsProvider_t proto = {0};
     proto.data = val;
-    proto.vtable = &z_t3622_NullProvider_ZVfsProvider_vtable;
+    proto.vtable = &z_t3621_NullProvider_ZVfsProvider_vtable;
     proto.destroy = NULL;
     return proto;
 }
 
-static void z_t3622_NullProvider_ZVfsProvider_owned_destroy(void* p) {
-    z_t3622_NullProvider_destroy((z_t3622_NullProvider_t*)p);
+static void z_t3621_NullProvider_ZVfsProvider_owned_destroy(void* p) {
+    z_t3621_NullProvider_destroy((z_t3621_NullProvider_t*)p);
     free(p);
 }
 
-static z_t883_ZVfsProvider_t z_t3622_NullProvider_ZVfsProvider_create_owned(z_t3622_NullProvider_t* val) {
+static z_t883_ZVfsProvider_t z_t3621_NullProvider_ZVfsProvider_create_owned(z_t3621_NullProvider_t* val) {
     z_t883_ZVfsProvider_t proto = {0};
-    z_t3622_NullProvider_t* boxed = (z_t3622_NullProvider_t*)z_xmalloc(sizeof(z_t3622_NullProvider_t));
+    z_t3621_NullProvider_t* boxed = (z_t3621_NullProvider_t*)z_xmalloc(sizeof(z_t3621_NullProvider_t));
     *boxed = *val;
     proto.data = boxed;
-    proto.vtable = &z_t3622_NullProvider_ZVfsProvider_vtable;
-    proto.destroy = z_t3622_NullProvider_ZVfsProvider_owned_destroy;
+    proto.vtable = &z_t3621_NullProvider_ZVfsProvider_vtable;
+    proto.destroy = z_t3621_NullProvider_ZVfsProvider_owned_destroy;
     return proto;
 }
 
-static uint32_t z_t3631_StringProvider_ZVfsProvider_walk_wrapper(void* _data, z_t105_StringView_t name, uint32_t parent) {
-    z_t3631_StringProvider_t* _self = (z_t3631_StringProvider_t*)_data;
-    return z_t3651_StringProvider_walk(_self, name, parent);
+static uint32_t z_t3630_StringProvider_ZVfsProvider_walk_wrapper(void* _data, z_t105_StringView_t name, uint32_t parent) {
+    z_t3630_StringProvider_t* _self = (z_t3630_StringProvider_t*)_data;
+    return z_t3650_StringProvider_walk(_self, name, parent);
 }
 
-static z_t1255_OpenResult_t z_t3631_StringProvider_ZVfsProvider_open_wrapper(void* _data, uint32_t item) {
-    z_t3631_StringProvider_t* _self = (z_t3631_StringProvider_t*)_data;
-    return z_t3652_StringProvider_open(_self, item);
+static z_t1255_OpenResult_t z_t3630_StringProvider_ZVfsProvider_open_wrapper(void* _data, uint32_t item) {
+    z_t3630_StringProvider_t* _self = (z_t3630_StringProvider_t*)_data;
+    return z_t3651_StringProvider_open(_self, item);
 }
 
-static z_t3614_nodekind_t z_t3631_StringProvider_ZVfsProvider_stat_wrapper(void* _data, uint32_t item) {
-    z_t3631_StringProvider_t* _self = (z_t3631_StringProvider_t*)_data;
-    return z_t3653_StringProvider_stat(_self, item);
+static z_t3613_nodekind_t z_t3630_StringProvider_ZVfsProvider_stat_wrapper(void* _data, uint32_t item) {
+    z_t3630_StringProvider_t* _self = (z_t3630_StringProvider_t*)_data;
+    return z_t3652_StringProvider_stat(_self, item);
 }
 
-static z_t74_String_t z_t3631_StringProvider_ZVfsProvider_path_wrapper(void* _data, uint32_t item) {
-    z_t3631_StringProvider_t* _self = (z_t3631_StringProvider_t*)_data;
-    return z_t3654_StringProvider_path(_self, item);
+static z_t74_String_t z_t3630_StringProvider_ZVfsProvider_path_wrapper(void* _data, uint32_t item) {
+    z_t3630_StringProvider_t* _self = (z_t3630_StringProvider_t*)_data;
+    return z_t3653_StringProvider_path(_self, item);
 }
 
-static void z_t3631_StringProvider_ZVfsProvider_addFile_wrapper(void* _data, z_t74_String_t fpath, z_t74_String_t content) {
-    z_t3631_StringProvider_t* _self = (z_t3631_StringProvider_t*)_data;
-    z_t3655_StringProvider_addFile(_self, fpath, content);
+static void z_t3630_StringProvider_ZVfsProvider_addFile_wrapper(void* _data, z_t74_String_t fpath, z_t74_String_t content) {
+    z_t3630_StringProvider_t* _self = (z_t3630_StringProvider_t*)_data;
+    z_t3654_StringProvider_addFile(_self, fpath, content);
 }
 
-static z_t883_ZVfsProvider_vtable_t z_t3631_StringProvider_ZVfsProvider_vtable = {
-    .walk = z_t3631_StringProvider_ZVfsProvider_walk_wrapper,
-    .open = z_t3631_StringProvider_ZVfsProvider_open_wrapper,
-    .stat = z_t3631_StringProvider_ZVfsProvider_stat_wrapper,
-    .path = z_t3631_StringProvider_ZVfsProvider_path_wrapper,
-    .addFile = z_t3631_StringProvider_ZVfsProvider_addFile_wrapper,
+static z_t883_ZVfsProvider_vtable_t z_t3630_StringProvider_ZVfsProvider_vtable = {
+    .walk = z_t3630_StringProvider_ZVfsProvider_walk_wrapper,
+    .open = z_t3630_StringProvider_ZVfsProvider_open_wrapper,
+    .stat = z_t3630_StringProvider_ZVfsProvider_stat_wrapper,
+    .path = z_t3630_StringProvider_ZVfsProvider_path_wrapper,
+    .addFile = z_t3630_StringProvider_ZVfsProvider_addFile_wrapper,
 };
 
-static z_t883_ZVfsProvider_t z_t3631_StringProvider_ZVfsProvider_create(z_t3631_StringProvider_t* val) {
+static z_t883_ZVfsProvider_t z_t3630_StringProvider_ZVfsProvider_create(z_t3630_StringProvider_t* val) {
     z_t883_ZVfsProvider_t proto = {0};
     proto.data = val;
-    proto.vtable = &z_t3631_StringProvider_ZVfsProvider_vtable;
+    proto.vtable = &z_t3630_StringProvider_ZVfsProvider_vtable;
     proto.destroy = NULL;
     return proto;
 }
 
-static void z_t3631_StringProvider_ZVfsProvider_owned_destroy(void* p) {
-    z_t3631_StringProvider_destroy((z_t3631_StringProvider_t*)p);
+static void z_t3630_StringProvider_ZVfsProvider_owned_destroy(void* p) {
+    z_t3630_StringProvider_destroy((z_t3630_StringProvider_t*)p);
     free(p);
 }
 
-static z_t883_ZVfsProvider_t z_t3631_StringProvider_ZVfsProvider_create_owned(z_t3631_StringProvider_t* val) {
+static z_t883_ZVfsProvider_t z_t3630_StringProvider_ZVfsProvider_create_owned(z_t3630_StringProvider_t* val) {
     z_t883_ZVfsProvider_t proto = {0};
-    z_t3631_StringProvider_t* boxed = (z_t3631_StringProvider_t*)z_xmalloc(sizeof(z_t3631_StringProvider_t));
+    z_t3630_StringProvider_t* boxed = (z_t3630_StringProvider_t*)z_xmalloc(sizeof(z_t3630_StringProvider_t));
     *boxed = *val;
     proto.data = boxed;
-    proto.vtable = &z_t3631_StringProvider_ZVfsProvider_vtable;
-    proto.destroy = z_t3631_StringProvider_ZVfsProvider_owned_destroy;
+    proto.vtable = &z_t3630_StringProvider_ZVfsProvider_vtable;
+    proto.destroy = z_t3630_StringProvider_ZVfsProvider_owned_destroy;
     return proto;
 }
 
-static uint32_t z_t3659_FSProvider_ZVfsProvider_walk_wrapper(void* _data, z_t105_StringView_t name, uint32_t parent) {
-    z_t3659_FSProvider_t* _self = (z_t3659_FSProvider_t*)_data;
-    return z_t3678_FSProvider_walk(_self, name, parent);
+static uint32_t z_t3658_FSProvider_ZVfsProvider_walk_wrapper(void* _data, z_t105_StringView_t name, uint32_t parent) {
+    z_t3658_FSProvider_t* _self = (z_t3658_FSProvider_t*)_data;
+    return z_t3677_FSProvider_walk(_self, name, parent);
 }
 
-static z_t1255_OpenResult_t z_t3659_FSProvider_ZVfsProvider_open_wrapper(void* _data, uint32_t item) {
-    z_t3659_FSProvider_t* _self = (z_t3659_FSProvider_t*)_data;
-    return z_t3679_FSProvider_open(_self, item);
+static z_t1255_OpenResult_t z_t3658_FSProvider_ZVfsProvider_open_wrapper(void* _data, uint32_t item) {
+    z_t3658_FSProvider_t* _self = (z_t3658_FSProvider_t*)_data;
+    return z_t3678_FSProvider_open(_self, item);
 }
 
-static z_t3614_nodekind_t z_t3659_FSProvider_ZVfsProvider_stat_wrapper(void* _data, uint32_t item) {
-    z_t3659_FSProvider_t* _self = (z_t3659_FSProvider_t*)_data;
-    return z_t3680_FSProvider_stat(_self, item);
+static z_t3613_nodekind_t z_t3658_FSProvider_ZVfsProvider_stat_wrapper(void* _data, uint32_t item) {
+    z_t3658_FSProvider_t* _self = (z_t3658_FSProvider_t*)_data;
+    return z_t3679_FSProvider_stat(_self, item);
 }
 
-static z_t74_String_t z_t3659_FSProvider_ZVfsProvider_path_wrapper(void* _data, uint32_t item) {
-    z_t3659_FSProvider_t* _self = (z_t3659_FSProvider_t*)_data;
-    return z_t3681_FSProvider_path(_self, item);
+static z_t74_String_t z_t3658_FSProvider_ZVfsProvider_path_wrapper(void* _data, uint32_t item) {
+    z_t3658_FSProvider_t* _self = (z_t3658_FSProvider_t*)_data;
+    return z_t3680_FSProvider_path(_self, item);
 }
 
-static void z_t3659_FSProvider_ZVfsProvider_addFile_wrapper(void* _data, z_t74_String_t fpath, z_t74_String_t content) {
-    z_t3659_FSProvider_t* _self = (z_t3659_FSProvider_t*)_data;
-    z_t3682_FSProvider_addFile(_self, fpath, content);
+static void z_t3658_FSProvider_ZVfsProvider_addFile_wrapper(void* _data, z_t74_String_t fpath, z_t74_String_t content) {
+    z_t3658_FSProvider_t* _self = (z_t3658_FSProvider_t*)_data;
+    z_t3681_FSProvider_addFile(_self, fpath, content);
 }
 
-static z_t883_ZVfsProvider_vtable_t z_t3659_FSProvider_ZVfsProvider_vtable = {
-    .walk = z_t3659_FSProvider_ZVfsProvider_walk_wrapper,
-    .open = z_t3659_FSProvider_ZVfsProvider_open_wrapper,
-    .stat = z_t3659_FSProvider_ZVfsProvider_stat_wrapper,
-    .path = z_t3659_FSProvider_ZVfsProvider_path_wrapper,
-    .addFile = z_t3659_FSProvider_ZVfsProvider_addFile_wrapper,
+static z_t883_ZVfsProvider_vtable_t z_t3658_FSProvider_ZVfsProvider_vtable = {
+    .walk = z_t3658_FSProvider_ZVfsProvider_walk_wrapper,
+    .open = z_t3658_FSProvider_ZVfsProvider_open_wrapper,
+    .stat = z_t3658_FSProvider_ZVfsProvider_stat_wrapper,
+    .path = z_t3658_FSProvider_ZVfsProvider_path_wrapper,
+    .addFile = z_t3658_FSProvider_ZVfsProvider_addFile_wrapper,
 };
 
-static z_t883_ZVfsProvider_t z_t3659_FSProvider_ZVfsProvider_create(z_t3659_FSProvider_t* val) {
+static z_t883_ZVfsProvider_t z_t3658_FSProvider_ZVfsProvider_create(z_t3658_FSProvider_t* val) {
     z_t883_ZVfsProvider_t proto = {0};
     proto.data = val;
-    proto.vtable = &z_t3659_FSProvider_ZVfsProvider_vtable;
+    proto.vtable = &z_t3658_FSProvider_ZVfsProvider_vtable;
     proto.destroy = NULL;
     return proto;
 }
 
-static void z_t3659_FSProvider_ZVfsProvider_owned_destroy(void* p) {
-    z_t3659_FSProvider_destroy((z_t3659_FSProvider_t*)p);
+static void z_t3658_FSProvider_ZVfsProvider_owned_destroy(void* p) {
+    z_t3658_FSProvider_destroy((z_t3658_FSProvider_t*)p);
     free(p);
 }
 
-static z_t883_ZVfsProvider_t z_t3659_FSProvider_ZVfsProvider_create_owned(z_t3659_FSProvider_t* val) {
+static z_t883_ZVfsProvider_t z_t3658_FSProvider_ZVfsProvider_create_owned(z_t3658_FSProvider_t* val) {
     z_t883_ZVfsProvider_t proto = {0};
-    z_t3659_FSProvider_t* boxed = (z_t3659_FSProvider_t*)z_xmalloc(sizeof(z_t3659_FSProvider_t));
+    z_t3658_FSProvider_t* boxed = (z_t3658_FSProvider_t*)z_xmalloc(sizeof(z_t3658_FSProvider_t));
     *boxed = *val;
     proto.data = boxed;
-    proto.vtable = &z_t3659_FSProvider_ZVfsProvider_vtable;
-    proto.destroy = z_t3659_FSProvider_ZVfsProvider_owned_destroy;
+    proto.vtable = &z_t3658_FSProvider_ZVfsProvider_vtable;
+    proto.destroy = z_t3658_FSProvider_ZVfsProvider_owned_destroy;
     return proto;
 }
 
@@ -23914,7 +23910,7 @@ void z_t2314_extendraw(z_t74_String_t* stringparts, z_t105_StringView_t delim_vi
 bool z_t2315_ishexdigit(uint8_t b);
 uint8_t z_t2316_hexvalue(uint8_t b);
 void z_t2317_utf8_encode_append(uint64_t cp, z_t74_String_t* dst);
-z_t3696_kwresult_t z_t2318_kwlookup(z_t105_StringView_t sv);
+z_t3695_kwresult_t z_t2318_kwlookup(z_t105_StringView_t sv);
 bool z_t2319_islookupReserved(z_t105_StringView_t sv);
 z_t74_String_t z_t2320_ttname(z_t2082_TT_t t);
 uint8_t z_t2321_hexdigit(uint8_t b);
@@ -24009,13 +24005,13 @@ uint64_t z_t2358_bitLength(uint64_t v);
 bool z_t2359_intFitsFloat(int64_t value, z_t2343_numkind_t k);
 bool z_t2360_floatFitsFloat(double value, z_t2343_numkind_t k);
 z_t169_optionval_u64_t z_t2361_digitVal(uint8_t b);
-z_t3702_suffixinfo_t z_t2362_numkindByName(z_t105_StringView_t name);
-z_t3702_suffixinfo_t z_t2363_suffixInfoOf(z_t105_StringView_t numstr);
+z_t3701_suffixinfo_t z_t2362_numkindByName(z_t105_StringView_t name);
+z_t3701_suffixinfo_t z_t2363_suffixInfoOf(z_t105_StringView_t numstr);
 z_t74_String_t z_t2364_rangeErr(uint64_t value, z_t2343_numkind_t k, z_t2365_NumRange_t* r);
-z_t3710_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool hasK, z_t2343_numkind_t k);
-z_t3710_ParsedNumber_t z_t2368_parseNumber(z_t105_StringView_t numstr);
-z_t3710_ParsedNumber_t z_t2369_parseNumberAs(z_t105_StringView_t numstr, z_t2343_numkind_t k);
-z_t3706_parsedval_t z_t2370_parseLiteralValue(z_t105_StringView_t numstr);
+z_t3709_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool hasK, z_t2343_numkind_t k);
+z_t3709_ParsedNumber_t z_t2368_parseNumber(z_t105_StringView_t numstr);
+z_t3709_ParsedNumber_t z_t2369_parseNumberAs(z_t105_StringView_t numstr, z_t2343_numkind_t k);
+z_t3705_parsedval_t z_t2370_parseLiteralValue(z_t105_StringView_t numstr);
 void z_main(void);
 void z_t2372_smokeMangleVar(z_t105_StringView_t name);
 void z_t2373_smokeIntFits(int64_t value, z_t2343_numkind_t k);
@@ -24696,8 +24692,8 @@ z_t74_String_t z_t3146_methodReturnByName(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
 uint64_t z_t3147_stampIdDeep(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t1068_Node_t n);
 z_t74_String_t z_t3148_stampNameDeep(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t1068_Node_t n);
 void z_t3149_emitPrintStmt(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx, z_t1081_CallData_t* call, z_t105_StringView_t ind, z_t3063_TmpCtr_t* tmp, z_t74_String_t* buf);
-z_t3712_cfold_t z_t3150_evalConstI64(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1068_Node_t n);
-z_t3712_cfold_t z_t3151_foldIfClause9(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1036_List_u32_t* conds);
+z_t3711_cfold_t z_t3150_evalConstI64(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1068_Node_t n);
+z_t3711_cfold_t z_t3151_foldIfClause9(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1036_List_u32_t* conds);
 z_t74_String_t z_t3152_plainStringLiteral9(z_t1067_Ast_t* ast, z_t1068_Node_t n);
 void z_t3153_emitErrorStmt(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx, z_t1081_CallData_t* call, z_t105_StringView_t ind, z_t74_String_t* buf);
 void z_t3154_emitPanicStmt(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx, z_t1081_CallData_t* call, z_t105_StringView_t ind, z_t74_String_t* buf);
@@ -25007,36 +25003,36 @@ void z_t3457_emitParseNative(z_t2947_Ctx_t* ctx, z_t105_StringView_t runtimeDir,
 void z_t3458_emitCodepointsNatives(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx, z_t105_StringView_t runtimeDir, z_t74_String_t* buf);
 void z_t3459_emitCpFrag(z_t105_StringView_t runtimeDir, z_t105_StringView_t frag, z_t105_StringView_t svC, z_t105_StringView_t cpc, z_t105_StringView_t ovc, z_t74_String_t* buf);
 z_t74_String_t z_t3460_mainNameOf9(z_t1068_Node_t program);
-static void z_t3717_ZDumper_emit(z_t3716_ZDumper_t* this, uint32_t id, uint32_t line, uint32_t col, z_t105_StringView_t kind, z_t105_StringView_t nameSql);
-static void z_t3718_ZDumper_appendFiles(z_t3716_ZDumper_t* this, z_t881_ZVfs_t* vfs);
-static void z_t3719_ZDumper_walkOptAt(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t oId, z_t105_StringView_t nameSql);
-static void z_t3720_ZDumper_walkUnwrapped(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t wrapper, z_t105_StringView_t nameSql);
-static void z_t3721_ZDumper_walkNode(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t node, z_t105_StringView_t nameSql);
-static void z_t3722_ZDumper_appendUnitDefAndBody(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t unitdef, z_t105_StringView_t uname);
-static void z_t3723_ZDumper_appendBodyMember(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t member, z_t105_StringView_t uname);
-static void z_t3724_ZDumper_appendNodes(z_t3716_ZDumper_t* this, z_t1068_Node_t program);
-static void z_t3725_ZDumper_appendUnitFromNamedOp(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t unitNamedOpId);
-static void z_t3726_ZDumper_appendUnits(z_t3716_ZDumper_t* this, z_t1068_Node_t program, z_t1633_ZTyping_t* typing);
-static void z_t3727_ZDumper_appendUnitRow(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t unitNamedOpId, z_t105_StringView_t mainName, z_t1633_ZTyping_t* typing);
-static void z_t3728_ZDumper_appendTypes(z_t3716_ZDumper_t* this, z_t1267_ZSymbolTable_t* st, z_t1147_StringPool_t* pool);
-static void z_t3729_ZDumper_appendDecls(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1633_ZTyping_t* typing);
-static void z_t3730_ZDumper_appendSynthNodes(z_t3716_ZDumper_t* this, z_t1633_ZTyping_t* typing);
-static void z_t3731_ZDumper_appendTypedNodes(z_t3716_ZDumper_t* this, z_t1633_ZTyping_t* typing);
-static void z_t3732_ZDumper_appendAtomStamps(z_t3716_ZDumper_t* this, z_t1633_ZTyping_t* typing);
-static void z_t3733_ZDumper_appendConformance(z_t3716_ZDumper_t* this, z_t1633_ZTyping_t* typing);
-static void z_t3734_ZDumper_appendSymbolTable(z_t3716_ZDumper_t* this, z_t1267_ZSymbolTable_t* st);
-static void z_t3735_ZDumper_emitSection(z_t3716_ZDumper_t* this, z_t105_StringView_t title, z_t989_List_String_t* rows);
-static void z_t3736_ZDumper_appendUnitsCanon(z_t3716_ZDumper_t* this, z_t1068_Node_t program);
-static void z_t3737_ZDumper_appendGenericChildren(z_t3716_ZDumper_t* this, z_t1267_ZSymbolTable_t* st);
-static void z_t3738_ZDumper_appendGenericArgs(z_t3716_ZDumper_t* this, z_t1267_ZSymbolTable_t* st);
-static void z_t3739_ZDumper_appendGenericChildrenCanon(z_t3716_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st);
-static void z_t3740_ZDumper_appendGenericArgsCanon(z_t3716_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st);
-static void z_t3741_ZDumper_appendTypesCanon(z_t3716_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st, z_t1147_StringPool_t* pool);
-static void z_t3742_ZDumper_appendDeclChildCanon(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st);
-static void z_t3743_ZDumper_appendConformanceCanon(z_t3716_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st);
-static void z_t3744_ZDumper_appendSymbolTableCanon(z_t3716_ZDumper_t* this, z_t1267_ZSymbolTable_t* st);
-static void z_t3745_ZDumper_appendArgDispositionCanon(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* st);
-static void z_t3746_ZDumper_appendCallGenericBindingCanon(z_t3716_ZDumper_t* this, z_t1068_Node_t program, z_t1267_ZSymbolTable_t* st);
+static void z_t3716_ZDumper_emit(z_t3715_ZDumper_t* this, uint32_t id, uint32_t line, uint32_t col, z_t105_StringView_t kind, z_t105_StringView_t nameSql);
+static void z_t3717_ZDumper_appendFiles(z_t3715_ZDumper_t* this, z_t881_ZVfs_t* vfs);
+static void z_t3718_ZDumper_walkOptAt(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t oId, z_t105_StringView_t nameSql);
+static void z_t3719_ZDumper_walkUnwrapped(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t wrapper, z_t105_StringView_t nameSql);
+static void z_t3720_ZDumper_walkNode(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t node, z_t105_StringView_t nameSql);
+static void z_t3721_ZDumper_appendUnitDefAndBody(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t unitdef, z_t105_StringView_t uname);
+static void z_t3722_ZDumper_appendBodyMember(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t member, z_t105_StringView_t uname);
+static void z_t3723_ZDumper_appendNodes(z_t3715_ZDumper_t* this, z_t1068_Node_t program);
+static void z_t3724_ZDumper_appendUnitFromNamedOp(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t unitNamedOpId);
+static void z_t3725_ZDumper_appendUnits(z_t3715_ZDumper_t* this, z_t1068_Node_t program, z_t1633_ZTyping_t* typing);
+static void z_t3726_ZDumper_appendUnitRow(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t unitNamedOpId, z_t105_StringView_t mainName, z_t1633_ZTyping_t* typing);
+static void z_t3727_ZDumper_appendTypes(z_t3715_ZDumper_t* this, z_t1267_ZSymbolTable_t* st, z_t1147_StringPool_t* pool);
+static void z_t3728_ZDumper_appendDecls(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1633_ZTyping_t* typing);
+static void z_t3729_ZDumper_appendSynthNodes(z_t3715_ZDumper_t* this, z_t1633_ZTyping_t* typing);
+static void z_t3730_ZDumper_appendTypedNodes(z_t3715_ZDumper_t* this, z_t1633_ZTyping_t* typing);
+static void z_t3731_ZDumper_appendAtomStamps(z_t3715_ZDumper_t* this, z_t1633_ZTyping_t* typing);
+static void z_t3732_ZDumper_appendConformance(z_t3715_ZDumper_t* this, z_t1633_ZTyping_t* typing);
+static void z_t3733_ZDumper_appendSymbolTable(z_t3715_ZDumper_t* this, z_t1267_ZSymbolTable_t* st);
+static void z_t3734_ZDumper_emitSection(z_t3715_ZDumper_t* this, z_t105_StringView_t title, z_t989_List_String_t* rows);
+static void z_t3735_ZDumper_appendUnitsCanon(z_t3715_ZDumper_t* this, z_t1068_Node_t program);
+static void z_t3736_ZDumper_appendGenericChildren(z_t3715_ZDumper_t* this, z_t1267_ZSymbolTable_t* st);
+static void z_t3737_ZDumper_appendGenericArgs(z_t3715_ZDumper_t* this, z_t1267_ZSymbolTable_t* st);
+static void z_t3738_ZDumper_appendGenericChildrenCanon(z_t3715_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st);
+static void z_t3739_ZDumper_appendGenericArgsCanon(z_t3715_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st);
+static void z_t3740_ZDumper_appendTypesCanon(z_t3715_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st);
+static void z_t3741_ZDumper_appendDeclChildCanon(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st);
+static void z_t3742_ZDumper_appendConformanceCanon(z_t3715_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st);
+static void z_t3743_ZDumper_appendSymbolTableCanon(z_t3715_ZDumper_t* this, z_t1267_ZSymbolTable_t* st);
+static void z_t3744_ZDumper_appendArgDispositionCanon(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* st);
+static void z_t3745_ZDumper_appendCallGenericBindingCanon(z_t3715_ZDumper_t* this, z_t1068_Node_t program, z_t1267_ZSymbolTable_t* st);
 z_t74_String_t z_t3462_sqlStr(z_t105_StringView_t s);
 z_t74_String_t z_t3463_boolNum(bool b);
 z_t74_String_t z_t3464_optIdStr(z_t169_optionval_u64_t o);
@@ -25047,23 +25043,22 @@ z_t74_String_t z_t3468_optBoolSql(z_t1418_optionval_bool_t o);
 z_t947_Option_String_t z_t3469_ownOptStr(z_t944_OptionView_String_t o);
 z_t74_String_t z_t3470_sqlStrOrNull(z_t105_StringView_t s, bool present);
 z_t74_String_t z_t3471_optStrSql(z_t947_Option_String_t o);
-z_t74_String_t z_t3472_optStrSome(z_t947_Option_String_t o);
-z_t74_String_t z_t3473_cnameSql(z_t105_StringView_t c);
-z_t74_String_t z_t3474_paramOwnSql(z_t1794_optionval_zparamownership_t o);
-z_t74_String_t z_t3475_varOwnSql(z_t1842_optionval_zownership_t o);
-z_t74_String_t z_t3476_optBoolNumOr0(z_t1418_optionval_bool_t o);
-z_t74_String_t z_t3477_originSql(z_t947_Option_String_t o);
-z_t74_String_t z_t3478_originKindSql(z_t1418_optionval_bool_t o);
-z_t74_String_t z_t3479_argAtomName(z_t1067_Ast_t* ast, uint64_t id);
-uint64_t z_t3480_walkExprStampsAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t nId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
-uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z_t1068_Node_t n, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
-void z_t3482_walkExprStampsOptAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t oId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
-void z_t3483_overrideExpressionStamps(z_t1633_ZTyping_t* typing, z_t1068_Node_t program);
-z_t74_String_t z_t3484_dumpSql(z_t1068_Node_t program, z_t881_ZVfs_t* vfs, z_t1267_ZSymbolTable_t* symtab);
-uint64_t z_t3485_optU64Or0(z_t169_optionval_u64_t o);
-z_t74_String_t z_t3486_canonTypeName(z_t1412_ZTypeRegistry_t* reg, uint64_t tid);
-z_t74_String_t z_t3487_mainUnitNameOf(z_t1068_Node_t program);
-z_t74_String_t z_t3488_dumpCanon(z_t1068_Node_t program, z_t1267_ZSymbolTable_t* symtab);
+z_t74_String_t z_t3472_cnameSql(z_t105_StringView_t c);
+z_t74_String_t z_t3473_paramOwnSql(z_t1794_optionval_zparamownership_t o);
+z_t74_String_t z_t3474_varOwnSql(z_t1842_optionval_zownership_t o);
+z_t74_String_t z_t3475_optBoolNumOr0(z_t1418_optionval_bool_t o);
+z_t74_String_t z_t3476_originSql(z_t947_Option_String_t o);
+z_t74_String_t z_t3477_originKindSql(z_t1418_optionval_bool_t o);
+z_t74_String_t z_t3478_argAtomName(z_t1067_Ast_t* ast, uint64_t id);
+uint64_t z_t3479_walkExprStampsAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t nId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
+uint64_t z_t3480_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z_t1068_Node_t n, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
+void z_t3481_walkExprStampsOptAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t oId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
+void z_t3482_overrideExpressionStamps(z_t1633_ZTyping_t* typing, z_t1068_Node_t program);
+z_t74_String_t z_t3483_dumpSql(z_t1068_Node_t program, z_t881_ZVfs_t* vfs, z_t1267_ZSymbolTable_t* symtab);
+uint64_t z_t3484_optU64Or0(z_t169_optionval_u64_t o);
+z_t74_String_t z_t3485_canonTypeName(z_t1412_ZTypeRegistry_t* reg, uint64_t tid);
+z_t74_String_t z_t3486_mainUnitNameOf(z_t1068_Node_t program);
+z_t74_String_t z_t3487_dumpCanon(z_t1068_Node_t program, z_t1267_ZSymbolTable_t* symtab);
 static z_t1067_Ast_t z_t1177_Ast_create(void) {
     z_t1067_Ast_t a9 = z_t1067_Ast_meta_create(z_t1130_List_Node_create((uint64_t)0), z_t1148_StringPool_create(), z_t1036_List_u32_create((uint64_t)0), z_t1160_List_FileSeg_create((uint64_t)0));
     (void)(z_t1152_StringPool_set(&a9.names, _zs212));
@@ -25252,13 +25247,13 @@ static uint32_t z_t987_DentryTable_append(z_t949_DentryTable_t* this, z_t950_den
     return idx;
 }
 
-static uint32_t z_t3623_NullProvider_walk(z_t3622_NullProvider_t* this, z_t105_StringView_t name, uint32_t parent) {
+static uint32_t z_t3622_NullProvider_walk(z_t3621_NullProvider_t* this, z_t105_StringView_t name, uint32_t parent) {
     (void)(name);
     (void)(parent);
     return 1;
 }
 
-static z_t1255_OpenResult_t z_t3624_NullProvider_open(z_t3622_NullProvider_t* this, uint32_t item) {
+static z_t1255_OpenResult_t z_t3623_NullProvider_open(z_t3621_NullProvider_t* this, uint32_t item) {
     (void)(item);
     z_t1256_IoError_t e = ({ z_t1256_IoError_t _u = {0}; _u.tag = Z_IOERROR_TAG_OTHER; z_t74_String_t* _b = (z_t74_String_t*)z_xmalloc(sizeof(z_t74_String_t)); *_b = z_t74_String_from_view(_zs426); _u.data = _b; _u; });
     z_t1255_OpenResult_t _ret0 = ({ z_t1255_OpenResult_t _u = {0}; _u.tag = Z_OPENRESULT_TAG_ERR; z_t1256_IoError_t* _b = (z_t1256_IoError_t*)z_xmalloc(sizeof(z_t1256_IoError_t)); *_b = e; _u.data = _b; _u; });
@@ -25268,19 +25263,19 @@ static z_t1255_OpenResult_t z_t3624_NullProvider_open(z_t3622_NullProvider_t* th
     z_t1256_IoError_destroy(&e);
 }
 
-static z_t3614_nodekind_t z_t3625_NullProvider_stat(z_t3622_NullProvider_t* this, uint32_t item) {
+static z_t3613_nodekind_t z_t3624_NullProvider_stat(z_t3621_NullProvider_t* this, uint32_t item) {
     if ((item == 0)) {
-        return ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR });
+        return ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR });
     }
-    return ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_NOTFOUND });
+    return ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_NOTFOUND });
 }
 
-static z_t74_String_t z_t3626_NullProvider_path(z_t3622_NullProvider_t* this, uint32_t item) {
+static z_t74_String_t z_t3625_NullProvider_path(z_t3621_NullProvider_t* this, uint32_t item) {
     (void)(item);
     return z_t74_String_from_view(_zs427);
 }
 
-static void z_t3627_NullProvider_addFile(z_t3622_NullProvider_t* this, z_t74_String_t fpath, z_t74_String_t content) {
+static void z_t3626_NullProvider_addFile(z_t3621_NullProvider_t* this, z_t74_String_t fpath, z_t74_String_t content) {
     (void)(fpath);
     (void)(content);
     z_panic((const char*)_zs428.data);
@@ -25289,54 +25284,54 @@ static void z_t3627_NullProvider_addFile(z_t3622_NullProvider_t* this, z_t74_Str
 }
 
 static uint32_t z_t1246_ProviderTable_registerNull(z_t1245_ProviderTable_t* this) {
-    z_t3622_NullProvider_t np = z_t3622_NullProvider_create(false);
-    z_t883_ZVfsProvider_t prov = z_t3622_NullProvider_ZVfsProvider_create_owned(&np);
-    np = (z_t3622_NullProvider_t){0};
+    z_t3621_NullProvider_t np = z_t3621_NullProvider_create(false);
+    z_t883_ZVfsProvider_t prov = z_t3621_NullProvider_ZVfsProvider_create_owned(&np);
+    np = (z_t3621_NullProvider_t){0};
     z_t882_ProviderBox_t box = z_t882_ProviderBox_create(prov);
     prov = (z_t883_ZVfsProvider_t){0};
     uint32_t idx = ({ __auto_type _rc = (({ uint64_t _v = this->providers.length; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; });
     (void)(z_t892_List_ProviderBox_append(&this->providers, box));
     box = (z_t882_ProviderBox_t){0};
-    z_t3622_NullProvider_destroy(&np);
+    z_t3621_NullProvider_destroy(&np);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
     return idx;
-    z_t3622_NullProvider_destroy(&np);
+    z_t3621_NullProvider_destroy(&np);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
 }
 
 static uint32_t z_t1247_ProviderTable_registerString(z_t1245_ProviderTable_t* this) {
-    z_t3631_StringProvider_t sp = z_t3631_StringProvider_create(z_t3632_List_StringNode_create((uint64_t)0), z_t1006_Map_String_u32_create((uint64_t)0));
-    z_t3629_StringNode_t root = z_t3629_StringNode_create(z_t74_String_from_view(_zs429), ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR }), z_t74_String_from_view(_zs430));
-    (void)(z_t3632_List_StringNode_append(&sp.nodes, root));
-    root = (z_t3629_StringNode_t){0};
-    z_t883_ZVfsProvider_t prov = z_t3631_StringProvider_ZVfsProvider_create_owned(&sp);
-    sp = (z_t3631_StringProvider_t){0};
+    z_t3630_StringProvider_t sp = z_t3630_StringProvider_create(z_t3631_List_StringNode_create((uint64_t)0), z_t1006_Map_String_u32_create((uint64_t)0));
+    z_t3628_StringNode_t root = z_t3628_StringNode_create(z_t74_String_from_view(_zs429), ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR }), z_t74_String_from_view(_zs430));
+    (void)(z_t3631_List_StringNode_append(&sp.nodes, root));
+    root = (z_t3628_StringNode_t){0};
+    z_t883_ZVfsProvider_t prov = z_t3630_StringProvider_ZVfsProvider_create_owned(&sp);
+    sp = (z_t3630_StringProvider_t){0};
     z_t882_ProviderBox_t box = z_t882_ProviderBox_create(prov);
     prov = (z_t883_ZVfsProvider_t){0};
     uint32_t idx = ({ __auto_type _rc = (({ uint64_t _v = this->providers.length; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; });
     (void)(z_t892_List_ProviderBox_append(&this->providers, box));
     box = (z_t882_ProviderBox_t){0};
-    z_t3631_StringProvider_destroy(&sp);
-    z_t3629_StringNode_destroy(&root);
+    z_t3630_StringProvider_destroy(&sp);
+    z_t3628_StringNode_destroy(&root);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
     return idx;
-    z_t3631_StringProvider_destroy(&sp);
-    z_t3629_StringNode_destroy(&root);
+    z_t3630_StringProvider_destroy(&sp);
+    z_t3628_StringNode_destroy(&root);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
 }
 
 static uint32_t z_t1248_ProviderTable_registerFS(z_t1245_ProviderTable_t* this, z_t74_String_t rootpath, z_t74_String_t parentpath) {
     z_t74_String_t full = z_t1239_joinPath(((z_t105_StringView_t){ rootpath.data, rootpath.size }), ((z_t105_StringView_t){ parentpath.data, parentpath.size }));
-    z_t3518_Result_filestat_IoError_t sr = z_io_stat(((z_t105_StringView_t){ full.data, full.size }));
-    z_t3518_Result_filestat_IoError_t _m0 = sr;
+    z_t3517_Result_filestat_IoError_t sr = z_io_stat(((z_t105_StringView_t){ full.data, full.size }));
+    z_t3517_Result_filestat_IoError_t _m0 = sr;
     switch (_m0.tag) {
         case Z_RESULT_FILESTAT_IOERROR_TAG_OK: {
-            /* alias: sr => (*(z_t3510_filestat_t*)_m0.data) */
-            z_t3511_filekind_t _m1 = (*(z_t3510_filestat_t*)_m0.data).kind;
+            /* alias: sr => (*(z_t3509_filestat_t*)_m0.data) */
+            z_t3510_filekind_t _m1 = (*(z_t3509_filestat_t*)_m0.data).kind;
             switch (_m1.tag) {
                 case Z_FILEKIND_TAG_DIR: {
                     break;
@@ -25364,15 +25359,15 @@ static uint32_t z_t1248_ProviderTable_registerFS(z_t1245_ProviderTable_t* this, 
         }
         default: break;
     }
-    /* post-guard alias: sr => (*(z_t3510_filestat_t*)sr.data) */
-    z_t3659_FSProvider_t fp = z_t3659_FSProvider_create(rootpath, z_t3660_List_FSNode_create((uint64_t)0), z_t1006_Map_String_u32_create((uint64_t)0));
+    /* post-guard alias: sr => (*(z_t3509_filestat_t*)sr.data) */
+    z_t3658_FSProvider_t fp = z_t3658_FSProvider_create(rootpath, z_t3659_List_FSNode_create((uint64_t)0), z_t1006_Map_String_u32_create((uint64_t)0));
     rootpath = (z_t74_String_t){0};
-    z_t3657_FSNode_t root = z_t3657_FSNode_create(parentpath, ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR }));
+    z_t3656_FSNode_t root = z_t3656_FSNode_create(parentpath, ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR }));
     parentpath = (z_t74_String_t){0};
-    (void)(z_t3660_List_FSNode_append(&fp.pathtable, root));
-    root = (z_t3657_FSNode_t){0};
-    z_t883_ZVfsProvider_t prov = z_t3659_FSProvider_ZVfsProvider_create_owned(&fp);
-    fp = (z_t3659_FSProvider_t){0};
+    (void)(z_t3659_List_FSNode_append(&fp.pathtable, root));
+    root = (z_t3656_FSNode_t){0};
+    z_t883_ZVfsProvider_t prov = z_t3658_FSProvider_ZVfsProvider_create_owned(&fp);
+    fp = (z_t3658_FSProvider_t){0};
     z_t882_ProviderBox_t box = z_t882_ProviderBox_create(prov);
     prov = (z_t883_ZVfsProvider_t){0};
     uint32_t idx = ({ __auto_type _rc = (({ uint64_t _v = this->providers.length; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; });
@@ -25381,39 +25376,39 @@ static uint32_t z_t1248_ProviderTable_registerFS(z_t1245_ProviderTable_t* this, 
     z_t74_String_free(&rootpath);
     z_t74_String_free(&parentpath);
     z_t74_String_free(&full);
-    z_t3518_Result_filestat_IoError_destroy(&sr);
-    z_t3659_FSProvider_destroy(&fp);
-    z_t3657_FSNode_destroy(&root);
+    z_t3517_Result_filestat_IoError_destroy(&sr);
+    z_t3658_FSProvider_destroy(&fp);
+    z_t3656_FSNode_destroy(&root);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
     return idx;
     z_t74_String_free(&rootpath);
     z_t74_String_free(&parentpath);
     z_t74_String_free(&full);
-    z_t3518_Result_filestat_IoError_destroy(&sr);
-    z_t3659_FSProvider_destroy(&fp);
-    z_t3657_FSNode_destroy(&root);
+    z_t3517_Result_filestat_IoError_destroy(&sr);
+    z_t3658_FSProvider_destroy(&fp);
+    z_t3656_FSNode_destroy(&root);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
 }
 
-static uint32_t z_t3649_StringProvider_appendNode(z_t3631_StringProvider_t* this, z_t74_String_t fpath, z_t3614_nodekind_t k, z_t74_String_t c) {
+static uint32_t z_t3648_StringProvider_appendNode(z_t3630_StringProvider_t* this, z_t74_String_t fpath, z_t3613_nodekind_t k, z_t74_String_t c) {
     uint32_t idx = ({ __auto_type _rc = (({ uint64_t _v = this->nodes.length; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; });
-    z_t3629_StringNode_t n = z_t3629_StringNode_create(fpath, k, c);
+    z_t3628_StringNode_t n = z_t3628_StringNode_create(fpath, k, c);
     fpath = (z_t74_String_t){0};
     c = (z_t74_String_t){0};
-    (void)(z_t3632_List_StringNode_append(&this->nodes, n));
-    n = (z_t3629_StringNode_t){0};
+    (void)(z_t3631_List_StringNode_append(&this->nodes, n));
+    n = (z_t3628_StringNode_t){0};
     z_t74_String_free(&fpath);
     z_t74_String_free(&c);
-    z_t3629_StringNode_destroy(&n);
+    z_t3628_StringNode_destroy(&n);
     return idx;
     z_t74_String_free(&fpath);
     z_t74_String_free(&c);
-    z_t3629_StringNode_destroy(&n);
+    z_t3628_StringNode_destroy(&n);
 }
 
-static void z_t3650_StringProvider_addChild(z_t3631_StringProvider_t* this, uint32_t parentid, z_t105_StringView_t name, uint32_t childid) {
+static void z_t3649_StringProvider_addChild(z_t3630_StringProvider_t* this, uint32_t parentid, z_t105_StringView_t name, uint32_t childid) {
     z_t74_String_t _s0 = z_t74_String_create((uint64_t)33);
     char _b1[32]; int _b1_n = snprintf(_b1, 32, "%ld", (long)(int64_t)parentid);
     z_t74_String_append(&_s0, _b1, (uint64_t)_b1_n);
@@ -25425,7 +25420,7 @@ static void z_t3650_StringProvider_addChild(z_t3631_StringProvider_t* this, uint
     z_t74_String_free(&key);
 }
 
-static uint32_t z_t3651_StringProvider_walk(z_t3631_StringProvider_t* this, z_t105_StringView_t name, uint32_t parent) {
+static uint32_t z_t3650_StringProvider_walk(z_t3630_StringProvider_t* this, z_t105_StringView_t name, uint32_t parent) {
     z_t74_String_t _s0 = z_t74_String_create((uint64_t)33);
     char _b1[32]; int _b1_n = snprintf(_b1, 32, "%ld", (long)(int64_t)parent);
     z_t74_String_append(&_s0, _b1, (uint64_t)_b1_n);
@@ -25446,16 +25441,16 @@ static uint32_t z_t3651_StringProvider_walk(z_t3631_StringProvider_t* this, z_t1
         }
         case Z_OPTIONVAL_U32_TAG_NONE: {
             z_t74_String_t _s4 = z_t74_String_create((uint64_t)33);
-            z_t74_String_t _h6 = (*z_t3632_List_StringNode_get(&this->nodes, ((uint64_t)parent))).path;
+            z_t74_String_t _h6 = (*z_t3631_List_StringNode_get(&this->nodes, ((uint64_t)parent))).path;
             z_t74_String_append(&_s4, _h6.data, _h6.size);
             z_t74_String_append(&_s4, "/", sizeof("/")-1);
             z_t74_String_append(&_s4, name.data, name.length);
             z_t74_String_t childpath = _s4;
             z_t74_String_t empty = ((z_t74_String_t){0});
-            uint32_t newid = z_t3649_StringProvider_appendNode(this, childpath, ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_NOTFOUND }), empty);
+            uint32_t newid = z_t3648_StringProvider_appendNode(this, childpath, ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_NOTFOUND }), empty);
             childpath = (z_t74_String_t){0};
             empty = (z_t74_String_t){0};
-            (void)(z_t3650_StringProvider_addChild(this, parent, name, ((uint32_t)newid)));
+            (void)(z_t3649_StringProvider_addChild(this, parent, name, ((uint32_t)newid)));
             z_t74_String_free(&key);
             z_t74_String_free(&childpath);
             z_t74_String_free(&empty);
@@ -25471,10 +25466,10 @@ static uint32_t z_t3651_StringProvider_walk(z_t3631_StringProvider_t* this, z_t1
     z_t74_String_free(&_ah1489);
 }
 
-static z_t1255_OpenResult_t z_t3652_StringProvider_open(z_t3631_StringProvider_t* this, uint32_t item) {
-    __auto_type __borrow_n = &(*z_t3632_List_StringNode_get(&this->nodes, ((uint64_t)item)));
+static z_t1255_OpenResult_t z_t3651_StringProvider_open(z_t3630_StringProvider_t* this, uint32_t item) {
+    __auto_type __borrow_n = &(*z_t3631_List_StringNode_get(&this->nodes, ((uint64_t)item)));
     /* alias: n => (*__borrow_n) */
-    z_t3614_nodekind_t _m0 = (*__borrow_n).kind;
+    z_t3613_nodekind_t _m0 = (*__borrow_n).kind;
     switch (_m0.tag) {
         case Z_NODEKIND_TAG_FILE: {
             z_t74_String_t c = z_t74_String_copy(&(*__borrow_n).content);
@@ -25503,25 +25498,25 @@ static z_t1255_OpenResult_t z_t3652_StringProvider_open(z_t3631_StringProvider_t
     }
 }
 
-static z_t3614_nodekind_t z_t3653_StringProvider_stat(z_t3631_StringProvider_t* this, uint32_t item) {
-    __auto_type __borrow_n = &(*z_t3632_List_StringNode_get(&this->nodes, ((uint64_t)item)));
+static z_t3613_nodekind_t z_t3652_StringProvider_stat(z_t3630_StringProvider_t* this, uint32_t item) {
+    __auto_type __borrow_n = &(*z_t3631_List_StringNode_get(&this->nodes, ((uint64_t)item)));
     /* alias: n => (*__borrow_n) */
     return (*__borrow_n).kind;
 }
 
-static z_t74_String_t z_t3654_StringProvider_path(z_t3631_StringProvider_t* this, uint32_t item) {
-    __auto_type __borrow_n = &(*z_t3632_List_StringNode_get(&this->nodes, ((uint64_t)item)));
+static z_t74_String_t z_t3653_StringProvider_path(z_t3630_StringProvider_t* this, uint32_t item) {
+    __auto_type __borrow_n = &(*z_t3631_List_StringNode_get(&this->nodes, ((uint64_t)item)));
     /* alias: n => (*__borrow_n) */
     return z_t74_String_copy(&(*__borrow_n).path);
 }
 
-static void z_t3655_StringProvider_addFile(z_t3631_StringProvider_t* this, z_t74_String_t fpath, z_t74_String_t content) {
+static void z_t3654_StringProvider_addFile(z_t3630_StringProvider_t* this, z_t74_String_t fpath, z_t74_String_t content) {
     z_t105_StringView_t sv = (z_t105_StringView_t){ fpath.data, fpath.size };
     uint32_t currentid = ((uint32_t)0);
     uint64_t total = ((uint64_t)0);
-    z_t3591_Splitter_t it = z_t105_StringView_split(&sv, &_zs436);
+    z_t3590_Splitter_t it = z_t105_StringView_split(&sv, &_zs436);
     while (1) {
-        z_t754_Option_StringView_t _iter0 = z_t3591_Splitter_call(&it);
+        z_t754_Option_StringView_t _iter0 = z_t3590_Splitter_call(&it);
         if (_iter0.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter0); break; }
         z_t105_StringView_t piece = *(z_t105_StringView_t*)_iter0.data;
         free(_iter0.data);
@@ -25533,9 +25528,9 @@ static void z_t3655_StringProvider_addFile(z_t3631_StringProvider_t* this, z_t74
         z_panic((const char*)_zs437.data);
     }
     uint64_t seen = ((uint64_t)0);
-    z_t3591_Splitter_t it2 = z_t105_StringView_split(&sv, &_zs438);
+    z_t3590_Splitter_t it2 = z_t105_StringView_split(&sv, &_zs438);
     while (1) {
-        z_t754_Option_StringView_t _iter1 = z_t3591_Splitter_call(&it2);
+        z_t754_Option_StringView_t _iter1 = z_t3590_Splitter_call(&it2);
         if (_iter1.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter1); break; }
         z_t105_StringView_t piece = *(z_t105_StringView_t*)_iter1.data;
         free(_iter1.data);
@@ -25559,25 +25554,25 @@ static void z_t3655_StringProvider_addFile(z_t3631_StringProvider_t* this, z_t74
                 }
                 case Z_OPTIONVAL_U32_TAG_NONE: {
                     z_t74_String_t _s6 = z_t74_String_create((uint64_t)33);
-                    z_t74_String_t _h8 = (*z_t3632_List_StringNode_get(&this->nodes, ((uint64_t)currentid))).path;
+                    z_t74_String_t _h8 = (*z_t3631_List_StringNode_get(&this->nodes, ((uint64_t)currentid))).path;
                     z_t74_String_append(&_s6, _h8.data, _h8.size);
                     z_t74_String_append(&_s6, "/", sizeof("/")-1);
                     z_t74_String_append(&_s6, piece.data, piece.length);
                     z_t74_String_t childpath = _s6;
                     if ((seen == total)) {
                         z_t74_String_t c = z_t74_String_copy(&content);
-                        uint32_t newid = z_t3649_StringProvider_appendNode(this, childpath, ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_FILE }), c);
+                        uint32_t newid = z_t3648_StringProvider_appendNode(this, childpath, ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_FILE }), c);
                         childpath = (z_t74_String_t){0};
                         c = (z_t74_String_t){0};
-                        (void)(z_t3650_StringProvider_addChild(this, currentid, piece, ((uint32_t)newid)));
+                        (void)(z_t3649_StringProvider_addChild(this, currentid, piece, ((uint32_t)newid)));
                         currentid = newid;
     z_t74_String_free(&c);
                     } else {
                         z_t74_String_t empty = ((z_t74_String_t){0});
-                        uint32_t newid = z_t3649_StringProvider_appendNode(this, childpath, ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR }), empty);
+                        uint32_t newid = z_t3648_StringProvider_appendNode(this, childpath, ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR }), empty);
                         childpath = (z_t74_String_t){0};
                         empty = (z_t74_String_t){0};
-                        (void)(z_t3650_StringProvider_addChild(this, currentid, piece, ((uint32_t)newid)));
+                        (void)(z_t3649_StringProvider_addChild(this, currentid, piece, ((uint32_t)newid)));
                         currentid = newid;
     z_t74_String_free(&empty);
                     }
@@ -25594,21 +25589,21 @@ static void z_t3655_StringProvider_addFile(z_t3631_StringProvider_t* this, z_t74
     z_t74_String_free(&content);
 }
 
-static uint32_t z_t3677_FSProvider_appendPath(z_t3659_FSProvider_t* this, z_t74_String_t fpath, z_t3614_nodekind_t k) {
+static uint32_t z_t3676_FSProvider_appendPath(z_t3658_FSProvider_t* this, z_t74_String_t fpath, z_t3613_nodekind_t k) {
     uint32_t idx = ({ __auto_type _rc = (({ uint64_t _v = this->pathtable.length; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; });
-    z_t3657_FSNode_t n = z_t3657_FSNode_create(fpath, k);
+    z_t3656_FSNode_t n = z_t3656_FSNode_create(fpath, k);
     fpath = (z_t74_String_t){0};
-    (void)(z_t3660_List_FSNode_append(&this->pathtable, n));
-    n = (z_t3657_FSNode_t){0};
+    (void)(z_t3659_List_FSNode_append(&this->pathtable, n));
+    n = (z_t3656_FSNode_t){0};
     z_t74_String_free(&fpath);
-    z_t3657_FSNode_destroy(&n);
+    z_t3656_FSNode_destroy(&n);
     return idx;
     z_t74_String_free(&fpath);
-    z_t3657_FSNode_destroy(&n);
+    z_t3656_FSNode_destroy(&n);
 }
 
-static uint32_t z_t3678_FSProvider_walk(z_t3659_FSProvider_t* this, z_t105_StringView_t name, uint32_t parent) {
-    z_t74_String_t rel = z_t1239_joinPath(((z_t105_StringView_t){ (*z_t3660_List_FSNode_get(&this->pathtable, ((uint64_t)parent))).path.data, (*z_t3660_List_FSNode_get(&this->pathtable, ((uint64_t)parent))).path.size }), name);
+static uint32_t z_t3677_FSProvider_walk(z_t3658_FSProvider_t* this, z_t105_StringView_t name, uint32_t parent) {
+    z_t74_String_t rel = z_t1239_joinPath(((z_t105_StringView_t){ (*z_t3659_List_FSNode_get(&this->pathtable, ((uint64_t)parent))).path.data, (*z_t3659_List_FSNode_get(&this->pathtable, ((uint64_t)parent))).path.size }), name);
     z_t74_String_t _ah1491 = z_t74_String_copy(&rel);
     z_t657_optionval_u32_t cached = z_t1006_Map_String_u32_get(this->pathcache, _ah1491);
     z_t657_optionval_u32_t _m0 = cached;
@@ -25623,28 +25618,28 @@ static uint32_t z_t3678_FSProvider_walk(z_t3659_FSProvider_t* this, z_t105_Strin
         }
         case Z_OPTIONVAL_U32_TAG_NONE: {
             z_t74_String_t full = z_t1239_joinPath(((z_t105_StringView_t){ this->rootpath.data, this->rootpath.size }), ((z_t105_StringView_t){ rel.data, rel.size }));
-            z_t3614_nodekind_t k = ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_NOTFOUND });
-            z_t3518_Result_filestat_IoError_t sr = z_io_stat(((z_t105_StringView_t){ full.data, full.size }));
-            z_t3518_Result_filestat_IoError_t _m1 = sr;
+            z_t3613_nodekind_t k = ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_NOTFOUND });
+            z_t3517_Result_filestat_IoError_t sr = z_io_stat(((z_t105_StringView_t){ full.data, full.size }));
+            z_t3517_Result_filestat_IoError_t _m1 = sr;
             switch (_m1.tag) {
                 case Z_RESULT_FILESTAT_IOERROR_TAG_OK: {
-                    /* alias: sr => (*(z_t3510_filestat_t*)_m1.data) */
-                    z_t3511_filekind_t _m2 = (*(z_t3510_filestat_t*)_m1.data).kind;
+                    /* alias: sr => (*(z_t3509_filestat_t*)_m1.data) */
+                    z_t3510_filekind_t _m2 = (*(z_t3509_filestat_t*)_m1.data).kind;
                     switch (_m2.tag) {
                         case Z_FILEKIND_TAG_FILE: {
-                            k = ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_FILE });
+                            k = ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_FILE });
                             break;
                         }
                         case Z_FILEKIND_TAG_DIR: {
-                            k = ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR });
+                            k = ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR });
                             break;
                         }
                         case Z_FILEKIND_TAG_SYMLINK: {
-                            k = ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_FILE });
+                            k = ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_FILE });
                             break;
                         }
                         case Z_FILEKIND_TAG_OTHER: {
-                            k = ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_NOTFOUND });
+                            k = ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_NOTFOUND });
                             break;
                         }
                         default: break;
@@ -25657,15 +25652,15 @@ static uint32_t z_t3678_FSProvider_walk(z_t3659_FSProvider_t* this, z_t105_Strin
                 }
                 default: break;
             }
-            uint32_t newid = z_t3677_FSProvider_appendPath(this, z_t74_String_copy(&rel), k);
+            uint32_t newid = z_t3676_FSProvider_appendPath(this, z_t74_String_copy(&rel), k);
             (void)(z_t1006_Map_String_u32_set(this->pathcache, rel, ((uint32_t)newid)));
             rel = (z_t74_String_t){0};
             z_t74_String_free(&rel);
             z_t74_String_free(&full);
     z_t74_String_free(&_ah1491);
-    z_t3518_Result_filestat_IoError_destroy(&sr);
+    z_t3517_Result_filestat_IoError_destroy(&sr);
             return newid;
-    z_t3518_Result_filestat_IoError_destroy(&sr);
+    z_t3517_Result_filestat_IoError_destroy(&sr);
     z_t74_String_free(&full);
             break;
         }
@@ -25675,22 +25670,22 @@ static uint32_t z_t3678_FSProvider_walk(z_t3659_FSProvider_t* this, z_t105_Strin
     z_t74_String_free(&_ah1491);
 }
 
-static z_t1255_OpenResult_t z_t3679_FSProvider_open(z_t3659_FSProvider_t* this, uint32_t item) {
-    __auto_type __borrow_n = &(*z_t3660_List_FSNode_get(&this->pathtable, ((uint64_t)item)));
+static z_t1255_OpenResult_t z_t3678_FSProvider_open(z_t3658_FSProvider_t* this, uint32_t item) {
+    __auto_type __borrow_n = &(*z_t3659_List_FSNode_get(&this->pathtable, ((uint64_t)item)));
     /* alias: n => (*__borrow_n) */
-    z_t3614_nodekind_t _m0 = (*__borrow_n).kind;
+    z_t3613_nodekind_t _m0 = (*__borrow_n).kind;
     switch (_m0.tag) {
         case Z_NODEKIND_TAG_FILE: {
             z_t74_String_t full = z_t1239_joinPath(((z_t105_StringView_t){ this->rootpath.data, this->rootpath.size }), ((z_t105_StringView_t){ (*__borrow_n).path.data, (*__borrow_n).path.size }));
-            z_t3495_Result_String_IoError_t rr = z_io_readText(((z_t105_StringView_t){ full.data, full.size }));
-            z_t3495_Result_String_IoError_t _m1 = rr;
+            z_t3494_Result_String_IoError_t rr = z_io_readText(((z_t105_StringView_t){ full.data, full.size }));
+            z_t3494_Result_String_IoError_t _m1 = rr;
             switch (_m1.tag) {
                 case Z_RESULT_STRING_IOERROR_TAG_OK: {
                     /* alias: rr => (*(z_t74_String_t*)_m1.data) */
                     z_t1255_OpenResult_t _ret2 = ({ z_t1255_OpenResult_t _u = {0}; _u.tag = Z_OPENRESULT_TAG_OK; z_t74_String_t* _b = (z_t74_String_t*)z_xmalloc(sizeof(z_t74_String_t)); *_b = (*(z_t74_String_t*)_m1.data); _u.data = _b; _u; });
                     (*(z_t74_String_t*)_m1.data) = (z_t74_String_t){0};
                     z_t74_String_free(&full);
-    z_t3495_Result_String_IoError_destroy(&rr);
+    z_t3494_Result_String_IoError_destroy(&rr);
                     return _ret2;
                     break;
                 }
@@ -25699,14 +25694,14 @@ static z_t1255_OpenResult_t z_t3679_FSProvider_open(z_t3659_FSProvider_t* this, 
                     z_t1255_OpenResult_t _ret3 = ({ z_t1255_OpenResult_t _u = {0}; _u.tag = Z_OPENRESULT_TAG_ERR; z_t1256_IoError_t* _b = (z_t1256_IoError_t*)z_xmalloc(sizeof(z_t1256_IoError_t)); *_b = (*(z_t1256_IoError_t*)_m1.data); _u.data = _b; _u; });
                     (*(z_t1256_IoError_t*)_m1.data) = (z_t1256_IoError_t){0};
                     z_t74_String_free(&full);
-    z_t3495_Result_String_IoError_destroy(&rr);
+    z_t3494_Result_String_IoError_destroy(&rr);
                     return _ret3;
                     break;
                 }
                 default: z_unreachable();
             }
             /* post-guard alias: rr => (*(z_t1256_IoError_t*)rr.data) */
-    z_t3495_Result_String_IoError_destroy(&rr);
+    z_t3494_Result_String_IoError_destroy(&rr);
     z_t74_String_free(&full);
             break;
         }
@@ -25728,19 +25723,19 @@ static z_t1255_OpenResult_t z_t3679_FSProvider_open(z_t3659_FSProvider_t* this, 
     }
 }
 
-static z_t3614_nodekind_t z_t3680_FSProvider_stat(z_t3659_FSProvider_t* this, uint32_t item) {
-    __auto_type __borrow_n = &(*z_t3660_List_FSNode_get(&this->pathtable, ((uint64_t)item)));
+static z_t3613_nodekind_t z_t3679_FSProvider_stat(z_t3658_FSProvider_t* this, uint32_t item) {
+    __auto_type __borrow_n = &(*z_t3659_List_FSNode_get(&this->pathtable, ((uint64_t)item)));
     /* alias: n => (*__borrow_n) */
     return (*__borrow_n).kind;
 }
 
-static z_t74_String_t z_t3681_FSProvider_path(z_t3659_FSProvider_t* this, uint32_t item) {
-    __auto_type __borrow_n = &(*z_t3660_List_FSNode_get(&this->pathtable, ((uint64_t)item)));
+static z_t74_String_t z_t3680_FSProvider_path(z_t3658_FSProvider_t* this, uint32_t item) {
+    __auto_type __borrow_n = &(*z_t3659_List_FSNode_get(&this->pathtable, ((uint64_t)item)));
     /* alias: n => (*__borrow_n) */
     return z_t74_String_copy(&(*__borrow_n).path);
 }
 
-static void z_t3682_FSProvider_addFile(z_t3659_FSProvider_t* this, z_t74_String_t fpath, z_t74_String_t content) {
+static void z_t3681_FSProvider_addFile(z_t3658_FSProvider_t* this, z_t74_String_t fpath, z_t74_String_t content) {
     (void)(fpath);
     (void)(content);
     z_panic((const char*)_zs440.data);
@@ -25749,9 +25744,9 @@ static void z_t3682_FSProvider_addFile(z_t3659_FSProvider_t* this, z_t74_String_
 }
 
 static uint32_t z_t1030_ZVfs_registerNull(z_t881_ZVfs_t* this) {
-    z_t3622_NullProvider_t np = z_t3622_NullProvider_create(false);
-    z_t883_ZVfsProvider_t prov = z_t3622_NullProvider_ZVfsProvider_create_owned(&np);
-    np = (z_t3622_NullProvider_t){0};
+    z_t3621_NullProvider_t np = z_t3621_NullProvider_create(false);
+    z_t883_ZVfsProvider_t prov = z_t3621_NullProvider_ZVfsProvider_create_owned(&np);
+    np = (z_t3621_NullProvider_t){0};
     z_t882_ProviderBox_t box = z_t882_ProviderBox_create(prov);
     prov = (z_t883_ZVfsProvider_t){0};
     uint32_t pid = ({ __auto_type _rc = (({ uint64_t _v = this->providers.length; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; });
@@ -25760,22 +25755,22 @@ static uint32_t z_t1030_ZVfs_registerNull(z_t881_ZVfs_t* this) {
     z_t950_dentry_t d = ((z_t950_dentry_t){ .tag = Z_DENTRY_TAG_DIRECTORY, .data.directory = (z_t959_dirdata_create(0, pid, 0)) });
     uint32_t did = z_t987_DentryTable_append(&this->entrytable, d);
     (void)(z_t989_List_String_append(&this->file_names, z_t74_String_from_view(_zs441)));
-    z_t3622_NullProvider_destroy(&np);
+    z_t3621_NullProvider_destroy(&np);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
     return did;
-    z_t3622_NullProvider_destroy(&np);
+    z_t3621_NullProvider_destroy(&np);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
 }
 
 static uint32_t z_t1031_ZVfs_registerString(z_t881_ZVfs_t* this) {
-    z_t3631_StringProvider_t sp = z_t3631_StringProvider_create(z_t3632_List_StringNode_create((uint64_t)0), z_t1006_Map_String_u32_create((uint64_t)0));
-    z_t3629_StringNode_t root = z_t3629_StringNode_create(z_t74_String_from_view(_zs442), ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR }), z_t74_String_from_view(_zs443));
-    (void)(z_t3632_List_StringNode_append(&sp.nodes, root));
-    root = (z_t3629_StringNode_t){0};
-    z_t883_ZVfsProvider_t prov = z_t3631_StringProvider_ZVfsProvider_create_owned(&sp);
-    sp = (z_t3631_StringProvider_t){0};
+    z_t3630_StringProvider_t sp = z_t3630_StringProvider_create(z_t3631_List_StringNode_create((uint64_t)0), z_t1006_Map_String_u32_create((uint64_t)0));
+    z_t3628_StringNode_t root = z_t3628_StringNode_create(z_t74_String_from_view(_zs442), ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR }), z_t74_String_from_view(_zs443));
+    (void)(z_t3631_List_StringNode_append(&sp.nodes, root));
+    root = (z_t3628_StringNode_t){0};
+    z_t883_ZVfsProvider_t prov = z_t3630_StringProvider_ZVfsProvider_create_owned(&sp);
+    sp = (z_t3630_StringProvider_t){0};
     z_t882_ProviderBox_t box = z_t882_ProviderBox_create(prov);
     prov = (z_t883_ZVfsProvider_t){0};
     uint32_t pid = ({ __auto_type _rc = (({ uint64_t _v = this->providers.length; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; });
@@ -25784,25 +25779,25 @@ static uint32_t z_t1031_ZVfs_registerString(z_t881_ZVfs_t* this) {
     z_t950_dentry_t d = ((z_t950_dentry_t){ .tag = Z_DENTRY_TAG_DIRECTORY, .data.directory = (z_t959_dirdata_create(0, pid, 0)) });
     uint32_t did = z_t987_DentryTable_append(&this->entrytable, d);
     (void)(z_t989_List_String_append(&this->file_names, z_t74_String_from_view(_zs444)));
-    z_t3631_StringProvider_destroy(&sp);
-    z_t3629_StringNode_destroy(&root);
+    z_t3630_StringProvider_destroy(&sp);
+    z_t3628_StringNode_destroy(&root);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
     return did;
-    z_t3631_StringProvider_destroy(&sp);
-    z_t3629_StringNode_destroy(&root);
+    z_t3630_StringProvider_destroy(&sp);
+    z_t3628_StringNode_destroy(&root);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
 }
 
 static uint32_t z_t1032_ZVfs_registerFS(z_t881_ZVfs_t* this, z_t74_String_t rootpath, z_t74_String_t parentpath) {
     z_t74_String_t full = z_t1239_joinPath(((z_t105_StringView_t){ rootpath.data, rootpath.size }), ((z_t105_StringView_t){ parentpath.data, parentpath.size }));
-    z_t3518_Result_filestat_IoError_t sr = z_io_stat(((z_t105_StringView_t){ full.data, full.size }));
-    z_t3518_Result_filestat_IoError_t _m0 = sr;
+    z_t3517_Result_filestat_IoError_t sr = z_io_stat(((z_t105_StringView_t){ full.data, full.size }));
+    z_t3517_Result_filestat_IoError_t _m0 = sr;
     switch (_m0.tag) {
         case Z_RESULT_FILESTAT_IOERROR_TAG_OK: {
-            /* alias: sr => (*(z_t3510_filestat_t*)_m0.data) */
-            z_t3511_filekind_t _m1 = (*(z_t3510_filestat_t*)_m0.data).kind;
+            /* alias: sr => (*(z_t3509_filestat_t*)_m0.data) */
+            z_t3510_filekind_t _m1 = (*(z_t3509_filestat_t*)_m0.data).kind;
             switch (_m1.tag) {
                 case Z_FILEKIND_TAG_DIR: {
                     break;
@@ -25830,16 +25825,16 @@ static uint32_t z_t1032_ZVfs_registerFS(z_t881_ZVfs_t* this, z_t74_String_t root
         }
         default: break;
     }
-    /* post-guard alias: sr => (*(z_t3510_filestat_t*)sr.data) */
+    /* post-guard alias: sr => (*(z_t3509_filestat_t*)sr.data) */
     z_t74_String_t rpCopy = z_t74_String_copy(&rootpath);
-    z_t3659_FSProvider_t fp = z_t3659_FSProvider_create(rootpath, z_t3660_List_FSNode_create((uint64_t)0), z_t1006_Map_String_u32_create((uint64_t)0));
+    z_t3658_FSProvider_t fp = z_t3658_FSProvider_create(rootpath, z_t3659_List_FSNode_create((uint64_t)0), z_t1006_Map_String_u32_create((uint64_t)0));
     rootpath = (z_t74_String_t){0};
-    z_t3657_FSNode_t root = z_t3657_FSNode_create(parentpath, ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR }));
+    z_t3656_FSNode_t root = z_t3656_FSNode_create(parentpath, ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR }));
     parentpath = (z_t74_String_t){0};
-    (void)(z_t3660_List_FSNode_append(&fp.pathtable, root));
-    root = (z_t3657_FSNode_t){0};
-    z_t883_ZVfsProvider_t prov = z_t3659_FSProvider_ZVfsProvider_create_owned(&fp);
-    fp = (z_t3659_FSProvider_t){0};
+    (void)(z_t3659_List_FSNode_append(&fp.pathtable, root));
+    root = (z_t3656_FSNode_t){0};
+    z_t883_ZVfsProvider_t prov = z_t3658_FSProvider_ZVfsProvider_create_owned(&fp);
+    fp = (z_t3658_FSProvider_t){0};
     z_t882_ProviderBox_t box = z_t882_ProviderBox_create(prov);
     prov = (z_t883_ZVfsProvider_t){0};
     uint32_t pid = ({ __auto_type _rc = (({ uint64_t _v = this->providers.length; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; });
@@ -25854,9 +25849,9 @@ static uint32_t z_t1032_ZVfs_registerFS(z_t881_ZVfs_t* this, z_t74_String_t root
     z_t74_String_free(&parentpath);
     z_t74_String_free(&full);
     z_t74_String_free(&rpCopy);
-    z_t3518_Result_filestat_IoError_destroy(&sr);
-    z_t3659_FSProvider_destroy(&fp);
-    z_t3657_FSNode_destroy(&root);
+    z_t3517_Result_filestat_IoError_destroy(&sr);
+    z_t3658_FSProvider_destroy(&fp);
+    z_t3656_FSNode_destroy(&root);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
     return did;
@@ -25864,9 +25859,9 @@ static uint32_t z_t1032_ZVfs_registerFS(z_t881_ZVfs_t* this, z_t74_String_t root
     z_t74_String_free(&parentpath);
     z_t74_String_free(&full);
     z_t74_String_free(&rpCopy);
-    z_t3518_Result_filestat_IoError_destroy(&sr);
-    z_t3659_FSProvider_destroy(&fp);
-    z_t3657_FSNode_destroy(&root);
+    z_t3517_Result_filestat_IoError_destroy(&sr);
+    z_t3658_FSProvider_destroy(&fp);
+    z_t3656_FSNode_destroy(&root);
     z_t883_ZVfsProvider_destroy(&prov);
     z_t882_ProviderBox_destroy(&box);
 }
@@ -25896,7 +25891,7 @@ static uint32_t z_t1033_ZVfs_walk(z_t881_ZVfs_t* this, uint32_t parent, z_t105_S
         }
         default: break;
     }
-    z_t3618_mountinfo_t mi = z_t1056_ZVfs__extractMount(this, parent);
+    z_t3617_mountinfo_t mi = z_t1056_ZVfs__extractMount(this, parent);
     if (mi.is_mount) {
         uint32_t r1 = z_t1033_ZVfs_walk(this, mi.first, name);
         if (mi.has_second) {
@@ -25957,9 +25952,9 @@ static uint32_t z_t1033_ZVfs_walk(z_t881_ZVfs_t* this, uint32_t parent, z_t105_S
     __auto_type __borrow_box = &(*z_t892_List_ProviderBox_get(&this->providers, ((uint64_t)ppid)));
     /* alias: box => (*__borrow_box) */
     uint32_t newnid = (*__borrow_box).p.vtable->walk((*__borrow_box).p.data, name, pnid);
-    z_t3614_nodekind_t kind = (*__borrow_box).p.vtable->stat((*__borrow_box).p.data, newnid);
+    z_t3613_nodekind_t kind = (*__borrow_box).p.vtable->stat((*__borrow_box).p.data, newnid);
     z_t950_dentry_t newd = ((z_t950_dentry_t){ .tag = Z_DENTRY_TAG_NOTFOUND, .data.notfound = (z_t951_notfounddata_create(parent, ppid, newnid)) });
-    z_t3614_nodekind_t _m5 = kind;
+    z_t3613_nodekind_t _m5 = kind;
     switch (_m5.tag) {
         case Z_NODEKIND_TAG_FILE: {
             newd = ((z_t950_dentry_t){ .tag = Z_DENTRY_TAG_FILE, .data.file = (z_t955_filedata_create(parent, ppid, newnid)) });
@@ -25985,36 +25980,36 @@ static uint32_t z_t1033_ZVfs_walk(z_t881_ZVfs_t* this, uint32_t parent, z_t105_S
     z_t74_String_free(&cklookup);
 }
 
-static z_t3614_nodekind_t z_t1034_ZVfs_arm(z_t881_ZVfs_t* this, uint32_t dentryid) {
+static z_t3613_nodekind_t z_t1034_ZVfs_arm(z_t881_ZVfs_t* this, uint32_t dentryid) {
     z_t950_dentry_t e = z_t970_List_dentry_get(&this->entrytable.entries, ((uint64_t)dentryid));
     z_t950_dentry_t _m0 = e;
     switch (_m0.tag) {
         case Z_DENTRY_TAG_ROOT: {
-            return ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR });
+            return ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR });
             break;
         }
         case Z_DENTRY_TAG_NOTFOUND: {
             z_t951_notfounddata_t e = _m0.data.notfound;
             (void)e;
-            return ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_NOTFOUND });
+            return ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_NOTFOUND });
             break;
         }
         case Z_DENTRY_TAG_FILE: {
             z_t955_filedata_t e = _m0.data.file;
             (void)e;
-            return ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_FILE });
+            return ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_FILE });
             break;
         }
         case Z_DENTRY_TAG_DIRECTORY: {
             z_t959_dirdata_t e = _m0.data.directory;
             (void)e;
-            return ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR });
+            return ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR });
             break;
         }
         case Z_DENTRY_TAG_MOUNT: {
             z_t963_mountdata_t e = _m0.data.mount;
             (void)e;
-            return ((z_t3614_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR });
+            return ((z_t3613_nodekind_t){ .tag = Z_NODEKIND_TAG_DIR });
             break;
         }
         default: z_unreachable();
@@ -26272,14 +26267,14 @@ static z_t74_String_t z_t1055_ZVfs_pathfromproviderNative(z_t881_ZVfs_t* this, u
     z_t944_OptionView_String_destroy(&ro9);
 }
 
-static z_t3618_mountinfo_t z_t1056_ZVfs__extractMount(z_t881_ZVfs_t* this, uint32_t dentryid) {
+static z_t3617_mountinfo_t z_t1056_ZVfs__extractMount(z_t881_ZVfs_t* this, uint32_t dentryid) {
     z_t950_dentry_t e = z_t970_List_dentry_get(&this->entrytable.entries, ((uint64_t)dentryid));
     z_t950_dentry_t _m0 = e;
     switch (_m0.tag) {
         case Z_DENTRY_TAG_MOUNT: {
             z_t963_mountdata_t e = _m0.data.mount;
             (void)e;
-            return z_t3618_mountinfo_create(true, e.first, e.second, e.has_second);
+            return z_t3617_mountinfo_create(true, e.first, e.second, e.has_second);
             break;
         }
         case Z_DENTRY_TAG_ROOT: {
@@ -26302,7 +26297,7 @@ static z_t3618_mountinfo_t z_t1056_ZVfs__extractMount(z_t881_ZVfs_t* this, uint3
         }
         default: break;
     }
-    return z_t3618_mountinfo_create(false, 0, 0, false);
+    return z_t3617_mountinfo_create(false, 0, 0, false);
 }
 
 static bool z_t1057_ZVfs__dentryIsNotFound(z_t881_ZVfs_t* this, uint32_t dentryid) {
@@ -26399,9 +26394,9 @@ static z_t947_Option_String_t z_t1059_ZVfs_getline(z_t881_ZVfs_t* this, uint32_t
             z_t74_String_t s = z_t74_String_copy(&(*(z_t74_String_t*)_m0.data));
             z_t105_StringView_t sv = (z_t105_StringView_t){ s.data, s.size };
             z_t989_List_String_t all_lines = z_t989_List_String_create((uint64_t)0);
-            z_t3594_LinesIter_t li = z_t105_StringView_lines(&sv);
+            z_t3593_LinesIter_t li = z_t105_StringView_lines(&sv);
             while (1) {
-                z_t754_Option_StringView_t _iter1 = z_t3594_LinesIter_call(&li);
+                z_t754_Option_StringView_t _iter1 = z_t3593_LinesIter_call(&li);
                 if (_iter1.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter1); break; }
                 z_t105_StringView_t line = *(z_t105_StringView_t*)_iter1.data;
                 free(_iter1.data);
@@ -26662,7 +26657,7 @@ static uint64_t z_t2022_ZSymbolTable_pop(z_t1267_ZSymbolTable_t* this) {
     }
     z_t989_List_String_t mNames = z_t989_List_String_create((uint64_t)0);
     z_t1422_List_u64_t mTypes = z_t1422_List_u64_create((uint64_t)0);
-    z_t3813_List_zsrcpos_t mLocs = z_t3813_List_zsrcpos_create((uint64_t)0);
+    z_t3812_List_zsrcpos_t mLocs = z_t3812_List_zsrcpos_create((uint64_t)0);
     uint64_t p2 = start;
     while ((p2 < endIdx)) {
         __auto_type __borrow_e = &(*z_t1322_List_ZEntry_get(&this->entries, p2));
@@ -26679,7 +26674,7 @@ static uint64_t z_t2022_ZSymbolTable_pop(z_t1267_ZSymbolTable_t* this) {
                         uint64_t zt = (*__borrow_e).ztypeId;
                         (void)(z_t989_List_String_append(&mNames, z_t74_String_copy(&(*__borrow_e).name)));
                         (void)(z_t1422_List_u64_append(&mTypes, zt));
-                        (void)(z_t3813_List_zsrcpos_append(&mLocs, taOpt));
+                        (void)(z_t3812_List_zsrcpos_append(&mLocs, taOpt));
                     }
                     break;
                 }
@@ -26713,7 +26708,7 @@ static uint64_t z_t2022_ZSymbolTable_pop(z_t1267_ZSymbolTable_t* this) {
         if ((already == false)) {
             z_t1291_ZEntry_t te = z_t1577_ZTypeRegistry_newEntry(&this->reg, ((z_t105_StringView_t){ (*__borrow_nm).data, (*__borrow_nm).size }), zt, false);
             te.isTaken = true;
-            te.takenAt = ((z_t1317_optionval_zsrcpos_t){ .tag = Z_OPTIONVAL_ZSRCPOS_TAG_SOME, .data.some = (z_t3813_List_zsrcpos_get(&mLocs, mi)) });
+            te.takenAt = ((z_t1317_optionval_zsrcpos_t){ .tag = Z_OPTIONVAL_ZSRCPOS_TAG_SOME, .data.some = (z_t3812_List_zsrcpos_get(&mLocs, mi)) });
             (void)(z_t1322_List_ZEntry_append(&this->entries, te));
             te = (z_t1291_ZEntry_t){0};
     z_t1291_ZEntry_destroy(&te);
@@ -26724,13 +26719,13 @@ static uint64_t z_t2022_ZSymbolTable_pop(z_t1267_ZSymbolTable_t* this) {
     z_t1304_Set_String_destroy(localDefs);
     z_t989_List_String_destroy(&mNames);
     z_t1422_List_u64_destroy(&mTypes);
-    z_t3813_List_zsrcpos_destroy(&mLocs);
+    z_t3812_List_zsrcpos_destroy(&mLocs);
     z_t1268_ZScope_destroy(&popped);
     return topId;
     z_t1304_Set_String_destroy(localDefs);
     z_t989_List_String_destroy(&mNames);
     z_t1422_List_u64_destroy(&mTypes);
-    z_t3813_List_zsrcpos_destroy(&mLocs);
+    z_t3812_List_zsrcpos_destroy(&mLocs);
     z_t1268_ZScope_destroy(&popped);
 }
 
@@ -29013,7 +29008,7 @@ static uint32_t z_t2079_Parser_internName(z_t2075_Parser_t* this, z_t105_StringV
 
 static bool z_t2080_Parser_isReservedWordTok(z_t2075_Parser_t* this, z_t2081_Token_t* tok) {
     z_t105_StringView_t sv9 = ((z_t105_StringView_t){ tok->tokstr.data, tok->tokstr.size });
-    z_t3696_kwresult_t kr9 = z_t2318_kwlookup(sv9);
+    z_t3695_kwresult_t kr9 = z_t2318_kwlookup(sv9);
     if (kr9.found) {
         return true;
     }
@@ -29803,7 +29798,7 @@ static z_t1130_List_Node_t z_t2153_Parser_operationPaths(z_t2075_Parser_t* this,
 
 static z_t1068_Node_t z_t2154_Parser_foldStack(z_t2075_Parser_t* this, z_t1130_List_Node_t stack, z_t2081_Token_t* nextTok) {
     z_t1068_Node_t acc = z_t1130_List_Node_pop(&stack);
-    z_t3610_nodepos_t sp = z_t1216_posOf(acc);
+    z_t3609_nodepos_t sp = z_t1216_posOf(acc);
     z_t1068_Node_t _ret0 = z_t2155_Parser_foldBinopTail(this, stack, acc, sp.line, sp.col, nextTok);
     stack = (z_t1130_List_Node_t){0};
     acc = (z_t1068_Node_t){0};
@@ -29881,7 +29876,7 @@ static z_t1068_Node_t z_t2158_Parser_acceptTermBinopCall(z_t2075_Parser_t* this,
     z_t1130_List_Node_t stack = z_t2157_Parser_reverseStack(paths);
     paths = (z_t1130_List_Node_t){0};
     z_t1068_Node_t callable = z_t1130_List_Node_pop(&stack);
-    z_t3610_nodepos_t cp = z_t1216_posOf(callable);
+    z_t3609_nodepos_t cp = z_t1216_posOf(callable);
     z_t1130_List_Node_t args = z_t1130_List_Node_create((uint64_t)0);
     if ((stack.length > 0)) {
         z_t2081_Token_t _ah1494 = z_t2130_Lexer_peek(lex);
@@ -29896,7 +29891,7 @@ static z_t1068_Node_t z_t2158_Parser_acceptTermBinopCall(z_t2075_Parser_t* this,
     z_t2081_Token_destroy(&_ah1494);
             return argNode;
         }
-        z_t3610_nodepos_t ap = z_t1216_posOf(argNode);
+        z_t3609_nodepos_t ap = z_t1216_posOf(argNode);
         z_t1068_Node_t uarg = z_t2151_Parser_mkNamedOp(this, 0, argNode, ap.line, ap.col);
         argNode = (z_t1068_Node_t){0};
         (void)(z_t1130_List_Node_append(&args, uarg));
@@ -29923,7 +29918,7 @@ static z_t1068_Node_t z_t2159_Parser_acceptCall(z_t2075_Parser_t* this, z_t2094_
     z_t1130_List_Node_t stack = z_t2157_Parser_reverseStack(paths);
     paths = (z_t1130_List_Node_t){0};
     z_t1068_Node_t callable = z_t1130_List_Node_pop(&stack);
-    z_t3610_nodepos_t cp = z_t1216_posOf(callable);
+    z_t3609_nodepos_t cp = z_t1216_posOf(callable);
     z_t1130_List_Node_t args = z_t1130_List_Node_create((uint64_t)0);
     if ((stack.length > 0)) {
         z_t2081_Token_t _ah1495 = z_t2130_Lexer_peek(lex);
@@ -29940,7 +29935,7 @@ static z_t1068_Node_t z_t2159_Parser_acceptCall(z_t2075_Parser_t* this, z_t2094_
         }
         bool argIsOp = z_t2091_Parser_isOperationArm(argNode);
         if (argIsOp) {
-            z_t3610_nodepos_t ap = z_t1216_posOf(argNode);
+            z_t3609_nodepos_t ap = z_t1216_posOf(argNode);
             z_t1068_Node_t uarg = z_t2151_Parser_mkNamedOp(this, 0, argNode, ap.line, ap.col);
             argNode = (z_t1068_Node_t){0};
             (void)(z_t1130_List_Node_append(&args, uarg));
@@ -30279,7 +30274,7 @@ static bool z_t2164_Parser_exprLookahead(z_t2075_Parser_t* this, z_t2094_Lexer_t
 }
 
 static z_t1068_Node_t z_t2165_Parser_wrapExpression(z_t2075_Parser_t* this, z_t1068_Node_t inner) {
-    z_t3610_nodepos_t ip = z_t1216_posOf(inner);
+    z_t3609_nodepos_t ip = z_t1216_posOf(inner);
     z_t1068_Node_t _ret0 = ({ z_t1068_Node_t _u = {0}; _u.tag = Z_NODE_TAG_EXPRESSION; z_t1101_ExpressionData_t* _b = (z_t1101_ExpressionData_t*)z_xmalloc(sizeof(z_t1101_ExpressionData_t)); *_b = z_t1101_ExpressionData_create(z_t2077_Parser_nextId(this), ip.line, ip.col, z_t2078_Parser_intern(this, inner)); _u.data = _b; _u; });
     inner = (z_t1068_Node_t){0};
     z_t1068_Node_destroy(&inner);
@@ -30623,7 +30618,7 @@ static z_t1068_Node_t z_t2174_Parser_ifClausesTail(z_t2075_Parser_t* this, z_t20
     z_t1130_List_Node_destroy(&vpaths);
             return cond;
         }
-        z_t3610_nodepos_t cp = z_t1216_posOf(cond);
+        z_t3609_nodepos_t cp = z_t1216_posOf(cond);
         z_t1068_Node_t no = z_t2151_Parser_mkNamedOp(this, 0, cond, cp.line, cp.col);
         cond = (z_t1068_Node_t){0};
         (void)(z_t1036_List_u32_append(&conditions, z_t2078_Parser_intern(this, no)));
@@ -30752,7 +30747,7 @@ static z_t1068_Node_t z_t2175_Parser_acceptIfExpression(z_t2075_Parser_t* this, 
     z_t1130_List_Node_destroy(&vpaths);
                 return cond;
             }
-            z_t3610_nodepos_t cp = z_t1216_posOf(cond);
+            z_t3609_nodepos_t cp = z_t1216_posOf(cond);
             z_t1068_Node_t no = z_t2151_Parser_mkNamedOp(this, 0, cond, cp.line, cp.col);
             cond = (z_t1068_Node_t){0};
             z_t1036_List_u32_t conditions = z_t1036_List_u32_create((uint64_t)0);
@@ -31004,7 +30999,7 @@ static z_t1068_Node_t z_t2178_Parser_forClausesTail(z_t2075_Parser_t* this, z_t2
             (void)(z_t1036_List_u32_append(&postconditions, z_t2078_Parser_intern(this, op)));
             op = (z_t1068_Node_t){0};
         } else {
-            z_t3610_nodepos_t cp = z_t1216_posOf(op);
+            z_t3609_nodepos_t cp = z_t1216_posOf(op);
             z_t1068_Node_t no = z_t2151_Parser_mkNamedOp(this, 0, op, cp.line, cp.col);
             op = (z_t1068_Node_t){0};
             (void)(z_t1036_List_u32_append(&conditions, z_t2078_Parser_intern(this, no)));
@@ -31196,7 +31191,7 @@ static z_t1068_Node_t z_t2179_Parser_acceptForExpression(z_t2075_Parser_t* this,
     z_t1130_List_Node_destroy(&paths);
                 return op;
             }
-            z_t3610_nodepos_t cp = z_t1216_posOf(op);
+            z_t3609_nodepos_t cp = z_t1216_posOf(op);
             z_t1068_Node_t no = z_t2151_Parser_mkNamedOp(this, 0, op, cp.line, cp.col);
             op = (z_t1068_Node_t){0};
             (void)(z_t1036_List_u32_append(&conditions, z_t2078_Parser_intern(this, no)));
@@ -31511,7 +31506,7 @@ static z_t1068_Node_t z_t2181_Parser_acceptDataDefinition(z_t2075_Parser_t* this
     z_t2081_Token_destroy(&et);
                                         return pathNode;
                                     }
-                                    z_t3610_nodepos_t cp = z_t1216_posOf(pathNode);
+                                    z_t3609_nodepos_t cp = z_t1216_posOf(pathNode);
                                     z_t1068_Node_t no = z_t2151_Parser_mkNamedOp(this, 0, pathNode, cp.line, cp.col);
                                     pathNode = (z_t1068_Node_t){0};
                                     (void)(z_t1036_List_u32_append(&elements, z_t2078_Parser_intern(this, no)));
@@ -32049,7 +32044,7 @@ static z_t1068_Node_t z_t2186_Parser_functionClausesTail(z_t2075_Parser_t* this,
         uint64_t an = ab.length;
         if ((an > 0)) {
             uint32_t lastId9 = z_t1036_List_u32_pop(&ab);
-            if (z_t3606_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
+            if (z_t3605_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
                 z_t1068_Node_t _ret8 = z_t1234_tableTake(&this->ast, lastId9);
     z_t1036_List_u32_destroy(&parameters);
     z_t1036_List_u32_destroy(&asItems);
@@ -32082,7 +32077,7 @@ static z_t1068_Node_t z_t2186_Parser_functionClausesTail(z_t2075_Parser_t* this,
         uint64_t pn = pb.length;
         if ((pn > 0)) {
             uint32_t lastId9 = z_t1036_List_u32_pop(&pb);
-            if (z_t3606_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
+            if (z_t3605_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
                 z_t1068_Node_t _ret11 = z_t1234_tableTake(&this->ast, lastId9);
     z_t1036_List_u32_destroy(&parameters);
     z_t1036_List_u32_destroy(&asItems);
@@ -32124,7 +32119,7 @@ static z_t1068_Node_t z_t2187_Parser_functionDefinitionInner(z_t2075_Parser_t* t
         uint64_t pn = pb.length;
         if ((pn > 0)) {
             uint32_t lastId9 = z_t1036_List_u32_pop(&pb);
-            if (z_t3606_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
+            if (z_t3605_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
                 z_t1068_Node_t _ret0 = z_t1234_tableTake(&this->ast, lastId9);
     z_t1036_List_u32_destroy(&parameters);
     z_t1036_List_u32_destroy(&asItems);
@@ -32686,7 +32681,7 @@ static z_t1068_Node_t z_t2194_Parser_parseUnitDefinition(z_t2075_Parser_t* this,
             uint64_t bn = body.length;
             if ((bn > 0)) {
                 uint32_t lastId9 = z_t1036_List_u32_pop(&body);
-                if (z_t3606_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
+                if (z_t3605_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
                     z_t1068_Node_t _ret3 = z_t1234_tableTake(&this->ast, lastId9);
     z_t2132_Option_Token_destroy(&openOpt);
     z_t1036_List_u32_destroy(&body);
@@ -32797,7 +32792,7 @@ static z_t1068_Node_t z_t2196_Parser_acceptItemBodiesTail(z_t2075_Parser_t* this
                 uint64_t ibn = ib.length;
                 if ((ibn > 0)) {
                     uint32_t lastId9 = z_t1036_List_u32_pop(&ib);
-                    if (z_t3606_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
+                    if (z_t3605_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
                         z_t1068_Node_t _ret4 = z_t1234_tableTake(&this->ast, lastId9);
     z_t1036_List_u32_destroy(&isItems);
     z_t1036_List_u32_destroy(&asItems);
@@ -32856,7 +32851,7 @@ static z_t1068_Node_t z_t2196_Parser_acceptItemBodiesTail(z_t2075_Parser_t* this
         uint64_t abn = ab.length;
         if ((abn > 0)) {
             uint32_t lastId9 = z_t1036_List_u32_pop(&ab);
-            if (z_t3606_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
+            if (z_t3605_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
                 z_t1068_Node_t _ret8 = z_t1234_tableTake(&this->ast, lastId9);
     z_t1036_List_u32_destroy(&isItems);
     z_t1036_List_u32_destroy(&asItems);
@@ -32889,7 +32884,7 @@ static z_t1068_Node_t z_t2196_Parser_acceptItemBodiesTail(z_t2075_Parser_t* this
             uint64_t ibn = ib.length;
             if ((ibn > 0)) {
                 uint32_t lastId9 = z_t1036_List_u32_pop(&ib);
-                if (z_t3606_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
+                if (z_t3605_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
                     z_t1068_Node_t _ret10 = z_t1234_tableTake(&this->ast, lastId9);
     z_t1036_List_u32_destroy(&isItems);
     z_t1036_List_u32_destroy(&asItems);
@@ -33192,9 +33187,9 @@ static z_t1068_Node_t z_t2200_Parser_loadUnit(z_t2075_Parser_t* this, z_t881_ZVf
     z_t74_String_append(&_s0, ".z", sizeof(".z")-1);
     z_t74_String_t fn = _s0;
     uint32_t fsid = z_t1033_ZVfs_walk(vfs, parentid, ((z_t105_StringView_t){ fn.data, fn.size }));
-    z_t3614_nodekind_t fkind = z_t1034_ZVfs_arm(vfs, fsid);
+    z_t3613_nodekind_t fkind = z_t1034_ZVfs_arm(vfs, fsid);
     bool isNF = false;
-    z_t3614_nodekind_t _m2 = fkind;
+    z_t3613_nodekind_t _m2 = fkind;
     switch (_m2.tag) {
         case Z_NODEKIND_TAG_NOTFOUND: {
             isNF = true;
@@ -33236,7 +33231,7 @@ static z_t1068_Node_t z_t2200_Parser_loadUnit(z_t2075_Parser_t* this, z_t881_ZVf
             uint64_t bn = body.length;
             if ((bn > 0)) {
                 uint32_t lastId9 = z_t1036_List_u32_pop(&body);
-                if (z_t3606_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
+                if (z_t3605_astkind_eq(z_t1235_kindOf(&this->ast, lastId9), ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR }))) {
                     z_t1068_Node_t _ret6 = z_t1234_tableTake(&this->ast, lastId9);
                     z_t74_String_free(&fn);
     z_t1255_OpenResult_destroy(&r);
@@ -33294,9 +33289,9 @@ _s0; });
             (void)(z_t2289_ewBindNameIds(&this->ast, outNames, &body));
             z_t989_List_String_t raw = z_t2297_collectExterns(&this->ast, &body);
             uint32_t dirid = z_t1033_ZVfs_walk(vfs, parentid, ((z_t105_StringView_t){ unitname->data, unitname->size }));
-            z_t3614_nodekind_t dkind = z_t1034_ZVfs_arm(vfs, dirid);
+            z_t3613_nodekind_t dkind = z_t1034_ZVfs_arm(vfs, dirid);
             bool hasSubdir = false;
-            z_t3614_nodekind_t _m10 = dkind;
+            z_t3613_nodekind_t _m10 = dkind;
             switch (_m10.tag) {
                 case Z_NODEKIND_TAG_DIR: {
                     hasSubdir = true;
@@ -34097,7 +34092,7 @@ static z_t2081_Token_t z_t2127_Tokenizer_token(z_t2095_Tokenizer_t* this) {
     bool reservedfound = false;
     z_t105_StringView_t wsv = ((z_t105_StringView_t){ this->source.data, this->source.size });
     z_t105_StringView_t wv = z_t105_StringView_substring(&wsv, s_word, e_word);
-    z_t3696_kwresult_t kw_res = z_t2318_kwlookup(wv);
+    z_t3695_kwresult_t kw_res = z_t2318_kwlookup(wv);
     kwfound = kw_res.found;
     kwtt = kw_res.tt;
     reservedfound = z_t2319_islookupReserved(wv);
@@ -35043,7 +35038,7 @@ static uint64_t z_t3064_TmpCtr_next(z_t3063_TmpCtr_t* this) {
     return v;
 }
 
-static void z_t3717_ZDumper_emit(z_t3716_ZDumper_t* this, uint32_t id, uint32_t line, uint32_t col, z_t105_StringView_t kind, z_t105_StringView_t nameSql) {
+static void z_t3716_ZDumper_emit(z_t3715_ZDumper_t* this, uint32_t id, uint32_t line, uint32_t col, z_t105_StringView_t kind, z_t105_StringView_t nameSql) {
     z_t74_String_t _s0 = z_t74_String_create((uint64_t)141);
     z_t74_String_append(&_s0, "INSERT INTO ast_nodes VALUES (", sizeof("INSERT INTO ast_nodes VALUES (")-1);
     char _b1[32]; int _b1_n = snprintf(_b1, 32, "%ld", (long)(int64_t)id);
@@ -35065,7 +35060,7 @@ static void z_t3717_ZDumper_emit(z_t3716_ZDumper_t* this, uint32_t id, uint32_t 
     z_t74_String_free(&row);
 }
 
-static void z_t3718_ZDumper_appendFiles(z_t3716_ZDumper_t* this, z_t881_ZVfs_t* vfs) {
+static void z_t3717_ZDumper_appendFiles(z_t3715_ZDumper_t* this, z_t881_ZVfs_t* vfs) {
     z_t1036_List_u32_t ids = z_t1036_List_u32_create((uint64_t)0);
     z_t989_List_String_t paths = z_t989_List_String_create((uint64_t)0);
     (void)(z_t1035_ZVfs_fileTable(vfs, &ids, &paths));
@@ -35094,36 +35089,36 @@ static void z_t3718_ZDumper_appendFiles(z_t3716_ZDumper_t* this, z_t881_ZVfs_t* 
     z_t989_List_String_destroy(&paths);
 }
 
-static void z_t3719_ZDumper_walkOptAt(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t oId, z_t105_StringView_t nameSql) {
+static void z_t3718_ZDumper_walkOptAt(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t oId, z_t105_StringView_t nameSql) {
     if ((oId == 0)) {
         return;
     }
     z_t1068_Node_t o9 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(oId - 1)));
-    (void)(z_t3721_ZDumper_walkNode(this, ast, o9, nameSql));
+    (void)(z_t3720_ZDumper_walkNode(this, ast, o9, nameSql));
 }
 
-static void z_t3720_ZDumper_walkUnwrapped(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t wrapper, z_t105_StringView_t nameSql) {
+static void z_t3719_ZDumper_walkUnwrapped(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t wrapper, z_t105_StringView_t nameSql) {
     z_t1068_Node_t _m0 = wrapper;
     switch (_m0.tag) {
         case Z_NODE_TAG_NAMEDOPERATION: {
             /* alias: wrapper => (*(z_t1085_NamedOperationData_t*)_m0.data) */
             z_t1068_Node_t _ah1505 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m0.data).operation - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1505, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1505, nameSql));
             break;
         }
         default: {
-            (void)(z_t3721_ZDumper_walkNode(this, ast, wrapper, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, wrapper, nameSql));
             break;
         }
     }
 }
 
-static void z_t3721_ZDumper_walkNode(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t node, z_t105_StringView_t nameSql) {
+static void z_t3720_ZDumper_walkNode(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t node, z_t105_StringView_t nameSql) {
     z_t1068_Node_t _m0 = node;
     switch (_m0.tag) {
         case Z_NODE_TAG_ERROR: {
             /* alias: node => (*(z_t875_ErrorData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t875_ErrorData_t*)_m0.data).nodeid, (*(z_t875_ErrorData_t*)_m0.data).lineno, (*(z_t875_ErrorData_t*)_m0.data).colno, _zs4037, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t875_ErrorData_t*)_m0.data).nodeid, (*(z_t875_ErrorData_t*)_m0.data).lineno, (*(z_t875_ErrorData_t*)_m0.data).colno, _zs4035, nameSql));
             break;
         }
         case Z_NODE_TAG_PLACEHOLDER: {
@@ -35131,279 +35126,279 @@ static void z_t3721_ZDumper_walkNode(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast
         }
         case Z_NODE_TAG_ATOMID: {
             /* alias: node => (*(z_t1069_AtomIdData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1069_AtomIdData_t*)_m0.data).nodeid, (*(z_t1069_AtomIdData_t*)_m0.data).lineno, (*(z_t1069_AtomIdData_t*)_m0.data).colno, _zs4038, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1069_AtomIdData_t*)_m0.data).nodeid, (*(z_t1069_AtomIdData_t*)_m0.data).lineno, (*(z_t1069_AtomIdData_t*)_m0.data).colno, _zs4036, nameSql));
             break;
         }
         case Z_NODE_TAG_LABELVALUE: {
             /* alias: node => (*(z_t1071_LabelValueData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1071_LabelValueData_t*)_m0.data).nodeid, (*(z_t1071_LabelValueData_t*)_m0.data).lineno, (*(z_t1071_LabelValueData_t*)_m0.data).colno, _zs4039, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1071_LabelValueData_t*)_m0.data).nodeid, (*(z_t1071_LabelValueData_t*)_m0.data).lineno, (*(z_t1071_LabelValueData_t*)_m0.data).colno, _zs4037, nameSql));
             break;
         }
         case Z_NODE_TAG_STRINGCHUNK: {
             /* alias: node => (*(z_t1073_StringChunkData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1073_StringChunkData_t*)_m0.data).nodeid, (*(z_t1073_StringChunkData_t*)_m0.data).lineno, (*(z_t1073_StringChunkData_t*)_m0.data).colno, _zs4040, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1073_StringChunkData_t*)_m0.data).nodeid, (*(z_t1073_StringChunkData_t*)_m0.data).lineno, (*(z_t1073_StringChunkData_t*)_m0.data).colno, _zs4038, nameSql));
             break;
         }
         case Z_NODE_TAG_BINOP: {
             /* alias: node => (*(z_t1075_BinOpData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1075_BinOpData_t*)_m0.data).nodeid, (*(z_t1075_BinOpData_t*)_m0.data).lineno, (*(z_t1075_BinOpData_t*)_m0.data).colno, _zs4041, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1075_BinOpData_t*)_m0.data).nodeid, (*(z_t1075_BinOpData_t*)_m0.data).lineno, (*(z_t1075_BinOpData_t*)_m0.data).colno, _zs4039, nameSql));
             z_t1068_Node_t _ah1506 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1075_BinOpData_t*)_m0.data).lhs - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1506, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1506, nameSql));
             z_t1068_Node_t _ah1507 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1075_BinOpData_t*)_m0.data).operator - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1507, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1507, nameSql));
             z_t1068_Node_t _ah1508 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1075_BinOpData_t*)_m0.data).rhs - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1508, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1508, nameSql));
             break;
         }
         case Z_NODE_TAG_ATOMSTRING: {
             /* alias: node => (*(z_t1077_AtomStringData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1077_AtomStringData_t*)_m0.data).nodeid, (*(z_t1077_AtomStringData_t*)_m0.data).lineno, (*(z_t1077_AtomStringData_t*)_m0.data).colno, _zs4042, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1077_AtomStringData_t*)_m0.data).nodeid, (*(z_t1077_AtomStringData_t*)_m0.data).lineno, (*(z_t1077_AtomStringData_t*)_m0.data).colno, _zs4040, nameSql));
             z_t1050_ListIter_u32_t spiter = z_t1036_List_u32_iterate(&(*(z_t1077_AtomStringData_t*)_m0.data).stringparts);
             while (1) {
                 z_t927_OptionView_u32_t _iter1 = z_t1050_ListIter_u32_call(&spiter);
                 if (_iter1.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t sp = *(uint32_t*)_iter1.data;
                 z_t1068_Node_t _ah1509 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(sp - 1)));
-                (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1509, nameSql));
+                (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1509, nameSql));
             }
             break;
         }
         case Z_NODE_TAG_DOTTEDPATH: {
             /* alias: node => (*(z_t1079_DottedPathData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1079_DottedPathData_t*)_m0.data).nodeid, (*(z_t1079_DottedPathData_t*)_m0.data).lineno, (*(z_t1079_DottedPathData_t*)_m0.data).colno, _zs4043, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1079_DottedPathData_t*)_m0.data).nodeid, (*(z_t1079_DottedPathData_t*)_m0.data).lineno, (*(z_t1079_DottedPathData_t*)_m0.data).colno, _zs4041, nameSql));
             z_t1068_Node_t _ah1510 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1079_DottedPathData_t*)_m0.data).parent - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1510, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1510, nameSql));
             z_t1068_Node_t _ah1511 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1079_DottedPathData_t*)_m0.data).child - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1511, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1511, nameSql));
             break;
         }
         case Z_NODE_TAG_CALL: {
             /* alias: node => (*(z_t1081_CallData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1081_CallData_t*)_m0.data).nodeid, (*(z_t1081_CallData_t*)_m0.data).lineno, (*(z_t1081_CallData_t*)_m0.data).colno, _zs4044, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1081_CallData_t*)_m0.data).nodeid, (*(z_t1081_CallData_t*)_m0.data).lineno, (*(z_t1081_CallData_t*)_m0.data).colno, _zs4042, nameSql));
             z_t1068_Node_t _ah1512 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1081_CallData_t*)_m0.data).callable - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1512, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1512, nameSql));
             z_t1050_ListIter_u32_t aiter = z_t1036_List_u32_iterate(&(*(z_t1081_CallData_t*)_m0.data).arguments);
             while (1) {
                 z_t927_OptionView_u32_t _iter2 = z_t1050_ListIter_u32_call(&aiter);
                 if (_iter2.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t arg = *(uint32_t*)_iter2.data;
                 z_t1068_Node_t _ah1513 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(arg - 1)));
-                (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1513, nameSql));
+                (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1513, nameSql));
             }
             break;
         }
         case Z_NODE_TAG_TYPEOFEXPR: {
             /* alias: node => (*(z_t1083_TypeOfExprData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1083_TypeOfExprData_t*)_m0.data).nodeid, (*(z_t1083_TypeOfExprData_t*)_m0.data).lineno, (*(z_t1083_TypeOfExprData_t*)_m0.data).colno, _zs4045, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1083_TypeOfExprData_t*)_m0.data).nodeid, (*(z_t1083_TypeOfExprData_t*)_m0.data).lineno, (*(z_t1083_TypeOfExprData_t*)_m0.data).colno, _zs4043, nameSql));
             z_t1068_Node_t _ah1514 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1083_TypeOfExprData_t*)_m0.data).source - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1514, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1514, nameSql));
             break;
         }
         case Z_NODE_TAG_NAMEDOPERATION: {
             /* alias: node => (*(z_t1085_NamedOperationData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1085_NamedOperationData_t*)_m0.data).nodeid, (*(z_t1085_NamedOperationData_t*)_m0.data).lineno, (*(z_t1085_NamedOperationData_t*)_m0.data).colno, _zs4046, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1085_NamedOperationData_t*)_m0.data).nodeid, (*(z_t1085_NamedOperationData_t*)_m0.data).lineno, (*(z_t1085_NamedOperationData_t*)_m0.data).colno, _zs4044, nameSql));
             z_t1068_Node_t _ah1515 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m0.data).operation - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1515, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1515, nameSql));
             break;
         }
         case Z_NODE_TAG_DATABLOCK: {
             /* alias: node => (*(z_t1087_DataBlockData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1087_DataBlockData_t*)_m0.data).nodeid, (*(z_t1087_DataBlockData_t*)_m0.data).lineno, (*(z_t1087_DataBlockData_t*)_m0.data).colno, _zs4047, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1087_DataBlockData_t*)_m0.data).nodeid, (*(z_t1087_DataBlockData_t*)_m0.data).lineno, (*(z_t1087_DataBlockData_t*)_m0.data).colno, _zs4045, nameSql));
             z_t1050_ListIter_u32_t eiter = z_t1036_List_u32_iterate(&(*(z_t1087_DataBlockData_t*)_m0.data).elements);
             while (1) {
                 z_t927_OptionView_u32_t _iter3 = z_t1050_ListIter_u32_call(&eiter);
                 if (_iter3.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t el = *(uint32_t*)_iter3.data;
                 z_t1068_Node_t _ah1516 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(el - 1)));
-                (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1516, nameSql));
+                (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1516, nameSql));
             }
-            (void)(z_t3719_ZDumper_walkOptAt(this, ast, (*(z_t1087_DataBlockData_t*)_m0.data).outType, nameSql));
+            (void)(z_t3718_ZDumper_walkOptAt(this, ast, (*(z_t1087_DataBlockData_t*)_m0.data).outType, nameSql));
             break;
         }
         case Z_NODE_TAG_YIELDEXPR: {
             /* alias: node => (*(z_t1089_YieldExprData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1089_YieldExprData_t*)_m0.data).nodeid, (*(z_t1089_YieldExprData_t*)_m0.data).lineno, (*(z_t1089_YieldExprData_t*)_m0.data).colno, _zs4048, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1089_YieldExprData_t*)_m0.data).nodeid, (*(z_t1089_YieldExprData_t*)_m0.data).lineno, (*(z_t1089_YieldExprData_t*)_m0.data).colno, _zs4046, nameSql));
             z_t1068_Node_t _ah1517 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1089_YieldExprData_t*)_m0.data).expr - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1517, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1517, nameSql));
             break;
         }
         case Z_NODE_TAG_STATEMENT: {
             /* alias: node => (*(z_t1091_StatementData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1091_StatementData_t*)_m0.data).nodeid, (*(z_t1091_StatementData_t*)_m0.data).lineno, (*(z_t1091_StatementData_t*)_m0.data).colno, _zs4049, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1091_StatementData_t*)_m0.data).nodeid, (*(z_t1091_StatementData_t*)_m0.data).lineno, (*(z_t1091_StatementData_t*)_m0.data).colno, _zs4047, nameSql));
             z_t1050_ListIter_u32_t sliter = z_t1036_List_u32_iterate(&(*(z_t1091_StatementData_t*)_m0.data).statements);
             while (1) {
                 z_t927_OptionView_u32_t _iter4 = z_t1050_ListIter_u32_call(&sliter);
                 if (_iter4.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t lnId9 = *(uint32_t*)_iter4.data;
                 z_t1068_Node_t _ah1518 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(lnId9 - 1)));
-                (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1518, nameSql));
+                (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1518, nameSql));
             }
             break;
         }
         case Z_NODE_TAG_STATEMENTLINE: {
             /* alias: node => (*(z_t1093_StatementLineData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1093_StatementLineData_t*)_m0.data).nodeid, (*(z_t1093_StatementLineData_t*)_m0.data).lineno, (*(z_t1093_StatementLineData_t*)_m0.data).colno, _zs4050, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1093_StatementLineData_t*)_m0.data).nodeid, (*(z_t1093_StatementLineData_t*)_m0.data).lineno, (*(z_t1093_StatementLineData_t*)_m0.data).colno, _zs4048, nameSql));
             z_t1068_Node_t _ah1519 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1093_StatementLineData_t*)_m0.data).statementline - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1519, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1519, nameSql));
             break;
         }
         case Z_NODE_TAG_ASSIGNMENT: {
             /* alias: node => (*(z_t1095_AssignmentData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1095_AssignmentData_t*)_m0.data).nodeid, (*(z_t1095_AssignmentData_t*)_m0.data).lineno, (*(z_t1095_AssignmentData_t*)_m0.data).colno, _zs4051, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1095_AssignmentData_t*)_m0.data).nodeid, (*(z_t1095_AssignmentData_t*)_m0.data).lineno, (*(z_t1095_AssignmentData_t*)_m0.data).colno, _zs4049, nameSql));
             z_t1068_Node_t _ah1520 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1095_AssignmentData_t*)_m0.data).value - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1520, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1520, nameSql));
             break;
         }
         case Z_NODE_TAG_REASSIGNMENT: {
             /* alias: node => (*(z_t1097_ReassignmentData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1097_ReassignmentData_t*)_m0.data).nodeid, (*(z_t1097_ReassignmentData_t*)_m0.data).lineno, (*(z_t1097_ReassignmentData_t*)_m0.data).colno, _zs4052, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1097_ReassignmentData_t*)_m0.data).nodeid, (*(z_t1097_ReassignmentData_t*)_m0.data).lineno, (*(z_t1097_ReassignmentData_t*)_m0.data).colno, _zs4050, nameSql));
             z_t1068_Node_t _ah1521 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1097_ReassignmentData_t*)_m0.data).topath - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1521, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1521, nameSql));
             z_t1068_Node_t _ah1522 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1097_ReassignmentData_t*)_m0.data).value - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1522, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1522, nameSql));
             break;
         }
         case Z_NODE_TAG_SWAPSTMT: {
             /* alias: node => (*(z_t1099_SwapStmtData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1099_SwapStmtData_t*)_m0.data).nodeid, (*(z_t1099_SwapStmtData_t*)_m0.data).lineno, (*(z_t1099_SwapStmtData_t*)_m0.data).colno, _zs4053, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1099_SwapStmtData_t*)_m0.data).nodeid, (*(z_t1099_SwapStmtData_t*)_m0.data).lineno, (*(z_t1099_SwapStmtData_t*)_m0.data).colno, _zs4051, nameSql));
             z_t1068_Node_t _ah1523 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1099_SwapStmtData_t*)_m0.data).lhs - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1523, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1523, nameSql));
             z_t1068_Node_t _ah1524 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1099_SwapStmtData_t*)_m0.data).rhs - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1524, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1524, nameSql));
             break;
         }
         case Z_NODE_TAG_EXPRESSION: {
             /* alias: node => (*(z_t1101_ExpressionData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1101_ExpressionData_t*)_m0.data).nodeid, (*(z_t1101_ExpressionData_t*)_m0.data).lineno, (*(z_t1101_ExpressionData_t*)_m0.data).colno, _zs4054, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1101_ExpressionData_t*)_m0.data).nodeid, (*(z_t1101_ExpressionData_t*)_m0.data).lineno, (*(z_t1101_ExpressionData_t*)_m0.data).colno, _zs4052, nameSql));
             z_t1068_Node_t _ah1525 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1101_ExpressionData_t*)_m0.data).expression - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1525, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1525, nameSql));
             break;
         }
         case Z_NODE_TAG_IFEXPR: {
             /* alias: node => (*(z_t1103_IfData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1103_IfData_t*)_m0.data).nodeid, (*(z_t1103_IfData_t*)_m0.data).lineno, (*(z_t1103_IfData_t*)_m0.data).colno, _zs4055, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1103_IfData_t*)_m0.data).nodeid, (*(z_t1103_IfData_t*)_m0.data).lineno, (*(z_t1103_IfData_t*)_m0.data).colno, _zs4053, nameSql));
             z_t1050_ListIter_u32_t cliter = z_t1036_List_u32_iterate(&(*(z_t1103_IfData_t*)_m0.data).clauses);
             while (1) {
                 z_t927_OptionView_u32_t _iter5 = z_t1050_ListIter_u32_call(&cliter);
                 if (_iter5.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t cl = *(uint32_t*)_iter5.data;
                 z_t1068_Node_t _ah1526 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(cl - 1)));
-                (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1526, nameSql));
+                (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1526, nameSql));
             }
-            (void)(z_t3719_ZDumper_walkOptAt(this, ast, (*(z_t1103_IfData_t*)_m0.data).elseclause, nameSql));
+            (void)(z_t3718_ZDumper_walkOptAt(this, ast, (*(z_t1103_IfData_t*)_m0.data).elseclause, nameSql));
             break;
         }
         case Z_NODE_TAG_IFCLAUSE: {
             /* alias: node => (*(z_t1105_IfClauseData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1105_IfClauseData_t*)_m0.data).nodeid, (*(z_t1105_IfClauseData_t*)_m0.data).lineno, (*(z_t1105_IfClauseData_t*)_m0.data).colno, _zs4056, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1105_IfClauseData_t*)_m0.data).nodeid, (*(z_t1105_IfClauseData_t*)_m0.data).lineno, (*(z_t1105_IfClauseData_t*)_m0.data).colno, _zs4054, nameSql));
             z_t1050_ListIter_u32_t coiter = z_t1036_List_u32_iterate(&(*(z_t1105_IfClauseData_t*)_m0.data).conditions);
             while (1) {
                 z_t927_OptionView_u32_t _iter6 = z_t1050_ListIter_u32_call(&coiter);
                 if (_iter6.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t coId9 = *(uint32_t*)_iter6.data;
                 z_t1068_Node_t _ah1527 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(coId9 - 1)));
-                (void)(z_t3720_ZDumper_walkUnwrapped(this, ast, _ah1527, nameSql));
+                (void)(z_t3719_ZDumper_walkUnwrapped(this, ast, _ah1527, nameSql));
             }
             z_t1068_Node_t _ah1528 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1105_IfClauseData_t*)_m0.data).statement - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1528, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1528, nameSql));
             break;
         }
         case Z_NODE_TAG_FOREXPR: {
             /* alias: node => (*(z_t1107_ForData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1107_ForData_t*)_m0.data).nodeid, (*(z_t1107_ForData_t*)_m0.data).lineno, (*(z_t1107_ForData_t*)_m0.data).colno, _zs4057, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1107_ForData_t*)_m0.data).nodeid, (*(z_t1107_ForData_t*)_m0.data).lineno, (*(z_t1107_ForData_t*)_m0.data).colno, _zs4055, nameSql));
             z_t1050_ListIter_u32_t fciter = z_t1036_List_u32_iterate(&(*(z_t1107_ForData_t*)_m0.data).conditions);
             while (1) {
                 z_t927_OptionView_u32_t _iter7 = z_t1050_ListIter_u32_call(&fciter);
                 if (_iter7.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t fc = *(uint32_t*)_iter7.data;
                 z_t1068_Node_t _ah1529 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(fc - 1)));
-                (void)(z_t3720_ZDumper_walkUnwrapped(this, ast, _ah1529, nameSql));
+                (void)(z_t3719_ZDumper_walkUnwrapped(this, ast, _ah1529, nameSql));
             }
-            (void)(z_t3719_ZDumper_walkOptAt(this, ast, (*(z_t1107_ForData_t*)_m0.data).body, nameSql));
+            (void)(z_t3718_ZDumper_walkOptAt(this, ast, (*(z_t1107_ForData_t*)_m0.data).body, nameSql));
             z_t1050_ListIter_u32_t fpiter = z_t1036_List_u32_iterate(&(*(z_t1107_ForData_t*)_m0.data).postconditions);
             while (1) {
                 z_t927_OptionView_u32_t _iter8 = z_t1050_ListIter_u32_call(&fpiter);
                 if (_iter8.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t fp = *(uint32_t*)_iter8.data;
                 z_t1068_Node_t _ah1530 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(fp - 1)));
-                (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1530, nameSql));
+                (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1530, nameSql));
             }
             break;
         }
         case Z_NODE_TAG_DOEXPR: {
             /* alias: node => (*(z_t1109_DoData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1109_DoData_t*)_m0.data).nodeid, (*(z_t1109_DoData_t*)_m0.data).lineno, (*(z_t1109_DoData_t*)_m0.data).colno, _zs4058, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1109_DoData_t*)_m0.data).nodeid, (*(z_t1109_DoData_t*)_m0.data).lineno, (*(z_t1109_DoData_t*)_m0.data).colno, _zs4056, nameSql));
             z_t1068_Node_t _ah1531 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1109_DoData_t*)_m0.data).statement - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1531, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1531, nameSql));
             break;
         }
         case Z_NODE_TAG_WITHEXPR: {
             /* alias: node => (*(z_t1111_WithData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1111_WithData_t*)_m0.data).nodeid, (*(z_t1111_WithData_t*)_m0.data).lineno, (*(z_t1111_WithData_t*)_m0.data).colno, _zs4059, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1111_WithData_t*)_m0.data).nodeid, (*(z_t1111_WithData_t*)_m0.data).lineno, (*(z_t1111_WithData_t*)_m0.data).colno, _zs4057, nameSql));
             z_t1068_Node_t _ah1532 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1111_WithData_t*)_m0.data).value - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1532, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1532, nameSql));
             z_t1068_Node_t _ah1533 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1111_WithData_t*)_m0.data).body - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1533, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1533, nameSql));
             break;
         }
         case Z_NODE_TAG_CASEEXPR: {
             /* alias: node => (*(z_t1113_CaseData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1113_CaseData_t*)_m0.data).nodeid, (*(z_t1113_CaseData_t*)_m0.data).lineno, (*(z_t1113_CaseData_t*)_m0.data).colno, _zs4060, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1113_CaseData_t*)_m0.data).nodeid, (*(z_t1113_CaseData_t*)_m0.data).lineno, (*(z_t1113_CaseData_t*)_m0.data).colno, _zs4058, nameSql));
             z_t1068_Node_t _ah1534 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1113_CaseData_t*)_m0.data).subject - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1534, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1534, nameSql));
             z_t1050_ListIter_u32_t cciter = z_t1036_List_u32_iterate(&(*(z_t1113_CaseData_t*)_m0.data).clauses);
             while (1) {
                 z_t927_OptionView_u32_t _iter9 = z_t1050_ListIter_u32_call(&cciter);
                 if (_iter9.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t cc = *(uint32_t*)_iter9.data;
                 z_t1068_Node_t _ah1535 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(cc - 1)));
-                (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1535, nameSql));
+                (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1535, nameSql));
             }
-            (void)(z_t3719_ZDumper_walkOptAt(this, ast, (*(z_t1113_CaseData_t*)_m0.data).elseclause, nameSql));
+            (void)(z_t3718_ZDumper_walkOptAt(this, ast, (*(z_t1113_CaseData_t*)_m0.data).elseclause, nameSql));
             break;
         }
         case Z_NODE_TAG_CASECLAUSE: {
             /* alias: node => (*(z_t1115_CaseClauseData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1115_CaseClauseData_t*)_m0.data).nodeid, (*(z_t1115_CaseClauseData_t*)_m0.data).lineno, (*(z_t1115_CaseClauseData_t*)_m0.data).colno, _zs4061, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1115_CaseClauseData_t*)_m0.data).nodeid, (*(z_t1115_CaseClauseData_t*)_m0.data).lineno, (*(z_t1115_CaseClauseData_t*)_m0.data).colno, _zs4059, nameSql));
             z_t1068_Node_t _ah1536 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1115_CaseClauseData_t*)_m0.data).matcharm - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1536, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1536, nameSql));
             z_t1068_Node_t _ah1537 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1115_CaseClauseData_t*)_m0.data).statement - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1537, nameSql));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1537, nameSql));
             break;
         }
         case Z_NODE_TAG_FUNCTIONDEF: {
             /* alias: node => (*(z_t1117_FunctionData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1117_FunctionData_t*)_m0.data).nodeid, (*(z_t1117_FunctionData_t*)_m0.data).lineno, (*(z_t1117_FunctionData_t*)_m0.data).colno, _zs4062, nameSql));
-            (void)(z_t3719_ZDumper_walkOptAt(this, ast, (*(z_t1117_FunctionData_t*)_m0.data).returntype, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1117_FunctionData_t*)_m0.data).nodeid, (*(z_t1117_FunctionData_t*)_m0.data).lineno, (*(z_t1117_FunctionData_t*)_m0.data).colno, _zs4060, nameSql));
+            (void)(z_t3718_ZDumper_walkOptAt(this, ast, (*(z_t1117_FunctionData_t*)_m0.data).returntype, nameSql));
             z_t1050_ListIter_u32_t piter = z_t1036_List_u32_iterate(&(*(z_t1117_FunctionData_t*)_m0.data).parameters);
             while (1) {
                 z_t927_OptionView_u32_t _iter10 = z_t1050_ListIter_u32_call(&piter);
                 if (_iter10.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t pmId9 = *(uint32_t*)_iter10.data;
                 z_t1068_Node_t pm = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(pmId9 - 1)));
-                (void)(z_t3720_ZDumper_walkUnwrapped(this, ast, pm, nameSql));
+                (void)(z_t3719_ZDumper_walkUnwrapped(this, ast, pm, nameSql));
             }
-            (void)(z_t3719_ZDumper_walkOptAt(this, ast, (*(z_t1117_FunctionData_t*)_m0.data).body, nameSql));
+            (void)(z_t3718_ZDumper_walkOptAt(this, ast, (*(z_t1117_FunctionData_t*)_m0.data).body, nameSql));
             z_t1050_ListIter_u32_t faiter = z_t1036_List_u32_iterate(&(*(z_t1117_FunctionData_t*)_m0.data).asItems);
             while (1) {
                 z_t927_OptionView_u32_t _iter11 = z_t1050_ListIter_u32_call(&faiter);
                 if (_iter11.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t amId9 = *(uint32_t*)_iter11.data;
                 z_t1068_Node_t am = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(amId9 - 1)));
-                (void)(z_t3720_ZDumper_walkUnwrapped(this, ast, am, nameSql));
+                (void)(z_t3719_ZDumper_walkUnwrapped(this, ast, am, nameSql));
             }
             break;
         }
         case Z_NODE_TAG_OBJECTDEF: {
             /* alias: node => (*(z_t1119_ObjectDefData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1119_ObjectDefData_t*)_m0.data).nodeid, (*(z_t1119_ObjectDefData_t*)_m0.data).lineno, (*(z_t1119_ObjectDefData_t*)_m0.data).colno, _zs4063, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1119_ObjectDefData_t*)_m0.data).nodeid, (*(z_t1119_ObjectDefData_t*)_m0.data).lineno, (*(z_t1119_ObjectDefData_t*)_m0.data).colno, _zs4061, nameSql));
             z_t1050_ListIter_u32_t oiiter = z_t1036_List_u32_iterate(&(*(z_t1119_ObjectDefData_t*)_m0.data).isItems);
             while (1) {
                 z_t927_OptionView_u32_t _iter12 = z_t1050_ListIter_u32_call(&oiiter);
                 if (_iter12.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t oiId9 = *(uint32_t*)_iter12.data;
                 z_t1068_Node_t oi = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(oiId9 - 1)));
-                (void)(z_t3720_ZDumper_walkUnwrapped(this, ast, oi, nameSql));
+                (void)(z_t3719_ZDumper_walkUnwrapped(this, ast, oi, nameSql));
             }
             z_t1050_ListIter_u32_t oaiter = z_t1036_List_u32_iterate(&(*(z_t1119_ObjectDefData_t*)_m0.data).asItems);
             while (1) {
@@ -35411,46 +35406,46 @@ static void z_t3721_ZDumper_walkNode(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast
                 if (_iter13.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t oaId9 = *(uint32_t*)_iter13.data;
                 z_t1068_Node_t oa = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(oaId9 - 1)));
-                (void)(z_t3720_ZDumper_walkUnwrapped(this, ast, oa, nameSql));
+                (void)(z_t3719_ZDumper_walkUnwrapped(this, ast, oa, nameSql));
             }
             break;
         }
         case Z_NODE_TAG_UNITDEF: {
             /* alias: node => (*(z_t1125_UnitData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1125_UnitData_t*)_m0.data).nodeid, (*(z_t1125_UnitData_t*)_m0.data).lineno, (*(z_t1125_UnitData_t*)_m0.data).colno, _zs4064, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1125_UnitData_t*)_m0.data).nodeid, (*(z_t1125_UnitData_t*)_m0.data).lineno, (*(z_t1125_UnitData_t*)_m0.data).colno, _zs4062, nameSql));
             z_t1050_ListIter_u32_t ubiter = z_t1036_List_u32_iterate(&(*(z_t1125_UnitData_t*)_m0.data).body);
             while (1) {
                 z_t927_OptionView_u32_t _iter14 = z_t1050_ListIter_u32_call(&ubiter);
                 if (_iter14.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t ub = *(uint32_t*)_iter14.data;
                 z_t1068_Node_t ubNode9 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(ub - 1)));
-                (void)(z_t3720_ZDumper_walkUnwrapped(this, ast, ubNode9, nameSql));
+                (void)(z_t3719_ZDumper_walkUnwrapped(this, ast, ubNode9, nameSql));
             }
             break;
         }
         case Z_NODE_TAG_PROGRAM: {
             /* alias: node => (*(z_t1127_ProgramData_t*)_m0.data) */
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1127_ProgramData_t*)_m0.data).nodeid, (*(z_t1127_ProgramData_t*)_m0.data).lineno, (*(z_t1127_ProgramData_t*)_m0.data).colno, _zs4065, nameSql));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1127_ProgramData_t*)_m0.data).nodeid, (*(z_t1127_ProgramData_t*)_m0.data).lineno, (*(z_t1127_ProgramData_t*)_m0.data).colno, _zs4063, nameSql));
             break;
         }
         default: break;
     }
 }
 
-static void z_t3722_ZDumper_appendUnitDefAndBody(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t unitdef, z_t105_StringView_t uname) {
+static void z_t3721_ZDumper_appendUnitDefAndBody(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t unitdef, z_t105_StringView_t uname) {
     z_t1068_Node_t _m0 = unitdef;
     switch (_m0.tag) {
         case Z_NODE_TAG_UNITDEF: {
             /* alias: unitdef => (*(z_t1125_UnitData_t*)_m0.data) */
             z_t74_String_t unameSql = z_t3462_sqlStr(uname);
-            (void)(z_t3717_ZDumper_emit(this, (*(z_t1125_UnitData_t*)_m0.data).nodeid, (*(z_t1125_UnitData_t*)_m0.data).lineno, (*(z_t1125_UnitData_t*)_m0.data).colno, _zs4066, ((z_t105_StringView_t){ unameSql.data, unameSql.size })));
+            (void)(z_t3716_ZDumper_emit(this, (*(z_t1125_UnitData_t*)_m0.data).nodeid, (*(z_t1125_UnitData_t*)_m0.data).lineno, (*(z_t1125_UnitData_t*)_m0.data).colno, _zs4064, ((z_t105_StringView_t){ unameSql.data, unameSql.size })));
             z_t1050_ListIter_u32_t biter = z_t1036_List_u32_iterate(&(*(z_t1125_UnitData_t*)_m0.data).body);
             while (1) {
                 z_t927_OptionView_u32_t _iter1 = z_t1050_ListIter_u32_call(&biter);
                 if (_iter1.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t bm = *(uint32_t*)_iter1.data;
                 z_t1068_Node_t bmNode9 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(bm - 1)));
-                (void)(z_t3723_ZDumper_appendBodyMember(this, ast, bmNode9, uname));
+                (void)(z_t3722_ZDumper_appendBodyMember(this, ast, bmNode9, uname));
             }
     z_t74_String_free(&unameSql);
             break;
@@ -35461,7 +35456,7 @@ static void z_t3722_ZDumper_appendUnitDefAndBody(z_t3716_ZDumper_t* this, z_t106
     }
 }
 
-static void z_t3723_ZDumper_appendBodyMember(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t member, z_t105_StringView_t uname) {
+static void z_t3722_ZDumper_appendBodyMember(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1068_Node_t member, z_t105_StringView_t uname) {
     z_t1068_Node_t _m0 = member;
     switch (_m0.tag) {
         case Z_NODE_TAG_NAMEDOPERATION: {
@@ -35474,7 +35469,7 @@ static void z_t3723_ZDumper_appendBodyMember(z_t3716_ZDumper_t* this, z_t1067_As
             z_t74_String_t label = _s1;
             z_t74_String_t labelSql = z_t3462_sqlStr(((z_t105_StringView_t){ label.data, label.size }));
             z_t1068_Node_t _ah1538 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m0.data).operation - 1)));
-            (void)(z_t3721_ZDumper_walkNode(this, ast, _ah1538, ((z_t105_StringView_t){ labelSql.data, labelSql.size })));
+            (void)(z_t3720_ZDumper_walkNode(this, ast, _ah1538, ((z_t105_StringView_t){ labelSql.data, labelSql.size })));
     z_t74_String_free(&labelSql);
     z_t74_String_free(&label);
     z_t74_String_free(&dname);
@@ -35486,7 +35481,7 @@ static void z_t3723_ZDumper_appendBodyMember(z_t3716_ZDumper_t* this, z_t1067_As
     }
 }
 
-static void z_t3724_ZDumper_appendNodes(z_t3716_ZDumper_t* this, z_t1068_Node_t program) {
+static void z_t3723_ZDumper_appendNodes(z_t3715_ZDumper_t* this, z_t1068_Node_t program) {
     z_t1068_Node_t _m0 = program;
     switch (_m0.tag) {
         case Z_NODE_TAG_PROGRAM: {
@@ -35496,7 +35491,7 @@ static void z_t3724_ZDumper_appendNodes(z_t3716_ZDumper_t* this, z_t1068_Node_t 
             while ((uIdx9a < uCnt9a)) {
                 uint32_t uId9 = z_t1036_List_u32_get(&(*(z_t1127_ProgramData_t*)_m0.data).ast.units, uIdx9a);
                 uIdx9a = (uIdx9a + 1);
-                (void)(z_t3725_ZDumper_appendUnitFromNamedOp(this, &(*(z_t1127_ProgramData_t*)_m0.data).ast, uId9));
+                (void)(z_t3724_ZDumper_appendUnitFromNamedOp(this, &(*(z_t1127_ProgramData_t*)_m0.data).ast, uId9));
             }
             break;
         }
@@ -35506,18 +35501,18 @@ static void z_t3724_ZDumper_appendNodes(z_t3716_ZDumper_t* this, z_t1068_Node_t 
     }
 }
 
-static void z_t3725_ZDumper_appendUnitFromNamedOp(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t unitNamedOpId) {
+static void z_t3724_ZDumper_appendUnitFromNamedOp(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t unitNamedOpId) {
     z_t1068_Node_t unitNamedOp = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(unitNamedOpId - 1)));
     if (((unitNamedOp).tag == Z_NODE_TAG_NAMEDOPERATION)) {
         /* alias: unitNamedOp => (*(z_t1085_NamedOperationData_t*)unitNamedOp.data) */
         z_t74_String_t uname = z_t1222_nameTextCopy(ast, (*(z_t1085_NamedOperationData_t*)unitNamedOp.data).name);
         z_t1068_Node_t _ah1539 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)unitNamedOp.data).operation - 1)));
-        (void)(z_t3722_ZDumper_appendUnitDefAndBody(this, ast, _ah1539, ((z_t105_StringView_t){ uname.data, uname.size })));
+        (void)(z_t3721_ZDumper_appendUnitDefAndBody(this, ast, _ah1539, ((z_t105_StringView_t){ uname.data, uname.size })));
     z_t74_String_free(&uname);
     }
 }
 
-static void z_t3726_ZDumper_appendUnits(z_t3716_ZDumper_t* this, z_t1068_Node_t program, z_t1633_ZTyping_t* typing) {
+static void z_t3725_ZDumper_appendUnits(z_t3715_ZDumper_t* this, z_t1068_Node_t program, z_t1633_ZTyping_t* typing) {
     z_t1068_Node_t _m0 = program;
     switch (_m0.tag) {
         case Z_NODE_TAG_PROGRAM: {
@@ -35527,7 +35522,7 @@ static void z_t3726_ZDumper_appendUnits(z_t3716_ZDumper_t* this, z_t1068_Node_t 
             while ((uIdx9b < uCnt9b)) {
                 uint32_t uId9 = z_t1036_List_u32_get(&(*(z_t1127_ProgramData_t*)_m0.data).ast.units, uIdx9b);
                 uIdx9b = (uIdx9b + 1);
-                (void)(z_t3727_ZDumper_appendUnitRow(this, &(*(z_t1127_ProgramData_t*)_m0.data).ast, uId9, ((z_t105_StringView_t){ (*(z_t1127_ProgramData_t*)_m0.data).mainUnitName.data, (*(z_t1127_ProgramData_t*)_m0.data).mainUnitName.size }), typing));
+                (void)(z_t3726_ZDumper_appendUnitRow(this, &(*(z_t1127_ProgramData_t*)_m0.data).ast, uId9, ((z_t105_StringView_t){ (*(z_t1127_ProgramData_t*)_m0.data).mainUnitName.data, (*(z_t1127_ProgramData_t*)_m0.data).mainUnitName.size }), typing));
             }
             break;
         }
@@ -35537,7 +35532,7 @@ static void z_t3726_ZDumper_appendUnits(z_t3716_ZDumper_t* this, z_t1068_Node_t 
     }
 }
 
-static void z_t3727_ZDumper_appendUnitRow(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t unitNamedOpId, z_t105_StringView_t mainName, z_t1633_ZTyping_t* typing) {
+static void z_t3726_ZDumper_appendUnitRow(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, uint32_t unitNamedOpId, z_t105_StringView_t mainName, z_t1633_ZTyping_t* typing) {
     z_t1068_Node_t unitNamedOp = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(unitNamedOpId - 1)));
     if (((unitNamedOp).tag == Z_NODE_TAG_NAMEDOPERATION)) {
         /* alias: unitNamedOp => (*(z_t1085_NamedOperationData_t*)unitNamedOp.data) */
@@ -35569,7 +35564,7 @@ static void z_t3727_ZDumper_appendUnitRow(z_t3716_ZDumper_t* this, z_t1067_Ast_t
     }
 }
 
-static void z_t3728_ZDumper_appendTypes(z_t3716_ZDumper_t* this, z_t1267_ZSymbolTable_t* st, z_t1147_StringPool_t* pool) {
+static void z_t3727_ZDumper_appendTypes(z_t3715_ZDumper_t* this, z_t1267_ZSymbolTable_t* st, z_t1147_StringPool_t* pool) {
     uint64_t n = st->reg.nextTypeId;
     uint64_t tid = ((uint64_t)0);
     while ((tid < n)) {
@@ -35590,7 +35585,7 @@ static void z_t3728_ZDumper_appendTypes(z_t3716_ZDumper_t* this, z_t1267_ZSymbol
         z_t74_String_t dnTx9 = z_t1220_poolTextCopy(pool, dnid9);
         z_t74_String_t dnSql = z_t3470_sqlStrOrNull(((z_t105_StringView_t){ dnTx9.data, dnTx9.size }), (dnid9 != 0));
         z_t74_String_t heapSql = z_t3463_boolNum((*__borrow_zt).isHeapAllocated);
-        z_t74_String_t cnSql = z_t3473_cnameSql(((z_t105_StringView_t){ (*__borrow_zt).cname.data, (*__borrow_zt).cname.size }));
+        z_t74_String_t cnSql = z_t3472_cnameSql(((z_t105_StringView_t){ (*__borrow_zt).cname.data, (*__borrow_zt).cname.size }));
         z_t947_Option_String_t _ah1540 = z_t3465_definedUnitOf9(st, tid);
         z_t74_String_t duSql = z_t3471_optStrSql(_ah1540);
         z_t74_String_t _s0 = z_t74_String_create((uint64_t)235);
@@ -35639,7 +35634,7 @@ static void z_t3728_ZDumper_appendTypes(z_t3716_ZDumper_t* this, z_t1267_ZSymbol
     }
 }
 
-static void z_t3729_ZDumper_appendDecls(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1633_ZTyping_t* typing) {
+static void z_t3728_ZDumper_appendDecls(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1633_ZTyping_t* typing) {
     uint64_t n = typing->decls.length;
     uint64_t did = ((uint64_t)0);
     while ((did < n)) {
@@ -35737,19 +35732,19 @@ static void z_t3729_ZDumper_appendDecls(z_t3716_ZDumper_t* this, z_t1067_Ast_t* 
     }
 }
 
-static void z_t3730_ZDumper_appendSynthNodes(z_t3716_ZDumper_t* this, z_t1633_ZTyping_t* typing) {
+static void z_t3729_ZDumper_appendSynthNodes(z_t3715_ZDumper_t* this, z_t1633_ZTyping_t* typing) {
     z_t1648_ListIter_SynthNode_t siter = z_t1636_List_SynthNode_iterate(&typing->synthNodes);
     while (1) {
         z_t1650_OptionView_SynthNode_t _iter0 = z_t1648_ListIter_SynthNode_call(&siter);
         if (_iter0.tag == Z_OPTIONVIEW_SYNTHNODE_TAG_NONE) break;
         z_t1634_SynthNode_t sn = *(z_t1634_SynthNode_t*)_iter0.data;
         z_t74_String_t ns = z_t3462_sqlStr(((z_t105_StringView_t){ sn.label.data, sn.label.size }));
-        (void)(z_t3717_ZDumper_emit(this, sn.nodeid, sn.lineno, sn.colno, ((z_t105_StringView_t){ sn.kind.data, sn.kind.size }), ((z_t105_StringView_t){ ns.data, ns.size })));
+        (void)(z_t3716_ZDumper_emit(this, sn.nodeid, sn.lineno, sn.colno, ((z_t105_StringView_t){ sn.kind.data, sn.kind.size }), ((z_t105_StringView_t){ ns.data, ns.size })));
     z_t74_String_free(&ns);
     }
 }
 
-static void z_t3731_ZDumper_appendTypedNodes(z_t3716_ZDumper_t* this, z_t1633_ZTyping_t* typing) {
+static void z_t3730_ZDumper_appendTypedNodes(z_t3715_ZDumper_t* this, z_t1633_ZTyping_t* typing) {
     uint64_t n9 = typing->nodeType.length;
     uint64_t i9 = ((uint64_t)0);
     while ((i9 < n9)) {
@@ -35772,7 +35767,7 @@ static void z_t3731_ZDumper_appendTypedNodes(z_t3716_ZDumper_t* this, z_t1633_ZT
     }
 }
 
-static void z_t3732_ZDumper_appendAtomStamps(z_t3716_ZDumper_t* this, z_t1633_ZTyping_t* typing) {
+static void z_t3731_ZDumper_appendAtomStamps(z_t3715_ZDumper_t* this, z_t1633_ZTyping_t* typing) {
     z_t1371_MapItemIter_u64_u64_t avit = z_t1358_Map_u64_u64_iterateItems(typing->atomVariableId);
     while (1) {
         z_t1378_OptionView_MapEntry_u64_u64_t _iter0 = z_t1371_MapItemIter_u64_u64_call(&avit);
@@ -36013,7 +36008,7 @@ static void z_t3732_ZDumper_appendAtomStamps(z_t3716_ZDumper_t* this, z_t1633_ZT
     }
 }
 
-static void z_t3733_ZDumper_appendConformance(z_t3716_ZDumper_t* this, z_t1633_ZTyping_t* typing) {
+static void z_t3732_ZDumper_appendConformance(z_t3715_ZDumper_t* this, z_t1633_ZTyping_t* typing) {
     z_t1886_ListIter_ZConformance_t citer = z_t1874_List_ZConformance_iterate(&typing->conformance);
     while (1) {
         z_t1888_OptionView_ZConformance_t _iter0 = z_t1886_ListIter_ZConformance_call(&citer);
@@ -36045,7 +36040,7 @@ static void z_t3733_ZDumper_appendConformance(z_t3716_ZDumper_t* this, z_t1633_Z
     }
 }
 
-static void z_t3734_ZDumper_appendSymbolTable(z_t3716_ZDumper_t* this, z_t1267_ZSymbolTable_t* st) {
+static void z_t3733_ZDumper_appendSymbolTable(z_t3715_ZDumper_t* this, z_t1267_ZSymbolTable_t* st) {
     z_t1384_Set_u64_t* seen = z_t1384_Set_u64_create((uint64_t)0);
     uint64_t depth = ((uint64_t)0);
     z_t1353_ListIter_ZScopeLogRow_t _git0 = z_t1341_List_ZScopeLogRow_iterate(&st->scopeLog);
@@ -36191,12 +36186,12 @@ static void z_t3734_ZDumper_appendSymbolTable(z_t3716_ZDumper_t* this, z_t1267_Z
         if (_iter29.tag == Z_OPTIONVIEW_U64_TAG_NONE) break;
         uint64_t vid = *(uint64_t*)_iter29.data;
         z_t74_String_t ztSql = z_t3464_optIdStr(z_t1358_Map_u64_u64_get(st->typing.variableZtype, vid));
-        z_t74_String_t ownSql = z_t3475_varOwnSql(z_t1823_Map_u64_zownership_get(st->typing.variableOwnership, vid));
-        z_t74_String_t privNum = z_t3476_optBoolNumOr0(z_t1653_Map_u64_bool_get(st->typing.variableIsPrivate, vid));
+        z_t74_String_t ownSql = z_t3474_varOwnSql(z_t1823_Map_u64_zownership_get(st->typing.variableOwnership, vid));
+        z_t74_String_t privNum = z_t3475_optBoolNumOr0(z_t1653_Map_u64_bool_get(st->typing.variableIsPrivate, vid));
         z_t947_Option_String_t _ah1541 = z_t3469_ownOptStr(z_t1712_Map_u64_String_get(st->typing.variableBorrowOrigin, vid));
-        z_t74_String_t boSql = z_t3477_originSql(_ah1541);
+        z_t74_String_t boSql = z_t3476_originSql(_ah1541);
         z_t947_Option_String_t _ah1542 = z_t3469_ownOptStr(z_t1712_Map_u64_String_get(st->typing.variableSynthOrigin, vid));
-        z_t74_String_t soSql = z_t3477_originSql(_ah1542);
+        z_t74_String_t soSql = z_t3476_originSql(_ah1542);
         z_t74_String_t _s30 = z_t74_String_create((uint64_t)148);
         z_t74_String_append(&_s30, "INSERT OR IGNORE INTO variable VALUES (", sizeof("INSERT OR IGNORE INTO variable VALUES (")-1);
         char _b31[32]; int _b31_n = snprintf(_b31, 32, "%ld", (long)(int64_t)vid);
@@ -36227,23 +36222,23 @@ static void z_t3734_ZDumper_appendSymbolTable(z_t3716_ZDumper_t* this, z_t1267_Z
     z_t1384_Set_u64_destroy(seen);
 }
 
-static void z_t3735_ZDumper_emitSection(z_t3716_ZDumper_t* this, z_t105_StringView_t title, z_t989_List_String_t* rows) {
+static void z_t3734_ZDumper_emitSection(z_t3715_ZDumper_t* this, z_t105_StringView_t title, z_t989_List_String_t* rows) {
     (void)(z_t989_List_String_sort(rows));
-    (void)(z_t74_String_append(&this->acc, (_zs4067).data, (_zs4067).length));
+    (void)(z_t74_String_append(&this->acc, (_zs4065).data, (_zs4065).length));
     (void)(z_t74_String_append(&this->acc, (title).data, (title).length));
-    (void)(z_t74_String_append(&this->acc, (_zs4068).data, (_zs4068).length));
+    (void)(z_t74_String_append(&this->acc, (_zs4066).data, (_zs4066).length));
     uint64_t ri = ((uint64_t)0);
     uint64_t rn = rows->length;
     while ((ri < rn)) {
         z_t74_String_t rc = z_t74_String_copy(&(*z_t989_List_String_get(rows, ri)));
         (void)(z_t74_String_append(&this->acc, (rc).data, (rc).size));
-        (void)(z_t74_String_append(&this->acc, (_zs4069).data, (_zs4069).length));
+        (void)(z_t74_String_append(&this->acc, (_zs4067).data, (_zs4067).length));
         ri = (ri + 1);
     z_t74_String_free(&rc);
     }
 }
 
-static void z_t3736_ZDumper_appendUnitsCanon(z_t3716_ZDumper_t* this, z_t1068_Node_t program) {
+static void z_t3735_ZDumper_appendUnitsCanon(z_t3715_ZDumper_t* this, z_t1068_Node_t program) {
     z_t989_List_String_t rows = z_t989_List_String_create((uint64_t)0);
     z_t1068_Node_t _m0 = program;
     switch (_m0.tag) {
@@ -36288,11 +36283,11 @@ static void z_t3736_ZDumper_appendUnitsCanon(z_t3716_ZDumper_t* this, z_t1068_No
             break;
         }
     }
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4070, &rows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4068, &rows));
     z_t989_List_String_destroy(&rows);
 }
 
-static void z_t3737_ZDumper_appendGenericChildren(z_t3716_ZDumper_t* this, z_t1267_ZSymbolTable_t* st) {
+static void z_t3736_ZDumper_appendGenericChildren(z_t3715_ZDumper_t* this, z_t1267_ZSymbolTable_t* st) {
     uint64_t n = st->reg.nextTypeId;
     uint64_t tid = ((uint64_t)0);
     while ((tid < n)) {
@@ -36327,7 +36322,7 @@ static void z_t3737_ZDumper_appendGenericChildren(z_t3716_ZDumper_t* this, z_t12
     }
 }
 
-static void z_t3738_ZDumper_appendGenericArgs(z_t3716_ZDumper_t* this, z_t1267_ZSymbolTable_t* st) {
+static void z_t3737_ZDumper_appendGenericArgs(z_t3715_ZDumper_t* this, z_t1267_ZSymbolTable_t* st) {
     uint64_t n = st->reg.nextTypeId;
     uint64_t tid = ((uint64_t)0);
     while ((tid < n)) {
@@ -36376,7 +36371,7 @@ static void z_t3738_ZDumper_appendGenericArgs(z_t3716_ZDumper_t* this, z_t1267_Z
     }
 }
 
-static void z_t3739_ZDumper_appendGenericChildrenCanon(z_t3716_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st) {
+static void z_t3738_ZDumper_appendGenericChildrenCanon(z_t3715_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st) {
     z_t989_List_String_t rows = z_t989_List_String_create((uint64_t)0);
     uint64_t n = st->reg.nextTypeId;
     uint64_t tid = ((uint64_t)0);
@@ -36421,7 +36416,7 @@ static void z_t3739_ZDumper_appendGenericChildrenCanon(z_t3716_ZDumper_t* this, 
             while ((idx9 < gn9)) {
                 uint64_t ekey9 = z_t1422_List_u64_get(&gkeys9, idx9);
                 uint64_t eval9 = z_t1422_List_u64_get(&gtids9, idx9);
-                z_t74_String_t pn9 = z_t3486_canonTypeName(&st->reg, tid);
+                z_t74_String_t pn9 = z_t3485_canonTypeName(&st->reg, tid);
                 uint64_t kc9 = z_t1596_ZTypeRegistry_genericArgCount(&st->reg, eval9);
                 bool kIsVal9 = false;
                 if ((kc9 > 0)) {
@@ -36435,11 +36430,11 @@ static void z_t3739_ZDumper_appendGenericChildrenCanon(z_t3716_ZDumper_t* this, 
                     z_t74_String_free(&kn9);
                     kn9 = _s1;
                 } else {
-                    z_t74_String_t _rr3 = z_t3486_canonTypeName(&st->reg, ekey9);
+                    z_t74_String_t _rr3 = z_t3485_canonTypeName(&st->reg, ekey9);
                     z_t74_String_free(&kn9);
                     kn9 = _rr3;
                 }
-                z_t74_String_t cn9 = z_t3486_canonTypeName(&st->reg, eval9);
+                z_t74_String_t cn9 = z_t3485_canonTypeName(&st->reg, eval9);
                 z_t74_String_t _s4 = z_t74_String_create((uint64_t)64);
                 z_t74_String_append(&_s4, "generic_child ", sizeof("generic_child ")-1);
                 z_t74_String_append(&_s4, pn9.data, pn9.size);
@@ -36461,11 +36456,11 @@ static void z_t3739_ZDumper_appendGenericChildrenCanon(z_t3716_ZDumper_t* this, 
     z_t1422_List_u64_destroy(&gtids9);
     z_t1422_List_u64_destroy(&gkeys9);
     }
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4071, &rows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4069, &rows));
     z_t989_List_String_destroy(&rows);
 }
 
-static void z_t3740_ZDumper_appendGenericArgsCanon(z_t3716_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st) {
+static void z_t3739_ZDumper_appendGenericArgsCanon(z_t3715_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st) {
     z_t989_List_String_t rows = z_t989_List_String_create((uint64_t)0);
     uint64_t n = st->reg.nextTypeId;
     uint64_t tid = ((uint64_t)0);
@@ -36506,7 +36501,7 @@ static void z_t3740_ZDumper_appendGenericArgsCanon(z_t3716_ZDumper_t* this, z_t1
             uint64_t ai9 = ((uint64_t)0);
             while ((ai9 < an9)) {
                 uint64_t av9 = z_t1422_List_u64_get(&cargs9, ai9);
-                z_t74_String_t sn9 = z_t3486_canonTypeName(&st->reg, tid);
+                z_t74_String_t sn9 = z_t3485_canonTypeName(&st->reg, tid);
                 uint64_t iv9 = ((uint64_t)0);
                 z_t74_String_t vn9 = ((z_t74_String_t){0});
                 if (z_t1598_ZTypeRegistry_genericArgIsValueAt(&st->reg, tid, ai9)) {
@@ -36517,7 +36512,7 @@ static void z_t3740_ZDumper_appendGenericArgsCanon(z_t3716_ZDumper_t* this, z_t1
                     z_t74_String_free(&vn9);
                     vn9 = _s1;
                 } else {
-                    z_t74_String_t _rr3 = z_t3486_canonTypeName(&st->reg, av9);
+                    z_t74_String_t _rr3 = z_t3485_canonTypeName(&st->reg, av9);
                     z_t74_String_free(&vn9);
                     vn9 = _rr3;
                 }
@@ -36544,11 +36539,11 @@ static void z_t3740_ZDumper_appendGenericArgsCanon(z_t3716_ZDumper_t* this, z_t1
         tid = (tid + 1);
     z_t1422_List_u64_destroy(&cargs9);
     }
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4072, &rows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4070, &rows));
     z_t989_List_String_destroy(&rows);
 }
 
-static void z_t3741_ZDumper_appendTypesCanon(z_t3716_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st, z_t1147_StringPool_t* pool) {
+static void z_t3740_ZDumper_appendTypesCanon(z_t3715_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st) {
     z_t989_List_String_t rows = z_t989_List_String_create((uint64_t)0);
     uint64_t n = st->reg.nextTypeId;
     uint64_t tid = ((uint64_t)0);
@@ -36610,11 +36605,11 @@ static void z_t3741_ZDumper_appendTypesCanon(z_t3716_ZDumper_t* this, z_t105_Str
         tid = (tid + 1);
     z_t947_Option_String_destroy(&du);
     }
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4073, &rows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4071, &rows));
     z_t989_List_String_destroy(&rows);
 }
 
-static void z_t3742_ZDumper_appendDeclChildCanon(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st) {
+static void z_t3741_ZDumper_appendDeclChildCanon(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st) {
     z_t989_List_String_t rows = z_t989_List_String_create((uint64_t)0);
     uint64_t tn9 = st->reg.nextTypeId;
     uint64_t tid9 = ((uint64_t)0);
@@ -36641,19 +36636,19 @@ static void z_t3742_ZDumper_appendDeclChildCanon(z_t3716_ZDumper_t* this, z_t106
             z_t1422_List_u64_t nms9 = z_t1422_List_u64_create((uint64_t)0);
             z_t1422_List_u64_t tds9 = z_t1422_List_u64_create((uint64_t)0);
             (void)(z_t1985_ZTyping_declChildRows(&st->typing, pid9, &nms9, &tds9));
-            z_t74_String_t pName = z_t3486_canonTypeName(&st->reg, pid9);
+            z_t74_String_t pName = z_t3485_canonTypeName(&st->reg, pid9);
             z_t74_String_t pSql = z_t3462_sqlStr(((z_t105_StringView_t){ pName.data, pName.size }));
             uint64_t pos9 = ((uint64_t)0);
             uint64_t cn9 = nms9.length;
             while ((pos9 < cn9)) {
                 uint64_t nid9 = z_t1422_List_u64_get(&nms9, pos9);
-                z_t74_String_t cName = z_t3486_canonTypeName(&st->reg, z_t1422_List_u64_get(&tds9, pos9));
+                z_t74_String_t cName = z_t3485_canonTypeName(&st->reg, z_t1422_List_u64_get(&tds9, pos9));
                 __auto_type __borrow_cnB8 = &(*z_t989_List_String_get(&ast->names.texts, ((uint64_t)(nid9 - 1))));
                 /* alias: cnB8 => (*__borrow_cnB8) */
                 z_t74_String_t cnSql = z_t3462_sqlStr(((z_t105_StringView_t){ (*__borrow_cnB8).data, (*__borrow_cnB8).size }));
                 z_t74_String_t ctSql = z_t3462_sqlStr(((z_t105_StringView_t){ cName.data, cName.size }));
                 z_t1794_optionval_zparamownership_t own9 = z_t1975_ZTyping_declOwnershipOfId(&st->typing, pid9, ({ __auto_type _rc = (({ uint64_t _v = nid9; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; }));
-                z_t74_String_t poSql = z_t3474_paramOwnSql(own9);
+                z_t74_String_t poSql = z_t3473_paramOwnSql(own9);
                 z_t74_String_t _s1 = z_t74_String_create((uint64_t)92);
                 z_t74_String_append(&_s1, pSql.data, pSql.size);
                 z_t74_String_append(&_s1, " | ", sizeof(" | ")-1);
@@ -36682,11 +36677,11 @@ static void z_t3742_ZDumper_appendDeclChildCanon(z_t3716_ZDumper_t* this, z_t106
         }
     z_t947_Option_String_destroy(&pdu);
     }
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4074, &rows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4072, &rows));
     z_t989_List_String_destroy(&rows);
 }
 
-static void z_t3743_ZDumper_appendConformanceCanon(z_t3716_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st) {
+static void z_t3742_ZDumper_appendConformanceCanon(z_t3715_ZDumper_t* this, z_t105_StringView_t unm, z_t1267_ZSymbolTable_t* st) {
     z_t989_List_String_t rows = z_t989_List_String_create((uint64_t)0);
     z_t1886_ListIter_ZConformance_t citer = z_t1874_List_ZConformance_iterate(&st->typing.conformance);
     while (1) {
@@ -36710,8 +36705,8 @@ static void z_t3743_ZDumper_appendConformanceCanon(z_t3716_ZDumper_t* this, z_t1
             default: break;
         }
         if (inUnit) {
-            z_t74_String_t iName = z_t3486_canonTypeName(&st->reg, cf.implTypeId);
-            z_t74_String_t sName = z_t3486_canonTypeName(&st->reg, cf.specTypeId);
+            z_t74_String_t iName = z_t3485_canonTypeName(&st->reg, cf.implTypeId);
+            z_t74_String_t sName = z_t3485_canonTypeName(&st->reg, cf.specTypeId);
             z_t74_String_t iSql = z_t3462_sqlStr(((z_t105_StringView_t){ iName.data, iName.size }));
             z_t74_String_t sSql = z_t3462_sqlStr(((z_t105_StringView_t){ sName.data, sName.size }));
             z_t74_String_t lblSql = z_t3462_sqlStr(((z_t105_StringView_t){ cf.label.data, cf.label.size }));
@@ -36737,11 +36732,11 @@ static void z_t3743_ZDumper_appendConformanceCanon(z_t3716_ZDumper_t* this, z_t1
         }
     z_t947_Option_String_destroy(&idu);
     }
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4075, &rows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4073, &rows));
     z_t989_List_String_destroy(&rows);
 }
 
-static void z_t3744_ZDumper_appendSymbolTableCanon(z_t3716_ZDumper_t* this, z_t1267_ZSymbolTable_t* st) {
+static void z_t3743_ZDumper_appendSymbolTableCanon(z_t3715_ZDumper_t* this, z_t1267_ZSymbolTable_t* st) {
     z_t1712_Map_u64_String_t* scopeName = z_t1712_Map_u64_String_create((uint64_t)0);
     z_t989_List_String_t scopeRows = z_t989_List_String_create((uint64_t)0);
     uint64_t depth = ((uint64_t)0);
@@ -36751,7 +36746,7 @@ static void z_t3744_ZDumper_appendSymbolTableCanon(z_t3716_ZDumper_t* this, z_t1
         if (_iter0.tag == Z_OPTIONVIEW_ZSCOPELOGROW_TAG_NONE) break;
         z_t1339_ZScopeLogRow_t row = *(z_t1339_ZScopeLogRow_t*)_iter0.data;
         (void)(z_t1712_Map_u64_String_set(scopeName, row.scopeId, z_t74_String_copy(&row.name)));
-        z_t74_String_t parentNameSql = z_t74_String_from_view(_zs4076);
+        z_t74_String_t parentNameSql = z_t74_String_from_view(_zs4074);
         z_t169_optionval_u64_t pidOpt = row.parentId;
         z_t169_optionval_u64_t _m1 = pidOpt;
         switch (_m1.tag) {
@@ -36807,7 +36802,7 @@ static void z_t3744_ZDumper_appendSymbolTableCanon(z_t3716_ZDumper_t* this, z_t1
     z_t74_String_free(&rk);
     z_t74_String_free(&parentNameSql);
     }
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4077, &scopeRows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4075, &scopeRows));
     z_t989_List_String_t entryRows = z_t989_List_String_create((uint64_t)0);
     z_t989_List_String_t narrowedRows = z_t989_List_String_create((uint64_t)0);
     z_t1384_Set_u64_t* seen = z_t1384_Set_u64_create((uint64_t)0);
@@ -36823,7 +36818,7 @@ static void z_t3744_ZDumper_appendSymbolTableCanon(z_t3716_ZDumper_t* this, z_t1
                 /* alias: so => (*(z_t74_String_t*)_m11.data) */
                 z_t74_String_t scNameSql = z_t3462_sqlStr(((z_t105_StringView_t){ (*(z_t74_String_t*)_m11.data).data, (*(z_t74_String_t*)_m11.data).size }));
                 z_t74_String_t enmSql = z_t3462_sqlStr(((z_t105_StringView_t){ e.name.data, e.name.size }));
-                z_t74_String_t ztName = z_t3486_canonTypeName(&st->reg, e.ztypeId);
+                z_t74_String_t ztName = z_t3485_canonTypeName(&st->reg, e.ztypeId);
                 z_t74_String_t ztSql = z_t3462_sqlStr(((z_t105_StringView_t){ ztName.data, ztName.size }));
                 z_t74_String_t defNum = z_t3463_boolNum(e.isDefinition);
                 bool hasVar = false;
@@ -36914,23 +36909,23 @@ _s0; });
         }
     z_t944_OptionView_String_destroy(&so);
     }
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4078, &entryRows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4076, &entryRows));
     z_t989_List_String_t varRows = z_t989_List_String_create((uint64_t)0);
     z_t1389_SetIter_u64_t _git23 = z_t1384_Set_u64_iterate(seen);
     while (1) {
         z_t1366_OptionView_u64_t _iter23 = z_t1389_SetIter_u64_call(&_git23);
         if (_iter23.tag == Z_OPTIONVIEW_U64_TAG_NONE) break;
         uint64_t vid = *(uint64_t*)_iter23.data;
-        uint64_t ztId = z_t3485_optU64Or0(z_t1358_Map_u64_u64_get(st->typing.variableZtype, vid));
-        z_t74_String_t ztName = z_t3486_canonTypeName(&st->reg, ztId);
+        uint64_t ztId = z_t3484_optU64Or0(z_t1358_Map_u64_u64_get(st->typing.variableZtype, vid));
+        z_t74_String_t ztName = z_t3485_canonTypeName(&st->reg, ztId);
         z_t74_String_t ztSql = z_t3462_sqlStr(((z_t105_StringView_t){ ztName.data, ztName.size }));
-        z_t74_String_t ownSql = z_t3475_varOwnSql(z_t1823_Map_u64_zownership_get(st->typing.variableOwnership, vid));
-        z_t74_String_t privNum = z_t3476_optBoolNumOr0(z_t1653_Map_u64_bool_get(st->typing.variableIsPrivate, vid));
+        z_t74_String_t ownSql = z_t3474_varOwnSql(z_t1823_Map_u64_zownership_get(st->typing.variableOwnership, vid));
+        z_t74_String_t privNum = z_t3475_optBoolNumOr0(z_t1653_Map_u64_bool_get(st->typing.variableIsPrivate, vid));
         z_t947_Option_String_t _ah1545 = z_t3469_ownOptStr(z_t1712_Map_u64_String_get(st->typing.variableBorrowOrigin, vid));
-        z_t74_String_t boSql = z_t3477_originSql(_ah1545);
+        z_t74_String_t boSql = z_t3476_originSql(_ah1545);
         z_t947_Option_String_t _ah1546 = z_t3469_ownOptStr(z_t1712_Map_u64_String_get(st->typing.variableSynthOrigin, vid));
-        z_t74_String_t soSql = z_t3477_originSql(_ah1546);
-        z_t74_String_t orSql9 = z_t3478_originKindSql(z_t1653_Map_u64_bool_get(st->typing.variableOrigin, vid));
+        z_t74_String_t soSql = z_t3476_originSql(_ah1546);
+        z_t74_String_t orSql9 = z_t3477_originKindSql(z_t1653_Map_u64_bool_get(st->typing.variableOrigin, vid));
         z_t74_String_t _s24 = z_t74_String_create((uint64_t)111);
         z_t74_String_append(&_s24, ztSql.data, ztSql.size);
         z_t74_String_append(&_s24, " | ", sizeof(" | ")-1);
@@ -36957,8 +36952,8 @@ _s0; });
     z_t74_String_free(&ztSql);
     z_t74_String_free(&ztName);
     }
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4079, &varRows));
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4080, &narrowedRows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4077, &varRows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4078, &narrowedRows));
     z_t1712_Map_u64_String_destroy(scopeName);
     z_t989_List_String_destroy(&scopeRows);
     z_t989_List_String_destroy(&entryRows);
@@ -36967,14 +36962,14 @@ _s0; });
     z_t989_List_String_destroy(&varRows);
 }
 
-static void z_t3745_ZDumper_appendArgDispositionCanon(z_t3716_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* st) {
+static void z_t3744_ZDumper_appendArgDispositionCanon(z_t3715_ZDumper_t* this, z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* st) {
     z_t989_List_String_t rows = z_t989_List_String_create((uint64_t)0);
     z_t1785_MapItemIter_u64_zparamownership_t adit = z_t1775_Map_u64_zparamownership_iterateItems(st->typing.argDisposition);
     while (1) {
         z_t1791_OptionView_MapEntry_u64_zparamownership_t _iter0 = z_t1785_MapItemIter_u64_zparamownership_call(&adit);
         if (_iter0.tag == Z_OPTIONVIEW_MAPENTRY_U64_ZPARAMOWNERSHIP_TAG_NONE) break;
         z_t1787_MapEntry_u64_zparamownership_t ad = *(z_t1787_MapEntry_u64_zparamownership_t*)_iter0.data;
-        z_t74_String_t an9 = z_t3479_argAtomName(ast, ad.key);
+        z_t74_String_t an9 = z_t3478_argAtomName(ast, ad.key);
         if ((an9.size > 0)) {
             z_t74_String_t anSql9 = z_t3462_sqlStr(((z_t105_StringView_t){ an9.data, an9.size }));
             z_t74_String_t dnm9 = z_t2337_zparamownershipName(ad.value);
@@ -36989,11 +36984,11 @@ _s0; });
         }
     z_t74_String_free(&an9);
     }
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4081, &rows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4079, &rows));
     z_t989_List_String_destroy(&rows);
 }
 
-static void z_t3746_ZDumper_appendCallGenericBindingCanon(z_t3716_ZDumper_t* this, z_t1068_Node_t program, z_t1267_ZSymbolTable_t* st) {
+static void z_t3745_ZDumper_appendCallGenericBindingCanon(z_t3715_ZDumper_t* this, z_t1068_Node_t program, z_t1267_ZSymbolTable_t* st) {
     z_t989_List_String_t rows = z_t989_List_String_create((uint64_t)0);
     z_t1068_Node_t _m0 = program;
     switch (_m0.tag) {
@@ -37007,7 +37002,7 @@ static void z_t3746_ZDumper_appendCallGenericBindingCanon(z_t3716_ZDumper_t* thi
                 uint64_t nid9 = (cg.key / 4294967296);
                 uint32_t pnid9 = ({ __auto_type _rc = (({ uint64_t _v = (cg.key - (nid9 * 4294967296)); z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; });
                 z_t74_String_t hld9 = z_t1220_poolTextCopy(&(*(z_t1127_ProgramData_t*)_m0.data).ast.names, pnid9);
-                z_t74_String_t tn9 = z_t3486_canonTypeName(&st->reg, cg.value);
+                z_t74_String_t tn9 = z_t3485_canonTypeName(&st->reg, cg.value);
                 z_t74_String_t hSql9 = z_t3462_sqlStr(((z_t105_StringView_t){ hld9.data, hld9.size }));
                 z_t74_String_t tSql9 = z_t3462_sqlStr(((z_t105_StringView_t){ tn9.data, tn9.size }));
                 z_t74_String_t _ah1548 = ({  z_t74_String_t _s0 = z_t74_String_create((uint64_t)35);
@@ -37027,7 +37022,7 @@ _s0; });
             break;
         }
     }
-    (void)(z_t3735_ZDumper_emitSection(this, _zs4082, &rows));
+    (void)(z_t3734_ZDumper_emitSection(this, _zs4080, &rows));
     z_t989_List_String_destroy(&rows);
 }
 
@@ -37071,7 +37066,7 @@ void z_t1212_printNodeType(z_t1120_nodetype_t nt);
 void z_t1213_printCallKind(z_t1207_callkind_t ck);
 void z_t1214_printPoolName(z_t1067_Ast_t* ast, uint32_t ref);
 void z_t1215_printOptChildAt(z_t1067_Ast_t* ast, uint32_t id);
-z_t3610_nodepos_t z_t1216_posOf(z_t1068_Node_t n);
+z_t3609_nodepos_t z_t1216_posOf(z_t1068_Node_t n);
 uint32_t z_t1217_poolFind(z_t1147_StringPool_t* pool, z_t105_StringView_t text);
 uint32_t z_t1218_poolSet(z_t1147_StringPool_t* pool, z_t105_StringView_t text);
 bool z_t1219_poolTextEq(z_t1147_StringPool_t* pool, uint32_t ref, z_t105_StringView_t s);
@@ -37089,7 +37084,7 @@ void z_t1231_tableSet(z_t1067_Ast_t* ast, uint32_t id, z_t1068_Node_t child);
 uint32_t z_t1232_nodeIdOf(z_t1068_Node_t n);
 uint32_t z_t1233_tableAdd(z_t1067_Ast_t* ast, z_t1068_Node_t n);
 z_t1068_Node_t z_t1234_tableTake(z_t1067_Ast_t* ast, uint32_t id);
-z_t3606_astkind_t z_t1235_kindOf(z_t1067_Ast_t* ast, uint32_t id);
+z_t3605_astkind_t z_t1235_kindOf(z_t1067_Ast_t* ast, uint32_t id);
 z_t1036_List_u32_t z_t1236_unitBodyIdsAt(z_t1067_Ast_t* ast, uint32_t unitId);
 
 void z_t1238_printEntry(uint32_t id, z_t950_dentry_t e);
@@ -37202,7 +37197,7 @@ void z_t2314_extendraw(z_t74_String_t* stringparts, z_t105_StringView_t delim_vi
 bool z_t2315_ishexdigit(uint8_t b);
 uint8_t z_t2316_hexvalue(uint8_t b);
 void z_t2317_utf8_encode_append(uint64_t cp, z_t74_String_t* dst);
-z_t3696_kwresult_t z_t2318_kwlookup(z_t105_StringView_t sv);
+z_t3695_kwresult_t z_t2318_kwlookup(z_t105_StringView_t sv);
 bool z_t2319_islookupReserved(z_t105_StringView_t sv);
 z_t74_String_t z_t2320_ttname(z_t2082_TT_t t);
 uint8_t z_t2321_hexdigit(uint8_t b);
@@ -37237,13 +37232,13 @@ uint64_t z_t2358_bitLength(uint64_t v);
 bool z_t2359_intFitsFloat(int64_t value, z_t2343_numkind_t k);
 bool z_t2360_floatFitsFloat(double value, z_t2343_numkind_t k);
 z_t169_optionval_u64_t z_t2361_digitVal(uint8_t b);
-z_t3702_suffixinfo_t z_t2362_numkindByName(z_t105_StringView_t name);
-z_t3702_suffixinfo_t z_t2363_suffixInfoOf(z_t105_StringView_t numstr);
+z_t3701_suffixinfo_t z_t2362_numkindByName(z_t105_StringView_t name);
+z_t3701_suffixinfo_t z_t2363_suffixInfoOf(z_t105_StringView_t numstr);
 z_t74_String_t z_t2364_rangeErr(uint64_t value, z_t2343_numkind_t k, z_t2365_NumRange_t* r);
-z_t3710_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool hasK, z_t2343_numkind_t k);
-z_t3710_ParsedNumber_t z_t2368_parseNumber(z_t105_StringView_t numstr);
-z_t3710_ParsedNumber_t z_t2369_parseNumberAs(z_t105_StringView_t numstr, z_t2343_numkind_t k);
-z_t3706_parsedval_t z_t2370_parseLiteralValue(z_t105_StringView_t numstr);
+z_t3709_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool hasK, z_t2343_numkind_t k);
+z_t3709_ParsedNumber_t z_t2368_parseNumber(z_t105_StringView_t numstr);
+z_t3709_ParsedNumber_t z_t2369_parseNumberAs(z_t105_StringView_t numstr, z_t2343_numkind_t k);
+z_t3705_parsedval_t z_t2370_parseLiteralValue(z_t105_StringView_t numstr);
 void z_t2372_smokeMangleVar(z_t105_StringView_t name);
 void z_t2373_smokeIntFits(int64_t value, z_t2343_numkind_t k);
 void z_t2374_smokeFloatFits(z_t105_StringView_t label, double value, z_t2343_numkind_t k);
@@ -37924,8 +37919,8 @@ z_t74_String_t z_t3146_methodReturnByName(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
 uint64_t z_t3147_stampIdDeep(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t1068_Node_t n);
 z_t74_String_t z_t3148_stampNameDeep(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t1068_Node_t n);
 void z_t3149_emitPrintStmt(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx, z_t1081_CallData_t* call, z_t105_StringView_t ind, z_t3063_TmpCtr_t* tmp, z_t74_String_t* buf);
-z_t3712_cfold_t z_t3150_evalConstI64(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1068_Node_t n);
-z_t3712_cfold_t z_t3151_foldIfClause9(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1036_List_u32_t* conds);
+z_t3711_cfold_t z_t3150_evalConstI64(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1068_Node_t n);
+z_t3711_cfold_t z_t3151_foldIfClause9(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1036_List_u32_t* conds);
 z_t74_String_t z_t3152_plainStringLiteral9(z_t1067_Ast_t* ast, z_t1068_Node_t n);
 void z_t3153_emitErrorStmt(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx, z_t1081_CallData_t* call, z_t105_StringView_t ind, z_t74_String_t* buf);
 void z_t3154_emitPanicStmt(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx, z_t1081_CallData_t* call, z_t105_StringView_t ind, z_t74_String_t* buf);
@@ -38246,23 +38241,22 @@ z_t74_String_t z_t3468_optBoolSql(z_t1418_optionval_bool_t o);
 z_t947_Option_String_t z_t3469_ownOptStr(z_t944_OptionView_String_t o);
 z_t74_String_t z_t3470_sqlStrOrNull(z_t105_StringView_t s, bool present);
 z_t74_String_t z_t3471_optStrSql(z_t947_Option_String_t o);
-z_t74_String_t z_t3472_optStrSome(z_t947_Option_String_t o);
-z_t74_String_t z_t3473_cnameSql(z_t105_StringView_t c);
-z_t74_String_t z_t3474_paramOwnSql(z_t1794_optionval_zparamownership_t o);
-z_t74_String_t z_t3475_varOwnSql(z_t1842_optionval_zownership_t o);
-z_t74_String_t z_t3476_optBoolNumOr0(z_t1418_optionval_bool_t o);
-z_t74_String_t z_t3477_originSql(z_t947_Option_String_t o);
-z_t74_String_t z_t3478_originKindSql(z_t1418_optionval_bool_t o);
-z_t74_String_t z_t3479_argAtomName(z_t1067_Ast_t* ast, uint64_t id);
-uint64_t z_t3480_walkExprStampsAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t nId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
-uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z_t1068_Node_t n, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
-void z_t3482_walkExprStampsOptAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t oId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
-void z_t3483_overrideExpressionStamps(z_t1633_ZTyping_t* typing, z_t1068_Node_t program);
-z_t74_String_t z_t3484_dumpSql(z_t1068_Node_t program, z_t881_ZVfs_t* vfs, z_t1267_ZSymbolTable_t* symtab);
-uint64_t z_t3485_optU64Or0(z_t169_optionval_u64_t o);
-z_t74_String_t z_t3486_canonTypeName(z_t1412_ZTypeRegistry_t* reg, uint64_t tid);
-z_t74_String_t z_t3487_mainUnitNameOf(z_t1068_Node_t program);
-z_t74_String_t z_t3488_dumpCanon(z_t1068_Node_t program, z_t1267_ZSymbolTable_t* symtab);
+z_t74_String_t z_t3472_cnameSql(z_t105_StringView_t c);
+z_t74_String_t z_t3473_paramOwnSql(z_t1794_optionval_zparamownership_t o);
+z_t74_String_t z_t3474_varOwnSql(z_t1842_optionval_zownership_t o);
+z_t74_String_t z_t3475_optBoolNumOr0(z_t1418_optionval_bool_t o);
+z_t74_String_t z_t3476_originSql(z_t947_Option_String_t o);
+z_t74_String_t z_t3477_originKindSql(z_t1418_optionval_bool_t o);
+z_t74_String_t z_t3478_argAtomName(z_t1067_Ast_t* ast, uint64_t id);
+uint64_t z_t3479_walkExprStampsAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t nId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
+uint64_t z_t3480_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z_t1068_Node_t n, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
+void z_t3481_walkExprStampsOptAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t oId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals);
+void z_t3482_overrideExpressionStamps(z_t1633_ZTyping_t* typing, z_t1068_Node_t program);
+z_t74_String_t z_t3483_dumpSql(z_t1068_Node_t program, z_t881_ZVfs_t* vfs, z_t1267_ZSymbolTable_t* symtab);
+uint64_t z_t3484_optU64Or0(z_t169_optionval_u64_t o);
+z_t74_String_t z_t3485_canonTypeName(z_t1412_ZTypeRegistry_t* reg, uint64_t tid);
+z_t74_String_t z_t3486_mainUnitNameOf(z_t1068_Node_t program);
+z_t74_String_t z_t3487_dumpCanon(z_t1068_Node_t program, z_t1267_ZSymbolTable_t* symtab);
 
 z_t74_String_t z_t22_spacesOf(uint64_t n) {
     z_t74_String_t buf = ((z_t74_String_t){0});
@@ -38662,8 +38656,8 @@ void z_t1191_printEnv(z_t105_StringView_t systemFlag, z_t105_StringView_t runtim
     z_t74_String_t root = z_t2230_exeRoot();
     z_t74_String_t ver = z_t1183_zcVersion();
     z_t74_String_t exep = ((z_t74_String_t){0});
-    z_t3495_Result_String_IoError_t ep = z_os_exePath();
-    z_t3495_Result_String_IoError_t _m0 = ep;
+    z_t3494_Result_String_IoError_t ep = z_os_exePath();
+    z_t3494_Result_String_IoError_t _m0 = ep;
     switch (_m0.tag) {
         case Z_RESULT_STRING_IOERROR_TAG_OK: {
             /* alias: ep => (*(z_t74_String_t*)_m0.data) */
@@ -38702,7 +38696,7 @@ void z_t1191_printEnv(z_t105_StringView_t systemFlag, z_t105_StringView_t runtim
     z_t74_String_free(&ver);
     z_t74_String_free(&exep);
     z_t74_String_free(&buf);
-    z_t3495_Result_String_IoError_destroy(&ep);
+    z_t3494_Result_String_IoError_destroy(&ep);
 }
 
 z_t74_String_t z_t1192_tempPath(z_t105_StringView_t uname, z_t105_StringView_t ext) {
@@ -38756,9 +38750,9 @@ int32_t z_t1193_buildExe(z_t105_StringView_t cc, z_t105_StringView_t tempC, z_t1
         (void)(z_t989_List_String_append(&a, z_t74_String_from_view(_zs88)));
     }
     (void)(z_t989_List_String_append(&a, z_t74_String_from_view(_zs89)));
-    z_t3591_Splitter_t cf = z_t105_StringView_split(&cflags, &_zs90);
+    z_t3590_Splitter_t cf = z_t105_StringView_split(&cflags, &_zs90);
     while (1) {
-        z_t754_Option_StringView_t _iter0 = z_t3591_Splitter_call(&cf);
+        z_t754_Option_StringView_t _iter0 = z_t3590_Splitter_call(&cf);
         if (_iter0.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter0); break; }
         z_t105_StringView_t piece = *(z_t105_StringView_t*)_iter0.data;
         free(_iter0.data);
@@ -38771,9 +38765,9 @@ int32_t z_t1193_buildExe(z_t105_StringView_t cc, z_t105_StringView_t tempC, z_t1
     (void)(z_t989_List_String_append(&a, z_t74_String_from_view(tempC)));
     (void)(z_t989_List_String_append(&a, z_t74_String_from_view(_zs92)));
     (void)(z_t989_List_String_append(&a, z_t74_String_from_view(_zs93)));
-    z_t3591_Splitter_t lf = z_t105_StringView_split(&ldflags, &_zs94);
+    z_t3590_Splitter_t lf = z_t105_StringView_split(&ldflags, &_zs94);
     while (1) {
-        z_t754_Option_StringView_t _iter1 = z_t3591_Splitter_call(&lf);
+        z_t754_Option_StringView_t _iter1 = z_t3590_Splitter_call(&lf);
         if (_iter1.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter1); break; }
         z_t105_StringView_t piece2 = *(z_t105_StringView_t*)_iter1.data;
         free(_iter1.data);
@@ -38788,9 +38782,9 @@ int32_t z_t1193_buildExe(z_t105_StringView_t cc, z_t105_StringView_t tempC, z_t1
 }
 
 int32_t z_t1194_runZlShim(z_t105_StringView_t verb, z_t989_List_String_t* argv) {
-    z_t3495_Result_String_IoError_t ep = z_os_exePath();
+    z_t3494_Result_String_IoError_t ep = z_os_exePath();
     z_t74_String_t zlpath = ((z_t74_String_t){0});
-    z_t3495_Result_String_IoError_t _m0 = ep;
+    z_t3494_Result_String_IoError_t _m0 = ep;
     switch (_m0.tag) {
         case Z_RESULT_STRING_IOERROR_TAG_OK: {
             /* alias: ep => (*(z_t74_String_t*)_m0.data) */
@@ -38811,7 +38805,7 @@ int32_t z_t1194_runZlShim(z_t105_StringView_t verb, z_t989_List_String_t* argv) 
             (void)(z_io_eprintln(((z_t105_StringView_t){ em.data, em.size })));
             z_t74_String_free(&zlpath);
             z_t74_String_free(&em);
-    z_t3495_Result_String_IoError_destroy(&ep);
+    z_t3494_Result_String_IoError_destroy(&ep);
             return 2;
     z_t74_String_free(&em);
             break;
@@ -38833,11 +38827,11 @@ int32_t z_t1194_runZlShim(z_t105_StringView_t verb, z_t989_List_String_t* argv) 
     }
     int32_t rc = z_os_spawn(&args, _zs99, _zs100, _zs101, 0);
     z_t74_String_free(&zlpath);
-    z_t3495_Result_String_IoError_destroy(&ep);
+    z_t3494_Result_String_IoError_destroy(&ep);
     z_t989_List_String_destroy(&args);
     return rc;
     z_t74_String_free(&zlpath);
-    z_t3495_Result_String_IoError_destroy(&ep);
+    z_t3494_Result_String_IoError_destroy(&ep);
     z_t989_List_String_destroy(&args);
 }
 
@@ -38845,8 +38839,8 @@ void z_t1195_writeOut(z_t105_StringView_t target, z_t105_StringView_t content, z
     if (z_t105_StringView_eq(target, _zs102)) {
         z_t105_StringView_print(content);
     } else {
-        z_t3501_Result_null_IoError_t wr = z_io_writeText(target, content);
-        z_t3501_Result_null_IoError_t _m0 = wr;
+        z_t3500_Result_null_IoError_t wr = z_io_writeText(target, content);
+        z_t3500_Result_null_IoError_t _m0 = wr;
         switch (_m0.tag) {
             case Z_RESULT_NULL_IOERROR_TAG_OK: {
                 break;
@@ -38864,13 +38858,13 @@ void z_t1195_writeOut(z_t105_StringView_t target, z_t105_StringView_t content, z
             }
             default: break;
         }
-    z_t3501_Result_null_IoError_destroy(&wr);
+    z_t3500_Result_null_IoError_destroy(&wr);
     }
 }
 
 void z_t1196_removeTemp(z_t105_StringView_t path) {
-    z_t3501_Result_null_IoError_t rr = z_io_remove(path);
-    z_t3501_Result_null_IoError_t _m0 = rr;
+    z_t3500_Result_null_IoError_t rr = z_io_remove(path);
+    z_t3500_Result_null_IoError_t _m0 = rr;
     switch (_m0.tag) {
         case Z_RESULT_NULL_IOERROR_TAG_OK: {
             break;
@@ -38881,7 +38875,7 @@ void z_t1196_removeTemp(z_t105_StringView_t path) {
         }
         default: break;
     }
-    z_t3501_Result_null_IoError_destroy(&rr);
+    z_t3500_Result_null_IoError_destroy(&rr);
 }
 
 uint32_t z_t1197_parseECode(z_t105_StringView_t s) {
@@ -39338,7 +39332,7 @@ void z_main(void) {
     z_t74_String_free(&csrc);
             } else {
                 if (isDumpCanon) {
-                    z_t74_String_t canonOut = z_t3488_dumpCanon(prog, &st);
+                    z_t74_String_t canonOut = z_t3487_dumpCanon(prog, &st);
                     z_t74_String_t tgt2 = z_t74_String_copy(&outPath);
                     if ((tgt2.size == 0)) {
                         z_t74_String_t _rr24 = z_t74_String_from_view(_zs156);
@@ -39350,7 +39344,7 @@ void z_main(void) {
     z_t74_String_free(&canonOut);
                 } else {
                     if (isDumpSql) {
-                        z_t74_String_t sql = z_t3484_dumpSql(prog, &vfs, &st);
+                        z_t74_String_t sql = z_t3483_dumpSql(prog, &vfs, &st);
                         z_t74_String_t tgt3 = z_t74_String_copy(&dumpSqlTarget);
                         if ((tgt3.size == 0)) {
                             z_t74_String_t _rr25 = z_t74_String_copy(&outPath);
@@ -39373,8 +39367,8 @@ void z_main(void) {
                             (void)(z_t1181_printPhases(tParse0, tParse1, tCheck1, z_os_monotonicMillis()));
                         }
                         z_t74_String_t tmpc = z_t1192_tempPath(((z_t105_StringView_t){ unitname.data, unitname.size }), _zs160);
-                        z_t3501_Result_null_IoError_t wrc = z_io_writeText(((z_t105_StringView_t){ tmpc.data, tmpc.size }), ((z_t105_StringView_t){ csrc2.data, csrc2.size }));
-                        z_t3501_Result_null_IoError_t _m27 = wrc;
+                        z_t3500_Result_null_IoError_t wrc = z_io_writeText(((z_t105_StringView_t){ tmpc.data, tmpc.size }), ((z_t105_StringView_t){ csrc2.data, csrc2.size }));
+                        z_t3500_Result_null_IoError_t _m27 = wrc;
                         switch (_m27.tag) {
                             case Z_RESULT_NULL_IOERROR_TAG_OK: {
                                 break;
@@ -39448,7 +39442,7 @@ void z_main(void) {
                             (void)(z_os_exit(prc));
     z_t989_List_String_destroy(&sargs);
                         }
-    z_t3501_Result_null_IoError_destroy(&wrc);
+    z_t3500_Result_null_IoError_destroy(&wrc);
     z_t989_List_String_destroy(&emitErrs2);
     z_t74_String_free(&exe);
     z_t74_String_free(&cc);
@@ -40359,136 +40353,136 @@ void z_t1215_printOptChildAt(z_t1067_Ast_t* ast, uint32_t id) {
     }
 }
 
-z_t3610_nodepos_t z_t1216_posOf(z_t1068_Node_t n) {
+z_t3609_nodepos_t z_t1216_posOf(z_t1068_Node_t n) {
     z_t1068_Node_t _m0 = n;
     switch (_m0.tag) {
         case Z_NODE_TAG_ERROR: {
             /* alias: n => (*(z_t875_ErrorData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t875_ErrorData_t*)_m0.data).lineno, (*(z_t875_ErrorData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t875_ErrorData_t*)_m0.data).lineno, (*(z_t875_ErrorData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_ATOMID: {
             /* alias: n => (*(z_t1069_AtomIdData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1069_AtomIdData_t*)_m0.data).lineno, (*(z_t1069_AtomIdData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1069_AtomIdData_t*)_m0.data).lineno, (*(z_t1069_AtomIdData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_LABELVALUE: {
             /* alias: n => (*(z_t1071_LabelValueData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1071_LabelValueData_t*)_m0.data).lineno, (*(z_t1071_LabelValueData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1071_LabelValueData_t*)_m0.data).lineno, (*(z_t1071_LabelValueData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_BINOP: {
             /* alias: n => (*(z_t1075_BinOpData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1075_BinOpData_t*)_m0.data).lineno, (*(z_t1075_BinOpData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1075_BinOpData_t*)_m0.data).lineno, (*(z_t1075_BinOpData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_ATOMSTRING: {
             /* alias: n => (*(z_t1077_AtomStringData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1077_AtomStringData_t*)_m0.data).lineno, (*(z_t1077_AtomStringData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1077_AtomStringData_t*)_m0.data).lineno, (*(z_t1077_AtomStringData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_DOTTEDPATH: {
             /* alias: n => (*(z_t1079_DottedPathData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1079_DottedPathData_t*)_m0.data).lineno, (*(z_t1079_DottedPathData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1079_DottedPathData_t*)_m0.data).lineno, (*(z_t1079_DottedPathData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_CALL: {
             /* alias: n => (*(z_t1081_CallData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1081_CallData_t*)_m0.data).lineno, (*(z_t1081_CallData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1081_CallData_t*)_m0.data).lineno, (*(z_t1081_CallData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_NAMEDOPERATION: {
             /* alias: n => (*(z_t1085_NamedOperationData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1085_NamedOperationData_t*)_m0.data).lineno, (*(z_t1085_NamedOperationData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1085_NamedOperationData_t*)_m0.data).lineno, (*(z_t1085_NamedOperationData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_TYPEOFEXPR: {
             /* alias: n => (*(z_t1083_TypeOfExprData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1083_TypeOfExprData_t*)_m0.data).lineno, (*(z_t1083_TypeOfExprData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1083_TypeOfExprData_t*)_m0.data).lineno, (*(z_t1083_TypeOfExprData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_EXPRESSION: {
             /* alias: n => (*(z_t1101_ExpressionData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1101_ExpressionData_t*)_m0.data).lineno, (*(z_t1101_ExpressionData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1101_ExpressionData_t*)_m0.data).lineno, (*(z_t1101_ExpressionData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_DATABLOCK: {
             /* alias: n => (*(z_t1087_DataBlockData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1087_DataBlockData_t*)_m0.data).lineno, (*(z_t1087_DataBlockData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1087_DataBlockData_t*)_m0.data).lineno, (*(z_t1087_DataBlockData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_YIELDEXPR: {
             /* alias: n => (*(z_t1089_YieldExprData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1089_YieldExprData_t*)_m0.data).lineno, (*(z_t1089_YieldExprData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1089_YieldExprData_t*)_m0.data).lineno, (*(z_t1089_YieldExprData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_STRINGCHUNK: {
             /* alias: n => (*(z_t1073_StringChunkData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1073_StringChunkData_t*)_m0.data).lineno, (*(z_t1073_StringChunkData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1073_StringChunkData_t*)_m0.data).lineno, (*(z_t1073_StringChunkData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_STATEMENT: {
             /* alias: n => (*(z_t1091_StatementData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1091_StatementData_t*)_m0.data).lineno, (*(z_t1091_StatementData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1091_StatementData_t*)_m0.data).lineno, (*(z_t1091_StatementData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_STATEMENTLINE: {
             /* alias: n => (*(z_t1093_StatementLineData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1093_StatementLineData_t*)_m0.data).lineno, (*(z_t1093_StatementLineData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1093_StatementLineData_t*)_m0.data).lineno, (*(z_t1093_StatementLineData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_ASSIGNMENT: {
             /* alias: n => (*(z_t1095_AssignmentData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1095_AssignmentData_t*)_m0.data).lineno, (*(z_t1095_AssignmentData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1095_AssignmentData_t*)_m0.data).lineno, (*(z_t1095_AssignmentData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_REASSIGNMENT: {
             /* alias: n => (*(z_t1097_ReassignmentData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1097_ReassignmentData_t*)_m0.data).lineno, (*(z_t1097_ReassignmentData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1097_ReassignmentData_t*)_m0.data).lineno, (*(z_t1097_ReassignmentData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_SWAPSTMT: {
             /* alias: n => (*(z_t1099_SwapStmtData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1099_SwapStmtData_t*)_m0.data).lineno, (*(z_t1099_SwapStmtData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1099_SwapStmtData_t*)_m0.data).lineno, (*(z_t1099_SwapStmtData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_IFEXPR: {
             /* alias: n => (*(z_t1103_IfData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1103_IfData_t*)_m0.data).lineno, (*(z_t1103_IfData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1103_IfData_t*)_m0.data).lineno, (*(z_t1103_IfData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_IFCLAUSE: {
             /* alias: n => (*(z_t1105_IfClauseData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1105_IfClauseData_t*)_m0.data).lineno, (*(z_t1105_IfClauseData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1105_IfClauseData_t*)_m0.data).lineno, (*(z_t1105_IfClauseData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_FOREXPR: {
             /* alias: n => (*(z_t1107_ForData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1107_ForData_t*)_m0.data).lineno, (*(z_t1107_ForData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1107_ForData_t*)_m0.data).lineno, (*(z_t1107_ForData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_DOEXPR: {
             /* alias: n => (*(z_t1109_DoData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1109_DoData_t*)_m0.data).lineno, (*(z_t1109_DoData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1109_DoData_t*)_m0.data).lineno, (*(z_t1109_DoData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_WITHEXPR: {
             /* alias: n => (*(z_t1111_WithData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1111_WithData_t*)_m0.data).lineno, (*(z_t1111_WithData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1111_WithData_t*)_m0.data).lineno, (*(z_t1111_WithData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_CASEEXPR: {
             /* alias: n => (*(z_t1113_CaseData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1113_CaseData_t*)_m0.data).lineno, (*(z_t1113_CaseData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1113_CaseData_t*)_m0.data).lineno, (*(z_t1113_CaseData_t*)_m0.data).colno);
             break;
         }
         case Z_NODE_TAG_CASECLAUSE: {
             /* alias: n => (*(z_t1115_CaseClauseData_t*)_m0.data) */
-            return z_t3610_nodepos_create((*(z_t1115_CaseClauseData_t*)_m0.data).lineno, (*(z_t1115_CaseClauseData_t*)_m0.data).colno);
+            return z_t3609_nodepos_create((*(z_t1115_CaseClauseData_t*)_m0.data).lineno, (*(z_t1115_CaseClauseData_t*)_m0.data).colno);
             break;
         }
         default: {
-            return z_t3610_nodepos_create(0, 0);
+            return z_t3609_nodepos_create(0, 0);
             break;
         }
     }
@@ -42097,157 +42091,157 @@ z_t1068_Node_t z_t1234_tableTake(z_t1067_Ast_t* ast, uint32_t id) {
     return z_t1130_List_Node_set(&ast->nodes, ((uint64_t)(id - 1)), ((z_t1068_Node_t){ .tag = Z_NODE_TAG_PLACEHOLDER }));
 }
 
-z_t3606_astkind_t z_t1235_kindOf(z_t1067_Ast_t* ast, uint32_t id) {
+z_t3605_astkind_t z_t1235_kindOf(z_t1067_Ast_t* ast, uint32_t id) {
     z_t1068_Node_t n9 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(id - 1)));
     z_t1068_Node_t _m0 = n9;
     switch (_m0.tag) {
         case Z_NODE_TAG_ERROR: {
             /* alias: n9 => (*(z_t875_ErrorData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ERROR });
             break;
         }
         case Z_NODE_TAG_ATOMID: {
             /* alias: n9 => (*(z_t1069_AtomIdData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ATOMID });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ATOMID });
             break;
         }
         case Z_NODE_TAG_LABELVALUE: {
             /* alias: n9 => (*(z_t1071_LabelValueData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_LABELVALUE });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_LABELVALUE });
             break;
         }
         case Z_NODE_TAG_STRINGCHUNK: {
             /* alias: n9 => (*(z_t1073_StringChunkData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_STRINGCHUNK });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_STRINGCHUNK });
             break;
         }
         case Z_NODE_TAG_BINOP: {
             /* alias: n9 => (*(z_t1075_BinOpData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_BINOP });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_BINOP });
             break;
         }
         case Z_NODE_TAG_ATOMSTRING: {
             /* alias: n9 => (*(z_t1077_AtomStringData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ATOMSTRING });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ATOMSTRING });
             break;
         }
         case Z_NODE_TAG_DOTTEDPATH: {
             /* alias: n9 => (*(z_t1079_DottedPathData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_DOTTEDPATH });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_DOTTEDPATH });
             break;
         }
         case Z_NODE_TAG_CALL: {
             /* alias: n9 => (*(z_t1081_CallData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_CALL });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_CALL });
             break;
         }
         case Z_NODE_TAG_TYPEOFEXPR: {
             /* alias: n9 => (*(z_t1083_TypeOfExprData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_TYPEOFEXPR });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_TYPEOFEXPR });
             break;
         }
         case Z_NODE_TAG_NAMEDOPERATION: {
             /* alias: n9 => (*(z_t1085_NamedOperationData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_NAMEDOPERATION });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_NAMEDOPERATION });
             break;
         }
         case Z_NODE_TAG_DATABLOCK: {
             /* alias: n9 => (*(z_t1087_DataBlockData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_DATABLOCK });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_DATABLOCK });
             break;
         }
         case Z_NODE_TAG_YIELDEXPR: {
             /* alias: n9 => (*(z_t1089_YieldExprData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_YIELDEXPR });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_YIELDEXPR });
             break;
         }
         case Z_NODE_TAG_STATEMENT: {
             /* alias: n9 => (*(z_t1091_StatementData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_STATEMENT });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_STATEMENT });
             break;
         }
         case Z_NODE_TAG_STATEMENTLINE: {
             /* alias: n9 => (*(z_t1093_StatementLineData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_STATEMENTLINE });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_STATEMENTLINE });
             break;
         }
         case Z_NODE_TAG_ASSIGNMENT: {
             /* alias: n9 => (*(z_t1095_AssignmentData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ASSIGNMENT });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ASSIGNMENT });
             break;
         }
         case Z_NODE_TAG_REASSIGNMENT: {
             /* alias: n9 => (*(z_t1097_ReassignmentData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_REASSIGNMENT });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_REASSIGNMENT });
             break;
         }
         case Z_NODE_TAG_SWAPSTMT: {
             /* alias: n9 => (*(z_t1099_SwapStmtData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_SWAPSTMT });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_SWAPSTMT });
             break;
         }
         case Z_NODE_TAG_EXPRESSION: {
             /* alias: n9 => (*(z_t1101_ExpressionData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_EXPRESSION });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_EXPRESSION });
             break;
         }
         case Z_NODE_TAG_IFEXPR: {
             /* alias: n9 => (*(z_t1103_IfData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_IFEXPR });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_IFEXPR });
             break;
         }
         case Z_NODE_TAG_IFCLAUSE: {
             /* alias: n9 => (*(z_t1105_IfClauseData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_IFCLAUSE });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_IFCLAUSE });
             break;
         }
         case Z_NODE_TAG_FOREXPR: {
             /* alias: n9 => (*(z_t1107_ForData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_FOREXPR });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_FOREXPR });
             break;
         }
         case Z_NODE_TAG_DOEXPR: {
             /* alias: n9 => (*(z_t1109_DoData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_DOEXPR });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_DOEXPR });
             break;
         }
         case Z_NODE_TAG_WITHEXPR: {
             /* alias: n9 => (*(z_t1111_WithData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_WITHEXPR });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_WITHEXPR });
             break;
         }
         case Z_NODE_TAG_CASEEXPR: {
             /* alias: n9 => (*(z_t1113_CaseData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_CASEEXPR });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_CASEEXPR });
             break;
         }
         case Z_NODE_TAG_CASECLAUSE: {
             /* alias: n9 => (*(z_t1115_CaseClauseData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_CASECLAUSE });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_CASECLAUSE });
             break;
         }
         case Z_NODE_TAG_FUNCTIONDEF: {
             /* alias: n9 => (*(z_t1117_FunctionData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_FUNCTIONDEF });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_FUNCTIONDEF });
             break;
         }
         case Z_NODE_TAG_OBJECTDEF: {
             /* alias: n9 => (*(z_t1119_ObjectDefData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_OBJECTDEF });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_OBJECTDEF });
             break;
         }
         case Z_NODE_TAG_UNITDEF: {
             /* alias: n9 => (*(z_t1125_UnitData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_UNITDEF });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_UNITDEF });
             break;
         }
         case Z_NODE_TAG_PROGRAM: {
             /* alias: n9 => (*(z_t1127_ProgramData_t*)_m0.data) */
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_PROGRAM });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_PROGRAM });
             break;
         }
         case Z_NODE_TAG_PLACEHOLDER: {
-            return ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_PLACEHOLDER });
+            return ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_PLACEHOLDER });
             break;
         }
         default: z_unreachable();
@@ -42344,9 +42338,9 @@ z_t74_String_t z_t1239_joinPath(z_t105_StringView_t parent, z_t105_StringView_t 
 
 z_t989_List_String_t z_t1240_tokenizeLine(z_t105_StringView_t line) {
     z_t989_List_String_t buf = z_t989_List_String_create((uint64_t)0);
-    z_t3591_Splitter_t it = z_t105_StringView_split(&line, &_zs464);
+    z_t3590_Splitter_t it = z_t105_StringView_split(&line, &_zs464);
     while (1) {
-        z_t754_Option_StringView_t _iter0 = z_t3591_Splitter_call(&it);
+        z_t754_Option_StringView_t _iter0 = z_t3590_Splitter_call(&it);
         if (_iter0.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter0); break; }
         z_t105_StringView_t piece = *(z_t105_StringView_t*)_iter0.data;
         free(_iter0.data);
@@ -42574,8 +42568,8 @@ void z_t1251_dispatchStat(z_t989_List_String_t* tokens, z_t1245_ProviderTable_t*
     uint32_t item = z_t1241_parseU32at(tokens, 2);
     __auto_type __borrow_box = &(*z_t892_List_ProviderBox_get(&providers->providers, ((uint64_t)pid)));
     /* alias: box => (*__borrow_box) */
-    z_t3614_nodekind_t k = (*__borrow_box).p.vtable->stat((*__borrow_box).p.data, item);
-    z_t3614_nodekind_t _m0 = k;
+    z_t3613_nodekind_t k = (*__borrow_box).p.vtable->stat((*__borrow_box).p.data, item);
+    z_t3613_nodekind_t _m0 = k;
     switch (_m0.tag) {
         case Z_NODEKIND_TAG_DIR: {
             z_t105_StringView_print(_zs490);
@@ -42800,8 +42794,8 @@ void z_t1260_dispatchVfs(z_t989_List_String_t* tokens, z_t881_ZVfs_t* vfs) {
             z_panic((const char*)_zs520.data);
         }
         uint32_t did = z_t1241_parseU32at(tokens, 2);
-        z_t3614_nodekind_t k = z_t1034_ZVfs_arm(vfs, did);
-        z_t3614_nodekind_t _m8 = k;
+        z_t3613_nodekind_t k = z_t1034_ZVfs_arm(vfs, did);
+        z_t3613_nodekind_t _m8 = k;
         switch (_m8.tag) {
             case Z_NODEKIND_TAG_DIR: {
                 z_t105_StringView_print(_zs521);
@@ -43009,9 +43003,9 @@ void z_t1261_dispatchLine(z_t105_StringView_t line, z_t949_DentryTable_t* table,
 
 void z_t1262_runScript(z_t74_String_t* text, z_t949_DentryTable_t* table, z_t1245_ProviderTable_t* providers, z_t881_ZVfs_t* vfs) {
     z_t105_StringView_t sv = (z_t105_StringView_t){ text->data, text->size };
-    z_t3594_LinesIter_t li = z_t105_StringView_lines(&sv);
+    z_t3593_LinesIter_t li = z_t105_StringView_lines(&sv);
     while (1) {
-        z_t754_Option_StringView_t _iter0 = z_t3594_LinesIter_call(&li);
+        z_t754_Option_StringView_t _iter0 = z_t3593_LinesIter_call(&li);
         if (_iter0.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter0); break; }
         z_t105_StringView_t line = *(z_t105_StringView_t*)_iter0.data;
         free(_iter0.data);
@@ -43257,15 +43251,15 @@ z_t74_String_t z_t2229_joinPath(z_t105_StringView_t a, z_t105_StringView_t b) {
 }
 
 z_t74_String_t z_t2230_exeRoot(void) {
-    z_t3495_Result_String_IoError_t er = z_os_exePath();
-    z_t3495_Result_String_IoError_t _m0 = er;
+    z_t3494_Result_String_IoError_t er = z_os_exePath();
+    z_t3494_Result_String_IoError_t _m0 = er;
     switch (_m0.tag) {
         case Z_RESULT_STRING_IOERROR_TAG_OK: {
             /* alias: er => (*(z_t74_String_t*)_m0.data) */
             z_t74_String_t d1 = z_t2228_dirname(((z_t105_StringView_t){ (*(z_t74_String_t*)_m0.data).data, (*(z_t74_String_t*)_m0.data).size }));
             z_t74_String_t d2 = z_t2228_dirname(((z_t105_StringView_t){ d1.data, d1.size }));
             z_t74_String_free(&d1);
-    z_t3495_Result_String_IoError_destroy(&er);
+    z_t3494_Result_String_IoError_destroy(&er);
             return d2;
     z_t74_String_free(&d2);
     z_t74_String_free(&d1);
@@ -43274,14 +43268,14 @@ z_t74_String_t z_t2230_exeRoot(void) {
         case Z_RESULT_STRING_IOERROR_TAG_ERR: {
             /* alias: er => (*(z_t1256_IoError_t*)_m0.data) */
             z_t74_String_t _ret1 = z_t74_String_from_view(_zs567);
-    z_t3495_Result_String_IoError_destroy(&er);
+    z_t3494_Result_String_IoError_destroy(&er);
             return _ret1;
             break;
         }
         default: z_unreachable();
     }
     /* post-guard alias: er => (*(z_t1256_IoError_t*)er.data) */
-    z_t3495_Result_String_IoError_destroy(&er);
+    z_t3494_Result_String_IoError_destroy(&er);
 }
 
 z_t74_String_t z_t2231_pickRuntimeUnder(z_t105_StringView_t root) {
@@ -45079,95 +45073,95 @@ void z_t2317_utf8_encode_append(uint64_t cp, z_t74_String_t* dst) {
     (void)(z_t74_String_append_byte(dst, ({ __auto_type _rc = (({ uint64_t _v = (lo + 128); z_t220_resultval_u8_convError_t _r = {0}; if (_v > 255) { _r.tag = Z_RESULTVAL_U8_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U8_CONVERROR_TAG_OK; _r.data.ok = (uint8_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U8_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; })));
 }
 
-z_t3696_kwresult_t z_t2318_kwlookup(z_t105_StringView_t sv) {
+z_t3695_kwresult_t z_t2318_kwlookup(z_t105_StringView_t sv) {
     if (z_t105_StringView_eq(sv, _zs1011)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_EQUALSTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_EQUALSTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1012)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_FUNCTIONTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_FUNCTIONTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1013)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_IFTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_IFTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1014)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_WHENTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_WHENTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1015)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_THENTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_THENTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1016)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_ELSETOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_ELSETOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1017)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_FORTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_FORTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1018)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_LOOPTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_LOOPTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1019)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_WHILETOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_WHILETOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1020)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_DOTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_DOTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1021)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_CASETOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_CASETOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1022)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_MATCHTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_MATCHTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1023)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_ONTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_ONTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1024)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_OUTTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_OUTTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1025)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_INTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_INTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1026)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_SWAPTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_SWAPTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1027)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_UNITTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_UNITTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1028)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_RECORDTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_RECORDTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1029)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_CLASSTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_CLASSTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1030)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_UNIONTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_UNIONTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1031)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_VARIANTTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_VARIANTTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1032)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_PROTOCOLTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_PROTOCOLTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1033)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_DATATOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_DATATOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1034)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_ISTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_ISTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1035)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_ASTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_ASTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1036)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_WITHTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_WITHTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1037)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_FACETTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_FACETTOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1038)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_NATIVETOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_NATIVETOK }));
     }
     if (z_t105_StringView_eq(sv, _zs1039)) {
-        return z_t3696_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_YIELDTOK }));
+        return z_t3695_kwresult_create(true, ((z_t2082_TT_t){ .tag = Z_TT_TAG_YIELDTOK }));
     }
-    return z_t3696_kwresult_create(false, ((z_t2082_TT_t){ .tag = Z_TT_TAG_EOFTOK }));
+    return z_t3695_kwresult_create(false, ((z_t2082_TT_t){ .tag = Z_TT_TAG_EOFTOK }));
 }
 
 bool z_t2319_islookupReserved(z_t105_StringView_t sv) {
@@ -46484,71 +46478,71 @@ z_t169_optionval_u64_t z_t2361_digitVal(uint8_t b) {
     return ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE });
 }
 
-z_t3702_suffixinfo_t z_t2362_numkindByName(z_t105_StringView_t name) {
+z_t3701_suffixinfo_t z_t2362_numkindByName(z_t105_StringView_t name) {
     if (z_t105_StringView_eq(name, _zs1216)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I8TYPE }), 2);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I8TYPE }), 2);
     }
     if (z_t105_StringView_eq(name, _zs1217)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_U8TYPE }), 2);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_U8TYPE }), 2);
     }
     if (z_t105_StringView_eq(name, _zs1218)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_C8TYPE }), 2);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_C8TYPE }), 2);
     }
     if (z_t105_StringView_eq(name, _zs1219)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I16TYPE }), 3);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I16TYPE }), 3);
     }
     if (z_t105_StringView_eq(name, _zs1220)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I32TYPE }), 3);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I32TYPE }), 3);
     }
     if (z_t105_StringView_eq(name, _zs1221)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I64TYPE }), 3);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I64TYPE }), 3);
     }
     if (z_t105_StringView_eq(name, _zs1222)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_U16TYPE }), 3);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_U16TYPE }), 3);
     }
     if (z_t105_StringView_eq(name, _zs1223)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_U32TYPE }), 3);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_U32TYPE }), 3);
     }
     if (z_t105_StringView_eq(name, _zs1224)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_U64TYPE }), 3);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_U64TYPE }), 3);
     }
     if (z_t105_StringView_eq(name, _zs1225)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_F16TYPE }), 3);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_F16TYPE }), 3);
     }
     if (z_t105_StringView_eq(name, _zs1226)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_F32TYPE }), 3);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_F32TYPE }), 3);
     }
     if (z_t105_StringView_eq(name, _zs1227)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_F64TYPE }), 3);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_F64TYPE }), 3);
     }
     if (z_t105_StringView_eq(name, _zs1228)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_C32TYPE }), 3);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_C32TYPE }), 3);
     }
     if (z_t105_StringView_eq(name, _zs1229)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I128TYPE }), 4);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I128TYPE }), 4);
     }
     if (z_t105_StringView_eq(name, _zs1230)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_U128TYPE }), 4);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_U128TYPE }), 4);
     }
     if (z_t105_StringView_eq(name, _zs1231)) {
-        return z_t3702_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_F128TYPE }), 4);
+        return z_t3701_suffixinfo_create(true, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_F128TYPE }), 4);
     }
-    return z_t3702_suffixinfo_create(false, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I64TYPE }), 0);
+    return z_t3701_suffixinfo_create(false, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I64TYPE }), 0);
 }
 
-z_t3702_suffixinfo_t z_t2363_suffixInfoOf(z_t105_StringView_t numstr) {
+z_t3701_suffixinfo_t z_t2363_suffixInfoOf(z_t105_StringView_t numstr) {
     uint64_t n9 = numstr.length;
     uint64_t tl9 = ((uint64_t)4ULL);
     while ((tl9 >= 2)) {
         if ((n9 >= tl9)) {
-            z_t3702_suffixinfo_t si9 = z_t2362_numkindByName(z_t105_StringView_substring(&numstr, (n9 - tl9), n9));
+            z_t3701_suffixinfo_t si9 = z_t2362_numkindByName(z_t105_StringView_substring(&numstr, (n9 - tl9), n9));
             if (si9.has) {
                 return si9;
             }
         }
         tl9 = (tl9 - 1);
     }
-    return z_t3702_suffixinfo_create(false, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I64TYPE }), 0);
+    return z_t3701_suffixinfo_create(false, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I64TYPE }), 0);
 }
 
 z_t74_String_t z_t2364_rangeErr(uint64_t value, z_t2343_numkind_t k, z_t2365_NumRange_t* r) {
@@ -46571,7 +46565,7 @@ z_t74_String_t z_t2364_rangeErr(uint64_t value, z_t2343_numkind_t k, z_t2365_Num
     z_t74_String_free(&msg);
 }
 
-z_t3710_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool hasK, z_t2343_numkind_t k) {
+z_t3709_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool hasK, z_t2343_numkind_t k) {
     uint64_t n = numstr.length;
     uint64_t coreLen = n;
     bool hasKind = hasK;
@@ -46600,7 +46594,7 @@ z_t3710_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool 
     if (hasDot) {
         if (hasKind) {
             if ((z_t2354_isFloatKind(kind) == false)) {
-                return z_t3710_ParsedNumber_create(kind, false, 0, 0.0, z_t74_String_from_view(_zs1232));
+                return z_t3709_ParsedNumber_create(kind, false, 0, 0.0, z_t74_String_from_view(_zs1232));
             }
         } else {
             kind = ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_F64TYPE });
@@ -46637,7 +46631,7 @@ z_t3710_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool 
     if (isChar) {
         uint64_t bodyLen = (coreLen - 2);
         if ((bodyLen != 1)) {
-            return z_t3710_ParsedNumber_create(kind, false, 0, 0.0, z_t105_StringView_concat(&_zs1237, &numstr));
+            return z_t3709_ParsedNumber_create(kind, false, 0, 0.0, z_t105_StringView_concat(&_zs1237, &numstr));
         }
         z_t744_optionval_u8_t cbopt = z_t105_StringView_byteAt(&numstr, ((uint64_t)2ULL));
         uint64_t cval = ((uint64_t)0);
@@ -46658,7 +46652,7 @@ z_t3710_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool 
         if (rc.has) {
             if ((cval > rc.hi)) {
                 z_t74_String_t em = z_t2364_rangeErr(cval, kind, &rc);
-                z_t3710_ParsedNumber_t _ret2 = z_t3710_ParsedNumber_create(kind, false, cval, 0.0, em);
+                z_t3709_ParsedNumber_t _ret2 = z_t3709_ParsedNumber_create(kind, false, cval, 0.0, em);
                 em = (z_t74_String_t){0};
                 z_t74_String_free(&em);
     z_t2365_NumRange_destroy(&rc);
@@ -46666,14 +46660,14 @@ z_t3710_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool 
     z_t74_String_free(&em);
             }
         }
-        z_t3710_ParsedNumber_t _ret3 = z_t3710_ParsedNumber_create(kind, false, cval, 0.0, z_t74_String_from_view(_zs1238));
+        z_t3709_ParsedNumber_t _ret3 = z_t3709_ParsedNumber_create(kind, false, cval, 0.0, z_t74_String_from_view(_zs1238));
     z_t2365_NumRange_destroy(&rc);
         return _ret3;
     z_t2365_NumRange_destroy(&rc);
     }
     if (z_t2354_isFloatKind(kind)) {
         if ((base != 10)) {
-            return z_t3710_ParsedNumber_create(kind, true, 0, 0.0, z_t105_StringView_concat(&_zs1239, &numstr));
+            return z_t3709_ParsedNumber_create(kind, true, 0, 0.0, z_t105_StringView_concat(&_zs1239, &numstr));
         }
         z_t74_String_t fbuf = ((z_t74_String_t){0});
         uint64_t fi = ((uint64_t)0);
@@ -46700,7 +46694,7 @@ z_t3710_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool 
             case Z_RESULTVAL_F64_PARSEERROR_TAG_OK: {
                 double fres = _m5.data.ok;
                 (void)fres;
-                z_t3710_ParsedNumber_t _ret6 = z_t3710_ParsedNumber_create(kind, true, 0, fres, z_t74_String_from_view(_zs1240));
+                z_t3709_ParsedNumber_t _ret6 = z_t3709_ParsedNumber_create(kind, true, 0, fres, z_t74_String_from_view(_zs1240));
                 z_t74_String_free(&fbuf);
                 return _ret6;
                 break;
@@ -46708,7 +46702,7 @@ z_t3710_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool 
             case Z_RESULTVAL_F64_PARSEERROR_TAG_ERR: {
                 z_t777_parseerror_t fres = _m5.data.err;
                 (void)fres;
-                z_t3710_ParsedNumber_t _ret7 = z_t3710_ParsedNumber_create(kind, true, 0, 0.0, z_t105_StringView_concat(&_zs1241, &numstr));
+                z_t3709_ParsedNumber_t _ret7 = z_t3709_ParsedNumber_create(kind, true, 0, 0.0, z_t105_StringView_concat(&_zs1241, &numstr));
                 z_t74_String_free(&fbuf);
                 return _ret7;
                 break;
@@ -46759,13 +46753,13 @@ z_t3710_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool 
         ii = (ii + 1);
     }
     if ((ok == false)) {
-        return z_t3710_ParsedNumber_create(kind, false, 0, 0.0, z_t105_StringView_concat(&_zs1242, &numstr));
+        return z_t3709_ParsedNumber_create(kind, false, 0, 0.0, z_t105_StringView_concat(&_zs1242, &numstr));
     }
     z_t2365_NumRange_t ri = z_t2356_rangeOf(kind);
     if (ri.has) {
         if ((acc > ri.hi)) {
             z_t74_String_t em2 = z_t2364_rangeErr(acc, kind, &ri);
-            z_t3710_ParsedNumber_t _ret10 = z_t3710_ParsedNumber_create(kind, false, acc, 0.0, em2);
+            z_t3709_ParsedNumber_t _ret10 = z_t3709_ParsedNumber_create(kind, false, acc, 0.0, em2);
             em2 = (z_t74_String_t){0};
             z_t74_String_free(&em2);
     z_t2365_NumRange_destroy(&ri);
@@ -46773,36 +46767,36 @@ z_t3710_ParsedNumber_t z_t2367_parseNumberWith(z_t105_StringView_t numstr, bool 
     z_t74_String_free(&em2);
         }
     }
-    z_t3710_ParsedNumber_t _ret11 = z_t3710_ParsedNumber_create(kind, false, acc, 0.0, z_t74_String_from_view(_zs1243));
+    z_t3709_ParsedNumber_t _ret11 = z_t3709_ParsedNumber_create(kind, false, acc, 0.0, z_t74_String_from_view(_zs1243));
     z_t2365_NumRange_destroy(&ri);
     return _ret11;
     z_t2365_NumRange_destroy(&ri);
 }
 
-z_t3710_ParsedNumber_t z_t2368_parseNumber(z_t105_StringView_t numstr) {
+z_t3709_ParsedNumber_t z_t2368_parseNumber(z_t105_StringView_t numstr) {
     return z_t2367_parseNumberWith(numstr, false, ((z_t2343_numkind_t){ .tag = Z_NUMKIND_TAG_I64TYPE }));
 }
 
-z_t3710_ParsedNumber_t z_t2369_parseNumberAs(z_t105_StringView_t numstr, z_t2343_numkind_t k) {
+z_t3709_ParsedNumber_t z_t2369_parseNumberAs(z_t105_StringView_t numstr, z_t2343_numkind_t k) {
     return z_t2367_parseNumberWith(numstr, true, k);
 }
 
-z_t3706_parsedval_t z_t2370_parseLiteralValue(z_t105_StringView_t numstr) {
-    z_t3710_ParsedNumber_t p = z_t2368_parseNumber(numstr);
+z_t3705_parsedval_t z_t2370_parseLiteralValue(z_t105_StringView_t numstr) {
+    z_t3709_ParsedNumber_t p = z_t2368_parseNumber(numstr);
     bool hasErr = (p.err.size > 0);
     if (hasErr) {
         if ((p.ival == 0)) {
             if ((z_t105_StringView_contains(&((z_t105_StringView_t){ p.err.data, p.err.size }), &_zs1244) == false)) {
-                z_t3706_parsedval_t _ret0 = z_t3706_parsedval_create(false, false, 0, 0.0);
-    z_t3710_ParsedNumber_destroy(&p);
+                z_t3705_parsedval_t _ret0 = z_t3705_parsedval_create(false, false, 0, 0.0);
+    z_t3709_ParsedNumber_destroy(&p);
                 return _ret0;
             }
         }
     }
-    z_t3706_parsedval_t _ret1 = z_t3706_parsedval_create(true, p.isFloat, p.ival, p.fval);
-    z_t3710_ParsedNumber_destroy(&p);
+    z_t3705_parsedval_t _ret1 = z_t3705_parsedval_create(true, p.isFloat, p.ival, p.fval);
+    z_t3709_ParsedNumber_destroy(&p);
     return _ret1;
-    z_t3710_ParsedNumber_destroy(&p);
+    z_t3709_ParsedNumber_destroy(&p);
 }
 
 void z_t2372_smokeMangleVar(z_t105_StringView_t name) {
@@ -46853,7 +46847,7 @@ void z_t2374_smokeFloatFits(z_t105_StringView_t label, double value, z_t2343_num
 }
 
 void z_t2375_smokeParse(z_t105_StringView_t numstr) {
-    z_t3710_ParsedNumber_t p = z_t2368_parseNumber(numstr);
+    z_t3709_ParsedNumber_t p = z_t2368_parseNumber(numstr);
     z_t74_String_t _s0 = z_t74_String_create((uint64_t)113);
     z_t74_String_append(&_s0, "parse ", sizeof("parse ")-1);
     z_t74_String_append(&_s0, numstr.data, numstr.length);
@@ -46872,11 +46866,11 @@ void z_t2375_smokeParse(z_t105_StringView_t numstr) {
     z_t74_String_append(&_s0, p.err.data, p.err.size);
     z_t74_String_print(&_s0);
     z_t74_String_free(&_s0);
-    z_t3710_ParsedNumber_destroy(&p);
+    z_t3709_ParsedNumber_destroy(&p);
 }
 
 void z_t2376_smokeLitVal(z_t105_StringView_t numstr) {
-    z_t3706_parsedval_t v = z_t2370_parseLiteralValue(numstr);
+    z_t3705_parsedval_t v = z_t2370_parseLiteralValue(numstr);
     z_t74_String_t _s0 = z_t74_String_create((uint64_t)91);
     z_t74_String_append(&_s0, "litval ", sizeof("litval ")-1);
     z_t74_String_append(&_s0, numstr.data, numstr.length);
@@ -47854,9 +47848,9 @@ void z_t2402_populatePreludeBody(z_t1633_ZTyping_t* ty, z_t1412_ZTypeRegistry_t*
             z_t74_String_t atgt0 = z_t2420_dottedDefTarget(ast, _ah113);
             if ((atgt0.size > 0)) {
                 z_t74_String_t ps0 = ((z_t74_String_t){0});
-                z_t3591_Splitter_t pit = z_t105_StringView_split(&((z_t105_StringView_t){ atgt0.data, atgt0.size }), &_zs1358);
+                z_t3590_Splitter_t pit = z_t105_StringView_split(&((z_t105_StringView_t){ atgt0.data, atgt0.size }), &_zs1358);
                 while (1) {
-                    z_t754_Option_StringView_t _iter1 = z_t3591_Splitter_call(&pit);
+                    z_t754_Option_StringView_t _iter1 = z_t3590_Splitter_call(&pit);
                     if (_iter1.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter1); break; }
                     z_t105_StringView_t pseg = *(z_t105_StringView_t*)_iter1.data;
                     free(_iter1.data);
@@ -53885,9 +53879,9 @@ uint64_t z_t2522_resolveAliasKey(z_t1633_ZTyping_t* ty, z_t1412_ZTypeRegistry_t*
     }
     z_t74_String_t tu9 = ((z_t74_String_t){0});
     z_t74_String_t tn9 = ((z_t74_String_t){0});
-    z_t3591_Splitter_t sit9 = z_t105_StringView_split(&((z_t105_StringView_t){ tgt9.data, tgt9.size }), &_zs1581);
+    z_t3590_Splitter_t sit9 = z_t105_StringView_split(&((z_t105_StringView_t){ tgt9.data, tgt9.size }), &_zs1581);
     while (1) {
-        z_t754_Option_StringView_t _iter3 = z_t3591_Splitter_call(&sit9);
+        z_t754_Option_StringView_t _iter3 = z_t3590_Splitter_call(&sit9);
         if (_iter3.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter3); break; }
         z_t105_StringView_t seg9 = *(z_t105_StringView_t*)_iter3.data;
         free(_iter3.data);
@@ -58541,7 +58535,7 @@ void z_t2631_cloneMethodInto(z_t1067_Ast_t* ast, z_t1633_ZTyping_t* ty, z_t1412_
     z_t1422_List_u64_t cI5 = z_t1422_List_u64_create((uint64_t)0);
     z_t1422_List_u64_t cNid5 = z_t1422_List_u64_create((uint64_t)0);
     z_t1439_List_bool_t cOh5 = z_t1439_List_bool_create((uint64_t)0);
-    z_t3766_List_zparamownership_t cOv5 = z_t3766_List_zparamownership_create((uint64_t)0);
+    z_t3765_List_zparamownership_t cOv5 = z_t3765_List_zparamownership_create((uint64_t)0);
     (void)(z_t1984_ZTyping_declMemberList(ty, tplFnId, &cNid5, &cI5));
     uint64_t cq5 = ((uint64_t)0);
     uint64_t cqn5 = cNid5.length;
@@ -58566,12 +58560,12 @@ void z_t2631_cloneMethodInto(z_t1067_Ast_t* ast, z_t1633_ZTyping_t* ty, z_t1412_
                 (void)oo5;
                 (void)(z_t1439_List_bool_append(&cOh5, true));
                 z_t1771_zparamownership_t ov5c = oo5;
-                (void)(z_t3766_List_zparamownership_append(&cOv5, ov5c));
+                (void)(z_t3765_List_zparamownership_append(&cOv5, ov5c));
                 break;
             }
             case Z_OPTIONVAL_ZPARAMOWNERSHIP_TAG_NONE: {
                 (void)(z_t1439_List_bool_append(&cOh5, false));
-                (void)(z_t3766_List_zparamownership_append(&cOv5, ((z_t1771_zparamownership_t){ .tag = Z_ZPARAMOWNERSHIP_TAG_BORROWMODE })));
+                (void)(z_t3765_List_zparamownership_append(&cOv5, ((z_t1771_zparamownership_t){ .tag = Z_ZPARAMOWNERSHIP_TAG_BORROWMODE })));
                 break;
             }
             default: break;
@@ -58623,7 +58617,7 @@ void z_t2631_cloneMethodInto(z_t1067_Ast_t* ast, z_t1633_ZTyping_t* ty, z_t1412_
         }
         (void)(z_t1992_ZTyping_setMemberType(ty, fid5, ((uint64_t)z_t1217_poolFind(&ast->names, ((z_t105_StringView_t){ (*__borrow_pnm5).data, (*__borrow_pnm5).size }))), tgt5));
         if (z_t1439_List_bool_get(&cOh5, pi5)) {
-            z_t1771_zparamownership_t pov5 = z_t3766_List_zparamownership_get(&cOv5, pi5);
+            z_t1771_zparamownership_t pov5 = z_t3765_List_zparamownership_get(&cOv5, pi5);
             (void)(z_t2005_ZTyping_setChildOwnership(ty, &ast->names, fid5, ((z_t105_StringView_t){ (*__borrow_pnm5).data, (*__borrow_pnm5).size }), pov5));
         }
         pi5 = (pi5 + 1);
@@ -58674,7 +58668,7 @@ void z_t2631_cloneMethodInto(z_t1067_Ast_t* ast, z_t1633_ZTyping_t* ty, z_t1412_
     z_t1422_List_u64_destroy(&cI5);
     z_t1422_List_u64_destroy(&cNid5);
     z_t1439_List_bool_destroy(&cOh5);
-    z_t3766_List_zparamownership_destroy(&cOv5);
+    z_t3765_List_zparamownership_destroy(&cOv5);
 }
 
 uint64_t z_t2632_respecialize(z_t1067_Ast_t* ast, z_t1633_ZTyping_t* ty, z_t1412_ZTypeRegistry_t* reg, z_t105_StringView_t mainName, uint64_t specTid, z_t1358_Map_u64_u64_t* idSubs) {
@@ -62076,8 +62070,8 @@ uint64_t z_t2684_checkDotted(z_t1267_ZSymbolTable_t* st, z_t105_StringView_t uni
                     if (z_t2424_isNumericTypeName(((z_t105_StringView_t){ castChild.data, castChild.size }))) {
                         bool isChar9c = z_t105_StringView_startsWith(&((z_t105_StringView_t){ castBase.data, castBase.size }), &_zs1874);
                         if ((isChar9c == false)) {
-                            z_t3702_suffixinfo_t nk9c = z_t2362_numkindByName(((z_t105_StringView_t){ castChild.data, castChild.size }));
-                            z_t3710_ParsedNumber_t pn9c = z_t2369_parseNumberAs(((z_t105_StringView_t){ castBase.data, castBase.size }), nk9c.kind);
+                            z_t3701_suffixinfo_t nk9c = z_t2362_numkindByName(((z_t105_StringView_t){ castChild.data, castChild.size }));
+                            z_t3709_ParsedNumber_t pn9c = z_t2369_parseNumberAs(((z_t105_StringView_t){ castBase.data, castBase.size }), nk9c.kind);
                             if ((pn9c.err.size > 0)) {
                                 (void)(z_t2388_addError(st, dp->nodeid, dp->lineno, dp->colno, ((z_t876_err_t){ .tag = Z_ERR_TAG_TYPEERROR }), &pn9c.err));
                             } else {
@@ -62087,7 +62081,7 @@ uint64_t z_t2684_checkDotted(z_t1267_ZSymbolTable_t* st, z_t105_StringView_t uni
                                     if (baseDot9c) {
                                         exact9c = z_t2360_floatFitsFloat(pn9c.fval, pn9c.kind);
                                     } else {
-                                        z_t3710_ParsedNumber_t ivp9c = z_t2368_parseNumber(((z_t105_StringView_t){ castBase.data, castBase.size }));
+                                        z_t3709_ParsedNumber_t ivp9c = z_t2368_parseNumber(((z_t105_StringView_t){ castBase.data, castBase.size }));
                                         z_t379_resultval_i64_convError_t ivr9c = ({ uint64_t _v = ivp9c.ival; z_t379_resultval_i64_convError_t _r = {0}; if (_v > 9223372036854775807) { _r.tag = Z_RESULTVAL_I64_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_I64_CONVERROR_TAG_OK; _r.data.ok = (int64_t)_v; } _r; });
                                         z_t379_resultval_i64_convError_t _m1 = ivr9c;
                                         switch (_m1.tag) {
@@ -62105,7 +62099,7 @@ uint64_t z_t2684_checkDotted(z_t1267_ZSymbolTable_t* st, z_t105_StringView_t uni
                                             }
                                             default: break;
                                         }
-    z_t3710_ParsedNumber_destroy(&ivp9c);
+    z_t3709_ParsedNumber_destroy(&ivp9c);
                                     }
                                     if ((exact9c == false)) {
                                         z_t74_String_t _s2 = z_t74_String_create((uint64_t)68);
@@ -62119,7 +62113,7 @@ uint64_t z_t2684_checkDotted(z_t1267_ZSymbolTable_t* st, z_t105_StringView_t uni
                                     }
                                 }
                             }
-    z_t3710_ParsedNumber_destroy(&pn9c);
+    z_t3709_ParsedNumber_destroy(&pn9c);
                         }
                     }
                     z_t1068_Node_t _ah460 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(dp->parent - 1)));
@@ -62142,11 +62136,11 @@ uint64_t z_t2684_checkDotted(z_t1267_ZSymbolTable_t* st, z_t105_StringView_t uni
     z_t74_String_free(&castChild);
     }
     bool supPrev9 = st->typing.suppressBareCtor;
-    z_t3606_astkind_t dpk9 = z_t1235_kindOf(ast, dp->parent);
-    if (z_t3606_astkind_eq(dpk9, ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_ATOMID }))) {
+    z_t3605_astkind_t dpk9 = z_t1235_kindOf(ast, dp->parent);
+    if (z_t3605_astkind_eq(dpk9, ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_ATOMID }))) {
         st->typing.suppressBareCtor = true;
     }
-    if (z_t3606_astkind_eq(dpk9, ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_DOTTEDPATH }))) {
+    if (z_t3605_astkind_eq(dpk9, ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_DOTTEDPATH }))) {
         st->typing.suppressBareCtor = true;
     }
     bool supFnPrev9 = st->typing.suppressFnAutoCall;
@@ -63603,7 +63597,7 @@ uint64_t z_t2685_checkAtomid(z_t1267_ZSymbolTable_t* st, z_t105_StringView_t uni
     z_t74_String_free(&nmc9);
             }
             if (z_t2425_isNumericLiteralName(((z_t105_StringView_t){ (*__borrow_ndNm9).data, (*__borrow_ndNm9).size }))) {
-                z_t3702_suffixinfo_t sfR9 = z_t2363_suffixInfoOf(((z_t105_StringView_t){ (*__borrow_ndNm9).data, (*__borrow_ndNm9).size }));
+                z_t3701_suffixinfo_t sfR9 = z_t2363_suffixInfoOf(((z_t105_StringView_t){ (*__borrow_ndNm9).data, (*__borrow_ndNm9).size }));
                 bool rejS9 = false;
                 if (sfR9.has) {
                     rejS9 = true;
@@ -67610,7 +67604,7 @@ uint64_t z_t2763_checkCall(z_t1267_ZSymbolTable_t* st, z_t105_StringView_t unitN
             default: break;
         }
     } else {
-        bool isWrapCall = z_t3606_astkind_eq(z_t1235_kindOf(ast, call->callable), ((z_t3606_astkind_t){ .tag = Z_ASTKIND_TAG_EXPRESSION }));
+        bool isWrapCall = z_t3605_astkind_eq(z_t1235_kindOf(ast, call->callable), ((z_t3605_astkind_t){ .tag = Z_ASTKIND_TAG_EXPRESSION }));
         if (isWrapCall) {
             z_t1068_Node_t xq119 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(call->callable - 1)));
             uint64_t wcv = z_t2769_checkValue(st, unitName, ast, unitBody, xq119);
@@ -73757,9 +73751,9 @@ z_t169_optionval_u64_t z_t2837_childOfWalk(z_t1067_Ast_t* ast, z_t1633_ZTyping_t
     uint64_t cur = ((uint64_t)0);
     bool started = false;
     bool ok = true;
-    z_t3591_Splitter_t it = z_t105_StringView_split(&((z_t105_StringView_t){ key->data, key->size }), &_zs2109);
+    z_t3590_Splitter_t it = z_t105_StringView_split(&((z_t105_StringView_t){ key->data, key->size }), &_zs2109);
     while (1) {
-        z_t754_Option_StringView_t _iter4 = z_t3591_Splitter_call(&it);
+        z_t754_Option_StringView_t _iter4 = z_t3590_Splitter_call(&it);
         if (_iter4.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter4); break; }
         z_t105_StringView_t seg = *(z_t105_StringView_t*)_iter4.data;
         free(_iter4.data);
@@ -73826,9 +73820,9 @@ z_t169_optionval_u64_t z_t2838_resolvedByKey(z_t1067_Ast_t* ast, z_t1633_ZTyping
     z_t74_String_t au = ((z_t74_String_t){0});
     z_t74_String_t an = ((z_t74_String_t){0});
     uint64_t segs9 = ((uint64_t)0);
-    z_t3591_Splitter_t sk = z_t105_StringView_split(&((z_t105_StringView_t){ key->data, key->size }), &_zs2110);
+    z_t3590_Splitter_t sk = z_t105_StringView_split(&((z_t105_StringView_t){ key->data, key->size }), &_zs2110);
     while (1) {
-        z_t754_Option_StringView_t _iter1 = z_t3591_Splitter_call(&sk);
+        z_t754_Option_StringView_t _iter1 = z_t3590_Splitter_call(&sk);
         if (_iter1.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter1); break; }
         z_t105_StringView_t sg = *(z_t105_StringView_t*)_iter1.data;
         free(_iter1.data);
@@ -78817,8 +78811,8 @@ z_t74_String_t z_t2946_readTemplateCached(z_t2947_Ctx_t* ctx, z_t105_StringView_
         return cached9;
     }
     z_t74_String_t txt = ((z_t74_String_t){0});
-    z_t3495_Result_String_IoError_t rd = z_io_readText(path);
-    z_t3495_Result_String_IoError_t _m2 = rd;
+    z_t3494_Result_String_IoError_t rd = z_io_readText(path);
+    z_t3494_Result_String_IoError_t _m2 = rd;
     switch (_m2.tag) {
         case Z_RESULT_STRING_IOERROR_TAG_OK: {
             /* alias: rd => (*(z_t74_String_t*)_m2.data) */
@@ -78837,13 +78831,13 @@ z_t74_String_t z_t2946_readTemplateCached(z_t2947_Ctx_t* ctx, z_t105_StringView_
     z_t74_String_free(&cached9);
     z_t74_String_free(&_ah880);
     z_t944_OptionView_String_destroy(&got);
-    z_t3495_Result_String_IoError_destroy(&rd);
+    z_t3494_Result_String_IoError_destroy(&rd);
     return txt;
     z_t74_String_free(&cached9);
     z_t74_String_free(&txt);
     z_t74_String_free(&_ah880);
     z_t944_OptionView_String_destroy(&got);
-    z_t3495_Result_String_IoError_destroy(&rd);
+    z_t3494_Result_String_IoError_destroy(&rd);
 }
 
 void z_t2987_emitFail(z_t2947_Ctx_t* ctx, z_t74_String_t* what, uint32_t line) {
@@ -78871,15 +78865,15 @@ void z_t2987_emitFail(z_t2947_Ctx_t* ctx, z_t74_String_t* what, uint32_t line) {
 }
 
 z_t74_String_t z_t2988_loadFragment(z_t105_StringView_t path, z_t105_StringView_t svC, z_t105_StringView_t strC, z_t989_List_String_t* fails) {
-    z_t3495_Result_String_IoError_t rd = z_io_readText(path);
-    z_t3495_Result_String_IoError_t _m0 = rd;
+    z_t3494_Result_String_IoError_t rd = z_io_readText(path);
+    z_t3494_Result_String_IoError_t _m0 = rd;
     switch (_m0.tag) {
         case Z_RESULT_STRING_IOERROR_TAG_OK: {
             /* alias: rd => (*(z_t74_String_t*)_m0.data) */
             z_t74_String_t s1 = z_t2945_substituteAll(&(*(z_t74_String_t*)_m0.data), _zs2333, svC);
             z_t74_String_t s2 = z_t2945_substituteAll(&s1, _zs2334, strC);
             z_t74_String_free(&s1);
-    z_t3495_Result_String_IoError_destroy(&rd);
+    z_t3494_Result_String_IoError_destroy(&rd);
             return s2;
     z_t74_String_free(&s2);
     z_t74_String_free(&s1);
@@ -78900,7 +78894,7 @@ z_t74_String_t z_t2988_loadFragment(z_t105_StringView_t path, z_t105_StringView_
             z_t74_String_append(&_s3, "\n", sizeof("\n")-1);
             z_t74_String_t m9 = _s3;
             z_t74_String_free(&f9);
-    z_t3495_Result_String_IoError_destroy(&rd);
+    z_t3494_Result_String_IoError_destroy(&rd);
             return m9;
     z_t74_String_free(&m9);
     z_t74_String_free(&f9);
@@ -78909,7 +78903,7 @@ z_t74_String_t z_t2988_loadFragment(z_t105_StringView_t path, z_t105_StringView_
         default: z_unreachable();
     }
     /* post-guard alias: rd => (*(z_t1256_IoError_t*)rd.data) */
-    z_t3495_Result_String_IoError_destroy(&rd);
+    z_t3494_Result_String_IoError_destroy(&rd);
 }
 
 z_t74_String_t z_t2989_chunkText9(z_t1068_Node_t n) {
@@ -79766,11 +79760,10 @@ z_t74_String_t z_t3027_takeAliasBase(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t*
             z_t1068_Node_t _ah915 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1079_DottedPathData_t*)_m0.data).parent - 1)));
             uint64_t bnid9 = z_t2998_atomNodeId9(_ah915);
             uint64_t bt9 = z_t2999_stampIdOf(symtab, bnid9);
-            z_t74_String_t bo9 = z_t3302_monoOriginName(symtab, bt9);
-            if ((bo9.size != 0)) {
+            uint64_t bo9 = z_t3010_originTidOf(symtab, bt9);
+            if ((bo9 > 0)) {
                 z_t74_String_t _ret2 = z_t74_String_from_view(_zs2346);
                 z_t74_String_free(&cn9);
-                z_t74_String_free(&bo9);
                 return _ret2;
             }
             z_t1414_ztypetype_t btt9 = z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, bt9);
@@ -79788,15 +79781,12 @@ z_t74_String_t z_t3027_takeAliasBase(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t*
                 z_t1068_Node_t _ah916 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1079_DottedPathData_t*)_m0.data).parent - 1)));
                 z_t74_String_t _ret3 = z_t2996_atomTextOf(ast, _ah916);
                 z_t74_String_free(&cn9);
-                z_t74_String_free(&bo9);
                 return _ret3;
             } else {
                 z_t74_String_t _ret4 = z_t74_String_from_view(_zs2347);
                 z_t74_String_free(&cn9);
-                z_t74_String_free(&bo9);
                 return _ret4;
             }
-    z_t74_String_free(&bo9);
     z_t74_String_free(&cn9);
             break;
         }
@@ -80184,14 +80174,12 @@ bool z_t3035_isCtorOwnerCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab,
         uint64_t uctO = z_t3170_resolveTypeIdByName(ast, symtab, ctx, ((z_t105_StringView_t){ bnO.data, bnO.size }));
         if ((uctO > 0)) {
             if (z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, uctO), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_UNIONTYPE }))) {
-                z_t74_String_t monoLk1 = z_t3302_monoOriginName(symtab, uctO);
-                if ((monoLk1.size == 0)) {
+                uint64_t monoLk1 = z_t3010_originTidOf(symtab, uctO);
+                if ((monoLk1 == 0)) {
                     z_t74_String_free(&bnO);
                     z_t74_String_free(&mcO9);
-                    z_t74_String_free(&monoLk1);
                     return true;
                 }
-    z_t74_String_free(&monoLk1);
             }
         }
     }
@@ -81976,13 +81964,12 @@ z_t74_String_t z_t3071_emitInstanceMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbo
         z_t74_String_free(&recvExpr);
         return _ret3;
     }
-    z_t74_String_t monoLk2 = z_t3302_monoOriginName(symtab, rtid);
-    if ((monoLk2.size > 0)) {
+    uint64_t monoLk2 = z_t3010_originTidOf(symtab, rtid);
+    if ((monoLk2 > 0)) {
         if ((z_t3230_isUserClassMonoTid(symtab, ctx, rtid) == false)) {
             z_t74_String_t _ret4 = z_t74_String_from_view(_zs2473);
             z_t74_String_free(&mn);
             z_t74_String_free(&recvExpr);
-            z_t74_String_free(&monoLk2);
             return _ret4;
         }
     }
@@ -81995,7 +81982,6 @@ z_t74_String_t z_t3071_emitInstanceMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbo
                 z_t74_String_t _ret6 = z_t74_String_from_view(_zs2475);
                 z_t74_String_free(&mn);
                 z_t74_String_free(&recvExpr);
-                z_t74_String_free(&monoLk2);
     z_t947_Option_String_destroy(&rdu9);
                 return _ret6;
             }
@@ -82003,7 +81989,6 @@ z_t74_String_t z_t3071_emitInstanceMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbo
                 z_t74_String_t _ret7 = z_t74_String_from_view(_zs2477);
                 z_t74_String_free(&mn);
                 z_t74_String_free(&recvExpr);
-                z_t74_String_free(&monoLk2);
     z_t947_Option_String_destroy(&rdu9);
                 return _ret7;
             }
@@ -82011,7 +81996,6 @@ z_t74_String_t z_t3071_emitInstanceMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbo
                 z_t74_String_t _ret8 = z_t74_String_from_view(_zs2479);
                 z_t74_String_free(&mn);
                 z_t74_String_free(&recvExpr);
-                z_t74_String_free(&monoLk2);
     z_t947_Option_String_destroy(&rdu9);
                 return _ret8;
             }
@@ -82019,7 +82003,6 @@ z_t74_String_t z_t3071_emitInstanceMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbo
                 z_t74_String_t _ret9 = z_t74_String_from_view(_zs2481);
                 z_t74_String_free(&mn);
                 z_t74_String_free(&recvExpr);
-                z_t74_String_free(&monoLk2);
     z_t947_Option_String_destroy(&rdu9);
                 return _ret9;
             }
@@ -82027,7 +82010,6 @@ z_t74_String_t z_t3071_emitInstanceMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbo
                 z_t74_String_t _ret10 = z_t74_String_from_view(_zs2483);
                 z_t74_String_free(&mn);
                 z_t74_String_free(&recvExpr);
-                z_t74_String_free(&monoLk2);
     z_t947_Option_String_destroy(&rdu9);
                 return _ret10;
             }
@@ -82264,7 +82246,6 @@ z_t74_String_t z_t3071_emitInstanceMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbo
                 z_t74_String_t r9 = _s31;
                 z_t74_String_free(&mn);
                 z_t74_String_free(&recvExpr);
-                z_t74_String_free(&monoLk2);
                 z_t74_String_free(&mcn9);
                 z_t74_String_free(&recvNm9);
                 z_t74_String_free(&tpnm9);
@@ -82293,12 +82274,10 @@ z_t74_String_t z_t3071_emitInstanceMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbo
     z_t74_String_t _ret34 = z_t74_String_from_view(_zs2486);
     z_t74_String_free(&mn);
     z_t74_String_free(&recvExpr);
-    z_t74_String_free(&monoLk2);
     z_t947_Option_String_destroy(&rdu9);
     return _ret34;
     z_t74_String_free(&mn);
     z_t74_String_free(&recvExpr);
-    z_t74_String_free(&monoLk2);
     z_t947_Option_String_destroy(&rdu9);
 }
 
@@ -82823,25 +82802,21 @@ z_t74_String_t z_t3081_emitEmptyColCreate(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
     }
     uint64_t mid9 = z_t2999_stampIdOf(symtab, ((uint64_t)call->nodeid));
     mid9 = z_t3246_chaseColMono(symtab, ctx, mid9);
-    z_t74_String_t monoLk3 = z_t3302_monoOriginName(symtab, mid9);
-    if ((monoLk3.size <= 0)) {
-        z_t74_String_t _ret4 = z_t74_String_from_view(_zs2510);
-        z_t74_String_free(&monoLk3);
-        return _ret4;
+    uint64_t monoLk3 = z_t3010_originTidOf(symtab, mid9);
+    if ((monoLk3 == 0)) {
+        return z_t74_String_from_view(_zs2510);
     }
     z_t74_String_t cb9 = z_t1588_ZTypeRegistry_cnameOf(&symtab->reg, mid9);
     z_t1068_Node_t _ah1008 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(call->nodeid - 1)));
     z_t74_String_t ccap9 = z_t3056_listCapArg(ast, symtab, ctx, _ah1008);
-    z_t74_String_t _s5 = z_t74_String_create((uint64_t)51);
-    z_t74_String_append(&_s5, cb9.data, cb9.size);
-    z_t74_String_append(&_s5, "_create((uint64_t)", sizeof("_create((uint64_t)")-1);
-    z_t74_String_append(&_s5, ccap9.data, ccap9.size);
-    z_t74_String_append(&_s5, ")", sizeof(")")-1);
-    z_t74_String_free(&monoLk3);
+    z_t74_String_t _s4 = z_t74_String_create((uint64_t)51);
+    z_t74_String_append(&_s4, cb9.data, cb9.size);
+    z_t74_String_append(&_s4, "_create((uint64_t)", sizeof("_create((uint64_t)")-1);
+    z_t74_String_append(&_s4, ccap9.data, ccap9.size);
+    z_t74_String_append(&_s4, ")", sizeof(")")-1);
     z_t74_String_free(&cb9);
     z_t74_String_free(&ccap9);
-    return _s5;
-    z_t74_String_free(&monoLk3);
+    return _s4;
     z_t74_String_free(&cb9);
     z_t74_String_free(&ccap9);
 }
@@ -83838,8 +83813,8 @@ z_t74_String_t z_t3098_emitUnionCtor(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t*
         return _ret1;
     }
     uint64_t smid0 = z_t2999_stampIdOf(symtab, ((uint64_t)call->nodeid));
-    z_t74_String_t smOrig9 = z_t3302_monoOriginName(symtab, smid0);
-    if ((smOrig9.size > 0)) {
+    uint64_t smOrig9 = z_t3010_originTidOf(symtab, smid0);
+    if ((smOrig9 > 0)) {
         bool sysU9 = false;
         if (z_t3011_originIsTid(symtab, smid0, ctx->optionvalOriginTid)) {
             sysU9 = true;
@@ -83857,7 +83832,6 @@ z_t74_String_t z_t3098_emitUnionCtor(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t*
             z_t74_String_t _ret2 = z_t74_String_from_view(_zs2587);
             z_t74_String_free(&bn);
             z_t74_String_free(&mn);
-            z_t74_String_free(&smOrig9);
             return _ret2;
         }
     }
@@ -83866,18 +83840,16 @@ z_t74_String_t z_t3098_emitUnionCtor(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t*
         z_t74_String_t _ret3 = z_t74_String_from_view(_zs2588);
         z_t74_String_free(&bn);
         z_t74_String_free(&mn);
-        z_t74_String_free(&smOrig9);
         return _ret3;
     }
     if (!z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, utid), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_UNIONTYPE }))) {
         z_t74_String_t _ret4 = z_t74_String_from_view(_zs2589);
         z_t74_String_free(&bn);
         z_t74_String_free(&mn);
-        z_t74_String_free(&smOrig9);
         return _ret4;
     }
     uint64_t ctid9 = utid;
-    if ((smOrig9.size > 0) && z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, smid0), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_UNIONTYPE }))) {
+    if ((smOrig9 > 0) && z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, smid0), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_UNIONTYPE }))) {
         ctid9 = smid0;
     }
     z_t74_String_t vc = z_t1588_ZTypeRegistry_cnameOf(&symtab->reg, ctid9);
@@ -83933,7 +83905,6 @@ z_t74_String_t z_t3098_emitUnionCtor(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t*
         z_t74_String_t e = _s9;
         z_t74_String_free(&bn);
         z_t74_String_free(&mn);
-        z_t74_String_free(&smOrig9);
         z_t74_String_free(&vc);
         z_t74_String_free(&tg);
         z_t74_String_free(&payC);
@@ -83951,7 +83922,6 @@ z_t74_String_t z_t3098_emitUnionCtor(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t*
         z_t74_String_t e2 = _s16;
         z_t74_String_free(&bn);
         z_t74_String_free(&mn);
-        z_t74_String_free(&smOrig9);
         z_t74_String_free(&vc);
         z_t74_String_free(&tg);
         z_t74_String_free(&payC);
@@ -83960,7 +83930,6 @@ z_t74_String_t z_t3098_emitUnionCtor(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t*
     }
     z_t74_String_free(&bn);
     z_t74_String_free(&mn);
-    z_t74_String_free(&smOrig9);
     z_t74_String_free(&vc);
     z_t74_String_free(&tg);
     z_t74_String_free(&payC);
@@ -85403,17 +85372,15 @@ z_t74_String_t z_t3122_emitGenericFnCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTabl
         z_t74_String_free(&gdc9);
         return _ret2;
     }
-    z_t74_String_t gmo9 = z_t3302_monoOriginName(symtab, gmf9);
-    if ((gmo9.size == 0)) {
+    uint64_t gmo9 = z_t3010_originTidOf(symtab, gmf9);
+    if ((gmo9 == 0)) {
         z_t74_String_t _ret3 = z_t74_String_from_view(_zs2644);
         z_t74_String_free(&gdc9);
-        z_t74_String_free(&gmo9);
         return _ret3;
     }
     if (z_t3121_fnIsNativeId(symtab, gmf9)) {
         z_t74_String_t _ret4 = z_t74_String_from_view(_zs2645);
         z_t74_String_free(&gdc9);
-        z_t74_String_free(&gmo9);
         return _ret4;
     }
     z_t74_String_t fc9 = z_t1588_ZTypeRegistry_cnameOf(&symtab->reg, gmf9);
@@ -85539,7 +85506,6 @@ z_t74_String_t z_t3122_emitGenericFnCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTabl
     z_t74_String_append(&_s12, ")", sizeof(")")-1);
     z_t74_String_t e9 = _s12;
     z_t74_String_free(&gdc9);
-    z_t74_String_free(&gmo9);
     z_t74_String_free(&fc9);
     z_t74_String_free(&args9);
     z_t989_List_String_destroy(&fpNames9);
@@ -85549,7 +85515,6 @@ z_t74_String_t z_t3122_emitGenericFnCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTabl
     z_t1712_Map_u64_String_destroy(valBySlot9g);
     return e9;
     z_t74_String_free(&gdc9);
-    z_t74_String_free(&gmo9);
     z_t74_String_free(&fc9);
     z_t74_String_free(&args9);
     z_t74_String_free(&e9);
@@ -85569,26 +85534,23 @@ z_t74_String_t z_t3123_emitUnitMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
     if (!z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, rsid9), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_UNITTYPE }))) {
         return z_t74_String_from_view(_zs2648);
     }
-    z_t74_String_t rmo9 = z_t3302_monoOriginName(symtab, rsid9);
-    if ((rmo9.size == 0)) {
-        z_t74_String_t _ret0 = z_t74_String_from_view(_zs2649);
-        z_t74_String_free(&rmo9);
-        return _ret0;
+    uint64_t rmo9 = z_t3010_originTidOf(symtab, rsid9);
+    if ((rmo9 == 0)) {
+        return z_t74_String_from_view(_zs2649);
     }
     z_t1068_Node_t _ah1052 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(call->callable - 1)));
     z_t74_String_t child9 = z_t3047_aliasChildName(ast, symtab, _ah1052);
     if ((child9.size == 0)) {
-        z_t74_String_t _ret1 = z_t74_String_from_view(_zs2650);
-        z_t74_String_free(&rmo9);
+        z_t74_String_t _ret0 = z_t74_String_from_view(_zs2650);
         z_t74_String_free(&child9);
-        return _ret1;
+        return _ret0;
     }
     z_t169_optionval_u64_t co9 = z_t1969_ZTyping_declChildOf(&symtab->typing, &ast->names, rsid9, ((z_t105_StringView_t){ child9.data, child9.size }));
     uint64_t fid9 = ((uint64_t)0);
-    z_t169_optionval_u64_t _m2 = co9;
-    switch (_m2.tag) {
+    z_t169_optionval_u64_t _m1 = co9;
+    switch (_m1.tag) {
         case Z_OPTIONVAL_U64_TAG_SOME: {
-            uint64_t co9 = _m2.data.some;
+            uint64_t co9 = _m1.data.some;
             (void)co9;
             fid9 = co9;
             break;
@@ -85599,16 +85561,14 @@ z_t74_String_t z_t3123_emitUnitMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
         default: break;
     }
     if ((fid9 == 0)) {
-        z_t74_String_t _ret3 = z_t74_String_from_view(_zs2651);
-        z_t74_String_free(&rmo9);
+        z_t74_String_t _ret2 = z_t74_String_from_view(_zs2651);
         z_t74_String_free(&child9);
-        return _ret3;
+        return _ret2;
     }
     if (!z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, fid9), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }))) {
-        z_t74_String_t _ret4 = z_t74_String_from_view(_zs2652);
-        z_t74_String_free(&rmo9);
+        z_t74_String_t _ret3 = z_t74_String_from_view(_zs2652);
         z_t74_String_free(&child9);
-        return _ret4;
+        return _ret3;
     }
     z_t74_String_t fc9 = z_t1588_ZTypeRegistry_cnameOf(&symtab->reg, fid9);
     z_t989_List_String_t fpNames9 = z_t989_List_String_create((uint64_t)0);
@@ -85620,28 +85580,28 @@ z_t74_String_t z_t3123_emitUnitMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
     uint64_t ai9 = ((uint64_t)0);
     z_t1050_ListIter_u32_t aiter9 = z_t1036_List_u32_iterate(&call->arguments);
     while (1) {
-        z_t927_OptionView_u32_t _iter5 = z_t1050_ListIter_u32_call(&aiter9);
-        if (_iter5.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
-        uint32_t a9Id9 = *(uint32_t*)_iter5.data;
+        z_t927_OptionView_u32_t _iter4 = z_t1050_ListIter_u32_call(&aiter9);
+        if (_iter4.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
+        uint32_t a9Id9 = *(uint32_t*)_iter4.data;
         z_t1068_Node_t a9 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(a9Id9 - 1)));
-        z_t1068_Node_t _m6 = a9;
-        switch (_m6.tag) {
+        z_t1068_Node_t _m5 = a9;
+        switch (_m5.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: a9 => (*(z_t1085_NamedOperationData_t*)_m6.data) */
-                z_t1068_Node_t opf2079 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m6.data).operation - 1)));
-                z_t1068_Node_t opf2069 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m6.data).operation - 1)));
+                /* alias: a9 => (*(z_t1085_NamedOperationData_t*)_m5.data) */
+                z_t1068_Node_t opf2079 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m5.data).operation - 1)));
+                z_t1068_Node_t opf2069 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m5.data).operation - 1)));
                 uint64_t slot9g = z_t1422_List_u64_get(&slots9g, ai9);
                 if ((slot9g < fpNames9.length)) {
                     uint64_t fpid9 = z_t1422_List_u64_get(&fpIds9, slot9g);
                     __auto_type __borrow_fpnO9 = &(*z_t989_List_String_get(&fpNames9, slot9g));
                     /* alias: fpnO9 => (*__borrow_fpnO9) */
-                    z_t1068_Node_t _ah1053 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m6.data).operation - 1)));
+                    z_t1068_Node_t _ah1053 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m5.data).operation - 1)));
                     z_t74_String_t iav9 = z_t3091_emitInterpArgForParam(ast, symtab, ctx, _ah1053, fid9, ((z_t105_StringView_t){ (*__borrow_fpnO9).data, (*__borrow_fpnO9).size }), fpid9);
                     if ((iav9.size > 0)) {
                         (void)(z_t1712_Map_u64_String_set(valBySlot9g, slot9g, iav9));
                         iav9 = (z_t74_String_t){0};
                     } else {
-                        z_t1068_Node_t _ah1054 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m6.data).operation - 1)));
+                        z_t1068_Node_t _ah1054 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m5.data).operation - 1)));
                         z_t74_String_t av9 = z_t3137_emitExpr(ast, symtab, ctx, _ah1054);
                         bool byref9 = false;
                         z_t74_String_t argRef9 = ((z_t74_String_t){0});
@@ -85661,27 +85621,27 @@ z_t74_String_t z_t3123_emitUnitMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
                         if (ptra9) {
                             if ((z_t3016_isPtrVar(ctx, ((z_t105_StringView_t){ av9.data, av9.size })) == false)) {
                                 byref9 = true;
-                                z_t74_String_t _rr7 = z_t3120_emitByrefArg(ast, symtab, ctx, ((z_t105_StringView_t){ av9.data, av9.size }), fpid9, z_t3074_hoistExprIsBorrowRooted(ast, symtab, ctx, opf2069));
+                                z_t74_String_t _rr6 = z_t3120_emitByrefArg(ast, symtab, ctx, ((z_t105_StringView_t){ av9.data, av9.size }), fpid9, z_t3074_hoistExprIsBorrowRooted(ast, symtab, ctx, opf2069));
                                 z_t74_String_free(&argRef9);
-                                argRef9 = _rr7;
+                                argRef9 = _rr6;
                             }
                         }
                         z_t74_String_t vbh9x = ((z_t74_String_t){0});
                         if ((ptra9 == false)) {
-                            z_t74_String_t _rr8 = z_t3070_hoistBorrowValArg(ast, symtab, ctx, ((z_t105_StringView_t){ av9.data, av9.size }), fpid9, z_t1977_ZTyping_declOwnershipIs(&symtab->typing, &ast->names, fid9, ((z_t105_StringView_t){ (*__borrow_fpnO9).data, (*__borrow_fpnO9).size }), ((z_t1771_zparamownership_t){ .tag = Z_ZPARAMOWNERSHIP_TAG_TAKEMODE })), z_t3074_hoistExprIsBorrowRooted(ast, symtab, ctx, opf2079));
+                            z_t74_String_t _rr7 = z_t3070_hoistBorrowValArg(ast, symtab, ctx, ((z_t105_StringView_t){ av9.data, av9.size }), fpid9, z_t1977_ZTyping_declOwnershipIs(&symtab->typing, &ast->names, fid9, ((z_t105_StringView_t){ (*__borrow_fpnO9).data, (*__borrow_fpnO9).size }), ((z_t1771_zparamownership_t){ .tag = Z_ZPARAMOWNERSHIP_TAG_TAKEMODE })), z_t3074_hoistExprIsBorrowRooted(ast, symtab, ctx, opf2079));
                             z_t74_String_free(&vbh9x);
-                            vbh9x = _rr8;
+                            vbh9x = _rr7;
                         }
                         z_t74_String_t finalS9g = z_t74_String_copy(&av9);
                         if (byref9) {
-                            z_t74_String_t _rr9 = z_t74_String_copy(&argRef9);
+                            z_t74_String_t _rr8 = z_t74_String_copy(&argRef9);
                             z_t74_String_free(&finalS9g);
-                            finalS9g = _rr9;
+                            finalS9g = _rr8;
                         } else {
                             if ((vbh9x.size > 0)) {
-                                z_t74_String_t _rr10 = z_t74_String_copy(&vbh9x);
+                                z_t74_String_t _rr9 = z_t74_String_copy(&vbh9x);
                                 z_t74_String_free(&finalS9g);
-                                finalS9g = _rr10;
+                                finalS9g = _rr9;
                             }
                         }
                         (void)(z_t1712_Map_u64_String_set(valBySlot9g, slot9g, finalS9g));
@@ -85707,14 +85667,14 @@ z_t74_String_t z_t3123_emitUnitMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
     uint64_t ppn9g = fpNames9.length;
     while ((pp9g < ppn9g)) {
         z_t944_OptionView_String_t vo9g = z_t1712_Map_u64_String_get(valBySlot9g, pp9g);
-        z_t944_OptionView_String_t _m11 = vo9g;
-        switch (_m11.tag) {
+        z_t944_OptionView_String_t _m10 = vo9g;
+        switch (_m10.tag) {
             case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                /* alias: vo9g => (*(z_t74_String_t*)_m11.data) */
+                /* alias: vo9g => (*(z_t74_String_t*)_m10.data) */
                 if ((emitted9g > 0)) {
                     (void)(z_t74_String_append(&args9, (_zs2653).data, (_zs2653).length));
                 }
-                (void)(z_t74_String_append(&args9, ((*(z_t74_String_t*)_m11.data)).data, ((*(z_t74_String_t*)_m11.data)).size));
+                (void)(z_t74_String_append(&args9, ((*(z_t74_String_t*)_m10.data)).data, ((*(z_t74_String_t*)_m10.data)).size));
                 emitted9g = (emitted9g + 1);
                 break;
             }
@@ -85726,13 +85686,12 @@ z_t74_String_t z_t3123_emitUnitMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
         pp9g = (pp9g + 1);
     z_t944_OptionView_String_destroy(&vo9g);
     }
-    z_t74_String_t _s12 = z_t74_String_create((uint64_t)34);
-    z_t74_String_append(&_s12, fc9.data, fc9.size);
-    z_t74_String_append(&_s12, "(", sizeof("(")-1);
-    z_t74_String_append(&_s12, args9.data, args9.size);
-    z_t74_String_append(&_s12, ")", sizeof(")")-1);
-    z_t74_String_t e9 = _s12;
-    z_t74_String_free(&rmo9);
+    z_t74_String_t _s11 = z_t74_String_create((uint64_t)34);
+    z_t74_String_append(&_s11, fc9.data, fc9.size);
+    z_t74_String_append(&_s11, "(", sizeof("(")-1);
+    z_t74_String_append(&_s11, args9.data, args9.size);
+    z_t74_String_append(&_s11, ")", sizeof(")")-1);
+    z_t74_String_t e9 = _s11;
     z_t74_String_free(&child9);
     z_t74_String_free(&fc9);
     z_t74_String_free(&args9);
@@ -85742,7 +85701,6 @@ z_t74_String_t z_t3123_emitUnitMethodCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
     z_t1422_List_u64_destroy(&slots9g);
     z_t1712_Map_u64_String_destroy(valBySlot9g);
     return e9;
-    z_t74_String_free(&rmo9);
     z_t74_String_free(&child9);
     z_t74_String_free(&fc9);
     z_t74_String_free(&args9);
@@ -87126,8 +87084,8 @@ z_t74_String_t z_t3134_emitCallValue(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t*
     if ((fid == 0)) {
         z_t1068_Node_t _ah1078 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(call->callable - 1)));
         uint64_t cstid9 = z_t2999_stampIdOf(symtab, z_t3145_nodeIdOf9(_ah1078));
-        z_t74_String_t cstmn9 = z_t3302_monoOriginName(symtab, cstid9);
-        if ((cstid9 > 0) && (cstmn9.size > 0)) {
+        uint64_t cstOrig9 = z_t3010_originTidOf(symtab, cstid9);
+        if ((cstid9 > 0) && (cstOrig9 > 0)) {
             z_t1414_ztypetype_t cstt9 = z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, cstid9);
             bool cstOk9 = false;
             if (z_t1414_ztypetype_eq(cstt9, ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_RECORDTYPE }))) {
@@ -87145,7 +87103,6 @@ z_t74_String_t z_t3134_emitCallValue(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t*
     z_t74_String_free(&cstn9);
             }
         }
-    z_t74_String_free(&cstmn9);
     }
     if ((ctorTid9 > 0) && z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, ctorTid9), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_RECORDTYPE }))) {
         z_t74_String_t _ret3 = z_t3108_emitRecordCtor(ast, symtab, ctx, call, ctorTid9, ((z_t105_StringView_t){ ctorNm9.data, ctorNm9.size }));
@@ -87990,14 +87947,14 @@ z_t74_String_t z_t3137_emitExpr(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symt
             /* alias: avC9 => (*__borrow_avC9) */
             z_t105_StringView_t av = (z_t105_StringView_t){ (*__borrow_avC9).data, (*__borrow_avC9).size };
             if (z_t105_StringView_startsWith(&av, &_zs2725)) {
-                z_t3710_ParsedNumber_t pn9 = z_t2368_parseNumber(av);
+                z_t3709_ParsedNumber_t pn9 = z_t2368_parseNumber(av);
                 if ((pn9.err.size == 0)) {
                     z_t74_String_t _s5 = z_t74_String_create((uint64_t)16);
                     char _b6[32]; int _b6_n = snprintf(_b6, 32, "%ld", (long)(int64_t)pn9.ival);
                     z_t74_String_append(&_s5, _b6, (uint64_t)_b6_n);
                     z_t74_String_t cl9 = _s5;
                     z_t74_String_free(&cv9);
-    z_t3710_ParsedNumber_destroy(&pn9);
+    z_t3709_ParsedNumber_destroy(&pn9);
                     return cl9;
     z_t74_String_free(&cl9);
                 }
@@ -88011,11 +87968,11 @@ _s0; });
                 z_t74_String_append(&_s7, av.data, av.length);
                 z_t74_String_append(&_s7, " */0", sizeof(" */0")-1);
                 z_t74_String_free(&cv9);
-    z_t3710_ParsedNumber_destroy(&pn9);
+    z_t3709_ParsedNumber_destroy(&pn9);
     z_t74_String_free(&_ah1088);
                 return _s7;
     z_t74_String_free(&_ah1088);
-    z_t3710_ParsedNumber_destroy(&pn9);
+    z_t3709_ParsedNumber_destroy(&pn9);
             }
             z_t169_optionval_u64_t avo9 = z_t1358_Map_u64_u64_get(symtab->typing.atomVariableId, ((uint64_t)(*(z_t1069_AtomIdData_t*)_m0.data).nodeid));
             z_t169_optionval_u64_t _m9 = avo9;
@@ -89229,7 +89186,7 @@ _s0; });
                                     z_t105_StringView_t bv1 = (z_t105_StringView_t){ bn2.data, bn2.size };
                                     z_t74_String_t bc1 = z_t74_String_from_view(bv1);
                                     if (z_t105_StringView_startsWith(&bv1, &_zs2754)) {
-                                        z_t3710_ParsedNumber_t pn1 = z_t2368_parseNumber(bv1);
+                                        z_t3709_ParsedNumber_t pn1 = z_t2368_parseNumber(bv1);
                                         if ((pn1.err.size == 0)) {
                                             z_t74_String_t _s113 = z_t74_String_create((uint64_t)16);
                                             char _b114[32]; int _b114_n = snprintf(_b114, 32, "%ld", (long)(int64_t)pn1.ival);
@@ -89237,7 +89194,7 @@ _s0; });
                                             z_t74_String_free(&bc1);
                                             bc1 = _s113;
                                         }
-    z_t3710_ParsedNumber_destroy(&pn1);
+    z_t3709_ParsedNumber_destroy(&pn1);
                                     }
                                     z_t74_String_t sfx1 = z_t2939_numLitSuffix(((z_t105_StringView_t){ mn2.data, mn2.size }));
                                     (void)(z_t74_String_append(&bc1, (sfx1).data, (sfx1).size));
@@ -89776,11 +89733,10 @@ _s0; });
                     }
                 }
                 if (z_t1414_ztypetype_eq(rtt, ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_CLASSTYPE }))) {
-                    z_t74_String_t bsoNm0 = z_t3302_monoOriginName(symtab, bstamp);
-                    if ((bsoNm0.size == 0)) {
+                    uint64_t bsoOrig0 = z_t3010_originTidOf(symtab, bstamp);
+                    if ((bsoOrig0 == 0)) {
                         isRecOrCls = true;
                     }
-    z_t74_String_free(&bsoNm0);
                 }
                 if (isRecOrCls) {
                     z_t74_String_t fbtn9 = z_t3256_typeNameOfReg9(symtab, bstamp);
@@ -92441,10 +92397,9 @@ bool z_t3143_interpBaseIsOwnedStructField(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
             z_t1068_Node_t _ah1153 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1079_DottedPathData_t*)_m0.data).parent - 1)));
             uint64_t bnid = z_t2998_atomNodeId9(_ah1153);
             uint64_t bt = z_t2999_stampIdOf(symtab, bnid);
-            z_t74_String_t bo = z_t3302_monoOriginName(symtab, bt);
-            if ((bo.size != 0)) {
+            uint64_t bo = z_t3010_originTidOf(symtab, bt);
+            if ((bo > 0)) {
                 if ((z_t1582_ZTypeRegistry_hasDestructorName(&symtab->reg, bt) == false)) {
-                    z_t74_String_free(&bo);
                     return false;
                 }
             }
@@ -92457,7 +92412,6 @@ bool z_t3143_interpBaseIsOwnedStructField(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
                 isUC = true;
             }
             if ((isUC == false)) {
-                z_t74_String_free(&bo);
                 return false;
             }
             z_t1068_Node_t _ah1154 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1079_DottedPathData_t*)_m0.data).child - 1)));
@@ -92469,18 +92423,15 @@ bool z_t3143_interpBaseIsOwnedStructField(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
                     uint64_t co = _m1.data.some;
                     (void)co;
                     if (z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, co), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }))) {
-                        z_t74_String_free(&bo);
                         z_t74_String_free(&cn);
                         return false;
                     } else {
-                        z_t74_String_free(&bo);
                         z_t74_String_free(&cn);
                         return true;
                     }
                     break;
                 }
                 case Z_OPTIONVAL_U64_TAG_NONE: {
-                    z_t74_String_free(&bo);
                     z_t74_String_free(&cn);
                     return false;
                     break;
@@ -92488,7 +92439,6 @@ bool z_t3143_interpBaseIsOwnedStructField(z_t1067_Ast_t* ast, z_t1267_ZSymbolTab
                 default: z_unreachable();
             }
     z_t74_String_free(&cn);
-    z_t74_String_free(&bo);
             break;
         }
         default: {
@@ -93182,7 +93132,7 @@ void z_t3149_emitPrintStmt(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z
     }
 }
 
-z_t3712_cfold_t z_t3150_evalConstI64(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1068_Node_t n) {
+z_t3711_cfold_t z_t3150_evalConstI64(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1068_Node_t n) {
     z_t1068_Node_t _m0 = n;
     switch (_m0.tag) {
         case Z_NODE_TAG_EXPRESSION: {
@@ -93202,7 +93152,7 @@ z_t3712_cfold_t z_t3150_evalConstI64(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t
                 case Z_RESULTVAL_I64_PARSEERROR_TAG_OK: {
                     int64_t pl9 = _m1.data.ok;
                     (void)pl9;
-                    return z_t3712_cfold_create(true, pl9);
+                    return z_t3711_cfold_create(true, pl9);
                     break;
                 }
                 case Z_RESULTVAL_I64_PARSEERROR_TAG_ERR: {
@@ -93225,7 +93175,7 @@ z_t3712_cfold_t z_t3150_evalConstI64(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t
                         case Z_RESULTVAL_I64_PARSEERROR_TAG_OK: {
                             int64_t pc9 = _m3.data.ok;
                             (void)pc9;
-                            z_t3712_cfold_t _ret4 = z_t3712_cfold_create(true, pc9);
+                            z_t3711_cfold_t _ret4 = z_t3711_cfold_create(true, pc9);
     z_t944_OptionView_String_destroy(&cg9);
                             return _ret4;
                             break;
@@ -93245,7 +93195,7 @@ z_t3712_cfold_t z_t3150_evalConstI64(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t
                 }
                 default: break;
             }
-            z_t3712_cfold_t _ret5 = z_t3712_cfold_create(false, 0);
+            z_t3711_cfold_t _ret5 = z_t3711_cfold_create(false, 0);
     z_t944_OptionView_String_destroy(&cg9);
             return _ret5;
     z_t944_OptionView_String_destroy(&cg9);
@@ -93254,25 +93204,25 @@ z_t3712_cfold_t z_t3150_evalConstI64(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t
         case Z_NODE_TAG_BINOP: {
             /* alias: n => (*(z_t1075_BinOpData_t*)_m0.data) */
             z_t1068_Node_t _ah1160 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1075_BinOpData_t*)_m0.data).lhs - 1)));
-            z_t3712_cfold_t lf9 = z_t3150_evalConstI64(ast, ctx, _ah1160);
+            z_t3711_cfold_t lf9 = z_t3150_evalConstI64(ast, ctx, _ah1160);
             z_t1068_Node_t _ah1161 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1075_BinOpData_t*)_m0.data).rhs - 1)));
-            z_t3712_cfold_t rf9 = z_t3150_evalConstI64(ast, ctx, _ah1161);
+            z_t3711_cfold_t rf9 = z_t3150_evalConstI64(ast, ctx, _ah1161);
             if (lf9.ok && rf9.ok) {
                 z_t1068_Node_t _ah1162 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1075_BinOpData_t*)_m0.data).operator - 1)));
                 z_t74_String_t opt9 = z_t2996_atomTextOf(ast, _ah1162);
                 z_t105_StringView_t ops9 = (z_t105_StringView_t){ opt9.data, opt9.size };
                 if (z_t105_StringView_eq(ops9, _zs2878)) {
-                    z_t3712_cfold_t _ret6 = z_t3712_cfold_create(true, (lf9.val + rf9.val));
+                    z_t3711_cfold_t _ret6 = z_t3711_cfold_create(true, (lf9.val + rf9.val));
                     z_t74_String_free(&opt9);
                     return _ret6;
                 }
                 if (z_t105_StringView_eq(ops9, _zs2879)) {
-                    z_t3712_cfold_t _ret7 = z_t3712_cfold_create(true, (lf9.val - rf9.val));
+                    z_t3711_cfold_t _ret7 = z_t3711_cfold_create(true, (lf9.val - rf9.val));
                     z_t74_String_free(&opt9);
                     return _ret7;
                 }
                 if (z_t105_StringView_eq(ops9, _zs2880)) {
-                    z_t3712_cfold_t _ret8 = z_t3712_cfold_create(true, (lf9.val * rf9.val));
+                    z_t3711_cfold_t _ret8 = z_t3711_cfold_create(true, (lf9.val * rf9.val));
                     z_t74_String_free(&opt9);
                     return _ret8;
                 }
@@ -93309,27 +93259,27 @@ z_t3712_cfold_t z_t3150_evalConstI64(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t
                 }
                 if (hit9) {
                     if (cb9) {
-                        z_t3712_cfold_t _ret9 = z_t3712_cfold_create(true, 1);
+                        z_t3711_cfold_t _ret9 = z_t3711_cfold_create(true, 1);
                         z_t74_String_free(&opt9);
                         return _ret9;
                     }
-                    z_t3712_cfold_t _ret10 = z_t3712_cfold_create(true, 0);
+                    z_t3711_cfold_t _ret10 = z_t3711_cfold_create(true, 0);
                     z_t74_String_free(&opt9);
                     return _ret10;
                 }
     z_t74_String_free(&opt9);
             }
-            return z_t3712_cfold_create(false, 0);
+            return z_t3711_cfold_create(false, 0);
             break;
         }
         default: {
-            return z_t3712_cfold_create(false, 0);
+            return z_t3711_cfold_create(false, 0);
             break;
         }
     }
 }
 
-z_t3712_cfold_t z_t3151_foldIfClause9(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1036_List_u32_t* conds) {
+z_t3711_cfold_t z_t3151_foldIfClause9(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_t1036_List_u32_t* conds) {
     int64_t tv9 = 1;
     z_t1050_ListIter_u32_t citer = z_t1036_List_u32_iterate(conds);
     while (1) {
@@ -93344,14 +93294,14 @@ z_t3712_cfold_t z_t3151_foldIfClause9(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_
                 z_t74_String_t cl9 = z_t1222_nameTextCopy(ast, (*(z_t1085_NamedOperationData_t*)_m1.data).name);
                 z_t105_StringView_t clv9 = (z_t105_StringView_t){ cl9.data, cl9.size };
                 if ((clv9.length > 0) && !z_t105_StringView_eq(clv9, _zs2887)) {
-                    z_t3712_cfold_t _ret2 = z_t3712_cfold_create(false, 0);
+                    z_t3711_cfold_t _ret2 = z_t3711_cfold_create(false, 0);
                     z_t74_String_free(&cl9);
                     return _ret2;
                 }
                 z_t1068_Node_t _ah1163 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m1.data).operation - 1)));
-                z_t3712_cfold_t f9 = z_t3150_evalConstI64(ast, ctx, _ah1163);
+                z_t3711_cfold_t f9 = z_t3150_evalConstI64(ast, ctx, _ah1163);
                 if ((f9.ok == false)) {
-                    z_t3712_cfold_t _ret3 = z_t3712_cfold_create(false, 0);
+                    z_t3711_cfold_t _ret3 = z_t3711_cfold_create(false, 0);
                     z_t74_String_free(&cl9);
                     return _ret3;
                 }
@@ -93362,12 +93312,12 @@ z_t3712_cfold_t z_t3151_foldIfClause9(z_t1067_Ast_t* ast, z_t2947_Ctx_t* ctx, z_
                 break;
             }
             default: {
-                return z_t3712_cfold_create(false, 0);
+                return z_t3711_cfold_create(false, 0);
                 break;
             }
         }
     }
-    return z_t3712_cfold_create(true, tv9);
+    return z_t3711_cfold_create(true, tv9);
 }
 
 z_t74_String_t z_t3152_plainStringLiteral9(z_t1067_Ast_t* ast, z_t1068_Node_t n) {
@@ -93647,9 +93597,9 @@ void z_t3155_emitPrintArg(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_
                             uint64_t svco = _m23.data.some;
                             (void)svco;
                             z_t74_String_t mcb = z_t1588_ZTypeRegistry_cnameOf(&symtab->reg, svco);
-                            z_t74_String_t amn = z_t3302_monoOriginName(symtab, argTid);
+                            uint64_t argOrig9 = z_t3010_originTidOf(symtab, argTid);
                             bool usesAmp = false;
-                            if (z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, argTid), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_CLASSTYPE })) && (amn.size == 0)) {
+                            if (z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, argTid), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_CLASSTYPE })) && (argOrig9 == 0)) {
                                 if ((z_t3016_isPtrVar(ctx, ((z_t105_StringView_t){ anm.data, anm.size })) == false)) {
                                     usesAmp = true;
                                 }
@@ -93681,7 +93631,6 @@ void z_t3155_emitPrintArg(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_
                                 (void)(z_t74_String_append(buf, (lpt2).data, (lpt2).size));
     z_t74_String_free(&lpt2);
                             }
-    z_t74_String_free(&amn);
     z_t74_String_free(&mcb);
                             break;
                         }
@@ -95357,8 +95306,8 @@ _s0; });
                 if (z_t1582_ZTypeRegistry_hasDestructorName(&symtab->reg, ltid)) {
                     ltHasDtor9 = true;
                 }
-                z_t74_String_t ltUmn9 = z_t3302_monoOriginName(symtab, ltid);
-                if ((ltUmn9.size > 0) && z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, ltid), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_UNIONTYPE }))) {
+                uint64_t ltUorig9 = z_t3010_originTidOf(symtab, ltid);
+                if ((ltUorig9 > 0) && z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, ltid), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_UNIONTYPE }))) {
                     ltHasDtor9 = true;
                 }
                 if (ltHasDtor9) {
@@ -95392,7 +95341,6 @@ _s0; });
     z_t74_String_free(&ldcb);
                     }
                 }
-    z_t74_String_free(&ltUmn9);
     z_t74_String_free(&la);
             } else {
                 z_t74_String_t _ah1193 = ({  z_t74_String_t _s0 = z_t74_String_create((uint64_t)60);
@@ -95746,7 +95694,7 @@ _s0; });
                     switch (_m222.tag) {
                         case Z_NODE_TAG_IFCLAUSE: {
                             /* alias: pcn9 => (*(z_t1105_IfClauseData_t*)_m222.data) */
-                            z_t3712_cfold_t fr9 = z_t3151_foldIfClause9(ast, ctx, &(*(z_t1105_IfClauseData_t*)_m222.data).conditions);
+                            z_t3711_cfold_t fr9 = z_t3151_foldIfClause9(ast, ctx, &(*(z_t1105_IfClauseData_t*)_m222.data).conditions);
                             if (fr9.ok) {
                                 if ((fr9.val == 1) && (ewin9 == 0)) {
                                     ewin9 = (*(z_t1105_IfClauseData_t*)_m222.data).statement;
@@ -95835,7 +95783,7 @@ _s0; });
         case Z_NODE_TAG_CASEEXPR: {
             /* alias: n => (*(z_t1113_CaseData_t*)_m0.data) */
             z_t1068_Node_t _ah1194 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1113_CaseData_t*)_m0.data).subject - 1)));
-            z_t3712_cfold_t msub9 = z_t3150_evalConstI64(ast, ctx, _ah1194);
+            z_t3711_cfold_t msub9 = z_t3150_evalConstI64(ast, ctx, _ah1194);
             bool melim9 = msub9.ok;
             uint32_t mwin9 = ((uint32_t)0);
             if (melim9) {
@@ -95854,7 +95802,7 @@ _s0; });
                                     melim9 = false;
                                 } else {
                                     z_t1068_Node_t _ah1195 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1115_CaseClauseData_t*)_m233.data).matcharm - 1)));
-                                    z_t3712_cfold_t maf9 = z_t3150_evalConstI64(ast, ctx, _ah1195);
+                                    z_t3711_cfold_t maf9 = z_t3150_evalConstI64(ast, ctx, _ah1195);
                                     if (maf9.ok) {
                                         if ((maf9.val == msub9.val) && (mwin9 == 0)) {
                                             mwin9 = (*(z_t1115_CaseClauseData_t*)_m233.data).statement;
@@ -98150,11 +98098,10 @@ bool z_t3196_emitObjIterFor(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, 
                     uint64_t itUfn9 = z_t3012_canonFnId(ast, symtab, ctx, itid, ((z_t105_StringView_t){ itn.data, itn.size }));
                     bool isUserCls9 = false;
                     if ((itUfn9 > 0) && z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, itid), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_CLASSTYPE }))) {
-                        z_t74_String_t itorig9 = z_t3302_monoOriginName(symtab, itid);
-                        if ((itorig9.size == 0)) {
+                        uint64_t itorig9 = z_t3010_originTidOf(symtab, itid);
+                        if ((itorig9 == 0)) {
                             isUserCls9 = true;
                         }
-    z_t74_String_free(&itorig9);
                     }
                     if (isUserCls9) {
                         z_t74_String_t _rr5 = z_t1588_ZTypeRegistry_cnameOf(&symtab->reg, cco);
@@ -98886,9 +98833,9 @@ z_t74_String_t z_t3205_remainingArm9(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t*
 }
 
 bool z_t3206_svHasWord9(z_t105_StringView_t hay, z_t105_StringView_t word) {
-    z_t3591_Splitter_t wit9 = z_t105_StringView_split(&hay, &_zs2971);
+    z_t3590_Splitter_t wit9 = z_t105_StringView_split(&hay, &_zs2971);
     while (1) {
-        z_t754_Option_StringView_t _iter0 = z_t3591_Splitter_call(&wit9);
+        z_t754_Option_StringView_t _iter0 = z_t3590_Splitter_call(&wit9);
         if (_iter0.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t754_Option_StringView_destroy(&_iter0); break; }
         z_t105_StringView_t w9 = *(z_t105_StringView_t*)_iter0.data;
         free(_iter0.data);
@@ -100629,10 +100576,9 @@ bool z_t3231_isReftypeParam(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, 
     z_t947_Option_String_destroy(&rduo0);
         return false;
     }
-    z_t74_String_t monoLk4 = z_t3302_monoOriginName(symtab, cid);
-    if ((monoLk4.size > 0)) {
+    uint64_t monoLk4 = z_t3010_originTidOf(symtab, cid);
+    if ((monoLk4 > 0)) {
         if ((z_t3230_isUserClassMonoTid(symtab, ctx, cid) == false)) {
-            z_t74_String_free(&monoLk4);
     z_t947_Option_String_destroy(&rduo0);
             return false;
         }
@@ -100643,13 +100589,11 @@ bool z_t3231_isReftypeParam(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, 
         case Z_OPTION_STRING_TAG_SOME: {
             /* alias: duo => (*(z_t74_String_t*)_m1.data) */
             if (z_t105_StringView_eq(((z_t105_StringView_t){ (*(z_t74_String_t*)_m1.data).data, (*(z_t74_String_t*)_m1.data).size }), _zs3001)) {
-                z_t74_String_free(&monoLk4);
     z_t947_Option_String_destroy(&rduo0);
     z_t947_Option_String_destroy(&duo);
                 return false;
             }
             if (z_t105_StringView_eq(((z_t105_StringView_t){ (*(z_t74_String_t*)_m1.data).data, (*(z_t74_String_t*)_m1.data).size }), _zs3002)) {
-                z_t74_String_free(&monoLk4);
     z_t947_Option_String_destroy(&rduo0);
     z_t947_Option_String_destroy(&duo);
                 return false;
@@ -100661,11 +100605,9 @@ bool z_t3231_isReftypeParam(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, 
         }
         default: break;
     }
-    z_t74_String_free(&monoLk4);
     z_t947_Option_String_destroy(&rduo0);
     z_t947_Option_String_destroy(&duo);
     return true;
-    z_t74_String_free(&monoLk4);
     z_t947_Option_String_destroy(&rduo0);
     z_t947_Option_String_destroy(&duo);
 }
@@ -106066,8 +106008,8 @@ z_t74_String_t z_t3344_ioCanonCnameUncached(z_t1067_Ast_t* ast, z_t1267_ZSymbolT
 }
 
 z_t74_String_t z_t3345_loadIoFragment(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx, z_t105_StringView_t path) {
-    z_t3495_Result_String_IoError_t rd = z_io_readText(path);
-    z_t3495_Result_String_IoError_t _m0 = rd;
+    z_t3494_Result_String_IoError_t rd = z_io_readText(path);
+    z_t3494_Result_String_IoError_t _m0 = rd;
     switch (_m0.tag) {
         case Z_RESULT_STRING_IOERROR_TAG_OK: {
             /* alias: rd => (*(z_t74_String_t*)_m0.data) */
@@ -106142,7 +106084,7 @@ z_t74_String_t z_t3345_loadIoFragment(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t
             z_t74_String_t _rr4 = z_t2945_substituteAll(&cur, _zs3537, ((z_t105_StringView_t){ ctx->strC.data, ctx->strC.size }));
             z_t74_String_free(&cur);
             cur = _rr4;
-    z_t3495_Result_String_IoError_destroy(&rd);
+    z_t3494_Result_String_IoError_destroy(&rd);
     z_t989_List_String_destroy(&canons);
             return cur;
     z_t989_List_String_destroy(&canons);
@@ -106161,7 +106103,7 @@ _s0; });
             z_t74_String_append(&_s5, path.data, path.length);
             z_t74_String_append(&_s5, " */", sizeof(" */")-1);
             z_t74_String_append(&_s5, "\n", sizeof("\n")-1);
-    z_t3495_Result_String_IoError_destroy(&rd);
+    z_t3494_Result_String_IoError_destroy(&rd);
     z_t74_String_free(&_ah1365);
             return _s5;
     z_t74_String_free(&_ah1365);
@@ -106170,7 +106112,7 @@ _s0; });
         default: z_unreachable();
     }
     /* post-guard alias: rd => (*(z_t1256_IoError_t*)rd.data) */
-    z_t3495_Result_String_IoError_destroy(&rd);
+    z_t3494_Result_String_IoError_destroy(&rd);
 }
 
 void z_t3346_ioFragIf(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx, z_t105_StringView_t runtimeDir, z_t105_StringView_t need, z_t105_StringView_t frag, z_t74_String_t* buf) {
@@ -106330,8 +106272,8 @@ void z_t3354_emitIoFileConformance(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* s
     uint64_t ti = ((uint64_t)1ULL);
     while ((ti < last)) {
         if (z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, ti), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_CLASSTYPE }))) {
-            z_t74_String_t cmo9 = z_t3302_monoOriginName(symtab, ti);
-            if ((cmo9.size == 0)) {
+            uint64_t cmo9 = z_t3010_originTidOf(symtab, ti);
+            if ((cmo9 == 0)) {
                 uint64_t duId9 = z_t3255_defUnitIdOf9(ctx, ti);
                 bool isIoC9 = false;
                 if ((duId9 > 0)) {
@@ -106366,7 +106308,6 @@ void z_t3354_emitIoFileConformance(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* s
     z_t74_String_free(&cn9);
                 }
             }
-    z_t74_String_free(&cmo9);
         }
         ti = (ti + 1);
     }
@@ -106960,16 +106901,14 @@ void z_t3366_maybePreEmitElem(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab
         default: break;
     }
     uint64_t cid = z_t3246_chaseColMono(symtab, ctx, rid0);
-    z_t74_String_t monoLk4 = z_t3302_monoOriginName(symtab, cid);
-    if ((monoLk4.size > 0)) {
+    uint64_t monoLk4 = z_t3010_originTidOf(symtab, cid);
+    if ((monoLk4 > 0)) {
         z_t74_String_free(&snm0);
-        z_t74_String_free(&monoLk4);
     z_t947_Option_String_destroy(&sduo);
         return;
     }
     if (z_t3315_isGenericType(symtab, cid)) {
         z_t74_String_free(&snm0);
-        z_t74_String_free(&monoLk4);
     z_t947_Option_String_destroy(&sduo);
         return;
     }
@@ -106981,7 +106920,6 @@ void z_t3366_maybePreEmitElem(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab
             /* alias: duoPe => (*(z_t74_String_t*)_m1.data) */
             if ((z_t3272_isEmittableFileUnit(((z_t105_StringView_t){ (*(z_t74_String_t*)_m1.data).data, (*(z_t74_String_t*)_m1.data).size })) == false)) {
                 z_t74_String_free(&snm0);
-                z_t74_String_free(&monoLk4);
                 z_t74_String_free(&peUnit);
     z_t947_Option_String_destroy(&sduo);
     z_t947_Option_String_destroy(&duoPe);
@@ -107000,7 +106938,6 @@ void z_t3366_maybePreEmitElem(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab
     z_t74_String_t nm = z_t3256_typeNameOfReg9(symtab, cid);
     if ((nm.size == 0)) {
         z_t74_String_free(&snm0);
-        z_t74_String_free(&monoLk4);
         z_t74_String_free(&peUnit);
         z_t74_String_free(&nm);
     z_t947_Option_String_destroy(&sduo);
@@ -107030,7 +106967,6 @@ void z_t3366_maybePreEmitElem(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab
     }
     (void)(z_t3318_ctxBindMain(ctx, ((z_t105_StringView_t){ smPe.data, smPe.size })));
     z_t74_String_free(&snm0);
-    z_t74_String_free(&monoLk4);
     z_t74_String_free(&peUnit);
     z_t74_String_free(&nm);
     z_t74_String_free(&smPe);
@@ -107085,8 +107021,8 @@ void z_t3369_emitMainFwdDecls(z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx
         }
         if (isStructType) {
             bool gen = z_t3315_isGenericType(symtab, t);
-            z_t74_String_t mo = z_t3302_monoOriginName(symtab, t);
-            if ((mo.size == 0) && (gen == false)) {
+            uint64_t mo = z_t3010_originTidOf(symtab, t);
+            if ((mo == 0) && (gen == false)) {
                 z_t947_Option_String_t duo = z_t3173_definedInUnitOf(symtab, t);
                 z_t947_Option_String_t _m0 = duo;
                 switch (_m0.tag) {
@@ -107135,7 +107071,7 @@ void z_t3369_emitMainFwdDecls(z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx
     z_t947_Option_String_destroy(&duo);
             } else {
                 bool fwdM9 = false;
-                if ((mo.size > 0)) {
+                if ((mo > 0)) {
                     if (z_t1582_ZTypeRegistry_hasDestructorName(&symtab->reg, t)) {
                         fwdM9 = true;
                     }
@@ -107193,7 +107129,6 @@ void z_t3369_emitMainFwdDecls(z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx
     z_t74_String_free(&cnX);
                 }
             }
-    z_t74_String_free(&mo);
         }
         t = (t + 1);
     }
@@ -107329,9 +107264,9 @@ void z_t3372_buildUserTypeList(z_t1267_ZSymbolTable_t* symtab, z_t1422_List_u64_
             isStruct = true;
         }
         if (isStruct) {
-            z_t74_String_t mo = z_t3302_monoOriginName(symtab, t);
+            uint64_t mo = z_t3010_originTidOf(symtab, t);
             bool gen = z_t3315_isGenericType(symtab, t);
-            if ((mo.size == 0) && (gen == false)) {
+            if ((mo == 0) && (gen == false)) {
                 z_t947_Option_String_t duo = z_t3173_definedInUnitOf(symtab, t);
                 z_t947_Option_String_t _m0 = duo;
                 switch (_m0.tag) {
@@ -107349,7 +107284,6 @@ void z_t3372_buildUserTypeList(z_t1267_ZSymbolTable_t* symtab, z_t1422_List_u64_
                 }
     z_t947_Option_String_destroy(&duo);
             }
-    z_t74_String_free(&mo);
         }
         t = (t + 1);
     }
@@ -107371,16 +107305,14 @@ bool z_t3373_monoDependsOnUser(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symta
     z_t1422_List_u64_destroy(&elems);
             return true;
         }
-        z_t74_String_t emo = z_t3302_monoOriginName(symtab, ceid);
-        if ((emo.size > 0)) {
+        uint64_t emo = z_t3010_originTidOf(symtab, ceid);
+        if ((emo > 0)) {
             if (z_t3373_monoDependsOnUser(ast, symtab, ctx, ceid, userList, seen)) {
-                z_t74_String_free(&emo);
     z_t1422_List_u64_destroy(&elems);
                 return true;
             }
         }
         ei = (ei + 1);
-    z_t74_String_free(&emo);
     }
     z_t1422_List_u64_destroy(&elems);
     return false;
@@ -107475,16 +107407,14 @@ bool z_t3377_monoLateDepsMet(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab,
                 return false;
             }
         }
-        z_t74_String_t emo = z_t3302_monoOriginName(symtab, ceid);
-        if ((emo.size > 0)) {
+        uint64_t emo = z_t3010_originTidOf(symtab, ceid);
+        if ((emo > 0)) {
             if ((z_t3377_monoLateDepsMet(ast, symtab, ctx, ceid, group, emitted, seen) == false)) {
-                z_t74_String_free(&emo);
     z_t1422_List_u64_destroy(&elems);
                 return false;
             }
         }
         ei = (ei + 1);
-    z_t74_String_free(&emo);
     }
     z_t1422_List_u64_destroy(&elems);
     return true;
@@ -107626,15 +107556,11 @@ bool z_t3382_fnptrTypedefEligible(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* sy
     if (z_t3315_isGenericType(symtab, tid)) {
         return false;
     }
-    z_t74_String_t mo = z_t3302_monoOriginName(symtab, tid);
-    if ((mo.size > 0)) {
-        z_t74_String_free(&mo);
+    uint64_t mo = z_t3010_originTidOf(symtab, tid);
+    if ((mo > 0)) {
         return false;
     }
-    bool _ret0 = z_t3381_stdFnRefEmittable(ast, symtab, tid);
-    z_t74_String_free(&mo);
-    return _ret0;
-    z_t74_String_free(&mo);
+    return z_t3381_stdFnRefEmittable(ast, symtab, tid);
 }
 
 uint64_t z_t3383_fnRegReturnId(z_t1267_ZSymbolTable_t* symtab, uint64_t tid) {
@@ -108055,8 +107981,8 @@ void z_t3390_emitUserStructsOrdered(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* 
     while ((tp < last)) {
         if (z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, tp), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_PROTOCOLTYPE }))) {
             bool pgen = z_t3315_isGenericType(symtab, tp);
-            z_t74_String_t pmo = z_t3302_monoOriginName(symtab, tp);
-            if ((pmo.size == 0) && (pgen == false)) {
+            uint64_t pmo = z_t3010_originTidOf(symtab, tp);
+            if ((pmo == 0) && (pgen == false)) {
                 z_t947_Option_String_t pduo = z_t3173_definedInUnitOf(symtab, tp);
                 z_t947_Option_String_t _m0 = pduo;
                 switch (_m0.tag) {
@@ -108074,7 +108000,6 @@ void z_t3390_emitUserStructsOrdered(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* 
                 }
     z_t947_Option_String_destroy(&pduo);
             }
-    z_t74_String_free(&pmo);
         }
         tp = (tp + 1);
     }
@@ -108132,8 +108057,8 @@ void z_t3390_emitUserStructsOrdered(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* 
         while ((pi < pn)) {
             uint64_t x = z_t1422_List_u64_get(&lateGroup, pi);
             if ((z_t3375_idSetHas(emittedSet, x) == false)) {
-                z_t74_String_t xorigin = z_t3302_monoOriginName(symtab, x);
-                if ((xorigin.size > 0)) {
+                uint64_t xorigin = z_t3010_originTidOf(symtab, x);
+                if ((xorigin > 0)) {
                     z_t1422_List_u64_t seen = z_t1422_List_u64_create((uint64_t)0);
                     if (z_t3377_monoLateDepsMet(ast, symtab, ctx, x, lateSet, emittedSet, &seen)) {
                         (void)(z_t3379_emitMonoById(ast, symtab, ctx, runtimeDir, x, buf));
@@ -108150,7 +108075,6 @@ void z_t3390_emitUserStructsOrdered(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* 
                         progressed = true;
                     }
                 }
-    z_t74_String_free(&xorigin);
             }
             pi = (pi + 1);
         }
@@ -108169,14 +108093,13 @@ void z_t3390_emitUserStructsOrdered(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* 
         while ((f0 < f1)) {
             uint64_t x2 = z_t1422_List_u64_get(&lateGroup, f0);
             if ((z_t3375_idSetHas(emittedSet, x2) == false)) {
-                z_t74_String_t xo2 = z_t3302_monoOriginName(symtab, x2);
-                if ((xo2.size > 0)) {
+                uint64_t xo2 = z_t3010_originTidOf(symtab, x2);
+                if ((xo2 > 0)) {
                     (void)(z_t3379_emitMonoById(ast, symtab, ctx, runtimeDir, x2, buf));
                 } else {
                     (void)(z_t3378_emitUserTypeById(ast, symtab, ctx, x2, buf));
                 }
                 (void)(z_t1653_Map_u64_bool_set(emittedSet, x2, true));
-    z_t74_String_free(&xo2);
             }
             f0 = (f0 + 1);
         }
@@ -108217,9 +108140,9 @@ void z_t3391_emitMonos(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t29
     while ((tcl9 < last)) {
         uint64_t tv9 = tcl9;
         z_t1414_ztypetype_t tt9 = z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, tcl9);
-        z_t74_String_t onm9 = z_t3302_monoOriginName(symtab, tcl9);
+        uint64_t oOrig9 = z_t3010_originTidOf(symtab, tcl9);
         bool gen9 = z_t3315_isGenericType(symtab, tcl9);
-        bool isMono9 = (onm9.size > 0);
+        bool isMono9 = (oOrig9 > 0);
         bool inIo9 = false;
         bool inCli9 = false;
         z_t947_Option_String_t duo9 = z_t3173_definedInUnitOf(symtab, tcl9);
@@ -108402,7 +108325,6 @@ void z_t3391_emitMonos(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t29
         }
         tcl9 = (tcl9 + 1);
     z_t947_Option_String_destroy(&duo9);
-    z_t74_String_free(&onm9);
     }
     uint64_t tstr9 = ((uint64_t)0);
     while ((tstr9 < wStr9.length)) {
@@ -109116,9 +109038,8 @@ void z_t3400_emitOneProtocol(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab,
 }
 
 void z_t3401_emitProtocolImpl(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab, z_t2947_Ctx_t* ctx, uint64_t implTid, z_t105_StringView_t implName, uint64_t protoTid, z_t105_StringView_t protoName, z_t105_StringView_t label, z_t74_String_t* buf) {
-    z_t74_String_t omn = z_t3302_monoOriginName(symtab, implTid);
-    if ((omn.size != 0)) {
-        z_t74_String_free(&omn);
+    uint64_t implOrig9 = z_t3010_originTidOf(symtab, implTid);
+    if ((implOrig9 > 0)) {
         return;
     }
     z_t74_String_t implBase = z_t2928_cnameOf(implTid, implName);
@@ -109431,7 +109352,6 @@ void z_t3401_emitProtocolImpl(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable_t* symtab
     z_t74_String_append(&_s50, "\n", sizeof("\n")-1);
     z_t74_String_t oc0 = _s50;
     (void)(z_t74_String_append(buf, (oc0).data, (oc0).size));
-    z_t74_String_free(&omn);
     z_t74_String_free(&implBase);
     z_t74_String_free(&implCtype);
     z_t74_String_free(&protoBase);
@@ -109784,9 +109704,8 @@ uint64_t z_t3406_fileTypeIdOf(z_t1267_ZSymbolTable_t* symtab, uint64_t nid) {
     if (!z_t1414_ztypetype_eq(z_t1580_ZTypeRegistry_typetypeOf(&symtab->reg, tid), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_CLASSTYPE }))) {
         return 0;
     }
-    z_t74_String_t omn9 = z_t3302_monoOriginName(symtab, tid);
-    if ((omn9.size != 0)) {
-        z_t74_String_free(&omn9);
+    uint64_t fileOrig9 = z_t3010_originTidOf(symtab, tid);
+    if ((fileOrig9 > 0)) {
         return 0;
     }
     z_t947_Option_String_t duo9 = z_t3173_definedInUnitOf(symtab, tid);
@@ -109815,14 +109734,11 @@ uint64_t z_t3406_fileTypeIdOf(z_t1267_ZSymbolTable_t* symtab, uint64_t nid) {
         default: break;
     }
     if (isIoT9) {
-        z_t74_String_free(&omn9);
     z_t947_Option_String_destroy(&duo9);
         return tid;
     }
-    z_t74_String_free(&omn9);
     z_t947_Option_String_destroy(&duo9);
     return 0;
-    z_t74_String_free(&omn9);
     z_t947_Option_String_destroy(&duo9);
 }
 
@@ -111276,12 +111192,11 @@ z_t74_String_t z_t3425_emitUserIterCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable
         z_t74_String_free(&mn);
         return _ret4;
     }
-    z_t74_String_t itorig9 = z_t3302_monoOriginName(symtab, iterId);
-    if ((itorig9.size != 0)) {
+    uint64_t itorig9 = z_t3010_originTidOf(symtab, iterId);
+    if ((itorig9 > 0)) {
         z_t74_String_t _ret5 = z_t74_String_from_view(_zs3866);
         z_t74_String_free(&bn);
         z_t74_String_free(&mn);
-        z_t74_String_free(&itorig9);
         return _ret5;
     }
     z_t74_String_t itn9 = z_t3256_typeNameOfReg9(symtab, iterId);
@@ -111289,7 +111204,6 @@ z_t74_String_t z_t3425_emitUserIterCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable
         z_t74_String_t _ret6 = z_t74_String_from_view(_zs3867);
         z_t74_String_free(&bn);
         z_t74_String_free(&mn);
-        z_t74_String_free(&itorig9);
         z_t74_String_free(&itn9);
         return _ret6;
     }
@@ -111372,7 +111286,6 @@ z_t74_String_t z_t3425_emitUserIterCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable
                 z_t74_String_append(&_s16, ")", sizeof(")")-1);
                 z_t74_String_free(&bn);
                 z_t74_String_free(&mn);
-                z_t74_String_free(&itorig9);
                 z_t74_String_free(&itn9);
                 z_t74_String_free(&callC9);
                 z_t74_String_free(&recv9);
@@ -111388,7 +111301,6 @@ z_t74_String_t z_t3425_emitUserIterCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable
             z_t74_String_append(&_s20, ")", sizeof(")")-1);
             z_t74_String_free(&bn);
             z_t74_String_free(&mn);
-            z_t74_String_free(&itorig9);
             z_t74_String_free(&itn9);
             z_t74_String_free(&callC9);
             z_t74_String_free(&recv9);
@@ -111407,7 +111319,6 @@ z_t74_String_t z_t3425_emitUserIterCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable
             z_t74_String_t _ret23 = z_t74_String_from_view(_zs3871);
             z_t74_String_free(&bn);
             z_t74_String_free(&mn);
-            z_t74_String_free(&itorig9);
             z_t74_String_free(&itn9);
             return _ret23;
             break;
@@ -111416,7 +111327,6 @@ z_t74_String_t z_t3425_emitUserIterCall(z_t1067_Ast_t* ast, z_t1267_ZSymbolTable
     }
     z_t74_String_free(&bn);
     z_t74_String_free(&mn);
-    z_t74_String_free(&itorig9);
     z_t74_String_free(&itn9);
 }
 
@@ -114192,8 +114102,8 @@ void z_t3459_emitCpFrag(z_t105_StringView_t runtimeDir, z_t105_StringView_t frag
     z_t74_String_append(&_s0, frag.data, frag.length);
     z_t74_String_append(&_s0, ".inc", sizeof(".inc")-1);
     z_t74_String_t p = _s0;
-    z_t3495_Result_String_IoError_t raw = z_io_readText(((z_t105_StringView_t){ p.data, p.size }));
-    z_t3495_Result_String_IoError_t _m3 = raw;
+    z_t3494_Result_String_IoError_t raw = z_io_readText(((z_t105_StringView_t){ p.data, p.size }));
+    z_t3494_Result_String_IoError_t _m3 = raw;
     switch (_m3.tag) {
         case Z_RESULT_STRING_IOERROR_TAG_OK: {
             /* alias: raw => (*(z_t74_String_t*)_m3.data) */
@@ -114214,7 +114124,7 @@ void z_t3459_emitCpFrag(z_t105_StringView_t runtimeDir, z_t105_StringView_t frag
         default: break;
     }
     z_t74_String_free(&p);
-    z_t3495_Result_String_IoError_destroy(&raw);
+    z_t3494_Result_String_IoError_destroy(&raw);
 }
 
 z_t74_String_t z_t3460_mainNameOf9(z_t1068_Node_t program) {
@@ -114400,31 +114310,15 @@ z_t74_String_t z_t3471_optStrSql(z_t947_Option_String_t o) {
     }
 }
 
-z_t74_String_t z_t3472_optStrSome(z_t947_Option_String_t o) {
-    z_t947_Option_String_t _m0 = o;
-    switch (_m0.tag) {
-        case Z_OPTION_STRING_TAG_SOME: {
-            /* alias: o => (*(z_t74_String_t*)_m0.data) */
-            return z_t74_String_from_view(_zs4024);
-            break;
-        }
-        case Z_OPTION_STRING_TAG_NONE: {
-            return z_t74_String_from_view(_zs4025);
-            break;
-        }
-        default: z_unreachable();
-    }
-}
-
-z_t74_String_t z_t3473_cnameSql(z_t105_StringView_t c) {
+z_t74_String_t z_t3472_cnameSql(z_t105_StringView_t c) {
     if ((c.length == 0)) {
-        return z_t74_String_from_view(_zs4026);
+        return z_t74_String_from_view(_zs4024);
     } else {
         return z_t3462_sqlStr(c);
     }
 }
 
-z_t74_String_t z_t3474_paramOwnSql(z_t1794_optionval_zparamownership_t o) {
+z_t74_String_t z_t3473_paramOwnSql(z_t1794_optionval_zparamownership_t o) {
     z_t1794_optionval_zparamownership_t _m0 = o;
     switch (_m0.tag) {
         case Z_OPTIONVAL_ZPARAMOWNERSHIP_TAG_SOME: {
@@ -114437,14 +114331,14 @@ z_t74_String_t z_t3474_paramOwnSql(z_t1794_optionval_zparamownership_t o) {
             break;
         }
         case Z_OPTIONVAL_ZPARAMOWNERSHIP_TAG_NONE: {
-            return z_t74_String_from_view(_zs4027);
+            return z_t74_String_from_view(_zs4025);
             break;
         }
         default: z_unreachable();
     }
 }
 
-z_t74_String_t z_t3475_varOwnSql(z_t1842_optionval_zownership_t o) {
+z_t74_String_t z_t3474_varOwnSql(z_t1842_optionval_zownership_t o) {
     z_t1842_optionval_zownership_t _m0 = o;
     switch (_m0.tag) {
         case Z_OPTIONVAL_ZOWNERSHIP_TAG_SOME: {
@@ -114459,14 +114353,14 @@ z_t74_String_t z_t3475_varOwnSql(z_t1842_optionval_zownership_t o) {
             break;
         }
         case Z_OPTIONVAL_ZOWNERSHIP_TAG_NONE: {
-            return z_t74_String_from_view(_zs4028);
+            return z_t74_String_from_view(_zs4026);
             break;
         }
         default: z_unreachable();
     }
 }
 
-z_t74_String_t z_t3476_optBoolNumOr0(z_t1418_optionval_bool_t o) {
+z_t74_String_t z_t3475_optBoolNumOr0(z_t1418_optionval_bool_t o) {
     z_t1418_optionval_bool_t _m0 = o;
     switch (_m0.tag) {
         case Z_OPTIONVAL_BOOL_TAG_SOME: {
@@ -114476,6 +114370,26 @@ z_t74_String_t z_t3476_optBoolNumOr0(z_t1418_optionval_bool_t o) {
             break;
         }
         case Z_OPTIONVAL_BOOL_TAG_NONE: {
+            return z_t74_String_from_view(_zs4027);
+            break;
+        }
+        default: z_unreachable();
+    }
+}
+
+z_t74_String_t z_t3476_originSql(z_t947_Option_String_t o) {
+    z_t947_Option_String_t _m0 = o;
+    switch (_m0.tag) {
+        case Z_OPTION_STRING_TAG_SOME: {
+            /* alias: o => (*(z_t74_String_t*)_m0.data) */
+            if (((*(z_t74_String_t*)_m0.data).size == 0)) {
+                return z_t74_String_from_view(_zs4028);
+            } else {
+                return z_t3462_sqlStr(((z_t105_StringView_t){ (*(z_t74_String_t*)_m0.data).data, (*(z_t74_String_t*)_m0.data).size }));
+            }
+            break;
+        }
+        case Z_OPTION_STRING_TAG_NONE: {
             return z_t74_String_from_view(_zs4029);
             break;
         }
@@ -114483,49 +114397,29 @@ z_t74_String_t z_t3476_optBoolNumOr0(z_t1418_optionval_bool_t o) {
     }
 }
 
-z_t74_String_t z_t3477_originSql(z_t947_Option_String_t o) {
-    z_t947_Option_String_t _m0 = o;
-    switch (_m0.tag) {
-        case Z_OPTION_STRING_TAG_SOME: {
-            /* alias: o => (*(z_t74_String_t*)_m0.data) */
-            if (((*(z_t74_String_t*)_m0.data).size == 0)) {
-                return z_t74_String_from_view(_zs4030);
-            } else {
-                return z_t3462_sqlStr(((z_t105_StringView_t){ (*(z_t74_String_t*)_m0.data).data, (*(z_t74_String_t*)_m0.data).size }));
-            }
-            break;
-        }
-        case Z_OPTION_STRING_TAG_NONE: {
-            return z_t74_String_from_view(_zs4031);
-            break;
-        }
-        default: z_unreachable();
-    }
-}
-
-z_t74_String_t z_t3478_originKindSql(z_t1418_optionval_bool_t o) {
+z_t74_String_t z_t3477_originKindSql(z_t1418_optionval_bool_t o) {
     z_t1418_optionval_bool_t _m0 = o;
     switch (_m0.tag) {
         case Z_OPTIONVAL_BOOL_TAG_SOME: {
             bool o = _m0.data.some;
             (void)o;
             if (o) {
-                return z_t74_String_from_view(_zs4032);
+                return z_t74_String_from_view(_zs4030);
             }
-            return z_t74_String_from_view(_zs4033);
+            return z_t74_String_from_view(_zs4031);
             break;
         }
         case Z_OPTIONVAL_BOOL_TAG_NONE: {
-            return z_t74_String_from_view(_zs4034);
+            return z_t74_String_from_view(_zs4032);
             break;
         }
         default: z_unreachable();
     }
 }
 
-z_t74_String_t z_t3479_argAtomName(z_t1067_Ast_t* ast, uint64_t id) {
+z_t74_String_t z_t3478_argAtomName(z_t1067_Ast_t* ast, uint64_t id) {
     if ((id == 0)) {
-        return z_t74_String_from_view(_zs4035);
+        return z_t74_String_from_view(_zs4033);
     }
     z_t1068_Node_t n = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(id - 1)));
     z_t1068_Node_t _m0 = n;
@@ -114536,24 +114430,24 @@ z_t74_String_t z_t3479_argAtomName(z_t1067_Ast_t* ast, uint64_t id) {
             break;
         }
         default: {
-            return z_t74_String_from_view(_zs4036);
+            return z_t74_String_from_view(_zs4034);
             break;
         }
     }
 }
 
-uint64_t z_t3480_walkExprStampsAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t nId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals) {
+uint64_t z_t3479_walkExprStampsAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t nId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals) {
     z_t1068_Node_t n9 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(nId - 1)));
-    return z_t3481_walkExprStamps(typing, ast, n9, ids, vals);
+    return z_t3480_walkExprStamps(typing, ast, n9, ids, vals);
 }
 
-uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z_t1068_Node_t n, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals) {
+uint64_t z_t3480_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z_t1068_Node_t n, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals) {
     z_t1068_Node_t _m0 = n;
     switch (_m0.tag) {
         case Z_NODE_TAG_EXPRESSION: {
             /* alias: n => (*(z_t1101_ExpressionData_t*)_m0.data) */
             z_t1068_Node_t _ah1457 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1101_ExpressionData_t*)_m0.data).expression - 1)));
-            uint64_t eff = z_t3481_walkExprStamps(typing, ast, _ah1457, ids, vals);
+            uint64_t eff = z_t3480_walkExprStamps(typing, ast, _ah1457, ids, vals);
             if ((eff > 0)) {
                 uint64_t wid = ((uint64_t)(*(z_t1101_ExpressionData_t*)_m0.data).nodeid);
                 (void)(z_t1422_List_u64_append(ids, wid));
@@ -114567,11 +114461,11 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
         case Z_NODE_TAG_BINOP: {
             /* alias: n => (*(z_t1075_BinOpData_t*)_m0.data) */
             z_t1068_Node_t _ah1458 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1075_BinOpData_t*)_m0.data).lhs - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1458, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1458, ids, vals));
             z_t1068_Node_t _ah1459 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1075_BinOpData_t*)_m0.data).operator - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1459, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1459, ids, vals));
             z_t1068_Node_t _ah1460 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1075_BinOpData_t*)_m0.data).rhs - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1460, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1460, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1075_BinOpData_t*)_m0.data).nodeid));
             break;
         }
@@ -114583,7 +114477,7 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
                 if (_iter1.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t sp = *(uint32_t*)_iter1.data;
                 z_t1068_Node_t _ah1461 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(sp - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, _ah1461, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, _ah1461, ids, vals));
             }
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1077_AtomStringData_t*)_m0.data).nodeid));
             break;
@@ -114591,23 +114485,23 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
         case Z_NODE_TAG_DOTTEDPATH: {
             /* alias: n => (*(z_t1079_DottedPathData_t*)_m0.data) */
             z_t1068_Node_t _ah1462 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1079_DottedPathData_t*)_m0.data).parent - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1462, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1462, ids, vals));
             z_t1068_Node_t _ah1463 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1079_DottedPathData_t*)_m0.data).child - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1463, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1463, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1079_DottedPathData_t*)_m0.data).nodeid));
             break;
         }
         case Z_NODE_TAG_CALL: {
             /* alias: n => (*(z_t1081_CallData_t*)_m0.data) */
             z_t1068_Node_t _ah1464 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1081_CallData_t*)_m0.data).callable - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1464, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1464, ids, vals));
             z_t1050_ListIter_u32_t aiter = z_t1036_List_u32_iterate(&(*(z_t1081_CallData_t*)_m0.data).arguments);
             while (1) {
                 z_t927_OptionView_u32_t _iter2 = z_t1050_ListIter_u32_call(&aiter);
                 if (_iter2.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t arg = *(uint32_t*)_iter2.data;
                 z_t1068_Node_t _ah1465 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(arg - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, _ah1465, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, _ah1465, ids, vals));
             }
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1081_CallData_t*)_m0.data).nodeid));
             break;
@@ -114615,14 +114509,14 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
         case Z_NODE_TAG_TYPEOFEXPR: {
             /* alias: n => (*(z_t1083_TypeOfExprData_t*)_m0.data) */
             z_t1068_Node_t _ah1466 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1083_TypeOfExprData_t*)_m0.data).source - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1466, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1466, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1083_TypeOfExprData_t*)_m0.data).nodeid));
             break;
         }
         case Z_NODE_TAG_NAMEDOPERATION: {
             /* alias: n => (*(z_t1085_NamedOperationData_t*)_m0.data) */
             z_t1068_Node_t _ah1467 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m0.data).operation - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1467, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1467, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1085_NamedOperationData_t*)_m0.data).nodeid));
             break;
         }
@@ -114634,16 +114528,16 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
                 if (_iter3.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t el = *(uint32_t*)_iter3.data;
                 z_t1068_Node_t _ah1468 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(el - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, _ah1468, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, _ah1468, ids, vals));
             }
-            (void)(z_t3482_walkExprStampsOptAt(typing, ast, (*(z_t1087_DataBlockData_t*)_m0.data).outType, ids, vals));
+            (void)(z_t3481_walkExprStampsOptAt(typing, ast, (*(z_t1087_DataBlockData_t*)_m0.data).outType, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1087_DataBlockData_t*)_m0.data).nodeid));
             break;
         }
         case Z_NODE_TAG_YIELDEXPR: {
             /* alias: n => (*(z_t1089_YieldExprData_t*)_m0.data) */
             z_t1068_Node_t _ah1469 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1089_YieldExprData_t*)_m0.data).expr - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1469, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1469, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1089_YieldExprData_t*)_m0.data).nodeid));
             break;
         }
@@ -114655,7 +114549,7 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
                 if (_iter4.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t lnId9 = *(uint32_t*)_iter4.data;
                 z_t1068_Node_t _ah1470 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(lnId9 - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, _ah1470, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, _ah1470, ids, vals));
             }
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1091_StatementData_t*)_m0.data).nodeid));
             break;
@@ -114663,32 +114557,32 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
         case Z_NODE_TAG_STATEMENTLINE: {
             /* alias: n => (*(z_t1093_StatementLineData_t*)_m0.data) */
             z_t1068_Node_t _ah1471 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1093_StatementLineData_t*)_m0.data).statementline - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1471, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1471, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1093_StatementLineData_t*)_m0.data).nodeid));
             break;
         }
         case Z_NODE_TAG_ASSIGNMENT: {
             /* alias: n => (*(z_t1095_AssignmentData_t*)_m0.data) */
             z_t1068_Node_t _ah1472 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1095_AssignmentData_t*)_m0.data).value - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1472, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1472, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1095_AssignmentData_t*)_m0.data).nodeid));
             break;
         }
         case Z_NODE_TAG_REASSIGNMENT: {
             /* alias: n => (*(z_t1097_ReassignmentData_t*)_m0.data) */
             z_t1068_Node_t _ah1473 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1097_ReassignmentData_t*)_m0.data).topath - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1473, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1473, ids, vals));
             z_t1068_Node_t _ah1474 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1097_ReassignmentData_t*)_m0.data).value - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1474, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1474, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1097_ReassignmentData_t*)_m0.data).nodeid));
             break;
         }
         case Z_NODE_TAG_SWAPSTMT: {
             /* alias: n => (*(z_t1099_SwapStmtData_t*)_m0.data) */
             z_t1068_Node_t _ah1475 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1099_SwapStmtData_t*)_m0.data).lhs - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1475, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1475, ids, vals));
             z_t1068_Node_t _ah1476 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1099_SwapStmtData_t*)_m0.data).rhs - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1476, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1476, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1099_SwapStmtData_t*)_m0.data).nodeid));
             break;
         }
@@ -114700,9 +114594,9 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
                 if (_iter5.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t cl = *(uint32_t*)_iter5.data;
                 z_t1068_Node_t _ah1477 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(cl - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, _ah1477, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, _ah1477, ids, vals));
             }
-            (void)(z_t3482_walkExprStampsOptAt(typing, ast, (*(z_t1103_IfData_t*)_m0.data).elseclause, ids, vals));
+            (void)(z_t3481_walkExprStampsOptAt(typing, ast, (*(z_t1103_IfData_t*)_m0.data).elseclause, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1103_IfData_t*)_m0.data).nodeid));
             break;
         }
@@ -114714,10 +114608,10 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
                 if (_iter6.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t coId9 = *(uint32_t*)_iter6.data;
                 z_t1068_Node_t _ah1478 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(coId9 - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, _ah1478, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, _ah1478, ids, vals));
             }
             z_t1068_Node_t _ah1479 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1105_IfClauseData_t*)_m0.data).statement - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1479, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1479, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1105_IfClauseData_t*)_m0.data).nodeid));
             break;
         }
@@ -114729,16 +114623,16 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
                 if (_iter7.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t fc = *(uint32_t*)_iter7.data;
                 z_t1068_Node_t _ah1480 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(fc - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, _ah1480, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, _ah1480, ids, vals));
             }
-            (void)(z_t3482_walkExprStampsOptAt(typing, ast, (*(z_t1107_ForData_t*)_m0.data).body, ids, vals));
+            (void)(z_t3481_walkExprStampsOptAt(typing, ast, (*(z_t1107_ForData_t*)_m0.data).body, ids, vals));
             z_t1050_ListIter_u32_t fpiter = z_t1036_List_u32_iterate(&(*(z_t1107_ForData_t*)_m0.data).postconditions);
             while (1) {
                 z_t927_OptionView_u32_t _iter8 = z_t1050_ListIter_u32_call(&fpiter);
                 if (_iter8.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t fp = *(uint32_t*)_iter8.data;
                 z_t1068_Node_t _ah1481 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(fp - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, _ah1481, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, _ah1481, ids, vals));
             }
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1107_ForData_t*)_m0.data).nodeid));
             break;
@@ -114746,63 +114640,63 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
         case Z_NODE_TAG_DOEXPR: {
             /* alias: n => (*(z_t1109_DoData_t*)_m0.data) */
             z_t1068_Node_t _ah1482 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1109_DoData_t*)_m0.data).statement - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1482, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1482, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1109_DoData_t*)_m0.data).nodeid));
             break;
         }
         case Z_NODE_TAG_WITHEXPR: {
             /* alias: n => (*(z_t1111_WithData_t*)_m0.data) */
             z_t1068_Node_t _ah1483 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1111_WithData_t*)_m0.data).value - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1483, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1483, ids, vals));
             z_t1068_Node_t _ah1484 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1111_WithData_t*)_m0.data).body - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1484, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1484, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1111_WithData_t*)_m0.data).nodeid));
             break;
         }
         case Z_NODE_TAG_CASEEXPR: {
             /* alias: n => (*(z_t1113_CaseData_t*)_m0.data) */
             z_t1068_Node_t _ah1485 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1113_CaseData_t*)_m0.data).subject - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1485, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1485, ids, vals));
             z_t1050_ListIter_u32_t cciter = z_t1036_List_u32_iterate(&(*(z_t1113_CaseData_t*)_m0.data).clauses);
             while (1) {
                 z_t927_OptionView_u32_t _iter9 = z_t1050_ListIter_u32_call(&cciter);
                 if (_iter9.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t cc = *(uint32_t*)_iter9.data;
                 z_t1068_Node_t _ah1486 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(cc - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, _ah1486, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, _ah1486, ids, vals));
             }
-            (void)(z_t3482_walkExprStampsOptAt(typing, ast, (*(z_t1113_CaseData_t*)_m0.data).elseclause, ids, vals));
+            (void)(z_t3481_walkExprStampsOptAt(typing, ast, (*(z_t1113_CaseData_t*)_m0.data).elseclause, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1113_CaseData_t*)_m0.data).nodeid));
             break;
         }
         case Z_NODE_TAG_CASECLAUSE: {
             /* alias: n => (*(z_t1115_CaseClauseData_t*)_m0.data) */
             z_t1068_Node_t _ah1487 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1115_CaseClauseData_t*)_m0.data).matcharm - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1487, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1487, ids, vals));
             z_t1068_Node_t _ah1488 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1115_CaseClauseData_t*)_m0.data).statement - 1)));
-            (void)(z_t3481_walkExprStamps(typing, ast, _ah1488, ids, vals));
+            (void)(z_t3480_walkExprStamps(typing, ast, _ah1488, ids, vals));
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1115_CaseClauseData_t*)_m0.data).nodeid));
             break;
         }
         case Z_NODE_TAG_FUNCTIONDEF: {
             /* alias: n => (*(z_t1117_FunctionData_t*)_m0.data) */
-            (void)(z_t3482_walkExprStampsOptAt(typing, ast, (*(z_t1117_FunctionData_t*)_m0.data).returntype, ids, vals));
+            (void)(z_t3481_walkExprStampsOptAt(typing, ast, (*(z_t1117_FunctionData_t*)_m0.data).returntype, ids, vals));
             z_t1050_ListIter_u32_t piter = z_t1036_List_u32_iterate(&(*(z_t1117_FunctionData_t*)_m0.data).parameters);
             while (1) {
                 z_t927_OptionView_u32_t _iter10 = z_t1050_ListIter_u32_call(&piter);
                 if (_iter10.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t pmId9 = *(uint32_t*)_iter10.data;
                 z_t1068_Node_t pm = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(pmId9 - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, pm, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, pm, ids, vals));
             }
-            (void)(z_t3482_walkExprStampsOptAt(typing, ast, (*(z_t1117_FunctionData_t*)_m0.data).body, ids, vals));
+            (void)(z_t3481_walkExprStampsOptAt(typing, ast, (*(z_t1117_FunctionData_t*)_m0.data).body, ids, vals));
             z_t1050_ListIter_u32_t faiter = z_t1036_List_u32_iterate(&(*(z_t1117_FunctionData_t*)_m0.data).asItems);
             while (1) {
                 z_t927_OptionView_u32_t _iter11 = z_t1050_ListIter_u32_call(&faiter);
                 if (_iter11.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t amId9 = *(uint32_t*)_iter11.data;
                 z_t1068_Node_t am = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(amId9 - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, am, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, am, ids, vals));
             }
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1117_FunctionData_t*)_m0.data).nodeid));
             break;
@@ -114815,7 +114709,7 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
                 if (_iter12.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t oiId9 = *(uint32_t*)_iter12.data;
                 z_t1068_Node_t oi = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(oiId9 - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, oi, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, oi, ids, vals));
             }
             z_t1050_ListIter_u32_t oaiter = z_t1036_List_u32_iterate(&(*(z_t1119_ObjectDefData_t*)_m0.data).asItems);
             while (1) {
@@ -114823,7 +114717,7 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
                 if (_iter13.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t oaId9 = *(uint32_t*)_iter13.data;
                 z_t1068_Node_t oa = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(oaId9 - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, oa, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, oa, ids, vals));
             }
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1119_ObjectDefData_t*)_m0.data).nodeid));
             break;
@@ -114836,7 +114730,7 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
                 if (_iter14.tag == Z_OPTIONVIEW_U32_TAG_NONE) break;
                 uint32_t ub = *(uint32_t*)_iter14.data;
                 z_t1068_Node_t ubNode9 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(ub - 1)));
-                (void)(z_t3481_walkExprStamps(typing, ast, ubNode9, ids, vals));
+                (void)(z_t3480_walkExprStamps(typing, ast, ubNode9, ids, vals));
             }
             return z_t2257_nodeTypeAt(&typing->nodeType, ((uint64_t)(*(z_t1125_UnitData_t*)_m0.data).nodeid));
             break;
@@ -114863,15 +114757,15 @@ uint64_t z_t3481_walkExprStamps(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, z
     }
 }
 
-void z_t3482_walkExprStampsOptAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t oId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals) {
+void z_t3481_walkExprStampsOptAt(z_t1633_ZTyping_t* typing, z_t1067_Ast_t* ast, uint32_t oId, z_t1422_List_u64_t* ids, z_t1422_List_u64_t* vals) {
     if ((oId == 0)) {
         return;
     }
     z_t1068_Node_t o9 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(oId - 1)));
-    (void)(z_t3481_walkExprStamps(typing, ast, o9, ids, vals));
+    (void)(z_t3480_walkExprStamps(typing, ast, o9, ids, vals));
 }
 
-void z_t3483_overrideExpressionStamps(z_t1633_ZTyping_t* typing, z_t1068_Node_t program) {
+void z_t3482_overrideExpressionStamps(z_t1633_ZTyping_t* typing, z_t1068_Node_t program) {
     z_t1422_List_u64_t ids = z_t1422_List_u64_create((uint64_t)0);
     z_t1422_List_u64_t vals = z_t1422_List_u64_create((uint64_t)0);
     z_t1068_Node_t _m0 = program;
@@ -114883,7 +114777,7 @@ void z_t3483_overrideExpressionStamps(z_t1633_ZTyping_t* typing, z_t1068_Node_t 
             while ((uIdx9d < uCnt9d)) {
                 uint32_t uId9 = z_t1036_List_u32_get(&(*(z_t1127_ProgramData_t*)_m0.data).ast.units, uIdx9d);
                 uIdx9d = (uIdx9d + 1);
-                (void)(z_t3480_walkExprStampsAt(typing, &(*(z_t1127_ProgramData_t*)_m0.data).ast, uId9, &ids, &vals));
+                (void)(z_t3479_walkExprStampsAt(typing, &(*(z_t1127_ProgramData_t*)_m0.data).ast, uId9, &ids, &vals));
             }
             break;
         }
@@ -114905,38 +114799,38 @@ void z_t3483_overrideExpressionStamps(z_t1633_ZTyping_t* typing, z_t1068_Node_t 
     z_t1422_List_u64_destroy(&vals);
 }
 
-z_t74_String_t z_t3484_dumpSql(z_t1068_Node_t program, z_t881_ZVfs_t* vfs, z_t1267_ZSymbolTable_t* symtab) {
-    z_t3716_ZDumper_t d = z_t3716_ZDumper_create(z_t3467_schemaSql());
-    (void)(z_t3718_ZDumper_appendFiles(&d, vfs));
-    (void)(z_t3724_ZDumper_appendNodes(&d, program));
-    (void)(z_t3730_ZDumper_appendSynthNodes(&d, &symtab->typing));
-    (void)(z_t3726_ZDumper_appendUnits(&d, program, &symtab->typing));
+z_t74_String_t z_t3483_dumpSql(z_t1068_Node_t program, z_t881_ZVfs_t* vfs, z_t1267_ZSymbolTable_t* symtab) {
+    z_t3715_ZDumper_t d = z_t3715_ZDumper_create(z_t3467_schemaSql());
+    (void)(z_t3717_ZDumper_appendFiles(&d, vfs));
+    (void)(z_t3723_ZDumper_appendNodes(&d, program));
+    (void)(z_t3729_ZDumper_appendSynthNodes(&d, &symtab->typing));
+    (void)(z_t3725_ZDumper_appendUnits(&d, program, &symtab->typing));
     z_t1068_Node_t _m0 = program;
     switch (_m0.tag) {
         case Z_NODE_TAG_PROGRAM: {
             /* alias: program => (*(z_t1127_ProgramData_t*)_m0.data) */
-            (void)(z_t3728_ZDumper_appendTypes(&d, symtab, &(*(z_t1127_ProgramData_t*)_m0.data).ast.names));
-            (void)(z_t3729_ZDumper_appendDecls(&d, &(*(z_t1127_ProgramData_t*)_m0.data).ast, &symtab->typing));
+            (void)(z_t3727_ZDumper_appendTypes(&d, symtab, &(*(z_t1127_ProgramData_t*)_m0.data).ast.names));
+            (void)(z_t3728_ZDumper_appendDecls(&d, &(*(z_t1127_ProgramData_t*)_m0.data).ast, &symtab->typing));
             break;
         }
         default: {
             break;
         }
     }
-    (void)(z_t3737_ZDumper_appendGenericChildren(&d, symtab));
-    (void)(z_t3738_ZDumper_appendGenericArgs(&d, symtab));
-    (void)(z_t3483_overrideExpressionStamps(&symtab->typing, program));
-    (void)(z_t3731_ZDumper_appendTypedNodes(&d, &symtab->typing));
-    (void)(z_t3732_ZDumper_appendAtomStamps(&d, &symtab->typing));
-    (void)(z_t3733_ZDumper_appendConformance(&d, &symtab->typing));
-    (void)(z_t3734_ZDumper_appendSymbolTable(&d, symtab));
+    (void)(z_t3736_ZDumper_appendGenericChildren(&d, symtab));
+    (void)(z_t3737_ZDumper_appendGenericArgs(&d, symtab));
+    (void)(z_t3482_overrideExpressionStamps(&symtab->typing, program));
+    (void)(z_t3730_ZDumper_appendTypedNodes(&d, &symtab->typing));
+    (void)(z_t3731_ZDumper_appendAtomStamps(&d, &symtab->typing));
+    (void)(z_t3732_ZDumper_appendConformance(&d, &symtab->typing));
+    (void)(z_t3733_ZDumper_appendSymbolTable(&d, symtab));
     z_t74_String_t _ret1 = z_t74_String_copy(&d.acc);
-    z_t3716_ZDumper_destroy(&d);
+    z_t3715_ZDumper_destroy(&d);
     return _ret1;
-    z_t3716_ZDumper_destroy(&d);
+    z_t3715_ZDumper_destroy(&d);
 }
 
-uint64_t z_t3485_optU64Or0(z_t169_optionval_u64_t o) {
+uint64_t z_t3484_optU64Or0(z_t169_optionval_u64_t o) {
     z_t169_optionval_u64_t _m0 = o;
     switch (_m0.tag) {
         case Z_OPTIONVAL_U64_TAG_SOME: {
@@ -114953,16 +114847,16 @@ uint64_t z_t3485_optU64Or0(z_t169_optionval_u64_t o) {
     }
 }
 
-z_t74_String_t z_t3486_canonTypeName(z_t1412_ZTypeRegistry_t* reg, uint64_t tid) {
+z_t74_String_t z_t3485_canonTypeName(z_t1412_ZTypeRegistry_t* reg, uint64_t tid) {
     if ((z_t1599_ZTypeRegistry_typeValid(reg, tid) == false)) {
-        return z_t74_String_from_view(_zs4083);
+        return z_t74_String_from_view(_zs4081);
     }
     __auto_type __borrow_zt = &(*z_t1458_List_ZType_get(&reg->typeById, tid));
     /* alias: zt => (*__borrow_zt) */
     return z_t74_String_copy(&(*__borrow_zt).name);
 }
 
-z_t74_String_t z_t3487_mainUnitNameOf(z_t1068_Node_t program) {
+z_t74_String_t z_t3486_mainUnitNameOf(z_t1068_Node_t program) {
     z_t1068_Node_t _m0 = program;
     switch (_m0.tag) {
         case Z_NODE_TAG_PROGRAM: {
@@ -114971,40 +114865,40 @@ z_t74_String_t z_t3487_mainUnitNameOf(z_t1068_Node_t program) {
             break;
         }
         default: {
-            return z_t74_String_from_view(_zs4084);
+            return z_t74_String_from_view(_zs4082);
             break;
         }
     }
 }
 
-z_t74_String_t z_t3488_dumpCanon(z_t1068_Node_t program, z_t1267_ZSymbolTable_t* symtab) {
-    z_t74_String_t mu = z_t3487_mainUnitNameOf(program);
-    z_t3716_ZDumper_t d = z_t3716_ZDumper_create(z_t74_String_from_view(_zs4085));
-    (void)(z_t3736_ZDumper_appendUnitsCanon(&d, program));
+z_t74_String_t z_t3487_dumpCanon(z_t1068_Node_t program, z_t1267_ZSymbolTable_t* symtab) {
+    z_t74_String_t mu = z_t3486_mainUnitNameOf(program);
+    z_t3715_ZDumper_t d = z_t3715_ZDumper_create(z_t74_String_from_view(_zs4083));
+    (void)(z_t3735_ZDumper_appendUnitsCanon(&d, program));
     z_t1068_Node_t _m0 = program;
     switch (_m0.tag) {
         case Z_NODE_TAG_PROGRAM: {
             /* alias: program => (*(z_t1127_ProgramData_t*)_m0.data) */
-            (void)(z_t3741_ZDumper_appendTypesCanon(&d, ((z_t105_StringView_t){ mu.data, mu.size }), symtab, &(*(z_t1127_ProgramData_t*)_m0.data).ast.names));
-            (void)(z_t3742_ZDumper_appendDeclChildCanon(&d, &(*(z_t1127_ProgramData_t*)_m0.data).ast, ((z_t105_StringView_t){ mu.data, mu.size }), symtab));
-            (void)(z_t3745_ZDumper_appendArgDispositionCanon(&d, &(*(z_t1127_ProgramData_t*)_m0.data).ast, symtab));
+            (void)(z_t3740_ZDumper_appendTypesCanon(&d, ((z_t105_StringView_t){ mu.data, mu.size }), symtab));
+            (void)(z_t3741_ZDumper_appendDeclChildCanon(&d, &(*(z_t1127_ProgramData_t*)_m0.data).ast, ((z_t105_StringView_t){ mu.data, mu.size }), symtab));
+            (void)(z_t3744_ZDumper_appendArgDispositionCanon(&d, &(*(z_t1127_ProgramData_t*)_m0.data).ast, symtab));
             break;
         }
         default: {
             break;
         }
     }
-    (void)(z_t3739_ZDumper_appendGenericChildrenCanon(&d, ((z_t105_StringView_t){ mu.data, mu.size }), symtab));
-    (void)(z_t3740_ZDumper_appendGenericArgsCanon(&d, ((z_t105_StringView_t){ mu.data, mu.size }), symtab));
-    (void)(z_t3743_ZDumper_appendConformanceCanon(&d, ((z_t105_StringView_t){ mu.data, mu.size }), symtab));
-    (void)(z_t3744_ZDumper_appendSymbolTableCanon(&d, symtab));
-    (void)(z_t3746_ZDumper_appendCallGenericBindingCanon(&d, program, symtab));
+    (void)(z_t3738_ZDumper_appendGenericChildrenCanon(&d, ((z_t105_StringView_t){ mu.data, mu.size }), symtab));
+    (void)(z_t3739_ZDumper_appendGenericArgsCanon(&d, ((z_t105_StringView_t){ mu.data, mu.size }), symtab));
+    (void)(z_t3742_ZDumper_appendConformanceCanon(&d, ((z_t105_StringView_t){ mu.data, mu.size }), symtab));
+    (void)(z_t3743_ZDumper_appendSymbolTableCanon(&d, symtab));
+    (void)(z_t3745_ZDumper_appendCallGenericBindingCanon(&d, program, symtab));
     z_t74_String_t _ret1 = z_t74_String_copy(&d.acc);
     z_t74_String_free(&mu);
-    z_t3716_ZDumper_destroy(&d);
+    z_t3715_ZDumper_destroy(&d);
     return _ret1;
     z_t74_String_free(&mu);
-    z_t3716_ZDumper_destroy(&d);
+    z_t3715_ZDumper_destroy(&d);
 }
 
 int main(int argc, char* argv[]) {
