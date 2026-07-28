@@ -289,8 +289,9 @@ ZTyping: class {
     # inferred concrete tid per call, keyed by (callNodeid << 32 | paramNameId)
     callGenericBinding: (Map u64 value: u64)
 
-    # per-node single-valued stamps, keyed by parsed-AST nodeid
-    nodeType: (Map u64 value: u64)
+    # per-node single-valued stamps, indexed by nodeid - 1 (node ids are
+    # minted dense 1..N, so the stamp IS the slot); 0 means unstamped
+    nodeType: (List u64)
     callKind: (Map u64 value: zast.callkind)
     atomVariableId: (Map u64 value: u64)
     # dotted-path nodeid -> the internal member name a public alias resolved to
@@ -1466,27 +1467,23 @@ ZTyping: class {
 
 # nodeTypeAt -- the type id stamped on node `nid`; 0 when nothing is stamped
 # there (nodeTypeSet records neither a 0 node id nor a 0 type id).
-nodeTypeAt: function {tbl: (Map u64 value: u64) nid: u64} out u64 is {
+nodeTypeAt: function {tbl: (List u64) nid: u64} out u64 is {
     if nid == 0 then return 0
-    g9: tbl.get key: nid
-    match (
-        g9
-    ) case some then {
-        return g9
-    } case none then {
-        return 0
-    }
+    i9: nid - 1
+    if i9 >= tbl.length then return 0
+    return (tbl.get i: i9)
 }
 
 # nodeTypeSet -- stamp node `nid` with type id `tid`. Node id 0 means "no node"
 # and type id 0 is the unresolved sentinel, so neither is recorded: an absent
 # stamp and a 0 stamp are the same answer to every reader.
-nodeTypeSet: function {tbl: (Map u64 value: u64) nid: u64 tid: u64} is {
+nodeTypeSet: function {tbl: (List u64) nid: u64 tid: u64} is {
     if nid == 0 then return
     if tid == 0 then return
-    k9: nid
+    i9: nid - 1
+    for tbl.length <= i9 loop tbl.append 0
     v9: tid
-    tbl.set key: k9 value: v9
+    tbl.set i: i9 val: v9
 }
 
 # construct an empty ZTyping, pre-sizing its tables for roughly
@@ -1553,7 +1550,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         callGenericBinding: (Map u64 value: u64)
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
-        nodeType: (Map u64 value: u64 capacity: nodeEst)
+        nodeType: (List u64 capacity: nodeEst + (nodeEst / 4))
         callKind: (Map u64 value: zast.callkind)
         atomVariableId: (Map u64 value: u64 capacity: nodeEst / 4)
         aliasInternalName: (Map u64 value: String)
