@@ -771,7 +771,7 @@ ZDumper: class {
     # fields are read directly (not via st methods) so the scope-log iterator's
     # lock does not reject a whole-value method call on st. narrowed_subtype is
     # emitted by a later slice (taken/narrowing entries).
-    appendSymbolTable: function {:this st: zenv.ZSymbolTable} is {
+    appendSymbolTable: function {:this pool: zast.StringPool st: zenv.ZSymbolTable} is {
         seen: (Set u64)
         depth: u64
         for row: st.scopeLog.iterate loop {
@@ -791,7 +791,8 @@ ZDumper: class {
             origSql: optIdStr o: e.originalZtypeId
             defNum: boolNum b: e.isDefinition
             takNum: boolNum b: e.isTaken
-            enmSql: sqlStr s: e.name.stringview
+            enmT9: zast.poolTextCopy :pool ref: e.name
+            enmSql: sqlStr s: enmT9.stringview
             r: "INSERT OR IGNORE INTO entry VALUES (\{e.entryId}, \{e.scopeId}, \{e.position}, \{enmSql}, \{e.ztypeId}, \{defNum}, \{varSql}, \{origSql}, \{takNum}, NULL, NULL, NULL);\n"
             this.acc.append s: r
             if e.narrowedSubtype.length > 0 then {
@@ -1136,7 +1137,7 @@ ZDumper: class {
     # the scope open/close seqs are dropped, foreign keys resolved to names (scope
     # parent and entry owning-scope by scope name, entry/variable ztype via
     # canonTypeName). No unit filter -- the table holds only the main unit's bodies.
-    appendSymbolTableCanon: function {:this st: zenv.ZSymbolTable} is {
+    appendSymbolTableCanon: function {:this pool: zast.StringPool st: zenv.ZSymbolTable} is {
         scopeName: (Map u64 value: String)
         scopeRows: (List String)
         depth: u64
@@ -1173,7 +1174,8 @@ ZDumper: class {
                 so
             ) case some then {
                 scNameSql: sqlStr s: so.stringview
-                enmSql: sqlStr s: e.name.stringview
+                enmT8: zast.poolTextCopy :pool ref: e.name
+                enmSql: sqlStr s: enmT8.stringview
                 ztName: canonTypeName reg: st.reg tid: e.ztypeId
                 ztSql: sqlStr s: ztName.stringview
                 defNum: boolNum b: e.isDefinition
@@ -1504,7 +1506,11 @@ dumpSql: function {program: Node vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out S
     d.appendTypedNodes typing: symtab.typing
     d.appendAtomStamps typing: symtab.typing
     d.appendConformance typing: symtab.typing
-    d.appendSymbolTable st: symtab
+    match (
+        program
+    ) case program then {
+        d.appendSymbolTable pool: program.ast.names st: symtab
+    } else null
     return d.acc.copy
 }
 
@@ -1560,7 +1566,11 @@ dumpCanon: function {program: Node symtab: zenv.ZSymbolTable} out String is {
     d.appendGenericChildrenCanon unm: mu.stringview st: symtab
     d.appendGenericArgsCanon unm: mu.stringview st: symtab
     d.appendConformanceCanon unm: mu.stringview st: symtab
-    d.appendSymbolTableCanon st: symtab
+    match (
+        program
+    ) case program then {
+        d.appendSymbolTableCanon pool: program.ast.names st: symtab
+    } else null
     d.appendCallGenericBindingCanon :program st: symtab
     return d.acc.copy
 }

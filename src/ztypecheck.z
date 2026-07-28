@@ -8344,6 +8344,13 @@ blockHasYieldingLoop: function {ast: Ast blk: Node} out bool is {
     }
 }
 
+# nameIdOf -- the pool id of an already-interned name. 0 (absent) is what
+# every symbol-table query treats as a miss, so a name the pool never saw
+# cannot resolve -- which is exactly right, since nothing declared it.
+nameIdOf: function {ast: Ast name: StringView} out u32 is {
+    return (zast.poolFind pool: ast.names text: name)
+}
+
 # assignmentLocalName -- the pool id of the local a statement-line binds via
 # `name: value`, or 0.
 assignmentLocalName: function {ast: Ast line: Node} out u32 is {
@@ -9684,7 +9691,10 @@ runUnitMonoWalks: function {
                             avU9: st.reg.genericArgAt specId: monoId ordinal: pjU9
                             if avU9 > 0 then {
                                 pnmU9: (pnU9.get i: pjU9).copy
-                                st.define name: pnmU9.stringview ztypeId: avU9
+                                (st.define
+                                    nameId: (zast.poolSet pool: ast.names text: pnmU9.stringview)
+                                    ztypeId: avU9
+                                )
                             }
                         }
                         pjU9 = pjU9 + 1
@@ -12555,7 +12565,7 @@ checkProjectionCreate: function {
                             # the projection borrows, it never hoists.
                             pbr: rootNameOf :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
                             if pbr.length > 0 then {
-                                pbv2: st.lookupVarId name: pbr.stringview
+                                pbv2: st.lookupVarId nameId: (nameIdOf :ast name: pbr.stringview)
                                 match (
                                     pbv2
                                 ) case some then {
@@ -12571,13 +12581,13 @@ checkProjectionCreate: function {
                             ) then {
                                 pbn: bareAtomName :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
                                 if pbn.length > 0 then {
-                                    pbv: st.lookupVarId name: pbn.stringview
+                                    pbv: st.lookupVarId nameId: (nameIdOf :ast name: pbn.stringview)
                                     match (
                                         pbv
                                     ) case some then {
                                         if consumes then {
                                             (st.invalidate
-                                                name: pbn.stringview
+                                                nameId: (nameIdOf :ast name: pbn.stringview)
                                                 loc: (optionval.none ztypes.zsrcpos)
                                             )
                                         }
@@ -12706,12 +12716,12 @@ checkTypedefCreate: function {
                         if (argIsTrivial :ast op: (ast.nodes.get i: (arg.operation - 1).u64)) then {
                             bn: bareAtomName :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
                             if bn.length > 0 then {
-                                bvo: st.lookupVarId name: bn.stringview
+                                bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringview)
                                 match (
                                     bvo
                                 ) case some then {
                                     (st.invalidate
-                                        name: bn.stringview
+                                        nameId: (nameIdOf :ast name: bn.stringview)
                                         loc: (optionval.none ztypes.zsrcpos)
                                     )
                                 } case none then null
@@ -12989,7 +12999,7 @@ baseIsPrivateCapable: function {st: zenv.ZSymbolTable ast: Ast bt: u64 baseNode:
     ) case atomid then {
         anm9: zast.nameTextCopy :ast ref: baseNode.name
         if anm9.stringview == "this" then return true
-        vo9: st.lookupVarId name: anm9.stringview
+        vo9: st.lookupVarId nameId: (nameIdOf :ast name: anm9.stringview)
         match (
             vo9
         ) case some then {
@@ -13316,7 +13326,7 @@ checkDotted: function {
             )
         }
         if mkRoot.length > 0 then {
-            mvo: st.lookupVarId name: mkRoot.stringview
+            mvo: st.lookupVarId nameId: (nameIdOf :ast name: mkRoot.stringview)
             match (
                 mvo
             ) case some then {
@@ -13340,12 +13350,12 @@ checkDotted: function {
                     rpath9: (List String)
                     mrkc9: mkRoot.copy
                     rpath9.append mrkc9
-                    elh9: st.findExclusiveLock path: rpath9
+                    elh9: st.findExclusiveLock pool: ast.names path: rpath9
                     match (
                         elh9
                     ) case some then {
                         relBlocked9 = true
-                        ahn9: st.formatLockHolder elh9
+                        ahn9: st.formatLockHolder pool: ast.names holder: elh9
                         mra9: mkRoot.copy
                         macc9: "Cannot access: '\{mra9}' has exclusive lock held by '\{ahn9}'"
                         ahint9: String
@@ -13369,17 +13379,17 @@ checkDotted: function {
                             width: mkRoot.length.u32.orPanic
                         )
                     } case none then null
-                    rlk9: st.findLock name: mkRoot.stringview
+                    rlk9: st.findLock nameId: (nameIdOf :ast name: mkRoot.stringview)
                     match (
                         rlk9
                     ) case some then {
                         relBlocked9 = true
                         rhn9: String
-                        rlhh9: st.findLockHolder name: mkRoot.stringview
+                        rlhh9: st.findLockHolder nameId: (nameIdOf :ast name: mkRoot.stringview)
                         match (
                             rlhh9
                         ) case some then {
-                            rhn9 = st.formatLockHolder rlhh9
+                            rhn9 = st.formatLockHolder pool: ast.names holder: rlhh9
                         } case none then null
                         lsn9: zenv.zlockstateNameLower t: rlk9
                         mrr9: mkRoot.copy
@@ -13397,7 +13407,7 @@ checkDotted: function {
                 if (relBlocked9) == false then {
                     mh: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: mvo)
                     st.releaseHeldLocks holder: mh
-                    st.invalidate name: mkRoot.stringview loc: takenHere
+                    st.invalidate nameId: (nameIdOf :ast name: mkRoot.stringview) loc: takenHere
                 }
             } case none then {
                 if cn.stringview == "release" then {
@@ -13977,7 +13987,7 @@ checkDotted: function {
         if rmtt == ztypes.ztypetype.protocolType then {
             pjroot: bareAtomName :ast n: (ast.nodes.get i: (dp.parent - 1).u64)
             if pjroot.length > 0 then {
-                pjvo: st.lookupVarId name: pjroot.stringview
+                pjvo: st.lookupVarId nameId: (nameIdOf :ast name: pjroot.stringview)
                 match (
                     pjvo
                 ) case some then {
@@ -14244,7 +14254,7 @@ checkAtomid: function {
 } out u64 is {
     ndNm9: ast.names.texts.get i: (node.name - 1).u64
     result: u64
-    vtOpt: st.lookup name: ndNm9.stringview
+    vtOpt: st.lookup nameId: (nameIdOf :ast name: ndNm9.stringview)
     match (
         vtOpt
     ) case some then {
@@ -14269,7 +14279,7 @@ checkAtomid: function {
         stampGate :st nid: node.nodeid.u64 tid: result
         # atom-use variable id: stamped even during template walks (variable
         # ids are valid there; stampGate only gates GENERIC_PARAM types)
-        avo9: st.lookupVarId name: ndNm9.stringview
+        avo9: st.lookupVarId nameId: (nameIdOf :ast name: ndNm9.stringview)
         match (
             avo9
         ) case some then {
@@ -14304,7 +14314,7 @@ checkAtomid: function {
                 }
             }
         }
-        if (st.isTakenName name: ndNm9.stringview) then {
+        if (st.isTakenName nameId: (nameIdOf :ast name: ndNm9.stringview)) then {
             nmc9: ndNm9.copy
             eh5: String
             m5: "cannot use '\{nmc9}' after ownership transfer"
@@ -14633,7 +14643,7 @@ predFactOf: function {
 # payload keeps the outer type (nothing to read). Condition-derived
 # call sites only -- construction narrowing never routes through here.
 shadowCollapseIfSingle: function {ast: Ast st: zenv.ZSymbolTable name: StringView fullTid: u64} is {
-    arm9: st.narrowedArmOf :name fullTypeId: fullTid
+    arm9: st.narrowedArmOf nameId: (nameIdOf :ast :name) fullTypeId: fullTid
     if arm9.length == 0 then return
     po9: st.typing.declChildOf pool: ast.names parentTypeId: fullTid name: arm9.stringview
     match (
@@ -14642,7 +14652,7 @@ shadowCollapseIfSingle: function {ast: Ast st: zenv.ZSymbolTable name: StringVie
         if (st.reg.typetypeOf typeId: po9) == ztypes.ztypetype.nullType then return
         (st.narrow
             pool: ast.names
-            :name
+            nameId: (nameIdOf :ast :name)
             toTypeId: po9
             subtypeName: arm9.stringview
             shadow: true
@@ -14671,7 +14681,7 @@ applyPredFact: function {ast: Ast st: zenv.ZSymbolTable f: ArmPredFact holds: bo
         ) case some then {
             (st.narrow
                 pool: ast.names
-                name: f.subject.stringview
+                nameId: (nameIdOf :ast name: f.subject.stringview)
                 toTypeId: po9
                 subtypeName: f.armName.stringview
                 shadow: true
@@ -14680,7 +14690,7 @@ applyPredFact: function {ast: Ast st: zenv.ZSymbolTable f: ArmPredFact holds: bo
     } else {
         (st.exclude
             pool: ast.names
-            name: f.subject.stringview
+            nameId: (nameIdOf :ast name: f.subject.stringview)
             subtypeName: f.armName.stringview
             fullTypeId: f.fullTid
         )
@@ -14699,8 +14709,8 @@ postGuardRecord: function {
     subject: StringView
     fullTid: u64
 } is {
-    if (st.isShadowNarrowed name: subject) == false then return
-    arm9: st.getSubtypeName name: subject
+    if (st.isShadowNarrowed nameId: (nameIdOf :ast name: subject)) == false then return
+    arm9: st.getSubtypeName nameId: (nameIdOf :ast name: subject)
     if arm9.length == 0 then return
     po9: st.typing.declChildOf pool: ast.names parentTypeId: fullTid name: arm9.stringview
     match (
@@ -14907,8 +14917,7 @@ checkAssignment: function {
             bo: r0.copy
             v.borrowOrigin = (Option.some bo)
         }
-        anmD9: zast.poolTextCopy pool: ast.names ref: asgn.name
-        st.defineVar name: anmD9.stringview var: v
+        st.defineVar pool: ast.names nameId: asgn.name var: v
         vid2: vid
         st.typing.defVariableId.set key: asgn.nodeid.u64 value: vid2
         st.typing.variableOrigin.set key: vid2 value: false
@@ -14919,7 +14928,7 @@ checkAssignment: function {
             :st
             tid: vt
         ) when (st.reg.hasDestructorName typeId: vt) then {
-            vo5: st.lookupVarId name: rn5.stringview
+            vo5: st.lookupVarId nameId: (nameIdOf :ast name: rn5.stringview)
             match (
                 vo5
             ) case some then {
@@ -14935,7 +14944,10 @@ checkAssignment: function {
                         msg: mb5
                     )
                 } else {
-                    st.invalidate name: rn5.stringview loc: (optionval.none ztypes.zsrcpos)
+                    (st.invalidate
+                        nameId: (nameIdOf :ast name: rn5.stringview)
+                        loc: (optionval.none ztypes.zsrcpos)
+                    )
                 }
             } case none then null
         }
@@ -14945,6 +14957,7 @@ checkAssignment: function {
             st.typing.pendingBorrowShared = false
             (installBorrowLocks
                 :st
+                pool: ast.names
                 src: bsrc
                 :vid
                 leafShared: lfsA9
@@ -14958,10 +14971,9 @@ checkAssignment: function {
         # subject's type and records the narrowed subtype).
         ucArm: unionCreateArmName :ast :st n: av9
         if ucArm.length > 0 then {
-            anmN9: zast.poolTextCopy pool: ast.names ref: asgn.name
             (st.narrow
                 pool: ast.names
-                name: anmN9.stringview
+                nameId: asgn.name
                 toTypeId: vt
                 subtypeName: ucArm.stringview
                 shadow: false
@@ -15015,7 +15027,7 @@ checkReassignment: function {
         ) case some then {
             troot: methodReceiverRoot :ast n: tpn9
             if troot.length > 0 then {
-                tto: st.lookup name: troot.stringview
+                tto: st.lookup nameId: (nameIdOf :ast name: troot.stringview)
                 match (
                     tto
                 ) case some then {
@@ -15064,7 +15076,7 @@ checkReassignment: function {
         {
             nmC9: atomName :ast n: tpn9
             if nmC9.length > 0 then {
-                dtoC9: st.declaredTypeOf name: nmC9.stringview
+                dtoC9: st.declaredTypeOf nameId: (nameIdOf :ast name: nmC9.stringview)
                 match (
                     dtoC9
                 ) case some then {
@@ -15106,8 +15118,8 @@ checkReassignment: function {
     }
     nm: atomName :ast n: tpn9
     if nm.length > 0 then {
-        st.resetNarrowing name: nm.stringview
-        nvo9: st.lookupVarId name: nm.stringview
+        st.resetNarrowing nameId: (nameIdOf :ast name: nm.stringview)
+        nvo9: st.lookupVarId nameId: (nameIdOf :ast name: nm.stringview)
         match (
             nvo9
         ) case some then {
@@ -15133,7 +15145,7 @@ checkReassignment: function {
     troot9: methodReceiverRoot :ast n: tpn9
     tfn9: dottedChildName :ast n: tpn9
     if troot9.length > 0 when tfn9.length > 0 then {
-        tto9: st.lookup name: troot9.stringview
+        tto9: st.lookup nameId: (nameIdOf :ast name: troot9.stringview)
         match (
             tto9
         ) case some then {
@@ -15159,7 +15171,7 @@ checkReassignment: function {
     # appends its taken overlay entry).
     rn: bareAtomName :ast n: rvn9
     if rn.length > 0 when rvt > 0 when (typeIsReftype :st tid: rvt) then {
-        vo: st.lookupVarId name: rn.stringview
+        vo: st.lookupVarId nameId: (nameIdOf :ast name: rn.stringview)
         match (
             vo
         ) case some then {
@@ -15175,7 +15187,10 @@ checkReassignment: function {
                     msg: mc9
                 )
             } else {
-                st.invalidate name: rn.stringview loc: (optionval.none ztypes.zsrcpos)
+                (st.invalidate
+                    nameId: (nameIdOf :ast name: rn.stringview)
+                    loc: (optionval.none ztypes.zsrcpos)
+                )
             }
         } case none then null
     }
@@ -15209,7 +15224,7 @@ withValueOwnership: function {
         return (withValueOwnership :ast :st v: (ast.nodes.get i: (v.expression - 1).u64))
     } case atomid then {
         vNm9: ast.names.texts.get i: (v.name - 1).u64
-        vo: st.lookupVarId name: vNm9.stringview
+        vo: st.lookupVarId nameId: (nameIdOf :ast name: vNm9.stringview)
         match (
             vo
         ) case some then {
@@ -15259,8 +15274,7 @@ checkWith: function {
         }
         v: st.reg.newVariable ztypeId: vt ownership: own
         vid: v.variableId
-        wnmD9: zast.poolTextCopy pool: ast.names ref: withnode.name
-        st.defineVar name: wnmD9.stringview var: v
+        st.defineVar pool: ast.names nameId: withnode.name var: v
         vid2: vid
         st.typing.defVariableId.set key: withnode.nodeid.u64 value: vid2
         if (typeIsReftype :st tid: vt) then {
@@ -15269,6 +15283,7 @@ checkWith: function {
             st.typing.pendingBorrowShared = false
             (installBorrowLocks
                 :st
+                pool: ast.names
                 src: btgt
                 :vid
                 leafShared: lfsW9
@@ -15351,7 +15366,7 @@ checkDo: function {
 } out u64 is {
     doMarker: st.pushBlock name: "block"
     dbk: st.reg.ctlPlaceholder
-    st.define name: "break" ztypeId: dbk
+    st.define nameId: (zast.poolSet pool: ast.names text: "break") ztypeId: dbk
     checkStatement :st :unitName :ast :unitBody block: (ast.nodes.get i: (donode.statement - 1).u64)
     result: lastStmtType :st :ast block: (ast.nodes.get i: (donode.statement - 1).u64)
     st.popTo marker: doMarker
@@ -15448,9 +15463,9 @@ checkFor: function {
 } out u64 is {
     forMarker: st.pushBlock name: "for"
     bk: st.reg.ctlPlaceholder
-    st.define name: "break" ztypeId: bk
+    st.define nameId: (zast.poolSet pool: ast.names text: "break") ztypeId: bk
     ct: st.reg.ctlPlaceholder
-    st.define name: "continue" ztypeId: ct
+    st.define nameId: (zast.poolSet pool: ast.names text: "continue") ztypeId: ct
     citer: fornode.conditions.iterate
     for condId9: citer loop {
         cond: ast.nodes.get i: (condId9 - 1).u64
@@ -15629,14 +15644,18 @@ checkFor: function {
                         v: st.reg.newVariable ztypeId: elem ownership: ztypes.zownership.borrowed
                         v.borrowOrigin = (Option.some bo)
                         vid: v.variableId
-                        st.defineVar name: nm.stringview var: v
+                        nmId9: zast.poolSet pool: ast.names text: nm.stringview
+                    st.defineVar pool: ast.names nameId: nmId9 var: v
                         condNid: nodeId n: (ast.nodes.get i: (cond.operation - 1).u64)
                         st.typing.defVariableId.set key: condNid.u64 value: vid
                     } else {
-                        st.define name: nm.stringview ztypeId: elem
+                        (st.define
+                            nameId: (zast.poolSet pool: ast.names text: nm.stringview)
+                            ztypeId: elem
+                        )
                     }
                 } else {
-                    st.define name: nm.stringview ztypeId: vt
+                    st.define nameId: (zast.poolSet pool: ast.names text: nm.stringview) ztypeId: vt
                 }
             }
         } else null
@@ -15717,12 +15736,12 @@ checkFor: function {
 # never stamps its type (e.g. an else-arm's `childpath.take` emitting `.take` on a
 # String). Mirrors the reference _check_if_inner per-arm restore; the port's take
 # is an overlay over a persisting entry, so clearTaken alone restores (no redefine).
-restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: Set String taken: Set String} is {
+restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: Set u32 taken: Set u32} is {
     liveAfter: st.getLiveOwnedVars
     for vn: liveBefore.iterate loop {
         if (liveAfter.has item: vn) == false then {
-            taken.add item: vn.copy
-            st.clearTaken name: vn.stringview
+            taken.add item: vn
+            st.clearTaken nameId: vn
         }
     }
 }
@@ -15730,9 +15749,9 @@ restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: Set String taken: S
 # invalidateTakenAcross -- after the whole if, mark every var taken in some arm as
 # taken in the enclosing scope (it is consumed on at least one path, so a later use
 # is use-after-take).
-invalidateTakenAcross: function {st: zenv.ZSymbolTable names: Set String} is {
+invalidateTakenAcross: function {st: zenv.ZSymbolTable names: Set u32} is {
     for vn: names.iterate loop {
-        st.invalidate name: vn.stringview loc: (optionval.none ztypes.zsrcpos)
+        st.invalidate nameId: vn loc: (optionval.none ztypes.zsrcpos)
     }
 }
 
@@ -15745,7 +15764,7 @@ checkIf: function {
 } out u64 is {
     ifMarker: st.pushBlock name: "if"
     liveBefore: st.getLiveOwnedVars
-    takenAcross: (Set String)
+    takenAcross: (Set u32)
     nvId: (optU64Or
         o: (walkLookupTyperef :ast ty: st.typing reg: st.reg currentUnit: unitName base: "never")
         d: 0
@@ -16228,7 +16247,7 @@ taggedRecvIsValue: function {ast: Ast st: zenv.ZSymbolTable n: Node} out bool is
     } else {
         rn0: pathRootName :ast :n
         if rn0.length == 0 then return false
-        rvo0: st.lookupVarId name: rn0.stringview
+        rvo0: st.lookupVarId nameId: (nameIdOf :ast name: rn0.stringview)
         match (
             rvo0
         ) case some then {
@@ -16340,6 +16359,7 @@ positionalParamName: function {
 # overlay entry in the open call scope; it vanishes when the scope pops).
 lockCallArg: function {
     st: zenv.ZSymbolTable
+    pool: zast.StringPool
     name: StringView
     callId: u64
     shared: bool
@@ -16354,7 +16374,14 @@ lockCallArg: function {
     h2: (ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId)
     clk9: ztypes.zlockstate.exclusive
     if shared then clk9 = ztypes.zlockstate.shared
-    r: st.tryLock path: pth lockType: clk9 holder: h hasSelfHolder: true selfHolder: h2
+    r: (st.tryLock
+        :pool
+        path: pth
+        lockType: clk9
+        holder: h
+        hasSelfHolder: true
+        selfHolder: h2
+    )
     if r.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: r
 }
 
@@ -16363,6 +16390,7 @@ lockCallArg: function {
 # share the CALL holder identity (self-idempotent).
 lockCallPath: function {
     st: zenv.ZSymbolTable
+    pool: zast.StringPool
     path: List String
     callId: u64
     shared: bool
@@ -16385,6 +16413,7 @@ lockCallPath: function {
         hs: (ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId)
         hs2: (ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId)
         rs: (st.tryLock
+            :pool
             path: sub
             lockType: ztypes.zlockstate.shared
             holder: hs
@@ -16406,7 +16435,14 @@ lockCallPath: function {
     he2: (ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId)
     clk9: ztypes.zlockstate.exclusive
     if shared then clk9 = ztypes.zlockstate.shared
-    re: st.tryLock path: full lockType: clk9 holder: he hasSelfHolder: true selfHolder: he2
+    re: (st.tryLock
+        :pool
+        path: full
+        lockType: clk9
+        holder: he
+        hasSelfHolder: true
+        selfHolder: he2
+    )
     if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
 }
 
@@ -16479,6 +16515,7 @@ takePendingBorrow: function {st: zenv.ZSymbolTable dst: List String} is {
 # path root -- the oracle's non-definition rows). Holder = the binding var.
 installBorrowLocks: function {
     st: zenv.ZSymbolTable
+    pool: zast.StringPool
     src: List String
     vid: u64
     leafShared: bool
@@ -16501,6 +16538,7 @@ installBorrowLocks: function {
         hs: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: vid)
         hs2: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: vid)
         rs: (st.tryLock
+            :pool
             path: sub
             lockType: ztypes.zlockstate.shared
             holder: hs
@@ -16522,7 +16560,14 @@ installBorrowLocks: function {
     he2: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: vid)
     lk9: ztypes.zlockstate.exclusive
     if leafShared then lk9 = ztypes.zlockstate.shared
-    re: st.tryLock path: full lockType: lk9 holder: he hasSelfHolder: false selfHolder: he2
+    re: (st.tryLock
+        :pool
+        path: full
+        lockType: lk9
+        holder: he
+        hasSelfHolder: false
+        selfHolder: he2
+    )
     if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
 }
 
@@ -16590,7 +16635,8 @@ hoistArg: function {ast: Ast
         v.borrowOrigin = (Option.some hbo)
     }
     vid: v.variableId
-    st.defineVar name: tname.stringview var: v
+    tnId9: zast.poolSet pool: ast.names text: tname.stringview
+    st.defineVar pool: ast.names nameId: tnId9 var: v
     # the hoisted temp is the user-written hoist made explicit: it borrows
     # its source path for the call scope (SHARED prefixes, leaf kind from
     # the side channel), so aliasing between arguments -- or with a live
@@ -16610,6 +16656,7 @@ hoistArg: function {ast: Ast
         if okInstall9 then {
             (installBorrowLocks
                 :st
+                pool: ast.names
                 src: hbsrc
                 :vid
                 leafShared: st.typing.pendingBorrowShared
@@ -16620,7 +16667,10 @@ hoistArg: function {ast: Ast
         }
     }
     st.typing.defVariableId.set key: assignId.u64 value: vid
-    if consumes then st.invalidate name: tname.stringview loc: (optionval.none ztypes.zsrcpos)
+    if consumes then (st.invalidate
+        nameId: (nameIdOf :ast name: tname.stringview)
+        loc: (optionval.none ztypes.zsrcpos)
+    )
     return tname
 }
 
@@ -17208,7 +17258,7 @@ walkCallArgsHoist: function {
                     # parameter locks it for the call.
                     bn: bareAtomName :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
                     if bn.length > 0 when (typeIsReftype :st tid: vt) then {
-                        bvo: st.lookupVarId name: bn.stringview
+                        bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringview)
                         match (
                             bvo
                         ) case some then {
@@ -17230,12 +17280,16 @@ walkCallArgsHoist: function {
                                         msg: mb7
                                     )
                                 } else {
-                                    st.invalidate name: bn.stringview loc: takenHere
+                                    (st.invalidate
+                                        nameId: (nameIdOf :ast name: bn.stringview)
+                                        loc: takenHere
+                                    )
                                 }
                             } else {
                                 if isLockish then {
                                     (lockCallArg
                                         :st
+                                        pool: ast.names
                                         name: bn.stringview
                                         callId: call.nodeid.u64
                                         shared: false
@@ -17286,7 +17340,7 @@ walkCallArgsHoist: function {
                             appendValueTuple :ast n: an9 dst: src9
                             if src9.length > 0 then {
                                 rt9: rootNameOf :ast n: an9
-                                rvo9: st.lookupVarId name: rt9.stringview
+                                rvo9: st.lookupVarId nameId: (nameIdOf :ast name: rt9.stringview)
                                 match (
                                     rvo9
                                 ) case some then {
@@ -17317,6 +17371,7 @@ walkCallArgsHoist: function {
                         if isLockish when (typeIsReftype :st tid: vt) then {
                             (lockCallArg
                                 :st
+                                pool: ast.names
                                 name: tnm.stringview
                                 callId: call.nodeid.u64
                                 shared: false
@@ -17389,7 +17444,7 @@ checkBoxConstruction: function {
                             }
                             bn: bareAtomName :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
                             if bn.length > 0 when (typeIsReftype :st tid: vt) then {
-                                bvo8: st.lookupVarId name: bn.stringview
+                                bvo8: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringview)
                                 match (
                                     bvo8
                                 ) case some then {
@@ -17408,10 +17463,16 @@ checkBoxConstruction: function {
                                             msg: mb8
                                         )
                                     } else {
-                                        st.invalidate name: bn.stringview loc: takenHere
+                                        (st.invalidate
+                                            nameId: (nameIdOf :ast name: bn.stringview)
+                                            loc: takenHere
+                                        )
                                     }
                                 } case none then {
-                                    st.invalidate name: bn.stringview loc: takenHere
+                                    (st.invalidate
+                                        nameId: (nameIdOf :ast name: bn.stringview)
+                                        loc: takenHere
+                                    )
                                 }
                             }
                         } else {
@@ -17574,7 +17635,7 @@ unresolvedBareName: function {ast: Ast
     # `meta` is the enclosing type's raw allocator base (meta.create):
     # contextual, never a unit-resolvable name
     if name == "meta" then return "".string
-    ubv9: st.lookupVarId :name
+    ubv9: st.lookupVarId nameId: (nameIdOf :ast :name)
     match (
         ubv9
     ) case some then {
@@ -17943,7 +18004,7 @@ checkCall: function {
                     recvVal9: false
                     rrn9: rootNameOf :ast n: (ast.nodes.get i: (call.callable - 1).u64)
                     if rrn9.length > 0 then {
-                        rlo9: st.lookup name: rrn9.stringview
+                        rlo9: st.lookup nameId: (nameIdOf :ast name: rrn9.stringview)
                         match (
                             rlo9
                         ) case some then {
@@ -17965,11 +18026,11 @@ checkCall: function {
                     # the args, matching the oracle's entry order).
                     rro: methodReceiverRoot :ast n: (ast.nodes.get i: (call.callable - 1).u64)
                     if rro.length > 0 then {
-                        rvo2: st.lookupVarId name: rro.stringview
+                        rvo2: st.lookupVarId nameId: (nameIdOf :ast name: rro.stringview)
                         match (
                             rvo2
                         ) case some then {
-                            rvt2: st.lookup name: rro.stringview
+                            rvt2: st.lookup nameId: (nameIdOf :ast name: rro.stringview)
                             match (
                                 rvt2
                             ) case some then {
@@ -18002,6 +18063,7 @@ checkCall: function {
                                     )
                                     (lockCallArg
                                         :st
+                                        pool: ast.names
                                         name: rro.stringview
                                         callId: call.nodeid.u64
                                         shared: shr9
@@ -18022,7 +18084,10 @@ checkCall: function {
                         xq79: ast.nodes.get i: (call.callable - 1).u64
                         methodReceiverTuple :ast n: xq79 dst: rtupC
                         if rtupC.length > 1 then {
-                            rvoN: st.lookupVarId name: (rtupC.get i: 0).stringview
+                            rvoN: st.lookupVarId nameId: (nameIdOf
+                                :ast
+                                name: (rtupC.get i: 0).stringview
+                            )
                             match (
                                 rvoN
                             ) case some then {
@@ -18040,6 +18105,7 @@ checkCall: function {
                                     )
                                     (lockCallPath
                                         :st
+                                        pool: ast.names
                                         path: rtupC
                                         callId: call.nodeid.u64
                                         shared: shrN9
@@ -18097,7 +18163,10 @@ checkCall: function {
                         methodReceiverTuple :ast n: xq49 dst: rtupB
                         pushedB: false
                         if rtupB.length > 0 then {
-                            rvoB: st.lookupVarId name: (rtupB.get i: 0).stringview
+                            rvoB: st.lookupVarId nameId: (nameIdOf
+                                :ast
+                                name: (rtupB.get i: 0).stringview
+                            )
                             match (
                                 rvoB
                             ) case some then {
@@ -18132,7 +18201,10 @@ checkCall: function {
                             xq39: ast.nodes.get i: (call.callable - 1).u64
                             methodReceiverTuple :ast n: xq39 dst: rtupV
                             if rtupV.length > 0 then {
-                                rvb9: st.lookupVarId name: (rtupV.get i: 0).stringview
+                                rvb9: st.lookupVarId nameId: (nameIdOf
+                                    :ast
+                                    name: (rtupV.get i: 0).stringview
+                                )
                                 match (
                                     rvb9
                                 ) case some then {
@@ -18349,11 +18421,11 @@ checkCall: function {
                             xq29: ast.nodes.get i: (call.callable - 1).u64
                             rroG9: methodReceiverRoot :ast n: xq29
                             if rroG9.length > 0 then {
-                                rvoG9: st.lookupVarId name: rroG9.stringview
+                                rvoG9: st.lookupVarId nameId: (nameIdOf :ast name: rroG9.stringview)
                                 match (
                                     rvoG9
                                 ) case some then {
-                                    rvtG9: st.lookup name: rroG9.stringview
+                                    rvtG9: st.lookup nameId: (nameIdOf :ast name: rroG9.stringview)
                                     match (
                                         rvtG9
                                     ) case some then {
@@ -18385,6 +18457,7 @@ checkCall: function {
                                             )
                                             (lockCallArg
                                                 :st
+                                                pool: ast.names
                                                 name: rroG9.stringview
                                                 callId: call.nodeid.u64
                                                 shared: shrG9
@@ -18473,7 +18546,7 @@ checkCall: function {
         if cn.length > 0 then {
             # A local variable of FUNCTION type (a spec-typed param or a
             # function reference) is callable; locals shadow unit names.
-            lvo: st.lookup name: cn.stringview
+            lvo: st.lookup nameId: (nameIdOf :ast name: cn.stringview)
             match (
                 lvo
             ) case some then {
@@ -18482,7 +18555,7 @@ checkCall: function {
                     st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.callable
                     # callee-use variable id: calling through a fn-typed
                     # variable reads it, so it stamps like a value atom
-                    cvo9: st.lookupVarId name: cn.stringview
+                    cvo9: st.lookupVarId nameId: (nameIdOf :ast name: cn.stringview)
                     match (
                         cvo9
                     ) case some then {
@@ -19255,7 +19328,7 @@ checkCase: function {
     if st.typing.curMonoStamp > 0 when subjT > 0 then {
         dsn9: subjectAtomName :ast n: (ast.nodes.get i: (casenode.subject - 1).u64)
         if dsn9.length > 0 then {
-            dsv9: st.lookupVarId name: dsn9.stringview
+            dsv9: st.lookupVarId nameId: (nameIdOf :ast name: dsn9.stringview)
             match (
                 dsv9
             ) case some then null case none then {
@@ -19357,7 +19430,10 @@ checkCase: function {
     )
     anyEmpty: false
     st.pushBlock name: "match_body"
-    if targetName.length > 0 then st.resetNarrowing name: targetName.stringview
+    if targetName.length > 0 then st.resetNarrowing nameId: (nameIdOf
+        :ast
+        name: targetName.stringview
+    )
     covered: (List String)
     diverging: (List String)
     armTypes: (List u64)
@@ -19411,7 +19487,7 @@ checkCase: function {
                 ) case some then {
                     (st.narrow
                         pool: ast.names
-                        name: targetName.stringview
+                        nameId: (nameIdOf :ast name: targetName.stringview)
                         toTypeId: armo9
                         subtypeName: armName.stringview
                         shadow: true
@@ -19443,7 +19519,7 @@ checkCase: function {
             with eiter: covered.iterate do for en2: eiter loop {
                 (st.exclude
                     pool: ast.names
-                    name: targetName.stringview
+                    nameId: (nameIdOf :ast name: targetName.stringview)
                     subtypeName: en2.stringview
                     fullTypeId: subjT
                 )
@@ -19468,7 +19544,10 @@ checkCase: function {
             required9: (List String)
             nsn9: String
             if targetName.length > 0 then {
-                gsn9: st.narrowedArmOf name: targetName.stringview fullTypeId: subjT
+                gsn9: (st.narrowedArmOf
+                    nameId: (nameIdOf :ast name: targetName.stringview)
+                    fullTypeId: subjT
+                )
                 nsn9 = gsn9
             }
             if nsn9.length > 0 then {
@@ -19477,7 +19556,10 @@ checkCase: function {
             } else {
                 excl9: (Set String)
                 if targetName.length > 0 then {
-                    st.collectExcluded name: targetName.stringview into: excl9
+                    (st.collectExcluded
+                        nameId: (nameIdOf :ast name: targetName.stringview)
+                        into: excl9
+                    )
                 }
                 with a0it9: arms2.iterate do for an0: a0it9 loop {
                     if (excl9.has item: an0) == false then required9.append an0.copy
@@ -19524,7 +19606,7 @@ checkCase: function {
         with diter: diverging.iterate do for dn2: diter loop {
             (st.exclude
                 pool: ast.names
-                name: targetName.stringview
+                nameId: (nameIdOf :ast name: targetName.stringview)
                 subtypeName: dn2.stringview
                 fullTypeId: subjT
             )
@@ -19613,13 +19695,13 @@ checkValue: function {
         # the `:x` shorthand in value position reads the local x -- and only a
         # local: it resolves through no other scope, so a miss is unresolvable
         lvNm9: ast.names.texts.get i: (node.name - 1).u64
-        lvo9: st.lookup name: lvNm9.stringview
+        lvo9: st.lookup nameId: (nameIdOf :ast name: lvNm9.stringview)
         match (
             lvo9
         ) case some then {
             setlv9: lvo9
             stampGate :st nid: node.nodeid.u64 tid: setlv9
-            lvv9: st.lookupVarId name: lvNm9.stringview
+            lvv9: st.lookupVarId nameId: (nameIdOf :ast name: lvNm9.stringview)
             match (
                 lvv9
             ) case some then {
@@ -19654,7 +19736,7 @@ checkValue: function {
         # resume value is a borrow into the caller's argument: the
         # surrounding binding becomes BORROWED origin value.
         checkValue :st :unitName :ast :unitBody node: (ast.nodes.get i: (node.expr - 1).u64)
-        yvo: st.lookup name: "value"
+        yvo: st.lookup nameId: (nameIdOf :ast name: "value")
         match (
             yvo
         ) case some then {
@@ -20323,7 +20405,8 @@ checkFunctionBody: function {
                         n: (ast.nodes.get i: (pm.operation - 1).u64)
                     ) then v.isPrivateAccess = true
                     vid2: v.variableId
-                    st.defineVar name: pname.stringview var: v
+                    pnId9: zast.poolSet pool: ast.names text: pname.stringview
+        st.defineVar pool: ast.names nameId: pnId9 var: v
                     st.typing.defVariableId.set key: pnid.u64 value: vid2
                     st.typing.variableOrigin.set key: vid2 value: true
                 } else null
@@ -20913,6 +20996,7 @@ sweepUnwalkedMethods: function {st: zenv.ZSymbolTable ast: Ast} is {
 # substitution at stamp time; the template's Decl is the one key.
 bindMonoParams: function {
     st: zenv.ZSymbolTable
+    pool: zast.StringPool
     monoId: u64
 } is {
     morig9: u64
@@ -20929,7 +21013,7 @@ bindMonoParams: function {
             av9: st.reg.genericArgAt specId: monoId ordinal: pj9
             if av9 > 0 then {
                 pnm9: (pn9.get i: pj9).copy
-                st.define name: pnm9.stringview ztypeId: av9
+                st.define nameId: (zast.poolSet :pool text: pnm9.stringview) ztypeId: av9
                 pto9: st.reg.genericParamTidOf :tdecl paramName: pnm9.stringview
                 match (
                     pto9
@@ -20998,7 +21082,7 @@ stampOneFnMono: function {
     st.push name: sn9.stringview
     st.typing.monoParamSubst = (Map u64 value: u64)
     {
-        bindMonoParams :st :monoId
+        bindMonoParams :st pool: ast.names :monoId
     }
     st.typing.curMonoStamp = monoId
     st.typing.curMonoFnTid = monoId
@@ -21095,7 +21179,7 @@ stampOneClassMono: function {
     st.push name: sn9.stringview
     st.typing.monoParamSubst = (Map u64 value: u64)
     {
-        bindMonoParams :st :monoId
+        bindMonoParams :st pool: ast.names :monoId
     }
     mNames9: (List String)
     mOps9: (List u32)
@@ -21379,7 +21463,7 @@ stampOneUnitMono: function {
     st.push name: sn9.stringview
     st.typing.monoParamSubst = (Map u64 value: u64)
     {
-        bindMonoParams :st :monoId
+        bindMonoParams :st pool: ast.names :monoId
     }
     idxs9: (List u64)
     {
