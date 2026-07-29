@@ -466,6 +466,11 @@ ZType: class {
     # the declaration (ztyping DeclId) that minted this type; 0 until the
     # declaration layer links it
     def: u64
+    # the type that owns this one when it is a member (a method, an operator,
+    # a synthesized `create`/`borrow`); 0 for a free type. `name` is always the
+    # member's OWN name -- the qualified form exists only in the emitted C
+    # symbol, which composeCname builds from the two parts.
+    ownerTid: u64
     cname: String
 }
 
@@ -560,6 +565,7 @@ holeType: function {} out ZType is {
     isNative: false
     runtimeIndexed: false
     def: 0
+    ownerTid: 0
     cname: "".string)
 }
 
@@ -617,9 +623,11 @@ ZTypeRegistry: class {
     # fields afterward. They are registry methods (not free functions)
     # so the id-counter bump persists through the `:this` receiver -- a
     # bump through a plain borrowed param does not propagate back.
-    newType: function {:this name: StringView typetype: ztypetype} out u64 is {
+    newType: function {:this name: StringView typetype: ztypetype ownerTid: 0.u64} out u64 is {
         id: this.nextTypeId
         this.nextTypeId = this.nextTypeId + 1
+        own9: String
+        if ownerTid > 0 then own9 = this.nameOf tid: ownerTid
         t: (ZType
         typeId: id
         name: name.string
@@ -640,7 +648,8 @@ ZTypeRegistry: class {
         isNative: false
         runtimeIndexed: false
         def: 0
-        cname: (composeCname tid: id :name))
+        :ownerTid
+        cname: (composeCname tid: id ownerName: own9.stringview :name))
         this.typeById.append t
         return id
     }
@@ -1292,9 +1301,11 @@ mangleVarName: function {name: StringView} out String is {
 # composeCname -- the id-based C name for a type: z_t{tid}_{name}, dots
 # flattened to underscores. Composed once at mint (newType); consumers read
 # the stored cname, never re-derive it.
-composeCname: function {tid: u64 name: StringView} out String is {
+composeCname: function {tid: u64 ownerName: StringView name: StringView} out String is {
     flat: name.replace needle: "." replacement: "_"
-    return "z_t\{tid}_\{flat}"
+    if ownerName.length == 0 then return "z_t\{tid}_\{flat}"
+    oflat: ownerName.replace needle: "." replacement: "_"
+    return "z_t\{tid}_\{oflat}_\{flat}"
 }
 
 # --- numeric classification and range ---
