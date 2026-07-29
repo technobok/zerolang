@@ -1203,8 +1203,8 @@ Ctx: class {
     aliases: (List NameVal)
     narrowBox: (List NameVal)
     narrowTid: (List NameTid)
-    exclArms: (List NameVal)
-    exclTids: (List NameTid)
+    exclArms: (List VidVal)
+    exclTids: (List VidTid)
     genActive: bool
     # the emitted C name of the generator receiver, for the state-machine
     # prologue: it is a renamed parameter, not the literal `this`
@@ -1403,6 +1403,106 @@ NameVal: class {
 NameTid: class {
     name: String
     tid: u64
+}
+
+# VidVal / VidTid -- the same pairs keyed by VARIABLE ID rather than by source
+# name. A name conflates two bindings that happen to share it; a variable id
+# cannot, and it is the only key a declaration site and a use site can both
+# produce. A vid of 0 means "no variable here" and never keys an entry.
+VidVal: class {
+    vid: u64
+    val: String
+}
+
+VidTid: class {
+    vid: u64
+    tid: u64
+}
+
+# vvGet -- the value recorded for `vid`, "" when absent (values never empty).
+vvGet: function {xs: List VidVal vid: u64} out String is {
+    if vid == 0 then return "".string
+    i9: u64
+    n9: xs.length
+    for i9 < n9 loop {
+        e9: xs.get i: i9
+        if e9.vid == vid then return e9.val.copy
+        i9 = i9 + 1
+    }
+    return "".string
+}
+
+# vvSet -- replace-or-append: one entry per variable (map.set semantics).
+vvSet: function {xs: List VidVal vid: u64 val: StringView} is {
+    if vid == 0 then return
+    i9: u64
+    n9: xs.length
+    for i9 < n9 loop {
+        if (xs.get i: i9).vid == vid then {
+            xs.set i: i9 val: (VidVal :vid val: val.string)
+            return
+        }
+        i9 = i9 + 1
+    }
+    xs.append (VidVal :vid val: val.string)
+}
+
+# vvRemove -- drop `vid`'s entry (swap-with-last; vids are unique).
+vvRemove: function {xs: List VidVal vid: u64} is {
+    if vid == 0 then return
+    i9: u64
+    n9: xs.length
+    for i9 < n9 loop {
+        if (xs.get i: i9).vid == vid then {
+            last9: xs.pop
+            if i9 + 1 < n9 then xs.set i: i9 val: last9
+            return
+        }
+        i9 = i9 + 1
+    }
+}
+
+# the type id bound to `vid` in `xs`, or none.
+vtGet: function {xs: List VidTid vid: u64} out optionval u64 is {
+    if vid == 0 then return (optionval.none u64)
+    i9: u64
+    n9: xs.length
+    for i9 < n9 loop {
+        e9: xs.get i: i9
+        if e9.vid == vid then return (optionval.some e9.tid)
+        i9 = i9 + 1
+    }
+    return (optionval.none u64)
+}
+
+# bind `vid` to type id `tid` in `xs`.
+vtSet: function {xs: List VidTid vid: u64 tid: u64} is {
+    if vid == 0 then return
+    i9: u64
+    n9: xs.length
+    for i9 < n9 loop {
+        if (xs.get i: i9).vid == vid then {
+            xs.set i: i9 val: (VidTid :vid :tid)
+            return
+        }
+        i9 = i9 + 1
+    }
+    xs.append (VidTid :vid :tid)
+}
+
+# remove `vid`'s binding from `xs`.
+vtRemove: function {xs: List VidTid vid: u64} is {
+    if vid == 0 then return
+    i9: u64
+    n9: xs.length
+    for i9 < n9 loop {
+        if (xs.get i: i9).vid == vid then {
+            last9: xs.pop
+            if i9 + 1 < n9 then xs.set i: i9 val: last9
+            return
+        }
+        i9 = i9 + 1
+    }
 }
 
 # nvGet -- the value recorded for name, "" when absent (values never empty).
@@ -11686,17 +11786,17 @@ armAliasText9: function {
 }
 
 # remainingArm9 -- the single arm of `tid` left after removing the
-# ambient exclusions recorded for `subject` (ctx.exclArms) plus the
+# ambient exclusions recorded for variable `subjVid` (ctx.exclArms) plus the
 # `extra` space-joined arms; "" when zero or more than one remain.
 remainingArm9: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    subject: StringView
+    subjVid: u64
     tid: u64
     extra: StringView
 } out String is {
-    exv9: nvGet xs: ctx.exclArms name: subject
+    exv9: vvGet xs: ctx.exclArms vid: subjVid
     all9: (List String)
     sumArmNames9 :ast :symtab :tid names: all9
     remN9: u64
@@ -11882,12 +11982,13 @@ seedNegFromPred9: function {
         if bsn9.stringview == "bool" then return
         subj9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
         if subj9.length == 0 then return
+        snv9: atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64))
         arm9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         rem9: (remainingArm9
             :ast
             :symtab
             :ctx
-            subject: subj9.stringview
+            subjVid: snv9
             tid: dap9
             extra: arm9.stringview
         )
@@ -11895,7 +11996,6 @@ seedNegFromPred9: function {
         if (bodyReassigns9 :ast n: body name: subj9.stringview) then return
         recv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
         acc9: ".".string
-        snv9: atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64))
         if (isPtrVid :ctx vid: snv9) then acc9 = "->".string
         alias9: (armAliasText9
             :ast
@@ -12437,19 +12537,18 @@ emitElse9: function {
         # condition-false knowledge: each positive chain fact excludes its
         # arm for the else body (layered in ctx.exclArms so nested else-if
         # wraps compose); a negated fact IS the arm directly.
-        exN9: (List String)
+        exN9: (List u64)
         exPrevV9: (List String)
         exPrevT9: (List u64)
         fi9: u64
         for fi9 < chSubjects.length loop {
             if (chNegs.get i: fi9) == false then {
-                fs9: chSubjects.get i: fi9
-                pv0: nvGet xs: ctx.exclArms name: fs9.stringview
-                fsv9: fs9.copy
-                exN9.append fsv9
+                fv9: chSubjectVids.get i: fi9
+                pv0: vvGet xs: ctx.exclArms vid: fv9
+                exN9.append fv9
                 pvc9: pv0.copy
                 exPrevV9.append pvc9
-                exPrevT9.append (optU64Or9 o: (ntGet xs: ctx.exclTids name: fs9.stringview))
+                exPrevT9.append (optU64Or9 o: (vtGet xs: ctx.exclTids vid: fv9))
                 fa9: chArms.get i: fi9
                 nx9: String
                 if pv0.length > 0 then {
@@ -12459,8 +12558,8 @@ emitElse9: function {
                     na0: fa9.copy
                     nx9 = na0
                 }
-                nvSet xs: ctx.exclArms name: fs9.stringview val: nx9.stringview
-                ntSet xs: ctx.exclTids name: fs9.stringview tid: (chTids.get i: fi9)
+                vvSet xs: ctx.exclArms vid: fv9 val: nx9.stringview
+                vtSet xs: ctx.exclTids vid: fv9 tid: (chTids.get i: fi9)
             }
             fi9 = fi9 + 1
         }
@@ -12471,6 +12570,7 @@ emitElse9: function {
         gi9: u64
         for gi9 < chSubjects.length loop {
             gs9: chSubjects.get i: gi9
+            gv9: chSubjectVids.get i: gi9
             if (doneS9.has item: gs9) == false then {
                 gsc9: gs9.copy
                 doneS9.add item: gsc9
@@ -12494,7 +12594,7 @@ emitElse9: function {
                         :ast
                         :symtab
                         :ctx
-                        subject: gs9.stringview
+                        subjVid: gv9
                         tid: gtid9
                         extra: ""
                     )
@@ -12504,7 +12604,6 @@ emitElse9: function {
                     if (bodyReassigns9 :ast n: o name: gs9.stringview) == false then {
                         mrecv9: chRecvs.get i: gi9
                         macc9: ".".string
-                        gv9: chSubjectVids.get i: gi9
                         if (isPtrVid :ctx vid: gv9) then macc9 = "->".string
                         alias9: (armAliasText9
                             :ast
@@ -12581,15 +12680,15 @@ emitElse9: function {
             xn9: exN9.get i: xi9
             xv9: exPrevV9.get i: xi9
             if xv9.length > 0 then {
-                nvSet xs: ctx.exclArms name: xn9.stringview val: xv9.stringview
+                vvSet xs: ctx.exclArms vid: xn9 val: xv9.stringview
             } else {
-                nvRemove xs: ctx.exclArms name: xn9.stringview
+                vvRemove xs: ctx.exclArms vid: xn9
             }
             xt9: exPrevT9.get i: xi9
             if xt9 > 0 then {
-                ntSet xs: ctx.exclTids name: xn9.stringview tid: xt9
+                vtSet xs: ctx.exclTids vid: xn9 tid: xt9
             } else {
-                ntRemove xs: ctx.exclTids name: xn9.stringview
+                vtRemove xs: ctx.exclTids vid: xn9
             }
         }
     }
@@ -14541,8 +14640,8 @@ emitUnitMonoInstances: function {
                                         ctx.aliases = (List NameVal)
                                         ctx.narrowBox = (List NameVal)
                                         ctx.narrowTid = (List NameTid)
-                                        ctx.exclArms = (List NameVal)
-                                        ctx.exclTids = (List NameTid)
+                                        ctx.exclArms = (List VidVal)
+                                        ctx.exclTids = (List VidTid)
                                         (registerReftypeParams
                                             :ast
                                             :symtab
@@ -14678,8 +14777,8 @@ emitFnMonoInstances: function {
                 ctx.aliases = (List NameVal)
                 ctx.narrowBox = (List NameVal)
                 ctx.narrowTid = (List NameTid)
-                ctx.exclArms = (List NameVal)
-                ctx.exclTids = (List NameTid)
+                ctx.exclArms = (List VidVal)
+                ctx.exclTids = (List VidTid)
                 registerReftypeParams :ast :symtab :ctx fid: t9 op: templateFnOp
                 ctx.curThisTid = t9
                 emitFnBody :ast :symtab :ctx op: templateFnOp fid: t9 :buf
@@ -14801,8 +14900,8 @@ emitFnsIn: function {
                         ctx.aliases = (List NameVal)
                         ctx.narrowBox = (List NameVal)
                         ctx.narrowTid = (List NameTid)
-                        ctx.exclArms = (List NameVal)
-                        ctx.exclTids = (List NameTid)
+                        ctx.exclArms = (List VidVal)
+                        ctx.exclTids = (List VidTid)
                         (registerReftypeParams
                             :ast
                             :symtab
@@ -15429,8 +15528,8 @@ emitC: function {
         aliases: (List NameVal)
         narrowBox: (List NameVal)
         narrowTid: (List NameTid)
-        exclArms: (List NameVal)
-        exclTids: (List NameTid)
+        exclArms: (List VidVal)
+        exclTids: (List VidTid)
         genActive: false
         genRecvC: "this".string
         genValC: "value".string
@@ -21719,8 +21818,8 @@ emitClassMonoMethods: function {
                                         ctx.aliases = (List NameVal)
                                         ctx.narrowBox = (List NameVal)
                                         ctx.narrowTid = (List NameTid)
-                                        ctx.exclArms = (List NameVal)
-                                        ctx.exclTids = (List NameTid)
+                                        ctx.exclArms = (List VidVal)
+                                        ctx.exclTids = (List VidTid)
                                         (registerReftypeParams
                                             :ast
                                             :symtab
@@ -21782,8 +21881,8 @@ emitClassMonoMethods: function {
                                         ctx.aliases = (List NameVal)
                                         ctx.narrowBox = (List NameVal)
                                         ctx.narrowTid = (List NameTid)
-                                        ctx.exclArms = (List NameVal)
-                                        ctx.exclTids = (List NameTid)
+                                        ctx.exclArms = (List VidVal)
+                                        ctx.exclTids = (List VidTid)
                                         (registerReftypeParams
                                             :ast
                                             :symtab
@@ -22284,8 +22383,8 @@ emitOneMethod: function {
     ctx.aliases = (List NameVal)
     ctx.narrowBox = (List NameVal)
     ctx.narrowTid = (List NameTid)
-    ctx.exclArms = (List NameVal)
-    ctx.exclTids = (List NameTid)
+    ctx.exclArms = (List VidVal)
+    ctx.exclTids = (List VidTid)
     encIsClass: false
     if (symtab.reg.typetypeOf typeId: thisTid9) == ztypes.ztypetype.classType then encIsClass = true
     clsNm9: typeNameOfReg9 :symtab tid: thisTid9
@@ -22378,8 +22477,8 @@ emitOneMethod: function {
     ctx.aliases = (List NameVal)
     ctx.narrowBox = (List NameVal)
     ctx.narrowTid = (List NameTid)
-    ctx.exclArms = (List NameVal)
-    ctx.exclTids = (List NameTid)
+    ctx.exclArms = (List VidVal)
+    ctx.exclTids = (List VidTid)
 }
 
 # emitMonoNative -- a native fragment substituting z_StringView and (when
