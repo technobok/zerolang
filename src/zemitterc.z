@@ -23,6 +23,11 @@ TmpCtr: class {
     frees: (List String)
     listFrees: (List String)
     listFreeVars: (List String)
+    # the SOURCE name of each cleanup entry, beside its emitted identifier: the
+    # alias table is keyed by source name, so only this can probe it. "" for a
+    # synthesized temp, which is never a binding and never aliased.
+    freeRaw: (List String)
+    listFreeRaw: (List String)
 } as {
     next: function {:this} out u64 is {
         v: this.n
@@ -1248,6 +1253,8 @@ Ctx: class {
     breakListMarks: (List u64)
     breakLabelCleanup: (List String)
     breakLabelCleanupVar: (List String)
+    # source names for breakLabelCleanupVar, for the same reason as TmpCtr's
+    breakLabelCleanupRaw: (List String)
     borrowedVars: (Map u64 value: bool)
     colGetFromCode: bool
     strTid: u64
@@ -2815,6 +2822,7 @@ flushArgHoists: function {ctx: Ctx ind: StringView tmp: TmpCtr buf: String.borro
             dtc: dto.copy
             tmp.listFrees.append dtc
             tmp.listFreeVars.append nmo.copy
+            tmp.listFreeRaw.append "".string
         }
         i = i + 1
     }
@@ -2848,6 +2856,8 @@ pushLoopLabel: function {ctx: Ctx tmp: TmpCtr isDo: bool} out u64 is {
     ctx.breakLabelCleanup.append cl9
     cv9: String
     ctx.breakLabelCleanupVar.append cv9
+    cvr9: String
+    ctx.breakLabelCleanupRaw.append cvr9
     return ctx.breakLabelCtr - 1
 }
 
@@ -2876,6 +2886,7 @@ popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is 
     if ctx.breakLabelCleanup.length > 0 then {
         ctx.breakLabelCleanup.pop
         ctx.breakLabelCleanupVar.pop
+        ctx.breakLabelCleanupRaw.pop
     }
     uo: ctx.breakLabelUsed.get key: id
     match (
@@ -3765,6 +3776,8 @@ emitInterpArgExpr: function {
                 frees: (List String)
                 listFrees: (List String)
                 listFreeVars: (List String)
+                freeRaw: (List String)
+                listFreeRaw: (List String)
             )
             lbuf: String
             sM: (emitInterpBuild
@@ -8707,6 +8720,7 @@ emitStringBindValue: function {
     ctx: Ctx
     n: Node
     nm: StringView
+    nmRaw: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -8715,7 +8729,7 @@ emitStringBindValue: function {
         n
     ) case expression then {
         iex9: ast.nodes.get i: (n.expression - 1).u64
-        return (emitStringBindValue :ast :symtab :ctx n: iex9 :nm :ind :tmp :buf)
+        return (emitStringBindValue :ast :symtab :ctx n: iex9 :nm :nmRaw :ind :tmp :buf)
     } case atomstring then {
         if (isInterp :ast parts: n.stringparts) then {
             sB: emitInterpBuild :ast :symtab :ctx parts: n.stringparts :ind :tmp :buf
@@ -8723,6 +8737,7 @@ emitStringBindValue: function {
             buf.append lst
             nmc: nm.string
             tmp.frees.append nmc
+            tmp.freeRaw.append nmRaw.string
             return true
         } else {
             return false
@@ -8731,7 +8746,7 @@ emitStringBindValue: function {
         cnd9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         if cnd9.stringview == "string" then {
             dpv9: ast.nodes.get i: (n.parent - 1).u64
-            return (emitStringBindValue :ast :symtab :ctx n: dpv9 :nm :ind :tmp :buf)
+            return (emitStringBindValue :ast :symtab :ctx n: dpv9 :nm :nmRaw :ind :tmp :buf)
         }
         if cnd9.stringview == "copy" then {
             # `<rvalue>.copy` over a String (e.g. `(list.get i: n).copy`): the
@@ -8750,6 +8765,7 @@ emitStringBindValue: function {
                     buf.append lc9
                     nmc9: nm.string
                     tmp.frees.append nmc9
+                    tmp.freeRaw.append nmRaw.string
                     return true
                 }
             }
@@ -9137,6 +9153,7 @@ emitStmt: function {
                         ldfsB: ldfB.copy
                         tmp.listFrees.append ldfsB
                         tmp.listFreeVars.append nm.copy
+                        tmp.listFreeRaw.append anmC9.copy
                     }
                     return
                 } case none then null
@@ -9193,6 +9210,7 @@ emitStmt: function {
             lfv: lfsv.string
             tmp.listFrees.append lfv
             tmp.listFreeVars.append nm.copy
+            tmp.listFreeRaw.append anmC9.copy
             return
         }
         if (originIsTid :symtab tid: ltid originTid: ctx.setOriginTid) then {
@@ -9212,6 +9230,7 @@ emitStmt: function {
             sfv: sfsv.string
             tmp.listFrees.append sfv
             tmp.listFreeVars.append nm.copy
+            tmp.listFreeRaw.append anmC9.copy
             return
         }
         if (originIsTid :symtab tid: ltid originTid: ctx.mapOriginTid) then {
@@ -9231,6 +9250,7 @@ emitStmt: function {
             mfv: mfsv.string
             tmp.listFrees.append mfv
             tmp.listFreeVars.append nm.copy
+            tmp.listFreeRaw.append anmC9.copy
             return
         }
         if (rhsIsBorrowGet :ast :symtab :ctx n: avn9) then {
@@ -9283,6 +9303,7 @@ emitStmt: function {
                 buf.append lsc
                 nmc2: nm.copy
                 tmp.frees.append nmc2
+                tmp.freeRaw.append anmC9.copy
                 return
             }
             did9: (emitStringBindValue
@@ -9291,6 +9312,7 @@ emitStmt: function {
                 :ctx
                 n: avn9
                 nm: nm.stringview
+                nmRaw: anmC9.stringview
                 :ind
                 :tmp
                 :buf
@@ -9308,6 +9330,7 @@ emitStmt: function {
                 if (bindingRhsIsBorrow :ast :symtab :ctx n: avn9) == false then {
                     nmc3: nm.copy
                     tmp.frees.append nmc3
+                    tmp.freeRaw.append anmC9.copy
                 }
             }
             return
@@ -9343,6 +9366,7 @@ emitStmt: function {
                 :ctx
                 n: avn9
                 nm: nm.stringview
+                nmRaw: anmC9.stringview
                 ct: ct.stringview
                 tid: ltid
                 :ind
@@ -9397,6 +9421,7 @@ emitStmt: function {
                     ldfs: ldf.copy
                     tmp.listFrees.append ldfs
                     tmp.listFreeVars.append nm.copy
+                    tmp.listFreeRaw.append anmC9.copy
                 }
             }
         } else {
@@ -10958,6 +10983,7 @@ emitDoBindValue: function {
     ctx: Ctx
     n: Node
     nm: StringView
+    nmRaw: StringView
     ct: StringView
     tid: u64
     ind: StringView
@@ -10968,7 +10994,7 @@ emitDoBindValue: function {
         n
     ) case expression then {
         iexK9: ast.nodes.get i: (n.expression - 1).u64
-        return (emitDoBindValue :ast :symtab :ctx n: iexK9 :nm :ct :tid :ind :tmp :buf)
+        return (emitDoBindValue :ast :symtab :ctx n: iexK9 :nm :nmRaw :ct :tid :ind :tmp :buf)
     } case doexpr then {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
@@ -10992,6 +11018,7 @@ emitDoBindValue: function {
                 ldfs9: ldf9.copy
                 tmp.listFrees.append ldfs9
                 tmp.listFreeVars.append nm.string
+                tmp.listFreeRaw.append nmRaw.string
             }
             l1: "\{ind}do {\n"
             buf.append l1
@@ -11027,6 +11054,7 @@ emitDoBindValue: function {
                 pldfs9: pldf9.copy
                 tmp.listFrees.append pldfs9
                 tmp.listFreeVars.append nm.string
+                tmp.listFreeRaw.append nmRaw.string
             }
             l3: "\{ind}{\n"
             buf.append l3
@@ -11354,6 +11382,7 @@ emitObjIterFor: function {
                     tmp.listFrees.append gdt9
                     gdn9: "_git\{mN}"
                     tmp.listFreeVars.append gdn9
+                    tmp.listFreeRaw.append "".string
                 }
             }
             lidO: pushLoopLabel :ctx :tmp isDo: false
@@ -11370,8 +11399,10 @@ emitObjIterFor: function {
                 pcl9: payCleanup9.copy
                 ctx.breakLabelCleanup.append pcl9
                 ctx.breakLabelCleanupVar.pop
+                ctx.breakLabelCleanupRaw.pop
                 pcv9: lbl.copy
                 ctx.breakLabelCleanupVar.append pcv9
+                ctx.breakLabelCleanupRaw.append lblR9.copy
             }
             l0: "\{ind}while (1) {\n"
             buf.append l0
@@ -14509,6 +14540,9 @@ emitUnitMonoInstances: function {
                                                                                 ctx.ptrVids = (List u64)
                                         ctx.aliases = (List NameVal)
                                         ctx.narrowBox = (List NameVal)
+                                        ctx.narrowTid = (List NameTid)
+                                        ctx.exclArms = (List NameVal)
+                                        ctx.exclTids = (List NameTid)
                                         (registerReftypeParams
                                             :ast
                                             :symtab
@@ -14643,6 +14677,9 @@ emitFnMonoInstances: function {
                                 ctx.ptrVids = (List u64)
                 ctx.aliases = (List NameVal)
                 ctx.narrowBox = (List NameVal)
+                ctx.narrowTid = (List NameTid)
+                ctx.exclArms = (List NameVal)
+                ctx.exclTids = (List NameTid)
                 registerReftypeParams :ast :symtab :ctx fid: t9 op: templateFnOp
                 ctx.curThisTid = t9
                 emitFnBody :ast :symtab :ctx op: templateFnOp fid: t9 :buf
@@ -14763,6 +14800,9 @@ emitFnsIn: function {
                                                 ctx.ptrVids = (List u64)
                         ctx.aliases = (List NameVal)
                         ctx.narrowBox = (List NameVal)
+                        ctx.narrowTid = (List NameTid)
+                        ctx.exclArms = (List NameVal)
+                        ctx.exclTids = (List NameTid)
                         (registerReftypeParams
                             :ast
                             :symtab
@@ -14929,13 +14969,16 @@ emitReturnCleanup: function {
     ind: StringView
     buf: String.borrow
 } is {
-    fiterR: tmp.frees.iterate
-    for fvR: fiterR loop {
+    fRi9: u64
+    for fRi9 < tmp.frees.length loop {
+        fvR: tmp.frees.get i: fRi9
+        fRaw9: tmp.freeRaw.get i: fRi9
+        fRi9 = fRi9 + 1
         keepF: true
         if keepRefd then {
             if (refsLocal expr: retExpr name: fvR.stringview) then keepF = false
         }
-        if (nvHas xs: ctx.aliases name: fvR.stringview) then keepF = false
+        if (nvHas xs: ctx.aliases name: fRaw9.stringview) then keepF = false
         if keepF then {
             lfR: "\{ind}\{ctx.strC}_free(&\{fvR});\n"
             buf.append lfR
@@ -14946,11 +14989,12 @@ emitReturnCleanup: function {
     for li9 < nL9 loop {
         stmt9: tmp.listFrees.get i: li9
         var9: tmp.listFreeVars.get i: li9
+        lRaw9: tmp.listFreeRaw.get i: li9
         keepL: true
         if keepRefd then {
             if (refsLocal expr: retExpr name: var9.stringview) then keepL = false
         }
-        if (nvHas xs: ctx.aliases name: var9.stringview) then keepL = false
+        if (nvHas xs: ctx.aliases name: lRaw9.stringview) then keepL = false
         if keepL then buf.append stmt9
         li9 = li9 + 1
     }
@@ -14962,12 +15006,13 @@ emitReturnCleanup: function {
     for ci9 < cn9 loop {
         ccl0: ctx.breakLabelCleanup.get i: ci9
         ccv0: ctx.breakLabelCleanupVar.get i: ci9
+        cRaw9: ctx.breakLabelCleanupRaw.get i: ci9
         if ccl0.length > 0 then {
             keepC: true
             if keepRefd then {
                 if (refsLocal expr: retExpr name: ccv0.stringview) then keepC = false
             }
-            if (nvHas xs: ctx.aliases name: ccv0.stringview) then keepC = false
+            if (nvHas xs: ctx.aliases name: cRaw9.stringview) then keepC = false
             if keepC then {
                 lcr9: "\{ind}\{ccl0}"
                 buf.append lcr9
@@ -14989,7 +15034,14 @@ emitFnBody: function {
     match (
         op
     ) case functiondef then {
-        tmp: (TmpCtr n: 0 frees: (List String) listFrees: (List String) listFreeVars: (List String))
+        tmp: (TmpCtr
+            n: 0
+            frees: (List String)
+            listFrees: (List String)
+            listFreeVars: (List String)
+            freeRaw: (List String)
+            listFreeRaw: (List String)
+        )
         pnames9: (List String)
         pids9: (List u64)
         pids9Nm: (List u64)
@@ -15016,6 +15068,7 @@ emitFnBody: function {
                 if ppid9 == ctx.strTid then {
                     pms9: pmn9.copy
                     tmp.frees.append pms9
+                    tmp.freeRaw.append ppn9.copy
                 } else {
                     # owned .take Set/Map params are skipped: declared by value, but a
                     # Set/Map _destroy frees the container as a heap pointer (would need
@@ -15033,6 +15086,7 @@ emitFnBody: function {
                             pdfs9: pdf9.copy
                             tmp.listFrees.append pdfs9
                             tmp.listFreeVars.append pmn9.copy
+                            tmp.listFreeRaw.append ppn9.copy
                         }
                     }
                 }
@@ -15407,6 +15461,7 @@ emitC: function {
         breakListMarks: (List u64)
         breakLabelCleanup: (List String)
         breakLabelCleanupVar: (List String)
+        breakLabelCleanupRaw: (List String)
         borrowedVars: (Map u64 value: bool)
         colGetFromCode: false
         strTid: strId
@@ -21663,6 +21718,9 @@ emitClassMonoMethods: function {
                                                                                 ctx.ptrVids = (List u64)
                                         ctx.aliases = (List NameVal)
                                         ctx.narrowBox = (List NameVal)
+                                        ctx.narrowTid = (List NameTid)
+                                        ctx.exclArms = (List NameVal)
+                                        ctx.exclTids = (List NameTid)
                                         (registerReftypeParams
                                             :ast
                                             :symtab
@@ -21723,6 +21781,9 @@ emitClassMonoMethods: function {
                                                                                 ctx.ptrVids = (List u64)
                                         ctx.aliases = (List NameVal)
                                         ctx.narrowBox = (List NameVal)
+                                        ctx.narrowTid = (List NameTid)
+                                        ctx.exclArms = (List NameVal)
+                                        ctx.exclTids = (List NameTid)
                                         (registerReftypeParams
                                             :ast
                                             :symtab
@@ -22222,6 +22283,9 @@ emitOneMethod: function {
         ctx.ptrVids = (List u64)
     ctx.aliases = (List NameVal)
     ctx.narrowBox = (List NameVal)
+    ctx.narrowTid = (List NameTid)
+    ctx.exclArms = (List NameVal)
+    ctx.exclTids = (List NameTid)
     encIsClass: false
     if (symtab.reg.typetypeOf typeId: thisTid9) == ztypes.ztypetype.classType then encIsClass = true
     clsNm9: typeNameOfReg9 :symtab tid: thisTid9
@@ -22313,6 +22377,9 @@ emitOneMethod: function {
         ctx.ptrVids = (List u64)
     ctx.aliases = (List NameVal)
     ctx.narrowBox = (List NameVal)
+    ctx.narrowTid = (List NameTid)
+    ctx.exclArms = (List NameVal)
+    ctx.exclTids = (List NameTid)
 }
 
 # emitMonoNative -- a native fragment substituting z_StringView and (when
