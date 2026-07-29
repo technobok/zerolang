@@ -1416,29 +1416,20 @@ declareCanonicalType: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     defUnit: StringView
+    # the type that owns this one when it is a member (`Type.method`), by
+    # interned name id; 0 for a free definition. `name` is always the
+    # definition's OWN name -- no qualified name is built, and none is parsed.
+    ownerNameId: 0.u32
     name: StringView
     typetype: ztypes.ztypetype
 } out u64 is {
-    # a qualified member name (`Type.method`) is indexed on the type that owns
-    # it, walked to through its unit -- never as a flattened key under the unit
-    qbase9: String
-    qmem9: String
-    {
-        dot9: name.indexOf needle: "."
-        match (
-            dot9
-        ) case some then {
-            qbase9 = (name.substring from: 0 to: dot9).string
-            qmem9 = (name.substring from: dot9 + 1 to: name.length).string
-        } case none then null
-    }
     qowner9: u64
-    if qmem9.length > 0 then {
+    if ownerNameId != 0 then {
         cudq: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
         match (
             cudq
         ) case some then {
-            bo9: ty.declChildOf pool: ast.names parentTypeId: cudq name: qbase9.stringview
+            bo9: ty.declChildOfId parentTypeId: cudq nameId: ownerNameId.u64
             match (
                 bo9
             ) case some then {
@@ -1447,15 +1438,14 @@ declareCanonicalType: function {
         } case none then null
     }
     if qowner9 > 0 then {
-        exq: ty.declChildOf pool: ast.names parentTypeId: qowner9 name: qmem9.stringview
+        exq: ty.declChildOf pool: ast.names parentTypeId: qowner9 :name
         match (
             exq
         ) case some then {
-            linkDeclType :ty :reg :ast :defUnit :name tid: exq
             return exq
         } case none then null
     }
-    if qmem9.length == 0 then {
+    if ownerNameId == 0 then {
         cudm: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
         match (
             cudm
@@ -1469,15 +1459,15 @@ declareCanonicalType: function {
             } case none then null
         } case none then null
     }
-    id: reg.newType :name :typetype
+    id: reg.newType :name ownerTid: qowner9 :typetype
     if qowner9 > 0 then {
         (ty.setMemberType
             parentTypeId: qowner9
-            nameId: (ast.internString text: qmem9.stringview).u64
+            nameId: (ast.internString text: name).u64
             childTypeId: id
         )
     } else {
-        if qmem9.length == 0 then {
+        if ownerNameId == 0 then {
             cud0: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
             match (
                 cud0
@@ -1499,7 +1489,7 @@ declareCanonicalType: function {
             } case none then null
         }
     }
-    linkDeclType :ty :reg :ast :defUnit :name tid: id
+    if ownerNameId == 0 then linkDeclType :ty :reg :ast :defUnit :name tid: id
     prxOk9: false
     if (reg.defOf tid: id) == 0 then prxOk9 = true
     if prxOk9 then {
@@ -1944,37 +1934,18 @@ declOfFnDef: function {
     ty: ztyping.ZTyping
     ast: Ast
     unitName: StringView
+    ownerNameId: u32
     defName: StringView
     thisName: StringView
 } out u64 is {
     if thisName.length == 0 then return (declOfUnitDef :ty :ast defUnit: unitName name: defName)
     mown9: declOfUnitDef :ty :ast defUnit: unitName name: thisName
     mnm9: defName
-    mdot9: u64
-    mhas9: false
-    {
-        mi9: u64
-        mn0: defName.length
-        for mi9 < mn0 loop {
-            mb9: defName.byteAt i: mi9
-            match (
-                mb9
-            ) case some then {
-                if mb9 == 46 then {
-                    mdot9 = mi9
-                    mhas9 = true
-                }
-            } case none then null
-            mi9 = mi9 + 1
-        }
-    }
-    if mhas9 then {
-        mownNm9: (defName.substring from: 0 to: mdot9).string
-        if mownNm9.stringview != thisName then {
-            malt9: declOfUnitDef :ty :ast defUnit: unitName name: mownNm9.stringview
+    if ownerNameId != 0 then {
+        if (zast.poolTextEq pool: ast.names ref: ownerNameId s: thisName) == false then {
+            malt9: declOfUnitDefId :ty :ast defUnit: unitName nameId: ownerNameId
             if malt9 > 0 then mown9 = malt9
         }
-        mnm9 = defName.substring from: (mdot9 + 1) to: defName.length
     }
     if mown9 == 0 then return 0
     return (ty.declFindChild parentDeclId: mown9 nameId: (zast.poolFind pool: ast.names text: mnm9))
@@ -3451,6 +3422,8 @@ resolveFunction: function {
     reg: ztypes.ZTypeRegistry
     ast: Ast
     unitName: StringView
+    # a method's owner, by interned name id; 0 for a free function
+    ownerNameId: 0.u32
     defName: StringView
     fnode: zast.FunctionData
     thisName: StringView
@@ -3461,6 +3434,7 @@ resolveFunction: function {
         :ty
         :reg
         defUnit: unitName
+        :ownerNameId
         name: defName
         typetype: ztypes.ztypetype.functionType
     )
@@ -3473,7 +3447,7 @@ resolveFunction: function {
     dfid: fid
     rfid: fid
     isgen: hasGenericParam :ast items: fnode.asItems
-    fnDecl9: declOfFnDef :ty :ast :unitName :defName :thisName
+    fnDecl9: declOfFnDef :ty :ast :unitName :ownerNameId :defName :thisName
     # link the declaration to its type up front: the parameter loop below
     # records ownership and defaults on member declarations, which needs the
     # owner reachable from its type id.
@@ -3771,8 +3745,10 @@ resolveFunction: function {
         # wrapper projection (optionval/Option/OptionView by the value's
         # nature) and are skipped here.
         skipPr4: false
-        if defName == "Map.get" then skipPr4 = true
-        if defName == "Map.remove" then skipPr4 = true
+        if (zast.poolTextEq pool: ast.names ref: ownerNameId s: "Map") then {
+            if defName == "get" then skipPr4 = true
+            if defName == "remove" then skipPr4 = true
+        }
         if skipPr4 == false then {
             prt4: (partialReturnTid
                 :ty
@@ -3863,7 +3839,8 @@ resolveMethodFn: function {
     reg: ztypes.ZTypeRegistry
     ast: Ast
     unitName: StringView
-    qname: StringView
+    ownerNameId: u32
+    mname: StringView
     thisName: StringView
     op: Node
 } out optionval u64 is {
@@ -3875,7 +3852,8 @@ resolveMethodFn: function {
             :reg
             :ast
             :unitName
-            defName: qname
+            :ownerNameId
+            defName: mname
             fnode: op
             :thisName
             skipThisType: false
@@ -3922,7 +3900,8 @@ resolveSpecFn: function {
     reg: ztypes.ZTypeRegistry
     ast: Ast
     unitName: StringView
-    qname: StringView
+    ownerNameId: u32
+    mname: StringView
     thisName: StringView
     op: Node
     skipThis: bool
@@ -3935,7 +3914,8 @@ resolveSpecFn: function {
             :reg
             :ast
             :unitName
-            defName: qname
+            :ownerNameId
+            defName: mname
             fnode: op
             :thisName
             skipThisType: skipThis
@@ -4035,13 +4015,13 @@ attachMethods: function {
                     checkBorrowReturnLock :ast :ty fnode: mop9 defName: mname.stringview
                 } else null
             }
-            qname: "\{defName}.\{mname}"
             mido: (resolveMethodFn
                 :ty
                 :reg
                 :ast
                 :unitName
-                qname: qname.stringview
+                ownerNameId: (nameIdOf :ast name: defName)
+                mname: mname.stringview
                 thisName: defName
                 op: (ast.nodes.get i: (am.operation - 1).u64)
             )
@@ -5016,13 +4996,13 @@ resolveRecord: function {
                 fm
             ) case namedoperation then {
                 fname: zast.nameTextCopy :ast ref: fm.name
-                qname: "\{defName}.\{fname}"
                 mido: (resolveMethodFn
                     :ty
                     :reg
                     :ast
                     :unitName
-                    qname: qname.stringview
+                    ownerNameId: (nameIdOf :ast name: defName)
+                    mname: fname.stringview
                     thisName: defName
                     op: (ast.nodes.get i: (fm.operation - 1).u64)
                 )
@@ -5348,13 +5328,13 @@ resolveVariant: function {
             am
         ) case namedoperation then {
             mname: zast.nameTextCopy :ast ref: am.name
-            qname: "\{defName}.\{mname}"
             mido: (resolveMethodFn
                 :ty
                 :reg
                 :ast
                 :unitName
-                qname: qname.stringview
+                ownerNameId: (nameIdOf :ast name: defName)
+                mname: mname.stringview
                 thisName: defName
                 op: (ast.nodes.get i: (am.operation - 1).u64)
             )
@@ -5648,13 +5628,13 @@ resolveUnion: function {
             am
         ) case namedoperation then {
             mname: zast.nameTextCopy :ast ref: am.name
-            qname: "\{defName}.\{mname}"
             mido: (resolveMethodFn
                 :ty
                 :reg
                 :ast
                 :unitName
-                qname: qname.stringview
+                ownerNameId: (nameIdOf :ast name: defName)
+                mname: mname.stringview
                 thisName: defName
                 op: (ast.nodes.get i: (am.operation - 1).u64)
             )
@@ -5866,13 +5846,13 @@ resolveClass: function {
                     }
                 }
                 if prodM4 then {
-                    qname: "\{defName}.\{fname}"
                     mido: (resolveMethodFn
                         :ty
                         :reg
                         :ast
                         :unitName
-                        qname: qname.stringview
+                        ownerNameId: (nameIdOf :ast name: defName)
+                        mname: fname.stringview
                         thisName: defName
                         op: (ast.nodes.get i: (fm.operation - 1).u64)
                     )
@@ -6064,13 +6044,13 @@ resolveClass: function {
                     }
                 }
                 if prodA4 then {
-                    aqnP4: "\{defName}.\{afnP4}"
                     amidP4: (resolveMethodFn
                         :ty
                         :reg
                         :ast
                         :unitName
-                        qname: aqnP4.stringview
+                        ownerNameId: (nameIdOf :ast name: defName)
+                        mname: afnP4.stringview
                         thisName: defName
                         op: (ast.nodes.get i: (amP4.operation - 1).u64)
                     )
@@ -6197,13 +6177,13 @@ resolveFacet: function {
             sm
         ) case namedoperation then {
             mname: zast.nameTextCopy :ast ref: sm.name
-            qname: "\{defName}.\{mname}"
             sido: (resolveSpecFn
                 :ty
                 :reg
                 :ast
                 :unitName
-                qname: qname.stringview
+                ownerNameId: (nameIdOf :ast name: defName)
+                mname: mname.stringview
                 thisName: specThisStr.stringview
                 op: (ast.nodes.get i: (sm.operation - 1).u64)
                 skipThis: dropThis
@@ -6294,13 +6274,13 @@ resolveProtocol: function {
             sm
         ) case namedoperation then {
             mname: zast.nameTextCopy :ast ref: sm.name
-            qname: "\{defName}.\{mname}"
             sido: (resolveSpecFn
                 :ty
                 :reg
                 :ast
                 :unitName
-                qname: qname.stringview
+                ownerNameId: (nameIdOf :ast name: defName)
+                mname: mname.stringview
                 thisName: specThisStr.stringview
                 op: (ast.nodes.get i: (sm.operation - 1).u64)
                 skipThis: dropThis
@@ -8868,13 +8848,13 @@ resolveInlineGenericUnit: function {
                 bmNode9
             ) case namedoperation then {
                 fn: zast.nameTextCopy :ast ref: bmNode9.name
-                qn: "\{defName}_\{fn}"
                 mido: (resolveMethodFn
                     :ty
                     :reg
                     :ast
                     :unitName
-                    qname: qn.stringview
+                    ownerNameId: (nameIdOf :ast name: defName)
+                    mname: fn.stringview
                     thisName: ""
                     op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
                 )
@@ -9233,13 +9213,13 @@ buildUnitMono: function {
                     ) case some then {
                         srcId = tfo
                     } case none then {
-                        tq: "\{tmplName}_\{fn}"
                         mo0: (resolveMethodFn
                             :ty
                             :reg
                             :ast
                             unitName: tmplUnitName
-                            qname: tq.stringview
+                            ownerNameId: (nameIdOf :ast name: tmplName)
+                            mname: fn.stringview
                             thisName: ""
                             op: (ast.nodes.get i: (fmNode9.operation - 1).u64)
                         )
