@@ -346,7 +346,7 @@ emitter-guard:
 	if [ "$$e4" -gt 35 ]; then echo "emitter-guard FAIL: userFnId = $$e4 (baseline 35)"; fail=1; fi; \
 	if [ "$$e5" -gt 0 ]; then echo "emitter-guard FAIL: childOwnershipText = $$e5 (baseline 0)"; fail=1; fi; \
 	if [ "$$e6" -gt 94 ]; then echo "emitter-guard FAIL: typeNameOfReg9 = $$e6 (baseline 94)"; fail=1; fi; \
-	if [ "$$e7" -gt 20 ]; then echo "emitter-guard FAIL: ztypes.mangleVarName = $$e7 (baseline 20)"; fail=1; fi; \
+	if [ "$$e7" -gt 2 ]; then echo "emitter-guard FAIL: ztypes.mangleVarName = $$e7 (baseline 2, both inside varCName: the --readable-names spelling and the no-id fallback)"; fail=1; fi; \
 	if [ "$$e8" -gt 5 ]; then echo "emitter-guard FAIL: io.readText = $$e8 (baseline 5)"; fail=1; fi; \
 	if [ "$$e9" -gt 8 ]; then echo "emitter-guard FAIL: monoOriginName = $$e9 (baseline 8)"; fail=1; fi; \
 	if [ "$$fail" = "1" ]; then \
