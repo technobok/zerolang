@@ -28561,16 +28561,12 @@ static void z_t1972_ZTyping_declSetMemberType(z_t1613_ZTyping_t* this, uint64_t 
         }
         md8 = z_t1957_ZTyping_declNew(this, nid8, od8, ((z_t1892_declkind_t){ .tag = Z_DECLKIND_TAG_PARAMDECL }), node8);
     }
-    bool isMethod8 = false;
     if (z_t1956_ZTyping_declValid(this, md8)) {
         __auto_type __borrow_do8 = &(*z_t1922_List_Decl_get(&this->decls, (md8 - 1)));
         /* alias: do8 => (*__borrow_do8) */
         (*__borrow_do8).typeId = typeId;
-        if ((((*__borrow_do8).kind).tag == Z_DECLKIND_TAG_METHODDECL)) {
-            isMethod8 = true;
-        }
     }
-    if (isMethod8 && (typeId > 0)) {
+    if ((typeId > 0)) {
         if ((z_t1971_ZTyping_declIdOfType(this, typeId) == 0)) {
             (void)(z_t1358_Map_u64_u64_set(this->declByTypeId, typeId, md8));
         }
