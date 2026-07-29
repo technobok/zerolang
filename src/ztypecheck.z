@@ -2725,6 +2725,29 @@ returnParamTid: function {
     return 0
 }
 
+# returnWrapperBaseNameId -- the Ast.names pool id of the base atom of a declared
+# return typeref (`(Option of: value)` -> the id of `Option`), peeling expression
+# wrappers and `.borrow`-style strip markers; 0 for any other shape. Reads the
+# declaration only: it resolves nothing and mints nothing, unlike partialTyperefTid
+# below.
+returnWrapperBaseNameId: function {ast: Ast n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (returnWrapperBaseNameId :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case dottedpath then {
+        dcn7: atomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
+        if (isStripMarker name: dcn7.stringview) then {
+            return (returnWrapperBaseNameId :ast n: (ast.nodes.get i: (n.parent - 1).u64))
+        }
+        return 0
+    } case call then {
+        return (atomNameId :ast n: (ast.nodes.get i: (n.callable - 1).u64))
+    } else {
+        return 0
+    }
+}
+
 # partialTyperefTid -- resolve a composite parameterized typeref inside a
 # template method signature to a spec through the shared disassembly
 # (resolveMonoRefParts with the template's enclKey). Returns the spec only
@@ -3741,13 +3764,21 @@ resolveFunction: function {
     if rpt4 == 0 when unitName == "collections" then {
         # collection template methods declare composite parameterized returns
         # ((ListIter of: of).borrow); they resolve to partial specs so clones
-        # heal through respecialize. Map.get/remove keep their value-kind
-        # wrapper projection (optionval/Option/OptionView by the value's
-        # nature) and are skipped here.
+        # heal through respecialize.
+        #
+        # Map's get/getv/remove declare `(Option of: value)`, but their real
+        # return is the value-kind wrapper -- optionval for a valtype,
+        # Option/OptionView otherwise -- which cannot be spelled in a return-type
+        # position, so the declaration is a PLACEHOLDER. partialReturnTid is not a
+        # query: it resolves through getOrMintSpec, so on that placeholder it
+        # registers Option over the value parameter, which respecializes to
+        # `Option i64` and trips Option's Any.reftype bound. buildCollectionChildren
+        # installs the real wrapper per mono instead. Keyed on the declared return,
+        # so it cannot fall out of step with a method's name.
         skipPr4: false
-        if (zast.poolTextEq pool: ast.names ref: ownerNameId s: "Map") then {
-            if defName == "get" then skipPr4 = true
-            if defName == "remove" then skipPr4 = true
+        if fnode.returntype > 0 then {
+            rwb4: (returnWrapperBaseNameId :ast n: (ast.nodes.get i: (fnode.returntype - 1).u64))
+            if rwb4 != 0 when rwb4 == (nameIdOf :ast name: "Option").u64 then skipPr4 = true
         }
         if skipPr4 == false then {
             prt4: (partialReturnTid
