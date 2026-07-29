@@ -81,6 +81,103 @@ ctxCname: function {ctx: Ctx tid: u64} out String is {
     return (listCname cnames: ctx.cnames :tid)
 }
 
+# atomVid -- the variable a reference node resolves to, or 0.
+atomVid: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
+    return (optU64Or9 o: (symtab.typing.atomVariableId.get key: nid))
+}
+
+# defVid -- the variable a binding node introduces, or 0.
+defVid: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
+    return (optU64Or9 o: (symtab.typing.defVariableId.get key: nid))
+}
+
+# atomNodeIdDeep9 -- atomNodeId9 through `expression` wrappers, mirroring
+# atomTextDeep so an id and a text always describe the same node.
+atomNodeIdDeep9: function {ast: Ast n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (atomNodeIdDeep9 :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case atomid then {
+        return n.nodeid.u64
+    } else {
+        return 0
+    }
+}
+
+# atomVidIfPlain -- the variable an already-emitted value expression names, but
+# only when the emitted text is that atom's own source name. An alias
+# substitution, a C-keyword mangle or any compound expression makes the text
+# something other than the binding, and then there is no variable to ask a
+# pointer question about -- which is what a name compare answers by missing.
+atomVidIfPlain: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    n: Node
+    text: StringView
+} out u64 is {
+    match (
+        n
+    ) case expression then {
+        nx9: ast.nodes.get i: (n.expression - 1).u64
+        return (atomVidIfPlain :ast :symtab n: nx9 :text)
+    } case atomid then {
+        at9: zast.nameTextCopy :ast ref: n.name
+        if at9.stringview != text then return 0
+        return (atomVid :symtab nid: n.nodeid.u64)
+    } case labelvalue then {
+        # the `:name` shorthand names a binding just as a bare atom does
+        lv9: zast.nameTextCopy :ast ref: n.name
+        if lv9.stringview != text then return 0
+        return (atomVid :symtab nid: n.nodeid.u64)
+    } case dottedpath then {
+        # a dotted path can still emit as its bare base -- a `.private` access
+        # marker contributes no C text -- and then the base IS the value passed.
+        dbn9: ast.nodes.get i: (n.parent - 1).u64
+        db9: atomTextOf :ast n: dbn9
+        if db9.length == 0 then return 0
+        if db9.stringview != text then return 0
+        return (atomVid :symtab nid: (atomNodeId9 n: dbn9))
+    } else {
+        return 0
+    }
+}
+
+# paramVidByNameId -- the variable behind parameter `nameId` of the function
+# node `op`, or 0. The type checker mints a parameter's variable while walking
+# the AST parameter list and stamps it on the node the parameter WRAPS, so read
+# it back the same way. The declaration tree cannot supply it: a generic clone
+# shares its template's declaration, so a member lookup there answers with one
+# node for every parameter alike.
+paramVidByNameId: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    op: Node
+    nameId: u64
+} out u64 is {
+    if nameId == 0 then return 0
+    match (
+        op
+    ) case expression then {
+        opx9: ast.nodes.get i: (op.expression - 1).u64
+        return (paramVidByNameId :ast :symtab op: opx9 :nameId)
+    } case functiondef then {
+        piter9: op.parameters.iterate
+        for pmId9: piter9 loop {
+            pm9: ast.nodes.get i: (pmId9 - 1).u64
+            match (
+                pm9
+            ) case namedoperation then {
+                if pm9.name.u64 == nameId when pm9.operation > 0 then {
+                    on9: nodeIdOf9 n: (ast.nodes.get i: (pm9.operation - 1).u64)
+                    return (defVid :symtab nid: on9)
+                }
+            } else null
+        }
+    } else null
+    return 0
+}
+
 # cnameById -- a type's default C name: its id alone. The emitted C is a
 # build artifact rather than a reading surface, so the source name rides
 # along only under --readable-names.
@@ -1044,7 +1141,8 @@ Ctx: class {
     methodReturns: (Map String value: String)
     dataElems: (Map String value: String)
     dataConst: (Map String value: String)
-    ptrVars: (List String)
+    # the current class method body's pointer-receiver params, by variable id
+    ptrVids: (List u64)
     aliases: (List NameVal)
     narrowBox: (List NameVal)
     narrowTid: (List NameTid)
@@ -1176,15 +1274,17 @@ userFnIdById: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx nameId: u32}
     }
 }
 
-# isPtrVar -- true when a local name is a pointer-receiver param of the current
-# class method body (so field reads emit `->` instead of `.`).
-isPtrVar: function {ctx: Ctx name: StringView} out bool is {
-    pi: u64
-    pn: ctx.ptrVars.length
-    for pi < pn loop {
-        pv: ctx.ptrVars.get i: pi
-        if pv.stringview == name then return true
-        pi = pi + 1
+# isPtrVid -- true when variable `vid` is a pointer-receiver param of the
+# current class method body (so field reads emit `->` instead of `.`). The
+# id-addressed form; a vid of 0 means the site had no variable to name and is
+# never a pointer receiver.
+isPtrVid: function {ctx: Ctx vid: u64} out bool is {
+    if vid == 0 then return false
+    vi9: u64
+    vn9: ctx.ptrVids.length
+    for vi9 < vn9 loop {
+        if (ctx.ptrVids.get i: vi9) == vid then return true
+        vi9 = vi9 + 1
     }
     return false
 }
@@ -1200,11 +1300,15 @@ pathIsPointer: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} ou
     } case atomid then {
         anP9: ast.names.texts.get i: (n.name - 1).u64
         rn: aliasResolve :ctx name: anP9.stringview
-        return (isPtrVar :ctx name: rn.stringview)
+        rnv9: u64
+        if rn.stringview == anP9.stringview then rnv9 = (atomVid :symtab nid: n.nodeid.u64)
+        return (isPtrVid :ctx vid: rnv9)
     } case labelvalue then {
         lnP9: ast.names.texts.get i: (n.name - 1).u64
         rln: aliasResolve :ctx name: lnP9.stringview
-        return (isPtrVar :ctx name: rln.stringview)
+        rlv9: u64
+        if rln.stringview == lnP9.stringview then rlv9 = (atomVid :symtab nid: n.nodeid.u64)
+        return (isPtrVid :ctx vid: rlv9)
     } case dottedpath then {
         cn: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         pnid: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
@@ -1409,8 +1513,7 @@ takeStringSource: function {
         if (stampIdOf :symtab nid: bnid9) == ctx.strTid then isMv9 = true
         if (symtab.reg.typetypeOf typeId: bid9) == ztypes.ztypetype.unionType then isMv9 = true
         if (symtab.reg.typetypeOf typeId: bid9) == ztypes.ztypetype.classType then {
-            bn9c: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
-            if (isPtrVar :ctx name: bn9c.stringview) == false then isMv9 = true
+            if (isPtrVid :ctx vid: (atomVid :symtab nid: bnid9)) == false then isMv9 = true
         }
         if (isMv9) == false then return "".string
         bn9r: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
@@ -1885,14 +1988,18 @@ isStringyTid: function {ctx: Ctx tid: u64} out bool is {
 
 # svValueForm -- a String/StringView operand as a by-value StringView C
 # expression (a String operand view-converts via a compound literal).
-svValueForm: function {ctx: Ctx expr: StringView isStr: bool} out String is {
+svValueForm: function {ctx: Ctx expr: StringView isStr: bool vid: u64} out String is {
     if isStr then {
         # callers hand this a bare atom name, so resolve it: a borrowed element
         # get binds the name to a deref projection, and the raw name has no
-        # declaration. aliasResolve is a no-op on an already-emitted expression.
+        # declaration. The pointer question is asked of `vid`, not of that text
+        # -- but only when no alias intervened, since an alias means the value
+        # being read is the projection and not the binding.
         rex9: aliasResolve :ctx name: expr
+        vid9: vid
+        if rex9.stringview != expr then vid9 = 0
         acc: ".".string
-        if (isPtrVar :ctx name: rex9.stringview) then acc = "->".string
+        if (isPtrVid :ctx vid: vid9) then acc = "->".string
         v1: "((\{ctx.svC}_t){ \{rex9}\{acc}data, \{rex9}\{acc}size })"
         return v1
     } else {
@@ -2065,7 +2172,7 @@ svArgAddr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out St
         if snm9.stringview == "bool" then return "".string
         # A String arg to a StringLike param projects to a by-value view.
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.strTid then {
-            svs9: svValueForm :ctx expr: an isStr: true
+            svs9: svValueForm :ctx expr: an isStr: true vid: (atomVid :symtab nid: n.nodeid.u64)
             a2s: "&\{svs9}"
             return a2s
         }
@@ -2079,7 +2186,7 @@ svArgAddr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out St
         if (isFloatName name: snl9.stringview) then return "".string
         if snl9.stringview == "bool" then return "".string
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.strTid then {
-            svl9: svValueForm :ctx expr: anl isStr: true
+            svl9: svValueForm :ctx expr: anl isStr: true vid: (atomVid :symtab nid: n.nodeid.u64)
             a2ls: "&\{svl9}"
             return a2ls
         }
@@ -2091,7 +2198,13 @@ svArgAddr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out St
             pe: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
             ptid9: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64))
             pIsStr9: ptid9 == ctx.strTid
-            sv: svValueForm :ctx expr: pe.stringview isStr: pIsStr9
+            pev9: (atomVidIfPlain
+                :ast
+                :symtab
+                n: (ast.nodes.get i: (n.parent - 1).u64)
+                text: pe.stringview
+            )
+            sv: svValueForm :ctx expr: pe.stringview isStr: pIsStr9 vid: pev9
             a3: "&\{sv}"
             return a3
         }
@@ -2136,9 +2249,15 @@ emitDottedCall: function {
         bn = ztypes.mangleVarName name: bn.stringview
     }
     btIsStr9: btid == ctx.strTid
+    dcbV9: (atomVidIfPlain
+        :ast
+        :symtab
+        n: (ast.nodes.get i: (call.callable - 1).u64)
+        text: bn.stringview
+    )
     if (isStringyTid :ctx tid: btid) when mn.stringview == "compare" then {
         # compare maps to the by-value cmp in the base fragment
-        bf: svValueForm :ctx expr: bn.stringview isStr: btIsStr9
+        bf: svValueForm :ctx expr: bn.stringview isStr: btIsStr9 vid: dcbV9
         cargs: String
         citer: call.arguments.iterate
         for caId9: citer loop {
@@ -2149,7 +2268,13 @@ emitDottedCall: function {
                 cae: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (ca.operation - 1).u64)
                 cat: stampNameDeep :ast :symtab n: (ast.nodes.get i: (ca.operation - 1).u64)
                 caIsStr9: cat.stringview == "String"
-                caf: svValueForm :ctx expr: cae.stringview isStr: caIsStr9
+                cav9: (atomVidIfPlain
+                    :ast
+                    :symtab
+                    n: (ast.nodes.get i: (ca.operation - 1).u64)
+                    text: cae.stringview
+                )
+                caf: svValueForm :ctx expr: cae.stringview isStr: caIsStr9 vid: cav9
                 if cargs.length == 0 then cargs.append caf
             } else null
         }
@@ -2164,11 +2289,17 @@ emitDottedCall: function {
             if btid == ctx.svTid then {
                 recvp9 = "&\{bn}"
             } else { if btIsStr9 then {
-                bfs9: svValueForm :ctx expr: bn.stringview isStr: true
+                bfs9: svValueForm :ctx expr: bn.stringview isStr: true vid: dcbV9
                 recvp9 = "&\{bfs9}"
             } else {
                 sacc9: ".".string
-                if (isPtrVar :ctx name: bn.stringview) then sacc9 = "->".string
+                bcn9: ast.nodes.get i: (call.callable - 1).u64
+                bba9: dottedBaseAtom :ast n: bcn9
+                bnv9: u64
+                if bn.stringview == bba9.stringview then {
+                    bnv9 = (atomVid :symtab nid: (dottedBaseNodeId :ast n: bcn9))
+                }
+                if (isPtrVid :ctx vid: bnv9) then sacc9 = "->".string
                 recvp9 = "&((\{ctx.svC}_t){ \{bn}\{sacc9}data, \{bn}\{sacc9}len })"
             } }
             if recvp9.length > 0 then {
@@ -2213,7 +2344,18 @@ emitDottedCall: function {
                                 paramTake: false
                             )
                             if sph9.length > 0 then sxe9 = sph9
-                            svsp9: svValueForm :ctx expr: sxe9.stringview isStr: true
+                            sxv9: (atomVidIfPlain
+                                :ast
+                                :symtab
+                                n: (ast.nodes.get i: (sa9.operation - 1).u64)
+                                text: sxe9.stringview
+                            )
+                            svsp9: (svValueForm
+                                :ctx
+                                expr: sxe9.stringview
+                                isStr: true
+                                vid: sxv9
+                            )
                             sepx9.append svsp9
                         } else {
                             sepx9.append sxe9
@@ -2231,7 +2373,7 @@ emitDottedCall: function {
         return el9
     }
     if (isStringyTid :ctx tid: btid) when (isSvParseNative name: mn.stringview) then {
-        bfp9: svValueForm :ctx expr: bn.stringview isStr: btIsStr9
+        bfp9: svValueForm :ctx expr: bn.stringview isStr: btIsStr9 vid: dcbV9
         needsAdd :ctx name: mn.stringview
         epn9: "\{ctx.svC}_\{mn}(&\{bfp9})"
         return epn9
@@ -2265,7 +2407,18 @@ emitDottedCall: function {
                                 paramTake: false
                             )
                             if sxh9.length > 0 then sx9 = sxh9
-                            svx9: svValueForm :ctx expr: sx9.stringview isStr: true
+                            sxq9: (atomVidIfPlain
+                                :ast
+                                :symtab
+                                n: (ast.nodes.get i: (a9.operation - 1).u64)
+                                text: sx9.stringview
+                            )
+                            svx9: (svValueForm
+                                :ctx
+                                expr: sx9.stringview
+                                isStr: true
+                                vid: sxq9
+                            )
                             argx.append "&"
                             argx.append svx9
                         } else {
@@ -2304,7 +2457,7 @@ emitDottedCall: function {
             # substring/parse legs (a StringView receiver is one already)
             recvS9: "&\{bn}"
             if btIsStr9 then {
-                bfs2: svValueForm :ctx expr: bn.stringview isStr: true
+                bfs2: svValueForm :ctx expr: bn.stringview isStr: true vid: dcbV9
                 recvS9 = "&\{bfs2}"
             }
             args: String
@@ -2336,7 +2489,18 @@ emitDottedCall: function {
                                 paramTake: false
                             )
                             if svh9.length > 0 then sv9 = svh9
-                            svv9: svValueForm :ctx expr: sv9.stringview isStr: true
+                            svq9: (atomVidIfPlain
+                                :ast
+                                :symtab
+                                n: (ast.nodes.get i: (a.operation - 1).u64)
+                                text: sv9.stringview
+                            )
+                            svv9: (svValueForm
+                                :ctx
+                                expr: sv9.stringview
+                                isStr: true
+                                vid: svq9
+                            )
                             args.append "&"
                             args.append svv9
                         } else {
@@ -2843,6 +3007,11 @@ emitInstanceMethodCall: function {
                     av9: String
                     avBor9: false
                     usedInterp9: false
+                    # the argument's value node, so the pointer check below asks
+                    # about the variable rather than the emitted text. An
+                    # interpolated argument is a statement expression, never a
+                    # variable, so it leaves this 0.
+                    avNd9: u64
                     if iiVal9.length > 0 then {
                         av9 = iiVal9
                         usedInterp9 = true
@@ -2850,14 +3019,25 @@ emitInstanceMethodCall: function {
                     } else {
                         av9 = ctorArgByLabel :ast :symtab :ctx :call label: pname9.stringview
                         avBor9 = ctorArgIsBorrow :ast :symtab :ctx :call label: pname9.stringview
+                        avNd9 = ctorArgNodeByLabel :ast :call label: pname9.stringview
                         if (isLbl9b) == false then {
                             pv9: ctorArgByPosition :ast :symtab :ctx :call idx: posIdx9
                             if pv9.length > 0 then {
                                 av9 = pv9
                                 avBor9 = ctorArgIsBorrowPos :ast :symtab :ctx :call idx: posIdx9
+                                avNd9 = ctorArgNodeByPosition :ast :call idx: posIdx9
                             }
                             posIdx9 = posIdx9 + 1
                         }
+                    }
+                    avq9: u64
+                    if avNd9 > 0 then {
+                        avq9 = (atomVidIfPlain
+                            :ast
+                            :symtab
+                            n: (ast.nodes.get i: avNd9 - 1)
+                            text: av9.stringview
+                        )
                     }
                     ptra9: false
                     isStrBorrow9: false
@@ -2901,7 +3081,7 @@ emitInstanceMethodCall: function {
                     if usedInterp9 then ptra9 = false
                     byref9: false
                     if ptra9 then {
-                        if (isPtrVar :ctx name: av9.stringview) == false then byref9 = true
+                        if (isPtrVid :ctx vid: avq9) == false then byref9 = true
                     }
                     if byref9 then {
                         if (isNonLvalueArg s: av9.stringview) then {
@@ -3297,8 +3477,8 @@ emitEmptyColCreate: function {ast: Ast
 # colRecvRef -- a collection (List) receiver as a C lvalue for a method call: a
 # ptrVar List (a by-pointer param) is already a pointer and passes directly; a
 # value List passes its address.
-colRecvRef: function {ctx: Ctx bn: StringView} out String is {
-    if (isPtrVar :ctx name: bn) then return bn.string
+colRecvRef: function {ctx: Ctx bn: StringView vid: u64} out String is {
+    if (isPtrVid :ctx :vid) then return bn.string
     return "&\{bn}"
 }
 
@@ -3314,6 +3494,12 @@ emitCollectionMethodCall: function {
 } out String is {
     bn: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
+    bvid: (atomVidIfPlain
+        :ast
+        :symtab
+        n: (ast.nodes.get i: (call.callable - 1).u64)
+        text: bn.stringview
+    )
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     brid9: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: (call.callable - 1).u64)
     bt: chaseColMono :symtab :ctx tid: brid9
@@ -3322,11 +3508,11 @@ emitCollectionMethodCall: function {
     # genericOriginId when extra units register their own List/Map shells
     on9: monoOriginName :symtab tid: bt
     ov9: on9.stringview
-    if ov9 == "array" then return (emitArrayMethodCall :ast :symtab :ctx :call :mn :bn :bt)
+    if ov9 == "array" then return (emitArrayMethodCall :ast :symtab :ctx :call :mn :bn :bt :bvid)
     isList9: false
     if ov9 == "List" then isList9 = true
     if ov9 == "ListView" then isList9 = true
-    if isList9 then return (emitListMethodCall :ast :symtab :ctx :call :mn :bn :bt)
+    if isList9 then return (emitListMethodCall :ast :symtab :ctx :call :mn :bn :bt :bvid)
     if ov9 == "Set" then return (emitSetMethodCall :ast :symtab :ctx :call :mn :bn :bt)
     if ov9 == "Map" then return (emitMapMethodCall :ast :symtab :ctx :call :mn :bn :bt)
     return "".string
@@ -3341,9 +3527,10 @@ emitListMethodCall: function {
     mn: String
     bn: String
     bt: u64
+    bvid: u64
 } out String is {
     cb: ctxCname :ctx tid: bt
-    recvR9: colRecvRef :ctx bn: bn.stringview
+    recvR9: colRecvRef :ctx bn: bn.stringview vid: bvid
     if mn.stringview == "append" then {
         v: colArg :ast :symtab :ctx :call label: "from" consumes: true
         e0: "\{cb}_append(\{recvR9}, \{v})"
@@ -3400,6 +3587,7 @@ emitArrayMethodCall: function {
     mn: String
     bn: String
     bt: u64
+    bvid: u64
 } out String is {
     cb: ctxCname :ctx tid: bt
     if mn.stringview == "get" then {
@@ -3409,7 +3597,7 @@ emitArrayMethodCall: function {
     if mn.stringview == "set" then {
         vi: listArg :ast :symtab :ctx :call label: "i"
         vv: listArg :ast :symtab :ctx :call label: "val"
-        recvR9: colRecvRef :ctx bn: bn.stringview
+        recvR9: colRecvRef :ctx bn: bn.stringview vid: bvid
         return "\{cb}_set(\{recvR9}, \{vi}, \{vv})"
     }
     return "".string
@@ -3659,7 +3847,7 @@ emitInterpArgForParam: function {
             retx = "&\{nmH}"
         }
     } else {
-        retx = svValueForm :ctx expr: nmH.stringview isStr: true
+        retx = svValueForm :ctx expr: nmH.stringview isStr: true vid: 0
     }
     ctx.argHoistVals.append sx
     ctx.argHoistTypes.append "\{ctx.strC}_t"
@@ -4543,13 +4731,7 @@ ctorArgIsBorrowPos: function {
 }
 
 # the constructor-argument node matching a field label.
-ctorArgByLabel: function {
-    ast: Ast
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    call: zast.CallData
-    label: StringView
-} out String is {
+ctorArgNodeByLabel: function {ast: Ast call: zast.CallData label: StringView} out u64 is {
     aiter: call.arguments.iterate
     for aId9: aiter loop {
         a: ast.nodes.get i: (aId9 - 1).u64
@@ -4557,16 +4739,29 @@ ctorArgByLabel: function {
             a
         ) case namedoperation then {
             an: zast.nameTextCopy :ast ref: a.name
-            if an.stringview == label then {
-                # an interpolated argument builds via a self-contained statement
-                # expression (emitExpr cannot emit the chain)
-                iv9: emitInterpArgExpr :ast :symtab :ctx n: (ast.nodes.get i: (a.operation - 1).u64)
-                if iv9.length > 0 then return iv9
-                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (a.operation - 1).u64))
-            }
+            if an.stringview == label then return a.operation.u64
         } else null
     }
-    return "0".string
+    return 0
+}
+
+# ctorArgByLabel -- that argument's emitted text. Selected through the node
+# above so a caller can ask about the same argument by node.
+ctorArgByLabel: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData
+    label: StringView
+} out String is {
+    aid9: ctorArgNodeByLabel :ast :call :label
+    if aid9 == 0 then return "0".string
+    and9: ast.nodes.get i: aid9 - 1
+    # an interpolated argument builds via a self-contained statement
+    # expression (emitExpr cannot emit the chain)
+    iv9: emitInterpArgExpr :ast :symtab :ctx n: and9
+    if iv9.length > 0 then return iv9
+    return (emitExpr :ast :symtab :ctx n: and9)
 }
 
 # argIsPointerByLabel -- true when the arg at `label` already evaluates to a C
@@ -4600,13 +4795,7 @@ argIsPointerByLabel: function {
 # ctorArgByPosition -- the idx-th POSITIONAL (unlabeled) argument's C text, for a
 # method call passing args positionally (`this.formatLockHolder holder`) rather
 # than by label; "" when there is no such arg.
-ctorArgByPosition: function {
-    ast: Ast
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    call: zast.CallData
-    idx: u64
-} out String is {
+ctorArgNodeByPosition: function {ast: Ast call: zast.CallData idx: u64} out u64 is {
     seen9: u64
     aiter: call.arguments.iterate
     for aId9: aiter loop {
@@ -4616,21 +4805,29 @@ ctorArgByPosition: function {
         ) case namedoperation then {
             an: zast.nameTextCopy :ast ref: a.name
             if an.length == 0 then {
-                if seen9 == idx then {
-                    ip9: (emitInterpArgExpr
-                        :ast
-                        :symtab
-                        :ctx
-                        n: (ast.nodes.get i: (a.operation - 1).u64)
-                    )
-                    if ip9.length > 0 then return ip9
-                    return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (a.operation - 1).u64))
-                }
+                if seen9 == idx then return a.operation.u64
                 seen9 = seen9 + 1
             }
         } else null
     }
-    return "".string
+    return 0
+}
+
+# ctorArgByPosition -- that argument's emitted text, selected through the node
+# above so a caller can ask about the same argument by node.
+ctorArgByPosition: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData
+    idx: u64
+} out String is {
+    pid9: ctorArgNodeByPosition :ast :call :idx
+    if pid9 == 0 then return "".string
+    pnd9: ast.nodes.get i: pid9 - 1
+    ip9: emitInterpArgExpr :ast :symtab :ctx n: pnd9
+    if ip9.length > 0 then return ip9
+    return (emitExpr :ast :symtab :ctx n: pnd9)
 }
 
 # ctorInterpArgByLabel -- the interp-arg form (emitInterpArgForParam) for the
@@ -4964,6 +5161,12 @@ emitGenericFnCall: function {
                     valBySlot9g.set key: slot9g value: iav9
                 } else {
                     av9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (a9.operation - 1).u64)
+                    avq9: (atomVidIfPlain
+                        :ast
+                        :symtab
+                        n: (ast.nodes.get i: (a9.operation - 1).u64)
+                        text: av9.stringview
+                    )
                     byref9: false
                     argRef9: String
                     ptra9: false
@@ -4994,7 +5197,7 @@ emitGenericFnCall: function {
                         ) then ptra9 = true
                     }
                     if ptra9 then {
-                        if (isPtrVar :ctx name: av9.stringview) == false then {
+                        if (isPtrVid :ctx vid: avq9) == false then {
                             byref9 = true
                             argRef9 = (emitByrefArg
                                 :ast
@@ -5112,6 +5315,12 @@ emitUnitMethodCall: function {
                     valBySlot9g.set key: slot9g value: iav9
                 } else {
                     av9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (a9.operation - 1).u64)
+                    avq9: (atomVidIfPlain
+                        :ast
+                        :symtab
+                        n: (ast.nodes.get i: (a9.operation - 1).u64)
+                        text: av9.stringview
+                    )
                     byref9: false
                     argRef9: String
                     ptra9: false
@@ -5142,7 +5351,7 @@ emitUnitMethodCall: function {
                         ) then ptra9 = true
                     }
                     if ptra9 then {
-                        if (isPtrVar :ctx name: av9.stringview) == false then {
+                        if (isPtrVid :ctx vid: avq9) == false then {
                             byref9 = true
                             argRef9 = (emitByrefArg
                                 :ast
@@ -5260,6 +5469,12 @@ emitCrossUnitFnCall: function {
                     valBySlot9c.set key: slot9c value: iav8
                 } else {
                     av9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (a.operation - 1).u64)
+                    avq9: (atomVidIfPlain
+                        :ast
+                        :symtab
+                        n: (ast.nodes.get i: (a.operation - 1).u64)
+                        text: av9.stringview
+                    )
                     byref8: false
                     argRef8: String
                     vbh8c: String
@@ -5291,7 +5506,7 @@ emitCrossUnitFnCall: function {
                         ) then ptra8 = true
                     }
                     if ptra8 then {
-                        if (isPtrVar :ctx name: av9.stringview) == false then {
+                        if (isPtrVid :ctx vid: avq9) == false then {
                             byref8 = true
                             argRef8 = (emitByrefArg
                                 :ast
@@ -5898,6 +6113,12 @@ emitCallValue: function {
                         opf179: ast.nodes.get i: (a.operation - 1).u64
                         av9 = emitExpr :ast :symtab :ctx n: opf179
                     }
+                    avq9: (atomVidIfPlain
+                        :ast
+                        :symtab
+                        n: (ast.nodes.get i: (a.operation - 1).u64)
+                        text: av9.stringview
+                    )
                     pRaw9: fpIds.get i: slot9b
                     ppid9: pRaw9
                     pptt9: symtab.reg.typetypeOf typeId: ppid9
@@ -5919,7 +6140,7 @@ emitCallValue: function {
                             if pLbl9.length > 0 then {
                                 aIb9: ctxCname :ctx tid: aTid9
                                 aRcv9: "&\{av9}"
-                                if (isPtrVar :ctx name: av9.stringview) then aRcv9 = "\{av9}"
+                                if (isPtrVid :ctx vid: avq9) then aRcv9 = "\{av9}"
                                 av9 = "\{aIb9}_\{pLbl9}_create(\{aRcv9})"
                                 projd9 = true
                             }
@@ -5960,7 +6181,7 @@ emitCallValue: function {
                             ) then ptra8 = true
                         }
                         if ptra8 then {
-                            if (isPtrVar :ctx name: av9.stringview) == false then {
+                            if (isPtrVid :ctx vid: avq9) == false then {
                                 byref8 = true
                                 argRef8 = (emitByrefArg
                                 :ast
@@ -6043,10 +6264,10 @@ emitCallValue: function {
                     sja9
                 ) case namedoperation then {
                     if sji9 > 0 then sjargs9.append ", "
-                    sjv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (sja9.operation - 1).u64)
-                    if sji9 == 0 when (isPtrVar :ctx name: sjv9.stringview) == false then {
-                        sjargs9.append "&"
-                    }
+                    sjn9: ast.nodes.get i: (sja9.operation - 1).u64
+                    sjv9: emitExpr :ast :symtab :ctx n: sjn9
+                    sjq9: atomVidIfPlain :ast :symtab n: sjn9 text: sjv9.stringview
+                    if sji9 == 0 when (isPtrVid :ctx vid: sjq9) == false then sjargs9.append "&"
                     sjIsStr9: false
                     if sji9 > 0 then {
                         sjat9: (stampIdOf
@@ -6056,7 +6277,7 @@ emitCallValue: function {
                         if sjat9 == ctx.strTid then sjIsStr9 = true
                     }
                     if sjIsStr9 then {
-                        sjsv9: svValueForm :ctx expr: sjv9.stringview isStr: true
+                        sjsv9: svValueForm :ctx expr: sjv9.stringview isStr: true vid: sjq9
                         sjargs9.append sjsv9
                     } else {
                         sjargs9.append sjv9
@@ -6083,6 +6304,7 @@ emitStringMethod: function {
     recv: StringView
     recvIsPtr: bool
     mn: StringView
+    recvVid: u64
 } out String is {
     if mn == "copy" then {
         if recvIsPtr then return "\{ctx.strC}_copy(\{recv})"
@@ -6096,7 +6318,7 @@ emitStringMethod: function {
         if recvIsPtr then return "\{recv}->capacity"
         return "\{recv}.capacity"
     }
-    if mn == "stringview" then return (svValueForm :ctx expr: recv isStr: true)
+    if mn == "stringview" then return (svValueForm :ctx expr: recv isStr: true vid: recvVid)
     if mn == "shrink" then {
         if recvIsPtr then return "\{ctx.strC}_shrink(\{recv})"
         return "\{ctx.strC}_shrink(&\{recv})"
@@ -6448,8 +6670,10 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 if cvstr9 then {
                     cvpv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
                     if (isNonLvalueArg s: cvpv9.stringview) == false then {
-                        cvan2: atomTextDeep :ast n: (ast.nodes.get i: (n.parent - 1).u64)
-                        if cvan2.length > 0 when (isPtrVar :ctx name: cvan2.stringview) then {
+                        cvpn9: ast.nodes.get i: (n.parent - 1).u64
+                        cvan2: atomTextDeep :ast n: cvpn9
+                        cvav9: atomVid :symtab nid: (atomNodeIdDeep9 :ast n: cvpn9)
+                        if cvan2.length > 0 when (isPtrVid :ctx vid: cvav9) then {
                             return "\{ctx.strC}_copy(\{cvpv9})"
                         }
                         return "\{ctx.strC}_copy(&\{cvpv9})"
@@ -6534,7 +6758,8 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             accP9: ".".string
             rootP9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
             if rootP9.length > 0 then {
-                if (isPtrVar :ctx name: rootP9.stringview) then accP9 = "->".string
+                rpn9: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
+                if (isPtrVid :ctx vid: (atomVid :symtab nid: rpn9)) then accP9 = "->".string
             }
             tgP9: variantTag :symtab tid: dap9 arm: mnc0.stringview
             eP9: "((\{recvP9})\{accP9}tag == \{tgP9})"
@@ -6559,7 +6784,8 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             accT9: ".".string
             rootT9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
             if rootT9.length > 0 then {
-                if (isPtrVar :ctx name: rootT9.stringview) then accT9 = "->".string
+                rtn9: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
+                if (isPtrVid :ctx vid: (atomVid :symtab nid: rtn9)) then accT9 = "->".string
             }
             eT9: "((\{castT9})(\{recvT9})\{accT9}tag)"
             return eT9
@@ -6567,6 +6793,13 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         bn2r: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
         bn2a9: aliasResolve :ctx name: bn2r.stringview
         bn2: ztypes.mangleVarName name: bn2a9.stringview
+        # the receiver's variable, for the pointer-access checks below. An alias
+        # or a keyword mangle makes bn2 something other than the base binding, and
+        # then no variable is being read -- so leave the vid 0.
+        bn2v9: u64
+        if bn2.stringview == bn2r.stringview then {
+            bn2v9 = (atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)))
+        }
         mn2: aliasOrChild :ast :symtab aliasId: n.nodeid.u64 childId: n.child
         if bn2r.stringview == "io" then {
             isStdS9: false
@@ -6609,8 +6842,8 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             if (stampIdOf :symtab nid: tknid9) == ctx.strTid then isMove9 = true
             if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.unionType then isMove9 = true
             if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.classType then {
-                tkbn9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
-                if (isPtrVar :ctx name: tkbn9.stringview) == false then isMove9 = true
+                tkv9: atomVid :symtab nid: tknid9
+                if (isPtrVid :ctx vid: tkv9) == false then isMove9 = true
             }
             if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.functionType then isMove9 = true
             if isMove9 then {
@@ -6696,7 +6929,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 # String receivers project to a view for the no-arg SV
                 # natives, mirroring the chained/auto-call legs
                 needsAdd :ctx name: mn2.stringview
-                svfb9: svValueForm :ctx expr: bn2.stringview isStr: true
+                svfb9: svValueForm :ctx expr: bn2.stringview isStr: true vid: bn2v9
                 efb9: "\{ctx.svC}_\{mn2}(&\{svfb9})"
                 return efb9
             }
@@ -6755,7 +6988,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             if bareTid9 == ctx.strTid then {
                 if mn2.stringview == "length" then {
                     sacc3: ".".string
-                    if (isPtrVar :ctx name: bn2.stringview) then sacc3 = "->".string
+                    if (isPtrVid :ctx vid: bn2v9) then sacc3 = "->".string
                     e3: "\{bn2}\{sacc3}size"
                     return e3
                 }
@@ -6805,7 +7038,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 if mn2.stringview == "release" then isPMn9 = false
                 if isPMn9 then {
                     pacc9: ".".string
-                    if (isPtrVar :ctx name: bn2.stringview) then pacc9 = "->".string
+                    if (isPtrVid :ctx vid: bn2v9) then pacc9 = "->".string
                     return "\{bn2}\{pacc9}vtable->\{mn2}(\{bn2}\{pacc9}data)"
                 }
             }
@@ -6832,12 +7065,13 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             if isRecOrCls then {
                 fbtn9: typeNameOfReg9 :symtab tid: bstamp
                 if bstamp == ctx.strTid then {
-                    sptr9: isPtrVar :ctx name: bn2.stringview
+                    sptr9: isPtrVid :ctx vid: bn2v9
                     sm9: (emitStringMethod
                         :ctx
                         recv: bn2.stringview
                         recvIsPtr: sptr9
                         mn: mn2.stringview
+                        recvVid: bn2v9
                     )
                     if sm9.length > 0 then return sm9
                 }
@@ -6873,7 +7107,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                             needsAdd :ctx name: ffn9.stringview
                         }
                         frecv9: "&\{bn2}"
-                        if (isPtrVar :ctx name: bn2.stringview) then frecv9 = "\{bn2}"
+                        if (isPtrVid :ctx vid: bn2v9) then frecv9 = "\{bn2}"
                         return "\{ffc9}_\{mn2}(\{frecv9})"
                     }
                 }
@@ -6896,7 +7130,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                         clab9: conformanceLabelFor :symtab implTid: bstamp protoTid: mco
                         if clab9.stringview == mn2.stringview then {
                             ib9: ctxCname :ctx tid: bstamp
-                            if (isPtrVar :ctx name: bn2.stringview) then {
+                            if (isPtrVid :ctx vid: bn2v9) then {
                                 pj9: "\{ib9}_\{mn2}_create(\{bn2})"
                                 return pj9
                             }
@@ -6924,6 +7158,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                                 :ctx
                                 expr: bn2.stringview
                                 isStr: (bstamp == ctx.strTid)
+                                vid: bn2v9
                             )
                             ef9: "\{ctx.svC}_\{mn2}(&\{svfa9})"
                             return ef9
@@ -6952,7 +7187,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                         }
                         mrecv6: "\{bn2}"
                         if rtt == ztypes.ztypetype.classType then {
-                            if (isPtrVar :ctx name: bn2.stringview) == false then mrecv6 = "&\{bn2}"
+                            if (isPtrVid :ctx vid: bn2v9) == false then mrecv6 = "&\{bn2}"
                         }
                         ida9: renderedMethodDefaultArgs :ast :symtab :ctx fnTid: mco
                         if ida9.length > 0 then return "\{mc2}(\{mrecv6}, \{ida9})"
@@ -6969,7 +7204,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                         if (fnTypeTakesThis :symtab tid: mco) then {
                             accFp: ".".string
                             rcvFp: "&\{bn2}"
-                            if (isPtrVar :ctx name: bn2.stringview) then {
+                            if (isPtrVid :ctx vid: bn2v9) then {
                                 accFp = "->".string
                                 rcvFp = "\{bn2}"
                             }
@@ -6977,7 +7212,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                         }
                     }
                 } case none then null
-                if (isPtrVar :ctx name: bn2.stringview) then {
+                if (isPtrVid :ctx vid: bn2v9) then {
                     e5p: "\{bn2}->\{mn2}"
                     return e5p
                 }
@@ -6989,8 +7224,8 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 return e9
             }
             accB2: ".".string
-            if (isPtrVar :ctx name: bn2.stringview) then accB2 = "->".string
-            recvB2: colRecvRef :ctx bn: bn2.stringview
+            if (isPtrVid :ctx vid: bn2v9) then accB2 = "->".string
+            recvB2: colRecvRef :ctx bn: bn2.stringview vid: bn2v9
             if (originIsTid :symtab tid: bstamp originTid: ctx.arrayOriginTid) then {
                 acba9: ctxCname :ctx tid: bstamp
                 if mn2.stringview == "length" then {
@@ -7149,7 +7384,13 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             ppid9: nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64)
             if (stampIdOf :symtab nid: ppid9) == ctx.strTid then {
                 pbv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
-                sv9: svValueForm :ctx expr: pbv9.stringview isStr: true
+                pbq9: (atomVidIfPlain
+                    :ast
+                    :symtab
+                    n: (ast.nodes.get i: (n.parent - 1).u64)
+                    text: pbv9.stringview
+                )
+                sv9: svValueForm :ctx expr: pbv9.stringview isStr: true vid: pbq9
                 return sv9
             }
             if (stampIdOf :symtab nid: ppid9) == ctx.svTid then {
@@ -7159,6 +7400,12 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         # a nested base (e.g. it.target.a): emit the base expression, then chain
         # `.`/`->` by whether the base resolves to a pointer (ptrVar / lock field).
         base9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
+        bs9vid: (atomVidIfPlain
+            :ast
+            :symtab
+            n: (ast.nodes.get i: (n.parent - 1).u64)
+            text: base9.stringview
+        )
         if (base9.stringview.startsWith prefix: "/*") then {
             emitFail :ctx what: "unhandled dotted".string line: n.lineno
             return "/* zemitterc: unhandled dotted */0".string
@@ -7166,13 +7413,19 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         nptn9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.parent - 1).u64)
         if nptn9.stringview == "String" then {
             nptr9: pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
-            nsm9: emitStringMethod :ctx recv: base9.stringview recvIsPtr: nptr9 mn: mn2.stringview
+            nsm9: (emitStringMethod
+                :ctx
+                recv: base9.stringview
+                recvIsPtr: nptr9
+                mn: mn2.stringview
+                recvVid: bs9vid
+            )
             if nsm9.length > 0 then return nsm9
         }
         if (isStringy name: nptn9.stringview) when (isSvParseNative name: mn2.stringview) then {
             needsAdd :ctx name: mn2.stringview
             npIsStr9: nptn9.stringview == "String"
-            pnv9: svValueForm :ctx expr: base9.stringview isStr: npIsStr9
+            pnv9: svValueForm :ctx expr: base9.stringview isStr: npIsStr9 vid: bs9vid
             epnv9: "\{ctx.svC}_\{mn2}(&\{pnv9})"
             return epnv9
         }
@@ -7192,7 +7445,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         }
         if (originIsTid :symtab tid: nlid9 originTid: ctx.listOriginTid) then {
             nlcb9: ctxCname :ctx tid: nlid9
-            recvB9: colRecvRef :ctx bn: base9.stringview
+            recvB9: colRecvRef :ctx bn: base9.stringview vid: bs9vid
             if mn2.stringview == "pop" then return "\{nlcb9}_pop(\{recvB9})"
             if mn2.stringview == "sort" then return "\{nlcb9}_sort(\{recvB9})"
             if mn2.stringview == "listview" then return "\{nlcb9}_listview(\{recvB9})"
@@ -7238,6 +7491,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                                 :ctx
                                 expr: base9.stringview
                                 isStr: nlid9 == ctx.strTid
+                                vid: bs9vid
                             )
                             return "\{ctx.svC}_\{mn2}(&\{svfn9})"
                         }
@@ -7357,8 +7611,20 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 rt: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.rhs - 1).u64)
                 ltIsStr9: lt.stringview == "String"
                 rtIsStr9: rt.stringview == "String"
-                lf: svValueForm :ctx expr: l.stringview isStr: ltIsStr9
-                rf: svValueForm :ctx expr: r.stringview isStr: rtIsStr9
+                lq9: (atomVidIfPlain
+                    :ast
+                    :symtab
+                    n: (ast.nodes.get i: (n.lhs - 1).u64)
+                    text: l.stringview
+                )
+                rq9: (atomVidIfPlain
+                    :ast
+                    :symtab
+                    n: (ast.nodes.get i: (n.rhs - 1).u64)
+                    text: r.stringview
+                )
+                lf: svValueForm :ctx expr: l.stringview isStr: ltIsStr9 vid: lq9
+                rf: svValueForm :ctx expr: r.stringview isStr: rtIsStr9 vid: rq9
                 if op.stringview == "==" then {
                     eq1: "\{ctx.svC}_eq(\{lf}, \{rf})"
                     return eq1
@@ -7653,6 +7919,7 @@ emitInterpPart: function {
         } else if tn.stringview == "String" then {
             isAtomP: false
             an0: atomTextDeep :ast :n
+            an0v9: atomVid :symtab nid: (atomNodeIdDeep9 :ast :n)
             if an0.length > 0 then isAtomP = true
             if (interpBaseIsMapEntry :ast :symtab :n) then isAtomP = true
             if (interpBaseIsOwnedStructField :ast :symtab :n) then isAtomP = true
@@ -7661,7 +7928,7 @@ emitInterpPart: function {
                 # registers the raw name); compound bases (map-entry deref,
                 # owned struct field) have an0 == "" and keep the value form
                 sAcc9: ".".string
-                if an0.length > 0 when (isPtrVar :ctx name: an0.stringview) then sAcc9 = "->".string
+                if an0.length > 0 when (isPtrVid :ctx vid: an0v9) then sAcc9 = "->".string
                 lss: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}\{sAcc9}data, \{val}\{sAcc9}size);\n"
                 buf.append lss
             } else if (hoistExprIsBorrowRooted :ast :symtab :ctx :n) then {
@@ -8123,8 +8390,10 @@ emitPrintArg: function {
         anC9: zast.nameTextCopy :ast ref: n.name
         an9: anC9.stringview
         anm: aliasResolve :ctx name: an9
+        anv9: u64
+        if anm.stringview == an9 then anv9 = (atomVid :symtab nid: n.nodeid.u64)
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.strTid then {
-            if (isPtrVar :ctx name: anm.stringview) then {
+            if (isPtrVid :ctx vid: anv9) then {
                 lps: "\{ind}\{ctx.strC}_print(\{anm});\n"
                 buf.append lps
             } else {
@@ -8149,7 +8418,7 @@ emitPrintArg: function {
                 argOrig9: originTidOf :symtab tid: argTid
                 usesAmp: false
                 if (symtab.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.classType when argOrig9 == 0 then {
-                    if (isPtrVar :ctx name: anm.stringview) == false then usesAmp = true
+                    if (isPtrVid :ctx vid: anv9) == false then usesAmp = true
                 }
                 if usesAmp then {
                     lpt: "\{ind}\{ctx.svC}_print(\{mcb}(&\{anm}));\n"
@@ -8227,23 +8496,31 @@ bindLitIndex: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out
 
 # stringviewOfBase -- the base name of `X.stringview` over a String local
 # ("" otherwise).
-stringviewOfBase: function {ast: Ast symtab: zenv.ZSymbolTable n: Node} out String is {
+stringviewOfBaseNid: function {ast: Ast symtab: zenv.ZSymbolTable n: Node} out u64 is {
     match (
         n
     ) case expression then {
-        return (stringviewOfBase :ast :symtab n: (ast.nodes.get i: (n.expression - 1).u64))
+        return (stringviewOfBaseNid :ast :symtab n: (ast.nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
         mn: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         if mn.stringview == "stringview" then {
             bnid: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
             if (stampIdOf :symtab nid: bnid) == (builtinTid :ast :symtab base: "String") then {
-                return (atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64))
+                return bnid
             }
         }
-        return "".string
+        return 0
     } else {
-        return "".string
+        return 0
     }
+}
+
+# stringviewOfBase -- that base atom's text. Derived from the node above rather
+# than re-walked, so the name and the id can never describe different atoms.
+stringviewOfBase: function {ast: Ast symtab: zenv.ZSymbolTable n: Node} out String is {
+    sbn9: stringviewOfBaseNid :ast :symtab :n
+    if sbn9 == 0 then return "".string
+    return (atomTextOf :ast n: (ast.nodes.get i: sbn9 - 1))
 }
 
 # stringCopyLitIndex -- the pool index of `\"lit\".string` (0 otherwise).
@@ -8857,7 +9134,8 @@ emitStmt: function {
             svb: stringviewOfBase :ast :symtab n: avn9
             if svb.length > 0 then {
                 svacc4: ".".string
-                if (isPtrVar :ctx name: svb.stringview) then svacc4 = "->".string
+                svbV9: atomVid :symtab nid: (stringviewOfBaseNid :ast :symtab n: avn9)
+                if (isPtrVid :ctx vid: svbV9) then svacc4 = "->".string
                 svbR4a: aliasResolve :ctx name: svb.stringview
                 svbR4: ztypes.mangleVarName name: svbR4a.stringview
                 lsv4: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ \{svbR4}\{svacc4}data, \{svbR4}\{svacc4}size };\n"
@@ -9215,6 +9493,7 @@ emitStmt: function {
             )
         }
         chS9: (List String)
+        chV9: (List u64)
         chA9: (List String)
         chT9: (List u64)
         chN9: (List bool)
@@ -9225,6 +9504,7 @@ emitStmt: function {
             :ctx
             clauses: n.clauses
             subjects: chS9
+            svids: chV9
             arms: chA9
             tids: chT9
             negs: chN9
@@ -9239,6 +9519,7 @@ emitStmt: function {
             :ind
             :tmp
             chSubjects: chS9
+            chSubjectVids: chV9
             chArms: chA9
             chTids: chT9
             chNegs: chN9
@@ -9772,8 +10053,9 @@ emitReassignLvalue: function {
             name: memFp9.stringview
         ) then {
             recvFp9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
+            rfv9: atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64))
             accFpL9: ".".string
-            if (isPtrVar :ctx name: recvFp9.stringview) then accFpL9 = "->".string
+            if (isPtrVid :ctx vid: rfv9) then accFpL9 = "->".string
             recvFpC9: ztypes.mangleVarName name: recvFp9.stringview
             return "\{recvFpC9}\{accFpL9}\{memFp9}"
         }
@@ -10708,6 +10990,7 @@ emitIfBindValue: function {
             )
         }
         chS9: (List String)
+        chV9: (List u64)
         chA9: (List String)
         chT9: (List u64)
         chN9: (List bool)
@@ -10718,6 +11001,7 @@ emitIfBindValue: function {
             :ctx
             clauses: n.clauses
             subjects: chS9
+            svids: chV9
             arms: chA9
             tids: chT9
             negs: chN9
@@ -10732,6 +11016,7 @@ emitIfBindValue: function {
             :ind
             :tmp
             chSubjects: chS9
+            chSubjectVids: chV9
             chArms: chA9
             chTids: chT9
             chNegs: chN9
@@ -11389,7 +11674,7 @@ seedPosCore9: function {
     if (bodyReassigns9 :ast n: body name: subj9.stringview) then return
     recv9: emitExpr :ast :symtab :ctx n: parent
     acc9: ".".string
-    if (isPtrVar :ctx name: subj9.stringview) then acc9 = "->".string
+    if (isPtrVid :ctx vid: (atomVid :symtab nid: (atomNodeId9 n: parent))) then acc9 = "->".string
     alias9: (armAliasText9
         :ast
         :symtab
@@ -11444,7 +11729,8 @@ seedNegFromPred9: function {
         if (bodyReassigns9 :ast n: body name: subj9.stringview) then return
         recv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
         acc9: ".".string
-        if (isPtrVar :ctx name: subj9.stringview) then acc9 = "->".string
+        snv9: atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64))
+        if (isPtrVid :ctx vid: snv9) then acc9 = "->".string
         alias9: (armAliasText9
             :ast
             :symtab
@@ -11591,6 +11877,7 @@ chainFactsOfClauses9: function {
     ctx: Ctx
     clauses: List u32
     subjects: List String
+    svids: List u64
     arms: List String
     tids: List u64
     negs: List bool
@@ -11603,6 +11890,7 @@ chainFactsOfClauses9: function {
         ) case ifclause then {
             if c9.conditions.length == 1 then {
                 tS9: (List String)
+                tV9: (List u64)
                 tA9: (List String)
                 tT9: (List u64)
                 tN9: (List bool)
@@ -11618,6 +11906,7 @@ chainFactsOfClauses9: function {
                             :ctx
                             n: (ast.nodes.get i: (k9.operation - 1).u64)
                             subjects: tS9
+                            svids: tV9
                             arms: tA9
                             tids: tT9
                             negs: tN9
@@ -11628,6 +11917,7 @@ chainFactsOfClauses9: function {
                 if tS9.length == 1 then {
                     ms9: tS9.pop
                     subjects.append ms9
+                    svids.append (tV9.get i: 0)
                     ma9: tA9.pop
                     arms.append ma9
                     tids.append (tT9.get i: 0)
@@ -11648,6 +11938,7 @@ chainCondFact9: function {
     ctx: Ctx
     n: Node
     subjects: List String
+    svids: List u64
     arms: List String
     tids: List u64
     negs: List bool
@@ -11657,7 +11948,7 @@ chainCondFact9: function {
         n
     ) case expression then {
         iexD9: ast.nodes.get i: (n.expression - 1).u64
-        chainCondFact9 :ast :symtab :ctx n: iexD9 :subjects :arms :tids :negs :recvs
+        chainCondFact9 :ast :symtab :ctx n: iexD9 :subjects :svids :arms :tids :negs :recvs
     } case dottedpath then {
         cn9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         if cn9.stringview == "true" then {
@@ -11668,6 +11959,7 @@ chainCondFact9: function {
                 n: (ast.nodes.get i: (n.parent - 1).u64)
                 neg: false
                 :subjects
+                :svids
                 :arms
                 :tids
                 :negs
@@ -11683,6 +11975,7 @@ chainCondFact9: function {
                 n: (ast.nodes.get i: (n.parent - 1).u64)
                 neg: true
                 :subjects
+                :svids
                 :arms
                 :tids
                 :negs
@@ -11699,6 +11992,7 @@ chainCondFact9: function {
             childName: cn9.stringview
             neg: false
             :subjects
+            :svids
             :arms
             :tids
             :negs
@@ -11717,6 +12011,7 @@ chainCondFact9: function {
                     n: (ast.nodes.get i: (n.lhs - 1).u64)
                     neg: false
                     :subjects
+                    :svids
                     :arms
                     :tids
                     :negs
@@ -11732,6 +12027,7 @@ chainCondFact9: function {
                     n: (ast.nodes.get i: (n.lhs - 1).u64)
                     neg: true
                     :subjects
+                    :svids
                     :arms
                     :tids
                     :negs
@@ -11747,6 +12043,7 @@ chainCondFact9: function {
                     n: (ast.nodes.get i: (n.rhs - 1).u64)
                     neg: false
                     :subjects
+                    :svids
                     :arms
                     :tids
                     :negs
@@ -11762,6 +12059,7 @@ chainCondFact9: function {
                     n: (ast.nodes.get i: (n.rhs - 1).u64)
                     neg: true
                     :subjects
+                    :svids
                     :arms
                     :tids
                     :negs
@@ -11780,6 +12078,7 @@ chainInnerFact9: function {
     n: Node
     neg: bool
     subjects: List String
+    svids: List u64
     arms: List String
     tids: List u64
     negs: List bool
@@ -11789,7 +12088,7 @@ chainInnerFact9: function {
         n
     ) case expression then {
         iexE9: ast.nodes.get i: (n.expression - 1).u64
-        chainInnerFact9 :ast :symtab :ctx n: iexE9 :neg :subjects :arms :tids :negs :recvs
+        chainInnerFact9 :ast :symtab :ctx n: iexE9 :neg :subjects :svids :arms :tids :negs :recvs
     } case dottedpath then {
         arm0: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         (chainFactCore9
@@ -11801,6 +12100,7 @@ chainInnerFact9: function {
             childName: arm0.stringview
             :neg
             :subjects
+            :svids
             :arms
             :tids
             :negs
@@ -11821,6 +12121,7 @@ chainFactCore9: function {
     childName: StringView
     neg: bool
     subjects: List String
+    svids: List u64
     arms: List String
     tids: List u64
     negs: List bool
@@ -11835,6 +12136,7 @@ chainFactCore9: function {
     an9: childName.string
     rv9: emitExpr :ast :symtab :ctx n: parent
     subjects.append subj9
+    svids.append (atomVid :symtab nid: (atomNodeId9 n: parent))
     arms.append an9
     tids.append dap9
     negs.append neg
@@ -11954,6 +12256,7 @@ emitElse9: function {
     ind: StringView
     tmp: TmpCtr
     chSubjects: List String
+    chSubjectVids: List u64
     chArms: List String
     chTids: List u64
     chNegs: List bool
@@ -12035,7 +12338,8 @@ emitElse9: function {
                     if (bodyReassigns9 :ast n: o name: gs9.stringview) == false then {
                         mrecv9: chRecvs.get i: gi9
                         macc9: ".".string
-                        if (isPtrVar :ctx name: gs9.stringview) then macc9 = "->".string
+                        gv9: chSubjectVids.get i: gi9
+                        if (isPtrVid :ctx vid: gv9) then macc9 = "->".string
                         alias9: (armAliasText9
                             :ast
                             :symtab
@@ -12506,7 +12810,10 @@ emitBodyNode: function {
                 {
                     if pgRawN9.length > 0 when pgRecv9.length > 0 when pgTid0 > 0 when pgArm0.length > 0 then {
                         acc9: ".".string
-                        if (isPtrVar :ctx name: pgRawN9.stringview) then acc9 = "->".string
+                        pgv9: (optU64Or9
+                            o: (symtab.typing.postGuardVarId.get key: pgid9)
+                        )
+                        if (isPtrVid :ctx vid: pgv9) then acc9 = "->".string
                         alias9: (armAliasText9
                             :ast
                             :symtab
@@ -12833,8 +13140,8 @@ isBorrowStringParam: function {
 }
 
 # registerReftypeParams -- add a top-level function's reftype (class/union)
-# params to ctx.ptrVars, so the body reads them as `param->field` and method
-# calls pass them directly (they arrive as pointers). Caller resets ptrVars.
+# params to ctx.ptrVids, so the body reads them as `param->field` and method
+# calls pass them directly (they arrive as pointers). Caller resets ptrVids.
 # isSetMapPtrParam -- a non-TAKE Set/Map param. Set/Map are heap pointers, so the
 # param is passed BY POINTER (Set_t*) and its arg (a Set/Map local/field, also a
 # pointer) is passed directly -- unlike a by-value List param which needs &.
@@ -12882,7 +13189,13 @@ isListPtrParam: function {
 }
 
 # record which of function `fid`'s parameters are reftypes.
-registerReftypeParams: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} is {
+registerReftypeParams: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    fid: u64
+    op: Node
+} is {
     pNames: (List String)
     pIds: (List u64)
     pNmIds: (List u64)
@@ -12919,8 +13232,8 @@ registerReftypeParams: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx fid
             tid: rpid
         ) then regp9 = true
         if regp9 then {
-            rpc: rpn.copy
-            ctx.ptrVars.append rpc
+            rvd9: paramVidByNameId :ast :symtab :op nameId: (pNmIds.get i: ri)
+            ctx.ptrVids.append rvd9
         }
         ri = ri + 1
     }
@@ -14044,10 +14357,16 @@ emitUnitMonoInstances: function {
                                     } else {
                                         lo9: "\{sig9} {\n"
                                         buf.append lo9
-                                        ctx.ptrVars = (List String)
+                                                                                ctx.ptrVids = (List u64)
                                         ctx.aliases = (List NameVal)
                                         ctx.narrowBox = (List NameVal)
-                                        registerReftypeParams :ast :symtab :ctx fid: cfid9
+                                        (registerReftypeParams
+                                            :ast
+                                            :symtab
+                                            :ctx
+                                            fid: cfid9
+                                            op: (ast.nodes.get i: (fm9Node9.operation - 1).u64)
+                                        )
                                         ctx.curThisTid = t9
                                         (emitFnBody
                                             :ast
@@ -14172,10 +14491,10 @@ emitFnMonoInstances: function {
             } else {
                 lo9: "\{sig9} {\n"
                 buf.append lo9
-                ctx.ptrVars = (List String)
+                                ctx.ptrVids = (List u64)
                 ctx.aliases = (List NameVal)
                 ctx.narrowBox = (List NameVal)
-                registerReftypeParams :ast :symtab :ctx fid: t9
+                registerReftypeParams :ast :symtab :ctx fid: t9 op: templateFnOp
                 ctx.curThisTid = t9
                 emitFnBody :ast :symtab :ctx op: templateFnOp fid: t9 :buf
                 ctx.curThisTid = 0
@@ -14292,10 +14611,16 @@ emitFnsIn: function {
                     } else {
                         lo: "\{sig} {\n"
                         buf.append lo
-                        ctx.ptrVars = (List String)
+                                                ctx.ptrVids = (List u64)
                         ctx.aliases = (List NameVal)
                         ctx.narrowBox = (List NameVal)
-                        registerReftypeParams :ast :symtab :ctx :fid
+                        (registerReftypeParams
+                            :ast
+                            :symtab
+                            :ctx
+                            :fid
+                            op: (ast.nodes.get i: (dm2.operation - 1).u64)
+                        )
                         (emitFnBody
                             :ast
                             :symtab
@@ -14891,7 +15216,7 @@ emitC: function {
         methodReturns: (Map String value: String)
         dataElems: (Map String value: String)
         dataConst: (Map String value: String)
-        ptrVars: (List String)
+        ptrVids: (List u64)
         aliases: (List NameVal)
         narrowBox: (List NameVal)
         narrowTid: (List NameTid)
@@ -19363,7 +19688,8 @@ fileFromArgCoerce: function {
                     )
                     fb9: av.string
                     if fh9.length > 0 then fb9 = fh9
-                    return (svValueForm :ctx expr: fb9.stringview isStr: true)
+                    fbq9: atomVidIfPlain :ast :symtab n: opf2129 text: fb9.stringview
+                    return (svValueForm :ctx expr: fb9.stringview isStr: true vid: fbq9)
                 }
             }
         } else null
@@ -19403,8 +19729,10 @@ emitFileMethodCall: function {
     }
     recv: aliasResolve :ctx name: bn.stringview
     recvC: ztypes.mangleVarName name: recv.stringview
+    recvV9: u64
+    if recv.stringview == bn.stringview then recvV9 = (atomVid :symtab nid: bnid)
     recvExpr: "&\{recvC}"
-    if (isPtrVar :ctx name: recv.stringview) then recvExpr = recvC
+    if (isPtrVid :ctx vid: recvV9) then recvExpr = recvC
     isNet9: false
     {
         fduo9: definedInUnitOf :symtab tid: fid
@@ -19497,16 +19825,23 @@ wrapperCreateArg: function {
                     abtid: stampIdOf :symtab nid: abnid
                     abcb: ctxCname :ctx tid: abtid
                     ablab: conformanceLabelFor :symtab implTid: abtid protoTid: prtid
+                    abv9: u64
+                    if abr.stringview == ab.stringview then abv9 = (atomVid :symtab nid: abnid)
                     abpfx9: "&".string
-                    if (isPtrVar :ctx name: abr.stringview) then abpfx9 = "".string
+                    if (isPtrVid :ctx vid: abv9) then abpfx9 = "".string
                     return "\{abcb}_\{ablab}_create(\{abpfx9}\{abrC})"
                 }
                 if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType then {
-                    ab2: dottedBaseAtom :ast n: (ast.nodes.get i: (a.operation - 1).u64)
+                    a2op9: ast.nodes.get i: (a.operation - 1).u64
+                    ab2: dottedBaseAtom :ast n: a2op9
                     abr2: aliasResolve :ctx name: ab2.stringview
                     abr2C: ztypes.mangleVarName name: abr2.stringview
+                    ab2v9: u64
+                    if abr2.stringview == ab2.stringview then {
+                        ab2v9 = (atomVid :symtab nid: (dottedBaseNodeId :ast n: a2op9))
+                    }
                     ab2pfx9: "&".string
-                    if (isPtrVar :ctx name: abr2.stringview) then ab2pfx9 = "".string
+                    if (isPtrVid :ctx vid: ab2v9) then ab2pfx9 = "".string
                     return "\{ab2pfx9}\{abr2C}"
                 }
                 return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (a.operation - 1).u64))
@@ -19660,7 +19995,7 @@ lowerNativeArg: function {
     if (symtab.reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam then isViewP9 = true
     if isViewP9 then {
         avh9: emitColInterpArg :ast :symtab :ctx n: op consumes: false
-        if avh9.length > 0 then return (svValueForm :ctx expr: avh9.stringview isStr: true)
+        if avh9.length > 0 then return (svValueForm :ctx expr: avh9.stringview isStr: true vid: 0)
         av0: emitExpr :ast :symtab :ctx n: op
         if (stampIdOf :symtab nid: (nodeIdOf9 n: op)) == ctx.strTid then {
             hb9: (hoistBorrowValArg
@@ -19673,7 +20008,8 @@ lowerNativeArg: function {
                 isBorrow: (hoistExprIsBorrowRooted :ast :symtab :ctx n: op)
             )
             if hb9.length > 0 then av0 = hb9
-            return (svValueForm :ctx expr: av0.stringview isStr: true)
+            av0q9: atomVidIfPlain :ast :symtab n: op text: av0.stringview
+            return (svValueForm :ctx expr: av0.stringview isStr: true vid: av0q9)
         }
         return av0
     }
@@ -19996,8 +20332,10 @@ emitParsedMethodCall: function {
     pc: ctxCname :ctx tid: pid
     recv: aliasResolve :ctx name: bn.stringview
     recvC: ztypes.mangleVarName name: recv.stringview
+    recvV9: u64
+    if recv.stringview == bn.stringview then recvV9 = (atomVid :symtab nid: bnid)
     recvExpr: "&\{recvC}"
-    if (isPtrVar :ctx name: recv.stringview) then recvExpr = recvC
+    if (isPtrVid :ctx vid: recvV9) then recvExpr = recvC
     needsAdd :ctx name: "cli"
     pneed: "cli_\{mn}"
     needsAdd :ctx name: pneed.stringview
@@ -20065,8 +20403,10 @@ emitUserIterCall: function {
         callC9: ctxCname :ctx tid: cco9
         recv9: aliasResolve :ctx name: bn.stringview
         recvC9: ztypes.mangleVarName name: recv9.stringview
+        recvV9: u64
+        if recv9.stringview == bn.stringview then recvV9 = (atomVid :symtab nid: bnid)
         recvExpr9: "&\{recvC9}"
-        if (isPtrVar :ctx name: recv9.stringview) then recvExpr9 = recvC9
+        if (isPtrVid :ctx vid: recvV9) then recvExpr9 = recvC9
         valArg9: String
         hasVal9: false
         with aiter9: call.arguments.iterate do for av9Id9: aiter9 loop {
@@ -20079,10 +20419,15 @@ emitUserIterCall: function {
                     hasVal9 = true
                     ve9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (av9.operation - 1).u64)
                     if (isLockArg :ast n: (ast.nodes.get i: (av9.operation - 1).u64)) then {
-                        vbase9: dottedBaseAtom :ast n: (ast.nodes.get i: (av9.operation - 1).u64)
+                        vop9: ast.nodes.get i: (av9.operation - 1).u64
+                        vbase9: dottedBaseAtom :ast n: vop9
                         vbr9: aliasResolve :ctx name: vbase9.stringview
+                        vbv9: u64
+                        if vbr9.stringview == vbase9.stringview then {
+                            vbv9 = (atomVid :symtab nid: (dottedBaseNodeId :ast n: vop9))
+                        }
                         vpfx9: "&".string
-                        if (isPtrVar :ctx name: vbr9.stringview) then vpfx9 = "".string
+                        if (isPtrVid :ctx vid: vbv9) then vpfx9 = "".string
                         valArg9 = "\{vpfx9}\{ve9}"
                     } else {
                         valArg9 = ve9
@@ -20266,11 +20611,9 @@ emitProtocolCreateCall: function {
         ) case namedoperation then {
             an: zast.nameTextCopy :ast ref: a.name
             if an.stringview == "from" then {
-                fromBase: dottedBaseAtom :ast n: (ast.nodes.get i: (a.operation - 1).u64)
-                if fromBase.length == 0 then {
-                    opf1049: ast.nodes.get i: (a.operation - 1).u64
-                    fromBase = (atomTextOf :ast n: opf1049)
-                }
+                fop9: ast.nodes.get i: (a.operation - 1).u64
+                fromBase: dottedBaseAtom :ast n: fop9
+                if fromBase.length == 0 then fromBase = (atomTextOf :ast n: fop9)
                 fdn: stampNameDeep :ast :symtab n: (ast.nodes.get i: (a.operation - 1).u64)
                 fromTid: (canonTypeId
                     :ast
@@ -20285,8 +20628,13 @@ emitProtocolCreateCall: function {
                 if label.length == 0 then return "".string
                 valVar: aliasResolve :ctx name: fromBase.stringview
                 valVarC: ztypes.mangleVarName name: valVar.stringview
+                vvv9: u64
+                if valVar.stringview == fromBase.stringview then {
+                    vvv9 = (atomVid :symtab nid: (dottedBaseNodeId :ast n: fop9))
+                    if vvv9 == 0 then vvv9 = (atomVid :symtab nid: (atomNodeId9 n: fop9))
+                }
                 refPfx9: "&".string
-                if (isPtrVar :ctx name: valVar.stringview) then refPfx9 = "".string
+                if (isPtrVid :ctx vid: vvv9) then refPfx9 = "".string
                 ce: "\{implBase}_\{label}_\{suffix}(\{refPfx9}\{valVarC})"
                 return ce
             }
@@ -21154,10 +21502,16 @@ emitClassMonoMethods: function {
                                     } else {
                                         lo8: "\{sg8} {\n"
                                         buf.append lo8
-                                        ctx.ptrVars = (List String)
+                                                                                ctx.ptrVids = (List u64)
                                         ctx.aliases = (List NameVal)
                                         ctx.narrowBox = (List NameVal)
-                                        registerReftypeParams :ast :symtab :ctx fid: cf8
+                                        (registerReftypeParams
+                                            :ast
+                                            :symtab
+                                            :ctx
+                                            fid: cf8
+                                            op: (ast.nodes.get i: (am8.operation - 1).u64)
+                                        )
                                         ctx.curThisTid = t8
                                         (emitFnBody
                                             :ast
@@ -21208,10 +21562,16 @@ emitClassMonoMethods: function {
                                     } else {
                                         lo8b: "\{sg8b} {\n"
                                         buf.append lo8b
-                                        ctx.ptrVars = (List String)
+                                                                                ctx.ptrVids = (List u64)
                                         ctx.aliases = (List NameVal)
                                         ctx.narrowBox = (List NameVal)
-                                        registerReftypeParams :ast :symtab :ctx fid: cf8b
+                                        (registerReftypeParams
+                                            :ast
+                                            :symtab
+                                            :ctx
+                                            fid: cf8b
+                                            op: (ast.nodes.get i: (am8b.operation - 1).u64)
+                                        )
                                         ctx.curThisTid = t8
                                         (emitFnBody
                                             :ast
@@ -21695,7 +22055,7 @@ emitOneMethod: function {
     # a CLASS method takes its `this` receiver by pointer (reference semantics):
     # the receiver param gets a `*` and its name is recorded so the body emits
     # `c->field`. Reset for this method (names must not leak into other bodies).
-    ctx.ptrVars = (List String)
+        ctx.ptrVids = (List u64)
     ctx.aliases = (List NameVal)
     ctx.narrowBox = (List NameVal)
     encIsClass: false
@@ -21716,8 +22076,8 @@ emitOneMethod: function {
             if pid == thisTid9 then isRecv9 = true
             if isRecv9 then {
                 pt = "\{pt}*"
-                pnc9: pname.copy
-                ctx.ptrVars.append pnc9
+                pvd9: paramVidByNameId :ast :symtab :op nameId: (pidsNm.get i: pi)
+                ctx.ptrVids.append pvd9
             } else {
                 # a non-TAKE class param borrows the container (LOCK/BORROW, or the
                 # borrow-default whose ownership a cross-unit shell records as "none")
@@ -21753,8 +22113,8 @@ emitOneMethod: function {
                 ) then giveptr9 = true
                 if giveptr9 then {
                     pt = "\{pt}*"
-                    pnc9b: pname.copy
-                    ctx.ptrVars.append pnc9b
+                    pvd9b: paramVidByNameId :ast :symtab :op nameId: (pidsNm.get i: pi)
+                    ctx.ptrVids.append pvd9b
                 }
             }
         }
@@ -21783,7 +22143,7 @@ emitOneMethod: function {
         }
         buf.append "}\n\n"
     }
-    ctx.ptrVars = (List String)
+        ctx.ptrVids = (List u64)
     ctx.aliases = (List NameVal)
     ctx.narrowBox = (List NameVal)
 }
