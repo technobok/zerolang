@@ -6099,9 +6099,9 @@ resolveClass: function {
     }
     if (hasCreate) == false then {
         if (isgen) == false then {
-            createName: "\{defName}.create"
             createId: (reg.newType
-                name: createName.stringview
+                name: "create"
+                ownerTid: cid
                 typetype: ztypes.ztypetype.functionType
             )
             (ty.declSynthMember
@@ -8251,7 +8251,7 @@ scanMainForInstantiations: function {program: Node reqs: List InstReq} is {
     } else null
 }
 
-# attachMonoUnitFuncs -- add a JOIN-only `{mono}.{fn}` FUNCTION shell child per function
+# attachMonoUnitFuncs -- add a JOIN-only FUNCTION shell child per function
 # in the template unit's body. The mono function rows are defined_in_unit=NULL (excluded
 # from the filtered dump), so no params are resolved -- only the names matter for the JOIN.
 attachMonoUnitFuncs: function {
@@ -8259,7 +8259,6 @@ attachMonoUnitFuncs: function {
     reg: ztypes.ZTypeRegistry
     ast: Ast
     monoId: u64
-    monoName: StringView
     templateOpId: u32
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: templateOpId
@@ -8272,9 +8271,9 @@ attachMonoUnitFuncs: function {
             ) case namedoperation then {
                 if (isFunctionDefOp op: (ast.nodes.get i: (fmNode9.operation - 1).u64)) then {
                     fn: zast.nameTextCopy :ast ref: fmNode9.name
-                    shellName: "\{monoName}.\{fn}"
                     shellId: (reg.newType
-                        name: shellName.stringview
+                        name: fn.stringview
+                        ownerTid: monoId
                         typetype: ztypes.ztypetype.functionType
                     )
                     (ty.declSynthMember
@@ -8966,7 +8965,7 @@ createUnitMono: function {
                 }
             }
         }
-        attachMonoUnitFuncs :ty :reg :ast :monoId :monoName :templateOpId
+        attachMonoUnitFuncs :ty :reg :ast :monoId :templateOpId
         reg.recordDemand name: "return"
         reg.recordDemand name: "never"
     }
@@ -9205,6 +9204,8 @@ buildUnitMono: function {
             ) case namedoperation then {
                 if (isFunctionDefOp op: (ast.nodes.get i: (fmNode9.operation - 1).u64)) then {
                     fn: zast.nameTextCopy :ast ref: fmNode9.name
+                    # still composite: PendingUnitWalk carries it as the lazy
+                    # body walk's defName, which is a label, not a type name
                     qn: "\{monoName}.\{fn}"
                     srcId: u64
                     tfo: ty.declChildOf pool: ast.names parentTypeId: tplId name: fn.stringview
@@ -9245,7 +9246,11 @@ buildUnitMono: function {
                             )
                         } case none then null
                     }
-                    newFnId: reg.newType name: qn.stringview typetype: ztypes.ztypetype.functionType
+                    newFnId: (reg.newType
+                        name: fn.stringview
+                        ownerTid: monoId
+                        typetype: ztypes.ztypetype.functionType
+                    )
                     # declare and edge the method before filling its parameters:
                     # edging claims the method's own function type for its
                     # declaration, which is what the parameter writes below --
