@@ -1201,8 +1201,8 @@ Ctx: class {
     # the current class method body's pointer-receiver params, by variable id
     ptrVids: (List u64)
     aliases: (List NameVal)
-    narrowBox: (List NameVal)
-    narrowTid: (List NameTid)
+    narrowBox: (List VidVal)
+    narrowTid: (List VidTid)
     exclArms: (List VidVal)
     exclTids: (List VidTid)
     genActive: bool
@@ -1363,15 +1363,17 @@ pathIsPointer: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} ou
         return (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: (n.expression - 1).u64))
     } case atomid then {
         anP9: ast.names.texts.get i: (n.name - 1).u64
-        rn: aliasResolve :ctx name: anP9.stringview
+        rnV0: atomVid :symtab nid: n.nodeid.u64
+        rn: aliasResolve :ctx name: anP9.stringview vid: rnV0
         rnv9: u64
-        if rn.stringview == anP9.stringview then rnv9 = (atomVid :symtab nid: n.nodeid.u64)
+        if rn.stringview == anP9.stringview then rnv9 = rnV0
         return (isPtrVid :ctx vid: rnv9)
     } case labelvalue then {
         lnP9: ast.names.texts.get i: (n.name - 1).u64
-        rln: aliasResolve :ctx name: lnP9.stringview
+        rlnV0: atomVid :symtab nid: n.nodeid.u64
+        rln: aliasResolve :ctx name: lnP9.stringview vid: rlnV0
         rlv9: u64
-        if rln.stringview == lnP9.stringview then rlv9 = (atomVid :symtab nid: n.nodeid.u64)
+        if rln.stringview == lnP9.stringview then rlv9 = rlnV0
         return (isPtrVid :ctx vid: rlv9)
     } case dottedpath then {
         cn: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
@@ -1391,18 +1393,12 @@ pathIsPointer: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} ou
     }
 }
 
-# NameVal / NameTid -- assoc-list entries for the per-function narrowing and
-# alias state. A handful of entries at most, so linear StringView probes beat
-# a map's per-probe owned-key allocation and hash.
+# NameVal -- an assoc-list entry for the alias state, the last of the
+# per-function tables still keyed by source name. A handful of entries at most,
+# so a linear probe beats a map's per-probe owned-key allocation and hash.
 NameVal: class {
     name: String
     val: String
-}
-
-# a (name, type-id) pair for the emitter's small association lists.
-NameTid: class {
-    name: String
-    tid: u64
 }
 
 # VidVal / VidTid -- the same pairs keyed by VARIABLE ID rather than by source
@@ -1430,6 +1426,18 @@ vvGet: function {xs: List VidVal vid: u64} out String is {
         i9 = i9 + 1
     }
     return "".string
+}
+
+# true when list `xs` has an entry for `vid`.
+vvHas: function {xs: List VidVal vid: u64} out bool is {
+    if vid == 0 then return false
+    i9: u64
+    n9: xs.length
+    for i9 < n9 loop {
+        if (xs.get i: i9).vid == vid then return true
+        i9 = i9 + 1
+    }
+    return false
 }
 
 # vvSet -- replace-or-append: one entry per variable (map.set semantics).
@@ -1557,52 +1565,13 @@ nvRemove: function {xs: List NameVal name: StringView} is {
     }
 }
 
-# the type id bound to `name` in `xs`, or none.
-ntGet: function {xs: List NameTid name: StringView} out optionval u64 is {
-    i9: u64
-    n9: xs.length
-    for i9 < n9 loop {
-        e9: xs.get i: i9
-        if e9.name.stringview == name then return (optionval.some e9.tid)
-        i9 = i9 + 1
-    }
-    return (optionval.none u64)
-}
-
-# bind `name` to type id `tid` in `xs`.
-ntSet: function {xs: List NameTid name: StringView tid: u64} is {
-    i9: u64
-    n9: xs.length
-    for i9 < n9 loop {
-        if (xs.get i: i9).name.stringview == name then {
-            xs.set i: i9 val: (NameTid name: name.string :tid)
-            return
-        }
-        i9 = i9 + 1
-    }
-    xs.append (NameTid name: name.string :tid)
-}
-
-# remove `name`'s binding from `xs`.
-ntRemove: function {xs: List NameTid name: StringView} is {
-    i9: u64
-    n9: xs.length
-    for i9 < n9 loop {
-        if (xs.get i: i9).name.stringview == name then {
-            last9: xs.pop
-            if i9 + 1 < n9 then xs.set i: i9 val: last9
-            return
-        }
-        i9 = i9 + 1
-    }
-}
-
 # aliasResolve -- a `.take` alias's base C name, or the name itself if none.
-aliasResolve: function {ctx: Ctx name: StringView} out String is {
+aliasResolve: function {ctx: Ctx name: StringView vid: u64} out String is {
     # A match-arm narrowing (narrowBox) takes priority: inside the arm the name
     # resolves to the narrowed union payload cast, not the un-narrowed binding or a
-    # stale for-loop/borrow/take alias -- mirrors takeSourceResolve.
-    nbo: nvGet xs: ctx.narrowBox :name
+    # stale for-loop/borrow/take alias -- mirrors takeSourceResolve. narrowBox is
+    # keyed by variable; ctx.aliases is still keyed by source name.
+    nbo: vvGet xs: ctx.narrowBox :vid
     if nbo.length > 0 then return nbo
     ao: nvGet xs: ctx.aliases :name
     if ao.length > 0 then return ao
@@ -1763,9 +1732,9 @@ emitNarrowedTakeZero: function {
         if cn9.stringview == "take" then {
             bn9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
             bn9v: atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64))
-            if (nvHas xs: ctx.narrowBox name: bn9.stringview) then {
+            if (vvHas xs: ctx.narrowBox vid: bn9v) then {
                 box9: takeSourceResolve :ctx name: bn9.stringview vid: bn9v
-                tido9: ntGet xs: ctx.narrowTid name: bn9.stringview
+                tido9: vtGet xs: ctx.narrowTid vid: bn9v
                 match (
                     tido9
                 ) case some then {
@@ -2159,7 +2128,7 @@ svValueForm: function {ctx: Ctx expr: StringView isStr: bool vid: u64} out Strin
         # declaration. The pointer question is asked of `vid`, not of that text
         # -- but only when no alias intervened, since an alias means the value
         # being read is the projection and not the binding.
-        rex9: aliasResolve :ctx name: expr
+        rex9: aliasResolve :ctx name: expr :vid
         vid9: vid
         if rex9.stringview != expr then vid9 = 0
         acc: ".".string
@@ -2418,9 +2387,10 @@ emitDottedCall: function {
         # leg already routes through emitDottedReceiver). An alias or narrowing
         # in scope substitutes for it, and then no variable is being read -- so
         # the pointer question below has nothing to ask about.
-        bnA9: aliasResolve :ctx name: bn.stringview
+        bnA9V0: atomVid :symtab nid: bnid
+        bnA9: aliasResolve :ctx name: bn.stringview vid: bnA9V0
         if bnA9.stringview == bn.stringview then dcbV9 = (atomVid :symtab nid: bnid)
-        bn = emitLocalAtomName :ctx name: bn.stringview vid: dcbV9
+        bn = emitLocalAtomName :ctx name: bn.stringview vid: bnA9V0
     }
     btIsStr9: btid == ctx.strTid
     if (isStringyTid :ctx tid: btid) when mn.stringview == "compare" then {
@@ -3467,15 +3437,15 @@ bindingRhsIsBorrow: function {
         return (callRhsIsBorrow :ast :symtab :ctx call: n)
     } case dottedpath then {
         ch9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        bnm9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
-        if (nvHas xs: ctx.narrowBox name: bnm9.stringview) then {
+        bnmV9: atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64))
+        if (vvHas xs: ctx.narrowBox vid: bnmV9) then {
             # a field read off a narrowed subject is a shallow-copy borrow (it aliases
             # the subject's heap); an ownership builtin yields an owned value, and so
             # does a method auto-call (FUNCTION child) on the narrowed payload.
             if ch9.stringview == "take" then return false
             if ch9.stringview == "copy" then return false
             if ch9.stringview == "string" then return false
-            ntO2: ntGet xs: ctx.narrowTid name: bnm9.stringview
+            ntO2: vtGet xs: ctx.narrowTid vid: bnmV9
             match (
                 ntO2
             ) case some then {
@@ -6545,7 +6515,7 @@ varCName: function {ctx: Ctx vid: u64 name: StringView} out String is {
 # cast in scope for it, else its own identifier. Shared by the atomid and
 # labelvalue (:name shorthand) value legs.
 emitLocalAtomName: function {ctx: Ctx name: StringView vid: u64} out String is {
-    acv: aliasResolve :ctx :name
+    acv: aliasResolve :ctx :name :vid
     if acv.stringview != name then return acv
     return (varCName :ctx :vid :name)
 }
@@ -7009,7 +6979,8 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             return eT9
         }
         bn2r: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
-        bn2a9: aliasResolve :ctx name: bn2r.stringview
+        bn2a9V0: atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64))
+        bn2a9: aliasResolve :ctx name: bn2r.stringview vid: bn2a9V0
         # the receiver's variable, for the pointer-access checks below. An alias
         # substitution means the base binding is not what is being read, so the
         # vid stays 0 and bn2 becomes the substituted text.
@@ -7017,7 +6988,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         if bn2a9.stringview == bn2r.stringview then {
             bn2v9 = (atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)))
         }
-        bn2: emitLocalAtomName :ctx name: bn2r.stringview vid: bn2v9
+        bn2: emitLocalAtomName :ctx name: bn2r.stringview vid: bn2a9V0
         mn2: aliasOrChild :ast :symtab aliasId: n.nodeid.u64 childId: n.child
         if bn2r.stringview == "io" then {
             isStdS9: false
@@ -8617,12 +8588,13 @@ emitPrintArg: function {
         tn9: stampNameOf :symtab nid: n.nodeid.u64
         anC9: zast.nameTextCopy :ast ref: n.name
         an9: anC9.stringview
-        anm: aliasResolve :ctx name: an9
+        anmV0: atomVid :symtab nid: n.nodeid.u64
+        anm: aliasResolve :ctx name: an9 vid: anmV0
         anv9: u64
-        if anm.stringview == an9 then anv9 = (atomVid :symtab nid: n.nodeid.u64)
+        if anm.stringview == an9 then anv9 = anmV0
         # anm stays the SOURCE name (the alias/narrow lookups key on it); anmE
         # is what reaches the C
-        anmE: emitLocalAtomName :ctx name: an9 vid: anv9
+        anmE: emitLocalAtomName :ctx name: an9 vid: anmV0
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.strTid then {
             if (isPtrVid :ctx vid: anv9) then {
                 lps: "\{ind}\{ctx.strC}_print(\{anmE});\n"
@@ -9236,8 +9208,8 @@ emitStmt: function {
             # the match arm's box: real storage from the narrowed cast plus
             # box zeroing, so the subject's post-match destroy no-ops (a
             # pure alias would re-resolve to the whole un-narrowed subject)
-            if (nvHas xs: ctx.narrowBox name: tabA.stringview) then {
-                ntO9: ntGet xs: ctx.narrowTid name: tabA.stringview
+            if (vvHas xs: ctx.narrowBox vid: tabAV9) then {
+                ntO9: vtGet xs: ctx.narrowTid vid: tabAV9
                 match (
                     ntO9
                 ) case some then {
@@ -10278,7 +10250,8 @@ emitReassignLvalue: function {
     ) case dottedpath then {
         ba9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
         if ba9.length > 0 then {
-            nbo9: nvGet xs: ctx.narrowBox name: ba9.stringview
+            ba9V9: atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64))
+            nbo9: vvGet xs: ctx.narrowBox vid: ba9V9
             if nbo9.length > 0 then {
                 mem9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
                 bx9: nbo9.copy
@@ -10615,11 +10588,11 @@ emitMatchStmt: function {
     mePrevV9: String
     mePrevT9: u64
     if meSeed9 then {
-        pv9: nvGet xs: ctx.narrowBox name: meN9.stringview
+        pv9: vvGet xs: ctx.narrowBox vid: snameV9
         mePrevV9 = pv9
-        mePrevT9 = optU64Or9 o: (ntGet xs: ctx.narrowTid name: meN9.stringview)
-        nvSet xs: ctx.narrowBox name: meN9.stringview val: meV9.stringview
-        ntSet xs: ctx.narrowTid name: meN9.stringview tid: meT9
+        mePrevT9 = optU64Or9 o: (vtGet xs: ctx.narrowTid vid: snameV9)
+        vvSet xs: ctx.narrowBox vid: snameV9 val: meV9.stringview
+        vtSet xs: ctx.narrowTid vid: snameV9 tid: meT9
     }
     mdvg: matchDiverges :symtab nid: m.nodeid.u64
     (emitMatchElse
@@ -10635,14 +10608,14 @@ emitMatchStmt: function {
     )
     if meSeed9 then {
         if mePrevV9.length > 0 then {
-            nvSet xs: ctx.narrowBox name: meN9.stringview val: mePrevV9.stringview
+            vvSet xs: ctx.narrowBox vid: snameV9 val: mePrevV9.stringview
         } else {
-            nvRemove xs: ctx.narrowBox name: meN9.stringview
+            vvRemove xs: ctx.narrowBox vid: snameV9
         }
         if mePrevT9 > 0 then {
-            ntSet xs: ctx.narrowTid name: meN9.stringview tid: mePrevT9
+            vtSet xs: ctx.narrowTid vid: snameV9 tid: mePrevT9
         } else {
-            ntRemove xs: ctx.narrowTid name: meN9.stringview
+            vtRemove xs: ctx.narrowTid vid: snameV9
         }
     }
     l9: "\{ind}}\n"
@@ -10933,12 +10906,12 @@ emitMatchClause: function {
                 cmt9: "\{ind}    /* alias: \{sname} => (*(\{pc}*)_m\{mN}.data) */\n"
                 buf.append cmt9
                 nbv: "(*(\{pc}*)_m\{mN}.data)"
-                nvSet xs: ctx.narrowBox name: sname val: nbv.stringview
+                vvSet xs: ctx.narrowBox vid: snameVid val: nbv.stringview
                 co: symtab.typing.declChildOf pool: ast.names parentTypeId: vtid name: arm
                 match (
                     co
                 ) case some then {
-                    ntSet xs: ctx.narrowTid name: sname tid: co
+                    vtSet xs: ctx.narrowTid vid: snameVid tid: co
                 } case none then null
                 didSeed = true
             } else {
@@ -10961,8 +10934,8 @@ emitMatchClause: function {
             flushBlockFrees :ctx :tmp fL: fL9 lL: lL9 :buf
         }
         if didSeed then {
-            nvRemove xs: ctx.narrowBox name: sname
-            ntRemove xs: ctx.narrowTid name: sname
+            vvRemove xs: ctx.narrowBox vid: snameVid
+            vtRemove xs: ctx.narrowTid vid: snameVid
         }
         l5: "\{ind}    break;\n"
         buf.append l5
@@ -11893,6 +11866,7 @@ seedFromPred9: function {
     n: Node
     body: Node
     names: List String
+    svids: List u64
     vals: List String
     tids: List u64
 } is {
@@ -11900,7 +11874,7 @@ seedFromPred9: function {
         n
     ) case expression then {
         iexA9: ast.nodes.get i: (n.expression - 1).u64
-        seedFromPred9 :ast :symtab :ctx n: iexA9 :body :names :vals :tids
+        seedFromPred9 :ast :symtab :ctx n: iexA9 :body :names :svids :vals :tids
     } case dottedpath then {
         arm0: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         (seedPosCore9
@@ -11912,6 +11886,7 @@ seedFromPred9: function {
             childName: arm0.stringview
             :body
             :names
+            :svids
             :vals
             :tids
         )
@@ -11928,6 +11903,7 @@ seedPosCore9: function {
     childName: StringView
     body: Node
     names: List String
+    svids: List u64
     vals: List String
     tids: List u64
 } is {
@@ -11952,6 +11928,7 @@ seedPosCore9: function {
     )
     if alias9.length == 0 then return
     names.append subj9
+    svids.append (atomVid :symtab nid: (atomNodeId9 n: parent))
     vals.append alias9
     pt9: optU64Or9 o: (symtab.typing.declChildOf pool: ast.names parentTypeId: dap9 name: childName)
     tids.append pt9
@@ -11967,6 +11944,7 @@ seedNegFromPred9: function {
     n: Node
     body: Node
     names: List String
+    svids: List u64
     vals: List String
     tids: List u64
 } is {
@@ -11974,7 +11952,7 @@ seedNegFromPred9: function {
         n
     ) case expression then {
         iexB9: ast.nodes.get i: (n.expression - 1).u64
-        seedNegFromPred9 :ast :symtab :ctx n: iexB9 :body :names :vals :tids
+        seedNegFromPred9 :ast :symtab :ctx n: iexB9 :body :names :svids :vals :tids
     } case dottedpath then {
         dap9: dpArmPredicateOf9 :symtab nid: n.nodeid.u64
         if dap9 == 0 then return
@@ -12008,6 +11986,7 @@ seedNegFromPred9: function {
         )
         if alias9.length == 0 then return
         names.append subj9
+        svids.append snv9
         vals.append alias9
         pt9: optU64Or9 o: (symtab.typing.declChildOf
             pool: ast.names
@@ -12028,6 +12007,7 @@ seedCondOp9: function {
     n: Node
     body: Node
     names: List String
+    svids: List u64
     vals: List String
     tids: List u64
 } is {
@@ -12035,17 +12015,17 @@ seedCondOp9: function {
         n
     ) case expression then {
         iexC9: ast.nodes.get i: (n.expression - 1).u64
-        seedCondOp9 :ast :symtab :ctx n: iexC9 :body :names :vals :tids
+        seedCondOp9 :ast :symtab :ctx n: iexC9 :body :names :svids :vals :tids
     } case dottedpath then {
         cn9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         if cn9.stringview == "true" then {
             dpp9: ast.nodes.get i: (n.parent - 1).u64
-            seedFromPred9 :ast :symtab :ctx n: dpp9 :body :names :vals :tids
+            seedFromPred9 :ast :symtab :ctx n: dpp9 :body :names :svids :vals :tids
             return
         }
         if cn9.stringview == "false" then {
             dpq9: ast.nodes.get i: (n.parent - 1).u64
-            seedNegFromPred9 :ast :symtab :ctx n: dpq9 :body :names :vals :tids
+            seedNegFromPred9 :ast :symtab :ctx n: dpq9 :body :names :svids :vals :tids
             return
         }
         (seedPosCore9
@@ -12057,6 +12037,7 @@ seedCondOp9: function {
             childName: cn9.stringview
             :body
             :names
+            :svids
             :vals
             :tids
         )
@@ -12067,22 +12048,22 @@ seedCondOp9: function {
             rn9: bareAtomText9 :ast n: (ast.nodes.get i: (n.rhs - 1).u64)
             if rn9.stringview == "true" then {
                 bl9: ast.nodes.get i: (n.lhs - 1).u64
-                seedFromPred9 :ast :symtab :ctx n: bl9 :body :names :vals :tids
+                seedFromPred9 :ast :symtab :ctx n: bl9 :body :names :svids :vals :tids
                 return
             }
             if rn9.stringview == "false" then {
                 bl29: ast.nodes.get i: (n.lhs - 1).u64
-                seedNegFromPred9 :ast :symtab :ctx n: bl29 :body :names :vals :tids
+                seedNegFromPred9 :ast :symtab :ctx n: bl29 :body :names :svids :vals :tids
                 return
             }
             if ln9.stringview == "true" then {
                 br9: ast.nodes.get i: (n.rhs - 1).u64
-                seedFromPred9 :ast :symtab :ctx n: br9 :body :names :vals :tids
+                seedFromPred9 :ast :symtab :ctx n: br9 :body :names :svids :vals :tids
                 return
             }
             if ln9.stringview == "false" then {
                 br29: ast.nodes.get i: (n.rhs - 1).u64
-                seedNegFromPred9 :ast :symtab :ctx n: br29 :body :names :vals :tids
+                seedNegFromPred9 :ast :symtab :ctx n: br29 :body :names :svids :vals :tids
             }
         }
     } else null
@@ -12111,6 +12092,7 @@ ifPredSeeds9: function {
     conds: List u32
     bodyId: u32
     names: List String
+    svids: List u64
     vals: List String
     tids: List u64
 } is {
@@ -12127,6 +12109,7 @@ ifPredSeeds9: function {
                 n: (ast.nodes.get i: (k9.operation - 1).u64)
                 :body
                 :names
+                :svids
                 :vals
                 :tids
             )
@@ -12445,6 +12428,7 @@ emitIfClause: function {
         }
         ind2: "\{ind}    "
         sN9: (List String)
+        sVid9: (List u64)
         sV9: (List String)
         sT9: (List u64)
         (ifPredSeeds9
@@ -12454,6 +12438,7 @@ emitIfClause: function {
             conds: n.conditions
             bodyId: n.statement
             names: sN9
+            svids: sVid9
             vals: sV9
             tids: sT9
         )
@@ -12462,14 +12447,15 @@ emitIfClause: function {
         si9: u64
         for si9 < sN9.length loop {
             snm9: sN9.get i: si9
-            pv9: nvGet xs: ctx.narrowBox name: snm9.stringview
+            snv0: sVid9.get i: si9
+            pv9: vvGet xs: ctx.narrowBox vid: snv0
             sPrevV9.append pv9
-            ptv9: optU64Or9 o: (ntGet xs: ctx.narrowTid name: snm9.stringview)
+            ptv9: optU64Or9 o: (vtGet xs: ctx.narrowTid vid: snv0)
             sPrevT9.append ptv9
             svv9: sV9.get i: si9
-            nvSet xs: ctx.narrowBox name: snm9.stringview val: svv9.stringview
+            vvSet xs: ctx.narrowBox vid: snv0 val: svv9.stringview
             stt9: sT9.get i: si9
-            ntSet xs: ctx.narrowTid name: snm9.stringview tid: stt9
+            vtSet xs: ctx.narrowTid vid: snv0 tid: stt9
             cmtS9: "\{ind}    /* alias: \{snm9} => \{svv9} */\n"
             buf.append cmtS9
             si9 = si9 + 1
@@ -12494,18 +12480,18 @@ emitIfClause: function {
         }
         ri9: u64
         for ri9 < sN9.length loop {
-            rnm9: sN9.get i: ri9
+            rnv9: sVid9.get i: ri9
             rv9: sPrevV9.get i: ri9
             if rv9.length > 0 then {
-                nvSet xs: ctx.narrowBox name: rnm9.stringview val: rv9.stringview
+                vvSet xs: ctx.narrowBox vid: rnv9 val: rv9.stringview
             } else {
-                nvRemove xs: ctx.narrowBox name: rnm9.stringview
+                vvRemove xs: ctx.narrowBox vid: rnv9
             }
             rt9: sPrevT9.get i: ri9
             if rt9 > 0 then {
-                ntSet xs: ctx.narrowTid name: rnm9.stringview tid: rt9
+                vtSet xs: ctx.narrowTid vid: rnv9 tid: rt9
             } else {
-                ntRemove xs: ctx.narrowTid name: rnm9.stringview
+                vtRemove xs: ctx.narrowTid vid: rnv9
             }
             ri9 = ri9 + 1
         }
@@ -12564,6 +12550,7 @@ emitElse9: function {
             fi9 = fi9 + 1
         }
         sN9: (List String)
+        sVid9: (List u64)
         sPrevV9: (List String)
         sPrevT9: (List u64)
         doneS9: (Set String)
@@ -12615,15 +12602,16 @@ emitElse9: function {
                             acc: macc9.stringview
                         )
                         if alias9.length > 0 then {
-                            pv9: nvGet xs: ctx.narrowBox name: gs9.stringview
+                            pv9: vvGet xs: ctx.narrowBox vid: gv9
                             sPrevV9.append pv9
                             ptv9: (optU64Or9
-                                o: (ntGet xs: ctx.narrowTid name: gs9.stringview)
+                                o: (vtGet xs: ctx.narrowTid vid: gv9)
                             )
                             sPrevT9.append ptv9
                             gsv9: gs9.copy
                             sN9.append gsv9
-                            nvSet xs: ctx.narrowBox name: gs9.stringview val: alias9.stringview
+                            sVid9.append gv9
+                            vvSet xs: ctx.narrowBox vid: gv9 val: alias9.stringview
                             pt9: (optU64Or9
                                 o: (symtab.typing.declChildOf
                                     pool: ast.names
@@ -12631,7 +12619,7 @@ emitElse9: function {
                                     name: fArm9.stringview
                                 )
                             )
-                            ntSet xs: ctx.narrowTid name: gs9.stringview tid: pt9
+                            vtSet xs: ctx.narrowTid vid: gv9 tid: pt9
                             cmtS9: "\{ind}    /* alias: \{gs9} => \{alias9} */\n"
                             buf.append cmtS9
                         }
@@ -12659,18 +12647,18 @@ emitElse9: function {
         }
         ri9: u64
         for ri9 < sN9.length loop {
-            rnm9: sN9.get i: ri9
+            rnv9: sVid9.get i: ri9
             rv9: sPrevV9.get i: ri9
             if rv9.length > 0 then {
-                nvSet xs: ctx.narrowBox name: rnm9.stringview val: rv9.stringview
+                vvSet xs: ctx.narrowBox vid: rnv9 val: rv9.stringview
             } else {
-                nvRemove xs: ctx.narrowBox name: rnm9.stringview
+                vvRemove xs: ctx.narrowBox vid: rnv9
             }
             rt9: sPrevT9.get i: ri9
             if rt9 > 0 then {
-                ntSet xs: ctx.narrowTid name: rnm9.stringview tid: rt9
+                vtSet xs: ctx.narrowTid vid: rnv9 tid: rt9
             } else {
-                ntRemove xs: ctx.narrowTid name: rnm9.stringview
+                vtRemove xs: ctx.narrowTid vid: rnv9
             }
             ri9 = ri9 + 1
         }
@@ -12993,6 +12981,7 @@ emitBodyNode: function {
         trTail9: ctx.tailRetActive
         ctx.tailRetActive = false
         pgN9: (List String)
+        pgVid9: (List u64)
         pgPrevV9: (List String)
         pgPrevT9: (List u64)
         pgDead9: (Set String)
@@ -13007,17 +12996,18 @@ emitBodyNode: function {
                 rn9: pgN9.get i: ri9
                 if (pgDead9.has item: rn9) == false then {
                     if (bodyReassigns9 :ast n: s9 name: rn9.stringview) then {
+                        rnv0: pgVid9.get i: ri9
                         rv9: pgPrevV9.get i: ri9
                         if rv9.length > 0 then {
-                            nvSet xs: ctx.narrowBox name: rn9.stringview val: rv9.stringview
+                            vvSet xs: ctx.narrowBox vid: rnv0 val: rv9.stringview
                         } else {
-                            nvRemove xs: ctx.narrowBox name: rn9.stringview
+                            vvRemove xs: ctx.narrowBox vid: rnv0
                         }
                         rt9: pgPrevT9.get i: ri9
                         if rt9 > 0 then {
-                            ntSet xs: ctx.narrowTid name: rn9.stringview tid: rt9
+                            vtSet xs: ctx.narrowTid vid: rnv0 tid: rt9
                         } else {
-                            ntRemove xs: ctx.narrowTid name: rn9.stringview
+                            vtRemove xs: ctx.narrowTid vid: rnv0
                         }
                         rd9: rn9.copy
                         pgDead9.add item: rd9
@@ -13055,13 +13045,12 @@ emitBodyNode: function {
                     } case none then null
                 }
                 # postGuardRecv is the subject's SOURCE name; the alias text it
-                # builds is emitted C, so it has to be the subject's identifier
-                {
-                    pgrv9: optU64Or9 o: (symtab.typing.postGuardVarId.get key: pgid9)
-                    if pgrv9 > 0 when pgRawN9.length > 0 then {
-                        pgre9: varCName :ctx vid: pgrv9 name: pgRawN9.stringview
-                        pgRecv9 = pgre9
-                    }
+                # builds is emitted C, so it has to be the subject's identifier --
+                # and the narrowing tables below key on the subject's variable
+                pgrv9: optU64Or9 o: (symtab.typing.postGuardVarId.get key: pgid9)
+                if pgrv9 > 0 when pgRawN9.length > 0 then {
+                    pgre9: varCName :ctx vid: pgrv9 name: pgRawN9.stringview
+                    pgRecv9 = pgre9
                 }
                 pgTid0: u64
                 {
@@ -13099,13 +13088,13 @@ emitBodyNode: function {
                             acc: acc9.stringview
                         )
                         if alias9.length > 0 then {
-                            pv9: nvGet xs: ctx.narrowBox name: pgRawN9.stringview
+                            pv9: vvGet xs: ctx.narrowBox vid: pgrv9
                             pgPrevV9.append pv9
                             ptv9: (optU64Or9
-                                o: (ntGet xs: ctx.narrowTid name: pgRawN9.stringview)
+                                o: (vtGet xs: ctx.narrowTid vid: pgrv9)
                             )
                             pgPrevT9.append ptv9
-                            nvSet xs: ctx.narrowBox name: pgRawN9.stringview val: alias9.stringview
+                            vvSet xs: ctx.narrowBox vid: pgrv9 val: alias9.stringview
                             pt9: (optU64Or9
                                 o: (symtab.typing.declChildOf
                                     pool: ast.names
@@ -13113,11 +13102,12 @@ emitBodyNode: function {
                                     name: pgArm0.stringview
                                 )
                             )
-                            ntSet xs: ctx.narrowTid name: pgRawN9.stringview tid: pt9
+                            vtSet xs: ctx.narrowTid vid: pgrv9 tid: pt9
                             cmt9: "\{ind}/* post-guard alias: \{pgRawN9} => \{alias9} */\n"
                             buf.append cmt9
                             pgrn9: pgRawN9.copy
                             pgN9.append pgrn9
+                            pgVid9.append pgrv9
                         }
                     }
                 }
@@ -13129,17 +13119,18 @@ emitBodyNode: function {
             zi9 = zi9 - 1
             zn9: pgN9.get i: zi9
             if (pgDead9.has item: zn9) == false then {
+                znv9: pgVid9.get i: zi9
                 zv9: pgPrevV9.get i: zi9
                 if zv9.length > 0 then {
-                    nvSet xs: ctx.narrowBox name: zn9.stringview val: zv9.stringview
+                    vvSet xs: ctx.narrowBox vid: znv9 val: zv9.stringview
                 } else {
-                    nvRemove xs: ctx.narrowBox name: zn9.stringview
+                    vvRemove xs: ctx.narrowBox vid: znv9
                 }
                 zt9: pgPrevT9.get i: zi9
                 if zt9 > 0 then {
-                    ntSet xs: ctx.narrowTid name: zn9.stringview tid: zt9
+                    vtSet xs: ctx.narrowTid vid: znv9 tid: zt9
                 } else {
-                    ntRemove xs: ctx.narrowTid name: zn9.stringview
+                    vtRemove xs: ctx.narrowTid vid: znv9
                 }
             }
         }
@@ -14638,8 +14629,8 @@ emitUnitMonoInstances: function {
                                         buf.append lo9
                                                                                 ctx.ptrVids = (List u64)
                                         ctx.aliases = (List NameVal)
-                                        ctx.narrowBox = (List NameVal)
-                                        ctx.narrowTid = (List NameTid)
+                                        ctx.narrowBox = (List VidVal)
+                                        ctx.narrowTid = (List VidTid)
                                         ctx.exclArms = (List VidVal)
                                         ctx.exclTids = (List VidTid)
                                         (registerReftypeParams
@@ -14775,8 +14766,8 @@ emitFnMonoInstances: function {
                 buf.append lo9
                                 ctx.ptrVids = (List u64)
                 ctx.aliases = (List NameVal)
-                ctx.narrowBox = (List NameVal)
-                ctx.narrowTid = (List NameTid)
+                ctx.narrowBox = (List VidVal)
+                ctx.narrowTid = (List VidTid)
                 ctx.exclArms = (List VidVal)
                 ctx.exclTids = (List VidTid)
                 registerReftypeParams :ast :symtab :ctx fid: t9 op: templateFnOp
@@ -14898,8 +14889,8 @@ emitFnsIn: function {
                         buf.append lo
                                                 ctx.ptrVids = (List u64)
                         ctx.aliases = (List NameVal)
-                        ctx.narrowBox = (List NameVal)
-                        ctx.narrowTid = (List NameTid)
+                        ctx.narrowBox = (List VidVal)
+                        ctx.narrowTid = (List VidTid)
                         ctx.exclArms = (List VidVal)
                         ctx.exclTids = (List VidTid)
                         (registerReftypeParams
@@ -15526,8 +15517,8 @@ emitC: function {
         dataConst: (Map String value: String)
         ptrVids: (List u64)
         aliases: (List NameVal)
-        narrowBox: (List NameVal)
-        narrowTid: (List NameTid)
+        narrowBox: (List VidVal)
+        narrowTid: (List VidTid)
         exclArms: (List VidVal)
         exclTids: (List VidTid)
         genActive: false
@@ -20038,10 +20029,11 @@ emitFileMethodCall: function {
         fcc9: ioCanonCname :ast :symtab :ctx canon: fcn9.stringview
         if fcc9.length > 0 then fc = fcc9
     }
-    recv: aliasResolve :ctx name: bn.stringview
+    recvV0: atomVid :symtab nid: bnid
+    recv: aliasResolve :ctx name: bn.stringview vid: recvV0
     recvV9: u64
-    if recv.stringview == bn.stringview then recvV9 = (atomVid :symtab nid: bnid)
-    recvC: emitLocalAtomName :ctx name: bn.stringview vid: recvV9
+    if recv.stringview == bn.stringview then recvV9 = recvV0
+    recvC: emitLocalAtomName :ctx name: bn.stringview vid: recvV0
     recvExpr: "&\{recvC}"
     if (isPtrVid :ctx vid: recvV9) then recvExpr = recvC
     isNet9: false
@@ -20130,14 +20122,15 @@ wrapperCreateArg: function {
             if al.stringview == label then {
                 if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.protocolType then {
                     ab: dottedBaseAtom :ast n: (ast.nodes.get i: (a.operation - 1).u64)
-                    abr: aliasResolve :ctx name: ab.stringview
                     abnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (a.operation - 1).u64)
+                    abrV0: atomVid :symtab nid: abnid
+                    abr: aliasResolve :ctx name: ab.stringview vid: abrV0
                     abtid: stampIdOf :symtab nid: abnid
                     abcb: ctxCname :ctx tid: abtid
                     ablab: conformanceLabelFor :symtab implTid: abtid protoTid: prtid
                     abv9: u64
                     if abr.stringview == ab.stringview then abv9 = (atomVid :symtab nid: abnid)
-                    abrC: emitLocalAtomName :ctx name: ab.stringview vid: abv9
+                    abrC: emitLocalAtomName :ctx name: ab.stringview vid: abrV0
                     abpfx9: "&".string
                     if (isPtrVid :ctx vid: abv9) then abpfx9 = "".string
                     return "\{abcb}_\{ablab}_create(\{abpfx9}\{abrC})"
@@ -20145,12 +20138,11 @@ wrapperCreateArg: function {
                 if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType then {
                     a2op9: ast.nodes.get i: (a.operation - 1).u64
                     ab2: dottedBaseAtom :ast n: a2op9
-                    abr2: aliasResolve :ctx name: ab2.stringview
+                    abr2V0: atomVid :symtab nid: (dottedBaseNodeId :ast n: a2op9)
+                    abr2: aliasResolve :ctx name: ab2.stringview vid: abr2V0
                     ab2v9: u64
-                    if abr2.stringview == ab2.stringview then {
-                        ab2v9 = (atomVid :symtab nid: (dottedBaseNodeId :ast n: a2op9))
-                    }
-                    abr2C: emitLocalAtomName :ctx name: ab2.stringview vid: ab2v9
+                    if abr2.stringview == ab2.stringview then ab2v9 = abr2V0
+                    abr2C: emitLocalAtomName :ctx name: ab2.stringview vid: abr2V0
                     ab2pfx9: "&".string
                     if (isPtrVid :ctx vid: ab2v9) then ab2pfx9 = "".string
                     return "\{ab2pfx9}\{abr2C}"
@@ -20641,10 +20633,11 @@ emitParsedMethodCall: function {
     pcn: typeNameOfReg9 :symtab tid: pid
     if pcn.stringview != "Parsed" then return "".string
     pc: ctxCname :ctx tid: pid
-    recv: aliasResolve :ctx name: bn.stringview
+    recvV0: atomVid :symtab nid: bnid
+    recv: aliasResolve :ctx name: bn.stringview vid: recvV0
     recvV9: u64
-    if recv.stringview == bn.stringview then recvV9 = (atomVid :symtab nid: bnid)
-    recvC: emitLocalAtomName :ctx name: bn.stringview vid: recvV9
+    if recv.stringview == bn.stringview then recvV9 = recvV0
+    recvC: emitLocalAtomName :ctx name: bn.stringview vid: recvV0
     recvExpr: "&\{recvC}"
     if (isPtrVid :ctx vid: recvV9) then recvExpr = recvC
     needsAdd :ctx name: "cli"
@@ -20712,10 +20705,11 @@ emitUserIterCall: function {
         cco9
     ) case some then {
         callC9: ctxCname :ctx tid: cco9
-        recv9: aliasResolve :ctx name: bn.stringview
+        recv9V0: atomVid :symtab nid: bnid
+        recv9: aliasResolve :ctx name: bn.stringview vid: recv9V0
         recvV9: u64
-        if recv9.stringview == bn.stringview then recvV9 = (atomVid :symtab nid: bnid)
-        recvC9: emitLocalAtomName :ctx name: bn.stringview vid: recvV9
+        if recv9.stringview == bn.stringview then recvV9 = recv9V0
+        recvC9: emitLocalAtomName :ctx name: bn.stringview vid: recv9V0
         recvExpr9: "&\{recvC9}"
         if (isPtrVid :ctx vid: recvV9) then recvExpr9 = recvC9
         valArg9: String
@@ -20732,11 +20726,10 @@ emitUserIterCall: function {
                     if (isLockArg :ast n: (ast.nodes.get i: (av9.operation - 1).u64)) then {
                         vop9: ast.nodes.get i: (av9.operation - 1).u64
                         vbase9: dottedBaseAtom :ast n: vop9
-                        vbr9: aliasResolve :ctx name: vbase9.stringview
+                        vbr9V0: atomVid :symtab nid: (dottedBaseNodeId :ast n: vop9)
+                        vbr9: aliasResolve :ctx name: vbase9.stringview vid: vbr9V0
                         vbv9: u64
-                        if vbr9.stringview == vbase9.stringview then {
-                            vbv9 = (atomVid :symtab nid: (dottedBaseNodeId :ast n: vop9))
-                        }
+                        if vbr9.stringview == vbase9.stringview then vbv9 = vbr9V0
                         vpfx9: "&".string
                         if (isPtrVid :ctx vid: vbv9) then vpfx9 = "".string
                         valArg9 = "\{vpfx9}\{ve9}"
@@ -20937,13 +20930,12 @@ emitProtocolCreateCall: function {
                 implBase: ctxCname :ctx tid: fromTid
                 label: conformanceLabelFor :symtab implTid: fromTid :protoTid
                 if label.length == 0 then return "".string
-                valVar: aliasResolve :ctx name: fromBase.stringview
+                valVarV0: atomVid :symtab nid: (dottedBaseNodeId :ast n: fop9)
+                if valVarV0 == 0 then valVarV0 = (atomVid :symtab nid: (atomNodeId9 n: fop9))
+                valVar: aliasResolve :ctx name: fromBase.stringview vid: valVarV0
                 vvv9: u64
-                if valVar.stringview == fromBase.stringview then {
-                    vvv9 = (atomVid :symtab nid: (dottedBaseNodeId :ast n: fop9))
-                    if vvv9 == 0 then vvv9 = (atomVid :symtab nid: (atomNodeId9 n: fop9))
-                }
-                valVarC: emitLocalAtomName :ctx name: fromBase.stringview vid: vvv9
+                if valVar.stringview == fromBase.stringview then vvv9 = valVarV0
+                valVarC: emitLocalAtomName :ctx name: fromBase.stringview vid: valVarV0
                 refPfx9: "&".string
                 if (isPtrVid :ctx vid: vvv9) then refPfx9 = "".string
                 ce: "\{implBase}_\{label}_\{suffix}(\{refPfx9}\{valVarC})"
@@ -21816,8 +21808,8 @@ emitClassMonoMethods: function {
                                         buf.append lo8
                                                                                 ctx.ptrVids = (List u64)
                                         ctx.aliases = (List NameVal)
-                                        ctx.narrowBox = (List NameVal)
-                                        ctx.narrowTid = (List NameTid)
+                                        ctx.narrowBox = (List VidVal)
+                                        ctx.narrowTid = (List VidTid)
                                         ctx.exclArms = (List VidVal)
                                         ctx.exclTids = (List VidTid)
                                         (registerReftypeParams
@@ -21879,8 +21871,8 @@ emitClassMonoMethods: function {
                                         buf.append lo8b
                                                                                 ctx.ptrVids = (List u64)
                                         ctx.aliases = (List NameVal)
-                                        ctx.narrowBox = (List NameVal)
-                                        ctx.narrowTid = (List NameTid)
+                                        ctx.narrowBox = (List VidVal)
+                                        ctx.narrowTid = (List VidTid)
                                         ctx.exclArms = (List VidVal)
                                         ctx.exclTids = (List VidTid)
                                         (registerReftypeParams
@@ -22381,8 +22373,8 @@ emitOneMethod: function {
     # `c->field`. Reset for this method (names must not leak into other bodies).
         ctx.ptrVids = (List u64)
     ctx.aliases = (List NameVal)
-    ctx.narrowBox = (List NameVal)
-    ctx.narrowTid = (List NameTid)
+    ctx.narrowBox = (List VidVal)
+    ctx.narrowTid = (List VidTid)
     ctx.exclArms = (List VidVal)
     ctx.exclTids = (List VidTid)
     encIsClass: false
@@ -22475,8 +22467,8 @@ emitOneMethod: function {
     }
         ctx.ptrVids = (List u64)
     ctx.aliases = (List NameVal)
-    ctx.narrowBox = (List NameVal)
-    ctx.narrowTid = (List NameTid)
+    ctx.narrowBox = (List VidVal)
+    ctx.narrowTid = (List VidTid)
     ctx.exclArms = (List VidVal)
     ctx.exclTids = (List VidTid)
 }
