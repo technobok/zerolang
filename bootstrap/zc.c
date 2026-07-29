@@ -17222,11 +17222,10 @@ struct z_t1413_ZType_t {
     bool isNative;
     bool runtimeIndexed;
     uint64_t def;
-    uint64_t ownerTid;
     z_t74_String_t cname;
 };
-static z_t1413_ZType_t z_t1413_ZType_meta_create(uint64_t typeId, z_t74_String_t name, z_t1414_ztypetype_t typetype, z_t169_optionval_u64_t returnTypeId, uint32_t thisParamNameId, bool isgeneric, z_t1418_optionval_bool_t isValtype, z_t169_optionval_u64_t genericOriginId, bool isTagGenericOrigin, z_t1422_List_u64_t genericChildKeys, z_t1422_List_u64_t genericChildTids, z_t1422_List_u64_t genericArgs, z_t1439_List_bool_t genericArgIsValue, uint32_t destructorNameId, bool isHeapAllocated, bool isBox, bool isNative, bool runtimeIndexed, uint64_t def, uint64_t ownerTid, z_t74_String_t cname) {
-    z_t1413_ZType_t _this = { typeId, name, typetype, returnTypeId, thisParamNameId, isgeneric, isValtype, genericOriginId, isTagGenericOrigin, genericChildKeys, genericChildTids, genericArgs, genericArgIsValue, destructorNameId, isHeapAllocated, isBox, isNative, runtimeIndexed, def, ownerTid, cname };
+static z_t1413_ZType_t z_t1413_ZType_meta_create(uint64_t typeId, z_t74_String_t name, z_t1414_ztypetype_t typetype, z_t169_optionval_u64_t returnTypeId, uint32_t thisParamNameId, bool isgeneric, z_t1418_optionval_bool_t isValtype, z_t169_optionval_u64_t genericOriginId, bool isTagGenericOrigin, z_t1422_List_u64_t genericChildKeys, z_t1422_List_u64_t genericChildTids, z_t1422_List_u64_t genericArgs, z_t1439_List_bool_t genericArgIsValue, uint32_t destructorNameId, bool isHeapAllocated, bool isBox, bool isNative, bool runtimeIndexed, uint64_t def, z_t74_String_t cname) {
+    z_t1413_ZType_t _this = { typeId, name, typetype, returnTypeId, thisParamNameId, isgeneric, isValtype, genericOriginId, isTagGenericOrigin, genericChildKeys, genericChildTids, genericArgs, genericArgIsValue, destructorNameId, isHeapAllocated, isBox, isNative, runtimeIndexed, def, cname };
     return _this;
 }
 #define z_t1413_ZType_create z_t1413_ZType_meta_create
@@ -34594,7 +34593,7 @@ static uint64_t z_t1551_ZTypeRegistry_newType(z_t1412_ZTypeRegistry_t* this, z_t
         z_t74_String_free(&own9);
         own9 = _rr0;
     }
-    z_t1413_ZType_t t = z_t1413_ZType_create(id, z_t74_String_from_view(name), typetype, ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE }), 0, false, ((z_t1418_optionval_bool_t){ .tag = Z_OPTIONVAL_BOOL_TAG_NONE }), ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE }), false, z_t1422_List_u64_create((uint64_t)0), z_t1422_List_u64_create((uint64_t)0), z_t1422_List_u64_create((uint64_t)0), z_t1439_List_bool_create((uint64_t)0), 0, false, false, false, false, 0, ownerTid, z_t2367_composeCname(id, ((z_t105_StringView_t){ own9.data, own9.size }), name));
+    z_t1413_ZType_t t = z_t1413_ZType_create(id, z_t74_String_from_view(name), typetype, ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE }), 0, false, ((z_t1418_optionval_bool_t){ .tag = Z_OPTIONVAL_BOOL_TAG_NONE }), ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE }), false, z_t1422_List_u64_create((uint64_t)0), z_t1422_List_u64_create((uint64_t)0), z_t1422_List_u64_create((uint64_t)0), z_t1439_List_bool_create((uint64_t)0), 0, false, false, false, false, 0, z_t2367_composeCname(id, ((z_t105_StringView_t){ own9.data, own9.size }), name));
     (void)(z_t1458_List_ZType_append(&this->typeById, t));
     t = (z_t1413_ZType_t){0};
     z_t74_String_free(&own9);
@@ -46456,7 +46455,7 @@ z_t74_String_t z_t2361_boolText(bool b) {
 }
 
 z_t1413_ZType_t z_t2362_holeType(void) {
-    return z_t1413_ZType_create(0, z_t74_String_from_view(_zs1140), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_NULLTYPE }), ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE }), 0, false, ((z_t1418_optionval_bool_t){ .tag = Z_OPTIONVAL_BOOL_TAG_NONE }), ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE }), false, z_t1422_List_u64_create((uint64_t)0), z_t1422_List_u64_create((uint64_t)0), z_t1422_List_u64_create((uint64_t)0), z_t1439_List_bool_create((uint64_t)0), 0, false, false, false, false, 0, 0, z_t74_String_from_view(_zs1141));
+    return z_t1413_ZType_create(0, z_t74_String_from_view(_zs1140), ((z_t1414_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_NULLTYPE }), ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE }), 0, false, ((z_t1418_optionval_bool_t){ .tag = Z_OPTIONVAL_BOOL_TAG_NONE }), ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE }), false, z_t1422_List_u64_create((uint64_t)0), z_t1422_List_u64_create((uint64_t)0), z_t1422_List_u64_create((uint64_t)0), z_t1439_List_bool_create((uint64_t)0), 0, false, false, false, false, 0, z_t74_String_from_view(_zs1141));
 }
 
 z_t1412_ZTypeRegistry_t z_t2363_newRegistry(void) {
