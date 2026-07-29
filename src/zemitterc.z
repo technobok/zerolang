@@ -23,11 +23,11 @@ TmpCtr: class {
     frees: (List String)
     listFrees: (List String)
     listFreeVars: (List String)
-    # the SOURCE name of each cleanup entry, beside its emitted identifier: the
-    # alias table is keyed by source name, so only this can probe it. "" for a
-    # synthesized temp, which is never a binding and never aliased.
-    freeRaw: (List String)
-    listFreeRaw: (List String)
+    # the VARIABLE of each cleanup entry, beside its emitted identifier: the
+    # alias table is keyed by variable, so only this can probe it. 0 for a
+    # synthesized temp, which is never a binding and so never aliased.
+    freeRaw: (List u64)
+    listFreeRaw: (List u64)
 } as {
     next: function {:this} out u64 is {
         v: this.n
@@ -1200,7 +1200,7 @@ Ctx: class {
     dataConst: (Map String value: String)
     # the current class method body's pointer-receiver params, by variable id
     ptrVids: (List u64)
-    aliases: (List NameVal)
+    aliases: (List VidVal)
     narrowBox: (List VidVal)
     narrowTid: (List VidTid)
     exclArms: (List VidVal)
@@ -1253,8 +1253,8 @@ Ctx: class {
     breakListMarks: (List u64)
     breakLabelCleanup: (List String)
     breakLabelCleanupVar: (List String)
-    # source names for breakLabelCleanupVar, for the same reason as TmpCtr's
-    breakLabelCleanupRaw: (List String)
+    # variables for breakLabelCleanupVar, for the same reason as TmpCtr's
+    breakLabelCleanupRaw: (List u64)
     borrowedVars: (Map u64 value: bool)
     colGetFromCode: bool
     strTid: u64
@@ -1393,18 +1393,12 @@ pathIsPointer: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} ou
     }
 }
 
-# NameVal -- an assoc-list entry for the alias state, the last of the
-# per-function tables still keyed by source name. A handful of entries at most,
-# so a linear probe beats a map's per-probe owned-key allocation and hash.
-NameVal: class {
-    name: String
-    val: String
-}
-
-# VidVal / VidTid -- the same pairs keyed by VARIABLE ID rather than by source
-# name. A name conflates two bindings that happen to share it; a variable id
-# cannot, and it is the only key a declaration site and a use site can both
-# produce. A vid of 0 means "no variable here" and never keys an entry.
+# VidVal / VidTid -- assoc-list entries for the per-function narrowing and alias
+# state, keyed by VARIABLE ID. A name conflates two bindings that happen to share
+# it, and it is not a key a declaration site and a use site can both produce -- a
+# variable id is both. A vid of 0 means "no variable here" and never keys an
+# entry. A handful of entries at most, so a linear probe beats a map's per-probe
+# owned-key allocation and hash.
 VidVal: class {
     vid: u64
     val: String
@@ -1513,67 +1507,15 @@ vtRemove: function {xs: List VidTid vid: u64} is {
     }
 }
 
-# nvGet -- the value recorded for name, "" when absent (values never empty).
-nvGet: function {xs: List NameVal name: StringView} out String is {
-    i9: u64
-    n9: xs.length
-    for i9 < n9 loop {
-        e9: xs.get i: i9
-        if e9.name.stringview == name then return e9.val.copy
-        i9 = i9 + 1
-    }
-    return "".string
-}
-
-# true when list `xs` has an entry named `name`.
-nvHas: function {xs: List NameVal name: StringView} out bool is {
-    i9: u64
-    n9: xs.length
-    for i9 < n9 loop {
-        e9: xs.get i: i9
-        if e9.name.stringview == name then return true
-        i9 = i9 + 1
-    }
-    return false
-}
-
-# nvSet -- replace-or-append: one entry per name (map.set semantics).
-nvSet: function {xs: List NameVal name: StringView val: StringView} is {
-    i9: u64
-    n9: xs.length
-    for i9 < n9 loop {
-        if (xs.get i: i9).name.stringview == name then {
-            xs.set i: i9 val: (NameVal name: name.string val: val.string)
-            return
-        }
-        i9 = i9 + 1
-    }
-    xs.append (NameVal name: name.string val: val.string)
-}
-
-# nvRemove -- drop name's entry (swap-with-last; names are unique).
-nvRemove: function {xs: List NameVal name: StringView} is {
-    i9: u64
-    n9: xs.length
-    for i9 < n9 loop {
-        if (xs.get i: i9).name.stringview == name then {
-            last9: xs.pop
-            if i9 + 1 < n9 then xs.set i: i9 val: last9
-            return
-        }
-        i9 = i9 + 1
-    }
-}
-
 # aliasResolve -- a `.take` alias's base C name, or the name itself if none.
 aliasResolve: function {ctx: Ctx name: StringView vid: u64} out String is {
-    # A match-arm narrowing (narrowBox) takes priority: inside the arm the name
-    # resolves to the narrowed union payload cast, not the un-narrowed binding or a
-    # stale for-loop/borrow/take alias -- mirrors takeSourceResolve. narrowBox is
-    # keyed by variable; ctx.aliases is still keyed by source name.
+    # A match-arm narrowing (narrowBox) takes priority: inside the arm the
+    # variable resolves to the narrowed union payload cast, not the un-narrowed
+    # binding or a stale for-loop/borrow/take alias -- mirrors takeSourceResolve.
+    # `name` is only what comes back when neither table has an entry.
     nbo: vvGet xs: ctx.narrowBox :vid
     if nbo.length > 0 then return nbo
-    ao: nvGet xs: ctx.aliases :name
+    ao: vvGet xs: ctx.aliases :vid
     if ao.length > 0 then return ao
     return name.string
 }
@@ -2892,7 +2834,7 @@ flushArgHoists: function {ctx: Ctx ind: StringView tmp: TmpCtr buf: String.borro
             dtc: dto.copy
             tmp.listFrees.append dtc
             tmp.listFreeVars.append nmo.copy
-            tmp.listFreeRaw.append "".string
+            tmp.listFreeRaw.append 0
         }
         i = i + 1
     }
@@ -2926,7 +2868,7 @@ pushLoopLabel: function {ctx: Ctx tmp: TmpCtr isDo: bool} out u64 is {
     ctx.breakLabelCleanup.append cl9
     cv9: String
     ctx.breakLabelCleanupVar.append cv9
-    cvr9: String
+    cvr9: u64
     ctx.breakLabelCleanupRaw.append cvr9
     return ctx.breakLabelCtr - 1
 }
@@ -3846,8 +3788,8 @@ emitInterpArgExpr: function {
                 frees: (List String)
                 listFrees: (List String)
                 listFreeVars: (List String)
-                freeRaw: (List String)
-                listFreeRaw: (List String)
+                freeRaw: (List u64)
+                listFreeRaw: (List u64)
             )
             lbuf: String
             sM: (emitInterpBuild
@@ -8792,7 +8734,7 @@ emitStringBindValue: function {
     ctx: Ctx
     n: Node
     nm: StringView
-    nmRaw: StringView
+    nmVid: u64
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -8801,7 +8743,7 @@ emitStringBindValue: function {
         n
     ) case expression then {
         iex9: ast.nodes.get i: (n.expression - 1).u64
-        return (emitStringBindValue :ast :symtab :ctx n: iex9 :nm :nmRaw :ind :tmp :buf)
+        return (emitStringBindValue :ast :symtab :ctx n: iex9 :nm :nmVid :ind :tmp :buf)
     } case atomstring then {
         if (isInterp :ast parts: n.stringparts) then {
             sB: emitInterpBuild :ast :symtab :ctx parts: n.stringparts :ind :tmp :buf
@@ -8809,7 +8751,7 @@ emitStringBindValue: function {
             buf.append lst
             nmc: nm.string
             tmp.frees.append nmc
-            tmp.freeRaw.append nmRaw.string
+            tmp.freeRaw.append nmVid
             return true
         } else {
             return false
@@ -8818,7 +8760,7 @@ emitStringBindValue: function {
         cnd9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         if cnd9.stringview == "string" then {
             dpv9: ast.nodes.get i: (n.parent - 1).u64
-            return (emitStringBindValue :ast :symtab :ctx n: dpv9 :nm :nmRaw :ind :tmp :buf)
+            return (emitStringBindValue :ast :symtab :ctx n: dpv9 :nm :nmVid :ind :tmp :buf)
         }
         if cnd9.stringview == "copy" then {
             # `<rvalue>.copy` over a String (e.g. `(list.get i: n).copy`): the
@@ -8837,7 +8779,7 @@ emitStringBindValue: function {
                     buf.append lc9
                     nmc9: nm.string
                     tmp.frees.append nmc9
-                    tmp.freeRaw.append nmRaw.string
+                    tmp.freeRaw.append nmVid
                     return true
                 }
             }
@@ -9172,14 +9114,15 @@ emitStmt: function {
             }
         }
         anmC9: zast.poolTextCopy pool: ast.names ref: n.name
-        nm: varCName :ctx vid: (defVid :symtab nid: n.nodeid.u64) name: anmC9.stringview
+        nmVid9: defVid :symtab nid: n.nodeid.u64
+        nm: varCName :ctx vid: nmVid9 name: anmC9.stringview
         # this statement introduces a fresh local: a borrow alias left by an
         # earlier binding of the same name names a C variable that is out of
         # scope here, so drop it before the legs below re-establish one.
         {
-            sab9: nvGet xs: ctx.aliases name: anmC9.stringview
+            sab9: vvGet xs: ctx.aliases vid: nmVid9
             if sab9.length > 0 when (sab9.stringview.startsWith prefix: "(*__borrow_") then {
-                nvRemove xs: ctx.aliases name: anmC9.stringview
+                vvRemove xs: ctx.aliases vid: nmVid9
             }
         }
         nbrw9: bindingRhsIsBorrow :ast :symtab :ctx n: avn9
@@ -9192,7 +9135,7 @@ emitStmt: function {
                 value: avn9
                 aid: n.nodeid.u64
                 nm: nm.stringview
-                nmRaw: anmC9.stringview
+                nmVid: nmVid9
                 :ind
                 :tmp
                 :buf
@@ -9225,7 +9168,7 @@ emitStmt: function {
                         ldfsB: ldfB.copy
                         tmp.listFrees.append ldfsB
                         tmp.listFreeVars.append nm.copy
-                        tmp.listFreeRaw.append anmC9.copy
+                        tmp.listFreeRaw.append nmVid9
                     }
                     return
                 } case none then null
@@ -9235,7 +9178,7 @@ emitStmt: function {
             tabAE9: emitLocalAtomName :ctx name: tabA.stringview vid: tabAV9
             lalA: "\{ind}/* alias: \{nm} => \{tabAE9} */\n"
             buf.append lalA
-            nvSet xs: ctx.aliases name: anmC9.stringview val: tabAE9.stringview
+            vvSet xs: ctx.aliases vid: nmVid9 val: tabAE9.stringview
             return
         }
         ltid: stampIdOf :symtab nid: n.nodeid.u64
@@ -9282,7 +9225,7 @@ emitStmt: function {
             lfv: lfsv.string
             tmp.listFrees.append lfv
             tmp.listFreeVars.append nm.copy
-            tmp.listFreeRaw.append anmC9.copy
+            tmp.listFreeRaw.append nmVid9
             return
         }
         if (originIsTid :symtab tid: ltid originTid: ctx.setOriginTid) then {
@@ -9302,7 +9245,7 @@ emitStmt: function {
             sfv: sfsv.string
             tmp.listFrees.append sfv
             tmp.listFreeVars.append nm.copy
-            tmp.listFreeRaw.append anmC9.copy
+            tmp.listFreeRaw.append nmVid9
             return
         }
         if (originIsTid :symtab tid: ltid originTid: ctx.mapOriginTid) then {
@@ -9322,7 +9265,7 @@ emitStmt: function {
             mfv: mfsv.string
             tmp.listFrees.append mfv
             tmp.listFreeVars.append nm.copy
-            tmp.listFreeRaw.append anmC9.copy
+            tmp.listFreeRaw.append nmVid9
             return
         }
         if (rhsIsBorrowGet :ast :symtab :ctx n: avn9) then {
@@ -9336,7 +9279,7 @@ emitStmt: function {
             lbg1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
             buf.append lbg1
             bga9: "(*__borrow_\{nm})"
-            nvSet xs: ctx.aliases name: anmC9.stringview val: bga9.stringview
+            vvSet xs: ctx.aliases vid: nmVid9 val: bga9.stringview
             return
         }
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.svTid then {
@@ -9375,7 +9318,7 @@ emitStmt: function {
                 buf.append lsc
                 nmc2: nm.copy
                 tmp.frees.append nmc2
-                tmp.freeRaw.append anmC9.copy
+                tmp.freeRaw.append nmVid9
                 return
             }
             did9: (emitStringBindValue
@@ -9384,7 +9327,7 @@ emitStmt: function {
                 :ctx
                 n: avn9
                 nm: nm.stringview
-                nmRaw: anmC9.stringview
+                nmVid: nmVid9
                 :ind
                 :tmp
                 :buf
@@ -9402,7 +9345,7 @@ emitStmt: function {
                 if (bindingRhsIsBorrow :ast :symtab :ctx n: avn9) == false then {
                     nmc3: nm.copy
                     tmp.frees.append nmc3
-                    tmp.freeRaw.append anmC9.copy
+                    tmp.freeRaw.append nmVid9
                 }
             }
             return
@@ -9438,7 +9381,7 @@ emitStmt: function {
                 :ctx
                 n: avn9
                 nm: nm.stringview
-                nmRaw: anmC9.stringview
+                nmVid: nmVid9
                 ct: ct.stringview
                 tid: ltid
                 :ind
@@ -9493,7 +9436,7 @@ emitStmt: function {
                     ldfs: ldf.copy
                     tmp.listFrees.append ldfs
                     tmp.listFreeVars.append nm.copy
-                    tmp.listFreeRaw.append anmC9.copy
+                    tmp.listFreeRaw.append nmVid9
                 }
             }
         } else {
@@ -11056,7 +10999,7 @@ emitDoBindValue: function {
     ctx: Ctx
     n: Node
     nm: StringView
-    nmRaw: StringView
+    nmVid: u64
     ct: StringView
     tid: u64
     ind: StringView
@@ -11067,7 +11010,7 @@ emitDoBindValue: function {
         n
     ) case expression then {
         iexK9: ast.nodes.get i: (n.expression - 1).u64
-        return (emitDoBindValue :ast :symtab :ctx n: iexK9 :nm :nmRaw :ct :tid :ind :tmp :buf)
+        return (emitDoBindValue :ast :symtab :ctx n: iexK9 :nm :nmVid :ct :tid :ind :tmp :buf)
     } case doexpr then {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
@@ -11091,7 +11034,7 @@ emitDoBindValue: function {
                 ldfs9: ldf9.copy
                 tmp.listFrees.append ldfs9
                 tmp.listFreeVars.append nm.string
-                tmp.listFreeRaw.append nmRaw.string
+                tmp.listFreeRaw.append nmVid
             }
             l1: "\{ind}do {\n"
             buf.append l1
@@ -11127,7 +11070,7 @@ emitDoBindValue: function {
                 pldfs9: pldf9.copy
                 tmp.listFrees.append pldfs9
                 tmp.listFreeVars.append nm.string
-                tmp.listFreeRaw.append nmRaw.string
+                tmp.listFreeRaw.append nmVid
             }
             l3: "\{ind}{\n"
             buf.append l3
@@ -11455,7 +11398,7 @@ emitObjIterFor: function {
                     tmp.listFrees.append gdt9
                     gdn9: "_git\{mN}"
                     tmp.listFreeVars.append gdn9
-                    tmp.listFreeRaw.append "".string
+                    tmp.listFreeRaw.append 0
                 }
             }
             lidO: pushLoopLabel :ctx :tmp isDo: false
@@ -11475,7 +11418,7 @@ emitObjIterFor: function {
                 ctx.breakLabelCleanupRaw.pop
                 pcv9: lbl.copy
                 ctx.breakLabelCleanupVar.append pcv9
-                ctx.breakLabelCleanupRaw.append lblR9.copy
+                ctx.breakLabelCleanupRaw.append lblV9
             }
             l0: "\{ind}while (1) {\n"
             buf.append l0
@@ -11515,7 +11458,7 @@ emitObjIterFor: function {
                     l3pa: "\{ind}    /* alias: \{lbl} => (*__borrow_\{lbl}) */\n"
                     buf.append l3pa
                     av3p: "(*__borrow_\{lbl})"
-                    nvSet xs: ctx.aliases name: lblR9.stringview val: av3p.stringview
+                    vvSet xs: ctx.aliases vid: lblV9 val: av3p.stringview
                 }
             } else if (originIsTid :symtab tid: ovid originTid: ctx.optionOriginTid) then {
                 # owned heap yield: move the payload out, free just the box; the
@@ -14628,7 +14571,7 @@ emitUnitMonoInstances: function {
                                         lo9: "\{sig9} {\n"
                                         buf.append lo9
                                                                                 ctx.ptrVids = (List u64)
-                                        ctx.aliases = (List NameVal)
+                                        ctx.aliases = (List VidVal)
                                         ctx.narrowBox = (List VidVal)
                                         ctx.narrowTid = (List VidTid)
                                         ctx.exclArms = (List VidVal)
@@ -14765,7 +14708,7 @@ emitFnMonoInstances: function {
                 lo9: "\{sig9} {\n"
                 buf.append lo9
                                 ctx.ptrVids = (List u64)
-                ctx.aliases = (List NameVal)
+                ctx.aliases = (List VidVal)
                 ctx.narrowBox = (List VidVal)
                 ctx.narrowTid = (List VidTid)
                 ctx.exclArms = (List VidVal)
@@ -14888,7 +14831,7 @@ emitFnsIn: function {
                         lo: "\{sig} {\n"
                         buf.append lo
                                                 ctx.ptrVids = (List u64)
-                        ctx.aliases = (List NameVal)
+                        ctx.aliases = (List VidVal)
                         ctx.narrowBox = (List VidVal)
                         ctx.narrowTid = (List VidTid)
                         ctx.exclArms = (List VidVal)
@@ -15068,7 +15011,7 @@ emitReturnCleanup: function {
         if keepRefd then {
             if (refsLocal expr: retExpr name: fvR.stringview) then keepF = false
         }
-        if (nvHas xs: ctx.aliases name: fRaw9.stringview) then keepF = false
+        if (vvHas xs: ctx.aliases vid: fRaw9) then keepF = false
         if keepF then {
             lfR: "\{ind}\{ctx.strC}_free(&\{fvR});\n"
             buf.append lfR
@@ -15084,7 +15027,7 @@ emitReturnCleanup: function {
         if keepRefd then {
             if (refsLocal expr: retExpr name: var9.stringview) then keepL = false
         }
-        if (nvHas xs: ctx.aliases name: lRaw9.stringview) then keepL = false
+        if (vvHas xs: ctx.aliases vid: lRaw9) then keepL = false
         if keepL then buf.append stmt9
         li9 = li9 + 1
     }
@@ -15102,7 +15045,7 @@ emitReturnCleanup: function {
             if keepRefd then {
                 if (refsLocal expr: retExpr name: ccv0.stringview) then keepC = false
             }
-            if (nvHas xs: ctx.aliases name: cRaw9.stringview) then keepC = false
+            if (vvHas xs: ctx.aliases vid: cRaw9) then keepC = false
             if keepC then {
                 lcr9: "\{ind}\{ccl0}"
                 buf.append lcr9
@@ -15129,8 +15072,8 @@ emitFnBody: function {
             frees: (List String)
             listFrees: (List String)
             listFreeVars: (List String)
-            freeRaw: (List String)
-            listFreeRaw: (List String)
+            freeRaw: (List u64)
+            listFreeRaw: (List u64)
         )
         pnames9: (List String)
         pids9: (List u64)
@@ -15158,7 +15101,7 @@ emitFnBody: function {
                 if ppid9 == ctx.strTid then {
                     pms9: pmn9.copy
                     tmp.frees.append pms9
-                    tmp.freeRaw.append ppn9.copy
+                    tmp.freeRaw.append pmnB9
                 } else {
                     # owned .take Set/Map params are skipped: declared by value, but a
                     # Set/Map _destroy frees the container as a heap pointer (would need
@@ -15176,7 +15119,7 @@ emitFnBody: function {
                             pdfs9: pdf9.copy
                             tmp.listFrees.append pdfs9
                             tmp.listFreeVars.append pmn9.copy
-                            tmp.listFreeRaw.append ppn9.copy
+                            tmp.listFreeRaw.append pmnB9
                         }
                     }
                 }
@@ -15516,7 +15459,7 @@ emitC: function {
         dataElems: (Map String value: String)
         dataConst: (Map String value: String)
         ptrVids: (List u64)
-        aliases: (List NameVal)
+        aliases: (List VidVal)
         narrowBox: (List VidVal)
         narrowTid: (List VidTid)
         exclArms: (List VidVal)
@@ -15551,7 +15494,7 @@ emitC: function {
         breakListMarks: (List u64)
         breakLabelCleanup: (List String)
         breakLabelCleanupVar: (List String)
-        breakLabelCleanupRaw: (List String)
+        breakLabelCleanupRaw: (List u64)
         borrowedVars: (Map u64 value: bool)
         colGetFromCode: false
         strTid: strId
@@ -21807,7 +21750,7 @@ emitClassMonoMethods: function {
                                         lo8: "\{sg8} {\n"
                                         buf.append lo8
                                                                                 ctx.ptrVids = (List u64)
-                                        ctx.aliases = (List NameVal)
+                                        ctx.aliases = (List VidVal)
                                         ctx.narrowBox = (List VidVal)
                                         ctx.narrowTid = (List VidTid)
                                         ctx.exclArms = (List VidVal)
@@ -21870,7 +21813,7 @@ emitClassMonoMethods: function {
                                         lo8b: "\{sg8b} {\n"
                                         buf.append lo8b
                                                                                 ctx.ptrVids = (List u64)
-                                        ctx.aliases = (List NameVal)
+                                        ctx.aliases = (List VidVal)
                                         ctx.narrowBox = (List VidVal)
                                         ctx.narrowTid = (List VidTid)
                                         ctx.exclArms = (List VidVal)
@@ -22219,7 +22162,7 @@ emitExprFormYield: function {
     value: Node
     aid: u64
     nm: StringView
-    nmRaw: StringView
+    nmVid: u64
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -22238,7 +22181,7 @@ emitExprFormYield: function {
         lp1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
         buf.append lp1
         av9: "(*__borrow_\{nm})"
-        nvSet xs: ctx.aliases name: nmRaw val: av9.stringview
+        vvSet xs: ctx.aliases vid: nmVid val: av9.stringview
     } else {
         lp2: "\{ind}\{ct9} \{nm} = \{ctx.genRecvC}->_resume_input;\n"
         buf.append lp2
@@ -22372,7 +22315,7 @@ emitOneMethod: function {
     # the receiver param gets a `*` and its name is recorded so the body emits
     # `c->field`. Reset for this method (names must not leak into other bodies).
         ctx.ptrVids = (List u64)
-    ctx.aliases = (List NameVal)
+    ctx.aliases = (List VidVal)
     ctx.narrowBox = (List VidVal)
     ctx.narrowTid = (List VidTid)
     ctx.exclArms = (List VidVal)
@@ -22466,7 +22409,7 @@ emitOneMethod: function {
         buf.append "}\n\n"
     }
         ctx.ptrVids = (List u64)
-    ctx.aliases = (List NameVal)
+    ctx.aliases = (List VidVal)
     ctx.narrowBox = (List VidVal)
     ctx.narrowTid = (List VidTid)
     ctx.exclArms = (List VidVal)
