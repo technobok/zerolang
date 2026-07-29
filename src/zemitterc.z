@@ -68,6 +68,19 @@ cnameOf: function {tid: u64 ownerName: StringView name: StringView} out String i
     return "z_t\{tid}_\{joined9}"
 }
 
+# listCname -- a type's C name base from the table composed once at the start
+# of emitC. "" when the id names no registered type.
+listCname: function {cnames: List String tid: u64} out String is {
+    if tid >= cnames.length then return "".string
+    got: cnames.get i: tid
+    return got.copy
+}
+
+# ctxCname -- listCname against the table the emission context carries.
+ctxCname: function {ctx: Ctx tid: u64} out String is {
+    return (listCname cnames: ctx.cnames :tid)
+}
+
 # cTypeOf -- the C spelling of a scalar type name ("" when not scalar).
 cTypeOf: function {name: StringView} out String is {
     if name == "i8" then return "int8_t".string
@@ -280,6 +293,7 @@ castLitVal: function {val: StringView dstName: StringView} out String is {
 # power-of-2 bounds + round-trip test, or an f64->f32 exact-representation test.
 # retTid is the stamped resultval mono; okTag/errTag/RT are named from it.
 emitNumericCastResult: function {
+    ctx: Ctx
     srcName: StringView
     dstName: StringView
     val: StringView
@@ -288,7 +302,7 @@ emitNumericCastResult: function {
 } out String is {
     scT: cTypeOf name: srcName
     tcT: cTypeOf name: dstName
-    rtBase: symtab.reg.cnameOf tid: retTid
+    rtBase: ctxCname :ctx tid: retTid
     okTag: variantTag :symtab tid: retTid arm: "ok"
     errTag: variantTag :symtab tid: retTid arm: "err"
     sFloat: isFloatName name: srcName
@@ -403,6 +417,7 @@ emitNumericCastResult: function {
 # statement-expression (z_panic when out of range); unknown / non-integer source
 # falls back to a plain cast.
 emitNumericCast: function {
+    ctx: Ctx
     srcName: StringView
     dstName: StringView
     val: StringView
@@ -411,6 +426,7 @@ emitNumericCast: function {
 } out String is {
     resOrig9: monoOriginName :symtab tid: retTid
     if resOrig9.stringview == "resultval" then return (emitNumericCastResult
+        :ctx
         :srcName
         :dstName
         :val
@@ -1012,6 +1028,8 @@ Ctx: class {
     realMain: String
     strC: String
     svC: String
+    # type id -> C name base, composed once at emit start; "" for a hole
+    cnames: (List String)
     litIds: (List u64)
     usedLits: (Map u64 value: bool)
     constVals: (Map u64 value: String)
@@ -2703,7 +2721,7 @@ hoistBorrowValArg: function {
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     vnmh: "_ah\{vhn}"
     vcty: typeRefC :ast :symtab :ctx tid: pid thisTid: 0
-    vcb: symtab.reg.cnameOf tid: vrid
+    vcb: ctxCname :ctx tid: vrid
     vdt: "    \{vcb}_destroy(&\{vnmh});\n"
     if isStrH9 then vdt = "    \{ctx.strC}_free(&\{vnmh});\n"
     # a borrow-returning call result is a shared view: hoist for
@@ -2756,7 +2774,7 @@ emitInstanceMethodCall: function {
         if (symtab.reg.typetypeOf typeId: mco9) == ztypes.ztypetype.functionType then {
             xq169: ast.nodes.get i: (call.callable - 1).u64
             rptr9: dottedReceiverIsPtr :ast :symtab :ctx callable: xq169
-            mcn9: symtab.reg.cnameOf tid: mco9
+            mcn9: ctxCname :ctx tid: mco9
             pnames: (List String)
             pids: (List u64)
             pidsNm: (List u64)
@@ -2906,7 +2924,7 @@ emitInstanceMethodCall: function {
                                     if hrr9 > 0 then hrid9 = hrr9
                                 } case some then null
                                 if (symtab.reg.hasDestructorName typeId: hrid9) then {
-                                    hcb9: symtab.reg.cnameOf tid: hrid9
+                                    hcb9: ctxCname :ctx tid: hrid9
                                     hdt9 = "    \{hcb9}_destroy(&\{nmH9});\n"
                                 }
                             }
@@ -3168,8 +3186,7 @@ emitStrConvCall: function {
     rid0: stampIdOf :symtab nid: call.nodeid.u64
     rid: chaseColMono :symtab :ctx tid: rid0
     if (originIsTid :symtab tid: rid originTid: ctx.strOriginTid) == false then return "".string
-    rmn: typeNameOfReg9 :symtab tid: rid
-    rnm: cbaseNoPrefix tid: rid name: rmn.stringview
+    rnm: cbaseNoPrefix :ctx tid: rid
     pv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: (call.callable - 1).u64)
     ptid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: (call.callable - 1).u64)
     lenAcc: "len".string
@@ -3243,7 +3260,7 @@ emitEmptyColCreate: function {ast: Ast
         amid0: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (call.callable - 1).u64))
         amid9: chaseColMono :symtab :ctx tid: amid0
         if (originIsTid :symtab tid: amid9 originTid: ctx.arrayOriginTid) then {
-            acb9: symtab.reg.cnameOf tid: amid9
+            acb9: ctxCname :ctx tid: amid9
             return "\{acb9}_create()"
         }
     }
@@ -3251,7 +3268,7 @@ emitEmptyColCreate: function {ast: Ast
         smid0: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (call.callable - 1).u64))
         smid9: chaseColMono :symtab :ctx tid: smid0
         if (originIsTid :symtab tid: smid9 originTid: ctx.strOriginTid) then {
-            scb9: symtab.reg.cnameOf tid: smid9
+            scb9: ctxCname :ctx tid: smid9
             return "\{scb9}_create()"
         }
     }
@@ -3264,7 +3281,7 @@ emitEmptyColCreate: function {ast: Ast
     mid9 = chaseColMono :symtab :ctx tid: mid9
     monoLk3: originTidOf :symtab tid: mid9
     if monoLk3 == 0 then return "".string
-    cb9: symtab.reg.cnameOf tid: mid9
+    cb9: ctxCname :ctx tid: mid9
     ccap9: listCapArg :ast :symtab :ctx n: (ast.nodes.get i: (call.nodeid - 1).u64)
     return "\{cb9}_create((uint64_t)\{ccap9})"
 }
@@ -3317,7 +3334,7 @@ emitListMethodCall: function {
     bn: String
     bt: u64
 } out String is {
-    cb: symtab.reg.cnameOf tid: bt
+    cb: ctxCname :ctx tid: bt
     recvR9: colRecvRef :ctx bn: bn.stringview
     if mn.stringview == "append" then {
         v: colArg :ast :symtab :ctx :call label: "from" consumes: true
@@ -3376,7 +3393,7 @@ emitArrayMethodCall: function {
     bn: String
     bt: u64
 } out String is {
-    cb: symtab.reg.cnameOf tid: bt
+    cb: ctxCname :ctx tid: bt
     if mn.stringview == "get" then {
         vi: listArg :ast :symtab :ctx :call label: "i"
         return "\{cb}_get(\{bn}, \{vi})"
@@ -3402,7 +3419,7 @@ emitSetMethodCall: function {
     bn: String
     bt: u64
 } out String is {
-    cb: symtab.reg.cnameOf tid: bt
+    cb: ctxCname :ctx tid: bt
     if mn.stringview == "add" then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: true
         e0: "\{cb}_add(\{bn}, \{v})"
@@ -3433,7 +3450,7 @@ emitMapMethodCall: function {
     bn: String
     bt: u64
 } out String is {
-    cb: symtab.reg.cnameOf tid: bt
+    cb: ctxCname :ctx tid: bt
     if mn.stringview == "set" then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: true
         vv: colArg :ast :symtab :ctx :call label: "value" consumes: true
@@ -3827,7 +3844,7 @@ emitInlineVariantCtor: function {
 } out String is {
     pc: armPayloadC :ast :symtab :ctx :tid :arm
     tg: variantTag :symtab :tid :arm
-    vc: symtab.reg.cnameOf :tid
+    vc: ctxCname :ctx :tid
     if pc.length > 0 then {
         av: "0".string
         aiter: call.arguments.iterate
@@ -3886,7 +3903,7 @@ emitUnionCtor: function {
     if smOrig9 > 0 when (symtab.reg.typetypeOf typeId: smid0) == ztypes.ztypetype.unionType then {
         ctid9 = smid0
     }
-    vc: symtab.reg.cnameOf tid: ctid9
+    vc: ctxCname :ctx tid: ctid9
     tg: variantTag :symtab tid: ctid9 arm: mn.stringview
     payC: armPayloadC :ast :symtab :ctx tid: ctid9 arm: mn.stringview
     if payC.length > 0 then {
@@ -3953,7 +3970,7 @@ emitVariantCtorCall: function {
         arm: mn.stringview
     )
     if (originIsTid :symtab tid: smid originTid: ctx.optionOriginTid) then {
-        ovc9: symtab.reg.cnameOf tid: smid
+        ovc9: ctxCname :ctx tid: smid
         if mn.stringview == "none" then {
             otg9: variantTag :symtab tid: smid arm: "none"
             en9: "((\{ovc9}_t){ .tag = \{otg9}, .data = NULL })"
@@ -4060,7 +4077,7 @@ emitTypeQualCall: function {
                 } case none then null
             }
             if mn.stringview == "create" when mcBody9 == false then {
-                return (emitRecordCtor :ast :symtab :ctx :call tid: btid name: bn.stringview)
+                return (emitRecordCtor :ast :symtab :ctx :call tid: btid)
             }
             pn: pnames.length
             args: String
@@ -4109,7 +4126,7 @@ emitTypeQualCall: function {
                     } else null
                 }
             }
-            mc3: symtab.reg.cnameOf tid: mco
+            mc3: ctxCname :ctx tid: mco
             e7: "\{mc3}(\{args})"
             return e7
         }
@@ -4142,8 +4159,8 @@ renderDefault: function {
         if df9.func then {
             tn: typeNameOfReg9 :symtab tid: targetTid
             cf9: canonFnId :ast :symtab :ctx tid: targetTid name: tn.stringview
-            if cf9 > 0 then return (symtab.reg.cnameOf tid: cf9)
-            return (symtab.reg.cnameOf tid: targetTid)
+            if cf9 > 0 then return (ctxCname :ctx tid: cf9)
+            return (ctxCname :ctx tid: targetTid)
         }
     }
     {
@@ -4311,7 +4328,7 @@ emitCtorDefaultsFill: function {
                     if cargs.length > 0 then cargs.append ", "
                     cargs.append cav
                 }
-                ccb: symtab.reg.cnameOf tid: cco
+                ccb: ctxCname :ctx tid: cco
                 return "\{ccb}(\{cargs})"
             }
         }
@@ -4333,13 +4350,13 @@ emitCtorDefaultsFill: function {
             av = renderDefault :ast :symtab :ctx dv: cdt1 targetTid: ffid
         } else {
             if (symtab.typing.declIsFnptrFieldId parentTypeId: tid nameId: fnameId) then {
-                av = symtab.reg.cnameOf tid: ffid
+                av = ctxCname :ctx tid: ffid
             }
         }
         if args.length > 0 then args.append ", "
         args.append av
     }
-    rcb9: symtab.reg.cnameOf :tid
+    rcb9: ctxCname :ctx :tid
     return "\{rcb9}_create(\{args})"
 }
 
@@ -4350,7 +4367,6 @@ emitRecordCtor: function {
     ctx: Ctx
     call: zast.CallData
     tid: u64
-    name: StringView
 } out String is {
     # a user-defined `create` (non-empty params) overrides the field-wise ctor:
     # bare-name construction routes through it, args by the create's own labels.
@@ -4411,7 +4427,7 @@ emitRecordCtor: function {
                     cargs.append cav
                     ci = ci + 1
                 }
-                ccb: symtab.reg.cnameOf tid: cco
+                ccb: ctxCname :ctx tid: cco
                 ce: "\{ccb}(\{cargs})"
                 return ce
             }
@@ -4446,7 +4462,7 @@ emitRecordCtor: function {
                     av = renderDefault :ast :symtab :ctx dv: cdt1 targetTid: ffid0
                 } else {
                     if (symtab.typing.declIsFnptrFieldId parentTypeId: tid nameId: fnameId) then {
-                        av = symtab.reg.cnameOf tid: ffid0
+                        av = ctxCname :ctx tid: ffid0
                     }
                 }
             }
@@ -4455,7 +4471,7 @@ emitRecordCtor: function {
         args.append av
         fi = fi + 1
     }
-    rc: cnameOf :tid ownerName: "" :name
+    rc: ctxCname :ctx :tid
     e0: "\{rc}_create(\{args})"
     return e0
 }
@@ -4828,7 +4844,7 @@ emitMetaCreateCall: function {
             args.append av
             fi = fi + 1
         }
-        ecb: symtab.reg.cnameOf tid: et
+        ecb: ctxCname :ctx tid: et
         e0: "\{ecb}_meta_create(\{args})"
         return e0
     } case none then {
@@ -4869,7 +4885,7 @@ emitByrefArg: function {
         hdt = "    \{ctx.strC}_free(&\{nmH});\n"
     } else {
         if (symtab.reg.hasDestructorName typeId: hrid) then {
-            hcb: symtab.reg.cnameOf tid: hrid
+            hcb: ctxCname :ctx tid: hrid
             hdt = "    \{hcb}_destroy(&\{nmH});\n"
         }
     }
@@ -4907,7 +4923,7 @@ emitGenericFnCall: function {
     gmo9: originTidOf :symtab tid: gmf9
     if gmo9 == 0 then return "".string
     if (fnIsNativeId :symtab fid: gmf9) then return "".string
-    fc9: symtab.reg.cnameOf tid: gmf9
+    fc9: ctxCname :ctx tid: gmf9
     fpNames9: (List String)
     fpIds9: (List u64)
     fpIds9Nm: (List u64)
@@ -5055,7 +5071,7 @@ emitUnitMethodCall: function {
     } case none then null
     if fid9 == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: fid9) != ztypes.ztypetype.functionType then return "".string
-    fc9: symtab.reg.cnameOf tid: fid9
+    fc9: ctxCname :ctx tid: fid9
     fpNames9: (List String)
     fpIds9: (List u64)
     fpIds9Nm: (List u64)
@@ -5203,7 +5219,7 @@ emitCrossUnitFnCall: function {
     } case none then null
     if fid == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
-    fc: symtab.reg.cnameOf tid: fid
+    fc: ctxCname :ctx tid: fid
     fpNames: (List String)
     fpIds: (List u64)
     fpIdsNm: (List u64)
@@ -5347,7 +5363,8 @@ dottedParentChild: function {ast: Ast n: Node} out String is {
 # emitCrossUnitBareCreate -- a bare (no-arg) cross-unit construction
 # `unit.Type.create` written as a dotted path (not a call): emit `<Type>_create()`
 # (the user create, no receiver). "" when not such a 3-segment bare create.
-emitCrossUnitBareCreate: function {ast: Ast
+emitCrossUnitBareCreate: function {ctx: Ctx
+    ast: Ast
     symtab: zenv.ZSymbolTable
     parent: Node
     child: StringView
@@ -5375,7 +5392,7 @@ emitCrossUnitBareCreate: function {ast: Ast
         cco9
     ) case some then {
         if (symtab.reg.typetypeOf typeId: cco9) == ztypes.ztypetype.functionType then {
-            ccb9: symtab.reg.cnameOf tid: cco9
+            ccb9: ctxCname :ctx tid: cco9
             return "\{ccb9}()"
         }
     } case none then null
@@ -5437,10 +5454,10 @@ emitCrossUnitExplicitCreate: function {
                 } case none then null
             }
             if ccBody9 then {
-                ccb: symtab.reg.cnameOf tid: cco
+                ccb: ctxCname :ctx tid: cco
                 return "\{ccb}(\{cargs})"
             }
-            fwcb9: symtab.reg.cnameOf :tid
+            fwcb9: ctxCname :ctx :tid
             return "\{fwcb9}_create(\{cargs})"
         }
     } case none then null
@@ -5506,7 +5523,7 @@ emitCrossUnitUnionCtor: function {
     } case none then null
     if utid == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: utid) != ztypes.ztypetype.unionType then return "".string
-    vc: symtab.reg.cnameOf tid: utid
+    vc: ctxCname :ctx tid: utid
     tg: variantTag :symtab tid: utid arm: arm9.stringview
     payC: armPayloadC :ast :symtab :ctx tid: utid arm: arm9.stringview
     if payC.length > 0 then {
@@ -5570,7 +5587,7 @@ emitCrossUnitCtor: function {
     if tt == ztypes.ztypetype.recordType then isRc = true
     if tt == ztypes.ztypetype.classType then isRc = true
     if (isRc) == false then return "".string
-    return (emitRecordCtor :ast :symtab :ctx :call :tid name: child.stringview)
+    return (emitRecordCtor :ast :symtab :ctx :call :tid)
 }
 
 # emitCrossUnitTag -- a 3-segment cross-unit variant/enum tag value
@@ -5609,7 +5626,7 @@ emitCrossUnitTag: function {
     pc: armPayloadC :ast :symtab :ctx tid: vtid :arm
     if pc.length == 0 then {
         tg: variantTag :symtab tid: vtid :arm
-        vc: symtab.reg.cnameOf tid: vtid
+        vc: ctxCname :ctx tid: vtid
         e: "((\{vc}_t){ .tag = \{tg} })"
         return e
     }
@@ -5815,10 +5832,10 @@ emitCallValue: function {
         }
     }
     if ctorTid9 > 0 when (symtab.reg.typetypeOf typeId: ctorTid9) == ztypes.ztypetype.recordType then {
-        return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid9 name: ctorNm9.stringview)
+        return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid9)
     }
     if ctorTid9 > 0 when (symtab.reg.typetypeOf typeId: ctorTid9) == ztypes.ztypetype.classType then {
-        return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid9 name: ctorNm9.stringview)
+        return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid9)
     }
     iwc: emitIoWrapperCreate :ast :symtab :ctx :call
     if iwc.length > 0 then return iwc
@@ -5835,7 +5852,7 @@ emitCallValue: function {
     imc9: emitInstanceMethodCall :ast :symtab :ctx :call
     if imc9.length > 0 then return imc9
     if fid > 0 then {
-        fc: symtab.reg.cnameOf tid: fid
+        fc: ctxCname :ctx tid: fid
         fpNames: (List String)
         fpIds: (List u64)
         fpIdsNm: (List u64)
@@ -5892,7 +5909,7 @@ emitCallValue: function {
                         if aConc9 then {
                             pLbl9: conformanceLabelFor :symtab implTid: aTid9 protoTid: ppid9
                             if pLbl9.length > 0 then {
-                                aIb9: symtab.reg.cnameOf tid: aTid9
+                                aIb9: ctxCname :ctx tid: aTid9
                                 aRcv9: "&\{av9}"
                                 if (isPtrVar :ctx name: av9.stringview) then aRcv9 = "\{av9}"
                                 av9 = "\{aIb9}_\{pLbl9}_create(\{aRcv9})"
@@ -6178,7 +6195,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 if ztd9.length > 0 then return "((\{ztd9})0)"
                 return (emitCtorDefaultsFill :ast :symtab :ctx tid: brid)
             } case none then null
-            brc: symtab.reg.cnameOf tid: brid
+            brc: ctxCname :ctx tid: brid
             be0: "((\{brc}_t){0})"
             return be0
         }
@@ -6201,7 +6218,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 } case none then null
                 zmono9: chaseColMono :symtab :ctx tid: brid
                 if zmono9 != brid then {
-                    zmc9: symtab.reg.cnameOf tid: zmono9
+                    zmc9: ctxCname :ctx tid: zmono9
                     if (originIsTid :symtab tid: zmono9 originTid: ctx.listOriginTid) then {
                         return "\{zmc9}_create((uint64_t)0)"
                     }
@@ -6214,7 +6231,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             # a bare no-arg unit fn that typecheck coerced to a CALL (its atom
             # stamp is the RETURN type, not FUNCTION) is invoked here; a genuine
             # fn reference (stamped FUNCTION) keeps the bare cname.
-            fbcn9: symtab.reg.cnameOf tid: brid
+            fbcn9: ctxCname :ctx tid: brid
             fastid9: stampIdOf :symtab nid: n.nodeid.u64
             if fastid9 > 0 when (symtab.reg.typetypeOf typeId: fastid9) == ztypes.ztypetype.functionType then {
                 # a node still stamped FUNCTION is a genuine reference (a
@@ -6327,7 +6344,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             if dzt9.length > 0 then return "((\{dzt9})0)"
             dzm9: chaseColMono :symtab :ctx tid: izd9
             if dzm9 != izd9 then {
-                dzmc9: symtab.reg.cnameOf tid: dzm9
+                dzmc9: ctxCname :ctx tid: dzm9
                 if (originIsTid :symtab tid: dzm9 originTid: ctx.listOriginTid) then {
                     return "\{dzmc9}_create((uint64_t)0)"
                 }
@@ -6358,7 +6375,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                     dpOk9 = stdFnRefEmittable :ast :symtab fid: dpUfo9
                 }
                 if dpOk9 when (symtab.reg.typetypeOf typeId: dpUfo9) == ztypes.ztypetype.functionType then {
-                    dpUfc9: symtab.reg.cnameOf tid: dpUfo9
+                    dpUfc9: ctxCname :ctx tid: dpUfo9
                     # a node stamped FUNCTION is a fn REFERENCE (a .take peel
                     # delegates here): the bare cname, like the atom leg
                     dpStamp9: stampIdOf :symtab nid: n.nodeid.u64
@@ -6381,7 +6398,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         }
         mnc0: aliasOrChild :ast :symtab aliasId: n.nodeid.u64 childId: n.child
         dps9: ast.nodes.get i: (n.parent - 1).u64
-        ccbc9: emitCrossUnitBareCreate :ast :symtab parent: dps9 child: mnc0.stringview
+        ccbc9: emitCrossUnitBareCreate :ctx :ast :symtab parent: dps9 child: mnc0.stringview
         if ccbc9.length > 0 then return ccbc9
         if mnc0.stringview == "copy" then {
             # `.copy` on a generic-param field inside a clone body: the node
@@ -6431,7 +6448,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                     }
                 }
                 if cvgen9 then {
-                    cvtn9: symtab.reg.cnameOf tid: cvp9
+                    cvtn9: ctxCname :ctx tid: cvp9
                     (emitFail
                         :ctx
                         what: "unsupported .copy of type \{cvtn9} in a generic body"
@@ -6483,7 +6500,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             if (symtab.reg.typetypeOf typeId: dtp9) == ztypes.ztypetype.variantType then dtg9 = true
             if (symtab.reg.typetypeOf typeId: dtp9) == ztypes.ztypetype.unionType then dtg9 = true
             if dtg9 when (isGenericType :symtab tid: dtp9) == false then {
-                vcH9: symtab.reg.cnameOf tid: dtp9
+                vcH9: ctxCname :ctx tid: dtp9
                 if vcH9.length > 0 then {
                     pcH9: armPayloadC :ast :symtab :ctx tid: dtp9 arm: mnc0.stringview
                     if pcH9.length == 0 then {
@@ -6616,6 +6633,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             ncRet9: stampIdOf :symtab nid: n.nodeid.u64
             ncRetM9: chaseColMono :symtab :ctx tid: ncRet9
             return (emitNumericCast
+                :ctx
                 srcName: ncSrc9.stringview
                 dstName: mn2.stringview
                 val: ncVal9.stringview
@@ -6745,7 +6763,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 pc2: armPayloadC :ast :symtab :ctx tid: vtid2 arm: mn2.stringview
                 if pc2.length == 0 then {
                     tg2: variantTag :symtab tid: vtid2 arm: mn2.stringview
-                    vc2: symtab.reg.cnameOf tid: vtid2
+                    vc2: ctxCname :ctx tid: vtid2
                     e8: "((\{vc2}_t){ .tag = \{tg2} })"
                     return e8
                 }
@@ -6836,7 +6854,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                     if mn2.stringview == "readLine" then isFN9 = true
                     if mn2.stringview == "accept" when isNetU9 then isFN9 = true
                     if isFN9 then {
-                        ffc9: symtab.reg.cnameOf tid: bstamp
+                        ffc9: ctxCname :ctx tid: bstamp
                         ffcc9: ioCanonCname :ast :symtab :ctx canon: fbtn9.stringview
                         if ffcc9.length > 0 then ffc9 = ffcc9
                         if isNetU9 then {
@@ -6869,7 +6887,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                         # gate on the conformance row.)
                         clab9: conformanceLabelFor :symtab implTid: bstamp protoTid: mco
                         if clab9.stringview == mn2.stringview then {
-                            ib9: symtab.reg.cnameOf tid: bstamp
+                            ib9: ctxCname :ctx tid: bstamp
                             if (isPtrVar :ctx name: bn2.stringview) then {
                                 pj9: "\{ib9}_\{mn2}_create(\{bn2})"
                                 return pj9
@@ -6902,7 +6920,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                             ef9: "\{ctx.svC}_\{mn2}(&\{svfa9})"
                             return ef9
                         }
-                        mc2: symtab.reg.cnameOf tid: mco
+                        mc2: ctxCname :ctx tid: mco
                         # `Type.create` -- the base is the type name itself, not
                         # an instance -- is a constructor/static call and takes no
                         # receiver (fbtn9 is the enclosing type's name). The
@@ -6938,7 +6956,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                         parentTypeId: bstamp
                         name: mn2.stringview
                     ) then {
-                        mcFp: symtab.reg.cnameOf tid: mco
+                        mcFp: ctxCname :ctx tid: mco
                         if bn2.stringview == fbtn9.stringview then return mcFp
                         if (fnTypeTakesThis :symtab tid: mco) then {
                             accFp: ".".string
@@ -6966,7 +6984,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             if (isPtrVar :ctx name: bn2.stringview) then accB2 = "->".string
             recvB2: colRecvRef :ctx bn: bn2.stringview
             if (originIsTid :symtab tid: bstamp originTid: ctx.arrayOriginTid) then {
-                acba9: symtab.reg.cnameOf tid: bstamp
+                acba9: ctxCname :ctx tid: bstamp
                 if mn2.stringview == "length" then {
                     eal9: "\{acba9}_length"
                     return eal9
@@ -6977,7 +6995,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 }
             }
             if (originIsTid :symtab tid: bstamp originTid: ctx.strOriginTid) then {
-                scba9: symtab.reg.cnameOf tid: bstamp
+                scba9: ctxCname :ctx tid: bstamp
                 if mn2.stringview == "length" then {
                     esl9: "\{bn2}\{accB2}len"
                     return esl9
@@ -7004,7 +7022,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                     el1: "\{bn2}\{accB2}capacity"
                     return el1
                 }
-                lcb2: symtab.reg.cnameOf tid: bstamp
+                lcb2: ctxCname :ctx tid: bstamp
                 if mn2.stringview == "pop" then {
                     ep0: "\{lcb2}_pop(\{recvB2})"
                     return ep0
@@ -7037,7 +7055,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                     esc: "\{bn2}->capacity"
                     return esc
                 }
-                scb2: symtab.reg.cnameOf tid: bstamp
+                scb2: ctxCname :ctx tid: bstamp
                 if mn2.stringview == "iterate" then {
                     esi: "\{scb2}_iterate(\{bn2})"
                     return esi
@@ -7052,7 +7070,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                     emc: "\{bn2}->capacity"
                     return emc
                 }
-                mcb2: symtab.reg.cnameOf tid: bstamp
+                mcb2: ctxCname :ctx tid: bstamp
                 if mn2.stringview == "iterate" then {
                     emi: "\{mcb2}_iterate(\{bn2})"
                     return emi
@@ -7156,7 +7174,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         nlid9: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64))
         nlid9 = chaseColMono :symtab :ctx tid: nlid9
         if (originIsTid :symtab tid: nlid9 originTid: ctx.strOriginTid) then {
-            nstrcb9: symtab.reg.cnameOf tid: nlid9
+            nstrcb9: ctxCname :ctx tid: nlid9
             if mn2.stringview == "length" then return "\{base9}.len"
             if mn2.stringview == "size" then return "\{nstrcb9}_size"
             if mn2.stringview == "string" then return "\{nstrcb9}_string(\{base9})"
@@ -7165,7 +7183,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             }
         }
         if (originIsTid :symtab tid: nlid9 originTid: ctx.listOriginTid) then {
-            nlcb9: symtab.reg.cnameOf tid: nlid9
+            nlcb9: ctxCname :ctx tid: nlid9
             recvB9: colRecvRef :ctx bn: base9.stringview
             if mn2.stringview == "pop" then return "\{nlcb9}_pop(\{recvB9})"
             if mn2.stringview == "sort" then return "\{nlcb9}_sort(\{recvB9})"
@@ -7177,11 +7195,11 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         # methodOwnerId scan would mis-resolve to a duplicate same-named mono. The
         # receiver field is already a pointer, so it is passed directly (no `&`).
         if (originIsTid :symtab tid: nlid9 originTid: ctx.setOriginTid) then {
-            nscb9: symtab.reg.cnameOf tid: nlid9
+            nscb9: ctxCname :ctx tid: nlid9
             if mn2.stringview == "iterate" then return "\{nscb9}_iterate(\{base9})"
         }
         if (originIsTid :symtab tid: nlid9 originTid: ctx.mapOriginTid) then {
-            nmpcb9: symtab.reg.cnameOf tid: nlid9
+            nmpcb9: ctxCname :ctx tid: nlid9
             if mn2.stringview == "iterate" then return "\{nmpcb9}_iterate(\{base9})"
             if mn2.stringview == "iterateItems" then return "\{nmpcb9}_iterateItems(\{base9})"
         }
@@ -7215,7 +7233,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                             )
                             return "\{ctx.svC}_\{mn2}(&\{svfn9})"
                         }
-                        nmc9: symtab.reg.cnameOf tid: nmco9
+                        nmc9: ctxCname :ctx tid: nmco9
                         nrttM9: symtab.reg.typetypeOf typeId: nlidM9
                         nmrecv9: "\{base9}"
                         if nrttM9 == ztypes.ztypetype.classType then {
@@ -7306,7 +7324,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 }
             }
             if lti > 0 when (symtab.reg.typetypeOf typeId: lti) == ztypes.ztypetype.recordType then {
-                rce: symtab.reg.cnameOf tid: lti
+                rce: ctxCname :ctx tid: lti
                 if op.stringview == "==" then {
                     re1: "\{rce}_eq(\{l}, \{r})"
                     return re1
@@ -7317,7 +7335,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 }
             }
             if lti > 0 when (symtab.reg.typetypeOf typeId: lti) == ztypes.ztypetype.variantType then {
-                vce: symtab.reg.cnameOf tid: lti
+                vce: ctxCname :ctx tid: lti
                 if op.stringview == "==" then {
                     ee1: "\{vce}_eq(\{l}, \{r})"
                     return ee1
@@ -8119,7 +8137,7 @@ emitPrintArg: function {
             match (
                 svco
             ) case some then {
-                mcb: symtab.reg.cnameOf tid: svco
+                mcb: ctxCname :ctx tid: svco
                 argOrig9: originTidOf :symtab tid: argTid
                 usesAmp: false
                 if (symtab.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.classType when argOrig9 == 0 then {
@@ -8382,7 +8400,7 @@ emitOptionBoxHoist: function {
                 }
             } else null
         }
-        vc: symtab.reg.cnameOf tid: mid
+        vc: ctxCname :ctx tid: mid
         payC: armPayloadC :ast :symtab :ctx tid: mid arm: "some"
         tg: variantTag :symtab tid: mid arm: "some"
         bN: tmp.next
@@ -8484,7 +8502,7 @@ emitDiscardedResult: function {
         dcfree9: "\{ind}\{ctx.strC}_free(&\{dctnm9});\n"
         if rtid != ctx.strTid then {
             dcct9 = typeRefC :ast :symtab :ctx tid: rtid thisTid: 0
-            dccb9: symtab.reg.cnameOf tid: rtid
+            dccb9: ctxCname :ctx tid: rtid
             dcref9: "&\{dctnm9}"
             if (ctEndsWithStar ct: dcct9.stringview) then dcref9 = "\{dctnm9}"
             dcfree9 = "\{ind}\{dccb9}_destroy(\{dcref9});\n"
@@ -8709,7 +8727,7 @@ emitStmt: function {
                     lnB2: "\{ind}\{valB9} = (\{ctB9}){0};\n"
                     buf.append lnB2
                     if (symtab.reg.hasDestructorName typeId: ntO9) then {
-                        ldcbB: symtab.reg.cnameOf tid: ntO9
+                        ldcbB: ctxCname :ctx tid: ntO9
                         ldfB: "    \{ldcbB}_destroy(&\{nm});\n"
                         ldfsB: ldfB.copy
                         tmp.listFrees.append ldfsB
@@ -8727,7 +8745,7 @@ emitStmt: function {
         if ltid == 0 then ltid = stampIdOf :symtab nid: (nodeIdOf9 n: avn9)
         ltid = chaseColMono :symtab :ctx tid: ltid
         if (originIsTid :symtab tid: ltid originTid: ctx.listOriginTid) then {
-            lcb: symtab.reg.cnameOf tid: ltid
+            lcb: ctxCname :ctx tid: ltid
             if (osNoArgCallRhs :ast n: avn9) then {
                 # owned List returned by os.args / os.envNames: emit the call.
                 losr: emitExpr :ast :symtab :ctx n: avn9
@@ -8770,7 +8788,7 @@ emitStmt: function {
             return
         }
         if (originIsTid :symtab tid: ltid originTid: ctx.setOriginTid) then {
-            scb: symtab.reg.cnameOf tid: ltid
+            scb: ctxCname :ctx tid: ltid
             if (collectionValueCallRhs :ast n: avn9) then {
                 svr: emitExpr :ast :symtab :ctx n: avn9
                 sbc: "\{ind}\{scb}_t* \{nm} = \{svr};\n"
@@ -8789,7 +8807,7 @@ emitStmt: function {
             return
         }
         if (originIsTid :symtab tid: ltid originTid: ctx.mapOriginTid) then {
-            mcb: symtab.reg.cnameOf tid: ltid
+            mcb: ctxCname :ctx tid: ltid
             if (collectionValueCallRhs :ast n: avn9) then {
                 mvr: emitExpr :ast :symtab :ctx n: avn9
                 mbc: "\{ind}\{mcb}_t* \{nm} = \{mvr};\n"
@@ -8964,7 +8982,7 @@ emitStmt: function {
             }
             if ltHasDtor9 then {
                 if (bindingRhsIsBorrow :ast :symtab :ctx n: avn9) == false then {
-                    ldcb: symtab.reg.cnameOf tid: ltid
+                    ldcb: ctxCname :ctx tid: ltid
                     ldRef9: "&\{nm}"
                     if (isBoxTid :symtab tid: ltid) then ldRef9 = "\{nm}"
                     ldf: "    \{ldcb}_destroy(\{ldRef9});\n"
@@ -9032,10 +9050,10 @@ emitStmt: function {
             buf.append rdo9
         } else {
             if (symtab.reg.hasDestructorName typeId: rtsid9) then {
-                rdcb9: symtab.reg.cnameOf tid: rtsid9
+                rdcb9: ctxCname :ctx tid: rtsid9
                 # the chased mono's registry cname is authoritative (the
                 # stamp name still says the typedef)
-                if rtChased9 then rdcb9 = symtab.reg.cnameOf tid: rtsid9
+                if rtChased9 then rdcb9 = ctxCname :ctx tid: rtsid9
                 if (isHeapPtrCollection :symtab :ctx tid: rtsid9) then {
                     rdoh9: "\{ind}\{rdcb9}_destroy(\{nm2});\n"
                     buf.append rdoh9
@@ -9385,7 +9403,7 @@ emitStmt: function {
                     buf.append rdf9
                 } else {
                     if (symtab.reg.hasDestructorName typeId: rrid9) then {
-                        rdcb9: symtab.reg.cnameOf tid: rrid9
+                        rdcb9: ctxCname :ctx tid: rrid9
                         rdref9: "&\{rcvV9}"
                         if (isBoxTid :symtab tid: rrid9) then rdref9 = "\{rcvV9}"
                         rdc9: "\{ind}\{rdcb9}_destroy(\{rdref9});\n"
@@ -9962,7 +9980,7 @@ emitMatchStmt: function {
             return
         }
     }
-    vc: symtab.reg.cnameOf tid: vtid
+    vc: ctxCname :ctx tid: vtid
     mN: tmp.next
     l0: "\{ind}\{vc}_t _m\{mN} = \{sx};\n"
     buf.append l0
@@ -10550,7 +10568,7 @@ emitDoBindValue: function {
             if boxedC9.length > 0 then {
                 l0b: "\{ind}\{nm}.data = NULL;\n"
                 buf.append l0b
-                dcb9: symtab.reg.cnameOf :tid
+                dcb9: ctxCname :ctx :tid
                 ldf9: "    \{dcb9}_destroy(&\{nm});\n"
                 ldfs9: ldf9.copy
                 tmp.listFrees.append ldfs9
@@ -10585,7 +10603,7 @@ emitDoBindValue: function {
             # an owned destructible block value is destroyed at scope exit
             # (the binding path returns before its own registration).
             if (symtab.reg.hasDestructorName typeId: tid) then {
-                pdcb9: symtab.reg.cnameOf :tid
+                pdcb9: ctxCname :ctx :tid
                 pldf9: "    \{pdcb9}_destroy(&\{nm});\n"
                 pldfs9: pldf9.copy
                 tmp.listFrees.append pldfs9
@@ -10866,22 +10884,22 @@ emitObjIterFor: function {
                 if itorig9 == 0 then isUserCls9 = true
             }
             if isUserCls9 then {
-                callC = symtab.reg.cnameOf tid: cco
+                callC = ctxCname :ctx tid: cco
             } else {
-                itc9: symtab.reg.cnameOf tid: itid
+                itc9: ctxCname :ctx tid: itid
                 callC = "\{itc9}_call"
             }
             ovn: typeNameOfReg9 :symtab tid: ovid
-            ovc: symtab.reg.cnameOf tid: ovid
+            ovc: ctxCname :ctx tid: ovid
             ovu: cUpperOf text: ovn.stringview
             payC: armPayloadC :ast :symtab :ctx tid: ovid arm: "some"
             oovorig: monoOriginName :symtab tid: ovid
             mN: tmp.next
-            itCb9: symtab.reg.cnameOf tid: itid
+            itCb9: ctxCname :ctx tid: itid
             iterRecv9: String
             ownGit9: false
             if bareFnId9 > 0 then {
-                bcn9: symtab.reg.cnameOf tid: bareFnId9
+                bcn9: ctxCname :ctx tid: bareFnId9
                 lgh9: "\{ind}\{itCb9}_t _git\{mN} = \{bcn9}();\n"
                 buf.append lgh9
                 iterRecv9 = "_git\{mN}"
@@ -13042,7 +13060,7 @@ fnSignature: function {
         pi = pi + 1
     }
     if pn == 0 then params.append "void"
-    fc: symtab.reg.cnameOf tid: fid
+    fc: ctxCname :ctx tid: fid
     sig: "\{ret} \{fc}(\{params})"
     return sig
 }
@@ -13229,7 +13247,7 @@ typeRefC: function {
     }
     cmid9: chaseColMono :symtab :ctx tid: cid
     if cmid9 != cid then {
-        cmc9: symtab.reg.cnameOf tid: cmid9
+        cmc9: ctxCname :ctx tid: cmid9
         return "\{cmc9}_t"
     }
     cid = chaseStrTypedef :symtab :ctx tid: cid
@@ -13251,48 +13269,48 @@ typeRefC: function {
         return "\{bxinner9}*"
     }
     if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: cid)) then {
-        cc9: symtab.reg.cnameOf tid: cid
+        cc9: ctxCname :ctx tid: cid
         ct9: "\{cc9}_t"
         return ct9
     }
     if (originIsTid :symtab tid: cid originTid: ctx.arrayOriginTid) then {
-        aca9: symtab.reg.cnameOf tid: cid
+        aca9: ctxCname :ctx tid: cid
         act9: "\{aca9}_t"
         return act9
     }
     ctt: symtab.reg.typetypeOf typeId: cid
     if ctt == ztypes.ztypetype.recordType then {
-        rc: symtab.reg.cnameOf tid: cid
+        rc: ctxCname :ctx tid: cid
         rt9: "\{rc}_t"
         return rt9
     }
     if ctt == ztypes.ztypetype.variantType then {
-        rc2: symtab.reg.cnameOf tid: cid
+        rc2: ctxCname :ctx tid: cid
         rt8: "\{rc2}_t"
         return rt8
     }
     if ctt == ztypes.ztypetype.classType then {
-        rc3: symtab.reg.cnameOf tid: cid
+        rc3: ctxCname :ctx tid: cid
         rt7: "\{rc3}_t"
         return rt7
     }
     if ctt == ztypes.ztypetype.unionType then {
-        rc4: symtab.reg.cnameOf tid: cid
+        rc4: ctxCname :ctx tid: cid
         rt6: "\{rc4}_t"
         return rt6
     }
     if ctt == ztypes.ztypetype.protocolType then {
-        rc5: symtab.reg.cnameOf tid: cid
+        rc5: ctxCname :ctx tid: cid
         rt5: "\{rc5}_t"
         return rt5
     }
     if ctt == ztypes.ztypetype.facetType then {
-        rc55: symtab.reg.cnameOf tid: cid
+        rc55: ctxCname :ctx tid: cid
         rt55: "\{rc55}_t"
         return rt55
     }
     if ctt == ztypes.ztypetype.functionType then {
-        rcf: symtab.reg.cnameOf tid: cid
+        rcf: ctxCname :ctx tid: cid
         rtf: "\{rcf}_ft"
         return rtf
     }
@@ -14522,7 +14540,7 @@ emitFnBody: function {
                             if prbn9 > 0 then puse9 = prbn9
                         }
                         if (symtab.reg.hasDestructorName typeId: puse9) then {
-                            pcb9: symtab.reg.cnameOf tid: puse9
+                            pcb9: ctxCname :ctx tid: puse9
                             pdf9: "    \{pcb9}_destroy(&\{pmn9});\n"
                             pdfs9: pdf9.copy
                             tmp.listFrees.append pdfs9
@@ -14752,8 +14770,23 @@ emitC: function {
     ) case some then {
         svId = vgo
     } case none then null
-    strC: cnameOf tid: strId ownerName: "" name: "String"
-    svC: cnameOf tid: svId ownerName: "" name: "StringView"
+    cnames9: (List String)
+    ctb9: u64
+    ctlast9: symtab.reg.nextTypeId
+    for ctb9 < ctlast9 loop {
+        cn9: String
+        if (symtab.reg.typeValid tid: ctb9) then {
+            onm9: String
+            oti9: symtab.reg.ownerTidOf tid: ctb9
+            if oti9 > 0 then onm9 = symtab.reg.nameOf tid: oti9
+            tnm9: symtab.reg.nameOf tid: ctb9
+            cn9 = cnameOf tid: ctb9 ownerName: onm9.stringview name: tnm9.stringview
+        }
+        cnames9.append cn9
+        ctb9 = ctb9 + 1
+    }
+    strC: listCname cnames: cnames9 tid: strId
+    svC: listCname cnames: cnames9 tid: svId
     strOriginTid: u64
     arrayOriginTid: u64
     listOriginTid: u64
@@ -14800,7 +14833,7 @@ emitC: function {
     with sdit9: symtab.typing.typedefBaseTid.iterateItems do for sde9: sdit9 loop {
         if sde9.value == strId then {
             if (symtab.reg.hasDestructorName typeId: sde9.key) then {
-                sdc9: symtab.reg.cnameOf tid: sde9.key
+                sdc9: listCname cnames: cnames9 tid: sde9.key
                 sdw9: "static void \{sdc9}_destroy(\{strC}_t* p) { \{strC}_free(p); }\n"
                 buf.append sdw9
             }
@@ -14825,6 +14858,7 @@ emitC: function {
         :fastHash
         :strC
         :svC
+        cnames: cnames9
         :litIds
         usedLits: (Map u64 value: bool)
         constVals: (Map u64 value: String)
@@ -15059,7 +15093,6 @@ emitNeededNatives: function {
     if (needsHas :ctx name: "indexOf") then needRaw = true
     if (needsHas :ctx name: "lastIndexOf") then needRaw = true
     if needRaw then (emitMonoNative
-        :symtab
         :ctx
         :runtimeDir
         frag: "_Z_SV_INDEX_OF_RAW"
@@ -15133,7 +15166,6 @@ emitNeededNatives: function {
     if hasCp then emitCodepointsNatives :ast :symtab :ctx :runtimeDir :buf
     if (needsHas :ctx name: "indexOf") then {
         (emitMonoNative
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_INDEX_OF"
@@ -15144,7 +15176,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "lastIndexOf") then {
         (emitMonoNative
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_LAST_INDEX_OF"
@@ -15155,7 +15186,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "byteAt") then {
         (emitMonoNative
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_BYTE_AT"
@@ -15166,7 +15196,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "stripPrefix") then {
         (emitMonoNative
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_STRIP_PREFIX"
@@ -15177,7 +15206,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "stripSuffix") then {
         (emitMonoNative
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_STRIP_SUFFIX"
@@ -15188,7 +15216,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "splitOnce") then {
         (emitMonoNative
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_SPLIT_ONCE"
@@ -15199,7 +15226,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "parseI64") then {
         (emitParseNative
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_PARSE_I64"
@@ -15210,7 +15236,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "parseU64") then {
         (emitParseNative
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_PARSE_U64"
@@ -15221,7 +15246,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "parseF64") then {
         (emitParseNative
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_PARSE_F64"
@@ -15232,7 +15256,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "parseF16") then {
         (emitParseNative
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_PARSE_F16"
@@ -15243,7 +15266,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "parseF128") then {
         (emitParseNative
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_PARSE_F128"
@@ -15284,8 +15306,8 @@ emitNativeIf: function {
 
 # cbaseNoPrefix -- the id-based cname without the leading "z_" (the runtime
 # templates spell z_@@NAME@@, so NAME omits the prefix).
-cbaseNoPrefix: function {tid: u64 name: StringView} out String is {
-    full: cnameOf :tid ownerName: "" :name
+cbaseNoPrefix: function {ctx: Ctx tid: u64} out String is {
+    full: ctxCname :ctx :tid
     fl: full.length
     rest: (full.substring from: 2 to: fl)
     return rest.string
@@ -15340,7 +15362,7 @@ emitArrayMono: function {
     buf: String.borrow
 } is {
     mn: typeNameOfReg9 :symtab tid: monoId
-    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    nm: cbaseNoPrefix :ctx tid: monoId
     eid: listElemType :symtab :monoId
     eln9: typeNameOfReg9 :symtab tid: eid
     ect0: typeRefC :ast :symtab :ctx tid: eid thisTid: 0
@@ -15401,7 +15423,7 @@ emitStrMono: function {
     buf: String.borrow
 } is {
     mn: typeNameOfReg9 :symtab tid: monoId
-    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    nm: cbaseNoPrefix :ctx tid: monoId
     capStr: monoElemName full: mn prefixLen: 4
     lenT: capLenT cap: capStr.stringview
     eqBody: String
@@ -15439,7 +15461,7 @@ emitBoxMono: function {
     buf: String.borrow
 } is {
     mn: typeNameOfReg9 :symtab tid: monoId
-    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    nm: cbaseNoPrefix :ctx tid: monoId
     beName9: monoElemName full: mn prefixLen: 4
     beid9: resolveTypeIdByName :ast :symtab :ctx name: beName9.stringview
     binner9: typeRefC :ast :symtab :ctx tid: beid9 thisTid: 0
@@ -15453,7 +15475,7 @@ emitBoxMono: function {
         buf.append bfree9
     } else {
         if (symtab.reg.hasDestructorName typeId: beid9) then {
-            bicb9: symtab.reg.cnameOf tid: beid9
+            bicb9: ctxCname :ctx tid: beid9
             bidf9: "    \{bicb9}_destroy(v);\n"
             buf.append bidf9
         }
@@ -15471,8 +15493,7 @@ emitListMono: function {
     monoId: u64
     buf: String.borrow
 } is {
-    mn: typeNameOfReg9 :symtab tid: monoId
-    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    nm: cbaseNoPrefix :ctx tid: monoId
     eid: listElemType :symtab :monoId
     eln9: typeNameOfReg9 :symtab tid: eid
     isStrEl9: false
@@ -15497,12 +15518,12 @@ emitListMono: function {
                 if rbn9 > 0 then ecid9 = rbn9
             }
             if (symtab.reg.hasDestructorName typeId: ecid9) then {
-                ecb9: symtab.reg.cnameOf tid: ecid9
+                ecb9: ctxCname :ctx tid: ecid9
                 delems9 = "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ecb9}_destroy(&p->data[_di]);\n    }\n"
             }
         }
         t3: applyTmpl text: t2 key: "DESTROY_ELEMS" val: delems9.stringview
-        lvm: listviewMethods :symtab :monoId nm: nm.stringview ect: ect.stringview
+        lvm: listviewMethods :ctx :symtab :monoId nm: nm.stringview ect: ect.stringview
         t4: applyTmpl text: t3 key: "LISTVIEW_METHODS" val: lvm.stringview
         buf.append t4
         buf.append "\n"
@@ -15550,7 +15571,7 @@ emitListMono: function {
             :buf
         )
     } case none then null
-    emitListIter :symtab :monoId nm: nm.stringview :buf
+    emitListIter :ctx :symtab :monoId nm: nm.stringview :buf
 }
 
 # emitColGet -- the element `get` for a List / ListView mono. The declared
@@ -15592,6 +15613,7 @@ emitColGet: function {
 # used (the ListIter / OptionView monos were minted). The OptionView mono is
 # emitted by the earlier OptionView pass, so this can reference it.
 emitListIter: function {
+    ctx: Ctx
     symtab: zenv.ZSymbolTable
     monoId: u64
     nm: StringView
@@ -15599,12 +15621,11 @@ emitListIter: function {
 } is {
     liId: monoMethodReturn :symtab :monoId nameId: zast.wkIterate.u64
     if liId == 0 then return
-    liName: typeNameOfReg9 :symtab tid: liId
     ovId: monoMethodReturn :symtab monoId: liId nameId: zast.wkCall.u64
     if ovId == 0 then return
     ovName: typeNameOfReg9 :symtab tid: ovId
-    li: cbaseNoPrefix tid: liId name: liName.stringview
-    ov: cbaseNoPrefix tid: ovId name: ovName.stringview
+    li: cbaseNoPrefix :ctx tid: liId
+    ov: cbaseNoPrefix :ctx tid: ovId
     ovu: cUpperOf text: ovName.stringview
     s0: "typedef struct {\n    z_\{nm}_t* list;\n    uint64_t idx;\n} z_\{li}_t;\n"
     buf.append s0
@@ -15691,8 +15712,7 @@ emitListViewMono: function {
     monoId: u64
     buf: String.borrow
 } is {
-    mn: typeNameOfReg9 :symtab tid: monoId
-    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    nm: cbaseNoPrefix :ctx tid: monoId
     eid: listElemType :symtab :monoId
     ect0: typeRefC :ast :symtab :ctx tid: eid thisTid: 0
     ect: ctypeOrI64 s: ect0.stringview
@@ -15718,6 +15738,7 @@ emitListViewMono: function {
 # listviewMethods -- the _listview cast + _extendView companions when a
 # List mono carries a listview child; "" otherwise.
 listviewMethods: function {
+    ctx: Ctx
     symtab: zenv.ZSymbolTable
     monoId: u64
     nm: StringView
@@ -15730,7 +15751,7 @@ listviewMethods: function {
         rt: fnReturnTidOf :symtab tid: lo
         if rt > 0 then {
             {
-                lvc: symtab.reg.cnameOf tid: rt
+                lvc: ctxCname :ctx tid: rt
                 buf: String
                 m0: "static \{lvc}_t z_\{nm}_listview(z_\{nm}_t* _this) { return *(\{lvc}_t*)_this; }\n"
                 buf.append m0
@@ -15829,7 +15850,6 @@ emitUnionMono: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     tid: u64
-    name: StringView
     buf: String.borrow
 } is {
     egu9: ctx.emittedUserTypes.get key: tid
@@ -15843,7 +15863,7 @@ emitUnionMono: function {
     aids: (List u64)
     aidsNm: (List u64)
     variantArms :ast :symtab :tid names: anames ids: aids nameIds: aidsNm
-    vc: cnameOf :tid ownerName: "" :name
+    vc: ctxCname :ctx :tid
     buf.append "typedef enum {\n"
     ai: u64
     an: anames.length
@@ -15926,7 +15946,7 @@ payloadDestructor: function {
             if rbn > 0 then rid = rbn
         }
         if (symtab.reg.hasDestructorName typeId: rid) then {
-            cb: symtab.reg.cnameOf tid: rid
+            cb: ctxCname :ctx tid: rid
             return "\{cb}_destroy"
         }
     } case none then null
@@ -16025,12 +16045,13 @@ setFreeItemDel: function {isStr: bool strC: StringView} out String is {
 # emitOptionViewMono -- the borrowed-view option a collection iterator yields:
 # a {tag; void* data} struct with a no-op destroy (the view owns nothing).
 emitOptionViewMono: function {
+    ctx: Ctx
     symtab: zenv.ZSymbolTable
     monoId: u64
     buf: String.borrow
 } is {
     mn: typeNameOfReg9 :symtab tid: monoId
-    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    nm: cbaseNoPrefix :ctx tid: monoId
     ovu: cUpperOf text: mn.stringview
     buf.append "typedef enum {\n"
     l1: "    Z_\{ovu}_TAG_NONE,\n"
@@ -16061,7 +16082,7 @@ emitSetMono: function {
     buf: String.borrow
 } is {
     mn: typeNameOfReg9 :symtab tid: monoId
-    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringview
     elemName: monoElemName full: mn prefixLen: 4
     elemTid: setElemType :symtab :monoId
@@ -16070,13 +16091,12 @@ emitSetMono: function {
     isStr: ekind == 1
     siId: monoMethodReturn :symtab :monoId nameId: zast.wkIterate.u64
     if siId == 0 then return
-    siName: typeNameOfReg9 :symtab tid: siId
     ovId: monoMethodReturn :symtab monoId: siId nameId: zast.wkCall.u64
     if ovId == 0 then return
     ovName: typeNameOfReg9 :symtab tid: ovId
-    ov: cbaseNoPrefix tid: ovId name: ovName.stringview
+    ov: cbaseNoPrefix :ctx tid: ovId
     ovu: cUpperOf text: ovName.stringview
-    si: cbaseNoPrefix tid: siId name: siName.stringview
+    si: cbaseNoPrefix :ctx tid: siId
     hashBody: setHashBody kind: ekind fast: ctx.fastHash
     eqBody: setEqBody kind: ekind
     destroyItems: setDestroyItems :isStr strC: ctx.strC.stringview
@@ -16152,7 +16172,7 @@ mapValFreeStmt: function {
         if (symtab.reg.hasDestructorName typeId: vmid) then needs = true
         if (isHeapPtrCollection :symtab :ctx tid: valTid) then needs = true
         if needs then {
-            vcb: symtab.reg.cnameOf tid: vmid
+            vcb: ctxCname :ctx tid: vmid
             if (isHeapPtrCollection
                 :symtab
                 :ctx
@@ -16180,10 +16200,8 @@ emitMapIters: function {
 } is {
     miiId: monoMethodReturn :symtab :monoId nameId: zast.wkIterateItems.u64
     if miiId == 0 then return
-    miiName: typeNameOfReg9 :symtab tid: miiId
     mkiId: monoMethodReturn :symtab :monoId nameId: zast.wkIterate.u64
     if mkiId == 0 then return
-    mkiName: typeNameOfReg9 :symtab tid: mkiId
     ovkId: monoMethodReturn :symtab monoId: mkiId nameId: zast.wkCall.u64
     if ovkId == 0 then return
     ovkName: typeNameOfReg9 :symtab tid: ovkId
@@ -16198,13 +16216,12 @@ emitMapIters: function {
         meId = meo
     } case none then null
     if meId == 0 then return
-    meName: typeNameOfReg9 :symtab tid: meId
-    mki: cbaseNoPrefix tid: mkiId name: mkiName.stringview
-    mii: cbaseNoPrefix tid: miiId name: miiName.stringview
-    me: cbaseNoPrefix tid: meId name: meName.stringview
-    ovk: cbaseNoPrefix tid: ovkId name: ovkName.stringview
+    mki: cbaseNoPrefix :ctx tid: mkiId
+    mii: cbaseNoPrefix :ctx tid: miiId
+    me: cbaseNoPrefix :ctx tid: meId
+    ovk: cbaseNoPrefix :ctx tid: ovkId
     ovku: cUpperOf text: ovkName.stringview
-    ove: cbaseNoPrefix tid: oveId name: oveName.stringview
+    ove: cbaseNoPrefix :ctx tid: oveId
     oveu: cUpperOf text: oveName.stringview
     pi: "\{runtimeDir}/z_MapIter.c.tmpl"
     rawi: readTemplateCached :ctx path: pi.stringview
@@ -16286,7 +16303,7 @@ emitMapMono: function {
     buf: String.borrow
 } is {
     mn: typeNameOfReg9 :symtab tid: monoId
-    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringview
     ovId: u64
     go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkGet.u64
@@ -16300,7 +16317,7 @@ emitMapMono: function {
     valTid: mapValType :symtab :monoId
     valName: typeNameOfReg9 :symtab tid: valTid
     valT: cTypeForNameTid :ast :symtab :ctx name: valName.stringview tid: valTid
-    ov: cbaseNoPrefix tid: ovId name: ovName.stringview
+    ov: cbaseNoPrefix :ctx tid: ovId
     ovu: cUpperOf text: ovName.stringview
     keyName: mapKeyName full: mn vlen: valName.length
     keyTid: mapKeyType :symtab :monoId
@@ -16350,7 +16367,7 @@ emitMapMono: function {
         rmWrapId9 = symtab.reg.returnTypeOf tid: roMm9
     } case none then null
     rmWrapName9: typeNameOfReg9 :symtab tid: rmWrapId9
-    rmWrap9: cbaseNoPrefix tid: rmWrapId9 name: rmWrapName9.stringview
+    rmWrap9: cbaseNoPrefix :ctx tid: rmWrapId9
     rmWrapU9: cUpperOf text: rmWrapName9.stringview
     keyOnlyFree9: mapFreeKeyDel isStr: keyIsStr strC: ctx.strC.stringview valFree: ""
     delTail9: "\{keyOnlyFree9}    _this->entries[idx].alive = 0;\n    _this->indices[slot] = Z_\{mcr}_INDEX_DELETED;\n    _this->length--;\n"
@@ -16516,14 +16533,14 @@ ioCanonCnameUncached: function {
     canon: StringView
 } out String is {
     st9: ioCanonTid :ast :symtab :canon
-    if st9 > 0 then return (symtab.reg.cnameOf tid: st9)
+    if st9 > 0 then return (ctxCname :ctx tid: st9)
     # a plain source-name stem (File, IoError, Reader): the system unit first,
     # then the registry scan below for the io/cli units it does not cover.
     mo: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg name: canon
     match (
         mo
     ) case some then {
-        return (symtab.reg.cnameOf tid: mo)
+        return (ctxCname :ctx tid: mo)
     } case none then null
     last: symtab.reg.nextTypeId
     found: u64
@@ -16538,7 +16555,7 @@ ioCanonCnameUncached: function {
         }
         ti = ti + 1
     }
-    if found > 0 then return (symtab.reg.cnameOf tid: found)
+    if found > 0 then return (ctxCname :ctx tid: found)
     return "".string
 }
 
@@ -16724,7 +16741,7 @@ cliClassIsComposite: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx tid: 
 emitCliFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
     pid: cliClassTypeId :symtab :ctx name: "Parsed"
     if pid == 0 then return
-    pc: cnameOf tid: pid ownerName: "" name: "Parsed"
+    pc: ctxCname :ctx tid: pid
     l0: "typedef struct \{pc}_t \{pc}_t;\n"
     buf.append l0
     l1: "static void \{pc}_destroy(\{pc}_t* p);\n"
@@ -16806,7 +16823,7 @@ emitIoStdStreams: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx buf: Str
     if (needAny) == false then return
     fid: ioFileId :symtab :ctx
     if fid == 0 then return
-    fbase: cnameOf tid: fid ownerName: "" name: "File"
+    fbase: ctxCname :ctx tid: fid
     wcn: ioCanonCname :ast :symtab :ctx canon: "Writer"
     rcn: ioCanonCname :ast :symtab :ctx canon: "Reader"
     if (needsHas :ctx name: "io_stdout") then {
@@ -16842,7 +16859,7 @@ emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow
         ti = ti + 1
     }
     if fid == 0 then return
-    fc: cnameOf tid: fid ownerName: "" name: "File"
+    fc: ctxCname :ctx tid: fid
     l0: "typedef struct {\n    int32_t fd;\n    bool closed;\n} \{fc}_t;\n"
     buf.append l0
     l1: "static void \{fc}_destroy(\{fc}_t* p) {\n    if (!p) return;\n    if (p->closed) return;\n    close(p->fd);\n    p->closed = true;\n}\n\n"
@@ -16883,7 +16900,7 @@ emitNetFdClass: function {
         return
     } case none then null
     ctx.emittedUserTypes.set key: fid.u64 value: true
-    fc: symtab.reg.cnameOf tid: fid
+    fc: ctxCname :ctx tid: fid
     if (isFwdDeclared :ctx tid: fid) then {
         l0: "struct \{fc}_t {\n    int32_t fd;\n    bool closed;\n};\n"
         buf.append l0
@@ -17225,22 +17242,22 @@ maybePreEmitElem: function {
     smPe: ctx.mainName.copy
     ctxBindMain :ctx name: peUnit.stringview
     if tt == ztypes.ztypetype.variantType then {
-        emitOneVariant :ast :symtab :ctx tid: cid name: nm.stringview :buf
+        emitOneVariant :ast :symtab :ctx tid: cid :buf
     }
     if tt == ztypes.ztypetype.recordType then {
-        emitOneRecord :ast :symtab :ctx tid: cid name: nm.stringview :buf
+        emitOneRecord :ast :symtab :ctx tid: cid :buf
     }
     if tt == ztypes.ztypetype.classType then {
-        emitOneRecord :ast :symtab :ctx tid: cid name: nm.stringview :buf
+        emitOneRecord :ast :symtab :ctx tid: cid :buf
     }
     if tt == ztypes.ztypetype.protocolType then {
         emitOneProtocol :ast :symtab :ctx tid: cid name: nm.stringview :buf
     }
     if tt == ztypes.ztypetype.facetType then {
-        emitOneFacet :ast :symtab :ctx tid: cid name: nm.stringview :buf
+        emitOneFacet :ast :symtab :ctx tid: cid :buf
     }
     if tt == ztypes.ztypetype.unionType then {
-        emitUnionMono :ast :symtab :ctx tid: cid name: nm.stringview :buf
+        emitUnionMono :ast :symtab :ctx tid: cid :buf
     }
     ctxBindMain :ctx name: smPe.stringview
 }
@@ -17311,7 +17328,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                             :symtab
                             tid: t
                         ) == false when (isBoxTid :symtab tid: t) == false then {
-                            cn: symtab.reg.cnameOf tid: t
+                            cn: ctxCname :ctx tid: t
                             ctx.fwdDeclaredTypes.set key: t.u64 value: true
                             l0: "typedef struct \{cn}_t \{cn}_t;\n"
                             buf.append l0
@@ -17337,7 +17354,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                 }
                 if (isBoxTid :symtab tid: t) then fwdM9 = false
                 if fwdM9 then {
-                    cnX: symtab.reg.cnameOf tid: t
+                    cnX: ctxCname :ctx tid: t
                     ctx.fwdDeclaredTypes.set key: t.u64 value: true
                     lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
                     buf.append lx0
@@ -17622,7 +17639,6 @@ emitUserTypeById: function {
         :symtab
         :ctx
         :tid
-        name: nm.stringview
         :buf
     )
     if tt == ztypes.ztypetype.recordType then (emitOneRecord
@@ -17630,7 +17646,6 @@ emitUserTypeById: function {
         :symtab
         :ctx
         :tid
-        name: nm.stringview
         :buf
     )
     if tt == ztypes.ztypetype.classType then (emitOneRecord
@@ -17638,7 +17653,6 @@ emitUserTypeById: function {
         :symtab
         :ctx
         :tid
-        name: nm.stringview
         :buf
     )
     if tt == ztypes.ztypetype.unionType then (emitUnionMono
@@ -17646,14 +17660,13 @@ emitUserTypeById: function {
         :symtab
         :ctx
         :tid
-        name: nm.stringview
         :buf
     )
     if tt == ztypes.ztypetype.protocolType then {
         emitOneProtocol :ast :symtab :ctx :tid name: nm.stringview :buf
     }
     if tt == ztypes.ztypetype.facetType then {
-        emitOneFacet :ast :symtab :ctx :tid name: nm.stringview :buf
+        emitOneFacet :ast :symtab :ctx :tid :buf
     }
     ctxBindMain :ctx name: sm.stringview
 }
@@ -17668,13 +17681,11 @@ emitMonoById: function {
     buf: String.borrow
 } is {
     if (originIsTid :symtab tid: monoId originTid: ctx.optionvalOriginTid) then {
-        nm: typeNameOfReg9 :symtab tid: monoId
-        emitOneVariant :ast :symtab :ctx tid: monoId name: nm.stringview :buf
+        emitOneVariant :ast :symtab :ctx tid: monoId :buf
         return
     }
     if (originIsTid :symtab tid: monoId originTid: ctx.resultvalOriginTid) then {
-        nm2: typeNameOfReg9 :symtab tid: monoId
-        emitOneVariant :ast :symtab :ctx tid: monoId name: nm2.stringview :buf
+        emitOneVariant :ast :symtab :ctx tid: monoId :buf
         return
     }
     if (originIsTid :symtab tid: monoId originTid: ctx.listViewOriginTid) then {
@@ -17851,7 +17862,7 @@ ensureFwdStruct: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 buf: Stri
         match (
             o
         ) case some then null case none then {
-            cn: symtab.reg.cnameOf :tid
+            cn: ctxCname :ctx :tid
             ctx.fwdDeclaredTypes.set key: tid.u64 value: true
             l0: "typedef struct \{cn}_t \{cn}_t;\n"
             buf.append l0
@@ -17970,7 +17981,7 @@ emitOneFnptrTypedef: function {
     }
     if pn == 0 then params.append "void"
     retc: fnptrRetTypeC :ast :symtab :ctx :tid
-    cb: symtab.reg.cnameOf :tid
+    cb: ctxCname :ctx :tid
     line: "typedef \{retc} (*\{cb}_ft)(\{params});\n"
     buf.append line
 }
@@ -18435,8 +18446,7 @@ emitMonos: function {
     tsu: u64
     for tsu < wIoUnion9.length loop {
         iuId9: wIoUnion9.get i: tsu
-        iun: typeNameOfReg9 :symtab tid: iuId9
-        emitUnionMono :ast :symtab :ctx tid: iuId9 name: iun.stringview :buf
+        emitUnionMono :ast :symtab :ctx tid: iuId9 :buf
         tsu = tsu + 1
     }
     emitIoFileClass :symtab :ctx :buf
@@ -18446,8 +18456,7 @@ emitMonos: function {
     tclf: u64
     for tclf < wCliLeaf9.length loop {
         clfId9: wCliLeaf9.get i: tclf
-        clfn: typeNameOfReg9 :symtab tid: clfId9
-        emitOneRecord :ast :symtab :ctx tid: clfId9 name: clfn.stringview :buf
+        emitOneRecord :ast :symtab :ctx tid: clfId9 :buf
         tclf = tclf + 1
     }
     # reachable non-mono system VARIANTs (parseerror, seekorigin, ...) --
@@ -18455,8 +18464,7 @@ emitMonos: function {
     tsv: u64
     for tsv < wSysVar9.length loop {
         svId9: wSysVar9.get i: tsv
-        svn: typeNameOfReg9 :symtab tid: svId9
-        emitOneVariant :ast :symtab :ctx tid: svId9 name: svn.stringview :buf
+        emitOneVariant :ast :symtab :ctx tid: svId9 :buf
         tsv = tsv + 1
     }
     # reachable non-mono system RECORDs (filestat) -- the ok payload of a Result
@@ -18464,8 +18472,7 @@ emitMonos: function {
     tsr: u64
     for tsr < wSysRec9.length loop {
         srId9: wSysRec9.get i: tsr
-        srn: typeNameOfReg9 :symtab tid: srId9
-        emitOneRecord :ast :symtab :ctx tid: srId9 name: srn.stringview :buf
+        emitOneRecord :ast :symtab :ctx tid: srId9 :buf
         tsr = tsr + 1
     }
     # optionval + resultval variant monos -- iterators/collection-gets /
@@ -18473,8 +18480,7 @@ emitMonos: function {
     tido: u64
     for tido < wValMono9.length loop {
         vmId9: wValMono9.get i: tido
-        oovn: typeNameOfReg9 :symtab tid: vmId9
-        emitOneVariant :ast :symtab :ctx tid: vmId9 name: oovn.stringview :buf
+        emitOneVariant :ast :symtab :ctx tid: vmId9 :buf
         tido = tido + 1
     }
     # Option union monos (tag + void* data heap payload) -- reftype
@@ -18482,8 +18488,7 @@ emitMonos: function {
     tiu: u64
     for tiu < wOptRes9.length loop {
         orId9: wOptRes9.get i: tiu
-        uvn: typeNameOfReg9 :symtab tid: orId9
-        emitUnionMono :ast :symtab :ctx tid: orId9 name: uvn.stringview :buf
+        emitUnionMono :ast :symtab :ctx tid: orId9 :buf
         tiu = tiu + 1
     }
     # user generic UNION monos (e.g. MyOption<i64>): struct + tags via
@@ -18492,8 +18497,7 @@ emitMonos: function {
     tugu9: u64
     for tugu9 < wUgUnion9.length loop {
         uguId9: wUgUnion9.get i: tugu9
-        uguvn9: typeNameOfReg9 :symtab tid: uguId9
-        emitUnionMono :ast :symtab :ctx tid: uguId9 name: uguvn9.stringview :buf
+        emitUnionMono :ast :symtab :ctx tid: uguId9 :buf
         tugu9 = tugu9 + 1
     }
     # OptionView structs -- the borrowed-view option every collection
@@ -18501,7 +18505,7 @@ emitMonos: function {
     tiov: u64
     for tiov < wOptView9.length loop {
         ovId9: wOptView9.get i: tiov
-        emitOptionViewMono :symtab monoId: ovId9 :buf
+        emitOptionViewMono :ctx :symtab monoId: ovId9 :buf
         tiov = tiov + 1
     }
     # ListView structs next -- a List's listview companion references
@@ -18553,7 +18557,6 @@ emitMonos: function {
             :symtab
             :ctx
             tid: clcId9
-            name: clcn.stringview
             fwdDeclared: fwd9
             :buf
         )
@@ -18577,7 +18580,7 @@ emitMonos: function {
         scn: typeNameOfReg9 :symtab tid: scId9
         unb9: "io_uses_\{scn}"
         if (needsHas :ctx name: unb9.stringview) then {
-            emitOneRecord :ast :symtab :ctx tid: scId9 name: scn.stringview :buf
+            emitOneRecord :ast :symtab :ctx tid: scId9 :buf
         }
         tsc = tsc + 1
     }
@@ -18587,8 +18590,7 @@ emitMonos: function {
     tug9: u64
     for tug9 < wUgRec9.length loop {
         ugId9: wUgRec9.get i: tug9
-        ugnm9: typeNameOfReg9 :symtab tid: ugId9
-        emitOneRecord :ast :symtab :ctx tid: ugId9 name: ugnm9.stringview :buf
+        emitOneRecord :ast :symtab :ctx tid: ugId9 :buf
         tug9 = tug9 + 1
     }
 }
@@ -18813,7 +18815,6 @@ emitOneFacet: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     tid: u64
-    name: StringView
     buf: String.borrow
 } is {
     egf9: ctx.emittedUserTypes.get key: tid
@@ -18823,7 +18824,7 @@ emitOneFacet: function {
         return
     } case none then null
     ctx.emittedUserTypes.set key: tid.u64 value: true
-    pbase: cnameOf :tid ownerName: "" :name
+    pbase: ctxCname :ctx :tid
     impls9: (List u64)
     facetImplTids :symtab :tid acc: impls9
     preEmitEmbeddedTypes :ast :symtab :ctx ids: impls9 :buf
@@ -18875,7 +18876,7 @@ emitOneFacet: function {
     buf.append l0
     du9: String
     with iiter: impls9.iterate do for itid9: iiter loop {
-        icn9: symtab.reg.cnameOf tid: itid9
+        icn9: ctxCname :ctx tid: itid9
         drow9: "    \{icn9}_t _i\{itid9};\n"
         du9.append drow9
     }
@@ -18902,7 +18903,7 @@ emitOneProtocol: function {
         return
     } case none then null
     ctx.emittedUserTypes.set key: tid.u64 value: true
-    pbase: cnameOf :tid ownerName: "" :name
+    pbase: ctxCname :ctx :tid
     mnames: (List String)
     mids: (List u64)
     midsNm: (List u64)
@@ -18972,9 +18973,9 @@ emitProtocolImpl: function {
 } is {
     implOrig9: originTidOf :symtab tid: implTid
     if implOrig9 > 0 then return
-    implBase: symtab.reg.cnameOf tid: implTid
+    implBase: ctxCname :ctx tid: implTid
     implCtype: "\{implBase}_t"
-    protoBase: symtab.reg.cnameOf tid: protoTid
+    protoBase: ctxCname :ctx tid: protoTid
     protoCtype: "\{protoBase}_t"
     vtableCtype: "\{protoBase}_vtable_t"
     wbase: "\{implBase}_\{label}"
@@ -19049,7 +19050,7 @@ emitProtocolImpl: function {
             if (definedInNonMain :symtab :ctx tid: implTid) then {
                 implMc = "\{implBase}_\{mname}"
             } else {
-                implMc = (symtab.reg.cnameOf tid: implMid)
+                implMc = (ctxCname :ctx tid: implMid)
             }
         }
         retkw: "return ".string
@@ -19101,9 +19102,9 @@ emitFacetImpl: function {
     buf: String.borrow
 } is {
     if (isGenericType :symtab tid: implTid) then return
-    implBase: symtab.reg.cnameOf tid: implTid
+    implBase: ctxCname :ctx tid: implTid
     implCtype: "\{implBase}_t"
-    facetBase: symtab.reg.cnameOf tid: facetTid
+    facetBase: ctxCname :ctx tid: facetTid
     facetCtype: "\{facetBase}_t"
     vtableCtype: "\{facetBase}_vtable_t"
     wbase: "\{implBase}_\{label}"
@@ -19172,7 +19173,7 @@ emitFacetImpl: function {
             if (definedInNonMain :symtab :ctx tid: implTid) then {
                 implMc = "\{implBase}_\{mname}"
             } else {
-                implMc = (symtab.reg.cnameOf tid: implMid)
+                implMc = (ctxCname :ctx tid: implMid)
             }
         }
         retkw: "return ".string
@@ -19380,7 +19381,7 @@ emitFileMethodCall: function {
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     fid: fileTypeIdOf :symtab nid: bnid
     if fid == 0 then return "".string
-    fc: symtab.reg.cnameOf tid: fid
+    fc: ctxCname :ctx tid: fid
     {
         fcn9: typeNameOfReg9 :symtab tid: fid
         fcc9: ioCanonCname :ast :symtab :ctx canon: fcn9.stringview
@@ -19480,7 +19481,7 @@ wrapperCreateArg: function {
                     abrC: ztypes.mangleVarName name: abr.stringview
                     abnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (a.operation - 1).u64)
                     abtid: stampIdOf :symtab nid: abnid
-                    abcb: symtab.reg.cnameOf tid: abtid
+                    abcb: ctxCname :ctx tid: abtid
                     ablab: conformanceLabelFor :symtab implTid: abtid protoTid: prtid
                     abpfx9: "&".string
                     if (isPtrVar :ctx name: abr.stringview) then abpfx9 = "".string
@@ -19538,7 +19539,7 @@ emitIoWrapperCreate: function {
         args.append astr
         pi = pi + 1
     }
-    wcn: symtab.reg.cnameOf tid: wid
+    wcn: ctxCname :ctx tid: wid
     un9w: "io_uses_\{wn}"
     needsAdd :ctx name: un9w.stringview
     return "\{wcn}_create(\{args})"
@@ -19890,7 +19891,7 @@ emitCliSpecCreate: function {
     }
     needsAdd :ctx name: "cli"
     needsAdd :ctx name: "cli_spec_create"
-    ccb: symtab.reg.cnameOf tid: cid
+    ccb: ctxCname :ctx tid: cid
     return "\{ccb}_create(\{args})"
 }
 
@@ -19978,7 +19979,7 @@ emitParsedMethodCall: function {
     if pid == 0 then return "".string
     pcn: typeNameOfReg9 :symtab tid: pid
     if pcn.stringview != "Parsed" then return "".string
-    pc: symtab.reg.cnameOf tid: pid
+    pc: ctxCname :ctx tid: pid
     recv: aliasResolve :ctx name: bn.stringview
     recvC: ztypes.mangleVarName name: recv.stringview
     recvExpr: "&\{recvC}"
@@ -20047,7 +20048,7 @@ emitUserIterCall: function {
     match (
         cco9
     ) case some then {
-        callC9: symtab.reg.cnameOf tid: cco9
+        callC9: ctxCname :ctx tid: cco9
         recv9: aliasResolve :ctx name: bn.stringview
         recvC9: ztypes.mangleVarName name: recv9.stringview
         recvExpr9: "&\{recvC9}"
@@ -20265,7 +20266,7 @@ emitProtocolCreateCall: function {
                     name: fdn.stringview
                 )
                 if fromTid == 0 then return "".string
-                implBase: symtab.reg.cnameOf tid: fromTid
+                implBase: ctxCname :ctx tid: fromTid
                 label: conformanceLabelFor :symtab implTid: fromTid :protoTid
                 if label.length == 0 then return "".string
                 valVar: aliasResolve :ctx name: fromBase.stringview
@@ -20307,7 +20308,6 @@ emitRecordDefsIn: function {
                         :symtab
                         :ctx
                         tid: uidu
-                        name: nmu.stringview
                         :buf
                     )
                 }
@@ -20336,7 +20336,7 @@ emitRecordDefsIn: function {
                     nm: zast.nameTextCopy :ast ref: bm.name
                     rid: userFnId :ast :symtab :ctx name: nm.stringview
                     if rid > 0 when (isGenericType :symtab tid: rid) == false then {
-                        emitOneRecord :ast :symtab :ctx tid: rid name: nm.stringview :buf
+                        emitOneRecord :ast :symtab :ctx tid: rid :buf
                         (emitAsConsts
                             :ast
                             :symtab
@@ -20352,7 +20352,7 @@ emitRecordDefsIn: function {
                     nmc: zast.nameTextCopy :ast ref: bm.name
                     cid9: userFnId :ast :symtab :ctx name: nmc.stringview
                     if cid9 > 0 when (isGenericType :symtab tid: cid9) == false then {
-                        emitOneRecord :ast :symtab :ctx tid: cid9 name: nmc.stringview :buf
+                        emitOneRecord :ast :symtab :ctx tid: cid9 :buf
                         (emitAsConsts
                             :ast
                             :symtab
@@ -20372,7 +20372,6 @@ emitRecordDefsIn: function {
                         :symtab
                         :ctx
                         tid: vid5
-                        name: nm5.stringview
                         :buf
                     )
                 }
@@ -20566,7 +20565,6 @@ emitOneVariant: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     tid: u64
-    name: StringView
     buf: String.borrow
 } is {
     egv9: ctx.emittedUserTypes.get key: tid
@@ -20581,7 +20579,7 @@ emitOneVariant: function {
     aidsNm: (List u64)
     variantArms :ast :symtab :tid names: anames ids: aids nameIds: aidsNm
     preEmitEmbeddedTypes :ast :symtab :ctx ids: aids :buf
-    vc: cnameOf :tid ownerName: "" :name
+    vc: ctxCname :ctx :tid
     buf.append "typedef enum {\n"
     ai: u64
     an: anames.length
@@ -20642,7 +20640,7 @@ emitOneVariant: function {
                             if qtt == ztypes.ztypetype.recordType then isAgg = true
                             if qtt == ztypes.ztypetype.variantType then isAgg = true
                             if isAgg then {
-                                qrc: symtab.reg.cnameOf tid: qrid
+                                qrc: ctxCname :ctx tid: qrid
                                 qe: "\{qrc}_eq(a.data.\{qname}, b.data.\{qname})"
                                 qeq.append qe
                             }
@@ -20736,12 +20734,11 @@ emitStructDestructor: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     tid: u64
-    name: StringView
     fnames: List String
     fids: List u64
     buf: String.borrow
 } is {
-    rc: cnameOf :tid ownerName: "" :name
+    rc: ctxCname :ctx :tid
     d0: "static void \{rc}_destroy(\{rc}_t* p);\n"
     buf.append d0
     d1: "static void \{rc}_destroy(\{rc}_t* p) {\n"
@@ -20767,7 +20764,7 @@ emitStructDestructor: function {
                 if (symtab.reg.hasDestructorName typeId: fmid9) then fneeds9 = true
                 if (isHeapPtrCollection :symtab :ctx tid: fid) then fneeds9 = true
                 if fneeds9 then {
-                    fcb: symtab.reg.cnameOf tid: fmid9
+                    fcb: ctxCname :ctx tid: fmid9
                     if (isHeapPtrCollection :symtab :ctx tid: fid) then {
                         df: "    \{fcb}_destroy(p->\{fname});\n"
                         buf.append df
@@ -20803,7 +20800,6 @@ emitOneRecord: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     tid: u64
-    name: StringView
     buf: String.borrow
 } is {
     egr9: ctx.emittedUserTypes.get key: tid
@@ -20819,7 +20815,7 @@ emitOneRecord: function {
     fidsNm: (List u64)
     recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
     preEmitEmbeddedTypes :ast :symtab :ctx ids: fids :buf
-    rc: cnameOf :tid ownerName: "" :name
+    rc: ctxCname :ctx :tid
     if (isFwdDeclared :ctx :tid) then {
         lopenR: "struct \{rc}_t {\n"
         buf.append lopenR
@@ -20910,7 +20906,7 @@ emitOneRecord: function {
                     if ftt == ztypes.ztypetype.recordType then isAggF = true
                     if ftt == ztypes.ztypetype.variantType then isAggF = true
                     if isAggF then {
-                        frc: symtab.reg.cnameOf tid: frid
+                        frc: ctxCname :ctx tid: frid
                         fe: "\{frc}_eq(a.\{fkn}, b.\{fkn})"
                         eqx.append fe
                         fdone = true
@@ -20929,7 +20925,7 @@ emitOneRecord: function {
     buf.append "}\n\n"
     }
     if (symtab.reg.hasDestructorName typeId: tid) then {
-        emitStructDestructor :ast :symtab :ctx :tid :name :fnames :fids :buf
+        emitStructDestructor :ast :symtab :ctx :tid :fnames :fids :buf
     }
 }
 
@@ -20943,7 +20939,6 @@ emitCliCompositeClass: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     tid: u64
-    name: StringView
     fwdDeclared: bool
     buf: String.borrow
 } is {
@@ -20951,7 +20946,7 @@ emitCliCompositeClass: function {
     fids: (List u64)
     fidsNm: (List u64)
     recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
-    rc: cnameOf :tid ownerName: "" :name
+    rc: ctxCname :ctx :tid
     if (fwdDeclared) == false then {
         lt: "typedef struct \{rc}_t \{rc}_t;\n"
         buf.append lt
@@ -21018,7 +21013,7 @@ emitCliCompositeClass: function {
             if (symtab.reg.hasDestructorName typeId: dcm) then dneeds9 = true
             if (isHeapPtrCollection :symtab :ctx tid: dfi) then dneeds9 = true
             if dneeds9 then {
-                dcb: symtab.reg.cnameOf tid: dcm
+                dcb: ctxCname :ctx tid: dcm
                 if (isHeapPtrCollection :symtab :ctx tid: dfi) then {
                     df: "    \{dcb}_destroy(p->\{dfn});\n"
                     buf.append df
@@ -21431,7 +21426,7 @@ setupGenCtx: function {
     }
     rn: typeNameOfReg9 :symtab tid: rid
     ru: cUpperOf text: rn.stringview
-    rc: symtab.reg.cnameOf tid: rid
+    rc: ctxCname :ctx tid: rid
     ctx.genActive = true
     ctx.genYieldCount = gyc
     ctx.genYieldNext = 1
@@ -21616,7 +21611,7 @@ emitOneMethod: function {
     declOnly: bool
     buf: String.borrow
 } is {
-    mc: symtab.reg.cnameOf tid: mid
+    mc: ctxCname :ctx tid: mid
     ret: "void".string
     {
         rto: fnReturnTidOf :symtab tid: mid
@@ -21639,7 +21634,7 @@ emitOneMethod: function {
     if ret.stringview == "void" when thisTid9 > 0 then {
         rbn0: ztypecheck.fnReturnBaseNameOf :ast :op
         if rbn0.stringview == "this" then {
-            tcb: symtab.reg.cnameOf tid: thisTid9
+            tcb: ctxCname :ctx tid: thisTid9
             ret = "\{tcb}_t"
         }
     }
@@ -21782,7 +21777,6 @@ emitOneMethod: function {
 # emitMonoNative -- a native fragment substituting z_StringView and (when
 # mono is non-empty) the canonical z_{mono} to the mono's id-based cname.
 emitMonoNative: function {
-    symtab: zenv.ZSymbolTable
     ctx: Ctx
     runtimeDir: StringView
     frag: StringView
@@ -21796,7 +21790,7 @@ emitMonoNative: function {
         scv: ctx.svC.copy
         cur: substituteAll text: raw needle: "z_StringView" repl: scv.stringview
         if mono.length > 0 then {
-            mc: symtab.reg.cnameOf tid: stemTid
+            mc: ctxCname :ctx tid: stemTid
             cn: "z_\{mono}"
             cur = substituteAll text: cur needle: cn.stringview repl: mc.stringview
         }
@@ -21808,7 +21802,6 @@ emitMonoNative: function {
 # emitParseNative -- a parse fragment, substituting the canonical
 # z_resultval_*_parseerror to the mono's id-based cname and z_StringView.
 emitParseNative: function {
-    symtab: zenv.ZSymbolTable
     ctx: Ctx
     runtimeDir: StringView
     frag: StringView
@@ -21816,7 +21809,7 @@ emitParseNative: function {
     stemTid: u64
     buf: String.borrow
 } is {
-    mc: symtab.reg.cnameOf tid: stemTid
+    mc: ctxCname :ctx tid: stemTid
     p: "\{runtimeDir}/natives/\{frag}.inc"
     raw: readTemplateCached :ctx path: p.stringview
     if raw.length > 0 then {
@@ -21840,8 +21833,8 @@ emitCodepointsNatives: function {
 } is {
     cpId: builtinTid :ast :symtab base: "CpIter"
     ovId: specStemTid :ast :symtab base: "optionval" arg1: "u32" arg2: ""
-    cpc: cnameOf tid: cpId ownerName: "" name: "CpIter"
-    ovc: cnameOf tid: ovId ownerName: "" name: "optionval_u32"
+    cpc: ctxCname :ctx tid: cpId
+    ovc: ctxCname :ctx tid: ovId
     (emitCpFrag
         :runtimeDir
         frag: "_Z_SV_CPITER_STRUCT"

@@ -587,17 +587,23 @@ error (E0100): the type's methods belong to the C runtime.
 
 #---: C Name Generation
 
-A type's C name is composed #b:"once, at mint": #~"ztypes.composeCname"
-fills #~"ZType.cname" inside #~"newType", and the emitter reads it back
-through #~"reg.cnameOf". Names are never reassigned after mint, so the
-stored cname cannot go stale. Sites that name a #b:"composed" symbol (a
-dotted member flattening, a #~"{mono}.{fn}" method instance) call the
-shared composer explicitly with that composed name. Variable names go
-through #~"ztypes.mangleVarName" (C-keyword mangling of the emitted
-identifier only); function symbols through #~"ztypes.mangleFuncName".
-The #~"emitter-guard" Makefile ratchet (run by #~"make ci") pins the
-emitter's remaining by-name resolution and name-derivation sites at
-their current floors so new ones cannot creep in.
+C names are the emitter's business -- the type checker composes none. At
+the start of #~"emitC" a single pass over the type registry fills a
+#~"tid"-indexed table on #~"Ctx.cnames", and every emission site reads it
+back through #~"ctxCname" (a hole minted by #~"allocType" gets #~""). The
+table is built once from a frozen model, so a name cannot go stale, and one
+function composes every name, so a definition and its references cannot
+disagree.
+
+The composer is #~"zemitterc.cnameOf". Outside the table builder only two
+sites call it, both naming a symbol that no registered type owns: the
+flattened #~"{base}.{member}" of a dotted member access, and an #~"as"-block
+constant's #~"{type}.{label}". Variable names go through
+#~"ztypes.mangleVarName" (C-keyword mangling of the emitted identifier
+only). The #~"emitter-guard" Makefile ratchet (run by #~"make ci") pins the
+emitter's by-name resolution sites at their current floors, holds
+#~"composeCname" in the type checker at zero, and caps the #~"z_t{id}"
+spelling at the two lines of the composer itself.
 
 #--: Id-based naming
 
@@ -607,9 +613,12 @@ the #~"z_" namespace prefix: #~"z_t{type_id}_<mangled>" (so the type
 #~"z_t527_point_add"). Because the id is unique by construction, names cannot
 collide -- there is no dedup set and no on-collision suffix; #~"cnameOf"
 just splices the id in. The id goes #b:"after" #~"z_" so the emitter's
-#~"z_"-prefix / #~"_t"-suffix shape checks and #~"cname_base"-derived helper
-names keep working unchanged. Two kinds of symbol stay #b:"canonical"
-(un-id'd): the hand-written runtime ABI -- native functions (#~"z_io_open",
+#~"z_"-prefix / #~"_t"-suffix shape checks and cname-base-derived helper
+names keep working unchanged. A method's owner name comes from
+#~"ZType.ownerTid", the id #~"newType" is handed at mint: the registry
+stores the id, never a composed string. Two kinds of symbol stay
+#b:"canonical" (un-id'd): the hand-written runtime ABI -- native functions
+(#~"z_io_open",
 #~"z_String_create", ...) and the C entry point #~"z_main" -- and local
 variables (#~"mangleVarName"); embedding a variable id is a separate,
 not-yet-applied step.

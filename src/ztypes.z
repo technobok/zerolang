@@ -466,7 +466,9 @@ ZType: class {
     # the declaration (ztyping DeclId) that minted this type; 0 until the
     # declaration layer links it
     def: u64
-    cname: String
+    # the type that owns this one (a method's receiver); 0 when the type
+    # stands free. The emitter composes C names from it.
+    ownerTid: u64
 }
 
 # A single environment entry: a definition (introduces a name) or a
@@ -560,7 +562,7 @@ holeType: function {} out ZType is {
     isNative: false
     runtimeIndexed: false
     def: 0
-    cname: "".string)
+    ownerTid: 0)
 }
 
 ZTypeRegistry: class {
@@ -620,8 +622,6 @@ ZTypeRegistry: class {
     newType: function {:this name: StringView typetype: ztypetype ownerTid: 0.u64} out u64 is {
         id: this.nextTypeId
         this.nextTypeId = this.nextTypeId + 1
-        own9: String
-        if ownerTid > 0 then own9 = this.nameOf tid: ownerTid
         t: (ZType
         typeId: id
         name: name.string
@@ -642,7 +642,7 @@ ZTypeRegistry: class {
         isNative: false
         runtimeIndexed: false
         def: 0
-        cname: (composeCname tid: id ownerName: own9.stringview :name))
+        :ownerTid)
         this.typeById.append t
         return id
     }
@@ -748,11 +748,11 @@ ZTypeRegistry: class {
         got.isTagGenericOrigin = true
     }
 
-    # cnameOf -- the mint-composed C name for a type id ("" when absent).
-    cnameOf: function {:this tid: u64} out String is {
-        if tid >= this.typeById.length then return "".string
+    # ownerTidOf -- the type owning `tid` as a member, or 0.
+    ownerTidOf: function {:this tid: u64} out u64 is {
+        if tid >= this.typeById.length then return 0
         got: this.typeById.get i: tid
-        return got.cname.copy
+        return got.ownerTid
     }
 
     setValtype: function {:this typeId: u64 value: bool} is {
@@ -1289,16 +1289,6 @@ isCReserved: function {name: StringView} out bool is {
 mangleVarName: function {name: StringView} out String is {
     if isCReserved name then return ("v_".concat name)
     return name.string
-}
-
-# composeCname -- the id-based C name for a type: z_t{tid}_{name}, dots
-# flattened to underscores. Composed once at mint (newType); consumers read
-# the stored cname, never re-derive it.
-composeCname: function {tid: u64 ownerName: StringView name: StringView} out String is {
-    flat: name.replace needle: "." replacement: "_"
-    if ownerName.length == 0 then return "z_t\{tid}_\{flat}"
-    oflat: ownerName.replace needle: "." replacement: "_"
-    return "z_t\{tid}_\{oflat}_\{flat}"
 }
 
 # --- numeric classification and range ---

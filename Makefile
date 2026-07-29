@@ -305,6 +305,9 @@ shadow-guard:
 # counted residual (template re-emission, probe-chain legs). A rising count
 # means a new name-resolved site -- resolve from stamps/ids instead, or lower
 # the baseline when a residual is legitimately removed.
+# The last two pin where C names are BUILT: the type checker composes none, and
+# the emitter spells the z_t{id} shape only inside its one composer, which the
+# per-program table in emitC calls once per type.
 emitter-guard:
 	@e1=$$(grep -c 'ztypecheck.resolvedByKey' src/zemitterc.z); \
 	e2=$$(grep -c 'ztypecheck.walkLookupTyperef' src/zemitterc.z); \
@@ -315,20 +318,24 @@ emitter-guard:
 	e7=$$(grep -c 'ztypes.mangleVarName' src/zemitterc.z); \
 	e8=$$(grep -cF 'io.readText' src/zemitterc.z); \
 	e9=$$(grep -c 'monoOriginName' src/zemitterc.z); \
+	g1=$$(grep -c 'composeCname' src/ztypes.z); \
+	g2=$$(grep -cF 'z_t\{' src/zemitterc.z); \
 	fail=0; \
+	if [ "$$g1" -gt 0 ]; then echo "emitter-guard FAIL: composeCname in src/ztypes.z = $$g1 (baseline 0)"; fail=1; fi; \
+	if [ "$$g2" -gt 2 ]; then echo "emitter-guard FAIL: 'z_t{' literals in src/zemitterc.z = $$g2 (baseline 2)"; fail=1; fi; \
 	if [ "$$e1" -gt 23 ]; then echo "emitter-guard FAIL: ztypecheck.resolvedByKey = $$e1 (baseline 23)"; fail=1; fi; \
 	if [ "$$e2" -gt 5 ]; then echo "emitter-guard FAIL: ztypecheck.walkLookupTyperef = $$e2 (baseline 5)"; fail=1; fi; \
 	if [ "$$e3" -gt 23 ]; then echo "emitter-guard FAIL: resolveTypeIdByName = $$e3 (baseline 23)"; fail=1; fi; \
 	if [ "$$e4" -gt 35 ]; then echo "emitter-guard FAIL: userFnId = $$e4 (baseline 35)"; fail=1; fi; \
 	if [ "$$e5" -gt 0 ]; then echo "emitter-guard FAIL: childOwnershipText = $$e5 (baseline 0)"; fail=1; fi; \
-	if [ "$$e6" -gt 121 ]; then echo "emitter-guard FAIL: typeNameOfReg9 = $$e6 (baseline 121)"; fail=1; fi; \
+	if [ "$$e6" -gt 94 ]; then echo "emitter-guard FAIL: typeNameOfReg9 = $$e6 (baseline 94)"; fail=1; fi; \
 	if [ "$$e7" -gt 20 ]; then echo "emitter-guard FAIL: ztypes.mangleVarName = $$e7 (baseline 20)"; fail=1; fi; \
 	if [ "$$e8" -gt 5 ]; then echo "emitter-guard FAIL: io.readText = $$e8 (baseline 5)"; fail=1; fi; \
 	if [ "$$e9" -gt 8 ]; then echo "emitter-guard FAIL: monoOriginName = $$e9 (baseline 8)"; fail=1; fi; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
-	  echo "  reg.cnameOf instead of resolving by name."; \
+	  echo "  ctxCname instead of resolving by name."; \
 	  exit 1; \
 	fi; \
 	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 (monoOrigin baseline 8)"

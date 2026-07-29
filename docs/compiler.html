@@ -615,17 +615,22 @@ themselves have no reference form; they are call-only).
 A <em><strong>type method</strong></em> with a <code>.z</code> body in these units is a compile
 error (E0100): the type's methods belong to the C runtime.</p>
 <h3 id="c-name-generation"><a href="#c-name-generation">8.2. C Name Generation</a></h3>
-<p>A type's C name is composed <strong>once, at mint</strong>: <code>ztypes.composeCname</code>
-fills <code>ZType.cname</code> inside <code>newType</code>, and the emitter reads it back
-through <code>reg.cnameOf</code>. Names are never reassigned after mint, so the
-stored cname cannot go stale. Sites that name a <strong>composed</strong> symbol (a
-dotted member flattening, a <code>{mono}.{fn}</code> method instance) call the
-shared composer explicitly with that composed name. Variable names go
-through <code>ztypes.mangleVarName</code> (C-keyword mangling of the emitted
-identifier only); function symbols through <code>ztypes.mangleFuncName</code>.
-The <code>emitter-guard</code> Makefile ratchet (run by <code>make ci</code>) pins the
-emitter's remaining by-name resolution and name-derivation sites at
-their current floors so new ones cannot creep in.</p>
+<p>C names are the emitter's business -- the type checker composes none. At
+the start of <code>emitC</code> a single pass over the type registry fills a
+<code>tid</code>-indexed table on <code>Ctx.cnames</code>, and every emission site reads it
+back through <code>ctxCname</code> (a hole minted by <code>allocType</code> gets <code></code>). The
+table is built once from a frozen model, so a name cannot go stale, and one
+function composes every name, so a definition and its references cannot
+disagree.</p>
+<p>The composer is <code>zemitterc.cnameOf</code>. Outside the table builder only two
+sites call it, both naming a symbol that no registered type owns: the
+flattened <code>{base}.{member}</code> of a dotted member access, and an <code>as</code>-block
+constant's <code>{type}.{label}</code>. Variable names go through
+<code>ztypes.mangleVarName</code> (C-keyword mangling of the emitted identifier
+only). The <code>emitter-guard</code> Makefile ratchet (run by <code>make ci</code>) pins the
+emitter's by-name resolution sites at their current floors, holds
+<code>composeCname</code> in the type checker at zero, and caps the <code>z_t{id}</code>
+spelling at the two lines of the composer itself.</p>
 <h2 id="id-based-naming"><a href="#id-based-naming">9. Id-based naming</a></h2>
 <p>A type's (and a non-native function's) cname embeds its monotonic id right after
 the <code>z_</code> namespace prefix: <code>z_t{type_id}_&lt;mangled&gt;</code> (so the type
@@ -633,9 +638,12 @@ the <code>z_</code> namespace prefix: <code>z_t{type_id}_&lt;mangled&gt;</code> 
 <code>z_t527_point_add</code>). Because the id is unique by construction, names cannot
 collide -- there is no dedup set and no on-collision suffix; <code>cnameOf</code>
 just splices the id in. The id goes <strong>after</strong> <code>z_</code> so the emitter's
-<code>z_</code>-prefix / <code>_t</code>-suffix shape checks and <code>cname_base</code>-derived helper
-names keep working unchanged. Two kinds of symbol stay <strong>canonical</strong>
-(un-id'd): the hand-written runtime ABI -- native functions (<code>z_io_open</code>,
+<code>z_</code>-prefix / <code>_t</code>-suffix shape checks and cname-base-derived helper
+names keep working unchanged. A method's owner name comes from
+<code>ZType.ownerTid</code>, the id <code>newType</code> is handed at mint: the registry
+stores the id, never a composed string. Two kinds of symbol stay
+<strong>canonical</strong> (un-id'd): the hand-written runtime ABI -- native functions
+(<code>z_io_open</code>,
 <code>z_String_create</code>, ...) and the C entry point <code>z_main</code> -- and local
 variables (<code>mangleVarName</code>); embedding a variable id is a separate,
 not-yet-applied step.</p>
