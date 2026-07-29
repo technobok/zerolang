@@ -1039,6 +1039,39 @@ dpTagReadOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
     }
 }
 
+# dataBlockTid9 -- the DATA type a data-block reference resolved to, read off
+# the refDecl stamp on the access base. userFnId cannot serve here: it resolves
+# against ctx.mainName, so it is main-relative and answers with the main unit's
+# block for a dependency unit's reference.
+dataBlockTid9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
+    if nid == 0 then return 0
+    rd9: u64
+    {
+        go9: symtab.typing.refDecl.get key: nid
+        match (
+            go9
+        ) case some then {
+            rd9 = go9
+        } case none then null
+    }
+    if rd9 == 0 then return 0
+    if (symtab.typing.declValid id: rd9) == false then return 0
+    t9: u64
+    {
+        d9: symtab.typing.decls.get i: rd9 - 1
+        t9 = d9.typeId
+    }
+    if t9 == 0 then return 0
+    if (symtab.reg.typetypeOf typeId: t9) != ztypes.ztypetype.dataType then return 0
+    return t9
+}
+
+# dataKey9 -- a data block's table key: its type id, so two units' same-named
+# blocks stay distinct.
+dataKey9: function {tid: u64} out String is {
+    return "\{tid}"
+}
+
 # memberOwnerOf9 -- the receiver's canonical type id for a dotted member
 # node (the member declaration's parent type via refDecl); 0 when the
 # path resolved through a non-member leg.
@@ -2553,7 +2586,12 @@ emitDataIndexCall: function {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    isData: ctx.dataElems.has key: bn.copy
+    dtid9: (dataBlockTid9
+        :symtab
+        nid: (dottedBaseNodeId :ast n: (ast.nodes.get i: (call.callable - 1).u64))
+    )
+    if dtid9 == 0 then return "".string
+    isData: ctx.dataElems.has key: (dataKey9 tid: dtid9)
     if (isData) == false then return "".string
     if mn.stringview == "index" then {
         ax: "0".string
@@ -2567,7 +2605,8 @@ emitDataIndexCall: function {
                 ax = emitExpr :ast :symtab :ctx n: opf79
             } else null
         }
-        e0: "z_\{bn}[\{ax}]"
+        dsym0: ctxCname :ctx tid: dtid9
+        e0: "\{dsym0}[\{ax}]"
         return e0
     }
     return "".string
@@ -7407,10 +7446,14 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 }
             }
             baseIsData9: false
+            dbt9: (dataBlockTid9
+                :symtab
+                nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64))
+            )
             if rtt == ztypes.ztypetype.dataType then {
                 baseIsData9 = true
             } else {
-                if (ctx.dataElems.has key: bn2.copy) then baseIsData9 = true
+                if (ctx.dataElems.has key: (dataKey9 tid: dbt9)) then baseIsData9 = true
             }
             if baseIsData9 then {
                 if mn2.stringview == "array" then {
@@ -7425,15 +7468,17 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                     daN9: ctx.argHoistCtr
                     ctx.argHoistCtr = ctx.argHoistCtr + 1
                     daNm9: "_da\{daN9}"
-                    daRaw9: "    \{daCt9} \{daNm9};\n    for (int64_t _i = 0; _i < \{daLen9.stringview}; _i++) { \{daNm9}.data[_i] = z_\{bn2}[_i]; }\n"
+                    daSym9: ctxCname :ctx tid: dbt9
+                    daRaw9: "    \{daCt9} \{daNm9};\n    for (int64_t _i = 0; _i < \{daLen9.stringview}; _i++) { \{daNm9}.data[_i] = \{daSym9}[_i]; }\n"
                     ctx.argHoistRaw.append daRaw9
                     return daNm9
                 }
                 if mn2.stringview == "length" then {
-                    ed0: "z_\{bn2}_len"
+                    edSym9: ctxCname :ctx tid: dbt9
+                    ed0: "\{edSym9}_len"
                     return ed0
                 }
-                dck: "\{bn2}.\{mn2}"
+                dck: "\{dbt9}.\{mn2}"
                 dco: ctx.dataConst.get key: dck
                 match (
                     dco
@@ -7835,8 +7880,8 @@ dataIndexElemName: function {
     } case call then {
         mn: dottedChildText :ast n: (ast.nodes.get i: (n.callable - 1).u64)
         if mn.stringview == "index" then {
-            bn: dottedBaseAtom :ast n: (ast.nodes.get i: (n.callable - 1).u64)
-            dk: bn.copy
+            dnid9: dottedBaseNodeId :ast n: (ast.nodes.get i: (n.callable - 1).u64)
+            dk: dataKey9 tid: (dataBlockTid9 :symtab nid: dnid9)
             go: ctx.dataElems.get key: dk
             match (
                 go
@@ -13994,7 +14039,8 @@ fillOneDataElem: function {
         fillOneDataElem :ast :symtab :ctx :name op: (ast.nodes.get i: (op.expression - 1).u64)
     } case datablock then {
         ebn: dataElemBaseName :ast oId: op.outType
-        k9: name.string
+        dtid9: stampIdOf :symtab nid: op.nodeid.u64
+        k9: dataKey9 tid: dtid9
         if ebn.length > 0 then {
             ebv9: ebn.stringview
             ev9: ebv9.string
@@ -14007,12 +14053,12 @@ fillOneDataElem: function {
         eiter9: op.elements.iterate
         for e9: eiter9 loop {
             vx9: emitDataElem :ast :symtab :ctx n: (ast.nodes.get i: (e9 - 1).u64)
-            ik9: "\{name}.\{idx9}"
+            ik9: "\{dtid9}.\{idx9}"
             iv2: vx9.copy
             ctx.dataConst.set key: ik9 value: iv2
             elbl: dataElemLabel :ast n: (ast.nodes.get i: (e9 - 1).u64)
             if elbl.length > 0 then {
-                lk9: "\{name}.\{elbl}"
+                lk9: "\{dtid9}.\{elbl}"
                 lv9: vx9.copy
                 ctx.dataConst.set key: lk9 value: lv9
             }
@@ -20955,7 +21001,7 @@ emitDataBlock: function {
     ) case expression then {
         emitDataBlock :ast :symtab :ctx :name op: (ast.nodes.get i: (op.expression - 1).u64) :buf
     } case datablock then {
-        ridtid9: userFnId :ast :symtab :ctx :name
+        ridtid9: stampIdOf :symtab nid: op.nodeid.u64
         ri9: false
         {
             runtimeIndexed9v: symtab.reg.isRuntimeIndexedOf tid: ridtid9
@@ -20977,7 +21023,8 @@ emitDataBlock: function {
                 elems.append ev
                 cnt = cnt + 1
             }
-            l0: "static const \{ect} z_\{name}[] = {\{elems}};\n\n"
+            dsym9: ctxCname :ctx tid: ridtid9
+            l0: "static const \{ect} \{dsym9}[] = {\{elems}};\n\n"
             buf.append l0
         }
     } else null
