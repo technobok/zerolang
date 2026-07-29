@@ -81,6 +81,13 @@ ctxCname: function {ctx: Ctx tid: u64} out String is {
     return (listCname cnames: ctx.cnames :tid)
 }
 
+# cnameById -- a type's default C name: its id alone. The emitted C is a
+# build artifact rather than a reading surface, so the source name rides
+# along only under --readable-names.
+cnameById: function {tid: u64} out String is {
+    return "z_t\{tid}"
+}
+
 # cTypeOf -- the C spelling of a scalar type name ("" when not scalar).
 cTypeOf: function {name: StringView} out String is {
     if name == "i8" then return "int8_t".string
@@ -1053,6 +1060,7 @@ Ctx: class {
     genHasValue: bool
     curThisTid: u64
     fastHash: bool
+    readableNames: bool
     tailRetActive: bool
     defUnitId: (Map u64 value: u64)
     unitIdByName: (Map String value: u64)
@@ -14680,6 +14688,7 @@ emitC: function {
     symtab: zenv.ZSymbolTable
     runtimeDir: StringView
     fastHash: bool
+    readableNames: bool
     errs: List String
 } out String is {
     buf: String
@@ -14776,11 +14785,15 @@ emitC: function {
     for ctb9 < ctlast9 loop {
         cn9: String
         if (symtab.reg.typeValid tid: ctb9) then {
-            onm9: String
-            oti9: symtab.reg.ownerTidOf tid: ctb9
-            if oti9 > 0 then onm9 = symtab.reg.nameOf tid: oti9
-            tnm9: symtab.reg.nameOf tid: ctb9
-            cn9 = cnameOf tid: ctb9 ownerName: onm9.stringview name: tnm9.stringview
+            if readableNames then {
+                onm9: String
+                oti9: symtab.reg.ownerTidOf tid: ctb9
+                if oti9 > 0 then onm9 = symtab.reg.nameOf tid: oti9
+                tnm9: symtab.reg.nameOf tid: ctb9
+                cn9 = cnameOf tid: ctb9 ownerName: onm9.stringview name: tnm9.stringview
+            } else {
+                cn9 = cnameById tid: ctb9
+            }
         }
         cnames9.append cn9
         ctb9 = ctb9 + 1
@@ -14856,6 +14869,7 @@ emitC: function {
         mainName: mn
         realMain: rm
         :fastHash
+        :readableNames
         :strC
         :svC
         cnames: cnames9

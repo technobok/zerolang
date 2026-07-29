@@ -630,23 +630,28 @@ constant's <code>{type}.{label}</code>. Variable names go through
 only). The <code>emitter-guard</code> Makefile ratchet (run by <code>make ci</code>) pins the
 emitter's by-name resolution sites at their current floors, holds
 <code>composeCname</code> in the type checker at zero, and caps the <code>z_t{id}</code>
-spelling at the two lines of the composer itself.</p>
+spelling at the composer itself.</p>
 <h2 id="id-based-naming"><a href="#id-based-naming">9. Id-based naming</a></h2>
-<p>A type's (and a non-native function's) cname embeds its monotonic id right after
-the <code>z_</code> namespace prefix: <code>z_t{type_id}_&lt;mangled&gt;</code> (so the type
-<code>point</code> with id 525 becomes <code>z_t525_point_t</code>, its <strong>add</strong> method
-<code>z_t527_point_add</code>). Because the id is unique by construction, names cannot
-collide -- there is no dedup set and no on-collision suffix; <code>cnameOf</code>
-just splices the id in. The id goes <strong>after</strong> <code>z_</code> so the emitter's
-<code>z_</code>-prefix / <code>_t</code>-suffix shape checks and cname-base-derived helper
-names keep working unchanged. A method's owner name comes from
-<code>ZType.ownerTid</code>, the id <code>newType</code> is handed at mint: the registry
-stores the id, never a composed string. Two kinds of symbol stay
-<strong>canonical</strong> (un-id'd): the hand-written runtime ABI -- native functions
-(<code>z_io_open</code>,
-<code>z_String_create</code>, ...) and the C entry point <code>z_main</code> -- and local
-variables (<code>mangleVarName</code>); embedding a variable id is a separate,
-not-yet-applied step.</p>
+<p>A type's (and a non-native function's) C name <strong>is</strong> its monotonic id under
+the <code>z_</code> namespace prefix: the type <code>point</code> with id 525 becomes
+<code>z_t525_t</code>, its <strong>add</strong> method (a function type of its own, id 527)
+<code>z_t527</code>. Derived symbols append a literal suffix to that base --
+<code>z_t525_create</code>, <code>z_t525_destroy</code>, <code>z_t525_meta_create</code>. Because the
+id is unique by construction, names cannot collide: there is no dedup set
+and no on-collision suffix.</p>
+<p><code>--readable-names</code> switches the table to <code>cnameOf</code>, which appends the
+source name to the same base -- <code>z_t525_point_t</code>, <code>z_t527_point_add</code>.
+Nothing else changes, because the id is the unique part in both schemes and
+the name is pure decoration; it costs about 16% of the emitted file. A
+method's owner name comes from <code>ZType.ownerTid</code>, the id <code>newType</code> is
+handed at mint: the registry stores the id, never a composed string.</p>
+<p>Three kinds of symbol keep a source name in <em><strong>both</strong></em> schemes. The
+hand-written runtime ABI -- native functions (<code>z_io_open</code>,
+<code>z_String_create</code>, ...) and the C entry point <code>z_main</code> -- must match C
+written by hand. Local variables go through <code>mangleVarName</code>; embedding a
+variable id is a separate, not-yet-applied step. And an <code>as</code>-block
+constant is named <code>z_t{owner_id}_{type}_{label}</code>, because several
+constants share their owner's id and only the label separates them.</p>
 <p>The hand-written runtime (<code>src/runtime/*.inc</code> / <code>*.c.tmpl</code> /
 <code>src/runtime/natives/</code>) is authored with the <strong>canonical</strong> type spelling
 <code>z_&lt;Name&gt;</code>. Each fragment/template is read once per emit (cached by path
