@@ -789,6 +789,19 @@ ternaryElse: function {
 }
 
 # atomTextOf -- an atomid node's name text ("" for any other shape).
+# atomNameIdOf -- an atom's interned name id (0 when the node is not an atom;
+# no pool id is 0, so a lookup by it misses).
+atomNameIdOf: function {ast: Ast n: Node} out u64 is {
+    ast
+    match (
+        n
+    ) case atomid then {
+        return n.name.u64
+    } else {
+        return 0
+    }
+}
+
 atomTextOf: function {ast: Ast n: Node} out String is {
     match (
         n
@@ -1861,6 +1874,18 @@ svValueForm: function {ctx: Ctx expr: StringView isStr: bool} out String is {
 
 # dottedBaseAtom / dottedChildText -- the parent atom and member name of
 # a dotted path ("" when the shape is deeper than one segment).
+# dottedBaseAtomId -- the base atom's interned name id (0 when absent). The
+# id form of dottedBaseAtom, for callers that only need to identify the name.
+dottedBaseAtomId: function {ast: Ast n: Node} out u64 is {
+    match (
+        n
+    ) case dottedpath then {
+        return (atomNameIdOf :ast n: (ast.nodes.get i: (n.parent - 1).u64))
+    } else {
+        return 0
+    }
+}
+
 dottedBaseAtom: function {ast: Ast n: Node} out String is {
     match (
         n
@@ -5163,7 +5188,10 @@ emitCrossUnitFnCall: function {
     child: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if base.length == 0 then return "".string
     if child.length == 0 then return "".string
-    if (symtab.reg.isUnitName name: base.stringview) == false then return "".string
+    if (symtab.reg.isUnitName nameId: (dottedBaseAtomId
+        :ast
+        n: (ast.nodes.get i: (call.callable - 1).u64)
+    )) == false then return "".string
     k: "\{base}.\{child}"
     go: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k
     fid: u64
@@ -5328,7 +5356,10 @@ emitCrossUnitBareCreate: function {ast: Ast
     ptype9: dottedChildText :ast n: parent
     if pbase9.length == 0 then return "".string
     if ptype9.length == 0 then return "".string
-    if (symtab.reg.isUnitName name: pbase9.stringview) == false then return "".string
+    if (symtab.reg.isUnitName nameId: (dottedBaseAtomId
+        :ast
+        n: parent
+    )) == false then return "".string
     k9: "\{pbase9}.\{ptype9}"
     go9: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k9
     tid9: u64
@@ -5363,7 +5394,10 @@ emitCrossUnitExplicitCreate: function {
     ptype: dottedParentChild :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     if pbase.length == 0 then return "".string
     if ptype.length == 0 then return "".string
-    if (symtab.reg.isUnitName name: pbase.stringview) == false then return "".string
+    if (symtab.reg.isUnitName nameId: (dottedBaseAtomId
+        :ast
+        n: (ast.nodes.get i: (call.callable - 1).u64)
+    )) == false then return "".string
     k: "\{pbase}.\{ptype}"
     go: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k
     tid: u64
@@ -5414,6 +5448,19 @@ emitCrossUnitExplicitCreate: function {
 
 # outerBaseAtom -- the leftmost atom of a LEFT-nested three-segment
 # dotted path `(a.B).c`: "a". "" for shallower shapes.
+# outerBaseAtomId -- the interned name id of outerBaseAtom's leftmost atom.
+outerBaseAtomId: function {ast: Ast n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (outerBaseAtomId :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case dottedpath then {
+        return (dottedBaseAtomId :ast n: (ast.nodes.get i: (n.parent - 1).u64))
+    } else {
+        return 0
+    }
+}
+
 outerBaseAtom: function {ast: Ast n: Node} out String is {
     match (
         n
@@ -5444,7 +5491,10 @@ emitCrossUnitUnionCtor: function {
     if arm9.length == 0 then return "".string
     if arm9.stringview == "create" then return "".string
     if arm9.stringview == "borrow" then return "".string
-    if (symtab.reg.isUnitName name: pbase.stringview) == false then return "".string
+    if (symtab.reg.isUnitName nameId: (outerBaseAtomId
+        :ast
+        n: (ast.nodes.get i: (call.callable - 1).u64)
+    )) == false then return "".string
     k: "\{pbase}.\{ptype}"
     go: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k
     utid: u64
@@ -5501,7 +5551,10 @@ emitCrossUnitCtor: function {
         ce9: emitCrossUnitExplicitCreate :ast :symtab :ctx :call
         if ce9.length > 0 then return ce9
     }
-    if (symtab.reg.isUnitName name: base.stringview) == false then return "".string
+    if (symtab.reg.isUnitName nameId: (dottedBaseAtomId
+        :ast
+        n: (ast.nodes.get i: (call.callable - 1).u64)
+    )) == false then return "".string
     k: "\{base}.\{child}"
     go: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k
     tid: u64
@@ -5534,7 +5587,10 @@ emitCrossUnitTag: function {
     if pbase.length == 0 then return "".string
     if ptype.length == 0 then return "".string
     if arm.length == 0 then return "".string
-    if (symtab.reg.isUnitName name: pbase) == false then return "".string
+    if (symtab.reg.isUnitName nameId: (zast.poolFind
+        pool: ast.names
+        text: pbase
+    )) == false then return "".string
     k: "\{pbase}.\{ptype}"
     go: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k
     vtid: u64
@@ -6226,7 +6282,10 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             if dbU9.length > 0 when dcId9 > 0 then {
                 isU9: false
                 {
-                    duo9: symtab.reg.unitNameTid.get key: dbU9.copy
+                    duo9: symtab.reg.unitNameTid.get key: (zast.poolFind
+                        pool: ast.names
+                        text: dbU9.stringview
+                    ).u64
                     match (
                         duo9
                     ) case some then {
@@ -6276,7 +6335,10 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             return (emitCtorDefaultsFill :ast :symtab :ctx tid: izd9)
         } case none then null
         dpUb9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
-        if (symtab.reg.isUnitName name: dpUb9.stringview) then {
+        if (symtab.reg.isUnitName nameId: (atomNameIdOf
+            :ast
+            n: (ast.nodes.get i: (n.parent - 1).u64)
+        )) then {
             dpUc9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
             dpUk9: "\{dpUb9}.\{dpUc9}"
             dpUfo9: (ztypecheck.resolvedByKey
@@ -9500,10 +9562,10 @@ emitStmt: function {
 # keys for the composed-key fallback) once per Ctx. unitNameTid is populated in
 # typecheck and never mutated during emit, so the snapshot stays valid; this
 # replaces the per-resolve List rebuild that iterated unitNameTid every call.
-ensureUnitCache: function {ctx: Ctx reg: ztypes.ZTypeRegistry} is {
+ensureUnitCache: function {ctx: Ctx pool: zast.StringPool reg: ztypes.ZTypeRegistry} is {
     if ctx.unitCacheBuilt then return
     with uit: reg.unitNameTid.iterateItems do for ue: uit loop {
-        ukc9: ue.key.copy
+        ukc9: zast.poolTextCopy :pool ref: ue.key.u32.orPanic
         ctx.unitKeysC.append ukc9
         ctx.unitTidsC.append ue.value
     }
@@ -9561,7 +9623,7 @@ typeIdByNameStages9: function {
     # (no key composition); the composed-key resolvedByKey pass (which also
     # follows unit-level aliases) runs only when every direct probe missed.
     found2: u64
-    ensureUnitCache :ctx reg: symtab.reg
+    ensureUnitCache :ctx pool: ast.names reg: symtab.reg
     uki9: u64
     ukn9: ctx.unitTidsC.length
     for uki9 < ukn9 loop {
@@ -13899,7 +13961,7 @@ emitUnitMonoInstances: function {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: templateUnitOpId
     tplId9: u64
     tk9: templateName.string
-    tgo9: symtab.reg.unitNameTid.get key: tk9
+    tgo9: symtab.reg.unitNameTid.get key: (zast.poolFind pool: ast.names text: tk9.stringview).u64
     match (
         tgo9
     ) case some then {
