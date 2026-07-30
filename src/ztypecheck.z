@@ -1744,6 +1744,7 @@ isStripMarker: function {name: StringView} out bool is {
     if name == "lock" then return true
     if name == "borrow" then return true
     if name == "take" then return true
+    if name == "view" then return true
     if name == "private" then return true
     if name == "public" then return true
     return false
@@ -2075,6 +2076,7 @@ pathOwnership: function {ast: Ast n: Node} out optionval ztypes.zparamownership 
         if cn.stringview == "lock" then return (optionval.some ztypes.zparamownership.lockMode)
         if cn.stringview == "borrow" then return (optionval.some ztypes.zparamownership.borrowMode)
         if cn.stringview == "take" then return (optionval.some ztypes.zparamownership.takeMode)
+        if cn.stringview == "view" then return (optionval.some ztypes.zparamownership.viewMode)
         return (optionval.none ztypes.zparamownership)
     } else {
         return (optionval.none ztypes.zparamownership)
@@ -10075,6 +10077,8 @@ ownershipOfParam: function {o: optionval ztypes.zparamownership} out ztypes.zown
             return ztypes.zownership.borrowed
         } case lockMode then {
             return ztypes.zownership.borrowed
+        } case viewMode then {
+            return ztypes.zownership.borrowed
         }
     } case none then {
         return ztypes.zownership.borrowed
@@ -16737,12 +16741,19 @@ checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast n: Node verb: StringVie
     if rh9.none then return
     rn9: st.formatLockHolder pool: ast.names holder: rh9
     ppc9: pp9.copy
+    selfRo9: rn9.stringview == wr9.stringview
     mr9: "Cannot \{verb} '\{ppc9}': shared lock held by '\{rn9}'"
+    if selfRo9 then {
+        wrc9: wr9.copy
+        mr9 = "Cannot \{verb} '\{ppc9}': '\{wrc9}' is readonly here"
+    }
     rht9: String
-    if rh9.kind == ztypes.zlockholderkind.varKind then {
+    if rh9.kind == ztypes.zlockholderkind.varKind when (selfRo9) == false then {
         rnc9: rn9.copy
         rht9 = "'\{rnc9}' reads this path -- writing it would invalidate what '\{rnc9}' points at; end its scope first"
     }
+    if selfRo9 then rht9 = "a `view` parameter is readonly for the whole body; take a `.copy` to get a mutable value".string
+
     ren9: String
     (addErrorH
         :st
@@ -17370,6 +17381,7 @@ walkCallArgsHoist: function {
                 isTake: false
                 isLockish: false
                 isDeclLock: false
+                isViewArg: false
                 pt: u64
                 if funcId > 0 when pn.length > 0 then {
                     if (isLiteralTypeId :st tid: vt) then {
@@ -17397,6 +17409,10 @@ walkCallArgsHoist: function {
                             isDeclLock = true
                         }
                         if oo == ztypes.zparamownership.borrowMode then isLockish = true
+                        if oo == ztypes.zparamownership.viewMode then {
+                            isLockish = true
+                            isViewArg = true
+                        }
                     } case none then {
                         # Unrecorded ownership: the effective default is
                         # borrow (ctor field params keep their recorded flow).
@@ -17478,7 +17494,7 @@ walkCallArgsHoist: function {
                                         pool: ast.names
                                         name: bn.stringview
                                         callId: call.nodeid.u64
-                                        shared: false
+                                        shared: isViewArg
                                         nodeid: (nodeId n: (ast.nodes.get i: (arg.operation - 1).u64))
                                         lineno: (nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64))
                                         colno: (nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64))
@@ -20595,10 +20611,15 @@ checkFunctionBody: function {
                     }
                     pown9: pathOwnership :ast n: (ast.nodes.get i: (pm.operation - 1).u64)
                     isLockP9: false
+                    mkn9: "lock".string
                     match (
                         pown9
                     ) case some then {
                         if pown9 == ztypes.zparamownership.lockMode then isLockP9 = true
+                        if pown9 == ztypes.zparamownership.viewMode then {
+                            isLockP9 = true
+                            mkn9 = "view".string
+                        }
                     } case none then null
                     isGenP9: false
                     if (st.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.genericParam then isGenP9 = true
@@ -20615,7 +20636,8 @@ checkFunctionBody: function {
                         pnc9: pname.copy
                         plln9: nodeLine n: (ast.nodes.get i: (pm.operation - 1).u64)
                         plcl9: nodeCol n: (ast.nodes.get i: (pm.operation - 1).u64)
-                        ml9: "Cannot use '.lock' on valtype parameter '\{pnc9}' (type '\{ptnc9}') — locking requires identity (use a class)"
+                        mkc9: mkn9.copy
+                        ml9: "Cannot use '.\{mkc9}' on valtype parameter '\{pnc9}' (type '\{ptnc9}') — locking requires identity (use a class)"
                         (addError
                             :st
                             nodeid: pnid
@@ -20629,6 +20651,12 @@ checkFunctionBody: function {
                         :ast
                         n: (ast.nodes.get i: (pm.operation - 1).u64)
                     )
+                    isViewP9: false
+                    match (
+                        pown9
+                    ) case some then {
+                        if pown9 == ztypes.zparamownership.viewMode then isViewP9 = true
+                    } case none then null
                     v: st.reg.newVariable ztypeId: ptid ownership: own
                     if (typeExprHasPrivate
                         :ast
@@ -20637,6 +20665,36 @@ checkFunctionBody: function {
                     vid2: v.variableId
                     pnId9: zast.poolSet pool: ast.names text: pname.stringview
         st.defineVar nameId: pnId9 var: v
+                    if isViewP9 when (typeIsReftype :st tid: ptid) then {
+                        # A `view` parameter is readonly for the whole body: it
+                        # holds a readonly lock on itself, so writes, mutating
+                        # receivers and re-passing to a mutable parameter are
+                        # all caught by the ordinary lock rules.
+                        vpp9: (List String)
+                        vpn9: pname.copy
+                        vpp9.append vpn9
+                        vph9: (ztypes.zlockholder
+                            kind: ztypes.zlockholderkind.varKind
+                            id: vid2
+                        )
+                        vpr9: (st.tryLock
+                            pool: ast.names
+                            path: vpp9
+                            lockType: ztypes.zlockstate.shared
+                            lockScope: ztypes.zlockscope.target
+                            holder: vph9
+                        )
+                        if vpr9.length > 0 then {
+                            (addError
+                                :st
+                                nodeid: pnid
+                                lineno: (nodeLine n: (ast.nodes.get i: (pm.operation - 1).u64))
+                                colno: (nodeCol n: (ast.nodes.get i: (pm.operation - 1).u64))
+                                e: zast.err.ownerError
+                                msg: vpr9
+                            )
+                        }
+                    }
                     st.typing.defVariableId.set key: pnid.u64 value: vid2
                     st.typing.variableOrigin.set key: vid2 value: true
                 } else null
