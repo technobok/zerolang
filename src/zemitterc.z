@@ -1410,16 +1410,27 @@ VidTid: class {
 }
 
 # vvGet -- the value recorded for `vid`, "" when absent (values never empty).
-vvGet: function {xs: List VidVal vid: u64} out String is {
-    if vid == 0 then return "".string
+# vvFind -- the 1-based index of `vid`'s entry in `xs`, 0 when absent. The
+# value is copied only on a hit, so a miss allocates nothing at all. vvGet's
+# empty-String sentinel cost 277,711 one-byte allocations on a self-compile
+# (2.9% of every allocation the compiler makes) because the miss is the common
+# case: read through this, not vvGet, on any hot path.
+vvFind: function {xs: List VidVal vid: u64} out u64 is {
+    if vid == 0 then return 0
     i9: u64
     n9: xs.length
     for i9 < n9 loop {
-        e9: xs.get i: i9
-        if e9.vid == vid then return e9.val.copy
+        if (xs.get i: i9).vid == vid then return i9 + 1
         i9 = i9 + 1
     }
-    return "".string
+    return 0
+}
+
+# vvGet -- the value recorded for `vid`, "" when absent (values never empty).
+vvGet: function {xs: List VidVal vid: u64} out String is {
+    f9: vvFind :xs :vid
+    if f9 == 0 then return "".string
+    return (xs.get i: f9 - 1).val.copy
 }
 
 # true when list `xs` has an entry for `vid`.
@@ -1513,10 +1524,10 @@ aliasResolve: function {ctx: Ctx name: StringView vid: u64} out String is {
     # variable resolves to the narrowed union payload cast, not the un-narrowed
     # binding or a stale for-loop/borrow/take alias -- mirrors takeSourceResolve.
     # `name` is only what comes back when neither table has an entry.
-    nbo: vvGet xs: ctx.narrowBox :vid
-    if nbo.length > 0 then return nbo
-    ao: vvGet xs: ctx.aliases :vid
-    if ao.length > 0 then return ao
+    nb9: vvFind xs: ctx.narrowBox :vid
+    if nb9 > 0 then return (ctx.narrowBox.get i: nb9 - 1).val.copy
+    al9: vvFind xs: ctx.aliases :vid
+    if al9 > 0 then return (ctx.aliases.get i: al9 - 1).val.copy
     return name.string
 }
 
@@ -6457,8 +6468,13 @@ varCName: function {ctx: Ctx vid: u64 name: StringView} out String is {
 # cast in scope for it, else its own identifier. Shared by the atomid and
 # labelvalue (:name shorthand) value legs.
 emitLocalAtomName: function {ctx: Ctx name: StringView vid: u64} out String is {
-    acv: aliasResolve :ctx :name :vid
-    if acv.stringview != name then return acv
+    # Probed directly rather than through aliasResolve: that would synthesize a
+    # copy of `name` for the no-alias case, which is the common one, only for the
+    # comparison below to discard it.
+    nb9: vvFind xs: ctx.narrowBox :vid
+    if nb9 > 0 then return (ctx.narrowBox.get i: nb9 - 1).val.copy
+    al9: vvFind xs: ctx.aliases :vid
+    if al9 > 0 then return (ctx.aliases.get i: al9 - 1).val.copy
     return (varCName :ctx :vid :name)
 }
 
