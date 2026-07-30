@@ -16447,7 +16447,6 @@ lockCallArg: function {
     nm: name.string
     pth.append nm
     h: (ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId)
-    h2: (ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId)
     clk9: ztypes.zlockstate.exclusive
     if shared then clk9 = ztypes.zlockstate.shared
     r: (st.tryLock
@@ -16455,15 +16454,13 @@ lockCallArg: function {
         path: pth
         lockType: clk9
         holder: h
-        hasSelfHolder: true
-        selfHolder: h2
     )
     if r.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: r
 }
 
 # lockCallPath -- call-scoped path lock over a full receiver tuple: SHARED
-# on the strict prefixes, reader/writer kind on the leaf. Same-call locks
-# share the CALL holder identity (self-idempotent).
+# on the strict prefixes, reader/writer kind on the leaf. The prefixes are
+# intent locks, so they never block the leaf they were taken for.
 lockCallPath: function {
     st: zenv.ZSymbolTable
     pool: zast.StringPool
@@ -16487,14 +16484,11 @@ lockCallPath: function {
             i = i + 1
         }
         hs: (ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId)
-        hs2: (ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId)
         rs: (st.tryLock
             :pool
             path: sub
             lockType: ztypes.zlockstate.shared
             holder: hs
-            hasSelfHolder: true
-            selfHolder: hs2
         )
         if rs.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: rs
         end = end + 1
@@ -16508,7 +16502,6 @@ lockCallPath: function {
         j = j + 1
     }
     he: (ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId)
-    he2: (ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId)
     clk9: ztypes.zlockstate.exclusive
     if shared then clk9 = ztypes.zlockstate.shared
     re: (st.tryLock
@@ -16516,8 +16509,6 @@ lockCallPath: function {
         path: full
         lockType: clk9
         holder: he
-        hasSelfHolder: true
-        selfHolder: he2
     )
     if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
 }
@@ -16547,8 +16538,9 @@ takenHere: function {} out optionval ztypes.zsrcpos is {
     return (optionval.some (ztypes.zsrcpos fsno: 0 lineno: 0 colno: 0))
 }
 
-# appendValueTuple -- the dotted-path tuple of a value node (root first),
-# appended onto dst; non-path shapes contribute nothing.
+# appendValueTuple -- the source path of a value node (root first), appended onto
+# dst. Ownership and access markers are not addressable segments, so
+# `rec.field.borrow` contributes (rec, field); non-path shapes contribute nothing.
 appendValueTuple: function {ast: Ast n: Node dst: List String} is {
     match (
         n
@@ -16560,7 +16552,7 @@ appendValueTuple: function {ast: Ast n: Node dst: List String} is {
     } case dottedpath then {
         appendValueTuple :ast n: (ast.nodes.get i: (n.parent - 1).u64) :dst
         cn: atomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if cn.length > 0 then dst.append cn
+        if cn.length > 0 when (isStripMarker name: cn.stringview) == false then dst.append cn
     } else null
 }
 
@@ -16612,14 +16604,11 @@ installBorrowLocks: function {
             i = i + 1
         }
         hs: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: vid)
-        hs2: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: vid)
         rs: (st.tryLock
             :pool
             path: sub
             lockType: ztypes.zlockstate.shared
             holder: hs
-            hasSelfHolder: false
-            selfHolder: hs2
         )
         if rs.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: rs
         end = end + 1
@@ -16633,7 +16622,6 @@ installBorrowLocks: function {
         j = j + 1
     }
     he: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: vid)
-    he2: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: vid)
     lk9: ztypes.zlockstate.exclusive
     if leafShared then lk9 = ztypes.zlockstate.shared
     re: (st.tryLock
@@ -16641,8 +16629,6 @@ installBorrowLocks: function {
         path: full
         lockType: lk9
         holder: he
-        hasSelfHolder: false
-        selfHolder: he2
     )
     if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
 }

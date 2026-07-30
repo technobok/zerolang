@@ -660,10 +660,11 @@ permitted by multi-granularity semantics:</p>
 acquisition pattern (shared on every intermediate prefix plus exclusive
 on the leaf) self-consistent.</p>
 <p>A reftype can only appear once as an argument or as a receiver in a single
-function call (enforced by the Call-scoped Locking algorithm below). This
-prevents aliasing and is the property <code>docs/spec.pdoc</code> calls 'no aliasing
-for reftypes'. Top-level <code>data</code> items are exempt -- they are immutable
-and never locked.</p>
+function call (enforced by the Call-scoped Locking algorithm below, on both
+axes: argument-versus-argument and argument-versus-receiver). This prevents
+aliasing and is the property <code>docs/spec.pdoc</code> calls 'no aliasing for
+reftypes'. Top-level <code>data</code> items are exempt -- they are immutable and
+never locked.</p>
 <h3 id="call-scoped-locking-algorithm"><a href="#call-scoped-locking-algorithm">8.3. Call-scoped Locking Algorithm</a></h3>
 <p>When a function is called, locks are taken on argument paths and the
 receiver path, then released when the call returns:</p>
@@ -681,7 +682,12 @@ receiver path, then released when the call returns:</p>
   similarly for stringview/listview), the call-scoped lock targets the
   source path -- the parent of the lifting suffix -- not the
   syntactic path with the suffix appended. <code>m.lock</code> passed as an
-  argument locks path <code>(m,)</code>, not <code>(m, lock)</code>.</li>
+  argument locks path <code>(m,)</code>, not <code>(m, lock)</code>. This holds for every
+  ownership and access marker, at any depth: the path builder classifies
+  each dotted segment by name, so <code>rec.field.borrow</code> locks
+  <code>(rec, field)</code> and <code>this.private.lock</code> locks <code>(this,)</code>.
+  Position cannot decide this -- in the latter, both trailing segments
+  are markers.</li>
 <li>If the requested lock conflicts with an outstanding lock on an
   overlapping path (see Conflict rule above), it is an error.</li>
 <li>If the argument is a sub-call, locking is applied recursively.
@@ -711,16 +717,22 @@ bound to a name -- opens its own scope while the typechecker
 processes it, and pops that scope when the call resolves. The
 sub-scope owns three things:</p>
 <ul>
-<li>A call identity string (<code>call:&lt;nodeid&gt;</code>). Locks taken
-  while processing this call -- on the receiver, on argument source
-  paths, or by recursion into nested calls -- carry this identity as
-  their Holder. The conflict check treats locks with the current
-  call's identity as non-blocking self-locks, so a method call
-  whose argument also borrows the receiver (<code>f.poke side: f.a.borrow</code>)
-  composes correctly: the receiver lock and the arg's prefix-overlapping
-  shared lock are attributed to the same call and merge under the
-  existing SHARED+EXCLUSIVE rules. Two different calls get
-  different identities and live in their own sub-scopes.</li>
+<li>A call identity (<code>call:&lt;nodeid&gt;</code>). Locks taken while
+  processing this call -- on the receiver, on argument source paths, or
+  by recursion into nested calls -- carry this identity as their Holder,
+  which is what scopes their release. It grants no exemption: every
+  acquisition is checked against every outstanding lock, whoever holds
+  it. Self-composition needs no exemption, because the prefixes an
+  acquisition takes are shared and an existing shared ancestor is
+  intent-shared -- so a prefix never blocks the leaf it was taken for.
+  What remains is the one-appearance rule: two overlapping exclusive
+  locks across one call mean the same reftype was reached twice, and that
+  is an error. A mutable receiver plus an argument borrowing inside it
+  (<code>f.poke side: f.a.borrow</code>) is therefore rejected -- inside the
+  callee, <code>this.a</code> and <code>side</code> would alias. Two different calls
+  get different identities and live in their own sub-scopes. Call
+  identities are never named in a diagnostic; a conflict across calls
+  reports the paths instead.</li>
 <li>A list of synth temps (<code>_t0</code>, <code>_t1</code>, ...) for any
   argument that is not a bare name or literal. Each non-trivial
   argument is rewritten in place to a fresh <code>AtomId(_tN)</code> reference,

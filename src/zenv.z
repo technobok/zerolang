@@ -199,6 +199,26 @@ formatPath: function {path: List String} out String is {
     return (stringJoin parts: path sep: ".")
 }
 
+# Two locks taken while processing calls conflict: one reftype reached twice as
+# an argument or a receiver. A call identity is not user-visible, so the message
+# names the paths instead of the holder.
+formatAliasConflict: function {
+    reqPath: List String
+    existingPath: List String
+    sameCall: bool
+} out String is {
+    rp: formatPath reqPath
+    ep: formatPath existingPath
+    if (pathsEqual a: reqPath b: existingPath) then {
+        if sameCall then return "Cannot pass '\{rp}' twice in one call — a reftype may appear only once as an argument or as a receiver"
+        return "Cannot pass '\{rp}': it is already passed to an enclosing call"
+    }
+    if reqPath.length < existingPath.length then {
+        return "Cannot pass both '\{rp}' and '\{ep}' in one call — '\{ep}' is inside '\{rp}'; a reftype may appear only once as an argument or as a receiver"
+    }
+    return "Cannot pass both '\{ep}' and '\{rp}' in one call — '\{rp}' is inside '\{ep}'; a reftype may appear only once as an argument or as a receiver"
+}
+
 # --- carriers ---
 
 # One scope frame's metadata. `entryStart` is the index into the symbol
@@ -796,10 +816,11 @@ ZSymbolTable: class {
     # --- lock operations ---
 
     # Try to take a lock on `path`. Returns "" on success, else an error
-    # message. `path[0]` must resolve to a known variable. `hasSelfHolder`
-    # marks locks installed by the current operation so a call can install
-    # receiver + arg locks under one identity without self-conflict.
-    tryLock: function {:this pool: zast.StringPool path: List String lockType: ztypes.zlockstate holder: ztypes.zlockholder hasSelfHolder: bool selfHolder: ztypes.zlockholder} out String is {
+    # message. `path[0]` must resolve to a known variable. Every acquisition is
+    # checked against every outstanding lock: an acquisition's own prefixes are
+    # SHARED and an existing SHARED ancestor is intent-shared, so a prefix never
+    # blocks the leaf it was taken for, whatever holds it.
+    tryLock: function {:this pool: zast.StringPool path: List String lockType: ztypes.zlockstate holder: ztypes.zlockholder} out String is {
         if path.length == 0 then return "".string
         rootStr: (path.get i: 0).copy
         rootId: zast.poolFind :pool text: rootStr.stringview
@@ -815,6 +836,7 @@ ZSymbolTable: class {
         idempotent: false
         conflictAt: u64
         conflictFound: false
+        conflictSelf: false
         ne: this.entries.length
         j: ne
         for j > 0 loop {
@@ -822,25 +844,20 @@ ZSymbolTable: class {
             e: this.entries.get i: j2
             if e.name == rootId then {
                 if e.hasLock then {
-                    sameCall: false
-                    if hasSelfHolder then {
-                        if (holderEq a: e.lockHolder b: selfHolder) then sameCall = true
-                    }
-                    if sameCall == false then {
-                        conflict: (lockAcquireConflict
-                            existingType: e.lockType
-                            existingPath: e.lockPath
-                            reqType: lockType
-                            reqPath: path
-                        )
-                        if conflict then {
-                            # the formatting method takes `this` exclusively:
-                            # remember the index, format after the element
-                            # view ends.
-                            conflictAt = j2
-                            conflictFound = true
-                            break
-                        }
+                    conflict: (lockAcquireConflict
+                        existingType: e.lockType
+                        existingPath: e.lockPath
+                        reqType: lockType
+                        reqPath: path
+                    )
+                    if conflict then {
+                        # the formatting method takes `this` exclusively:
+                        # remember the index, format after the element
+                        # view ends.
+                        conflictAt = j2
+                        conflictFound = true
+                        conflictSelf = holderEq a: e.lockHolder b: holder
+                        break
                     }
                     same: pathsEqual a: e.lockPath b: path
                     if same then {
@@ -866,6 +883,14 @@ ZSymbolTable: class {
                     csc9: cseg9.copy
                     cPath9.append csc9
                 }
+            }
+            ck9: cHolder9.kind
+            if ck9.callKind then {
+                return (formatAliasConflict
+                    reqPath: path
+                    existingPath: cPath9
+                    sameCall: conflictSelf
+                )
             }
             return (this.formatLockConflict
                 :pool
@@ -1381,8 +1406,6 @@ main: function is {
         path: px
         lockType: ztypes.zlockstate.exclusive
         holder: holderX
-        hasSelfHolder: false
-        selfHolder: holderX
     )
     print "lock x EXCLUSIVE -> \{smokeErr r1.stringview}"
 
@@ -1394,8 +1417,6 @@ main: function is {
         path: px2
         lockType: ztypes.zlockstate.shared
         holder: holderC
-        hasSelfHolder: false
-        selfHolder: holderC
     )
     print "lock x SHARED -> \{smokeErr r2.stringview}"
 
