@@ -595,6 +595,23 @@ isViewVar: function {ast: Ast st: zenv.ZSymbolTable vid: u64} out bool is {
     }
 }
 
+# methodReceiverIsView -- the method declares its receiver `.view`, so a call
+# reads the receiver instead of writing it and the receiver lock is SHARED.
+# Declared readonly-ness: unlike isContainerReaderCall it needs no name
+# whitelist and works for user types.
+methodReceiverIsView: function {st: zenv.ZSymbolTable mid: u64} out bool is {
+    rpn9: st.reg.thisParamNameIdOf tid: mid
+    if rpn9 == 0 then return false
+    rpo9: st.typing.declOwnershipOfId parentTypeId: mid nameId: rpn9
+    match (
+        rpo9
+    ) case some then {
+        return rpo9 == ztypes.zparamownership.viewMode
+    } case none then {
+        return false
+    }
+}
+
 # isContainerReaderCall -- a synthesized container method known not to
 # mutate its receiver: the call's receiver lock is SHARED so readers
 # coexist with live views (many readers XOR one writer XOR one exclusive
@@ -14133,6 +14150,7 @@ checkDotted: function {
                         recvTid: bt
                         mname: cn.stringview
                     )
+                    if (methodReceiverIsView :st mid: mo) then ashr9 = true
                     if atup9.length == 1 then {
                         (lockCallArg
                             :st
@@ -18262,6 +18280,7 @@ checkCall: function {
                                         recvTid: rvt2
                                         mname: rmn9.stringview
                                     )
+                                    if (methodReceiverIsView :st mid: dro) then shr9 = true
                                     (lockCallArg
                                         :st
                                         pool: ast.names
@@ -18304,6 +18323,7 @@ checkCall: function {
                                         recvTid: rvtN
                                         mname: rmnN.stringview
                                     )
+                                    if (methodReceiverIsView :st mid: dro) then shrN9 = true
                                     (lockCallPath
                                         :st
                                         pool: ast.names
@@ -18656,6 +18676,7 @@ checkCall: function {
                                                 recvTid: rvtG9
                                                 mname: rmnG9.stringview
                                             )
+                                            if (methodReceiverIsView :st mid: dro) then shrG9 = true
                                             (lockCallArg
                                                 :st
                                                 pool: ast.names
@@ -18701,6 +18722,10 @@ checkCall: function {
                                                 recvTid: rvtNG9
                                                 mname: rmnNG9.stringview
                                             )
+                                            if (methodReceiverIsView
+                                                :st
+                                                mid: dro
+                                            ) then shrNG9 = true
                                             (lockCallPath
                                                 :st
                                                 pool: ast.names
