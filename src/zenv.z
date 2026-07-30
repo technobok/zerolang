@@ -997,6 +997,36 @@ ZSymbolTable: class {
         return (optionval.none ztypes.zlockholder)
     }
 
+    # Holder of a SHARED lock that a write to `path` would invalidate, or none.
+    # A write at or above any shared lock destroys what its holder reads. A
+    # shared TARGET is a live read of its whole subtree, so a write below it is
+    # blocked too; a shared INTENT is only bookkeeping toward a deeper lock,
+    # which is checked on its own entry.
+    findReadBlocker: function {:this pool: zast.StringPool path: List String} out optionval ztypes.zlockholder is {
+        if path.length == 0 then return (optionval.none ztypes.zlockholder)
+        rootStr: (path.get i: 0).copy
+        rootId: zast.poolFind :pool text: rootStr.stringview
+        if rootId == 0 then return (optionval.none ztypes.zlockholder)
+        ne: this.entries.length
+        j: ne
+        for j > 0 loop {
+            j2: j - 1
+            e: this.entries.get i: j2
+            if e.name == rootId then {
+                if e.hasLock when e.lockType == ztypes.zlockstate.shared then {
+                    blocks9: false
+                    if (isPrefix p: path whole: e.lockPath) then blocks9 = true
+                    if e.lockScope == ztypes.zlockscope.target then {
+                        if (isPrefix p: e.lockPath whole: path) then blocks9 = true
+                    }
+                    if blocks9 then return (optionval.some e.lockHolder)
+                }
+            }
+            j = j - 1
+        }
+        return (optionval.none ztypes.zlockholder)
+    }
+
     # Any lock (SHARED or EXCLUSIVE) prefix-overlapping `path`?
     isPathLocked: function {:this pool: zast.StringPool path: List String} out bool is {
         if path.length == 0 then return false
