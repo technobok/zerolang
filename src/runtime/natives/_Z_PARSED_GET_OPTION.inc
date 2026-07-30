@@ -1,5 +1,5 @@
-static z_Option_String_t z_Parsed_option(z_Parsed_t* self, const z_StringView_t* name);
-static z_Option_String_t z_Parsed_option(z_Parsed_t* self, const z_StringView_t* name) {
+static z_Option_String_t z_Parsed_option(const z_Parsed_t* self, const z_StringView_t* name);
+static z_Option_String_t z_Parsed_option(const z_Parsed_t* self, const z_StringView_t* name) {
     z_Option_String_t out = {0};
     z_String_t key = z_String_create(name->length);
     z_String_append(&key, name->data, name->length);

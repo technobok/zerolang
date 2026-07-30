@@ -384,12 +384,20 @@ member-guard:
 # view-guard -- a native receiver marked `.view` asserts that the C never writes
 # through it, and the compiler cannot check that: there is no body. So the C
 # compiler proves it instead -- the receiver is declared `const`, and (with
-# -Werror=discarded-qualifiers) any write, direct or through a helper, fails the
-# build. This guard keeps the two halves from drifting: a `.view` declaration
-# must have a const receiver in its fragment, and a const receiver must be
-# declared `.view` so the marker does not go unused. Fragments whose type is not
-# in the prefix table, and readers emitted as inline field reads with no C
-# function at all, are outside its reach and are not counted.
+# -Werror=discarded-qualifiers) any write, direct or through a helper or a
+# vtable, fails the build. This guard keeps the two halves from drifting: a
+# `.view` declaration must have a const receiver in its fragment, and a const
+# receiver must be declared `.view` so the marker does not go unused.
+#
+# A fragment that carries a receiver but resolves to no declaration is an ERROR,
+# not a skip -- a silently unchecked fragment is exactly what the guard exists to
+# prevent. Fragments whose C name does not match the method spell it in
+# VIEW_GUARD_ALIASES; internal helpers with no zerolang declaration at all go in
+# VIEW_GUARD_INTERNAL. Types backed by .c.tmpl templates (List, Map, Set, String)
+# are not covered yet.
+VIEW_GUARD_ALIASES  := _Z_PARSED_GET_OPTION=option _Z_PARSED_GET_POSITIONAL=positional _Z_SV_REPEAT=repeated
+VIEW_GUARD_INTERNAL := _Z_SV_INDEX_OF_RAW _Z_SV_REPLACE_IMPL
+
 view-guard:
 	@fail=0; nconst=0; checked=0; \
 	for f in src/runtime/natives/*.inc; do \
@@ -401,8 +409,13 @@ view-guard:
 	    TEXTWRITER) ty=TextWriter;; PARSED) ty=Parsed;; \
 	    *) continue;; \
 	  esac; \
+	  case " $(VIEW_GUARD_INTERNAL) " in *" $$base "*) continue;; esac; \
 	  m=$$(echo $$base | sed "s/^_Z_$${pfx}_//" | tr 'A-Z' 'a-z' | sed -E 's/_(.)/\U\1/g'); \
+	  for a in $(VIEW_GUARD_ALIASES); do \
+	    case $$a in $$base=*) m=$${a#*=};; esac; \
+	  done; \
 	  if grep -qE 'const z_[A-Za-z0-9_]+_t[[:space:]]*\*[[:space:]]*(self|_this)' $$f; then c=1; else c=0; fi; \
+	  if grep -qE 'z_[A-Za-z0-9_]+_t[[:space:]]*\*[[:space:]]*(self|_this)' $$f; then hasrecv=1; else hasrecv=0; fi; \
 	  v=$$(awk -v ty="$$ty" -v m="$$m" ' \
 	      FNR==1 {cur=""; acc=""; grab=0} \
 	      /^[A-Za-z][A-Za-z0-9]*: (class|record|variant|facet|protocol)/ {cur=$$1; sub(/:.*/,"",cur)} \
@@ -412,7 +425,13 @@ view-guard:
 	          acc=$$0; \
 	          if ($$0 ~ /is native/) { print (acc ~ /this\.view/) ? 1 : 0; exit } \
 	          grab=1 }' lib/system/*.z); \
-	  test -z "$$v" && continue; \
+	  if [ -z "$$v" ]; then \
+	    if [ "$$hasrecv" = 1 ]; then \
+	      echo "view-guard FAIL: $$base carries a receiver but resolves to no $$ty method (derived '$$m') -- add a VIEW_GUARD_ALIASES entry or list it in VIEW_GUARD_INTERNAL"; \
+	      fail=1; \
+	    fi; \
+	    continue; \
+	  fi; \
 	  checked=$$((checked+1)); nconst=$$((nconst+c)); \
 	  if [ "$$c" != "$$v" ]; then \
 	    fail=1; \
