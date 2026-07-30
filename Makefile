@@ -1,7 +1,8 @@
 CC       := gcc
 CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
             -Werror=implicit-function-declaration -Werror=implicit-int \
-            -Werror=int-conversion -Werror=incompatible-pointer-types
+            -Werror=int-conversion -Werror=incompatible-pointer-types \
+            -Werror=discarded-qualifiers
 
 # Parallel by default: make fans out independent targets and the corpus runner
 # fans out its per-case pipelines (--jobs). `make NPROC=1` forces everything
