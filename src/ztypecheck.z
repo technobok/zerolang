@@ -633,12 +633,19 @@ isContainerReaderCall: function {
         if mname == "length" then return true
         if mname == "capacity" then return true
         if mname == "copy" then return true
+        if mname == "listview" then return true
+        return false
+    }
+    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapEntry") then {
+        if mname == "key" then return true
+        if mname == "value" then return true
         return false
     }
     if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "String") then {
         if mname == "length" then return true
         if mname == "compare" then return true
         if mname == "copy" then return true
+        if mname == "stringview" then return true
         return false
     }
     return false
@@ -14102,6 +14109,56 @@ checkDotted: function {
             :st
             mid: mo
         ) then {
+            # The receiver locks for the auto-call's duration, exactly as a
+            # written-out call does. The lock is released by holder as soon as
+            # it is taken -- an auto-call opens no scope to pop -- so its only
+            # effect is the conflict check against locks outstanding elsewhere.
+            atup9: (List String)
+            appendValueTuple :ast n: (ast.nodes.get i: (dp.parent - 1).u64) dst: atup9
+            if atup9.length > 0 when (typeIsReftype :st tid: bt) then {
+                arv9: st.lookupVarId nameId: (nameIdOf
+                    :ast
+                    name: (atup9.get i: 0).stringview
+                )
+                match (
+                    arv9
+                ) case some then {
+                    ashr9: (isContainerReaderCall
+                        :ast
+                        :st
+                        recvTid: bt
+                        mname: cn.stringview
+                    )
+                    if atup9.length == 1 then {
+                        (lockCallArg
+                            :st
+                            pool: ast.names
+                            name: (atup9.get i: 0).stringview
+                            callId: dp.nodeid.u64
+                            shared: ashr9
+                            nodeid: dp.nodeid
+                            lineno: dp.lineno
+                            colno: dp.colno
+                        )
+                    } else {
+                        (lockCallPath
+                            :st
+                            pool: ast.names
+                            path: atup9
+                            callId: dp.nodeid.u64
+                            shared: ashr9
+                            nodeid: dp.nodeid
+                            lineno: dp.lineno
+                            colno: dp.colno
+                        )
+                    }
+                    ahl9: (ztypes.zlockholder
+                        kind: ztypes.zlockholderkind.callKind
+                        id: dp.nodeid.u64
+                    )
+                    st.releaseHeldLocks holder: ahl9
+                } case none then null
+            }
             ro: methodReturnOf :st mid: mo
             match (
                 ro
