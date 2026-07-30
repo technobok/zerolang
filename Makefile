@@ -102,7 +102,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard fallback-guard member-guard readable-check ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard readable-check ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -380,6 +380,51 @@ member-guard:
 	  exit 1; \
 	fi; \
 	echo "member-guard OK: cn.stringview == = $$m1 (<=38)"
+
+# view-guard -- a native receiver marked `.view` asserts that the C never writes
+# through it, and the compiler cannot check that: there is no body. So the C
+# compiler proves it instead -- the receiver is declared `const`, and (with
+# -Werror=discarded-qualifiers) any write, direct or through a helper, fails the
+# build. This guard keeps the two halves from drifting: a `.view` declaration
+# must have a const receiver in its fragment, and a const receiver must be
+# declared `.view` so the marker does not go unused. Fragments whose type is not
+# in the prefix table, and readers emitted as inline field reads with no C
+# function at all, are outside its reach and are not counted.
+view-guard:
+	@fail=0; nconst=0; checked=0; \
+	for f in src/runtime/natives/*.inc; do \
+	  base=$$(basename $$f .inc); \
+	  pfx=$$(echo $$base | sed 's/^_Z_//; s/_.*//'); \
+	  case $$pfx in \
+	    SV) ty=StringView;; FILE) ty=File;; BUFREADER) ty=BufReader;; \
+	    BUFWRITER) ty=BufWriter;; TEXTREADER) ty=TextReader;; \
+	    TEXTWRITER) ty=TextWriter;; PARSED) ty=Parsed;; \
+	    *) continue;; \
+	  esac; \
+	  m=$$(echo $$base | sed "s/^_Z_$${pfx}_//" | tr 'A-Z' 'a-z' | sed -E 's/_(.)/\U\1/g'); \
+	  if grep -qE 'const z_[A-Za-z0-9_]+_t[[:space:]]*\*[[:space:]]*(self|_this)' $$f; then c=1; else c=0; fi; \
+	  v=$$(awk -v ty="$$ty" -v m="$$m" ' \
+	      FNR==1 {cur=""; acc=""; grab=0} \
+	      /^[A-Za-z][A-Za-z0-9]*: (class|record|variant|facet|protocol)/ {cur=$$1; sub(/:.*/,"",cur)} \
+	      grab { acc = acc " " $$0; if ($$0 ~ /is native/ || $$0 ~ /\} out/ || $$0 ~ /\} is/) { \
+	               print (acc ~ /this\.view/) ? 1 : 0; exit } next } \
+	      cur==ty && $$0 ~ ("^[[:space:]]+" m ": function") { \
+	          acc=$$0; \
+	          if ($$0 ~ /is native/) { print (acc ~ /this\.view/) ? 1 : 0; exit } \
+	          grab=1 }' lib/system/*.z); \
+	  test -z "$$v" && continue; \
+	  checked=$$((checked+1)); nconst=$$((nconst+c)); \
+	  if [ "$$c" != "$$v" ]; then \
+	    fail=1; \
+	    if [ "$$v" = 1 ]; then \
+	      echo "view-guard FAIL: $$ty.$$m is declared '.view' but $$base has a NON-const receiver -- the C may write through it"; \
+	    else \
+	      echo "view-guard FAIL: $$base has a const receiver but $$ty.$$m is not declared '.view' -- the marker is available and unused"; \
+	    fi; \
+	  fi; \
+	done; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "view-guard OK: $$checked native receivers, $$nconst const in C and declared '.view'"
 
 # fallback-guard -- the emitter must never silently degrade: a construct it
 # cannot emit leaves a "/* zemitterc: unhandled ... */" marker in the C (and
