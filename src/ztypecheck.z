@@ -15072,6 +15072,7 @@ checkReassignment: function {
     rvn9: ast.nodes.get i: (rasgn.value - 1).u64
     lvt: checkValue :st :unitName :ast :unitBody node: tpn9
     st.typing.inAssignTarget = false
+    checkWriteLock :st :ast n: tpn9 verb: "assign to"
     rvt: checkValue :st :unitName :ast :unitBody node: rvn9
     mrv0: materialiseLiteral :ast :st :unitName t: rvt
     if mrv0 > 0 when (st.reg.typetypeOf typeId: mrv0) == ztypes.ztypetype.nullType then {
@@ -15283,6 +15284,8 @@ checkSwap: function {
 } is {
     checkValue :st :unitName :ast :unitBody node: (ast.nodes.get i: (swapnode.lhs - 1).u64)
     checkValue :st :unitName :ast :unitBody node: (ast.nodes.get i: (swapnode.rhs - 1).u64)
+    checkWriteLock :st :ast n: (ast.nodes.get i: (swapnode.lhs - 1).u64) verb: "swap"
+    checkWriteLock :st :ast n: (ast.nodes.get i: (swapnode.rhs - 1).u64) verb: "swap"
 }
 
 # withValueOwnership -- the with-binding's ownership from the bound value's
@@ -16631,6 +16634,41 @@ installBorrowLocks: function {
         holder: he
     )
     if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
+}
+
+# checkWriteLock -- a write is rejected while an EXCLUSIVE lock overlapping its
+# target path is outstanding: the holder reaches through that path, so the write
+# would invalidate what it points at. Sibling paths do not overlap, so a lock on
+# one field leaves the others writable.
+checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast n: Node verb: StringView} is {
+    wp9: (List String)
+    appendValueTuple :ast :n dst: wp9
+    if wp9.length == 0 then return
+    wr9: (wp9.get i: 0).copy
+    wv9: st.lookupVarId nameId: (nameIdOf :ast name: wr9.stringview)
+    if wv9.none then return
+    wh9: st.findExclusiveLock pool: ast.names path: wp9
+    if wh9.none then return
+    hn9: st.formatLockHolder pool: ast.names holder: wh9
+    pp9: zenv.formatPath path: wp9
+    mw9: "Cannot \{verb} '\{pp9}': exclusive lock held by '\{hn9}'"
+    wht9: String
+    if wh9.kind == ztypes.zlockholderkind.varKind then {
+        hnc9: hn9.copy
+        wht9 = "write through '\{hnc9}' instead, or end '\{hnc9}'s scope first to release the lock"
+    }
+    wen9: String
+    (addErrorH
+        :st
+        nodeid: (nodeId :n)
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.ownerError
+        msg: mw9
+        note: wen9
+        hint: wht9
+        width: wr9.length.u32.orPanic
+    )
 }
 
 # isLiteralTypeId -- a literal-typed value: the unregistered int/float pseudo
