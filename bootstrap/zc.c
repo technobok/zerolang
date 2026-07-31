@@ -10653,8 +10653,8 @@ static z_t74_t* z_t988_get(z_t988_t* _this, uint64_t _idx) {
     return &_this->data[_idx];
 }
 
-static bool z_t988_contains(z_t988_t* _this, z_t74_t _needle);
-static bool z_t988_contains(z_t988_t* _this, z_t74_t _needle) {
+static bool z_t988_contains(const z_t988_t* _this, z_t74_t _needle);
+static bool z_t988_contains(const z_t988_t* _this, z_t74_t _needle) {
     for (uint64_t i = 0; i < _this->length; i++) {
         if (_this->data[i].size == _needle.size && memcmp(_this->data[i].data, _needle.data, _needle.size) == 0) return true;
     }
@@ -10809,8 +10809,8 @@ static uint32_t z_t1035_get(z_t1035_t* _this, uint64_t _idx) {
     return _this->data[_idx];
 }
 
-static bool z_t1035_contains(z_t1035_t* _this, uint32_t _needle);
-static bool z_t1035_contains(z_t1035_t* _this, uint32_t _needle) {
+static bool z_t1035_contains(const z_t1035_t* _this, uint32_t _needle);
+static bool z_t1035_contains(const z_t1035_t* _this, uint32_t _needle) {
     for (uint64_t i = 0; i < _this->length; i++) {
         if (_this->data[i] == _needle) return true;
     }
@@ -10965,8 +10965,8 @@ static uint64_t z_t1425_get(z_t1425_t* _this, uint64_t _idx) {
     return _this->data[_idx];
 }
 
-static bool z_t1425_contains(z_t1425_t* _this, uint64_t _needle);
-static bool z_t1425_contains(z_t1425_t* _this, uint64_t _needle) {
+static bool z_t1425_contains(const z_t1425_t* _this, uint64_t _needle);
+static bool z_t1425_contains(const z_t1425_t* _this, uint64_t _needle) {
     for (uint64_t i = 0; i < _this->length; i++) {
         if (_this->data[i] == _needle) return true;
     }
@@ -11121,8 +11121,8 @@ static bool z_t1442_get(z_t1442_t* _this, uint64_t _idx) {
     return _this->data[_idx];
 }
 
-static bool z_t1442_contains(z_t1442_t* _this, bool _needle);
-static bool z_t1442_contains(z_t1442_t* _this, bool _needle) {
+static bool z_t1442_contains(const z_t1442_t* _this, bool _needle);
+static bool z_t1442_contains(const z_t1442_t* _this, bool _needle) {
     for (uint64_t i = 0; i < _this->length; i++) {
         if (_this->data[i] == _needle) return true;
     }
@@ -11252,8 +11252,8 @@ static uint8_t z_t3570_get(z_t3570_t* _this, uint64_t _idx) {
     return _this->data[_idx];
 }
 
-static bool z_t3570_contains(z_t3570_t* _this, uint8_t _needle);
-static bool z_t3570_contains(z_t3570_t* _this, uint8_t _needle) {
+static bool z_t3570_contains(const z_t3570_t* _this, uint8_t _needle);
+static bool z_t3570_contains(const z_t3570_t* _this, uint8_t _needle) {
     for (uint64_t i = 0; i < _this->length; i++) {
         if (_this->data[i] == _needle) return true;
     }
@@ -11525,8 +11525,8 @@ static void z_t1307_grow(z_t1307_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1307_find(z_t1307_t* _this, z_t74_t _item, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1307_find(z_t1307_t* _this, z_t74_t _item, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1307_find(const z_t1307_t* _this, z_t74_t _item, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1307_find(const z_t1307_t* _this, z_t74_t _item, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -11588,8 +11588,8 @@ static int z_t1307_add(z_t1307_t* _this, z_t74_t _item) {
     return 1;
 }
 
-static int z_t1307_has(z_t1307_t* _this, z_t74_t _item);
-static int z_t1307_has(z_t1307_t* _this, z_t74_t _item) {
+static int z_t1307_has(const z_t1307_t* _this, z_t74_t _item);
+static int z_t1307_has(const z_t1307_t* _this, z_t74_t _item) {
     uint64_t h = z_t1307_hash_item(_item);
     return z_t1307_find(_this, _item, h, NULL) >= 0;
 }
@@ -11727,8 +11727,8 @@ static void z_t1387_grow(z_t1387_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1387_find(z_t1387_t* _this, uint64_t _item, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1387_find(z_t1387_t* _this, uint64_t _item, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1387_find(const z_t1387_t* _this, uint64_t _item, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1387_find(const z_t1387_t* _this, uint64_t _item, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -11789,8 +11789,8 @@ static int z_t1387_add(z_t1387_t* _this, uint64_t _item) {
     return 1;
 }
 
-static int z_t1387_has(z_t1387_t* _this, uint64_t _item);
-static int z_t1387_has(z_t1387_t* _this, uint64_t _item) {
+static int z_t1387_has(const z_t1387_t* _this, uint64_t _item);
+static int z_t1387_has(const z_t1387_t* _this, uint64_t _item) {
     uint64_t h = z_t1387_hash_item(_item);
     return z_t1387_find(_this, _item, h, NULL) >= 0;
 }
@@ -11927,8 +11927,8 @@ static void z_t2080_grow(z_t2080_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t2080_find(z_t2080_t* _this, uint32_t _item, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t2080_find(z_t2080_t* _this, uint32_t _item, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t2080_find(const z_t2080_t* _this, uint32_t _item, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t2080_find(const z_t2080_t* _this, uint32_t _item, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -11989,8 +11989,8 @@ static int z_t2080_add(z_t2080_t* _this, uint32_t _item) {
     return 1;
 }
 
-static int z_t2080_has(z_t2080_t* _this, uint32_t _item);
-static int z_t2080_has(z_t2080_t* _this, uint32_t _item) {
+static int z_t2080_has(const z_t2080_t* _this, uint32_t _item);
+static int z_t2080_has(const z_t2080_t* _this, uint32_t _item) {
     uint64_t h = z_t2080_hash_item(_item);
     return z_t2080_find(_this, _item, h, NULL) >= 0;
 }
@@ -12133,8 +12133,8 @@ static void z_t918_grow(z_t918_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t918_find(z_t918_t* _this, uint32_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t918_find(z_t918_t* _this, uint32_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t918_find(const z_t918_t* _this, uint32_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t918_find(const z_t918_t* _this, uint32_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -12233,8 +12233,8 @@ static z_t946_t z_t918_remove(z_t918_t* _this, uint32_t _key) {
     return _r;
 }
 
-static int z_t918_has(z_t918_t* _this, uint32_t _key);
-static int z_t918_has(z_t918_t* _this, uint32_t _key) {
+static int z_t918_has(const z_t918_t* _this, uint32_t _key);
+static int z_t918_has(const z_t918_t* _this, uint32_t _key) {
     uint64_t h = z_t918_hash_key(_key);
     return z_t918_find(_this, _key, h, NULL) >= 0;
 }
@@ -12406,8 +12406,8 @@ static void z_t1005_grow(z_t1005_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1005_find(z_t1005_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1005_find(z_t1005_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1005_find(const z_t1005_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1005_find(const z_t1005_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -12503,8 +12503,8 @@ static z_t656_t z_t1005_remove(z_t1005_t* _this, z_t74_t _key) {
     return _r;
 }
 
-static int z_t1005_has(z_t1005_t* _this, z_t74_t _key);
-static int z_t1005_has(z_t1005_t* _this, z_t74_t _key) {
+static int z_t1005_has(const z_t1005_t* _this, z_t74_t _key);
+static int z_t1005_has(const z_t1005_t* _this, z_t74_t _key) {
     uint64_t h = z_t1005_hash_key(_key);
     return z_t1005_find(_this, _key, h, NULL) >= 0;
 }
@@ -12676,8 +12676,8 @@ static void z_t1361_grow(z_t1361_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1361_find(z_t1361_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1361_find(z_t1361_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1361_find(const z_t1361_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1361_find(const z_t1361_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -12771,8 +12771,8 @@ static z_t166_t z_t1361_remove(z_t1361_t* _this, uint64_t _key) {
     return _r;
 }
 
-static int z_t1361_has(z_t1361_t* _this, uint64_t _key);
-static int z_t1361_has(z_t1361_t* _this, uint64_t _key) {
+static int z_t1361_has(const z_t1361_t* _this, uint64_t _key);
+static int z_t1361_has(const z_t1361_t* _this, uint64_t _key) {
     uint64_t h = z_t1361_hash_key(_key);
     return z_t1361_find(_this, _key, h, NULL) >= 0;
 }
@@ -12944,8 +12944,8 @@ static void z_t1478_grow(z_t1478_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1478_find(z_t1478_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1478_find(z_t1478_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1478_find(const z_t1478_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1478_find(const z_t1478_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -13041,8 +13041,8 @@ static z_t1421_t z_t1478_remove(z_t1478_t* _this, z_t74_t _key) {
     return _r;
 }
 
-static int z_t1478_has(z_t1478_t* _this, z_t74_t _key);
-static int z_t1478_has(z_t1478_t* _this, z_t74_t _key) {
+static int z_t1478_has(const z_t1478_t* _this, z_t74_t _key);
+static int z_t1478_has(const z_t1478_t* _this, z_t74_t _key) {
     uint64_t h = z_t1478_hash_key(_key);
     return z_t1478_find(_this, _key, h, NULL) >= 0;
 }
@@ -13214,8 +13214,8 @@ static void z_t1636_grow(z_t1636_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1636_find(z_t1636_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1636_find(z_t1636_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1636_find(const z_t1636_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1636_find(const z_t1636_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -13309,8 +13309,8 @@ static z_t1421_t z_t1636_remove(z_t1636_t* _this, uint64_t _key) {
     return _r;
 }
 
-static int z_t1636_has(z_t1636_t* _this, uint64_t _key);
-static int z_t1636_has(z_t1636_t* _this, uint64_t _key) {
+static int z_t1636_has(const z_t1636_t* _this, uint64_t _key);
+static int z_t1636_has(const z_t1636_t* _this, uint64_t _key) {
     uint64_t h = z_t1636_hash_key(_key);
     return z_t1636_find(_this, _key, h, NULL) >= 0;
 }
@@ -13482,8 +13482,8 @@ static void z_t1656_grow(z_t1656_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1656_find(z_t1656_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1656_find(z_t1656_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1656_find(const z_t1656_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1656_find(const z_t1656_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -13579,8 +13579,8 @@ static z_t166_t z_t1656_remove(z_t1656_t* _this, z_t74_t _key) {
     return _r;
 }
 
-static int z_t1656_has(z_t1656_t* _this, z_t74_t _key);
-static int z_t1656_has(z_t1656_t* _this, z_t74_t _key) {
+static int z_t1656_has(const z_t1656_t* _this, z_t74_t _key);
+static int z_t1656_has(const z_t1656_t* _this, z_t74_t _key) {
     uint64_t h = z_t1656_hash_key(_key);
     return z_t1656_find(_this, _key, h, NULL) >= 0;
 }
@@ -13752,8 +13752,8 @@ static void z_t1695_grow(z_t1695_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1695_find(z_t1695_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1695_find(z_t1695_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1695_find(const z_t1695_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1695_find(const z_t1695_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -13847,8 +13847,8 @@ static z_t656_t z_t1695_remove(z_t1695_t* _this, uint64_t _key) {
     return _r;
 }
 
-static int z_t1695_has(z_t1695_t* _this, uint64_t _key);
-static int z_t1695_has(z_t1695_t* _this, uint64_t _key) {
+static int z_t1695_has(const z_t1695_t* _this, uint64_t _key);
+static int z_t1695_has(const z_t1695_t* _this, uint64_t _key) {
     uint64_t h = z_t1695_hash_key(_key);
     return z_t1695_find(_this, _key, h, NULL) >= 0;
 }
@@ -14020,8 +14020,8 @@ static void z_t1715_grow(z_t1715_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1715_find(z_t1715_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1715_find(z_t1715_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1715_find(const z_t1715_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1715_find(const z_t1715_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -14120,8 +14120,8 @@ static z_t946_t z_t1715_remove(z_t1715_t* _this, uint64_t _key) {
     return _r;
 }
 
-static int z_t1715_has(z_t1715_t* _this, uint64_t _key);
-static int z_t1715_has(z_t1715_t* _this, uint64_t _key) {
+static int z_t1715_has(const z_t1715_t* _this, uint64_t _key);
+static int z_t1715_has(const z_t1715_t* _this, uint64_t _key) {
     uint64_t h = z_t1715_hash_key(_key);
     return z_t1715_find(_this, _key, h, NULL) >= 0;
 }
@@ -14294,8 +14294,8 @@ static void z_t1735_grow(z_t1735_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1735_find(z_t1735_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1735_find(z_t1735_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1735_find(const z_t1735_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1735_find(const z_t1735_t* _this, z_t74_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -14396,8 +14396,8 @@ static z_t946_t z_t1735_remove(z_t1735_t* _this, z_t74_t _key) {
     return _r;
 }
 
-static int z_t1735_has(z_t1735_t* _this, z_t74_t _key);
-static int z_t1735_has(z_t1735_t* _this, z_t74_t _key) {
+static int z_t1735_has(const z_t1735_t* _this, z_t74_t _key);
+static int z_t1735_has(const z_t1735_t* _this, z_t74_t _key) {
     uint64_t h = z_t1735_hash_key(_key);
     return z_t1735_find(_this, _key, h, NULL) >= 0;
 }
@@ -21489,8 +21489,8 @@ static void z_t1778_grow(z_t1778_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1778_find(z_t1778_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1778_find(z_t1778_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1778_find(const z_t1778_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1778_find(const z_t1778_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -21584,8 +21584,8 @@ static z_t1797_t z_t1778_remove(z_t1778_t* _this, uint64_t _key) {
     return _r;
 }
 
-static int z_t1778_has(z_t1778_t* _this, uint64_t _key);
-static int z_t1778_has(z_t1778_t* _this, uint64_t _key) {
+static int z_t1778_has(const z_t1778_t* _this, uint64_t _key);
+static int z_t1778_has(const z_t1778_t* _this, uint64_t _key) {
     uint64_t h = z_t1778_hash_key(_key);
     return z_t1778_find(_this, _key, h, NULL) >= 0;
 }
@@ -21752,8 +21752,8 @@ static void z_t1802_grow(z_t1802_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1802_find(z_t1802_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1802_find(z_t1802_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1802_find(const z_t1802_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1802_find(const z_t1802_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -21847,8 +21847,8 @@ static z_t1821_t z_t1802_remove(z_t1802_t* _this, uint64_t _key) {
     return _r;
 }
 
-static int z_t1802_has(z_t1802_t* _this, uint64_t _key);
-static int z_t1802_has(z_t1802_t* _this, uint64_t _key) {
+static int z_t1802_has(const z_t1802_t* _this, uint64_t _key);
+static int z_t1802_has(const z_t1802_t* _this, uint64_t _key) {
     uint64_t h = z_t1802_hash_key(_key);
     return z_t1802_find(_this, _key, h, NULL) >= 0;
 }
@@ -22015,8 +22015,8 @@ static void z_t1826_grow(z_t1826_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1826_find(z_t1826_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1826_find(z_t1826_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1826_find(const z_t1826_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1826_find(const z_t1826_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -22110,8 +22110,8 @@ static z_t1845_t z_t1826_remove(z_t1826_t* _this, uint64_t _key) {
     return _r;
 }
 
-static int z_t1826_has(z_t1826_t* _this, uint64_t _key);
-static int z_t1826_has(z_t1826_t* _this, uint64_t _key) {
+static int z_t1826_has(const z_t1826_t* _this, uint64_t _key);
+static int z_t1826_has(const z_t1826_t* _this, uint64_t _key) {
     uint64_t h = z_t1826_hash_key(_key);
     return z_t1826_find(_this, _key, h, NULL) >= 0;
 }
@@ -23142,8 +23142,8 @@ static void z_t1527_grow(z_t1527_t* _this) {
     _this->entries_len = new_entries_len;
 }
 
-static int64_t z_t1527_find(z_t1527_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
-static int64_t z_t1527_find(z_t1527_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
+static int64_t z_t1527_find(const z_t1527_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_t1527_find(const z_t1527_t* _this, uint64_t _key, uint64_t _hash, int64_t* _slot_out) {
     if (_this->capacity == 0) return -1;
     uint64_t probe = _hash & (_this->capacity - 1);
     for (uint64_t i = 0; i < _this->capacity; i++) {
@@ -23242,8 +23242,8 @@ static z_t1549_t z_t1527_remove(z_t1527_t* _this, uint64_t _key) {
     return _r;
 }
 
-static int z_t1527_has(z_t1527_t* _this, uint64_t _key);
-static int z_t1527_has(z_t1527_t* _this, uint64_t _key) {
+static int z_t1527_has(const z_t1527_t* _this, uint64_t _key);
+static int z_t1527_has(const z_t1527_t* _this, uint64_t _key) {
     uint64_t h = z_t1527_hash_key(_key);
     return z_t1527_find(_this, _key, h, NULL) >= 0;
 }
@@ -105220,10 +105220,10 @@ void z_t3356(z_t1066_t* z_v20579, z_t1266_t* z_v20580, z_t2957_t* z_v20581, z_t1
         case Z_OPTIONVAL_U64_TAG_SOME: {
             uint64_t z_v20616 = _m6.data.some;
             (void)z_v20616;
-            z_t74_t _s7 = z_t74_create((uint64_t)96);
+            z_t74_t _s7 = z_t74_create((uint64_t)102);
             z_t74_append(&_s7, "static bool z_", sizeof("static bool z_")-1);
             z_t74_append(&_s7, z_v20585.data, z_v20585.size);
-            z_t74_append(&_s7, "_contains(z_", sizeof("_contains(z_")-1);
+            z_t74_append(&_s7, "_contains(const z_", sizeof("_contains(const z_")-1);
             z_t74_append(&_s7, z_v20585.data, z_v20585.size);
             z_t74_append(&_s7, "_t* _this, ", sizeof("_t* _this, ")-1);
             z_t74_append(&_s7, z_v20592.data, z_v20592.size);
@@ -105231,10 +105231,10 @@ void z_t3356(z_t1066_t* z_v20579, z_t1266_t* z_v20580, z_t2957_t* z_v20581, z_t1
             z_t74_append(&_s7, "\n", sizeof("\n")-1);
             z_t74_t z_v20617 = _s7;
             (void)(z_t74_append(z_v20584, (z_v20617).data, (z_v20617).size));
-            z_t74_t _s11 = z_t74_create((uint64_t)97);
+            z_t74_t _s11 = z_t74_create((uint64_t)103);
             z_t74_append(&_s11, "static bool z_", sizeof("static bool z_")-1);
             z_t74_append(&_s11, z_v20585.data, z_v20585.size);
-            z_t74_append(&_s11, "_contains(z_", sizeof("_contains(z_")-1);
+            z_t74_append(&_s11, "_contains(const z_", sizeof("_contains(const z_")-1);
             z_t74_append(&_s11, z_v20585.data, z_v20585.size);
             z_t74_append(&_s11, "_t* _this, ", sizeof("_t* _this, ")-1);
             z_t74_append(&_s11, z_v20592.data, z_v20592.size);
