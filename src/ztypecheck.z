@@ -14240,6 +14240,7 @@ checkDotted: function {
                     } else {
                         (lockCallPath
                             :st
+                            :ast
                             pool: ast.names
                             path: atup9
                             callId: dp.nodeid.u64
@@ -16712,6 +16713,7 @@ lockCallArg: function {
 # intent locks, so they never block the leaf they were taken for.
 lockCallPath: function {
     st: zenv.ZSymbolTable
+    ast: Ast
     pool: zast.StringPool
     path: List String
     callId: u64
@@ -16722,6 +16724,18 @@ lockCallPath: function {
 } is {
     n: path.length
     if n == 0 then return
+    if (shared) == false then {
+        (checkFrozenWrite
+            :st
+            :ast
+            :path
+            verb: "mutate through"
+            upTo: path.length
+            :nodeid
+            :lineno
+            :colno
+        )
+    }
     end: 1.u64
     for end < n loop {
         sub: (List String)
@@ -16886,6 +16900,92 @@ installBorrowLocks: function {
     if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
 }
 
+# frozenFieldInPath -- the first segment of a path, up to `upTo`, declared
+# `view` or `hold`, or "". The contents of such a field are readonly for the
+# instance's whole life; the slot rule (static or not) is the other axis and is
+# decided at the declaration. Walks segment by segment, since the frozen field
+# may be nested (`b.inner.name`).
+#
+# `upTo` is what separates writing THROUGH a frozen field from writing the
+# field itself: an assignment passes the strict prefix, because assigning the
+# slot is the slot rule's business, while a mutating call passes the whole path
+# -- there the leaf IS the receiver being mutated.
+frozenFieldInPath: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    path: List String
+    upTo: u64
+} out String is {
+    n9: upTo
+    if n9 > path.length then n9 = path.length
+    if n9 < 2 then return "".string
+    r9: path.get i: 0
+    cur9: u64
+    {
+        ro9: st.lookup nameId: (nameIdOf :ast name: r9.stringview)
+        match (
+            ro9
+        ) case some then {
+            cur9 = ro9
+        } case none then {
+            return "".string
+        }
+    }
+    i9: 1.u64
+    for i9 < n9 loop {
+        seg9: path.get i: i9
+        oo9: (st.typing.declOwnershipOfId
+            parentTypeId: cur9
+            nameId: (zast.poolFind pool: ast.names text: seg9.stringview)
+        )
+        match (
+            oo9
+        ) case some then {
+            if oo9 == ztypes.zparamownership.viewMode then return seg9.copy
+            if oo9 == ztypes.zparamownership.holdMode then return seg9.copy
+        } case none then null
+        co9: (st.typing.declChildOf
+            pool: ast.names
+            parentTypeId: cur9
+            name: seg9.stringview
+        )
+        match (
+            co9
+        ) case some then {
+            cur9 = co9
+        } case none then {
+            return "".string
+        }
+        i9 = i9 + 1
+    }
+    return "".string
+}
+
+# checkFrozenWrite -- reject a mutation reaching through a readonly field.
+checkFrozenWrite: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    path: List String
+    verb: StringView
+    upTo: u64
+    nodeid: u32
+    lineno: u32
+    colno: u32
+} is {
+    ff9: frozenFieldInPath :st :ast :path :upTo
+    if ff9.length == 0 then return
+    pp9: zenv.formatPath :path
+    mf9: "Cannot \{verb} '\{pp9}': field '\{ff9}' is readonly"
+    (addError
+        :st
+        :nodeid
+        :lineno
+        :colno
+        e: zast.err.ownerError
+        msg: mf9
+    )
+}
+
 # checkWriteLock -- a write is rejected while an EXCLUSIVE lock overlapping its
 # target path is outstanding: the holder reaches through that path, so the write
 # would invalidate what it points at. Sibling paths do not overlap, so a lock on
@@ -16894,6 +16994,16 @@ checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast n: Node verb: StringVie
     wp9: (List String)
     appendValueTuple :ast :n dst: wp9
     if wp9.length == 0 then return
+    (checkFrozenWrite
+        :st
+        :ast
+        path: wp9
+        :verb
+        upTo: wp9.length - 1
+        nodeid: (nodeId :n)
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+    )
     wr9: (wp9.get i: 0).copy
     wv9: st.lookupVarId nameId: (nameIdOf :ast name: wr9.stringview)
     if wv9.none then return
@@ -18492,6 +18602,7 @@ checkCall: function {
                                     if (methodReceiverIsView :st mid: dro) then shrN9 = true
                                     (lockCallPath
                                         :st
+                                        :ast
                                         pool: ast.names
                                         path: rtupC
                                         callId: call.nodeid.u64
@@ -18894,6 +19005,7 @@ checkCall: function {
                                             ) then shrNG9 = true
                                             (lockCallPath
                                                 :st
+                                                :ast
                                                 pool: ast.names
                                                 path: rtupG9
                                                 callId: call.nodeid.u64
