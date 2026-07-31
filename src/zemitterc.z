@@ -3489,7 +3489,10 @@ rhsIsBorrowGet: function {
     } case call then {
         cbl9: ast.nodes.get i: (n.callable - 1).u64
         ch9: aliasChildName :ast :symtab n: cbl9
-        if ch9.stringview != "get" then return false
+        isG9: false
+        if ch9.stringview == "get" then isG9 = true
+        if ch9.stringview == "getMut" then isG9 = true
+        if (isG9) == false then return false
         bt9: chaseColMono :symtab :ctx tid: (dottedReceiverStampId :ast :symtab callable: cbl9)
         isC9: false
         if (originIsTid :symtab tid: bt9 originTid: ctx.listOriginTid) then isC9 = true
@@ -3684,6 +3687,12 @@ emitListMethodCall: function {
         if (listGetIsPtr :ast :symtab :ctx monoId: bt) then return "(*\{e1})"
         return e1
     }
+    if mn.stringview == "getMut" then {
+        vm: listArg :ast :symtab :ctx :call label: "i"
+        e1m: "\{cb}_getMut(\{recvR9}, \{vm})"
+        if (listGetIsPtr :ast :symtab :ctx monoId: bt) then return "(*\{e1m})"
+        return e1m
+    }
     if mn.stringview == "set" then {
         vi: listArg :ast :symtab :ctx :call label: "i"
         vv: listArg :ast :symtab :ctx :call label: "val"
@@ -3738,6 +3747,10 @@ emitArrayMethodCall: function {
     if mn.stringview == "get" then {
         vi: listArg :ast :symtab :ctx :call label: "i"
         return "\{cb}_get(\{bn}, \{vi})"
+    }
+    if mn.stringview == "getMut" then {
+        viM: listArg :ast :symtab :ctx :call label: "i"
+        return "\{cb}_getMut(\{bn}, \{viM})"
     }
     if mn.stringview == "set" then {
         vi: listArg :ast :symtab :ctx :call label: "i"
@@ -16372,18 +16385,30 @@ emitColGet: function {
         rt = "\{ect}*"
         rv = "    return &_this->data[_idx];\n".string
     }
+    # `get` and `getMut` are the same C over the same storage; they differ only
+    # in what the typechecker lets the caller do with the result. Both names are
+    # spelled LITERALLY -- view-guard reads these string literals to learn which
+    # declaration each emitted function backs, and cannot see through an
+    # interpolated method name.
+    body: String
+    body.append "    if (_idx >= _this->length) {\n"
+    body.append "        char _zp_buf[96];\n"
+    b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"\{kind} get: index %lu out of bounds (length %lu)\", (unsigned long)_idx, (unsigned long)_this->length);\n"
+    body.append b2
+    body.append "        z_panic(_zp_buf);\n"
+    body.append "    }\n"
+    body.append rv
+    body.append "}\n\n"
     s0: "static \{rt} z_\{nm}_get(z_\{nm}_t* _this, uint64_t _idx);\n"
     buf.append s0
     s1: "static \{rt} z_\{nm}_get(z_\{nm}_t* _this, uint64_t _idx) {\n"
     buf.append s1
-    buf.append "    if (_idx >= _this->length) {\n"
-    buf.append "        char _zp_buf[96];\n"
-    s2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"\{kind} get: index %lu out of bounds (length %lu)\", (unsigned long)_idx, (unsigned long)_this->length);\n"
-    buf.append s2
-    buf.append "        z_panic(_zp_buf);\n"
-    buf.append "    }\n"
-    buf.append rv
-    buf.append "}\n\n"
+    buf.append body
+    m0: "static \{rt} z_\{nm}_getMut(z_\{nm}_t* _this, uint64_t _idx);\n"
+    buf.append m0
+    m1: "static \{rt} z_\{nm}_getMut(z_\{nm}_t* _this, uint64_t _idx) {\n"
+    buf.append m1
+    buf.append body
 }
 
 # emitListIter -- the borrowed-view iterator over a List mono (a `{List*; idx}`

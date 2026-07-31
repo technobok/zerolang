@@ -427,7 +427,8 @@ member-guard:
 VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:List z_Map.c.tmpl=@@NAME@@:Map \
   z_MapIter.c.tmpl=@@NAME@@:Map,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
   z_Set.c.tmpl=@@NAME@@:Set,@@SETITER@@:SetIter
-VIEW_GUARD_EMITTED := get:List.get,ListView.get contains:List.contains \
+VIEW_GUARD_EMITTED := get:List.get,ListView.get getMut:List.getMut,ListView.getMut \
+  contains:List.contains \
   listview:List.listview sort:List.sort iterate:List.iterate call:ListIter.call \
   iterateMut:List.iterateMut getv:Map.getv eq:- extendView:- destroy:-
 VIEW_GUARD_BACKS := StringView.eq===,!= StringView.cmp=compare,<,<=,>,>=
