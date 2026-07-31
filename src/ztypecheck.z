@@ -13112,6 +13112,57 @@ methodHasNoUserArgs: function {ast: Ast st: zenv.ZSymbolTable mid: u64} out bool
     )
 }
 
+# lockAutoCallReceiver -- the receiver locks for a zero-arg auto-call's
+# duration, exactly as a written-out call does. The lock is released by holder
+# as soon as it is taken -- an auto-call opens no scope to pop -- so its only
+# effect is the conflict check against locks outstanding elsewhere. `mid` names
+# the METHOD, which is what carries the receiver's marker and so decides whether
+# the lock is shared or exclusive.
+lockAutoCallReceiver: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    dp: zast.DottedPathData
+    bt: u64
+    shared: bool
+} is {
+    atup9: (List String)
+    appendValueTuple :ast n: (ast.nodes.get i: (dp.parent - 1).u64) dst: atup9
+    if atup9.length == 0 then return
+    if (typeIsReftype :st tid: bt) == false then return
+    arv9: st.lookupVarId nameId: (nameIdOf :ast name: (atup9.get i: 0).stringview)
+    if arv9.none then return
+    ashr9: shared
+    if atup9.length == 1 then {
+        (lockCallArg
+            :st
+            pool: ast.names
+            name: (atup9.get i: 0).stringview
+            callId: dp.nodeid.u64
+            shared: ashr9
+            nodeid: dp.nodeid
+            lineno: dp.lineno
+            colno: dp.colno
+        )
+    } else {
+        (lockCallPath
+            :st
+            :ast
+            pool: ast.names
+            path: atup9
+            callId: dp.nodeid.u64
+            shared: ashr9
+            nodeid: dp.nodeid
+            lineno: dp.lineno
+            colno: dp.colno
+        )
+    }
+    ahl9: (ztypes.zlockholder
+        kind: ztypes.zlockholderkind.callKind
+        id: dp.nodeid.u64
+    )
+    st.releaseHeldLocks holder: ahl9
+}
+
 # fnAutoCallable -- a bare reference to this function is a zero-argument
 # auto-call: it has no user parameters, or every non-receiver parameter
 # carries a default the site can fill. The strict no-user-args predicate
@@ -14325,63 +14376,28 @@ checkDotted: function {
                 )
             }
         }
+        # A member DECLARED as a method but materialised as a plain scalar --
+        # a collection's `length`/`capacity`, which emit as a struct field read
+        # -- resolves to its RETURN type, so everything keyed on "is this a
+        # method?" skipped it, the auto-call receiver lock included. It is still
+        # a call, and collapsing is only sound for a READ of the receiver, so it
+        # takes the SHARED lock a reader takes. Without this `xs.length` inside
+        # an exclusively-pinned iteration was accepted while `xs.contains item:
+        # x` beside it was refused -- both readers, and under the locking model
+        # a reader takes SHARED for its duration.
+        if coerce when (st.reg.typetypeOf typeId: mo) != ztypes.ztypetype.functionType then {
+            if (st.typing.declIsMethodId parentTypeId: bt nameId: cnId9.u32.orPanic) then {
+                lockAutoCallReceiver :ast :st :dp :bt shared: true
+            }
+        }
         if coerce when (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
             :ast
             :st
             mid: mo
         ) then {
-            # The receiver locks for the auto-call's duration, exactly as a
-            # written-out call does. The lock is released by holder as soon as
-            # it is taken -- an auto-call opens no scope to pop -- so its only
-            # effect is the conflict check against locks outstanding elsewhere.
-            atup9: (List String)
-            appendValueTuple :ast n: (ast.nodes.get i: (dp.parent - 1).u64) dst: atup9
-            if atup9.length > 0 when (typeIsReftype :st tid: bt) then {
-                arv9: st.lookupVarId nameId: (nameIdOf
-                    :ast
-                    name: (atup9.get i: 0).stringview
-                )
-                match (
-                    arv9
-                ) case some then {
-                    ashr9: (isContainerReaderCall
-                        :ast
-                        :st
-                        recvTid: bt
-                        mname: cn.stringview
-                    )
-                    if (methodReceiverIsView :st mid: mo) then ashr9 = true
-                    if atup9.length == 1 then {
-                        (lockCallArg
-                            :st
-                            pool: ast.names
-                            name: (atup9.get i: 0).stringview
-                            callId: dp.nodeid.u64
-                            shared: ashr9
-                            nodeid: dp.nodeid
-                            lineno: dp.lineno
-                            colno: dp.colno
-                        )
-                    } else {
-                        (lockCallPath
-                            :st
-                            :ast
-                            pool: ast.names
-                            path: atup9
-                            callId: dp.nodeid.u64
-                            shared: ashr9
-                            nodeid: dp.nodeid
-                            lineno: dp.lineno
-                            colno: dp.colno
-                        )
-                    }
-                    ahl9: (ztypes.zlockholder
-                        kind: ztypes.zlockholderkind.callKind
-                        id: dp.nodeid.u64
-                    )
-                    st.releaseHeldLocks holder: ahl9
-                } case none then null
-            }
+            aShr9: isContainerReaderCall :ast :st recvTid: bt mname: cn.stringview
+            if (methodReceiverIsView :st mid: mo) then aShr9 = true
+            lockAutoCallReceiver :ast :st :dp :bt shared: aShr9
             ro: methodReturnOf :st mid: mo
             match (
                 ro
@@ -17606,12 +17622,15 @@ checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast n: Node verb: StringVie
     wp9: (List String)
     appendValueTuple :ast :n dst: wp9
     if wp9.length == 0 then return
+    # hoisted: the length read locks wp9 for its duration, and wp9 is already
+    # an argument to the same call -- one appearance per call.
+    wpn9: wp9.length
     (checkFrozenWrite
         :st
         :ast
         path: wp9
         :verb
-        upTo: wp9.length - 1
+        upTo: wpn9 - 1
         nodeid: (nodeId :n)
         lineno: (nodeLine :n)
         colno: (nodeCol :n)

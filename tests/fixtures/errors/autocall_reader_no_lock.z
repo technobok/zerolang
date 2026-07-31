@@ -1,0 +1,22 @@
+# E0200: a zero-arg READER takes a shared receiver lock for its duration, like
+# any other call, so it is refused while an exclusive reference is live.
+#
+# `length` and `capacity` are materialised as plain u64 members -- they emit as
+# a struct field read rather than a call -- so they resolve to their RETURN type
+# and every mechanism keyed on "is this a method?" used to skip them. The result
+# was that `xs.length` was ACCEPTED inside an exclusively-pinned walk while
+# `xs.contains item: x` beside it was refused, though both are readers.
+#
+# Under the readonly `iterate` this is legal (a shared pin coexists with a
+# shared read) -- see map_get_while_iterate. It is `iterateMut`, which pins
+# exclusively, that must refuse it.
+main: function is {
+    xs: (List i64)
+    xs.append from: 1
+    n: 0.u64
+    c: 0.u64
+    with it: xs.iterateMut do for x: it loop {
+        n = n + xs.length
+        c = c + xs.capacity
+    }
+}
