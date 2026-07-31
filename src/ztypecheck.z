@@ -13523,6 +13523,25 @@ checkDotted: function {
                             msg: mtb9
                         )
                     }
+                    # A readonly source is refused whatever its ownership: a
+                    # `hold` binding is owned, so nothing above catches it, and
+                    # moving it out would thaw a cell declared frozen.
+                    if (relBlocked9) == false when (nameIsReadonly
+                        :st
+                        :ast
+                        name: mkRoot.stringview
+                    ) then {
+                        relBlocked9 = true
+                        tvb9: "with '.\{cn}'"
+                        (readonlyMoveError
+                            :st
+                            nodeid: dp.nodeid
+                            lineno: dp.lineno
+                            colno: dp.colno
+                            name: mkRoot.stringview
+                            verb: tvb9.stringview
+                        )
+                    }
                 }
                 if cn.stringview == "release" then {
                     rpath9: (List String)
@@ -15155,7 +15174,25 @@ checkAssignment: function {
         setk: vt
         stampGate :st nid: asgn.nodeid.u64 tid: setk
         rn5: bareAtomName :ast n: av9
-        if rn5.length > 0 when (typeIsReftype
+        # The readonly test runs OUTSIDE the destructor gate below: a frozen
+        # binding may not be moved out of whether or not its type owns heap,
+        # and without a destructor the emitter builds a value from a pointer
+        # and gcc rejects the C.
+        roMv5: false
+        if rn5.length > 0 when (typeIsReftype :st tid: vt) then {
+            if (nameIsReadonly :st :ast name: rn5.stringview) then {
+                roMv5 = true
+                (readonlyMoveError
+                    :st
+                    nodeid: asgn.nodeid
+                    lineno: asgn.lineno
+                    colno: asgn.colno
+                    name: rn5.stringview
+                    verb: "into an owned binding"
+                )
+            }
+        }
+        if rn5.length > 0 when (roMv5) == false when (typeIsReftype
             :st
             tid: vt
         ) when (st.reg.hasDestructorName typeId: vt) then {
@@ -15548,10 +15585,21 @@ checkReassignment: function {
                     msg: mc9
                 )
             } else {
-                (st.invalidate
-                    nameId: (nameIdOf :ast name: rn.stringview)
-                    loc: (optionval.none ztypes.zsrcpos)
-                )
+                if (nameIsReadonly :st :ast name: rn.stringview) then {
+                    (readonlyMoveError
+                        :st
+                        nodeid: rasgn.nodeid
+                        lineno: rasgn.lineno
+                        colno: rasgn.colno
+                        name: rn.stringview
+                        verb: "by reassignment"
+                    )
+                } else {
+                    (st.invalidate
+                        nameId: (nameIdOf :ast name: rn.stringview)
+                        loc: (optionval.none ztypes.zsrcpos)
+                    )
+                }
             }
         } case none then null
     }
@@ -17065,6 +17113,42 @@ pathIsReadonly: function {st: zenv.ZSymbolTable ast: Ast path: List String} out 
     return lh9.id == rv9
 }
 
+# nameIsReadonly -- the one-segment form of pathIsReadonly. A `view` parameter,
+# a `hold` binding and a payload narrowed from either each hold a readonly lock
+# on their own name, so this answers "may this binding only be read?".
+nameIsReadonly: function {st: zenv.ZSymbolTable ast: Ast name: StringView} out bool is {
+    if name.length == 0 then return false
+    rop9: (List String)
+    ron9: name.string
+    rop9.append ron9
+    return (pathIsReadonly :st :ast path: rop9)
+}
+
+# readonlyMoveError -- a move whose SOURCE may only be read is refused:
+# capability may only be given up, so `hold`/`view` never become an owned
+# mutable value. `verb` names the move form ("with '.take'", "by
+# reassignment", ...).
+readonlyMoveError: function {
+    st: zenv.ZSymbolTable
+    nodeid: u32
+    lineno: u32
+    colno: u32
+    name: StringView
+    verb: StringView
+} is {
+    rmn9: name.string
+    rmv9: verb.string
+    rmm9: "Cannot move readonly variable '\{rmn9}' \{rmv9} — a readonly binding may only be read; copy with '.copy' to keep the source"
+    (addError
+        :st
+        :nodeid
+        :lineno
+        :colno
+        e: zast.err.ownerError
+        msg: rmm9
+    )
+}
+
 # checkFrozenWrite -- reject a mutation reaching through a readonly field.
 checkFrozenWrite: function {
     st: zenv.ZSymbolTable
@@ -17150,7 +17234,13 @@ checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast n: Node verb: StringVie
         rnc9: rn9.copy
         rht9 = "'\{rnc9}' reads this path -- writing it would invalidate what '\{rnc9}' points at; end its scope first"
     }
-    if selfRo9 then rht9 = "a `view` parameter is readonly for the whole body; take a `.copy` to get a mutable value".string
+    if selfRo9 then {
+        # `view` is not owned, `hold` is -- the self-lock is the same, so the
+        # binding's ownership is what tells them apart for the hint.
+        rmk9: "hold".string
+        if (isBorrowedVar :st vid: wv9) then rmk9 = "view".string
+        rht9 = "a `\{rmk9}` binding is readonly for its whole scope; take a `.copy` to get a mutable value"
+    }
 
     ren9: String
     (addErrorH
@@ -17880,10 +17970,25 @@ walkCallArgsHoist: function {
                                         msg: mb7
                                     )
                                 } else {
-                                    (st.invalidate
-                                        nameId: (nameIdOf :ast name: bn.stringview)
-                                        loc: takenHere
-                                    )
+                                    if (nameIsReadonly
+                                        :st
+                                        :ast
+                                        name: bn.stringview
+                                    ) then {
+                                        (readonlyMoveError
+                                            :st
+                                            nodeid: (nodeId n: (ast.nodes.get i: (arg.operation - 1).u64))
+                                            lineno: (nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64))
+                                            colno: (nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64))
+                                            name: bn.stringview
+                                            verb: "into a taking argument"
+                                        )
+                                    } else {
+                                        (st.invalidate
+                                            nameId: (nameIdOf :ast name: bn.stringview)
+                                            loc: takenHere
+                                        )
+                                    }
                                 }
                             } else {
                                 if isLockish then {
@@ -18043,6 +18148,9 @@ checkBoxConstruction: function {
                                 stampGate :st nid: iid.u64 tid: setbl
                             }
                             bn: bareAtomName :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
+                            aid8b: nodeId n: (ast.nodes.get i: (arg.operation - 1).u64)
+                            aln8b: nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64)
+                            acl8b: nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64)
                             if bn.length > 0 when (typeIsReftype :st tid: vt) then {
                                 bvo8: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringview)
                                 match (
@@ -18063,10 +18171,25 @@ checkBoxConstruction: function {
                                             msg: mb8
                                         )
                                     } else {
-                                        (st.invalidate
-                                            nameId: (nameIdOf :ast name: bn.stringview)
-                                            loc: takenHere
-                                        )
+                                        if (nameIsReadonly
+                                            :st
+                                            :ast
+                                            name: bn.stringview
+                                        ) then {
+                                            (readonlyMoveError
+                                                :st
+                                                nodeid: aid8b
+                                                lineno: aln8b
+                                                colno: acl8b
+                                                name: bn.stringview
+                                                verb: "into a box"
+                                            )
+                                        } else {
+                                            (st.invalidate
+                                                nameId: (nameIdOf :ast name: bn.stringview)
+                                                loc: takenHere
+                                            )
+                                        }
                                     }
                                 } case none then {
                                     (st.invalidate
