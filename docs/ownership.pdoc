@@ -386,8 +386,65 @@ Compare with #~".take" (transfer the source's ownership to the
 destination, invalidating the source) and inline #~".borrow" (alias the
 source via a lock, no allocation).
 
-Currently provided as a native method on #~"String"; the same shape is
-available for any type that defines its own deep-copy logic.
+#----: Which types have a .copy
+
+Whether #~"x.copy" exists depends on the type's family, and it is a
+#_+"deliberate" split -- not a gap waiting to be filled.
+
+#ul:
+  [#*: #_+"Valtypes (record, variant, facet) have one by default": the
+  byte copy their assignment already performs. A valtype can never
+  contain a reftype, so copying its bytes copies the whole value and the
+  two are independent afterwards. Writing #~".copy" is therefore never
+  required -- it is how a reader says "a duplicate is intended here"
+  rather than "an alias".]
+  [#*: #_+"Reftypes (class, union) have none": the compiler never
+  synthesizes one. A duplicate of a reftype is a design decision -- which
+  fields are cloned, which are shared, what a nested container means --
+  so #_+"the author writes the method". Until one exists, #~"x.copy" on
+  such a type is a compile error naming the type.]
+  [#*: #_+"The standard library's are ordinary methods": #~"String.copy"
+  and the container copies are declared #~"is native" like any other
+  member. They are not a special case in the language.]
+
+Both defaults are #_+"overridable, and both by the same mechanism" -- a
+#~"copy" member in the #~"as" block. Member lookup finds it first, so it
+wins over the valtype default:
+
+#code language=zerolang: """
+  Tagged: record {
+      n: i64
+  } as {
+      copy: function {t: this} out Tagged is {
+          return (Tagged n: t.n + 100)   # the default byte copy is replaced
+      }
+  }
+
+  Inner: class {
+      n: i64
+      label: String
+  } as {
+      copy: function {t: this.view} out Inner is {
+          return (Inner n: t.n label: t.label.copy)   # a reftype's only copy
+      }
+  }
+  """
+
+A valtype may also #_+"strike the default off" by defining the member as
+#~"null", the same way #~"==: null" opts out of synthesized equality.
+#~".copy" on such a type is then an error, which is what a type that must
+never be duplicated silently wants:
+
+#code language=zerolang: """
+  Handle: record {
+      fd: i32
+  } as {
+      copy: null      # duplicating a file descriptor is a bug, not a copy
+  }
+  """
+
+#~"StringView" is a view, not an owner: it is copied by assignment, and
+#~".string" is what allocates an owned #~"String" from it.
 
 #---: .release
 

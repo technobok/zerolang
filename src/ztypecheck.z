@@ -4049,6 +4049,25 @@ markerTargetId: function {
 # declaring `==: null` or `!=: null` (mirrors the `create: null` opt-out): the
 # record / variant synthetic `==` / `!=` is then suppressed, so a comparison on
 # the type resolves no method and is a hard error.
+# memberNullOptOut -- true when a type's `as {}` block defines `member` as
+# `null`, the language's way of striking a compiler-provided member off a type.
+memberNullOptOut: function {ast: Ast asItems: List u32 member: StringView} out bool is {
+    result: false
+    with aiter: asItems.iterate do for amId9: aiter loop {
+        am: ast.nodes.get i: (amId9 - 1).u64
+        match (
+            am
+        ) case namedoperation then {
+            mn9: zast.nameTextCopy :ast ref: am.name
+            if mn9.stringview == member then {
+                vn9: atomName :ast n: (ast.nodes.get i: (am.operation - 1).u64)
+                if vn9.stringview == "null" then result = true
+            }
+        } else null
+    }
+    return result
+}
+
 eqNullOptOut: function {ast: Ast asItems: List u32} out bool is {
     result: false
     with aiter: asItems.iterate do for amId9: aiter loop {
@@ -5048,6 +5067,12 @@ resolveRecord: function {
     reg.setValtype typeId: rid value: true
     isgen: hasGenericParam :ast items: rnode.asItems
     eqOptR9: eqNullOptOut :ast asItems: rnode.asItems
+    # `copy: null` strikes the default byte copy off this type. It is recorded
+    # as a member carrying the null shell so the use site can tell it from a
+    # type that simply never mentioned `copy`.
+    if (memberNullOptOut :ast asItems: rnode.asItems member: "copy") then {
+        ty.copyOptOut.add item: rid
+    }
     if isgen then {
         reg.setGeneric typeId: rid value: true
         (registerGenericParams
@@ -5333,6 +5358,9 @@ resolveVariant: function {
     reg.setValtype typeId: vid value: true
     isgen: hasGenericParam :ast items: vnode.asItems
     eqOptV9: eqNullOptOut :ast asItems: vnode.asItems
+    if (memberNullOptOut :ast asItems: vnode.asItems member: "copy") then {
+        ty.copyOptOut.add item: vid
+    }
     if isgen then {
         reg.setGeneric typeId: vid value: true
         (registerGenericParams
@@ -14419,10 +14447,35 @@ checkDotted: function {
             if bttCp9 == ztypes.ztypetype.recordType then isValCp9 = true
             if bttCp9 == ztypes.ztypetype.variantType then isValCp9 = true
             if bttCp9 == ztypes.ztypetype.facetType then isValCp9 = true
-            mCp9: "type '\{btnCp9}' has no '.copy': deep copy of user-defined reftypes is not implemented (move with '.take', or copy field-by-field)"
-            if isValCp9 then {
-                mCp9 = "type '\{btnCp9}' has no '.copy': valtypes copy by assignment (drop '.copy')"
+            # A valtype's DEFAULT `.copy` is the byte copy its assignment
+            # already performs -- a valtype holds no reftype, so copying the
+            # bytes copies the whole value. Writing one in the as-block
+            # overrides this default; the member lookup above finds it first
+            # and never reaches here. `copy: null` strikes the default off,
+            # and a monomorphised instance inherits its template's decision.
+            cpOff9: st.typing.copyOptOut.has item: bt
+            if (cpOff9) == false then {
+                cpOrg9: st.reg.genericOriginOf tid: bt
+                if cpOrg9 > 0 then cpOff9 = st.typing.copyOptOut.has item: cpOrg9
             }
+            if isValCp9 when (cpOff9) == false then {
+                stampGate :st nid: dp.nodeid.u64 tid: bt
+                return bt
+            }
+            if cpOff9 then {
+                mOff9: "type '\{btnCp9}' has no '.copy': its `as` block defines `copy: null`, striking the default copy off the type"
+                (addError
+                    :st
+                    nodeid: dp.nodeid
+                    lineno: dp.lineno
+                    colno: dp.colno
+                    e: zast.err.typeError
+                    msg: mOff9
+                )
+                return 0
+            }
+            mCp9: "type '\{btnCp9}' has no '.copy': a reftype has no default copy -- define a 'copy' method on '\{btnCp9}' saying what a duplicate means, or move with '.take'"
+
             if bt == (builtinTidTc :ast :st base: "StringView") then {
                 mCp9 = "type 'StringView' has no '.copy': a view is copied by assignment; '.string' makes an owned String (allocates)".string
             }
