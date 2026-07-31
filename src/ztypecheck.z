@@ -13574,6 +13574,18 @@ checkDotted: function {
                             verb: tvb9.stringview
                         )
                     }
+                    if (relBlocked9) == false then {
+                        tpv9: "with '.\{cn}'"
+                        if (pinnedMoveError
+                            :st
+                            :ast
+                            nodeid: dp.nodeid
+                            lineno: dp.lineno
+                            colno: dp.colno
+                            name: mkRoot.stringview
+                            verb: tpv9.stringview
+                        ) then relBlocked9 = true
+                    }
                     if (relBlocked9) == false when (isBorrowedVar :st vid: mvo) then {
                         relBlocked9 = true
                         tbr9: mkRoot.copy
@@ -15276,6 +15288,16 @@ checkAssignment: function {
                     name: rn5.stringview
                     verb: "into an owned binding"
                 )
+            } else {
+                if (pinnedMoveError
+                    :st
+                    :ast
+                    nodeid: asgn.nodeid
+                    lineno: asgn.lineno
+                    colno: asgn.colno
+                    name: rn5.stringview
+                    verb: "into an owned binding"
+                ) then roMv5 = true
             }
         }
         if rn5.length > 0 when (roMv5) == false when (typeIsReftype
@@ -15669,7 +15691,16 @@ checkReassignment: function {
                     verb: "by reassignment"
                 )
             } else {
-                if (isBorrowedVar :st vid: vo) then {
+                rpin9: (pinnedMoveError
+                    :st
+                    :ast
+                    nodeid: rasgn.nodeid
+                    lineno: rasgn.lineno
+                    colno: rasgn.colno
+                    name: rn.stringview
+                    verb: "by reassignment"
+                )
+                if rpin9 then null else if (isBorrowedVar :st vid: vo) then {
                     rnc9: rn.copy
                     mc9: "Cannot move borrowed variable '\{rnc9}' by reassignment — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
                     (addError
@@ -17259,6 +17290,56 @@ armPayloadReadonly: function {
     if slr9.length > 0 then return
 }
 
+# pinnedMoveError -- a move out of a binding ANOTHER holder has locked is
+# refused: the holder reads or writes through that value, and a move frees it
+# out from under them (a StringView over a moved String reads freed memory).
+# `.release` has refused this for a while; the move sites never asked. Reports
+# and returns true when it fires, so the caller skips its remaining legs.
+pinnedMoveError: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    nodeid: u32
+    lineno: u32
+    colno: u32
+    name: StringView
+    verb: StringView
+} out bool is {
+    if name.length == 0 then return false
+    pnid9: nameIdOf :ast :name
+    pvo9: st.lookupVarId nameId: pnid9
+    if pvo9.none then return false
+    plk9: st.findLock nameId: pnid9
+    if plk9.none then return false
+    plh9: st.findLockHolder nameId: pnid9
+    if plh9.none then return false
+    # A holder that is the binding itself is the readonly case, which
+    # readonlyMoveError words better; a call-scoped holder belongs to the
+    # statement being checked, not to a live reader.
+    if plh9.kind != ztypes.zlockholderkind.varKind then return false
+    if plh9.id == pvo9 then return false
+    phn9: st.formatLockHolder pool: ast.names holder: plh9
+    plsn9: zenv.zlockstateNameLower t: plk9
+    pnm9: name.string
+    pvb9: verb.string
+    pm9: "Cannot move '\{pnm9}' \{pvb9}: \{plsn9} lock held by '\{phn9}'"
+    phc9: phn9.copy
+    pnc9: pnm9.copy
+    pht9: "'\{phc9}' reads '\{pnc9}' -- moving it would leave '\{phc9}' pointing at freed memory; end its scope first, or copy with '.copy'"
+    pen9: String
+    (addErrorH
+        :st
+        :nodeid
+        :lineno
+        :colno
+        e: zast.err.ownerError
+        msg: pm9
+        note: pen9
+        hint: pht9
+        width: name.length.u32.orPanic
+    )
+    return true
+}
+
 # readonlyMoveError -- a move whose SOURCE may only be read is refused:
 # capability may only be given up, so `hold`/`view` never become an owned
 # mutable value. `verb` names the move form ("with '.take'", "by
@@ -18104,7 +18185,16 @@ walkCallArgsHoist: function {
                                         verb: "into a taking argument"
                                     )
                                 } else {
-                                    if (isBorrowedVar :st vid: bvo) then {
+                                    apin7: (pinnedMoveError
+                                        :st
+                                        :ast
+                                        nodeid: aid7
+                                        lineno: aln7
+                                        colno: acl7
+                                        name: bn.stringview
+                                        verb: "into a taking argument"
+                                    )
+                                    if apin7 then null else if (isBorrowedVar :st vid: bvo) then {
                                         bnc7: bn.copy
                                         mb7: "Cannot move borrowed variable '\{bnc7}' into a taking argument — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
                                         (addError
@@ -18298,7 +18388,19 @@ checkBoxConstruction: function {
                                             verb: "into a box"
                                         )
                                     } else {
-                                        if (isBorrowedVar :st vid: bvo8) then {
+                                        bpin8: (pinnedMoveError
+                                            :st
+                                            :ast
+                                            nodeid: aid8b
+                                            lineno: aln8b
+                                            colno: acl8b
+                                            name: bn.stringview
+                                            verb: "into a box"
+                                        )
+                                        if bpin8 then null else if (isBorrowedVar
+                                            :st
+                                            vid: bvo8
+                                        ) then {
                                             bnc8: bn.copy
                                             mb8: "Cannot move borrowed variable '\{bnc8}' into a box — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
                                             (addError
