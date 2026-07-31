@@ -1760,6 +1760,7 @@ isStripMarker: function {name: StringView} out bool is {
     if name == "borrow" then return true
     if name == "take" then return true
     if name == "view" then return true
+    if name == "hold" then return true
     if name == "private" then return true
     if name == "public" then return true
     return false
@@ -2092,6 +2093,7 @@ pathOwnership: function {ast: Ast n: Node} out optionval ztypes.zparamownership 
         if cn.stringview == "borrow" then return (optionval.some ztypes.zparamownership.borrowMode)
         if cn.stringview == "take" then return (optionval.some ztypes.zparamownership.takeMode)
         if cn.stringview == "view" then return (optionval.some ztypes.zparamownership.viewMode)
+    if cn.stringview == "hold" then return (optionval.some ztypes.zparamownership.holdMode)
         return (optionval.none ztypes.zparamownership)
     } else {
         return (optionval.none ztypes.zparamownership)
@@ -10094,6 +10096,8 @@ ownershipOfParam: function {o: optionval ztypes.zparamownership} out ztypes.zown
             return ztypes.zownership.borrowed
         } case viewMode then {
             return ztypes.zownership.borrowed
+        } case holdMode then {
+            return ztypes.zownership.owned
         }
     } case none then {
         return ztypes.zownership.borrowed
@@ -20643,6 +20647,10 @@ checkFunctionBody: function {
                             isLockP9 = true
                             mkn9 = "view".string
                         }
+                        if pown9 == ztypes.zparamownership.holdMode then {
+                            isLockP9 = true
+                            mkn9 = "hold".string
+                        }
                     } case none then null
                     isGenP9: false
                     if (st.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.genericParam then isGenP9 = true
@@ -20674,11 +20682,12 @@ checkFunctionBody: function {
                         :ast
                         n: (ast.nodes.get i: (pm.operation - 1).u64)
                     )
-                    isViewP9: false
+                    isRoP9: false
                     match (
                         pown9
                     ) case some then {
-                        if pown9 == ztypes.zparamownership.viewMode then isViewP9 = true
+                        if pown9 == ztypes.zparamownership.viewMode then isRoP9 = true
+                        if pown9 == ztypes.zparamownership.holdMode then isRoP9 = true
                     } case none then null
                     v: st.reg.newVariable ztypeId: ptid ownership: own
                     if (typeExprHasPrivate
@@ -20688,11 +20697,13 @@ checkFunctionBody: function {
                     vid2: v.variableId
                     pnId9: zast.poolSet pool: ast.names text: pname.stringview
         st.defineVar nameId: pnId9 var: v
-                    if isViewP9 when (typeIsReftype :st tid: ptid) then {
-                        # A `view` parameter is readonly for the whole body: it
-                        # holds a readonly lock on itself, so writes, mutating
-                        # receivers and re-passing to a mutable parameter are
-                        # all caught by the ordinary lock rules.
+                    if isRoP9 when (typeIsReftype :st tid: ptid) then {
+                        # A readonly parameter -- `view` (not owned) or `hold`
+                        # (owned) -- is readonly for the whole body: it holds a
+                        # readonly lock on itself, so writes, mutating receivers
+                        # and re-passing to a mutable parameter are all caught
+                        # by the ordinary lock rules. Ownership is a separate
+                        # axis and is carried by `own` above.
                         vpp9: (List String)
                         vpn9: pname.copy
                         vpp9.append vpn9
