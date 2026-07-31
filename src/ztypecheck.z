@@ -16251,6 +16251,33 @@ checkFor: function {
                     st.defineVar nameId: nmId9 var: v
                         condNid: nodeId n: (ast.nodes.get i: (cond.operation - 1).u64)
                         st.typing.defVariableId.set key: condNid.u64 value: vid
+                        # `for x: xs.iterate` has no iterator binding to carry
+                        # the container's lock, so the element carries it: the
+                        # reference the loop hands out points into the
+                        # container's storage, and a write through the
+                        # container reallocates it. The `with` form leaves
+                        # nothing pending here -- its binding took the lock.
+                        fbs9: (List String)
+                        takePendingBorrow :st dst: fbs9
+                        if fbs9.length > 0 then {
+                            flf9: isViewFamilyTid :ast :st tid: vt
+                            if st.typing.pendingBorrowShared then flf9 = true
+                            st.typing.pendingBorrowShared = false
+                            fcn9: ast.nodes.get i: (cond.operation - 1).u64
+                            fnd9: nodeId n: fcn9
+                            fln9: nodeLine n: fcn9
+                            fcl9: nodeCol n: fcn9
+                            (installBorrowLocks
+                                :st
+                                pool: ast.names
+                                src: fbs9
+                                :vid
+                                leafShared: flf9
+                                nodeid: fnd9
+                                lineno: fln9
+                                colno: fcl9
+                            )
+                        }
                     } else {
                         (st.define
                             nameId: (zast.poolSet pool: ast.names text: nm.stringview)
