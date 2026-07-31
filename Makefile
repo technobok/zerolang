@@ -371,15 +371,15 @@ emitter-guard:
 # genuinely-sanctioned marker.
 member-guard:
 	@m1=$$(grep -c 'cn.stringview ==' src/ztypecheck.z); \
-	if [ "$$m1" -gt 39 ]; then \
-	  echo "member-guard FAIL: 'cn.stringview ==' = $$m1 (baseline 39)"; \
+	if [ "$$m1" -gt 37 ]; then \
+	  echo "member-guard FAIL: 'cn.stringview ==' = $$m1 (baseline 37)"; \
 	  echo "  A new hardcoded string-keyed member/marker special-case was added to the"; \
 	  echo "  type checker. Resolve members through their declared childOf edges (the"; \
 	  echo "  system units are the source of truth); bump the baseline only for a"; \
 	  echo "  genuinely-sanctioned marker."; \
 	  exit 1; \
 	fi; \
-	echo "member-guard OK: cn.stringview == = $$m1 (<=39)"
+	echo "member-guard OK: cn.stringview == = $$m1 (<=37)"
 
 # view-guard -- a native receiver marked `.view` asserts that the C never writes
 # through it, and the compiler cannot check that: there is no body. So the C

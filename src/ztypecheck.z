@@ -1752,6 +1752,31 @@ isNumericLiteralName: function {name: StringView} out bool is {
     return false
 }
 
+# isMoveMarker -- a value-position ownership-transfer marker. `.hold` moves its
+# source exactly as `.take` does; the two differ only in whether the destination
+# is frozen afterwards.
+isMoveMarker: function {name: StringView} out bool is {
+    if name == "take" then return true
+    if name == "hold" then return true
+    return false
+}
+
+# valueIsHold -- true when a bound value carries the `.hold` marker, through any
+# `expression` wrapper. `hold` is owned and readonly, so the binding both moves
+# the source away and freezes itself.
+valueIsHold: function {ast: Ast n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (valueIsHold :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case dottedpath then {
+        cnh9: atomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
+        return (cnh9.stringview == "hold")
+    } else {
+        return false
+    }
+}
+
 # isStripMarker -- true for a dotted-path leaf that is an ownership or access marker
 # (`.lock`/`.borrow`/`.take`/`.private`/`.public`); a type reference peels these to
 # reach the underlying base type.
@@ -13415,7 +13440,7 @@ checkDotted: function {
     # carries the base's type; a bare-name source releases its held locks and
     # invalidates (the taken overlay propagates out of popped scopes).
     isXferMarker: false
-    if cn.stringview == "take" then isXferMarker = true
+    if (isMoveMarker name: cn.stringview) then isXferMarker = true
     if cn.stringview == "release" then isXferMarker = true
     if isXferMarker then {
         mkRoot: bareAtomName :ast n: (ast.nodes.get i: (dp.parent - 1).u64)
@@ -13436,7 +13461,7 @@ checkDotted: function {
                 mvo
             ) case some then {
                 relBlocked9: false
-                if cn.stringview == "take" then {
+                if (isMoveMarker name: cn.stringview) then {
                     if (isViewVar :ast :st vid: mvo) then {
                         relBlocked9 = true
                         tbr9: mkRoot.copy
@@ -15107,6 +15132,36 @@ checkAssignment: function {
                     )
                 }
             } case none then null
+        }
+        if (valueIsHold :ast n: av9) when (typeIsReftype :st tid: vt) then {
+            # Owned but frozen: the same readonly self-lock a `view` parameter
+            # takes, so writes, mutating receivers and re-passing to a mutable
+            # parameter are all caught by the ordinary lock rules. Ownership is
+            # the other axis and is already `owned` above.
+            hpp9: (List String)
+            hpn9: (ast.names.texts.get i: (asgn.name - 1).u64).stringview.string
+            hpp9.append hpn9
+            hph9: (ztypes.zlockholder
+                kind: ztypes.zlockholderkind.varKind
+                id: vid2
+            )
+            hpr9: (st.tryLock
+                pool: ast.names
+                path: hpp9
+                lockType: ztypes.zlockstate.shared
+                lockScope: ztypes.zlockscope.target
+                holder: hph9
+            )
+            if hpr9.length > 0 then {
+                (addError
+                    :st
+                    nodeid: asgn.nodeid
+                    lineno: asgn.lineno
+                    colno: asgn.colno
+                    e: zast.err.ownerError
+                    msg: hpr9
+                )
+            }
         }
         if own == ztypes.zownership.borrowed then {
             lfsA9: isViewFamilyTid :ast :st tid: vt

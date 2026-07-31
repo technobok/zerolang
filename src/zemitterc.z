@@ -1538,6 +1538,15 @@ takeSourceResolve: function {ctx: Ctx name: StringView vid: u64} out String is {
     return (emitLocalAtomName :ctx :name :vid)
 }
 
+# isMoveMarker -- a value-position ownership-transfer marker. `.hold` is `.take`
+# plus a compile-time freeze, so the two are indistinguishable to the emitter:
+# both move the base value and leave the source to be zeroed.
+isMoveMarker: function {name: StringView} out bool is {
+    if name == "take" then return true
+    if name == "hold" then return true
+    return false
+}
+
 # takeAliasBase -- the base atom of a `<x>.take` over a user record/class (an
 # ownership-transfer alias: the binding reuses the source storage), else "".
 takeAliasBaseNid: function {ast: Ast symtab: zenv.ZSymbolTable n: Node} out u64 is {
@@ -1549,7 +1558,7 @@ takeAliasBaseNid: function {ast: Ast symtab: zenv.ZSymbolTable n: Node} out u64 
         return (takeAliasBaseNid :ast :symtab n: (ast.nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
         cn9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if cn9.stringview != "take" then return 0
+        if (isMoveMarker name: cn9.stringview) == false then return 0
         bnid9: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
         bt9: stampIdOf :symtab nid: bnid9
         bo9: originTidOf :symtab tid: bt9
@@ -1591,7 +1600,7 @@ takeStringSource: function {
         return (takeStringSource :ast :symtab :ctx n: (ast.nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
         cn9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if cn9.stringview != "take" then return "".string
+        if (isMoveMarker name: cn9.stringview) == false then return "".string
         bnid9: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
         bid9: stampIdOf :symtab nid: bnid9
         isMv9: false
@@ -1644,7 +1653,7 @@ isFieldTake: function {ast: Ast n: Node} out bool is {
         return (isFieldTake :ast n: (ast.nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
         cn9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if cn9.stringview != "take" then return false
+        if (isMoveMarker name: cn9.stringview) == false then return false
         return (nodeIsDotted9 n: (ast.nodes.get i: (n.parent - 1).u64))
     } else {
         return false
@@ -1682,7 +1691,7 @@ emitNarrowedTakeZero: function {
         emitNarrowedTakeZero :ast :symtab :ctx n: sln9 :ind :buf
     } case dottedpath then {
         cn9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if cn9.stringview == "take" then {
+        if (isMoveMarker name: cn9.stringview) then {
             bn9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
             bn9v: atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64))
             if (vvHas xs: ctx.narrowBox vid: bn9v) then {
@@ -3395,7 +3404,7 @@ bindingRhsIsBorrow: function {
             # a field read off a narrowed subject is a shallow-copy borrow (it aliases
             # the subject's heap); an ownership builtin yields an owned value, and so
             # does a method auto-call (FUNCTION child) on the narrowed payload.
-            if ch9.stringview == "take" then return false
+            if (isMoveMarker name: ch9.stringview) then return false
             if ch9.stringview == "copy" then return false
             if ch9.stringview == "string" then return false
             ntO2: vtGet xs: ctx.narrowTid vid: bnmV9
@@ -6981,7 +6990,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         # ownership MOVE: emit the base value. The statement-level emitter zeroes
         # the source after the call so its scope-exit free is a no-op (the callee
         # now owns the heap). A borrowed pointer-param class is not a move source.
-        if mn2.stringview == "take" then {
+        if (isMoveMarker name: mn2.stringview) then {
             tknid9: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
             if tknid9 == 0 then tknid9 = n.parent.u64
             tkt9: stampIdOf :symtab nid: tknid9
