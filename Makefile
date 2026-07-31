@@ -386,64 +386,199 @@ member-guard:
 # compiler proves it instead -- the receiver is declared `const`, and (with
 # -Werror=discarded-qualifiers) any write, direct or through a helper or a
 # vtable, fails the build. This guard keeps the two halves from drifting: a
-# `.view` declaration must have a const receiver in its fragment, and a const
+# `.view` declaration must have a const receiver in its backing, and a const
 # receiver must be declared `.view` so the marker does not go unused.
 #
-# A fragment that carries a receiver but resolves to no declaration is an ERROR,
-# not a skip -- a silently unchecked fragment is exactly what the guard exists to
-# prevent. Fragments whose C name does not match the method spell it in
-# VIEW_GUARD_ALIASES; internal helpers with no zerolang declaration at all go in
-# VIEW_GUARD_INTERNAL. Types backed by .c.tmpl templates (List, Map, Set, String)
-# are not covered yet.
-VIEW_GUARD_ALIASES  := _Z_PARSED_GET_OPTION=option _Z_PARSED_GET_POSITIONAL=positional _Z_SV_REPEAT=repeated
-VIEW_GUARD_INTERNAL := _Z_SV_INDEX_OF_RAW _Z_SV_REPLACE_IMPL
+# Backings come in three shapes: one fragment per method under
+# src/runtime/natives, many functions in one file (z_String.inc), and the
+# @@NAME@@ container templates. So a receiver is found by TYPE rather than by
+# parameter name -- the first parameter whose struct is the function's own
+# prefix, which covers self / _this / _it / _e / s / a alike.
+# VIEW_GUARD_PLACEHOLDER names the type each template placeholder stands for;
+# an unmapped placeholder names a user type or a valtype (array, str, the
+# protocol vtable, meta.create), and `.view` does not apply to either.
+#
+# A receiver-bearing C function that resolves to no declaration is an ERROR,
+# not a skip -- a silently unchecked backing is exactly what the guard exists
+# to prevent. One C function backing several declarations (z_String_cmp is
+# `compare` and the four orderings) is spelt out in VIEW_GUARD_BACKS; a helper
+# with no zerolang declaration at all goes in VIEW_GUARD_INTERNAL.
+VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:List z_Map.c.tmpl=@@NAME@@:Map \
+  z_MapIter.c.tmpl=@@NAME@@:Map,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
+  z_Set.c.tmpl=@@NAME@@:Set,@@SETITER@@:SetIter
+VIEW_GUARD_BACKS := String.eq===,!= String.cmp=compare,<,<=,>,>= \
+  StringView.eq===,!= StringView.cmp=compare,<,<=,>,>=
+VIEW_GUARD_INTERNAL := String.cat String.print String.free \
+  StringView.print StringView.indexOfRaw StringView.replaceImpl \
+  List.destroy List.grow Map.destroy Map.grow Map.find \
+  Set.destroy Set.grow Set.find MapEntry.key MapEntry.value
+
+define VIEW_GUARD_AWK
+# Reads lib/system/*.z (declarations) and the C backings, then joins them.
+
+function camel(s,   out, i, c, up) {
+    out = ""; up = 0
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "_") { up = 1; continue }
+        out = out (up ? toupper(c) : c); up = 0
+    }
+    return out
+}
+
+# A native method declaring a receiver, on a reference type: record whether
+# the receiver carries the .view marker.
+function declEmit() {
+    if ((dacc !~ /[{ ]:this[ }]/) && (dacc !~ /this\.(view|lock|borrow|take)/)) return
+    dm = (dacc ~ /this\.view/) ? "view" : "plain"
+    if (!((dty " " dmeth) in dseen)) { dord[++dn] = dty " " dmeth; dseen[dty " " dmeth] = 1 }
+    dkind[dty " " dmeth] = dm
+}
+
+FNR == 1 {
+    if (FILENAME ~ /\.z$$/) { dty = ""; grab = 0 }
+    else {
+        base = FILENAME; sub(/.*\//, "", base)
+        delete ph
+        np = split(PH, pf, " ")
+        for (i = 1; i <= np; i++) {
+            e = index(pf[i], "=")
+            if (substr(pf[i], 1, e - 1) != base) continue
+            nk = split(substr(pf[i], e + 1), kv, ",")
+            for (j = 1; j <= nk; j++) {
+                p = index(kv[j], ":")
+                ph[substr(kv[j], 1, p - 1)] = substr(kv[j], p + 1)
+            }
+        }
+        buf = ""; cap = 0
+    }
+}
+
+# ---------------- declaration side ----------------
+
+FILENAME ~ /\.z$$/ {
+    if ($$0 ~ /^[A-Za-z][A-Za-z0-9]*: (class|union|protocol)/) {
+        dty = $$1; sub(/:.*/, "", dty); grab = 0; next
+    }
+    if ($$0 ~ /^[A-Za-z][A-Za-z0-9]*: (record|variant|facet)/) { dty = ""; grab = 0; next }
+    if (dty == "") next
+    if (grab) {
+        dacc = dacc " " $$0
+        dlines++
+        if (dacc ~ /is native/) { grab = 0; declEmit() }
+        else if (dacc ~ /\bis \{/ || dlines > 14) grab = 0
+        next
+    }
+    if ($$0 ~ /^[ \t]+([A-Za-z_][A-Za-z0-9_]*|[=!<>+*\/%-]+): function/) {
+        dmeth = $$1; sub(/:$$/, "", dmeth)
+        dacc = $$0; dlines = 1
+        if (dacc ~ /is native/) { declEmit(); next }
+        if (dacc ~ /\bis \{/) next
+        grab = 1
+    }
+    next
+}
+
+# ---------------- C backing side ----------------
+# A definition whose FIRST parameter is its own struct is a receiver. Keying on
+# the type rather than the parameter name covers self / _this / _it / _e / s / a.
+
+{
+    if (cap) buf = buf " " $$0
+    else if ($$0 ~ /^(static|ZINLINE)[ \t].*z_[A-Za-z0-9_@]+[ \t]*\(/) { buf = $$0; cap = 1 }
+    else next
+    if (index(buf, ")") == 0) next
+    cap = 0
+
+    if (match(buf, /z_[A-Za-z0-9_@]+[ \t]*\(/) == 0) next
+    fname = substr(buf, RSTART, RLENGTH)
+    rest = substr(buf, RSTART + RLENGTH)
+    sub(/[ \t]*\($$/, "", fname)
+
+    ce = index(rest, ",")
+    cc = index(rest, ")")
+    if (ce == 0 || (cc > 0 && cc < ce)) ce = cc
+    if (ce == 0) next
+    p1 = substr(rest, 1, ce - 1)
+
+    if (match(p1, /z_[A-Za-z0-9_@]+_t/) == 0) next
+    pty = substr(p1, RSTART, RLENGTH)
+    cty = substr(pty, 3, length(pty) - 4)
+    pfx = "z_" cty "_"
+    if (substr(fname, 1, length(pfx)) != pfx) next
+    cm = camel(substr(fname, length(pfx) + 1))
+    if (cm == "") next
+
+    # A placeholder with no mapping names a user type or a valtype (array, str,
+    # the protocol vtable, meta.create): .view does not apply there.
+    if (cty in ph) cty = ph[cty]
+    else if (cty ~ /@@/) next
+
+    ck = (p1 ~ /\*/) ? ((p1 ~ /const/) ? "const" : "ptr") : "byvalue"
+
+    # One C function can back several declarations (z_String_cmp is compare and
+    # the four orderings); expand it into one row per method it backs.
+    na = split(ALIAS, al, " ")
+    hit = 0
+    for (i = 1; i <= na; i++) {
+        e = index(al[i], "=")
+        if (substr(al[i], 1, e - 1) != cty "." cm) continue
+        hit = 1
+        nm = split(substr(al[i], e + 1), ms, ",")
+        for (j = 1; j <= nm; j++) crow(cty, ms[j], ck, fname)
+    }
+    if (!hit) crow(cty, cm, ck, fname)
+}
+
+function crow(t, m, k, f,   key) {
+    key = t " " m
+    if (key in ckind && ckind[key] != k) {
+        print "view-guard FAIL: " key " has both a " ckind[key] " and a " k " receiver in C (" cfn[key] " / " f ")"
+        bad = 1
+        return
+    }
+    if (!(key in ckind)) cord[++cn] = key
+    ckind[key] = k
+    cfn[key] = f
+}
+
+END {
+    ni = split(INTERNAL, iv, " ")
+    for (i = 1; i <= ni; i++) internal[iv[i]] = 1
+
+    for (i = 1; i <= cn; i++) {
+        key = cord[i]
+        t = key; sub(/ .*/, "", t)
+        m = key; sub(/^[^ ]* /, "", m)
+        if (!(key in dkind)) {
+            if ((t "." m) in internal) { nint++; continue }
+            print "view-guard FAIL: " cfn[key] " carries a " t " receiver but resolves to no " t "." m " declaration -- back it with a declaration, or list " t "." m " in VIEW_GUARD_INTERNAL"
+            bad = 1
+            continue
+        }
+        if (ckind[key] == "byvalue") { nval++; continue }
+        checked++
+        isc = (ckind[key] == "const")
+        isv = (dkind[key] == "view")
+        if (isc && isv) { nview++; continue }
+        if (isc && !isv) {
+            print "view-guard FAIL: " cfn[key] " has a const receiver but " t "." m " is not declared '.view' -- the marker is available and unused"
+            bad = 1
+        } else if (!isc && isv) {
+            print "view-guard FAIL: " t "." m " is declared '.view' but " cfn[key] " has a NON-const receiver -- the C may write through it"
+            bad = 1
+        }
+    }
+    if (bad) exit 1
+    printf "view-guard OK: %d native receivers const-checked in C (%d '.view'), %d by-value, %d internal\n", checked, nview, nval, nint
+}
+endef
+export VIEW_GUARD_AWK
 
 view-guard:
-	@fail=0; nconst=0; checked=0; \
-	for f in src/runtime/natives/*.inc; do \
-	  base=$$(basename $$f .inc); \
-	  pfx=$$(echo $$base | sed 's/^_Z_//; s/_.*//'); \
-	  case $$pfx in \
-	    SV) ty=StringView;; FILE) ty=File;; BUFREADER) ty=BufReader;; \
-	    BUFWRITER) ty=BufWriter;; TEXTREADER) ty=TextReader;; \
-	    TEXTWRITER) ty=TextWriter;; PARSED) ty=Parsed;; \
-	    *) continue;; \
-	  esac; \
-	  case " $(VIEW_GUARD_INTERNAL) " in *" $$base "*) continue;; esac; \
-	  m=$$(echo $$base | sed "s/^_Z_$${pfx}_//" | tr 'A-Z' 'a-z' | sed -E 's/_(.)/\U\1/g'); \
-	  for a in $(VIEW_GUARD_ALIASES); do \
-	    case $$a in $$base=*) m=$${a#*=};; esac; \
-	  done; \
-	  if grep -qE 'const z_[A-Za-z0-9_]+_t[[:space:]]*\*[[:space:]]*(self|_this)' $$f; then c=1; else c=0; fi; \
-	  if grep -qE 'z_[A-Za-z0-9_]+_t[[:space:]]*\*[[:space:]]*(self|_this)' $$f; then hasrecv=1; else hasrecv=0; fi; \
-	  v=$$(awk -v ty="$$ty" -v m="$$m" ' \
-	      FNR==1 {cur=""; acc=""; grab=0} \
-	      /^[A-Za-z][A-Za-z0-9]*: (class|record|variant|facet|protocol)/ {cur=$$1; sub(/:.*/,"",cur)} \
-	      grab { acc = acc " " $$0; if ($$0 ~ /is native/ || $$0 ~ /\} out/ || $$0 ~ /\} is/) { \
-	               print (acc ~ /this\.view/) ? 1 : 0; exit } next } \
-	      cur==ty && $$0 ~ ("^[[:space:]]+" m ": function") { \
-	          acc=$$0; \
-	          if ($$0 ~ /is native/) { print (acc ~ /this\.view/) ? 1 : 0; exit } \
-	          grab=1 }' lib/system/*.z); \
-	  if [ -z "$$v" ]; then \
-	    if [ "$$hasrecv" = 1 ]; then \
-	      echo "view-guard FAIL: $$base carries a receiver but resolves to no $$ty method (derived '$$m') -- add a VIEW_GUARD_ALIASES entry or list it in VIEW_GUARD_INTERNAL"; \
-	      fail=1; \
-	    fi; \
-	    continue; \
-	  fi; \
-	  checked=$$((checked+1)); nconst=$$((nconst+c)); \
-	  if [ "$$c" != "$$v" ]; then \
-	    fail=1; \
-	    if [ "$$v" = 1 ]; then \
-	      echo "view-guard FAIL: $$ty.$$m is declared '.view' but $$base has a NON-const receiver -- the C may write through it"; \
-	    else \
-	      echo "view-guard FAIL: $$base has a const receiver but $$ty.$$m is not declared '.view' -- the marker is available and unused"; \
-	    fi; \
-	  fi; \
-	done; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "view-guard OK: $$checked native receivers, $$nconst const in C and declared '.view'"
+	@awk -v PH='$(VIEW_GUARD_PLACEHOLDER)' -v ALIAS='$(VIEW_GUARD_BACKS)' \
+	  -v INTERNAL='$(VIEW_GUARD_INTERNAL)' "$$VIEW_GUARD_AWK" \
+	  lib/system/*.z src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl
 
 # fallback-guard -- the emitter must never silently degrade: a construct it
 # cannot emit leaves a "/* zemitterc: unhandled ... */" marker in the C (and
