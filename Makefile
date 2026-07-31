@@ -405,21 +405,46 @@ member-guard:
 #
 # A receiver-bearing C function that resolves to no declaration is an ERROR,
 # not a skip -- a silently unchecked backing is exactly what the guard exists
-# to prevent. One C function backing several declarations (z_String_cmp is
-# `compare` and the four orderings) is spelt out in VIEW_GUARD_BACKS; a helper
-# with no zerolang declaration at all goes in VIEW_GUARD_INTERNAL.
+# to prevent. One C function backing several declarations is spelt out in
+# VIEW_GUARD_BACKS; a helper with no zerolang declaration at all goes in
+# VIEW_GUARD_INTERNAL.
+#
+# The other direction closes the same hole from the declaration end: a native
+# receiver that reaches no C function the guard can read would otherwise carry
+# an unchecked marker, so every one of them is registered in VIEW_GUARD_INLINE
+# with the reason it cannot be const-checked --
+#   inline      the receiver is read in place (a field read or a compound
+#               literal); no C function receives it
+#   byvalue     the C receives a copy, so it cannot write through to the source
+#   unemitted   declared, but nothing emits a call to it
+#   Type.method the receiver is projected and handed to another declared
+#               method, which must itself be `.view` before this one may be
+# A registered entry that turns out to HAVE a backing is an error too, so the
+# register cannot go stale. String's comparisons are the reason the last kind
+# exists: `s1 == s2` does not call z_String_eq (which nothing calls) -- it
+# converts both sides to by-value views and calls z_StringView_eq.
 VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:List z_Map.c.tmpl=@@NAME@@:Map \
   z_MapIter.c.tmpl=@@NAME@@:Map,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
   z_Set.c.tmpl=@@NAME@@:Set,@@SETITER@@:SetIter
 VIEW_GUARD_EMITTED := get:List.get,ListView.get contains:List.contains \
   listview:List.listview sort:List.sort iterate:List.iterate call:ListIter.call \
   getv:Map.getv eq:- extendView:- destroy:-
-VIEW_GUARD_BACKS := String.eq===,!= String.cmp=compare,<,<=,>,>= \
-  StringView.eq===,!= StringView.cmp=compare,<,<=,>,>=
-VIEW_GUARD_INTERNAL := String.cat String.print String.free \
+VIEW_GUARD_BACKS := StringView.eq===,!= StringView.cmp=compare,<,<=,>,>=
+VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp \
   StringView.print StringView.indexOfRaw StringView.replaceImpl \
   List.destroy List.grow Map.destroy Map.grow Map.find \
   Set.destroy Set.grow Set.find MapEntry.key MapEntry.value
+VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
+  List.length:inline List.capacity:inline ListView.length:inline \
+  Map.length:inline Map.capacity:inline Set.length:inline Set.capacity:inline \
+  String.length:inline String.capacity:inline String.stringview:inline \
+  StringView.length:inline StringView.string:byvalue \
+  String.contains:StringView.contains String.startsWith:StringView.startsWith \
+  String.endsWith:StringView.endsWith String.count:StringView.count \
+  String.hash:StringView.hash String.substring:StringView.substring \
+  String.==:StringView.== String.!=:StringView.!= String.<:StringView.< \
+  String.<=:StringView.<= String.>:StringView.> String.>=:StringView.>= \
+  String.compare:StringView.compare
 
 define VIEW_GUARD_AWK
 # Reads lib/system/*.z (declarations) and the C backings, then joins them.
@@ -523,8 +548,8 @@ function scanSig(sig, emitted,   fname, rest, ce, cc, p1, pty, cty, pfx, cm, ck,
 }
 
 FNR == 1 {
-    isdecl = (FILENAME ~ /lib\/system\/.*\.z$$/)
     isemit = (FILENAME ~ /zemitterc\.z$$/)
+    isdecl = (FILENAME ~ /\.z$$/) && !isemit
     if (isdecl) { dty = ""; grab = 0 }
     else if (!isemit) {
         base = FILENAME; sub(/.*\//, "", base)
@@ -617,8 +642,45 @@ END {
             bad = 1
         }
     }
+    # Every declared receiver must be accounted for: const-checked above, a
+    # by-value copy the C cannot write through, or an entry in the register.
+    nr = split(INLINE, rv, " ")
+    for (i = 1; i <= nr; i++) {
+        e = index(rv[i], ":")
+        rwhy[substr(rv[i], 1, e - 1)] = substr(rv[i], e + 1)
+    }
+    for (i = 1; i <= dn; i++) {
+        key = dord[i]
+        t = key; sub(/ .*/, "", t)
+        m = key; sub(/^[^ ]* /, "", m)
+        dot = t "." m
+        if (key in ckind) {
+            if (dot in rwhy) {
+                print "view-guard FAIL: " dot " is in VIEW_GUARD_INLINE but " cfn[key] " does receive it -- drop the entry, the const check covers it"
+                bad = 1
+            }
+            continue
+        }
+        if (!(dot in rwhy)) {
+            print "view-guard FAIL: " dot " declares a receiver that reaches no C function the guard can read -- say why in VIEW_GUARD_INLINE (inline / byvalue / unemitted / <Type.method> it delegates to)"
+            bad = 1
+            continue
+        }
+        nreg++
+        why = rwhy[dot]
+        if (why == "inline" || why == "byvalue" || why == "unemitted") continue
+        tgt = why; sub(/\./, " ", tgt)
+        if (!(tgt in dkind)) {
+            print "view-guard FAIL: " dot " is registered as delegating to " why ", which is not a declared native receiver"
+            bad = 1
+        } else if (dkind[key] == "view" && dkind[tgt] != "view") {
+            print "view-guard FAIL: " dot " is declared '.view' but delegates to " why ", which is not -- the reader it defers to must be one first"
+            bad = 1
+        }
+    }
+
     if (bad) exit 1
-    printf "view-guard OK: %d native receivers const-checked in C (%d '.view'), %d by-value, %d internal\n", checked, nview, nval, nint
+    printf "view-guard OK: %d native receivers const-checked in C (%d '.view'), %d by-value, %d registered, %d internal\n", checked, nview, nval, nreg, nint
 }
 endef
 export VIEW_GUARD_AWK
@@ -626,6 +688,7 @@ export VIEW_GUARD_AWK
 view-guard:
 	@awk -v PH='$(VIEW_GUARD_PLACEHOLDER)' -v ALIAS='$(VIEW_GUARD_BACKS)' \
 	  -v INTERNAL='$(VIEW_GUARD_INTERNAL)' -v EMITTED='$(VIEW_GUARD_EMITTED)' \
+	  -v INLINE='$(VIEW_GUARD_INLINE)' \
 	  "$$VIEW_GUARD_AWK" lib/system/*.z src/zemitterc.z \
 	  src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl
 
