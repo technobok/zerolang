@@ -63768,6 +63768,10 @@ _s0; });
                                     }
                                     if ((z_t2478(z_v7477, z_v7927) == false)) {
                                         z_v7477->typing.pendingBorrowShared = true;
+                                    } else {
+                                        if (z_t2414(z_v7477, z_v7869)) {
+                                            z_v7477->typing.pendingBorrowShared = true;
+                                        }
                                     }
     z_t988_destroy(&z_v7976);
                                 } else {
@@ -69216,6 +69220,10 @@ uint64_t z_t2799(z_t1266_t* z_v9844, z_t105_t z_v9845, z_t1066_t* z_v9846, z_t10
                                         }
                                         if ((z_t2478(z_v9844, z_v10022) == false)) {
                                             z_v9844->typing.pendingBorrowShared = true;
+                                        } else {
+                                            if (z_t2414(z_v9844, z_v9940)) {
+                                                z_v9844->typing.pendingBorrowShared = true;
+                                            }
                                         }
                                         z_v10040 = true;
                                         break;
@@ -69233,6 +69241,10 @@ uint64_t z_t2799(z_t1266_t* z_v9844, z_t105_t z_v9845, z_t1066_t* z_v9846, z_t10
                                 z_v10047 = (z_t74_t){0};
                                 if ((z_t2478(z_v9844, z_v10022) == false)) {
                                     z_v9844->typing.pendingBorrowShared = true;
+                                } else {
+                                    if (z_t2414(z_v9844, z_v9940)) {
+                                        z_v9844->typing.pendingBorrowShared = true;
+                                    }
                                 }
     z_t74_free(&z_v10047);
                             }
@@ -69770,6 +69782,10 @@ uint64_t z_t2799(z_t1266_t* z_v9844, z_t105_t z_v9845, z_t1066_t* z_v9846, z_t10
                     z_v10259 = (z_t74_t){0};
                     if ((z_t2478(z_v9844, z_v9849) == false)) {
                         z_v9844->typing.pendingBorrowShared = true;
+                    } else {
+                        if (z_t2414(z_v9844, z_v10200)) {
+                            z_v9844->typing.pendingBorrowShared = true;
+                        }
                     }
     z_t74_free(&z_v10259);
                 }
