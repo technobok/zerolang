@@ -1753,6 +1753,22 @@ implicitTakeSourceAtom: function {
     return (takeSourceResolve :ctx name: nm vid: 0)
 }
 
+# moveMarkerBase -- the base node id of an explicit `<x>.take` / `<x>.hold`,
+# through any `expression` wrapper; 0 when the node is not a move marker.
+moveMarkerBase: function {ast: Ast n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (moveMarkerBase :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case dottedpath then {
+        mbc9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
+        if (isMoveMarker name: mbc9.stringview) == false then return 0
+        return n.parent.u64
+    } else {
+        return 0
+    }
+}
+
 # the source path an implicit `.take` moves from, if any.
 implicitTakeSource: function {
     ast: Ast
@@ -9576,6 +9592,22 @@ emitStmt: function {
         # into a container -- now owns the heap). Scalars/valtypes have no
         # destructor and are left untouched.
         zsrc9: implicitTakeSource :ast :symtab :ctx n: rvn29
+        if zsrc9.length == 0 then {
+            # an explicit `<local>.take` / `.hold` moves just as a bare name
+            # does; the marker form arrives as a dotted path, which
+            # implicitTakeSource (bare names only) does not see. Without this
+            # the source keeps its buffer and frees it again at scope exit,
+            # after the target has already freed it.
+            mmb9: moveMarkerBase :ast n: rvn29
+            if mmb9 > 0 then {
+                zsrc9 = (implicitTakeSource
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: (mmb9 - 1).u64)
+                )
+            }
+        }
         if zsrc9.length > 0 then {
             znid9: nodeIdOf9 n: rvn29
             zid9: stampIdOf :symtab nid: znid9
