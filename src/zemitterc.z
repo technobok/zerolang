@@ -3047,7 +3047,17 @@ emitInstanceMethodCall: function {
     rtidc: chaseColMono :symtab :ctx tid: rtid0
     rtid: methodOwnerId :ast :symtab rtid: rtidc mn: mn.stringview
     if rtid == 0 then return "".string
-    if (symtab.reg.typetypeOf typeId: rtid) != ztypes.ztypetype.classType then return "".string
+    # Both families reach here: a user record's methods take their receiver by
+    # pointer too, so they need the same receiver-addressing logic below. The
+    # stdlib units are still excluded further down -- they have dedicated
+    # dispatchers.
+    rttK9: symtab.reg.typetypeOf typeId: rtid
+    isUserObj9: false
+    if rttK9 == ztypes.ztypetype.classType then isUserObj9 = true
+    if rttK9 == ztypes.ztypetype.recordType then isUserObj9 = true
+    if rttK9 == ztypes.ztypetype.variantType then isUserObj9 = true
+    if rttK9 == ztypes.ztypetype.facetType then isUserObj9 = true
+    if (isUserObj9) == false then return "".string
     monoLk2: originTidOf :symtab tid: rtid
     if monoLk2 > 0 then {
         if (isUserClassMonoTid :symtab :ctx tid: rtid) == false then return "".string
@@ -4431,7 +4441,6 @@ emitTypeQualCall: function {
                 }
             } else {
                 # a method: positional args; a CLASS receiver passes by address
-                clsNmQ: typeNameOfReg9 :symtab tid: btid
                 ai9: u64
                 with aiterQ: call.arguments.iterate do for aQId9: aiterQ loop {
                     aQ: ast.nodes.get i: (aQId9 - 1).u64
@@ -4439,13 +4448,18 @@ emitTypeQualCall: function {
                         aQ
                     ) case namedoperation then {
                         avq: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (aQ.operation - 1).u64)
+                        # the receiver passes by address in BOTH families, and
+                        # is identified by its PARAMETER name -- keying on the
+                        # type would also catch a same-typed sibling
                         byRef9: false
-                        if bttq == ztypes.ztypetype.classType when ai9 < pn then {
-                            ppid9: pids.get i: ai9
-                            pptn9: typeNameOfReg9 :symtab tid: ppid9
-                            if pptn9.stringview == "this" then byRef9 = true
-                            if pptn9.stringview == clsNmQ.stringview then byRef9 = true
-                            if ppid9 == btid then byRef9 = true
+                        if ai9 < pn then {
+                            ppnm9: pnames.get i: ai9
+                            if (paramIsReceiverName
+                                :ast
+                                :symtab
+                                fid: mco
+                                pname: ppnm9.stringview
+                            ) then byRef9 = true
                         }
                         if (pathIsPointer
                             :ast
@@ -5313,6 +5327,12 @@ emitGenericFnCall: function {
                     byref9: false
                     argRef9: String
                     ptra9: false
+                    if (paramIsReceiverName
+                        :ast
+                        :symtab
+                        fid: gmf9
+                        pname: fpnO9.stringview
+                    ) then ptra9 = true
                     if (symtab.typing.declOwnershipIs
                         pool: ast.names
                         parentTypeId: gmf9
@@ -5468,6 +5488,12 @@ emitUnitMethodCall: function {
                     byref9: false
                     argRef9: String
                     ptra9: false
+                    if (paramIsReceiverName
+                        :ast
+                        :symtab
+                        fid: fid9
+                        pname: fpnO9.stringview
+                    ) then ptra9 = true
                     if (symtab.typing.declOwnershipIs
                         pool: ast.names
                         parentTypeId: fid9
@@ -5624,6 +5650,12 @@ emitCrossUnitFnCall: function {
                     argRef8: String
                     vbh8c: String
                     ptra8: false
+                    if (paramIsReceiverName
+                        :ast
+                        :symtab
+                        :fid
+                        pname: fpnO8.stringview
+                    ) then ptra8 = true
                     if (symtab.typing.declOwnershipIs
                         pool: ast.names
                         parentTypeId: fid
@@ -6306,6 +6338,17 @@ emitCallValue: function {
                             name: fpnO8.stringview
                             own: ztypes.zparamownership.takeMode
                         )
+                        # The receiver is a pointer in both families, so a
+                        # value-typed one still needs `&`. Only this leg is
+                        # added, not the whole definition-side predicate: a
+                        # Map/Set argument is already a pointer here and must
+                        # not be addressed again.
+                        if (paramIsReceiverName
+                            :ast
+                            :symtab
+                            :fid
+                            pname: fpnO8.stringview
+                        ) then ptra8 = true
                         if pTake8 == false when (isReftypeParam :ast :symtab :ctx tid: fpid8) then {
                             ptra8 = true
                         } else {
@@ -7359,8 +7402,10 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                             if sda9.length > 0 then return "\{mc2}(\{sda9})"
                             return "\{mc2}()"
                         }
+                        # a receiver-taking method takes it by pointer in both
+                        # families, so address it unless it already is one
                         mrecv6: "\{bn2}"
-                        if rtt == ztypes.ztypetype.classType then {
+                        if (calleeTakesReceiverByPtr :ast :symtab fid: mco) then {
                             if (isPtrVid :ctx vid: bn2v9) == false then mrecv6 = "&\{bn2}"
                         }
                         ida9: renderedMethodDefaultArgs :ast :symtab :ctx fnTid: mco
@@ -7678,9 +7723,10 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                             return "\{ctx.svC}_\{mn2}(&\{svfn9})"
                         }
                         nmc9: ctxCname :ctx tid: nmco9
-                        nrttM9: symtab.reg.typetypeOf typeId: nlidM9
+                        # a receiver-taking method takes it by pointer in both
+                        # families, so address it unless it already is one
                         nmrecv9: "\{base9}"
-                        if nrttM9 == ztypes.ztypetype.classType then {
+                        if (calleeTakesReceiverByPtr :ast :symtab fid: nmco9) then {
                             dpu9: ast.nodes.get i: (n.parent - 1).u64
                             if (pathIsPointer :ast :symtab :ctx n: dpu9) == false then {
                                 nmrecv9 = "&\{base9}"
@@ -13491,6 +13537,46 @@ registerReftypeParams: function {
     }
 }
 
+# paramIsReceiverName -- is `pname` the method's receiver slot? `this` for the
+# `:this` shorthand, or the spelled name for `{a: this}`. The receiver is a
+# pointer in BOTH families, so a call passing a value-typed one must address it.
+# Call sites add this leg ALONE, never the whole definition-side predicate: a
+# Map or Set argument is already a pointer and must not be addressed again.
+paramIsReceiverName: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    fid: u64
+    pname: StringView
+} out bool is {
+    rnm9: "this".string
+    {
+        tpn9: (zast.poolTextCopy
+            pool: ast.names
+            ref: (symtab.reg.thisParamNameIdOf tid: fid)
+        )
+        if tpn9.length > 0 then rnm9 = tpn9
+    }
+    return (pname == rnm9.stringview)
+}
+
+# calleeTakesReceiverByPtr -- does this method's FIRST parameter occupy the
+# receiver slot? Only then does a call address the base. A valtype method whose
+# first parameter is an ordinary one of the same type (`double: function
+# {self: meters}`) still takes it by value.
+calleeTakesReceiverByPtr: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    fid: u64
+} out bool is {
+    fpN9: (List String)
+    fpI9: (List u64)
+    fpNm9: (List u64)
+    recFieldLists :ast :symtab tid: fid names: fpN9 ids: fpI9 nameIds: fpNm9
+    if fpN9.length == 0 then return false
+    fp09: fpN9.get i: 0
+    return (paramIsReceiverName :ast :symtab :fid pname: fp09.stringview)
+}
+
 # paramTypeIsPointer -- is a parameter's C type `T*`? A non-`take` user class
 # passes by reference, and the stdlib families answer separately because
 # isReftypeParam deliberately covers user classes only.
@@ -13513,6 +13599,22 @@ paramTypeIsPointer: function {
         name: pname
         own: ztypes.zparamownership.takeMode
     )
+    isHold9: (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: fid
+        name: pname
+        own: ztypes.zparamownership.holdMode
+    )
+    # The receiver is a reference in BOTH families -- its default is `borrow`,
+    # not `take`, so a record method acts on the caller's instance rather than
+    # on a copy of it.
+    if (isTake9) == false when (isHold9) == false then {
+        if pname == "this" then return true
+        rnid9: zast.poolFind pool: ast.names text: pname
+        if rnid9 > 0 then {
+            if (symtab.reg.thisParamNameIs tid: fid nameId: rnid9) then return true
+        }
+    }
     if (isTake9) == false when (isReftypeParam :ast :symtab :ctx tid: pid) then return true
     if (isBorrowStringParam :ast :symtab :fid :pname :pid) then return true
     if (isListPtrParam :ast :symtab :ctx :fid :pname tid: pid) then return true
@@ -19610,8 +19712,8 @@ emitProtocolImpl: function {
         smid: mids.get i: mi
         ret: methodRetCtype :ast :symtab :ctx mid: smid thisTid: protoTid
         wparams: "void* _data".string
+        # every method takes its receiver by pointer now, in both families
         cargs: "_self".string
-        if (implIsClass) == false then cargs = "(*_self)".string
         pnames: (List String)
         pids: (List u64)
         pidsNm: (List u64)
@@ -19737,7 +19839,7 @@ emitFacetImpl: function {
         smid: mids.get i: mi
         ret: methodRetCtype :ast :symtab :ctx mid: smid thisTid: facetTid
         wparams: "void* _data".string
-        cargs: "(*_self)".string
+        cargs: "_self".string
         pnames: (List String)
         pids: (List u64)
         pidsNm: (List u64)
@@ -22355,7 +22457,6 @@ emitOneMethod: function {
     ctx.exclTids = (List VidTid)
     encIsClass: false
     if (symtab.reg.typetypeOf typeId: thisTid9) == ztypes.ztypetype.classType then encIsClass = true
-    clsNm9: typeNameOfReg9 :symtab tid: thisTid9
     pi: u64
     pn: pnames.length
     for pi < pn loop {
@@ -22363,17 +22464,30 @@ emitOneMethod: function {
         pid: pids.get i: pi
         pt: typeRefC :ast :symtab :ctx tid: pid thisTid: thisTid9
         if pt.length == 0 then pt = "int64_t".string
-        if encIsClass then {
-            ptn9: typeNameOfReg9 :symtab tid: pid
-            isRecv9: false
-            if ptn9.stringview == "this" then isRecv9 = true
-            if ptn9.stringview == clsNm9.stringview then isRecv9 = true
-            if pid == thisTid9 then isRecv9 = true
-            if isRecv9 then {
-                pt = "\{pt}*"
-                pvd9: paramVidByNameId :ast :symtab :op nameId: (pidsNm.get i: pi)
-                ctx.ptrVids.append pvd9
-            } else {
+        # The receiver is identified by its PARAMETER name -- `this` for the
+        # `:this` shorthand, or the spelled name for `{a: this}` -- exactly as
+        # the call site names it. Keying on the parameter's TYPE instead would
+        # also catch a same-typed sibling (`add: function {a: this b: point}`
+        # takes two points), which classes hid by making both pointers anyway.
+        recvNm9: "this".string
+        {
+            tpnR9: (zast.poolTextCopy
+                pool: ast.names
+                ref: (symtab.reg.thisParamNameIdOf tid: mid)
+            )
+            if tpnR9.length > 0 then recvNm9 = tpnR9
+        }
+        isRecv9: false
+        if pname.stringview == recvNm9.stringview then isRecv9 = true
+        # The receiver is a reference in BOTH families: a record method acts on
+        # the caller's instance, not on a copy of it. The rest of the pointer
+        # rule still applies to class methods only.
+        if isRecv9 then {
+            pt = "\{pt}*"
+            pvd9: paramVidByNameId :ast :symtab :op nameId: (pidsNm.get i: pi)
+            ctx.ptrVids.append pvd9
+        } else {
+            if encIsClass then {
                 # a non-TAKE class param borrows the container (LOCK/BORROW, or the
                 # borrow-default whose ownership a cross-unit shell records as "none")
                 # -> pass by pointer. A `.take` (owning) class param stays by value:
