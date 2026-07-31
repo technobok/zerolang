@@ -1752,6 +1752,25 @@ isNumericLiteralName: function {name: StringView} out bool is {
     return false
 }
 
+# markerText -- a field or parameter marker's source spelling, for diagnostics.
+markerText: function {o: ztypes.zparamownership} out String is {
+    match (
+        o
+    ) case noneMode then {
+        return "".string
+    } case takeMode then {
+        return "take".string
+    } case borrowMode then {
+        return "borrow".string
+    } case lockMode then {
+        return "lock".string
+    } case viewMode then {
+        return "view".string
+    } case holdMode then {
+        return "hold".string
+    }
+}
+
 # isMoveMarker -- a value-position ownership-transfer marker. `.hold` moves its
 # source exactly as `.take` does; the two differ only in whether the destination
 # is frozen afterwards.
@@ -5959,12 +5978,21 @@ resolveClass: function {
             } else {
                 fname: zast.nameTextCopy :ast ref: fm.name
                 ftn: fieldHeadName :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
+                # A NON-OWNED field marker (lock / borrow / view) makes the
+                # slot static: it is set in the constructor, never reassigned,
+                # the constructor locks the caller's argument rather than
+                # taking it, and the field holds no destructor. An OWNED one
+                # (take / hold) is an ordinary field on all three counts --
+                # `hold` freezes the contents, not the slot.
                 lockField: false
                 flock0: pathOwnership :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
                 match (
                     flock0
                 ) case some then {
-                    lockField = true
+                    fOwned9: false
+                    if flock0 == ztypes.zparamownership.takeMode then fOwned9 = true
+                    if flock0 == ztypes.zparamownership.holdMode then fOwned9 = true
+                    if fOwned9 == false then lockField = true
                 } case none then null
                 mkey: "\{unitName}.\{defName}.\{ftn}"
                 mref: resolvedByKey :ast :ty :reg key: mkey
@@ -5988,6 +6016,16 @@ resolveClass: function {
                         parentTypeId: cid
                         name: fname.stringview
                     )
+                    match (
+                        flock0
+                    ) case some then {
+                        (ty.setChildOwnership
+                            pool: ast.names
+                            parentTypeId: cid
+                            name: fname.stringview
+                            ownership: flock0
+                        )
+                    } case none then null
                     # a sibling-member ref default: the construction fill
                     # stamps the default's node with the member's type.
                     pdk: nodeId n: (ast.nodes.get i: (fm.operation - 1).u64)
@@ -6047,6 +6085,16 @@ resolveClass: function {
                                 name: fname.stringview
                             )
                         }
+                        match (
+                            flock0
+                        ) case some then {
+                            (ty.setChildOwnership
+                                pool: ast.names
+                                parentTypeId: cid
+                                name: fname.stringview
+                                ownership: flock0
+                            )
+                        } case none then null
                         (recordTyperef
                             :ty
                             :reg
@@ -15416,7 +15464,20 @@ checkReassignment: function {
                 name: tfn9.stringview
             ) then {
                 tfnc9: tfn9.copy
-                md9: "Cannot reassign '.lock' field '\{tfnc9}' — lock fields are set at construction time and immutable"
+                tmk9: "lock".string
+                {
+                    tmo9: (st.typing.declOwnershipOfId
+                        parentTypeId: tto9
+                        nameId: (zast.poolFind pool: ast.names text: tfn9.stringview)
+                    )
+                    match (
+                        tmo9
+                    ) case some then {
+                        tmt9: markerText o: tmo9
+                        if tmt9.length > 0 then tmk9 = tmt9
+                    } case none then null
+                }
+                md9: "Cannot reassign '.\{tmk9}' field '\{tfnc9}' — a non-owned field is set at construction time and immutable"
                 (addError
                     :st
                     nodeid: rasgn.nodeid
