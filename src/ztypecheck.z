@@ -15182,6 +15182,42 @@ checkAssignment: function {
                 }
             } case none then null
         }
+        # Readonly is deep: a reftype read out of a readonly path is itself
+        # readonly, and takes the same self-lock. Without this the binding is
+        # a laundering step -- `i: c.sub` off a `view` receiver would hand back
+        # a freely mutable name.
+        roPath9: (List String)
+        appendValueTuple :ast n: av9 dst: roPath9
+        roDeep9: false
+        if roPath9.length > 1 when (typeIsReftype :st tid: vt) then {
+            if (pathIsReadonly :st :ast path: roPath9) then roDeep9 = true
+        }
+        if roDeep9 when (valueIsHold :ast n: av9) == false then {
+            rop9: (List String)
+            ropn9: (ast.names.texts.get i: (asgn.name - 1).u64).stringview.string
+            rop9.append ropn9
+            roh9: (ztypes.zlockholder
+                kind: ztypes.zlockholderkind.varKind
+                id: vid2
+            )
+            ror9: (st.tryLock
+                pool: ast.names
+                path: rop9
+                lockType: ztypes.zlockstate.shared
+                lockScope: ztypes.zlockscope.target
+                holder: roh9
+            )
+            if ror9.length > 0 then {
+                (addError
+                    :st
+                    nodeid: asgn.nodeid
+                    lineno: asgn.lineno
+                    colno: asgn.colno
+                    e: zast.err.ownerError
+                    msg: ror9
+                )
+            }
+        }
         if (valueIsHold :ast n: av9) when (typeIsReftype :st tid: vt) then {
             # Owned but frozen: the same readonly self-lock a `view` parameter
             # takes, so writes, mutating receivers and re-passing to a mutable
@@ -16959,6 +16995,27 @@ frozenFieldInPath: function {
         i9 = i9 + 1
     }
     return "".string
+}
+
+# pathIsReadonly -- true when a value path may only be read: it passes through
+# a `view`/`hold` field, or its root binding holds a readonly lock on itself (a
+# `view` parameter, a `hold` binding). Readonly is deep, so a binding taken
+# from such a path is readonly in turn -- otherwise the intermediate name
+# launders the restriction away.
+pathIsReadonly: function {st: zenv.ZSymbolTable ast: Ast path: List String} out bool is {
+    if path.length == 0 then return false
+    ff9: frozenFieldInPath :st :ast :path upTo: path.length
+    if ff9.length > 0 then return true
+    r9: path.get i: 0
+    rv9: st.lookupVarId nameId: (nameIdOf :ast name: r9.stringview)
+    if rv9.none then return false
+    lk9: st.findLock nameId: (nameIdOf :ast name: r9.stringview)
+    if lk9.none then return false
+    if lk9 != ztypes.zlockstate.shared then return false
+    lh9: st.findLockHolder nameId: (nameIdOf :ast name: r9.stringview)
+    if lh9.none then return false
+    if lh9.kind != ztypes.zlockholderkind.varKind then return false
+    return lh9.id == rv9
 }
 
 # checkFrozenWrite -- reject a mutation reaching through a readonly field.
