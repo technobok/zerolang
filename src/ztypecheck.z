@@ -612,10 +612,19 @@ methodReceiverIsView: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     }
 }
 
-# isContainerReaderCall -- a synthesized container method known not to
-# mutate its receiver: the call's receiver lock is SHARED so readers
-# coexist with live views (many readers XOR one writer XOR one exclusive
-# iterator). Writers and user methods (opaque bodies) stay EXCLUSIVE.
+# isContainerReaderCall -- the container methods whose receiver lock is
+# SHARED but which cannot say so themselves. Everything a `.view` receiver
+# can express has moved to the declarations (methodReceiverIsView, ORed in at
+# every call site); what is left is what a marker cannot cover:
+#
+#   get / getv / listview hand out a mutable interior pointer, so their C
+#   refuses a const receiver and `.view` would let a caller write through an
+#   alias obtained from a readonly receiver;
+#   MapEntry.key / .value are projections through the entry pointer with no
+#   method declaration to mark;
+#   copy is the universal `.copy` marker, which resolves to no method either.
+#
+# Writers and user methods (opaque bodies) stay EXCLUSIVE.
 isContainerReaderCall: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -631,26 +640,17 @@ isContainerReaderCall: function {
     if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "Map") then {
         if mname == "get" then return true
         if mname == "getv" then return true
-        if mname == "has" then return true
-        if mname == "length" then return true
-        if mname == "capacity" then return true
         if mname == "copy" then return true
         return false
     }
     if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "Set") then {
-        if mname == "has" then return true
-        if mname == "length" then return true
-        if mname == "capacity" then return true
         if mname == "copy" then return true
         return false
     }
     if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "List") then {
         if mname == "get" then return true
-        if mname == "contains" then return true
-        if mname == "length" then return true
-        if mname == "capacity" then return true
-        if mname == "copy" then return true
         if mname == "listview" then return true
+        if mname == "copy" then return true
         return false
     }
     if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapEntry") then {
@@ -659,10 +659,8 @@ isContainerReaderCall: function {
         return false
     }
     if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "String") then {
-        if mname == "length" then return true
-        if mname == "compare" then return true
-        if mname == "copy" then return true
         if mname == "stringview" then return true
+        if mname == "copy" then return true
         return false
     }
     return false
