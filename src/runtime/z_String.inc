@@ -119,7 +119,7 @@ static z_String_t z_String_create(uint64_t cap) {
     return z;
 }
 
-static z_String_t z_String_copy(z_String_t* s) {
+static z_String_t z_String_copy(const z_String_t* s) {
     z_String_t z = {0};
     z.size = s->size;
     z.capacity = s->size + 1;

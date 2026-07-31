@@ -170,7 +170,7 @@ static z_t74_t z_t74_create(uint64_t cap) {
     return z;
 }
 
-static z_t74_t z_t74_copy(z_t74_t* s) {
+static z_t74_t z_t74_copy(const z_t74_t* s) {
     z_t74_t z = {0};
     z.size = s->size;
     z.capacity = s->size + 1;
