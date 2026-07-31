@@ -423,16 +423,7 @@ member-guard:
 # register cannot go stale. String's comparisons are the reason the last kind
 # exists: `s1 == s2` does not call z_String_eq (which nothing calls) -- it
 # converts both sides to by-value views and calls z_StringView_eq.
-#
-# VIEW_GUARD_STORED is the one account the C compiler cannot give: the
-# container iterators RECEIVE the container and keep the pointer, reading
-# through it on each step. Nothing writes through it -- but the element each
-# step yields travels in the OptionView's single `void*` payload, which is
-# shared with the readers that hand out a MUTABLE interior pointer on purpose
-# (List.get's write-back is load-bearing). Const would have to propagate into
-# that payload and break them, so these four are const-checked by inspection
-# and listed here. A stored entry whose C becomes const-checked is an error,
-# exactly like a stale VIEW_GUARD_INLINE entry.
+
 VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:List z_Map.c.tmpl=@@NAME@@:Map \
   z_MapIter.c.tmpl=@@NAME@@:Map,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
   z_Set.c.tmpl=@@NAME@@:Set,@@SETITER@@:SetIter
@@ -444,7 +435,6 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   StringView.print StringView.indexOfRaw StringView.replaceImpl \
   List.destroy List.grow Map.destroy Map.grow Map.find \
   Set.destroy Set.grow Set.find MapEntry.key MapEntry.value
-VIEW_GUARD_STORED := List.iterate Map.iterate Map.iterateItems Set.iterate
 VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   List.length:inline List.capacity:inline ListView.length:inline \
   Map.length:inline Map.capacity:inline Set.length:inline Set.capacity:inline \
@@ -629,8 +619,6 @@ isemit {
 END {
     ni = split(INTERNAL, iv, " ")
     for (i = 1; i <= ni; i++) internal[iv[i]] = 1
-    ns = split(STORED, sv, " ")
-    for (i = 1; i <= ns; i++) stored[sv[i]] = 1
 
     for (i = 1; i <= cn; i++) {
         key = cord[i]
@@ -645,20 +633,6 @@ END {
         if (ckind[key] == "byvalue") { nval++; continue }
         isc = (ckind[key] == "const")
         isv = (dkind[key] == "view")
-        if ((t "." m) in stored) {
-            if (isc) {
-                print "view-guard FAIL: " t "." m " is in VIEW_GUARD_STORED but " cfn[key] " has a const receiver -- drop the entry, the const check covers it"
-                bad = 1
-                continue
-            }
-            if (!isv) {
-                print "view-guard FAIL: " t "." m " is in VIEW_GUARD_STORED but is not declared '.view' -- the register accounts for view receivers only"
-                bad = 1
-                continue
-            }
-            nstor++
-            continue
-        }
         checked++
         if (isc && isv) { nview++; continue }
         if (isc && !isv) {
@@ -707,7 +681,7 @@ END {
     }
 
     if (bad) exit 1
-    printf "view-guard OK: %d native receivers const-checked in C (%d '.view'), %d by-value, %d stored, %d registered, %d internal\n", checked, nview, nval, nstor, nreg, nint
+    printf "view-guard OK: %d native receivers const-checked in C (%d '.view'), %d by-value, %d registered, %d internal\n", checked, nview, nval, nreg, nint
 }
 endef
 export VIEW_GUARD_AWK
@@ -715,7 +689,7 @@ export VIEW_GUARD_AWK
 view-guard:
 	@awk -v PH='$(VIEW_GUARD_PLACEHOLDER)' -v ALIAS='$(VIEW_GUARD_BACKS)' \
 	  -v INTERNAL='$(VIEW_GUARD_INTERNAL)' -v EMITTED='$(VIEW_GUARD_EMITTED)' \
-	  -v INLINE='$(VIEW_GUARD_INLINE)' -v STORED='$(VIEW_GUARD_STORED)' \
+	  -v INLINE='$(VIEW_GUARD_INLINE)' \
 	  "$$VIEW_GUARD_AWK" lib/system/*.z src/zemitterc.z \
 	  src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl
 
