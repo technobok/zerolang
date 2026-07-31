@@ -31,12 +31,15 @@ List: class {
     get: function {t: this.lock i: u64} out of.borrow is native
     set: function {:this i: u64 val: of.take} out of is native
     pop: function {:this} out of is native
-    contains: function {t: this.view item: of.borrow} out bool is native
+    contains: function {t: this.view item: of.view} out bool is native
     sort: function {:this} is native
     length: function {t: this.view} out u64 is native
     capacity: function {t: this.view} out u64 is native
     listview: function {t: this.lock} out (ListView :of).borrow is native
-    iterate: function {t: this.lock} out (ListIter :of).borrow is native
+    # the readonly walk: a SHARED receiver, so several may run at once and the
+    # container stays readable throughout -- and the elements it yields are
+    # readonly. `iterateMut` is the exclusive twin for writing through them.
+    iterate: function {t: this.view} out (ListIter :of).borrow is native
     # the mutable walk: an exclusive receiver, so the elements it yields may
     # be written through. `iterate` is the readonly twin (see getMut/get).
     iterateMut: function {t: this.lock} out (ListIter :of).borrow is native
@@ -79,15 +82,17 @@ ByteView: class { val: (ListView of: u8).typedef }
 
 # a hash map from `key` to `value`.
 Map: class {
-    get: function {:this key: key.borrow} out (Option of: value) is native
+    get: function {:this key: key.view} out (Option of: value) is native
     # String-keyed maps only: look up by view without materializing a key
     getv: function {:this key: StringView} out (Option of: value) is native
     set: function {:this key: key.take value: value.take} is native
-    has: function {t: this.view key: key.borrow} out bool is native
-    remove: function {:this key: key.borrow} out (Option of: value) is native
+    has: function {t: this.view key: key.view} out bool is native
+    remove: function {:this key: key.view} out (Option of: value) is native
     length: function {t: this.view} out u64 is native
     capacity: function {t: this.view} out u64 is native
-    iterate: function {t: this.lock} out (MapKeyIter :key :value).borrow is native
+    # readonly, and with no mutable twin by design: a key is hashed, so writing
+    # through one in place would put the entry in the wrong bucket.
+    iterate: function {t: this.view} out (MapKeyIter :key :value).borrow is native
     iterateItems: function {t: this.lock} out (MapItemIter :key :value).borrow is native
     create: function {capacity: 0.u64} out type is native
 } as {
@@ -110,11 +115,12 @@ MapKeyIter: class is native as {
 # a hash set of unique `of` elements.
 Set: class {
     add: function {:this item: of.take} out bool is native
-    has: function {t: this.view item: of.borrow} out bool is native
-    delete: function {:this item: of.borrow} out bool is native
+    has: function {t: this.view item: of.view} out bool is native
+    delete: function {:this item: of.view} out bool is native
     length: function {t: this.view} out u64 is native
     capacity: function {t: this.view} out u64 is native
-    iterate: function {t: this.lock} out (SetIter :of).borrow is native
+    # readonly, and with no mutable twin: an item IS the key here (see Map).
+    iterate: function {t: this.view} out (SetIter :of).borrow is native
     create: function {capacity: 0.u64} out type is native
 } as {
     of: Any.generic

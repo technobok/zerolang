@@ -15063,7 +15063,7 @@ shadowCollapseIfSingle: function {ast: Ast st: zenv.ZSymbolTable name: StringVie
 # (or failing negated) fact SHADOW-narrows to the arm (the bare name is
 # the payload); the opposite excludes it, and an exclusion that leaves a
 # single payload arm collapses to the same shadow form.
-applyPredFact: function {ast: Ast st: zenv.ZSymbolTable f: ArmPredFact holds: bool} is {
+applyPredFact: function {ast: Ast st: zenv.ZSymbolTable f: ArmPredFact.view holds: bool} is {
     doNarrow9: false
     if holds when (f.negated) == false then doNarrow9 = true
     if (holds) == false when f.negated then doNarrow9 = true
@@ -15876,6 +15876,14 @@ checkWith: function {
             own = ztypes.zownership.borrowed
         }
         v: st.reg.newVariable ztypeId: vt ownership: own
+        # the borrow origin, as a plain binding records it: what this alias is
+        # a reference INTO. A for-loop over an iterator alias reads it back to
+        # learn how strongly the alias pins the container it walks.
+        if btgt.length > 0 then {
+            w0: btgt.get i: 0
+            wbo: w0.copy
+            v.borrowOrigin = (Option.some wbo)
+        }
         vid: v.variableId
         st.defineVar nameId: withnode.name var: v
         vid2: vid
@@ -16259,10 +16267,10 @@ checkFor: function {
                         # nothing pending here -- its binding took the lock.
                         fbs9: (List String)
                         takePendingBorrow :st dst: fbs9
+                        flf9: isViewFamilyTid :ast :st tid: vt
+                        if st.typing.pendingBorrowShared then flf9 = true
+                        st.typing.pendingBorrowShared = false
                         if fbs9.length > 0 then {
-                            flf9: isViewFamilyTid :ast :st tid: vt
-                            if st.typing.pendingBorrowShared then flf9 = true
-                            st.typing.pendingBorrowShared = false
                             fcn9: ast.nodes.get i: (cond.operation - 1).u64
                             fnd9: nodeId n: fcn9
                             fln9: nodeLine n: fcn9
@@ -16277,6 +16285,37 @@ checkFor: function {
                                 lineno: fln9
                                 colno: fcl9
                             )
+                        }
+                        # The element is a reference derived from the lock its
+                        # holder has on the container, so it inherits that
+                        # lock's strength: a SHARED pin (a `view` iterator
+                        # receiver) yields READONLY elements, an exclusive one
+                        # yields writable ones. The binding-free form knows its
+                        # own strength; the `with` form has to ask its binding.
+                        elr9: flf9
+                        if fbs9.length == 0 then {
+                            elr9 = (iterElementIsReadonly
+                                :st
+                                :ast
+                                iterName: srcName.stringview
+                            )
+                        }
+                        if elr9 then {
+                            erm9: readonlySelfLock :st :ast name: nm.stringview :vid
+                            if erm9.length > 0 then {
+                                ecn9: ast.nodes.get i: (cond.operation - 1).u64
+                                end9: nodeId n: ecn9
+                                eln9: nodeLine n: ecn9
+                                ecl9: nodeCol n: ecn9
+                                (addError
+                                    :st
+                                    nodeid: end9
+                                    lineno: eln9
+                                    colno: ecl9
+                                    e: zast.err.ownerError
+                                    msg: erm9
+                                )
+                            }
                         }
                     } else {
                         (st.define
@@ -17361,6 +17400,42 @@ readonlySelfLock: function {
         lockScope: ztypes.zlockscope.target
         holder: rsh9
     )
+}
+
+# iterElementIsReadonly -- ask an iterator BINDING what strength of lock it
+# holds on the container it walks. A `view` iterator receiver pins SHARED, so
+# the elements it hands out may only be read; an exclusive pin yields writable
+# ones. Unlike pathIsReadonly this is not a self-lock question -- the holder is
+# the iterator and the locked path is the container it recorded as its borrow
+# origin.
+iterElementIsReadonly: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    iterName: StringView
+} out bool is {
+    if iterName.length == 0 then return false
+    ivo9: st.lookupVarId nameId: (nameIdOf :ast name: iterName)
+    if ivo9.none then return false
+    # the container name, copied OUT of the map view: the view holds a shared
+    # lock on st for its scope, and the lock queries below want st exclusively.
+    ocn9: String
+    {
+        oro9: st.typing.variableBorrowOrigin.get key: ivo9
+        match (
+            oro9
+        ) case some then {
+            ocn9 = oro9.copy
+        } case none then null
+    }
+    if ocn9.length == 0 then return false
+    cnd9: nameIdOf :ast name: ocn9.stringview
+    clk9: st.findLock nameId: cnd9
+    if clk9.none then return false
+    if clk9 != ztypes.zlockstate.shared then return false
+    clh9: st.findLockHolder nameId: cnd9
+    if clh9.none then return false
+    if clh9.kind != ztypes.zlockholderkind.varKind then return false
+    return clh9.id == ivo9
 }
 
 # nameIsReadonly -- the one-segment form of pathIsReadonly. A `view` parameter,
