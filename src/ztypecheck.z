@@ -3332,18 +3332,52 @@ nameIsInUnitReftype: function {
 # expression: an atom name directly, or the callable of a parenthesized
 # `(List of: i64)` form (an expression wrapping a call). "" for anything else.
 # returnHasBorrowMarkerNode / returnHasBorrowMarker -- the function's return
-# type carries the `.borrow` marker (`out StringView.borrow`).
+# type carries a REFERENCE marker: `out T.borrow` hands back a mutable
+# reference into the receiver, `out T.view` a readonly one. Both pin the
+# receiver for the result binding's scope; they differ only in how strongly
+# (returnHasViewMarker picks that apart).
 returnHasBorrowMarkerNode: function {ast: Ast n: Node} out bool is {
     match (
         n
     ) case expression then {
         return (returnHasBorrowMarkerNode :ast n: (ast.nodes.get i: (n.expression - 1).u64))
-    } case dottedpath then {
-        cn: atomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        return cn.stringview == "borrow"
     } else {
-        return false
+        rbo9: pathOwnership :ast :n
+        match (
+            rbo9
+        ) case some then {
+            if rbo9 == ztypes.zparamownership.borrowMode then return true
+            return rbo9 == ztypes.zparamownership.viewMode
+        } case none then {
+            return false
+        }
     }
+}
+
+# returnHasViewMarkerNode / returnHasViewMarker -- the reference the return
+# hands back is READONLY (`out T.view`), so the pin it leaves on the receiver
+# is shared: several such references may be live at once.
+returnHasViewMarkerNode: function {ast: Ast n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (returnHasViewMarkerNode :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } else {
+        rvo9: pathOwnership :ast :n
+        match (
+            rvo9
+        ) case some then {
+            return rvo9 == ztypes.zparamownership.viewMode
+        } case none then {
+            return false
+        }
+    }
+}
+
+returnHasViewMarker: function {ast: Ast oId: u32} out bool is {
+    if oId == 0 then return false
+    o: ast.nodes.get i: (oId - 1).u64
+    return (returnHasViewMarkerNode :ast n: o)
 }
 
 # true when operation `oId`'s return type carries a `.borrow` marker.
@@ -3856,6 +3890,11 @@ resolveFunction: function {
         fbk: fid
         fbv: true
         ty.funcReturnsBorrow.set key: fbk value: fbv
+        if (returnHasViewMarker :ast oId: fnode.returntype) then {
+            fvk: fid
+            fvv: true
+            ty.funcReturnsView.set key: fvk value: fvv
+        }
     }
     checkBorrowReturnLock :ast :ty :fnode :defName
     if fnDecl9 > 0 then {
@@ -10485,6 +10524,9 @@ cloneMethodInto: function {
     if isNat0 then reg.setNative typeId: fid5 value: true
     if tpn0id > 0 then reg.setThisParamName typeId: fid5 nameId: tpn0id
     tpn0: zast.poolTextCopy pool: ast.names ref: tpn0id
+    if (optBoolOr o: (ty.funcReturnsView.get key: tplFnId) d: false) then {
+        ty.funcReturnsView.set key: fid5 value: true
+    }
     if (optBoolOr o: (ty.funcReturnsBorrow.get key: tplFnId) d: false) then {
         ty.funcReturnsBorrow.set key: fid5 value: true
     }
@@ -14371,6 +14413,12 @@ checkDotted: function {
                                 st.typing.pendingBorrowShared = true
                             }
                         }
+                        # An `out T.view` result is a READONLY reference: shared pin,
+                        # and the binding it lands on may only be read.
+                        if (optBoolOr o: (st.typing.funcReturnsView.get key: mo) d: false) then {
+                            st.typing.pendingBorrowShared = true
+                            st.typing.pendingBorrowReadonly = true
+                        }
                     } else {
                         drainPendingBorrow :st
                     }
@@ -15276,12 +15324,28 @@ checkAssignment: function {
             bo: r0.copy
             v.borrowOrigin = (Option.some bo)
         }
+        roRef9: st.typing.pendingBorrowReadonly
+        st.typing.pendingBorrowReadonly = false
         st.defineVar nameId: asgn.name var: v
         vid2: vid
         st.typing.defVariableId.set key: asgn.nodeid.u64 value: vid2
         st.typing.variableOrigin.set key: vid2 value: false
         setk: vt
         stampGate :st nid: asgn.nodeid.u64 tid: setk
+        if roRef9 then {
+            rrn9: (ast.names.texts.get i: (asgn.name - 1).u64).stringview.string
+            rrr9: readonlySelfLock :st :ast name: rrn9.stringview vid: vid2
+            if rrr9.length > 0 then {
+                (addError
+                    :st
+                    nodeid: asgn.nodeid
+                    lineno: asgn.lineno
+                    colno: asgn.colno
+                    e: zast.err.ownerError
+                    msg: rrr9
+                )
+            }
+        }
         rn5: bareAtomName :ast n: av9
         # The readonly test runs OUTSIDE the destructor gate below: a frozen
         # binding may not be moved out of whether or not its type owns heap,
@@ -17040,6 +17104,7 @@ appendValueTuple: function {ast: Ast n: Node dst: List String} is {
 drainPendingBorrow: function {st: zenv.ZSymbolTable} is {
     for st.typing.pendingBorrowPath.length > 0 loop st.typing.pendingBorrowPath.pop
     st.typing.pendingBorrowShared = false
+    st.typing.pendingBorrowReadonly = false
 }
 
 # drain the pending-borrow markers accumulated during argument hoisting.
@@ -17053,8 +17118,10 @@ takePendingBorrow: function {st: zenv.ZSymbolTable dst: List String} is {
         i = i + 1
     }
     sh9: st.typing.pendingBorrowShared
+    ro9: st.typing.pendingBorrowReadonly
     drainPendingBorrow :st
     st.typing.pendingBorrowShared = sh9
+    st.typing.pendingBorrowReadonly = ro9
 }
 
 # installBorrowLocks -- SHARED on every path prefix, EXCLUSIVE on the leaf
@@ -17239,6 +17306,34 @@ pathIsReadonly: function {st: zenv.ZSymbolTable ast: Ast path: List String} out 
     if lh9.none then return false
     if lh9.kind != ztypes.zlockholderkind.varKind then return false
     return lh9.id == rv9
+}
+
+# readonlySelfLock -- make `name` a readonly binding: it holds a shared lock on
+# ITSELF, which is how a `view` parameter, a `hold` local, a marked match-arm
+# payload and an `out T.view` result all say the same thing. Returns the
+# conflict message, or "" when the lock was taken.
+readonlySelfLock: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    name: StringView
+    vid: u64
+} out String is {
+    if name.length == 0 then return "".string
+    if vid == 0 then return "".string
+    rsp9: (List String)
+    rsn9: name.string
+    rsp9.append rsn9
+    rsh9: (ztypes.zlockholder
+        kind: ztypes.zlockholderkind.varKind
+        id: vid
+    )
+    return (st.tryLock
+        pool: ast.names
+        path: rsp9
+        lockType: ztypes.zlockstate.shared
+        lockScope: ztypes.zlockscope.target
+        holder: rsh9
+    )
 }
 
 # nameIsReadonly -- the one-segment form of pathIsReadonly. A `view` parameter,
@@ -19149,6 +19244,15 @@ checkCall: function {
                                         st.typing.pendingBorrowShared = true
                                     }
                                 }
+                                # An `out T.view` result is a READONLY reference: shared pin,
+                                # and the binding it lands on may only be read.
+                                if (optBoolOr
+                                    o: (st.typing.funcReturnsView.get key: dro)
+                                    d: false
+                                ) then {
+                                    st.typing.pendingBorrowShared = true
+                                    st.typing.pendingBorrowReadonly = true
+                                }
                                 pushedB = true
                             } case none then null
                         }
@@ -19162,6 +19266,15 @@ checkCall: function {
                                 if (methodReceiverIsView :st mid: dro) then {
                                     st.typing.pendingBorrowShared = true
                                 }
+                            }
+                            # An `out T.view` result is a READONLY reference: shared pin,
+                            # and the binding it lands on may only be read.
+                            if (optBoolOr
+                                o: (st.typing.funcReturnsView.get key: dro)
+                                d: false
+                            ) then {
+                                st.typing.pendingBorrowShared = true
+                                st.typing.pendingBorrowReadonly = true
                             }
                         }
                     }
@@ -19732,6 +19845,12 @@ checkCall: function {
                         if (methodReceiverIsView :st mid: funcId) then {
                             st.typing.pendingBorrowShared = true
                         }
+                    }
+                    # An `out T.view` result is a READONLY reference: shared pin,
+                    # and the binding it lands on may only be read.
+                    if (optBoolOr o: (st.typing.funcReturnsView.get key: funcId) d: false) then {
+                        st.typing.pendingBorrowShared = true
+                        st.typing.pendingBorrowReadonly = true
                     }
                 }
             }
