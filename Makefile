@@ -389,14 +389,19 @@ member-guard:
 # `.view` declaration must have a const receiver in its backing, and a const
 # receiver must be declared `.view` so the marker does not go unused.
 #
-# Backings come in three shapes: one fragment per method under
-# src/runtime/natives, many functions in one file (z_String.inc), and the
-# @@NAME@@ container templates. So a receiver is found by TYPE rather than by
-# parameter name -- the first parameter whose struct is the function's own
-# prefix, which covers self / _this / _it / _e / s / a alike.
-# VIEW_GUARD_PLACEHOLDER names the type each template placeholder stands for;
-# an unmapped placeholder names a user type or a valtype (array, str, the
-# protocol vtable, meta.create), and `.view` does not apply to either.
+# Backings come in four shapes: one fragment per method under
+# src/runtime/natives, many functions in one file (z_String.inc), the @@NAME@@
+# container templates, and C the emitter builds from string literals (List.get,
+# .contains, .listview, .sort, .iterate, ListIter.call, Map.getv). So a receiver
+# is found by TYPE rather than by parameter name -- the first parameter whose
+# struct is the function's own prefix, which covers self / _this / _it / _e /
+# s / a alike. VIEW_GUARD_PLACEHOLDER names the type each template placeholder
+# stands for; an unmapped placeholder names a user type or a valtype (array,
+# str, the protocol vtable, meta.create), and `.view` does not apply to either.
+# An emitter-built function names a runtime mono rather than a type the guard
+# can read, so VIEW_GUARD_EMITTED says which declaration each one backs; `-`
+# marks the ones backing no reference-type method at all (array / str value
+# equality, a union destructor, List.extendView).
 #
 # A receiver-bearing C function that resolves to no declaration is an ERROR,
 # not a skip -- a silently unchecked backing is exactly what the guard exists
@@ -406,6 +411,9 @@ member-guard:
 VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:List z_Map.c.tmpl=@@NAME@@:Map \
   z_MapIter.c.tmpl=@@NAME@@:Map,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
   z_Set.c.tmpl=@@NAME@@:Set,@@SETITER@@:SetIter
+VIEW_GUARD_EMITTED := get:List.get,ListView.get contains:List.contains \
+  listview:List.listview sort:List.sort iterate:List.iterate call:ListIter.call \
+  getv:Map.getv eq:- extendView:- destroy:-
 VIEW_GUARD_BACKS := String.eq===,!= String.cmp=compare,<,<=,>,>= \
   StringView.eq===,!= StringView.cmp=compare,<,<=,>,>=
 VIEW_GUARD_INTERNAL := String.cat String.print String.free \
@@ -435,9 +443,90 @@ function declEmit() {
     dkind[dty " " dmeth] = dm
 }
 
+# One (type, method) -> receiver class. A prototype and its definition must
+# agree, so a disagreement is itself a finding.
+function crow(t, m, k, f,   key) {
+    key = t " " m
+    if (key in ckind && ckind[key] != k) {
+        print "view-guard FAIL: " t "." m " is backed by both a " ckind[key] " and a " k " receiver (" cfn[key] ") -- a prototype and its definition disagree"
+        bad = 1
+        return
+    }
+    if (!(key in ckind)) cord[++cn] = key
+    ckind[key] = k
+    cfn[key] = f
+}
+
+# A C signature whose FIRST parameter is its own struct declares a receiver.
+# Keying on the type rather than the parameter name covers self / _this / _it /
+# _e / s / a alike, and reads the method straight off the C name.
+function scanSig(sig, emitted,   fname, rest, ce, cc, p1, pty, cty, pfx, cm, ck, i, na, al, e, hit, nm, ms, j) {
+    if (match(sig, /z_[A-Za-z0-9_@]+[ \t]*\(/) == 0) return
+    fname = substr(sig, RSTART, RLENGTH)
+    rest = substr(sig, RSTART + RLENGTH)
+    sub(/[ \t]*\($$/, "", fname)
+
+    ce = index(rest, ",")
+    cc = index(rest, ")")
+    if (ce == 0 || (cc > 0 && cc < ce)) ce = cc
+    if (ce == 0) return
+    p1 = substr(rest, 1, ce - 1)
+
+    if (match(p1, /z_[A-Za-z0-9_@]+_t/) == 0) return
+    pty = substr(p1, RSTART, RLENGTH)
+    cty = substr(pty, 3, length(pty) - 4)
+    pfx = "z_" cty "_"
+    if (substr(fname, 1, length(pfx)) != pfx) return
+    cm = camel(substr(fname, length(pfx) + 1))
+    if (cm == "") return
+    ck = (p1 ~ /\*/) ? ((p1 ~ /const/) ? "const" : "ptr") : "byvalue"
+
+    # The emitter builds its C from string literals, so the type is a runtime
+    # mono name rather than a spelling the guard can read: VIEW_GUARD_EMITTED
+    # says which declaration each of those functions backs.
+    if (emitted) {
+        na = split(EMITTED, al, " ")
+        for (i = 1; i <= na; i++) {
+            e = index(al[i], ":")
+            if (substr(al[i], 1, e - 1) != cm) continue
+            if (substr(al[i], e + 1) == "-") return
+            nm = split(substr(al[i], e + 1), ms, ",")
+            for (j = 1; j <= nm; j++) {
+                sub(/\./, " ", ms[j])
+                split(ms[j], mt, " ")
+                crow(mt[1], mt[2], ck, "the emitter's z_..._" cm)
+            }
+            return
+        }
+        print "view-guard FAIL: the emitter builds a z_..._" cm " with a receiver but VIEW_GUARD_EMITTED does not say which declaration it backs"
+        bad = 1
+        return
+    }
+
+    # A placeholder with no mapping names a user type or a valtype (array, str,
+    # the protocol vtable, meta.create): .view does not apply there.
+    if (cty in ph) cty = ph[cty]
+    else if (cty ~ /@@/) return
+
+    # One C function can back several declarations (z_String_cmp is compare and
+    # the four orderings); expand it into one row per method it backs.
+    na = split(ALIAS, al, " ")
+    hit = 0
+    for (i = 1; i <= na; i++) {
+        e = index(al[i], "=")
+        if (substr(al[i], 1, e - 1) != cty "." cm) continue
+        hit = 1
+        nm = split(substr(al[i], e + 1), ms, ",")
+        for (j = 1; j <= nm; j++) crow(cty, ms[j], ck, fname)
+    }
+    if (!hit) crow(cty, cm, ck, fname)
+}
+
 FNR == 1 {
-    if (FILENAME ~ /\.z$$/) { dty = ""; grab = 0 }
-    else {
+    isdecl = (FILENAME ~ /lib\/system\/.*\.z$$/)
+    isemit = (FILENAME ~ /zemitterc\.z$$/)
+    if (isdecl) { dty = ""; grab = 0 }
+    else if (!isemit) {
         base = FILENAME; sub(/.*\//, "", base)
         delete ph
         np = split(PH, pf, " ")
@@ -456,7 +545,7 @@ FNR == 1 {
 
 # ---------------- declaration side ----------------
 
-FILENAME ~ /\.z$$/ {
+isdecl {
     if ($$0 ~ /^[A-Za-z][A-Za-z0-9]*: (class|union|protocol)/) {
         dty = $$1; sub(/:.*/, "", dty); grab = 0; next
     }
@@ -479,9 +568,18 @@ FILENAME ~ /\.z$$/ {
     next
 }
 
-# ---------------- C backing side ----------------
-# A definition whose FIRST parameter is its own struct is a receiver. Keying on
-# the type rather than the parameter name covers self / _this / _it / _e / s / a.
+# ---------------- C the emitter builds ----------------
+# A `"static ...` literal, with every \{interpolation} folded to a placeholder.
+
+isemit {
+    if (index($$0, "\"static ") == 0) next
+    lit = substr($$0, index($$0, "\"static ") + 1)
+    gsub(/\\[{][^}]*[}]/, "@@", lit)
+    scanSig(lit, 1)
+    next
+}
+
+# ---------------- C backing files ----------------
 
 {
     if (cap) buf = buf " " $$0
@@ -489,57 +587,7 @@ FILENAME ~ /\.z$$/ {
     else next
     if (index(buf, ")") == 0) next
     cap = 0
-
-    if (match(buf, /z_[A-Za-z0-9_@]+[ \t]*\(/) == 0) next
-    fname = substr(buf, RSTART, RLENGTH)
-    rest = substr(buf, RSTART + RLENGTH)
-    sub(/[ \t]*\($$/, "", fname)
-
-    ce = index(rest, ",")
-    cc = index(rest, ")")
-    if (ce == 0 || (cc > 0 && cc < ce)) ce = cc
-    if (ce == 0) next
-    p1 = substr(rest, 1, ce - 1)
-
-    if (match(p1, /z_[A-Za-z0-9_@]+_t/) == 0) next
-    pty = substr(p1, RSTART, RLENGTH)
-    cty = substr(pty, 3, length(pty) - 4)
-    pfx = "z_" cty "_"
-    if (substr(fname, 1, length(pfx)) != pfx) next
-    cm = camel(substr(fname, length(pfx) + 1))
-    if (cm == "") next
-
-    # A placeholder with no mapping names a user type or a valtype (array, str,
-    # the protocol vtable, meta.create): .view does not apply there.
-    if (cty in ph) cty = ph[cty]
-    else if (cty ~ /@@/) next
-
-    ck = (p1 ~ /\*/) ? ((p1 ~ /const/) ? "const" : "ptr") : "byvalue"
-
-    # One C function can back several declarations (z_String_cmp is compare and
-    # the four orderings); expand it into one row per method it backs.
-    na = split(ALIAS, al, " ")
-    hit = 0
-    for (i = 1; i <= na; i++) {
-        e = index(al[i], "=")
-        if (substr(al[i], 1, e - 1) != cty "." cm) continue
-        hit = 1
-        nm = split(substr(al[i], e + 1), ms, ",")
-        for (j = 1; j <= nm; j++) crow(cty, ms[j], ck, fname)
-    }
-    if (!hit) crow(cty, cm, ck, fname)
-}
-
-function crow(t, m, k, f,   key) {
-    key = t " " m
-    if (key in ckind && ckind[key] != k) {
-        print "view-guard FAIL: " key " has both a " ckind[key] " and a " k " receiver in C (" cfn[key] " / " f ")"
-        bad = 1
-        return
-    }
-    if (!(key in ckind)) cord[++cn] = key
-    ckind[key] = k
-    cfn[key] = f
+    scanSig(buf, 0)
 }
 
 END {
@@ -577,8 +625,9 @@ export VIEW_GUARD_AWK
 
 view-guard:
 	@awk -v PH='$(VIEW_GUARD_PLACEHOLDER)' -v ALIAS='$(VIEW_GUARD_BACKS)' \
-	  -v INTERNAL='$(VIEW_GUARD_INTERNAL)' "$$VIEW_GUARD_AWK" \
-	  lib/system/*.z src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl
+	  -v INTERNAL='$(VIEW_GUARD_INTERNAL)' -v EMITTED='$(VIEW_GUARD_EMITTED)' \
+	  "$$VIEW_GUARD_AWK" lib/system/*.z src/zemitterc.z \
+	  src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl
 
 # fallback-guard -- the emitter must never silently degrade: a construct it
 # cannot emit leaves a "/* zemitterc: unhandled ... */" marker in the C (and
