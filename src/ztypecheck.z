@@ -15190,7 +15190,9 @@ checkAssignment: function {
         appendValueTuple :ast n: av9 dst: roPath9
         roDeep9: false
         if roPath9.length > 1 when (typeIsReftype :st tid: vt) then {
-            if (pathIsReadonly :st :ast path: roPath9) then roDeep9 = true
+            if (pathLeafIsMethod :st :ast path: roPath9) == false then {
+                if (pathIsReadonly :st :ast path: roPath9) then roDeep9 = true
+            }
         }
         if roDeep9 when (valueIsHold :ast n: av9) == false then {
             rop9: (List String)
@@ -16995,6 +16997,51 @@ frozenFieldInPath: function {
         i9 = i9 + 1
     }
     return "".string
+}
+
+# pathLeafIsMethod -- the last segment of a path names a METHOD rather than a
+# field. A call's result ownership is its signature's business -- `.copy` and
+# every owned return are fresh values -- so the deep-readonly rule, which is
+# about reading a reftype field out of a readonly path, must not claim them.
+pathLeafIsMethod: function {st: zenv.ZSymbolTable ast: Ast path: List String} out bool is {
+    n9: path.length
+    if n9 < 2 then return false
+    r9: path.get i: 0
+    cur9: u64
+    {
+        ro9: st.lookup nameId: (nameIdOf :ast name: r9.stringview)
+        match (
+            ro9
+        ) case some then {
+            cur9 = ro9
+        } case none then {
+            return false
+        }
+    }
+    last9: n9 - 1
+    i9: 1.u64
+    for i9 < n9 loop {
+        seg9: path.get i: i9
+        co9: (st.typing.declChildOf
+            pool: ast.names
+            parentTypeId: cur9
+            name: seg9.stringview
+        )
+        match (
+            co9
+        ) case some then {
+            if i9 == last9 then {
+                tt9: st.reg.typetypeOf typeId: co9
+                if tt9 == ztypes.ztypetype.functionType then return true
+                return false
+            }
+            cur9 = co9
+        } case none then {
+            return false
+        }
+        i9 = i9 + 1
+    }
+    return false
 }
 
 # pathIsReadonly -- true when a value path may only be read: it passes through
