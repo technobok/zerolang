@@ -15208,8 +15208,56 @@ checkReassignment: function {
     rvn9: ast.nodes.get i: (rasgn.value - 1).u64
     lvt: checkValue :st :unitName :ast :unitBody node: tpn9
     st.typing.inAssignTarget = false
+    # `h = y.hold`: a hold binding rebinds only when the marker is written
+    # again, so its readonly self-lock steps aside for this assignment and is
+    # retaken over the new value. Without the marker the lock stands and the
+    # write is rejected -- there is no implicit downgrade at a reassignment.
+    hbVid9: u64
+    hbNm9: atomName :ast n: tpn9
+    if hbNm9.length > 0 when (valueIsHold :ast n: rvn9) then {
+        hbo9: st.lookupVarId nameId: (nameIdOf :ast name: hbNm9.stringview)
+        match (
+            hbo9
+        ) case some then {
+            hlh9: st.findLockHolder nameId: (nameIdOf :ast name: hbNm9.stringview)
+            match (
+                hlh9
+            ) case some then {
+                if hlh9.kind == ztypes.zlockholderkind.varKind when hlh9.id == hbo9 then {
+                    hbVid9 = hbo9
+                    st.releaseHeldLocks holder: hlh9
+                }
+            } case none then null
+        } case none then null
+    }
     checkWriteLock :st :ast n: tpn9 verb: "assign to"
     rvt: checkValue :st :unitName :ast :unitBody node: rvn9
+    if hbVid9 > 0 then {
+        hrp9: (List String)
+        hrn9: hbNm9.copy
+        hrp9.append hrn9
+        hrh9: (ztypes.zlockholder
+            kind: ztypes.zlockholderkind.varKind
+            id: hbVid9
+        )
+        hrr9: (st.tryLock
+            pool: ast.names
+            path: hrp9
+            lockType: ztypes.zlockstate.shared
+            lockScope: ztypes.zlockscope.target
+            holder: hrh9
+        )
+        if hrr9.length > 0 then {
+            (addError
+                :st
+                nodeid: rasgn.nodeid
+                lineno: rasgn.lineno
+                colno: rasgn.colno
+                e: zast.err.ownerError
+                msg: hrr9
+            )
+        }
+    }
     mrv0: materialiseLiteral :ast :st :unitName t: rvt
     if mrv0 > 0 when (st.reg.typetypeOf typeId: mrv0) == ztypes.ztypetype.nullType then {
         m0n: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
