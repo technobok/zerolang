@@ -2893,8 +2893,8 @@ static const char _zs1472_d[] = "String";
 static const z_t105_t _zs1472 = { _zs1472_d, 6 };
 static const char _zs1473_d[] = "StringView";
 static const z_t105_t _zs1473 = { _zs1473_d, 10 };
-static const char _zs1474_d[] = "a `.borrow` return must borrow from a `.lock` parameter -- mark the source parameter (e.g. `t: this.lock`) so the returned view has a locked parent";
-static const z_t105_t _zs1474 = { _zs1474_d, 147 };
+static const char _zs1474_d[] = "a `.borrow` return must borrow from a non-owned parameter -- mark the source `.view` (readonly) or `.borrow`/`.lock` (mutable), e.g. `t: this.view`, so the returned view has a pinned parent";
+static const z_t105_t _zs1474 = { _zs1474_d, 189 };
 static const char _zs1475_d[] = "this";
 static const z_t105_t _zs1475 = { _zs1475_d, 4 };
 static const char _zs1476_d[] = "collections";
@@ -51350,6 +51350,12 @@ bool z_t2500(z_t1066_t* z_v3383, z_t1116_t* z_v3384) {
                             z_t1774_t z_v3392 = _m2.data.some;
                             (void)z_v3392;
                             if (z_t1774_eq(z_v3392, ((z_t1774_t){ .tag = Z_ZPARAMOWNERSHIP_TAG_LOCKMODE }))) {
+                                z_v3385 = true;
+                            }
+                            if (z_t1774_eq(z_v3392, ((z_t1774_t){ .tag = Z_ZPARAMOWNERSHIP_TAG_BORROWMODE }))) {
+                                z_v3385 = true;
+                            }
+                            if (z_t1774_eq(z_v3392, ((z_t1774_t){ .tag = Z_ZPARAMOWNERSHIP_TAG_VIEWMODE }))) {
                                 z_v3385 = true;
                             }
                             break;
