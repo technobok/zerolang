@@ -578,23 +578,6 @@ isViewFamilyTid: function {ast: Ast st: zenv.ZSymbolTable tid: u64} out bool is 
     return false
 }
 
-# isViewVar -- a borrowed binding whose DECLARED type is a view (OptionView
-# from Map.get, StringView, ...): its payload aliases the parent's storage,
-# so moving the (narrowed) payload out would drain the parent. Borrowed
-# non-view bindings (a protocol call's fresh result bound conservatively)
-# keep the pre-existing move semantics.
-isViewVar: function {ast: Ast st: zenv.ZSymbolTable vid: u64} out bool is {
-    if (isBorrowedVar :st :vid) == false then return false
-    vzo9: st.typing.variableZtype.get key: vid
-    match (
-        vzo9
-    ) case some then {
-        return (isViewFamilyTid :ast :st tid: vzo9)
-    } case none then {
-        return false
-    }
-}
-
 # methodReceiverIsView -- the method declares its receiver `.view`, so a call
 # reads the receiver instead of writing it and the receiver lock is SHARED.
 # Declared readonly-ness: unlike isContainerReaderCall it needs no name
@@ -13547,7 +13530,23 @@ checkDotted: function {
             ) case some then {
                 relBlocked9: false
                 if (isMoveMarker name: cn.stringview) then {
-                    if (isViewVar :ast :st vid: mvo) then {
+                    # Readonly first: a `view` parameter is both readonly and
+                    # non-owned, and readonly is the rule the author has to
+                    # satisfy. A `hold` binding IS owned, so only this leg
+                    # catches it -- moving it out would thaw a frozen cell.
+                    if (nameIsReadonly :st :ast name: mkRoot.stringview) then {
+                        relBlocked9 = true
+                        tvb9: "with '.\{cn}'"
+                        (readonlyMoveError
+                            :st
+                            nodeid: dp.nodeid
+                            lineno: dp.lineno
+                            colno: dp.colno
+                            name: mkRoot.stringview
+                            verb: tvb9.stringview
+                        )
+                    }
+                    if (relBlocked9) == false when (isBorrowedVar :st vid: mvo) then {
                         relBlocked9 = true
                         tbr9: mkRoot.copy
                         mtb9: "Cannot move borrowed variable '\{tbr9}' with '.take' — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
@@ -13558,25 +13557,6 @@ checkDotted: function {
                             colno: dp.colno
                             e: zast.err.ownerError
                             msg: mtb9
-                        )
-                    }
-                    # A readonly source is refused whatever its ownership: a
-                    # `hold` binding is owned, so nothing above catches it, and
-                    # moving it out would thaw a cell declared frozen.
-                    if (relBlocked9) == false when (nameIsReadonly
-                        :st
-                        :ast
-                        name: mkRoot.stringview
-                    ) then {
-                        relBlocked9 = true
-                        tvb9: "with '.\{cn}'"
-                        (readonlyMoveError
-                            :st
-                            nodeid: dp.nodeid
-                            lineno: dp.lineno
-                            colno: dp.colno
-                            name: mkRoot.stringview
-                            verb: tvb9.stringview
                         )
                     }
                 }
@@ -15626,26 +15606,26 @@ checkReassignment: function {
         match (
             vo
         ) case some then {
-            if (isBorrowedVar :st vid: vo) then {
-                rnc9: rn.copy
-                mc9: "Cannot move borrowed variable '\{rnc9}' by reassignment — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
-                (addError
+            if (nameIsReadonly :st :ast name: rn.stringview) then {
+                (readonlyMoveError
                     :st
                     nodeid: rasgn.nodeid
                     lineno: rasgn.lineno
                     colno: rasgn.colno
-                    e: zast.err.ownerError
-                    msg: mc9
+                    name: rn.stringview
+                    verb: "by reassignment"
                 )
             } else {
-                if (nameIsReadonly :st :ast name: rn.stringview) then {
-                    (readonlyMoveError
+                if (isBorrowedVar :st vid: vo) then {
+                    rnc9: rn.copy
+                    mc9: "Cannot move borrowed variable '\{rnc9}' by reassignment — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+                    (addError
                         :st
                         nodeid: rasgn.nodeid
                         lineno: rasgn.lineno
                         colno: rasgn.colno
-                        name: rn.stringview
-                        verb: "by reassignment"
+                        e: zast.err.ownerError
+                        msg: mc9
                     )
                 } else {
                     (st.invalidate
@@ -18055,35 +18035,32 @@ walkCallArgsHoist: function {
                             bvo
                         ) case some then {
                             if isTake then {
-                                # ANY borrowed binding refuses the move (the
-                                # view-family test predates element borrows)
-                                if (isBorrowedVar :st vid: bvo) then {
-                                    bnc7: bn.copy
-                                    mb7: "Cannot move borrowed variable '\{bnc7}' into a taking argument — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
-                                    aid7: nodeId n: (ast.nodes.get i: (arg.operation - 1).u64)
-                                    aln7: nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64)
-                                    acl7: nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64)
-                                    (addError
+                                aid7: nodeId n: (ast.nodes.get i: (arg.operation - 1).u64)
+                                aln7: nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64)
+                                acl7: nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64)
+                                # Readonly first, then ownership: ANY borrowed
+                                # binding refuses the move (the view-family
+                                # test predates element borrows).
+                                if (nameIsReadonly :st :ast name: bn.stringview) then {
+                                    (readonlyMoveError
                                         :st
                                         nodeid: aid7
                                         lineno: aln7
                                         colno: acl7
-                                        e: zast.err.ownerError
-                                        msg: mb7
+                                        name: bn.stringview
+                                        verb: "into a taking argument"
                                     )
                                 } else {
-                                    if (nameIsReadonly
-                                        :st
-                                        :ast
-                                        name: bn.stringview
-                                    ) then {
-                                        (readonlyMoveError
+                                    if (isBorrowedVar :st vid: bvo) then {
+                                        bnc7: bn.copy
+                                        mb7: "Cannot move borrowed variable '\{bnc7}' into a taking argument — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+                                        (addError
                                             :st
-                                            nodeid: (nodeId n: (ast.nodes.get i: (arg.operation - 1).u64))
-                                            lineno: (nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64))
-                                            colno: (nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64))
-                                            name: bn.stringview
-                                            verb: "into a taking argument"
+                                            nodeid: aid7
+                                            lineno: aln7
+                                            colno: acl7
+                                            e: zast.err.ownerError
+                                            msg: mb7
                                         )
                                     } else {
                                         (st.invalidate
@@ -18258,33 +18235,26 @@ checkBoxConstruction: function {
                                 match (
                                     bvo8
                                 ) case some then {
-                                    if (isViewVar :ast :st vid: bvo8) then {
-                                        bnc8: bn.copy
-                                        mb8: "Cannot move borrowed variable '\{bnc8}' into a box — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
-                                        aid8: nodeId n: (ast.nodes.get i: (arg.operation - 1).u64)
-                                        aln8: nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64)
-                                        acl8: nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64)
-                                        (addError
+                                    if (nameIsReadonly :st :ast name: bn.stringview) then {
+                                        (readonlyMoveError
                                             :st
-                                            nodeid: aid8
-                                            lineno: aln8
-                                            colno: acl8
-                                            e: zast.err.ownerError
-                                            msg: mb8
+                                            nodeid: aid8b
+                                            lineno: aln8b
+                                            colno: acl8b
+                                            name: bn.stringview
+                                            verb: "into a box"
                                         )
                                     } else {
-                                        if (nameIsReadonly
-                                            :st
-                                            :ast
-                                            name: bn.stringview
-                                        ) then {
-                                            (readonlyMoveError
+                                        if (isBorrowedVar :st vid: bvo8) then {
+                                            bnc8: bn.copy
+                                            mb8: "Cannot move borrowed variable '\{bnc8}' into a box — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+                                            (addError
                                                 :st
                                                 nodeid: aid8b
                                                 lineno: aln8b
                                                 colno: acl8b
-                                                name: bn.stringview
-                                                verb: "into a box"
+                                                e: zast.err.ownerError
+                                                msg: mb8
                                             )
                                         } else {
                                             (st.invalidate
