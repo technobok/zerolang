@@ -5694,6 +5694,20 @@ resolveUnion: function {
                 nameId: fm.name.u64
                 childTypeId: cid
             )
+            # An arm's marker is the payload's, not the union's: the shell
+            # resolve above strips it, so record it per member the way a class
+            # field does. `view` / `hold` are what a match arm reads back.
+            alk9: pathOwnership :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
+            match (
+                alk9
+            ) case some then {
+                (ty.setChildOwnership
+                    pool: ast.names
+                    parentTypeId: uid
+                    name: aname.stringview
+                    ownership: alk9
+                )
+            } case none then null
             (recordTyperef
                 :ty
                 :reg
@@ -14905,6 +14919,14 @@ shadowCollapseIfSingle: function {ast: Ast st: zenv.ZSymbolTable name: StringVie
             subtypeName: arm9.stringview
             shadow: true
         )
+        (armPayloadReadonly
+            :st
+            :ast
+            subject: name
+            parentTid: fullTid
+            armName: arm9.stringview
+            payloadTid: po9
+        )
     } case none then null
 }
 
@@ -14933,6 +14955,14 @@ applyPredFact: function {ast: Ast st: zenv.ZSymbolTable f: ArmPredFact holds: bo
                 toTypeId: po9
                 subtypeName: f.armName.stringview
                 shadow: true
+            )
+            (armPayloadReadonly
+                :st
+                :ast
+                subject: f.subject.stringview
+                parentTid: f.fullTid
+                armName: f.armName.stringview
+                payloadTid: po9
             )
         } case none then null
     } else {
@@ -17122,6 +17152,55 @@ nameIsReadonly: function {st: zenv.ZSymbolTable ast: Ast name: StringView} out b
     ron9: name.string
     rop9.append ron9
     return (pathIsReadonly :st :ast path: rop9)
+}
+
+# armPayloadReadonly -- a narrowed match-arm payload takes the readonly
+# self-lock when its ARM is declared `view` or `hold`. The payload binds under
+# the subject's own name, so the lock lands on that name for the arm's scope
+# and every readonly rule -- writes, mutating receivers, moves -- follows from
+# it. A readonly SUBJECT needs nothing here: the shadow reuses the name, so its
+# lock is still the innermost one found.
+armPayloadReadonly: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    subject: StringView
+    parentTid: u64
+    armName: StringView
+    payloadTid: u64
+} is {
+    if subject.length == 0 then return
+    if parentTid == 0 then return
+    if payloadTid == 0 then return
+    if (typeIsReftype :st tid: payloadTid) == false then return
+    ao9: (st.typing.declOwnershipOfId
+        parentTypeId: parentTid
+        nameId: (nameIdOf :ast name: armName)
+    )
+    apr9: false
+    match (
+        ao9
+    ) case some then {
+        if ao9 == ztypes.zparamownership.viewMode then apr9 = true
+        if ao9 == ztypes.zparamownership.holdMode then apr9 = true
+    } case none then null
+    if (apr9) == false then return
+    svo9: st.lookupVarId nameId: (nameIdOf :ast name: subject)
+    if svo9.none then return
+    spa9: (List String)
+    snm9: subject.string
+    spa9.append snm9
+    sho9: (ztypes.zlockholder
+        kind: ztypes.zlockholderkind.varKind
+        id: svo9
+    )
+    slr9: (st.tryLock
+        pool: ast.names
+        path: spa9
+        lockType: ztypes.zlockstate.shared
+        lockScope: ztypes.zlockscope.target
+        holder: sho9
+    )
+    if slr9.length > 0 then return
 }
 
 # readonlyMoveError -- a move whose SOURCE may only be read is refused:
@@ -20267,6 +20346,14 @@ checkCase: function {
                         toTypeId: armo9
                         subtypeName: armName.stringview
                         shadow: true
+                    )
+                    (armPayloadReadonly
+                        :st
+                        :ast
+                        subject: targetName.stringview
+                        parentTid: subjT
+                        armName: armName.stringview
+                        payloadTid: armo9
                     )
                 } case none then null
             }
