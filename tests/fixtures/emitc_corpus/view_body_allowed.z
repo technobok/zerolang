@@ -1,0 +1,48 @@
+# The other half of `view_body_rules.z`: what a `.view` method MAY do. A rule
+# that only ever refuses is indistinguishable from one that refuses everything,
+# so the permitted cases need pinning as much as the forbidden ones.
+#
+# A `view` receiver holds a SHARED lock on its own alias, and shared locks
+# coexist -- which is exactly why a `view` method may call another `view` method
+# on the same receiver, and why several such calls compose in one expression.
+# Reading THROUGH a field is allowed for the same reason: deep readonly makes the
+# field readonly, not unreachable.
+#
+# `meta.create` is exempt by construction rather than by carve-out: it is not
+# reached through a `view` receiver at all -- there is no instance yet -- so a
+# constructor writes its fields with nothing to conflict against.
+Inner: class {
+    v: i64
+}
+
+Bag: class {
+    n: i64
+    i: Inner
+} as {
+    create: function {n: i64 v: i64} out this is {
+        # construction writes every field; no receiver exists to be readonly
+        return (meta.create :n i: (Inner :v))
+    }
+
+    size: function {t: this.view} out i64 is {
+        return t.n
+    }
+
+    deep: function {t: this.view} out i64 is {
+        # reading THROUGH a field of a readonly receiver
+        return t.i.v
+    }
+
+    total: function {t: this.view} out i64 is {
+        # a `view` method calling other `view` methods on the same receiver,
+        # twice in one expression: shared locks coexist
+        return (t.size) + (t.deep)
+    }
+}
+
+main: function is {
+    b: Bag.create n: 10 v: 32
+    print "size=\{b.size} deep=\{b.deep} total=\{b.total}"
+    # and the caller may still read the object while a view call is outstanding
+    print "still readable: \{b.n} \{b.i.v}"
+}

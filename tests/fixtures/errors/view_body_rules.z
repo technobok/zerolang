@@ -1,0 +1,58 @@
+# E0200: a `.view` method may only READ through its receiver. The rule is not a
+# separate check -- a `view` receiver holds a SHARED lock on its own alias for
+# the whole body, and the ordinary lock rules then refuse every way of mutating
+# through it. This fixture pins all four, because "enforced for free" is only
+# true until something moves the self-lock.
+#
+# `view_receiver_write.z` covers the fifth and simplest way, a direct field
+# write. Deep readonly (`6b8d74a`) is what makes the last two refuse: a reftype
+# read off a readonly path is itself readonly, so the depth does not launder it.
+Inner: class {
+    v: i64
+} as {
+    bump: function {:this} is {
+        this.v = this.v + 1
+    }
+}
+
+Bag: class {
+    n: i64
+    i: Inner
+} as {
+    grow: function {:this} is {
+        this.n = this.n + 1
+    }
+
+    # 1. calling a MUTATING method on the receiver
+    a: function {t: this.view} out i64 is {
+        t.grow
+        return t.n
+    }
+
+    # 2. passing the receiver to a MUTABLE parameter
+    b: function {t: this.view} out i64 is {
+        poke g: t
+        return t.n
+    }
+
+    # 3. a mutating method THROUGH a field of the receiver
+    c: function {t: this.view} out i64 is {
+        t.i.bump
+        return t.i.v
+    }
+
+    # 4. a write THROUGH a field of the receiver
+    d: function {t: this.view} out i64 is {
+        t.i.v = 9
+        return t.i.v
+    }
+}
+
+poke: function {g: Bag} is {
+    g.n = 9
+}
+
+main: function is {
+    b: Bag n: 1 i: (Inner v: 1)
+    print "\{b.a} \{b.b} \{b.c} \{b.d}"
+}
