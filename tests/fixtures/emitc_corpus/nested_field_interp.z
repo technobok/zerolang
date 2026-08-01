@@ -1,0 +1,44 @@
+# Reading a String field through a NESTED path -- `o.mid.inner.name` rather than
+# `i.name` -- used to FREE it out from under its owner.
+#
+# The interpolation emitter sorts a String part into three legs: append it in
+# place (an atom, a map-entry deref, or an owned struct field), hoist it without
+# freeing (a borrow-rooted call), or hoist-append-FREE (an owned call result).
+# `interpBaseIsOwnedStructField` decided the first, and its dotted-path arm asked
+# `atomNodeId9` for the base -- which answers 0 for anything that is not an atom.
+# A one-level read has an atom base and was sorted correctly; a nested one has a
+# dotted-path base, fell through to the owned-call-result leg, and the field's
+# String was freed while the object still owned it. The object's destructor then
+# freed it again.
+#
+# Both halves matter, so this fixture carries both: the nested reads must not be
+# freed, and the genuinely owned call results must still be, or the double free
+# is merely traded for a leak. The corpus leak pass is what checks the second
+# half -- it is not visible in the printed output.
+Inner: class {
+    name: String
+}
+
+Mid: class {
+    inner: Inner
+}
+
+Outer: class {
+    mid: Mid
+} as {
+    made: function {t: this.view} out String is {
+        return "made".string
+    }
+}
+
+main: function is {
+    o: Outer mid: (Mid inner: (Inner name: "deep".string))
+    # borrowed: reachable from `o`, which still owns it
+    print "three-level interp = \{o.mid.inner.name}"
+    print o.mid.inner.name
+    # owned: a fresh String the caller must free
+    print "owned call result  = \{o.made}"
+    print o.made
+    # the owner is intact afterwards -- the read was not a move
+    print "still owned        = \{o.mid.inner.name}"
+}
