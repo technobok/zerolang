@@ -3625,8 +3625,15 @@ resolveFunction: function {
             genParam: false
             fnParam9: false
             ptn: atomName :ast n: (ast.nodes.get i: (pm.operation - 1).u64)
+            # A MARKED receiver is an alias, so its type is `this.view` rather
+            # than the bare `this` an atom name reports. Ask the shared
+            # predicate, which knows every marker form.
+            isRecvP9: (paramIsThisReceiver
+                :ast
+                op: (ast.nodes.get i: (pm.operation - 1).u64)
+            )
             if skipThisType then {
-                if ptn.stringview == "this" then skipParam = true
+                if isRecvP9 then skipParam = true
             }
             if skipParam == false when isgen then {
                 if (reg.isGenericParamOf tdecl: fnDecl9 name: ptn.stringview) then {
@@ -3642,6 +3649,18 @@ resolveFunction: function {
                 genParam = true
             }
             if skipParam then {
+                # A dropped RECEIVER still records its alias: the vtable
+                # emitters and methodReceiverIsView ask which parameter is the
+                # receiver, and on a bodyless spec this is the only chance.
+                if isRecvP9 then {
+                    (reg.setThisParamName
+                        typeId: fid
+                        nameId: (zast.poolSet
+                            pool: ast.names
+                            text: (zast.nameTextCopy :ast ref: pm.name).stringview
+                        )
+                    )
+                }
                 if fnParam9 then {
                     # the template's own param: bind the canonical
                     # per-(template,param) tid as the child so holder

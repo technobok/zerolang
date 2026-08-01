@@ -1,0 +1,44 @@
+# A protocol SPEC drops its receiver parameter, but only recognised a BARE
+# `this`. An ALIASED receiver -- `{t: this.view}`, which is the only way to mark
+# one -- was kept, so it became a real argument and every dispatched call was
+# refused with "missing required argument 't'". A DIRECT call on the
+# implementation worked, which is what located the gap: only the spec was wrong.
+#
+# The receiver is dropped now, and its alias name recorded, which the vtable
+# emitters read to tell a receiver from an argument (protocol_receiver_alias.z
+# covers that half).
+#
+# Dispatch is through a protocol-typed FIELD, the shape zvfs uses, and a mutable
+# method sits alongside so both spellings dispatch through the same vtable. Every
+# call takes an argument on purpose: a ZERO-ARG auto-call through a protocol
+# field is not dispatched at all (it emits a struct field read), which is a
+# separate pre-existing gap and not what this fixture is about.
+Reader: protocol {
+    peek: function {t: this.view scale: i64} out i64
+    tally: function {t: this.view extra: i64} out i64
+    bump: function {:this by: i64}
+}
+Counter: class {
+    n: i64
+} as {
+    :Reader
+    peek: function {t: this.view scale: i64} out i64 is {
+        return t.n * scale
+    }
+    tally: function {t: this.view extra: i64} out i64 is {
+        return t.n + extra
+    }
+    bump: function {:this by: i64} is {
+        this.n = this.n + by
+    }
+}
+Box: class {
+    r: Reader
+}
+main: function is {
+    im: Counter n: 10
+    prov: Reader.create from: im.take
+    box: Box r: prov
+    box.r.bump by: 4
+    print "peek=\{box.r.peek scale: 2} tally=\{box.r.tally extra: 100}"
+}
