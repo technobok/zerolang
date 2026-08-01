@@ -1,0 +1,37 @@
+# A `.view` parameter only reads its argument, so the argument locks SHARED.
+# That was true for a BARE name and not for a PATH: `total xs: h.items` took an
+# exclusive lock on `h` and was refused off any readonly holder, while the
+# identical value hoisted to a local by hand was accepted. Two spellings of one
+# call had different rules.
+#
+# The path form is called twice over, off a readonly holder: a shared lock is one
+# several may hold, which is the whole point of the marker.
+#
+# The hand-hoisted spelling is deliberately NOT here. It double-frees, at this
+# commit and at its parent alike -- binding a container field to a local gives an
+# owning binding that frees the container's buffer. That is its own bug.
+Holder: class {
+    items: (List u64)
+    label: String
+}
+total: function {xs: (List u64).view} out u64 is {
+    t: 0.u64
+    with it: xs.iterate do for x: it loop t = t + x
+    return t
+}
+first: function {xs: (List u64).view} out u64 is {
+    if xs.length == 0.u64 then return 0.u64
+    return (xs.get i: 0.u64)
+}
+readIt: function {h: Holder.view} out u64 is {
+    # path-shaped, twice over: a shared lock is one several may hold
+    a: total xs: h.items
+    b: first xs: h.items
+    return a + b
+}
+main: function is {
+    hh: Holder items: (List u64) label: "h".string
+    hh.items.append from: 5.u64
+    hh.items.append from: 7.u64
+    print "sum=\{readIt h: hh} src=\{hh.items.length}"
+}

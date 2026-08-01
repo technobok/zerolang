@@ -12876,6 +12876,7 @@ checkProjectionCreate: function {
                                     argType: pvt
                                     paramType: 0
                                     :consumes
+                                    viewParam: false
                                 )
                             }
                         }
@@ -13009,6 +13010,7 @@ checkTypedefCreate: function {
                                 argType: vt
                                 paramType: 0
                                 consumes: true
+                                viewParam: false
                             )
                         }
                     }
@@ -17728,6 +17730,7 @@ hoistArg: function {ast: Ast
     argType: u64
     paramType: u64
     consumes: bool
+    viewParam: bool
 } out String is {
     tn: st.typing.nextTempId
     st.typing.nextTempId = tn + 1
@@ -17803,12 +17806,20 @@ hoistArg: function {ast: Ast
             if h0c9.stringview == hrt9.stringview then okInstall9 = true
         }
         if okInstall9 then {
+            # A `.view` parameter only reads its argument, so the hoisted temp
+            # locks the source SHARED -- exactly as the bare-name leg already
+            # did via `isViewArg`. Without this a PATH-shaped argument
+            # (`f xs: h.items`) took an exclusive lock and was refused off any
+            # readonly holder, while the identical value hoisted to a local by
+            # hand was accepted.
+            hlfs9: viewParam
+            if st.typing.pendingBorrowShared then hlfs9 = true
             (installBorrowLocks
                 :st
                 pool: ast.names
                 src: hbsrc
                 :vid
-                leafShared: st.typing.pendingBorrowShared
+                leafShared: hlfs9
                 nodeid: (nodeId n: argNode)
                 lineno: (nodeLine n: argNode)
                 colno: (nodeCol n: argNode)
@@ -18541,6 +18552,7 @@ walkCallArgsHoist: function {
                         argType: vt
                         paramType: pt
                         :consumes
+                        viewParam: isViewArg
                     )
                     if (hadPending) == false then {
                         if isLockish when (typeIsReftype :st tid: vt) then {
@@ -18549,7 +18561,7 @@ walkCallArgsHoist: function {
                                 pool: ast.names
                                 name: tnm.stringview
                                 callId: call.nodeid.u64
-                                shared: false
+                                shared: isViewArg
                                 nodeid: (nodeId n: (ast.nodes.get i: (arg.operation - 1).u64))
                                 lineno: (nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64))
                                 colno: (nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64))
@@ -18681,6 +18693,7 @@ checkBoxConstruction: function {
                                 argType: vt
                                 paramType: 0
                                 consumes: true
+                                viewParam: false
                             )
                         }
                     }
