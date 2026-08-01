@@ -608,6 +608,20 @@ methodReceiverIsView: function {st: zenv.ZSymbolTable mid: u64} out bool is {
 #   copy is the universal `.copy` marker, which resolves to no method either.
 #
 # Writers and user methods (opaque bodies) stay EXCLUSIVE.
+# isContainerReaderCall -- the irreducible core. Every entry left here is one a
+# DECLARATION cannot express, and the reason differs per entry:
+#
+#   Map.get / Map.getv / List.get / List.listview  hand back a MUTABLE interior
+#     pointer (`_r.data = &_this->entries[idx].value`), so their C refuses
+#     `const` and `.view` would hand a caller a writable alias out of a readonly
+#     receiver. List.get write-back is load-bearing at 28 sites.
+#   MapEntry.key / MapEntry.value  are FIELDS, not methods -- there is no
+#     declaration to mark.
+#   Map.copy / Set.copy / List.copy  are the synthesised `.copy` marker; the
+#     containers declare no `copy` member to mark.
+#
+# The String arm is gone: `String.copy` was already declared `{t: this.view}`,
+# and `String.stringview` now is, so `methodReceiverIsView` answers for both.
 isContainerReaderCall: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
@@ -639,11 +653,6 @@ isContainerReaderCall: function {
     if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapEntry") then {
         if mname == "key" then return true
         if mname == "value" then return true
-        return false
-    }
-    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "String") then {
-        if mname == "stringview" then return true
-        if mname == "copy" then return true
         return false
     }
     return false
