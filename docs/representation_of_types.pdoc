@@ -60,7 +60,7 @@ all types in Zerolang.
   fields. However, a reftype is not required to own heap resources -- a class
   with only valtype fields is valid. Such a class still has identity and
   single-owner semantics but needs no destructor.]
-  [#*: #+ Locks live on reftypes. The #~".lock" field mechanism is available to
+  [#*: #+ Locks live on reftypes. The non-owned field mechanism is available to
   reftypes (classes) only. Valtypes (records, variants) cannot hold locks.
   Born-borrowed is removed as a concept.]
 
@@ -68,7 +68,7 @@ all types in Zerolang.
 #--: Type Classification Summary
 
 #table cols="3 2 2 2 2 2":
-  Type                |Stack/Heap     |Copyable |Destructor          |Can have heap fields |.lock support
+  Type                |Stack/Heap     |Copyable |Destructor          |Can have heap fields |non-owned fields
   record              |stack          |yes      |no                  |no                   |no
   variant             |stack          |yes      |no                  |no                   |no
   class               |stack          |no       |if heap fields      |yes                  |yes
@@ -132,7 +132,7 @@ function references. Records #_*"cannot" contain #~"String", #~"List",
 #~"Box", #~"Map", classes, unions, or any type that requires heap cleanup.
 This restriction is enforced by the type checker.
 
-Records cannot have #~".lock" fields. Locks require identity (single-owner
+Records cannot have non-owned fields. Locks require identity (single-owner
 semantics) which valtypes do not have. See the Born-Borrowed Analysis section
 for discussion.
 
@@ -310,27 +310,27 @@ Swapping two class variables swaps the entire struct:
   }
   """
 
-#---: .lock Fields on Classes
+#---: Non-Owned Fields on Classes
 
-Classes may have #~".lock" fields. A class with #~".lock" fields:
+Classes may have non-owned fields. A class with non-owned fields:
 
 #ul:
-  [#*: Holds compile-time locks on the targets of its #~".lock" fields for the
+  [#*: Holds compile-time locks on the targets of its non-owned fields for the
   lifetime of the class instance.]
   [#*: Cannot be stored as a field of another type (prevents the lock from
   outliving its target).]
   [#*: Can be moved via #~".take" -- ownership and locks transfer to the new
   name.]
-  [#*: Can be passed to #~".borrow" and #~".lock" parameters.]
+  [#*: Can be passed to #~".borrow" and non-owned parameters.]
   [#*: When the instance falls out of scope, locks are released (and the
   destructor runs if present).]
 
-Classes with #~".lock" fields are normal owned instances. The single-owner
+Classes with non-owned fields are normal owned instances. The single-owner
 semantics of classes (no copying) already provide the safety guarantees that
 born-borrowed previously enforced for records. A class cannot be duplicated, so
 there is no risk of multiple copies holding the same lock.
 
-#~".lock" fields are immutable after construction.
+non-owned fields are immutable after construction.
 
 
 #--: Unions (Reftypes)
@@ -694,7 +694,7 @@ correct and the copy cost is negligible for element-sized data.
 #--: listview(T)
 
 #~"ListView" is a generic read-only view into a list. It is a class (single
-ownership) with a #~".lock" field that holds a lock on the parent list.
+ownership) with a non-owned field that holds a lock on the parent list.
 
 #---: Memory Layout
 
@@ -712,7 +712,7 @@ Field order matches the first two fields of #~"List": #~"length" first,
 #---: Ownership
 
 Listview is a class (reftype): single ownership, cannot be copied. It holds a
-#~".lock" on the source list, preventing mutation of the list while the view
+#~".borrow" on the source list, preventing mutation of the list while the view
 exists. When the listview falls out of scope, the lock is released.
 
 Listview does #_*"not" need a destructor (no heap allocations of its own). The
@@ -831,7 +831,7 @@ The string runtime functions and their signatures:
 #--: stringview
 
 #~"StringView" is a #+ class: a read-only view into a #~"String", with
-single-owner semantics and a #~".lock" on the source string.
+single-owner semantics and a #~".borrow" on the source string.
 
 #---: Memory Layout
 
@@ -849,7 +849,7 @@ fields of #~"String" (#~"size", #~"data"), enabling zero-cost casting from
 #---: Ownership
 
 Stringview is a class (reftype): single ownership, cannot be copied. It holds a
-#~".lock" on the source string (when created from a string variable).
+#~".borrow" on the source string (when created from a string variable).
 Stringviews created from string literals point into static #~".rodata" and do
 not lock anything (static data has infinite lifetime).
 
@@ -879,7 +879,7 @@ bare pointer with #~"NULL" sentinel, avoiding the tag + void* overhead entirely.
 
 #--: Removal from Valtypes
 
-Born-borrowed is removed as a language concept. The #~".lock" field mechanism
+Born-borrowed is removed as a language concept. The non-owned field mechanism
 is now available only to reftypes (classes). Valtypes (records, variants)
 cannot hold locks.
 
@@ -893,7 +893,7 @@ born-borrowed records neither truly values (they could not be copied) nor truly
 references (they had no identity or destructor).
 
 With classes now stack-allocated, the motivation disappears. A class with
-#~".lock" fields has single-owner semantics that naturally prevent copies,
+non-owned fields has single-owner semantics that naturally prevent copies,
 without any special born-borrowed mechanism. The class can be moved
 (#~".take"), which born-borrowed records could not do.
 
@@ -902,10 +902,10 @@ without any special born-borrowed mechanism. The class can be moved
 Types that were born-borrowed records become classes:
 
 #ul:
-  [#*: #~"StringView": becomes a class with #~".lock" on the source string.]
-  [#*: Iterators (eg. #~"BagIter"): become classes with #~".lock" on the
+  [#*: #~"StringView": becomes a class with #~".borrow" on the source string.]
+  [#*: Iterators (eg. #~"BagIter"): become classes with #~".borrow" on the
   container.]
-  [#*: Any record with #~".lock" fields: becomes a class.]
+  [#*: Any record with non-owned fields: becomes a class.]
 
 #---: Critique
 
@@ -955,7 +955,7 @@ Removing born-borrowed from valtypes is a simplification but has trade-offs:
   improving performance and reducing fragmentation.]
   [#*: #+ Unified field access. Local variables of all types use #~"." for
   field access. Only #~"this" in methods and boxed items use #~"->".]
-  [#*: #+ Class .lock fields. Enables natural class-based iterators and
+  [#*: #+ Class non-owned fields. Enables natural class-based iterators and
   views. More flexible than the old born-borrowed record approach: a class
   instance supports #~".take" (moving to a new name).]
   [#*: #+ Clean type system. Valtypes are always values. Reftypes are always

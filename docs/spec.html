@@ -953,7 +953,7 @@ the caller's heap data and is rejected at type-check time. Storing such a
 borrowed parameter into an aggregate field (<code>Box label: borrowed_s</code>) is
 rejected for the same reason. Remediations are <code>.copy</code> (clone),
 <code>.take</code> on the parameter (transfer ownership in), or
-<code>out T.borrow</code> + <code>.lock</code>-annotated parameter (return a borrow tied to a
+<code>out T.borrow</code> + a non-owned parameter (return a borrow tied to a
 locked source). See <code>ownership.pdoc</code> for details.</p>
 <p>In a call, the 'primary' parameter is the first parameter listed in the <code>in</code>
 parameter list of the <a href="#function">function definition</a>. In a type specifier, the
@@ -1672,22 +1672,22 @@ discriminator tag 0. Stdlib types <code>Option</code>, <code>optionval</code>,
 </ul>
 <p>User-defined sum types are encouraged but not required to follow this
 convention; the compiler does not enforce it on user code.</p>
-<h5 id="locked-union-arms">Locked union arms</h5>
-<p>A <code>union</code> arm may declare its payload type with a <code>.lock</code> suffix,
-indicating that the arm holds a locked reference into a parent rather
+<h5 id="non-owned-union-arms">Non-owned union arms</h5>
+<p>A <code>union</code> arm may declare its payload type non-owned -- <code>.borrow</code> or
+<code>.view</code> -- indicating that the arm holds a reference into a parent rather
 than owning its payload:</p>
 <pre><code class="language-zerolang">OptionView: union {
     none: null
-    some: t.lock
+    some: t.borrow
 } as { t: Any.generic }</code></pre>
 <p>Per-arm semantics:</p>
 <ul>
 <li><strong>Owned arms</strong> (the default &#x2014; e.g. <code>some: t</code>): the constructor
 takes ownership of the payload; the union's destructor frees the
 payload.</li>
-<li><strong>Locked arms</strong> (<code>some: t.lock</code>): the constructor takes a
-locked source via the <code>from:</code> parameter (consistent with
-<code>protocol.borrow from: x.lock</code>); the union's destructor releases
+<li><strong>Non-owned arms</strong> (<code>some: t.borrow</code>): the constructor takes a
+pinned source via the <code>from:</code> parameter (consistent with
+<code>protocol.borrow from: x</code>); the union's destructor releases
 the lock without freeing the payload. The union's lifetime cannot
 exceed the locked source's lifetime; escape analysis prevents
 storing the union into an aggregate that outlives the source.</li>
@@ -1915,7 +1915,7 @@ x4: optionval.none i32
 # Built on top of locked union arms &#x2014; see "Locked union arms" above.
 OptionView: union {
     none: null
-    some: t.lock
+    some: t.borrow
 } as {
     t: Any.generic
 }
@@ -2150,17 +2150,26 @@ reftypes) and does not need to be specified. For valtypes, borrowing means
 a copy is passed (source not invalidated). For reftypes, borrowing means
 a reference is passed. Generic type parameters are exempt from type-family
 restrictions. For <code>out</code> return types, <code>.borrow</code> means a borrowed
-instance is returned. The parameter housing that instance must be marked
-<code>.lock</code>.</li>
-<li><code>type.lock</code> - for <code>in</code> parameters, this parameter will be locked by
-the return value for its lifetime. Multiple parameters may be marked
-<code>.lock</code>; all locks transfer to the return value. It is illegal to specify
-<code>.lock</code> on a return value. It is illegal to <code>.lock</code> a parameter when
-there is no return value. <code>.lock</code> on a known valtype parameter is a
-compile error. Generic type parameters are exempt.</li>
+instance is returned. The parameter housing that instance must itself be
+non-owned (<code>.borrow</code> or <code>.view</code>).</li>
+<li><code>type.view</code> - not owned and readonly: the callee receives a
+reference it may only read. The pin is shared, so the caller keeps
+reading the argument across the call and several <code>.view</code> references to
+one value coexist. A <code>.view</code> receiver is readonly for its whole body.</li>
+<li><code>type.hold</code> - owned and readonly: moved in as <code>.take</code> does,
+then frozen. Rebinding requires another owned value (<code>h = y.hold</code>).</li>
+<li><code>out T.takex</code> - an owned return that pins the non-owned
+sources it was built from, for as long as the result lives. This is what a
+constructor needs when the value it returns holds a reference into one of
+its arguments. <code>.borrowx</code>, <code>.viewx</code> and <code>.holdx</code> do not exist.</li>
+<li><code>type.lock</code> - retired. It was a second name for <code>.borrow</code>,
+plus the pin that <code>.takex</code> now states on the return. The word still
+parses to <code>.borrow</code> so existing sources keep their meaning; do not write
+it in new code.</li>
 </ul>
 <h5 id="ownership-methods-on-instances">Ownership Methods on Instances</h5>
-<p><code>.take</code> and <code>.borrow</code> can also be used as compiler-generated methods on
+<p><code>.take</code>, <code>.borrow</code>, <code>.hold</code> and <code>.view</code> can also be used as
+compiler-generated methods on
 runtime instances:</p>
 <ul>
 <li><code>x.take</code> - takes ownership from the variable <code>x</code>. The name <code>x</code> is
@@ -2172,29 +2181,29 @@ borrowed reference. For valtypes, returns a copy of <code>x</code> without locki
 (valtypes have no identity to lock).</li>
 </ul>
 <h5 id="lock-fields-on-classes">Lock Fields on Classes</h5>
-<p>A class may declare a field with a <code>.lock</code> type modifier. The field stores
+<p>A class may declare a field non-owned (<code>.borrow</code> or <code>.view</code>). The field stores
 a locked reference to external data; the reference is locked for the
 instance's entire lifetime. Classes are single-owner and cannot be copied,
 so the lock cannot be duplicated.</p>
 <pre><code class="language-zerolang">Iter: class {
   pos: i64
-  target: container.private.lock
+  target: container.private.borrow
 } as {
-  create: function {target: container.private.lock} out this is {
+  create: function {target: container.private.borrow} out this is {
     return meta.create pos: 0 target: target
   }
 }</code></pre>
-<p><code>.lock</code> is the only field-type modifier permitted (<code>.take</code> and
-<code>.borrow</code> on field types are rejected). <code>.lock</code> fields are only
-permitted on <em><strong>classes</strong></em>. A record with a <code>.lock</code> field is a compile
+<p><code>.borrow</code> is the only field-type modifier permitted (<code>.take</code> and
+<code>.borrow</code> on field types are rejected). non-owned fields are only
+permitted on <em><strong>classes</strong></em>. A record with a non-owned field is a compile
 error because records are copied freely, which would duplicate the lock.
-A class that has any <code>.lock</code> field cannot itself be nested as a field
+A class that has any non-owned field cannot itself be nested as a field
 of another user-defined type (its lifetime must be scoped by the same
 block that owns the lock target).</p>
-<p>A function that returns a class holding <code>.lock</code> fields must initialise
-those fields from <code>.lock</code> parameters of the current function. The
-compiler performs escape analysis: every <code>.lock</code> field of the returned
-instance must trace back to a <code>.lock</code> parameter. The locks transfer
+<p>A function that returns a class holding non-owned fields must initialise
+those fields from <code>.borrow</code> parameters of the current function. The
+compiler performs escape analysis: every non-owned field of the returned
+instance must trace back to a <code>.borrow</code> parameter. The locks transfer
 from those parameters to the caller's variable holding the result, keeping
 the source locked for the returned instance's lifetime.</p>
 <p>See <code>docs/ownership.pdoc</code> for the full design and worked examples.</p>
@@ -2215,7 +2224,7 @@ child/grandchild member.</p>
 to that field. The borrowed reference holds a shared lock on the parent and
 an exclusive lock on the field.</p>
 <p>For a function that returns a borrowed instance: that instance retains an
-exclusive lock over the <code>.lock</code> parameter where the returned object lives,
+exclusive lock over the <code>.borrow</code> parameter where the returned object lives,
 until the borrowed object falls out of scope.</p>
 <h5 id="locking-algorithm">Locking Algorithm</h5>
 <p>During a call, locks are taken/checked/assigned on all arguments and return
@@ -2235,13 +2244,13 @@ values:</p>
 <li>After all arguments are processed, the receiver is locked (exclusive lock
     on each component of the receiver chain).</li>
 <li>The call is made.</li>
-<li>After the call, for any <code>.lock</code> parameters, their exclusive locks (plus
+<li>After the call, for any <code>.borrow</code> parameters, their exclusive locks (plus
     shared locks on parent items) are assigned to the returned value. All other
     argument locks are freed.</li>
 </ol>
 <p><code>for</code> loops over a reftype iteration target take an exclusive lock on the
 target for the body's duration, preventing mutation during iteration. Per-
-iteration locks on the iterator (and on any <code>.lock</code> fields it carries)
+iteration locks on the iterator (and on any non-owned fields it carries)
 flow through the per-iteration method dispatch.</p>
 <p><code>match</code> does <em><strong>not</strong></em> lock its subject. Match arms are mutually exclusive
 and the subject is evaluated once, so there is no aliasing concern. <code>match</code>
@@ -2275,7 +2284,7 @@ to a type reference (of the form <code>name: typereference</code>).</p>
     type parameter. For functions and protocols, the generic parameter is declared
     in the body. For records, unions, classes and variants, the generic parameter
     is declared in the <code>as</code> section.</li>
-<li>a type followed by <code>.take</code>, <code>.borrow</code>, or <code>.lock</code> in function
+<li>a type followed by <code>.take</code>, <code>.borrow</code>, or <code>.borrow</code> in function
     parameter definitions to specify ownership and locking semantics. See
     <code>ownership.pdoc</code>.</li>
 </ul>
@@ -2500,18 +2509,18 @@ is not taken. <code>.borrow</code> is the default for all <code>in</code> parame
 valtypes, borrowing means a copy is passed (source not invalidated). For
 reftypes, borrowing means a reference is passed.</p>
 <p>As a return type attribute (<code>out type.borrow</code>): the function returns a
-borrowed reference. At least one <code>in</code> parameter must be marked <code>.lock</code>.</p>
+borrowed reference. At least one <code>in</code> parameter must be marked <code>.borrow</code>.</p>
 <p>As a compiler method on instances (<code>x.borrow</code>): valid on all types. For
 reftypes, returns a borrowed reference and exclusively locks the receiver.
 For valtypes, returns a copy without locking. See
 <a href="#borrow-method">borrow (method)</a>.</p>
 <h4 id="lock"><a href="#lock">5.3.9. lock</a></h4>
 <p><code>lock</code> is a predefined type attribute on reftype types and generic type
-parameters, for use in function parameter declarations only (<code>type.lock</code>).
+parameters, for use in function parameter declarations only (<code>type.borrow</code>).
 It indicates that this parameter will be locked by the return value for the
-lifetime of that return value. Multiple parameters may be marked <code>.lock</code>;
-all locks transfer to the return value. It is illegal to specify <code>.lock</code> on
-a return value or when there is no return value. <code>.lock</code> on a known valtype
+lifetime of that return value. Multiple parameters may be marked <code>.borrow</code>;
+all locks transfer to the return value. It is illegal to specify <code>.borrow</code> on
+a return value or when there is no return value. <code>.borrow</code> on a known valtype
 parameter is a compile error -- valtypes are pass-by-value so identity-based
 locking is meaningless.</p>
 <h4 id="typedef"><a href="#typedef">5.3.10. typedef</a></h4>
@@ -2548,7 +2557,7 @@ base type and return an owned typedef instance.
 Signature: <code>take: function {from: basetype.take} out typedeftype</code></li>
 <li><code>borrow</code> takes a lock on a value of the base type and returns a
 borrowed typedef instance.
-Signature: <code>borrow: function {from: basetype.lock} out typedeftype.borrow</code></li>
+Signature: <code>borrow: function {from: basetype.borrow} out typedeftype.borrow</code></li>
 </ul>
 <p>The typedef retains the underlying type and so can continue to be passed to
 functions that expect the underlying type as is (backward compatible). But the
@@ -2763,7 +2772,7 @@ parameter declaration produces a borrowed view that can read and mutate the
 target's private fields.</p>
 <p><code>.private</code> is itself a borrowed reference: it cannot be copied, taken or
 stored as an owned value, and it participates in the locking algorithm like
-any other reference. Combined with <code>.lock</code> (<code>&lt;type&gt;.private.lock</code>), it
+any other reference. Combined with <code>.borrow</code> (<code>&lt;type&gt;.private.borrow</code>), it
 becomes a friend reference whose lock is held for the lifetime of the
 containing variable -- this is how class iterators access their container's
 internal state.</p>
@@ -2836,7 +2845,7 @@ MyObject: class {
 <h3 id="predefined-methods-on-types"><a href="#predefined-methods-on-types">5.4. Predefined Methods on Types</a></h3>
 <p>The compiler provides two tiers of pre-existing methods on types:</p>
 <ul>
-<li>Intrinsics -- <code>.take</code>, <code>.release</code>, <code>.borrow</code>, <code>.lock</code>,
+<li>Intrinsics -- <code>.take</code>, <code>.release</code>, <code>.borrow</code>, <code>.borrow</code>,
 <code>.private</code>. The compiler defines their semantics directly; no
 <code>is native</code> declaration in the standard library is required. They
 are also shadowable: a user-defined member with the same name on
@@ -2891,7 +2900,7 @@ scope.</p>
 <p>See also the <code>ownership.pdoc</code>.</p>
 <h4 id="lock-method"><a href="#lock-method">5.4.3. lock (method)</a></h4>
 <p><code>lock</code> is not a runtime method on instances. It is a type attribute used only
-in function parameter declarations (<code>type.lock</code>) to indicate that the
+in function parameter declarations (<code>type.borrow</code>) to indicate that the
 parameter will be locked by the return value. See <a href="#locking">locking</a>
 for details.</p>
 <h4 id="release-method"><a href="#release-method">5.4.4. release (method)</a></h4>
@@ -2920,7 +2929,7 @@ apply <code>.private</code> to it. Use from outside is a compile error
 (Cannot access '&lt;type&gt;.private' from outside the type definition).</p>
 <p><code>.private</code> takes no arguments. It does not transfer ownership and does
 not introduce a new borrow on its own -- it is purely a visibility
-adjustment. Subsequent suffixes such as <code>.lock</code> / <code>.borrow</code> attach
+adjustment. Subsequent suffixes such as <code>.borrow</code> / <code>.borrow</code> attach
 their usual lock semantics to the projected reference.</p>
 <p>See <code>examples/ListIter.z</code> for the canonical iterator-friend pattern
 built on <code>.private</code>.</p>
@@ -3254,7 +3263,7 @@ returns no value. It only has side-effects.</p>
 <p>The <code>in</code>  argument takes a brace delimited block of parameter definitions
 of the form <code>name: typereference</code>. See <a href="#declarations-and-references">Declarations and References</a> for
 details. A parameter <em><strong>must not</strong></em> be private (<code>_</code>) but may have ownership
-attributes (<code>type.take</code>, <code>type.borrow</code>, <code>type.lock</code>) or it may have a
+attributes (<code>type.take</code>, <code>type.borrow</code>, <code>type.borrow</code>) or it may have a
 default constant numeric value or a default function reference value. Parameters
 may reference generic types declared in the <code>as</code> clause. Declaring generic
 parameters directly in <code>in</code> (e.g. <code>t: Any.generic</code>) is a compile error.</p>
@@ -3278,7 +3287,7 @@ specified by the argument named <code>out</code>. Ownership of a returned reftyp
 after the call implicitly lies with the caller (<code>.take</code> is the default for
 return types and does not need to be specified). A function may return a
 borrowed reference by specifying <code>type.borrow</code> as the return type; in this
-case, at least one parameter must be marked <code>type.lock</code>.</p>
+case, at least one parameter must be marked <code>type.borrow</code>.</p>
 <p>The <code>is</code> parameter to <code>function</code> specifies the body. It may be a single
 expression or a block of code. Each line of code is a local variable definition
 or a statement. All arguments supplied can be referenced by name but are
@@ -3342,7 +3351,7 @@ taker arg: MyRefType
 # MyRefType is unavailable in the current scope from this point
 
 # passing a lock parameter and returning a borrow:
-getter: function {t: MyClass.lock} out refchild.borrow is {
+getter: function {t: MyClass.borrow} out refchild.borrow is {
     return t.myrefchild
 }</code></pre>
 <p>Generic function example:</p>
@@ -3386,7 +3395,7 @@ function argument label), can be:</p>
   parameter
 - a type followed by <code>.borrow</code> (eg. <code>type.borrow</code>) to explicitly borrow
   (this is the default for all parameters and does not need to be specified)
-- a type followed by <code>.lock</code> (eg. <code>reftype.lock</code>) to lock the parameter for
+- a type followed by <code>.borrow</code> (eg. <code>reftype.borrow</code>) to lock the parameter for
   the lifetime of the return value (compile error on known valtypes; permitted
   on generic type parameters)
 - a restrained type: a named type followed by a dot then a child named protocol
@@ -3446,7 +3455,7 @@ readers. Examples: <code>counter</code>, <code>intrange_i64</code>,
 Each iteration produces a fresh value and the loop body owns
 it for the iteration's duration.</li>
 <li><strong>Container iterators</strong> yield non-owning views into a source
-collection via <code>OptionView(t)</code>. The iterator holds a <code>.lock</code>
+collection via <code>OptionView(t)</code>. The iterator holds a <code>.borrow</code>
 reference into the source; each yielded value is a borrowed
 view, lifetime-tied to the iterator's lock. Examples:
 <code>ListIter</code>, <code>MapKeyIter</code>, <code>MapItemIter</code>, <code>SetIter</code>. The loop body
@@ -3461,11 +3470,11 @@ the loop variable to each <code>.call</code> result:</p>
 intermediate <code>with</code> can be omitted &#x2014; rule 1 of the dispatch creates a
 hidden binding with the same lifetime:</p>
 <pre><code class="language-zerolang">for line: (textreader file: f) loop { ... }</code></pre>
-<p>The recommended container-iterator form is a <code>class</code> with a <code>.lock</code> field
+<p>The recommended container-iterator form is a <code>class</code> with a non-owned field
 referencing the container's private members. The container is locked for
 the iterator's lifetime; the iterator falls out of scope at the end of the
 <code>for</code> body and the lock on the container is released. Classes are
-single-owner (cannot be copied), which is what makes the <code>.lock</code> field safe.
+single-owner (cannot be copied), which is what makes the non-owned field safe.
 See <code>examples/ListIter.z</code> for the canonical pattern and
 <code>docs/ownership.pdoc</code> for the lock-lifecycle walkthrough.</p>
 <h4 id="generator-functions"><a href="#generator-functions">5.12.6. Generator functions</a></h4>
@@ -3507,7 +3516,7 @@ generic argument defaults to <code>.borrow</code>; <code>.take</code> is explici
 <tr><td>bare <code>T</code></td><td><code>OptionView(T)</code></td><td><code>optionval(T)</code></td><td>Borrowed view (ref) / copy (val)</td></tr>
 <tr><td><code>T.borrow</code></td><td><code>OptionView(T)</code></td><td><code>optionval(T)</code></td><td>Same as bare</td></tr>
 <tr><td><code>T.take</code></td><td><code>Option(T)</code></td><td><code>optionval(T)</code></td><td>Owned out (ref) / copy (val)</td></tr>
-<tr><td><code>T.lock</code></td><td>Compile error</td><td>Compile error</td><td>Parameter-only ownership</td></tr>
+<tr><td><code>T.borrow</code></td><td>Compile error</td><td>Compile error</td><td>Parameter-only ownership</td></tr>
 </tbody>
 </table>
 <p>For valtype <code>T</code>, ownership annotations are physical no-ops
@@ -3538,22 +3547,22 @@ factory call, but the iterator outlives that call.</p>
 </thead>
 <tbody>
 <tr><td><code>arg: T.take</code> (reftype)</td><td>OK</td><td>Owned field; destroyed on iterator destruction</td></tr>
-<tr><td><code>arg: T.lock</code> (reftype)</td><td>OK</td><td>Locked field; released on iterator destruction</td></tr>
-<tr><td><code>arg: T.borrow</code>, bare <code>arg: T</code></td><td>Compile error</td><td>(use <code>.lock</code> or <code>.take</code>)</td></tr>
+<tr><td><code>arg: T.borrow</code> (reftype)</td><td>OK</td><td>Locked field; released on iterator destruction</td></tr>
+<tr><td><code>arg: T.borrow</code>, bare <code>arg: T</code></td><td>Compile error</td><td>(use <code>.borrow</code> or <code>.take</code>)</td></tr>
 <tr><td><code>arg: T</code> (valtype)</td><td>OK</td><td>Value field</td></tr>
 <tr><td><code>:this</code> (method)</td><td>Compile error</td><td>(use the explicit binding form below)</td></tr>
-<tr><td><code>arg: this.lock</code>, <code>arg: this.private.lock</code></td><td>OK</td><td>Locked receiver field</td></tr>
+<tr><td><code>arg: this.borrow</code>, <code>arg: this.private.borrow</code></td><td>OK</td><td>Locked receiver field</td></tr>
 </tbody>
 </table>
 <p>A generator method defined inside the receiver type's <code>as</code> block
-captures the receiver as a <code>Type.lock</code> field; no <code>.private</code> needed
+captures the receiver as a <code>Type.borrow</code> field; no <code>.private</code> needed
 (it is inside the privacy boundary). A generator function defined
-outside the receiver type may take <code>arg: this.private.lock</code> for
+outside the receiver type may take <code>arg: this.private.borrow</code> for
 friend access, subject to the same exposure rule that governs
 hand-written iterator classes. The label-value shorthand
-(<code>:this.lock</code>) is not parser-supported because the resulting
+(<code>:this.borrow</code>) is not parser-supported because the resulting
 parameter name <code>this</code> collides with method-receiver detection;
-write the explicit-binding form (e.g. <code>b: this.lock</code>) instead.</p>
+write the explicit-binding form (e.g. <code>b: this.borrow</code>) instead.</p>
 <p><code>yield</code> outside a function whose <code>out</code> type is
 <code>Iterator gives: ...</code> is a compile error. <code>yield</code> inside a nested
 function literal is rejected -- <code>yield</code> only belongs to the
@@ -3593,13 +3602,12 @@ across the body's yield window:</p>
 <tr><th style="text-align: left">accepts form</th><th style="text-align: left">Reftype U</th><th style="text-align: left">Valtype U</th><th style="text-align: left">Resume-input ownership</th></tr>
 </thead>
 <tbody>
-<tr><td>bare <code>U</code></td><td>borrow (.lock field)</td><td>bare value field</td><td>Borrow / by-value</td></tr>
-<tr><td><code>U.borrow</code></td><td>borrow (.lock field)</td><td>bare value field</td><td>Same as bare</td></tr>
-<tr><td><code>U.lock</code></td><td>borrow (.lock field)</td><td>Compile error</td><td>Borrow with explicit lock</td></tr>
+<tr><td>bare <code>U</code></td><td>non-owned field</td><td>bare value field</td><td>Borrow / by-value</td></tr>
+<tr><td><code>U.borrow</code></td><td>non-owned field</td><td>bare value field</td><td>Same as bare</td></tr>
 <tr><td><code>U.take</code></td><td>Owned field</td><td>Bare value field</td><td>Owned across yields</td></tr>
 </tbody>
 </table>
-<p>Borrowed forms (bare, <code>.borrow</code>, <code>.lock</code>) install a lock on the
+<p>Borrowed forms (bare and <code>.borrow</code>) install a lock on the
 caller's <code>value:</code> argument for the duration of each <code>.call</code>.
 The body's <code>name: yield v</code> binding is a pointer alias into the
 caller's storage; accesses through <code>name</code> read the live value.
@@ -3648,7 +3656,7 @@ consecutively; each drains its source before the next starts
 (see <code>examples/generator_chain.z</code>).</li>
 <li><strong>Pipelining</strong> -- each stage is a generator taking another
 iterator parameter. Function composition produces the pipeline;
-each stage's synthesised class holds a <code>.lock</code> on the previous
+each stage's synthesised class holds a <code>.borrow</code> on the previous
 stage and existing lock-escape rules keep the chain sound.</li>
 </ul>
 <p>The synthesised class is otherwise an ordinary class: visible in
@@ -3709,9 +3717,9 @@ level by passing a generic variable at the call site into the constructor.</p>
         return meta.create :a :b      # no stuttering... can use default args
     }
 }</code></pre>
-<p>Class constructors whose type carries <code>.lock</code> fields simply return
+<p>Class constructors whose type carries non-owned fields simply return
 <code>out this</code> like any other class constructor; the type system verifies
-that the <code>.lock</code> fields are initialised from <code>.lock</code> parameters of
+that the non-owned fields are initialised from <code>.borrow</code> parameters of
 the constructor (escape analysis). See
 <a href="#lock-fields-on-classes">Lock Fields on Classes</a>
 and <code>docs/ownership.pdoc</code>.</p>
@@ -4010,15 +4018,15 @@ dictelement2: record {
 }</code></pre>
 <p>Record fields are pure value data. A record cannot contain <code>String</code>,
 <code>List</code>, <code>Box</code>, <code>Map</code> or any other heap-backed type, and it cannot
-carry a <code>.lock</code> field. Types that need to hold a locked reference to
+carry a non-owned field. Types that need to hold a locked reference to
 external data are <em><strong>classes</strong></em> -- see
 <a href="#lock-fields-on-classes">Lock Fields on Classes</a>
 and <code>docs/ownership.pdoc</code>.</p>
 <pre><code class="language-zerolang">BagIter: class {
     pos: i64
-    target: bag.private.lock
+    target: bag.private.borrow
 } as {
-    create: function {target: bag.private.lock} out this is {
+    create: function {target: bag.private.borrow} out this is {
         return meta.create pos: 0 target: target
     }
 }</code></pre>
@@ -4263,7 +4271,7 @@ instance owns the data. When the protocol instance goes out of scope,
 both the protocol instance and the underlying data are destroyed.
 <code>.take</code> is <em><strong>not</strong></em> a protocol constructor; it remains the inline
 ownership method on runtime instances (<code>obj.take</code>) only.</li>
-<li>Borrowed via <code>borrow</code>: call <code>protocol.borrow from: obj.lock</code>
+<li>Borrowed via <code>borrow</code>: call <code>protocol.borrow from: obj.borrow</code>
 when the label shorthand is not available. This creates a borrowed
 protocol instance (same semantics as the label form). The source
 variable is locked for the lifetime of the protocol instance. The
@@ -4281,7 +4289,7 @@ declares conformance to that protocol directly &#x2014; no explicit
 The compiler synthesises the projection at the call boundary:</p>
 <ul>
 <li><code>borrow</code> when the parameter's ownership annotation is <code>.borrow</code>
-or <code>.lock</code> (the default for protocol parameters). The caller retains
+or <code>.borrow</code> (the default for protocol parameters). The caller retains
 ownership; the callee sees a borrowed protocol handle.</li>
 <li><code>take</code> when the parameter is annotated <code>.take</code>. The caller's
 binding is invalidated after the call and the callee's protocol handle
@@ -4321,7 +4329,7 @@ main: function is {
     # r: Reader.take from: f.take     # equivalent to create
 
     # Borrowed instance via protocol constructor
-    # r: Reader.borrow from: f.lock   # f is locked while r is in scope
+    # r: Reader.borrow from: f.borrow   # f is locked while r is in scope
 
     print "\{use_reader r}"  # prints 15
 }</code></pre>
@@ -4355,7 +4363,7 @@ a class or union produces a compile-time error.</p>
 instance and return an owned facet.
 Signature: <code>take: function {from: T.take} out facettype</code></li>
 <li><code>borrow</code> copies the source value and locks the source variable.
-Signature: <code>borrow: function {from: T.lock} out facettype.borrow</code></li>
+Signature: <code>borrow: function {from: T.borrow} out facettype.borrow</code></li>
 </ul>
 <p>Although the data is always copied, <code>borrow</code> still locks the source to
 maintain consistent ownership semantics with protocols. This is important

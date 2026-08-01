@@ -56,7 +56,7 @@ the core types (#~"Reader", #~"Writer", #~"File", #~"openmode",
     explicitly to surface a delayed-write error]
   [#*: #b:"Path-scoped locks on adapters." Buffered wrappers
     (#~"BufWriter", #~"BufReader") and text wrappers hold a
-    #~".lock" borrow on their sink / source. The underlying
+    #~".borrow" borrow on their sink / source. The underlying
     writer / reader is compiler-enforced locked for the wrapper's
     lifetime]
   [#*: #b:"Stdin / stdout / stderr as protocol handles."
@@ -132,14 +132,14 @@ the core types (#~"Reader", #~"Writer", #~"File", #~"openmode",
 #p: #b:"Buffered adapters"
 
 #ul:
-  [#*: #> to=bufwriter: #b:"BufWriter" -- #~"class { sink: Writer.lock  buf: Bytes  cap: u64 } as { :Writer }"]
-  [#*: #> to=bufreader: #b:"BufReader" -- #~"class { source: Reader.lock  buf: Bytes  head: u64  cap: u64 } as { :Reader }"]
+  [#*: #> to=bufwriter: #b:"BufWriter" -- #~"class { sink: Writer.borrow  buf: Bytes  cap: u64 } as { :Writer }"]
+  [#*: #> to=bufreader: #b:"BufReader" -- #~"class { source: Reader.borrow  buf: Bytes  head: u64  cap: u64 } as { :Reader }"]
 
 #p: #b:"Text adapters"
 
 #ul:
-  [#*: #> to=textwriter: #b:"TextWriter" -- #~"class { sink: BufWriter.lock }"]
-  [#*: #> to=textreader: #b:"TextReader" -- #~"class { source: BufReader.lock  buf: Bytes }"]
+  [#*: #> to=textwriter: #b:"TextWriter" -- #~"class { sink: BufWriter.borrow }"]
+  [#*: #> to=textreader: #b:"TextReader" -- #~"class { source: BufReader.borrow  buf: Bytes }"]
 
 
 #--: ioerror
@@ -666,12 +666,12 @@ to anything.
 
 #code language=zerolang: """
   bufwriter: class {
-      sink: Writer.lock
+      sink: Writer.borrow
       buf:  Bytes
       cap:  u64
   } as {
       :Writer
-      create: function {to: Writer.lock capacity: u64} out this is native
+      create: function {to: Writer.borrow capacity: u64} out this is native
       write:  function {:this from: ByteView} out (Result t: u64 e: IoError) is native
       flush:  function {:this} out (Result t: null e: IoError) is native
   }
@@ -684,7 +684,7 @@ buffer would overflow or on an explicit #~"flush".
 #b:"Flush is not automatic." Callers must invoke #~"flush"
 before the wrapper's scope ends, or buffered data is lost.
 
-#b:"Lock on sink." Constructed with #~"Writer.lock", the
+#b:"Lock on sink." Constructed with #~"Writer.borrow", the
 wrapper holds an EXCLUSIVE lock on the original writer for its
 lifetime. The source writer cannot be mutated, borrowed again,
 or locked while the bufwriter is alive -- path-scoped locking
@@ -692,7 +692,7 @@ rejects such access at the source.
 
 #code language=zerolang: """
   w: io.stdout
-  bw: io.BufWriter.create to: w.lock capacity: 16.u64
+  bw: io.BufWriter.create to: w.borrow capacity: 16.u64
   bw.write from: "hello, world\n".byteview
   match (bw.flush) case ok then {} case err then io.eprintln "flush failed".stringview
 """
@@ -702,13 +702,13 @@ rejects such access at the source.
 
 #code language=zerolang: """
   bufreader: class {
-      source: Reader.lock
+      source: Reader.borrow
       buf:    Bytes
       head:   u64
       cap:    u64
   } as {
       :Reader
-      create: function {from: Reader.lock capacity: u64} out this is native
+      create: function {from: Reader.borrow capacity: u64} out this is native
       read:   function {:this into: Bytes max: u64} out (Result t: u64 e: IoError) is native
   }
 """
@@ -732,9 +732,9 @@ and the next #~"read" call refills it from the source.
 
 #code language=zerolang: """
   textwriter: class {
-      sink: BufWriter.lock
+      sink: BufWriter.borrow
   } as {
-      create:     function {to: BufWriter.lock} out this is native
+      create:     function {to: BufWriter.borrow} out this is native
       write:      function as { T: StringLike.generic } in {:this from: T} out (Result t: u64 e: IoError) is native
       writeLine: function as { T: StringLike.generic } in {:this from: T} out (Result t: u64 e: IoError) is native
       flush:      function {:this} out (Result t: null e: IoError) is native
@@ -762,10 +762,10 @@ bufwriter locks the underlying writer. As with bufwriter,
 
 #code language=zerolang: """
   textreader: class {
-      source: BufReader.lock
+      source: BufReader.borrow
       buf:    Bytes
   } as {
-      create:    function {from: BufReader.lock} out this is native
+      create:    function {from: BufReader.borrow} out this is native
       readLine: function {:this} out (Result t: String e: IoError) is native
       call:      function {:this} out (Option t: String) is native
   }

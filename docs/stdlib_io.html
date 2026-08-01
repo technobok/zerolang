@@ -177,7 +177,7 @@ exit unless the caller has already invoked <code>close</code>
 explicitly to surface a delayed-write error</li>
 <li><strong>Path-scoped locks on adapters.</strong> Buffered wrappers
 (<code>BufWriter</code>, <code>BufReader</code>) and text wrappers hold a
-<code>.lock</code> borrow on their sink / source. The underlying
+<code>.borrow</code> borrow on their sink / source. The underlying
 writer / reader is compiler-enforced locked for the wrapper's
 lifetime</li>
 <li><strong>Stdin / stdout / stderr as protocol handles.</strong>
@@ -242,13 +242,13 @@ a static fd; scope exit does not close the underlying fd</li>
 </ul>
 <p><strong>Buffered adapters</strong></p>
 <ul>
-<li><a href="#bufwriter"><strong>BufWriter</strong> -- <code>class { sink: Writer.lock  buf: Bytes  cap: u64 } as { :Writer }</code></a></li>
-<li><a href="#bufreader"><strong>BufReader</strong> -- <code>class { source: Reader.lock  buf: Bytes  head: u64  cap: u64 } as { :Reader }</code></a></li>
+<li><a href="#bufwriter"><strong>BufWriter</strong> -- <code>class { sink: Writer.borrow  buf: Bytes  cap: u64 } as { :Writer }</code></a></li>
+<li><a href="#bufreader"><strong>BufReader</strong> -- <code>class { source: Reader.borrow  buf: Bytes  head: u64  cap: u64 } as { :Reader }</code></a></li>
 </ul>
 <p><strong>Text adapters</strong></p>
 <ul>
-<li><a href="#textwriter"><strong>TextWriter</strong> -- <code>class { sink: BufWriter.lock }</code></a></li>
-<li><a href="#textreader"><strong>TextReader</strong> -- <code>class { source: BufReader.lock  buf: Bytes }</code></a></li>
+<li><a href="#textwriter"><strong>TextWriter</strong> -- <code>class { sink: BufWriter.borrow }</code></a></li>
+<li><a href="#textreader"><strong>TextReader</strong> -- <code>class { source: BufReader.borrow  buf: Bytes }</code></a></li>
 </ul>
 <h2 id="ioerror"><a href="#ioerror">3. ioerror</a></h2>
 <pre><code class="language-zerolang">  ioerror: union {
@@ -573,12 +573,12 @@ made absolute. Fails with <code>exists</code> if <code>link</code> already refer
 to anything.</p>
 <h2 id="bufwriter"><a href="#bufwriter">31. bufwriter</a></h2>
 <pre><code class="language-zerolang">  bufwriter: class {
-      sink: Writer.lock
+      sink: Writer.borrow
       buf:  Bytes
       cap:  u64
   } as {
       :Writer
-      create: function {to: Writer.lock capacity: u64} out this is native
+      create: function {to: Writer.borrow capacity: u64} out this is native
       write:  function {:this from: ByteView} out (Result t: u64 e: IoError) is native
       flush:  function {:this} out (Result t: null e: IoError) is native
   }</code></pre>
@@ -587,24 +587,24 @@ bytes in <code>buf</code>, flushing to the underlying sink when the
 buffer would overflow or on an explicit <code>flush</code>.</p>
 <p><strong>Flush is not automatic.</strong> Callers must invoke <code>flush</code>
 before the wrapper's scope ends, or buffered data is lost.</p>
-<p><strong>Lock on sink.</strong> Constructed with <code>Writer.lock</code>, the
+<p><strong>Lock on sink.</strong> Constructed with <code>Writer.borrow</code>, the
 wrapper holds an EXCLUSIVE lock on the original writer for its
 lifetime. The source writer cannot be mutated, borrowed again,
 or locked while the bufwriter is alive -- path-scoped locking
 rejects such access at the source.</p>
 <pre><code class="language-zerolang">  w: io.stdout
-  bw: io.BufWriter.create to: w.lock capacity: 16.u64
+  bw: io.BufWriter.create to: w.borrow capacity: 16.u64
   bw.write from: "hello, world\n".byteview
   match (bw.flush) case ok then {} case err then io.eprintln "flush failed".stringview</code></pre>
 <h2 id="bufreader"><a href="#bufreader">32. bufreader</a></h2>
 <pre><code class="language-zerolang">  bufreader: class {
-      source: Reader.lock
+      source: Reader.borrow
       buf:    Bytes
       head:   u64
       cap:    u64
   } as {
       :Reader
-      create: function {from: Reader.lock capacity: u64} out this is native
+      create: function {from: Reader.borrow capacity: u64} out this is native
       read:   function {:this into: Bytes max: u64} out (Result t: u64 e: IoError) is native
   }</code></pre>
 <p>Buffered adapter over any <code>Reader</code>. Issues exactly one source
@@ -620,9 +620,9 @@ and the next <code>read</code> call refills it from the source.</p>
 <code>Reader</code> is locked for the wrapper's lifetime.</p>
 <h2 id="textwriter"><a href="#textwriter">33. textwriter</a></h2>
 <pre><code class="language-zerolang">  textwriter: class {
-      sink: BufWriter.lock
+      sink: BufWriter.borrow
   } as {
-      create:     function {to: BufWriter.lock} out this is native
+      create:     function {to: BufWriter.borrow} out this is native
       write:      function as { T: StringLike.generic } in {:this from: T} out (Result t: u64 e: IoError) is native
       writeLine: function as { T: StringLike.generic } in {:this from: T} out (Result t: u64 e: IoError) is native
       flush:      function {:this} out (Result t: null e: IoError) is native
@@ -642,10 +642,10 @@ bufwriter locks the underlying writer. As with bufwriter,
 <code>flush</code> is not automatic on scope exit.</p>
 <h2 id="textreader"><a href="#textreader">34. textreader</a></h2>
 <pre><code class="language-zerolang">  textreader: class {
-      source: BufReader.lock
+      source: BufReader.borrow
       buf:    Bytes
   } as {
-      create:    function {from: BufReader.lock} out this is native
+      create:    function {from: BufReader.borrow} out this is native
       readLine: function {:this} out (Result t: String e: IoError) is native
       call:      function {:this} out (Option t: String) is native
   }</code></pre>

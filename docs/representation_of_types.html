@@ -137,7 +137,7 @@ Table of Contents</div>
 </li>
 <li><a href="#swap">Swap</a>
 </li>
-<li><a href="#lock-fields-on-classes">.lock Fields on Classes</a>
+<li><a href="#non-owned-fields-on-classes">Non-Owned Fields on Classes</a>
 </li>
 </ul>
 </li>
@@ -304,7 +304,7 @@ instances) may contain <code>String</code>, <code>List</code>, <code>Box</code>,
 fields. However, a reftype is not required to own heap resources -- a class
 with only valtype fields is valid. Such a class still has identity and
 single-owner semantics but needs no destructor.</li>
-<li>Locks live on reftypes. The <code>.lock</code> field mechanism is available to
+<li>Locks live on reftypes. The non-owned field mechanism is available to
 reftypes (classes) only. Valtypes (records, variants) cannot hold locks.
 Born-borrowed is removed as a concept.</li>
 </ol>
@@ -319,7 +319,7 @@ Born-borrowed is removed as a concept.</li>
 <col style="width: 15%">
 </colgroup>
 <thead>
-<tr><th style="text-align: left">Type</th><th style="text-align: left">Stack/Heap</th><th style="text-align: left">Copyable</th><th style="text-align: left">Destructor</th><th style="text-align: left">Can have heap fields</th><th style="text-align: left">.lock support</th></tr>
+<tr><th style="text-align: left">Type</th><th style="text-align: left">Stack/Heap</th><th style="text-align: left">Copyable</th><th style="text-align: left">Destructor</th><th style="text-align: left">Can have heap fields</th><th style="text-align: left">non-owned fields</th></tr>
 </thead>
 <tbody>
 <tr><td>record</td><td>stack</td><td>yes</td><td>no</td><td>no</td><td>no</td></tr>
@@ -366,7 +366,7 @@ never need a destructor.</p>
 function references. Records <em><strong>cannot</strong></em> contain <code>String</code>, <code>List</code>,
 <code>Box</code>, <code>Map</code>, classes, unions, or any type that requires heap cleanup.
 This restriction is enforced by the type checker.</p>
-<p>Records cannot have <code>.lock</code> fields. Locks require identity (single-owner
+<p>Records cannot have non-owned fields. Locks require identity (single-owner
 semantics) which valtypes do not have. See the Born-Borrowed Analysis section
 for discussion.</p>
 <h3 id="construction"><a href="#construction">4.3. Construction</a></h3>
@@ -473,24 +473,24 @@ zero-initialises its source).</p>
     zv_a = zv_b;
     zv_b = _tmp;
 }</code></pre>
-<h3 id="lock-fields-on-classes"><a href="#lock-fields-on-classes">6.11. .lock Fields on Classes</a></h3>
-<p>Classes may have <code>.lock</code> fields. A class with <code>.lock</code> fields:</p>
+<h3 id="non-owned-fields-on-classes"><a href="#non-owned-fields-on-classes">6.11. Non-Owned Fields on Classes</a></h3>
+<p>Classes may have non-owned fields. A class with non-owned fields:</p>
 <ul>
-<li>Holds compile-time locks on the targets of its <code>.lock</code> fields for the
+<li>Holds compile-time locks on the targets of its non-owned fields for the
   lifetime of the class instance.</li>
 <li>Cannot be stored as a field of another type (prevents the lock from
   outliving its target).</li>
 <li>Can be moved via <code>.take</code> -- ownership and locks transfer to the new
   name.</li>
-<li>Can be passed to <code>.borrow</code> and <code>.lock</code> parameters.</li>
+<li>Can be passed to <code>.borrow</code> and non-owned parameters.</li>
 <li>When the instance falls out of scope, locks are released (and the
   destructor runs if present).</li>
 </ul>
-<p>Classes with <code>.lock</code> fields are normal owned instances. The single-owner
+<p>Classes with non-owned fields are normal owned instances. The single-owner
 semantics of classes (no copying) already provide the safety guarantees that
 born-borrowed previously enforced for records. A class cannot be duplicated, so
 there is no risk of multiple copies holding the same lock.</p>
-<p><code>.lock</code> fields are immutable after construction.</p>
+<p>non-owned fields are immutable after construction.</p>
 <h2 id="unions-reftypes"><a href="#unions-reftypes">7. Unions (Reftypes)</a></h2>
 <p>Unions are sum reference types. The struct itself is  stack-allocated; the
 subtype data is heap-allocated via a <code>void*</code> pointer.</p>
@@ -728,7 +728,7 @@ pattern (construct element on stack, append copies it into data buffer) is
 correct and the copy cost is negligible for element-sized data.</p>
 <h2 id="listview-t"><a href="#listview-t">12. listview(T)</a></h2>
 <p><code>ListView</code> is a generic read-only view into a list. It is a class (single
-ownership) with a <code>.lock</code> field that holds a lock on the parent list.</p>
+ownership) with a non-owned field that holds a lock on the parent list.</p>
 <h3 id="memory-layout-9"><a href="#memory-layout-9">12.1. Memory Layout</a></h3>
 <pre><code class="language-c">typedef struct {
     uint64_t length;
@@ -739,7 +739,7 @@ ownership) with a <code>.lock</code> field that holds a lock on the parent list.
 <code>z_listview_i64_t*</code> -- the memory is reinterpreted without copying.</p>
 <h3 id="ownership-3"><a href="#ownership-3">12.2. Ownership</a></h3>
 <p>Listview is a class (reftype): single ownership, cannot be copied. It holds a
-<code>.lock</code> on the source list, preventing mutation of the list while the view
+<code>.borrow</code> on the source list, preventing mutation of the list while the view
 exists. When the listview falls out of scope, the lock is released.</p>
 <p>Listview does <em><strong>not</strong></em> need a destructor (no heap allocations of its own). The
 data it points to is owned by the parent list.</p>
@@ -830,7 +830,7 @@ tracks the actual content length.</p>
 </table>
 <h2 id="stringview"><a href="#stringview">14. stringview</a></h2>
 <p><code>StringView</code> is a  class: a read-only view into a <code>String</code>, with
-single-owner semantics and a <code>.lock</code> on the source string.</p>
+single-owner semantics and a <code>.borrow</code> on the source string.</p>
 <h3 id="memory-layout-11"><a href="#memory-layout-11">14.1. Memory Layout</a></h3>
 <pre><code class="language-c">typedef struct {
     uint64_t length;        /* byte count of the viewed region */
@@ -841,7 +841,7 @@ fields of <code>String</code> (<code>size</code>, <code>data</code>), enabling z
 <code>z_string_t*</code> to <code>z_stringview_t*</code>.</p>
 <h3 id="ownership-4"><a href="#ownership-4">14.2. Ownership</a></h3>
 <p>Stringview is a class (reftype): single ownership, cannot be copied. It holds a
-<code>.lock</code> on the source string (when created from a string variable).
+<code>.borrow</code> on the source string (when created from a string variable).
 Stringviews created from string literals point into static <code>.rodata</code> and do
 not lock anything (static data has infinite lifetime).</p>
 <p>Stringview has no destructor (no heap allocations).</p>
@@ -861,7 +861,7 @@ pointer-typed payloads (box, protocol, etc.), <code>Option</code> is represented
 bare pointer with <code>NULL</code> sentinel, avoiding the tag + void* overhead entirely.</p>
 <h1 id="born-borrowed-analysis"><a href="#born-borrowed-analysis">Born-Borrowed Analysis</a></h1>
 <h2 id="removal-from-valtypes"><a href="#removal-from-valtypes">16. Removal from Valtypes</a></h2>
-<p>Born-borrowed is removed as a language concept. The <code>.lock</code> field mechanism
+<p>Born-borrowed is removed as a language concept. The non-owned field mechanism
 is now available only to reftypes (classes). Valtypes (records, variants)
 cannot hold locks.</p>
 <h3 id="rationale"><a href="#rationale">16.1. Rationale</a></h3>
@@ -872,16 +872,16 @@ valtypes (freely copyable), the born-borrowed flag was needed to prevent copies
 born-borrowed records neither truly values (they could not be copied) nor truly
 references (they had no identity or destructor).</p>
 <p>With classes now stack-allocated, the motivation disappears. A class with
-<code>.lock</code> fields has single-owner semantics that naturally prevent copies,
+non-owned fields has single-owner semantics that naturally prevent copies,
 without any special born-borrowed mechanism. The class can be moved
 (<code>.take</code>), which born-borrowed records could not do.</p>
 <h3 id="migration"><a href="#migration">16.2. Migration</a></h3>
 <p>Types that were born-borrowed records become classes:</p>
 <ul>
-<li><code>StringView</code>: becomes a class with <code>.lock</code> on the source string.</li>
-<li>Iterators (eg. <code>BagIter</code>): become classes with <code>.lock</code> on the
+<li><code>StringView</code>: becomes a class with <code>.borrow</code> on the source string.</li>
+<li>Iterators (eg. <code>BagIter</code>): become classes with <code>.borrow</code> on the
   container.</li>
-<li>Any record with <code>.lock</code> fields: becomes a class.</li>
+<li>Any record with non-owned fields: becomes a class.</li>
 </ul>
 <h3 id="critique"><a href="#critique">16.3. Critique</a></h3>
 <p>Removing born-borrowed from valtypes is a simplification but has trade-offs:</p>
@@ -925,7 +925,7 @@ buffers are on the heap." Easy to teach and reason about.</li>
 improving performance and reducing fragmentation.</li>
 <li>Unified field access. Local variables of all types use <code>.</code> for
 field access. Only <code>this</code> in methods and boxed items use <code>-&gt;</code>.</li>
-<li>Class .lock fields. Enables natural class-based iterators and
+<li>Class non-owned fields. Enables natural class-based iterators and
 views. More flexible than the old born-borrowed record approach: a class
 instance supports <code>.take</code> (moving to a new name).</li>
 <li>Clean type system. Valtypes are always values. Reftypes are always
