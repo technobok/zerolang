@@ -219,6 +219,16 @@ returnHeadOf: function {ast: Ast.view n: Node.view} out String is {
         return "".string
     }
 }
+# isNonOwnedLeaf9 -- a path leaf naming a NON-OWNED marker. `lock` and `borrow`
+# mean the same thing here (not owned, mutable), and the generator desugarer has
+# to accept both while `.lock` retires: the recognisers below keyed on the
+# literal `lock`, so a receiver spelled `.borrow` was silently not a receiver and
+# the factory came back with the wrong result type.
+isNonOwnedLeaf9: function {name: StringView} out bool is {
+    if name == "lock" then return true
+    return name == "borrow"
+}
+
 
 # pathLeafName -- the take/lock/borrow ownership leaf on a dotted path,
 # "" when none.
@@ -1853,7 +1863,7 @@ isThisPrivateLock: function {ast: Ast.view n: Node.view} out bool is {
         n
     ) case dottedpath then {
         ln: leafAtomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if ln.stringview == "lock" then {
+        if (isNonOwnedLeaf9 name: ln.stringview) then {
             return (isThisPrivate :ast n: (ast.nodes.get i: (n.parent - 1).u64))
         } else {
             return false
@@ -2054,7 +2064,7 @@ paramIsThisLock: function {ast: Ast.view n: Node.view} out bool is {
         n
     ) case namedoperation then {
         lf: pathLeafName :ast n: (ast.nodes.get i: (n.operation - 1).u64)
-        if lf.stringview == "lock" then {
+        if (isNonOwnedLeaf9 name: lf.stringview) then {
             return true
         } else {
             return false
@@ -2232,7 +2242,7 @@ lowerOne: function {
                         rfb0: resumeBaseId :ast o: resumeField
                         if rfb0 > 0 then noStamp.append rfb0
                     } else {
-                        if alf9.stringview == "lock" then {
+                        if (isNonOwnedLeaf9 name: alf9.stringview) then {
                             rf1: clonePath :ast n: acc9
                             # the field copy shares the param's stamp in the
                             # reference -- one stamp per ref (the recorder

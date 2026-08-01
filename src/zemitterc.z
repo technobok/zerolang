@@ -20667,6 +20667,24 @@ ioCreateWrapper: function {ast: Ast.view n: Node.view} out String is {
     return "".string
 }
 
+# argBaseAtom9 / argBaseNodeId9 -- the base of a wrapper-create argument. The
+# dotted extractors take the base of a PATH, which is what a `.lock`-suffixed
+# argument always was; a `borrow` parameter needs no suffix, so the argument
+# arrives as a BARE atom and is its own base. Without the fallback the emitter
+# builds `z_t0__create(&)` -- an unresolved type and an empty expression -- which
+# typechecks clean and dies at gcc.
+argBaseAtom9: function {ast: Ast.view n: Node.view} out String is {
+    b9: dottedBaseAtom :ast :n
+    if b9.length > 0 then return b9
+    return (atomTextOf :ast :n)
+}
+
+argBaseNodeId9: function {ast: Ast.view n: Node.view} out u32 is {
+    i9: dottedBaseNodeId :ast :n
+    if i9 > 0 then return i9
+    return (atomNodeId9 :n).u32.orPanic
+}
+
 # wrapperCreateArg -- one io-wrapper create arg by the create-param type: a
 # protocol-lock param projects the `.lock` base to that protocol; a class-lock
 # param takes the base's address; a scalar param emits the arg directly.
@@ -20689,8 +20707,11 @@ wrapperCreateArg: function {
             al: zast.nameTextCopy :ast ref: a.name
             if al.stringview == label then {
                 if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.protocolType then {
-                    ab: dottedBaseAtom :ast n: (ast.nodes.get i: (a.operation - 1).u64)
-                    abnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (a.operation - 1).u64)
+                    ab: argBaseAtom9 :ast n: (ast.nodes.get i: (a.operation - 1).u64)
+                    abnid: (argBaseNodeId9
+                        :ast
+                        n: (ast.nodes.get i: (a.operation - 1).u64)
+                    ).u64
                     abrV0: atomVid :symtab nid: abnid
                     abr: aliasResolve :ctx name: ab.stringview vid: abrV0
                     abtid: stampIdOf :symtab nid: abnid
@@ -20705,8 +20726,8 @@ wrapperCreateArg: function {
                 }
                 if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType then {
                     a2op9: ast.nodes.get i: (a.operation - 1).u64
-                    ab2: dottedBaseAtom :ast n: a2op9
-                    abr2V0: atomVid :symtab nid: (dottedBaseNodeId :ast n: a2op9)
+                    ab2: argBaseAtom9 :ast n: a2op9
+                    abr2V0: atomVid :symtab nid: (argBaseNodeId9 :ast n: a2op9).u64
                     abr2: aliasResolve :ctx name: ab2.stringview vid: abr2V0
                     ab2v9: u64
                     if abr2.stringview == ab2.stringview then ab2v9 = abr2V0

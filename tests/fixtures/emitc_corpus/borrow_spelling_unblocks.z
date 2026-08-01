@@ -1,0 +1,35 @@
+# The generator desugarer understood only the `.lock` SPELLING of "non-owned".
+#
+# A generator factory's receiver is written `{b: this.private.<marker>}` so the
+# synthesised iterator class can read the private fields. The desugarer's three
+# recognisers tested the leaf against the literal string "lock", so spelling it
+# `.borrow` -- the same thing, once `.lock` retires -- meant the parameter was
+# not recognised as a receiver at all.
+#
+# It failed SILENTLY. The generator still compiled and still built a class; the
+# loop variable simply came back as the ITERATOR type rather than the yielded
+# one, and the only symptom was a type error wherever the value was finally
+# used. That is why this fixture RUNS: a compile alone proves nothing here.
+#
+# The emitter's other half of the same unblocking -- a wrapper create whose
+# protocol argument is a bare name rather than a `.lock`-suffixed path -- is
+# covered by `examples/io_buffered.z` and its siblings, which migrated to the
+# bare form in the same commit and carry run goldens.
+Bag: class {
+    a: i64
+    b: i64
+    count: i64
+} as {
+    public: unit { :count :walk }
+    walk: function {b: this.private.borrow} out (Iterator gives: i64) is {
+        yield b.a
+        yield b.b
+    }
+}
+
+main: function is {
+    g: Bag a: 10 b: 20 count: 2
+    print "count=\{g.count}"
+    # `x` must be the YIELDED type, not the iterator
+    with it: (Bag.walk b: g) do for x: it loop print "walk: \{x}"
+}
