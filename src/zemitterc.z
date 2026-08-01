@@ -2908,8 +2908,19 @@ isNonLvalueArg: function {s: StringView} out bool is {
 # emitInstanceMethodCall for borrow-String args that needed `&` on a non-lvalue.
 # Called at statement level (which holds ind/tmp/buf) right after the call
 # expression is built; registers each temp for scope-exit free.
-flushArgHoists: function {ctx: Ctx ind: StringView tmp: TmpCtr buf: String.borrow} is {
-    i: u64
+# `floor`/`rawFloor` mark pending hoists that belong to an ENCLOSING scope: a
+# string interpolation used as a value emits into its own `({ ... })` buffer, and
+# declaring a sibling argument's temp in there produces C that gcc rejects with
+# `_ahN undeclared`. Everything below the floor stays pending for the outer flush.
+flushArgHoists: function {
+    ctx: Ctx
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    floor: 0.u64
+    rawFloor: 0.u64
+} is {
+    i: floor
     n: ctx.argHoistNames.length
     for i < n loop {
         nmo: ctx.argHoistNames.get :i
@@ -2926,18 +2937,21 @@ flushArgHoists: function {ctx: Ctx ind: StringView tmp: TmpCtr buf: String.borro
         }
         i = i + 1
     }
-    ri9: u64
+    ri9: rawFloor
     rn9: ctx.argHoistRaw.length
     for ri9 < rn9 loop {
         rdo9: ctx.argHoistRaw.get i: ri9
         buf.append rdo9
         ri9 = ri9 + 1
     }
-    ctx.argHoistNames = (List String)
-    ctx.argHoistVals = (List String)
-    ctx.argHoistTypes = (List String)
-    ctx.argHoistDtors = (List String)
-    ctx.argHoistRaw = (List String)
+    # drop what was just emitted, back to the floor -- not to empty
+    for ctx.argHoistNames.length > floor loop {
+        ctx.argHoistNames.pop
+        ctx.argHoistVals.pop
+        ctx.argHoistTypes.pop
+        ctx.argHoistDtors.pop
+    }
+    for ctx.argHoistRaw.length > rawFloor loop ctx.argHoistRaw.pop
 }
 
 # pushLoopLabel -- allocate a unique break-target label for a loop and push it.
@@ -4002,6 +4016,9 @@ emitInterpArgExpr: function {
                 listFreeRaw: (List u64)
             )
             lbuf: String
+            # this interpolation emits into its OWN `({ ... })` scope, so hoists
+            # already pending from the enclosing argument list must stay pending:
+            # they are declared and used at the call, outside this block.
             sM: (emitInterpBuild
                 :ast
                 :symtab
@@ -4010,6 +4027,8 @@ emitInterpArgExpr: function {
                 ind: " "
                 tmp: ltmp
                 buf: lbuf
+                hoistFloor: ctx.argHoistNames.length
+                hoistRawFloor: ctx.argHoistRaw.length
             )
             r: "({ \{lbuf}_s\{sM}; })"
             return r
@@ -8137,6 +8156,8 @@ emitInterpBuild: function {
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
+    hoistFloor: 0.u64
+    hoistRawFloor: 0.u64
 } out u64 is {
     est: u64
     with piter: parts.iterate do for pId9: piter loop {
@@ -8156,7 +8177,18 @@ emitInterpBuild: function {
     buf.append l0
     qiter: parts.iterate
     for qId9: qiter loop {
-        emitInterpPart :ast :symtab :ctx n: (ast.nodes.get i: (qId9 - 1).u64) :sN :ind :tmp :buf
+        (emitInterpPart
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: (qId9 - 1).u64)
+            :sN
+            :ind
+            :tmp
+            :buf
+            :hoistFloor
+            :hoistRawFloor
+        )
     }
     return sN
 }
@@ -8314,6 +8346,8 @@ interpBaseIsOwnedStructField: function {
 
 # emit one part of a string interpolation.
 emitInterpPart: function {
+    hoistFloor: 0.u64
+    hoistRawFloor: 0.u64
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
@@ -8345,7 +8379,7 @@ emitInterpPart: function {
         # a call fragment may have hoisted non-lvalue args to _ah temps:
         # declare them before the fragment uses them (mirrors the direct
         # print path's flush after emitCallValue)
-        flushArgHoists :ctx :ind :tmp :buf
+        flushArgHoists :ctx :ind :tmp :buf floor: hoistFloor rawFloor: hoistRawFloor
         bN: tmp.next
         if tn.stringview == "i128" then {
             l4a: "\{ind}char _b\{bN}[48]; int _b\{bN}_n = z_fmt_i128(_b\{bN}, (__int128)\{val});\n"

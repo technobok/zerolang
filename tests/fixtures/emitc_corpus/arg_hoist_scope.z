@@ -1,0 +1,81 @@
+# An argument hoisted for one call must be declared in THAT call's scope.
+#
+# A string interpolation used as a VALUE is emitted as a GCC statement
+# expression -- `({ String _s0 = ...; ...; _s0; })` -- built into its own local
+# buffer. Any argument hoists still pending from the ENCLOSING argument list were
+# flushed into that buffer, so a sibling argument's `_ahN` was declared inside a
+# block that closes before the call uses it. gcc rejects the result with
+# `_ahN undeclared`; the zerolang typechecks clean, so nothing before gcc says a
+# word.
+#
+# Three ingredients are needed together, which is why four earlier attempts to
+# reduce this from the compiler produced no `_ah` hoists at all:
+#
+#   1. an element read from a container that is passed BY VALUE, so it must be
+#      hoisted to an lvalue first. Only a CLASS param is passed by reference; a
+#      UNION is a reftype too, but it is a `{tag, void* data}` fat pointer passed
+#      BY VALUE (the copy still aliases through `data`). With a CLASS element the
+#      argument goes by pointer and no hoist is created at all;
+#   2. at least two of them in one argument list, so the second is still pending
+#      when the third argument is emitted;
+#   3. a sibling argument that is an interpolated string, which opens the nested
+#      scope that swallowed them.
+#
+# The nested `if`s are not incidental: the hoists are declared at the innermost
+# open block, which is what made the original failure so hard to place.
+Pl: record {
+    line: u32
+    col: u32
+}
+
+Fy: record {
+    line: u32
+    col: u32
+}
+
+Nd: union {
+    plain: Pl
+    fancy: Fy
+}
+
+lineOf: function {n: Nd.view} out u32 is {
+    match (
+        n
+    ) case plain then {
+        return n.line
+    } case fancy then {
+        return n.line
+    }
+}
+
+colOf: function {n: Nd.view} out u32 is {
+    match (
+        n
+    ) case plain then {
+        return n.col
+    } case fancy then {
+        return n.col
+    }
+}
+
+report: function {lineno: u32 colno: u32 msg: String note: String hint: String} is {
+    print "\{lineno}:\{colno} \{msg} | \{note} | \{hint}"
+}
+
+main: function is {
+    xs: (List Nd)
+    xs.append (Nd.plain (Pl line: 3 col: 7))
+    name: "thing".string
+    un: "u".string
+    if xs.length > 0 then {
+        if name.length > 0 then {
+            (report
+                lineno: (lineOf n: (xs.get i: 0))
+                colno: (colOf n: (xs.get i: 0))
+                msg: "'\{name}' is not public on unit '\{un}'"
+                note: "a note".string
+                hint: "a hint".string
+            )
+        }
+    }
+}
