@@ -3555,6 +3555,65 @@ fnHasLockParam: function {ast: Ast.view fnode: zast.FunctionData.view} out bool 
     return found9
 }
 
+# typeHasNonOwnedField9 -- the type declares at least one field the instance does
+# NOT own: a `borrow`/`view` slot, i.e. a reference into something else. Such an
+# instance is only sound while whatever it points at outlives it.
+typeHasNonOwnedField9: function {ty: ztyping.ZTyping tid: u64} out bool is {
+    if tid == 0 then return false
+    fn9: (List u64)
+    ft9: (List u64)
+    ty.declMemberList ownerTid: tid names: fn9 tids: ft9
+    i9: u64
+    n9: fn9.length
+    found9: false
+    for i9 < n9 loop {
+        if (found9) == false then {
+            nid9: (fn9.get i: i9).u32.orPanic
+            if (ty.declIsLockFieldId parentTypeId: tid nameId: nid9) then found9 = true
+        }
+        i9 = i9 + 1
+    }
+    return found9
+}
+
+# returnNamesThis9 -- the return type is the enclosing type itself (`out this`,
+# with or without a marker), which is what a constructor writes.
+returnNamesThis9: function {ast: Ast.view oId: u32} out bool is {
+    if oId == 0 then return false
+    rn9: rootNameOf :ast n: (ast.nodes.get i: (oId - 1).u64)
+    return rn9.stringview == "this"
+}
+
+# checkTakexHonesty -- an OWNED `out this` whose type declares a non-owned field
+# hands back a value holding a reference into something the callee was given.
+# Unless the return says `takex`, nothing pins that source and the field dangles
+# as soon as the caller drops it. This is the rule `.lock` on the parameter used
+# to enforce by accident; `takex` states it on the signature, where a reader can
+# see it.
+checkTakexHonesty: function {
+    ty: ztyping.ZTyping
+    ast: Ast.view
+    fnode: zast.FunctionData.view
+    thisTid: u64
+    defName: StringView
+} is {
+    if thisTid == 0 then return
+    if (returnNamesThis9 :ast oId: fnode.returntype) == false then return
+    # a reference return is a different contract, checked by checkBorrowReturnLock
+    if (returnHasBorrowMarker :ast oId: fnode.returntype) then return
+    if (returnHasTakexMarker :ast oId: fnode.returntype) then return
+    if (typeHasNonOwnedField9 :ty tid: thisTid) == false then return
+    (addResolveErrorH
+        :ty
+        nodeid: fnode.nodeid
+        lineno: fnode.lineno
+        colno: fnode.colno
+        e: zast.err.ownerError
+        msg: "an owned `out this` whose type declares a non-owned field must be `.takex` -- the result holds a reference into a parameter, and only `takex` pins that source for the result's lifetime".string
+        width: defName.length.u32.orPanic
+    )
+}
+
 # checkBorrowReturnLock -- a `.borrow`-returning function must borrow from a
 # `.lock` parameter (a `this.lock` receiver counts), so the returned view has a
 # locked parent (docs/ownership.pdoc). Runs at every function/method decl.
@@ -4241,6 +4300,13 @@ attachMethods: function {
                     mop9
                 ) case functiondef then {
                     checkBorrowReturnLock :ast :ty fnode: mop9 defName: mname.stringview
+                    (checkTakexHonesty
+                        :ty
+                        :ast
+                        fnode: mop9
+                        thisTid: parentId
+                        defName: mname.stringview
+                    )
                 } else null
             }
             mido: (resolveMethodFn
