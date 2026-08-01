@@ -66052,7 +66052,10 @@ void z_t2830(z_t1287_t* z_v8357, z_t105_t z_v8358, z_t1081_t* z_v8359, z_t1047_t
             z_v8388 = (z_t74_t){0};
     z_t74_free(&z_v8388);
         }
-        bool z_v8389 = z_v8357->typing.pendingBorrowReadonly;
+        bool z_v8389 = false;
+        if (z_t1601_eq(z_v8384, ((z_t1601_t){ .tag = Z_ZOWNERSHIP_TAG_BORROWED }))) {
+            z_v8389 = z_v8357->typing.pendingBorrowReadonly;
+        }
         z_v8357->typing.pendingBorrowReadonly = false;
         (void)(z_t2105(z_v8357, z_v8361->name, &z_v8385));
         uint64_t z_v8391 = z_v8386;
