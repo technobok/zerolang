@@ -464,7 +464,10 @@ function camel(s,   out, i, c, up) {
 # A native method declaring a receiver, on a reference type: record whether
 # the receiver carries the .view marker.
 function declEmit() {
-    if ((dacc !~ /[{ ]:this[ }]/) && (dacc !~ /this\.(view|lock|borrow|take)/)) return
+    # `takex` is a RETURN marker, not a receiver: without the trailing boundary
+    # `this.takex` prefix-matches `this.take` and the guard hunts for a receiver
+    # the declaration never had.
+    if ((dacc !~ /[{ ]:this[ }]/) && (dacc !~ /this\.(view|lock|borrow|take)[^a-z]/)) return
     dm = (dacc ~ /this\.view/) ? "view" : "plain"
     if (!((dty " " dmeth) in dseen)) { dord[++dn] = dty " " dmeth; dseen[dty " " dmeth] = 1 }
     dkind[dty " " dmeth] = dm
