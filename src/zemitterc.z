@@ -1432,7 +1432,7 @@ nodeIsRefBorrowResult9: function {
     f9: refBorrowCalleeFid9 :ast :symtab :ctx :n
     if f9 == 0 then return false
     r9: stampIdOf :symtab nid: (nodeIdOf9 :n)
-    return (fnReturnsRefBorrow9 :symtab :ctx fid: f9 retTid: r9)
+    return (fnReturnsRefBorrow9 :ast :symtab :ctx fid: f9 retTid: r9)
 }
 
 # VidVal / VidTid -- assoc-list entries for the per-function narrowing and alias
@@ -3429,6 +3429,7 @@ funcBorrowFlag: function {symtab: zenv.ZSymbolTable.view tid: u64} out bool is {
 # returnTypeOf is 0 for a user method, so both signature emitters fall back to
 # the AST (fnReturnTypeId) and pass the result in rather than repeat it.
 fnReturnsRefBorrow9: function {
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     fid: u64
@@ -3448,7 +3449,13 @@ fnReturnsRefBorrow9: function {
     if (isHeapPtrCollection :symtab :ctx tid: retTid) then return false
     if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: retTid)) then return false
     if (symtab.reg.isNativeOf tid: retTid) then return false
-    return (symtab.reg.isReftypeOf tid: retTid)
+    # The question is the C ABI, NOT the ownership family: only a CLASS is
+    # passed and returned by reference. A UNION is a reftype too, but it is a
+    # `{tag, void* data}` fat pointer passed BY VALUE -- the copy already aliases
+    # the source through `data`, so it needs no `*` and starring it produces C
+    # that cannot be matched on. `isReftypeParam` is the emitter's existing
+    # answer to exactly this and is what the param side already uses.
+    return (isReftypeParam :ast :symtab :ctx tid: retTid)
 }
 
 # hoistExprIsBorrowRooted -- the hoisted expression's ROOT is a
@@ -9782,7 +9789,13 @@ emitStmt: function {
             ctB8: "\{ct}"
             {
                 rbf8: refBorrowCalleeFid9 :ast :symtab :ctx n: avn9
-                if rbf8 > 0 when (fnReturnsRefBorrow9 :symtab :ctx fid: rbf8 retTid: ltid) then {
+                if rbf8 > 0 when (fnReturnsRefBorrow9
+                    :ast
+                    :symtab
+                    :ctx
+                    fid: rbf8
+                    retTid: ltid
+                ) then {
                     ctB8 = "\{ct}*"
                     ctx.ptrVids.append nmVid9
                 }
@@ -10169,7 +10182,7 @@ emitStmt: function {
         # ALIASES its source exactly as a plain binding does
         {
             wrb: refBorrowCalleeFid9 :ast :symtab :ctx n: (ast.nodes.get i: (n.value - 1).u64)
-            if wrb > 0 when (fnReturnsRefBorrow9 :symtab :ctx fid: wrb retTid: wsid9) then {
+            if wrb > 0 when (fnReturnsRefBorrow9 :ast :symtab :ctx fid: wrb retTid: wsid9) then {
                 wct = "\{wct}*"
                 ctx.ptrVids.append (defVid :symtab nid: n.nodeid.u64)
             }
@@ -13264,7 +13277,13 @@ emitTailStmt: function {
         # ALIASES its source exactly as a plain binding does
         {
             wrbT9: refBorrowCalleeFid9 :ast :symtab :ctx n: (ast.nodes.get i: (n.value - 1).u64)
-            if wrbT9 > 0 when (fnReturnsRefBorrow9 :symtab :ctx fid: wrbT9 retTid: wsidT9) then {
+            if wrbT9 > 0 when (fnReturnsRefBorrow9
+                :ast
+                :symtab
+                :ctx
+                fid: wrbT9
+                retTid: wsidT9
+            ) then {
                 wctT9 = "\{wctT9}*"
                 ctx.ptrVids.append (defVid :symtab nid: n.nodeid.u64)
             }
@@ -14052,7 +14071,7 @@ fnSignature: function {
             :ctx
             tid: retColId9
         ) then ret = "\{ret}*"
-        if (fnReturnsRefBorrow9 :symtab :ctx :fid retTid: retColId9) then ret = "\{ret}*"
+        if (fnReturnsRefBorrow9 :ast :symtab :ctx :fid retTid: retColId9) then ret = "\{ret}*"
     }
     params: String
     cNames: (List String)
@@ -15581,7 +15600,7 @@ emitFnBody: function {
     {
         rbt9: fnReturnTidOf :symtab tid: fid
         if rbt9 == 0 then rbt9 = fnReturnTypeId :ast :symtab :op
-        ctx.refBorrowRet = (fnReturnsRefBorrow9 :symtab :ctx :fid retTid: rbt9)
+        ctx.refBorrowRet = (fnReturnsRefBorrow9 :ast :symtab :ctx :fid retTid: rbt9)
     }
     match (
         op
@@ -22956,7 +22975,7 @@ emitOneMethod: function {
             :ctx
             tid: retColId9
         ) then ret = "\{ret}*"
-        if (fnReturnsRefBorrow9 :symtab :ctx fid: mid retTid: retColId9) then ret = "\{ret}*"
+        if (fnReturnsRefBorrow9 :ast :symtab :ctx fid: mid retTid: retColId9) then ret = "\{ret}*"
     }
     params: String
     pnames: (List String)

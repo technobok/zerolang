@@ -13,6 +13,14 @@
 # The `label` field owns heap on purpose: if the reference were ever bound as an
 # owned value again, its destructor would double-free the String and the corpus
 # leak pass would say so.
+#
+# The UNION case is here because it is the counter-example, and it is easy to get
+# backwards. A union is a reftype like a class, but the C ABI treats the two
+# differently: only a class is passed and returned by reference. A union is a
+# `{tag, void* data}` fat pointer returned BY VALUE, and that copy already
+# aliases its source through `data`, so it must NOT be given a `*` -- a starred
+# union return cannot be matched on at all. The rule keys on `isReftypeParam`
+# (the ABI question) rather than `isReftypeOf` (the ownership family).
 Item: class {
     n: i64
     label: String
@@ -23,6 +31,27 @@ Bag: class {
 } as {
     peek: function {t: this.borrow} out Item.borrow is {
         return t.it
+    }
+}
+
+Pl: record {
+    n: i64
+}
+
+Fy: record {
+    n: i64
+}
+
+Arm: union {
+    plain: Pl
+    fancy: Fy
+}
+
+Holder: class {
+    a: Arm
+} as {
+    look: function {t: this.borrow} out Arm.borrow is {
+        return t.a
     }
 }
 
@@ -41,4 +70,14 @@ main: function is {
     d: b.peek.n + 100
     print "derived value:               \{d}"
     print "source still owns its label: \{b.it.label}"
+    # a union borrow-return stays a by-value fat pointer, and must still match
+    h: Holder a: (Arm.plain (Pl n: 7))
+    u: h.look
+    match (
+        u
+    ) case plain then {
+        print "union borrow matched:        plain n=\{u.n}"
+    } case fancy then {
+        print "union borrow matched:        fancy n=\{u.n}"
+    }
 }
