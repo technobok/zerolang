@@ -1,0 +1,37 @@
+# A marked receiver is an ALIAS -- `{t: this.view}` rather than `{:this}` -- and
+# the protocol vtable emitter did not know that. It detects the receiver by the
+# NAME `this` or by matching the parameter's type, so an aliased one was emitted
+# as an extra argument: `z_t9_Reader_peek_wrapper` called `z_t861(_self, t)`,
+# which gcc rejects with "too many arguments", and the vtable's function-pointer
+# type disagreed with the wrapper for the same reason.
+#
+# The vtable is emitted for the CONFORMANCE, so this fixture reaches it without
+# needing protocol-typed dispatch -- which is still blocked one layer up, in the
+# typechecker's argument check.
+#
+# `bump` keeps a mutable receiver alongside, so the two spellings are emitted
+# side by side and the values prove the receiver still arrives.
+Reader: protocol {
+    peek: function {t: this.view} out i64
+    label: function {t: this.view} out String
+}
+Counter: class {
+    n: i64
+    tag: String
+} as {
+    :Reader
+    peek: function {t: this.view} out i64 is {
+        return t.n
+    }
+    label: function {t: this.view} out String is {
+        return t.tag.copy
+    }
+    bump: function {:this by: i64} is {
+        this.n = this.n + by
+    }
+}
+main: function is {
+    c: Counter n: 5 tag: "c".string
+    c.bump by: 3
+    print "peek=\{c.peek} label=\{c.label}"
+}
