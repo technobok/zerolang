@@ -1,0 +1,44 @@
+# A user method's `out T.borrow` hands back a REFERENCE, so a write through the
+# result reaches the source.
+#
+# It used to hand back a COPY: the C function returned the struct by value, the
+# binding copied it, and `p.n = 20` landed on the copy. `b.it.n` stayed 1 and
+# nothing anywhere reported a problem -- a silently wrong answer, not a crash.
+# Both binding forms lost it, the plain one and `with`.
+#
+# `borrow_return_view_param.z` is the read-only half of this pair; it only reads
+# through the reference, which is why the copy went unnoticed there. This one
+# writes, which is the whole point of a mutable borrow.
+#
+# The `label` field owns heap on purpose: if the reference were ever bound as an
+# owned value again, its destructor would double-free the String and the corpus
+# leak pass would say so.
+Item: class {
+    n: i64
+    label: String
+}
+
+Bag: class {
+    it: Item
+} as {
+    peek: function {t: this.borrow} out Item.borrow is {
+        return t.it
+    }
+}
+
+main: function is {
+    b: Bag it: (Item n: 1 label: "held".string)
+    {
+        p: b.peek
+        p.n = 20
+    }
+    print "plain binding wrote through: \{b.it.n}"
+    with q: b.peek do {
+        q.n = q.n + 5
+    }
+    print "with binding wrote through:  \{b.it.n}"
+    # a value DERIVED from the reference is a fresh value, not a reference
+    d: b.peek.n + 100
+    print "derived value:               \{d}"
+    print "source still owns its label: \{b.it.label}"
+}

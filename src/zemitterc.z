@@ -1200,6 +1200,9 @@ Ctx: class {
     dataConst: (Map String value: String)
     # the current class method body's pointer-receiver params, by variable id
     ptrVids: (List u64)
+    # the enclosing function hands back a REFERENCE to a user reftype, so its
+    # `return` yields an address. Per-function, set by emitFnBody like ptrVids.
+    refBorrowRet: bool
     aliases: (List VidVal)
     narrowBox: (List VidVal)
     narrowTid: (List VidTid)
@@ -1390,7 +1393,17 @@ pathIsPointer: function {
         rlv9: u64
         if rln.stringview == lnP9.stringview then rlv9 = rlnV0
         return (isPtrVid :ctx vid: rlv9)
+    } case call then {
+        # a reference-returning call yields `T*`. The arm narrows `n` to
+        # CallData, so the Node is re-fetched by its own id.
+        cnd9: ast.nodes.get i: (n.nodeid - 1).u64
+        return (nodeIsRefBorrowResult9 :ast :symtab :ctx n: cnd9)
     } case dottedpath then {
+        # a ZERO-ARG auto-call reads as a dotted path, so a reference-returning
+        # one is itself a `T*` and a read off it is `->`. The arm narrows `n`, so
+        # the Node is re-fetched by its own id.
+        dnd9: ast.nodes.get i: (n.nodeid - 1).u64
+        if (nodeIsRefBorrowResult9 :ast :symtab :ctx n: dnd9) then return true
         cn: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         pnid: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
         pstamp: stampIdOf :symtab nid: pnid
@@ -1406,6 +1419,20 @@ pathIsPointer: function {
     } else {
         return false
     }
+}
+
+# nodeIsRefBorrowResult9 -- the node evaluates to a reference-returning call's
+# result, i.e. a `T*` in the emitted C.
+nodeIsRefBorrowResult9: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    n: Node.view
+} out bool is {
+    f9: refBorrowCalleeFid9 :ast :symtab :ctx :n
+    if f9 == 0 then return false
+    r9: stampIdOf :symtab nid: (nodeIdOf9 :n)
+    return (fnReturnsRefBorrow9 :symtab :ctx fid: f9 retTid: r9)
 }
 
 # VidVal / VidTid -- assoc-list entries for the per-function narrowing and alias
@@ -3374,6 +3401,42 @@ funcBorrowFlag: function {symtab: zenv.ZSymbolTable.view tid: u64} out bool is {
     }
 }
 
+# fnReturnsRefBorrow9 -- the function hands back a REFERENCE to a user reftype:
+# its declared return carries `.borrow`/`.view` and names a reftype. Such a
+# return is a `T*` in C -- returning the struct by value hands the caller a COPY,
+# so a write through it is silently lost.
+#
+# Natives are excluded deliberately. `String` is a reftype and `is native`
+# (lib/system/system.z:590), and `out String.borrow` already works: the struct
+# copy shares the buffer and the borrow legs suppress the free. Natives hand back
+# interior pointers by their own rules -- `List.get`'s `_r.data = &...` -- so
+# starring them would ripple through every caller for no correctness gain.
+# `retTid` is the caller's already-resolved return type: the registry's
+# returnTypeOf is 0 for a user method, so both signature emitters fall back to
+# the AST (fnReturnTypeId) and pass the result in rather than repeat it.
+fnReturnsRefBorrow9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    fid: u64
+    retTid: u64
+} out bool is {
+    if fid == 0 then return false
+    if retTid == 0 then return false
+    if (funcBorrowFlag :symtab tid: fid) == false then return false
+    # a NATIVE callee's ABI is fixed by its hand-written `.inc` fragment, which
+    # returns its struct by value (`List.iterate` -> ListIter). This emitter only
+    # rewrites the bodies it generates itself.
+    if (symtab.reg.isNativeOf tid: fid) then return false
+    # String/StringView and the collections are reftypes with hand-written C and
+    # their own borrow legs; `isStringyTid` is asked rather than isNativeOf
+    # because a String return arrives as a TYPEDEF id whose isNative is unset.
+    if (isStringyTid :ctx tid: retTid) then return false
+    if (isHeapPtrCollection :symtab :ctx tid: retTid) then return false
+    if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: retTid)) then return false
+    if (symtab.reg.isNativeOf tid: retTid) then return false
+    return (symtab.reg.isReftypeOf tid: retTid)
+}
+
 # hoistExprIsBorrowRooted -- the hoisted expression's ROOT is a
 # borrow-returning call (an element get and any field chain off it): the
 # hoist is a shared view and must not register a free. Field chains off
@@ -3430,6 +3493,61 @@ callRhsIsBorrow: function {
         name: ch.stringview
     )
     return (funcBorrowFlag :symtab tid: mfid9)
+}
+
+# refBorrowCalleeFid9 -- the CALLEE behind a borrow-returning binding RHS, or 0.
+# Deliberately narrower than bindingRhsIsBorrow, which also answers true for a
+# plain field read: only a declared `.borrow`/`.view` RETURN makes the binding a
+# reference, and a field read keeps its existing shallow-copy leg.
+refBorrowCalleeFid9: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    n: Node.view
+} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (refBorrowCalleeFid9 :ast :symtab :ctx n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case statementline then {
+        return (refBorrowCalleeFid9
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: (n.statementline - 1).u64)
+        )
+    } case call then {
+        cid9: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (n.callable - 1).u64))
+        if (funcBorrowFlag :symtab tid: cid9) then return cid9
+        ch8: aliasChildName :ast :symtab n: (ast.nodes.get i: (n.callable - 1).u64)
+        if ch8.length == 0 then return 0
+        rid8: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: (n.callable - 1).u64)
+        rid8 = chaseColMono :symtab :ctx tid: rid8
+        mf8: optU64Or9 o: (symtab.typing.declChildOf
+            pool: ast.names
+            parentTypeId: rid8
+            name: ch8.stringview
+        )
+        if (funcBorrowFlag :symtab tid: mf8) then return mf8
+        return 0
+    } case dottedpath then {
+        # a zero-arg method auto-call reads as a dotted path
+        ch7: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
+        pt7: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64))
+        cc7: symtab.typing.declChildOf pool: ast.names parentTypeId: pt7 name: ch7.stringview
+        match (
+            cc7
+        ) case some then {
+            if (symtab.reg.typetypeOf typeId: cc7) == ztypes.ztypetype.functionType then {
+                if (funcBorrowFlag :symtab tid: cc7) then return cc7
+            }
+            return 0
+        } case none then {
+            return 0
+        }
+    } else {
+        return 0
+    }
 }
 
 # true when a binding's right-hand side is a borrow.
@@ -9623,7 +9741,19 @@ emitStmt: function {
         rv: emitExpr :ast :symtab :ctx n: avn9
         flushArgHoists :ctx :ind :tmp :buf
         if ct.length > 0 then {
-            la: "\{ind}\{ct} \{nm} = \{rv};\n"
+            # a reference-returning callee hands back `T*`: the binding ALIASES
+            # the source, so it is declared as a pointer and registered so every
+            # later use emits `->`. Binding it by value would copy the struct and
+            # silently lose writes through it.
+            ctB8: "\{ct}"
+            {
+                rbf8: refBorrowCalleeFid9 :ast :symtab :ctx n: avn9
+                if rbf8 > 0 when (fnReturnsRefBorrow9 :symtab :ctx fid: rbf8 retTid: ltid) then {
+                    ctB8 = "\{ct}*"
+                    ctx.ptrVids.append nmVid9
+                }
+            }
+            la: "\{ind}\{ctB8} \{nm} = \{rv};\n"
             buf.append la
             emitValueTakeInvalidations :ast :symtab :ctx n: avn9 :ind :buf
             ftFn9: false
@@ -10001,6 +10131,15 @@ emitStmt: function {
             wct = cTypeForName :ast :symtab :ctx name: wtn.stringview
         }
         wv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.value - 1).u64)
+        # a reference-returning callee hands back `T*`, so a `with` binding
+        # ALIASES its source exactly as a plain binding does
+        {
+            wrb: refBorrowCalleeFid9 :ast :symtab :ctx n: (ast.nodes.get i: (n.value - 1).u64)
+            if wrb > 0 when (fnReturnsRefBorrow9 :symtab :ctx fid: wrb retTid: wsid9) then {
+                wct = "\{wct}*"
+                ctx.ptrVids.append (defVid :symtab nid: n.nodeid.u64)
+            }
+        }
         if wct.length > 0 then {
             lwv: "\{ind}\{wct} \{wnm} = \{wv};\n"
             buf.append lwv
@@ -13016,7 +13155,11 @@ emitReturnOfNode: function {
                 buf.append hret9
             } else {
                 buf.append clProbe9
-                lr: "\{ind}return \{rv};\n"
+                # a reference return hands back the address, not a copy of the
+                # struct; without the `&` the caller writes through a temporary
+                rvOut9: "\{rv}"
+                if ctx.refBorrowRet then rvOut9 = "&\{rv}"
+                lr: "\{ind}return \{rvOut9};\n"
                 buf.append lr
             }
         }
@@ -13083,6 +13226,15 @@ emitTailStmt: function {
             wctT9 = cTypeForName :ast :symtab :ctx name: wtnT9.stringview
         }
         wvT9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.value - 1).u64)
+        # a reference-returning callee hands back `T*`, so a `with` binding
+        # ALIASES its source exactly as a plain binding does
+        {
+            wrbT9: refBorrowCalleeFid9 :ast :symtab :ctx n: (ast.nodes.get i: (n.value - 1).u64)
+            if wrbT9 > 0 when (fnReturnsRefBorrow9 :symtab :ctx fid: wrbT9 retTid: wsidT9) then {
+                wctT9 = "\{wctT9}*"
+                ctx.ptrVids.append (defVid :symtab nid: n.nodeid.u64)
+            }
+        }
         if wctT9.length > 0 then {
             lwT9: "\{ind}\{wctT9} \{wnmT9} = \{wvT9};\n"
             buf.append lwT9
@@ -13866,6 +14018,7 @@ fnSignature: function {
             :ctx
             tid: retColId9
         ) then ret = "\{ret}*"
+        if (fnReturnsRefBorrow9 :symtab :ctx :fid retTid: retColId9) then ret = "\{ret}*"
     }
     params: String
     cNames: (List String)
@@ -15391,6 +15544,11 @@ emitFnBody: function {
     fid: u64
     buf: String.borrow
 } is {
+    {
+        rbt9: fnReturnTidOf :symtab tid: fid
+        if rbt9 == 0 then rbt9 = fnReturnTypeId :ast :symtab :op
+        ctx.refBorrowRet = (fnReturnsRefBorrow9 :symtab :ctx :fid retTid: rbt9)
+    }
     match (
         op
     ) case functiondef then {
@@ -15791,6 +15949,7 @@ emitC: function {
         dataElems: (Map String value: String)
         dataConst: (Map String value: String)
         ptrVids: (List u64)
+        refBorrowRet: false
         aliases: (List VidVal)
         narrowBox: (List VidVal)
         narrowTid: (List VidTid)
@@ -22763,6 +22922,7 @@ emitOneMethod: function {
             :ctx
             tid: retColId9
         ) then ret = "\{ret}*"
+        if (fnReturnsRefBorrow9 :symtab :ctx fid: mid retTid: retColId9) then ret = "\{ret}*"
     }
     params: String
     pnames: (List String)
