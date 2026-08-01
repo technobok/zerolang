@@ -625,6 +625,33 @@ Locking is an orthogonal compile-time mechanism that prevents aliasing and
 enforces mutation-safety for outstanding borrows. It has zero runtime
 overhead.
 
+#_+"The whole model is three rules." Everything below is these worked out in
+detail; if the detail ever seems to say something else, these win.
+
+#ol:
+  [#*: #_+"Every call takes a lock on its receiver" -- SHARED for
+  #~"this.view", EXCLUSIVE for #~"this.borrow" (and a bare #~":this" is
+  #~"this.borrow"). A field write or a swap is the same thing at statement
+  scope. There is no separate rule for mutation: a mutator is simply a call
+  with an exclusive receiver, and no carve-out for readers.]
+  [#*: #_+"The lock is released on return" -- unless the return carries a
+  reference (#~"borrow", #~"view") or pins its sources (#~"takex"), in which
+  case it transfers to the binding and lives exactly as long as it does.]
+  [#*: #_+"Shared and shared coexist. Exclusive coexists with nothing. A
+  holder never conflicts with itself."]
+
+This is Rust's discipline applied to references, and it was chosen
+deliberately over a more permissive alternative that would have needed two
+concepts and given up both the aliasing guarantee and the "nobody observes a
+half-built object" guarantee.
+
+Consequences worth stating outright, because they surprise people: an iterator
+holds its container EXCLUSIVELY, so two iterators over one container are
+refused and passing the container anywhere while iterating is refused --
+but passing the #_+"element" is fine and must stay so. #~"xs.length" inside a
+mutable loop is refused; hoist it, or use an index loop, whose element binding
+dies each iteration.
+
 Zerolang uses one lock primitive for two purposes, which this document
 refers to as:
 
