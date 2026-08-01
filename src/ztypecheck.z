@@ -1749,8 +1749,6 @@ markerText: function {o: ztypes.zparamownership} out String is {
         return "take".string
     } case borrowMode then {
         return "borrow".string
-    } case lockMode then {
-        return "lock".string
     } case viewMode then {
         return "view".string
     } case holdMode then {
@@ -2124,7 +2122,11 @@ pathOwnership: function {ast: Ast.view n: Node.view} out optionval ztypes.zparam
         n
     ) case dottedpath then {
         cn: atomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if cn.stringview == "lock" then return (optionval.some ztypes.zparamownership.lockMode)
+        # `.lock` is a retired SPELLING of `borrow`. The MODE is gone -- the grid
+        # has one non-owned-and-mutable concept, not two -- but the word still
+        # parses to it so existing sources keep their exact semantics instead of
+        # silently changing meaning.
+        if cn.stringview == "lock" then return (optionval.some ztypes.zparamownership.borrowMode)
         if cn.stringview == "borrow" then return (optionval.some ztypes.zparamownership.borrowMode)
         if cn.stringview == "take" then return (optionval.some ztypes.zparamownership.takeMode)
         if cn.stringview == "view" then return (optionval.some ztypes.zparamownership.viewMode)
@@ -3535,7 +3537,6 @@ fnHasLockParam: function {ast: Ast.view fnode: zast.FunctionData.view} out bool 
                     # and exclusive for `lock`/`borrow`. This is L1 of the
                     # plan's liveness rules -- the source's identity stopped
                     # mattering once every non-owned parameter is pinned.
-                    if po9 == ztypes.zparamownership.lockMode then found9 = true
                     if po9 == ztypes.zparamownership.borrowMode then found9 = true
                     if po9 == ztypes.zparamownership.viewMode then found9 = true
                 } case none then null
@@ -3562,7 +3563,7 @@ checkBorrowReturnLock: function {
                 lineno: fnode.lineno
                 colno: fnode.colno
                 e: zast.err.ownerError
-                msg: "a `.borrow` return must borrow from a non-owned parameter -- mark the source `.view` (readonly) or `.borrow`/`.lock` (mutable), e.g. `t: this.view`, so the returned view has a pinned parent".string
+                msg: "a `.borrow` return must borrow from a non-owned parameter -- mark the source `.view` (readonly) or `.borrow` (mutable), e.g. `t: this.view`, so the returned view has a pinned parent".string
                 width: defName.length.u32.orPanic
             )
         }
@@ -10316,8 +10317,6 @@ ownershipOfParam: function {o: optionval ztypes.zparamownership} out ztypes.zown
         } case takeMode then {
             return ztypes.zownership.owned
         } case borrowMode then {
-            return ztypes.zownership.borrowed
-        } case lockMode then {
             return ztypes.zownership.borrowed
         } case viewMode then {
             return ztypes.zownership.borrowed
@@ -18478,10 +18477,6 @@ walkCallArgsHoist: function {
                     ) case some then {
                         if oo == ztypes.zparamownership.takeMode then isTake = true
                         if oo == ztypes.zparamownership.takexMode then isTake = true
-                        if oo == ztypes.zparamownership.lockMode then {
-                            isLockish = true
-                            isDeclLock = true
-                        }
                         if oo == ztypes.zparamownership.borrowMode then isLockish = true
                         if oo == ztypes.zparamownership.viewMode then {
                             isLockish = true
@@ -18512,7 +18507,6 @@ walkCallArgsHoist: function {
                 if isLockish then dispHit9 = true
                 if dispHit9 when (typeIsReftype :st tid: vt) then {
                     dispVal9: ztypes.zparamownership.borrowMode
-                    if isDeclLock then dispVal9 = ztypes.zparamownership.lockMode
                     if isTake then dispVal9 = ztypes.zparamownership.takeMode
                     dispNid9: innermostNodeId :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
                     if dispNid9 > 0 then {
@@ -21821,7 +21815,6 @@ checkFunctionBody: function {
                         # `.hold` are readonly markers, enforced by a lock on
                         # the parameter's own NAME, which a valtype has just as
                         # much as a class does.
-                        if pown9 == ztypes.zparamownership.lockMode then isLockP9 = true
                         if pown9 == ztypes.zparamownership.viewMode then mkn9 = "view".string
                         if pown9 == ztypes.zparamownership.holdMode then mkn9 = "hold".string
                     } case none then null
