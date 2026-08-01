@@ -2765,6 +2765,110 @@ Analysis: class {
     # main unit's function defs (precise name/position; the receiver is exempt). Locals are the
     # assignment bindings in this file. The opt-out is to `touch` the variable: write its name on
     # its own line (it lowers to `(void)(x);`), which stamps a use.
+    # isBuiltinCarrierTid9 -- String, StringView or a container. These are
+    # declared `class is native`, so `isReftypeOf` says true for all of them and
+    # `isNativeOf` says false (it is only ever set on FUNCTION types). Compare
+    # against the builtin ids the way isContainerReaderCall does.
+    isBuiltinCarrierTid9: function {
+        :this
+        ast: Ast
+        st: zenv.ZSymbolTable
+        tid: u64
+    } out bool is {
+        b9: tid
+        {
+            g9: st.reg.genericOriginOf :tid
+            if g9 > 0 then b9 = g9
+        }
+        if b9 == (ztypecheck.builtinTidT
+            :ast
+            ty: st.typing
+            reg: st.reg
+            base: "String"
+        ) then return true
+        if b9 == (ztypecheck.builtinTidT
+            :ast
+            ty: st.typing
+            reg: st.reg
+            base: "StringView"
+        ) then return true
+        if b9 == (ztypecheck.builtinTidT
+            :ast
+            ty: st.typing
+            reg: st.reg
+            base: "List"
+        ) then return true
+        if b9 == (ztypecheck.builtinTidT
+            :ast
+            ty: st.typing
+            reg: st.reg
+            base: "ListView"
+        ) then return true
+        if b9 == (ztypecheck.builtinTidT
+            :ast
+            ty: st.typing
+            reg: st.reg
+            base: "Map"
+        ) then return true
+        if b9 == (ztypecheck.builtinTidT
+            :ast
+            ty: st.typing
+            reg: st.reg
+            base: "Set"
+        ) then return true
+        return b9 == (ztypecheck.builtinTidT :ast ty: st.typing reg: st.reg base: "Bytes")
+    }
+
+    # reportUnmutatedParam -- L020. A USER reftype parameter that is mutable by
+    # default and never mutated should declare `.view`: the marker is what lets
+    # a caller keep reading its argument across the call, and without it a
+    # forgotten `.view` surfaces as a lock conflict at a DISTANT call site.
+    #
+    # "Mutated" is not re-derived. The typechecker records `variableMutated` at
+    # the two places that already enforce the question -- `lockCallArg` whenever
+    # it takes a non-shared lock (every mutating receiver and every mutable
+    # argument) and `checkWriteLock` (assignment and swap targets) -- so this
+    # agrees with the lock rules by construction.
+    reportUnmutatedParam: function {
+        :this
+        ast: Ast
+        st: zenv.ZSymbolTable
+        fnOp: u32
+        vid: u64
+        nameRef: u32
+        line: u32
+        col: u32
+    } is {
+        vt9: u64
+        vto9: st.typing.variableZtype.get key: vid
+        match (
+            vto9
+        ) case some then {
+            vt9 = vto9
+        } case none then null
+        if vt9 == 0 then return
+        if (st.reg.isReftypeOf tid: vt9) == false then return
+        if (this.isBuiltinCarrierTid9 :ast :st tid: vt9) then return
+        ftid9: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: fnOp.u64
+        if ftid9 == 0 then return
+        own9: st.typing.declOwnershipOfId parentTypeId: ftid9 nameId: nameRef
+        mutable9: true
+        match (
+            own9
+        ) case some then {
+            if own9 != ztypes.zparamownership.borrowMode then mutable9 = false
+        } case none then null
+        if (mutable9) == false then return
+        pnm9: zast.poolTextCopy pool: ast.names ref: nameRef
+        (this.info
+            code: "L020"
+            msg: "parameter '\{pnm9}' is never mutated -- declare it `.view` so callers may keep reading the argument across the call"
+            :line
+            :col
+            width: pnm9.length.u32.orPanic
+        )
+    }
+
     reportUnusedVars: function {:this prog: Node uname: StringView st: zenv.ZSymbolTable} is {
         match (
             prog
@@ -2877,6 +2981,26 @@ Analysis: class {
                             if (isRecv9) == false then {
                                 vo9: st.typing.defVariableId.get key: pOpId9.u64
                                 match (vo9) case some then {
+                                    umo9: st.typing.variableMutated.get key: vo9
+                                    umut9: false
+                                    match (
+                                        umo9
+                                    ) case some then {
+                                        if umo9 then umut9 = true
+                                    } case none then null
+                                    if (used9.has item: vo9) then {
+                                        if (umut9) == false then {
+                                            (this.reportUnmutatedParam
+                                                ast: prog.ast
+                                                :st
+                                                fnOp: fop9
+                                                vid: vo9
+                                                nameRef: pNameRef9
+                                                line: pLn9
+                                                col: pCl9
+                                            )
+                                        }
+                                    }
                                     if (used9.has item: vo9) == false then {
                                         pnm9: zast.poolTextCopy pool: prog.ast.names ref: pNameRef9
                                         (this.warn

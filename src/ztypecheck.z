@@ -13304,6 +13304,7 @@ lockAutoCallReceiver: function {
     ashr9: shared
     if atup9.length == 1 then {
         (lockCallArg
+                                        :ast
             :st
             pool: ast.names
             name: (atup9.get i: 0).stringview
@@ -15683,6 +15684,7 @@ checkAssignment: function {
             st.typing.pendingBorrowShared = false
             (installBorrowLocks
                 :st
+                :ast
                 pool: ast.names
                 src: bsrc
                 :vid
@@ -16101,6 +16103,7 @@ checkWith: function {
             st.typing.pendingBorrowShared = false
             (installBorrowLocks
                 :st
+                :ast
                 pool: ast.names
                 src: btgt
                 :vid
@@ -16484,6 +16487,7 @@ checkFor: function {
                             fcl9: nodeCol n: fcn9
                             (installBorrowLocks
                                 :st
+                                :ast
                                 pool: ast.names
                                 src: fbs9
                                 :vid
@@ -17233,8 +17237,20 @@ positionalParamName: function {
 # lockCallArg -- the call-scoped EXCLUSIVE lock a lock/borrow parameter takes
 # on its argument's root for the call's duration (the symtab appends the lock
 # overlay entry in the open call scope; it vanishes when the scope pops).
+markVarMutatedName: function {st: zenv.ZSymbolTable ast: Ast.view name: StringView} is {
+    if name.length == 0 then return
+    vo9: st.lookupVarId nameId: (nameIdOf :ast :name)
+    match (
+        vo9
+    ) case some then {
+        mk9: vo9
+        st.typing.variableMutated.set key: mk9 value: true
+    } case none then null
+}
+
 lockCallArg: function {
     st: zenv.ZSymbolTable
+    ast: Ast.view
     pool: zast.StringPool.view
     name: StringView
     callId: u64
@@ -17243,6 +17259,8 @@ lockCallArg: function {
     lineno: u32
     colno: u32
 } is {
+    # a NON-shared lock is a mutable use: the callee may write through it
+    if (shared) == false then markVarMutatedName :st :ast :name
     pth: (List String)
     nm: name.string
     pth.append nm
@@ -17276,6 +17294,13 @@ lockCallPath: function {
     n: path.length
     if n == 0 then return
     if (shared) == false then {
+        # a NESTED receiver (`st.reg.foo`) locks its path exclusively, which is a
+        # mutable use of the ROOT. The third and last lock-taking entry point,
+        # beside lockCallArg (bare names) and installBorrowLocks (path args).
+        {
+            lcp9: (path.get i: 0).copy
+            markVarMutatedName :st :ast name: lcp9.stringview
+        }
         (checkFrozenWrite
             :st
             :ast
@@ -17405,6 +17430,7 @@ takePendingBorrow: function {st: zenv.ZSymbolTable dst: List String} is {
 # path root -- the oracle's non-definition rows). Holder = the binding var.
 installBorrowLocks: function {
     st: zenv.ZSymbolTable
+    ast: Ast.view
     pool: zast.StringPool.view
     src: (List String).view
     vid: u64
@@ -17415,6 +17441,13 @@ installBorrowLocks: function {
 } is {
     n: src.length
     if n == 0 then return
+    # an EXCLUSIVE leaf is a mutable use of the path's ROOT. This is the other
+    # enforcement point beside lockCallArg: a PATH-shaped argument
+    # (`pool: program.ast.names`) never reaches lockCallArg, it installs here.
+    if (leafShared) == false then {
+        ibr9: (src.get i: 0).copy
+        markVarMutatedName :st :ast name: ibr9.stringview
+    }
     end: 1.u64
     for end < n loop {
         sub: (List String)
@@ -17820,6 +17853,10 @@ checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast.view n: Node.view verb:
     wp9: (List String)
     appendValueTuple :ast :n dst: wp9
     if wp9.length == 0 then return
+    {
+        wrt9: (wp9.get i: 0).copy
+        markVarMutatedName :st :ast name: wrt9.stringview
+    }
     # hoisted: the length read locks wp9 for its duration, and wp9 is already
     # an argument to the same call -- one appearance per call.
     wpn9: wp9.length
@@ -18000,6 +18037,7 @@ hoistArg: function {ast: Ast
             if st.typing.pendingBorrowShared then hlfs9 = true
             (installBorrowLocks
                 :st
+                :ast
                 pool: ast.names
                 src: hbsrc
                 :vid
@@ -18654,6 +18692,7 @@ walkCallArgsHoist: function {
                             } else {
                                 if isLockish then {
                                     (lockCallArg
+                                        :ast
                                         :st
                                         pool: ast.names
                                         name: bn.stringview
@@ -18737,6 +18776,7 @@ walkCallArgsHoist: function {
                     if (hadPending) == false then {
                         if isLockish when (typeIsReftype :st tid: vt) then {
                             (lockCallArg
+                                        :ast
                                 :st
                                 pool: ast.names
                                 name: tnm.stringview
@@ -19453,6 +19493,7 @@ checkCall: function {
                                     )
                                     if (methodReceiverIsView :st mid: dro) then shr9 = true
                                     (lockCallArg
+                                        :ast
                                         :st
                                         pool: ast.names
                                         name: rro.stringview
@@ -19894,6 +19935,7 @@ checkCall: function {
                                             )
                                             if (methodReceiverIsView :st mid: dro) then shrG9 = true
                                             (lockCallArg
+                                        :ast
                                                 :st
                                                 pool: ast.names
                                                 name: rroG9.stringview
