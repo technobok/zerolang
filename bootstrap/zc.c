@@ -29529,7 +29529,7 @@ static void z_t2030(z_t1661_t* z_v25203, uint64_t z_v25204, uint32_t z_v25205) {
     (void)(z_t1047_set(&z_v25216, z_v25246, z_v25237));
     (void)(z_t1458_set(&z_v25217, z_v25246, z_v25238));
     if (z_t2028(z_v25203, z_v25204)) {
-        __auto_type __borrow_z_v25248 = &(*z_t1988_get(&z_v25203->decls, (z_v25204 - 1)));
+        __auto_type __borrow_z_v25248 = &(*z_t1988_getMut(&z_v25203->decls, (z_v25204 - 1)));
         /* alias: z_v25248 => (*__borrow_z_v25248) */
         uint64_t z_v25249 = ((uint64_t)0);
         while ((z_v25249 < z_v25224)) {
@@ -29544,7 +29544,7 @@ static void z_t2030(z_t1661_t* z_v25203, uint64_t z_v25204, uint32_t z_v25205) {
 
 static void z_t2031(z_t1661_t* z_v25253, uint64_t z_v25254, uint32_t z_v25255, uint64_t z_v25256) {
     if (z_t2028(z_v25253, z_v25254)) {
-        __auto_type __borrow_z_v25258 = &(*z_t1988_get(&z_v25253->decls, (z_v25254 - 1)));
+        __auto_type __borrow_z_v25258 = &(*z_t1988_getMut(&z_v25253->decls, (z_v25254 - 1)));
         /* alias: z_v25258 => (*__borrow_z_v25258) */
         (void)(z_t1967_append(&(*__borrow_z_v25258).children, z_t1963_create(z_v25255, z_v25256)));
         if (((*__borrow_z_v25258).children.length > ((uint64_t)16ULL))) {
@@ -35984,7 +35984,7 @@ static void z_t1620(z_t1448_t* z_v27480, uint64_t z_v27481, uint64_t z_v27482, u
     if ((z_v27481 >= z_v27480->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27484 = &(*z_t1500_get(&z_v27480->typeById, z_v27481));
+    __auto_type __borrow_z_v27484 = &(*z_t1500_getMut(&z_v27480->typeById, z_v27481));
     /* alias: z_v27484 => (*__borrow_z_v27484) */
     uint64_t z_v27485 = ((uint64_t)0);
     uint64_t z_v27486 = (*__borrow_z_v27484).genericChildKeys.length;
@@ -36025,7 +36025,7 @@ static void z_t1622(z_t1448_t* z_v27494, uint64_t z_v27495, uint64_t z_v27496) {
     if ((z_v27495 >= z_v27494->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27497 = &(*z_t1500_get(&z_v27494->typeById, z_v27495));
+    __auto_type __borrow_z_v27497 = &(*z_t1500_getMut(&z_v27494->typeById, z_v27495));
     /* alias: z_v27497 => (*__borrow_z_v27497) */
     (void)(z_t1458_append(&(*__borrow_z_v27497).genericArgs, z_v27496));
     (void)(z_t1478_append(&(*__borrow_z_v27497).genericArgIsValue, false));
@@ -36035,7 +36035,7 @@ static void z_t1623(z_t1448_t* z_v27498, uint64_t z_v27499, uint64_t z_v27500) {
     if ((z_v27499 >= z_v27498->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27501 = &(*z_t1500_get(&z_v27498->typeById, z_v27499));
+    __auto_type __borrow_z_v27501 = &(*z_t1500_getMut(&z_v27498->typeById, z_v27499));
     /* alias: z_v27501 => (*__borrow_z_v27501) */
     (void)(z_t1458_append(&(*__borrow_z_v27501).genericArgs, z_v27500));
     (void)(z_t1478_append(&(*__borrow_z_v27501).genericArgIsValue, true));
@@ -44269,7 +44269,7 @@ void z_t1273(z_t997_t* z_v821, z_t1265_t* z_v822) {
     /* alias: z_v825 => (*__borrow_z_v825) */
     __auto_type __borrow_z_v826 = &(*z_t997_get(z_v821, 3));
     /* alias: z_v826 => (*__borrow_z_v826) */
-    __auto_type __borrow_z_v828 = &(*z_t894_get(&z_v822->providers, ((uint64_t)z_v824)));
+    __auto_type __borrow_z_v828 = &(*z_t894_getMut(&z_v822->providers, ((uint64_t)z_v824)));
     /* alias: z_v828 => (*__borrow_z_v828) */
     z_t74_t z_v829 = z_t74_copy(&(*__borrow_z_v825));
     z_t74_t z_v830 = z_t74_copy(&(*__borrow_z_v826));
@@ -44715,7 +44715,7 @@ z_t1286_t z_t2293(z_t105_t z_v922, z_t105_t z_v923, z_t105_t z_v924, z_t1786_t* 
     if ((z_v925->length > 0)) {
         uint32_t z_v942 = z_t1042(&z_v932);
         uint64_t z_v943 = (z_v932.providers.length - 1);
-        __auto_type __borrow_z_v944 = &(*z_t894_get(&z_v932.providers, z_v943));
+        __auto_type __borrow_z_v944 = &(*z_t894_getMut(&z_v932.providers, z_v943));
         /* alias: z_v944 => (*__borrow_z_v944) */
         z_t1796_t z_v945 = z_t1786_iterateItems(z_v925);
         while (1) {
@@ -75644,7 +75644,7 @@ void z_t2938(z_t1661_t* z_v11929, z_t1081_t* z_v11930, uint32_t z_v11931) {
         z_v11992 = (z_t1082_t){0};
     z_t1082_destroy(&z_v11992);
     }
-    z_t1082_t z_v11995 = z_t1144_get(&z_v11930->nodes, ((uint64_t)(z_v11931 - 1)));
+    z_t1082_t z_v11995 = z_t1144_getMut(&z_v11930->nodes, ((uint64_t)(z_v11931 - 1)));
     if (((z_v11995).tag == Z_NODE_TAG_UNITDEF)) {
         /* alias: u9 => (*(z_t1139_t*)z_v11995.data) */
         uint64_t z_v11996 = (*(z_t1139_t*)z_v11995.data).body.length;
