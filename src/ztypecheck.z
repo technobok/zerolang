@@ -1755,6 +1755,8 @@ markerText: function {o: ztypes.zparamownership} out String is {
         return "view".string
     } case holdMode then {
         return "hold".string
+    } case takexMode then {
+        return "takex".string
     }
 }
 
@@ -1792,6 +1794,7 @@ isStripMarker: function {name: StringView} out bool is {
     if name == "take" then return true
     if name == "view" then return true
     if name == "hold" then return true
+    if name == "takex" then return true
     if name == "private" then return true
     if name == "public" then return true
     return false
@@ -2112,9 +2115,10 @@ unitDefIsGeneric: function {ast: Ast.view oId: u32} out bool is {
     return (hasGenericParam :ast items: bodyIds9)
 }
 
-# pathOwnership -- the ownership a param/field type expr declares via a `.lock`/
-# `.borrow`/`.take` dotted-path leaf, or none. (Only `.lock` is valid on a field; all
-# three on a param.)
+# pathOwnership -- the ownership a param/field/return type expr declares via a
+# dotted-path marker leaf, or none. Fields take the non-owned markers (which make
+# the slot static) or `take`/`hold`; params take any of the four grid markers;
+# `takex` is a RETURN marker only.
 pathOwnership: function {ast: Ast.view n: Node.view} out optionval ztypes.zparamownership is {
     match (
         n
@@ -2124,7 +2128,8 @@ pathOwnership: function {ast: Ast.view n: Node.view} out optionval ztypes.zparam
         if cn.stringview == "borrow" then return (optionval.some ztypes.zparamownership.borrowMode)
         if cn.stringview == "take" then return (optionval.some ztypes.zparamownership.takeMode)
         if cn.stringview == "view" then return (optionval.some ztypes.zparamownership.viewMode)
-    if cn.stringview == "hold" then return (optionval.some ztypes.zparamownership.holdMode)
+        if cn.stringview == "hold" then return (optionval.some ztypes.zparamownership.holdMode)
+        if cn.stringview == "takex" then return (optionval.some ztypes.zparamownership.takexMode)
         return (optionval.none ztypes.zparamownership)
     } else {
         return (optionval.none ztypes.zparamownership)
@@ -6100,9 +6105,13 @@ resolveClass: function {
                 match (
                     flock0
                 ) case some then {
+                    # This test is INVERTED: anything not named here becomes a
+                    # lock field, so a new owned mode must be listed or it is
+                    # silently treated as non-owned.
                     fOwned9: false
                     if flock0 == ztypes.zparamownership.takeMode then fOwned9 = true
                     if flock0 == ztypes.zparamownership.holdMode then fOwned9 = true
+                    if flock0 == ztypes.zparamownership.takexMode then fOwned9 = true
                     if fOwned9 == false then lockField = true
                 } case none then null
                 mkey: "\{unitName}.\{defName}.\{ftn}"
@@ -10281,6 +10290,11 @@ ownershipOfParam: function {o: optionval ztypes.zparamownership} out ztypes.zown
         } case viewMode then {
             return ztypes.zownership.borrowed
         } case holdMode then {
+            return ztypes.zownership.owned
+        } case takexMode then {
+            # `takex` is a RETURN marker: the result is owned, and the pin on
+            # its non-owned sources is what the marker adds. As an ownership
+            # answer it is plain `owned`, exactly like `take`.
             return ztypes.zownership.owned
         }
     } case none then {
@@ -18416,6 +18430,7 @@ walkCallArgsHoist: function {
                         oo
                     ) case some then {
                         if oo == ztypes.zparamownership.takeMode then isTake = true
+                        if oo == ztypes.zparamownership.takexMode then isTake = true
                         if oo == ztypes.zparamownership.lockMode then {
                             isLockish = true
                             isDeclLock = true

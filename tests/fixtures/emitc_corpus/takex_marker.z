@@ -1,0 +1,36 @@
+# `takex` -- the OWNED return that pins its non-owned sources.
+#
+# `take` returns an owned value and pins nothing; `borrow`/`view` return a
+# reference and pin the source for the binding's life. Neither says what four
+# stdlib constructors need: `BufWriter.create to: Writer.lock out this` hands
+# back an OWNED value whose `sink` field is a reference INTO the argument, so
+# the argument has to stay pinned for as long as the result lives. `.lock` is
+# the only marker that expresses that today, which is why it cannot retire
+# without this one.
+#
+# This fixture covers the marker itself: it parses, it records as OWNED (so the
+# result carries a destructor -- the corpus leak pass is what checks that, not
+# the printed line), and it survives the round trip. The PIN is a separate rule
+# and gets its own fixture.
+#
+# At the parent commit `.takex` is not a marker at all and the emitter refuses
+# the binding with E0500.
+Src: class {
+    label: String
+}
+
+W: class {
+    label: String
+}
+
+mk: function {from: Src.borrow} out W.takex is {
+    return (W label: from.label.copy)
+}
+
+main: function is {
+    a: Src label: "source".string
+    w: mk from: a
+    print "takex result: \{w.label}"
+    # the source is untouched and still owns its own String
+    print "source intact: \{a.label}"
+}
