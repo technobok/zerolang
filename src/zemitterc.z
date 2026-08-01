@@ -7324,15 +7324,16 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             bstamp = chaseColMono :symtab :ctx tid: bstamp
             bstamp = chaseStrTypedef :symtab :ctx tid: bstamp
             rtt: symtab.reg.typetypeOf typeId: bstamp
-            if rtt == ztypes.ztypetype.protocolType then {
-                isPMn9: true
-                if mn2.stringview == "create" then isPMn9 = false
-                if mn2.stringview == "borrow" then isPMn9 = false
-                if mn2.stringview == "release" then isPMn9 = false
-                if isPMn9 then {
+            if (dispatchableTid9 :symtab tid: bstamp) then {
+                if (vtableAutoCallName9 name: mn2.stringview) then {
                     pacc9: ".".string
                     if (isPtrVid :ctx vid: bn2v9) then pacc9 = "->".string
-                    return "\{bn2}\{pacc9}vtable->\{mn2}(\{bn2}\{pacc9}data)"
+                    return (vtableAutoCallC9
+                        recv: bn2.stringview
+                        acc: pacc9.stringview
+                        mn: mn2.stringview
+                        isFacet: rtt == ztypes.ztypetype.facetType
+                    )
                 }
             }
             isRecOrCls: false
@@ -7774,6 +7775,26 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         }
         if nlid9 > 0 then {
             nrtt9: symtab.reg.typetypeOf typeId: nlid9
+            # a protocol/facet-typed base reached through a FIELD dispatches
+            # exactly as a bare one does; without this the member read falls
+            # through to the struct-field leg below and gcc rejects it
+            if (dispatchableTid9 :symtab tid: nlid9) then {
+                if (vtableAutoCallName9 name: mn2.stringview) then {
+                    nacc9: ".".string
+                    if (pathIsPointer
+                        :ast
+                        :symtab
+                        :ctx
+                        n: (ast.nodes.get i: (n.parent - 1).u64)
+                    ) then nacc9 = "->".string
+                    return (vtableAutoCallC9
+                        recv: base9.stringview
+                        acc: nacc9.stringview
+                        mn: mn2.stringview
+                        isFacet: nrtt9 == ztypes.ztypetype.facetType
+                    )
+                }
+            }
             nDisp9: false
             if nrtt9 == ztypes.ztypetype.classType then nDisp9 = true
             if nrtt9 == ztypes.ztypetype.recordType then nDisp9 = true
@@ -21081,6 +21102,38 @@ dispatchableTid9: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
     return tt9 == ztypes.ztypetype.facetType
 }
 
+# vtableDataArg9 -- the receiver argument a vtable slot takes. A protocol's
+# `data` is already a pointer to the boxed impl; a facet stores the impl INLINE
+# in a union, so the slot takes its address.
+vtableDataArg9: function {recv: StringView acc: StringView isFacet: bool} out String is {
+    if isFacet then return "&\{recv}\{acc}data"
+    return "\{recv}\{acc}data"
+}
+
+# vtableAutoCallName9 -- a member name that dispatches through the vtable. The
+# three lifecycle verbs are emitted by their own legs (emitProtocolCreateCall
+# and the destroy helper) and have no vtable slot.
+vtableAutoCallName9: function {name: StringView} out bool is {
+    if name == "create" then return false
+    if name == "borrow" then return false
+    if name == "release" then return false
+    return true
+}
+
+# vtableAutoCallC9 -- a ZERO-ARG method auto-call on a protocol/facet receiver.
+# A zero-arg method is not a Call node, so it never reaches
+# emitProtocolDispatch; this is the same dispatch spelled for the dotted-path
+# legs.
+vtableAutoCallC9: function {
+    recv: StringView
+    acc: StringView
+    mn: StringView
+    isFacet: bool
+} out String is {
+    dargs9: vtableDataArg9 :recv :acc :isFacet
+    return "\{recv}\{acc}vtable->\{mn}(\{dargs9})"
+}
+
 # emit a protocol method dispatch.
 emitProtocolDispatch: function {
     ast: Ast
@@ -21108,8 +21161,11 @@ emitProtocolDispatch: function {
     acc: ".".string
     xq129: ast.nodes.get i: (call.callable - 1).u64
     if (dottedReceiverIsPtr :ast :symtab :ctx callable: xq129) then acc = "->".string
-    dargs: "\{recv}\{acc}data"
-    if isFacetR9 then dargs = "&\{recv}\{acc}data"
+    dargs: (vtableDataArg9
+        recv: recv.stringview
+        acc: acc.stringview
+        isFacet: isFacetR9
+    )
     mtid9: optU64Or9 o: (symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: rtid

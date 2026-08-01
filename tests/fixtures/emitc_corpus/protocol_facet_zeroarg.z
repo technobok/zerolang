@@ -1,0 +1,79 @@
+# A ZERO-ARG method auto-call on a protocol- or facet-typed receiver.
+#
+# A zero-arg method is not a Call node -- it reads as a dotted path -- so it
+# never reaches emitProtocolDispatch and has to be dispatched by the dotted-path
+# legs themselves. Only one of the four combinations ever was: a PROTOCOL base
+# at two segments. The other three emitted a struct field read (`box.r.peek` ->
+# `z_v7.r.peek`), which typechecks clean and dies at gcc with "has no member
+# named 'peek'".
+#
+# The matrix is the point of this fixture, so all eight cells are here and every
+# one prints its value -- "it compiled" would not have caught the original bug
+# either, since the wrong C was well-formed zerolang.
+#
+#   receiver   reached by       arg-taking   zero-arg
+#   protocol   a local          ok           ok
+#   protocol   a field (nested) ok           WAS BROKEN
+#   facet      a local          ok           WAS BROKEN
+#   facet      a field (nested) ok           WAS BROKEN
+Reader: protocol {
+    peek: function {:this} out i64
+    scaled: function {:this by: i64} out i64
+}
+
+sizer: facet {
+    size: function {:this} out i64
+    sizedBy: function {:this k: i64} out i64
+}
+
+Counter: class {
+    n: i64
+} as {
+    :Reader
+    peek: function {:this} out i64 is {
+        return this.n
+    }
+
+    scaled: function {:this by: i64} out i64 is {
+        return this.n * by
+    }
+}
+
+point: record {
+    x: i64
+} as {
+    m: sizer
+    size: function {p: this} out i64 is {
+        return p.x
+    }
+
+    sizedBy: function {p: this k: i64} out i64 is {
+        return p.x * k
+    }
+}
+
+PBox: class {
+    r: Reader
+}
+
+FBox: class {
+    f: sizer
+}
+
+main: function is {
+    im: Counter n: 7
+    prov: Reader.create from: im.take
+    # before boxing: `PBox r: prov` MOVES the provider
+    print "proto local zeroarg = \{prov.peek}"
+    print "proto local arg     = \{prov.scaled by: 3}"
+    pb: PBox r: prov
+    pt: point x: 5
+    fac: sizer.create from: pt
+    print "facet local zeroarg = \{fac.size}"
+    print "facet local arg     = \{fac.sizedBy k: 3}"
+    fb: FBox f: fac
+    print "proto field arg     = \{pb.r.scaled by: 3}"
+    print "facet field arg     = \{fb.f.sizedBy k: 3}"
+    print "proto field zeroarg = \{pb.r.peek}"
+    print "facet field zeroarg = \{fb.f.size}"
+}
