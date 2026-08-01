@@ -13310,7 +13310,7 @@ canonicalChildBase: function {ast: Ast st: zenv.ZSymbolTable bt: u64 child: Stri
 # its static array emitted; label accesses fold to constants and don't.
 markDataRuntimeIndexed: function {st: zenv.ZSymbolTable tid: u64} is {
     if tid >= st.reg.typeById.length then return
-    to9: st.reg.typeById.get i: tid
+    to9: st.reg.typeById.getMut i: tid
     to9.runtimeIndexed = true
 }
 
@@ -23709,7 +23709,7 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
 # to the unit body under `{name}_iter`.
 lowerGeneratorsInUnit: function {
     ty: ztyping.ZTyping
-    ast: Ast.view
+    ast: Ast
     unitdefId: u32
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
@@ -23792,7 +23792,7 @@ lowerGeneratorsInUnit: function {
                     fac: lowOpt.factory.take
                     facId9: zast.tableAdd :ast n: fac
                     {
-                        uel2w: ast.nodes.get i: (uel2Id9 - 1).u64
+                        uel2w: ast.nodes.getMut i: (uel2Id9 - 1).u64
                         match (
                             uel2w
                         ) case namedoperation then {
@@ -23889,7 +23889,7 @@ lowerGeneratorMethods: function {
 
 # lower every generator function in a unit to its iterator class.
 lowerGeneratorItems: function {
-    ast: Ast.view
+    ast: Ast
     ty: ztyping.ZTyping
     typeName: StringView
     items: (List u32).view
@@ -23898,26 +23898,35 @@ lowerGeneratorItems: function {
     bi: u64
     bn: items.length
     for bi < bn loop {
-        bmId9: items.get i: bi
-        bm: ast.nodes.get i: (bmId9 - 1).u64
         isCand: false
-        match (
-            bm
-        ) case namedoperation then {
-            if (zgenerator.fnBodyHasYield :ast n: (ast.nodes.get i: (bm.operation - 1).u64)) then {
-                hd: zgenerator.returnHeadName :ast n: (ast.nodes.get i: (bm.operation - 1).u64)
-                if hd.stringview == "Iterator" then {
-                    if (zgenerator.canLowerNow
-                        :ast
-                        n: (ast.nodes.get i: (bm.operation - 1).u64)
-                        hasReceiver: true
-                    ) then isCand = true
+        # The candidacy read is scoped so it ENDS before the mutable re-read
+        # below begins: `bm` pins ast.nodes shared for as long as it lives, and
+        # `bm2` -- the same element, taken to write through -- needs it
+        # exclusively. One mutable element reference at a time.
+        {
+            bmId9: items.get i: bi
+            bm: ast.nodes.get i: (bmId9 - 1).u64
+            match (
+                bm
+            ) case namedoperation then {
+                if (zgenerator.fnBodyHasYield
+                    :ast
+                    n: (ast.nodes.get i: (bm.operation - 1).u64)
+                ) then {
+                    hd: zgenerator.returnHeadName :ast n: (ast.nodes.get i: (bm.operation - 1).u64)
+                    if hd.stringview == "Iterator" then {
+                        if (zgenerator.canLowerNow
+                            :ast
+                            n: (ast.nodes.get i: (bm.operation - 1).u64)
+                            hasReceiver: true
+                        ) then isCand = true
+                    }
                 }
-            }
-        } else null
+            } else null
+        }
         if isCand then {
             bm2Id9: items.get i: bi
-            bm2: ast.nodes.get i: (bm2Id9 - 1).u64
+            bm2: ast.nodes.getMut i: (bm2Id9 - 1).u64
             match (
                 bm2
             ) case namedoperation then {

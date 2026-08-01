@@ -29567,7 +29567,7 @@ static void z_t2032(z_t1661_t* z_v25265, uint64_t z_v25266, bool z_v25267) {
     if ((z_t2028(z_v25265, z_v25266) == false)) {
         return;
     }
-    __auto_type __borrow_z_v25269 = &(*z_t1988_get(&z_v25265->decls, (z_v25266 - 1)));
+    __auto_type __borrow_z_v25269 = &(*z_t1988_getMut(&z_v25265->decls, (z_v25266 - 1)));
     /* alias: z_v25269 => (*__borrow_z_v25269) */
     (*__borrow_z_v25269).resolving = z_v25267;
 }
@@ -29585,7 +29585,7 @@ static void z_t2034(z_t1661_t* z_v25274, uint64_t z_v25275) {
     if ((z_t2028(z_v25274, z_v25275) == false)) {
         return;
     }
-    __auto_type __borrow_z_v25277 = &(*z_t1988_get(&z_v25274->decls, (z_v25275 - 1)));
+    __auto_type __borrow_z_v25277 = &(*z_t1988_getMut(&z_v25274->decls, (z_v25275 - 1)));
     /* alias: z_v25277 => (*__borrow_z_v25277) */
     (*__borrow_z_v25277).defined = true;
 }
@@ -29601,7 +29601,7 @@ static bool z_t2035(z_t1661_t* z_v25278, uint64_t z_v25279) {
 
 static void z_t2036(z_t1661_t* z_v25282, uint64_t z_v25283, uint64_t z_v25284) {
     if (z_t2028(z_v25282, z_v25283)) {
-        __auto_type __borrow_z_v25286 = &(*z_t1988_get(&z_v25282->decls, (z_v25283 - 1)));
+        __auto_type __borrow_z_v25286 = &(*z_t1988_getMut(&z_v25282->decls, (z_v25283 - 1)));
         /* alias: z_v25286 => (*__borrow_z_v25286) */
         (*__borrow_z_v25286).typeId = z_v25284;
     }
@@ -29705,7 +29705,7 @@ static void z_t2041(z_t1661_t* z_v25319, uint64_t z_v25320, uint64_t z_v25321) {
             uint64_t z_v25329 = z_t2042(z_v25319, z_v25321, ({ __auto_type _rc = (({ uint64_t _v = z_v25326; z_t409_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; }));
             if ((z_v25329 > 0)) {
                 if (z_t2028(z_v25319, z_v25329)) {
-                    __auto_type __borrow_z_v25331 = &(*z_t1988_get(&z_v25319->decls, (z_v25329 - 1)));
+                    __auto_type __borrow_z_v25331 = &(*z_t1988_getMut(&z_v25319->decls, (z_v25329 - 1)));
                     /* alias: z_v25331 => (*__borrow_z_v25331) */
                     (*__borrow_z_v25331).typeId = z_v25327;
                 }
@@ -29799,7 +29799,7 @@ static void z_t2044(z_t1661_t* z_v25346, uint64_t z_v25347, uint64_t z_v25348, u
         z_v25351 = z_t2029(z_v25346, z_v25350, z_v25352, ((z_t1955_t){ .tag = Z_DECLKIND_TAG_PARAMDECL }), z_v25354);
     }
     if (z_t2028(z_v25346, z_v25351)) {
-        __auto_type __borrow_z_v25359 = &(*z_t1988_get(&z_v25346->decls, (z_v25351 - 1)));
+        __auto_type __borrow_z_v25359 = &(*z_t1988_getMut(&z_v25346->decls, (z_v25351 - 1)));
         /* alias: z_v25359 => (*__borrow_z_v25359) */
         (*__borrow_z_v25359).typeId = z_v25349;
     }
@@ -30024,7 +30024,7 @@ static uint64_t z_t2057(z_t1661_t* z_v25450, uint64_t z_v25451) {
     }
     uint64_t z_v25462 = z_t2029(z_v25450, z_v25452, 0, z_v25455, z_v25453);
     if (z_t2028(z_v25450, z_v25462)) {
-        __auto_type __borrow_z_v25464 = &(*z_t1988_get(&z_v25450->decls, (z_v25462 - 1)));
+        __auto_type __borrow_z_v25464 = &(*z_t1988_getMut(&z_v25450->decls, (z_v25462 - 1)));
         /* alias: z_v25464 => (*__borrow_z_v25464) */
         (*__borrow_z_v25464).parent = z_v25454;
     }
@@ -30319,7 +30319,7 @@ static void z_t2072(z_t1661_t* z_v25580, uint64_t z_v25581, uint64_t z_v25582) {
     uint64_t z_v25584 = z_t2067(z_v25580, z_v25581, ({ __auto_type _rc = (({ uint64_t _v = z_v25582; z_t409_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; }));
     if ((z_v25584 > 0)) {
         if (z_t2028(z_v25580, z_v25584)) {
-            __auto_type __borrow_z_v25586 = &(*z_t1988_get(&z_v25580->decls, (z_v25584 - 1)));
+            __auto_type __borrow_z_v25586 = &(*z_t1988_getMut(&z_v25580->decls, (z_v25584 - 1)));
             /* alias: z_v25586 => (*__borrow_z_v25586) */
             (*__borrow_z_v25586).grantsPrivate = true;
         }
@@ -30359,7 +30359,7 @@ static void z_t2075(z_t1661_t* z_v25595, z_t1164_t* z_v25596, uint64_t z_v25597,
             uint64_t z_v25601 = z_t2042(z_v25595, z_v25600, z_v25599);
             if ((z_v25601 > 0)) {
                 if (z_t2028(z_v25595, z_v25600)) {
-                    __auto_type __borrow_z_v25603 = &(*z_t1988_get(&z_v25595->decls, (z_v25600 - 1)));
+                    __auto_type __borrow_z_v25603 = &(*z_t1988_getMut(&z_v25595->decls, (z_v25600 - 1)));
                     /* alias: z_v25603 => (*__borrow_z_v25603) */
                     (*__borrow_z_v25603).lockFieldDecl = z_v25601;
                 }
@@ -30374,7 +30374,7 @@ static void z_t2076(z_t1661_t* z_v25604, z_t1164_t* z_v25605, uint64_t z_v25606,
         uint64_t z_v25609 = z_t2067(z_v25604, z_v25606, z_v25608);
         if ((z_v25609 > 0)) {
             if (z_t2028(z_v25604, z_v25609)) {
-                __auto_type __borrow_z_v25611 = &(*z_t1988_get(&z_v25604->decls, (z_v25609 - 1)));
+                __auto_type __borrow_z_v25611 = &(*z_t1988_getMut(&z_v25604->decls, (z_v25609 - 1)));
                 /* alias: z_v25611 => (*__borrow_z_v25611) */
                 (*__borrow_z_v25611).fnptrField = true;
             }
@@ -30396,7 +30396,7 @@ static void z_t2078(z_t1661_t* z_v25618, uint64_t z_v25619, z_t1164_t* z_v25620,
         return;
     }
     if (z_t2028(z_v25618, z_v25624)) {
-        __auto_type __borrow_z_v25626 = &(*z_t1988_get(&z_v25618->decls, (z_v25624 - 1)));
+        __auto_type __borrow_z_v25626 = &(*z_t1988_getMut(&z_v25618->decls, (z_v25624 - 1)));
         /* alias: z_v25626 => (*__borrow_z_v25626) */
         z_t1959_t z_v25627 = z_v25622;
         (*__borrow_z_v25626).defaultVal = z_v25627;
@@ -30470,7 +30470,7 @@ static void z_t2082(z_t1661_t* z_v25655, z_t1164_t* z_v25656, uint64_t z_v25657,
         uint64_t z_v25661 = z_t2067(z_v25655, z_v25657, z_v25660);
         if ((z_v25661 > 0)) {
             if (z_t2028(z_v25655, z_v25661)) {
-                __auto_type __borrow_z_v25663 = &(*z_t1988_get(&z_v25655->decls, (z_v25661 - 1)));
+                __auto_type __borrow_z_v25663 = &(*z_t1988_getMut(&z_v25655->decls, (z_v25661 - 1)));
                 /* alias: z_v25663 => (*__borrow_z_v25663) */
                 z_t1828_t z_v25664 = z_v25659;
                 (*__borrow_z_v25663).ownership = z_v25664;
@@ -30483,7 +30483,7 @@ static void z_t2083(z_t1661_t* z_v25665, uint64_t z_v25666, uint64_t z_v25667, z
     uint64_t z_v25670 = z_t2067(z_v25665, z_v25666, ({ __auto_type _rc = (({ uint64_t _v = z_v25667; z_t409_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; }));
     if ((z_v25670 > 0)) {
         if (z_t2028(z_v25665, z_v25670)) {
-            __auto_type __borrow_z_v25672 = &(*z_t1988_get(&z_v25665->decls, (z_v25670 - 1)));
+            __auto_type __borrow_z_v25672 = &(*z_t1988_getMut(&z_v25665->decls, (z_v25670 - 1)));
             /* alias: z_v25672 => (*__borrow_z_v25672) */
             z_t1828_t z_v25673 = z_v25668;
             (*__borrow_z_v25672).ownership = z_v25673;
@@ -35912,7 +35912,7 @@ static void z_t1612(z_t1448_t* z_v27452, uint64_t z_v27453, uint32_t z_v27454) {
     if ((z_v27453 >= z_v27452->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27455 = &(*z_t1500_get(&z_v27452->typeById, z_v27453));
+    __auto_type __borrow_z_v27455 = &(*z_t1500_getMut(&z_v27452->typeById, z_v27453));
     /* alias: z_v27455 => (*__borrow_z_v27455) */
     (*__borrow_z_v27455).destructorNameId = z_v27454;
 }
@@ -35921,7 +35921,7 @@ static void z_t1613(z_t1448_t* z_v27456, uint64_t z_v27457) {
     if ((z_v27457 >= z_v27456->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27458 = &(*z_t1500_get(&z_v27456->typeById, z_v27457));
+    __auto_type __borrow_z_v27458 = &(*z_t1500_getMut(&z_v27456->typeById, z_v27457));
     /* alias: z_v27458 => (*__borrow_z_v27458) */
     (*__borrow_z_v27458).isBox = true;
 }
@@ -35930,7 +35930,7 @@ static void z_t1614(z_t1448_t* z_v27459, uint64_t z_v27460) {
     if ((z_v27460 >= z_v27459->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27461 = &(*z_t1500_get(&z_v27459->typeById, z_v27460));
+    __auto_type __borrow_z_v27461 = &(*z_t1500_getMut(&z_v27459->typeById, z_v27460));
     /* alias: z_v27461 => (*__borrow_z_v27461) */
     (*__borrow_z_v27461).isHeapAllocated = true;
 }
@@ -35939,7 +35939,7 @@ static void z_t1615(z_t1448_t* z_v27462, uint64_t z_v27463) {
     if ((z_v27463 >= z_v27462->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27464 = &(*z_t1500_get(&z_v27462->typeById, z_v27463));
+    __auto_type __borrow_z_v27464 = &(*z_t1500_getMut(&z_v27462->typeById, z_v27463));
     /* alias: z_v27464 => (*__borrow_z_v27464) */
     (*__borrow_z_v27464).isTagGenericOrigin = true;
 }
@@ -35957,7 +35957,7 @@ static void z_t1617(z_t1448_t* z_v27468, uint64_t z_v27469, bool z_v27470) {
     if ((z_v27469 >= z_v27468->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27471 = &(*z_t1500_get(&z_v27468->typeById, z_v27469));
+    __auto_type __borrow_z_v27471 = &(*z_t1500_getMut(&z_v27468->typeById, z_v27469));
     /* alias: z_v27471 => (*__borrow_z_v27471) */
     (*__borrow_z_v27471).isValtype = ((z_t1454_t){ .tag = Z_OPTIONVAL_BOOL_TAG_SOME, .data.some = (z_v27470) });
 }
@@ -35966,7 +35966,7 @@ static void z_t1618(z_t1448_t* z_v27472, uint64_t z_v27473, bool z_v27474) {
     if ((z_v27473 >= z_v27472->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27475 = &(*z_t1500_get(&z_v27472->typeById, z_v27473));
+    __auto_type __borrow_z_v27475 = &(*z_t1500_getMut(&z_v27472->typeById, z_v27473));
     /* alias: z_v27475 => (*__borrow_z_v27475) */
     (*__borrow_z_v27475).isgeneric = z_v27474;
 }
@@ -35975,7 +35975,7 @@ static void z_t1619(z_t1448_t* z_v27476, uint64_t z_v27477, bool z_v27478) {
     if ((z_v27477 >= z_v27476->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27479 = &(*z_t1500_get(&z_v27476->typeById, z_v27477));
+    __auto_type __borrow_z_v27479 = &(*z_t1500_getMut(&z_v27476->typeById, z_v27477));
     /* alias: z_v27479 => (*__borrow_z_v27479) */
     (*__borrow_z_v27479).isNative = z_v27478;
 }
@@ -36273,7 +36273,7 @@ static void z_t1642(z_t1448_t* z_v27562, uint64_t z_v27563, uint64_t z_v27564) {
     if ((z_v27563 >= z_v27562->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27565 = &(*z_t1500_get(&z_v27562->typeById, z_v27563));
+    __auto_type __borrow_z_v27565 = &(*z_t1500_getMut(&z_v27562->typeById, z_v27563));
     /* alias: z_v27565 => (*__borrow_z_v27565) */
     uint64_t z_v27566 = z_v27564;
     (*__borrow_z_v27565).genericOriginId = ((z_t166_t){ .tag = Z_OPTIONVAL_U64_TAG_SOME, .data.some = (z_v27566) });
@@ -36283,7 +36283,7 @@ static void z_t1643(z_t1448_t* z_v27567, uint64_t z_v27568, uint64_t z_v27569) {
     if ((z_v27568 >= z_v27567->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27570 = &(*z_t1500_get(&z_v27567->typeById, z_v27568));
+    __auto_type __borrow_z_v27570 = &(*z_t1500_getMut(&z_v27567->typeById, z_v27568));
     /* alias: z_v27570 => (*__borrow_z_v27570) */
     uint64_t z_v27571 = z_v27569;
     (*__borrow_z_v27570).returnTypeId = ((z_t166_t){ .tag = Z_OPTIONVAL_U64_TAG_SOME, .data.some = (z_v27571) });
@@ -36293,7 +36293,7 @@ static void z_t1644(z_t1448_t* z_v27572, uint64_t z_v27573, uint64_t z_v27574) {
     if ((z_v27573 >= z_v27572->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27575 = &(*z_t1500_get(&z_v27572->typeById, z_v27573));
+    __auto_type __borrow_z_v27575 = &(*z_t1500_getMut(&z_v27572->typeById, z_v27573));
     /* alias: z_v27575 => (*__borrow_z_v27575) */
     (*__borrow_z_v27575).def = z_v27574;
 }
@@ -36302,7 +36302,7 @@ static void z_t1645(z_t1448_t* z_v27576, uint64_t z_v27577, uint32_t z_v27578) {
     if ((z_v27577 >= z_v27576->typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v27579 = &(*z_t1500_get(&z_v27576->typeById, z_v27577));
+    __auto_type __borrow_z_v27579 = &(*z_t1500_getMut(&z_v27576->typeById, z_v27577));
     /* alias: z_v27579 => (*__borrow_z_v27579) */
     (*__borrow_z_v27579).thisParamNameId = z_v27578;
 }
@@ -63656,7 +63656,7 @@ void z_t2790(z_t1287_t* z_v7481, uint64_t z_v7482) {
     if ((z_v7482 >= z_v7481->reg.typeById.length)) {
         return;
     }
-    __auto_type __borrow_z_v7483 = &(*z_t1500_get(&z_v7481->reg.typeById, z_v7482));
+    __auto_type __borrow_z_v7483 = &(*z_t1500_getMut(&z_v7481->reg.typeById, z_v7482));
     /* alias: z_v7483 => (*__borrow_z_v7483) */
     (*__borrow_z_v7483).runtimeIndexed = true;
 }
@@ -75566,7 +75566,7 @@ void z_t2938(z_t1661_t* z_v11929, z_t1081_t* z_v11930, uint32_t z_v11931) {
                     (*(z_t3046_t*)_m5.data).factory = (z_t1082_t){0};
                     uint32_t z_v11971 = z_t1253(z_v11930, z_v11970);
                     z_v11970 = (z_t1082_t){0};
-                    z_t1082_t z_v11973 = z_t1144_get(&z_v11930->nodes, ((uint64_t)(z_v11952 - 1)));
+                    z_t1082_t z_v11973 = z_t1144_getMut(&z_v11930->nodes, ((uint64_t)(z_v11952 - 1)));
                     z_t1082_t _m6 = z_v11973;
                     switch (_m6.tag) {
                         case Z_NODE_TAG_NAMEDOPERATION: {
@@ -75681,10 +75681,10 @@ void z_t2940(z_t1081_t* z_v12006, z_t1661_t* z_v12007, z_t105_t z_v12008, z_t104
     uint64_t z_v12011 = ((uint64_t)0);
     uint64_t z_v12012 = z_v12009->length;
     while ((z_v12011 < z_v12012)) {
-        uint32_t z_v12013 = z_t1047_get(z_v12009, z_v12011);
-        z_t1082_t z_v12015 = z_t1144_get(&z_v12006->nodes, ((uint64_t)(z_v12013 - 1)));
-        bool z_v12016 = false;
-        z_t1082_t _m0 = z_v12015;
+        bool z_v12013 = false;
+        uint32_t z_v12014 = z_t1047_get(z_v12009, z_v12011);
+        z_t1082_t z_v12016 = z_t1144_get(&z_v12006->nodes, ((uint64_t)(z_v12014 - 1)));
+        z_t1082_t _m0 = z_v12016;
         switch (_m0.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
                 /* alias: bm => (*(z_t1099_t*)_m0.data) */
@@ -75695,7 +75695,7 @@ void z_t2940(z_t1081_t* z_v12006, z_t1661_t* z_v12007, z_t105_t z_v12008, z_t104
                     if (z_t105_eq(((z_t105_t){ z_v12021.data, z_v12021.size }), _zs2121)) {
                         z_t1082_t _ah739 = z_t1144_get(&z_v12006->nodes, ((uint64_t)((*(z_t1099_t*)_m0.data).operation - 1)));
                         if (z_t3041(z_v12006, _ah739, true)) {
-                            z_v12016 = true;
+                            z_v12013 = true;
                         }
                     }
     z_t74_free(&z_v12021);
@@ -75706,9 +75706,9 @@ void z_t2940(z_t1081_t* z_v12006, z_t1661_t* z_v12007, z_t105_t z_v12008, z_t104
                 break;
             }
         }
-        if (z_v12016) {
+        if (z_v12013) {
             uint32_t z_v12024 = z_t1047_get(z_v12009, z_v12011);
-            z_t1082_t z_v12026 = z_t1144_get(&z_v12006->nodes, ((uint64_t)(z_v12024 - 1)));
+            z_t1082_t z_v12026 = z_t1144_getMut(&z_v12006->nodes, ((uint64_t)(z_v12024 - 1)));
             z_t1082_t _m1 = z_v12026;
             switch (_m1.tag) {
                 case Z_NODE_TAG_NAMEDOPERATION: {
