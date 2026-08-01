@@ -1,0 +1,39 @@
+# Binding a container FIELD to a local is a non-owning shallow copy: the struct
+# copy shares the holder's buffer, so the holder alone owns it. Registering a
+# destructor for the local freed that buffer twice -- a DOUBLE FREE, reproduced
+# under ASan on the plain form and through a `.view` reader alike.
+#
+# `bindingRhsIsBorrow` already answered this and is already computed for every
+# binding; the List/Set/Map legs were the ones not consulting it.
+#
+# The counterpart matters as much: a container the binding genuinely OWNS must
+# still be destroyed. Both are here, and the case runs under the leak checker,
+# so a fix that simply stopped emitting destructors would fail as a leak.
+Holder: class {
+    items: (List u64)
+    names: (Set u64)
+    label: String
+}
+readLen: function {h: Holder.view} out u64 is {
+    lv: h.items
+    return lv.length
+}
+main: function is {
+    hh: Holder items: (List u64) names: (Set u64) label: "abc".string
+    hh.items.append from: 5.u64
+    hh.items.append from: 7.u64
+    hh.names.add item: 9.u64
+
+    # non-owning: field reads off a plain holder
+    lv: hh.items
+    sv: hh.names
+    tv: hh.label
+    print "field=\{lv.length},\{sv.length},\{tv.length} viaview=\{readLen h: hh}"
+
+    # owning: containers this scope built itself, which must still be freed
+    own: (List u64)
+    own.append from: 1.u64
+    ownS: (Set u64)
+    ownS.add item: 2.u64
+    print "own=\{own.length},\{ownS.length} src=\{hh.items.length}"
+}
