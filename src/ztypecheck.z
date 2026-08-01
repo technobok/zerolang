@@ -3389,6 +3389,33 @@ returnHasViewMarker: function {ast: Ast.view oId: u32} out bool is {
     return (returnHasViewMarkerNode :ast n: o)
 }
 
+# returnHasTakexMarkerNode / returnHasTakexMarker -- `out T.takex`: the result is
+# OWNED, and the non-owned sources it was built from stay pinned for as long as
+# it lives. It is not a reference return, so it is kept apart from
+# returnHasBorrowMarker -- the binding keeps its destructor.
+returnHasTakexMarkerNode: function {ast: Ast.view n: Node.view} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (returnHasTakexMarkerNode :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } else {
+        rxo9: pathOwnership :ast :n
+        match (
+            rxo9
+        ) case some then {
+            return rxo9 == ztypes.zparamownership.takexMode
+        } case none then {
+            return false
+        }
+    }
+}
+
+returnHasTakexMarker: function {ast: Ast.view oId: u32} out bool is {
+    if oId == 0 then return false
+    o: ast.nodes.get i: (oId - 1).u64
+    return (returnHasTakexMarkerNode :ast n: o)
+}
+
 # true when operation `oId`'s return type carries a `.borrow` marker.
 returnHasBorrowMarker: function {ast: Ast.view oId: u32} out bool is {
     if oId == 0 then return false
@@ -3932,6 +3959,11 @@ resolveFunction: function {
             fvv: true
             ty.funcReturnsView.set key: fvk value: fvv
         }
+    }
+    if (returnHasTakexMarker :ast oId: fnode.returntype) then {
+        fxk: fid
+        fxv: true
+        ty.funcReturnsTakex.set key: fxk value: fxv
     }
     checkBorrowReturnLock :ast :ty :fnode :defName
     if fnDecl9 > 0 then {
@@ -10581,6 +10613,9 @@ cloneMethodInto: function {
     if (optBoolOr o: (ty.funcReturnsView.get key: tplFnId) d: false) then {
         ty.funcReturnsView.set key: fid5 value: true
     }
+    if (optBoolOr o: (ty.funcReturnsTakex.get key: tplFnId) d: false) then {
+        ty.funcReturnsTakex.set key: fid5 value: true
+    }
     if (optBoolOr o: (ty.funcReturnsBorrow.get key: tplFnId) d: false) then {
         ty.funcReturnsBorrow.set key: fid5 value: true
     }
@@ -15398,7 +15433,12 @@ checkAssignment: function {
         bsrc: (List String)
         takePendingBorrow :st dst: bsrc
         own: ztypes.zownership.owned
-        if bsrc.length > 0 when (typeIsReftype :st tid: vt) then own = ztypes.zownership.borrowed
+        # A `takex` result is pinned like a borrow but OWNED like a take, so the
+        # pin must not demote it. `pendingBorrowOwned` is what tells them apart.
+        pboX9: st.typing.pendingBorrowOwned
+        if bsrc.length > 0 when (typeIsReftype :st tid: vt) then {
+            if (pboX9) == false then own = ztypes.zownership.borrowed
+        }
         v: st.reg.newVariable ztypeId: vt ownership: own
         vid: v.variableId
         if own == ztypes.zownership.borrowed then {
@@ -15559,7 +15599,11 @@ checkAssignment: function {
                 )
             }
         }
-        if own == ztypes.zownership.borrowed then {
+        instX9: false
+        if own == ztypes.zownership.borrowed then instX9 = true
+        if pboX9 when bsrc.length > 0 then instX9 = true
+        st.typing.pendingBorrowOwned = false
+        if instX9 then {
             lfsA9: isViewFamilyTid :ast :st tid: vt
             if st.typing.pendingBorrowShared then lfsA9 = true
             st.typing.pendingBorrowShared = false
@@ -17260,6 +17304,7 @@ drainPendingBorrow: function {st: zenv.ZSymbolTable} is {
     for st.typing.pendingBorrowPath.length > 0 loop st.typing.pendingBorrowPath.pop
     st.typing.pendingBorrowShared = false
     st.typing.pendingBorrowReadonly = false
+    st.typing.pendingBorrowOwned = false
 }
 
 # drain the pending-borrow markers accumulated during argument hoisting.
@@ -17274,9 +17319,11 @@ takePendingBorrow: function {st: zenv.ZSymbolTable dst: List String} is {
     }
     sh9: st.typing.pendingBorrowShared
     ro9: st.typing.pendingBorrowReadonly
+    ow9: st.typing.pendingBorrowOwned
     drainPendingBorrow :st
     st.typing.pendingBorrowShared = sh9
     st.typing.pendingBorrowReadonly = ro9
+    st.typing.pendingBorrowOwned = ow9
 }
 
 # installBorrowLocks -- SHARED on every path prefix, EXCLUSIVE on the leaf
@@ -20050,6 +20097,16 @@ checkCall: function {
                     st.typing.lastLockParamRoot = "".string
                     drainPendingBorrow :st
                     st.typing.pendingBorrowPath.append xroot2
+                }
+                if (optBoolOr
+                    o: (st.typing.funcReturnsTakex.get key: funcId)
+                    d: false
+                ) when lockRoot.length > 0 then {
+                    # `takex`: pin the source, but the binding stays OWNED
+                    drainPendingBorrow :st
+                    lrx9: lockRoot.copy
+                    st.typing.pendingBorrowPath.append lrx9
+                    st.typing.pendingBorrowOwned = true
                 }
                 if (optBoolOr
                     o: (st.typing.funcReturnsBorrow.get key: funcId)

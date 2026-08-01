@@ -210,6 +210,10 @@ ZTyping: class {
     # of those, the ones whose reference is READONLY (`out T.view`): the pin
     # they leave on the receiver is shared, so several may be live at once.
     funcReturnsView: (Map u64 value: bool)
+    # function types whose return carries `.takex`: an OWNED result that pins
+    # its non-owned sources for the binding's life. Not a borrow -- the binding
+    # keeps its destructor -- so it is tracked apart from funcReturnsBorrow.
+    funcReturnsTakex: (Map u64 value: bool)
     # the fn whose body is being walked declares a `.borrow` return: bare
     # field returns are its contract (the lock/borrow source outlives).
     currentReturnsBorrow: bool
@@ -224,6 +228,11 @@ ZTyping: class {
     # the pending borrow came from an `out T.view` return, so the binding it
     # lands on is READONLY as well as pinned.
     pendingBorrowReadonly: bool
+    # the pending pin came from an `out T.takex` return: the SOURCES are pinned
+    # for the binding's life, but the binding itself stays OWNED -- it carries a
+    # destructor and may be moved. Without this the pin would demote it to a
+    # borrow, which is what `borrow`/`view` mean and `takex` does not.
+    pendingBorrowOwned: bool
     # type names whose method bodies the walk has already visited (methods
     # body-check once, at the type's first body-walk reference).
     walkedMethodOwners: (Map String value: bool)
@@ -1572,10 +1581,12 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         fnBodyDiverges: (Map u64 value: bool)
         funcReturnsBorrow: (Map u64 value: bool)
         funcReturnsView: (Map u64 value: bool)
+        funcReturnsTakex: (Map u64 value: bool)
         currentReturnsBorrow: false
         pendingBorrowPath: (List String)
         pendingBorrowShared: false
         pendingBorrowReadonly: false
+        pendingBorrowOwned: false
         walkedMethodOwners: (Map String value: bool)
         monoNodeType: (Map u64 value: u64)
         monoParamSubst: (Map u64 value: u64)

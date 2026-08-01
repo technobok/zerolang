@@ -8,29 +8,41 @@
 # the only marker that expresses that today, which is why it cannot retire
 # without this one.
 #
-# This fixture covers the marker itself: it parses, it records as OWNED (so the
-# result carries a destructor -- the corpus leak pass is what checks that, not
-# the printed line), and it survives the round trip. The PIN is a separate rule
-# and gets its own fixture.
+# Both halves are here, because either alone would be the wrong marker:
 #
-# At the parent commit `.takex` is not a marker at all and the emitter refuses
-# the binding with E0500.
+#   OWNED -- the result carries a destructor, so its `String` is freed exactly
+#   once. Only the corpus leak pass checks this; the printed lines cannot.
+#   Demoting the binding to a borrow (which is what a pin does for
+#   `borrow`/`view` returns) would leak it.
+#
+#   PINNED -- the source stays locked for the result's whole scope, and becomes
+#   writable again the moment that scope ends. `takex_pins_source.z` is the
+#   error half: with `borrow` alone the write is ACCEPTED and the result's field
+#   is left dangling; adding `.takex` refuses it.
 Src: class {
+    n: i64
     label: String
 }
 
 W: class {
+    s: Src.lock
     label: String
 }
 
 mk: function {from: Src.borrow} out W.takex is {
-    return (W label: from.label.copy)
+    return (W s: from label: "owned-by-result".string)
 }
 
 main: function is {
-    a: Src label: "source".string
-    w: mk from: a
-    print "takex result: \{w.label}"
-    # the source is untouched and still owns its own String
+    a: Src n: 1 label: "source".string
+    {
+        w: mk from: a
+        # the result owns its own String and reads through to the pinned source
+        print "result owns: \{w.label}"
+        print "reads source: \{w.s.n}"
+    }
+    # the pin died with `w`, so the source is writable again
+    a.n = 5
+    print "source writable after: \{a.n}"
     print "source intact: \{a.label}"
 }
