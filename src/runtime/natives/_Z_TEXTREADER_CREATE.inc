@@ -5,7 +5,7 @@ static z_TextReader_t z_TextReader_create(z_BufReader_t* source);
 static z_TextReader_t z_TextReader_create(z_BufReader_t* source) {
     z_TextReader_t self = {0};
     self.source = source;
-    self.buf = z_List_u8_create(0);
+    self.buf = z_ListVal_u8_create(0);
     return self;
 }
 

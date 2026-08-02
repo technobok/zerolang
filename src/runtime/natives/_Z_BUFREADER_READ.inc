@@ -5,10 +5,10 @@
    that need exactly N bytes loop externally, matching the
    reader-protocol contract ('short reads are fine'). */
 static z_Result_u64_IoError_t z_BufReader_read(
-    z_BufReader_t* self, z_List_u8_t* into, uint64_t max
+    z_BufReader_t* self, z_ListVal_u8_t* into, uint64_t max
 );
 static z_Result_u64_IoError_t z_BufReader_read(
-    z_BufReader_t* self, z_List_u8_t* into, uint64_t max
+    z_BufReader_t* self, z_ListVal_u8_t* into, uint64_t max
 ) {
     uint64_t available = self->buf.length - self->head;
     if (available == 0) {

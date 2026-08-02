@@ -2,10 +2,10 @@
    Grows the list capacity as needed. Returns actual bytes read
    (0 indicates EOF); retries on EINTR. */
 static z_Result_u64_IoError_t z_File_read(
-    z_File_t* f, z_List_u8_t* buf, uint64_t max
+    z_File_t* f, z_ListVal_u8_t* buf, uint64_t max
 );
 static z_Result_u64_IoError_t z_File_read(
-    z_File_t* f, z_List_u8_t* buf, uint64_t max
+    z_File_t* f, z_ListVal_u8_t* buf, uint64_t max
 ) {
     if (buf->capacity < buf->length + max) {
         uint64_t newcap = buf->length + max;

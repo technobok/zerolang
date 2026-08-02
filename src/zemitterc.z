@@ -17904,7 +17904,6 @@ ioCanonTid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view canon: String
     if canon == "ListView_u8" then {
         return (specStemTid :ast :symtab base: "ListView" arg1: "u8" arg2: "")
     }
-    if canon == "List_u8" then return (specStemTid :ast :symtab base: "List" arg1: "u8" arg2: "")
     if canon == "ListVal_u8" then {
         return (specStemTid :ast :symtab base: "ListVal" arg1: "u8" arg2: "")
     }
@@ -18057,7 +18056,6 @@ loadIoFragment: function {
         canons.append "OptionView_String".string
         canons.append "ListView_u8".string
         canons.append "List_String".string
-        canons.append "List_u8".string
         canons.append "ListVal_u8".string
         canons.append "BufWriter".string
         canons.append "BufReader".string
@@ -18141,15 +18139,19 @@ ioFileId: function {symtab: zenv.ZSymbolTable ctx: Ctx.view} out u64 is {
     return 0
 }
 
-# ioFileLive -- the File class is present AND its read/write param monos
-# (List_u8 / ListView_u8) exist, i.e. a File is actually live (constructed /
-# io.open / a file method called). This is the order-independent gate for
-# emitting File's natives + Reader/Writer conformance: it is true exactly when
-# that emitted code's referenced monos have been demanded, so it always compiles.
+# ioFileLive -- the File class is present AND its read/write param monos (the
+# byte buffer's element mono / ListView_u8) exist, i.e. a File is actually live
+# (constructed / io.open / a file method called). This is the order-independent
+# gate for emitting File's natives + Reader/Writer conformance: it is true
+# exactly when that emitted code's referenced monos have been demanded, so it
+# always compiles. Either byte-buffer stem counts while the seed still emits
+# the old one; `Bytes` names exactly one of them.
 ioFileLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
     fid9: ioFileId :symtab :ctx
     if fid9 == 0 then return false
-    if (specStemTid :ast :symtab base: "List" arg1: "u8" arg2: "") == 0 then return false
+    bufS9: specStemTid :ast :symtab base: "ListVal" arg1: "u8" arg2: ""
+    if bufS9 == 0 then bufS9 = specStemTid :ast :symtab base: "List" arg1: "u8" arg2: ""
+    if bufS9 == 0 then return false
     if (specStemTid :ast :symtab base: "ListView" arg1: "u8" arg2: "") == 0 then return false
     return true
 }

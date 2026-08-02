@@ -7,7 +7,7 @@ static z_BufReader_t z_BufReader_create(z_Reader_t source, uint64_t cap);
 static z_BufReader_t z_BufReader_create(z_Reader_t source, uint64_t cap) {
     z_BufReader_t self = {0};
     self.source = source;
-    self.buf = z_List_u8_create(cap);
+    self.buf = z_ListVal_u8_create(cap);
     self.head = 0;
     self.cap = cap;
     return self;

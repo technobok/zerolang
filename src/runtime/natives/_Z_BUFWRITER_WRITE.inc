@@ -21,7 +21,7 @@ static z_Result_u64_IoError_t z_BufWriter_write(
         /* oversize write: bypass the buffer */
         return self->sink.vtable->write(self->sink.data, from);
     }
-    z_List_u8_grow(&self->buf, self->buf.length + from->length);
+    z_ListVal_u8_grow(&self->buf, self->buf.length + from->length);
     memcpy(self->buf.data + self->buf.length, from->data, from->length);
     self->buf.length += from->length;
     return z_io_u64_ok(from->length);
