@@ -473,6 +473,18 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   SetVal.add:Set.add SetVal.has:Set.has SetVal.delete:Set.delete \
   SetVal.iterate:Set.iterate SetIterVal.call:SetIter.call \
   SetVal.length:inline SetVal.capacity:inline \
+  MapRV.get:Map.get MapRV.getv:Map.getv MapRV.set:Map.set MapRV.has:Map.has \
+  MapRV.remove:Map.remove MapRV.iterate:Map.iterate \
+  MapRV.iterateItems:Map.iterateItems \
+  MapRV.length:inline MapRV.capacity:inline \
+  MapVR.get:Map.get MapVR.set:Map.set MapVR.has:Map.has \
+  MapVR.remove:Map.remove MapVR.iterate:Map.iterate \
+  MapVR.iterateItems:Map.iterateItems \
+  MapVR.length:inline MapVR.capacity:inline \
+  MapVV.get:Map.get MapVV.set:Map.set MapVV.has:Map.has \
+  MapVV.remove:Map.remove MapVV.iterate:Map.iterate \
+  MapVV.iterateItems:Map.iterateItems \
+  MapVV.length:inline MapVV.capacity:inline \
   List.length:inline List.capacity:inline ListView.length:inline \
   Map.length:inline Map.capacity:inline Set.length:inline Set.capacity:inline \
   String.length:inline String.capacity:inline String.stringview:inline \

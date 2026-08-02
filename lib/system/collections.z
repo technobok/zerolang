@@ -165,6 +165,65 @@ Map: class {
     value: Any.generic
 }
 
+# a hash map from a reference key to a VALUE-TYPE value.
+#
+# The three siblings of `Map` differ only where the family shows: a valtype key
+# or value is passed BY VALUE rather than taken or viewed, and a valtype value
+# comes back as an `optionval` -- a copy, so `get` takes no lock on the map at
+# all, where a reference value hands back an `OptionView` into the entry
+# storage and must pin it. `remove` returns an owned `Option` on the reference
+# side and the same `optionval` on the value side.
+MapRV: class {
+    get: function {:this key: key.view} out (optionval value) is native
+    # String-keyed maps only: look up by view without materializing a key
+    getv: function {:this key: StringView} out (optionval value) is native
+    set: function {:this key: key.take value: value} is native
+    has: function {t: this.view key: key.view} out bool is native
+    remove: function {:this key: key.view} out (optionval value) is native
+    length: function {t: this.view} out u64 is native
+    capacity: function {t: this.view} out u64 is native
+    iterate: function {t: this.view} out (MapKeyIter :key :value).borrow is native
+    iterateItems: function {t: this.borrow} out (MapItemIter :key :value).borrow is native
+    create: function {capacity: 0.u64} out type is native
+} as {
+    key: RefHashable.generic
+    value: AnyVal.generic
+}
+
+# a hash map from a VALUE-TYPE key to a reference value. There is no `getv`:
+# it exists to look a String key up by view, and a valtype key is never one.
+MapVR: class {
+    get: function {:this key: key} out (OptionView value) is native
+    set: function {:this key: key value: value.take} is native
+    has: function {t: this.view key: key} out bool is native
+    remove: function {:this key: key} out (Option value) is native
+    length: function {t: this.view} out u64 is native
+    capacity: function {t: this.view} out u64 is native
+    iterate: function {t: this.view} out (MapKeyIter :key :value).borrow is native
+    iterateItems: function {t: this.borrow} out (MapItemIter :key :value).borrow is native
+    create: function {capacity: 0.u64} out type is native
+} as {
+    key: ValHashable.generic
+    value: AnyRef.generic
+}
+
+# a hash map from a VALUE-TYPE key to a VALUE-TYPE value. Nothing here is
+# taken, viewed or locked: both halves are copies.
+MapVV: class {
+    get: function {:this key: key} out (optionval value) is native
+    set: function {:this key: key value: value} is native
+    has: function {t: this.view key: key} out bool is native
+    remove: function {:this key: key} out (optionval value) is native
+    length: function {t: this.view} out u64 is native
+    capacity: function {t: this.view} out u64 is native
+    iterate: function {t: this.view} out (MapKeyIter :key :value).borrow is native
+    iterateItems: function {t: this.borrow} out (MapItemIter :key :value).borrow is native
+    create: function {capacity: 0.u64} out type is native
+} as {
+    key: ValHashable.generic
+    value: AnyVal.generic
+}
+
 # Borrowed-key iterator over a map. Yields optionview.some pointing at each
 # live entry''s key, optionview.none when exhausted. A Map is a compact dict --
 # a dense entry array plus a separate index table -- so iteration is in

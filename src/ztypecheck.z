@@ -634,7 +634,12 @@ isContainerReaderCall: function {
         rg9: st.reg.genericOriginOf tid: recvTid
         if rg9 > 0 then base9 = rg9
     }
-    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "Map") then {
+    isMapB9: false
+    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "Map") then isMapB9 = true
+    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapRV") then isMapB9 = true
+    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapVR") then isMapB9 = true
+    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapVV") then isMapB9 = true
+    if isMapB9 then {
         if mname == "get" then return true
         if mname == "getv" then return true
         if mname == "copy" then return true
@@ -4025,17 +4030,20 @@ resolveFunction: function {
         # ((ListIter of: of).borrow); they resolve to partial specs so clones
         # heal through respecialize.
         #
-        # Map's get/getv/remove declare `(Option of: value)`, but their real
-        # return is the value-kind wrapper -- optionval for a valtype,
-        # Option/OptionView otherwise -- which cannot be spelled in a return-type
-        # position, so the declaration is a PLACEHOLDER. partialReturnTid is not a
+        # `Map`'s get/getv/remove declare `(Option of: value)` as a
+        # PLACEHOLDER: one declaration has to serve every value family, and the
+        # real return -- optionval for a valtype, OptionView/Option otherwise --
+        # cannot be spelled in a return-type position. partialReturnTid is not a
         # query: it resolves through getOrMintSpec, so on that placeholder it
         # registers Option over the value parameter, which respecializes to
         # `Option i64` and trips Option's AnyRef bound. buildCollectionChildren
-        # installs the real wrapper per mono instead. Keyed on the declared return,
-        # so it cannot fall out of step with a method's name.
+        # installs the real wrapper per mono instead.
+        #
+        # Only `Map` needs this. Its split siblings each know their own value
+        # family and DECLARE the real return, and `MapVR.remove` genuinely
+        # returns an `Option` -- skipping it there left the return unresolved.
         skipPr4: false
-        if fnode.returntype > 0 then {
+        if thisName == "Map" when fnode.returntype > 0 then {
             rwb4: (returnWrapperBaseNameId :ast n: (ast.nodes.get i: (fnode.returntype - 1).u64))
             if rwb4 != 0 when rwb4 == (nameIdOf :ast name: "Option").u64 then skipPr4 = true
         }
@@ -6153,6 +6161,9 @@ fieldTypeNeedsCleanup: function {
     if name == "List" then return true
     if name == "ListVal" then return true
     if name == "Map" then return true
+    if name == "MapRV" then return true
+    if name == "MapVR" then return true
+    if name == "MapVV" then return true
     if name == "Set" then return true
     if name == "SetVal" then return true
     if name == "Option" then return true
@@ -6280,6 +6291,9 @@ resolveClass: function {
                         if defName == "Set" then famF3 = true
                         if defName == "SetVal" then famF3 = true
                         if defName == "Map" then famF3 = true
+                        if defName == "MapRV" then famF3 = true
+                        if defName == "MapVR" then famF3 = true
+                        if defName == "MapVV" then famF3 = true
                         if unitName == "collections" when famF3 then {
                             prodSkipL: false
                             if fname.stringview == "create" then prodSkipL = true
@@ -7885,7 +7899,12 @@ seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
         reg.recordDemand name: "ListIterVal"
         reg.recordDemand name: "ListView"
     }
-    if (reg.isDemanded name: "Map") then {
+    mapDem9: false
+    if (reg.isDemanded name: "Map") then mapDem9 = true
+    if (reg.isDemanded name: "MapRV") then mapDem9 = true
+    if (reg.isDemanded name: "MapVR") then mapDem9 = true
+    if (reg.isDemanded name: "MapVV") then mapDem9 = true
+    if mapDem9 then {
         reg.recordDemand name: "MapKeyIter"
         reg.recordDemand name: "MapItemIter"
         reg.recordDemand name: "MapEntry"
@@ -11074,6 +11093,9 @@ mintMono: function {
     if templateId == (builtinTidT :ast :ty :reg base: "Option") then needsDtorM = true
     if templateId == (builtinTidT :ast :ty :reg base: "Result") then needsDtorM = true
     if templateId == (builtinTidT :ast :ty :reg base: "Map") then needsDtorM = true
+    if templateId == (builtinTidT :ast :ty :reg base: "MapRV") then needsDtorM = true
+    if templateId == (builtinTidT :ast :ty :reg base: "MapVR") then needsDtorM = true
+    if templateId == (builtinTidT :ast :ty :reg base: "MapVV") then needsDtorM = true
     if templateId == (builtinTidT :ast :ty :reg base: "Set") then needsDtorM = true
     if templateId == (builtinTidT :ast :ty :reg base: "SetVal") then needsDtorM = true
     if needsDtorM then {
@@ -12096,6 +12118,9 @@ mintCollectionChildren: function {
     setTid: builtinTidT :ast :ty :reg base: "Set"
     setValTid: builtinTidT :ast :ty :reg base: "SetVal"
     mapTid: builtinTidT :ast :ty :reg base: "Map"
+    mapRVTid: builtinTidT :ast :ty :reg base: "MapRV"
+    mapVRTid: builtinTidT :ast :ty :reg base: "MapVR"
+    mapVVTid: builtinTidT :ast :ty :reg base: "MapVV"
     mapEntryTid: builtinTidT :ast :ty :reg base: "MapEntry"
     strTid: builtinTidT :ast :ty :reg base: "str"
     arrayTid: builtinTidT :ast :ty :reg base: "array"
@@ -12119,6 +12144,9 @@ mintCollectionChildren: function {
     if templateId == setTid then isColl = true
     if templateId == setValTid then isColl = true
     if templateId == mapTid then isColl = true
+    if templateId == mapRVTid then isColl = true
+    if templateId == mapVRTid then isColl = true
+    if templateId == mapVVTid then isColl = true
     if templateId == mapEntryTid then isColl = true
     if templateId == strTid then isColl = true
     if templateId == arrayTid then isColl = true
@@ -12192,6 +12220,43 @@ mintCollectionChildren: function {
     # optionval for a valtype, Option/OptionView otherwise) materialize
     # here, once per mono. Map has no create child (its construction path
     # is separate).
+    # The split Map forms declare their real returns -- an `optionval` for a
+    # valtype value, an `OptionView`/`Option` for a reference one -- so the
+    # clone pass heals get/remove like any other composite return and only the
+    # length/capacity fields materialize here. `getv` still needs its return
+    # healed by hand: its parameter is a concrete StringView, so the clone pass
+    # leaves the raw template child in place. Its wrapper is not a choice --
+    # MapRV's value is a valtype by its own bound -- and the val-key forms
+    # declare no `getv` at all, a String key being the only thing it is for.
+    isMapSplit9: false
+    if templateId == mapRVTid then isMapSplit9 = true
+    if templateId == mapVRTid then isMapSplit9 = true
+    if templateId == mapVVTid then isMapSplit9 = true
+    if isMapSplit9 when valArg > 0 then {
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength.u64 childTypeId: u64id
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity.u64 childTypeId: u64id
+        if templateId == mapRVTid then {
+            gvS9: mintCollectionMethod :ast :ty :reg :monoId m: "getv"
+            vnS9: monoValName :ast :ty :reg tid: valArg
+            woS9: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: "optionval"
+            match (
+                woS9
+            ) case some then {
+                wnS9: "optionval_\{vnS9}"
+                (mintReturnWrapper
+                    :ast
+                    :ty
+                    :reg
+                    :mainName
+                    targetId: gvS9
+                    name: wnS9.stringview
+                    templateId: woS9
+                    fallbackArg: valArg
+                )
+            } case none then null
+        }
+        return
+    }
     if templateId == mapTid when valArg > 0 then {
         ty.setMemberType parentTypeId: monoId nameId: zast.wkLength.u64 childTypeId: u64id
         ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity.u64 childTypeId: u64id
@@ -12677,6 +12742,24 @@ genericTypeConstruction: function {
                     :ast
                     ty: st.typing
                     reg: st.reg
+                    base: "MapRV"
+                ) then skipCr9 = true
+                if tplId == (builtinTidT
+                    :ast
+                    ty: st.typing
+                    reg: st.reg
+                    base: "MapVR"
+                ) then skipCr9 = true
+                if tplId == (builtinTidT
+                    :ast
+                    ty: st.typing
+                    reg: st.reg
+                    base: "MapVV"
+                ) then skipCr9 = true
+                if tplId == (builtinTidT
+                    :ast
+                    ty: st.typing
+                    reg: st.reg
                     base: "Set"
                 ) then skipCr9 = true
                 if tplId == (builtinTidT
@@ -12915,6 +12998,24 @@ validateGenericTypeArgs: function {
                         if tplId == (builtinTidT :ast ty: st.typing reg: st.reg base: "Map") then {
                             isField = true
                         }
+                        if tplId == (builtinTidT
+                            :ast
+                            ty: st.typing
+                            reg: st.reg
+                            base: "MapRV"
+                        ) then isField = true
+                        if tplId == (builtinTidT
+                            :ast
+                            ty: st.typing
+                            reg: st.reg
+                            base: "MapVR"
+                        ) then isField = true
+                        if tplId == (builtinTidT
+                            :ast
+                            ty: st.typing
+                            reg: st.reg
+                            base: "MapVV"
+                        ) then isField = true
                         if tplId == (builtinTidT :ast ty: st.typing reg: st.reg base: "Set") then {
                             isField = true
                         }
@@ -19488,6 +19589,9 @@ checkCall: function {
                     if wgix9 == (builtinTidTc :ast :st base: "List") then isWType = false
                     if wgix9 == (builtinTidTc :ast :st base: "ListVal") then isWType = false
                     if wgix9 == (builtinTidTc :ast :st base: "Map") then isWType = false
+                    if wgix9 == (builtinTidTc :ast :st base: "MapRV") then isWType = false
+                    if wgix9 == (builtinTidTc :ast :st base: "MapVR") then isWType = false
+                    if wgix9 == (builtinTidTc :ast :st base: "MapVV") then isWType = false
                     if wgix9 == (builtinTidTc :ast :st base: "Set") then isWType = false
                     if wgix9 == (builtinTidTc :ast :st base: "SetVal") then isWType = false
                 }
