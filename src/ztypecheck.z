@@ -4029,35 +4029,15 @@ resolveFunction: function {
         # collection template methods declare composite parameterized returns
         # ((ListIter of: of).borrow); they resolve to partial specs so clones
         # heal through respecialize.
-        #
-        # `Map`'s get/getv/remove declare `(Option of: value)` as a
-        # PLACEHOLDER: one declaration has to serve every value family, and the
-        # real return -- optionval for a valtype, OptionView/Option otherwise --
-        # cannot be spelled in a return-type position. partialReturnTid is not a
-        # query: it resolves through getOrMintSpec, so on that placeholder it
-        # registers Option over the value parameter, which respecializes to
-        # `Option i64` and trips Option's AnyRef bound. buildCollectionChildren
-        # installs the real wrapper per mono instead.
-        #
-        # Only `Map` needs this. Its split siblings each know their own value
-        # family and DECLARE the real return, and `MapVR.remove` genuinely
-        # returns an `Option` -- skipping it there left the return unresolved.
-        skipPr4: false
-        if thisName == "Map" when fnode.returntype > 0 then {
-            rwb4: (returnWrapperBaseNameId :ast n: (ast.nodes.get i: (fnode.returntype - 1).u64))
-            if rwb4 != 0 when rwb4 == (nameIdOf :ast name: "Option").u64 then skipPr4 = true
-        }
-        if skipPr4 == false then {
-            prt4: (partialReturnTid
-                :ty
-                :reg
-                :ast
-                :unitName
-                enclDecl: enclDecl9
-                oId: fnode.returntype
-            )
-            if prt4 > 0 then reg.setReturnType typeId: fid value: prt4
-        }
+        prt4: (partialReturnTid
+            :ty
+            :reg
+            :ast
+            :unitName
+            enclDecl: enclDecl9
+            oId: fnode.returntype
+        )
+        if prt4 > 0 then reg.setReturnType typeId: fid value: prt4
     }
     if (returnHasBorrowMarker :ast oId: fnode.returntype) then {
         fbk: fid
@@ -11470,18 +11450,6 @@ mintCollectionMethod: function {
     return fid
 }
 
-# mapGetWrapperName -- the Map.get return-wrapper template by value kind:
-# optionval for valtypes (copy-out), OptionView for reftypes incl. String (a
-# borrowed, locked view into the map's storage; the caller `.copy`s to keep it).
-mapGetWrapperName: function {
-    reg: ztypes.ZTypeRegistry
-    valArg: u64
-} out String is {
-    isVal: reg.isValtypeOf tid: valArg
-    if isVal then return ("optionval".string)
-    return ("OptionView".string)
-}
-
 # specLookup -- the existing specialization of `templateId` over the ordered
 # concrete arguments `args`, read straight off the id trie getOrMintSpec builds.
 # Lookup only: it never mints, so a caller can ask whether an instance was
@@ -12214,35 +12182,34 @@ mintCollectionChildren: function {
         mintCollectionMethod :ast :ty :reg :monoId m: "create"
         return
     }
-    # Map children come from the produced template methods (iterator
-    # returns healed by respecialize); the length/capacity fields and the
-    # value-kind wrapper returns for get/remove (inexpressible in source:
-    # optionval for a valtype, Option/OptionView otherwise) materialize
-    # here, once per mono. Map has no create child (its construction path
-    # is separate).
-    # The split Map forms declare their real returns -- an `optionval` for a
-    # valtype value, an `OptionView`/`Option` for a reference one -- so the
-    # clone pass heals get/remove like any other composite return and only the
+    # Every Map form declares its real returns -- an `optionval` for a valtype
+    # value, an `OptionView`/`Option` for a reference one -- so the clone pass
+    # heals get/remove like any other composite return and only the
     # length/capacity fields materialize here. `getv` still needs its return
     # healed by hand: its parameter is a concrete StringView, so the clone pass
     # leaves the raw template child in place. Its wrapper is not a choice --
-    # MapRV's value is a valtype by its own bound -- and the val-key forms
-    # declare no `getv` at all, a String key being the only thing it is for.
-    isMapSplit9: false
-    if templateId == mapRVTid then isMapSplit9 = true
-    if templateId == mapVRTid then isMapSplit9 = true
-    if templateId == mapVVTid then isMapSplit9 = true
-    if isMapSplit9 when valArg > 0 then {
+    # each form's value family is fixed by its own bound -- and the val-key
+    # forms declare no `getv` at all, a String key being the only thing it is
+    # for.
+    isMapTpl9: false
+    if templateId == mapTid then isMapTpl9 = true
+    if templateId == mapRVTid then isMapTpl9 = true
+    if templateId == mapVRTid then isMapTpl9 = true
+    if templateId == mapVVTid then isMapTpl9 = true
+    if isMapTpl9 when valArg > 0 then {
         ty.setMemberType parentTypeId: monoId nameId: zast.wkLength.u64 childTypeId: u64id
         ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity.u64 childTypeId: u64id
-        if templateId == mapRVTid then {
+        gvT9: String
+        if templateId == mapTid then gvT9 = "OptionView".string
+        if templateId == mapRVTid then gvT9 = "optionval".string
+        if gvT9.length > 0 then {
             gvS9: mintCollectionMethod :ast :ty :reg :monoId m: "getv"
             vnS9: monoValName :ast :ty :reg tid: valArg
-            woS9: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: "optionval"
+            woS9: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: gvT9.stringview
             match (
                 woS9
             ) case some then {
-                wnS9: "optionval_\{vnS9}"
+                wnS9: "\{gvT9}_\{vnS9}"
                 (mintReturnWrapper
                     :ast
                     :ty
@@ -12255,78 +12222,6 @@ mintCollectionChildren: function {
                 )
             } case none then null
         }
-        return
-    }
-    if templateId == mapTid when valArg > 0 then {
-        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength.u64 childTypeId: u64id
-        ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity.u64 childTypeId: u64id
-        vnM: monoValName :ast :ty :reg tid: valArg
-        mgoM: ty.declChildOfId parentTypeId: monoId nameId: zast.wkGet.u64
-        match (
-            mgoM
-        ) case some then {
-            wtplM: mapGetWrapperName :reg :valArg
-            wtoM: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: wtplM.stringview
-            match (
-                wtoM
-            ) case some then {
-                wnM: "\{wtplM}_\{vnM}"
-                (mintReturnWrapper
-                    :ast
-                    :ty
-                    :reg
-                    :mainName
-                    targetId: mgoM
-                    name: wnM.stringview
-                    templateId: wtoM
-                    fallbackArg: valArg
-                )
-            } case none then null
-        } case none then null
-        # getv has concrete params, so the clone pass leaves the raw template
-        # child in place; re-mint it as a per-mono native (args unchecked,
-        # like length/key/value) and heal the return by value kind.
-        gvIdM: mintCollectionMethod :ast :ty :reg :monoId m: "getv"
-        wtvM: mapGetWrapperName :reg :valArg
-        wtvoM: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: wtvM.stringview
-        match (
-            wtvoM
-        ) case some then {
-            wvnM: "\{wtvM}_\{vnM}"
-            (mintReturnWrapper
-                :ast
-                :ty
-                :reg
-                :mainName
-                targetId: gvIdM
-                name: wvnM.stringview
-                templateId: wtvoM
-                fallbackArg: valArg
-            )
-        } case none then null
-        mrmoM: ty.declChildOfId parentTypeId: monoId nameId: zast.wkRemove.u64
-        match (
-            mrmoM
-        ) case some then {
-            rwtM: "Option".string
-            if (typeIsValtype :ty :reg tid: valArg) then rwtM = "optionval".string
-            rwtoM: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: rwtM.stringview
-            match (
-                rwtoM
-            ) case some then {
-                rwnM: "\{rwtM}_\{vnM}"
-                (mintReturnWrapper
-                    :ast
-                    :ty
-                    :reg
-                    :mainName
-                    targetId: mrmoM
-                    name: rwnM.stringview
-                    templateId: rwtoM
-                    fallbackArg: valArg
-                )
-            } case none then null
-        } case none then null
         return
     }
     isSized: false
