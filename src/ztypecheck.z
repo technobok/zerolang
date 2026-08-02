@@ -4274,6 +4274,29 @@ markerTargetId: function {
 # the type resolves no method and is a hard error.
 # memberNullOptOut -- true when a type's `as {}` block defines `member` as
 # `null`, the language's way of striking a compiler-provided member off a type.
+# asDeclaresMember -- the as-block declares `member` as a real definition (not
+# the `member: null` opt-out shell). The synthesised valtype defaults must
+# YIELD to it: `hasEqIs` is computed from the IS-block alone, so a record whose
+# `==` lives in its `as` block used to get a synthesised `==` minted on top of
+# the author's, and the emitter picked the synthesised one -- the author's
+# method compiled, linked, and was never called.
+asDeclaresMember: function {ast: Ast.view asItems: (List u32).view member: StringView} out bool is {
+    result: false
+    with aiter: asItems.iterate do for amId9: aiter loop {
+        am: ast.nodes.get i: (amId9 - 1).u64
+        match (
+            am
+        ) case namedoperation then {
+            mn9: zast.nameTextCopy :ast ref: am.name
+            if mn9.stringview == member then {
+                vn9: atomName :ast n: (ast.nodes.get i: (am.operation - 1).u64)
+                if vn9.stringview != "null" then result = true
+            }
+        } else null
+    }
+    return result
+}
+
 memberNullOptOut: function {ast: Ast.view asItems: (List u32).view member: StringView} out bool is {
     result: false
     with aiter: asItems.iterate do for amId9: aiter loop {
@@ -5305,6 +5328,7 @@ resolveRecord: function {
     reg.setValtype typeId: rid value: true
     isgen: hasGenericParam :ast items: rnode.asItems
     eqOptR9: eqNullOptOut :ast asItems: rnode.asItems
+    eqAsR9: asDeclaresMember :ast asItems: rnode.asItems member: "=="
     # `copy: null` strikes the default byte copy off this type. It is recorded
     # as a member carrying the null shell so the use site can tell it from a
     # type that simply never mentioned `copy`.
@@ -5499,7 +5523,7 @@ resolveRecord: function {
         ty.setMemberType parentTypeId: rid nameId: zast.wkBorrow.u64 childTypeId: borrowId
     } else {
         if (isgen) == false then {
-            if (hasEqIs) == false when (eqOptR9) == false then {
+            if (hasEqIs) == false when (eqOptR9) == false when (eqAsR9) == false then {
                 eqId: reg.newType name: "==" ownerTid: rid typetype: ztypes.ztypetype.functionType
                 (ty.declSynthMember
                     parentTypeId: rid
