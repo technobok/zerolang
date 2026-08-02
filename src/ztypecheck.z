@@ -5335,14 +5335,6 @@ resolveRecord: function {
     if (memberNullOptOut :ast asItems: rnode.asItems member: "copy") then {
         ty.copyOptOut.add item: rid
     }
-    # `hash: null` / `==: null` strikes hashability off. Recorded rather than
-    # inferred: a type that never mentions either member is hashable by
-    # default, and only the null shell distinguishes "I have no equality" from
-    # "I said nothing".
-    if (memberNullOptOut :ast asItems: rnode.asItems member: "hash") then {
-        ty.hashOptOut.add item: rid
-    }
-    if eqOptR9 then ty.hashOptOut.add item: rid
     if isgen then {
         reg.setGeneric typeId: rid value: true
         (registerGenericParams
@@ -5549,6 +5541,22 @@ resolveRecord: function {
             }
         }
     }
+    # `hash` is INDEPENDENT of whether `==` was synthesised -- a type that
+    # declares its own `==` (every numeric does) still hashes by its bytes.
+    # It exists unless the author struck it off with a null shell or wrote
+    # their own, and a heap-owning value has no byte range to hash, so it gets
+    # none and is simply not Hashable.
+    hshOptR9: memberNullOptOut :ast asItems: rnode.asItems member: "hash"
+    hshAsR9: asDeclaresMember :ast asItems: rnode.asItems member: "hash"
+    if (isgen) == false when hshOptR9 == false when hshAsR9 == false then {
+        hshR9: reg.newType name: "hash" ownerTid: rid typetype: ztypes.ztypetype.functionType
+        (ty.declSynthMember
+            parentTypeId: rid
+            nameId: zast.wkHash.u64
+            kind: ztyping.declkind.methodDecl
+        )
+        ty.setMemberType parentTypeId: rid nameId: zast.wkHash.u64 childTypeId: hshR9
+    }
     if pvExcl_rrid.length > 0 then ty.privacySeen = true
     applyGrantsPrivate :ty parentId: rrid grants: pvGrants_rrid
 }
@@ -5631,10 +5639,6 @@ resolveVariant: function {
     if (memberNullOptOut :ast asItems: vnode.asItems member: "copy") then {
         ty.copyOptOut.add item: vid
     }
-    if (memberNullOptOut :ast asItems: vnode.asItems member: "hash") then {
-        ty.hashOptOut.add item: vid
-    }
-    if eqOptV9 then ty.hashOptOut.add item: vid
     if isgen then {
         reg.setGeneric typeId: vid value: true
         (registerGenericParams
@@ -5787,6 +5791,18 @@ resolveVariant: function {
             kind: ztyping.declkind.methodDecl
         )
         ty.setMemberType parentTypeId: vid nameId: zast.wkOpNe.u64 childTypeId: neqId
+    }
+    # `hash` on the same terms as `==` above (see resolveRecord).
+    hshOptV9: memberNullOptOut :ast asItems: vnode.asItems member: "hash"
+    hshAsV9: asDeclaresMember :ast asItems: vnode.asItems member: "hash"
+    if (isgen) == false when hshOptV9 == false when hshAsV9 == false then {
+        hshV9: reg.newType name: "hash" ownerTid: vid typetype: ztypes.ztypetype.functionType
+        (ty.declSynthMember
+            parentTypeId: vid
+            nameId: zast.wkHash.u64
+            kind: ztyping.declkind.methodDecl
+        )
+        ty.setMemberType parentTypeId: vid nameId: zast.wkHash.u64 childTypeId: hshV9
     }
     if pvExcl_vvid.length > 0 then ty.privacySeen = true
     applyGrantsPrivate :ty parentId: vvid grants: pvGrants_vvid
@@ -11541,26 +11557,21 @@ checkConstraintSat: function {
     if ck9 == ztypes.constraintkind.refType then {
         ok9 = reg.isReftypeOf tid: argTid
     }
-    # A VALTYPE is hashable by default -- the byte hash and byte compare cover
-    # it -- unless it owns heap members, which a byte range cannot reach.
+    # Hashability: one question, asked in one place (see typeIsHashable).
     if ck9 == ztypes.constraintkind.valHashable then {
-        ok9 = typeIsValtype :ty :reg tid: argTid
-        if ok9 when (heapOwningValtypeTid :ast :ty :reg tid: argTid) then ok9 = false
-        if ok9 when (ty.hashOptOut.has item: argTid) then ok9 = false
+        ok9 = false
+        if (typeIsValtype :ty :reg tid: argTid) then {
+            ok9 = typeIsHashable :ast :ty :reg tid: argTid
+            # a heap-owning value has no byte range to hash, and the synthesis
+            # cannot ask that during resolution -- a self-containing record
+            # would recurse forever before the cycle check has run
+            if ok9 when (heapOwningValtypeTid :ast :ty :reg tid: argTid) then ok9 = false
+        }
     }
-    # A REFTYPE has no default: its contents live behind a pointer, so it must
-    # DECLARE both members and say whether it means identity or value.
     if ck9 == ztypes.constraintkind.refHashable then {
         ok9 = false
         if (reg.isReftypeOf tid: argTid) then {
-            hnm9: zast.poolFind pool: ast.names text: "hash"
-            enm9: zast.poolFind pool: ast.names text: "=="
-            if hnm9 > 0 when enm9 > 0 then {
-                if (ty.declIsMethodId parentTypeId: argTid nameId: hnm9) then {
-                    if (ty.declIsMethodId parentTypeId: argTid nameId: enm9) then ok9 = true
-                }
-            }
-            if ok9 when (ty.hashOptOut.has item: argTid) then ok9 = false
+            ok9 = typeIsHashable :ast :ty :reg tid: argTid
         }
     }
     if ck9 == ztypes.constraintkind.stringLike then {
@@ -11602,6 +11613,32 @@ checkConstraintSat: function {
         m9: "generic argument '\{an9}' does not satisfy constraint '\{con9}' on parameter '\{paramName}' of '\{tdn9}'"
         addResolveError :ty e: zast.err.genericError msg: m9
     }
+}
+
+
+# typeIsHashable -- the type has both `hash` and `==`, so it may key a Map or
+# a Set. Read straight off the DECLARATIONS: `hash` and `==` are synthesised
+# for a valtype and declared for a reftype, and a member the author struck off
+# with a null shell is simply absent -- so the opt-out needs no flag to record
+# it, and there is exactly one place that asks.
+#
+# The answer is DERIVED rather than written back as a conformance row.
+# Materialising one makes the emitter treat it as a user-written `:ValHashable`
+# and emit a facet vtable plus a wrapper per conforming type -- for members
+# that have no body, and which nothing ever dispatches through: the containers
+# call `hash`/`==` directly. The row would be pure bloat on every record in
+# every program.
+typeIsHashable: function {
+    ast: Ast.view
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    tid: u64
+} out bool is {
+    ast
+    reg
+    if tid == 0 then return false
+    if (ty.declIsMethodId parentTypeId: tid nameId: zast.wkHash) == false then return false
+    return (ty.declIsMethodId parentTypeId: tid nameId: zast.wkOpEq)
 }
 
 # heapOwningValtypeTid -- a RECORD/VARIANT that transitively owns heap
@@ -11755,31 +11792,15 @@ getOrMintSpec: function {
                 mHK9: "heap-owning value type '\{hkN9}' cannot be a \{hkKind9}"
                 addResolveError :ty e: zast.err.genericError msg: mHK9
             }
-            # The author struck `hash` or `==` off with a null shell. Without
-            # this the container quietly supplied the byte hash and byte
-            # compare the type had just refused.
-            if (ty.hashOptOut.has item: hkT9) then {
-                hoN9: regTypeNameOf :reg tid: hkT9
-                mHO9: "'\{hoN9}' opted out of hash or '==' and cannot be a \{hkKind9}"
-                addResolveError :ty e: zast.err.genericError msg: mHO9
-            }
-            # A REFTYPE key must DECLARE both members. Its contents live behind
-            # a pointer, so there is nothing to byte-hash: the emitter cast the
-            # aggregate to an integer and produced C that does not compile.
-            if (reg.isReftypeOf tid: hkT9) then {
-                hhn9: zast.poolFind pool: ast.names text: "hash"
-                hen9: zast.poolFind pool: ast.names text: "=="
-                hOk9: false
-                if hhn9 > 0 when hen9 > 0 then {
-                    if (ty.declIsMethodId parentTypeId: hkT9 nameId: hhn9) then {
-                        if (ty.declIsMethodId parentTypeId: hkT9 nameId: hen9) then hOk9 = true
-                    }
-                }
-                if hOk9 == false then {
-                    hrN9: regTypeNameOf :reg tid: hkT9
-                    mHR9: "reference type '\{hrN9}' must declare 'hash' and '==' to be a \{hkKind9}"
-                    addResolveError :ty e: zast.err.genericError msg: mHR9
-                }
+            # ... and the ordinary conformance question for everything else.
+            # A type that struck `hash` or `==` off with a null shell simply has
+            # no such member, so no row was written for it; a class that never
+            # declared them likewise. Nothing here re-derives that.
+            hHeap9: heapOwningValtypeTid :ast :ty :reg tid: hkT9
+            if hHeap9 == false when (typeIsHashable :ast :ty :reg tid: hkT9) == false then {
+                hrN9: regTypeNameOf :reg tid: hkT9
+                mHR9: "'\{hrN9}' is not hashable and cannot be a \{hkKind9}: it needs both 'hash' and '=='"
+                addResolveError :ty e: zast.err.genericError msg: mHR9
             }
         }
     }
