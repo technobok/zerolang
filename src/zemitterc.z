@@ -17272,6 +17272,34 @@ monoElemName: function {full: String prefixLen: u64} out String is {
 # fragments of a Set mono: the keyed byte hash (SipHash by default,
 # z_fasthash_* under --fast-hash) + memcmp + per-item free for String keys,
 # the integer hash + `==` + no item cleanup otherwise.
+# declaredKeyFnC -- the C name of a `hash` or `==` the KEY TYPE declared, or
+# "" when it declares none. A reftype key has no byte representation to hash --
+# its contents live behind a pointer -- so RefHashable makes it declare both,
+# and the container must then CALL them instead of casting the aggregate.
+#
+# The member's receiver is a pointer like any other method's, and the template
+# holds the key BY VALUE, so the caller addresses it.
+declaredKeyFnC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: u64
+    member: StringView
+} out String is {
+    nid9: zast.poolFind pool: ast.names text: member
+    if nid9 == 0 then return "".string
+    if (symtab.typing.declIsMethodId parentTypeId: tid nameId: nid9) == false then return "".string
+    if (symtab.typing.declMemberIsSynth parentTypeId: tid nameId: nid9) then return "".string
+    mo9: symtab.typing.declChildOfId parentTypeId: tid nameId: nid9.u64
+    match (
+        mo9
+    ) case some then {
+        return (ctxCname :ctx tid: mo9)
+    } case none then {
+        return "".string
+    }
+}
+
 # keyHashKind -- classify a Set element / Map key by canonical id (never by
 # name, so a user shadow is handled by its nature): 1 native String, 2
 # StringView, 3 by-value struct (record/variant -> byte hash over contents), 0
@@ -17387,6 +17415,30 @@ emitSetMono: function {
     si: cbaseNoPrefix :ctx tid: siId
     hashBody: setHashBody kind: ekind fast: ctx.fastHash
     eqBody: setEqBody kind: ekind
+    {
+        dh9: String
+        de9: String
+        if ekind == 0 then {
+            dh9 = declaredKeyFnC :ast :symtab :ctx tid: elemTid member: "hash"
+            de9 = declaredKeyFnC :ast :symtab :ctx tid: elemTid member: "=="
+        }
+        if dh9.length > 0 when de9.length > 0 then {
+            hb9: "\{dh9}(&_key)"
+            hashBody = hb9
+            rhsPs9: elemBorrowsByPtr :ast :symtab :ctx tid: elemTid
+            rhsAs9: "_b".string
+            rhsTs9: itemT.copy
+            if rhsPs9 then {
+                rhsAs9 = "&_b".string
+                rhsTsp9: "\{itemT}*"
+                rhsTs9 = rhsTsp9
+            }
+            eb9: "\{de9}(&_a, \{rhsAs9})"
+            eqBody = eb9
+            fd9: "static uint64_t \{dh9}(\{itemT}*);\nstatic bool \{de9}(\{itemT}*, \{rhsTs9});\n"
+            buf.append fd9
+        }
+    }
     destroyItems: setDestroyItems :isStr strC: ctx.strC.stringview
     freeItemDup: setFreeItemDup :isStr strC: ctx.strC.stringview
     freeItemDel: setFreeItemDel :isStr strC: ctx.strC.stringview
@@ -17614,6 +17666,39 @@ emitMapMono: function {
     keyIsStr: kkind == 1
     hashKeyBody: setHashBody kind: kkind fast: ctx.fastHash
     keysEqBody: setEqBody kind: kkind
+    {
+        # Only the FALLTHROUGH kind. String (1), StringView (2) and the
+        # by-value structs (3) already have their own bodies, and String's
+        # `hash`/`==` are NATIVES whose C is fixed by their .inc -- calling
+        # them by emitted name links to nothing.
+        dhm9: String
+        dem9: String
+        if kkind == 0 then {
+            dhm9 = declaredKeyFnC :ast :symtab :ctx tid: keyTid member: "hash"
+            dem9 = declaredKeyFnC :ast :symtab :ctx tid: keyTid member: "=="
+        }
+        if dhm9.length > 0 when dem9.length > 0 then {
+            hbm9: "\{dhm9}(&_key)"
+            hashKeyBody = hbm9
+            # the receiver is a pointer either way; the `rhs` PARAMETER follows
+            # the key's own calling convention, which is a pointer for a class
+            # and a value for a record
+            rhsP9: elemBorrowsByPtr :ast :symtab :ctx tid: keyTid
+            rhsA9: "_b".string
+            rhsT9: keyT.copy
+            if rhsP9 then {
+                rhsA9 = "&_b".string
+                rhsTp9: "\{keyT}*"
+                rhsT9 = rhsTp9
+            }
+            ebm9: "\{dem9}(&_a, \{rhsA9})"
+            keysEqBody = ebm9
+            # the mono is emitted before user method bodies, so declare the
+            # two it now calls
+            fdm9: "static uint64_t \{dhm9}(\{keyT}*);\nstatic bool \{dem9}(\{keyT}*, \{rhsT9});\n"
+            buf.append fdm9
+        }
+    }
     vfDestroy: (mapValFreeStmt
         :symtab
         :ctx

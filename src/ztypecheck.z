@@ -5335,6 +5335,14 @@ resolveRecord: function {
     if (memberNullOptOut :ast asItems: rnode.asItems member: "copy") then {
         ty.copyOptOut.add item: rid
     }
+    # `hash: null` / `==: null` strikes hashability off. Recorded rather than
+    # inferred: a type that never mentions either member is hashable by
+    # default, and only the null shell distinguishes "I have no equality" from
+    # "I said nothing".
+    if (memberNullOptOut :ast asItems: rnode.asItems member: "hash") then {
+        ty.hashOptOut.add item: rid
+    }
+    if eqOptR9 then ty.hashOptOut.add item: rid
     if isgen then {
         reg.setGeneric typeId: rid value: true
         (registerGenericParams
@@ -5623,6 +5631,10 @@ resolveVariant: function {
     if (memberNullOptOut :ast asItems: vnode.asItems member: "copy") then {
         ty.copyOptOut.add item: vid
     }
+    if (memberNullOptOut :ast asItems: vnode.asItems member: "hash") then {
+        ty.hashOptOut.add item: vid
+    }
+    if eqOptV9 then ty.hashOptOut.add item: vid
     if isgen then {
         reg.setGeneric typeId: vid value: true
         (registerGenericParams
@@ -11534,6 +11546,7 @@ checkConstraintSat: function {
     if ck9 == ztypes.constraintkind.valHashable then {
         ok9 = typeIsValtype :ty :reg tid: argTid
         if ok9 when (heapOwningValtypeTid :ast :ty :reg tid: argTid) then ok9 = false
+        if ok9 when (ty.hashOptOut.has item: argTid) then ok9 = false
     }
     # A REFTYPE has no default: its contents live behind a pointer, so it must
     # DECLARE both members and say whether it means identity or value.
@@ -11547,6 +11560,7 @@ checkConstraintSat: function {
                     if (ty.declIsMethodId parentTypeId: argTid nameId: enm9) then ok9 = true
                 }
             }
+            if ok9 when (ty.hashOptOut.has item: argTid) then ok9 = false
         }
     }
     if ck9 == ztypes.constraintkind.stringLike then {
@@ -11740,6 +11754,32 @@ getOrMintSpec: function {
                 hkN9: regTypeNameOf :reg tid: hkT9
                 mHK9: "heap-owning value type '\{hkN9}' cannot be a \{hkKind9}"
                 addResolveError :ty e: zast.err.genericError msg: mHK9
+            }
+            # The author struck `hash` or `==` off with a null shell. Without
+            # this the container quietly supplied the byte hash and byte
+            # compare the type had just refused.
+            if (ty.hashOptOut.has item: hkT9) then {
+                hoN9: regTypeNameOf :reg tid: hkT9
+                mHO9: "'\{hoN9}' opted out of hash or '==' and cannot be a \{hkKind9}"
+                addResolveError :ty e: zast.err.genericError msg: mHO9
+            }
+            # A REFTYPE key must DECLARE both members. Its contents live behind
+            # a pointer, so there is nothing to byte-hash: the emitter cast the
+            # aggregate to an integer and produced C that does not compile.
+            if (reg.isReftypeOf tid: hkT9) then {
+                hhn9: zast.poolFind pool: ast.names text: "hash"
+                hen9: zast.poolFind pool: ast.names text: "=="
+                hOk9: false
+                if hhn9 > 0 when hen9 > 0 then {
+                    if (ty.declIsMethodId parentTypeId: hkT9 nameId: hhn9) then {
+                        if (ty.declIsMethodId parentTypeId: hkT9 nameId: hen9) then hOk9 = true
+                    }
+                }
+                if hOk9 == false then {
+                    hrN9: regTypeNameOf :reg tid: hkT9
+                    mHR9: "reference type '\{hrN9}' must declare 'hash' and '==' to be a \{hkKind9}"
+                    addResolveError :ty e: zast.err.genericError msg: mHR9
+                }
             }
         }
     }
