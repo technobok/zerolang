@@ -11024,9 +11024,23 @@ respecialize: function {
     )
 }
 
-# mintMono -- register one generic-instance type (deduped by mono name): the
-# template's typetype and valtype flag, genericOriginId linking back, and the
-# instance's children -- the template's children with generic-param targets
+# templateTypetypeOf -- the typetype a specialization of `templateId` takes. The
+# spec front door allocates the instance id itself (so the trie path can be
+# written before the children are built), and this is the one thing about the
+# template it needs to do that.
+templateTypetypeOf: function {
+    reg: ztypes.ZTypeRegistry.view
+    templateId: u64
+} out ztypes.ztypetype is {
+    if templateId < reg.typeById.length then {
+        tpl: reg.typeById.get i: templateId
+        return tpl.typetype
+    }
+    return ztypes.ztypetype.recordType
+}
+
+# mintMono -- populate one generic-instance type: the template's typetype and
+# valtype flag, genericOriginId linking back, and the instance's children -- the template's children with generic-param targets
 # substituted (matched by arg name; fallbackArg substitutes every child, the
 # single-type-param call-site inference) -- plus the synthesized members: a
 # per-instance tag data type (variants and unions) and the autogen ==/!=
@@ -11042,7 +11056,8 @@ mintMono: function {
     subs: (MapRV String value: u64)
     idSubs: (MapVV u64 value: u64)
     fallbackArg: u64
-} out u64 is {
+    monoTid: u64
+} is {
     tt: ztypes.ztypetype.recordType
     vto: (optionval.none bool)
     tplNative: false
@@ -11052,7 +11067,7 @@ mintMono: function {
         vto = tpl.isValtype
         tplNative = tpl.isNative
     }
-    mid: reg.newType :name typetype: tt
+    mid: monoTid
     match (
         vto
     ) case some then {
@@ -11363,7 +11378,6 @@ mintMono: function {
         )
         ty.setMemberType parentTypeId: mid nameId: zast.wkOpNe.u64 childTypeId: neId
     }
-    return mid
 }
 
 # isContainsEligibleTid / isSortEligibleTid -- element types List.contains /
@@ -11487,8 +11501,8 @@ specLookup: function {
 # definition-order argument keys from the name-keyed subs (fallbackArg fills a
 # single missing parameter), walk the generic-child edges, and return the existing
 # spec on a full-path hit. A parameter absent from subs with no fallback (a
-# numeric value parameter -- str/array's `to`) skips the tree -- mintMono's
-# name dedup still holds for those. On a miss the leaf materializes via mintMono; multi-level
+# numeric value parameter -- str/array's `to`) skips the tree entirely, so
+# nothing dedups it. On a miss the leaf materializes via mintMono; multi-level
 # paths mint intermediate nodes (genericOriginId = template, genericArgs =
 # the key prefix) that cache partial paths without being emitted.
 # checkConstraintSat -- a specialization argument against its parameter's
@@ -11903,7 +11917,7 @@ getOrMintSpec: function {
         mid8 = reg.newType name: pnmP8.stringview typetype: ztypes.ztypetype.genericParam
         reg.setGenericOrigin typeId: mid8 value: templateId
     } else {
-        mid8 = mintMono :ast :ty :reg :mainName :name :templateId :subs idSubs: idSubs8 :fallbackArg
+        mid8 = reg.newType :name typetype: (templateTypetypeOf :reg :templateId)
     }
     if trieOk8 when mid8 > 0 then {
         cur9: templateId
@@ -11954,6 +11968,25 @@ getOrMintSpec: function {
             }
             ka9 = ka9 + 1
         }
+    }
+    # The children are built LAST, and the trie path above is why. Building
+    # them respecializes, which re-enters this function for this very
+    # instantiation; before the edge existed that re-entry found nothing and
+    # minted a SECOND spec under the same name, which the emitter then emitted
+    # beside the first.
+    if (hasParamKey8) == false then {
+        (mintMono
+            :ast
+            :ty
+            :reg
+            :mainName
+            :name
+            :templateId
+            :subs
+            idSubs: idSubs8
+            :fallbackArg
+            monoTid: mid8
+        )
     }
     okC3: trieOk8
     if hasParamKey8 then okC3 = false

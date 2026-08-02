@@ -1238,6 +1238,7 @@ Ctx: class {
     condDepth: u64
     emitErrors: (List String)
     emittedUserTypes: (MapVV u64 value: bool)
+    tagStems: (MapRV String value: u64)
     fwdDeclaredTypes: (MapVV u64 value: bool)
     tmplCache: (Map String value: String)
     ioCanonC: (Map String value: String)
@@ -16233,6 +16234,7 @@ emitC: function {
         genHasValue: false
         curThisTid: 0
         emittedUserTypes: (MapVV u64 value: bool)
+        tagStems: (MapRV String value: u64)
         fwdDeclaredTypes: (MapVV u64 value: bool)
         tmplCache: (Map String value: String)
         ioCanonC: (Map String value: String)
@@ -17249,6 +17251,7 @@ emitUnionMono: function {
     aids: (ListVal u64)
     aidsNm: (ListVal u64)
     variantArms :ast :symtab :tid names: anames ids: aids nameIds: aidsNm
+    checkTagStem :symtab :ctx :tid
     vc: ctxCname :ctx :tid
     buf.append "typedef enum {\n"
     ai: u64
@@ -22228,6 +22231,29 @@ isUnionDef9: function {n: Node.view} out bool is {
     }
 }
 
+# checkTagStem -- a variant/union mono's tag ENUMERATORS are spelled from its
+# canonical name (`Z_RESULTVAL_U8_CONVERROR_TAG_ERR`) while the type itself is
+# spelled from its id, and deliberately so: hand-written runtime fragments name
+# the tags literally, and under the default naming the id carries no name at
+# all. The scheme therefore holds only while one canonical name means one
+# emitted mono -- a typecheck invariant (the specialization trie) that the
+# emitter cannot restore, so it says so here rather than handing gcc two
+# declarations of one enumerator.
+checkTagStem: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: u64} is {
+    tsN9: typeNameOfReg9 :symtab :tid
+    tsO9: ctx.tagStems.get key: tsN9
+    match (
+        tsO9
+    ) case some then {
+        c1s9: ctxCname :ctx tid: tsO9
+        c2s9: ctxCname :ctx :tid
+        mts9: "two monos share the name '\{tsN9}' (\{c1s9}, \{c2s9}); their tag enumerators collide"
+        emitFail :ctx what: mts9 line: 0
+    } case none then {
+        ctx.tagStems.set key: tsN9.copy value: tid
+    }
+}
+
 # emitOneVariant -- tag enum + tagged struct (+ payload union when any
 # arm carries one) + the by-tag/value eq helper.
 emitOneVariant: function {
@@ -22253,6 +22279,7 @@ emitOneVariant: function {
     # `Any` was never emitted for the same reason -- this makes the variant
     # side agree rather than emitting invalid C.
     if anames.length == 0 then return
+    checkTagStem :symtab :ctx :tid
     preEmitEmbeddedTypes :ast :symtab :ctx ids: aids :buf
     vc: ctxCname :ctx :tid
     buf.append "typedef enum {\n"
