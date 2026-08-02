@@ -3434,6 +3434,27 @@ funcBorrowFlag: function {symtab: zenv.ZSymbolTable.view tid: u64} out bool is {
 # starring them would ripple through every caller for no correctness gain.
 # `retTid` is the caller's already-resolved return type: the registry's
 # returnTypeOf is 0 for a user method, so both signature emitters fall back to
+# isColGetMutRef9 -- `fid` is a List/ListView mono's `getMut` whose element is a
+# COMPOUND VALTYPE, i.e. the one case where emitColGet's generated `getMut`
+# returns a pointer that `get` does not.
+isColGetMutRef9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    fid: u64
+} out bool is {
+    ownG9: symtab.reg.ownerTidOf tid: fid
+    if ownG9 == 0 then return false
+    isLG9: false
+    if (isListOriginOf :symtab :ctx tid: ownG9) then isLG9 = true
+    if (originIsTid :symtab tid: ownG9 originTid: ctx.listViewOriginTid) then isLG9 = true
+    if (isLG9) == false then return false
+    if (regNameIs :symtab tid: fid name: "getMut") == false then return false
+    eG9: listElemType :symtab monoId: ownG9
+    if (elemBorrowsByPtr :ast :symtab :ctx tid: eG9) then return false
+    return (elemRefByPtr :ast :symtab :ctx tid: eG9)
+}
+
 # the AST (fnReturnTypeId) and pass the result in rather than repeat it.
 fnReturnsRefBorrow9: function {
     ast: Ast.view
@@ -3445,6 +3466,12 @@ fnReturnsRefBorrow9: function {
     if fid == 0 then return false
     if retTid == 0 then return false
     if (funcBorrowFlag :symtab tid: fid) == false then return false
+    # A container's `getMut` is native BY DECLARATION but its C is generated
+    # HERE (emitColGet), not hand-written, so the exclusion below does not
+    # reach it: for a compound valtype element it really does return a pointer
+    # into the storage, and binding that by value is the write loss `getMut`
+    # exists to prevent.
+    if (isColGetMutRef9 :ast :symtab :ctx :fid) then return true
     # a NATIVE callee's ABI is fixed by its hand-written `.inc` fragment, which
     # returns its struct by value (`List.iterate` -> ListIter). This emitter only
     # rewrites the bodies it generates itself.
@@ -13877,6 +13904,25 @@ elemBorrowsByPtr: function {
     return (isReftypeParam :ast :symtab :ctx :tid)
 }
 
+# elemRefByPtr -- a List/ListView element type whose MUTABLE reference is a
+# pointer into the storage. Everything `elemBorrowsByPtr` covers, plus a
+# COMPOUND valtype: a record or variant has children, and mutating them in
+# place is exactly what `getMut` is for, so handing back a copy loses the
+# write. It is deliberately NOT the same question as `elemBorrowsByPtr`, which
+# also answers "what calling convention does this type use" for the declared
+# hash/`==` dispatch, where a record is still passed BY VALUE.
+elemRefByPtr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: u64
+} out bool is {
+    if (elemBorrowsByPtr :ast :symtab :ctx :tid) then return true
+    tt9: symtab.reg.typetypeOf typeId: tid
+    if tt9 == ztypes.ztypetype.recordType then return true
+    return tt9 == ztypes.ztypetype.variantType
+}
+
 # listGetIsPtr -- the `get` of this List/ListView mono returns a pointer. False
 # while the runtime templates still carry their own by-value `get` (the
 # emitted C must agree with whichever compiler read the template), so the
@@ -16884,6 +16930,7 @@ emitListMono: function {
             ect: ect.stringview
             kind: "List"
             ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: eid)
+            mutPtr: (elemRefByPtr :ast :symtab :ctx tid: eid)
             :buf
         )
     }
@@ -16941,6 +16988,7 @@ emitColGet: function {
     ect: StringView
     kind: StringView
     ptr: bool
+    mutPtr: bool
     buf: String.borrow
 } is {
     rt: ect.string
@@ -16949,30 +16997,40 @@ emitColGet: function {
         rt = "\{ect}*"
         rv = "    return &_this->data[_idx];\n".string
     }
-    # `get` and `getMut` are the same C over the same storage; they differ only
-    # in what the typechecker lets the caller do with the result. Both names are
-    # spelled LITERALLY -- view-guard reads these string literals to learn which
-    # declaration each emitted function backs, and cannot see through an
-    # interpolated method name.
-    body: String
-    body.append "    if (_idx >= _this->length) {\n"
-    body.append "        char _zp_buf[96];\n"
+    # `getMut` answers a DIFFERENT question from `get`: a valtype element copies
+    # out of `get` (cheap, cannot alias) but must come back BY REFERENCE from
+    # `getMut`, or a write to the referenced element's children lands on the
+    # copy and is silently lost.
+    mrt: ect.string
+    mrv: "    return _this->data[_idx];\n".string
+    if mutPtr then {
+        mrt = "\{ect}*"
+        mrv = "    return &_this->data[_idx];\n".string
+    }
+    # Both names are spelled LITERALLY -- view-guard reads these string literals
+    # to learn which declaration each emitted function backs, and cannot see
+    # through an interpolated method name.
+    guard: String
+    guard.append "    if (_idx >= _this->length) {\n"
+    guard.append "        char _zp_buf[96];\n"
     b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"\{kind} get: index %lu out of bounds (length %lu)\", (unsigned long)_idx, (unsigned long)_this->length);\n"
-    body.append b2
-    body.append "        z_panic(_zp_buf);\n"
-    body.append "    }\n"
-    body.append rv
-    body.append "}\n\n"
+    guard.append b2
+    guard.append "        z_panic(_zp_buf);\n"
+    guard.append "    }\n"
     s0: "static \{rt} z_\{nm}_get(z_\{nm}_t* _this, uint64_t _idx);\n"
     buf.append s0
     s1: "static \{rt} z_\{nm}_get(z_\{nm}_t* _this, uint64_t _idx) {\n"
     buf.append s1
-    buf.append body
-    m0: "static \{rt} z_\{nm}_getMut(z_\{nm}_t* _this, uint64_t _idx);\n"
+    buf.append guard
+    buf.append rv
+    buf.append "}\n\n"
+    m0: "static \{mrt} z_\{nm}_getMut(z_\{nm}_t* _this, uint64_t _idx);\n"
     buf.append m0
-    m1: "static \{rt} z_\{nm}_getMut(z_\{nm}_t* _this, uint64_t _idx) {\n"
+    m1: "static \{mrt} z_\{nm}_getMut(z_\{nm}_t* _this, uint64_t _idx) {\n"
     buf.append m1
-    buf.append body
+    buf.append guard
+    buf.append mrv
+    buf.append "}\n\n"
 }
 
 # emitListIter -- the borrowed-view iterator over a List mono (a `{List*; idx}`
@@ -17118,6 +17176,7 @@ emitListViewMono: function {
             ect: ect.stringview
             kind: "ListView"
             ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: eid)
+            mutPtr: (elemRefByPtr :ast :symtab :ctx tid: eid)
             :buf
         )
     }

@@ -467,6 +467,7 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   ListVal.append:List.append ListVal.insert:List.insert \
   ListVal.extend:List.extend ListVal.get:List.get ListVal.set:List.set \
   ListVal.pop:List.pop ListVal.contains:List.contains \
+  ListVal.getMut:List.getMut \
   ListVal.sort:List.sort ListVal.listview:List.listview \
   ListVal.iterate:List.iterate ListVal.iterateMut:List.iterateMut \
   ListVal.length:inline ListVal.capacity:inline \
