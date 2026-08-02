@@ -60955,13 +60955,7 @@ uint64_t z_t2746(z_t1081_t* z_v6523, z_t1661_t* z_v6524, z_t1448_t* z_v6525, z_t
             __auto_type __borrow_z_v6598 = &(*z_t997_get(&z_v6595, z_v6596));
             /* alias: z_v6598 => (*__borrow_z_v6598) */
             z_t1542_t z_v6600 = z_t1658(z_v6525, z_v6594, ((z_t105_t){ (*__borrow_z_v6598).data, (*__borrow_z_v6598).size }));
-            bool z_v6601 = true;
-            if (z_t1543_eq(z_v6600.kind, ((z_t1543_t){ .tag = Z_CONSTRAINTKIND_TAG_ANY }))) {
-                z_v6601 = false;
-            }
-            if (z_t1543_eq(z_v6600.kind, ((z_t1543_t){ .tag = Z_CONSTRAINTKIND_TAG_NONE }))) {
-                z_v6601 = false;
-            }
+            bool z_v6601 = z_t1543_eq(z_v6600.kind, ((z_t1543_t){ .tag = Z_CONSTRAINTKIND_TAG_NUMERIC }));
             if (z_v6601) {
                 z_t166_t z_v6604 = z_t2045(z_v6524, &z_v6523->names, z_v6536, ((z_t105_t){ (*__borrow_z_v6598).data, (*__borrow_z_v6598).size }));
                 z_t166_t _m9 = z_v6604;

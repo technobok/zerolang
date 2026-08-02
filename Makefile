@@ -102,7 +102,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard readable-check ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard readable-check ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -303,6 +303,32 @@ perf: bin/zc
 # sites (numeric casts, userFnId-first dispatch, control-flow checks, and the
 # head-gated assignment / fnSignature / typeRefC sites); a new by-name site grows
 # the count and fails. New type emission must go through the id-based helpers.
+# any-guard -- `Any` is the bound that says the family genuinely does not
+# matter. After the val/ref split no USER source may say it: a generic names
+# AnyVal or AnyRef. Two stdlib files keep counted residuals:
+#   system.z (7) -- `return` and `typedef`, whose parameter is never consulted
+#     (probed: bounding them to AnyVal does not reject a reftype), plus
+#     `Iterator` and `Result` and `OptionView`, which still span both families.
+#   collections.z (13) -- the containers, which the P5 split replaces with
+#     per-family templates. This baseline goes to 0 there.
+# Both are ratchets: they may only DECREASE. Enforced here rather than in the
+# typechecker because generic-param registration has no unit name in hand.
+any-guard:
+	@u=$$(grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#' | wc -l); \
+	if [ "$$u" -gt 0 ]; then \
+	  echo "any-guard FAIL: $$u use(s) of Any.generic in user source"; \
+	  grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#'; \
+	  echo "  A generic must name the family it takes: AnyVal.generic or AnyRef.generic."; \
+	  exit 1; \
+	fi; \
+	s=$$(grep -c 'Any\.generic' lib/system/system.z); \
+	c=$$(grep -c 'Any\.generic' lib/system/collections.z); \
+	fail=0; \
+	if [ "$$s" -gt 7 ]; then echo "any-guard FAIL: system.z Any.generic = $$s (baseline 7)"; fail=1; fi; \
+	if [ "$$c" -gt 13 ]; then echo "any-guard FAIL: collections.z Any.generic = $$c (baseline 13)"; fail=1; fi; \
+	if [ "$$fail" = "1" ]; then echo "  Lower the baseline here when a residual is legitimately removed."; exit 1; fi; \
+	echo "any-guard OK: user source clean; system.z=$$s (<=7) collections.z=$$c (<=13)"
+
 shadow-guard:
 	@n1=$$(grep -c 'cTypeOf name:' src/zemitterc.z); \
 	n2=$$(grep -c 'cTypeForName symtab:' src/zemitterc.z); \
