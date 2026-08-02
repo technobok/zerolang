@@ -4175,6 +4175,29 @@ isFunctionDefOp: function {op: Node.view} out bool is {
     }
 }
 
+# isInterfaceDefOp -- a facet or protocol definition. These resolve EAGERLY
+# because another definition's conformance marker (`m: sizer`) is resolved by
+# markerTargetId, which requires its target to be registered already, and
+# nothing else demands an interface: a program may conform to a facet and
+# never construct one. Without this the marker reports "Unknown type".
+isInterfaceDefOp: function {op: Node.view} out bool is {
+    match (
+        op
+    ) case objectdef then {
+        match (
+            op.kind
+        ) case facetDef then {
+            return true
+        } case protocolDef then {
+            return true
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
 # resolveSpecFn -- resolve one facet/protocol is-block spec method (a namedoperation
 # whose operation is a functiondef) into a qualified `{type}.{spec}` FUNCTION. Like
 # resolveMethodFn but drops the `:this` receiver: a facet/protocol `this` resolves to
@@ -7313,7 +7336,11 @@ resolveUnitBody: function {
                 defName: zast.nameTextCopy :ast ref: bmNode9.name
                 eager: true
                 if (isFunctionDefOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) == false then {
-                    if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) == false then eager = false
+                    if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) == false then {
+                        if (isInterfaceDefOp
+                            op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                        ) == false then eager = false
+                    }
                 }
                 if eager then {
                     if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
