@@ -5519,6 +5519,13 @@ emitGenericFnCall: function {
                         fid: gmf9
                         pname: fpnO9.stringview
                     ) then ptra9 = true
+                    if (markedValtypeRefParam
+                        :ast
+                        :symtab
+                        fid: gmf9
+                        pname: fpnO9.stringview
+                        pid: fpid9
+                    ) then ptra9 = true
                     if (symtab.typing.declOwnershipIs
                         pool: ast.names
                         parentTypeId: gmf9
@@ -5679,6 +5686,13 @@ emitUnitMethodCall: function {
                         :symtab
                         fid: fid9
                         pname: fpnO9.stringview
+                    ) then ptra9 = true
+                    if (markedValtypeRefParam
+                        :ast
+                        :symtab
+                        fid: fid9
+                        pname: fpnO9.stringview
+                        pid: fpid9
                     ) then ptra9 = true
                     if (symtab.typing.declOwnershipIs
                         pool: ast.names
@@ -5841,6 +5855,13 @@ emitCrossUnitFnCall: function {
                         :symtab
                         :fid
                         pname: fpnO8.stringview
+                    ) then ptra8 = true
+                    if (markedValtypeRefParam
+                        :ast
+                        :symtab
+                        :fid
+                        pname: fpnO8.stringview
+                        pid: fpid8
                     ) then ptra8 = true
                     if (symtab.typing.declOwnershipIs
                         pool: ast.names
@@ -6534,6 +6555,13 @@ emitCallValue: function {
                             :symtab
                             :fid
                             pname: fpnO8.stringview
+                        ) then ptra8 = true
+                        if (markedValtypeRefParam
+                            :ast
+                            :symtab
+                            :fid
+                            pname: fpnO8.stringview
+                            pid: fpid8
                         ) then ptra8 = true
                         if pTake8 == false when (isReftypeParam :ast :symtab :ctx tid: fpid8) then {
                             ptra8 = true
@@ -13936,6 +13964,40 @@ calleeTakesReceiverByPtr: function {
     return (paramIsReceiverName :ast :symtab :fid pname: fp09.stringview)
 }
 
+# markedValtypeRefParam -- an explicitly marked VALTYPE parameter, which is a
+# REFERENCE: `.borrow` so a write through it reaches the caller (passed by
+# value the write was silently LOST), `.view` so a large value is not copied.
+# An UNMARKED valtype parameter stays a copy: the marker is how a reference is
+# asked for, and that is what holds this to the declarations that opt in.
+#
+# NATIVES are excluded -- their C is hand-written and takes the value by value.
+# `Map.get key: key.view`, `Set.delete item: of.view` and `List.contains
+# item: of.view` monomorphise that marker onto a valtype key, and the runtime
+# templates would stop matching their own prototypes.
+markedValtypeRefParam: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    fid: u64
+    pname: StringView
+    pid: u64
+} out bool is {
+    if (symtab.reg.isNativeOf tid: fid) then return false
+    if (symtab.reg.isValtypeOf tid: pid) == false then return false
+    if (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: fid
+        name: pname
+        own: ztypes.zparamownership.viewMode
+    ) then return true
+    if (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: fid
+        name: pname
+        own: ztypes.zparamownership.borrowMode
+    ) then return true
+    return false
+}
+
 # paramTypeIsPointer -- is a parameter's C type `T*`? A non-`take` user class
 # passes by reference, and the stdlib families answer separately because
 # isReftypeParam deliberately covers user classes only.
@@ -13973,6 +14035,9 @@ paramTypeIsPointer: function {
         if rnid9 > 0 then {
             if (symtab.reg.thisParamNameIs tid: fid nameId: rnid9) then return true
         }
+    }
+    if (isTake9) == false when (isHold9) == false then {
+        if (markedValtypeRefParam :ast :symtab :fid :pname :pid) then return true
     }
     if (isTake9) == false when (isReftypeParam :ast :symtab :ctx tid: pid) then return true
     if (isBorrowStringParam :ast :symtab :fid :pname :pid) then return true
@@ -20906,6 +20971,7 @@ lowerNativeArg: function {
     if (isTake9) == false then {
         if (isReftypeParam :ast :symtab :ctx tid: pid) then needAmp9 = true
         if (isListPtrParam :ast :symtab :ctx :fid :pname tid: pid) then needAmp9 = true
+        if (markedValtypeRefParam :ast :symtab :fid :pname :pid) then needAmp9 = true
     }
     av1: emitExpr :ast :symtab :ctx n: op
     if needAmp9 when (pathIsPointer :ast :symtab :ctx n: op) == false then return "&\{av1}"
@@ -23067,6 +23133,13 @@ emitOneMethod: function {
                 if (isBorrowStringParam :ast :symtab fid: mid pname: pname.stringview :pid) then {
                     giveptr9 = true
                 }
+                if (markedValtypeRefParam
+                    :ast
+                    :symtab
+                    fid: mid
+                    pname: pname.stringview
+                    :pid
+                ) then giveptr9 = true
                 if (isListPtrParam
                     :ast
                     :symtab
