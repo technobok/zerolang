@@ -54,6 +54,41 @@ List: class {
     of: Any.generic
 }
 
+# a growable, heap-backed sequence of VALTYPE elements.
+#
+# The valtype twin of `List`. A valtype has no ownership to transfer and no
+# interior to alias, so the signatures differ where that matters: `append`
+# copies rather than taking, and `get` returns the element BY VALUE -- no
+# view, so no lock on the container and no aliasing question at all. `getMut`
+# is still a reference, because a COMPOUND valtype's children are mutated in
+# place through it; whole-element replacement is `set`.
+ListVal: class {
+    append: function {:this from: of} is native
+    insert: function {:this from: of at: u64} is native
+    extend: function {:this from: type.take} is native
+    # a COPY of the element -- cheap, and it cannot alias. The RECEIVER still
+    # says `borrow` because this shares `List.get`'s emitted C, and two
+    # declarations over one function cannot disagree about their receiver;
+    # the difference that matters is the RETURN.
+    get: function {t: this.borrow i: u64} out of is native
+    # whole-element replacement. There is deliberately NO `getMut` yet: a
+    # valtype element reference needs `elemBorrowsByPtr` to answer for a
+    # COMPOUND valtype, which today is reftype-only, so a `getMut` here would
+    # hand back a copy and silently lose the write.
+    set: function {:this i: u64 val: of} out of is native
+    pop: function {:this} out of is native
+    contains: function {t: this.view item: of} out bool is native
+    sort: function {:this} is native
+    length: function {t: this.view} out u64 is native
+    capacity: function {t: this.view} out u64 is native
+    listview: function {t: this.borrow} out (ListView :of).borrow is native
+    iterate: function {t: this.view} out (ListIter :of).borrow is native
+    iterateMut: function {t: this.borrow} out (ListIter :of).borrow is native
+    create: function {capacity: 0.u64} out type is native
+} as {
+    of: AnyVal.generic
+}
+
 # Borrowed-view iterator over a list. listiter holds a lock on the
 # source list for its lifetime; each .call yields an optionview.some
 # pointing into the list's storage, or optionview.none when exhausted.

@@ -463,6 +463,12 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   List.destroy List.grow Map.destroy Map.grow Map.find \
   Set.destroy Set.grow Set.find MapEntry.key MapEntry.value
 VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
+  ListVal.append:List.append ListVal.insert:List.insert \
+  ListVal.extend:List.extend ListVal.get:List.get ListVal.set:List.set \
+  ListVal.pop:List.pop ListVal.contains:List.contains \
+  ListVal.sort:List.sort ListVal.listview:List.listview \
+  ListVal.iterate:List.iterate ListVal.iterateMut:List.iterateMut \
+  ListVal.length:inline ListVal.capacity:inline \
   List.length:inline List.capacity:inline ListView.length:inline \
   Map.length:inline Map.capacity:inline Set.length:inline Set.capacity:inline \
   String.length:inline String.capacity:inline String.stringview:inline \

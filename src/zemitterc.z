@@ -1265,6 +1265,7 @@ Ctx: class {
     strOriginTid: u64
     arrayOriginTid: u64
     listOriginTid: u64
+    listValOriginTid: u64
     listViewOriginTid: u64
     mapOriginTid: u64
     setOriginTid: u64
@@ -3379,6 +3380,7 @@ collectionValueCallRhs: function {ast: Ast.view n: Node.view} out bool is {
             return dct9.length > 0
         }
         if cn.stringview == "List" then return false
+        if cn.stringview == "ListVal" then return false
         if cn.stringview == "Set" then return false
         if cn.stringview == "Map" then return false
         if cn.stringview == "Bytes" then return false
@@ -3653,7 +3655,7 @@ rhsIsBorrowGet: function {
         if (isG9) == false then return false
         bt9: chaseColMono :symtab :ctx tid: (dottedReceiverStampId :ast :symtab callable: cbl9)
         isC9: false
-        if (originIsTid :symtab tid: bt9 originTid: ctx.listOriginTid) then isC9 = true
+        if (isListOriginOf :symtab :ctx tid: bt9) then isC9 = true
         if (originIsTid :symtab tid: bt9 originTid: ctx.listViewOriginTid) then isC9 = true
         if (isC9) == false then return false
         return (listGetIsPtr :ast :symtab :ctx monoId: bt9)
@@ -3764,6 +3766,7 @@ emitEmptyColCreate: function {ast: Ast.view
     }
     isCol9: false
     if cn0 == "List" then isCol9 = true
+    if cn0 == "ListVal" then isCol9 = true
     if cn0 == "Set" then isCol9 = true
     if cn0 == "Map" then isCol9 = true
     if (isCol9) == false then return "".string
@@ -3814,6 +3817,7 @@ emitCollectionMethodCall: function {
     if ov9 == "array" then return (emitArrayMethodCall :ast :symtab :ctx :call :mn :bn :bt :bvid)
     isList9: false
     if ov9 == "List" then isList9 = true
+    if ov9 == "ListVal" then isList9 = true
     if ov9 == "ListView" then isList9 = true
     if isList9 then return (emitListMethodCall :ast :symtab :ctx :call :mn :bn :bt :bvid)
     if ov9 == "Set" then return (emitSetMethodCall :ast :symtab :ctx :call :mn :bn :bt)
@@ -6878,7 +6882,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 zmono9: chaseColMono :symtab :ctx tid: brid
                 if zmono9 != brid then {
                     zmc9: ctxCname :ctx tid: zmono9
-                    if (originIsTid :symtab tid: zmono9 originTid: ctx.listOriginTid) then {
+                    if (isListOriginOf :symtab :ctx tid: zmono9) then {
                         return "\{zmc9}_create((uint64_t)0)"
                     }
                     return "\{zmc9}_create()"
@@ -7005,7 +7009,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             dzm9: chaseColMono :symtab :ctx tid: izd9
             if dzm9 != izd9 then {
                 dzmc9: ctxCname :ctx tid: dzm9
-                if (originIsTid :symtab tid: dzm9 originTid: ctx.listOriginTid) then {
+                if (isListOriginOf :symtab :ctx tid: dzm9) then {
                     return "\{dzmc9}_create((uint64_t)0)"
                 }
                 return "\{dzmc9}_create()"
@@ -7718,7 +7722,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     return esvw9
                 }
             }
-            if (originIsTid :symtab tid: bstamp originTid: ctx.listOriginTid) then {
+            if (isListOriginOf :symtab :ctx tid: bstamp) then {
                 if mn2.stringview == "length" then {
                     el0: "\{bn2}\{accB2}length"
                     return el0
@@ -7917,7 +7921,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 return "(\{ctx.svC}_t){ \{base9}.data, \{base9}.len }"
             }
         }
-        if (originIsTid :symtab tid: nlid9 originTid: ctx.listOriginTid) then {
+        if (isListOriginOf :symtab :ctx tid: nlid9) then {
             nlcb9: ctxCname :ctx tid: nlid9
             recvB9: colRecvRef :ctx bn: base9.stringview vid: bs9vid
             if mn2.stringview == "pop" then return "\{nlcb9}_pop(\{recvB9})"
@@ -9623,7 +9627,7 @@ emitStmt: function {
         ltid: stampIdOf :symtab nid: n.nodeid.u64
         if ltid == 0 then ltid = stampIdOf :symtab nid: (nodeIdOf9 n: avn9)
         ltid = chaseColMono :symtab :ctx tid: ltid
-        if (originIsTid :symtab tid: ltid originTid: ctx.listOriginTid) then {
+        if (isListOriginOf :symtab :ctx tid: ltid) then {
             lcb: ctxCname :ctx tid: ltid
             if (osNoArgCallRhs :ast n: avn9) then {
                 # owned List returned by os.args / os.envNames: emit the call.
@@ -13931,7 +13935,7 @@ isListPtrParam: function {
         own: ztypes.zparamownership.takeMode
     ) then return false
     bt: chaseColMono :symtab :ctx :tid
-    return (originIsTid :symtab tid: bt originTid: ctx.listOriginTid)
+    return (isListOriginOf :symtab :ctx tid: bt)
 }
 
 # record which of function `fid`'s parameters are reftypes.
@@ -14276,12 +14280,22 @@ nodeIsAtomBox: function {
     }
 }
 
+# isListOriginOf -- the type is a List of EITHER family. The two templates
+# differ in what they DECLARE (a valtype element copies out, a reftype element
+# hands back a view) and not at all in the C the emitter builds from them, so
+# every site that just means "is this a List" asks this rather than naming one.
+isListOriginOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: u64} out bool is {
+    if (originIsTid :symtab :tid originTid: ctx.listOriginTid) then return true
+    return (originIsTid :symtab :tid originTid: ctx.listValOriginTid)
+}
+
 # isCollectionOriginTid -- originTid (a genericOriginId) is one of the nine
 # cached collection/iterator origin ids, i.e. a template that mints a C struct
 # type (List/ListView/Set/Map/MapEntry and the iterators).
 isCollectionOriginTid: function {ctx: Ctx.view originTid: u64} out bool is {
     if originTid == 0 then return false
     if originTid == ctx.listOriginTid then return true
+    if originTid == ctx.listValOriginTid then return true
     if originTid == ctx.listViewOriginTid then return true
     if originTid == ctx.setOriginTid then return true
     if originTid == ctx.mapOriginTid then return true
@@ -16048,6 +16062,7 @@ emitC: function {
     strOriginTid: u64
     arrayOriginTid: u64
     listOriginTid: u64
+    listValOriginTid: u64
     listViewOriginTid: u64
     mapOriginTid: u64
     setOriginTid: u64
@@ -16067,6 +16082,7 @@ emitC: function {
         strOriginTid = builtinTid ast: program.ast :symtab base: "str"
         arrayOriginTid = builtinTid ast: program.ast :symtab base: "array"
         listOriginTid = builtinTid ast: program.ast :symtab base: "List"
+        listValOriginTid = builtinTid ast: program.ast :symtab base: "ListVal"
         listViewOriginTid = builtinTid ast: program.ast :symtab base: "ListView"
         mapOriginTid = builtinTid ast: program.ast :symtab base: "Map"
         setOriginTid = builtinTid ast: program.ast :symtab base: "Set"
@@ -16181,6 +16197,7 @@ emitC: function {
         :strOriginTid
         :arrayOriginTid
         :listOriginTid
+        :listValOriginTid
         :listViewOriginTid
         :mapOriginTid
         :setOriginTid
@@ -16813,6 +16830,10 @@ emitListMono: function {
             buf.append "        if (_this->data[i].size == _needle.size && memcmp(_this->data[i].data, _needle.data, _needle.size) == 0) return true;\n"
         } else if isSvEl9 then {
             buf.append "        if (_this->data[i].length == _needle.length && memcmp(_this->data[i].data, _needle.data, _needle.length) == 0) return true;\n"
+        } else if (keyHashKind :symtab :ctx tid: eid) == 3 then {
+            # a by-value STRUCT element: C `==` does not apply to it. Same
+            # byte comparison Set already uses for its elements.
+            buf.append "        if (memcmp(&_this->data[i], &_needle, sizeof(_needle)) == 0) return true;\n"
         } else {
             buf.append "        if (_this->data[i] == _needle) return true;\n"
         }
@@ -16829,6 +16850,7 @@ emitListMono: function {
             ect: ect.stringview
             isStr: isStrEl9
             isSv: isSvEl9
+            isStruct: (keyHashKind :symtab :ctx tid: eid) == 3
             strC: ctx.strC.stringview
             svC: ctx.svC.stringview
             :buf
@@ -16943,6 +16965,7 @@ emitListSort: function {
     ect: StringView
     isStr: bool
     isSv: bool
+    isStruct: bool
     strC: StringView
     svC: StringView
     buf: String.borrow
@@ -16953,6 +16976,13 @@ emitListSort: function {
     } else if isSv then {
         s0v: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return \{svC}_cmp(_a, _b) < 0; }\n"
         buf.append s0v
+    } else if isStruct then {
+        # a by-value STRUCT element has no C ordering. Byte order is a total
+        # order and deterministic, which is what `sort` needs; an element that
+        # wants a MEANINGFUL order declares `<`, and dispatching to it is the
+        # same shape as the declared `==` the containers already honour.
+        s0r: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return memcmp(&_a, &_b, sizeof(_a)) < 0; }\n"
+        buf.append s0r
     } else {
         s0: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return _a < _b; }\n"
         buf.append s0
@@ -18104,7 +18134,7 @@ cliClassIsComposite: function {
     for fi < fn0 loop {
         fid: fids.get i: fi
         cm: chaseColMono :symtab :ctx tid: fid
-        if (originIsTid :symtab tid: cm originTid: ctx.listOriginTid) then return true
+        if (isListOriginOf :symtab :ctx tid: cm) then return true
         if (originIsTid :symtab tid: cm originTid: ctx.mapOriginTid) then return true
         if (originIsTid :symtab tid: cm originTid: ctx.setOriginTid) then return true
         fi = fi + 1
@@ -18728,7 +18758,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                 fwdM9: false
                 if mo > 0 then {
                     if (symtab.reg.hasDestructorName typeId: t) then fwdM9 = true
-                    if (originIsTid :symtab tid: t originTid: ctx.listOriginTid) then fwdM9 = true
+                    if (isListOriginOf :symtab :ctx tid: t) then fwdM9 = true
                     if (originIsTid :symtab tid: t originTid: ctx.listViewOriginTid) then {
                         fwdM9 = true
                     }
@@ -18784,7 +18814,7 @@ monoElemIdsOf: function {
     acc: List u64
 } is {
     isLV: false
-    if (originIsTid :symtab tid: monoId originTid: ctx.listOriginTid) then isLV = true
+    if (isListOriginOf :symtab :ctx tid: monoId) then isLV = true
     if (originIsTid :symtab tid: monoId originTid: ctx.listViewOriginTid) then isLV = true
     if isLV then {
         e: listElemType :symtab :monoId
@@ -19085,7 +19115,7 @@ emitMonoById: function {
         emitArrayMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
     }
-    if (originIsTid :symtab tid: monoId originTid: ctx.listOriginTid) then {
+    if (isListOriginOf :symtab :ctx tid: monoId) then {
         emitListMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
     }
@@ -19498,6 +19528,15 @@ emitUserStructsOrdered: function {
         :ast
         :symtab
         :ctx
+        originTid: ctx.listValOriginTid
+        :userList
+        acc: lateGroup
+        :last
+    )
+    (collectLateMonosKind
+        :ast
+        :symtab
+        :ctx
         originTid: ctx.setOriginTid
         :userList
         acc: lateGroup
@@ -19769,7 +19808,7 @@ emitMonos: function {
             isColKind9 = true
             colDst9 = 2
         }
-        if (originIsTid :symtab tid: tcl9 originTid: ctx.listOriginTid) then {
+        if (isListOriginOf :symtab :ctx tid: tcl9) then {
             isColKind9 = true
             colDst9 = 3
         }
