@@ -7034,6 +7034,36 @@ resolveAliasKey: function {
     return atid9
 }
 
+# ensureDefGenericParams -- register a generic type definition's parameter names
+# against its Decl. `registerGenericParams` runs from the definition resolvers,
+# but a def can be marked RESOLVED by a path that never reached one -- the
+# descent then short-circuits, and `getOrMintSpec` reads an arity of zero for a
+# template that plainly has parameters, which costs it the trie. `addGenericParam`
+# already refuses a name it holds, so re-registering is a no-op.
+ensureDefGenericParams: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    ast: Ast.view
+    declId: u64
+} is {
+    if declId == 0 then return
+    if (ty.declValid id: declId) == false then return
+    dgG9: ty.decls.get i: (declId - 1)
+    dnG9: dgG9.node.u64
+    if dnG9 == 0 then return
+    bmG9: ast.nodes.get i: (dnG9 - 1)
+    if bmG9.namedoperation then {
+        odG9: ast.nodes.get i: (bmG9.operation - 1).u64
+        match (
+            odG9
+        ) case objectdef then {
+            if (hasGenericParam :ast items: odG9.asItems) then {
+                registerGenericParams :ast :reg tdecl: declId items: odG9.asItems
+            }
+        } else null
+    }
+}
+
 descendNamed: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
@@ -7066,7 +7096,13 @@ descendNamed: function {
         :ast
         :defUnit
         nameId: (zast.poolFind pool: ast.names text: name)
-    ) then return tid9
+    ) then {
+        # already resolved -- but not necessarily by a path that registered the
+        # generic parameters, and the spec trie cannot key a template whose
+        # arity reads as zero.
+        ensureDefGenericParams :ty :reg :ast declId: ddecl9
+        return tid9
+    }
     if (ty.declIsResolving declId: ddecl9) then {
         # A grey hit is a back-edge. Reference-kind targets (UNION/CLASS --
         # boxed) are legal forward declarations; a VALUE-kind target reached
