@@ -15492,6 +15492,44 @@ isBareCName: function {s: StringView} out bool is {
     return true
 }
 
+# cSlotName -- a member name as a C identifier for an interface vtable slot.
+# An OPERATOR member (`==`, `<=`, ...) is not a C identifier, and the vtable
+# emitters used the zerolang name verbatim: a facet or protocol declaring `==`
+# emitted `bool (*==)(void*, T);` and died at gcc. Mangled in ONE place so the
+# struct field, the wrapper name, the vtable row and the dispatch site cannot
+# drift apart -- they are four spellings of the same slot.
+#
+# The fallback is byte-wise so any operator the table misses still yields a
+# unique, deterministic identifier rather than colliding with another one.
+cSlotName: function {name: StringView} out String is {
+    if (isBareCName s: name) then return name.string
+    if name == "==" then return "op_eq".string
+    if name == "!=" then return "op_ne".string
+    if name == "<" then return "op_lt".string
+    if name == "<=" then return "op_le".string
+    if name == ">" then return "op_gt".string
+    if name == ">=" then return "op_ge".string
+    if name == "+" then return "op_add".string
+    if name == "-" then return "op_sub".string
+    if name == "*" then return "op_mul".string
+    if name == "/" then return "op_div".string
+    if name == "%" then return "op_rem".string
+    if name == "&" then return "op_and".string
+    out9: "op".string
+    i9: u64
+    for i9 < name.length loop {
+        bo9: name.byteAt i9
+        match (
+            bo9
+        ) case some then {
+            seg9: "_\{bo9}"
+            out9.append seg9
+        } case none then null
+        i9 = i9 + 1
+    }
+    return out9
+}
+
 # optU8Or -- an (optionval u8) to a plain u8 with a default.
 optU8Or: function {o: optionval u8 d: u8} out u8 is {
     match (
@@ -20105,7 +20143,8 @@ emitOneFacet: function {
             }
             pi = pi + 1
         }
-        vline: "    \{ret} (*\{mname})(\{vparams});\n"
+        vslot9: cSlotName name: mname.stringview
+        vline: "    \{ret} (*\{vslot9})(\{vparams});\n"
         vfuncs.append vline
         mi = mi + 1
     }
@@ -20188,7 +20227,8 @@ emitOneProtocol: function {
             }
             pi = pi + 1
         }
-        vline: "    \{ret} (*\{mname})(\{vparams});\n"
+        vslot9: cSlotName name: mname.stringview
+        vline: "    \{ret} (*\{vslot9})(\{vparams});\n"
         vfuncs.append vline
         mi = mi + 1
     }
@@ -20306,7 +20346,8 @@ emitProtocolImpl: function {
         }
         retkw: "return ".string
         if ret.stringview == "void" then retkw = "".string
-        w0: "static \{ret} \{wbase}_\{mname}_wrapper(\{wparams}) {\n"
+        wslot9: cSlotName name: mname.stringview
+        w0: "static \{ret} \{wbase}_\{wslot9}_wrapper(\{wparams}) {\n"
         buf.append w0
         w1: "    \{implCtype}* _self = (\{implCtype}*)_data;\n"
         buf.append w1
@@ -20320,7 +20361,8 @@ emitProtocolImpl: function {
     mj: u64
     for mj < mn loop {
         mname2: mnames.get i: mj
-        vrow: "    .\{mname2} = \{wbase}_\{mname2}_wrapper,\n"
+        rslot9: cSlotName name: mname2.stringview
+        vrow: "    .\{rslot9} = \{wbase}_\{rslot9}_wrapper,\n"
         buf.append vrow
         mj = mj + 1
     }
@@ -20437,7 +20479,8 @@ emitFacetImpl: function {
         }
         retkw: "return ".string
         if ret.stringview == "void" then retkw = "".string
-        w0: "static \{ret} \{wbase}_\{mname}_wrapper(\{wparams}) {\n"
+        wslot9: cSlotName name: mname.stringview
+        w0: "static \{ret} \{wbase}_\{wslot9}_wrapper(\{wparams}) {\n"
         buf.append w0
         w1: "    \{implCtype}* _self = (\{implCtype}*)_data;\n"
         buf.append w1
@@ -20451,7 +20494,8 @@ emitFacetImpl: function {
     mj: u64
     for mj < mn loop {
         mname2: mnames.get i: mj
-        vrow: "    .\{mname2} = \{wbase}_\{mname2}_wrapper,\n"
+        rslot9: cSlotName name: mname2.stringview
+        vrow: "    .\{rslot9} = \{wbase}_\{rslot9}_wrapper,\n"
         buf.append vrow
         mj = mj + 1
     }
@@ -21443,7 +21487,7 @@ vtableAutoCallC9: function {
     isFacet: bool
 } out String is {
     dargs9: vtableDataArg9 :recv :acc :isFacet
-    return "\{recv}\{acc}vtable->\{mn}(\{dargs9})"
+    return "\{recv}\{acc}vtable->\{(cSlotName name: mn)}(\{dargs9})"
 }
 
 # emit a protocol method dispatch.
@@ -21575,7 +21619,8 @@ emitProtocolDispatch: function {
             } else null
         }
     }
-    de: "\{recv}\{acc}vtable->\{mn}(\{dargs})"
+    dslot9: cSlotName name: mn.stringview
+    de: "\{recv}\{acc}vtable->\{dslot9}(\{dargs})"
     return de
 }
 
