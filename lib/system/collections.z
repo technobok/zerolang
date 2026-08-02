@@ -191,12 +191,42 @@ Set: class {
     of: Any.generic
 }
 
+# a hash set of unique VALTYPE elements.
+#
+# The valtype twin of `Set`. A valtype has no ownership to transfer and no
+# interior to alias, so `add` copies rather than taking and `has` / `delete`
+# take the element by value: there is no view to hand them and nothing for one
+# to point at. Element membership is otherwise identical -- both families hash
+# the element and compare it, and both share one emitted C.
+SetVal: class {
+    add: function {:this item: of} out bool is native
+    has: function {t: this.view item: of} out bool is native
+    delete: function {:this item: of} out bool is native
+    length: function {t: this.view} out u64 is native
+    capacity: function {t: this.view} out u64 is native
+    iterate: function {t: this.view} out (SetIterVal :of).borrow is native
+    create: function {capacity: 0.u64} out type is native
+} as {
+    of: AnyVal.generic
+}
+
 # Borrowed-item iterator over a set. Yields optionview.some pointing at each
 # live entry''s item, optionview.none when exhausted. Same shape and the same
 # INSERTION-order guarantee as MapKeyIter (a set is a map without the value
 # column).
 SetIter: class is native as {
     of: Any.generic
+    call: function {:this} out (OptionView of) is native
+}
+
+# Borrowed-item iterator over a SetVal. The valtype twin of `SetIter`, and it
+# must be its own template rather than shared: the emitter names the iterator
+# struct after `iterate`'s DECLARED return and gives it a field pointing at the
+# container, so two containers declaring the same iterator type emit two
+# structs under ONE name with different bodies -- which typechecks and then
+# fails at gcc with `invalid initializer`.
+SetIterVal: class is native as {
+    of: AnyVal.generic
     call: function {:this} out (OptionView of) is native
 }
 

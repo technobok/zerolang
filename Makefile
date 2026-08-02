@@ -369,7 +369,7 @@ emitter-guard:
 	if [ "$$g2" -gt 3 ]; then echo "emitter-guard FAIL: 'z_t{' literals in src/zemitterc.z = $$g2 (baseline 3)"; fail=1; fi; \
 	if [ "$$e1" -gt 23 ]; then echo "emitter-guard FAIL: ztypecheck.resolvedByKey = $$e1 (baseline 23)"; fail=1; fi; \
 	if [ "$$e2" -gt 5 ]; then echo "emitter-guard FAIL: ztypecheck.walkLookupTyperef = $$e2 (baseline 5)"; fail=1; fi; \
-	if [ "$$e3" -gt 23 ]; then echo "emitter-guard FAIL: resolveTypeIdByName = $$e3 (baseline 23)"; fail=1; fi; \
+	if [ "$$e3" -gt 22 ]; then echo "emitter-guard FAIL: resolveTypeIdByName = $$e3 (baseline 22)"; fail=1; fi; \
 	if [ "$$e4" -gt 35 ]; then echo "emitter-guard FAIL: userFnId = $$e4 (baseline 35)"; fail=1; fi; \
 	if [ "$$e5" -gt 0 ]; then echo "emitter-guard FAIL: childOwnershipText = $$e5 (baseline 0)"; fail=1; fi; \
 	if [ "$$e6" -gt 94 ]; then echo "emitter-guard FAIL: typeNameOfReg9 = $$e6 (baseline 94)"; fail=1; fi; \
@@ -470,6 +470,9 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   ListVal.sort:List.sort ListVal.listview:List.listview \
   ListVal.iterate:List.iterate ListVal.iterateMut:List.iterateMut \
   ListVal.length:inline ListVal.capacity:inline \
+  SetVal.add:Set.add SetVal.has:Set.has SetVal.delete:Set.delete \
+  SetVal.iterate:Set.iterate SetIterVal.call:SetIter.call \
+  SetVal.length:inline SetVal.capacity:inline \
   List.length:inline List.capacity:inline ListView.length:inline \
   Map.length:inline Map.capacity:inline Set.length:inline Set.capacity:inline \
   String.length:inline String.capacity:inline String.stringview:inline \

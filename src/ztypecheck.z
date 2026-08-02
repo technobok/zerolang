@@ -640,7 +640,10 @@ isContainerReaderCall: function {
         if mname == "copy" then return true
         return false
     }
-    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "Set") then {
+    isSetB9: false
+    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "Set") then isSetB9 = true
+    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "SetVal") then isSetB9 = true
+    if isSetB9 then {
         if mname == "copy" then return true
         return false
     }
@@ -2327,6 +2330,7 @@ ensureNativeLinkTargets: function {
     descendNamed :ty :reg :ast defUnit: "collections" name: "ListView"
     descendNamed :ty :reg :ast defUnit: "collections" name: "Set"
     descendNamed :ty :reg :ast defUnit: "collections" name: "SetIter"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "SetIterVal"
     descendNamed :ty :reg :ast defUnit: "collections" name: "Map"
     descendNamed :ty :reg :ast defUnit: "collections" name: "MapKeyIter"
     descendNamed :ty :reg :ast defUnit: "collections" name: "MapItemIter"
@@ -2910,6 +2914,7 @@ returnIsIteratorTid: function {st: zenv.ZSymbolTable tid: u64} out bool is {
     if pn9.stringview == "ListIter" then return true
     if pn9.stringview == "ListIterVal" then return true
     if pn9.stringview == "SetIter" then return true
+    if pn9.stringview == "SetIterVal" then return true
     if pn9.stringview == "MapKeyIter" then return true
     if pn9.stringview == "MapItemIter" then return true
     return false
@@ -6149,6 +6154,7 @@ fieldTypeNeedsCleanup: function {
     if name == "ListVal" then return true
     if name == "Map" then return true
     if name == "Set" then return true
+    if name == "SetVal" then return true
     if name == "Option" then return true
     if name == "Result" then return true
     duo8: definingUnitFor :ty :ast currentUnit: unitName :name
@@ -6272,6 +6278,7 @@ resolveClass: function {
                         if defName == "ListVal" then famF3 = true
                         if defName == "ListView" then famF3 = true
                         if defName == "Set" then famF3 = true
+                        if defName == "SetVal" then famF3 = true
                         if defName == "Map" then famF3 = true
                         if unitName == "collections" when famF3 then {
                             prodSkipL: false
@@ -6501,6 +6508,7 @@ resolveClass: function {
                         if defName == "ListIter" then famA4 = true
                         if defName == "ListIterVal" then famA4 = true
                         if defName == "SetIter" then famA4 = true
+                        if defName == "SetIterVal" then famA4 = true
                         if defName == "MapKeyIter" then famA4 = true
                         if defName == "MapItemIter" then famA4 = true
                         if unitName == "collections" when famA4 then {
@@ -7868,6 +7876,7 @@ resolveConformanceDefs: function {
 # descent. When a collection is demanded, demand its iterators too.
 seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
     if (reg.isDemanded name: "Set") then reg.recordDemand name: "SetIter"
+    if (reg.isDemanded name: "SetVal") then reg.recordDemand name: "SetIterVal"
     if (reg.isDemanded name: "List") then {
         reg.recordDemand name: "ListIter"
         reg.recordDemand name: "ListView"
@@ -11066,6 +11075,7 @@ mintMono: function {
     if templateId == (builtinTidT :ast :ty :reg base: "Result") then needsDtorM = true
     if templateId == (builtinTidT :ast :ty :reg base: "Map") then needsDtorM = true
     if templateId == (builtinTidT :ast :ty :reg base: "Set") then needsDtorM = true
+    if templateId == (builtinTidT :ast :ty :reg base: "SetVal") then needsDtorM = true
     if needsDtorM then {
         mdnM: "\{name}_destroy"
         (reg.setDestructorName
@@ -12084,6 +12094,7 @@ mintCollectionChildren: function {
     listValTid: builtinTidT :ast :ty :reg base: "ListVal"
     listViewTid: builtinTidT :ast :ty :reg base: "ListView"
     setTid: builtinTidT :ast :ty :reg base: "Set"
+    setValTid: builtinTidT :ast :ty :reg base: "SetVal"
     mapTid: builtinTidT :ast :ty :reg base: "Map"
     mapEntryTid: builtinTidT :ast :ty :reg base: "MapEntry"
     strTid: builtinTidT :ast :ty :reg base: "str"
@@ -12091,12 +12102,14 @@ mintCollectionChildren: function {
     listIterTid: builtinTidT :ast :ty :reg base: "ListIter"
     listIterValTid: builtinTidT :ast :ty :reg base: "ListIterVal"
     setIterTid: builtinTidT :ast :ty :reg base: "SetIter"
+    setIterValTid: builtinTidT :ast :ty :reg base: "SetIterVal"
     mapKeyIterTid: builtinTidT :ast :ty :reg base: "MapKeyIter"
     mapItemIterTid: builtinTidT :ast :ty :reg base: "MapItemIter"
     isIter: false
     if templateId == listIterTid then isIter = true
     if templateId == listIterValTid then isIter = true
     if templateId == setIterTid then isIter = true
+    if templateId == setIterValTid then isIter = true
     if templateId == mapKeyIterTid then isIter = true
     if templateId == mapItemIterTid then isIter = true
     isColl: isIter
@@ -12104,6 +12117,7 @@ mintCollectionChildren: function {
     if templateId == listValTid then isColl = true
     if templateId == listViewTid then isColl = true
     if templateId == setTid then isColl = true
+    if templateId == setValTid then isColl = true
     if templateId == mapTid then isColl = true
     if templateId == mapEntryTid then isColl = true
     if templateId == strTid then isColl = true
@@ -12156,7 +12170,10 @@ mintCollectionChildren: function {
     # Set children come from the produced template methods (returns healed
     # by respecialize); the length/capacity fields (the canonical u64) and
     # the create child materialize here, once per mono.
-    if templateId == setTid then {
+    isSetTpl9: false
+    if templateId == setTid then isSetTpl9 = true
+    if templateId == setValTid then isSetTpl9 = true
+    if isSetTpl9 then {
         ty.setMemberType parentTypeId: monoId nameId: zast.wkLength.u64 childTypeId: u64id
         ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity.u64 childTypeId: u64id
         mintCollectionMethod :ast :ty :reg :monoId m: "create"
@@ -12662,6 +12679,12 @@ genericTypeConstruction: function {
                     reg: st.reg
                     base: "Set"
                 ) then skipCr9 = true
+                if tplId == (builtinTidT
+                    :ast
+                    ty: st.typing
+                    reg: st.reg
+                    base: "SetVal"
+                ) then skipCr9 = true
             }
             # a skipped capacity: arg is still a value: check it so its
             # atoms stamp (atomVariableId / refDecl) like any arg
@@ -12895,6 +12918,12 @@ validateGenericTypeArgs: function {
                         if tplId == (builtinTidT :ast ty: st.typing reg: st.reg base: "Set") then {
                             isField = true
                         }
+                        if tplId == (builtinTidT
+                            :ast
+                            ty: st.typing
+                            reg: st.reg
+                            base: "SetVal"
+                        ) then isField = true
                     }
                     if (isField) == false then {
                         pkc2: pk.copy
@@ -19460,6 +19489,7 @@ checkCall: function {
                     if wgix9 == (builtinTidTc :ast :st base: "ListVal") then isWType = false
                     if wgix9 == (builtinTidTc :ast :st base: "Map") then isWType = false
                     if wgix9 == (builtinTidTc :ast :st base: "Set") then isWType = false
+                    if wgix9 == (builtinTidTc :ast :st base: "SetVal") then isWType = false
                 }
                 if isWType when call.arguments.length > 0 then {
                     wcm: st.pushCall
