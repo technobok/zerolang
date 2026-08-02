@@ -11442,6 +11442,8 @@ specLookup: function {reg: ztypes.ZTypeRegistry templateId: u64 args: (List u64)
 constraintKindFor: function {text: StringView} out ztypes.constraintkind is {
     if text == "AnyVal" then return ztypes.constraintkind.valType
     if text == "AnyRef" then return ztypes.constraintkind.refType
+    if text == "ValHashable" then return ztypes.constraintkind.valHashable
+    if text == "RefHashable" then return ztypes.constraintkind.refHashable
     # the pre-rename spellings. They still MAP rather than being removed:
     # an unmapped constraint falls through to `other`, which checkConstraintSat
     # treats as satisfied, so deleting these would silently unconstrain any
@@ -11479,6 +11481,8 @@ constraintNumericName: function {max: u64} out String is {
 constraintTextOf: function {desc: ztypes.ConstraintDesc} out String is {
     if desc.kind == ztypes.constraintkind.valType then return "AnyVal".string
     if desc.kind == ztypes.constraintkind.refType then return "AnyRef".string
+    if desc.kind == ztypes.constraintkind.valHashable then return "ValHashable".string
+    if desc.kind == ztypes.constraintkind.refHashable then return "RefHashable".string
     if desc.kind == ztypes.constraintkind.stringLike then return "StringLike".string
     if desc.kind == ztypes.constraintkind.any then return "Any".string
     if desc.kind == ztypes.constraintkind.numeric then {
@@ -11524,6 +11528,26 @@ checkConstraintSat: function {
     if ck9 == ztypes.constraintkind.valType then ok9 = typeIsValtype :ty :reg tid: argTid
     if ck9 == ztypes.constraintkind.refType then {
         ok9 = reg.isReftypeOf tid: argTid
+    }
+    # A VALTYPE is hashable by default -- the byte hash and byte compare cover
+    # it -- unless it owns heap members, which a byte range cannot reach.
+    if ck9 == ztypes.constraintkind.valHashable then {
+        ok9 = typeIsValtype :ty :reg tid: argTid
+        if ok9 when (heapOwningValtypeTid :ast :ty :reg tid: argTid) then ok9 = false
+    }
+    # A REFTYPE has no default: its contents live behind a pointer, so it must
+    # DECLARE both members and say whether it means identity or value.
+    if ck9 == ztypes.constraintkind.refHashable then {
+        ok9 = false
+        if (reg.isReftypeOf tid: argTid) then {
+            hnm9: zast.poolFind pool: ast.names text: "hash"
+            enm9: zast.poolFind pool: ast.names text: "=="
+            if hnm9 > 0 when enm9 > 0 then {
+                if (ty.declIsMethodId parentTypeId: argTid nameId: hnm9) then {
+                    if (ty.declIsMethodId parentTypeId: argTid nameId: enm9) then ok9 = true
+                }
+            }
+        }
     }
     if ck9 == ztypes.constraintkind.stringLike then {
         okSL9: false
