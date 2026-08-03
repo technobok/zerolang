@@ -309,8 +309,8 @@ perf: bin/zc
 #   system.z (7) -- `return` and `typedef`, whose parameter is never consulted
 #     (probed: bounding them to AnyVal does not reject a reftype), plus
 #     `Iterator` and `Result` and `OptionView`, which still span both families.
-#   collections.z (6) -- the containers, which the P5 split replaces with
-#     per-family templates. This baseline goes to 0 there.
+#   collections.z (0) -- the P5 split is complete: every container template
+#     names the family it takes.
 # Both are ratchets: they may only DECREASE. Enforced here rather than in the
 # typechecker because generic-param registration has no unit name in hand.
 any-guard:
@@ -325,9 +325,9 @@ any-guard:
 	c=$$(grep -c 'Any\.generic' lib/system/collections.z); \
 	fail=0; \
 	if [ "$$s" -gt 7 ]; then echo "any-guard FAIL: system.z Any.generic = $$s (baseline 7)"; fail=1; fi; \
-	if [ "$$c" -gt 6 ]; then echo "any-guard FAIL: collections.z Any.generic = $$c (baseline 6)"; fail=1; fi; \
+	if [ "$$c" -gt 0 ]; then echo "any-guard FAIL: collections.z Any.generic = $$c (baseline 0)"; fail=1; fi; \
 	if [ "$$fail" = "1" ]; then echo "  Lower the baseline here when a residual is legitimately removed."; exit 1; fi; \
-	echo "any-guard OK: user source clean; system.z=$$s (<=7) collections.z=$$c (<=6)"
+	echo "any-guard OK: user source clean; system.z=$$s (<=7) collections.z=$$c (<=0)"
 
 shadow-guard:
 	@n1=$$(grep -c 'cTypeOf name:' src/zemitterc.z); \
@@ -488,6 +488,10 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   MapVV.remove:Map.remove MapVV.iterate:Map.iterate \
   MapVV.iterateItems:Map.iterateItems \
   MapVV.length:inline MapVV.capacity:inline \
+  MapKeyIterRV.call:MapKeyIter.call MapKeyIterVR.call:MapKeyIter.call \
+  MapKeyIterVV.call:MapKeyIter.call \
+  MapItemIterRV.call:MapItemIter.call MapItemIterVR.call:MapItemIter.call \
+  MapItemIterVV.call:MapItemIter.call \
   List.length:inline List.capacity:inline ListView.length:inline \
   Map.length:inline Map.capacity:inline Set.length:inline Set.capacity:inline \
   String.length:inline String.capacity:inline String.stringview:inline \
