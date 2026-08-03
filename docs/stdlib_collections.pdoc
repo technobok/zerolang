@@ -35,30 +35,63 @@
 
 The #~"collections" unit provides the generic containers:
 #~"array" (fixed-length valtype), #~"str" (bounded stack string
-valtype), #~"List" / #~"ListView" (growable heap collections),
-#~"Map" (hash map), plus the free #~"stringJoin" helper. All
-names are re-exported unqualified by #~"core"; use #~"List", not
-#~"collections.list".
+valtype), the #~"List" / #~"Set" / #~"Map" container families
+with their views and iterators, the #~"Bytes" / #~"ByteView"
+byte-buffer typedefs, and the free #~"stringJoin" helper. All
+names are re-exported unqualified by #~"core".
 
-#b:"Valtypes vs reftypes."
+#b:"Every container names its element family." A container
+template states whether it holds #b:"reftypes" (classes, unions,
+#~"String") or #b:"valtypes" (records, variants, numerics,
+#~"str", #~"array"), because the two families move differently:
+a reftype element is taken, viewed and borrowed; a valtype
+element is copied. The families are:
 
 #ul:
-  [#*: #b:"Valtypes" (#~"array", #~"str") are copied on
-    assignment, have no destructor, and are stack-allocated. Their
-    size is part of their type (#~"array of: i64 to: 8" is
-    distinct from #~"array of: i64 to: 16"). Usable as fields of
-    other valtypes (records, variants)]
-  [#*: #b:"Reftypes" (#~"List", #~"ListView", #~"Map") are
-    heap-allocated, moved on assignment, and run destructors on
-    scope exit. Their size is a runtime parameter, not part of
-    the type]
+  [#*: #b:"Reference-element containers" -- #~"ListRef",
+    #~"ListView", #~"SetRef", and #~"MapRR" (reftype key,
+    reftype value). The everyday names #~"List", #~"Set" and
+    #~"Map" are #~"core" aliases of #~"ListRef", #~"SetRef" and
+    #~"MapRR": both spellings resolve to the same template]
+  [#*: #b:"Valtype-element containers" -- #~"ListVal",
+    #~"ListViewVal", #~"SetVal", and the #~"Map" forms whose key
+    or value is a valtype: #~"MapRV" (reftype key, valtype
+    value), #~"MapVR" (valtype key, reftype value) and #~"MapVV"
+    (both valtypes)]
 
-#b:"Views lock their source." #~"ListView" (and the #~"ByteView"
-typedef over it; see
-#> to=./stdlib_system.html#bytes-and-byteview: bytes / byteview)
-installs an EXCLUSIVE lock on the source list for the view's
-lifetime. You cannot store a view into a class field or return
-it across a function boundary unless the source is a
+The bound spells the rule: an element position is
+#~"AnyRef.generic" or #~"AnyVal.generic"; a hashed position (a
+#~"Set" element or a #~"Map" key) is #~"RefHashable.generic" or
+#~"ValHashable.generic", which additionally requires #~"hash"
+and #~"==". Using the wrong family is a compile-time bound error
+naming the constraint.
+
+#b:"Readonly and mutable twins." Accessors come in pairs, and the
+pair exists because the readonly half is what most code wants:
+
+#ul:
+  [#*: #~"iterate" is the #_+"readonly" walk. Its receiver is
+  #~".view", so several walks may run at once, the container
+  stays readable throughout, and the elements it yields are
+  readonly. #~"iterateMut" (lists) and #~"iterateItems" (maps)
+  are the exclusive twins: they take the container #~".borrow"
+  and their elements may be written through, which is why
+  nothing else may touch the container while they run.]
+  [#*: #~"get" and #~"getMut" split the same way -- #~"getMut"
+  is the one to reach for when the element is going to be
+  written. On a valtype-element container #~"get" hands back a
+  copy while #~"getMut" hands back a reference to the stored
+  element, so writes through #~"getMut" are visible and writes
+  to a #~"get" copy are not.]
+
+The default is the readonly name in both pairs, so reading code
+says #~"iterate" and #~"get" and only the mutating minority
+carries the longer name.
+
+#b:"Views pin their source." #~"listview" installs an EXCLUSIVE
+pin on the source list for the view's lifetime (its receiver is
+#~"this.borrow"). You cannot store a view into a class field or
+return it across a function boundary unless the source is a
 non-owned parameter; see
 #> to=./ownership.html: ownership.
 
@@ -68,21 +101,49 @@ non-owned parameter; see
 #p: #b:"Value types"
 
 #ul:
-  [#*: #> to=array: #b:"array" -- #~"record as { of: Any.generic  to: u64.generic }"]
+  [#*: #> to=array: #b:"array" -- #~"record as { of: AnyVal.generic  to: u64.generic }"]
   [#*: #> to=str: #b:"str" -- #~"record is native as { :Text  to: u64.generic ... }"]
 
-#p: #b:"Reference types"
+#p: #b:"List family"
 
 #ul:
-  [#*: #> to=list: #b:"List" -- #~"class as { of: Any.generic }"]
-  [#*: #> to=listview: #b:"ListView" -- #~"class as { of: Any.generic }"]
-  [#*: #> to=map: #b:"Map" -- #~"class as { key: Any.generic  value: Any.generic }"]
-  [#*: #> to=set: #b:"Set" -- #~"class as { of: Any.generic }"]
+  [#*: #> to=the-list-family: #b:"ListRef" (alias #~"List") -- #~"class as { of: AnyRef.generic }"]
+  [#*: #> to=the-list-family: #b:"ListVal" -- #~"class as { of: AnyVal.generic }"]
+  [#*: #> to=the-list-views: #b:"ListView" -- #~"class as { of: AnyRef.generic }"]
+  [#*: #> to=the-list-views: #b:"ListViewVal" -- #~"class as { of: AnyVal.generic }"]
+
+#p: #b:"Map family"
+
+#ul:
+  [#*: #> to=the-map-family: #b:"MapRR" (alias #~"Map") -- #~"class as { key: RefHashable.generic  value: AnyRef.generic }"]
+  [#*: #> to=the-map-family: #b:"MapRV" -- #~"class as { key: RefHashable.generic  value: AnyVal.generic }"]
+  [#*: #> to=the-map-family: #b:"MapVR" -- #~"class as { key: ValHashable.generic  value: AnyRef.generic }"]
+  [#*: #> to=the-map-family: #b:"MapVV" -- #~"class as { key: ValHashable.generic  value: AnyVal.generic }"]
+
+#p: #b:"Set family"
+
+#ul:
+  [#*: #> to=the-set-family: #b:"SetRef" (alias #~"Set") -- #~"class as { of: RefHashable.generic }"]
+  [#*: #> to=the-set-family: #b:"SetVal" -- #~"class as { of: ValHashable.generic }"]
+
+#p: #b:"Byte buffers"
+
+#ul:
+  [#*: #b:"Bytes" -- #~"class { val: (ListVal u8).typedef }" with a #~"byteview" projection]
+  [#*: #b:"ByteView" -- #~"class { val: (ListViewVal of: u8).typedef }" (see
+    #> to=./stdlib_system.html#bytes-and-byteview: bytes / byteview)]
+
+#p: #b:"Iterators and entries"
+
+#ul:
+  [#*: #> to=iterators-and-entries: #b:"ListIter" / #b:"ListIterVal", #b:"SetIter" /
+    #b:"SetIterVal", #b:"MapKeyIter" / #b:"MapItemIter" / #b:"MapEntry"
+    (each Map satellite also in RV / VR / VV forms)]
 
 #p: #b:"Free functions"
 
 #ul:
-  [#*: #> to=string-join: #b:"stringJoin" -- #~"function {parts: (List of: String) sep: StringView} out String"]
+  [#*: #> to=string-join: #b:"stringJoin" -- #~"function as { T: StringLike.generic } in {parts: (ListRef String) sep: T} out String"]
 
 
 #--: array
@@ -94,7 +155,7 @@ non-owned parameter; see
       length: function {:this} out i64            is native
       create: function {} out type                is native
   } as {
-      of: Any.generic
+      of: AnyVal.generic
       to: u64.generic
   }
 """
@@ -108,8 +169,9 @@ change.
 #b:"Constraints."
 
 #ul:
-  [#*: #~"of" -- any valtype. Reftype elements are rejected by
-    R3 (valtype aggregates cannot hold reftypes)]
+  [#*: #~"of" -- any valtype (#~"AnyVal.generic"). Reftype
+    elements are rejected by the bound: a valtype aggregate
+    cannot hold reftypes]
   [#*: #~"to" -- compile-time #~"u64" constant]
 
 #b:"Construction."
@@ -140,7 +202,6 @@ change.
 Since arrays are valtypes they are copied on assignment and when
 passed by default (TAKE) to functions.
 
-
 #--: str
 
 #code language=zerolang: """
@@ -150,7 +211,8 @@ passed by default (TAKE) to functions.
       length:     function {:this} out u64     is native
       size:       function {:this} out u64     is native
       string:     function {:this} out String  is native
-      stringview: function {:this} out StringView is native
+      stringview: function {t: this.borrow} out StringView.borrow is native
+      substring:  function {t: this.borrow from: u64 to: u64} out StringView.borrow is native
       create:     function out type            is native
   }
 """
@@ -160,395 +222,317 @@ with compile-time capacity #~"to:". Uses the smallest fixed-width
 integer that fits #~"to:" for the length field, so #~"str to: 64"
 costs 65 bytes of storage (64 data + 1 length byte).
 
-#b:"When to use #~\"str\" over #~\"string\"."
+#b:"When to use #~\"str\" over #~\"string\"." When the maximum
+length is known and small, and the value must live inline --
+as a record field, an array element, or a variant payload,
+none of which can hold a reftype like #~"String". Conversion
+runs both ways: #~"\"text\".str to: 16" builds a #~"str" from a
+literal; #~".string" copies out to a heap #~"String";
+#~".stringview" and #~".substring" project borrowed views.
 
-#ul:
-  [#*: String field of a record / variant (valtypes can't hold
-    heap reftypes; #~"String" is a class)]
-  [#*: Bounded buffer sizes where you want stack allocation and
-    no destructor]
-  [#*: Small, short-lived scratch strings where #~"malloc" cost
-    would dominate]
+#b:"Truncation." Building a #~"str" from a source longer than
+#~"to:" is a runtime error, not a silent truncation.
 
-#b:":Text conformance." #~"str" declares #~":Text", so any API
-expecting #~"StringLike.generic" accepts a #~"str" value. The
-#~"StringView" method projects a readonly view over the buffer
-and installs the usual view lock.
+Since #~"str" is a valtype it is copied on assignment; the
+copy is a plain byte copy of the inline buffer.
 
-#b:"Construction and conversion."
-
-#code language=zerolang: """
-  s: (str to: 32)              # empty, 32-byte capacity
-  t: "hi".str to: 16           # from a literal, capacity 16
-
-  # Promote to a heap string
-  heap: s.string
-
-  # View without promotion
-  v: s.stringview
-"""
-
-#b:"Methods."
-
-#ul:
-  [#*: #~"length" -- #~"u64", current content byte count]
-  [#*: #~"size" -- #~"u64", the compile-time capacity
-    (equal to the #~"to:" parameter). Named #~"size" rather
-    than #~"capacity" because capacity is fixed, not a property
-    that grows]
-  [#*: #~"String" -- heap-copies the content into a fresh
-    #~"String"]
-  [#*: #~"StringView" -- readonly view; locks this #~"str" for
-    the view's lifetime]
-
-No #~".append" / #~".set" methods yet -- #~"str" is built once
-(via literal projection or data block) and read thereafter.
-
-
-#--: list
-
-#_+"Readonly and mutable twins." Two accessors come in pairs, and the pair
-exists because the readonly half is what most code wants:
-
-#ul:
-  [#*: #~"iterate" is the #_+"readonly" walk. Its receiver is #~".view", so
-  several walks may run at once, the container stays readable throughout, and
-  the elements it yields are readonly. #~"iterateMut" is the exclusive twin:
-  it takes the container #~".borrow" and its elements may be written through,
-  which is why nothing else may touch the container while it runs.]
-  [#*: #~"get" and #~"getMut" split the same way -- #~"getMut" is the one to
-  reach for when the element is going to be written.]
-
-The default is the readonly name in both pairs, so reading code says
-#~"iterate" and #~"get" and only the mutating minority carries the longer
-name.
-
+#--: The List family
 
 #code language=zerolang: """
-  list: class {
-      append:      function {:this item: of}             is native
-      insert:      function {:this item: of at: u64}     is native
-      extend:      function {:this other: type}          is native
-      extendView: function {:this other: (ListView of: of)} is native
-      get:         function {t: this.borrow i: u64} out of.borrow is native
-      getMut:      function {t: this.borrow i: u64} out of.borrow is native
-      set:         function {:this i: u64 item: of} out of is native
-      pop:         function {:this} out of               is native
-      contains:    function {t: this.view item: of.view} out bool is native
-      sort:        function {:this}                      is native
-      length:      function {t: this.view} out u64       is native
-      capacity:    function {t: this.view} out u64       is native
-      listview:    function {t: this.borrow} out (ListView of: of) is native
-      iterate:     function {t: this.view} out (ListIter of: of).borrow is native
-      iterateMut:  function {t: this.borrow} out (ListIter of: of).borrow is native
-      create:      function {capacity: 0u64} out type    is native
+  ListRef: class {
+      append:     function {:this from: of.take}         is native
+      insert:     function {:this from: of.take at: u64} is native
+      extend:     function {:this from: type.take}       is native
+      get:        function {t: this.borrow i: u64} out of.view is native
+      getMut:     function {t: this.borrow i: u64} out of.borrow is native
+      set:        function {:this i: u64 val: of.take} out of is native
+      pop:        function {:this} out of                is native
+      contains:   function {t: this.view item: of.view} out bool is native
+      sort:       function {:this}                       is native
+      length:     function {t: this.view} out u64        is native
+      capacity:   function {t: this.view} out u64        is native
+      listview:   function {t: this.borrow} out (ListView :of).borrow is native
+      iterate:    function {t: this.view} out (ListIter :of).borrow is native
+      iterateMut: function {t: this.borrow} out (ListIter :of).borrow is native
+      create:     function {capacity: 0.u64} out type    is native
   } as {
-      of: Any.generic
+      of: AnyRef.generic
   }
 """
 
-Growable, heap-allocated, homogeneous reftype. Generic over
-element type only; length is a runtime property. Different
-element types produce different monomorphised types
-(#~"list_i64", #~"list_string").
-
-In memory a #~"List" is a pointer to a struct with #~"capacity",
-#~"length", and a #~"data" pointer. Growth formula:
+Growable, heap-allocated, homogeneous sequence. #~"ListRef"
+holds reference elements; #~"List" is its #~"core" alias, so
+#~"(List String)" and #~"(ListRef String)" name the same
+monomorphisation. In memory a list is a struct with #~"length",
+a #~"data" pointer and #~"capacity". Growth formula:
 #~"newcap = oldcap + (oldcap >> 1) + 4" (roughly 1.5x plus a
 small base).
 
-#b:"Construction."
+#b:"The valtype twin." #~"ListVal" declares the same members
+over a valtype element. The signatures differ exactly where the
+family shows -- a valtype has no ownership to transfer and no
+interior to alias, so element parameters pass by value and
+#~"get" copies:
 
 #code language=zerolang: """
-  xs: (List of: i64)                       # empty
-  ys: (List of: i64) capacity: 10.u64      # pre-allocate
-  zs: (List of: String)                    # list of heap strings
-"""
-
-#b:"Methods (zero-indexed)."
-
-#ul:
-  [#*: #~"append item: elem" -- takes ownership of #~"elem",
-    adds to end, grows if needed]
-  [#*: #~"insert item: elem at: u64" -- takes ownership, shifts
-    later elements right, grows if needed]
-  [#*: #~"extend other: List of: of" -- takes ownership of the
-    source list, bulk-copies its elements, frees the source
-    container]
-  [#*: #~"extendView other: ListView of: of" -- bulk-copies
-    elements from a view without consuming the source]
-  [#*: #~"get i: u64" -- returns a #b:"borrow" of the element at
-    #~"i": the binding aliases the container's storage and holds a
-    SHARED lock on it while live, so a field write through the result
-    lands in the stored element and #~".copy" is needed to keep an
-    owned value past the borrow. Value-type and union elements are
-    value-stable, so for them the borrow is an inline copy. Runtime
-    error if out of range]
-  [#*: #~"set i: u64 item: elem" -- replaces, returns the old
-    element. Runtime error if out of range]
-  [#*: #~"pop" -- removes and returns the last element. Runtime
-    error if empty]
-  [#*: #~"contains item: elem" -- linear scan; returns #~"true"
-    if any element compares equal to #~"elem". Equality is
-    dispatched per element type: #~"==" for numerics, byte-wise
-    #~"memcmp" for #~"String" / #~"str" / #~"StringView".
-    Element type must be hashable / equatable (same constraint
-    as #~"Map" keys and #~"Set" items)]
-  [#*: #~"sort" -- stable in-place mergesort. Comparator is
-    hardcoded by element type: ascending #~"<" for numerics,
-    byte-wise lexicographic for #~"String" / #~"str" /
-    #~"StringView" (a shorter prefix sorts before its longer
-    extension). One method, no unstable variant. Element type
-    must be ordered -- numeric or string family; #~"bool" lists
-    do not synthesise #~".sort"]
-  [#*: #~"length" -- current element count]
-  [#*: #~"ListView" -- read-only view over the whole list;
-    installs a lock on the source for the view's lifetime]
-
-#b:"Destruction." Scope exit runs the list destructor: each
-element (if a reftype) has its own destructor run, then the data
-buffer and the struct are freed.
-
-
-#--: listview
-
-#code language=zerolang: """
-  listview: class {
-      get:    function {t: this.borrow i: u64} out of.borrow is native
-      length: function {:this} out u64              is native
-      list:   function {:this} out (List of: of)    is native
+  ListVal: class {
+      append:     function {:this from: of}            is native
+      insert:     function {:this from: of at: u64}    is native
+      extend:     function {:this from: type.take}     is native
+      get:        function {t: this.borrow i: u64} out of is native
+      getMut:     function {t: this.borrow i: u64} out of.borrow is native
+      set:        function {:this i: u64 val: of} out of is native
+      pop:        function {:this} out of              is native
+      contains:   function {t: this.view item: of} out bool is native
+      sort:       function {:this}                     is native
+      length:     function {t: this.view} out u64      is native
+      capacity:   function {t: this.view} out u64      is native
+      listview:   function {t: this.borrow} out (ListViewVal :of).borrow is native
+      iterate:    function {t: this.view} out (ListIterVal :of).borrow is native
+      iterateMut: function {t: this.borrow} out (ListIterVal :of).borrow is native
+      create:     function {capacity: 0.u64} out type  is native
   } as {
-      of: Any.generic
+      of: AnyVal.generic
   }
 """
 
-Read-only borrowed view over a #~"List". Generic over the
-element type; the view's element type must match the source
-list's element type. Same 16-byte #~"(pointer, length)" shape as
-#~"StringView".
-
-#b:"Lifetime." Creating a view installs an EXCLUSIVE lock on
-the source list. The source cannot be mutated (#~".append",
-#~".insert", reassignment) while the view is live. Scope exit
-releases the lock; so does explicit #~".release" on the view.
-
-#b:"Cannot escape into storage." Views cannot be returned from
-a function unless the source is a non-owned parameter; views
-cannot be stored in a class / record field. See
-#> to=./ownership.html: ownership.
+Note #~"ListVal.getMut" still returns #~"of.borrow": borrowing a
+#_+"compound" valtype element permits mutating its children in
+place, where a write through a #~"get" copy would be invisible.
+Whole-element replacement is #~"set".
 
 #b:"Construction."
 
 #code language=zerolang: """
-  xs: (List of: i64)
-  xs.append item: 1
-  xs.append item: 2
-
-  v: xs.listview                        # lock on xs held for v's scope
-
-  for x: v loop { print x }
+  xs: (List String)               # empty list of reftype elements
+  ns: (ListVal of: i64)           # empty list of valtype elements
+  ys: (ListVal of: i64 capacity: 10)   # preallocated
 """
 
-#b:"Methods."
+#b:"Element access."
 
 #ul:
-  [#*: #~"get i: u64" -- returns a #b:"borrow" of the element at
-    #~"i": the binding aliases the container's storage and holds a
-    SHARED lock on it while live, so a field write through the result
-    lands in the stored element and #~".copy" is needed to keep an
-    owned value past the borrow. Value-type and union elements are
-    value-stable, so for them the borrow is an inline copy. Runtime
-    error if out of range]
-  [#*: #~"length" -- element count of the view]
-  [#*: #~"List" -- heap-copies the view's elements into a fresh
-    #~"List of: of". Breaks the lock link; the new list is
-    independently owned]
+  [#*: #~"get" -- readonly: a #~"of.view" for a reftype element,
+    a copy for a valtype element. No write path]
+  [#*: #~"getMut" -- exclusive: #~"of.borrow" in both families;
+    writes reach the stored element]
+  [#*: #~"set" -- whole-element replacement; returns the old
+    element]
+  [#*: #~"append" / #~"insert" -- take a reftype element
+    (#~"from: of.take"), copy a valtype one (#~"from: of")]
 
-
-#--: map
+#b:"Iteration."
 
 #code language=zerolang: """
-  map: class {
-      get:    function {:this key: key} out (Option of: value) is native
-      # (reftype/String values: returns a borrowed OptionView -- the binding
-      # holds a SHARED lock on the map and the payload cannot be moved out;
-      # .copy to keep. Writers are rejected while a view is live; iterate /
-      # iterateItems hold the map exclusively. See ownership: Container
-      # Views and Locks.)
-      set:    function {:this key: key value: value}           is native
-      has:    function {:this key: key} out bool               is native
-      remove: function {:this key: key} out (Option of: value) is native
-      length: function {:this} out u64                         is native
-      create: function {} out type                             is native
+  with it: xs.iterate do for x: it loop print "\{x}"
+
+  # exclusive twin: elements may be written through
+  with mt: ns.iterateMut do for n: mt loop n
+"""
+
+#~"iterate" runs on a #~".view" receiver -- other readers,
+including other #~"iterate" walks, stay legal while it runs.
+#~"iterateMut" pins the list exclusively.
+
+#--: The list views
+
+#code language=zerolang: """
+  ListView: class {
+      get:    function {t: this.borrow i: u64} out of.view is native
+      getMut: function {t: this.borrow i: u64} out of.borrow is native
+      length: function {t: this.view} out u64 is native
   } as {
-      key:   Any.generic
-      value: Any.generic
+      of: AnyRef.generic
   }
-"""
 
-Hash map (dictionary) from #~"key" to #~"value". Heap-allocated
-and growable, with open-addressing + linear probing. Different
-key / value type combinations produce different monomorphised
-types (#~"map_i64_i64", #~"map_string_u64").
-
-#b:"Constraints."
-
-#ul:
-  [#*: #~"key" -- numeric types or #~"String" (hashability is
-    enforced at monomorphisation)]
-  [#*: #~"value" -- any type. Stored inline for valtypes; the
-    map owns all values]
-
-#b:"Construction."
-
-#code language=zerolang: """
-  m: (Map key: String value: i64)
-  n: (Map key: i64 value: String) capacity: 32.u64  # pre-size
-"""
-
-#b:"Methods."
-
-#ul:
-  [#*: #~"set key: k value: v" -- insert or replace. On
-    replacement, the old value is destroyed. Takes ownership of
-    both #~"k" and #~"v"]
-  [#*: #~"get key: k" -- looks up the value; #~"none" if the key
-    is absent. For a value-type value, returns an #~"optionval"
-    whose #~"some" is an owned inline copy; for a String /
-    reference-type value, returns an #~"OptionView" whose #~"some"
-    is a borrowed view into the map's storage (the lock is held
-    while the result is live -- #~".copy" it to keep an owned copy
-    past the borrow). The map always retains ownership of its values]
-  [#*: #~"has key: k" -- #~"bool", true if the key is present.
-    Cheaper than #~"get" when you don't need the value]
-  [#*: #~"remove key: k" -- removes the entry and returns its #_*"owned"
-    value: #~"some" carries the value (ownership transfers to the caller), #~"none"
-    if the key was absent. The key is destroyed; the value is NOT (it is handed
-    back). An #~"optionval" for a value-type value, an #~"Option" for a String /
-    reference-type value]
-  [#*: #~"length" -- current entry count]
-
-#b:"Load factor and resize." The table uses a 2/3 load factor.
-Capacity starts at 8 on first insert and doubles on resize.
-Removed entries leave tombstones; tombstones are reclaimed on
-resize. When the map falls out of scope, all owned keys and
-values are destroyed.
-
-#b:"Hash function." String / StringView keys hash via SipHash-1-3
-with a per-process random seed (initialised once at program
-start), so hash-flood DoS resistance is the default. Numeric keys
-hash through the splitmix64 finalizer. Compiling with #~"zc
---fast-hash" swaps the string-key path to a wyhash-style fast hash
-(same seed, no flood resistance) — appropriate when map keys are
-trusted input. See
-#> to=./stdlib_system.html#string: #~"String.hash" for the
-user-facing native, which is always SipHash.
-
-#b:"Iteration order." Insertion order, via the CPython-style
-compact-dict layout: a sparse #~"indices" array of int64 slots
-plus a dense, insertion-ordered #~"entries" array. Deletion
-tombstones the entry without disturbing earlier insertions;
-later inserts append at the end; resize preserves the order while
-compacting tombstones.
-
-
-#--: set
-
-#code language=zerolang: """
-  set: class {
-      add:      function {:this item: of} out bool       is native
-      has:      function {:this item: of} out bool       is native
-      delete:   function {:this item: of} out bool       is native
-      length:   function {:this} out u64                 is native
-      capacity: function {:this} out u64                 is native
-      iterate:  function {t: this.borrow} out (SetIter of: of).borrow is native
-      create:   function {} out type                     is native
+  ListViewVal: class {
+      get:    function {t: this.borrow i: u64} out of is native
+      getMut: function {t: this.borrow i: u64} out of.borrow is native
+      length: function {t: this.view} out u64 is native
   } as {
-      of: Any.generic
+      of: AnyVal.generic
   }
 """
 
-Hash-table set keyed on element value. Heap-allocated and
-growable, with open-addressing + linear probing -- the same
-hash-table primitive used by #~"map", with the value column
-excised. Different element types produce different
-monomorphised types (#~"set_i64", #~"set_string").
+A window over a list's elements, produced by #~"listview" on the
+matching list form (#~"ListRef.listview" returns a #~"ListView";
+#~"ListVal.listview" returns a #~"ListViewVal"). The view shares
+the list's storage -- its layout is the first two fields of the
+list struct, so producing one is a cast, not a copy.
 
-#b:"Constraints."
+A view is not read-only: #~"get" is the readonly accessor and
+#~"getMut" borrows the element for in-place writes, exactly as
+on the list itself. What a view cannot do is change the
+sequence -- no append, insert, pop or set.
+
+#b:"Pinning." #~"listview" takes the source #~"this.borrow", so
+the source list is exclusively pinned for the view's lifetime:
+
+#code language=zerolang: """
+  nums: (ListVal of: i64)
+  nums.append from: 1
+  with v: nums.listview do {
+      print "\{v.get i: 0}"
+      # nums.append from: 2   # rejected: nums is pinned by v
+  }
+"""
+
+#~"ByteView" is #~"(ListViewVal of: u8)" behind a typedef -- the
+standard byte-window type that #~"io" writers accept.
+
+#--: The Map family
+
+A hash map names the family of its key AND of its value, giving
+four forms. The key position is hashed, so its bound also
+requires #~"hash" and #~"==":
 
 #ul:
-  [#*: #~"of" -- numeric types or #~"String" (hashability is
-    enforced at monomorphisation; reftypes other than String are
-    rejected)]
+  [#*: #b:"MapRR" (alias #~"Map") -- reftype key, reftype value]
+  [#*: #b:"MapRV" -- reftype key, valtype value]
+  [#*: #b:"MapVR" -- valtype key, reftype value]
+  [#*: #b:"MapVV" -- valtype key, valtype value]
+
+#code language=zerolang: """
+  MapRR: class {
+      get:          function {:this key: key.view} out (OptionView value) is native
+      getv:         function {:this key: StringView} out (OptionView value) is native
+      set:          function {:this key: key.take value: value.take} is native
+      has:          function {t: this.view key: key.view} out bool is native
+      remove:       function {:this key: key.view} out (Option value) is native
+      length:       function {t: this.view} out u64 is native
+      capacity:     function {t: this.view} out u64 is native
+      iterate:      function {t: this.view} out (MapKeyIter :key :value).borrow is native
+      iterateItems: function {t: this.borrow} out (MapItemIter :key :value).borrow is native
+      create:       function {capacity: 0.u64} out type is native
+  } as {
+      key: RefHashable.generic
+      value: AnyRef.generic
+  }
+"""
+
+The three siblings declare the same members; the signatures
+differ exactly where the family shows:
+
+#ul:
+  [#*: A #b:"valtype key" is passed by value: #~"get" /
+    #~"has" / #~"remove" take #~"key: key" and #~"set" takes
+    #~"key: key" (no #~".take" / #~".view" markers)]
+  [#*: A #b:"valtype value" comes back as a copy: #~"get" and
+    #~"remove" return #~"(optionval value)" -- no reference into
+    the map, and therefore no pin on it. A #b:"reftype value"
+    comes back as #~"(OptionView value)" from #~"get" (a
+    borrowed view into the entry storage, pinning the map) and
+    as an owned #~"(Option value)" from #~"remove"]
+  [#*: #~"getv" exists only on the reftype-key forms
+    (#~"MapRR", #~"MapRV"): it looks a #~"String" key up by
+    view without materialising a key, and a valtype key is
+    never a #~"String"]
 
 #b:"Construction."
 
 #code language=zerolang: """
-  s: (Set of: i64)
-  t: (Set of: String) capacity: 32.u64    # pre-size
+  ages: (Map String value: String)          # MapRR via the alias
+  grades: (MapRV key: String value: i64)
+  names: (MapVR u64 value: String)
+  counts: (MapVV u64 value: u64)
 """
 
-#b:"Methods."
+#b:"Layout and iteration order." A map is a compact dict: a
+dense entry array plus a separate index table. Iteration is in
+INSERTION order -- stable across runs regardless of the hash
+seed, and preserved by resize (tombstones are skipped, then
+reclaimed).
 
-#ul:
-  [#*: #~"add item: x" -- inserts. Returns #~"true" if a new
-    element was added, #~"false" if #~"x" was already present.
-    Takes ownership of #~"x"; on the duplicate path the caller's
-    copy is destroyed.]
-  [#*: #~"has item: x" -- borrowed lookup. #~"bool".]
-  [#*: #~"delete item: x" -- removes. Returns #~"true" if an
-    element was removed. Destroys the stored copy on removal.]
-  [#*: #~"length" -- current element count.]
-  [#*: #~"capacity" -- current bucket-table size.]
-  [#*: #~"iterate" -- returns a borrowed #~"SetIter" yielding
-    each element. Holds an EXCLUSIVE lock on the source for the
-    iterator's lifetime, same convention as #~"map.iterate".]
-
-#b:"Iteration order." Insertion order, via the same
-compact-dict layout as #~"map".
-
-#b:"Load factor and resize." Same 2/3 load factor as #~"map".
-Capacity starts at 8 on first insert and doubles on resize.
-Tombstones from #~"delete" are reclaimed on resize. When the set
-falls out of scope, all owned items are destroyed.
-
-#b:"Hash function." Identical dispatch to #~"map": SipHash-1-3
-with per-process random seed for String / StringView; splitmix64
-for numerics. Bucket order randomises across runs.
-
-
-#--: setiter
+#b:"Iteration."
 
 #code language=zerolang: """
-  SetIter: class is native as {
-      of: Any.generic
-      call: function {:this} out (OptionView t: of) is native
+  with kt: counts.iterate do for k: kt loop print "key \{k}"
+  with et: counts.iterateItems do for e: et loop print "\{e.key}=\{e.value}"
+"""
+
+#~"iterate" walks keys on a #~".view" receiver (shared; the map
+stays readable). #~"iterateItems" yields borrowed entries whose
+#~".key" / #~".value" project into the entry storage, and takes
+the map #~".borrow" -- readonly, and with no mutable twin by
+design: a key is hashed, so writing through one in place would
+put the entry in the wrong bucket.
+
+#--: The Set family
+
+#code language=zerolang: """
+  SetRef: class {
+      add:      function {:this item: of.take} out bool is native
+      has:      function {t: this.view item: of.view} out bool is native
+      delete:   function {:this item: of.view} out bool is native
+      length:   function {t: this.view} out u64 is native
+      capacity: function {t: this.view} out u64 is native
+      iterate:  function {t: this.view} out (SetIter :of).borrow is native
+      create:   function {capacity: 0.u64} out type is native
+  } as {
+      of: RefHashable.generic
+  }
+
+  SetVal: class {
+      add:      function {:this item: of} out bool is native
+      has:      function {t: this.view item: of} out bool is native
+      delete:   function {:this item: of} out bool is native
+      length:   function {t: this.view} out u64 is native
+      capacity: function {t: this.view} out u64 is native
+      iterate:  function {t: this.view} out (SetIterVal :of).borrow is native
+      create:   function {capacity: 0.u64} out type is native
+  } as {
+      of: ValHashable.generic
   }
 """
 
-Borrowed iterator over a #~"Set". Yields #~"optionview.some"
-pointing into a bucket's item for each USED bucket,
-#~"optionview.none" when exhausted. Mirrors #~"MapKeyIter".
-
-Created via #~"Set.iterate" -- never instantiated directly --
-and consumed by the standard iterator-driver shape:
+A hash set of unique elements. An item IS the key here, so the
+element bound is the hashability interface of its family:
+#~"SetRef" (alias #~"Set") holds reftypes, #~"SetVal" holds
+valtypes, and #~"add" / #~"has" / #~"delete" pass the element
+the way its family moves (taken / viewed for reftypes, by value
+for valtypes). #~"add" and #~"delete" return whether the set
+changed.
 
 #code language=zerolang: """
-  with it: s.iterate do for x: it loop {
-      print "x: \\{x}"
-  }
+  seen: (SetVal of: i64)
+  seen.add item: 42
+  if (seen.has item: 42) then print "present"
 """
 
+Like maps, sets are compact dicts: dense entries, separate index
+table, INSERTION-order iteration, and a #~".view" (shared,
+readonly) #~"iterate" with no mutable twin by design.
+
+#--: Iterators and entries
+
+Each container family has its own iterator template, because the
+emitter names the cursor struct after #~"iterate"'s declared
+return: #~"ListIter" / #~"ListIterVal", #~"SetIter" /
+#~"SetIterVal", and per Map form #~"MapKeyIter" /
+#~"MapItemIter" / #~"MapEntry" (plain names serve #~"MapRR";
+the RV / VR / VV forms serve their maps). All iterators yield
+through #~"OptionView" -- #~"some" pointing at each live
+element, #~"none" when exhausted -- and a view of a valtype is
+still a reference, so one #~"OptionView" serves both families.
+
+These types rarely appear in user source: #~"with it: xs.iterate
+do for x: it loop ..." creates and drives them implicitly. A
+#~"MapEntry" (any form) presents #~".key" and #~".value" as
+borrowed projections into the map's entry storage.
 
 #--: string_join
 
 #code language=zerolang: """
-  stringJoin: function {parts: (List of: String) sep: StringView} out String is native
+  stringJoin: function as { T: StringLike.generic } in {
+      parts: (ListRef String)
+      sep: T
+  } out String is native
 """
 
 Concatenate every string in #~"parts" with #~"sep" between each.
 Returns a fresh owned #~"String". One allocation, bulk memcpy
-in sequence.
+in sequence. #~"sep" is any #~"StringLike" -- a literal,
+#~"StringView", #~"String" or #~"str" all work.
 
 #b:"Ownership."
 
@@ -556,26 +540,25 @@ in sequence.
   [#*: #~"parts" is borrowed (the default convention for reftype
     parameters); the caller retains ownership and the list
     outlives the call]
-  [#*: #~"sep" is a #~"StringView"; locked for the call]
   [#*: Return value is a newly-allocated owned #~"String"]
 
-#b:"Why not a method on #~\"list\"?" Generic types don't yet
+#b:"Why not a method on #~\"List\"?" Generic types don't yet
 support monomorphisation-specific methods -- #~"List.join"
-couldn't be restricted to #~"List of: String" while still
+couldn't be restricted to #~"(List String)" while still
 monomorphising cleanly. Keeping the helper as a free function
 sidesteps that.
 
-#b:"Why #~\"list of: string\" rather than #~\"list of: stringview\"?"
+#b:"Why #~\"(List String)\" rather than a list of views?"
 #~"StringView" cannot live in a reftype field (an outstanding
-lock would escape through the list's storage), so views cannot
+pin would escape through the list's storage), so views cannot
 populate a join input list directly. Callers holding views
 materialise owned strings first.
 
 #code language=zerolang: """
-  parts: (List of: String)
-  parts.append item: "alpha".string
-  parts.append item: "beta".string
-  parts.append item: "gamma".string
-  s: stringJoin parts: parts sep: ", ".stringview
+  parts: (List String)
+  parts.append from: "alpha".string
+  parts.append from: "beta".string
+  parts.append from: "gamma".string
+  s: stringJoin parts: parts sep: ", "
   # s == "alpha, beta, gamma"
 """
