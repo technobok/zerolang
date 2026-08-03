@@ -7406,7 +7406,20 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             # resolves through the member legs instead. Folded literal
             # conversions return earlier via nodeConstText.
             ncSrc9: stampNameOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64))
+            {
+                # a typedef source converts as its chain-end base
+                ncSrcT9: (stampIdOf
+                    :symtab
+                    nid: (nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64)).u64
+                )
+                ncTdN9: typedefChaseBaseName9 :symtab tid: ncSrcT9
+                if ncTdN9.length > 0 then ncSrc9 = ncTdN9.copy
+            }
             ncVal9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
+            if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)) then {
+                ncDeref9: "(*\{ncVal9})"
+                ncVal9 = ncDeref9.copy
+            }
             ncRet9: stampIdOf :symtab nid: n.nodeid.u64
             ncRetM9: chaseColMono :symtab :ctx tid: ncRet9
             return (emitNumericCast
@@ -8203,6 +8216,17 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                         }
                     } case none then null
                 }
+                # a typedef record emits no _eq of its own: a scalar base
+                # compares inline, any other base uses ITS helper
+                tdEqN9: typedefChaseBaseName9 :symtab tid: lti
+                if tdEqN9.length > 0 then {
+                    tdEqC9: cTypeOf name: tdEqN9.stringview
+                    if tdEqC9.length > 0 then {
+                        if op.stringview == "==" then return "(\{l} == \{r})"
+                        if op.stringview == "!=" then return "(\{l} != \{r})"
+                    }
+                    rce = ctxCname :ctx tid: (typedefChaseTid9 :symtab tid: lti)
+                }
                 if op.stringview == "==" then {
                     re1: "\{rce}_eq(\{l}, \{r})"
                     return re1
@@ -8213,7 +8237,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 }
             }
             if lti > 0 when (symtab.reg.typetypeOf typeId: lti) == ztypes.ztypetype.variantType then {
-                vce: ctxCname :ctx tid: lti
+                vce: ctxCname :ctx tid: (typedefChaseTid9 :symtab tid: lti)
                 if op.stringview == "==" then {
                     ee1: "\{vce}_eq(\{l}, \{r})"
                     return ee1
@@ -14358,6 +14382,48 @@ fnSignature: function {
     return sig
 }
 
+# typedefChaseTid9 -- the chain-end base tid of a typedef (tid itself when it
+# is not one). The equality, cast and key-classification legs ask this so a
+# typedef behaves exactly as its base at the C level.
+typedefChaseTid9: function {symtab: zenv.ZSymbolTable.view tid: u64} out u64 is {
+    cur9: tid
+    hops9: u64
+    for hops9 < 8 loop {
+        bo9: symtab.typing.typedefBaseTid.get key: cur9
+        match (
+            bo9
+        ) case some then {
+            cur9 = bo9
+        } case none then hops9 = 8
+        hops9 = hops9 + 1
+    }
+    return cur9
+}
+
+# typedefChaseBaseName9 -- the chain-end base NAME of a typedef, "" when tid
+# is not one.
+typedefChaseBaseName9: function {symtab: zenv.ZSymbolTable.view tid: u64} out String is {
+    cur9: tid
+    nm9: String
+    hops9: u64
+    for hops9 < 8 loop {
+        bn9: symtab.typing.typedefBaseName.get key: cur9
+        match (
+            bn9
+        ) case some then {
+            nm9 = bn9.copy
+        } case none then null
+        bo9: symtab.typing.typedefBaseTid.get key: cur9
+        match (
+            bo9
+        ) case some then {
+            cur9 = bo9
+        } case none then hops9 = 8
+        hops9 = hops9 + 1
+    }
+    return nm9
+}
+
 # typedefChaseC -- the underlying C scalar of a typedef record, chasing
 # the typedef-base chain (meters -> i64, height -> meters -> i64); ""
 # when the type is not a typedef.
@@ -17608,14 +17674,15 @@ declaredKeyFnC: function {
 # stays a struct). A heap-owning struct lands in 3 and fails to build at its
 # `_eq` until the typecheck rejection lands (Slice 3).
 keyHashKind: function {symtab: zenv.ZSymbolTable ctx: Ctx.view tid: u64} out u64 is {
-    if tid == ctx.strTid then return 1
-    if tid == ctx.svTid then return 2
-    tt: symtab.reg.typetypeOf typeId: tid
+    ktid9: typedefChaseTid9 :symtab :tid
+    if ktid9 == ctx.strTid then return 1
+    if ktid9 == ctx.svTid then return 2
+    tt: symtab.reg.typetypeOf typeId: ktid9
     isRv9: tt == ztypes.ztypetype.recordType
     if isRv9 == false then isRv9 = tt == ztypes.ztypetype.variantType
     if isRv9 then {
-        tn9: typeNameOfReg9 :symtab :tid
-        sc9: scalarCTypeFor :symtab name: tn9.stringview :tid
+        tn9: typeNameOfReg9 :symtab tid: ktid9
+        sc9: scalarCTypeFor :symtab name: tn9.stringview tid: ktid9
         if sc9.length > 0 then return 0
         return 3
     }
