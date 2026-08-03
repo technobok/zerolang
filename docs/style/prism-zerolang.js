@@ -50,7 +50,7 @@
         'f16', 'f32', 'f64', 'f128', 'c8', 'c32', 'bool',
         'String', 'StringView', 'Text', 'StringLike', 'Any',
         'Option', 'optionval', 'OptionView', 'Result', 'resultval', 'convError', 'Box', 'Iterator',
-        'array', 'str', 'List', 'ListView', 'ListIter', 'Map', 'MapKeyIter', 'MapItemIter', 'MapEntry', 'Set', 'SetIter', 'Bytes', 'ByteView',
+        'array', 'str', 'List', 'ListView', 'ListIter', 'Map', 'MapKeyIter', 'MapItemIter', 'MapEntry', 'Set', 'SetIter', 'ListRef', 'SetRef', 'MapRR', 'Bytes', 'ByteView',
         'Path', 'PathView', 'IoError', 'Reader', 'Writer', 'Closer', 'Seeker', 'seekorigin', 'File', 'openmode',
         'print', 'stringJoin', 'error', 'panic', 'stdin', 'stdout', 'stderr',
         'return', 'break', 'continue', 'yield',

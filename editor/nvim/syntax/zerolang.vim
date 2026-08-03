@@ -68,7 +68,7 @@ syn match zerolangBuiltinType /\<\%(i8\|i16\|i32\|i64\|i128\)\>/
 syn match zerolangBuiltinType /\<\%(f16\|f32\|f64\|f128\|c8\|c32\|bool\)\>/
 syn match zerolangBuiltinType /\<\%(String\|StringView\|Text\|StringLike\|Any\)\>/
 syn match zerolangBuiltinType /\<\%(Option\|optionval\|OptionView\|Result\|resultval\|convError\|Box\|Iterator\)\>/
-syn match zerolangBuiltinType /\<\%(array\|str\|List\|ListView\|ListIter\|Map\|MapKeyIter\|MapItemIter\|MapEntry\|Set\|SetIter\|Bytes\|ByteView\)\>/
+syn match zerolangBuiltinType /\<\%(array\|str\|List\|ListView\|ListIter\|Map\|MapKeyIter\|MapItemIter\|MapEntry\|Set\|SetIter\|ListRef\|SetRef\|MapRR\|Bytes\|ByteView\)\>/
 syn match zerolangBuiltinType /\<\%(Path\|PathView\|IoError\|Reader\|Writer\|Closer\|Seeker\|seekorigin\|File\|openmode\)\>/
 " Constants / literal values
 syn match zerolangBuiltinConst /\<\%(null\|never\|true\|false\|_\)\>/

@@ -417,8 +417,8 @@ member-guard:
 #
 # Backings come in four shapes: one fragment per method under
 # src/runtime/natives, many functions in one file (z_String.inc), the @@NAME@@
-# container templates, and C the emitter builds from string literals (List.get,
-# .contains, .listview, .sort, .iterate, ListIter.call, Map.getv). So a receiver
+# container templates, and C the emitter builds from string literals (ListRef.get,
+# .contains, .listview, .sort, .iterate, ListIter.call, MapRR.getv). So a receiver
 # is found by TYPE rather than by parameter name -- the first parameter whose
 # struct is the function's own prefix, which covers self / _this / _it / _e /
 # s / a alike. VIEW_GUARD_PLACEHOLDER names the type each template placeholder
@@ -427,7 +427,7 @@ member-guard:
 # An emitter-built function names a runtime mono rather than a type the guard
 # can read, so VIEW_GUARD_EMITTED says which declaration each one backs; `-`
 # marks the ones backing no reference-type method at all (array / str value
-# equality, a union destructor, List.extendView).
+# equality, a union destructor, ListRef.extendView).
 #
 # A receiver-bearing C function that resolves to no declaration is an ERROR,
 # not a skip -- a silently unchecked backing is exactly what the guard exists
@@ -450,50 +450,50 @@ member-guard:
 # exists: `s1 == s2` does not call z_String_eq (which nothing calls) -- it
 # converts both sides to by-value views and calls z_StringView_eq.
 
-VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:List z_Map.c.tmpl=@@NAME@@:Map \
-  z_MapIter.c.tmpl=@@NAME@@:Map,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
-  z_Set.c.tmpl=@@NAME@@:Set,@@SETITER@@:SetIter
-VIEW_GUARD_EMITTED := get:List.get,ListView.get getMut:List.getMut,ListView.getMut \
-  contains:List.contains \
-  listview:List.listview sort:List.sort iterate:List.iterate \
+VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:MapRR \
+  z_MapIter.c.tmpl=@@NAME@@:MapRR,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
+  z_Set.c.tmpl=@@NAME@@:SetRef,@@SETITER@@:SetIter
+VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get getMut:ListRef.getMut,ListView.getMut \
+  contains:ListRef.contains \
+  listview:ListRef.listview sort:ListRef.sort iterate:ListRef.iterate \
   call:ListIter.call,ListIterVal.call \
-  iterateMut:List.iterateMut getv:Map.getv eq:- extendView:- destroy:-
+  iterateMut:ListRef.iterateMut getv:MapRR.getv eq:- extendView:- destroy:-
 VIEW_GUARD_BACKS := StringView.eq===,!= StringView.cmp=compare,<,<=,>,>=
 VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp \
   StringView.print StringView.indexOfRaw StringView.replaceImpl \
-  List.destroy List.grow Map.destroy Map.grow Map.find \
-  Set.destroy Set.grow Set.find MapEntry.key MapEntry.value
+  ListRef.destroy ListRef.grow MapRR.destroy MapRR.grow MapRR.find \
+  SetRef.destroy SetRef.grow SetRef.find MapEntry.key MapEntry.value
 VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
-  ListVal.append:List.append ListVal.insert:List.insert \
-  ListVal.extend:List.extend ListVal.get:List.get ListVal.set:List.set \
-  ListVal.pop:List.pop ListVal.contains:List.contains \
-  ListVal.getMut:List.getMut \
+  ListVal.append:ListRef.append ListVal.insert:ListRef.insert \
+  ListVal.extend:ListRef.extend ListVal.get:ListRef.get ListVal.set:ListRef.set \
+  ListVal.pop:ListRef.pop ListVal.contains:ListRef.contains \
+  ListVal.getMut:ListRef.getMut \
   ListViewVal.get:ListView.get ListViewVal.getMut:ListView.getMut \
   ListViewVal.length:inline \
-  ListVal.sort:List.sort ListVal.listview:List.listview \
-  ListVal.iterate:List.iterate ListVal.iterateMut:List.iterateMut \
+  ListVal.sort:ListRef.sort ListVal.listview:ListRef.listview \
+  ListVal.iterate:ListRef.iterate ListVal.iterateMut:ListRef.iterateMut \
   ListVal.length:inline ListVal.capacity:inline \
-  SetVal.add:Set.add SetVal.has:Set.has SetVal.delete:Set.delete \
-  SetVal.iterate:Set.iterate SetIterVal.call:SetIter.call \
+  SetVal.add:SetRef.add SetVal.has:SetRef.has SetVal.delete:SetRef.delete \
+  SetVal.iterate:SetRef.iterate SetIterVal.call:SetIter.call \
   SetVal.length:inline SetVal.capacity:inline \
-  MapRV.get:Map.get MapRV.getv:Map.getv MapRV.set:Map.set MapRV.has:Map.has \
-  MapRV.remove:Map.remove MapRV.iterate:Map.iterate \
-  MapRV.iterateItems:Map.iterateItems \
+  MapRV.get:MapRR.get MapRV.getv:MapRR.getv MapRV.set:MapRR.set MapRV.has:MapRR.has \
+  MapRV.remove:MapRR.remove MapRV.iterate:MapRR.iterate \
+  MapRV.iterateItems:MapRR.iterateItems \
   MapRV.length:inline MapRV.capacity:inline \
-  MapVR.get:Map.get MapVR.set:Map.set MapVR.has:Map.has \
-  MapVR.remove:Map.remove MapVR.iterate:Map.iterate \
-  MapVR.iterateItems:Map.iterateItems \
+  MapVR.get:MapRR.get MapVR.set:MapRR.set MapVR.has:MapRR.has \
+  MapVR.remove:MapRR.remove MapVR.iterate:MapRR.iterate \
+  MapVR.iterateItems:MapRR.iterateItems \
   MapVR.length:inline MapVR.capacity:inline \
-  MapVV.get:Map.get MapVV.set:Map.set MapVV.has:Map.has \
-  MapVV.remove:Map.remove MapVV.iterate:Map.iterate \
-  MapVV.iterateItems:Map.iterateItems \
+  MapVV.get:MapRR.get MapVV.set:MapRR.set MapVV.has:MapRR.has \
+  MapVV.remove:MapRR.remove MapVV.iterate:MapRR.iterate \
+  MapVV.iterateItems:MapRR.iterateItems \
   MapVV.length:inline MapVV.capacity:inline \
   MapKeyIterRV.call:MapKeyIter.call MapKeyIterVR.call:MapKeyIter.call \
   MapKeyIterVV.call:MapKeyIter.call \
   MapItemIterRV.call:MapItemIter.call MapItemIterVR.call:MapItemIter.call \
   MapItemIterVV.call:MapItemIter.call \
-  List.length:inline List.capacity:inline ListView.length:inline \
-  Map.length:inline Map.capacity:inline Set.length:inline Set.capacity:inline \
+  ListRef.length:inline ListRef.capacity:inline ListView.length:inline \
+  MapRR.length:inline MapRR.capacity:inline SetRef.length:inline SetRef.capacity:inline \
   String.length:inline String.capacity:inline String.stringview:inline \
   StringView.length:inline StringView.string:byvalue \
   String.contains:StringView.contains String.startsWith:StringView.startsWith \
