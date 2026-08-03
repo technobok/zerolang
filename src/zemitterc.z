@@ -17569,14 +17569,23 @@ declaredKeyFnC: function {
 # keyHashKind -- classify a Set element / Map key by canonical id (never by
 # name, so a user shadow is handled by its nature): 1 native String, 2
 # StringView, 3 by-value struct (record/variant -> byte hash over contents), 0
-# scalar or pointer (cast hash, the prior `else`). A heap-owning struct lands in
-# 3 and fails to build at its `_eq` until the typecheck rejection lands (Slice 3).
+# scalar or pointer (cast hash + C `==`). A builtin numeric/bool/char is a
+# record whose C type is a scalar, so it classifies 0 with the pointers --
+# scalarCTypeFor is the shadow-safe gate (a user type shadowing a scalar name
+# stays a struct). A heap-owning struct lands in 3 and fails to build at its
+# `_eq` until the typecheck rejection lands (Slice 3).
 keyHashKind: function {symtab: zenv.ZSymbolTable ctx: Ctx.view tid: u64} out u64 is {
     if tid == ctx.strTid then return 1
     if tid == ctx.svTid then return 2
     tt: symtab.reg.typetypeOf typeId: tid
-    if tt == ztypes.ztypetype.recordType then return 3
-    if tt == ztypes.ztypetype.variantType then return 3
+    isRv9: tt == ztypes.ztypetype.recordType
+    if isRv9 == false then isRv9 = tt == ztypes.ztypetype.variantType
+    if isRv9 then {
+        tn9: typeNameOfReg9 :symtab :tid
+        sc9: scalarCTypeFor :symtab name: tn9.stringview :tid
+        if sc9.length > 0 then return 0
+        return 3
+    }
     return 0
 }
 
