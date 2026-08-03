@@ -327,21 +327,30 @@ any-guard:
 	if [ "$$s" -gt 5 ]; then echo "any-guard FAIL: system.z Any.generic = $$s (baseline 5)"; fail=1; fi; \
 	if [ "$$c" -gt 0 ]; then echo "any-guard FAIL: collections.z Any.generic = $$c (baseline 0)"; fail=1; fi; \
 	if [ "$$fail" = "1" ]; then echo "  Lower the baseline here when a residual is legitimately removed."; exit 1; fi; \
-	echo "any-guard OK: user source clean; system.z=$$s (<=5) collections.z=$$c (<=0)"
+	m=$$(grep -lE 'Any\.generic|\.lock[^A-Za-z0-9_]' tests/fixtures/lsp_cases/*.msgs 2>/dev/null | wc -l); \
+	if [ "$$m" -gt 0 ]; then \
+	  echo "any-guard FAIL: $$m lsp .msgs inline source(s) spell Any.generic or a .lock marker"; \
+	  grep -lE 'Any\.generic|\.lock[^A-Za-z0-9_]' tests/fixtures/lsp_cases/*.msgs; \
+	  echo "  didOpen inline text overrides the workspace file -- migrate the .msgs too."; \
+	  exit 1; \
+	fi; \
+	echo "any-guard OK: user source clean; system.z=$$s (<=5) collections.z=$$c (<=0); lsp .msgs clean"
 
 shadow-guard:
 	@n1=$$(grep -c 'cTypeOf name:' src/zemitterc.z); \
 	n2=$$(grep -c 'cTypeForName symtab:' src/zemitterc.z); \
 	fail=0; \
-	if [ "$$n1" -gt 18 ]; then echo "shadow-guard FAIL: 'cTypeOf name:' = $$n1 (baseline 18)"; fail=1; fi; \
-	if [ "$$n2" -gt 2 ]; then echo "shadow-guard FAIL: 'cTypeForName symtab:' = $$n2 (baseline 2)"; fail=1; fi; \
+	chk() { if [ "$$2" -gt "$$3" ]; then echo "shadow-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
+	  elif [ "$$2" -lt "$$3" ]; then echo "shadow-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
+	chk "'cTypeOf name:'" "$$n1" 18; \
+	chk "'cTypeForName symtab:'" "$$n2" 0; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new by-name C-type site was added. Resolve the C type from the canonical"; \
 	  echo "  type id via scalarCTypeFor / cTypeForNameTid / typeRefC, not cTypeOf(name)."; \
 	  echo "  (If a site was legitimately removed, lower the baseline here instead.)"; \
 	  exit 1; \
 	fi; \
-	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=18)  cTypeForName symtab:=$$n2 (<=2)"
+	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=18)  cTypeForName symtab:=$$n2 (<=0)"
 
 # emitter-guard -- ratchet against name-resolution creep in the C emitter. The
 # de-lookup arc drove these to their current floors: the emitter reads
@@ -365,24 +374,26 @@ emitter-guard:
 	g1=$$(grep -c 'composeCname' src/ztypes.z); \
 	g2=$$(grep -cF 'z_t\{' src/zemitterc.z); \
 	fail=0; \
-	if [ "$$g1" -gt 0 ]; then echo "emitter-guard FAIL: composeCname in src/ztypes.z = $$g1 (baseline 0)"; fail=1; fi; \
-	if [ "$$g2" -gt 3 ]; then echo "emitter-guard FAIL: 'z_t{' literals in src/zemitterc.z = $$g2 (baseline 3)"; fail=1; fi; \
-	if [ "$$e1" -gt 23 ]; then echo "emitter-guard FAIL: ztypecheck.resolvedByKey = $$e1 (baseline 23)"; fail=1; fi; \
-	if [ "$$e2" -gt 5 ]; then echo "emitter-guard FAIL: ztypecheck.walkLookupTyperef = $$e2 (baseline 5)"; fail=1; fi; \
-	if [ "$$e3" -gt 22 ]; then echo "emitter-guard FAIL: resolveTypeIdByName = $$e3 (baseline 22)"; fail=1; fi; \
-	if [ "$$e4" -gt 35 ]; then echo "emitter-guard FAIL: userFnId = $$e4 (baseline 35)"; fail=1; fi; \
-	if [ "$$e5" -gt 0 ]; then echo "emitter-guard FAIL: childOwnershipText = $$e5 (baseline 0)"; fail=1; fi; \
-	if [ "$$e6" -gt 94 ]; then echo "emitter-guard FAIL: typeNameOfReg9 = $$e6 (baseline 94)"; fail=1; fi; \
-	if [ "$$e7" -gt 2 ]; then echo "emitter-guard FAIL: ztypes.mangleVarName = $$e7 (baseline 2, both inside varCName: the --readable-names spelling and the no-id fallback)"; fail=1; fi; \
-	if [ "$$e8" -gt 5 ]; then echo "emitter-guard FAIL: io.readText = $$e8 (baseline 5)"; fail=1; fi; \
-	if [ "$$e9" -gt 8 ]; then echo "emitter-guard FAIL: monoOriginName = $$e9 (baseline 8)"; fail=1; fi; \
+	chk() { if [ "$$2" -gt "$$3" ]; then echo "emitter-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
+	  elif [ "$$2" -lt "$$3" ]; then echo "emitter-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
+	chk "composeCname in src/ztypes.z" "$$g1" 0; \
+	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
+	chk "ztypecheck.resolvedByKey" "$$e1" 12; \
+	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
+	chk "resolveTypeIdByName" "$$e3" 22; \
+	chk "userFnId" "$$e4" 35; \
+	chk "childOwnershipText" "$$e5" 0; \
+	chk "typeNameOfReg9" "$$e6" 91; \
+	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
+	chk "io.readText" "$$e8" 5; \
+	chk "monoOriginName" "$$e9" 8; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
 	  echo "  ctxCname instead of resolving by name."; \
 	  exit 1; \
 	fi; \
-	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 (monoOrigin baseline 8)"
+	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9"
 
 # member-guard -- ratchet against declaration-bypassing member special-cases in
 # the type checker. The single-source-of-truth arc removed the hardcoded member
@@ -814,17 +825,24 @@ clean:
 # emitter references exists on disk.
 NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
 native-guard:
-	@fail=0; \
+	@fail=0; conv=""; \
 	for u in io os cli net; do \
 	  for n in $$(awk '/^[a-zA-Z][a-zA-Z0-9]*: function/ {name=$$1; sub(/:.*/,"",name); pending=1} pending && /is native/ {print name; pending=0} pending && /is \{/ {pending=0}' lib/system/$$u.z); do \
 	    case " $(NATIVE_GUARD_EXCEPTIONS) " in *" $$u.$$n "*) continue;; esac; \
 	    snake=$$(echo "$$n" | sed 's/\([A-Z]\)/_\1/g' | tr 'a-z' 'A-Z'); \
 	    frag="_Z_$$(echo $$u | tr 'a-z' 'A-Z')_$$snake"; \
+	    conv="$$conv $$frag"; \
 	    test -f src/runtime/natives/$$frag.inc || { echo "native-guard: $$u.$$n declared native but $$frag.inc missing (add the fragment or an exceptions entry)"; fail=1; }; \
 	  done; \
 	done; \
 	for f in $$(grep -oE '"_Z_[A-Z0-9_]+"' src/zemitterc.z | tr -d '"' | sort -u); do \
 	  test -f src/runtime/natives/$$f.inc || { echo "native-guard: fragment $$f.inc referenced but missing"; fail=1; }; \
 	done; \
+	for f in src/runtime/natives/*.inc; do \
+	  stem=$$(basename $$f .inc); \
+	  case " $$conv " in *" $$stem "*) continue;; esac; \
+	  need=$$(echo "$$stem" | sed 's/^_Z_//' | tr 'A-Z' 'a-z'); \
+	  grep -qF "\"$$stem\"" src/zemitterc.z || grep -qF "\"$$need\"" src/zemitterc.z || { echo "native-guard: $$stem.inc on disk but nothing references it (orphan -- delete it or load it)"; fail=1; }; \
+	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "native-guard OK: native declarations and runtime fragments consistent"
+	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans)"
