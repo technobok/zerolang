@@ -3375,19 +3375,32 @@ emitInstanceMethodCall: function {
 # atom like `Bytes` / `ByteView`). A value call must be emitted as the call;
 # constructions emit the binding's mono create. Used by the List/Set/Map binding
 # branches to choose between emitting the RHS expression and an empty create.
-collectionValueCallRhs: function {ast: Ast.view n: Node.view} out bool is {
+# A construction is recognised by its stamped callKind, not the written head
+# name, so a re-export alias of a container constructs like its target.
+collectionValueCallRhs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: Node.view
+} out bool is {
     match (
         n
     ) case expression then {
-        return (collectionValueCallRhs :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+        return (collectionValueCallRhs :ast :symtab n: (ast.nodes.get i: (n.expression - 1).u64))
     } case statementline then {
-        return (collectionValueCallRhs :ast n: (ast.nodes.get i: (n.statementline - 1).u64))
+        return (collectionValueCallRhs :ast :symtab n: (ast.nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
         # a bare dotted path returning a collection (e.g. `st.allNames`) is a
         # no-arg method auto-call or field access -- a value, never a construction.
         atc9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         return atc9.length > 0
     } case call then {
+        cko9: symtab.typing.callKind.get key: n.nodeid.u64
+        match (
+            cko9
+        ) case some then {
+            if cko9 == zast.callkind.classCreate then return false
+            if cko9 == zast.callkind.typedefCreate then return false
+        } case none then null
         cn: atomTextOf :ast n: (ast.nodes.get i: (n.callable - 1).u64)
         if cn.length == 0 then {
             # a dotted-path method callable (e.g. `p.operationPaths lex: lx`)
@@ -3396,16 +3409,6 @@ collectionValueCallRhs: function {ast: Ast.view n: Node.view} out bool is {
             dct9: dottedChildText :ast n: (ast.nodes.get i: (n.callable - 1).u64)
             return dct9.length > 0
         }
-        if cn.stringview == "List" then return false
-        if cn.stringview == "ListVal" then return false
-        if cn.stringview == "Set" then return false
-        if cn.stringview == "SetVal" then return false
-        if cn.stringview == "Map" then return false
-        if cn.stringview == "MapRV" then return false
-        if cn.stringview == "MapVR" then return false
-        if cn.stringview == "MapVV" then return false
-        if cn.stringview == "Bytes" then return false
-        if cn.stringview == "ByteView" then return false
         return true
     } else {
         return false
@@ -3812,20 +3815,26 @@ emitEmptyColCreate: function {ast: Ast.view
             return "\{scb9}_create()"
         }
     }
-    isCol9: false
-    if cn0 == "List" then isCol9 = true
-    if cn0 == "ListVal" then isCol9 = true
-    if cn0 == "Set" then isCol9 = true
-    if cn0 == "SetVal" then isCol9 = true
-    if cn0 == "Map" then isCol9 = true
-    if cn0 == "MapRV" then isCol9 = true
-    if cn0 == "MapVR" then isCol9 = true
-    if cn0 == "MapVV" then isCol9 = true
-    if (isCol9) == false then return "".string
+    # the container leg is keyed on the stamped construction kind and the
+    # mono's origin family, not the written head name, so a re-export alias
+    # of a container constructs like its target.
+    ckc9: symtab.typing.callKind.get key: call.nodeid.u64
+    isCr9: false
+    match (
+        ckc9
+    ) case some then {
+        if ckc9 == zast.callkind.classCreate then isCr9 = true
+    } case none then null
+    if (isCr9) == false then return "".string
     mid9: stampIdOf :symtab nid: call.nodeid.u64
     mid9 = chaseColMono :symtab :ctx tid: mid9
     monoLk3: originTidOf :symtab tid: mid9
     if monoLk3 == 0 then return "".string
+    isCol9: false
+    if (isListOriginOf :symtab :ctx tid: mid9) then isCol9 = true
+    if (isSetOriginOf :symtab :ctx tid: mid9) then isCol9 = true
+    if (isMapOriginOf :symtab :ctx tid: mid9) then isCol9 = true
+    if (isCol9) == false then return "".string
     cb9: ctxCname :ctx tid: mid9
     ccap9: listCapArg :ast :symtab :ctx n: (ast.nodes.get i: (call.nodeid - 1).u64)
     return "\{cb9}_create((uint64_t)\{ccap9})"
@@ -9719,7 +9728,7 @@ emitStmt: function {
                         :buf
                     )
                 } else {
-                    if (collectionValueCallRhs :ast n: avn9) then {
+                    if (collectionValueCallRhs :ast :symtab n: avn9) then {
                         lvr0: emitExpr :ast :symtab :ctx n: avn9
                         lb0: "\{ind}\{lcb}_t \{nm} = \{lvr0};\n"
                         buf.append lb0
@@ -9746,7 +9755,7 @@ emitStmt: function {
         }
         if (isSetOriginOf :symtab :ctx tid: ltid) then {
             scb: ctxCname :ctx tid: ltid
-            if (collectionValueCallRhs :ast n: avn9) then {
+            if (collectionValueCallRhs :ast :symtab n: avn9) then {
                 svr: emitExpr :ast :symtab :ctx n: avn9
                 sbc: "\{ind}\{scb}_t* \{nm} = \{svr};\n"
                 buf.append sbc
@@ -9771,7 +9780,7 @@ emitStmt: function {
         }
         if (isMapOriginOf :symtab :ctx tid: ltid) then {
             mcb: ctxCname :ctx tid: ltid
-            if (collectionValueCallRhs :ast n: avn9) then {
+            if (collectionValueCallRhs :ast :symtab n: avn9) then {
                 mvr: emitExpr :ast :symtab :ctx n: avn9
                 mbc: "\{ind}\{mcb}_t* \{nm} = \{mvr};\n"
                 buf.append mbc
