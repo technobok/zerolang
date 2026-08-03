@@ -9485,57 +9485,57 @@ static bool z_t2119_eq(z_t2119_t a, z_t2119_t b) {
 }
 
 typedef enum {
-    Z_TT_TAG_BOFTOK,
-    Z_TT_TAG_EOFTOK,
-    Z_TT_TAG_ERRTOK,
-    Z_TT_TAG_WSTOK,
-    Z_TT_TAG_EOLTOK,
-    Z_TT_TAG_COMMENTTOK,
-    Z_TT_TAG_COLONTOK,
-    Z_TT_TAG_SEMICOLONTOK,
-    Z_TT_TAG_PARENOPENTOK,
-    Z_TT_TAG_PARENCLOSETOK,
-    Z_TT_TAG_BRACEOPENTOK,
-    Z_TT_TAG_BRACECLOSETOK,
-    Z_TT_TAG_DOTTOK,
-    Z_TT_TAG_DOTDOTDOTTOK,
-    Z_TT_TAG_REFIDTOK,
-    Z_TT_TAG_LABELTOK,
-    Z_TT_TAG_LABELPRETOK,
-    Z_TT_TAG_EQUALSTOK,
-    Z_TT_TAG_FUNCTIONTOK,
-    Z_TT_TAG_IFTOK,
-    Z_TT_TAG_WHENTOK,
-    Z_TT_TAG_THENTOK,
-    Z_TT_TAG_ELSETOK,
-    Z_TT_TAG_FORTOK,
-    Z_TT_TAG_LOOPTOK,
-    Z_TT_TAG_WHILETOK,
-    Z_TT_TAG_DOTOK,
-    Z_TT_TAG_CASETOK,
-    Z_TT_TAG_MATCHTOK,
-    Z_TT_TAG_ONTOK,
-    Z_TT_TAG_OUTTOK,
-    Z_TT_TAG_INTOK,
-    Z_TT_TAG_SWAPTOK,
-    Z_TT_TAG_UNITTOK,
-    Z_TT_TAG_RECORDTOK,
-    Z_TT_TAG_CLASSTOK,
-    Z_TT_TAG_UNIONTOK,
-    Z_TT_TAG_VARIANTTOK,
-    Z_TT_TAG_PROTOCOLTOK,
-    Z_TT_TAG_DATATOK,
-    Z_TT_TAG_ISTOK,
-    Z_TT_TAG_ASTOK,
-    Z_TT_TAG_WITHTOK,
-    Z_TT_TAG_FACETTOK,
-    Z_TT_TAG_NATIVETOK,
-    Z_TT_TAG_YIELDTOK,
-    Z_TT_TAG_STRBEGTOK,
-    Z_TT_TAG_STRMIDTOK,
-    Z_TT_TAG_STRCHRTOK,
-    Z_TT_TAG_STRENDTOK,
-    Z_TT_TAG_STREXPRBEGTOK,
+    Z_TOKTYPE_TAG_BOFTOK,
+    Z_TOKTYPE_TAG_EOFTOK,
+    Z_TOKTYPE_TAG_ERRTOK,
+    Z_TOKTYPE_TAG_WSTOK,
+    Z_TOKTYPE_TAG_EOLTOK,
+    Z_TOKTYPE_TAG_COMMENTTOK,
+    Z_TOKTYPE_TAG_COLONTOK,
+    Z_TOKTYPE_TAG_SEMICOLONTOK,
+    Z_TOKTYPE_TAG_PARENOPENTOK,
+    Z_TOKTYPE_TAG_PARENCLOSETOK,
+    Z_TOKTYPE_TAG_BRACEOPENTOK,
+    Z_TOKTYPE_TAG_BRACECLOSETOK,
+    Z_TOKTYPE_TAG_DOTTOK,
+    Z_TOKTYPE_TAG_DOTDOTDOTTOK,
+    Z_TOKTYPE_TAG_REFIDTOK,
+    Z_TOKTYPE_TAG_LABELTOK,
+    Z_TOKTYPE_TAG_LABELPRETOK,
+    Z_TOKTYPE_TAG_EQUALSTOK,
+    Z_TOKTYPE_TAG_FUNCTIONTOK,
+    Z_TOKTYPE_TAG_IFTOK,
+    Z_TOKTYPE_TAG_WHENTOK,
+    Z_TOKTYPE_TAG_THENTOK,
+    Z_TOKTYPE_TAG_ELSETOK,
+    Z_TOKTYPE_TAG_FORTOK,
+    Z_TOKTYPE_TAG_LOOPTOK,
+    Z_TOKTYPE_TAG_WHILETOK,
+    Z_TOKTYPE_TAG_DOTOK,
+    Z_TOKTYPE_TAG_CASETOK,
+    Z_TOKTYPE_TAG_MATCHTOK,
+    Z_TOKTYPE_TAG_ONTOK,
+    Z_TOKTYPE_TAG_OUTTOK,
+    Z_TOKTYPE_TAG_INTOK,
+    Z_TOKTYPE_TAG_SWAPTOK,
+    Z_TOKTYPE_TAG_UNITTOK,
+    Z_TOKTYPE_TAG_RECORDTOK,
+    Z_TOKTYPE_TAG_CLASSTOK,
+    Z_TOKTYPE_TAG_UNIONTOK,
+    Z_TOKTYPE_TAG_VARIANTTOK,
+    Z_TOKTYPE_TAG_PROTOCOLTOK,
+    Z_TOKTYPE_TAG_DATATOK,
+    Z_TOKTYPE_TAG_ISTOK,
+    Z_TOKTYPE_TAG_ASTOK,
+    Z_TOKTYPE_TAG_WITHTOK,
+    Z_TOKTYPE_TAG_FACETTOK,
+    Z_TOKTYPE_TAG_NATIVETOK,
+    Z_TOKTYPE_TAG_YIELDTOK,
+    Z_TOKTYPE_TAG_STRBEGTOK,
+    Z_TOKTYPE_TAG_STRMIDTOK,
+    Z_TOKTYPE_TAG_STRCHRTOK,
+    Z_TOKTYPE_TAG_STRENDTOK,
+    Z_TOKTYPE_TAG_STREXPRBEGTOK,
 } z_t2334_tag_t;
 typedef struct {
     z_t2334_tag_t tag;
@@ -31600,11 +31600,11 @@ static bool z_t2345(z_t2333_t* z_v26275) {
     z_t2334_t z_v26276 = z_v26275->toktype;
     z_t2334_t _m0 = z_v26276;
     switch (_m0.tag) {
-        case Z_TT_TAG_LABELTOK: {
+        case Z_TOKTYPE_TAG_LABELTOK: {
             return true;
             break;
         }
-        case Z_TT_TAG_LABELPRETOK: {
+        case Z_TOKTYPE_TAG_LABELPRETOK: {
             return true;
             break;
         }
@@ -31619,17 +31619,17 @@ static bool z_t2346(z_t2327_t* z_v26277, z_t2347_t* z_v26278) {
     z_t2333_t z_v26279 = z_t2389(z_v26278);
     z_t2334_t _m0 = z_v26279.toktype;
     switch (_m0.tag) {
-        case Z_TT_TAG_PARENOPENTOK: {
+        case Z_TOKTYPE_TAG_PARENOPENTOK: {
     z_t2333_destroy(&z_v26279);
             return true;
             break;
         }
-        case Z_TT_TAG_REFIDTOK: {
+        case Z_TOKTYPE_TAG_REFIDTOK: {
     z_t2333_destroy(&z_v26279);
             return true;
             break;
         }
-        case Z_TT_TAG_STRBEGTOK: {
+        case Z_TOKTYPE_TAG_STRBEGTOK: {
     z_t2333_destroy(&z_v26279);
             return true;
             break;
@@ -31647,19 +31647,19 @@ static z_t1226_t z_t2398(z_t2327_t* z_v26280, z_t2347_t* z_v26281) {
     z_t2333_t z_v26282 = z_t2389(z_v26281);
     z_t2334_t _m0 = z_v26282.toktype;
     switch (_m0.tag) {
-        case Z_TT_TAG_PARENOPENTOK: {
+        case Z_TOKTYPE_TAG_PARENOPENTOK: {
             z_t1226_t _ret1 = z_t2405(z_v26280, z_v26281);
     z_t2333_destroy(&z_v26282);
             return _ret1;
             break;
         }
-        case Z_TT_TAG_REFIDTOK: {
+        case Z_TOKTYPE_TAG_REFIDTOK: {
             z_t1226_t _ret2 = z_t2399(z_v26280, z_v26281);
     z_t2333_destroy(&z_v26282);
             return _ret2;
             break;
         }
-        case Z_TT_TAG_STRBEGTOK: {
+        case Z_TOKTYPE_TAG_STRBEGTOK: {
             z_t1226_t _ret3 = z_t2406(z_v26280, z_v26281);
     z_t2333_destroy(&z_v26282);
             return _ret3;
@@ -31676,7 +31676,7 @@ static z_t1226_t z_t2398(z_t2327_t* z_v26280, z_t2347_t* z_v26281) {
 }
 
 static z_t1226_t z_t2399(z_t2327_t* z_v26285, z_t2347_t* z_v26286) {
-    z_t2391_t z_v26288 = z_t2390(z_v26286, ((z_t2334_t){ .tag = Z_TT_TAG_REFIDTOK }));
+    z_t2391_t z_v26288 = z_t2390(z_v26286, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_REFIDTOK }));
     z_t2391_t _m0 = z_v26288;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_SOME: {
@@ -31711,7 +31711,7 @@ static z_t1226_t z_t2400(z_t2327_t* z_v26297, z_t2347_t* z_v26298) {
         return z_v26302;
     }
     z_t2333_t z_v26304 = z_t2389(z_v26298);
-    bool z_v26305 = z_t2334_eq(z_v26304.toktype, ((z_t2334_t){ .tag = Z_TT_TAG_DOTTOK }));
+    bool z_v26305 = z_t2334_eq(z_v26304.toktype, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_DOTTOK }));
     if (z_v26305) {
         z_t1226_t _ret0 = z_t2401(z_v26297, z_v26298, z_v26302, z_v26300, z_v26301);
         z_v26302 = (z_t1226_t){0};
@@ -31729,7 +31729,7 @@ static z_t1226_t z_t2400(z_t2327_t* z_v26297, z_t2347_t* z_v26298) {
 }
 
 static z_t1226_t z_t2401(z_t2327_t* z_v26306, z_t2347_t* z_v26307, z_t1226_t z_v26308, uint32_t z_v26309, uint32_t z_v26310) {
-    z_t2391_t z_v26312 = z_t2390(z_v26307, ((z_t2334_t){ .tag = Z_TT_TAG_DOTTOK }));
+    z_t2391_t z_v26312 = z_t2390(z_v26307, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_DOTTOK }));
     z_t2391_t _m0 = z_v26312;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -31739,7 +31739,7 @@ static z_t1226_t z_t2401(z_t2327_t* z_v26306, z_t2347_t* z_v26307, z_t1226_t z_v
         }
         case Z_OPTION_TOKEN_TAG_SOME: {
             /* alias: dotOpt => (*(z_t2333_t*)_m0.data) */
-            z_t2391_t z_v26314 = z_t2390(z_v26307, ((z_t2334_t){ .tag = Z_TT_TAG_REFIDTOK }));
+            z_t2391_t z_v26314 = z_t2390(z_v26307, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_REFIDTOK }));
             z_t2391_t _m1 = z_v26314;
             switch (_m1.tag) {
                 case Z_OPTION_TOKEN_TAG_SOME: {
@@ -31801,7 +31801,7 @@ static z_t2403_t z_t2402(z_t2327_t* z_v26329, z_t2347_t* z_v26330) {
 
 static z_t1226_t z_t2405(z_t2327_t* z_v26332, z_t2347_t* z_v26333) {
     z_t2333_t z_v26334 = z_t2389(z_v26333);
-    z_t2391_t z_v26336 = z_t2390(z_v26333, ((z_t2334_t){ .tag = Z_TT_TAG_PARENOPENTOK }));
+    z_t2391_t z_v26336 = z_t2390(z_v26333, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_PARENOPENTOK }));
     z_t2391_t _m0 = z_v26336;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -31824,7 +31824,7 @@ static z_t1226_t z_t2405(z_t2327_t* z_v26332, z_t2347_t* z_v26333) {
                 return z_v26340;
             }
             (void)(z_t2394(z_v26333, z_v26339));
-            z_t2391_t z_v26343 = z_t2390(z_v26333, ((z_t2334_t){ .tag = Z_TT_TAG_PARENCLOSETOK }));
+            z_t2391_t z_v26343 = z_t2390(z_v26333, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_PARENCLOSETOK }));
             z_t2391_t _m2 = z_v26343;
             switch (_m2.tag) {
                 case Z_OPTION_TOKEN_TAG_SOME: {
@@ -31874,7 +31874,7 @@ static z_t1226_t z_t2406(z_t2327_t* z_v26347, z_t2347_t* z_v26348) {
     while (true) {
         z_t2333_t z_v26354 = z_t2389(z_v26348);
         z_t2334_t z_v26355 = z_v26354.toktype;
-        if (z_t2334_eq(z_v26355, ((z_t2334_t){ .tag = Z_TT_TAG_STRENDTOK }))) {
+        if (z_t2334_eq(z_v26355, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRENDTOK }))) {
             bool z_v26356 = z_t106_eq(((z_t106_t){ z_v26354.tokstr.data, z_v26354.tokstr.size }), ((z_t106_t){ z_v26352.data, z_v26352.size }));
             if (z_v26356) {
                 (void)(z_t2388(z_v26348));
@@ -31889,10 +31889,10 @@ static z_t1226_t z_t2406(z_t2327_t* z_v26347, z_t2347_t* z_v26348) {
                 return _ret1;
             }
         } else {
-            if (z_t2334_eq(z_v26355, ((z_t2334_t){ .tag = Z_TT_TAG_STREXPRBEGTOK }))) {
+            if (z_t2334_eq(z_v26355, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STREXPRBEGTOK }))) {
                 (void)(z_t2388(z_v26348));
                 z_t2333_t z_v26359 = z_t2389(z_v26348);
-                if (!z_t2334_eq(z_v26359.toktype, ((z_t2334_t){ .tag = Z_TT_TAG_BRACEOPENTOK }))) {
+                if (!z_t2334_eq(z_v26359.toktype, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACEOPENTOK }))) {
                     z_t1226_t _ret2 = z_t2340(z_v26347, &z_v26359, ((z_t1013_t){ .tag = Z_ERR_TAG_BADSTRING }), z_t75_from_view(_zs741));
                     z_t75_free(&z_v26352);
     z_t2333_destroy(&z_v26349);
@@ -31917,7 +31917,7 @@ static z_t1226_t z_t2406(z_t2327_t* z_v26347, z_t2347_t* z_v26348) {
                     (void)(z_t1190_append(&z_v26353, z_t2330(z_v26347, z_v26363)));
                     z_v26363 = (z_t1226_t){0};
                     z_t2333_t z_v26366 = z_t2389(z_v26348);
-                    if (!z_t2334_eq(z_v26366.toktype, ((z_t2334_t){ .tag = Z_TT_TAG_BRACECLOSETOK }))) {
+                    if (!z_t2334_eq(z_v26366.toktype, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACECLOSETOK }))) {
                         z_t1226_t _ret3 = z_t2340(z_v26347, &z_v26366, ((z_t1013_t){ .tag = Z_ERR_TAG_BADSTRING }), z_t75_from_view(_zs742));
                         z_t75_free(&z_v26352);
     z_t2333_destroy(&z_v26349);
@@ -32430,7 +32430,7 @@ static z_t1226_t z_t2418(z_t2327_t* z_v26529, z_t2347_t* z_v26530, z_t1289_t z_v
     }
     z_t1140_t z_v26544 = z_t1140_create((uint64_t)0);
     while (true) {
-        z_t2391_t z_v26546 = z_t2390(z_v26530, ((z_t2334_t){ .tag = Z_TT_TAG_LABELTOK }));
+        z_t2391_t z_v26546 = z_t2390(z_v26530, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELTOK }));
         z_t2391_t _m0 = z_v26546;
         switch (_m0.tag) {
             case Z_OPTION_TOKEN_TAG_SOME: {
@@ -32502,7 +32502,7 @@ static z_t1226_t z_t2418(z_t2327_t* z_v26529, z_t2347_t* z_v26530, z_t1289_t z_v
                 break;
             }
             case Z_OPTION_TOKEN_TAG_NONE: {
-                z_t2391_t z_v26566 = z_t2390(z_v26530, ((z_t2334_t){ .tag = Z_TT_TAG_LABELPRETOK }));
+                z_t2391_t z_v26566 = z_t2390(z_v26530, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELPRETOK }));
                 z_t2391_t _m3 = z_v26566;
                 switch (_m3.tag) {
                     case Z_OPTION_TOKEN_TAG_SOME: {
@@ -32711,37 +32711,37 @@ static bool z_t2423(z_t2327_t* z_v26619, z_t2347_t* z_v26620) {
     z_t2333_t z_v26621 = z_t2389(z_v26620);
     z_t2334_t _m0 = z_v26621.toktype;
     switch (_m0.tag) {
-        case Z_TT_TAG_IFTOK: {
+        case Z_TOKTYPE_TAG_IFTOK: {
     z_t2333_destroy(&z_v26621);
             return true;
             break;
         }
-        case Z_TT_TAG_FORTOK: {
+        case Z_TOKTYPE_TAG_FORTOK: {
     z_t2333_destroy(&z_v26621);
             return true;
             break;
         }
-        case Z_TT_TAG_MATCHTOK: {
+        case Z_TOKTYPE_TAG_MATCHTOK: {
     z_t2333_destroy(&z_v26621);
             return true;
             break;
         }
-        case Z_TT_TAG_DATATOK: {
+        case Z_TOKTYPE_TAG_DATATOK: {
     z_t2333_destroy(&z_v26621);
             return true;
             break;
         }
-        case Z_TT_TAG_WITHTOK: {
+        case Z_TOKTYPE_TAG_WITHTOK: {
     z_t2333_destroy(&z_v26621);
             return true;
             break;
         }
-        case Z_TT_TAG_BRACEOPENTOK: {
+        case Z_TOKTYPE_TAG_BRACEOPENTOK: {
     z_t2333_destroy(&z_v26621);
             return true;
             break;
         }
-        case Z_TT_TAG_YIELDTOK: {
+        case Z_TOKTYPE_TAG_YIELDTOK: {
     z_t2333_destroy(&z_v26621);
             return true;
             break;
@@ -32769,12 +32769,12 @@ static bool z_t2425(z_t2327_t* z_v26629, z_t2347_t* z_v26630) {
     z_t2333_t z_v26631 = z_t2389(z_v26630);
     z_t2334_t _m0 = z_v26631.toktype;
     switch (_m0.tag) {
-        case Z_TT_TAG_EOLTOK: {
+        case Z_TOKTYPE_TAG_EOLTOK: {
     z_t2333_destroy(&z_v26631);
             return true;
             break;
         }
-        case Z_TT_TAG_SEMICOLONTOK: {
+        case Z_TOKTYPE_TAG_SEMICOLONTOK: {
     z_t2333_destroy(&z_v26631);
             return true;
             break;
@@ -32790,7 +32790,7 @@ static bool z_t2425(z_t2327_t* z_v26629, z_t2347_t* z_v26630) {
 
 static bool z_t2426(z_t2327_t* z_v26632, z_t2347_t* z_v26633) {
     z_t2333_t z_v26634 = z_t2389(z_v26633);
-    bool _ret0 = z_t2334_eq(z_v26634.toktype, ((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }));
+    bool _ret0 = z_t2334_eq(z_v26634.toktype, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }));
     z_t2333_destroy(&z_v26634);
     return _ret0;
     z_t2333_destroy(&z_v26634);
@@ -32800,12 +32800,12 @@ static bool z_t2427(z_t2327_t* z_v26635, z_t2347_t* z_v26636) {
     z_t2333_t z_v26637 = z_t2389(z_v26636);
     z_t2334_t _m0 = z_v26637.toktype;
     switch (_m0.tag) {
-        case Z_TT_TAG_LABELTOK: {
+        case Z_TOKTYPE_TAG_LABELTOK: {
     z_t2333_destroy(&z_v26637);
             return true;
             break;
         }
-        case Z_TT_TAG_LABELPRETOK: {
+        case Z_TOKTYPE_TAG_LABELPRETOK: {
     z_t2333_destroy(&z_v26637);
             return true;
             break;
@@ -32825,7 +32825,7 @@ static z_t1226_t z_t2428(z_t2327_t* z_v26638, z_t2347_t* z_v26639) {
     uint32_t z_v26641 = z_v26640.lineno;
     uint32_t z_v26642 = z_v26640.colno;
     z_t2334_t z_v26643 = z_v26640.toktype;
-    if (z_t2334_eq(z_v26643, ((z_t2334_t){ .tag = Z_TT_TAG_LABELPRETOK }))) {
+    if (z_t2334_eq(z_v26643, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELPRETOK }))) {
         z_t2333_t z_v26644 = z_t2393(z_v26639);
         z_t75_t z_v26645 = z_t75_copy(&z_v26644.tokstr);
         uint32_t z_v26647 = z_t2331(z_v26638, ((z_t106_t){ z_v26644.tokstr.data, z_v26644.tokstr.size }));
@@ -32846,10 +32846,10 @@ static z_t1226_t z_t2428(z_t2327_t* z_v26638, z_t2347_t* z_v26639) {
     z_t2333_destroy(&z_v26644);
     z_t75_free(&z_v26645);
     }
-    if (z_t2334_eq(z_v26643, ((z_t2334_t){ .tag = Z_TT_TAG_LABELTOK }))) {
+    if (z_t2334_eq(z_v26643, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELTOK }))) {
         z_t2333_t z_v26656 = z_t2393(z_v26639);
         uint32_t z_v26658 = z_t2331(z_v26638, ((z_t106_t){ z_v26656.tokstr.data, z_v26656.tokstr.size }));
-        z_t2391_t _c1 = z_t2390(z_v26639, ((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }));
+        z_t2391_t _c1 = z_t2390(z_v26639, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }));
         z_t2391_destroy(&_c1);
         bool z_v26660 = z_t2423(z_v26638, z_v26639);
         if (z_v26660) {
@@ -32901,7 +32901,7 @@ static z_t1226_t z_t2429(z_t2327_t* z_v26675, z_t2347_t* z_v26676) {
     z_t2333_t z_v26677 = z_t2389(z_v26676);
     uint32_t z_v26678 = z_v26677.lineno;
     uint32_t z_v26679 = z_v26677.colno;
-    z_t2391_t z_v26681 = z_t2390(z_v26676, ((z_t2334_t){ .tag = Z_TT_TAG_BRACEOPENTOK }));
+    z_t2391_t z_v26681 = z_t2390(z_v26676, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACEOPENTOK }));
     z_t2391_t _m0 = z_v26681;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_SOME: {
@@ -32933,7 +32933,7 @@ static z_t1226_t z_t2429(z_t2327_t* z_v26675, z_t2347_t* z_v26676) {
             }
             __zbrk_897: ;
             (void)(z_t2394(z_v26676, z_v26682));
-            z_t2391_t z_v26689 = z_t2390(z_v26676, ((z_t2334_t){ .tag = Z_TT_TAG_BRACECLOSETOK }));
+            z_t2391_t z_v26689 = z_t2390(z_v26676, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACECLOSETOK }));
             z_t2391_t _m1 = z_v26689;
             switch (_m1.tag) {
                 case Z_OPTION_TOKEN_TAG_SOME: {
@@ -33027,7 +33027,7 @@ static z_t1226_t z_t2432(z_t2327_t* z_v26715, z_t2347_t* z_v26716) {
     z_t2333_t z_v26717 = z_t2389(z_v26716);
     uint32_t z_v26718 = z_v26717.lineno;
     uint32_t z_v26719 = z_v26717.colno;
-    if (z_t2334_eq(z_v26717.toktype, ((z_t2334_t){ .tag = Z_TT_TAG_BRACEOPENTOK }))) {
+    if (z_t2334_eq(z_v26717.toktype, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACEOPENTOK }))) {
         z_t1226_t _ret0 = z_t2429(z_v26715, z_v26716);
     z_t2333_destroy(&z_v26717);
         return _ret0;
@@ -33066,9 +33066,9 @@ static z_t1226_t z_t2432(z_t2327_t* z_v26715, z_t2347_t* z_v26716) {
 static z_t1226_t z_t2433(z_t2327_t* z_v26731, z_t2347_t* z_v26732, z_t1190_t z_v26733, z_t1190_t z_v26734, uint32_t z_v26735, uint32_t z_v26736, uint32_t z_v26737, uint32_t z_v26738) {
     z_t2333_t z_v26739 = z_t2389(z_v26732);
     z_t2334_t z_v26740 = z_v26739.toktype;
-    if (z_t2334_eq(z_v26740, ((z_t2334_t){ .tag = Z_TT_TAG_WHENTOK }))) {
+    if (z_t2334_eq(z_v26740, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_WHENTOK }))) {
         (void)(z_t2388(z_v26732));
-        z_t2391_t _c0 = z_t2390(z_v26732, ((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }));
+        z_t2391_t _c0 = z_t2390(z_v26732, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }));
         z_t2391_destroy(&_c0);
         z_t1289_t z_v26742 = z_t2412(z_v26731, z_v26732);
         uint64_t z_v26743 = z_v26742.length;
@@ -33112,7 +33112,7 @@ static z_t1226_t z_t2433(z_t2327_t* z_v26731, z_t2347_t* z_v26732, z_t1190_t z_v
     z_t1226_destroy(&z_v26747);
     z_t1289_destroy(&z_v26742);
     }
-    if (z_t2334_eq(z_v26740, ((z_t2334_t){ .tag = Z_TT_TAG_THENTOK }))) {
+    if (z_t2334_eq(z_v26740, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_THENTOK }))) {
         (void)(z_t2388(z_v26732));
         z_t1226_t z_v26754 = z_t2431(z_v26731, z_v26732);
         bool z_v26755 = z_t2341(z_v26754);
@@ -33149,7 +33149,7 @@ static z_t1226_t z_t2433(z_t2327_t* z_v26731, z_t2347_t* z_v26732, z_t1190_t z_v
     z_t2333_destroy(&z_v26739);
         return _ret4;
     }
-    if (z_t2334_eq(z_v26740, ((z_t2334_t){ .tag = Z_TT_TAG_ELSETOK }))) {
+    if (z_t2334_eq(z_v26740, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ELSETOK }))) {
         (void)(z_t2388(z_v26732));
         z_t1226_t z_v26767 = z_t2431(z_v26731, z_v26732);
         bool z_v26768 = z_t2341(z_v26767);
@@ -33184,7 +33184,7 @@ static z_t1226_t z_t2434(z_t2327_t* z_v26772, z_t2347_t* z_v26773) {
     z_t2333_t z_v26774 = z_t2389(z_v26773);
     uint32_t z_v26775 = z_v26774.lineno;
     uint32_t z_v26776 = z_v26774.colno;
-    z_t2391_t z_v26778 = z_t2390(z_v26773, ((z_t2334_t){ .tag = Z_TT_TAG_IFTOK }));
+    z_t2391_t z_v26778 = z_t2390(z_v26773, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_IFTOK }));
     z_t2391_t _m0 = z_v26778;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -33258,14 +33258,14 @@ static z_t1226_t z_t2434(z_t2327_t* z_v26772, z_t2347_t* z_v26773) {
 
 static z_t1226_t z_t2435(z_t2327_t* z_v26798, z_t2347_t* z_v26799, uint32_t z_v26800, z_t1190_t z_v26801, uint32_t z_v26802, uint32_t z_v26803) {
     z_t2333_t z_v26804 = z_t2389(z_v26799);
-    bool z_v26805 = z_t2334_eq(z_v26804.toktype, ((z_t2334_t){ .tag = Z_TT_TAG_CASETOK }));
+    bool z_v26805 = z_t2334_eq(z_v26804.toktype, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_CASETOK }));
     if (z_v26805) {
         uint32_t z_v26806 = z_v26804.lineno;
         uint32_t z_v26807 = z_v26804.colno;
         (void)(z_t2388(z_v26799));
-        z_t2391_t _c0 = z_t2390(z_v26799, ((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }));
+        z_t2391_t _c0 = z_t2390(z_v26799, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }));
         z_t2391_destroy(&_c0);
-        z_t2391_t z_v26810 = z_t2390(z_v26799, ((z_t2334_t){ .tag = Z_TT_TAG_REFIDTOK }));
+        z_t2391_t z_v26810 = z_t2390(z_v26799, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_REFIDTOK }));
         z_t2391_t _m1 = z_v26810;
         switch (_m1.tag) {
             case Z_OPTION_TOKEN_TAG_SOME: {
@@ -33273,7 +33273,7 @@ static z_t1226_t z_t2435(z_t2327_t* z_v26798, z_t2347_t* z_v26799, uint32_t z_v2
                 uint32_t z_v26812 = z_t2331(z_v26798, ((z_t106_t){ (*(z_t2333_t*)_m1.data).tokstr.data, (*(z_t2333_t*)_m1.data).tokstr.size }));
                 z_t1226_t z_v26818 = ({ z_t1226_t _u = {0}; _u.tag = Z_NODE_TAG_ATOMID; z_t1227_t* _b = (z_t1227_t*)z_xmalloc(sizeof(z_t1227_t)); *_b = z_t1227_create(z_t2329(z_v26798), (*(z_t2333_t*)_m1.data).lineno, (*(z_t2333_t*)_m1.data).colno, z_t2331(z_v26798, ((z_t106_t){ (*(z_t2333_t*)_m1.data).tokstr.data, (*(z_t2333_t*)_m1.data).tokstr.size }))); _u.data = _b; _u; });
                 z_t2333_t z_v26819 = z_t2389(z_v26799);
-                bool z_v26820 = z_t2334_eq(z_v26819.toktype, ((z_t2334_t){ .tag = Z_TT_TAG_THENTOK }));
+                bool z_v26820 = z_t2334_eq(z_v26819.toktype, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_THENTOK }));
                 if (z_v26820) {
                     (void)(z_t2388(z_v26799));
                     z_t1226_t z_v26821 = z_t2431(z_v26798, z_v26799);
@@ -33334,7 +33334,7 @@ static z_t1226_t z_t2435(z_t2327_t* z_v26798, z_t2347_t* z_v26799, uint32_t z_v2
         }
     z_t2391_destroy(&z_v26810);
     }
-    z_t2391_t z_v26835 = z_t2390(z_v26799, ((z_t2334_t){ .tag = Z_TT_TAG_ELSETOK }));
+    z_t2391_t z_v26835 = z_t2390(z_v26799, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ELSETOK }));
     z_t2391_t _m5 = z_v26835;
     switch (_m5.tag) {
         case Z_OPTION_TOKEN_TAG_SOME: {
@@ -33378,7 +33378,7 @@ static z_t1226_t z_t2436(z_t2327_t* z_v26841, z_t2347_t* z_v26842) {
     z_t2333_t z_v26843 = z_t2389(z_v26842);
     uint32_t z_v26844 = z_v26843.lineno;
     uint32_t z_v26845 = z_v26843.colno;
-    z_t2391_t z_v26847 = z_t2390(z_v26842, ((z_t2334_t){ .tag = Z_TT_TAG_MATCHTOK }));
+    z_t2391_t z_v26847 = z_t2390(z_v26842, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_MATCHTOK }));
     z_t2391_t _m0 = z_v26847;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -33390,7 +33390,7 @@ static z_t1226_t z_t2436(z_t2327_t* z_v26841, z_t2347_t* z_v26842) {
         }
         case Z_OPTION_TOKEN_TAG_SOME: {
             /* alias: matchOpt => (*(z_t2333_t*)_m0.data) */
-            z_t2391_t _c2 = z_t2390(z_v26842, ((z_t2334_t){ .tag = Z_TT_TAG_ONTOK }));
+            z_t2391_t _c2 = z_t2390(z_v26842, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ONTOK }));
             z_t2391_destroy(&_c2);
             z_t1289_t z_v26851 = z_t2412(z_v26841, z_v26842);
             uint64_t z_v26852 = z_v26851.length;
@@ -33438,9 +33438,9 @@ static z_t1226_t z_t2436(z_t2327_t* z_v26841, z_t2347_t* z_v26842) {
 static z_t1226_t z_t2437(z_t2327_t* z_v26860, z_t2347_t* z_v26861, z_t1190_t z_v26862, z_t1190_t z_v26863, uint32_t z_v26864, bool z_v26865, bool z_v26866, uint32_t z_v26867, uint32_t z_v26868) {
     z_t2333_t z_v26869 = z_t2389(z_v26861);
     z_t2334_t z_v26870 = z_v26869.toktype;
-    if (z_t2334_eq(z_v26870, ((z_t2334_t){ .tag = Z_TT_TAG_WHILETOK }))) {
+    if (z_t2334_eq(z_v26870, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_WHILETOK }))) {
         (void)(z_t2388(z_v26861));
-        z_t2391_t _c0 = z_t2390(z_v26861, ((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }));
+        z_t2391_t _c0 = z_t2390(z_v26861, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }));
         z_t2391_destroy(&_c0);
         z_t1289_t z_v26872 = z_t2412(z_v26860, z_v26861);
         uint64_t z_v26873 = z_v26872.length;
@@ -33488,7 +33488,7 @@ static z_t1226_t z_t2437(z_t2327_t* z_v26860, z_t2347_t* z_v26861, z_t1190_t z_v
     z_t1226_destroy(&z_v26877);
     z_t1289_destroy(&z_v26872);
     }
-    if (z_t2334_eq(z_v26870, ((z_t2334_t){ .tag = Z_TT_TAG_LABELTOK }))) {
+    if (z_t2334_eq(z_v26870, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELTOK }))) {
         if (z_v26865) {
             z_t1226_t _ret3 = z_t2340(z_v26860, &z_v26869, ((z_t1013_t){ .tag = Z_ERR_TAG_BADFOR }), z_t75_from_view(_zs764));
     z_t1190_destroy(&z_v26862);
@@ -33505,7 +33505,7 @@ static z_t1226_t z_t2437(z_t2327_t* z_v26860, z_t2347_t* z_v26861, z_t1190_t z_v
         }
         z_t2333_t z_v26889 = z_t2393(z_v26861);
         z_t75_t z_v26890 = z_t75_copy(&z_v26889.tokstr);
-        z_t2391_t _c5 = z_t2390(z_v26861, ((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }));
+        z_t2391_t _c5 = z_t2390(z_v26861, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }));
         z_t2391_destroy(&_c5);
         z_t1289_t z_v26892 = z_t2412(z_v26860, z_v26861);
         uint64_t z_v26893 = z_v26892.length;
@@ -33556,7 +33556,7 @@ static z_t1226_t z_t2437(z_t2327_t* z_v26860, z_t2347_t* z_v26861, z_t1190_t z_v
     z_t2333_destroy(&z_v26889);
     z_t75_free(&z_v26890);
     }
-    if (z_t2334_eq(z_v26870, ((z_t2334_t){ .tag = Z_TT_TAG_LOOPTOK }))) {
+    if (z_t2334_eq(z_v26870, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LOOPTOK }))) {
         if (z_v26865) {
             z_t2333_t z_v26905 = z_t2393(z_v26861);
             z_t1226_t _ret8 = z_t2340(z_v26860, &z_v26905, ((z_t1013_t){ .tag = Z_ERR_TAG_BADFOR }), z_t75_from_view(_zs767));
@@ -33623,7 +33623,7 @@ static z_t1226_t z_t2438(z_t2327_t* z_v26917, z_t2347_t* z_v26918) {
     z_t2333_t z_v26919 = z_t2389(z_v26918);
     uint32_t z_v26920 = z_v26919.lineno;
     uint32_t z_v26921 = z_v26919.colno;
-    z_t2391_t z_v26923 = z_t2390(z_v26918, ((z_t2334_t){ .tag = Z_TT_TAG_FORTOK }));
+    z_t2391_t z_v26923 = z_t2390(z_v26918, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_FORTOK }));
     z_t2391_t _m0 = z_v26923;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -33695,7 +33695,7 @@ static z_t1226_t z_t2439(z_t2327_t* z_v26937, z_t2347_t* z_v26938) {
     z_t2333_t z_v26939 = z_t2389(z_v26938);
     uint32_t z_v26940 = z_v26939.lineno;
     uint32_t z_v26941 = z_v26939.colno;
-    z_t2391_t z_v26943 = z_t2390(z_v26938, ((z_t2334_t){ .tag = Z_TT_TAG_WITHTOK }));
+    z_t2391_t z_v26943 = z_t2390(z_v26938, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_WITHTOK }));
     z_t2391_t _m0 = z_v26943;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -33708,7 +33708,7 @@ static z_t1226_t z_t2439(z_t2327_t* z_v26937, z_t2347_t* z_v26938) {
         case Z_OPTION_TOKEN_TAG_SOME: {
             /* alias: wOpt => (*(z_t2333_t*)_m0.data) */
             z_t2333_t z_v26946 = z_t2389(z_v26938);
-            bool z_v26947 = z_t2334_eq(z_v26946.toktype, ((z_t2334_t){ .tag = Z_TT_TAG_LABELTOK }));
+            bool z_v26947 = z_t2334_eq(z_v26946.toktype, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELTOK }));
             if (z_v26947) {
                 z_t2333_t z_v26948 = z_t2393(z_v26938);
                 uint32_t z_v26950 = z_t2331(z_v26937, ((z_t106_t){ z_v26948.tokstr.data, z_v26948.tokstr.size }));
@@ -33739,7 +33739,7 @@ static z_t1226_t z_t2439(z_t2327_t* z_v26937, z_t2347_t* z_v26938) {
                 }
                 z_t1226_t z_v26958 = z_t2424(z_v26937, z_v26956);
                 z_v26956 = (z_t1226_t){0};
-                z_t2391_t z_v26960 = z_t2390(z_v26938, ((z_t2334_t){ .tag = Z_TT_TAG_DOTOK }));
+                z_t2391_t z_v26960 = z_t2390(z_v26938, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_DOTOK }));
                 z_t2391_t _m3 = z_v26960;
                 switch (_m3.tag) {
                     case Z_OPTION_TOKEN_TAG_NONE: {
@@ -33820,7 +33820,7 @@ static z_t1226_t z_t2440(z_t2327_t* z_v26972, z_t2347_t* z_v26973) {
     z_t2333_t z_v26974 = z_t2389(z_v26973);
     uint32_t z_v26975 = z_v26974.lineno;
     uint32_t z_v26976 = z_v26974.colno;
-    z_t2391_t z_v26978 = z_t2390(z_v26973, ((z_t2334_t){ .tag = Z_TT_TAG_DATATOK }));
+    z_t2391_t z_v26978 = z_t2390(z_v26973, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_DATATOK }));
     z_t2391_t _m0 = z_v26978;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -33832,9 +33832,9 @@ static z_t1226_t z_t2440(z_t2327_t* z_v26972, z_t2347_t* z_v26973) {
         }
         case Z_OPTION_TOKEN_TAG_SOME: {
             /* alias: dOpt => (*(z_t2333_t*)_m0.data) */
-            z_t2391_t _c2 = z_t2390(z_v26973, ((z_t2334_t){ .tag = Z_TT_TAG_ISTOK }));
+            z_t2391_t _c2 = z_t2390(z_v26973, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ISTOK }));
             z_t2391_destroy(&_c2);
-            z_t2391_t z_v26983 = z_t2390(z_v26973, ((z_t2334_t){ .tag = Z_TT_TAG_BRACEOPENTOK }));
+            z_t2391_t z_v26983 = z_t2390(z_v26973, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACEOPENTOK }));
             z_t2391_t _m3 = z_v26983;
             switch (_m3.tag) {
                 case Z_OPTION_TOKEN_TAG_NONE: {
@@ -33855,7 +33855,7 @@ static z_t1226_t z_t2440(z_t2327_t* z_v26972, z_t2347_t* z_v26973) {
                     while (true) {
                         z_t2333_t z_v26989 = z_t2389(z_v26973);
                         z_t2334_t z_v26990 = z_v26989.toktype;
-                        if (z_t2334_eq(z_v26990, ((z_t2334_t){ .tag = Z_TT_TAG_LABELPRETOK }))) {
+                        if (z_t2334_eq(z_v26990, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELPRETOK }))) {
                             z_t2333_t z_v26991 = z_t2393(z_v26973);
                             z_t75_t z_v26992 = z_t75_copy(&z_v26991.tokstr);
                             bool z_v26993 = z_t1140_contains(&z_v26988, z_v26992);
@@ -33891,7 +33891,7 @@ static z_t1226_t z_t2440(z_t2327_t* z_v26972, z_t2347_t* z_v26973) {
     z_t75_free(&z_v26997);
     z_t75_free(&z_v26992);
                         } else {
-                            bool z_v27008 = z_t2334_eq(z_v26990, ((z_t2334_t){ .tag = Z_TT_TAG_LABELTOK }));
+                            bool z_v27008 = z_t2334_eq(z_v26990, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELTOK }));
                             if (z_v27008) {
                                 z_t2333_t z_v27009 = z_t2393(z_v26973);
                                 z_t75_t z_v27010 = z_t75_copy(&z_v27009.tokstr);
@@ -33985,7 +33985,7 @@ static z_t1226_t z_t2440(z_t2327_t* z_v26972, z_t2347_t* z_v26973) {
     z_t2333_destroy(&z_v26989);
                     }
                     __zbrk_899: ;
-                    z_t2391_t z_v27037 = z_t2390(z_v26973, ((z_t2334_t){ .tag = Z_TT_TAG_BRACECLOSETOK }));
+                    z_t2391_t z_v27037 = z_t2390(z_v26973, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACECLOSETOK }));
                     z_t2391_t _m8 = z_v27037;
                     switch (_m8.tag) {
                         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -34015,7 +34015,7 @@ static z_t1226_t z_t2440(z_t2327_t* z_v26972, z_t2347_t* z_v26973) {
     z_t2391_destroy(&z_v27037);
                                 return _ret10;
                             }
-                            z_t2391_t z_v27045 = z_t2390(z_v26973, ((z_t2334_t){ .tag = Z_TT_TAG_OUTTOK }));
+                            z_t2391_t z_v27045 = z_t2390(z_v26973, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_OUTTOK }));
                             z_t2391_t _m11 = z_v27045;
                             switch (_m11.tag) {
                                 case Z_OPTION_TOKEN_TAG_SOME: {
@@ -34104,7 +34104,7 @@ static z_t1226_t z_t2440(z_t2327_t* z_v26972, z_t2347_t* z_v26973) {
 
 static z_t1226_t z_t2441(z_t2327_t* z_v27055, z_t2347_t* z_v27056) {
     z_t2333_t z_v27057 = z_t2389(z_v27056);
-    z_t2391_t z_v27059 = z_t2390(z_v27056, ((z_t2334_t){ .tag = Z_TT_TAG_YIELDTOK }));
+    z_t2391_t z_v27059 = z_t2390(z_v27056, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_YIELDTOK }));
     z_t2391_t _m0 = z_v27059;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -34238,7 +34238,7 @@ static z_t1226_t z_t2443(z_t2327_t* z_v27091, z_t1289_t z_v27092, z_t2347_t* z_v
 static z_t1190_t z_t2444(z_t2327_t* z_v27111, z_t2347_t* z_v27112) {
     z_t1190_t z_v27113 = z_t1190_create((uint64_t)0);
     z_t1140_t z_v27114 = z_t1140_create((uint64_t)0);
-    z_t2391_t z_v27116 = z_t2390(z_v27112, ((z_t2334_t){ .tag = Z_TT_TAG_BRACEOPENTOK }));
+    z_t2391_t z_v27116 = z_t2390(z_v27112, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACEOPENTOK }));
     z_t2391_t _m0 = z_v27116;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -34254,11 +34254,11 @@ static z_t1190_t z_t2444(z_t2327_t* z_v27111, z_t2347_t* z_v27112) {
         case Z_OPTION_TOKEN_TAG_SOME: {
             /* alias: openOpt => (*(z_t2333_t*)_m0.data) */
             while (true) {
-                z_t2391_t _c1 = z_t2390(z_v27112, ((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }));
+                z_t2391_t _c1 = z_t2390(z_v27112, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }));
                 z_t2391_destroy(&_c1);
                 z_t2333_t z_v27123 = z_t2389(z_v27112);
                 z_t2334_t z_v27124 = z_v27123.toktype;
-                if (z_t2334_eq(z_v27124, ((z_t2334_t){ .tag = Z_TT_TAG_LABELPRETOK }))) {
+                if (z_t2334_eq(z_v27124, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELPRETOK }))) {
                     z_t2333_t z_v27125 = z_t2393(z_v27112);
                     z_t75_t z_v27126 = z_t75_copy(&z_v27125.tokstr);
                     bool z_v27127 = z_t1140_contains(&z_v27114, z_v27126);
@@ -34288,7 +34288,7 @@ static z_t1190_t z_t2444(z_t2327_t* z_v27111, z_t2347_t* z_v27112) {
     z_t75_free(&z_v27132);
     z_t75_free(&z_v27126);
                 } else {
-                    bool z_v27143 = z_t2334_eq(z_v27124, ((z_t2334_t){ .tag = Z_TT_TAG_LABELTOK }));
+                    bool z_v27143 = z_t2334_eq(z_v27124, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELTOK }));
                     if (z_v27143) {
                         z_t2333_t z_v27144 = z_t2393(z_v27112);
                         z_t75_t z_v27145 = z_t75_copy(&z_v27144.tokstr);
@@ -34351,7 +34351,7 @@ static z_t1190_t z_t2444(z_t2327_t* z_v27111, z_t2347_t* z_v27112) {
     z_t2333_destroy(&z_v27123);
             }
             __zbrk_900: ;
-            z_t2391_t z_v27168 = z_t2390(z_v27112, ((z_t2334_t){ .tag = Z_TT_TAG_BRACECLOSETOK }));
+            z_t2391_t z_v27168 = z_t2390(z_v27112, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACECLOSETOK }));
             z_t2391_t _m2 = z_v27168;
             switch (_m2.tag) {
                 case Z_OPTION_TOKEN_TAG_NONE: {
@@ -34403,7 +34403,7 @@ _s0; });
 static z_t1226_t z_t2445(z_t2327_t* z_v27178, z_t2347_t* z_v27179, z_t1190_t z_v27180, z_t1190_t z_v27181, uint32_t z_v27182, uint32_t z_v27183, bool z_v27184, bool z_v27185, bool z_v27186, bool z_v27187, bool z_v27188, uint32_t z_v27189, uint32_t z_v27190) {
     z_t2333_t z_v27191 = z_t2389(z_v27179);
     z_t2334_t z_v27192 = z_v27191.toktype;
-    if (z_t2334_eq(z_v27192, ((z_t2334_t){ .tag = Z_TT_TAG_OUTTOK }))) {
+    if (z_t2334_eq(z_v27192, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_OUTTOK }))) {
         if (z_v27185) {
             z_t1226_t _ret0 = z_t2340(z_v27178, &z_v27191, ((z_t1013_t){ .tag = Z_ERR_TAG_BADARGUMENT }), z_t75_from_view(_zs793));
     z_t1190_destroy(&z_v27180);
@@ -34443,7 +34443,7 @@ static z_t1226_t z_t2445(z_t2327_t* z_v27178, z_t2347_t* z_v27179, z_t1190_t z_v
     z_t2333_destroy(&z_v27199);
         }
     }
-    if (z_t2334_eq(z_v27192, ((z_t2334_t){ .tag = Z_TT_TAG_ISTOK }))) {
+    if (z_t2334_eq(z_v27192, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ISTOK }))) {
         if (z_v27186) {
             z_t1226_t _ret3 = z_t2340(z_v27178, &z_v27191, ((z_t1013_t){ .tag = Z_ERR_TAG_BADARGUMENT }), z_t75_from_view(_zs795));
     z_t1190_destroy(&z_v27180);
@@ -34452,7 +34452,7 @@ static z_t1226_t z_t2445(z_t2327_t* z_v27178, z_t2347_t* z_v27179, z_t1190_t z_v
             return _ret3;
         }
         (void)(z_t2388(z_v27179));
-        z_t2391_t z_v27205 = z_t2390(z_v27179, ((z_t2334_t){ .tag = Z_TT_TAG_NATIVETOK }));
+        z_t2391_t z_v27205 = z_t2390(z_v27179, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_NATIVETOK }));
         z_t2391_t _m4 = z_v27205;
         switch (_m4.tag) {
             case Z_OPTION_TOKEN_TAG_SOME: {
@@ -34494,7 +34494,7 @@ static z_t1226_t z_t2445(z_t2327_t* z_v27178, z_t2347_t* z_v27179, z_t1190_t z_v
         }
     z_t2391_destroy(&z_v27205);
     }
-    if (z_t2334_eq(z_v27192, ((z_t2334_t){ .tag = Z_TT_TAG_ASTOK }))) {
+    if (z_t2334_eq(z_v27192, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ASTOK }))) {
         if (z_v27188) {
             z_t1226_t _ret7 = z_t2340(z_v27178, &z_v27191, ((z_t1013_t){ .tag = Z_ERR_TAG_BADARGUMENT }), z_t75_from_view(_zs796));
     z_t1190_destroy(&z_v27180);
@@ -34527,7 +34527,7 @@ static z_t1226_t z_t2445(z_t2327_t* z_v27178, z_t2347_t* z_v27179, z_t1190_t z_v
         return _ret9;
     z_t1190_destroy(&z_v27211);
     }
-    if (z_t2334_eq(z_v27192, ((z_t2334_t){ .tag = Z_TT_TAG_INTOK }))) {
+    if (z_t2334_eq(z_v27192, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_INTOK }))) {
         if (z_v27184) {
             z_t1226_t _ret10 = z_t2340(z_v27178, &z_v27191, ((z_t1013_t){ .tag = Z_ERR_TAG_BADARGUMENT }), z_t75_from_view(_zs797));
     z_t1190_destroy(&z_v27180);
@@ -34576,7 +34576,7 @@ static z_t1226_t z_t2446(z_t2327_t* z_v27224, z_t2347_t* z_v27225, uint32_t z_v2
     z_t1190_t z_v27228 = z_t1190_create((uint64_t)0);
     z_t1190_t z_v27229 = z_t1190_create((uint64_t)0);
     z_t2333_t z_v27230 = z_t2389(z_v27225);
-    bool z_v27231 = z_t2334_eq(z_v27230.toktype, ((z_t2334_t){ .tag = Z_TT_TAG_BRACEOPENTOK }));
+    bool z_v27231 = z_t2334_eq(z_v27230.toktype, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACEOPENTOK }));
     if (z_v27231) {
         z_t1190_t z_v27232 = z_t2444(z_v27224, z_v27225);
         uint64_t z_v27233 = z_v27232.length;
@@ -34625,7 +34625,7 @@ static z_t1226_t z_t2447(z_t2327_t* z_v27237, z_t2347_t* z_v27238, z_t2333_t* z_
 
 static z_t2403_t z_t2448(z_t2327_t* z_v27243, z_t2347_t* z_v27244) {
     z_t2333_t z_v27245 = z_t2389(z_v27244);
-    bool z_v27246 = z_t2334_eq(z_v27245.toktype, ((z_t2334_t){ .tag = Z_TT_TAG_FUNCTIONTOK }));
+    bool z_v27246 = z_t2334_eq(z_v27245.toktype, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_FUNCTIONTOK }));
     if (z_v27246) {
         z_t2403_t _c0 = {0};
         _c0.tag = Z_OPTION_NODE_TAG_SOME;
@@ -34645,7 +34645,7 @@ static z_t2403_t z_t2448(z_t2327_t* z_v27243, z_t2347_t* z_v27244) {
 static z_t1190_t z_t2449(z_t2327_t* z_v27247, z_t2347_t* z_v27248, bool z_v27249) {
     z_t1190_t z_v27250 = z_t1190_create((uint64_t)0);
     z_t1140_t z_v27251 = z_t1140_create((uint64_t)0);
-    z_t2391_t z_v27253 = z_t2390(z_v27248, ((z_t2334_t){ .tag = Z_TT_TAG_BRACEOPENTOK }));
+    z_t2391_t z_v27253 = z_t2390(z_v27248, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACEOPENTOK }));
     z_t2391_t _m0 = z_v27253;
     switch (_m0.tag) {
         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -34666,7 +34666,7 @@ static z_t1190_t z_t2449(z_t2327_t* z_v27247, z_t2347_t* z_v27248, bool z_v27249
                 }
                 z_t2333_t z_v27259 = z_t2389(z_v27248);
                 z_t2334_t z_v27260 = z_v27259.toktype;
-                if (z_t2334_eq(z_v27260, ((z_t2334_t){ .tag = Z_TT_TAG_LABELPRETOK }))) {
+                if (z_t2334_eq(z_v27260, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELPRETOK }))) {
                     z_t2333_t z_v27261 = z_t2393(z_v27248);
                     z_t75_t z_v27262 = z_t75_copy(&z_v27261.tokstr);
                     bool z_v27263 = z_t1140_contains(&z_v27251, z_v27262);
@@ -34696,7 +34696,7 @@ static z_t1190_t z_t2449(z_t2327_t* z_v27247, z_t2347_t* z_v27248, bool z_v27249
     z_t75_free(&z_v27268);
     z_t75_free(&z_v27262);
                 } else {
-                    bool z_v27279 = z_t2334_eq(z_v27260, ((z_t2334_t){ .tag = Z_TT_TAG_LABELTOK }));
+                    bool z_v27279 = z_t2334_eq(z_v27260, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELTOK }));
                     if (z_v27279) {
                         z_t2333_t z_v27280 = z_t2393(z_v27248);
                         z_t75_t z_v27281 = z_t75_copy(&z_v27280.tokstr);
@@ -34713,7 +34713,7 @@ static z_t1190_t z_t2449(z_t2327_t* z_v27247, z_t2347_t* z_v27248, bool z_v27249
                         (void)(z_t1140_append(&z_v27251, z_v27281));
                         z_v27281 = (z_t75_t){0};
                         z_t75_t z_v27287 = z_t75_copy(&z_v27280.tokstr);
-                        z_t2391_t _c1 = z_t2390(z_v27248, ((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }));
+                        z_t2391_t _c1 = z_t2390(z_v27248, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }));
                         z_t2391_destroy(&_c1);
                         z_t1226_t z_v27289 = z_t2450(z_v27247, z_v27248);
                         bool z_v27290 = z_t2341(z_v27289);
@@ -34788,7 +34788,7 @@ static z_t1190_t z_t2449(z_t2327_t* z_v27247, z_t2347_t* z_v27248, bool z_v27249
     z_t2333_destroy(&z_v27259);
             }
             __zbrk_901: ;
-            z_t2391_t z_v27306 = z_t2390(z_v27248, ((z_t2334_t){ .tag = Z_TT_TAG_BRACECLOSETOK }));
+            z_t2391_t z_v27306 = z_t2390(z_v27248, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACECLOSETOK }));
             z_t2391_t _m7 = z_v27306;
             switch (_m7.tag) {
                 case Z_OPTION_TOKEN_TAG_NONE: {
@@ -34840,12 +34840,12 @@ _s0; });
 static z_t1226_t z_t2450(z_t2327_t* z_v27316, z_t2347_t* z_v27317) {
     z_t2333_t z_v27318 = z_t2389(z_v27317);
     z_t2334_t z_v27319 = z_v27318.toktype;
-    if (z_t2334_eq(z_v27319, ((z_t2334_t){ .tag = Z_TT_TAG_FUNCTIONTOK }))) {
+    if (z_t2334_eq(z_v27319, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_FUNCTIONTOK }))) {
         z_t1226_t _ret0 = z_t2447(z_v27316, z_v27317, &z_v27318);
     z_t2333_destroy(&z_v27318);
         return _ret0;
     }
-    if (z_t2334_eq(z_v27319, ((z_t2334_t){ .tag = Z_TT_TAG_UNITTOK }))) {
+    if (z_t2334_eq(z_v27319, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_UNITTOK }))) {
         z_t1226_t _ret1 = z_t2453(z_v27316, z_v27317, &z_v27318);
     z_t2333_destroy(&z_v27318);
         return _ret1;
@@ -34883,55 +34883,55 @@ static z_t1226_t z_t2451(z_t2327_t* z_v27329, z_t2347_t* z_v27330) {
     z_t2333_t z_v27331 = z_t2389(z_v27330);
     z_t2334_t _m0 = z_v27331.toktype;
     switch (_m0.tag) {
-        case Z_TT_TAG_UNITTOK: {
+        case Z_TOKTYPE_TAG_UNITTOK: {
             z_t1226_t _ret1 = z_t2453(z_v27329, z_v27330, &z_v27331);
     z_t2333_destroy(&z_v27331);
             return _ret1;
             break;
         }
-        case Z_TT_TAG_FUNCTIONTOK: {
+        case Z_TOKTYPE_TAG_FUNCTIONTOK: {
             z_t1226_t _ret2 = z_t2447(z_v27329, z_v27330, &z_v27331);
     z_t2333_destroy(&z_v27331);
             return _ret2;
             break;
         }
-        case Z_TT_TAG_RECORDTOK: {
+        case Z_TOKTYPE_TAG_RECORDTOK: {
             z_t1226_t _ret3 = z_t2454(z_v27329, z_v27330, &z_v27331, ((z_t1278_t){ .tag = Z_NODETYPE_TAG_RECORDDEF }));
     z_t2333_destroy(&z_v27331);
             return _ret3;
             break;
         }
-        case Z_TT_TAG_CLASSTOK: {
+        case Z_TOKTYPE_TAG_CLASSTOK: {
             z_t1226_t _ret4 = z_t2454(z_v27329, z_v27330, &z_v27331, ((z_t1278_t){ .tag = Z_NODETYPE_TAG_CLASSDEF }));
     z_t2333_destroy(&z_v27331);
             return _ret4;
             break;
         }
-        case Z_TT_TAG_VARIANTTOK: {
+        case Z_TOKTYPE_TAG_VARIANTTOK: {
             z_t1226_t _ret5 = z_t2454(z_v27329, z_v27330, &z_v27331, ((z_t1278_t){ .tag = Z_NODETYPE_TAG_VARIANTDEF }));
     z_t2333_destroy(&z_v27331);
             return _ret5;
             break;
         }
-        case Z_TT_TAG_UNIONTOK: {
+        case Z_TOKTYPE_TAG_UNIONTOK: {
             z_t1226_t _ret6 = z_t2454(z_v27329, z_v27330, &z_v27331, ((z_t1278_t){ .tag = Z_NODETYPE_TAG_UNIONDEF }));
     z_t2333_destroy(&z_v27331);
             return _ret6;
             break;
         }
-        case Z_TT_TAG_PROTOCOLTOK: {
+        case Z_TOKTYPE_TAG_PROTOCOLTOK: {
             z_t1226_t _ret7 = z_t2454(z_v27329, z_v27330, &z_v27331, ((z_t1278_t){ .tag = Z_NODETYPE_TAG_PROTOCOLDEF }));
     z_t2333_destroy(&z_v27331);
             return _ret7;
             break;
         }
-        case Z_TT_TAG_FACETTOK: {
+        case Z_TOKTYPE_TAG_FACETTOK: {
             z_t1226_t _ret8 = z_t2454(z_v27329, z_v27330, &z_v27331, ((z_t1278_t){ .tag = Z_NODETYPE_TAG_FACETDEF }));
     z_t2333_destroy(&z_v27331);
             return _ret8;
             break;
         }
-        case Z_TT_TAG_IFTOK: {
+        case Z_TOKTYPE_TAG_IFTOK: {
             z_t1226_t z_v27338 = z_t2434(z_v27329, z_v27330);
             bool z_v27339 = z_t2341(z_v27338);
             if (z_v27339) {
@@ -34946,7 +34946,7 @@ static z_t1226_t z_t2451(z_t2327_t* z_v27329, z_t2347_t* z_v27330) {
     z_t1226_destroy(&z_v27338);
             break;
         }
-        case Z_TT_TAG_MATCHTOK: {
+        case Z_TOKTYPE_TAG_MATCHTOK: {
             z_t1226_t z_v27340 = z_t2436(z_v27329, z_v27330);
             bool z_v27341 = z_t2341(z_v27340);
             if (z_v27341) {
@@ -34961,7 +34961,7 @@ static z_t1226_t z_t2451(z_t2327_t* z_v27329, z_t2347_t* z_v27330) {
     z_t1226_destroy(&z_v27340);
             break;
         }
-        case Z_TT_TAG_DATATOK: {
+        case Z_TOKTYPE_TAG_DATATOK: {
             z_t1226_t z_v27342 = z_t2440(z_v27329, z_v27330);
             bool z_v27343 = z_t2341(z_v27342);
             if (z_v27343) {
@@ -35008,7 +35008,7 @@ static z_t1190_t z_t2452(z_t2327_t* z_v27348, z_t2347_t* z_v27349) {
         }
         z_t2333_t z_v27353 = z_t2389(z_v27349);
         z_t2334_t z_v27354 = z_v27353.toktype;
-        if (z_t2334_eq(z_v27354, ((z_t2334_t){ .tag = Z_TT_TAG_LABELPRETOK }))) {
+        if (z_t2334_eq(z_v27354, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELPRETOK }))) {
             z_t2333_t z_v27355 = z_t2393(z_v27349);
             z_t75_t z_v27356 = z_t75_copy(&z_v27355.tokstr);
             bool z_v27357 = z_t1140_contains(&z_v27351, z_v27356);
@@ -35038,7 +35038,7 @@ static z_t1190_t z_t2452(z_t2327_t* z_v27348, z_t2347_t* z_v27349) {
     z_t75_free(&z_v27362);
     z_t75_free(&z_v27356);
         } else {
-            bool z_v27373 = z_t2334_eq(z_v27354, ((z_t2334_t){ .tag = Z_TT_TAG_LABELTOK }));
+            bool z_v27373 = z_t2334_eq(z_v27354, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELTOK }));
             if (z_v27373) {
                 z_t2333_t z_v27374 = z_t2393(z_v27349);
                 z_t75_t z_v27375 = z_t75_copy(&z_v27374.tokstr);
@@ -35055,7 +35055,7 @@ static z_t1190_t z_t2452(z_t2327_t* z_v27348, z_t2347_t* z_v27349) {
                 (void)(z_t1140_append(&z_v27351, z_v27375));
                 z_v27375 = (z_t75_t){0};
                 z_t75_t z_v27381 = z_t75_copy(&z_v27374.tokstr);
-                z_t2391_t _c0 = z_t2390(z_v27349, ((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }));
+                z_t2391_t _c0 = z_t2390(z_v27349, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }));
                 z_t2391_destroy(&_c0);
                 (void)(z_t2394(z_v27349, true));
                 z_t1226_t z_v27383 = z_t2451(z_v27348, z_v27349);
@@ -35124,9 +35124,9 @@ _s0; });
 
 static z_t1226_t z_t2453(z_t2327_t* z_v27397, z_t2347_t* z_v27398, z_t2333_t* z_v27399) {
     (void)(z_t2388(z_v27398));
-    z_t2391_t _c0 = z_t2390(z_v27398, ((z_t2334_t){ .tag = Z_TT_TAG_ASTOK }));
+    z_t2391_t _c0 = z_t2390(z_v27398, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ASTOK }));
     z_t2391_destroy(&_c0);
-    z_t2391_t z_v27402 = z_t2390(z_v27398, ((z_t2334_t){ .tag = Z_TT_TAG_BRACEOPENTOK }));
+    z_t2391_t z_v27402 = z_t2390(z_v27398, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACEOPENTOK }));
     z_t2391_t _m1 = z_v27402;
     switch (_m1.tag) {
         case Z_OPTION_TOKEN_TAG_NONE: {
@@ -35152,7 +35152,7 @@ static z_t1226_t z_t2453(z_t2327_t* z_v27397, z_t2347_t* z_v27398, z_t2333_t* z_
                 }
                 (void)(z_t1190_append(&z_v27406, z_v27408));
             }
-            z_t2391_t z_v27412 = z_t2390(z_v27398, ((z_t2334_t){ .tag = Z_TT_TAG_BRACECLOSETOK }));
+            z_t2391_t z_v27412 = z_t2390(z_v27398, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACECLOSETOK }));
             z_t2391_t _m4 = z_v27412;
             switch (_m4.tag) {
                 case Z_OPTION_TOKEN_TAG_NONE: {
@@ -35219,7 +35219,7 @@ static z_t1226_t z_t2454(z_t2327_t* z_v27421, z_t2347_t* z_v27422, z_t2333_t* z_
 static z_t1226_t z_t2455(z_t2327_t* z_v27429, z_t2347_t* z_v27430, z_t1190_t z_v27431, z_t1190_t z_v27432, bool z_v27433, bool z_v27434, bool z_v27435, z_t1278_t z_v27436, uint32_t z_v27437, uint32_t z_v27438) {
     z_t2333_t z_v27439 = z_t2389(z_v27430);
     z_t2334_t z_v27440 = z_v27439.toktype;
-    if (z_t2334_eq(z_v27440, ((z_t2334_t){ .tag = Z_TT_TAG_ISTOK }))) {
+    if (z_t2334_eq(z_v27440, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ISTOK }))) {
         if (z_v27434) {
             z_t1226_t _ret0 = z_t2340(z_v27429, &z_v27439, ((z_t1013_t){ .tag = Z_ERR_TAG_BADITEM }), z_t75_from_view(_zs813));
     z_t1190_destroy(&z_v27431);
@@ -35235,7 +35235,7 @@ static z_t1226_t z_t2455(z_t2327_t* z_v27429, z_t2347_t* z_v27430, z_t1190_t z_v
             return _ret1;
         }
         (void)(z_t2388(z_v27430));
-        z_t2391_t z_v27446 = z_t2390(z_v27430, ((z_t2334_t){ .tag = Z_TT_TAG_NATIVETOK }));
+        z_t2391_t z_v27446 = z_t2390(z_v27430, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_NATIVETOK }));
         z_t2391_t _m2 = z_v27446;
         switch (_m2.tag) {
             case Z_OPTION_TOKEN_TAG_SOME: {
@@ -35282,7 +35282,7 @@ static z_t1226_t z_t2455(z_t2327_t* z_v27429, z_t2347_t* z_v27430, z_t1190_t z_v
         }
     z_t2391_destroy(&z_v27446);
     }
-    if (z_t2334_eq(z_v27440, ((z_t2334_t){ .tag = Z_TT_TAG_NATIVETOK }))) {
+    if (z_t2334_eq(z_v27440, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_NATIVETOK }))) {
         bool z_v27452 = true;
         if (z_v27434) {
             z_v27452 = false;
@@ -35301,7 +35301,7 @@ static z_t1226_t z_t2455(z_t2327_t* z_v27429, z_t2347_t* z_v27430, z_t1190_t z_v
             return _ret6;
         }
     }
-    if (z_t2334_eq(z_v27440, ((z_t2334_t){ .tag = Z_TT_TAG_ASTOK }))) {
+    if (z_t2334_eq(z_v27440, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ASTOK }))) {
         if (z_v27435) {
             z_t1226_t _ret7 = z_t2340(z_v27429, &z_v27439, ((z_t1013_t){ .tag = Z_ERR_TAG_BADITEM }), z_t75_from_view(_zs815));
     z_t1190_destroy(&z_v27431);
@@ -35334,7 +35334,7 @@ static z_t1226_t z_t2455(z_t2327_t* z_v27429, z_t2347_t* z_v27430, z_t1190_t z_v
         return _ret9;
     z_t1190_destroy(&z_v27455);
     }
-    if (z_t2334_eq(z_v27440, ((z_t2334_t){ .tag = Z_TT_TAG_BRACEOPENTOK }))) {
+    if (z_t2334_eq(z_v27440, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACEOPENTOK }))) {
         bool z_v27460 = true;
         if (z_v27434) {
             z_v27460 = false;
@@ -35398,7 +35398,7 @@ static z_t1226_t z_t2456(z_t2327_t* z_v27470, z_t2347_t* z_v27471) {
     z_t2333_t z_v27472 = z_t2389(z_v27471);
     z_t2334_t _m0 = z_v27472.toktype;
     switch (_m0.tag) {
-        case Z_TT_TAG_IFTOK: {
+        case Z_TOKTYPE_TAG_IFTOK: {
             z_t1226_t z_v27473 = z_t2434(z_v27470, z_v27471);
             bool z_v27474 = z_t2341(z_v27473);
             if (z_v27474) {
@@ -35413,7 +35413,7 @@ static z_t1226_t z_t2456(z_t2327_t* z_v27470, z_t2347_t* z_v27471) {
     z_t1226_destroy(&z_v27473);
             break;
         }
-        case Z_TT_TAG_FORTOK: {
+        case Z_TOKTYPE_TAG_FORTOK: {
             z_t1226_t z_v27475 = z_t2438(z_v27470, z_v27471);
             bool z_v27476 = z_t2341(z_v27475);
             if (z_v27476) {
@@ -35428,7 +35428,7 @@ static z_t1226_t z_t2456(z_t2327_t* z_v27470, z_t2347_t* z_v27471) {
     z_t1226_destroy(&z_v27475);
             break;
         }
-        case Z_TT_TAG_MATCHTOK: {
+        case Z_TOKTYPE_TAG_MATCHTOK: {
             z_t1226_t z_v27477 = z_t2436(z_v27470, z_v27471);
             bool z_v27478 = z_t2341(z_v27477);
             if (z_v27478) {
@@ -35443,7 +35443,7 @@ static z_t1226_t z_t2456(z_t2327_t* z_v27470, z_t2347_t* z_v27471) {
     z_t1226_destroy(&z_v27477);
             break;
         }
-        case Z_TT_TAG_DATATOK: {
+        case Z_TOKTYPE_TAG_DATATOK: {
             z_t1226_t z_v27479 = z_t2440(z_v27470, z_v27471);
             bool z_v27480 = z_t2341(z_v27479);
             if (z_v27480) {
@@ -35458,7 +35458,7 @@ static z_t1226_t z_t2456(z_t2327_t* z_v27470, z_t2347_t* z_v27471) {
     z_t1226_destroy(&z_v27479);
             break;
         }
-        case Z_TT_TAG_WITHTOK: {
+        case Z_TOKTYPE_TAG_WITHTOK: {
             z_t1226_t z_v27481 = z_t2439(z_v27470, z_v27471);
             bool z_v27482 = z_t2341(z_v27481);
             if (z_v27482) {
@@ -35473,7 +35473,7 @@ static z_t1226_t z_t2456(z_t2327_t* z_v27470, z_t2347_t* z_v27471) {
     z_t1226_destroy(&z_v27481);
             break;
         }
-        case Z_TT_TAG_BRACEOPENTOK: {
+        case Z_TOKTYPE_TAG_BRACEOPENTOK: {
             z_t1226_t z_v27483 = z_t2430(z_v27470, z_v27471);
             bool z_v27484 = z_t2341(z_v27483);
             if (z_v27484) {
@@ -35488,7 +35488,7 @@ static z_t1226_t z_t2456(z_t2327_t* z_v27470, z_t2347_t* z_v27471) {
     z_t1226_destroy(&z_v27483);
             break;
         }
-        case Z_TT_TAG_YIELDTOK: {
+        case Z_TOKTYPE_TAG_YIELDTOK: {
             z_t1226_t z_v27485 = z_t2441(z_v27470, z_v27471);
             bool z_v27486 = z_t2341(z_v27485);
             if (z_v27486) {
@@ -35512,7 +35512,7 @@ static z_t1226_t z_t2456(z_t2327_t* z_v27470, z_t2347_t* z_v27471) {
     z_t1289_destroy(&z_v27487);
                 return _ret8;
             }
-            z_t2391_t z_v27492 = z_t2390(z_v27471, ((z_t2334_t){ .tag = Z_TT_TAG_EQUALSTOK }));
+            z_t2391_t z_v27492 = z_t2390(z_v27471, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EQUALSTOK }));
             z_t2391_t _m9 = z_v27492;
             switch (_m9.tag) {
                 case Z_OPTION_TOKEN_TAG_SOME: {
@@ -35537,7 +35537,7 @@ static z_t1226_t z_t2456(z_t2327_t* z_v27470, z_t2347_t* z_v27471) {
                     break;
                 }
                 case Z_OPTION_TOKEN_TAG_NONE: {
-                    z_t2391_t z_v27498 = z_t2390(z_v27471, ((z_t2334_t){ .tag = Z_TT_TAG_SWAPTOK }));
+                    z_t2391_t z_v27498 = z_t2390(z_v27471, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_SWAPTOK }));
                     z_t2391_t _m11 = z_v27498;
                     switch (_m11.tag) {
                         case Z_OPTION_TOKEN_TAG_SOME: {
@@ -35706,7 +35706,7 @@ static z_t1226_t z_t2459(z_t2327_t* z_v27509, z_t1019_t* z_v27510, uint32_t z_v2
                 }
                 (void)(z_t1190_append(&z_v27545, z_v27547));
             }
-            z_t2391_t z_v27551 = z_t2390(&z_v27542, ((z_t2334_t){ .tag = Z_TT_TAG_EOFTOK }));
+            z_t2391_t z_v27551 = z_t2390(&z_v27542, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOFTOK }));
             z_t2391_t _m7 = z_v27551;
             switch (_m7.tag) {
                 case Z_OPTION_TOKEN_TAG_NONE: {
@@ -35977,7 +35977,7 @@ _s0; }), 0, z_t75_from_view(_zs831), z_t75_from_view(_zs832)); _u.data = _b; _u;
 }
 
 static z_t2348_t z_t2376(z_t75_t z_v27630, uint32_t z_v27631) {
-    z_t2348_t _ret0 = z_t2348_meta_create(z_v27630, 0, 0, 0, z_v27631, 1, 0, false, z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_EOFTOK }), z_t75_from_view(_zs991), z_v27631, 0, 0, 0), z_t2354_create((uint64_t)0));
+    z_t2348_t _ret0 = z_t2348_meta_create(z_v27630, 0, 0, 0, z_v27631, 1, 0, false, z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOFTOK }), z_t75_from_view(_zs991), z_v27631, 0, 0, 0), z_t2354_create((uint64_t)0));
     z_v27630 = (z_t75_t){0};
     z_t75_free(&z_v27630);
     return _ret0;
@@ -36044,10 +36044,10 @@ static z_t2333_t z_t2381(z_t2348_t* z_v27647) {
         (void)(z_t2380(z_v27647));
     }
     if (z_v27647->tokpos > z_v27651) {
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRMIDTOK }), z_t2385(z_v27647, z_v27651, z_v27647->tokpos), z_v27647->fsno, z_v27648, z_v27649, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRMIDTOK }), z_t2385(z_v27647, z_v27651, z_v27647->tokpos), z_v27647->fsno, z_v27648, z_v27649, 0);
     }
     (void)(z_t2380(z_v27647));
-    return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK }), z_t2385(z_v27647, z_v27651, (z_v27651 + 1)), z_v27647->fsno, z_v27648, z_v27649, 0);
+    return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK }), z_t2385(z_v27647, z_v27651, (z_v27651 + 1)), z_v27647->fsno, z_v27648, z_v27649, 0);
 }
 
 static z_t2333_t z_t2382(z_t2348_t* z_v27661, uint8_t z_v27662) {
@@ -36061,7 +36061,7 @@ static z_t2333_t z_t2382(z_t2348_t* z_v27661, uint8_t z_v27662) {
         }
         if (z_v27661->atchar != 34) {
             if (z_v27665.size > 0) {
-                z_t2333_t _ret0 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRMIDTOK }), z_v27665, z_v27661->fsno, z_v27663, z_v27664, 0);
+                z_t2333_t _ret0 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRMIDTOK }), z_v27665, z_v27661->fsno, z_v27663, z_v27664, 0);
                 z_v27665 = (z_t75_t){0};
                 z_t75_free(&z_v27665);
                 return _ret0;
@@ -36069,7 +36069,7 @@ static z_t2333_t z_t2382(z_t2348_t* z_v27661, uint8_t z_v27662) {
             z_t75_t z_v27670 = ((z_t75_t){0});
             (void)(z_t75_append_byte(&z_v27670, z_v27661->atchar));
             (void)(z_t2380(z_v27661));
-            z_t2333_t _ret1 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK }), z_v27670, z_v27661->fsno, z_v27663, z_v27664, 0);
+            z_t2333_t _ret1 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK }), z_v27670, z_v27661->fsno, z_v27663, z_v27664, 0);
             z_v27670 = (z_t75_t){0};
             z_t75_free(&z_v27665);
             z_t75_free(&z_v27670);
@@ -36088,18 +36088,18 @@ static z_t2333_t z_t2382(z_t2348_t* z_v27661, uint8_t z_v27662) {
         } else {
             (void)(z_t2378(z_v27661));
             if (z_v27665.size > 0) {
-                z_t2333_t _rr2 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRENDTOK }), z_v27676, z_v27661->fsno, z_v27674, z_v27675, 0);
+                z_t2333_t _rr2 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRENDTOK }), z_v27676, z_v27661->fsno, z_v27674, z_v27675, 0);
                 z_t2333_destroy(&z_v27661->nexttok);
                 z_v27661->nexttok = _rr2;
                 z_v27676 = (z_t75_t){0};
                 z_v27661->hasnext = true;
-                z_t2333_t _ret3 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRMIDTOK }), z_v27665, z_v27661->fsno, z_v27663, z_v27664, 0);
+                z_t2333_t _ret3 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRMIDTOK }), z_v27665, z_v27661->fsno, z_v27663, z_v27664, 0);
                 z_v27665 = (z_t75_t){0};
                 z_t75_free(&z_v27665);
                 z_t75_free(&z_v27676);
                 return _ret3;
             }
-            z_t2333_t _ret4 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRENDTOK }), z_v27676, z_v27661->fsno, z_v27674, z_v27675, 0);
+            z_t2333_t _ret4 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRENDTOK }), z_v27676, z_v27661->fsno, z_v27674, z_v27675, 0);
             z_v27676 = (z_t75_t){0};
             z_t75_free(&z_v27665);
             z_t75_free(&z_v27676);
@@ -36107,7 +36107,7 @@ static z_t2333_t z_t2382(z_t2348_t* z_v27661, uint8_t z_v27662) {
         }
     z_t75_free(&z_v27676);
     }
-    z_t2333_t _ret5 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK }), z_t75_from_view(_zs992), z_v27661->fsno, z_v27663, z_v27664, 0);
+    z_t2333_t _ret5 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK }), z_t75_from_view(_zs992), z_v27661->fsno, z_v27663, z_v27664, 0);
     z_t75_free(&z_v27665);
     return _ret5;
     z_t75_free(&z_v27665);
@@ -36120,7 +36120,7 @@ static z_t2333_t z_t2383(z_t2348_t* z_v27688) {
     if (z_v27691 != 92) {
         z_t75_t z_v27692 = ((z_t75_t){0});
         (void)(z_t75_append_byte(&z_v27692, z_v27691));
-        z_t2333_t _ret0 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK }), z_v27692, z_v27688->fsno, z_v27689, z_v27690, 0);
+        z_t2333_t _ret0 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK }), z_v27692, z_v27688->fsno, z_v27689, z_v27690, 0);
         z_v27692 = (z_t75_t){0};
         z_t75_free(&z_v27692);
         return _ret0;
@@ -36154,7 +36154,7 @@ static z_t2333_t z_t2383(z_t2348_t* z_v27688) {
         (void)(z_t2380(z_v27688));
         z_t75_t z_v27697 = ((z_t75_t){0});
         (void)(z_t75_append_byte(&z_v27697, z_v27695));
-        z_t2333_t _ret1 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRCHRTOK }), z_v27697, z_v27688->fsno, z_v27689, z_v27690, 0);
+        z_t2333_t _ret1 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRCHRTOK }), z_v27697, z_v27688->fsno, z_v27689, z_v27690, 0);
         z_v27697 = (z_t75_t){0};
         z_t75_free(&z_v27697);
         return _ret1;
@@ -36170,7 +36170,7 @@ static z_t2333_t z_t2383(z_t2348_t* z_v27688) {
         z_t75_t z_v27702 = ((z_t75_t){0});
         (void)(z_t75_append_byte(&z_v27702, 92));
         (void)(z_t2377(z_v27688, ((z_t2349_t){ .tag = Z_TOKSTATETYPE_TAG_STRINGEXPR })));
-        z_t2333_t _ret2 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STREXPRBEGTOK }), z_v27702, z_v27688->fsno, z_v27689, z_v27690, 0);
+        z_t2333_t _ret2 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STREXPRBEGTOK }), z_v27702, z_v27688->fsno, z_v27689, z_v27690, 0);
         z_v27702 = (z_t75_t){0};
         z_t75_free(&z_v27702);
         return _ret2;
@@ -36179,7 +36179,7 @@ static z_t2333_t z_t2383(z_t2348_t* z_v27688) {
     z_t75_t z_v27707 = ((z_t75_t){0});
     (void)(z_t75_append_byte(&z_v27707, 92));
     (void)(z_t75_append_byte(&z_v27707, z_v27691));
-    z_t2333_t _ret3 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK }), z_v27707, z_v27688->fsno, z_v27689, z_v27690, 0);
+    z_t2333_t _ret3 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK }), z_v27707, z_v27688->fsno, z_v27689, z_v27690, 0);
     z_v27707 = (z_t75_t){0};
     z_t75_free(&z_v27707);
     return _ret3;
@@ -36214,7 +36214,7 @@ static z_t2333_t z_t2384(z_t2348_t* z_v27711, uint32_t z_v27712, uint8_t z_v2771
                         break;
                     }
                     case Z_OPTIONVAL_U8_TAG_NONE: {
-                        z_t2333_t _ret1 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK }), z_v27719, z_v27711->fsno, z_v27714, z_v27715, 0);
+                        z_t2333_t _ret1 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK }), z_v27719, z_v27711->fsno, z_v27714, z_v27715, 0);
                         z_v27719 = (z_t75_t){0};
                         z_t75_free(&z_v27716);
                         z_t75_free(&z_v27719);
@@ -36226,7 +36226,7 @@ static z_t2333_t z_t2384(z_t2348_t* z_v27711, uint32_t z_v27712, uint8_t z_v2771
                 /* post-guard alias: db => z_v27724.data.some */
                 z_v27722 = (z_v27722 + 1);
             }
-            z_t2333_t _ret2 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK }), z_v27719, z_v27711->fsno, z_v27714, z_v27715, 0);
+            z_t2333_t _ret2 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK }), z_v27719, z_v27711->fsno, z_v27714, z_v27715, 0);
             z_v27719 = (z_t75_t){0};
             z_t75_free(&z_v27716);
             z_t75_free(&z_v27719);
@@ -36263,7 +36263,7 @@ static z_t2333_t z_t2384(z_t2348_t* z_v27711, uint32_t z_v27712, uint8_t z_v2771
     }
     if (z_v27713 == 117) {
         if (z_v27729 > 1114111) {
-            z_t2333_t _ret4 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK }), z_v27730, z_v27711->fsno, z_v27714, z_v27715, 0);
+            z_t2333_t _ret4 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK }), z_v27730, z_v27711->fsno, z_v27714, z_v27715, 0);
             z_v27730 = (z_t75_t){0};
             z_t75_free(&z_v27716);
             z_t75_free(&z_v27730);
@@ -36271,7 +36271,7 @@ static z_t2333_t z_t2384(z_t2348_t* z_v27711, uint32_t z_v27712, uint8_t z_v2771
         }
         z_t75_t z_v27739 = ((z_t75_t){0});
         (void)(z_t2584(z_v27729, &z_v27739));
-        z_t2333_t _ret5 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRCHRTOK }), z_v27739, z_v27711->fsno, z_v27714, z_v27715, 0);
+        z_t2333_t _ret5 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRCHRTOK }), z_v27739, z_v27711->fsno, z_v27714, z_v27715, 0);
         z_v27739 = (z_t75_t){0};
         z_t75_free(&z_v27716);
         z_t75_free(&z_v27730);
@@ -36282,7 +36282,7 @@ static z_t2333_t z_t2384(z_t2348_t* z_v27711, uint32_t z_v27712, uint8_t z_v2771
     uint8_t z_v27742 = ({ __auto_type _rc = (({ uint64_t _v = z_v27729; z_t340_t _r = {0}; if (_v > 255) { _r.tag = Z_RESULTVAL_U8_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U8_CONVERROR_TAG_OK; _r.data.ok = (uint8_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U8_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; });
     z_t75_t z_v27743 = ((z_t75_t){0});
     (void)(z_t75_append_byte(&z_v27743, z_v27742));
-    z_t2333_t _ret6 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRCHRTOK }), z_v27743, z_v27711->fsno, z_v27714, z_v27715, 0);
+    z_t2333_t _ret6 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRCHRTOK }), z_v27743, z_v27711->fsno, z_v27714, z_v27715, 0);
     z_v27743 = (z_t75_t){0};
     z_t75_free(&z_v27716);
     z_t75_free(&z_v27730);
@@ -36303,7 +36303,7 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
         bool z_v27751 = false;
         z_t2334_t _m0 = z_v27750->nexttok.toktype;
         switch (_m0.tag) {
-            case Z_TT_TAG_EOFTOK: {
+            case Z_TOKTYPE_TAG_EOFTOK: {
                 z_v27751 = true;
                 break;
             }
@@ -36336,13 +36336,13 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
     uint8_t z_v27764 = z_v27750->atchar;
     uint64_t z_v27765 = z_v27750->tokpos;
     if (z_v27764 == 0) {
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_EOFTOK }), z_t75_from_view(_zs994), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOFTOK }), z_t75_from_view(_zs994), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     if (z_v27764 == 10) {
         (void)(z_t2380(z_v27750));
         z_v27750->lineno = (z_v27750->lineno + 1);
         z_v27750->colno = 1;
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     if (z_v27764 == 13) {
         (void)(z_t2380(z_v27750));
@@ -36351,7 +36351,7 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
         }
         z_v27750->lineno = (z_v27750->lineno + 1);
         z_v27750->colno = 1;
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     z_t2349_t z_v27777 = z_t2379(z_v27750);
     bool z_v27778 = false;
@@ -36377,7 +36377,7 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
         if (z_v27764 == 34) {
             (void)(z_t2380(z_v27750));
             (void)(z_t2378(z_v27750));
-            return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRENDTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
+            return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRENDTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
         }
         return z_t2381(z_v27750);
     }
@@ -36388,13 +36388,13 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
         while (z_t2575(z_v27750->atchar)) {
             (void)(z_t2380(z_v27750));
         }
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_WSTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_WSTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     if (z_v27764 == 35) {
         while (z_t2576(z_v27750->atchar)) {
             (void)(z_t2380(z_v27750));
         }
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_COMMENTTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_COMMENTTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     if (z_v27764 == 34) {
         uint64_t z_v27794 = ((uint64_t)0);
@@ -36403,18 +36403,18 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
             (void)(z_t2380(z_v27750));
         }
         if (z_v27794 == 2) {
-            z_t2333_t _rr4 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRENDTOK }), z_t2385(z_v27750, (z_v27765 + 1), (z_v27765 + 2)), z_v27750->fsno, z_v27762, (z_v27763 + 1), 0);
+            z_t2333_t _rr4 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRENDTOK }), z_t2385(z_v27750, (z_v27765 + 1), (z_v27765 + 2)), z_v27750->fsno, z_v27762, (z_v27763 + 1), 0);
             z_t2333_destroy(&z_v27750->nexttok);
             z_v27750->nexttok = _rr4;
             z_v27750->hasnext = true;
-            return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRBEGTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
+            return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRBEGTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
         }
         if (z_v27794 == 1) {
             (void)(z_t2377(z_v27750, ((z_t2349_t){ .tag = Z_TOKSTATETYPE_TAG_STRING })));
-            return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRBEGTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
+            return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRBEGTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
         }
         (void)(z_t2377(z_v27750, ((z_t2349_t){ .tag = Z_TOKSTATETYPE_TAG_STRINGRAW, .data.stringraw = (({ __auto_type _rc = (({ uint64_t _v = z_v27794; z_t340_t _r = {0}; if (_v > 255) { _r.tag = Z_RESULTVAL_U8_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U8_CONVERROR_TAG_OK; _r.data.ok = (uint8_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U8_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; })) })));
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_STRBEGTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_STRBEGTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     if (z_v27764 == 46) {
         uint64_t z_v27815 = ((uint64_t)0);
@@ -36423,20 +36423,20 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
             (void)(z_t2380(z_v27750));
         }
         if (z_v27815 == 1) {
-            return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_DOTTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
+            return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_DOTTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
         }
         if (z_v27815 == 3) {
-            return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_DOTDOTDOTTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
+            return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_DOTDOTDOTTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
         }
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK }), z_t2385(z_v27750, z_v27765, z_v27750->tokpos), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     if (z_v27764 == 40) {
         (void)(z_t2380(z_v27750));
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_PARENOPENTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_PARENOPENTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     if (z_v27764 == 41) {
         (void)(z_t2380(z_v27750));
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_PARENCLOSETOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_PARENCLOSETOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     if (z_v27764 == 123) {
         bool z_v27836 = false;
@@ -36459,7 +36459,7 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
         if (z_v27836) {
             (void)(z_t2377(z_v27750, ((z_t2349_t){ .tag = Z_TOKSTATETYPE_TAG_STRINGEXPRBRACE })));
         }
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_BRACEOPENTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACEOPENTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     if (z_v27764 == 125) {
         bool z_v27842 = false;
@@ -36493,11 +36493,11 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
                 (void)(z_t2378(z_v27750));
             }
         }
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_BRACECLOSETOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BRACECLOSETOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     if (z_v27764 == 59) {
         (void)(z_t2380(z_v27750));
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_SEMICOLONTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_SEMICOLONTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     bool z_v27852 = false;
     uint32_t z_v27853 = z_v27762;
@@ -36539,7 +36539,7 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
             }
             z_v27860 = z_v27750->tokpos;
         } else {
-            z_t2333_t _rr8 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_DOTTOK }), z_t75_from_view(_zs995), z_v27750->fsno, z_v27861, z_v27862, 0);
+            z_t2333_t _rr8 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_DOTTOK }), z_t75_from_view(_zs995), z_v27750->fsno, z_v27861, z_v27862, 0);
             z_t2333_destroy(&z_v27750->nexttok);
             z_v27750->nexttok = _rr8;
             z_v27750->hasnext = true;
@@ -36547,13 +36547,13 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
     }
     if (z_v27860 == z_v27857) {
         if (z_v27852) {
-            return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27853, z_v27854, 0);
+            return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27853, z_v27854, 0);
         }
         (void)(z_t2380(z_v27750));
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK }), z_t2385(z_v27750, z_v27857, (z_v27857 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK }), z_t2385(z_v27750, z_v27857, (z_v27857 + 1)), z_v27750->fsno, z_v27762, z_v27763, 0);
     }
     bool z_v27876 = false;
-    z_t2334_t z_v27877 = ((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK });
+    z_t2334_t z_v27877 = ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK });
     bool z_v27878 = false;
     z_t106_t z_v27879 = ((z_t106_t){ z_v27750->source.data, z_v27750->source.size });
     z_t106_t z_v27880 = z_t106_substring(&z_v27879, z_v27857, z_v27860);
@@ -36562,18 +36562,18 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
     z_v27877 = z_v27881.tt;
     z_v27878 = z_t2586(z_v27880);
     if (z_v27852) {
-        z_t2334_t z_v27882 = ((z_t2334_t){ .tag = Z_TT_TAG_LABELPRETOK });
+        z_t2334_t z_v27882 = ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELPRETOK });
         if (z_v27876) {
-            z_v27882 = ((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK });
+            z_v27882 = ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK });
         }
         if (z_v27878) {
-            z_v27882 = ((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK });
+            z_v27882 = ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK });
         }
         z_t2333_t _rr9 = z_t2333_create(z_v27882, z_t2385(z_v27750, z_v27857, z_v27860), z_v27750->fsno, z_v27855, z_v27856, 0);
         z_t2333_destroy(&z_v27750->nexttok);
         z_v27750->nexttok = _rr9;
         z_v27750->hasnext = true;
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_COLONTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27853, z_v27854, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_COLONTOK }), z_t2385(z_v27750, z_v27765, (z_v27765 + 1)), z_v27750->fsno, z_v27853, z_v27854, 0);
     }
     bool z_v27889 = false;
     if (z_v27750->atchar == 58) {
@@ -36584,25 +36584,25 @@ static z_t2333_t z_t2386(z_t2348_t* z_v27750) {
         }
     }
     if (z_v27889) {
-        z_t2333_t _rr10 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_COLONTOK }), z_t75_from_view(_zs996), z_v27750->fsno, z_v27750->lineno, z_v27750->colno, 0);
+        z_t2333_t _rr10 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_COLONTOK }), z_t75_from_view(_zs996), z_v27750->fsno, z_v27750->lineno, z_v27750->colno, 0);
         z_t2333_destroy(&z_v27750->nexttok);
         z_v27750->nexttok = _rr10;
         z_v27750->hasnext = true;
         (void)(z_t2380(z_v27750));
-        return z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_LABELTOK }), z_t2385(z_v27750, z_v27857, z_v27860), z_v27750->fsno, z_v27855, z_v27856, 0);
+        return z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LABELTOK }), z_t2385(z_v27750, z_v27857, z_v27860), z_v27750->fsno, z_v27855, z_v27856, 0);
     }
-    z_t2334_t z_v27898 = ((z_t2334_t){ .tag = Z_TT_TAG_REFIDTOK });
+    z_t2334_t z_v27898 = ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_REFIDTOK });
     if (z_v27876) {
         z_v27898 = z_v27877;
     }
     if (z_v27878) {
-        z_v27898 = ((z_t2334_t){ .tag = Z_TT_TAG_ERRTOK });
+        z_v27898 = ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ERRTOK });
     }
     return z_t2333_create(z_v27898, z_t2385(z_v27750, z_v27857, z_v27860), z_v27750->fsno, z_v27855, z_v27856, 0);
 }
 
 static z_t2347_t z_t2387(z_t2348_t z_v27901) {
-    z_t2333_t z_v27904 = z_t2333_create(((z_t2334_t){ .tag = Z_TT_TAG_BOFTOK }), z_t75_from_view(_zs997), 0, 0, 0, 0);
+    z_t2333_t z_v27904 = z_t2333_create(((z_t2334_t){ .tag = Z_TOKTYPE_TAG_BOFTOK }), z_t75_from_view(_zs997), 0, 0, 0, 0);
     z_t2347_t z_v27905 = z_t2347_meta_create(z_v27901, z_v27904, true);
     z_v27901 = (z_t2348_t){0};
     z_v27904 = (z_t2333_t){0};
@@ -36621,19 +36621,19 @@ static void z_t2388(z_t2347_t* z_v27906) {
         bool z_v27908 = true;
         z_t2334_t _m0 = z_v27907.toktype;
         switch (_m0.tag) {
-            case Z_TT_TAG_WSTOK: {
+            case Z_TOKTYPE_TAG_WSTOK: {
                 z_v27908 = false;
                 break;
             }
-            case Z_TT_TAG_COMMENTTOK: {
+            case Z_TOKTYPE_TAG_COMMENTTOK: {
                 z_v27908 = false;
                 break;
             }
-            case Z_TT_TAG_COLONTOK: {
+            case Z_TOKTYPE_TAG_COLONTOK: {
                 z_v27908 = false;
                 break;
             }
-            case Z_TT_TAG_EOLTOK: {
+            case Z_TOKTYPE_TAG_EOLTOK: {
                 if (z_v27906->filterEol) {
                     z_v27908 = false;
                 }
@@ -36687,7 +36687,7 @@ static z_t2333_t z_t2393(z_t2347_t* z_v27913) {
 static void z_t2394(z_t2347_t* z_v27915, bool z_v27916) {
     z_v27915->filterEol = z_v27916;
     if (z_v27916) {
-        bool z_v27917 = z_t2334_eq(z_v27915->thistoken.toktype, ((z_t2334_t){ .tag = Z_TT_TAG_EOLTOK }));
+        bool z_v27917 = z_t2334_eq(z_v27915->thistoken.toktype, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOLTOK }));
         if (z_v27917) {
             (void)(z_t2388(z_v27915));
         }
@@ -46625,15 +46625,15 @@ void z_t2537(z_t1820_t* z_v1376) {
 uint8_t z_t2539(z_t2334_t z_v1379) {
     z_t2334_t _m0 = z_v1379;
     switch (_m0.tag) {
-        case Z_TT_TAG_STRMIDTOK: {
+        case Z_TOKTYPE_TAG_STRMIDTOK: {
             return 21;
             break;
         }
-        case Z_TT_TAG_STRCHRTOK: {
+        case Z_TOKTYPE_TAG_STRCHRTOK: {
             return 22;
             break;
         }
-        case Z_TT_TAG_EOLTOK: {
+        case Z_TOKTYPE_TAG_EOLTOK: {
             return 5;
             break;
         }
@@ -46647,15 +46647,15 @@ uint8_t z_t2539(z_t2334_t z_v1379) {
 bool z_t2540(z_t2334_t z_v1380) {
     z_t2334_t _m0 = z_v1380;
     switch (_m0.tag) {
-        case Z_TT_TAG_STRMIDTOK: {
+        case Z_TOKTYPE_TAG_STRMIDTOK: {
             return true;
             break;
         }
-        case Z_TT_TAG_STRCHRTOK: {
+        case Z_TOKTYPE_TAG_STRCHRTOK: {
             return true;
             break;
         }
-        case Z_TT_TAG_EOLTOK: {
+        case Z_TOKTYPE_TAG_EOLTOK: {
             return true;
             break;
         }
@@ -46838,31 +46838,31 @@ bool z_t2547(z_t1225_t* z_v1406, z_t1226_t z_v1407) {
 bool z_t2548(z_t2334_t z_v1411) {
     z_t2334_t _m0 = z_v1411;
     switch (_m0.tag) {
-        case Z_TT_TAG_RECORDTOK: {
+        case Z_TOKTYPE_TAG_RECORDTOK: {
             return true;
             break;
         }
-        case Z_TT_TAG_CLASSTOK: {
+        case Z_TOKTYPE_TAG_CLASSTOK: {
             return true;
             break;
         }
-        case Z_TT_TAG_VARIANTTOK: {
+        case Z_TOKTYPE_TAG_VARIANTTOK: {
             return true;
             break;
         }
-        case Z_TT_TAG_UNIONTOK: {
+        case Z_TOKTYPE_TAG_UNIONTOK: {
             return true;
             break;
         }
-        case Z_TT_TAG_PROTOCOLTOK: {
+        case Z_TOKTYPE_TAG_PROTOCOLTOK: {
             return true;
             break;
         }
-        case Z_TT_TAG_FACETTOK: {
+        case Z_TOKTYPE_TAG_FACETTOK: {
             return true;
             break;
         }
-        case Z_TT_TAG_DATATOK: {
+        case Z_TOKTYPE_TAG_DATATOK: {
             return true;
             break;
         }
@@ -47746,93 +47746,93 @@ void z_t2584(uint64_t z_v1755, z_t75_t* z_v1756) {
 
 z_t4072_t z_t2585(z_t106_t z_v1779) {
     if (z_t106_eq(z_v1779, _zs998)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_EQUALSTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EQUALSTOK }));
     }
     if (z_t106_eq(z_v1779, _zs999)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_FUNCTIONTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_FUNCTIONTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1000)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_IFTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_IFTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1001)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_WHENTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_WHENTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1002)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_THENTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_THENTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1003)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_ELSETOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ELSETOK }));
     }
     if (z_t106_eq(z_v1779, _zs1004)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_FORTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_FORTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1005)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_LOOPTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_LOOPTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1006)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_WHILETOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_WHILETOK }));
     }
     if (z_t106_eq(z_v1779, _zs1007)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_DOTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_DOTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1008)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_CASETOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_CASETOK }));
     }
     if (z_t106_eq(z_v1779, _zs1009)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_MATCHTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_MATCHTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1010)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_ONTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ONTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1011)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_OUTTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_OUTTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1012)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_INTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_INTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1013)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_SWAPTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_SWAPTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1014)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_UNITTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_UNITTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1015)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_RECORDTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_RECORDTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1016)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_CLASSTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_CLASSTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1017)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_UNIONTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_UNIONTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1018)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_VARIANTTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_VARIANTTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1019)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_PROTOCOLTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_PROTOCOLTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1020)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_DATATOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_DATATOK }));
     }
     if (z_t106_eq(z_v1779, _zs1021)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_ISTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ISTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1022)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_ASTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_ASTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1023)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_WITHTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_WITHTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1024)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_FACETTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_FACETTOK }));
     }
     if (z_t106_eq(z_v1779, _zs1025)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_NATIVETOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_NATIVETOK }));
     }
     if (z_t106_eq(z_v1779, _zs1026)) {
-        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TT_TAG_YIELDTOK }));
+        return z_t4072_create(true, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_YIELDTOK }));
     }
-    return z_t4072_create(false, ((z_t2334_t){ .tag = Z_TT_TAG_EOFTOK }));
+    return z_t4072_create(false, ((z_t2334_t){ .tag = Z_TOKTYPE_TAG_EOFTOK }));
 }
 
 bool z_t2586(z_t106_t z_v1810) {
@@ -47872,207 +47872,207 @@ bool z_t2586(z_t106_t z_v1810) {
 z_t75_t z_t2587(z_t2334_t z_v1811) {
     z_t2334_t _m0 = z_v1811;
     switch (_m0.tag) {
-        case Z_TT_TAG_BOFTOK: {
+        case Z_TOKTYPE_TAG_BOFTOK: {
             return z_t75_from_view(_zs1037);
             break;
         }
-        case Z_TT_TAG_EOFTOK: {
+        case Z_TOKTYPE_TAG_EOFTOK: {
             return z_t75_from_view(_zs1038);
             break;
         }
-        case Z_TT_TAG_ERRTOK: {
+        case Z_TOKTYPE_TAG_ERRTOK: {
             return z_t75_from_view(_zs1039);
             break;
         }
-        case Z_TT_TAG_WSTOK: {
+        case Z_TOKTYPE_TAG_WSTOK: {
             return z_t75_from_view(_zs1040);
             break;
         }
-        case Z_TT_TAG_EOLTOK: {
+        case Z_TOKTYPE_TAG_EOLTOK: {
             return z_t75_from_view(_zs1041);
             break;
         }
-        case Z_TT_TAG_COMMENTTOK: {
+        case Z_TOKTYPE_TAG_COMMENTTOK: {
             return z_t75_from_view(_zs1042);
             break;
         }
-        case Z_TT_TAG_COLONTOK: {
+        case Z_TOKTYPE_TAG_COLONTOK: {
             return z_t75_from_view(_zs1043);
             break;
         }
-        case Z_TT_TAG_SEMICOLONTOK: {
+        case Z_TOKTYPE_TAG_SEMICOLONTOK: {
             return z_t75_from_view(_zs1044);
             break;
         }
-        case Z_TT_TAG_PARENOPENTOK: {
+        case Z_TOKTYPE_TAG_PARENOPENTOK: {
             return z_t75_from_view(_zs1045);
             break;
         }
-        case Z_TT_TAG_PARENCLOSETOK: {
+        case Z_TOKTYPE_TAG_PARENCLOSETOK: {
             return z_t75_from_view(_zs1046);
             break;
         }
-        case Z_TT_TAG_BRACEOPENTOK: {
+        case Z_TOKTYPE_TAG_BRACEOPENTOK: {
             return z_t75_from_view(_zs1047);
             break;
         }
-        case Z_TT_TAG_BRACECLOSETOK: {
+        case Z_TOKTYPE_TAG_BRACECLOSETOK: {
             return z_t75_from_view(_zs1048);
             break;
         }
-        case Z_TT_TAG_DOTTOK: {
+        case Z_TOKTYPE_TAG_DOTTOK: {
             return z_t75_from_view(_zs1049);
             break;
         }
-        case Z_TT_TAG_DOTDOTDOTTOK: {
+        case Z_TOKTYPE_TAG_DOTDOTDOTTOK: {
             return z_t75_from_view(_zs1050);
             break;
         }
-        case Z_TT_TAG_REFIDTOK: {
+        case Z_TOKTYPE_TAG_REFIDTOK: {
             return z_t75_from_view(_zs1051);
             break;
         }
-        case Z_TT_TAG_LABELTOK: {
+        case Z_TOKTYPE_TAG_LABELTOK: {
             return z_t75_from_view(_zs1052);
             break;
         }
-        case Z_TT_TAG_LABELPRETOK: {
+        case Z_TOKTYPE_TAG_LABELPRETOK: {
             return z_t75_from_view(_zs1053);
             break;
         }
-        case Z_TT_TAG_EQUALSTOK: {
+        case Z_TOKTYPE_TAG_EQUALSTOK: {
             return z_t75_from_view(_zs1054);
             break;
         }
-        case Z_TT_TAG_FUNCTIONTOK: {
+        case Z_TOKTYPE_TAG_FUNCTIONTOK: {
             return z_t75_from_view(_zs1055);
             break;
         }
-        case Z_TT_TAG_IFTOK: {
+        case Z_TOKTYPE_TAG_IFTOK: {
             return z_t75_from_view(_zs1056);
             break;
         }
-        case Z_TT_TAG_WHENTOK: {
+        case Z_TOKTYPE_TAG_WHENTOK: {
             return z_t75_from_view(_zs1057);
             break;
         }
-        case Z_TT_TAG_THENTOK: {
+        case Z_TOKTYPE_TAG_THENTOK: {
             return z_t75_from_view(_zs1058);
             break;
         }
-        case Z_TT_TAG_ELSETOK: {
+        case Z_TOKTYPE_TAG_ELSETOK: {
             return z_t75_from_view(_zs1059);
             break;
         }
-        case Z_TT_TAG_FORTOK: {
+        case Z_TOKTYPE_TAG_FORTOK: {
             return z_t75_from_view(_zs1060);
             break;
         }
-        case Z_TT_TAG_LOOPTOK: {
+        case Z_TOKTYPE_TAG_LOOPTOK: {
             return z_t75_from_view(_zs1061);
             break;
         }
-        case Z_TT_TAG_WHILETOK: {
+        case Z_TOKTYPE_TAG_WHILETOK: {
             return z_t75_from_view(_zs1062);
             break;
         }
-        case Z_TT_TAG_DOTOK: {
+        case Z_TOKTYPE_TAG_DOTOK: {
             return z_t75_from_view(_zs1063);
             break;
         }
-        case Z_TT_TAG_CASETOK: {
+        case Z_TOKTYPE_TAG_CASETOK: {
             return z_t75_from_view(_zs1064);
             break;
         }
-        case Z_TT_TAG_MATCHTOK: {
+        case Z_TOKTYPE_TAG_MATCHTOK: {
             return z_t75_from_view(_zs1065);
             break;
         }
-        case Z_TT_TAG_ONTOK: {
+        case Z_TOKTYPE_TAG_ONTOK: {
             return z_t75_from_view(_zs1066);
             break;
         }
-        case Z_TT_TAG_OUTTOK: {
+        case Z_TOKTYPE_TAG_OUTTOK: {
             return z_t75_from_view(_zs1067);
             break;
         }
-        case Z_TT_TAG_INTOK: {
+        case Z_TOKTYPE_TAG_INTOK: {
             return z_t75_from_view(_zs1068);
             break;
         }
-        case Z_TT_TAG_SWAPTOK: {
+        case Z_TOKTYPE_TAG_SWAPTOK: {
             return z_t75_from_view(_zs1069);
             break;
         }
-        case Z_TT_TAG_UNITTOK: {
+        case Z_TOKTYPE_TAG_UNITTOK: {
             return z_t75_from_view(_zs1070);
             break;
         }
-        case Z_TT_TAG_RECORDTOK: {
+        case Z_TOKTYPE_TAG_RECORDTOK: {
             return z_t75_from_view(_zs1071);
             break;
         }
-        case Z_TT_TAG_CLASSTOK: {
+        case Z_TOKTYPE_TAG_CLASSTOK: {
             return z_t75_from_view(_zs1072);
             break;
         }
-        case Z_TT_TAG_UNIONTOK: {
+        case Z_TOKTYPE_TAG_UNIONTOK: {
             return z_t75_from_view(_zs1073);
             break;
         }
-        case Z_TT_TAG_VARIANTTOK: {
+        case Z_TOKTYPE_TAG_VARIANTTOK: {
             return z_t75_from_view(_zs1074);
             break;
         }
-        case Z_TT_TAG_PROTOCOLTOK: {
+        case Z_TOKTYPE_TAG_PROTOCOLTOK: {
             return z_t75_from_view(_zs1075);
             break;
         }
-        case Z_TT_TAG_DATATOK: {
+        case Z_TOKTYPE_TAG_DATATOK: {
             return z_t75_from_view(_zs1076);
             break;
         }
-        case Z_TT_TAG_ISTOK: {
+        case Z_TOKTYPE_TAG_ISTOK: {
             return z_t75_from_view(_zs1077);
             break;
         }
-        case Z_TT_TAG_ASTOK: {
+        case Z_TOKTYPE_TAG_ASTOK: {
             return z_t75_from_view(_zs1078);
             break;
         }
-        case Z_TT_TAG_WITHTOK: {
+        case Z_TOKTYPE_TAG_WITHTOK: {
             return z_t75_from_view(_zs1079);
             break;
         }
-        case Z_TT_TAG_FACETTOK: {
+        case Z_TOKTYPE_TAG_FACETTOK: {
             return z_t75_from_view(_zs1080);
             break;
         }
-        case Z_TT_TAG_NATIVETOK: {
+        case Z_TOKTYPE_TAG_NATIVETOK: {
             return z_t75_from_view(_zs1081);
             break;
         }
-        case Z_TT_TAG_YIELDTOK: {
+        case Z_TOKTYPE_TAG_YIELDTOK: {
             return z_t75_from_view(_zs1082);
             break;
         }
-        case Z_TT_TAG_STRBEGTOK: {
+        case Z_TOKTYPE_TAG_STRBEGTOK: {
             return z_t75_from_view(_zs1083);
             break;
         }
-        case Z_TT_TAG_STRMIDTOK: {
+        case Z_TOKTYPE_TAG_STRMIDTOK: {
             return z_t75_from_view(_zs1084);
             break;
         }
-        case Z_TT_TAG_STRCHRTOK: {
+        case Z_TOKTYPE_TAG_STRCHRTOK: {
             return z_t75_from_view(_zs1085);
             break;
         }
-        case Z_TT_TAG_STRENDTOK: {
+        case Z_TOKTYPE_TAG_STRENDTOK: {
             return z_t75_from_view(_zs1086);
             break;
         }
-        case Z_TT_TAG_STREXPRBEGTOK: {
+        case Z_TOKTYPE_TAG_STREXPRBEGTOK: {
             return z_t75_from_view(_zs1087);
             break;
         }
@@ -48434,7 +48434,7 @@ void z_t2594(z_t2348_t* z_v1888) {
         bool z_v1894 = false;
         z_t2334_t _m5 = z_v1889.toktype;
         switch (_m5.tag) {
-            case Z_TT_TAG_EOFTOK: {
+            case Z_TOKTYPE_TAG_EOFTOK: {
                 z_v1894 = true;
                 break;
             }

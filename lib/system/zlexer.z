@@ -1,16 +1,16 @@
 # Lexer for the zerolang language. Splits a source file into a
-# stream of tokens (TT) consumed by the parser. The Tokenizer
+# stream of tokens (toktype) consumed by the parser. The Tokenizer
 # scans bytes, tracks line and column, manages a state stack for
 # nested string interpolation, and emits one token per call to
 # `token`. The binary built from this file is a token-dump CLI:
-# given a source file it prints `<lineno>:<colno> <TT> "<tokstr>"`
+# given a source file it prints `<lineno>:<colno> <toktype> "<tokstr>"`
 # per token, exercised by tests/fixtures/lexer_golden/.
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
 public: unit {
     :Lexer
-    :TT
+    :toktype
     :Token
     :Tokenizer
     :islookupReserved
@@ -62,7 +62,7 @@ ascii: data {
 # Token type, used by Tokenizer + Lexer to classify each emitted
 # token. Uppercase member names to prevent collision with the
 # language keywords most arm names share.
-TT: variant {
+toktype: variant {
     bofTok: null
     eofTok: null
     errTok: null
@@ -131,7 +131,7 @@ tokstatetype: variant {
 
 # one lexer token: its kind, source text, and file/line/column position.
 Token: class {
-    toktype: TT
+    toktype: toktype
     tokstr: String
     fsno: u32
     lineno: u32
@@ -140,8 +140,8 @@ Token: class {
 }
 
 # kwlookup result: a token type plus a "found" flag. Returned by
-# `kwlookup` instead of routing through a `TT` sentinel arm.
-kwresult: record { found: bool tt: TT }
+# `kwlookup` instead of routing through a `toktype` sentinel arm.
+kwresult: record { found: bool tt: toktype }
 
 # Byte-class predicates used by the scanner dispatch.
 isws: function {b: u8} out bool is {
@@ -324,7 +324,7 @@ Tokenizer: class {
             colno: 0
             hasnext: false
             nexttok: (Token
-                toktype: TT.eofTok
+                toktype: toktype.eofTok
                 tokstr: "".string
                 :fsno
                 lineno: 0
@@ -393,7 +393,7 @@ Tokenizer: class {
         for (isstrc this.atchar) loop this.accept
         if this.tokpos > s0 then {
             return (Token
-                toktype: TT.strMidTok
+                toktype: toktype.strMidTok
                 tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
@@ -403,7 +403,7 @@ Tokenizer: class {
         }
         this.accept
         return (Token
-            toktype: TT.errTok
+            toktype: toktype.errTok
             tokstr: (this.tokSpan s: s0 e: s0 + 1)
             fsno: this.fsno
             lineno: line
@@ -436,7 +436,7 @@ Tokenizer: class {
                 # state on the next call.
                 if stringparts.length > 0 then {
                     return (Token
-                        toktype: TT.strMidTok
+                        toktype: toktype.strMidTok
                         tokstr: stringparts
                         fsno: this.fsno
                         lineno: line
@@ -448,7 +448,7 @@ Tokenizer: class {
                 err.appendByte this.atchar
                 this.accept
                 return (Token
-                    toktype: TT.errTok
+                    toktype: toktype.errTok
                     tokstr: err
                     fsno: this.fsno
                     lineno: line
@@ -475,7 +475,7 @@ Tokenizer: class {
                 this.statepop
                 if stringparts.length > 0 then {
                     this.nexttok = (Token
-                        toktype: TT.strEndTok
+                        toktype: toktype.strEndTok
                         tokstr: delimparts
                         fsno: this.fsno
                         lineno: dline
@@ -484,7 +484,7 @@ Tokenizer: class {
                     )
                     this.hasnext = true
                     return (Token
-                        toktype: TT.strMidTok
+                        toktype: toktype.strMidTok
                         tokstr: stringparts
                         fsno: this.fsno
                         lineno: line
@@ -493,7 +493,7 @@ Tokenizer: class {
                     )
                 }
                 return (Token
-                    toktype: TT.strEndTok
+                    toktype: toktype.strEndTok
                     tokstr: delimparts
                     fsno: this.fsno
                     lineno: dline
@@ -504,7 +504,7 @@ Tokenizer: class {
         }
         # unreachable -- the for-while-true loop only exits via return
         return (Token
-            toktype: TT.errTok
+            toktype: toktype.errTok
             tokstr: "".string
             fsno: this.fsno
             lineno: line
@@ -532,7 +532,7 @@ Tokenizer: class {
             err: String
             err.appendByte c
             return (Token
-                toktype: TT.errTok
+                toktype: toktype.errTok
                 tokstr: err
                 fsno: this.fsno
                 lineno: line
@@ -570,7 +570,7 @@ Tokenizer: class {
             sc: String
             sc.appendByte named_byte
             return (Token
-                toktype: TT.strChrTok
+                toktype: toktype.strChrTok
                 tokstr: sc
                 fsno: this.fsno
                 lineno: line
@@ -591,7 +591,7 @@ Tokenizer: class {
             bs.appendByte ascii.backslash
             this.statepush s: tokstatetype.stringexpr
             return (Token
-                toktype: TT.strExprBegTok
+                toktype: toktype.strExprBegTok
                 tokstr: bs
                 fsno: this.fsno
                 lineno: line
@@ -604,7 +604,7 @@ Tokenizer: class {
         err.appendByte ascii.backslash
         err.appendByte c
         return (Token
-            toktype: TT.errTok
+            toktype: toktype.errTok
             tokstr: err
             fsno: this.fsno
             lineno: line
@@ -648,7 +648,7 @@ Tokenizer: class {
                         err.appendByte db
                     } case none then {
                         return (Token
-                            toktype: TT.errTok
+                            toktype: toktype.errTok
                             tokstr: err
                             fsno: this.fsno
                             lineno: line
@@ -659,7 +659,7 @@ Tokenizer: class {
                     j = j + 1
                 }
                 return (Token
-                    toktype: TT.errTok
+                    toktype: toktype.errTok
                     tokstr: err
                     fsno: this.fsno
                     lineno: line
@@ -697,7 +697,7 @@ Tokenizer: class {
         if specifier == ascii.lowerU then {
             if val > 1114111 then {
                 return (Token
-                    toktype: TT.errTok
+                    toktype: toktype.errTok
                     tokstr: err
                     fsno: this.fsno
                     lineno: line
@@ -708,7 +708,7 @@ Tokenizer: class {
             sc: String
             utf8_encode_append cp: val dst: sc
             return (Token
-                toktype: TT.strChrTok
+                toktype: toktype.strChrTok
                 tokstr: sc
                 fsno: this.fsno
                 lineno: line
@@ -721,7 +721,7 @@ Tokenizer: class {
         sc: String
         sc.appendByte b
         return (Token
-            toktype: TT.strChrTok
+            toktype: toktype.strChrTok
             tokstr: sc
             fsno: this.fsno
             lineno: line
@@ -786,7 +786,7 @@ Tokenizer: class {
 
         if c == ascii.nul then {
             return (Token
-                toktype: TT.eofTok
+                toktype: toktype.eofTok
                 tokstr: "".string
                 fsno: this.fsno
                 lineno: line
@@ -800,7 +800,7 @@ Tokenizer: class {
             this.lineno = this.lineno + 1
             this.colno = 1
             return (Token
-                toktype: TT.eolTok
+                toktype: toktype.eolTok
                 tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
@@ -814,7 +814,7 @@ Tokenizer: class {
             this.lineno = this.lineno + 1
             this.colno = 1
             return (Token
-                toktype: TT.eolTok
+                toktype: toktype.eolTok
                 tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
@@ -849,7 +849,7 @@ Tokenizer: class {
                 this.accept
                 this.statepop
                 return (Token
-                    toktype: TT.strEndTok
+                    toktype: toktype.strEndTok
                     tokstr: (this.tokSpan s: s0 e: s0 + 1)
                     fsno: this.fsno
                     lineno: line
@@ -864,7 +864,7 @@ Tokenizer: class {
         if (isws b: c) then {
             for (isws b: this.atchar) loop this.accept
             return (Token
-                toktype: TT.wsTok
+                toktype: toktype.wsTok
                 tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
@@ -876,7 +876,7 @@ Tokenizer: class {
         if c == ascii.hash then {
             for (iscommentbody b: this.atchar) loop this.accept
             return (Token
-                toktype: TT.commentTok
+                toktype: toktype.commentTok
                 tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
@@ -900,7 +900,7 @@ Tokenizer: class {
                 # Empty string: emit STRBEG with the first quote and
                 # stash a STREND with the second for the next call.
                 this.nexttok = (Token
-                    toktype: TT.strEndTok
+                    toktype: toktype.strEndTok
                     tokstr: (this.tokSpan s: s0 + 1 e: s0 + 2)
                     fsno: this.fsno
                     lineno: line
@@ -909,7 +909,7 @@ Tokenizer: class {
                 )
                 this.hasnext = true
                 return (Token
-                    toktype: TT.strBegTok
+                    toktype: toktype.strBegTok
                     tokstr: (this.tokSpan s: s0 e: s0 + 1)
                     fsno: this.fsno
                     lineno: line
@@ -920,7 +920,7 @@ Tokenizer: class {
             if n == 1 then {
                 this.statepush s: tokstatetype.string
                 return (Token
-                    toktype: TT.strBegTok
+                    toktype: toktype.strBegTok
                     tokstr: (this.tokSpan s: s0 e: this.tokpos)
                     fsno: this.fsno
                     lineno: line
@@ -933,7 +933,7 @@ Tokenizer: class {
             # size.
             this.statepush s: tokstatetype.stringraw n.u8.orPanic
             return (Token
-                toktype: TT.strBegTok
+                toktype: toktype.strBegTok
                 tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
@@ -950,7 +950,7 @@ Tokenizer: class {
             }
             if n == 1 then {
                 return (Token
-                    toktype: TT.dotTok
+                    toktype: toktype.dotTok
                     tokstr: (this.tokSpan s: s0 e: this.tokpos)
                     fsno: this.fsno
                     lineno: line
@@ -960,7 +960,7 @@ Tokenizer: class {
             }
             if n == 3 then {
                 return (Token
-                    toktype: TT.dotDotDotTok
+                    toktype: toktype.dotDotDotTok
                     tokstr: (this.tokSpan s: s0 e: this.tokpos)
                     fsno: this.fsno
                     lineno: line
@@ -969,7 +969,7 @@ Tokenizer: class {
                 )
             }
             return (Token
-                toktype: TT.errTok
+                toktype: toktype.errTok
                 tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
@@ -981,7 +981,7 @@ Tokenizer: class {
         if c == ascii.parenOpen then {
             this.accept
             return (Token
-                toktype: TT.parenOpenTok
+                toktype: toktype.parenOpenTok
                 tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
@@ -992,7 +992,7 @@ Tokenizer: class {
         if c == ascii.parenClose then {
             this.accept
             return (Token
-                toktype: TT.parenCloseTok
+                toktype: toktype.parenCloseTok
                 tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
@@ -1018,7 +1018,7 @@ Tokenizer: class {
             this.accept
             if push_brace then this.statepush s: tokstatetype.stringexprbrace
             return (Token
-                toktype: TT.braceOpenTok
+                toktype: toktype.braceOpenTok
                 tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
@@ -1053,7 +1053,7 @@ Tokenizer: class {
                 if pop_expr then this.statepop
             }
             return (Token
-                toktype: TT.braceCloseTok
+                toktype: toktype.braceCloseTok
                 tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
@@ -1064,7 +1064,7 @@ Tokenizer: class {
         if c == ascii.semicolon then {
             this.accept
             return (Token
-                toktype: TT.semicolonTok
+                toktype: toktype.semicolonTok
                 tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
@@ -1131,7 +1131,7 @@ Tokenizer: class {
                 e_word = this.tokpos
             } else {
                 this.nexttok = (Token
-                    toktype: TT.dotTok
+                    toktype: toktype.dotTok
                     tokstr: ".".string
                     fsno: this.fsno
                     lineno: dot_line
@@ -1149,7 +1149,7 @@ Tokenizer: class {
             if has_colonpre then {
                 # Lone colon: emit the colon as ERR.
                 return (Token
-                    toktype: TT.errTok
+                    toktype: toktype.errTok
                     tokstr: (this.tokSpan s: s0 e: s0 + 1)
                     fsno: this.fsno
                     lineno: colonpre_line
@@ -1159,7 +1159,7 @@ Tokenizer: class {
             }
             this.accept
             return (Token
-                toktype: TT.errTok
+                toktype: toktype.errTok
                 tokstr: (this.tokSpan s: s_word e: s_word + 1)
                 fsno: this.fsno
                 lineno: line
@@ -1171,7 +1171,7 @@ Tokenizer: class {
         # Word is non-empty. Decide token type via the word's source
         # span; the views stay scoped so no lock outlives the lookups.
         kwfound: false
-        kwtt: TT.errTok
+        kwtt: toktype.errTok
         reservedfound: false
         {
             wsv: this.source.stringview
@@ -1184,9 +1184,9 @@ Tokenizer: class {
 
         # Path 1: colonpre. Stash the word, return the colon.
         if has_colonpre then {
-            stage_tt: TT.labelPreTok
-            if kwfound then stage_tt = TT.errTok
-            if reservedfound then stage_tt = TT.errTok
+            stage_tt: toktype.labelPreTok
+            if kwfound then stage_tt = toktype.errTok
+            if reservedfound then stage_tt = toktype.errTok
             this.nexttok = (Token
                 toktype: stage_tt
                 tokstr: (this.tokSpan s: s_word e: e_word)
@@ -1197,7 +1197,7 @@ Tokenizer: class {
             )
             this.hasnext = true
             return (Token
-                toktype: TT.colonTok
+                toktype: toktype.colonTok
                 tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: colonpre_line
@@ -1218,7 +1218,7 @@ Tokenizer: class {
         }
         if labelpath then {
             this.nexttok = (Token
-                toktype: TT.colonTok
+                toktype: toktype.colonTok
                 tokstr: ":".string
                 fsno: this.fsno
                 lineno: this.lineno
@@ -1228,7 +1228,7 @@ Tokenizer: class {
             this.hasnext = true
             this.accept
             return (Token
-                toktype: TT.labelTok
+                toktype: toktype.labelTok
                 tokstr: (this.tokSpan s: s_word e: e_word)
                 fsno: this.fsno
                 lineno: word_line
@@ -1239,9 +1239,9 @@ Tokenizer: class {
 
         # Path 3: no colonpre, no trailing-colon-label. REFID, keyword,
         # or reserved-as-ERR via a single computed `tt`.
-        ret_tt: TT.refIdTok
+        ret_tt: toktype.refIdTok
         if kwfound then ret_tt = kwtt
-        if reservedfound then ret_tt = TT.errTok
+        if reservedfound then ret_tt = toktype.errTok
         return (Token
             toktype: ret_tt
             tokstr: (this.tokSpan s: s_word e: e_word)
@@ -1266,7 +1266,7 @@ Lexer: class {
 } as {
     create: function {lexer: Tokenizer.take} out this is {
         placeholder: (Token
-            toktype: TT.bofTok
+            toktype: toktype.bofTok
             tokstr: "".string
             fsno: 0
             lineno: 0
@@ -1307,7 +1307,7 @@ Lexer: class {
     }
 
     # Accept and advance if the buffered token matches tt; else none.
-    accept: function {:this tt: TT} out Option Token is {
+    accept: function {:this tt: toktype} out Option Token is {
         if this.thistoken.toktype == tt then {
             tok: this.takeCurrent
             this.advance
@@ -1328,7 +1328,7 @@ Lexer: class {
     setFilterEol: function {:this enabled: bool} is {
         this.filterEol = enabled
         if enabled then {
-            iseol: this.thistoken.toktype == TT.eolTok
+            iseol: this.thistoken.toktype == toktype.eolTok
             if iseol then this.advance
         }
     }
@@ -1371,36 +1371,36 @@ Lexer: class {
 # Keyword and reserved-word lookups. Per-call StringView equality;
 # acceptable at this scale, can migrate to a Map later.
 kwlookup: function {sv: StringView} out kwresult is {
-    if sv == "=" then return (kwresult found: true tt: TT.equalsTok)
-    if sv == "function" then return (kwresult found: true tt: TT.functionTok)
-    if sv == "if" then return (kwresult found: true tt: TT.ifTok)
-    if sv == "when" then return (kwresult found: true tt: TT.whenTok)
-    if sv == "then" then return (kwresult found: true tt: TT.thenTok)
-    if sv == "else" then return (kwresult found: true tt: TT.elseTok)
-    if sv == "for" then return (kwresult found: true tt: TT.forTok)
-    if sv == "loop" then return (kwresult found: true tt: TT.loopTok)
-    if sv == "while" then return (kwresult found: true tt: TT.whileTok)
-    if sv == "do" then return (kwresult found: true tt: TT.doTok)
-    if sv == "case" then return (kwresult found: true tt: TT.caseTok)
-    if sv == "match" then return (kwresult found: true tt: TT.matchTok)
-    if sv == "on" then return (kwresult found: true tt: TT.onTok)
-    if sv == "out" then return (kwresult found: true tt: TT.outTok)
-    if sv == "in" then return (kwresult found: true tt: TT.inTok)
-    if sv == "swap" then return (kwresult found: true tt: TT.swapTok)
-    if sv == "unit" then return (kwresult found: true tt: TT.unitTok)
-    if sv == "record" then return (kwresult found: true tt: TT.recordTok)
-    if sv == "class" then return (kwresult found: true tt: TT.classTok)
-    if sv == "union" then return (kwresult found: true tt: TT.unionTok)
-    if sv == "variant" then return (kwresult found: true tt: TT.variantTok)
-    if sv == "protocol" then return (kwresult found: true tt: TT.protocolTok)
-    if sv == "data" then return (kwresult found: true tt: TT.dataTok)
-    if sv == "is" then return (kwresult found: true tt: TT.isTok)
-    if sv == "as" then return (kwresult found: true tt: TT.asTok)
-    if sv == "with" then return (kwresult found: true tt: TT.withTok)
-    if sv == "facet" then return (kwresult found: true tt: TT.facetTok)
-    if sv == "native" then return (kwresult found: true tt: TT.nativeTok)
-    if sv == "yield" then return (kwresult found: true tt: TT.yieldTok)
-    return (kwresult found: false tt: TT.eofTok)
+    if sv == "=" then return (kwresult found: true tt: toktype.equalsTok)
+    if sv == "function" then return (kwresult found: true tt: toktype.functionTok)
+    if sv == "if" then return (kwresult found: true tt: toktype.ifTok)
+    if sv == "when" then return (kwresult found: true tt: toktype.whenTok)
+    if sv == "then" then return (kwresult found: true tt: toktype.thenTok)
+    if sv == "else" then return (kwresult found: true tt: toktype.elseTok)
+    if sv == "for" then return (kwresult found: true tt: toktype.forTok)
+    if sv == "loop" then return (kwresult found: true tt: toktype.loopTok)
+    if sv == "while" then return (kwresult found: true tt: toktype.whileTok)
+    if sv == "do" then return (kwresult found: true tt: toktype.doTok)
+    if sv == "case" then return (kwresult found: true tt: toktype.caseTok)
+    if sv == "match" then return (kwresult found: true tt: toktype.matchTok)
+    if sv == "on" then return (kwresult found: true tt: toktype.onTok)
+    if sv == "out" then return (kwresult found: true tt: toktype.outTok)
+    if sv == "in" then return (kwresult found: true tt: toktype.inTok)
+    if sv == "swap" then return (kwresult found: true tt: toktype.swapTok)
+    if sv == "unit" then return (kwresult found: true tt: toktype.unitTok)
+    if sv == "record" then return (kwresult found: true tt: toktype.recordTok)
+    if sv == "class" then return (kwresult found: true tt: toktype.classTok)
+    if sv == "union" then return (kwresult found: true tt: toktype.unionTok)
+    if sv == "variant" then return (kwresult found: true tt: toktype.variantTok)
+    if sv == "protocol" then return (kwresult found: true tt: toktype.protocolTok)
+    if sv == "data" then return (kwresult found: true tt: toktype.dataTok)
+    if sv == "is" then return (kwresult found: true tt: toktype.isTok)
+    if sv == "as" then return (kwresult found: true tt: toktype.asTok)
+    if sv == "with" then return (kwresult found: true tt: toktype.withTok)
+    if sv == "facet" then return (kwresult found: true tt: toktype.facetTok)
+    if sv == "native" then return (kwresult found: true tt: toktype.nativeTok)
+    if sv == "yield" then return (kwresult found: true tt: toktype.yieldTok)
+    return (kwresult found: false tt: toktype.eofTok)
 }
 
 # true when `sv` is a reserved word that may not be used as an identifier.
@@ -1419,7 +1419,7 @@ islookupReserved: function {sv: StringView} out bool is {
 }
 
 # the printable name of a token type `t`.
-ttname: function {t: TT} out String is {
+ttname: function {t: toktype} out String is {
     match (
         t
     ) case bofTok then {
