@@ -11361,6 +11361,37 @@ mintMono: function {
         }
         ctn: regTypeNameOf :reg tid: chId
         if target == chId then target = optU64Or o: (subs.get key: ctn) d: target
+        # THE BOX RULE at instantiation: a union arm whose substituted type
+        # is a builtin Box mono collapses to the ELEMENT, exactly as a
+        # declared (Box T) arm does. Every union arm is a malloc'd cell on
+        # the void* data slot, so the collapse keeps construction, match
+        # narrowing, the destructor cast and the native io fragments'
+        # layout on the element -- a Box value IS the cell pointer.
+        if tt == ztypes.ztypetype.unionType then {
+            bxg5: u64
+            {
+                bxo5: reg.genericOriginOf tid: target
+                if bxo5 > 0 then bxg5 = bxo5
+            }
+            # the builtin-Box discriminator mirrors checkBoxConstruction's
+            # call gate (name + classType + empty body); comparing by name
+            # avoids RESOLVING Box here, which would mint its tid earlier
+            # than before and renumber every later type id.
+            isBxT5: false
+            if bxg5 > 0 then {
+                bxn5: regTypeNameOf :reg tid: bxg5
+                if bxn5.stringview == "Box" then {
+                    if (reg.typetypeOf typeId: bxg5) == ztypes.ztypetype.classType then {
+                        if (ty.declMemberCount ownerTid: bxg5) == 0 then isBxT5 = true
+                    }
+                }
+            }
+            if isBxT5 then {
+                if (reg.genericArgCount specId: target) == 1 then {
+                    target = reg.genericArgAt specId: target ordinal: 0
+                }
+            }
+        }
         # Generic FUNCTION children are clone candidates: the elided-arg
         # fallback must not swallow them (a method child's dotted name never
         # resolves, so the lookup-miss leg would replace the method with the
@@ -11805,6 +11836,17 @@ checkConstraintSat: function {
     cd9: reg.genericParamConstraintOf :tdecl :paramName
     ck9: cd9.kind
     if ck9 == ztypes.constraintkind.none then return
+    # `null` is the payload-less marker and satisfies either FAMILY bound --
+    # a null arm carries no payload, so the family question does not arise
+    # ((Result null e: IoError) stays the io idiom). Hashability bounds
+    # still reject it: a null key has nothing to hash.
+    isNul9: argTid == ty.nullTypeId
+    if isNul9 == false then {
+        nn9: regTypeNameOf :reg tid: argTid
+        if nn9.stringview == "null" then isNul9 = true
+    }
+    if isNul9 when ck9 == ztypes.constraintkind.refType then return
+    if isNul9 when ck9 == ztypes.constraintkind.valType then return
     ok9: true
     if ck9 == ztypes.constraintkind.valType then ok9 = typeIsValtype :ty :reg tid: argTid
     if ck9 == ztypes.constraintkind.refType then {
@@ -12173,6 +12215,22 @@ getOrMintSpec: function {
             :fallbackArg
             monoTid: mid8
         )
+        # a Box spec minted from TYPE POSITION (a union's type argument)
+        # registers the identity the construction path stamps: isBox drives
+        # typeRefC's bare-pointer rendering and the destructor plumbing. The
+        # member copy stays with construction -- nothing reads members off
+        # an un-constructed Box.
+        isBxM8: false
+        bxmn8: regTypeNameOf :reg tid: templateId
+        if bxmn8.stringview == "Box" then {
+            if (reg.typetypeOf typeId: templateId) == ztypes.ztypetype.classType then {
+                if (ty.declMemberCount ownerTid: templateId) == 0 then isBxM8 = true
+            }
+        }
+        if isBxM8 then {
+            reg.setIsBox typeId: mid8
+            reg.setIsHeapAllocated typeId: mid8
+        }
     }
     okC3: trieOk8
     if hasParamKey8 then okC3 = false
