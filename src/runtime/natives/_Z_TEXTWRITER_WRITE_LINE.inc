@@ -12,11 +12,11 @@ static z_Result_u64_IoError_t z_TextWriter_writeLine(
 static z_Result_u64_IoError_t z_TextWriter_writeLine(
     z_TextWriter_t* self, const z_StringView_t* from
 ) {
-    z_ListView_u8_t body = { from->length, (uint8_t*)from->data };
+    z_ListViewVal_u8_t body = { from->length, (uint8_t*)from->data };
     z_Result_u64_IoError_t br = z_BufWriter_write(self->sink, &body);
     if (br.tag != Z_RESULT_U64_IOERROR_TAG_OK) return br;
     uint8_t nl = (uint8_t)'\n';
-    z_ListView_u8_t tail = { (uint64_t)1, &nl };
+    z_ListViewVal_u8_t tail = { (uint64_t)1, &nl };
     z_Result_u64_IoError_t tr = z_BufWriter_write(self->sink, &tail);
     if (tr.tag != Z_RESULT_U64_IOERROR_TAG_OK) {
         free(br.data);

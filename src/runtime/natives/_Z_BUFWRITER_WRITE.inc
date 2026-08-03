@@ -3,10 +3,10 @@
    any write error). Chunks larger than `cap` bypass the buffer
    and go straight to the sink. */
 static z_Result_u64_IoError_t z_BufWriter_write(
-    z_BufWriter_t* self, z_ListView_u8_t* from
+    z_BufWriter_t* self, z_ListViewVal_u8_t* from
 );
 static z_Result_u64_IoError_t z_BufWriter_write(
-    z_BufWriter_t* self, z_ListView_u8_t* from
+    z_BufWriter_t* self, z_ListViewVal_u8_t* from
 ) {
     if (self->buf.length + from->length > self->cap) {
         z_Result_null_IoError_t fr = z_BufWriter_flush(self);
