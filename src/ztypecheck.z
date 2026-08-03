@@ -10571,6 +10571,9 @@ nameClaimedByScope: function {
     ) case some then {
         return true
     } case none then null
+    # `Any` is not user-reachable through the system probe: only a real
+    # scope claim above (its own unit defining it) counts.
+    if name == "Any" then return false
     ncs9: resolveSystemChild :ast :ty :reg :name
     match (
         ncs9
@@ -10672,7 +10675,12 @@ stampTyperefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                         currentUnit: origin
                         name: pval9.stringview
                     )
-                    if urHit9 == false then {
+                    if urHit9 == false when pval9.stringview == "Any" then {
+                        # `Any` is not user-reachable through the closure:
+                        # only a scope claim (its own unit defining it)
+                        # resolves it, so an unclaimed `Any` reports.
+                        urHit9 = false
+                    } else if urHit9 == false then {
                         # closure-wide: a bare name may resolve to a member
                         # of ANY loaded unit (the demand resolvers search
                         # the closure; the typeref walk does not)
@@ -11905,6 +11913,72 @@ checkConstraintSat: function {
         }
         m9: "generic argument '\{an9}' does not satisfy constraint '\{con9}' on parameter '\{paramName}' of '\{tdn9}'"
         addResolveError :ty e: zast.err.genericError msg: m9
+    }
+}
+
+# checkAnyBounds -- `Any` is not a user-spellable bound: a generic parameter
+# names the family it takes (AnyRef/AnyVal, a hashable bound, StringLike or a
+# numeric width). The spelling still maps to constraintkind.any at
+# registration, where the declaring unit is not known, so the gate runs once
+# after resolution: a kind-`any` parameter whose declaring unit does not
+# itself define `Any` reports the standard unknown-type error. system.z
+# defines `Any`, so its residual bounds pass; a user unit passes only by
+# defining its own `Any`.
+checkAnyBounds: function {ast: Ast.view st: zenv.ZSymbolTable} is {
+    anyNid9: zast.poolFind pool: ast.names text: "Any"
+    if anyNid9 == 0 then return
+    with git9: st.reg.genericParams.iterateItems do for ge9: git9 loop {
+        hasAny9: false
+        with pit9: ge9.value.params.iterate do for pd9: pit9 loop {
+            if pd9.constraint.kind == ztypes.constraintkind.any then hasAny9 = true
+        }
+        if hasAny9 then {
+            tdecl9: ge9.key
+            unitDecl9: u64
+            declNode9: u32
+            d9: tdecl9
+            for d9 > 0 loop {
+                if (st.typing.declValid id: d9) == false then {
+                    d9 = 0
+                } else {
+                    do9: st.typing.decls.get i: (d9 - 1)
+                    if declNode9 == 0 then declNode9 = do9.node
+                    match (
+                        do9.kind
+                    ) case unitDecl then {
+                        unitDecl9 = d9
+                        d9 = 0
+                    } else {
+                        d9 = do9.parent
+                    }
+                }
+            }
+            defined9: false
+            if unitDecl9 > 0 then {
+                # declFindChild reads the pre-resolution def index, so a
+                # defined-but-never-demanded `Any` still counts.
+                if (st.typing.declFindChild parentDeclId: unitDecl9 nameId: anyNid9) > 0 then {
+                    defined9 = true
+                }
+            } else {
+                defined9 = true
+            }
+            if (defined9) == false then {
+                if declNode9 > 0 then {
+                    tn9: ast.nodes.get i: (declNode9 - 1).u64
+                    m9: "Unknown type 'Any'".string
+                    (addResolveErrorH
+                        ty: st.typing
+                        nodeid: (nodeId n: tn9)
+                        lineno: (nodeLine n: tn9)
+                        colno: (nodeCol n: tn9)
+                        e: zast.err.badReference
+                        msg: m9
+                        width: 3
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -25091,6 +25165,10 @@ walkLookupTyperef: function {
     ) case some then {
         return (optionval.some r9)
     } case none then null
+    # `Any` is not user-reachable through the stdlib fallbacks: only its own
+    # unit (system.z, or a user unit defining one) resolves it. The
+    # constraint-position gate is checkAnyBounds.
+    if base == "Any" then return (optionval.none u64)
     r8: walkUnitProbe9 :ast :ty :reg uname: "system" :base
     match (
         r8
@@ -25242,6 +25320,9 @@ walkLookupTyperefById: function {
     ) case some then {
         return (optionval.some r9)
     } case none then null
+    # `Any` is not user-reachable through the stdlib fallbacks (see the
+    # text-keyed twin above).
+    if baseId == (zast.poolFind pool: ast.names text: "Any") then return (optionval.none u64)
     r8: walkUnitProbe9ById :ast :ty :reg uname: "system" :baseId
     match (
         r8
@@ -26003,6 +26084,7 @@ typecheck: function {
             :st
             mainName: program.mainUnitName.stringview
         )
+        checkAnyBounds ast: program.ast :st
     } else null
     return st
 }

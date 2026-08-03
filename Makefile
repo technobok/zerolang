@@ -314,10 +314,10 @@ perf: bin/zc
 # Both are ratchets: they may only DECREASE. Enforced here rather than in the
 # typechecker because generic-param registration has no unit name in hand.
 any-guard:
-	@u=$$(grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#' | wc -l); \
+	@u=$$(grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#' | grep -vE 'any_bound_retired\.z|any_shadow_bound\.z' | wc -l); \
 	if [ "$$u" -gt 0 ]; then \
 	  echo "any-guard FAIL: $$u use(s) of Any.generic in user source"; \
-	  grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#'; \
+	  grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#' | grep -vE 'any_bound_retired\.z|any_shadow_bound\.z'; \
 	  echo "  A generic must name the family it takes: AnyVal.generic or AnyRef.generic."; \
 	  exit 1; \
 	fi; \
