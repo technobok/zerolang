@@ -1028,6 +1028,106 @@ Analysis: class {
         } else null
     }
 
+    # walkTypeCasingProgram / walkTypeCasingAt -- L021 (default-on): a type
+    # definition's name casing follows its kind -- record/variant/facet
+    # lowercase, class/union/protocol PascalCase (styleguide Naming).
+    walkTypeCasingProgram: function {:this prog: Node.view} is {
+        match (
+            prog
+        ) case program then {
+            tci9: u64
+            tcn9: prog.ast.units.length
+            for tci9 < tcn9 loop {
+                tcid9: prog.ast.units.get i: tci9
+                this.walkTypeCasingAt ast: prog.ast nId: tcid9
+                tci9 = tci9 + 1
+            }
+        } else null
+    }
+
+    walkTypeCasingAt: function {:this ast: Ast.view nId: u32} is {
+        n9: ast.nodes.get i: (nId - 1).u64
+        match (
+            n9
+        ) case namedoperation then {
+            this.walkTypeCasingAt :ast nId: n9.operation
+        } case unitdef then {
+            it: n9.body.iterate
+            for bId9: it loop {
+                bm9: ast.nodes.get i: (bId9 - 1).u64
+                match (
+                    bm9
+                ) case namedoperation then {
+                    op9: ast.nodes.get i: (bm9.operation - 1).u64
+                    match (
+                        op9
+                    ) case objectdef then {
+                        (this.checkTypeNameCasing
+                            :ast
+                            nameRef: bm9.name
+                            line: bm9.lineno
+                            col: bm9.colno
+                            kind: op9.kind
+                        )
+                    } else null
+                } else null
+            }
+        } else null
+    }
+
+    # checkTypeNameCasing -- flag a valtype name carrying a capital, or a
+    # reftype name that does not start with one.
+    checkTypeNameCasing: function {:this ast: Ast.view nameRef: u32 line: u32 col: u32 kind: zast.nodetype} is {
+        isVal9: false
+        if kind == zast.nodetype.recordDef then isVal9 = true
+        if kind == zast.nodetype.variantDef then isVal9 = true
+        if kind == zast.nodetype.facetDef then isVal9 = true
+        isRef9: false
+        if kind == zast.nodetype.classDef then isRef9 = true
+        if kind == zast.nodetype.unionDef then isRef9 = true
+        if kind == zast.nodetype.protocolDef then isRef9 = true
+        if isVal9 == false when isRef9 == false then return
+        nm: zast.nameTextCopy :ast ref: nameRef
+        hasUpper9: false
+        ci9: u64
+        cln9: nm.length
+        for ci9 < cln9 loop {
+            cb9: nm.stringview.byteAt i: ci9
+            match (
+                cb9
+            ) case some then {
+                if cb9 >= 65 when cb9 <= 90 then hasUpper9 = true
+            } case none then null
+            ci9 = ci9 + 1
+        }
+        firstUpper9: false
+        fb9: nm.stringview.byteAt i: 0
+        match (
+            fb9
+        ) case some then {
+            if fb9 >= 65 when fb9 <= 90 then firstUpper9 = true
+        } case none then null
+        bad9: false
+        msg9: String
+        if isVal9 when hasUpper9 then {
+            bad9 = true
+            msg9 = "valtype '\{nm}' should be lowercase -- record/variant/facet names run their words together without capitals"
+        }
+        if isRef9 when firstUpper9 == false then {
+            bad9 = true
+            msg9 = "reftype '\{nm}' should be PascalCase -- class/union/protocol names start with a capital"
+        }
+        if bad9 then {
+            (this.warn
+                code: "L021"
+                msg: msg9
+                :line
+                :col
+                width: nm.length.u32.orPanic
+            )
+        }
+    }
+
     walkCasingProgram: function {:this prog: Node.view} is {
         match (
             prog
@@ -4106,6 +4206,7 @@ analyzeSource: function {
         wrapGroups: (ListVal u64)
     )
     a.runFastChecks n: root
+    a.walkTypeCasingProgram prog: root
     if casing then a.walkCasingProgram prog: root
     anyDocs9: docs
     if docParams then anyDocs9 = true
@@ -4205,6 +4306,7 @@ analyzeFileFull: function {
             wrapGroups: (ListVal u64)
         )
         a.runFastChecks n: root
+        a.walkTypeCasingProgram prog: root
         anyDocs9: docs
         if docParams then anyDocs9 = true
         if docFields then anyDocs9 = true
