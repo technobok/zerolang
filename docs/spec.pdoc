@@ -176,7 +176,7 @@ identifiers start with a decimal digit after an optional sign.
 Other predefined identifiers:
 
 #code language=zerolang: """
-  null never Any _ typedef tag
+  null never AnyRef AnyVal RefHashable ValHashable Box _ typedef tag
 
   u8 u16 u32 u64 u128
   i8 i16 i32 i64 i128
@@ -188,7 +188,7 @@ Other predefined identifiers:
 
   public private
 
-  take borrow lock generic
+  take borrow view hold takex copy release generic
 
   this
   meta
@@ -503,10 +503,10 @@ keywords:
 Reserved words are syntax errors. The following are reserved:
 
 #code language=zerolang:
-  macro           flag            view
-  goto            cell            unsafe
-  repeat          pragma          switch
-  until           enum
+  macro           flag            goto
+  cell            unsafe          repeat
+  pragma          switch          until
+  enum
 
 Neither keywords nor reserved words may be used as identifiers --
 this includes binding names, parameter names, and type names. The
@@ -1068,7 +1068,8 @@ Arguments:
 
 #_+"Ownership:" the binding follows function-argument rules. A plain
 name or dotted path on the right-hand side is #_*"borrowed" — the
-source is EXCLUSIVE-locked for the #~"do" scope; the source remains
+source is pinned for the #~"do" scope (exclusively for a #~".borrow"
+shape, shared for a #~".view" shape); the source remains
 valid after the #~"do" ends. An inline #~".take" moves ownership into
 the binding and invalidates the source. A call or constructor on the
 right-hand side produces a fresh value that the binding owns.
@@ -1320,7 +1321,7 @@ forms are supported:
 
 #ul:
   [#*: #_*"Type dissection" — the parameter ranges over types
-      (#~"t: Any.generic"). Each #~"case" names a type, matched against the
+      (#~"t: AnyVal.generic"). Each #~"case" names a type, matched against the
       concrete instantiation type.]
   [#*: #_*"Numeric-value dissection" — the parameter ranges over a numeric type
       (#~"cap: u32.generic"). Each #~"case" names a value, matched against the
@@ -1330,7 +1331,7 @@ forms are supported:
 
 Generic dissection is available anywhere a generic parameter is in scope: class
 methods (main-body and #~"as"-block), free functions, and generic units
-(#~"unit as { t: Any.generic }", whether defined inline or as a whole file). If
+(#~"unit as { t: AnyVal.generic }", whether defined inline or as a whole file). If
 no #~"case" matches the concrete binding and there is no #~"else", compilation
 fails at the offending instantiation — there is no arm to run.
 
@@ -1346,7 +1347,7 @@ fails at the offending instantiation — there is no arm to run.
               return "other"
           }
       }
-  } as { t: Any.generic }
+  } as { t: AnyVal.generic }
 
   Buffer: class {
       used: u32
@@ -1526,7 +1527,7 @@ values of the #~"loop" statement.
   # .call returns option/optionval/optionview
   for x: MyIter loop {
       # x is the some-payload (narrowed)
-      # MyIter is locked until 'for' completes
+      # MyIter is pinned until 'for' completes
   }
 
   # iterable — i64 has an .iterate method returning an integer-range
@@ -1984,7 +1985,7 @@ they must be consistent. A conflict produces a compilation error.
 Generic function example with inference:
 
 #code language=zerolang: """
-  identity: function as { t: Any.generic } in { val: t } out t is {
+  identity: function as { t: AnyRef.generic } in { val: t } out t is {
       return val
   }
 
@@ -1998,7 +1999,7 @@ Generic function example with inference:
 Generic parameter with default type:
 
 #code language=zerolang: """
-  myfn: function as { t: (Any.generic default: i64) } in { val: t } out t is {
+  myfn: function as { t: (AnyVal.generic default: i64) } in { val: t } out t is {
       return val
   }
   """
@@ -2006,9 +2007,14 @@ Generic parameter with default type:
 Note that attempting to store a reference type into a value type via a generic
 type will fail to compile.
 
-The #~"Any" type is a compiler defined union of all possible types declared in
-the current program. #~"Any" can #_*"ONLY" be used for generic definitions, not
-for creating fields or parameters.
+A generic bound names the family it takes: #~"AnyRef.generic" admits any
+reference type (class, union, protocol, #~"String"), #~"AnyVal.generic" any
+value type (record, variant, numeric, #~"str", #~"array"), and the hashed
+positions use #~"RefHashable.generic" / #~"ValHashable.generic", which also
+require #~"hash" and #~"==". The bare #~"Any" bound is not user-writable --
+the build rejects it; it survives only inside #~"system" on parameters that
+are never consulted and on the two types that deliberately span both
+families (#~"Iterator", #~"OptionView").
 
 Examples:
 
@@ -2018,7 +2024,7 @@ Examples:
       none: null
       some: t
   } as {
-      t: Any.reftype
+      t: AnyRef.generic
   }
 
   # optionval type for value types (stack-allocated tagged variant)
@@ -2026,7 +2032,7 @@ Examples:
       none: null
       some: t
   } as {
-      t: Any.valtype
+      t: AnyVal.generic
   }
 
   # usage:
@@ -2047,6 +2053,27 @@ Examples:
   # none takes only a single generic argument so the argument name can be
   # omitted
   x4: optionval.none i32
+
+  # Result is the two-armed union counterpart; a union holds reftypes,
+  # so a valtype success value is spelled with a Box argument
+  # ((Result (Box u64) e: IoError)) and a payload-less one is null
+  Result: union {
+      err: e
+      ok: t
+  } as {
+      t: AnyRef.generic
+      e: AnyRef.generic
+  }
+
+  # resultval is the all-valtype variant form (inline storage), with
+  # or/orPanic helpers; numeric conversions and parses return it
+  resultval: variant {
+      err: e
+      ok: t
+  } as {
+      t: AnyVal.generic
+      e: AnyVal.generic
+  }
 
   # OptionView type for borrowed views (used by container iterators).
   # Built on top of locked union arms — see "Locked union arms" above.
@@ -2130,20 +2157,26 @@ at runtime. Nesting options is legal but inadvisable; wrap in a class if needed.
 
 #----: box
 
-The #~"Box" type converts any type into a reference type. It has a generic
-parameter #~"t" of type #~"Any.generic" and a #~"from:" argument which takes
-ownership.
+The #~"Box" type converts a #_*"value type" into a reference type. It has a
+generic parameter #~"t" of type #~"AnyVal.generic" and a #~"from:" argument;
+a reference-type argument is rejected by the bound -- a class instance is
+already a heap pointer, so a box around one would be a pointer to a pointer.
 
-When the #~"from:" argument is a reference type, box is a zero-cost passthrough:
-the variable becomes the reference type directly with no runtime overhead.
-
-When the #~"from:" argument is a value type, box heap-allocates the value. The
-resulting variable is a reference type (pointer). Access to the boxed value is
-transparent: operators and fields work as if the value were unboxed. Destruction
-of a boxed value type frees the allocated memory.
+#~"Box from:" heap-allocates a copy of the value. The resulting variable is
+a reference type whose C representation is a bare pointer to the element.
+Access to the boxed value is transparent: operators and fields work as if
+the value were unboxed. Destruction of a boxed value frees the allocated
+memory.
 
 Example: #~"b: Box from: 42" heap-allocates the integer; #~"r: b + 8" uses
-transparent arithmetic. #~"s: Box from: \"hello\"" is a zero-cost passthrough.
+transparent arithmetic.
+
+#~"(Box T)" is also the spelling of a union's valtype arm, and there it
+#_*"collapses": the arm child is the element itself, construction takes the
+bare value, match arms bind the bare element, and the emitted C is exactly
+the heap cell a union arm always uses. The same collapse applies when a
+union is instantiated with a Box type argument, as in
+#~"(Result (Box u64) e: IoError)". See #>"union".
 
 Embedding a generic type in another type:
 
@@ -2152,8 +2185,8 @@ Embedding a generic type in another type:
 
   genericRec: record {
   } as {
-      a: Any.generic
-      b: Any.generic
+      a: AnyVal.generic
+      b: AnyVal.generic
   }
 
   # Embed:
@@ -2162,11 +2195,11 @@ Embedding a generic type in another type:
       # when creating a type reference for genericRec, the generic parameter
       # types must be specified
       bb: (genericRec a: aa b: aa)       # generic types 'passed down'
-      cc: (genericRec a: u32 b: String)    # they can also be concrete types
-      dd: (genericRec a: aa b: String)    # ..or could be a combination
+      cc: (genericRec a: u32 b: u64)     # they can also be concrete types
+      dd: (genericRec a: aa b: u64)      # ..or could be a combination
 
   } as {
-      aa: Any.generic
+      aa: AnyVal.generic
   }
   """
 
@@ -2174,7 +2207,7 @@ Example generic protocol:
 
 #code language=zerolang: """
   GenericFactory: protocol {
-      t: Any.generic
+      t: AnyRef.generic
       next: function { :this } out t
   }
   """
@@ -2369,11 +2402,20 @@ runtime instances:
     invalid after the call. Calling #~".take" on an expression that is not used
     (not assigned or passed) destroys the instance.]
   [#*: #~"x.borrow" - valid on all types. For reftypes, returns a borrowed
-    reference to #~"x" and exclusively locks #~"x" for the lifetime of the
+    reference to #~"x" and exclusively pins #~"x" for the lifetime of the
     borrowed reference. For valtypes, returns a copy of #~"x" without locking
     (valtypes have no identity to lock).]
+  [#*: #~"x.view" - the readonly counterpart of #~".borrow": a SHARED pin,
+    so several views may be live at once and the source stays readable;
+    nothing may be written through a view.]
+  [#*: #~"x.hold" - owned and readonly: ownership transfers but only
+    reading members may be called on the binding.]
+  [#*: #~"x.copy" - a duplicate. Valtypes copy by default; a reftype has no
+    default #~".copy" -- its author declares one in the #~"as" block (or
+    strikes a valtype's default with #~"copy: null").]
+  [#*: #~"x.release" - drops a non-owned field's reference early.]
 
-#-----: Lock Fields on Classes
+#-----: Non-Owned Fields on Classes
 
 A class may declare a field non-owned (#~".borrow" or #~".view"). The field stores
 a locked reference to external data; the reference is locked for the
@@ -2391,8 +2433,8 @@ so the lock cannot be duplicated.
   }
   """
 
-#~".borrow" is the only field-type modifier permitted (#~".take" and
-#~".borrow" on field types are rejected). non-owned fields are only
+#~".borrow" and #~".view" are the only field-type modifiers permitted
+(#~".take" on a field type is rejected). non-owned fields are only
 permitted on #_*"classes". A record with a non-owned field is a compile
 error because records are copied freely, which would duplicate the lock.
 A class that has any non-owned field cannot itself be nested as a field
@@ -2421,9 +2463,10 @@ Lock states:
   [#*: exclusive - an exclusive lock is held over this instance]
   [#*: shared - a shared lock is held over this instance]
 
-An exclusive lock is required to pass an instance as an argument to a method.
-A shared lock is taken on the parent when an exclusive lock is taken on a
-child/grandchild member.
+Passing an instance as an argument takes a lock matched to the parameter's
+marker: EXCLUSIVE for the default borrow and owned forms, SHARED for
+#~".view" (readers coexist). A shared lock is taken on the parent when an
+exclusive lock is taken on a child/grandchild member.
 
 Accessing a reftype field (eg. #~"x: obj.field") produces a borrowed reference
 to that field. The borrowed reference holds a shared lock on the parent and
@@ -2442,7 +2485,8 @@ values:
   [#*: Each argument is processed left to right as specified in the call.]
   [#*: If the argument is a top level (#~"data") item, no lock is taken
     (immutable, freely shared).]
-  [#*: Otherwise, an exclusive lock is taken on the argument.]
+  [#*: Otherwise, a lock matching the parameter's marker is taken on the
+    argument -- exclusive for the default borrow, shared for #~".view".]
   [#*: If the argument is a dotted chain, a shared lock is taken on each parent
     and grandparent in that chain.]
   [#*: Additional shared locks on already shared-locked parents are permitted.]
@@ -2457,8 +2501,10 @@ values:
     shared locks on parent items) are assigned to the returned value. All other
     argument locks are freed.]
 
-#~"for" loops over a reftype iteration target take an exclusive lock on the
-target for the body's duration, preventing mutation during iteration. Per-
+#~"for" loops over a reftype iteration target take the lock the iterator's
+receiver declares: #~"iterate" runs on a #~".view" receiver (SHARED -- the
+container stays readable), while #~"iterateMut" / #~"iterateItems" run on
+#~".borrow" (EXCLUSIVE, preventing all other access during iteration). Per-
 iteration locks on the iterator (and on any non-owned fields it carries)
 flow through the per-iteration method dispatch.
 
@@ -2499,13 +2545,13 @@ The declaration typereference follows the name. It is:
   [#*: the name of the type followed by each generic argument using syntax similar
     to function calls (to specify a generic type). As with function calls, the
     name of the first generic argument may be omitted]
-  [#*: a type followed by #~".generic" (eg. #~"Any.generic") to create a generic
+  [#*: a type followed by #~".generic" (eg. #~"AnyRef.generic") to create a generic
     type parameter. For functions and protocols, the generic parameter is declared
     in the body. For records, unions, classes and variants, the generic parameter
     is declared in the #~"as" section.]
-  [#*: a type followed by #~".take", #~".borrow", or #~".borrow" in function
-    parameter definitions to specify ownership and locking semantics. See
-    #~"ownership.pdoc".]
+  [#*: a type followed by #~".take", #~".borrow", #~".view" or #~".hold" in
+    function parameter definitions to specify ownership and locking
+    semantics. See #~"ownership.pdoc".]
 
 
 #---: Unit Types
@@ -2614,7 +2660,7 @@ Units can be generic. Generic type parameters are declared in the unit's
 
 #code language=zerolang: """
   mathops: unit as {
-      t: Any.generic
+      t: AnyVal.generic
       add: function {a: t b: t} out t is { return a + b }
       double: function {v: t} out t is { return v + v }
   }
@@ -2718,10 +2764,13 @@ Compiler created union type that contains all types except itself. Can
 #_*"only" be used as a generic field type.
 
 
-#~"Any.reftype" constrains a generic parameter to reference types (classes,
-unions, protocols, strings, lists, maps, sets). #~"Any.valtype" constrains a generic
-parameter to value types (records, variants, enums, numerics). These are used
-by the system #~"Option" (reftype only) and #~"optionval" (valtype only) types.
+#~"AnyRef.generic" constrains a generic parameter to reference types
+(classes, unions, protocols, strings, the reftype containers).
+#~"AnyVal.generic" constrains it to value types (records, variants,
+numerics). #~"RefHashable.generic" / #~"ValHashable.generic" additionally
+require #~"hash" and #~"==" for hashed positions. These are used by the
+system #~"Option" (reftype only), #~"optionval" (valtype only), and the
+container families.
 
 #----: type
 
@@ -2807,14 +2856,11 @@ For valtypes, returns a copy without locking. See
 
 #----: lock
 
-#~"lock" is a predefined type attribute on reftype types and generic type
-parameters, for use in function parameter declarations only (#~"type.borrow").
-It indicates that this parameter will be locked by the return value for the
-lifetime of that return value. Multiple parameters may be marked #~".borrow";
-all locks transfer to the return value. It is illegal to specify #~".borrow" on
-a return value or when there is no return value. #~".borrow" on a known valtype
-parameter is a compile error -- valtypes are pass-by-value so identity-based
-locking is meaningless.
+#~"lock" is retired. It was a second name for #~".borrow" plus, on a
+parameter, the pin that #~".takex" now states on the return (a
+#~"create"-style method returning #~"this.takex" pins its non-owned
+arguments to the returned instance). The word still parses and is treated
+as #~".borrow" while old sources migrate.
 
 #----: typedef
 
@@ -2893,8 +2939,8 @@ type is expected.
   MyDict: class {
       base: (dict k: str v: i64).typedef
   } as {
-      k: Any.generic
-      v: Any.generic
+      k: AnyVal.generic
+      v: AnyVal.generic
   }
   """
 
@@ -3198,8 +3244,8 @@ Also available is the fully qualified name for the parent object.
 The compiler provides two tiers of pre-existing methods on types:
 
 #ul:
-  [#*: #_+"Intrinsics" -- #~".take", #~".release", #~".borrow", #~".borrow",
-  #~".private". The compiler defines their semantics directly; no
+  [#*: #_+"Intrinsics" -- #~".take", #~".release", #~".borrow", #~".view",
+  #~".hold", #~".private". The compiler defines their semantics directly; no
   #~"is native" declaration in the standard library is required. They
   are also #_+"shadowable": a user-defined member with the same name on
   a type takes precedence over the intrinsic for that type. Resolution
@@ -3266,10 +3312,9 @@ See also the #~"ownership.pdoc".
 
 #----: lock (method)
 
-#~"lock" is not a runtime method on instances. It is a type attribute used only
-in function parameter declarations (#~"type.borrow") to indicate that the
-parameter will be locked by the return value. See [#> to=locking: locking]
-for details.
+#~"lock" is retired as a method spelling as well -- see the
+[#> to=lock: lock] attribute note. The return-pin it used to state is
+#~".takex".
 
 
 #----: release (method)
@@ -3307,7 +3352,7 @@ apply #~".private" to it. Use from outside is a compile error
 
 #~".private" takes no arguments. It does not transfer ownership and does
 not introduce a new borrow on its own -- it is purely a visibility
-adjustment. Subsequent suffixes such as #~".borrow" / #~".borrow" attach
+adjustment. Subsequent suffixes such as #~".borrow" / #~".view" attach
 their usual lock semantics to the projected reference.
 
 See #~"examples/ListIter.z" for the canonical iterator-friend pattern
@@ -3381,8 +3426,8 @@ defaults to #~"static const int64_t[]".
 
 String literal fragments are built on top of a u8 data sequence.
 
-The data when used at runtime has exactly the same API as #~"collections.list"
-except that it is readonly.
+The data when used at runtime has exactly the same API as the valtype list
+family (#~"ListVal") except that it is readonly.
 
 #code language=zerolang: """
   # array of i64 (default — no explicit type tag)
@@ -3474,7 +3519,6 @@ initialize content; if the source exceeds capacity, it is silently truncated.
 
   # field access
   n: greeting.length     # u64, current content length (5)
-  c: greeting.capacity   # u64, compile-time constant (32)
 
   # convert to a string (heap-allocated data buffer)
   heap: greeting.string   # returns string
@@ -3496,11 +3540,17 @@ are incompatible.
 
 #---: list
 
-#~"List" is a growable collection reftype. It is generic over the element
-type and provides dynamic-length storage with amortized O(1) append. Lists
-follow reftype ownership semantics: they are tracked for scope cleanup and
-support #~".take" for ownership transfer. The list struct itself lives on
-the stack; only its element data buffer is heap-allocated.
+#~"List" is a growable collection reftype, generic over the element type,
+with dynamic-length storage and amortized O(1) append. It is the everyday
+alias of #~"ListRef", whose elements are reference types
+(#~"of: AnyRef.generic"); the valtype twin is #~"ListVal"
+(#~"of: AnyVal.generic"). Element accessors come in readonly/mutable pairs:
+#~"get" (a view, or a copy on #~"ListVal") beside #~"getMut" (an exclusive
+#~"of.borrow" in both families), and #~"iterate" (shared, readonly) beside
+#~"iterateMut" (exclusive). Lists follow reftype ownership semantics: they
+are tracked for scope cleanup and support #~".take" for ownership transfer.
+The list struct itself lives on the stack; only its element data buffer is
+heap-allocated.
 
 The constructor is #~"(List of: <type>)" for an empty list, or
 #~"(List of: <type>) capacity: <u64>" to pre-allocate storage. The C
@@ -3555,7 +3605,12 @@ incompatible.
 #---: map
 
 #~"Map" is a hash map (dictionary) reftype, generic over key type and value
-type. Maps use open-addressing with linear probing and automatic resizing.
+type. It is the everyday alias of #~"MapRR" (reftype key, reftype value);
+the sibling forms name the other family combinations: #~"MapRV",
+#~"MapVR" and #~"MapVV". A key position is hashed, so its bound is
+#~"RefHashable.generic" / #~"ValHashable.generic"; a value position is
+#~"AnyRef.generic" / #~"AnyVal.generic". Maps are compact dicts -- a dense
+entry array plus a separate index table -- with automatic resizing.
 
 The constructor is #~"(Map key: <key_type> value: <value_type>)" for an empty
 map, or #~"(Map key: K value: V) capacity: <u64>" to pre-allocate buckets.
@@ -3568,7 +3623,8 @@ map, or #~"(Map key: K value: V) capacity: <u64>" to pre-allocate buckets.
   ages.set key: "alice" value: 30
   ages.set key: "bob" value: 25
 
-  # get returns optionval (value-type) or borrowed OptionView (String/reftype)
+  # get returns (OptionView value) on the reftype-value forms (MapRR /
+  # MapVR) and (optionval value) -- a copy, no pin -- on MapRV / MapVV
   r: ages.get key: "alice"
   match (r) case some then { print "found" } case none then { print "missing" }
 
@@ -3585,8 +3641,10 @@ map, or #~"(Map key: K value: V) capacity: <u64>" to pre-allocate buckets.
   c: ages.capacity   # u64, current bucket count
   """
 
-Key types must be numeric types or #~"String". The map takes ownership of both
-keys and values. On replacement via #~"set", the old value is destroyed. #~"remove key: k"
+A key type conforms to its family's hashability interface -- it declares
+#~"hash" and #~"==" (#~"String" and the numerics ship theirs; any
+conforming user type is a legal key). The reftype-key forms take ownership
+of keys; the reftype-value forms take ownership of values. On replacement via #~"set", the old value is destroyed. #~"remove key: k"
 deletes the entry and returns its #_*"owned" value wrapped in #~"Option" (for
 reference-type / #~"String" values) or #~"optionval" (for value-type values),
 or #~"none" if absent -- the value's ownership transfers to the caller and the
@@ -3609,9 +3667,11 @@ survivors keep their relative order).
 
 #---: set
 
-#~"Set" is a hash-table reftype, generic over element type. It shares the
-open-addressing + linear-probing hash table with #~"Map", with the value
-column excised — a #~"Set" is a #~"Map" without per-key payload.
+#~"Set" is a hash-table reftype, generic over element type. It is the
+everyday alias of #~"SetRef" (#~"of: RefHashable.generic"); the valtype
+twin is #~"SetVal" (#~"of: ValHashable.generic"). It shares the
+compact-dict layout with #~"Map", with the value column excised — a
+#~"Set" is a #~"Map" without per-key payload.
 
 The constructor is #~"(Set of: <element_type>)" for an empty set, or
 #~"(Set of: T) capacity: <u64>" to pre-allocate buckets.
@@ -3633,8 +3693,8 @@ The constructor is #~"(Set of: <element_type>)" for an empty set, or
   n: s.length          # u64, current element count
   c: s.capacity        # u64, current bucket count
 
-  # iteration via with/do — the iterator holds an EXCLUSIVE lock on the
-  # source for its lifetime
+  # iteration via with/do — iterate is the READONLY walk (a .view
+  # receiver, SHARED): the set stays readable while it runs
   with it: s.iterate do for x: it loop {
       print "x: \\{x}"
   }
@@ -3712,15 +3772,15 @@ details. A parameter #_*"must not" be private (#~"_") but may have ownership
 attributes (#~"type.take", #~"type.borrow", #~"type.borrow") or it may have a
 default constant numeric value or a default function reference value. Parameters
 may reference generic types declared in the #~"as" clause. Declaring generic
-parameters directly in #~"in" (e.g. #~"t: Any.generic") is a compile error.
+parameters directly in #~"in" (e.g. #~"t: AnyRef.generic") is a compile error.
 
 The order of the parameters is significant. The first parameter may
 be the 'primary' argument that can be used without specifying the parameter
 name in a call. See #>"calls" for details.
 
 The #~"as" argument takes a brace delimited block of generic type parameter
-declarations of the form #~"name: constraint.generic" (e.g. #~"t: Any.generic"
-or #~"n: u64.generic" for numeric generics). The #~"as" block follows the same
+declarations of the form #~"name: constraint.generic" (e.g.
+#~"t: AnyRef.generic" or #~"n: u64.generic" for numeric generics). The #~"as" block follows the same
 form as the #~"as" clause on [#> to=record: compound type definitions]. The
 first generic parameter in #~"as" can be specified without name at call sites;
 the remainder require names. This makes the instantiation interface
@@ -3821,14 +3881,14 @@ Generic function example:
 
 #code language=zerolang: """
   # generic identity function
-  identity: function as { t: Any.generic } in { val: t } out t is {
+  identity: function as { t: AnyRef.generic } in { val: t } out t is {
       return val
   }
 
   # generic function with multiple type parameters
   map: function
-      as { t: Any.generic
-           u: Any.generic }
+      as { t: AnyRef.generic
+           u: AnyRef.generic }
       in { val: t
            f: function in { x: t } out u }
       out u
@@ -3858,8 +3918,9 @@ function argument label), can be:
   the same type must be passed at the call
 - #~"address" followed by a function or method name. This will then be a #~"Spec"
   parameter with a default value equal to the function name specified.
-- a type followed by #~".generic" (eg. #~"Any.generic", #~"MyUnion.generic",
-  #~"myprotocol.generic") to specify a generic type constraint
+- a type followed by #~".generic" (eg. #~"AnyRef.generic",
+  #~"MyUnion.generic", #~"myprotocol.generic") to specify a generic type
+  constraint
 - a type followed by #~".take" (eg. #~"reftype.take") to take ownership of the
   parameter
 - a type followed by #~".borrow" (eg. #~"type.borrow") to explicitly borrow
@@ -3948,10 +4009,13 @@ Two iterator patterns are common:
       Each iteration produces a fresh value and the loop body owns
       it for the iteration's duration.]
   [#*: #b:"Container iterators" yield non-owning views into a source
-      collection via #~"OptionView(t)". The iterator holds a #~".borrow"
-      reference into the source; each yielded value is a borrowed
-      view, lifetime-tied to the iterator's lock. Examples:
-      #~"ListIter", #~"MapKeyIter", #~"MapItemIter", #~"SetIter". The loop body
+      collection via #~"OptionView(t)". A plain #~"iterate" holds a
+      #~".view" (shared) reference into the source, so the container
+      stays readable; #~"iterateMut" / #~"iterateItems" hold #~".borrow"
+      (exclusive). Each yielded value is a borrowed view, lifetime-tied
+      to the iterator's pin. Each container family has its own iterator
+      template (#~"ListIter" / #~"ListIterVal", #~"SetIter" /
+      #~"SetIterVal", the Map key/item iterators per form). The loop body
       cannot transfer ownership of a borrowed value (compile error;
       use #~".copy" first).]
 
@@ -3969,10 +4033,11 @@ hidden binding with the same lifetime:
 #code language=zerolang:
   for line: (textreader file: f) loop { ... }
 
-The recommended container-iterator form is a #~"class" with a non-owned field
-referencing the container's private members. The container is locked for
-the iterator's lifetime; the iterator falls out of scope at the end of the
-#~"for" body and the lock on the container is released. Classes are
+The recommended container-iterator form is a #~"class" with a non-owned
+field referencing the container's private members. The container is pinned
+for the iterator's lifetime -- shared for a readonly walk, exclusive for a
+mutating one; the iterator falls out of scope at the end of the #~"for"
+body and the pin on the container is released. Classes are
 single-owner (cannot be copied), which is what makes the non-owned field safe.
 See #~"examples/ListIter.z" for the canonical pattern and
 #~"docs/ownership.pdoc" for the lock-lifecycle walkthrough.
@@ -4014,7 +4079,6 @@ generic argument defaults to #~".borrow"; #~".take" is explicit.
   bare #~"T"         |#~"OptionView(T)"    |#~"optionval(T)"     |Borrowed view (ref) / copy (val)
   #~"T.borrow"       |#~"OptionView(T)"    |#~"optionval(T)"     |Same as bare
   #~"T.take"         |#~"Option(T)"        |#~"optionval(T)"     |Owned out (ref) / copy (val)
-  #~"T.borrow"         |Compile error        |Compile error        |Parameter-only ownership
 
 For valtype #~"T", ownership annotations are physical no-ops
 (#~".borrow" copies, #~".take" is identical), so all three forms
@@ -4041,7 +4105,7 @@ factory call, but the iterator outlives that call.
   Parameter form                       |Verdict        |Stored as
   #~"arg: T.take" (reftype)            |OK             |Owned field; destroyed on iterator destruction
   #~"arg: T.borrow" (reftype)            |OK             |Locked field; released on iterator destruction
-  #~"arg: T.borrow", bare #~"arg: T"   |Compile error  |(use #~".borrow" or #~".take")
+  bare #~"arg: T" (reftype)            |Compile error  |(use #~".borrow" or #~".take")
   #~"arg: T" (valtype)                 |OK             |Value field
   #~":this" (method)                   |Compile error  |(use the explicit binding form below)
   #~"arg: this.borrow", #~"arg: this.private.borrow" |OK   |Locked receiver field
@@ -4232,7 +4296,7 @@ Class constructors whose type carries non-owned fields simply return
 #~"out this" like any other class constructor; the type system verifies
 that the non-owned fields are initialised from #~".borrow" parameters of
 the constructor (escape analysis). See
-#> to=lock-fields-on-classes: Lock Fields on Classes
+#> to=non-owned-fields-on-classes: Non-Owned Fields on Classes
 and #~"docs/ownership.pdoc".
 
 Note that constructors are not executed for value types that are copied as
@@ -4574,17 +4638,19 @@ Generic types can also be used in records:
 #code language=zerolang: """
   # k and v can be anything (seperately)
   dictelement: record {
-      tk: generic Any
-      tv: generic Any
       k: tk
       v: tv
+  } as {
+      tk: AnyVal.generic
+      tv: AnyVal.generic
   }
 
   # k and v can be anything but must be the same anything for both
   dictelement2: record {
-      t: generic Any
       k: t
       v: t
+  } as {
+      t: AnyVal.generic
   }
   """
 
@@ -4592,7 +4658,7 @@ Record fields are pure value data. A record cannot contain #~"String",
 #~"List", #~"Box", #~"Map" or any other heap-backed type, and it cannot
 carry a non-owned field. Types that need to hold a locked reference to
 external data are #_*"classes" -- see
-#> to=lock-fields-on-classes: Lock Fields on Classes
+#> to=non-owned-fields-on-classes: Non-Owned Fields on Classes
 and #~"docs/ownership.pdoc".
 
 #code language=zerolang: """
@@ -5044,9 +5110,14 @@ Unions are sum-types that can hold exactly one of their child types at any
 given time. A discriminator (tag) is auto-generated for each subtype. A union
 is a reference type with a uniform two-word layout: a tag and a #~"void*"
 data pointer. The union struct itself lives on the stack; the subtype data
-pointed to by #~"void*" is heap-allocated. All member types may be reference
-types or value types. Valtype payloads are stored in the heap-allocated
-subtype slot; reftype payloads are stored by pointer.
+pointed to by #~"void*" is heap-allocated. #_*"A union holds reference
+types." A #~"null" arm carries no payload; an arm with an ownership marker
+(#~".view" / #~".borrow" / #~".hold") is reference-family whatever it
+points at; and a value-type arm is spelled #~"(Box T)", which
+#_*"collapses" -- the arm child is the element itself, construction takes
+the bare value, match arms bind the bare element, and the emitted C is
+exactly the heap cell every union arm uses. A bare value-type arm is a
+compile error naming the #~"(Box T)" spelling to write.
 
 Methods can be defined on the union body. These methods operate on the union
 type itself. To access subtype-specific data, the union must first be narrowed
@@ -5075,7 +5146,7 @@ If there is no associated type for a subtype, the type is specified with a
 #code language=zerolang: """
   MyUnion: union {
       u1: null       # no user stored value. Discriminator only
-      :u32           # shortened syntax for 'u32: u32'
+      u2: (Box u32)  # a boxed valtype arm; matches bind the bare u32
       u4: String
       u5: MyClass    # a class defined elsewhere
   }
@@ -5180,9 +5251,11 @@ Creating/setting a union value:
   }
   """
 
-Unions are also used to define generic types along with protocols. #~"Any" is a
-system defined union that includes all possible types used in the current
-program.
+Unions are also used to define generic types along with protocols.
+#~"AnyRef" is the system union spanning every reference type in the
+program; #~"AnyVal" is its variant counterpart for value types. Generic
+bounds name one of them (or a hashability interface) rather than the bare
+#~"Any".
 
 #code language=zerolang:
   smallint: union { i8: null u8: null }
@@ -5201,8 +5274,10 @@ Arguments for #~"variant":
   is        |Yes     |Block of independent subtypes, generic parameters and associated methods
   as        |        |Optional block for tag specification and shared attributes
 
-See also the #>"union" section. Other than variants being a value type, all
-other instructions for a union also apply to a variant.
+See also the #>"union" section. A variant stores its payload inline
+(tagged storage, no heap cell) and its arms are value types only -- the
+mirror image of a union's reference-only arms; construction, matching and
+tag selection otherwise follow the union rules.
 
 #----: Enumerated Types
 
@@ -5588,7 +5663,7 @@ are the numeric/character values.
 
 #code language=zerolang: """
   Container: class { val: t } as {
-      t: Any.generic
+      t: AnyRef.generic
 
       typecheck: function {c: this} is {
           match t case i32 then {
