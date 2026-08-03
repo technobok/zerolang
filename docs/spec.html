@@ -629,8 +629,9 @@ the same meaning regardless of position.</p>
 established rename pattern in the codebase is to pick a role-flavoured
 noun -- <code>result</code>, <code>buf</code>, <code>output</code>, <code>outval</code> and similar -- in
 place of the conflicting word.</p>
-<p>A further six identifiers are reserved in member position only:
-<code>lock</code>, <code>take</code>, <code>borrow</code>, <code>release</code>, <code>private</code> and
+<p>A further nine identifiers are reserved in member position only:
+<code>lock</code>, <code>take</code>, <code>borrow</code>, <code>view</code>, <code>hold</code>, <code>takex</code>,
+<code>release</code>, <code>private</code> and
 <code>public</code>. They are ownership and access markers, so a type body
 (record, class, variant, union, protocol or facet) may not declare a
 member, arm or method with one of these names -- error E0037. The
@@ -954,7 +955,7 @@ borrowed parameter into an aggregate field (<code>Box label: borrowed_s</code>) 
 rejected for the same reason. Remediations are <code>.copy</code> (clone),
 <code>.take</code> on the parameter (transfer ownership in), or
 <code>out T.borrow</code> + a non-owned parameter (return a borrow tied to a
-locked source). See <code>ownership.pdoc</code> for details.</p>
+pinned source). See <code>ownership.pdoc</code> for details.</p>
 <p>In a call, the 'primary' parameter is the first parameter listed in the <code>in</code>
 parameter list of the <a href="#function">function definition</a>. In a type specifier, the
 'primary' is the first generic argument. If that is also the first argument
@@ -1543,7 +1544,7 @@ synthesises the call to <code>.iterate</code> once before the loop;
 its result is the iterator. Example: <code>for x: 5 loop</code> lowers
 to <code>for x: 5.iterate loop</code>. Only the exact name <code>.iterate</code>
 triggers this rule; other iterator-producing methods such as
-<code>.iterate_keys</code> or <code>.iterateItems</code> must be invoked
+<code>.iterateMut</code> or <code>.iterateItems</code> must be invoked
 explicitly so they fall under rule 1.</li>
 <li><strong>Rule 3 (function as iterator):</strong> RHS is a call expression
 AND its return type is <code>Option(t)</code> / <code>optionval(t)</code> /
@@ -1674,9 +1675,10 @@ discriminator tag 0. Stdlib types <code>Option</code>, <code>optionval</code>,
 <p>User-defined sum types are encouraged but not required to follow this
 convention; the compiler does not enforce it on user code.</p>
 <h5 id="non-owned-union-arms">Non-owned union arms</h5>
-<p>A <code>union</code> arm may declare its payload type non-owned -- <code>.borrow</code> or
-<code>.view</code> -- indicating that the arm holds a reference into a parent rather
-than owning its payload:</p>
+<p>A <code>union</code> arm may carry an ownership marker -- <code>.view</code>, <code>.borrow</code> or
+<code>.hold</code>. The non-owned markers <code>.borrow</code> and <code>.view</code> indicate that
+the arm holds a reference into a parent rather
+than owning its payload (<code>.hold</code> stays owned but readonly):</p>
 <pre><code class="language-zerolang">OptionView: union {
     none: null
     some: t.borrow
@@ -1689,24 +1691,24 @@ payload.</li>
 <li><strong>Non-owned arms</strong> (<code>some: t.borrow</code>): the constructor takes a
 pinned source via the <code>from:</code> parameter (consistent with
 <code>protocol.borrow from: x</code>); the union's destructor releases
-the lock without freeing the payload. The union's lifetime cannot
-exceed the locked source's lifetime; escape analysis prevents
+the pin without freeing the payload. The union's lifetime cannot
+exceed the borrowed source's lifetime; escape analysis prevents
 storing the union into an aggregate that outlives the source.</li>
 </ul>
 <p>Mixed-ownership unions are permitted: arms may independently choose owned
-or locked semantics. The destructor walks the active arm via the tag and
+or borrowed semantics. The destructor walks the active arm via the tag and
 applies per-arm cleanup.</p>
 <p>The extension is union-only; <code>variant</code> arms must remain inline-stored
-valtypes. A locked arm holds a pointer to external data, which inherently
+valtypes. A borrowed arm holds a pointer to external data, which inherently
 introduces ownership/lifetime tracking that valtypes deliberately exclude.</p>
-<p><strong>Construction:</strong> the locked arm is constructed by passing <code>from:</code> with
-a locked source:</p>
-<pre><code class="language-zerolang">with v: my_lock_source do {
+<p><strong>Construction:</strong> the borrowed arm is constructed by passing <code>from:</code>
+with a borrowed source:</p>
+<pre><code class="language-zerolang">with v: my_borrow_source do {
     ov: OptionView.some from: v
     # ov.some is borrowed from v; ov cannot outlive this 'do' block
 }</code></pre>
 <p><strong>Destructor elision:</strong> if every arm of a union is either <code>null</code> or a
-locked reference, no runtime cleanup is required and the compiler emits no
+borrowed reference, no runtime cleanup is required and the compiler emits no
 destructor for the union. For mixed unions, the emitted destructor's
 <code>switch</code> only contains <code>case</code> clauses for arms that need cleanup.</p>
 <h5 id="type-narrowing">Type Narrowing</h5>
@@ -1939,7 +1941,8 @@ resultval: variant {
 }
 
 # OptionView type for borrowed views (used by container iterators).
-# Built on top of locked union arms &#x2014; see "Locked union arms" above.
+# Built on top of non-owned union arms &#x2014; see "Non-owned union arms"
+# above.
 OptionView: union {
     none: null
     some: t.borrow
@@ -1947,11 +1950,11 @@ OptionView: union {
     t: Any.generic
 }
 
-# OptionView.some takes a locked source via from:, and binds a
-# borrowed view. The view's lifetime is tied to the source's lock;
+# OptionView.some takes a borrowed source via from:, and binds a
+# borrowed view. The view's lifetime is tied to the pin on the source;
 # the OptionView cannot be stored in an aggregate that outlives
 # the source.
-with v: my_lock_source do {
+with v: my_borrow_source do {
     v0: OptionView.some from: v
     v1: OptionView.none i64
 }</code></pre>
@@ -2266,8 +2269,9 @@ exclusive lock is taken on a child/grandchild member.</p>
 <p>Accessing a reftype field (eg. <code>x: obj.field</code>) produces a borrowed reference
 to that field. The borrowed reference holds a shared lock on the parent and
 an exclusive lock on the field.</p>
-<p>For a function that returns a borrowed instance: that instance retains an
-exclusive lock over the <code>.borrow</code> parameter where the returned object lives,
+<p>For a function that returns a borrowed instance: that instance retains the
+source's lock over the non-owned parameter (<code>.borrow</code> or <code>.view</code>) where
+the returned object lives,
 until the borrowed object falls out of scope.</p>
 <h5 id="locking-algorithm">Locking Algorithm</h5>
 <p>During a call, locks are taken/checked/assigned on all arguments and return
@@ -2558,7 +2562,8 @@ is not taken. <code>.borrow</code> is the default for all <code>in</code> parame
 valtypes, borrowing means a copy is passed (source not invalidated). For
 reftypes, borrowing means a reference is passed.</p>
 <p>As a return type attribute (<code>out type.borrow</code>): the function returns a
-borrowed reference. At least one <code>in</code> parameter must be marked <code>.borrow</code>.</p>
+borrowed reference. At least one <code>in</code> parameter must be non-owned --
+marked <code>.view</code> (readonly) or <code>.borrow</code> (mutable).</p>
 <p>As a compiler method on instances (<code>x.borrow</code>): valid on all types. For
 reftypes, returns a borrowed reference and exclusively locks the receiver.
 For valtypes, returns a copy without locking. See
@@ -3138,11 +3143,11 @@ heap-allocated.</p>
 <code>(List of: &lt;type&gt;) capacity: &lt;u64&gt;</code> to pre-allocate storage. The C
 representation is a struct with <code>length</code> (u64), a typed <code>data</code>
 pointer to the heap buffer, and <code>capacity</code> (u64).</p>
-<pre><code class="language-zerolang"># create an empty list
-nums: (List of: i64)
+<pre><code class="language-zerolang"># create an empty list (i64 is a valtype, so the valtype family)
+nums: (ListVal i64)
 
 # create with pre-allocated capacity
-big: (List of: i64) capacity: 100.u64
+big: (ListVal i64) capacity: 100.u64
 
 # append elements
 nums.append from: 42
@@ -3161,7 +3166,7 @@ last: nums.pop
 nums.insert from: 50 at: 0.u64
 
 # extend from another list (takes ownership of source)
-other: (List of: i64)
+other: (ListVal i64)
 other.append from: 1
 nums.extend from: other.take
 
@@ -3177,7 +3182,7 @@ c: nums.capacity   # u64, current buffer capacity</code></pre>
 <p>Out-of-bounds <code>get</code> and <code>set</code> calls, and <code>pop</code> on an empty list, print an
 error to stderr and exit the process. Growth uses the formula
 <code>newcap = oldcap + (oldcap &gt;&gt; 1) + 4</code>. Different element types produce
-different monomorphized types: <code>List of: i64</code> and <code>List of: u64</code> are
+different monomorphized types: <code>(ListVal i64)</code> and <code>(ListVal u64)</code> are
 incompatible.</p>
 <h3 id="map"><a href="#map">5.9. map</a></h3>
 <p><code>Map</code> is a hash map (dictionary) reftype, generic over key type and value
@@ -3189,8 +3194,8 @@ the sibling forms name the other family combinations: <code>MapRV</code>,
 entry array plus a separate index table -- with automatic resizing.</p>
 <p>The constructor is <code>(Map key: &lt;key_type&gt; value: &lt;value_type&gt;)</code> for an empty
 map, or <code>(Map key: K value: V) capacity: &lt;u64&gt;</code> to pre-allocate buckets.</p>
-<pre><code class="language-zerolang"># create an empty map
-ages: (Map key: String value: i64)
+<pre><code class="language-zerolang"># create an empty map (reftype key, valtype value)
+ages: (MapRV key: String value: i64)
 
 # set entries (insert or replace)
 ages.set key: "alice" value: 30
@@ -3219,7 +3224,10 @@ of keys; the reftype-value forms take ownership of values. On replacement via <c
 deletes the entry and returns its <em><strong>owned</strong></em> value wrapped in <code>Option</code> (for
 reference-type / <code>String</code> values) or <code>optionval</code> (for value-type values),
 or <code>none</code> if absent -- the value's ownership transfers to the caller and the
-key is destroyed. <code>get</code> returns a copy of the value in the same wrappers.</p>
+key is destroyed. <code>get</code> differs by value family: on the reference-valued
+forms (<code>MapRR</code> / <code>MapVR</code>) it returns <code>(OptionView value)</code>, a borrowed
+view that pins the map; on the value-valued forms (<code>MapRV</code> / <code>MapVV</code>)
+it returns <code>(optionval value)</code>, a copy, with no pin.</p>
 <p>The table grows when the load factor exceeds 2/3. Capacity is always a power
 of two, starting at 8 and doubling on resize. Removed entries leave tombstones
 that are reclaimed during resize. Different key/value type combinations produce
@@ -3241,8 +3249,8 @@ compact-dict layout with <code>Map</code>, with the value column excised &#x2014
 <code>Set</code> is a <code>Map</code> without per-key payload.</p>
 <p>The constructor is <code>(Set of: &lt;element_type&gt;)</code> for an empty set, or
 <code>(Set of: T) capacity: &lt;u64&gt;</code> to pre-allocate buckets.</p>
-<pre><code class="language-zerolang">  # create an empty set
-  s: (Set of: i64)
+<pre><code class="language-zerolang">  # create an empty set (i64 is a valtype, so the valtype family)
+  s: (SetVal i64)
 
   # add elements; .add returns true on first insert, false on duplicate
   s.add item: 1
@@ -3262,8 +3270,10 @@ compact-dict layout with <code>Map</code>, with the value column excised &#x2014
   with it: s.iterate do for x: it loop {
       print "x: \\{x}"
   }</code></pre>
-<p>Element types must be numeric or <code>String</code> (hashability is enforced at
-monomorphization). The set takes ownership of items on <code>add</code>; on a
+<p>A set element must satisfy its family's hashable bound (<code>RefHashable</code>
+for <code>SetRef</code>, <code>ValHashable</code> for <code>SetVal</code> -- it declares <code>hash</code> and
+<code>==</code>); any conforming type is a legal element.
+The set takes ownership of items on <code>add</code>; on a
 duplicate-add the caller's copy is destroyed so the take-on-add contract
 holds. On <code>delete</code> the stored item is destroyed.</p>
 <p>Iteration is in <em><strong>insertion order</strong></em> and stable across runs: like <code>Map</code>, a
@@ -4506,18 +4516,18 @@ per-subtype constructor accessed via dot notation: <code>MyUnion.subtype expr</c
 Each subtype automatically gets a constructor. Null subtypes take no argument.
 Valtype arguments are copied (boxed) into the union. Reftype arguments require
 ownership transfer via <code>.take</code> or by passing an anonymous/literal value.</p>
-<pre><code class="language-zerolang">Result: union {
-    ok: i64
+<pre><code class="language-zerolang">Outcome: union {
+    ok: (Box i64)
     err: String
     none: null
 }
 
-a: Result.ok 42                     # valtype: value is boxed
-b: Result.err "something went wrong" # reftype: string literal, ownership taken
-c: Result.none                      # null subtype: no argument
+a: Outcome.ok 42                     # construction takes the bare value; the arm is spelled Box
+b: Outcome.err "something went wrong" # reftype: string literal, ownership taken
+c: Outcome.none                      # null subtype: no argument
 
 # named argument form
-d: Result.err from: mystr.take      # explicit .take transfers ownership</code></pre>
+d: Outcome.err from: mystr.take      # explicit .take transfers ownership</code></pre>
 <h4 id="ownership-2"><a href="#ownership-2">5.19.2. Ownership</a></h4>
 <p>Union instances are owned reference types. The same ownership rules that apply
 to classes also apply to unions:</p>

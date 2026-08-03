@@ -63,7 +63,8 @@ operation can fail for reasons the caller needs to handle
 #ul:
   [#*: #> to=numeric-types: #b:"i8" / #b:"i16" / #b:"i32" / #b:"i64" / #b:"i128" -- signed integer records]
   [#*: #> to=numeric-types: #b:"u8" / #b:"u16" / #b:"u32" / #b:"u64" / #b:"u128" -- unsigned integer records]
-  [#*: #> to=numeric-types: #b:"f32" / #b:"f64" -- IEEE 754 floating-point records]
+  [#*: #> to=numeric-types: #b:"f16" / #b:"f32" / #b:"f64" / #b:"f128" -- IEEE 754 floating-point records]
+  [#*: #> to=numeric-types: #b:"c8" / #b:"c32" -- character code-unit records (UTF-8 byte / Unicode scalar)]
 
 #p: #b:"Primitive types"
 
@@ -71,7 +72,7 @@ operation can fail for reasons the caller needs to handle
   [#*: #> to=bool: #b:"bool" -- #~"variant { false: null  true: null }"]
   [#*: #> to=null: #b:"null" -- #~"null: record is native"]
   [#*: #> to=never: #b:"never" -- #~"never: record is native"]
-  [#*: #> to=any: #b:"Any" -- #~"Any: union is native"]
+  [#*: #> to=any: #b:"Any" -- #~"Any: union is native" (system-internal; not user-reachable)]
 
 #p: #b:"String types"
 
@@ -81,7 +82,7 @@ operation can fail for reasons the caller needs to handle
   [#*: #> to=string-iterators: #b:"CpIter" -- #~"call: function out (optionval t: u32)"]
   [#*: #> to=string-iterators: #b:"Splitter" -- #~"call: function out (Option t: StringView)"]
   [#*: #> to=string-iterators: #b:"LinesIter" -- #~"call: function out (Option t: StringView)"]
-  [#*: #> to=text-and-stringlike: #b:"Text" -- #~"protocol { StringView: function {:this} out StringView }"]
+  [#*: #> to=text-and-stringlike: #b:"Text" -- #~"protocol { stringview: function {:this} out StringView }"]
   [#*: #> to=text-and-stringlike: #b:"StringLike" -- #~"union { :StringView :Text }"]
 
 #p: #b:"Option and Result"
@@ -98,7 +99,7 @@ operation can fail for reasons the caller needs to handle
 
 #ul:
   [#*: #> to=bytes-and-byteview: #b:"Bytes" -- #~"class { val: (ListVal u8).typedef }"]
-  [#*: #> to=bytes-and-byteview: #b:"ByteView" -- #~"class { val: (ListViewVal of: u8).typedef }"]
+  [#*: #> to=bytes-and-byteview: #b:"ByteView" -- #~"class { val: (ListViewVal u8).typedef }"]
   [#*: #> to=path-and-pathview: #b:"Path" -- #~"class { val: String.typedef }"]
   [#*: #> to=path-and-pathview: #b:"PathView" -- #~"class { val: StringView.typedef }"]
 
@@ -107,13 +108,13 @@ operation can fail for reasons the caller needs to handle
 #ul:
   [#*: #> to=box: #b:"Box" -- #~"class {} as { t: AnyVal.generic }"]
   [#*: #> to=typedef: #b:"typedef" -- #~"record is native as { from: Any.generic }"]
-  [#*: #> to=tag: #b:"tag" -- #~"record is native as { t: Any.generic }"]
+  [#*: #> to=tag: #b:"tag" -- #~"record is native as { t: AnyVal.generic }"]
 
 #p: #b:"Control flow"
 
 #ul:
-  [#*: #> to=error: #b:"error" -- #~"function {msg: String} out never is native"]
-  [#*: #> to=panic: #b:"panic" -- #~"function {msg: String} out never is native"]
+  [#*: #> to=error: #b:"error" -- #~"function as { T: StringLike.generic } in { msg: T } out never is native"]
+  [#*: #> to=panic: #b:"panic" -- #~"function as { T: StringLike.generic } in { msg: T } out never is native"]
   [#*: #> to=return: #b:"return" -- #~"function as { t: Any.generic } in { result: t } out never is native"]
   [#*: #> to=break: #b:"break" -- compiler-intrinsic]
   [#*: #> to=continue: #b:"continue" -- compiler-intrinsic]
@@ -132,13 +133,20 @@ operation can fail for reasons the caller needs to handle
   u32:  record { ... } as { tag: tag }
   u64:  record { ... } as { tag: tag }
   u128: record { ... } as { tag: tag }
+  f16:  record { ... } as { tag: tag }
   f32:  record { ... } as { tag: tag }
   f64:  record { ... } as { tag: tag }
+  f128: record { ... } as { tag: tag }
+  c8:   record { ... } as { tag: tag }
+  c32:  record { ... } as { tag: tag }
 """
 
-Twelve numeric record types: five signed integers, five unsigned
-integers, two IEEE 754 floats. All are valtypes (records): copied
-on assignment, no heap allocation, no destructor.
+Sixteen numeric record types: five signed integers, five unsigned
+integers, four IEEE 754 floats (#~"f16" half precision, #~"f32",
+#~"f64", #~"f128" quad precision), and two character code-unit
+scalars (#~"c8" a UTF-8 byte, #~"c32" a Unicode scalar value). All
+are valtypes (records): copied on assignment, no heap allocation,
+no destructor.
 
 #b:"Literals." Integer literals default to #~"i64"; float literals
 default to #~"f64". Use the dotted suffix form to choose a different
@@ -283,19 +291,22 @@ position.
 
 Control-flow analysis tracks #~"never"-returning expressions to
 determine unreachable-code errors and branch exhaustiveness. See
-#> to=./spec.html#dead-code: spec, dead code analysis.
+#> to=./spec.html#never: spec, the never type.
 
 
 #--: any
 
 #code language=zerolang: """
-  any: union is native
+  Any: union is native
 """
 
-The universal supertype: the union of all types. #b:"Not a
-user-writable bound" -- a generic parameter must name the family
-it takes, and the build rejects #~"Any.generic" in user source.
-The bounds to write are:
+The universal supertype: the union of all types -- and #b:"not a
+user-reachable name". #~"Any" is retired from the user surface: it
+is not re-exported by the prelude, and a user spelling of it in any
+position (a binding, a parameter type, a field type, or an
+#~"Any.generic" bound) is the standard unknown-name error
+(#~"E0023"), exactly as an undefined identifier is, unless the unit
+defines its own #~"Any". The bounds to write are:
 
 #ul:
   [#*: #~"AnyRef.generic" -- any #b:"reftype" (class, union,
@@ -321,7 +332,7 @@ zerolang does not do runtime type tagging at that level.
 #--: string
 
 #code language=zerolang: """
-  string: class is native as {
+  String: class is native as {
       :Text
       ==  / != / <  / <= / >  / >=: function {:this rhs: String} out bool
       compare:    function {:this rhs: String} out i32
@@ -416,7 +427,7 @@ destroys.
 #--: stringview
 
 #code language=zerolang: """
-  stringview: class is native as {
+  StringView: class is native as {
       length / == / != / < / <= / > / >= / compare  ...
       string:            function {:this} out String
 
@@ -578,15 +589,15 @@ usual form.
 #--: text and StringLike
 
 #code language=zerolang: """
-  text: protocol {
+  Text: protocol {
       stringview: function {:this} out StringView
   }
 
-  StringLike: union { :stringview :Text }
+  StringLike: union { :StringView :Text }
 """
 
 The #~"Text" protocol is a minimal conformance: any type with a
-#~"StringView: function {:this} out StringView" method can
+#~"stringview: function {:this} out StringView" method can
 declare #~":Text" in its #~"as" block and then accept a
 #~"Text"-constrained argument. Used by APIs that want to read
 text without caring whether the source is a #~"String",
@@ -760,7 +771,7 @@ distinct name and a namespace for bytes-specific methods.
 Because the wrapped types are classes, #~"List" operations flow
 through transparently via the typedef backward-compatibility
 rule: #~".append", #~".length", #~".listview" etc. work on a
-#~"Bytes" value. See #> to=./stdlib_collections.html#list: list.
+#~"Bytes" value. See #> to=./stdlib_collections.html#the-list-family: the List family.
 
 #b:"View lifetime." #~"ByteView" mirrors #~"StringView" /
 #~"ListView" lock semantics: creating a view locks its source
@@ -837,7 +848,7 @@ class with a single #~".typedef" field, which the compiler
 recognises as a typedef marker:
 
 #code language=zerolang: """
-  path: class { val: String.typedef }
+  Path: class { val: String.typedef }
 """
 
 This declares #~"Path" as a typedef over #~"String": a distinct
@@ -848,7 +859,7 @@ type in signatures but with full backward compatibility to
 #--: tag
 
 #code language=zerolang: """
-  tag: record is native as { t: Any.generic }
+  tag: record is native as { t: AnyVal.generic }
 """
 
 Generic record that carries a variant / union discriminator's
@@ -872,7 +883,7 @@ that must be statically dead; the #~"never" return type lets
 #~"error" occupy any expression position.
 
 #code language=zerolang: """
-  f: function as { T: Any.generic } in { x: T } is {
+  f: function as { T: AnyVal.generic } in { x: T } is {
       if (is T: never) {
           error msg: "never-valued T".string
       }
@@ -938,7 +949,7 @@ applies.
 
 Return ownership semantics are tied to the function's declared
 return-ownership annotation; see #> to=./ownership.html:
-ownership for #~".borrow" / #~".borrow" interactions and the
+ownership for #~".borrow" / #~".view" interactions and the
 lock-escape rules for view returns.
 
 

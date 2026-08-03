@@ -420,7 +420,8 @@ names split on word boundaries: <code>BufWriter</code>, not <code>Bufwriter</cod
 <code>ListView</code>, not <code>Listview</code>.</p>
 <p>The predefined reftypes built into the language follow the same rule:
 <code>String</code>, <code>StringView</code>, <code>Option</code>, <code>OptionView</code>, <code>Result</code>,
-<code>Any</code>, <code>Text</code>.</p>
+<code>Text</code>, and the generic bounds <code>AnyRef</code>, <code>AnyVal</code>,
+<code>RefHashable</code>, <code>ValHashable</code>.</p>
 <pre><code class="language-zerolang">File: class { ... }
 ListView: class { ... }
 ReadStream: protocol { ... }</code></pre>
@@ -509,7 +510,7 @@ intent at the call site. The judgement applies most often to native or
 generic methods where a bare argument's role is not obvious from the
 receiver and method name.</p>
 <pre><code class="language-zerolang"># clear from receiver and method name -- omit
-List.append item
+names.append item
 
 # bare argument's role is not obvious -- name it
 buf.write from: chunk</code></pre>
@@ -560,7 +561,7 @@ side-effecting an accumulator when an expression form is available.</p>
 squares: for x: 5.iterate loop { x * x }
 
 # avoid
-squares: List of: i64
+squares: (ListVal i64)
 for x: 5.iterate loop { squares.append x * x }</code></pre>
 <h2 id="unused-bindings"><a href="#unused-bindings">8. Unused Bindings</a></h2>
 <p>The linter warns on a local or parameter that is never read (L013 / L014)
@@ -587,17 +588,22 @@ inline code. The two are covered separately below.</p>
 <code>.take</code> on an <code>out</code> parameter.</li>
 <li><code>.borrow</code> on an <code>out</code> parameter is the only place <code>.borrow</code>
 is written explicitly. It indicates a borrowed return; at least one
-<code>in</code> parameter must be marked <code>.borrow</code> to provide a parent for the
-borrow's lifetime.</li>
+<code>in</code> parameter must be non-owned -- <code>.view</code> (readonly) or
+<code>.borrow</code> (mutable) -- to provide a parent for the borrow's
+lifetime.</li>
 <li><code>.view</code> and <code>.hold</code> have no default. Write them explicitly when
 a readonly receiver or binding is intended -- the stdlib's readers
 (<code>length</code>, <code>iterate</code>, ...) declare <code>t: this.view</code>.</li>
+<li><code>.takex</code> marks an owned return whose non-owned sources stay
+pinned for its life. Required when an owned <code>out this</code> return's type
+carries a non-owned field (the wrapper-constructor shape:
+<code>out this.takex</code>).</li>
 </ul>
 <pre><code class="language-zerolang"># in: borrow is implicit; out: take is implicit
 area: function {p: point} out f64 is { ... }
 
 # borrowed return: explicit .borrow on out, a non-owned parent
-first: function {l: List.borrow t: of} out of.borrow is { ... }</code></pre>
+first: function as { t: AnyRef.generic } in {l: (List t).borrow} out t.borrow is { ... }</code></pre>
 <h3 id="inline-code"><a href="#inline-code">9.2. Inline Code</a></h3>
 <ul>
 <li>Do not write <code>.borrow</code> in function bodies or on call arguments.

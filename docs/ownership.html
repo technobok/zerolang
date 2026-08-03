@@ -145,7 +145,7 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
-<li><a href="#locking">Locking</a>
+<li><a href="#pinning-and-locks">Pinning and Locks</a>
 <ul>
 <li><a href="#lock-keys-are-paths">Lock Keys Are Paths</a>
 </li>
@@ -191,13 +191,13 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
-<li><a href="#escape-analysis-for-locks">Escape Analysis for Locks</a>
+<li><a href="#escape-analysis-for-pins">Escape Analysis for Pins</a>
 <ul>
 <li><a href="#reftype-borrow-returns">Reftype Borrow Returns</a>
 </li>
 <li><a href="#classes-with-non-owned-fields-2">Classes with Non-Owned Fields</a>
 </li>
-<li><a href="#cross-function-lock-chains">Cross-Function Lock Chains</a>
+<li><a href="#cross-function-pin-chains">Cross-Function Pin Chains</a>
 </li>
 </ul>
 </li>
@@ -217,13 +217,13 @@ Table of Contents</div>
 </li>
 <li><a href="#full-example">Full Example</a>
 </li>
-<li><a href="#lock-lifecycle-in-the-for-loop">Lock Lifecycle in the For-Loop</a>
+<li><a href="#pin-lifecycle-in-the-for-loop">Pin Lifecycle in the For-Loop</a>
 </li>
 <li><a href="#views">Views</a>
 </li>
 </ul>
 </li>
-<li><a href="#container-views-and-locks">Container Views and Locks</a>
+<li><a href="#container-views-and-pins">Container Views and Pins</a>
 </li>
 <li><a href="#protocol-objects">Protocol Objects</a>
 </li>
@@ -235,8 +235,9 @@ Table of Contents</div>
 
 </nav>
 <main id="content">
-<p>This document describes the ownership and locking model for Zerolang. It
-covers owned and borrowed variables, locking, non-owned fields on classes,
+<p>This document describes the ownership and pinning model for Zerolang. It
+covers owned and borrowed variables, pinning and the locks that enforce it,
+non-owned fields on classes,
 escape analysis, iterators, protocol instances and the lifetime guarantees the
 compiler enforces.</p>
 <h2 id="for-most-code"><a href="#for-most-code">1. For Most Code</a></h2>
@@ -702,19 +703,24 @@ the alias. Unit-level instantiation creates a compile-time alias
 
 gen1: function out MyIter is { yield "a".string }
 gen2: function {n: i64} out MyIter is { ... }</code></pre>
-<h2 id="locking"><a href="#locking">8. Locking</a></h2>
-<p>Locking is an orthogonal compile-time mechanism that prevents aliasing and
-enforces mutation-safety for outstanding borrows. It has zero runtime
-overhead.</p>
+<h2 id="pinning-and-locks"><a href="#pinning-and-locks">8. Pinning and Locks</a></h2>
+<p>A non-owned binding or argument pins its source: SHARED for readonly
+views, EXCLUSIVE for mutable borrows. Pinning is an orthogonal compile-time
+mechanism that prevents aliasing and enforces mutation-safety for
+outstanding borrows, with zero runtime overhead. The machinery that
+enforces pins is called locking, and "lock" is the word compiler
+diagnostics use (e.g. "shared lock held by 'it'"); this chapter uses "pin"
+for the relationship a view or borrow establishes, and "lock" for the
+enforcement records the compiler tracks.</p>
 <p>The whole model is three rules. Everything below is these worked out in
 detail; if the detail ever seems to say something else, these win.</p>
 <ol>
-<li>Every call takes a lock on its receiver -- SHARED for
+<li>Every call pins its receiver -- SHARED for
 <code>this.view</code>, EXCLUSIVE for <code>this.borrow</code> (and a bare <code>:this</code> is
 <code>this.borrow</code>). A field write or a swap is the same thing at statement
 scope. There is no separate rule for mutation: a mutator is simply a call
 with an exclusive receiver, and no carve-out for readers.</li>
-<li>The lock is released on return -- unless the return carries a
+<li>The pin is released on return -- unless the return carries a
 reference (<code>borrow</code>, <code>view</code>) or pins its sources (<code>takex</code>), in which
 case it transfers to the binding and lives exactly as long as it does.</li>
 <li>Shared and shared coexist. Exclusive coexists with nothing. A
@@ -725,13 +731,17 @@ deliberately over a more permissive alternative that would have needed two
 concepts and given up both the aliasing guarantee and the "nobody observes a
 half-built object" guarantee.</p>
 <p>Consequences worth stating outright, because they surprise people: an iterator
-holds its container EXCLUSIVELY, so two iterators over one container are
-refused and passing the container anywhere while iterating is refused --
-but passing the element is fine and must stay so. <code>xs.length</code> inside a
-mutable loop is refused; hoist it, or use an index loop, whose element binding
-dies each iteration.</p>
-<p>Zerolang uses one lock primitive for two purposes, which this document
-refers to as:</p>
+pins its container for its whole lifetime with the strength its receiver
+declares. <code>iterate</code> is declared on a <code>.view</code> receiver, so it pins
+SHARED: other readers -- including further <code>iterate</code> walks over the same
+container -- stay legal while it runs, and only writes are refused.
+<code>iterateMut</code> and <code>iterateItems</code> are declared on <code>.borrow</code> receivers,
+so they pin EXCLUSIVELY, refusing everything else: <code>xs.length</code> inside an
+<code>iterateMut</code> loop is refused; hoist it, or use an index loop, whose
+element binding dies each iteration. Passing the element out is fine
+in both cases and must stay so.</p>
+<p>Zerolang enforces every pin with one lock primitive, used in two lifetime
+patterns, which this document refers to as:</p>
 <ul>
 <li>Call-scoped Locking -- locks held only during a function or
 method call, used to prevent aliasing between arguments and receiver.
@@ -802,7 +812,7 @@ receiver path, then released when the call returns:</p>
   similarly for stringview/listview), the call-scoped lock targets the
   source path -- the parent of the lifting suffix -- not the
   syntactic path with the suffix appended. <code>m.borrow</code> passed as an
-  argument locks path <code>(m,)</code>, not <code>(m, lock)</code>. This holds for every
+  argument locks path <code>(m,)</code>, not <code>(m, borrow)</code>. This holds for every
   ownership and access marker, at any depth: the path builder classifies
   each dotted segment by name, so <code>rec.field.borrow</code> locks
   <code>(rec, field)</code> and <code>this.private.borrow</code> locks <code>(this,)</code>.
@@ -825,11 +835,14 @@ receiver path, then released when the call returns:</p>
   by that returned value. All other argument and receiver locks are
   released when the call scope pops.</li>
 </ol>
-<p><code>for</code> loops over a reftype iteration target take an exclusive lock on
-the target for the duration of the body, preventing mutation of the
-container or iterator from outside the loop. Per-iteration method
-dispatch takes and releases an exclusive lock on the receiver for each
-call. See the lock lifecycle walkthrough below for a worked example.</p>
+<p><code>for</code> loops over a reftype iteration target take the lock the iterator's
+receiver declares, held for the duration of the body: <code>iterate</code> (a
+<code>.view</code> receiver) pins the target SHARED, while <code>iterateMut</code> and
+<code>iterateItems</code> (<code>.borrow</code> receivers) pin it EXCLUSIVELY. Either way
+the pin prevents mutation of the container or iterator from outside the
+loop. Per-iteration method dispatch takes and releases an exclusive lock
+on the iterator for each <code>call</code>. See the pin lifecycle walkthrough below
+for a worked example.</p>
 <h3 id="per-call-atomic-processing"><a href="#per-call-atomic-processing">8.4. Per-Call Atomic Processing</a></h3>
 <p>The locking algorithm above is implemented through a per-call
 sub-scope model: every call -- not only those whose result is
@@ -888,7 +901,8 @@ are ordinary native methods declared in <code>lib/system/*.z</code> with
 the standard marked-receiver alias, and the standard
 transfer drives the propagation uniformly.</p>
 <h3 id="borrow-scoped-locking"><a href="#borrow-scoped-locking">8.5. Borrow-scoped Locking</a></h3>
-<p>A Borrow-scoped Lock is acquired whenever a variable is bound to a
+<p>A Borrow-scoped Lock -- the enforcement record behind a pin -- is
+acquired whenever a variable is bound to a
 borrow or view construct: <code>.borrow</code>, <code>String.stringview</code> or
 <code>str.stringview</code> (both produce a <code>StringView</code> class borrowing the
 source), the analogous <code>List.listview</code>, a <code>with name: Path do
@@ -953,13 +967,15 @@ take their own locks via the function-call algorithm. When <code>name</code> fal
 of scope at the end of <code>with</code>, any locks it holds -- including those
 transferred from non-owned fields of the bound value -- are released.</p>
 <h3 id="lock-release-on-scope-exit"><a href="#lock-release-on-scope-exit">8.7. Lock Release on Scope Exit</a></h3>
-<p>When a variable falls out of scope, all locks it holds on other variables are
+<p>When a variable falls out of scope, every pin it holds ends: all locks it
+holds on other variables are
 released. If the variable is borrowed, the borrow ends. If the variable is
 owned, it is destroyed (reftypes) or forgotten (valtypes).</p>
 <h3 id="temporary-expressions-in-lock-context"><a href="#temporary-expressions-in-lock-context">8.8. Temporary Expressions in Lock Context</a></h3>
 <p>The compiler rejects <code>.borrow</code>, <code>.stringview</code>, <code>.listview</code>, and
-A non-owned marker on temporary expressions (i.e. expressions whose result has
-no named variable). The programmer must assign the value to a variable
+any non-owned marker on temporary expressions (i.e. expressions whose result
+has no named variable) -- a temporary has no scope to pin against. The
+programmer must assign the value to a variable
 first:</p>
 <pre><code class="language-zerolang"># ERROR: cannot create view from temporary expression
 # v: "hello".string.stringview
@@ -1156,10 +1172,11 @@ non-owned fields can be borrowed into a protocol instance via the label or
 the lifetime rules propagate as usual. Taking a class with non-owned fields
 into an owned protocol instance (consuming it with <code>.take</code>) is also
 permitted: the class -- and the locks it holds -- move into the wrapper.</p>
-<h2 id="escape-analysis-for-locks"><a href="#escape-analysis-for-locks">11. Escape Analysis for Locks</a></h2>
+<h2 id="escape-analysis-for-pins"><a href="#escape-analysis-for-pins">11. Escape Analysis for Pins</a></h2>
 <p>The compiler must verify that borrowed return values -- and owned returns
-that carry non-owned fields -- trace back to <code>.borrow</code> parameters of the
-current function. This ensures the locked data stays alive for the lifetime
+that carry non-owned fields -- trace back to non-owned (<code>.borrow</code> or
+<code>.view</code>) parameters of the
+current function. This ensures the pinned data stays alive for the lifetime
 of the returned value.</p>
 <h3 id="reftype-borrow-returns"><a href="#reftype-borrow-returns">11.1. Reftype Borrow Returns</a></h3>
 <p>For a reftype borrow return, the returned reference must point to data living
@@ -1197,19 +1214,19 @@ bad_iterate: function {b: this} out MyIter is {
 <p>The locks on the <code>.borrow</code> parameter transfer to the returned instance: the
 caller receives an owned class whose non-owned field keeps the source
 locked for the returned instance's lifetime.</p>
-<h3 id="cross-function-lock-chains"><a href="#cross-function-lock-chains">11.3. Cross-Function Lock Chains</a></h3>
-<p>When a function returns a borrowed value that holds locks, and the caller passes
-that value to another function, the lock chain must be maintained. The compiler
-verifies that each link in the chain connects to a <code>.borrow</code> parameter.</p>
+<h3 id="cross-function-pin-chains"><a href="#cross-function-pin-chains">11.3. Cross-Function Pin Chains</a></h3>
+<p>When a function returns a borrowed value that holds pins, and the caller passes
+that value to another function, the pin chain must be maintained. The compiler
+verifies that each link in the chain connects to a non-owned parameter.</p>
 <pre><code class="language-zerolang"># OK -- both functions lock their input and return a borrow
 inner: function {t: MyClass.borrow} out child.borrow is {
   return t.child
 }
 
 outer: function {t: MyClass.borrow} out grandchild.borrow is {
-  x: inner t         # x borrows from t, lock on t
+  x: inner t         # x borrows from t, pin on t
   y: x.grandchild    # y borrows from x
-  return y            # OK: lock chain traces to t which is non-owned
+  return y            # OK: pin chain traces to t which is non-owned
 }</code></pre>
 <h2 id="simple-ownership-examples"><a href="#simple-ownership-examples">12. Simple Ownership Examples</a></h2>
 <p>Before the advanced iterator pattern, here are the common ownership scenarios
@@ -1269,13 +1286,16 @@ fix it. For example:</p>
   that the variable is borrowed and suggests restructuring ownership.</li>
 <li>Attempting to use a locked variable reports which variable holds the lock
   and where the lock will be released (scope exit).</li>
+<li>Returning a borrow without a non-owned parameter to borrow from
+  suggests marking the source parameter <code>.view</code> (readonly) or
+  <code>.borrow</code> (mutable).</li>
 <li>Declaring a non-owned field on a record reports the specific field and
   suggests making the enclosing type a class.</li>
 </ul>
 <h2 id="iterator-pattern"><a href="#iterator-pattern">13. Iterator Pattern</a></h2>
 <p>The iterator pattern is the most common complex use of the ownership system.
-It demonstrates non-owned fields on classes, locking, private access, and
-scope-based lock lifecycle.</p>
+It demonstrates non-owned fields on classes, pinning, private access, and
+scope-based pin lifecycle.</p>
 <p>The iterator's constructor uses <code>meta.create</code> (the internal raw
 allocator of the enclosing type) to allocate the instance. This is
 the only legal form of construction inside the constructor body --
@@ -1366,41 +1386,50 @@ main: function is {
   # - b is available again
   print "Bag count: \{b.count}"
 }</code></pre>
-<h3 id="lock-lifecycle-in-the-for-loop"><a href="#lock-lifecycle-in-the-for-loop">13.3. Lock Lifecycle in the For-Loop</a></h3>
+<h3 id="pin-lifecycle-in-the-for-loop"><a href="#pin-lifecycle-in-the-for-loop">13.3. Pin Lifecycle in the For-Loop</a></h3>
 <p>The iterator may be created explicitly with <code>with</code> before the <code>for</code>
 loop; the for-loop dispatch also accepts an iterable directly (it
 synthesises the <code>.iterate</code> call) or an inline constructor call (it
 creates the hidden binding itself). The explicit form is:</p>
 <pre><code class="language-zerolang">with iter: container.iterate c: c do for x: iter loop { ... }</code></pre>
-<p>The lock lifecycle step by step:</p>
-<pre><code class="language-zerolang">with iter: bag.iterate b: b do {
-  # iter: OWNED BagIter on caller's stack
-  # b: EXCLUSIVELY LOCKED by iter (via its non-owned field)
-  # b cannot be used directly while iter is alive
+<p>The pin lifecycle step by step, for a readonly stdlib walk over a list
+<code>xs</code>:</p>
+<pre><code class="language-zerolang">with iter: xs.iterate do {
+  # iter: OWNED iterator on caller's stack
+  # xs: pinned SHARED by iter (via its non-owned field)
+  # readers on xs (length, get, another iterate) stay legal
+  # while iter is alive; writers are refused
 
   for x: iter loop {
     # Entry:
     #   iter.call is invoked (iter is the receiver)
     #   exclusive lock on iter during the call
-    #   result (optionval) checked -- none terminates the loop
-    #   x: OWNED i64 (copy from optionval.some)
-    #   lock on iter released (call complete)
+    #   result checked -- the call returns (OptionView of), a
+    #     borrowed view; none terminates the loop
+    #   x: READONLY borrowed view of the container's element,
+    #     pinning iter while it lives (for a valtype element x
+    #     reads as the value, but stays readonly)
+    #   call-scoped lock on iter released (call complete)
 
     print x
 
     # End of loop body:
-    #   x falls out of scope (i64, no cleanup)
+    #   x falls out of scope -- its pin on iter is released
     #   next iteration begins -- iter.call invoked again
   }
 }
 # iter falls out of scope:
 #   class is destroyed
-#   lock on b released
-# b is available again</code></pre>
-<p>If the iterator's <code>call</code> method returned a <em><strong>borrowed</strong></em> value instead (eg. a
-reference to a container element), the lifecycle would differ: the returned
-value would hold a lock on the iterator, preventing the next call until the
-value falls out of scope at the end of each loop iteration.</p>
+#   pin on xs released
+# xs is writable again</code></pre>
+<p>The <code>Bag</code> example above differs in exactly two places. Its <code>iterate</code>
+declares a <code>.borrow</code> receiver, so <code>BagIter</code> pins the bag EXCLUSIVELY
+-- <code>b</code> cannot be used at all while <code>iter</code> is alive. And its <code>call</code>
+returns owned <code>optionval</code> copies rather than borrowed views, so each
+<code>x</code> is an owned <code>i64</code> holding no pin once the call completes. A
+<code>call</code> that returns a borrowed view instead keeps a pin on the iterator,
+preventing the next call until the value falls out of scope at the end of
+each loop iteration.</p>
 <h3 id="views"><a href="#views">13.4. Views</a></h3>
 <p>The same pattern underlies views. A view is a small class holding a
 <code>.private.borrow</code> field into its source -- for example the <code>StringView</code>
@@ -1409,7 +1438,7 @@ readonly; <code>ListView</code> also offers <code>getMut</code> for in-place ele
 writes). Because the view is a single-owner class, the source stays safely
 pinned for the view's lifetime and no copy of the view can outlive it. See <code>examples/ListView.z</code>
 and <code>examples/borrowed_record.z</code> for worked examples.</p>
-<h2 id="container-views-and-locks"><a href="#container-views-and-locks">14. Container Views and Locks</a></h2>
+<h2 id="container-views-and-pins"><a href="#container-views-and-pins">14. Container Views and Pins</a></h2>
 <p>A <code>Map.get</code> over a reftype value does not copy the stored value out --
 it returns an <code>OptionView</code> whose payload is a borrowed reference into
 the map's own storage (the valtype-value forms <code>MapRV</code> / <code>MapVV</code>
@@ -1427,12 +1456,12 @@ drain the map's stored value in place -- the map would keep answering
 <code>some</code> with an empty husk. Call <code>.copy</code> on the payload to keep an
 owned copy; reading it in place (interpolation, <code>.stringview</code>,
 <code>.length</code>, comparisons, method calls) is always fine.</li>
-<li><strong>A live view locks its parent.</strong> The binding holds a SHARED
+<li><strong>A live view pins its parent.</strong> The binding holds a SHARED
 path-scoped lock on the container for its whole scope. Readers may
 overlap; a writer may not.</li>
 </ul>
-<p>The lock model is <strong>many readers or one writer, and mutating iterators
-are exclusive</strong>:</p>
+<p>The pin model is <strong>many readers or one writer</strong>; an iterator pins with
+the strength its receiver declares:</p>
 <ul>
 <li>Any number of live views and reader calls (<code>get</code>, <code>has</code>,
       <code>length</code>, <code>copy</code>, ...) coexist on one container.</li>
@@ -1443,10 +1472,12 @@ are exclusive</strong>:</p>
       dangle.</li>
 <li>A plain <code>iterate</code> is a <strong>reader</strong>: its receiver is <code>.view</code>,
       so other readers -- including <code>get</code> and further <code>iterate</code> walks
-      -- stay legal while it runs; only writers are excluded. The
-      <strong>mutating</strong> iterators (<code>iterateMut</code>, <code>iterateItems</code>) hold the
-      container <strong>exclusively</strong> for their lifetime: no other access until
-      the loop ends.</li>
+      -- stay legal while it runs; only writers are excluded.
+      <code>iterateMut</code> is the <strong>mutating</strong> walk; <code>iterateItems</code> is
+      readonly by design (a key is hashed -- writing through an entry
+      would put it in the wrong bucket) but still pins exclusively. Both
+      hold the container <strong>exclusively</strong> for their lifetime: no other
+      access until the loop ends.</li>
 </ul>
 <p>A method is a reader when its receiver is declared <code>.view</code>, which any
 class may do:</p>
@@ -1456,7 +1487,7 @@ class may do:</p>
         return c.n
     }
 }</code></pre>
-<p>The receiver then holds a readonly lock on itself for the whole body, so the
+<p>The receiver then pins itself readonly for the whole body, so the
 call takes a SHARED lock instead of an exclusive one. The stdlib containers
 declare it on <code>length</code>, <code>capacity</code>, <code>contains</code>, <code>has</code> and
 <code>iterate</code>, and <code>String</code> and <code>StringView</code> declare it on their
@@ -1484,11 +1515,11 @@ match (
 with items: m.iterateItems do for e: items loop {
     print "\{e.key}: \{e.value}"
 }</code></pre>
-<p>The same discipline covers strings: <code>sv: s.stringview</code> holds a SHARED lock
-on <code>s</code>, so <code>s.append</code> (which may reallocate the buffer <code>sv</code> points
+<p>The same discipline covers strings: <code>sv: s.stringview</code> pins <code>s</code>
+SHARED, so <code>s.append</code> (which may reallocate the buffer <code>sv</code> points
 into) is rejected while <code>sv</code> is live.</p>
 <p>User-defined functions are treated conservatively: passing a container to
-any function locks it exclusively for the call, because the compiler does
+any function pins it exclusively for the call, because the compiler does
 not look into the callee's body. Read a value out first (scope the view in
 a bare <code>{ }</code> block and <code>.copy</code> what you need) when you must hold data
 across such a call.</p>
@@ -1558,7 +1589,7 @@ the direct form.</p>
 <tbody>
 <tr><td><code>f borrowed_var.take</code></td><td>Cannot take a borrowed variable</td><td>Pass as <code>.borrow</code> or restructure ownership</td></tr>
 <tr><td><code>x.borrow</code> on a valtype</td><td>Cannot lock a valtype</td><td>Valtypes are pass-by-value; use a class if identity-based locking is needed</td></tr>
-<tr><td><code>return localvar</code> (as <code>.borrow</code>)</td><td>Cannot return local as borrowed without a non-owned param</td><td>Add <code>.borrow</code> to the relevant parameter</td></tr>
+<tr><td><code>return localvar</code> (as <code>.borrow</code>)</td><td>Cannot return local as borrowed without a non-owned param</td><td>Mark the source parameter <code>.view</code> (readonly) or <code>.borrow</code> (mutable)</td></tr>
 <tr><td><code>out this.takex</code> with no non-owned argument</td><td>Pin return without a pinned parameter</td><td>Give the factory a <code>.borrow</code> / <code>.view</code> parameter to pin</td></tr>
 <tr><td>non-owned field on a record</td><td>non-owned fields only allowed on classes</td><td>Change the enclosing type from <code>record</code> to <code>class</code></td></tr>
 <tr><td>non-owned field type mismatch</td><td>Field type must match constructor parameter type</td><td>Make the parameter type match the field type</td></tr>
