@@ -6035,15 +6035,81 @@ resolveUnion: function {
             armNames9.add item: aname.copy
             an: atomName :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
             if an.stringview != "null" then allNull = false
+            # A `(Box T)` arm collapses to T: the arm child IS the boxed
+            # valtype. A union arm is heap-celled whichever family it holds,
+            # so the spelling changes no emitted C; it exists so the
+            # declaration SAYS the arm boxes a valtype. Only the builtin Box
+            # (empty generic class body) collapses; a user class named Box
+            # resolves as an ordinary parameterized arm.
+            armTe9: fm.operation
+            armOpId9: fm.operation
+            armW9: true
+            for armW9 loop {
+                armW9 = false
+                {
+                    awn9: ast.nodes.get i: (armOpId9 - 1).u64
+                    match (
+                        awn9
+                    ) case expression then {
+                        armOpId9 = awn9.expression
+                        armW9 = true
+                    } else null
+                }
+            }
+            {
+                acn9: ast.nodes.get i: (armOpId9 - 1).u64
+                match (
+                    acn9
+                ) case call then {
+                    bxh9: atomName :ast n: (ast.nodes.get i: (acn9.callable - 1).u64)
+                    if bxh9.stringview == "Box" then {
+                        bxt9: (optU64Or
+                            o: (walkLookupTyperef :ast :ty :reg currentUnit: unitName base: "Box")
+                            d: 0)
+                        isBx9: false
+                        if bxt9 > 0 then {
+                            if (reg.typetypeOf typeId: bxt9) == ztypes.ztypetype.classType then {
+                                if (ty.declMemberCount ownerTid: bxt9) == 0 then isBx9 = true
+                            }
+                        }
+                        if isBx9 then {
+                            baiter9: acn9.arguments.iterate
+                            for baId9: baiter9 loop {
+                                ba9: ast.nodes.get i: (baId9 - 1).u64
+                                match (
+                                    ba9
+                                ) case namedoperation then {
+                                    if armTe9 == fm.operation then armTe9 = ba9.operation
+                                } else null
+                            }
+                        }
+                    }
+                } else null
+            }
             cid: (resolveTyperefShellMarked
                 :ty
                 :reg
                 :ast
                 :unitName
                 ownerId: 0
-                typeExpr: (ast.nodes.get i: (fm.operation - 1).u64)
+                typeExpr: (ast.nodes.get i: (armTe9 - 1).u64)
                 thisName: defName
             )
+            if armTe9 != fm.operation then {
+                if (typeIsValtype :ty :reg tid: cid) == false then {
+                    bxw9: atomName :ast n: (ast.nodes.get i: (armTe9 - 1).u64)
+                    mbx9: "'\{bxw9}' is already a reftype; a union arm holds it directly -- drop the Box"
+                    (addResolveErrorH
+                        :ty
+                        nodeid: fm.nodeid
+                        lineno: fm.lineno
+                        colno: fm.colno
+                        e: zast.err.typeError
+                        msg: mbx9
+                        width: aname.length.u32.orPanic
+                    )
+                }
+            }
             (ty.setMemberType
                 parentTypeId: uid
                 nameId: fm.name.u64
@@ -6069,7 +6135,7 @@ resolveUnion: function {
                 :ast
                 :unitName
                 thisName: ""
-                node: (ast.nodes.get i: (fm.operation - 1).u64)
+                node: (ast.nodes.get i: (armTe9 - 1).u64)
             )
         } else null
     }
