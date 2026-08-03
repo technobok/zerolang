@@ -308,9 +308,9 @@ perf: bin/zc
 # the count and fails. New type emission must go through the id-based helpers.
 # any-guard -- `Any` is the bound that says the family genuinely does not
 # matter. After the val/ref split no USER source may say it: a generic names
-# AnyVal or AnyRef. Two stdlib files keep counted residuals:
+# anyval or AnyRef. Two stdlib files keep counted residuals:
 #   system.z (5) -- `return` and `typedef`, whose parameter is never consulted
-#     (probed: bounding them to AnyVal does not reject a reftype), plus
+#     (probed: bounding them to anyval does not reject a reftype), plus
 #     `Iterator` and `OptionView`, which still span both families.
 #   collections.z (0) -- the P5 split is complete: every container template
 #     names the family it takes.
@@ -321,7 +321,7 @@ any-guard:
 	if [ "$$u" -gt 0 ]; then \
 	  echo "any-guard FAIL: $$u use(s) of Any.generic in user source"; \
 	  grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#' | grep -vE 'any_bound_retired\.z|any_shadow_bound\.z'; \
-	  echo "  A generic must name the family it takes: AnyVal.generic or AnyRef.generic."; \
+	  echo "  A generic must name the family it takes: anyval.generic or AnyRef.generic."; \
 	  exit 1; \
 	fi; \
 	s=$$(grep -c 'Any\.generic' lib/system/system.z); \

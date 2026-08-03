@@ -66,8 +66,8 @@ syn match zerolangReserved /\<\%(pragma\|enum\|view\|unsafe\|switch\)\>/
 syn match zerolangBuiltinType /\<\%(u8\|u16\|u32\|u64\|u128\)\>/
 syn match zerolangBuiltinType /\<\%(i8\|i16\|i32\|i64\|i128\)\>/
 syn match zerolangBuiltinType /\<\%(f16\|f32\|f64\|f128\|c8\|c32\|bool\)\>/
-syn match zerolangBuiltinType /\<\%(String\|StringView\|Text\|StringLike\|AnyRef\|AnyVal\|RefHashable\|ValHashable\)\>/
-syn match zerolangBuiltinType /\<\%(Option\|optionval\|OptionView\|Result\|resultval\|convError\|Box\|Iterator\)\>/
+syn match zerolangBuiltinType /\<\%(String\|StringView\|Text\|StringLike\|AnyRef\|anyval\|RefHashable\|valhashable\)\>/
+syn match zerolangBuiltinType /\<\%(Option\|optionval\|OptionView\|Result\|resultval\|converror\|Box\|Iterator\)\>/
 syn match zerolangBuiltinType /\<\%(array\|str\|List\|ListRef\|ListVal\|ListView\|ListViewVal\|ListIter\|ListIterVal\|Set\|SetRef\|SetVal\|SetIter\|SetIterVal\|Bytes\|ByteView\)\>/
 syn match zerolangBuiltinType /\<\%(Map\|MapRR\|MapRV\|MapVR\|MapVV\|MapKeyIter\|MapItemIter\|MapEntry\|MapKeyIterRV\|MapKeyIterVR\|MapKeyIterVV\|MapItemIterRV\|MapItemIterVR\|MapItemIterVV\|MapEntryRV\|MapEntryVR\|MapEntryVV\)\>/
 syn match zerolangBuiltinType /\<\%(Path\|PathView\|IoError\|Reader\|Writer\|Closer\|Seeker\|seekorigin\|File\|openmode\)\>/
