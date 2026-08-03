@@ -12,7 +12,7 @@ static z_Result_u64_IoError_t z_BufWriter_write(
         z_Result_null_IoError_t fr = z_BufWriter_flush(self);
         if (fr.tag != Z_RESULT_NULL_IOERROR_TAG_OK) {
             z_Result_u64_IoError_t result = {0};
-            result.tag = Z_RESULT_U64_IOERROR_TAG_ERR;
+            result.tag = Z_RESULT_BOX_U64_IOERROR_TAG_ERR;
             result.data = fr.data;
             return result;
         }

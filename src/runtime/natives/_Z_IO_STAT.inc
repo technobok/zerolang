@@ -13,7 +13,7 @@ static z_Result_filestat_IoError_t z_io_stat(z_StringView_t path) {
     if (rc != 0) {
         z_IoError_t* boxed = (z_IoError_t*)z_xmalloc(sizeof(z_IoError_t));
         *boxed = z_io_errno_to_IoError(e);
-        result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_ERR;
+        result.tag = Z_RESULT_BOX_FILESTAT_IOERROR_TAG_ERR;
         result.data = boxed;
         return result;
     }
@@ -21,7 +21,7 @@ static z_Result_filestat_IoError_t z_io_stat(z_StringView_t path) {
     z_io_fill_filestat(&fs, &sb);
     z_filestat_t* boxed = (z_filestat_t*)z_xmalloc(sizeof(z_filestat_t));
     *boxed = fs;
-    result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_OK;
+    result.tag = Z_RESULT_BOX_FILESTAT_IOERROR_TAG_OK;
     result.data = boxed;
     return result;
 }

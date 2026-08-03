@@ -306,9 +306,9 @@ perf: bin/zc
 # any-guard -- `Any` is the bound that says the family genuinely does not
 # matter. After the val/ref split no USER source may say it: a generic names
 # AnyVal or AnyRef. Two stdlib files keep counted residuals:
-#   system.z (7) -- `return` and `typedef`, whose parameter is never consulted
+#   system.z (5) -- `return` and `typedef`, whose parameter is never consulted
 #     (probed: bounding them to AnyVal does not reject a reftype), plus
-#     `Iterator` and `Result` and `OptionView`, which still span both families.
+#     `Iterator` and `OptionView`, which still span both families.
 #   collections.z (0) -- the P5 split is complete: every container template
 #     names the family it takes.
 # Both are ratchets: they may only DECREASE. Enforced here rather than in the
@@ -324,10 +324,10 @@ any-guard:
 	s=$$(grep -c 'Any\.generic' lib/system/system.z); \
 	c=$$(grep -c 'Any\.generic' lib/system/collections.z); \
 	fail=0; \
-	if [ "$$s" -gt 7 ]; then echo "any-guard FAIL: system.z Any.generic = $$s (baseline 7)"; fail=1; fi; \
+	if [ "$$s" -gt 5 ]; then echo "any-guard FAIL: system.z Any.generic = $$s (baseline 5)"; fail=1; fi; \
 	if [ "$$c" -gt 0 ]; then echo "any-guard FAIL: collections.z Any.generic = $$c (baseline 0)"; fail=1; fi; \
 	if [ "$$fail" = "1" ]; then echo "  Lower the baseline here when a residual is legitimately removed."; exit 1; fi; \
-	echo "any-guard OK: user source clean; system.z=$$s (<=7) collections.z=$$c (<=0)"
+	echo "any-guard OK: user source clean; system.z=$$s (<=5) collections.z=$$c (<=0)"
 
 shadow-guard:
 	@n1=$$(grep -c 'cTypeOf name:' src/zemitterc.z); \

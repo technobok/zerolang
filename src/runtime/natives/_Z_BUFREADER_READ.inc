@@ -26,7 +26,7 @@ static z_Result_u64_IoError_t z_BufReader_read(
         z_Result_u64_IoError_t rr = self->source.vtable->read(
             self->source.data, &self->buf, self->cap
         );
-        if (rr.tag != Z_RESULT_U64_IOERROR_TAG_OK) return rr;
+        if (rr.tag != Z_RESULT_BOX_U64_IOERROR_TAG_OK) return rr;
         free(rr.data);
         available = self->buf.length;
         if (available == 0) return z_io_u64_ok(0);

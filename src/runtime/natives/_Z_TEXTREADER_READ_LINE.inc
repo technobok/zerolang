@@ -37,7 +37,7 @@ static z_Result_String_IoError_t z_TextReader_readLine(
         z_Result_u64_IoError_t rr = z_BufReader_read(
             self->source, &self->buf, cap
         );
-        if (rr.tag != Z_RESULT_U64_IOERROR_TAG_OK) {
+        if (rr.tag != Z_RESULT_BOX_U64_IOERROR_TAG_OK) {
             z_Result_String_IoError_t result = {0};
             result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
             result.data = rr.data;

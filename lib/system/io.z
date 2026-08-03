@@ -159,7 +159,7 @@ filestat: record {
 # `io.lstat` to inspect the link itself. Errors surface in the
 # standard ioerror shape (notfound, permissiondenied, ...).
 stat: function as { T: StringLike.generic } in {path: T} out (Result
-    filestat
+    (Box filestat)
     e: IoError
 ) is native
 
@@ -167,7 +167,7 @@ stat: function as { T: StringLike.generic } in {path: T} out (Result
 # link, `kind` is `symlink` and `size` / `mtime_seconds` / `mode`
 # describe the link itself rather than its target.
 lstat: function as { T: StringLike.generic } in {path: T} out (Result
-    filestat
+    (Box filestat)
     e: IoError
 ) is native
 
@@ -216,7 +216,7 @@ seekorigin: variant {
 #   Reads up to `n` bytes into `buf`. Returns the number of bytes
 #   actually read (0 indicates EOF) or an ioerror.
 Reader: protocol {
-    read: function {:this into: Bytes max: u64} out (Result u64 e: IoError)
+    read: function {:this into: Bytes max: u64} out (Result (Box u64) e: IoError)
 }
 
 # `writer.write from: bv`
@@ -225,7 +225,7 @@ Reader: protocol {
 # `writer.flush`
 #   Forces buffered output to its final destination.
 Writer: protocol {
-    write: function {:this from: ByteView} out (Result u64 e: IoError)
+    write: function {:this from: ByteView} out (Result (Box u64) e: IoError)
     flush: function {:this} out (Result null e: IoError)
 }
 
@@ -242,7 +242,7 @@ Closer: protocol {
 #   Reposition the read/write head. Returns the new absolute position
 #   from the start of the resource, or an ioerror.
 Seeker: protocol {
-    seek: function {:this to: i64 from: seekorigin} out (Result u64 e: IoError)
+    seek: function {:this to: i64 from: seekorigin} out (Result (Box u64) e: IoError)
 }
 
 # `file` -- an open OS file handle. Wraps a POSIX-style file
@@ -267,10 +267,10 @@ File: class {
     # actual count read; 0 indicates EOF. The caller owns `buf` and
     # sees the new bytes in place on return. Signature matches the
     # `reader` protocol.
-    read: function {:this into: Bytes max: u64} out (Result u64 e: IoError) is native
+    read: function {:this into: Bytes max: u64} out (Result (Box u64) e: IoError) is native
     # write all bytes from `src` to the file. Returns the count
     # actually written (may be less than src.length on short write).
-    write: function {:this from: ByteView} out (Result u64 e: IoError) is native
+    write: function {:this from: ByteView} out (Result (Box u64) e: IoError) is native
     # flush buffered writes — a no-op on raw POSIX file descriptors
     # (each `write` syscall already goes to the kernel), kept so the
     # `writer` protocol signature is satisfied.
@@ -278,7 +278,7 @@ File: class {
     # reposition the read/write head. `to` is a byte offset
     # interpreted relative to `from` (start / current / end). Returns
     # the new absolute position measured from the start.
-    seek: function {:this to: i64 from: seekorigin} out (Result u64 e: IoError) is native
+    seek: function {:this to: i64 from: seekorigin} out (Result (Box u64) e: IoError) is native
 } as {
     :Reader
     :Writer
@@ -334,7 +334,7 @@ BufWriter: class {
 } as {
     :Writer
     create: function {to: Writer.borrow capacity: u64} out this.takex is native
-    write: function {:this from: ByteView} out (Result u64 e: IoError) is native
+    write: function {:this from: ByteView} out (Result (Box u64) e: IoError) is native
     flush: function {:this} out (Result null e: IoError) is native
 }
 
@@ -359,7 +359,7 @@ BufReader: class {
 } as {
     :Reader
     create: function {from: Reader.borrow capacity: u64} out this.takex is native
-    read: function {:this into: Bytes max: u64} out (Result u64 e: IoError) is native
+    read: function {:this into: Bytes max: u64} out (Result (Box u64) e: IoError) is native
 }
 
 # `textwriter` -- string-oriented adapter over a `bufwriter`. Writes
@@ -381,11 +381,11 @@ TextWriter: class {
 } as {
     create: function {to: BufWriter.borrow} out this.takex is native
     write: function as { T: StringLike.generic } in {:this from: T} out (Result
-        u64
+        (Box u64)
         e: IoError
     ) is native
     writeLine: function as { T: StringLike.generic } in {:this from: T} out (Result
-        u64
+        (Box u64)
         e: IoError
     ) is native
     flush: function {:this} out (Result null e: IoError) is native
