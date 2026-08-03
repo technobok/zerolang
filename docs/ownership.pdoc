@@ -66,7 +66,10 @@ suggesting how to fix the problem.
 #--: Ownership Overview
 
 Every variable in Zerolang has an ownership state tracked by the compiler at
-compile time. There are exactly two ownership states:
+compile time. Two axes -- owned vs borrowed, and writable vs readonly --
+give the four markers (#~".take" / #~".hold" on the owned side,
+#~".borrow" / #~".view" on the borrowed side). On the ownership axis there
+are exactly two states:
 
 #ul:
   [#*: #+ owned (taken) -- the variable owns its value. It is responsible for
@@ -81,7 +84,9 @@ compile time. There are exactly two ownership states:
   the reference is simply forgotten without destruction, and any locks held by
   this variable are released.]
 
-Ownership forms a permission hierarchy: #+ take > borrow. An owned variable can
+Ownership forms a permission hierarchy on its axis: #+ take > borrow (and
+readable-only #~".view" / #~".hold" are the readonly counterparts on the
+second axis). An owned variable can
 always be used in a context that expects a borrow (automatic downgrade). A
 borrowed variable can never be used in a context that expects a take (error:
 insufficient permission).
@@ -339,10 +344,10 @@ Variables declared #_*"inside" the loop body are unaffected: each iteration
 produces a fresh binding, so taking the local is fine.
 
 #code language=zerolang: """
-  a: Box value: 1
+  a: Crate value: 1
   for i: 3.iterate loop {
       a.take              # ERROR: outer-scope variable
-      b: Box value: 2
+      b: Crate value: 2
       c: b.take           # OK: b is body-local
   }
   """
@@ -425,10 +430,10 @@ hand an owned value to a destination that requires ownership (a
 constructor field, a list/map insert) but only have a borrowed source:
 
 #code language=zerolang: """
-  store: function {s: String} out Box.bag is {
+  store: function {s: String} out Crate.bag is {
       # `s` is borrowed from the caller; the box wants to own its label,
       # so clone the data into a fresh allocation.
-      return Box label: s.copy
+      return Crate label: s.copy
   }
   """
 
@@ -526,7 +531,7 @@ Error conditions:
 Example -- early cleanup without nesting:
 
 #code language=zerolang: """
-  h: Box label: "hotel" value: 8
+  h: Crate label: "hotel" value: 8
   print "h alive: \{h.label}"
   h.release
   print "h released -- no 'with' nesting needed"
@@ -1002,8 +1007,8 @@ owned value. Storing a borrowed parameter into it would alias the
 caller's heap data the same way:
 
 #code language=zerolang: """
-  make_box: function {name: String} out Box is {
-      return Box label: name      # error: 'name' is borrowed
+  make_box: function {name: String} out Crate is {
+      return Crate label: name    # error: 'name' is borrowed
   }
   """
 
@@ -1144,12 +1149,12 @@ user-defined type. A protocol instance wraps its source either by borrow
 
 #---: Restrictions with Generics
 
-A class cannot be stored as the element of a generic container that copies
-its elements, because classes cannot be copied. #~"List of: MyIter" is a
-compile error if #~"MyIter" is a class. This applies to every class, not
-just classes with non-owned fields; the #~".borrow" restriction merely adds
-the rule above (a class with a non-owned field cannot be nested as a field
-of another type either).
+A container names its element family: classes and unions go in the
+reference-element containers (#~"List of: MyIter" is exactly what
+#~"ListRef" accepts), records and other valtypes in the valtype twins
+(#~"ListVal"). Using the wrong family is a compile-time bound error. What
+remains restricted is the non-owned-field rule: a class with a non-owned
+field cannot be nested as a field of another type.
 
 Generic functions that only #~".borrow" their generic parameter are fine.
 The restriction only applies when the generic type or function would need
@@ -1264,32 +1269,32 @@ that cover most code.
 #---: Owned and Borrowed Reftypes
 
 #code language=zerolang: """
-  Box: class { label: String value: i64 }
+  Crate: class { label: String value: i64 }
 
-  a: Box label: "alpha" value: 1   # a is OWNED
+  a: Crate label: "alpha" value: 1   # a is OWNED
 
   # Reftype default: borrow. peek does not take ownership.
-  peek: function {b: Box} out i64 is {
+  peek: function {b: Crate} out i64 is {
     return b.value
   }
   v: peek a                        # a is borrowed, still valid after call
 
   # Explicit .take transfers ownership. a is invalid after this line.
-  consume: function {b: Box.take} is {
+  consume: function {b: Crate.take} is {
     print b.label
   }
   consume a                        # a is implicitly taken (ownership transferred)
   # a is invalid here -- compile error if used
 
   # Explicit .take to destroy
-  b: Box label: "beta" value: 2
+  b: Crate label: "beta" value: 2
   b.take                           # destroys b immediately
 
   # Borrow with lock: return a reference into the locked parameter
-  peek_label: function {b: Box.borrow} out String.borrow is {
+  peek_label: function {b: Crate.borrow} out String.borrow is {
     return b.label
   }
-  c: Box label: "gamma" value: 3
+  c: Crate label: "gamma" value: 3
   s: peek_label c                  # s borrows from c, c is locked
   print s                          # OK
   # c cannot be used here (locked by s)
@@ -1332,8 +1337,10 @@ An iterator system has three components:
 
 #ol:
   [#*: #+ Container -- the iterable object (typically a class). It has an
-  #~"iterate" method that returns an iterator. The method locks #~"this" so the
-  container cannot be modified while iteration is in progress.]
+  #~"iterate" method that returns an iterator. The method pins #~"this" --
+  shared for a readonly walk (the stdlib's #~"iterate" declares a
+  #~".view" receiver), exclusive for a mutating one -- so the container
+  cannot be modified while iteration is in progress.]
   [#*: #+ Iterator -- a class that maintains iteration state. It holds a
   #~".private.borrow" field referring to the container for access to internal
   state, and has a #~"call" method that returns the next item. Because
@@ -1417,10 +1424,10 @@ The canonical class-based iterator (also in
 
 #---: Lock Lifecycle in the For-Loop
 
-The iterator must be created explicitly using #~"with" before the #~"for" loop.
-The #~"for" loop only accepts a callable after a label -- it does not have
-special handling for iterables. A future version may add syntactic sugar for
-this, but for now the pattern is:
+The iterator may be created explicitly with #~"with" before the #~"for"
+loop; the for-loop dispatch also accepts an iterable directly (it
+synthesises the #~".iterate" call) or an inline constructor call (it
+creates the hidden binding itself). The explicit form is:
 
 #code language=zerolang:
   with iter: container.iterate c: c do for x: iter loop { ... }
@@ -1461,19 +1468,22 @@ value falls out of scope at the end of each loop iteration.
 
 #---: Views
 
-The same pattern underlies read-only views. A view is a small class holding a
+The same pattern underlies views. A view is a small class holding a
 #~".private.borrow" field into its source -- for example the #~"StringView"
-and #~"ListView" types in the standard library. Because the view is a
-single-owner class, the source stays safely locked for the view's
-lifetime and no copy of the view can outlive it. See #~"examples/ListView.z"
+and #~"ListView" types in the standard library (#~"StringView" is
+readonly; #~"ListView" also offers #~"getMut" for in-place element
+writes). Because the view is a single-owner class, the source stays safely
+pinned for the view's lifetime and no copy of the view can outlive it. See #~"examples/ListView.z"
 and #~"examples/borrowed_record.z" for worked examples.
 
 
 #--: Container Views and Locks
 
-A #~"Map.get" or #~"List.get" over a reftype or #~"String" value does not
-copy the stored value out -- it returns an #~"OptionView" whose payload is a borrowed
-reference into the map's own storage. The same is true of iterator yields,
+A #~"Map.get" over a reftype value does not copy the stored value out --
+it returns an #~"OptionView" whose payload is a borrowed reference into
+the map's own storage (the valtype-value forms #~"MapRV" / #~"MapVV"
+return #~"optionval", a copy, no pin). #~"List.get" hands back the
+element's #~"of.view" directly. The same is true of iterator yields,
 #~"MapEntry" pairs from #~"iterateItems", and the #~"stringview" /
 #~"listview" / #~"byteview" families. These are all #b:"views": cheap,
 non-owning windows into a parent container.
@@ -1492,22 +1502,23 @@ Two rules make views sound, and the compiler enforces both:
       path-scoped lock on the container for its whole scope. Readers may
       overlap; a writer may not.]
 
-The lock model is #b:"many readers or one writer, and iterators are
-exclusive":
+The lock model is #b:"many readers or one writer, and mutating iterators
+are exclusive":
 
 #ul:
   [#*: Any number of live views and reader calls (#~"get", #~"has",
       #~"length", #~"copy", ...) coexist on one container.]
   [#*: A writer call (#~"Map.set" / #~"remove", #~"Set.add" / #~"delete",
-      #~"List.append" / #~"pop" / ..., #~"String.append") is rejected while
-      any view or iterator on that container is live. A #~"set" can rehash
-      and reallocate; every live payload pointer would dangle.]
-  [#*: An iterator (#~"iterate" / #~"iterateItems") holds its container
-      #b:"exclusively" for its lifetime: no other access, not even reads,
-      until the loop ends. Iteration that needs values pairs them via
-      #~"iterateItems"; code that must consult or mutate the container per
-      element snapshots the keys into a #~"List" first and loops over the
-      snapshot.]
+      #~"List.append" / #~"pop" / #~"getMut" / ..., #~"String.append") is
+      rejected while any view or iterator on that container is live. A
+      #~"set" can rehash and reallocate; every live payload pointer would
+      dangle.]
+  [#*: A plain #~"iterate" is a #b:"reader": its receiver is #~".view",
+      so other readers -- including #~"get" and further #~"iterate" walks
+      -- stay legal while it runs; only writers are excluded. The
+      #b:"mutating" iterators (#~"iterateMut", #~"iterateItems") hold the
+      container #b:"exclusively" for their lifetime: no other access until
+      the loop ends.]
 
 A method is a reader when its receiver is declared #~".view", which any
 class may do:
@@ -1523,10 +1534,11 @@ class may do:
 
 The receiver then holds a readonly lock on itself for the whole body, so the
 call takes a SHARED lock instead of an exclusive one. The stdlib containers
-declare it on #~"length", #~"capacity", #~"contains" and #~"has", and
-#~"String" and #~"StringView" declare it on their queries. #~"get",
-#~"getv" and #~"listview" do not: they return a borrow into the container,
-and a readonly receiver must not hand out a writable alias.
+declare it on #~"length", #~"capacity", #~"contains", #~"has" and
+#~"iterate", and #~"String" and #~"StringView" declare it on their
+queries. #~"get", #~"getv", #~"getMut" and #~"listview" do not: they
+return a borrow into the container, and a readonly receiver must not hand
+out a writable alias.
 
 #code language=zerolang: """
   m: (Map String value: String)
@@ -1546,8 +1558,8 @@ and a readonly receiver must not hand out a writable alias.
   """
 
 #code language=zerolang: """
-  with it: m.iterate do for k: it loop {
-      v: m.get key: k.copy         # E0200: m is exclusively locked by 'it'
+  with it: m.iterateItems do for e: it loop {
+      v: m.get key: e.key.copy     # E0200: m is exclusively locked by 'it'
   }
   # pair values with the iteration instead:
   with items: m.iterateItems do for e: items loop {
@@ -1615,12 +1627,9 @@ parameter. Use the owned form (#~".create") for a self-contained
 wrapper that is safe to return or store. These restrictions mirror the
 existing locked-reference escape rules from the previous section.
 
-Boxing (#~"b: Box from: val") is itself an ownership transfer. The
-compiler invalidates the source after boxing: a stack class or record
-passed to #~"Box from:" is consumed, mirroring the standard TAKE rule.
-Passing a boxed value to #~"Box from:" again (which compiles to a
-zero-cost passthrough) likewise invalidates the earlier boxed name, so
-only the newly-bound name may be used afterward.
+Boxing (#~"b: Box from: val") copies its valtype source onto the heap --
+the standard valtype rule, no ownership transfer (#~"Box.t" is bounded
+#~"AnyVal.generic"; a reftype is already a heap pointer and is rejected).
 
 Boxing a conformer and then passing the box to #~"proto.create" is not
 supported: #~".create" already heap-allocates the owned copy
@@ -1634,11 +1643,10 @@ the direct form.
 #table cols="4 4 4":
   What you wrote                                            |Error                                                |Fix
   #~"f borrowed_var.take"                                   |Cannot take a borrowed variable                      |Pass as #~".borrow" or restructure ownership
-  #~"x.borrow" on a valtype                                   |Cannot lock a valtype                                |Valtypes are pass-by-value; use a class if identity-based locking is needed
+  #~"x.borrow" on a valtype                                 |Cannot lock a valtype                                |Valtypes are pass-by-value; use a class if identity-based locking is needed
   #~"return localvar" (as #~".borrow")                      |Cannot return local as borrowed without a non-owned param   |Add #~".borrow" to the relevant parameter
-  #~".borrow" param with no return value                      |Lock param with no return value                      |Remove #~".borrow" or add a return value
-  #~"out type.borrow" with no #~".borrow" param               |Borrow return requires a lock parameter               |Add #~".borrow" to input parameter
+  #~"out this.takex" with no non-owned argument             |Pin return without a pinned parameter                |Give the factory a #~".borrow" / #~".view" parameter to pin
   non-owned field on a record                               |non-owned fields only allowed on classes              |Change the enclosing type from #~"record" to #~"class"
   non-owned field type mismatch                             |Field type must match constructor parameter type      |Make the parameter type match the field type
-  #~"List of: classtype"                                    |Cannot use a class as list element                   |Store a wrapping record or use indirection
+  a valtype element in #~"ListRef" (or the converse)        |Bound error naming AnyRef / AnyVal                   |Pick the container form matching the element family
   Class with non-owned field as a field                     |Class with non-owned field cannot nest as a field     |Keep the instance in a block scope instead

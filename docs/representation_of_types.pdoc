@@ -87,9 +87,10 @@ subtype is #~"null" -- the struct collapses to just a tag discriminator.
 
 #--: Method Receiver (#~"this")
 
-For all type instances with methods, #~"this" is always passed as a pointer at
-the C level. This applies to records, classes, unions, and any other type with
-methods. The pointer convention ensures:
+For all type instances with methods, #~"this" is always passed as a pointer
+at the C level -- #~"T*" for a mutable (#~".borrow") receiver, #~"const T*"
+for a readonly (#~".view") receiver. This applies to records, classes,
+unions, and any other type with methods. The pointer convention ensures:
 
 #ul:
   [#*: Methods can mutate fields and have those mutations persist across calls.]
@@ -294,9 +295,11 @@ Functions returning a class return the struct by value. C compilers apply NRVO
 
 #---: Parameter Passing
 
-Borrow parameters receive a pointer (the caller passes #~"&var"). Take
-parameters receive the struct by value (the caller copies the struct and
-zero-initialises its source).
+Borrow parameters receive a pointer (the caller passes #~"&var"); view
+parameters receive a #~"const" pointer. Take parameters receive the struct
+by value (the caller copies the struct and zero-initialises its source);
+#~".hold" is take with a readonly binding, and #~".takex" marks a return
+that pins its non-owned arguments.
 
 #---: Swap
 
@@ -359,8 +362,11 @@ is heap-allocated and owned by the union.
 
 #---: Subtype Data
 
-Union subtypes may be reftypes or valtypes. The subtype data is always
-heap-allocated:
+A union's arms hold reftypes: a #~"null" arm carries no payload, a marked
+arm (#~".view" / #~".borrow" / #~".hold") is reference-family whatever it
+points at, and a valtype arm is spelled #~"(Box T)" -- which collapses to
+the element, so the representation below is unchanged by the rule. The
+subtype data is always heap-allocated:
 
 #ul:
   [#*: For valtype subtypes: #~"malloc(sizeof(subtype))" + copy value.]
@@ -513,8 +519,11 @@ No destructor is needed.
 
 #--: box(T)
 
-#~"Box" is a generic type that heap-allocates a single instance of any type.
-The C representation is a pointer to the inner type.
+#~"Box" is a generic type that heap-allocates a single instance of a
+#_*"valtype" (its bound is #~"AnyVal.generic"; a reftype is already a heap
+pointer). The C representation is a bare pointer to the inner type. As a
+union arm or union type argument, #~"(Box T)" collapses to the element --
+see the union section.
 
 #---: Memory Layout
 
@@ -538,18 +547,15 @@ modification.
 
 #---: Destructor
 
-The box destructor frees the heap allocation. If the inner type has a
-destructor (eg. a class with heap fields), that destructor is called first:
+The box destructor frees the heap allocation. A boxed element is a
+valtype, and valtypes own no heap, so the destructor is #~"free(v)":
 
 #code language=c: """
-  static void z_box_named_destroy(z_named_t* v) {
+  static void z_Box_pt_destroy(void* v) {
       if (!v) return;
-      z_named_destroy(v);    /* clean up inner type's heap fields */
       free(v);               /* free the box allocation */
   }
   """
-
-For simple valtypes (no destructor), the box destructor is just #~"free(v)".
 
 #---: Born-Boxed Construction
 
@@ -582,9 +588,8 @@ When boxing a variable that already exists:
   b: Box from: p
   """
 
-The compiler generates: allocate on heap, copy the value. If the source is a
-reftype, #~".take" semantics apply -- the source is zero-initialised to prevent
-double-free.
+The compiler generates: allocate on heap, copy the value. The source is a
+valtype, so it is copied, not consumed -- the standard valtype rule.
 
 #---: Swap
 
@@ -605,8 +610,11 @@ error-prone. The programmer should unbox/rebox explicitly if needed.
 
 #--: list(T)
 
-#~"List" is a generic growable array. The struct lives on the stack; only the
-data buffer is heap-allocated.
+#~"List" (the alias of #~"ListRef"; #~"ListVal" is the valtype-element
+twin with the identical layout) is a generic growable array. The struct
+lives on the stack; only the data buffer is heap-allocated. Emitted C
+names are id-mangled (#~"z_t1014_t"); the readable spellings in this
+document's samples correspond to the opt-in readable-names emitter mode.
 
 #---: Memory Layout
 
@@ -693,8 +701,11 @@ correct and the copy cost is negligible for element-sized data.
 
 #--: listview(T)
 
-#~"ListView" is a generic read-only view into a list. It is a class (single
-ownership) with a non-owned field that holds a lock on the parent list.
+#~"ListView" (and #~"ListViewVal", its valtype-element twin) is a generic
+window into a list. It is a class (single ownership) whose production pins
+the parent list exclusively. It is not read-only: #~"get" is the readonly
+accessor and #~"getMut" borrows the element for in-place writes; what a
+view cannot do is change the sequence.
 
 #---: Memory Layout
 
@@ -736,19 +747,20 @@ The listview holds a compile-time lock on the source list:
 #---: Methods
 
 #ul:
-  #*: #~"get(i: u64) out of" -- bounds-checked element access
-  #*: #~"length() out u64" -- number of elements in the view
-  #*: #~"List() out List" -- materialise a new owned list from the view (copies data)
+  [#*: #~"get(i: u64)" -- bounds-checked readonly access (#~"of.view" on
+    #~"ListView", a copy on #~"ListViewVal")]
+  [#*: #~"getMut(i: u64) out of.borrow" -- exclusive element access]
+  [#*: #~"length() out u64" -- number of elements in the view]
 
 #---: Zerolang Definition
 
 #code language=zerolang: """
-  Listview: class {
-      get: function {:this i: u64} out of is native
-      length: function {:this} out u64 is native
-      list: function {:this} out (List of: of) is native
+  ListView: class {
+      get: function {t: this.borrow i: u64} out of.view is native
+      getMut: function {t: this.borrow i: u64} out of.borrow is native
+      length: function {t: this.view} out u64 is native
   } as {
-      of: Any.generic
+      of: AnyRef.generic
   }
   """
 
@@ -866,7 +878,8 @@ Stringview has no destructor (no heap allocations).
 
 #--: option / optionval -- Impact
 
-#~"Option" is a union with subtypes #~"{ some: T, none: null }". Under the new
+#~"Option" is a union with subtypes #~"{ none: null, some: T }" (falsy arm
+first). Under the new
 model, the #~"Option" struct (#~"{ tag, void* }") moves to the stack but its
 subtype data is still heap-allocated (standard union behaviour).
 

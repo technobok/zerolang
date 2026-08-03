@@ -338,9 +338,10 @@ Born-borrowed is removed as a concept.</li>
 <p>Note: "enum" is not a separate type. Enums are variants or unions where every
 subtype is <code>null</code> -- the struct collapses to just a tag discriminator.</p>
 <h2 id="method-receiver"><a href="#method-receiver">3. Method Receiver (<code>this</code>)</a></h2>
-<p>For all type instances with methods, <code>this</code> is always passed as a pointer at
-the C level. This applies to records, classes, unions, and any other type with
-methods. The pointer convention ensures:</p>
+<p>For all type instances with methods, <code>this</code> is always passed as a pointer
+at the C level -- <code>T*</code> for a mutable (<code>.borrow</code>) receiver, <code>const T*</code>
+for a readonly (<code>.view</code>) receiver. This applies to records, classes,
+unions, and any other type with methods. The pointer convention ensures:</p>
 <ul>
 <li>Methods can mutate fields and have those mutations persist across calls.</li>
 <li>Method bodies work identically for stack-allocated and boxed instances --
@@ -463,9 +464,11 @@ the type has one). The cleanup code passes <code>&amp;var</code> to the destruct
 <p>Functions returning a class return the struct by value. C compilers apply NRVO
 (Named Return Value Optimisation) in practice, avoiding unnecessary copies.</p>
 <h3 id="parameter-passing"><a href="#parameter-passing">6.9. Parameter Passing</a></h3>
-<p>Borrow parameters receive a pointer (the caller passes <code>&amp;var</code>). Take
-parameters receive the struct by value (the caller copies the struct and
-zero-initialises its source).</p>
+<p>Borrow parameters receive a pointer (the caller passes <code>&amp;var</code>); view
+parameters receive a <code>const</code> pointer. Take parameters receive the struct
+by value (the caller copies the struct and zero-initialises its source);
+<code>.hold</code> is take with a readonly binding, and <code>.takex</code> marks a return
+that pins its non-owned arguments.</p>
 <h3 id="swap"><a href="#swap">6.10. Swap</a></h3>
 <p>Swapping two class variables swaps the entire struct:</p>
 <pre><code class="language-c">{
@@ -508,8 +511,11 @@ typedef struct {
 <p>The struct is 16 bytes on the stack regardless of subtype sizes. Subtype data
 is heap-allocated and owned by the union.</p>
 <h3 id="subtype-data"><a href="#subtype-data">7.2. Subtype Data</a></h3>
-<p>Union subtypes may be reftypes or valtypes. The subtype data is always
-heap-allocated:</p>
+<p>A union's arms hold reftypes: a <code>null</code> arm carries no payload, a marked
+arm (<code>.view</code> / <code>.borrow</code> / <code>.hold</code>) is reference-family whatever it
+points at, and a valtype arm is spelled <code>(Box T)</code> -- which collapses to
+the element, so the representation below is unchanged by the rule. The
+subtype data is always heap-allocated:</p>
 <ul>
 <li>For valtype subtypes: <code>malloc(sizeof(subtype))</code> + copy value.</li>
 <li>For reftype subtypes (classes, strings, etc.): <code>malloc(sizeof(subtype))</code>
@@ -613,8 +619,11 @@ variants). They cannot wrap reftypes (classes, unions) and therefore cannot
 indirectly contain <code>String</code>, <code>List</code>, <code>Box</code>, or other heap-backed fields.
 No destructor is needed.</p>
 <h2 id="box-t"><a href="#box-t">10. box(T)</a></h2>
-<p><code>Box</code> is a generic type that heap-allocates a single instance of any type.
-The C representation is a pointer to the inner type.</p>
+<p><code>Box</code> is a generic type that heap-allocates a single instance of a
+<em><strong>valtype</strong></em> (its bound is <code>AnyVal.generic</code>; a reftype is already a heap
+pointer). The C representation is a bare pointer to the inner type. As a
+union arm or union type argument, <code>(Box T)</code> collapses to the element --
+see the union section.</p>
 <h3 id="memory-layout-7"><a href="#memory-layout-7">10.1. Memory Layout</a></h3>
 <p>For <code>Box(point)</code> where point is <code>{ i64 x, i64 y }</code>:</p>
 <pre><code class="language-c">/* C type: z_point_t*  (pointer to heap-allocated point struct) */
@@ -628,14 +637,12 @@ function requires the function to accept exactly that boxed type.</p>
 boxed (heap pointer) and unboxed (stack, via <code>&amp;var</code>) instances without
 modification.</p>
 <h3 id="destructor-4"><a href="#destructor-4">10.3. Destructor</a></h3>
-<p>The box destructor frees the heap allocation. If the inner type has a
-destructor (eg. a class with heap fields), that destructor is called first:</p>
-<pre><code class="language-c">static void z_box_named_destroy(z_named_t* v) {
+<p>The box destructor frees the heap allocation. A boxed element is a
+valtype, and valtypes own no heap, so the destructor is <code>free(v)</code>:</p>
+<pre><code class="language-c">static void z_Box_pt_destroy(void* v) {
     if (!v) return;
-    z_named_destroy(v);    /* clean up inner type's heap fields */
     free(v);               /* free the box allocation */
 }</code></pre>
-<p>For simple valtypes (no destructor), the box destructor is just <code>free(v)</code>.</p>
 <h3 id="born-boxed-construction"><a href="#born-boxed-construction">10.4. Born-Boxed Construction</a></h3>
 <p>When a type is defined as a boxed type at the unit level, construction should
 allocate directly on the heap and construct in-place. This avoids the overhead
@@ -655,9 +662,8 @@ currently used for classes, now repurposed for box types only.</p>
 <p>When boxing a variable that already exists:</p>
 <pre><code class="language-zerolang">p: point x: 1 y: 2
 b: Box from: p</code></pre>
-<p>The compiler generates: allocate on heap, copy the value. If the source is a
-reftype, <code>.take</code> semantics apply -- the source is zero-initialised to prevent
-double-free.</p>
+<p>The compiler generates: allocate on heap, copy the value. The source is a
+valtype, so it is copied, not consumed -- the standard valtype rule.</p>
 <h3 id="swap-2"><a href="#swap-2">10.6. Swap</a></h3>
 <p>Swapping two boxed items of the same type is a pointer swap:</p>
 <pre><code class="language-c">{
@@ -669,8 +675,11 @@ double-free.</p>
 <em><strong>not</strong></em> supported. This would require a move-in/move-out dance that is
 error-prone. The programmer should unbox/rebox explicitly if needed.</p>
 <h2 id="list-t"><a href="#list-t">11. list(T)</a></h2>
-<p><code>List</code> is a generic growable array. The struct lives on the stack; only the
-data buffer is heap-allocated.</p>
+<p><code>List</code> (the alias of <code>ListRef</code>; <code>ListVal</code> is the valtype-element
+twin with the identical layout) is a generic growable array. The struct
+lives on the stack; only the data buffer is heap-allocated. Emitted C
+names are id-mangled (<code>z_t1014_t</code>); the readable spellings in this
+document's samples correspond to the opt-in readable-names emitter mode.</p>
 <h3 id="memory-layout-8"><a href="#memory-layout-8">11.1. Memory Layout</a></h3>
 <pre><code class="language-c">typedef struct {
     uint64_t length;
@@ -727,8 +736,11 @@ arguments and constructs the element in-place.</li>
 pattern (construct element on stack, append copies it into data buffer) is
 correct and the copy cost is negligible for element-sized data.</p>
 <h2 id="listview-t"><a href="#listview-t">12. listview(T)</a></h2>
-<p><code>ListView</code> is a generic read-only view into a list. It is a class (single
-ownership) with a non-owned field that holds a lock on the parent list.</p>
+<p><code>ListView</code> (and <code>ListViewVal</code>, its valtype-element twin) is a generic
+window into a list. It is a class (single ownership) whose production pins
+the parent list exclusively. It is not read-only: <code>get</code> is the readonly
+accessor and <code>getMut</code> borrows the element for in-place writes; what a
+view cannot do is change the sequence.</p>
 <h3 id="memory-layout-9"><a href="#memory-layout-9">12.1. Memory Layout</a></h3>
 <pre><code class="language-c">typedef struct {
     uint64_t length;
@@ -755,17 +767,18 @@ print v.get i: 0.u64       # OK: read through view
 # when v falls out of scope, nums is unlocked</code></pre>
 <h3 id="methods-2"><a href="#methods-2">12.4. Methods</a></h3>
 <ul>
-<li><code>get(i: u64) out of</code> -- bounds-checked element access</li>
+<li><code>get(i: u64)</code> -- bounds-checked readonly access (<code>of.view</code> on
+<code>ListView</code>, a copy on <code>ListViewVal</code>)</li>
+<li><code>getMut(i: u64) out of.borrow</code> -- exclusive element access</li>
 <li><code>length() out u64</code> -- number of elements in the view</li>
-<li><code>List() out List</code> -- materialise a new owned list from the view (copies data)</li>
 </ul>
 <h3 id="zerolang-definition"><a href="#zerolang-definition">12.5. Zerolang Definition</a></h3>
-<pre><code class="language-zerolang">Listview: class {
-    get: function {:this i: u64} out of is native
-    length: function {:this} out u64 is native
-    list: function {:this} out (List of: of) is native
+<pre><code class="language-zerolang">ListView: class {
+    get: function {t: this.borrow i: u64} out of.view is native
+    getMut: function {t: this.borrow i: u64} out of.borrow is native
+    length: function {t: this.view} out u64 is native
 } as {
-    of: Any.generic
+    of: AnyRef.generic
 }</code></pre>
 <h2 id="string"><a href="#string">13. string</a></h2>
 <p><code>String</code> is a growable UTF-8 byte buffer. The struct lives on the stack; only
@@ -853,7 +866,8 @@ not lock anything (static data has infinite lifetime).</p>
 <li><code>!=(rhs: StringView) out bool</code> -- negated comparison</li>
 </ul>
 <h2 id="option-optionval-impact"><a href="#option-optionval-impact">15. option / optionval -- Impact</a></h2>
-<p><code>Option</code> is a union with subtypes <code>{ some: T, none: null }</code>. Under the new
+<p><code>Option</code> is a union with subtypes <code>{ none: null, some: T }</code> (falsy arm
+first). Under the new
 model, the <code>Option</code> struct (<code>{ tag, void* }</code>) moves to the stack but its
 subtype data is still heap-allocated (standard union behaviour).</p>
 <p>The nullable-pointer optimisation (<code>is_nullable_ptr</code>) is preserved: for
