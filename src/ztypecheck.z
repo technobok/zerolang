@@ -2354,14 +2354,17 @@ ensureNativeLinkTargets: function {
     descendNamed :ty :reg :ast defUnit: "system" name: "Result"
     descendNamed :ty :reg :ast defUnit: "system" name: "resultval"
     descendNamed :ty :reg :ast defUnit: "collections" name: "List"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "ListRef"
     descendNamed :ty :reg :ast defUnit: "collections" name: "ListIter"
     descendNamed :ty :reg :ast defUnit: "collections" name: "ListIterVal"
     descendNamed :ty :reg :ast defUnit: "collections" name: "ListView"
     descendNamed :ty :reg :ast defUnit: "collections" name: "ListViewVal"
     descendNamed :ty :reg :ast defUnit: "collections" name: "Set"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "SetRef"
     descendNamed :ty :reg :ast defUnit: "collections" name: "SetIter"
     descendNamed :ty :reg :ast defUnit: "collections" name: "SetIterVal"
     descendNamed :ty :reg :ast defUnit: "collections" name: "Map"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "MapRR"
     descendNamed :ty :reg :ast defUnit: "collections" name: "MapKeyIter"
     descendNamed :ty :reg :ast defUnit: "collections" name: "MapItemIter"
     descendNamed :ty :reg :ast defUnit: "collections" name: "MapEntry"
@@ -3542,6 +3545,7 @@ paramTypeBaseName: function {ast: Ast.view op: Node.view} out String is {
 # Mirrors the is_heap_allocated the reference stamps on collection monos.
 isBorrowReftypeCollection: function {name: StringView} out bool is {
     if name == "List" then return true
+    if name == "ListRef" then return true
     if name == "ListVal" then return true
     if name == "ListView" then return true
     if name == "ListViewVal" then return true
@@ -6180,12 +6184,15 @@ fieldTypeNeedsCleanup: function {
     if isLock then return true
     if name == "String" then return true
     if name == "List" then return true
+    if name == "ListRef" then return true
     if name == "ListVal" then return true
     if name == "Map" then return true
+    if name == "MapRR" then return true
     if name == "MapRV" then return true
     if name == "MapVR" then return true
     if name == "MapVV" then return true
     if name == "Set" then return true
+    if name == "SetRef" then return true
     if name == "SetVal" then return true
     if name == "Option" then return true
     if name == "Result" then return true
@@ -6313,6 +6320,9 @@ resolveClass: function {
                         if defName == "Set" then famF3 = true
                         if defName == "SetVal" then famF3 = true
                         if defName == "Map" then famF3 = true
+                        if defName == "ListRef" then famF3 = true
+                        if defName == "SetRef" then famF3 = true
+                        if defName == "MapRR" then famF3 = true
                         if defName == "MapRV" then famF3 = true
                         if defName == "MapVR" then famF3 = true
                         if defName == "MapVV" then famF3 = true
@@ -7954,8 +7964,13 @@ resolveConformanceDefs: function {
 # descent. When a collection is demanded, demand its iterators too.
 seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
     if (reg.isDemanded name: "Set") then reg.recordDemand name: "SetIter"
+    if (reg.isDemanded name: "SetRef") then reg.recordDemand name: "SetIter"
     if (reg.isDemanded name: "SetVal") then reg.recordDemand name: "SetIterVal"
     if (reg.isDemanded name: "List") then {
+        reg.recordDemand name: "ListIter"
+        reg.recordDemand name: "ListView"
+    }
+    if (reg.isDemanded name: "ListRef") then {
         reg.recordDemand name: "ListIter"
         reg.recordDemand name: "ListView"
     }
@@ -7964,6 +7979,11 @@ seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
         reg.recordDemand name: "ListViewVal"
     }
     if (reg.isDemanded name: "Map") then {
+        reg.recordDemand name: "MapKeyIter"
+        reg.recordDemand name: "MapItemIter"
+        reg.recordDemand name: "MapEntry"
+    }
+    if (reg.isDemanded name: "MapRR") then {
         reg.recordDemand name: "MapKeyIter"
         reg.recordDemand name: "MapItemIter"
         reg.recordDemand name: "MapEntry"
@@ -10424,6 +10444,18 @@ builtinTidT: function {
         } case none then null
     }
     r: (optU64Or o: (walkLookupTyperef :ast :ty :reg currentUnit: "" :base) d: 0)
+    if r == 0 then {
+        # an internal lookup may still say the aliased container name while
+        # the declaration carries the family name (s7): retry the renamed
+        # twin -- the alias and the declaration share one canonical tid.
+        alt9: ""
+        if base == "List" then alt9 = "ListRef"
+        if base == "Set" then alt9 = "SetRef"
+        if base == "Map" then alt9 = "MapRR"
+        if alt9.length > 0 then {
+            r = optU64Or o: (walkLookupTyperef :ast :ty :reg currentUnit: "" base: alt9) d: 0
+        }
+    }
     if r == 0 then return r
     if bk > 0 then ty.builtinTidMemo.set key: bk value: r
     return r
