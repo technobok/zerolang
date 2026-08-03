@@ -15,7 +15,18 @@ public: unit {
     :ZVfs
     :bindkind
     :dentry
+    :fsno
     :main
+}
+
+# fsno -- a registered file's id in the vfs dentry space; 0 is "no file"
+# (synthesized nodes, typecheck-minted diagnostics). A typedef so a file id
+# cannot cross with the other numeric id spaces; equality is same-space
+# only, and sentinel checks read the base explicitly (f.u32 == 0).
+fsno: record { val: u32.typedef } as {
+    ==: function {:this rhs: fsno} out bool is {
+        return this.u32 == rhs.u32
+    }
 }
 
 # the kind of a resolved VFS node: dir, file, or notfound.
@@ -34,30 +45,30 @@ bindkind: variant {
 
 # a resolved-but-absent VFS entry: parent, provider, and node ids.
 notfounddata: record {
-    parentid: u32
+    parentid: fsno
     providerid: u32
     nodeid: u32
 }
 
 # a VFS file entry: parent, provider, and node ids.
 filedata: record {
-    parentid: u32
+    parentid: fsno
     providerid: u32
     nodeid: u32
 }
 
 # a VFS directory entry: parent, provider, and node ids.
 dirdata: record {
-    parentid: u32
+    parentid: fsno
     providerid: u32
     nodeid: u32
 }
 
 # a VFS mount overlaying up to two child subtrees (`first`/`second`).
 mountdata: record {
-    parentid: u32
-    first: u32
-    second: u32
+    parentid: fsno
+    first: fsno
+    second: fsno
     has_second: bool
 }
 
@@ -67,8 +78,8 @@ mountdata: record {
 # helper boundary; the rest mirrors mountdata.
 mountinfo: record {
     is_mount: bool
-    first: u32
-    second: u32
+    first: fsno
+    second: fsno
     has_second: bool
 }
 
@@ -85,8 +96,8 @@ dentry: variant {
 DentryTable: class {
     entries: (ListVal dentry)
 } as {
-    append: function {:this entry: dentry.take} out u32 is {
-        idx: this.entries.length.u32.orPanic
+    append: function {:this entry: dentry.take} out fsno is {
+        idx: fsno.create from: this.entries.length.u32.orPanic
         this.entries.append entry
         return idx
     }
@@ -255,7 +266,7 @@ StringProvider: class {
     # Internal: record a parent->child edge in the children map.
     # Builds the composite "<parentid>:<name>" key directly.
     addChild: function {:this parentid: u32 name: StringView childid: u32.take} is {
-        key: "\{parentid}:\{name}"
+        key: "\{parentid.u64}:\{name}"
         this.children.set key: key.take value: childid
     }
 
@@ -477,19 +488,19 @@ ZVfs: class {
     providerRoot: (MapVR u32 value: String)
     entrytable: DentryTable
     file_names: (List String)
-    walk_cache: (MapRV String value: u32)
-    rootid: u32
+    walk_cache: (MapRV String value: fsno)
+    rootid: fsno
 } as {
     # registerNull -- append a NullProvider to the provider list and
     # create its root directory dentry. Returns the new dentryid.
     #py:280-300 with NullProvider as the body.
-    registerNull: function {:this} out u32 is {
+    registerNull: function {:this} out fsno is {
         np: NullProvider _unused: false
         prov: ZVfsProvider.create from: np.take
         box: ProviderBox p: prov
         pid: this.providers.length.u32.orPanic
         this.providers.append box.take
-        d: dentry.directory (dirdata parentid: 0 providerid: pid nodeid: 0)
+        d: dentry.directory (dirdata parentid: fsno providerid: pid nodeid: 0)
         did: this.entrytable.append entry: d
         this.file_names.append "".string
         return did
@@ -500,7 +511,7 @@ ZVfs: class {
     # the underlying provider ( The provider
     # is reachable via this.providers; the dispatcher's `addFile`
     # currently goes through ProviderTable, not ZVfs.providers.
-    registerString: function {:this} out u32 is {
+    registerString: function {:this} out fsno is {
         sp: StringProvider nodes: (List StringNode) children: (MapRV String value: u32)
         root: StringNode path: "".string kind: nodekind.dir content: "".string
         sp.nodes.append root.take
@@ -508,7 +519,7 @@ ZVfs: class {
         box: ProviderBox p: prov
         pid: this.providers.length.u32.orPanic
         this.providers.append box.take
-        d: dentry.directory (dirdata parentid: 0 providerid: pid nodeid: 0)
+        d: dentry.directory (dirdata parentid: fsno providerid: pid nodeid: 0)
         did: this.entrytable.append entry: d
         this.file_names.append "".string
         return did
@@ -518,7 +529,7 @@ ZVfs: class {
     # create its root directory dentry.registerFS
     # closely; the only differences are the dentry construction at the
     # end and the use of ZVfs's own providers/entrytable/file_names.
-    registerFS: function {:this rootpath: String.take parentpath: String.take} out u32 is {
+    registerFS: function {:this rootpath: String.take parentpath: String.take} out fsno is {
         full: joinPath parent: rootpath.stringview name: parentpath.stringview
         sr: io.stat full
         match (
@@ -549,7 +560,7 @@ ZVfs: class {
         pid: this.providers.length.u32.orPanic
         this.providers.append box.take
         this.providerRoot.set key: pid value: rpCopy
-        d: dentry.directory (dirdata parentid: 0 providerid: pid nodeid: 0)
+        d: dentry.directory (dirdata parentid: fsno providerid: pid nodeid: 0)
         did: this.entrytable.append entry: d
         this.file_names.append "".string
         return did
@@ -561,9 +572,9 @@ ZVfs: class {
     # arms panic. On a cache miss: ask provider.walk +
     # provider.stat, translate to a file/directory/notfound dentry,
     # append to the entry table, record the name + cache.
-    walk: function {:this parent: u32 name: StringView} out u32 is {
+    walk: function {:this parent: fsno name: StringView} out fsno is {
         # cache lookup
-        cachekey: "\{parent}:\{name}"
+        cachekey: "\{parent.u64}:\{name}"
         cklookup: cachekey.copy
         cached: this.walk_cache.get key: cklookup
         match (
@@ -657,7 +668,7 @@ ZVfs: class {
     # directories and not-found entries (which also carry a name in
     # file_names) are excluded -- matching the reference's files-only
     # _file_names.py:302-304.
-    fileTable: function {:this outIds: ListVal u32 outPaths: List String} is {
+    fileTable: function {:this outIds: ListVal fsno outPaths: List String} is {
         n: this.entrytable.entries.length
         i: u64
         for i < n loop {
@@ -665,7 +676,7 @@ ZVfs: class {
             match (
                 e
             ) case file then {
-                outIds.append i.u32.orPanic
+                outIds.append from: (fsno.create from: i.u32.orPanic)
                 nm: this.file_names.get :i
                 outPaths.append nm.copy
             } case root then null case notfound then null case directory then null case mount then null
@@ -814,7 +825,7 @@ ZVfs: class {
                 has_second: e.has_second
             )
         } case root then null case notfound then null case file then null case directory then null
-        return (mountinfo is_mount: false first: 0 second: 0 has_second: false)
+        return (mountinfo is_mount: false first: fsno second: fsno has_second: false)
     }
 
     # _dentryIsNotFound -- true iff the dentry at `dentryid` is the
@@ -890,13 +901,13 @@ ZVfs: class {
     # the old root. INSTEAD overlays exclusively (no second arm); BEFORE
     # / AFTER preserve the old root as the union's second / first arm
     # respectively.py:412-433 (the name=None bind path).
-    bindRoot: function {:this newid: u32 kind: bindkind} out u32 is {
+    bindRoot: function {:this newid: fsno kind: bindkind} out fsno is {
         old: this.rootid
-        md: mountdata parentid: old first: 0 second: 0 has_second: false
+        md: mountdata parentid: old first: fsno second: fsno has_second: false
         match (
             kind
         ) case instead then {
-            md = mountdata parentid: old first: newid second: 0 has_second: false
+            md = mountdata parentid: old first: newid second: fsno has_second: false
         } case before then {
             md = mountdata parentid: old first: newid second: old has_second: true
         } case after then {
@@ -915,13 +926,14 @@ ZVfs: class {
     # respectively. The walk_cache entry for `<parentid>:<name>` is
     # overwritten so future walks route to the new mount (mirrors
     # Python's `parent.cache[name] = newunionid`.
-    bind: function {:this parentid: u32 name: StringView newid: u32 kind: bindkind} out u32 is {
+    bind: function {:this parentid: fsno name: StringView newid: fsno kind: bindkind} out fsno is {
         old: this.walk parent: parentid :name
-        md: mountdata :parentid first: 0 second: 0 has_second: false
+        zf9: fsno
+        md: mountdata :parentid first: zf9 second: zf9 has_second: false
         match (
             kind
         ) case instead then {
-            md = mountdata :parentid first: newid second: 0 has_second: false
+            md = mountdata :parentid first: newid second: zf9 has_second: false
         } case before then {
             md = mountdata :parentid first: newid second: old has_second: true
         } case after then {
@@ -930,8 +942,8 @@ ZVfs: class {
         new_dentry: dentry.mount md
         new_id: this.entrytable.append entry: new_dentry
         this.file_names.append name.string
-        cachekey: "\{parentid}:\{name}"
-        this.walk_cache.set key: cachekey.take value: new_id.u32
+        cachekey: "\{parentid.u64}:\{name}"
+        this.walk_cache.set key: cachekey.take value: new_id
         return new_id
     }
 }
@@ -1006,51 +1018,51 @@ dispatchEntry: function {tokens: (List String).view table: DentryTable} is {
     if arm == "root" then {
         if n != 2 then panic "entry root takes no args"
         idx: table.append entry: dentry.root
-        print "\{idx}"
+        print "\{idx.u64}"
         return
     }
     if arm == "notfound" then {
         if n != 5 then panic "entry notfound expects 3 args"
-        pid: parseU32at :tokens i: 2
+        pid: fsno.create from: (parseU32at :tokens i: 2)
         prv: parseU32at :tokens i: 3
         nid: parseU32at :tokens i: 4
         e: dentry.notfound (notfounddata parentid: pid providerid: prv nodeid: nid)
         idx: table.append entry: e
-        print "\{idx}"
+        print "\{idx.u64}"
         return
     }
     if arm == "file" then {
         if n != 5 then panic "entry file expects 3 args"
-        pid: parseU32at :tokens i: 2
+        pid: fsno.create from: (parseU32at :tokens i: 2)
         prv: parseU32at :tokens i: 3
         nid: parseU32at :tokens i: 4
         e: dentry.file (filedata parentid: pid providerid: prv nodeid: nid)
         idx: table.append entry: e
-        print "\{idx}"
+        print "\{idx.u64}"
         return
     }
     if arm == "directory" then {
         if n != 5 then panic "entry directory expects 3 args"
-        pid: parseU32at :tokens i: 2
+        pid: fsno.create from: (parseU32at :tokens i: 2)
         prv: parseU32at :tokens i: 3
         nid: parseU32at :tokens i: 4
         e: dentry.directory (dirdata parentid: pid providerid: prv nodeid: nid)
         idx: table.append entry: e
-        print "\{idx}"
+        print "\{idx.u64}"
         return
     }
     if arm == "mount" then {
         if n != 6 then panic "entry mount expects 4 args"
-        pid: parseU32at :tokens i: 2
-        first: parseU32at :tokens i: 3
-        second: parseU32at :tokens i: 4
+        pid: fsno.create from: (parseU32at :tokens i: 2)
+        first: fsno.create from: (parseU32at :tokens i: 3)
+        second: fsno.create from: (parseU32at :tokens i: 4)
         hassec_str: tokens.get i: 5
         hassec_sv: hassec_str.stringview
         hassec: false
         if hassec_sv == "true" then hassec = true
         e: dentry.mount (mountdata parentid: pid :first :second has_second: hassec)
         idx: table.append entry: e
-        print "\{idx}"
+        print "\{idx.u64}"
         return
     }
     panic "unknown entry arm"
@@ -1077,13 +1089,13 @@ dispatchProvider: function {tokens: (List String).view providers: ProviderTable}
     if kind == "null" then {
         if n != 2 then panic "provider null takes no args"
         idx: providers.registerNull
-        print "\{idx}"
+        print "\{idx.u64}"
         return
     }
     if kind == "string" then {
         if n != 2 then panic "provider string takes no args"
         idx: providers.registerString
-        print "\{idx}"
+        print "\{idx.u64}"
         return
     }
     if kind == "fs" then {
@@ -1093,7 +1105,7 @@ dispatchProvider: function {tokens: (List String).view providers: ProviderTable}
         rp: rp_str.copy
         pp: pp_str.copy
         idx: providers.registerFS rootpath: rp.take parentpath: pp.take
-        print "\{idx}"
+        print "\{idx.u64}"
         return
     }
     panic "unknown provider kind"
@@ -1240,13 +1252,13 @@ dispatchVfs: function {tokens: (List String).view vfs: ZVfs} is {
         if kind == "null" then {
             if n != 3 then panic "vfs register null takes no args"
             did: vfs.registerNull
-            print "\{did}"
+            print "\{did.u64}"
             return
         }
         if kind == "string" then {
             if n != 3 then panic "vfs register string takes no args"
             did: vfs.registerString
-            print "\{did}"
+            print "\{did.u64}"
             return
         }
         if kind == "fs" then {
@@ -1256,18 +1268,18 @@ dispatchVfs: function {tokens: (List String).view vfs: ZVfs} is {
             rp: rp_str.copy
             pp: pp_str.copy
             did: vfs.registerFS rootpath: rp.take parentpath: pp.take
-            print "\{did}"
+            print "\{did.u64}"
             return
         }
         panic "vfs register: unknown kind"
     }
     if sub == "walk" then {
         if n != 4 then panic "vfs walk expects 2 args (parentid name)"
-        pid: parseU32at :tokens i: 2
+        pid: fsno.create from: (parseU32at :tokens i: 2)
         name_str: tokens.get i: 3
         name_sv: name_str.stringview
         did: vfs.walk parent: pid name: name_sv
-        print "\{did}"
+        print "\{did.u64}"
         return
     }
     if sub == "stat" then {
@@ -1323,7 +1335,7 @@ dispatchVfs: function {tokens: (List String).view vfs: ZVfs} is {
     }
     if sub == "bindroot" then {
         if n != 4 then panic "vfs bindroot expects 2 args (newid kind)"
-        newid: parseU32at :tokens i: 2
+        newid: fsno.create from: (parseU32at :tokens i: 2)
         kind_str: tokens.get i: 3
         kind_sv: kind_str.stringview
         kind: bindkind.instead
@@ -1337,15 +1349,15 @@ dispatchVfs: function {tokens: (List String).view vfs: ZVfs} is {
             panic "vfs bindroot: unknown kind (instead/before/after)"
         }
         did: vfs.bindRoot :newid :kind
-        print "\{did}"
+        print "\{did.u64}"
         return
     }
     if sub == "bind" then {
         if n != 6 then panic "vfs bind expects 4 args (parentid name newid kind)"
-        pid: parseU32at :tokens i: 2
+        pid: fsno.create from: (parseU32at :tokens i: 2)
         name_str: tokens.get i: 3
         name_sv: name_str.stringview
-        newid: parseU32at :tokens i: 4
+        newid: fsno.create from: (parseU32at :tokens i: 4)
         kind_str: tokens.get i: 5
         kind_sv: kind_str.stringview
         kind: bindkind.instead
@@ -1359,7 +1371,7 @@ dispatchVfs: function {tokens: (List String).view vfs: ZVfs} is {
             panic "vfs bind: unknown kind (instead/before/after)"
         }
         did: vfs.bind parentid: pid name: name_sv :newid :kind
-        print "\{did}"
+        print "\{did.u64}"
         return
     }
     panic "vfs: unknown subverb"
@@ -1448,8 +1460,8 @@ main: function is {
             providerRoot: (MapVR u32 value: String)
             entrytable: vtable
             file_names: (List String)
-            walk_cache: (MapRV String value: u32)
-            rootid: 0
+            walk_cache: (MapRV String value: fsno)
+            rootid: fsno
         )
         runScript text: r.take :table :providers :vfs
     } case err then {
