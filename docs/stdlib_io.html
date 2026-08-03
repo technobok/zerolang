@@ -167,7 +167,10 @@ the core types (<code>Reader</code>, <code>Writer</code>, <code>File</code>, <co
 <ul>
 <li><strong>Result-first.</strong> Every fallible operation returns
 <code>Result t: T e: IoError</code>. Callers pattern-match or propagate
-with <code>return</code></li>
+with <code>return</code>. <code>Result</code> holds reftypes, so a valtype
+success -- a byte count, a <code>filestat</code> -- is spelled with a
+<code>Box</code> argument (<code>(Result (Box u64) e: IoError)</code>); the
+<code>case ok</code> arm still binds the bare value</li>
 <li><strong>Byte-oriented core, Text layered on top.</strong>
 <code>Reader</code> / <code>Writer</code> / <code>File</code> speak <code>Bytes</code> /
 <code>ByteView</code>. UTF-8 decoding and line splitting live in the
@@ -196,10 +199,10 @@ a static fd; scope exit does not close the underlying fd</li>
 </ul>
 <p><strong>Stream protocols</strong></p>
 <ul>
-<li><a href="#reader"><strong>Reader</strong> -- <code>protocol { read: function {:this into: Bytes max: u64} out (Result t: u64 e: IoError) }</code></a></li>
+<li><a href="#reader"><strong>Reader</strong> -- <code>protocol { read: function {:this into: Bytes max: u64} out (Result (Box u64) e: IoError) }</code></a></li>
 <li><a href="#writer"><strong>Writer</strong> -- <code>protocol { write: ...  flush: ... }</code></a></li>
 <li><a href="#closer"><strong>Closer</strong> -- <code>protocol { close: function {:this} out (Result t: null e: IoError) }</code></a></li>
-<li><a href="#seeker"><strong>Seeker</strong> -- <code>protocol { seek: function {:this to: i64 from: seekorigin} out (Result t: u64 e: IoError) }</code></a></li>
+<li><a href="#seeker"><strong>Seeker</strong> -- <code>protocol { seek: function {:this to: i64 from: seekorigin} out (Result (Box u64) e: IoError) }</code></a></li>
 </ul>
 <p><strong>File handle</strong></p>
 <ul>
@@ -226,8 +229,8 @@ a static fd; scope exit does not close the underlying fd</li>
 <p><strong>Filesystem queries</strong></p>
 <ul>
 <li><a href="#exists"><strong>io.exists</strong> -- <code>function {Path: StringView} out bool</code></a></li>
-<li><a href="#stat"><strong>io.stat</strong> -- <code>function as { T: StringLike.generic } in {path: T} out (Result t: filestat e: IoError)</code></a></li>
-<li><a href="#lstat"><strong>io.lstat</strong> -- <code>function as { T: StringLike.generic } in {path: T} out (Result t: filestat e: IoError)</code></a></li>
+<li><a href="#stat"><strong>io.stat</strong> -- <code>function as { T: StringLike.generic } in {path: T} out (Result (Box filestat) e: IoError)</code></a></li>
+<li><a href="#lstat"><strong>io.lstat</strong> -- <code>function as { T: StringLike.generic } in {path: T} out (Result (Box filestat) e: IoError)</code></a></li>
 <li><a href="#readlink"><strong>io.readlink</strong> -- <code>function as { T: StringLike.generic } in {path: T} out (Result t: String e: IoError)</code></a></li>
 <li><a href="#list-dir"><strong>io.listDir</strong> -- <code>function as { T: StringLike.generic } in {path: T} out (Result t: (List of: String) e: IoError)</code></a></li>
 </ul>
@@ -364,7 +367,7 @@ appends</li>
 </ul>
 <h2 id="reader"><a href="#reader">8. reader</a></h2>
 <pre><code class="language-zerolang">  reader: protocol {
-      read: function {:this into: Bytes max: u64} out (Result t: u64 e: IoError)
+      read: function {:this into: Bytes max: u64} out (Result (Box u64) e: IoError)
   }</code></pre>
 <p>Byte-oriented readable stream. Implementors fill <code>into</code> with
 up to <code>max</code> bytes and return the count actually read; <code>0</code>
@@ -375,7 +378,7 @@ implementation appends into the caller's buffer and the caller
 sees the new bytes after return.</p>
 <h2 id="writer"><a href="#writer">9. writer</a></h2>
 <pre><code class="language-zerolang">  writer: protocol {
-      write: function {:this from: ByteView} out (Result t: u64 e: IoError)
+      write: function {:this from: ByteView} out (Result (Box u64) e: IoError)
       flush: function {:this} out (Result t: null e: IoError)
   }</code></pre>
 <p>Byte-oriented writable stream. <code>write from: bv</code> emits the
@@ -397,7 +400,7 @@ type-check stage by the standard ownership rules.</p>
 <p>Implementors: <code>File</code>.</p>
 <h2 id="seeker"><a href="#seeker">11. seeker</a></h2>
 <pre><code class="language-zerolang">  seeker: protocol {
-      seek: function {:this to: i64 from: seekorigin} out (Result t: u64 e: IoError)
+      seek: function {:this to: i64 from: seekorigin} out (Result (Box u64) e: IoError)
   }</code></pre>
 <p>Reposition the read / write head. Returns the new absolute
 position measured from the start.</p>
@@ -407,10 +410,10 @@ position measured from the start.</p>
       fd:     i32
       closed: bool
       close:  function {:this} out (Result t: null e: IoError) is native
-      read:   function {:this into: Bytes max: u64} out (Result t: u64 e: IoError) is native
-      write:  function {:this from: ByteView} out (Result t: u64 e: IoError) is native
+      read:   function {:this into: Bytes max: u64} out (Result (Box u64) e: IoError) is native
+      write:  function {:this from: ByteView} out (Result (Box u64) e: IoError) is native
       flush:  function {:this} out (Result t: null e: IoError) is native
-      seek:   function {:this to: i64 from: seekorigin} out (Result t: u64 e: IoError) is native
+      seek:   function {:this to: i64 from: seekorigin} out (Result (Box u64) e: IoError) is native
   } as {
       :Reader
       :Writer
@@ -508,12 +511,12 @@ at <code>Path</code>. A permission-denied on the parent directory also
 surfaces as false. If you need to distinguish missing from
 permission-denied, use <code>stat</code>.</p>
 <h2 id="stat"><a href="#stat">21. stat</a></h2>
-<pre><code class="language-zerolang">  stat: function as { T: StringLike.generic } in {path: T} out (Result t: filestat e: IoError) is native</code></pre>
+<pre><code class="language-zerolang">  stat: function as { T: StringLike.generic } in {path: T} out (Result (Box filestat) e: IoError) is native</code></pre>
 <p>Return metadata for <code>Path</code>. Follows symlinks -- use
 <code>io.lstat</code> to inspect the link itself. Errors surface in the
 standard ioerror shape.</p>
 <h2 id="lstat"><a href="#lstat">22. lstat</a></h2>
-<pre><code class="language-zerolang">  lstat: function as { T: StringLike.generic } in {path: T} out (Result t: filestat e: IoError) is native</code></pre>
+<pre><code class="language-zerolang">  lstat: function as { T: StringLike.generic } in {path: T} out (Result (Box filestat) e: IoError) is native</code></pre>
 <p>Like <code>stat</code> but does not follow symlinks. On a symbolic link,
 <code>kind</code> is <code>symlink</code> and <code>size</code>, <code>mtimeSeconds</code>,
 <code>mode</code> describe the link itself rather than its target.</p>
@@ -579,7 +582,7 @@ to anything.</p>
   } as {
       :Writer
       create: function {to: Writer.borrow capacity: u64} out this is native
-      write:  function {:this from: ByteView} out (Result t: u64 e: IoError) is native
+      write:  function {:this from: ByteView} out (Result (Box u64) e: IoError) is native
       flush:  function {:this} out (Result t: null e: IoError) is native
   }</code></pre>
 <p>Buffered adapter over any <code>Writer</code>. Accumulates up to <code>cap</code>
@@ -605,7 +608,7 @@ rejects such access at the source.</p>
   } as {
       :Reader
       create: function {from: Reader.borrow capacity: u64} out this is native
-      read:   function {:this into: Bytes max: u64} out (Result t: u64 e: IoError) is native
+      read:   function {:this into: Bytes max: u64} out (Result (Box u64) e: IoError) is native
   }</code></pre>
 <p>Buffered adapter over any <code>Reader</code>. Issues exactly one source
 <code>read</code> per <code>capacity</code> bytes of data, regardless of how many
@@ -623,8 +626,8 @@ and the next <code>read</code> call refills it from the source.</p>
       sink: BufWriter.borrow
   } as {
       create:     function {to: BufWriter.borrow} out this is native
-      write:      function as { T: StringLike.generic } in {:this from: T} out (Result t: u64 e: IoError) is native
-      writeLine: function as { T: StringLike.generic } in {:this from: T} out (Result t: u64 e: IoError) is native
+      write:      function as { T: StringLike.generic } in {:this from: T} out (Result (Box u64) e: IoError) is native
+      writeLine: function as { T: StringLike.generic } in {:this from: T} out (Result (Box u64) e: IoError) is native
       flush:      function {:this} out (Result t: null e: IoError) is native
   }</code></pre>
 <p>String-oriented adapter over a <code>BufWriter</code>. Writes go through

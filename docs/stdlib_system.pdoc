@@ -87,23 +87,25 @@ operation can fail for reasons the caller needs to handle
 #p: #b:"Option and Result"
 
 #ul:
-  [#*: #> to=option: #b:"Option" -- #~"union { some: t  none: null } as { t: Any.reftype }"]
-  [#*: #> to=optionval: #b:"optionval" -- #~"variant { some: t  none: null } as { t: Any.valtype }"]
-  [#*: #> to=result: #b:"Result" -- #~"union { ok: t  err: e } as { t: Any.generic  e: Any.generic }"]
+  [#*: #> to=option: #b:"Option" -- #~"union { none: null  some: t } as { t: AnyRef.generic }"]
+  [#*: #> to=option: #b:"OptionView" -- #~"union { none: null  some: t.borrow } as { t: Any.generic }"]
+  [#*: #> to=optionval: #b:"optionval" -- #~"variant { none: null  some: t } as { t: AnyVal.generic }"]
+  [#*: #> to=result: #b:"Result" -- #~"union { err: e  ok: t } as { t: AnyRef.generic  e: AnyRef.generic }"]
+  [#*: #> to=result: #b:"resultval" -- #~"variant { err: e  ok: t } as { t: AnyVal.generic  e: AnyVal.generic }"]
   [#*: #> to=parseerror: #b:"parseerror" -- #~"variant { empty: null  invalidDigit: null  overflow: null }"]
 
 #p: #b:"Byte and Path typedefs"
 
 #ul:
-  [#*: #> to=bytes-and-byteview: #b:"Bytes" -- #~"class { val: (List of: u8).typedef }"]
-  [#*: #> to=bytes-and-byteview: #b:"ByteView" -- #~"class { val: (ListView of: u8).typedef }"]
+  [#*: #> to=bytes-and-byteview: #b:"Bytes" -- #~"class { val: (ListVal u8).typedef }"]
+  [#*: #> to=bytes-and-byteview: #b:"ByteView" -- #~"class { val: (ListViewVal of: u8).typedef }"]
   [#*: #> to=path-and-pathview: #b:"Path" -- #~"class { val: String.typedef }"]
   [#*: #> to=path-and-pathview: #b:"PathView" -- #~"class { val: StringView.typedef }"]
 
 #p: #b:"Generic primitives"
 
 #ul:
-  [#*: #> to=box: #b:"Box" -- #~"class {} as { t: Any.generic }"]
+  [#*: #> to=box: #b:"Box" -- #~"class {} as { t: AnyVal.generic }"]
   [#*: #> to=typedef: #b:"typedef" -- #~"record is native as { from: Any.generic }"]
   [#*: #> to=tag: #b:"tag" -- #~"record is native as { t: Any.generic }"]
 
@@ -290,19 +292,30 @@ determine unreachable-code errors and branch exhaustiveness. See
   any: union is native
 """
 
-The universal supertype: the union of all types. Rarely used
-directly in user code; its constrained views are the useful ones:
+The universal supertype: the union of all types. #b:"Not a
+user-writable bound" -- a generic parameter must name the family
+it takes, and the build rejects #~"Any.generic" in user source.
+The bounds to write are:
 
 #ul:
-  [#*: #~"Any.generic" -- the constraint on an unconstrained
-    generic parameter (#~"List of: Any.generic" accepts any #~"T")]
-  [#*: #~"Any.valtype" -- generic parameter restricted to
-    valtypes. Used by #~"optionval"]
-  [#*: #~"Any.reftype" -- generic parameter restricted to
-    reftypes. Used by #~"Option"]
+  [#*: #~"AnyRef.generic" -- any #b:"reftype" (class, union,
+    protocol, #~"String"). The bound on #~"ListRef.of",
+    #~"Option.t", #~"Result.t" / #~"e"]
+  [#*: #~"AnyVal.generic" -- any #b:"valtype" (record, variant,
+    numeric, #~"str", #~"array"). The bound on #~"ListVal.of",
+    #~"optionval.t", #~"Box.t"]
+  [#*: #~"RefHashable.generic" -- a reftype that also declares
+    #~"hash" and #~"==". The bound on a hashed position:
+    #~"SetRef.of", the #~"Map" reftype keys]
+  [#*: #~"ValHashable.generic" -- the valtype counterpart, for
+    #~"SetVal.of" and the #~"Map" valtype keys]
 
-Assigning into a bare #~"Any" is not supported -- zerolang does
-not do runtime type tagging at that level.
+#~"Any" itself survives only inside #~"system" on parameters
+that are never consulted (#~"return", #~"typedef") and on the
+two types that deliberately span both families (#~"Iterator",
+#~"OptionView" -- a borrowed view of a valtype is still a
+reference). Assigning into a bare #~"Any" is not supported --
+zerolang does not do runtime type tagging at that level.
 
 
 #--: string
@@ -595,7 +608,12 @@ full rule.
   Option: union {
       none: null
       some: t
-  } as { t: Any.reftype }
+  } as { t: AnyRef.generic }
+
+  OptionView: union {
+      none: null
+      some: t.borrow
+  } as { t: Any.generic }
 """
 
 Discriminated union for optional #b:"reftype" values. Two arms:
@@ -603,9 +621,16 @@ Discriminated union for optional #b:"reftype" values. Two arms:
 when absence is a routine expected case (map lookup, env var
 read, parse position past end).
 
-#b:"Constraint." #~"t: Any.reftype" -- the payload must be a
+#b:"Constraint." #~"t: AnyRef.generic" -- the payload must be a
 reference type (class / union / protocol / typedef over those).
 For valtypes, use #> to=optionval: optionval.
+
+#b:"OptionView" is the borrowed twin: its #~"some" arm carries a
+#~"t.borrow", a reference into storage owned by someone else --
+it is what container readers (#~"get" on reftype values,
+iterator #~"call") hand back. A view of a valtype is still a
+reference, so one #~"OptionView" serves both families; that is
+why its bound stays #~"Any.generic".
 
 #b:"Construction." Via the arm accessors:
 
@@ -634,7 +659,7 @@ the saved feedback on match narrowing).
   optionval: variant {
       none: null
       some: t
-  } as { t: Any.valtype }
+  } as { t: AnyVal.generic }
 """
 
 Variant (valtype-payload) counterpart to #~"Option". Same
@@ -654,16 +679,22 @@ return #~"optionval(u64)" / #~"optionval(u8)".
       err: e
       ok:  t
   } as {
-      t: Any.generic
-      e: Any.generic
+      t: AnyRef.generic
+      e: AnyRef.generic
   }
 """
 
 Two-armed union for operations that can fail. The #~"ok" arm
 carries the success value; the #~"err" arm carries the error.
-Both type parameters are #~"Any.generic" -- either arm can be a
-valtype or reftype; the compiler picks the right storage
-strategy per monomorphization.
+Both type parameters are #~"AnyRef.generic" -- a union holds
+reftypes. A #b:"valtype" success value is spelled with a
+#> to=box: Box argument -- #~"(Result (Box u64) e: IoError)" --
+which collapses onto the payload cell: the match arm binds the
+bare #~"u64", and nothing is stored double-indirected. A
+payload-less success is #~"(Result null e: ...)" -- #~"null"
+satisfies either family bound. The all-valtype counterpart is
+#~"resultval" (a variant, inline storage, with #~"or" /
+#~"orPanic" helpers); numeric conversions and parses return it.
 
 #b:"Canonical uses."
 
@@ -673,8 +704,10 @@ strategy per monomorphization.
     #~"os.cwd"]
   [#*: #~"(Result t: null e: IoError)" -- side-effectful I/O:
     #~"io.writeText", #~"io.remove", #~"os.setEnv"]
-  [#*: #~"(Result t: i64 e: parseerror)" -- numeric parse from
-    #~"StringView.parseI64"]
+  [#*: #~"(Result (Box u64) e: IoError)" -- byte-count returns:
+    #~"File.read" / #~"write", #~"Conn.read" / #~"write"]
+  [#*: #~"(resultval t: i64 e: parseerror)" -- numeric parse from
+    #~"StringView.parseI64" (a variant: both arms valtypes)]
 
 Like #~"Option", consumed by exhaustive #~"match" whose arms
 narrow the subject.
@@ -713,15 +746,16 @@ allocation:
 #--: bytes and byteview
 
 #code language=zerolang: """
-  bytes:    class { val: (List of: u8).typedef }
-  byteview: class { val: (ListView of: u8).typedef }
+  Bytes:    class { val: (ListVal u8).typedef }
+  ByteView: class { val: (ListViewVal of: u8).typedef }
 """
 
 Two typedef classes for binary data: #~"Bytes" is an owned,
 growable buffer; #~"ByteView" is a readonly borrowed view into
-one. The underlying storage is #~"List of: u8" / #~"ListView of:
-u8"; the typedef wrapping gives binary-data signatures a distinct
-name and a namespace for bytes-specific methods.
+one. The underlying storage is #~"(ListVal u8)" / #~"(ListViewVal
+of: u8)" -- bytes are valtypes, so the valtype list family
+backs them; the typedef wrapping gives binary-data signatures a
+distinct name and a namespace for bytes-specific methods.
 
 Because the wrapped types are classes, #~"List" operations flow
 through transparently via the typedef backward-compatibility
@@ -764,13 +798,22 @@ operations flow through via the typedef rule.
 #--: box
 
 #code language=zerolang: """
-  box: class {} as { t: Any.generic }
+  Box: class {} as { t: AnyVal.generic }
 """
 
-Generic reftype wrapper. Converts a valtype into a heap-allocated
-reftype, typically for storing valtypes in reftype-only positions
-(e.g. as a union arm whose siblings are reftypes). #~"Box.from"
-copies the value onto the heap and returns the boxed reftype.
+Generic reftype wrapper over a #b:"valtype" (the bound rejects
+reftypes -- they are already references). Converts a valtype
+into a heap-allocated reftype; its C representation is a bare
+pointer to the element. #~"Box from:" copies the value onto the
+heap and returns the boxed reftype.
+
+#b:"The union-arm spelling." A union holds reftypes, so a
+valtype arm is written #~"(Box T)" -- and it #b:"collapses": the
+arm child IS the element, construction takes the bare value,
+match arms bind the bare element, and the emitted C is exactly
+the heap cell a union arm always uses. The same collapse applies
+when a union is instantiated with a Box type argument
+(#~"(Result (Box u64) e: IoError)").
 
 #code language=zerolang: """
   r: i64

@@ -183,21 +183,23 @@ operation can fail for reasons the caller needs to handle
 </ul>
 <p><strong>Option and Result</strong></p>
 <ul>
-<li><a href="#option"><strong>Option</strong> -- <code>union { some: t  none: null } as { t: Any.reftype }</code></a></li>
-<li><a href="#optionval"><strong>optionval</strong> -- <code>variant { some: t  none: null } as { t: Any.valtype }</code></a></li>
-<li><a href="#result"><strong>Result</strong> -- <code>union { ok: t  err: e } as { t: Any.generic  e: Any.generic }</code></a></li>
+<li><a href="#option"><strong>Option</strong> -- <code>union { none: null  some: t } as { t: AnyRef.generic }</code></a></li>
+<li><a href="#option"><strong>OptionView</strong> -- <code>union { none: null  some: t.borrow } as { t: Any.generic }</code></a></li>
+<li><a href="#optionval"><strong>optionval</strong> -- <code>variant { none: null  some: t } as { t: AnyVal.generic }</code></a></li>
+<li><a href="#result"><strong>Result</strong> -- <code>union { err: e  ok: t } as { t: AnyRef.generic  e: AnyRef.generic }</code></a></li>
+<li><a href="#result"><strong>resultval</strong> -- <code>variant { err: e  ok: t } as { t: AnyVal.generic  e: AnyVal.generic }</code></a></li>
 <li><a href="#parseerror"><strong>parseerror</strong> -- <code>variant { empty: null  invalidDigit: null  overflow: null }</code></a></li>
 </ul>
 <p><strong>Byte and Path typedefs</strong></p>
 <ul>
-<li><a href="#bytes-and-byteview"><strong>Bytes</strong> -- <code>class { val: (List of: u8).typedef }</code></a></li>
-<li><a href="#bytes-and-byteview"><strong>ByteView</strong> -- <code>class { val: (ListView of: u8).typedef }</code></a></li>
+<li><a href="#bytes-and-byteview"><strong>Bytes</strong> -- <code>class { val: (ListVal u8).typedef }</code></a></li>
+<li><a href="#bytes-and-byteview"><strong>ByteView</strong> -- <code>class { val: (ListViewVal of: u8).typedef }</code></a></li>
 <li><a href="#path-and-pathview"><strong>Path</strong> -- <code>class { val: String.typedef }</code></a></li>
 <li><a href="#path-and-pathview"><strong>PathView</strong> -- <code>class { val: StringView.typedef }</code></a></li>
 </ul>
 <p><strong>Generic primitives</strong></p>
 <ul>
-<li><a href="#box"><strong>Box</strong> -- <code>class {} as { t: Any.generic }</code></a></li>
+<li><a href="#box"><strong>Box</strong> -- <code>class {} as { t: AnyVal.generic }</code></a></li>
 <li><a href="#typedef"><strong>typedef</strong> -- <code>record is native as { from: Any.generic }</code></a></li>
 <li><a href="#tag"><strong>tag</strong> -- <code>record is native as { t: Any.generic }</code></a></li>
 </ul>
@@ -335,18 +337,29 @@ determine unreachable-code errors and branch exhaustiveness. See
 <a href="./spec.html">./spec.html</a>spec, dead code analysis.</p>
 <h2 id="any"><a href="#any">7. any</a></h2>
 <pre><code class="language-zerolang">  any: union is native</code></pre>
-<p>The universal supertype: the union of all types. Rarely used
-directly in user code; its constrained views are the useful ones:</p>
+<p>The universal supertype: the union of all types. <strong>Not a
+user-writable bound</strong> -- a generic parameter must name the family
+it takes, and the build rejects <code>Any.generic</code> in user source.
+The bounds to write are:</p>
 <ul>
-<li><code>Any.generic</code> -- the constraint on an unconstrained
-generic parameter (<code>List of: Any.generic</code> accepts any <code>T</code>)</li>
-<li><code>Any.valtype</code> -- generic parameter restricted to
-valtypes. Used by <code>optionval</code></li>
-<li><code>Any.reftype</code> -- generic parameter restricted to
-reftypes. Used by <code>Option</code></li>
+<li><code>AnyRef.generic</code> -- any <strong>reftype</strong> (class, union,
+protocol, <code>String</code>). The bound on <code>ListRef.of</code>,
+<code>Option.t</code>, <code>Result.t</code> / <code>e</code></li>
+<li><code>AnyVal.generic</code> -- any <strong>valtype</strong> (record, variant,
+numeric, <code>str</code>, <code>array</code>). The bound on <code>ListVal.of</code>,
+<code>optionval.t</code>, <code>Box.t</code></li>
+<li><code>RefHashable.generic</code> -- a reftype that also declares
+<code>hash</code> and <code>==</code>. The bound on a hashed position:
+<code>SetRef.of</code>, the <code>Map</code> reftype keys</li>
+<li><code>ValHashable.generic</code> -- the valtype counterpart, for
+<code>SetVal.of</code> and the <code>Map</code> valtype keys</li>
 </ul>
-<p>Assigning into a bare <code>Any</code> is not supported -- zerolang does
-not do runtime type tagging at that level.</p>
+<p><code>Any</code> itself survives only inside <code>system</code> on parameters
+that are never consulted (<code>return</code>, <code>typedef</code>) and on the
+two types that deliberately span both families (<code>Iterator</code>,
+<code>OptionView</code> -- a borrowed view of a valtype is still a
+reference). Assigning into a bare <code>Any</code> is not supported --
+zerolang does not do runtime type tagging at that level.</p>
 <h2 id="string"><a href="#string">8. string</a></h2>
 <pre><code class="language-zerolang">  string: class is native as {
       :Text
@@ -579,14 +592,25 @@ full rule.</p>
 <pre><code class="language-zerolang">  Option: union {
       none: null
       some: t
-  } as { t: Any.reftype }</code></pre>
+  } as { t: AnyRef.generic }
+
+  OptionView: union {
+      none: null
+      some: t.borrow
+  } as { t: Any.generic }</code></pre>
 <p>Discriminated union for optional <strong>reftype</strong> values. Two arms:
 <code>some</code> holds a <code>t</code>; <code>none</code> holds <code>null</code>. Use <code>Option</code>
 when absence is a routine expected case (map lookup, env var
 read, parse position past end).</p>
-<p><strong>Constraint.</strong> <code>t: Any.reftype</code> -- the payload must be a
+<p><strong>Constraint.</strong> <code>t: AnyRef.generic</code> -- the payload must be a
 reference type (class / union / protocol / typedef over those).
 For valtypes, use <a href="#optionval">optionval.</a></p>
+<p><strong>OptionView</strong> is the borrowed twin: its <code>some</code> arm carries a
+<code>t.borrow</code>, a reference into storage owned by someone else --
+it is what container readers (<code>get</code> on reftype values,
+iterator <code>call</code>) hand back. A view of a valtype is still a
+reference, so one <code>OptionView</code> serves both families; that is
+why its bound stays <code>Any.generic</code>.</p>
 <p><strong>Construction.</strong> Via the arm accessors:</p>
 <pre><code class="language-zerolang">  some_result: Option.some "hi".string
   no_result:   Option.none null</code></pre>
@@ -602,7 +626,7 @@ the saved feedback on match narrowing).</p>
 <pre><code class="language-zerolang">  optionval: variant {
       none: null
       some: t
-  } as { t: Any.valtype }</code></pre>
+  } as { t: AnyVal.generic }</code></pre>
 <p>Variant (valtype-payload) counterpart to <code>Option</code>. Same
 semantics, but the payload is stored inline (no heap allocation
 for the wrapper). Use when the contained <code>t</code> is a valtype --
@@ -615,14 +639,20 @@ return <code>optionval(u64)</code> / <code>optionval(u8)</code>.</p>
       err: e
       ok:  t
   } as {
-      t: Any.generic
-      e: Any.generic
+      t: AnyRef.generic
+      e: AnyRef.generic
   }</code></pre>
 <p>Two-armed union for operations that can fail. The <code>ok</code> arm
 carries the success value; the <code>err</code> arm carries the error.
-Both type parameters are <code>Any.generic</code> -- either arm can be a
-valtype or reftype; the compiler picks the right storage
-strategy per monomorphization.</p>
+Both type parameters are <code>AnyRef.generic</code> -- a union holds
+reftypes. A <strong>valtype</strong> success value is spelled with a
+<a href="#box">Box argument -- <code>(Result (Box u64) e: IoError)</code> --</a>
+which collapses onto the payload cell: the match arm binds the
+bare <code>u64</code>, and nothing is stored double-indirected. A
+payload-less success is <code>(Result null e: ...)</code> -- <code>null</code>
+satisfies either family bound. The all-valtype counterpart is
+<code>resultval</code> (a variant, inline storage, with <code>or</code> /
+<code>orPanic</code> helpers); numeric conversions and parses return it.</p>
 <p><strong>Canonical uses.</strong></p>
 <ul>
 <li><code>(Result t: File e: IoError)</code> -- <code>io.open</code> return</li>
@@ -630,8 +660,10 @@ strategy per monomorphization.</p>
 <code>os.cwd</code></li>
 <li><code>(Result t: null e: IoError)</code> -- side-effectful I/O:
 <code>io.writeText</code>, <code>io.remove</code>, <code>os.setEnv</code></li>
-<li><code>(Result t: i64 e: parseerror)</code> -- numeric parse from
-<code>StringView.parseI64</code></li>
+<li><code>(Result (Box u64) e: IoError)</code> -- byte-count returns:
+<code>File.read</code> / <code>write</code>, <code>Conn.read</code> / <code>write</code></li>
+<li><code>(resultval t: i64 e: parseerror)</code> -- numeric parse from
+<code>StringView.parseI64</code> (a variant: both arms valtypes)</li>
 </ul>
 <p>Like <code>Option</code>, consumed by exhaustive <code>match</code> whose arms
 narrow the subject.</p>
@@ -657,13 +689,14 @@ the leading sign on signed parses, or the decimal point on
 <li><code>overflow</code> -- magnitude exceeds the target type's range</li>
 </ul>
 <h2 id="bytes-and-byteview"><a href="#bytes-and-byteview">16. bytes and byteview</a></h2>
-<pre><code class="language-zerolang">  bytes:    class { val: (List of: u8).typedef }
-  byteview: class { val: (ListView of: u8).typedef }</code></pre>
+<pre><code class="language-zerolang">  Bytes:    class { val: (ListVal u8).typedef }
+  ByteView: class { val: (ListViewVal of: u8).typedef }</code></pre>
 <p>Two typedef classes for binary data: <code>Bytes</code> is an owned,
 growable buffer; <code>ByteView</code> is a readonly borrowed view into
-one. The underlying storage is <code>List of: u8</code> / <code>ListView of:
-u8</code>; the typedef wrapping gives binary-data signatures a distinct
-name and a namespace for bytes-specific methods.</p>
+one. The underlying storage is <code>(ListVal u8)</code> / <code>(ListViewVal
+of: u8)</code> -- bytes are valtypes, so the valtype list family
+backs them; the typedef wrapping gives binary-data signatures a
+distinct name and a namespace for bytes-specific methods.</p>
 <p>Because the wrapped types are classes, <code>List</code> operations flow
 through transparently via the typedef backward-compatibility
 rule: <code>.append</code>, <code>.length</code>, <code>.listview</code> etc. work on a
@@ -689,11 +722,19 @@ operations flow through via the typedef rule.</p>
 <p><strong>View lifetime.</strong> Same as <code>StringView</code> / <code>ByteView</code> -- a
 <code>PathView</code> locks its source <code>Path</code>.</p>
 <h2 id="box"><a href="#box">18. box</a></h2>
-<pre><code class="language-zerolang">  box: class {} as { t: Any.generic }</code></pre>
-<p>Generic reftype wrapper. Converts a valtype into a heap-allocated
-reftype, typically for storing valtypes in reftype-only positions
-(e.g. as a union arm whose siblings are reftypes). <code>Box.from</code>
-copies the value onto the heap and returns the boxed reftype.</p>
+<pre><code class="language-zerolang">  Box: class {} as { t: AnyVal.generic }</code></pre>
+<p>Generic reftype wrapper over a <strong>valtype</strong> (the bound rejects
+reftypes -- they are already references). Converts a valtype
+into a heap-allocated reftype; its C representation is a bare
+pointer to the element. <code>Box from:</code> copies the value onto the
+heap and returns the boxed reftype.</p>
+<p><strong>The union-arm spelling.</strong> A union holds reftypes, so a
+valtype arm is written <code>(Box T)</code> -- and it <strong>collapses</strong>: the
+arm child IS the element, construction takes the bare value,
+match arms bind the bare element, and the emitted C is exactly
+the heap cell a union arm always uses. The same collapse applies
+when a union is instantiated with a Box type argument
+(<code>(Result (Box u64) e: IoError)</code>).</p>
 <pre><code class="language-zerolang">  r: i64
   b: Box from: r       # b: box(i64)</code></pre>
 <p>Construction is routed through the unified call dispatch; see
