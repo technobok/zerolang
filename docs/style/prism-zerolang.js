@@ -48,14 +48,15 @@
         'u8', 'u16', 'u32', 'u64', 'u128',
         'i8', 'i16', 'i32', 'i64', 'i128',
         'f16', 'f32', 'f64', 'f128', 'c8', 'c32', 'bool',
-        'String', 'StringView', 'Text', 'StringLike', 'Any',
+        'String', 'StringView', 'Text', 'StringLike', 'AnyRef', 'AnyVal', 'RefHashable', 'ValHashable',
         'Option', 'optionval', 'OptionView', 'Result', 'resultval', 'convError', 'Box', 'Iterator',
-        'array', 'str', 'List', 'ListView', 'ListIter', 'Map', 'MapKeyIter', 'MapItemIter', 'MapEntry', 'Set', 'SetIter', 'ListRef', 'SetRef', 'MapRR', 'Bytes', 'ByteView',
+        'array', 'str', 'List', 'ListRef', 'ListVal', 'ListView', 'ListViewVal', 'ListIter', 'ListIterVal', 'Set', 'SetRef', 'SetVal', 'SetIter', 'SetIterVal', 'Bytes', 'ByteView',
+        'Map', 'MapRR', 'MapRV', 'MapVR', 'MapVV', 'MapKeyIter', 'MapItemIter', 'MapEntry', 'MapKeyIterRV', 'MapKeyIterVR', 'MapKeyIterVV', 'MapItemIterRV', 'MapItemIterVR', 'MapItemIterVV', 'MapEntryRV', 'MapEntryVR', 'MapEntryVV',
         'Path', 'PathView', 'IoError', 'Reader', 'Writer', 'Closer', 'Seeker', 'seekorigin', 'File', 'openmode',
         'print', 'stringJoin', 'error', 'panic', 'stdin', 'stdout', 'stderr',
         'return', 'break', 'continue', 'yield',
         'public', 'private', 'this', 'meta', 'typedef', 'tag', 'iterator',
-        'take', 'borrow', 'lock', 'generic'
+        'take', 'borrow', 'view', 'hold', 'takex', 'generic'
     ];
 
     // Build a regex that matches a full WORD token and classifies it.

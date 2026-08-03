@@ -64,7 +64,6 @@ module Rouge
           pragma
           switch
           enum
-          view
           unsafe
         )
       end
@@ -73,7 +72,6 @@ module Rouge
         @builtins ||= %w(
           null
           never
-          Any
           _
           typedef
           tag
@@ -114,7 +112,9 @@ module Rouge
 
           take
           borrow
-          lock
+          view
+          hold
+          takex
           generic
 
           return

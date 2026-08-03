@@ -66,9 +66,10 @@ syn match zerolangReserved /\<\%(pragma\|enum\|view\|unsafe\|switch\)\>/
 syn match zerolangBuiltinType /\<\%(u8\|u16\|u32\|u64\|u128\)\>/
 syn match zerolangBuiltinType /\<\%(i8\|i16\|i32\|i64\|i128\)\>/
 syn match zerolangBuiltinType /\<\%(f16\|f32\|f64\|f128\|c8\|c32\|bool\)\>/
-syn match zerolangBuiltinType /\<\%(String\|StringView\|Text\|StringLike\|Any\)\>/
+syn match zerolangBuiltinType /\<\%(String\|StringView\|Text\|StringLike\|AnyRef\|AnyVal\|RefHashable\|ValHashable\)\>/
 syn match zerolangBuiltinType /\<\%(Option\|optionval\|OptionView\|Result\|resultval\|convError\|Box\|Iterator\)\>/
-syn match zerolangBuiltinType /\<\%(array\|str\|List\|ListView\|ListIter\|Map\|MapKeyIter\|MapItemIter\|MapEntry\|Set\|SetIter\|ListRef\|SetRef\|MapRR\|Bytes\|ByteView\)\>/
+syn match zerolangBuiltinType /\<\%(array\|str\|List\|ListRef\|ListVal\|ListView\|ListViewVal\|ListIter\|ListIterVal\|Set\|SetRef\|SetVal\|SetIter\|SetIterVal\|Bytes\|ByteView\)\>/
+syn match zerolangBuiltinType /\<\%(Map\|MapRR\|MapRV\|MapVR\|MapVV\|MapKeyIter\|MapItemIter\|MapEntry\|MapKeyIterRV\|MapKeyIterVR\|MapKeyIterVV\|MapItemIterRV\|MapItemIterVR\|MapItemIterVV\|MapEntryRV\|MapEntryVR\|MapEntryVV\)\>/
 syn match zerolangBuiltinType /\<\%(Path\|PathView\|IoError\|Reader\|Writer\|Closer\|Seeker\|seekorigin\|File\|openmode\)\>/
 " Constants / literal values
 syn match zerolangBuiltinConst /\<\%(null\|never\|true\|false\|_\)\>/
@@ -76,7 +77,7 @@ syn match zerolangBuiltinConst /\<\%(null\|never\|true\|false\|_\)\>/
 syn match zerolangBuiltin /\<\%(print\|stringJoin\|error\|panic\|stdin\|stdout\|stderr\)\>/
 syn match zerolangBuiltin /\<\%(return\|break\|continue\|yield\)\>/
 syn match zerolangBuiltin /\<\%(public\|private\|this\|meta\|typedef\|tag\|iterator\)\>/
-syn match zerolangBuiltin /\<\%(take\|borrow\|lock\|generic\)\>/
+syn match zerolangBuiltin /\<\%(take\|borrow\|view\|hold\|takex\|generic\)\>/
 
 " Labels: word: and :word (defined after keywords — longer match wins)
 exe 'syn match zerolangLabel /' . s:W . '\+:/'
