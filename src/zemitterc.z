@@ -10376,7 +10376,8 @@ emitStmt: function {
             }
             if pcond.length == 0 then pcond.append "0"
             emitContLabel :ctx id: lidDW ind: ind2d.stringview :buf
-            lpw: "\{ind}} while (\{pcond});\n"
+            cwP9: condParens9 cond: pcond.stringview
+            lpw: "\{ind}} while \{cwP9};\n"
             buf.append lpw
             popLoopLabel :ctx id: lidDW :ind :buf
             ctx.condDepth = ctx.condDepth - 1
@@ -10392,7 +10393,8 @@ emitStmt: function {
         # unconditional loop that exits via break/return.
         if cond.length == 0 then cond.append "1"
         lidW: pushLoopLabel :ctx :tmp isDo: false
-        lw: "\{ind}while (\{cond}) {\n"
+        cwW9: condParens9 cond: cond.stringview
+        lw: "\{ind}while \{cwW9} {\n"
         buf.append lw
         ind2: "\{ind}    "
         fLw9: tmp.frees.length
@@ -12936,6 +12938,44 @@ chainFactCore9: function {
 }
 
 # emit one clause of an if-expression.
+# condParens9 -- a C `if`/`while` condition, wrapped in parens exactly once.
+# An emitted expression is usually already fully parenthesized (`(a == b)`);
+# wrapping it again makes clang warn (-Wparentheses-equality). A condition
+# containing a string literal keeps the extra wrap rather than depth-counting
+# through quoted parens.
+condParens9: function {cond: StringView} out String is {
+    n9: cond.length
+    wrapped9: false
+    if n9 >= 2 when (cond.contains "\"") == false then {
+        b0: cond.byteAt 0.u64
+        match (
+            b0
+        ) case some then {
+            if b0 == 40 then {
+                depth9: u64
+                i9: u64
+                bal9: true
+                for i9 < n9 loop {
+                    bo9: cond.byteAt i9
+                    match (
+                        bo9
+                    ) case some then {
+                        if bo9 == 40 then depth9 = depth9 + 1
+                        if bo9 == 41 then {
+                            depth9 = depth9 - 1
+                            if depth9 == 0 when i9 < (n9 - 1) then bal9 = false
+                        }
+                    } case none then null
+                    i9 = i9 + 1
+                }
+                if bal9 when depth9 == 0 then wrapped9 = true
+            }
+        } case none then null
+    }
+    if wrapped9 then return cond.string
+    return "(\{cond})"
+}
+
 emitIfClause: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -12963,10 +13003,12 @@ emitIfClause: function {
         }
         if isFirst then {
             flushArgHoists :ctx :ind :tmp :buf
-            lf: "\{ind}if (\{cond}) {\n"
+            cw9: condParens9 cond: cond.stringview
+            lf: "\{ind}if \{cw9} {\n"
             buf.append lf
         } else {
-            lg: "\{ind}} else if (\{cond}) {\n"
+            cw9x: condParens9 cond: cond.stringview
+            lg: "\{ind}} else if \{cw9x} {\n"
             buf.append lg
         }
         ind2: "\{ind}    "
@@ -16116,8 +16158,14 @@ emitC: function {
     buf.append "#include <stdbool.h>\n"
     buf.append "#include <string.h>\n"
     buf.append "#include <math.h>\n"
-    buf.append "#if defined(__SIZEOF_FLOAT128__)\n"
+    buf.append "#if defined(__SIZEOF_FLOAT128__) && !defined(__clang__)\n"
     buf.append "#include <quadmath.h>\n"
+    buf.append "#elif defined(__SIZEOF_FLOAT128__)\n"
+    buf.append "/* clang: __float128 without GCC's quadmath.h; declare the two\n"
+    buf.append "   libquadmath symbols the runtime uses. */\n"
+    buf.append "extern __float128 fmodq(__float128 x, __float128 y);\n"
+    buf.append "extern __float128 strtoflt128(const char *s, char **sp);\n"
+    buf.append "extern int quadmath_snprintf(char *s, size_t size, const char *format, ...);\n"
     buf.append "#endif\n"
     buf.append "#include <errno.h>\n"
     buf.append "#include <fcntl.h>\n"
@@ -20725,8 +20773,6 @@ emitProtocolImpl: function {
     protoCtype: "\{protoBase}_t"
     vtableCtype: "\{protoBase}_vtable_t"
     wbase: "\{implBase}_\{label}"
-    implIsClass: false
-    if (symtab.reg.typetypeOf typeId: implTid) == ztypes.ztypetype.classType then implIsClass = true
     mnames: (List String)
     mids: (ListVal u64)
     midsNm: (ListVal u64)

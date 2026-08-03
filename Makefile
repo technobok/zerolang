@@ -1,8 +1,11 @@
 CC       := gcc
+# -Wdiscarded-qualifiers is the GCC spelling; clang groups the same
+# diagnostic under -Wincompatible-pointer-types-discards-qualifiers.
+QUALWERR := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),-Werror=incompatible-pointer-types-discards-qualifiers,-Werror=discarded-qualifiers)
 CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
             -Werror=implicit-function-declaration -Werror=implicit-int \
             -Werror=int-conversion -Werror=incompatible-pointer-types \
-            -Werror=discarded-qualifiers
+            $(QUALWERR)
 
 # Parallel by default: make fans out independent targets and the corpus runner
 # fans out its per-case pipelines (--jobs). `make NPROC=1` forces everything
