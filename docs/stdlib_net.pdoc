@@ -1,0 +1,210 @@
+#doc.lang: en
+
+#//: Zerolang Standard Library: net
+
+#doc.title: Zerolang Standard Library -- net
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-08-03
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: net
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+The #~"net" unit provides TCP sockets on localhost plus readiness
+polling: the transport for tool daemons such as #~"zls --listen".
+The v1 surface is deliberately small: a loopback listener,
+#~"accept" / #~"connect" producing bidirectional connections that
+satisfy the #~"io" #~"Reader" / #~"Writer" protocols, and
+poll-based readiness with a millisecond timeout.
+
+Accessed via qualified names only -- #~"net.listen ...",
+#~"net.connect ..."; there is no unqualified re-export.
+
+#b:"Operational notes." Connections and listeners close
+#b:"explicitly" (there is no RAII yet): call #~".close" when
+done. Double closes are safe no-ops, so a cleanup path may close
+unconditionally. Every fallible member returns
+#~"(Result ... e: IoError)" -- the errno domain is shared with
+#~"io", since socket I/O interleaves with file I/O.
+
+#b:"Byte counts and the #~\"(Box T)\" arm rule." A union arm
+holds reftypes, so a valtype success value rides in a #~"Box"
+type argument -- which collapses onto the payload cell. The
+byte-count members #~"read" / #~"write" are the stdlib's worked
+example: they return #~"(Result (Box u64) e: IoError)", the
+native side supplies the bare count, and a match arm narrows
+straight to the #~"u64" element -- no #~"Box" ever appears in
+user code:
+
+#code language=zerolang: """
+  buf: Bytes
+  nr: c.read into: buf max: 4096
+  match (nr)
+  case ok  then print "read \{nr} bytes"   # nr narrows to the bare u64
+  case err then io.eprintln "read failed"
+"""
+
+
+#--: Index
+
+#p: #b:"Types"
+
+#ul:
+  [#*: #> to=listener: #b:"Listener" -- #~"class { fd: i32  closed: bool } as { accept  close }"]
+  [#*: #> to=conn: #b:"Conn" -- #~"class { fd: i32  closed: bool } as { :Reader  :Writer  read  write  flush  close }"]
+
+#p: #b:"Functions"
+
+#ul:
+  [#*: #> to=listen: #b:"net.listen" -- #~"function {port: u16} out (Result Listener e: IoError)"]
+  [#*: #> to=connect: #b:"net.connect" -- #~"function {port: u16} out (Result Conn e: IoError)"]
+  [#*: #> to=poll-readable: #b:"net.pollReadable" -- #~"function {fd: i32 timeoutMillis: i32} out (Result (Box bool) e: IoError)"]
+
+
+#--: listener
+
+#code language=zerolang: """
+  Listener: class {
+      fd: i32
+      closed: bool
+  } as {
+      accept: function {:this} out (Result Conn e: IoError) is native
+      close:  function {:this} out (Result null e: IoError) is native
+  }
+"""
+
+A bound, listening TCP socket on 127.0.0.1, produced by
+#> to=listen: #~"net.listen". #~"accept" blocks until a client
+connects and returns the #~"Conn" for that client. #~"close"
+releases the socket; closing an already-closed listener is a
+safe no-op.
+
+The #~"fd" field is the raw file descriptor -- usable with
+#> to=poll-readable: #~"net.pollReadable" to wait for activity
+without blocking in #~"accept".
+
+
+#--: conn
+
+#code language=zerolang: """
+  Conn: class {
+      fd: i32
+      closed: bool
+  } as {
+      :Reader
+      :Writer
+      read:  function {:this into: Bytes max: u64} out (Result (Box u64) e: IoError) is native
+      write: function {:this from: ByteView} out (Result (Box u64) e: IoError) is native
+      flush: function {:this} out (Result null e: IoError) is native
+      close: function {:this} out (Result null e: IoError) is native
+  }
+"""
+
+One bidirectional TCP connection, produced by #~"Listener.accept"
+(server side) or #> to=connect: #~"net.connect" (client side).
+#~"Conn" declares #~":Reader" and #~":Writer" conformance, so it
+plugs into any API written against the #~"io" stream protocols.
+
+#ul:
+  [#*: #~"read into: buf max: n" -- appends up to #~"max" bytes
+    onto #~"buf" and returns the count actually read. A count of
+    #b:"0" means the peer closed its end]
+  [#*: #~"write from: bv" -- writes the view's bytes, looping
+    until every byte is out; the returned count equals the input
+    length on success]
+  [#*: #~"flush" -- completes the #~"Writer" conformance. Socket
+    writes go through directly, so nothing is buffered here and
+    the call always succeeds]
+  [#*: #~"close" -- shuts the connection down; double closes are
+    safe no-ops]
+
+#code language=zerolang: """
+  msg: Bytes
+  msg.append from: 104.u8   # 'h'
+  msg.append from: 105.u8   # 'i'
+  bv: ByteView.borrow from: msg.listview
+  wr: c.write from: bv
+  match (wr)
+  case ok  then print "wrote \{wr} bytes"
+  case err then io.eprintln "write failed"
+"""
+
+
+#--: listen
+
+#code language=zerolang: """
+  listen: function {port: u16} out (Result Listener e: IoError) is native
+"""
+
+Bind + listen on #~"127.0.0.1:<port>" (#~"SO_REUSEADDR", backlog
+16). The returned #~"Listener" accepts client connections; errors
+(port in use, permission denied) surface as #~"IoError".
+
+#code language=zerolang: """
+  lr: net.listen port: 8437
+  match (lr)
+  case ok then {
+      ar: lr.accept
+      match (ar)
+      case ok  then print "client connected"
+      case err then io.eprintln "accept failed"
+  }
+  case err then io.eprintln "listen failed"
+"""
+
+
+#--: connect
+
+#code language=zerolang: """
+  connect: function {port: u16} out (Result Conn e: IoError) is native
+"""
+
+Open a client connection to #~"127.0.0.1:<port>". The returned
+#~"Conn" is ready for #~"read" / #~"write"; a refused or
+unreachable port surfaces as #~"IoError".
+
+
+#--: poll_readable
+
+#code language=zerolang: """
+  pollReadable: function {fd: i32 timeoutMillis: i32} out (Result (Box bool) e: IoError) is native
+"""
+
+True when #~"fd" has readable data (or a hangup to drain) within
+#~"timeoutMillis"; #~"0" polls without blocking. Works on sockets
+and standard input (fd 0), which is how a daemon can multiplex a
+TCP transport with stdio. An interrupted wait reports
+not-readable rather than an error.
+
+The result is the second #~"(Box T)" collapse in this unit: the
+match arm binds the bare #~"bool".
+
+#code language=zerolang: """
+  pr: net.pollReadable fd: c.fd timeoutMillis: 100
+  match (pr)
+  case ok  then { if pr then print "data waiting" }
+  case err then io.eprintln "poll failed"
+"""

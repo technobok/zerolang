@@ -1,0 +1,485 @@
+#doc.lang: en
+
+#//: Zerolang Standard Library: json
+
+#doc.title: Zerolang Standard Library -- json
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-08-03
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: json
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+The #~"json" unit is a JSON (RFC 8259) value tree, parser, and
+serializer. The tree is a reftype tagged sum (#~"Value")
+mirroring the AST's union-of-carriers shape: scalars ride in the
+arm payload, arrays and objects in carrier classes (#~"Arr",
+#~"Obj"). Objects remember key insertion order, so serialization
+is deterministic; lookup stays O(1). Integers and floats are
+separate arms, so #~"i64" values (protocol ids, offsets)
+round-trip exactly.
+
+Accessed via qualified names only -- #~"json.parse ...",
+#~"json.Value.intval ..."; there is no unqualified re-export.
+
+#b:"The #~\"(Box T)\" arm rule, showcased." A union's arms hold
+reftypes; a valtype arm is spelled #~"(Box T)" and #b:"collapses"
+to its element. #~"Value" is the standard library's showcase of
+the rule: the #~"boolean" / #~"intval" / #~"floatval" arms are
+declared #~"(Box bool)" / #~"(Box i64)" / #~"(Box f64)", yet
+construction takes the bare value and a match arm narrows to the
+bare element -- no #~"Box" appears in user code:
+
+#code language=zerolang: """
+  v: (json.Value.intval 42)   # construction takes the bare i64
+  match (v)
+  case intval then print "\{v}"   # v narrows to the bare i64
+  else print "not an int"
+"""
+
+#b:"Reading a tree." Element and member reads inside the tree are
+borrows, which user code cannot return -- so the path accessors
+(#~"at" and its typed wrappers) surface the terminal value as
+scalars in a #~"Found": the kind arm plus the matching payload
+slot. Strings are copied out; structure (array / object) is
+reported by kind and length, and is navigated in place by
+matching on the tree at the use site.
+
+
+#--: Index
+
+#p: #b:"Types"
+
+#ul:
+  [#*: #> to=value: #b:"Value" -- #~"union { nul: null  boolean: (Box bool)  intval: (Box i64)  floatval: (Box f64)  text: String  array: Arr  object: Obj }"]
+  [#*: #> to=arr: #b:"Arr" -- #~"class { items: (List Value) }"]
+  [#*: #> to=obj: #b:"Obj" -- #~"class { entries: (Map String value: Value)  keys: (List String) } as { set  has }"]
+  [#*: #> to=jsonerror: #b:"JsonError" -- #~"class { at: u64  msg: String }"]
+  [#*: #> to=parseresult: #b:"ParseResult" -- #~"union { err: JsonError  ok: Value }"]
+  [#*: #> to=foundkind: #b:"foundkind" -- #~"variant { missing / nul / boolean / intval / floatval / text / array / object: null }"]
+  [#*: #> to=found: #b:"Found" -- #~"class { kind: foundkind  b: bool  i: i64  f: f64  s: String  n: u64 }"]
+
+#p: #b:"Parse and serialize"
+
+#ul:
+  [#*: #> to=parse: #b:"json.parse" -- #~"function {source: StringView} out ParseResult"]
+  [#*: #> to=serialize: #b:"json.serialize" -- #~"function {v: Value.view} out String"]
+
+#p: #b:"Path accessors"
+
+#ul:
+  [#*: #> to=at: #b:"json.at" -- #~"function {v: Value.view path: StringView} out Found"]
+  [#*: #> to=describe-value: #b:"json.describeValue" -- #~"function {v: Value.view} out Found"]
+  [#*: #> to=text-at: #b:"json.textAt" -- #~"function {v: Value.view path: StringView} out (Option String)"]
+  [#*: #> to=int-at: #b:"json.intAt" -- #~"function {v: Value.view path: StringView} out (optionval i64)"]
+  [#*: #> to=bool-at: #b:"json.boolAt" -- #~"function {v: Value.view path: StringView} out (optionval bool)"]
+  [#*: #> to=has-at: #b:"json.hasAt" -- #~"function {v: Value.view path: StringView} out bool"]
+  [#*: #> to=array-length: #b:"json.arrayLength" -- #~"function {v: Value.view} out u64"]
+  [#*: #> to=found-missing: #b:"json.foundMissing" -- #~"function out Found"]
+
+
+#--: value
+
+#code language=zerolang: """
+  Value: union {
+      nul:      null
+      boolean:  (Box bool)
+      intval:   (Box i64)
+      floatval: (Box f64)
+      text:     String
+      array:    Arr
+      object:   Obj
+  }
+"""
+
+A JSON value: a tagged sum of null / bool / int / float / string
+/ array / object. The scalar arms follow the #~"(Box T)" arm
+rule (a union holds reftypes; the Box argument collapses to its
+element), #~"text" holds an owned #~"String", and the two
+structured arms hold the #> to=arr: #~"Arr" and #> to=obj:
+#~"Obj" carrier classes.
+
+Integers and floats are deliberately separate arms: a JSON number
+without #~"." or an exponent parses to #~"intval" and serializes
+back digit-for-digit, so 64-bit ids survive a round trip that a
+single #~"f64" arm would corrupt.
+
+#b:"Construction" goes through the arm accessors; the collapsed
+arms take the bare scalar:
+
+#code language=zerolang: """
+  a: json.Value.nul
+  b: (json.Value.boolean true)
+  n: (json.Value.intval 42)
+  t: (json.Value.text "hi".string)
+"""
+
+#b:"Matching" narrows the subject to the arm's element type --
+the bare scalar for the collapsed arms, the carrier class for
+#~"array" / #~"object":
+
+#code language=zerolang: """
+  match (v)
+  case intval then print "int \{v}"          # v is the bare i64
+  case text   then print "text \{v}"         # v is the String payload
+  case array  then print "\{v.items.length} elements"
+  case nul    then print "null"
+  else print "something else"
+"""
+
+
+#--: arr
+
+#code language=zerolang: """
+  Arr: class {
+      items: (List Value)
+  }
+"""
+
+A JSON array -- an ordered list of #~"Value"s. The #~"items"
+field is public: append, index and iterate it directly with the
+#> to=./stdlib_collections.html#the-list-family: #~"List" surface.
+
+#code language=zerolang: """
+  a: (json.Arr items: (List json.Value))
+  a.items.append (json.Value.intval 1)
+  a.items.append (json.Value.intval 2)
+  v: (json.Value.array a)
+"""
+
+
+#--: obj
+
+#code language=zerolang: """
+  Obj: class {
+      entries: (Map String value: Value)
+      keys:    (List String)
+  } as {
+      set: function {:this key: String.take value: Value.take}
+      has: function {:this key: StringView} out bool
+  }
+"""
+
+A JSON object -- string-keyed #~"Value"s kept in insertion
+order. #~"entries" gives O(1) lookup; #~"keys" remembers first
+insertion order, which is the order #> to=serialize: #~"serialize"
+emits.
+
+#ul:
+  [#*: #~"set key: value:" -- insert or replace #~"key". A first
+    insertion records the key in #~"keys"; a replacement keeps
+    the original position]
+  [#*: #~"has key:" -- whether #~"key" is present, looked up by
+    view]
+
+#code language=zerolang: """
+  o: (json.Obj entries: (Map String value: json.Value) keys: (List String))
+  o.set key: "answer".string value: (json.Value.intval 42)
+  o.set key: "label".string  value: (json.Value.text "hi".string)
+  root: (json.Value.object o)
+  print (json.serialize v: root)   # {"answer":42,"label":"hi"}
+"""
+
+
+#--: jsonerror
+
+#code language=zerolang: """
+  JsonError: class {
+      at:  u64
+      msg: String
+  }
+"""
+
+A parse failure: #~"at" is the byte offset into the input where
+the parser stopped; #~"msg" is a short description
+(#~"unexpected character", #~"expected ',' or '}'",
+#~"unterminated string", #~"bad escape", #~"unpaired surrogate",
+#~"bad number", #~"nesting too deep", #~"trailing data", ...).
+Only the first failure is recorded.
+
+
+#--: parseresult
+
+#code language=zerolang: """
+  ParseResult: union {
+      err: JsonError
+      ok:  Value
+  }
+"""
+
+The outcome of parsing JSON text: #~"ok" carries the root
+#~"Value", #~"err" a #> to=jsonerror: #~"JsonError". A dedicated
+union rather than a #~"Result" instantiation, matched the same
+way (falsy arm first).
+
+
+#--: foundkind
+
+#code language=zerolang: """
+  foundkind: variant {
+      missing:  null
+      nul:      null
+      boolean:  null
+      intval:   null
+      floatval: null
+      text:     null
+      array:    null
+      object:   null
+  }
+"""
+
+Which value kind a path lookup landed on, or #~"missing" when
+the path does not resolve. One arm per #~"Value" arm plus
+#~"missing"; all payloads are #~"null", so a #~"foundkind" is a
+plain inline discriminator.
+
+
+#--: found
+
+#code language=zerolang: """
+  Found: class {
+      kind: foundkind
+      b:    bool
+      i:    i64
+      f:    f64
+      s:    String
+      n:    u64
+  }
+"""
+
+A scalar path-lookup result: the #~"kind" plus the matching
+payload slot. Only the slot named by #~"kind" is meaningful --
+#~"b" for #~"boolean", #~"i" for #~"intval", #~"f" for
+#~"floatval", #~"s" for #~"text" (an owned copy of the string),
+and #~"n" for #~"array" / #~"object" (the element count / key
+count). The other slots hold zero values.
+
+#~"Found" exists because reads inside the tree are borrows that
+cannot leave the call chain; copying the terminal scalar out
+gives the caller an unencumbered value. Structure is reported by
+kind and length only -- navigate an array or object in place by
+matching on the tree.
+
+
+#--: parse
+
+#code language=zerolang: """
+  parse: function {source: StringView} out ParseResult
+"""
+
+Whole-input parse of #~"source"; trailing non-whitespace after
+the root value is an error. Any JSON value may be the root -- an
+object, array, string, number, boolean, or #~"null".
+
+#ul:
+  [#*: #b:"Nesting" is capped at 128 levels of arrays / objects
+    (#~"nesting too deep")]
+  [#*: #b:"Strings" handle the RFC 8259 escapes #~"\\\"",
+    #~"\\\\", #~"\\/", #~"\\b", #~"\\f", #~"\\n", #~"\\r",
+    #~"\\t" and #~"\\uXXXX", including surrogate pairs; an
+    unpaired surrogate, a bad escape, or a raw control byte in a
+    string is an error]
+  [#*: #b:"Numbers" without #~"." or an exponent become
+    #~"intval" and must fit #~"i64" (overflow is a parse error);
+    anything with #~"." / #~"e" / #~"E" becomes #~"floatval" via
+    #~"f64" parsing]
+  [#*: #b:"Duplicate keys" follow #~"Obj.set": the later value
+    replaces the earlier one, at the key's original position]
+
+#code language=zerolang: """
+  pr: json.parse source: "[1, 2, 3]"
+  match (pr)
+  case ok then {
+      n: json.arrayLength v: pr
+      print "\{n} elements"
+  }
+  case err then print "parse error at byte \{pr.at}: \{pr.msg}"
+"""
+
+
+#--: serialize
+
+#code language=zerolang: """
+  serialize: function {v: Value.view} out String
+"""
+
+Serialize #~"v" to compact JSON text: no whitespace, object keys
+in insertion order, strings escaped per RFC 8259 (#~"\"",
+#~"\\", backspace, form feed, newline, carriage return and tab
+as named escapes; other control bytes as #~"\\u00XX"; multi-byte
+UTF-8 passed through verbatim). Returns a fresh owned
+#~"String".
+
+Because objects keep insertion order, #~"parse" -->
+#~"serialize" round-trips a document key-for-key, and building
+the same tree twice serializes to identical text.
+
+
+#--: at
+
+#code language=zerolang: """
+  at: function {v: Value.view path: StringView} out Found
+"""
+
+Walk #~"path" from #~"v" and describe the terminal: a
+#~"/"-separated sequence of segments, where a segment names an
+object key and a numeric segment indexes an array
+(#~"params/textDocument/uri", #~"tags/0"). Returns a
+#> to=found: #~"Found" -- kind #~"missing" when any step fails
+to resolve (absent key, index out of range, or a scalar where
+structure was expected).
+
+#code language=zerolang: """
+  r: json.at v: root path: "result/items/0/label"
+  k: r.kind
+  match (k)
+  case text    then print "label: \{r.s}"
+  case missing then print "no label"
+  else print "unexpected kind"
+"""
+
+The typed wrappers below cover the common cases; reach for
+#~"at" itself when you need the kind, or a length without
+matching on the tree.
+
+
+#--: describe_value
+
+#code language=zerolang: """
+  describeValue: function {v: Value.view} out Found
+"""
+
+One #~"Value" as a #> to=found: #~"Found", with no path step:
+the kind arm plus the matching payload slot (string copied out;
+array / object reported as kind plus length in #~"n").
+
+
+#--: text_at
+
+#code language=zerolang: """
+  textAt: function {v: Value.view path: StringView} out (Option String)
+"""
+
+The terminal string at #~"path", as an owned copy. #~"none" when
+the path does not resolve or the terminal is not a string.
+
+#code language=zerolang: """
+  nm: json.textAt v: root path: "name"
+  match (nm)
+  case some then print "name: \{nm}"
+  case none then print "name missing"
+"""
+
+
+#--: int_at
+
+#code language=zerolang: """
+  intAt: function {v: Value.view path: StringView} out (optionval i64)
+"""
+
+The terminal integer at #~"path". #~"none" when the path does
+not resolve or the terminal is not an #~"intval" (a float is not
+silently truncated).
+
+
+#--: bool_at
+
+#code language=zerolang: """
+  boolAt: function {v: Value.view path: StringView} out (optionval bool)
+"""
+
+The terminal boolean at #~"path". #~"none" when the path does
+not resolve or the terminal is not a #~"boolean".
+
+
+#--: has_at
+
+#code language=zerolang: """
+  hasAt: function {v: Value.view path: StringView} out bool
+"""
+
+Whether #~"path" resolves to any value at all -- of any kind,
+including #~"null".
+
+
+#--: array_length
+
+#code language=zerolang: """
+  arrayLength: function {v: Value.view} out u64
+"""
+
+Element count of #~"v", or #~"0" when #~"v" is not an array.
+Takes the value itself, not a path -- combine with a #~"match"
+on an #~"array" arm, or use #> to=at: #~"at" and read #~"n".
+
+
+#--: found_missing
+
+#code language=zerolang: """
+  foundMissing: function out Found
+"""
+
+A #~"Found" marking "no such path": kind #~"missing", every
+payload slot at its zero value. This is what #~"at" returns for
+an unresolved path; useful as a default when building your own
+lookups over a tree.
+
+
+#--: A worked example
+
+Parse a small document, walk it with the path accessors, and
+serialize it back:
+
+#code language=zerolang: """
+  src: "{\"name\": \"ada\", \"port\": 8080, \"tags\": [\"x\", \"y\"]}"
+  pr: json.parse source: src
+  match (pr)
+  case ok then {
+      nm: json.textAt v: pr path: "name"
+      match (nm)
+      case some then print "name: \{nm}"
+      case none then print "name missing"
+
+      pt: json.intAt v: pr path: "port"
+      match (pt)
+      case some then print "port: \{pt}"
+      case none then print "port missing"
+
+      t0: json.textAt v: pr path: "tags/0"
+      match (t0)
+      case some then print "first tag: \{t0}"
+      case none then print "no tags"
+
+      out: json.serialize v: pr
+      print out       # {"name":"ada","port":8080,"tags":["x","y"]}
+  }
+  case err then print "parse error at byte \{pr.at}: \{pr.msg}"
+"""
+
+Inside the #~"case ok" arm the bound name #~"pr" narrows to the
+root #~"Value"; inside #~"case some" each bound option narrows
+to its payload. The string literal is a #~"StringView", which is
+exactly what #~"parse" takes.
