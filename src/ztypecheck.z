@@ -576,6 +576,9 @@ isViewFamilyTid: function {ast: Ast.view st: zenv.ZSymbolTable tid: u64} out boo
     if vog9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "ListView") then return true
     if vog9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "ListViewVal") then return true
     if vog9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapEntry") then return true
+    if vog9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapEntryRV") then return true
+    if vog9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapEntryVR") then return true
+    if vog9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapEntryVV") then return true
     return false
 }
 
@@ -667,7 +670,27 @@ isContainerReaderCall: function {
         if mname == "copy" then return true
         return false
     }
-    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapEntry") then {
+    isEntryB9: false
+    if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapEntry") then isEntryB9 = true
+    if base9 == (builtinTidT
+        :ast
+        ty: st.typing
+        reg: st.reg
+        base: "MapEntryRV"
+    ) then isEntryB9 = true
+    if base9 == (builtinTidT
+        :ast
+        ty: st.typing
+        reg: st.reg
+        base: "MapEntryVR"
+    ) then isEntryB9 = true
+    if base9 == (builtinTidT
+        :ast
+        ty: st.typing
+        reg: st.reg
+        base: "MapEntryVV"
+    ) then isEntryB9 = true
+    if isEntryB9 then {
         if mname == "key" then return true
         if mname == "value" then return true
         return false
@@ -2342,6 +2365,15 @@ ensureNativeLinkTargets: function {
     descendNamed :ty :reg :ast defUnit: "collections" name: "MapKeyIter"
     descendNamed :ty :reg :ast defUnit: "collections" name: "MapItemIter"
     descendNamed :ty :reg :ast defUnit: "collections" name: "MapEntry"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "MapKeyIterRV"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "MapKeyIterVR"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "MapKeyIterVV"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "MapItemIterRV"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "MapItemIterVR"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "MapItemIterVV"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "MapEntryRV"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "MapEntryVR"
+    descendNamed :ty :reg :ast defUnit: "collections" name: "MapEntryVV"
 }
 
 # resolveMonoRefInline -- resolve a call-shaped parameterized type ref at the
@@ -2924,6 +2956,12 @@ returnIsIteratorTid: function {st: zenv.ZSymbolTable tid: u64} out bool is {
     if pn9.stringview == "SetIterVal" then return true
     if pn9.stringview == "MapKeyIter" then return true
     if pn9.stringview == "MapItemIter" then return true
+    if pn9.stringview == "MapKeyIterRV" then return true
+    if pn9.stringview == "MapKeyIterVR" then return true
+    if pn9.stringview == "MapKeyIterVV" then return true
+    if pn9.stringview == "MapItemIterRV" then return true
+    if pn9.stringview == "MapItemIterVR" then return true
+    if pn9.stringview == "MapItemIterVV" then return true
     return false
 }
 
@@ -6509,6 +6547,12 @@ resolveClass: function {
                         if defName == "SetIterVal" then famA4 = true
                         if defName == "MapKeyIter" then famA4 = true
                         if defName == "MapItemIter" then famA4 = true
+                        if defName == "MapKeyIterRV" then famA4 = true
+                        if defName == "MapKeyIterVR" then famA4 = true
+                        if defName == "MapKeyIterVV" then famA4 = true
+                        if defName == "MapItemIterRV" then famA4 = true
+                        if defName == "MapItemIterVR" then famA4 = true
+                        if defName == "MapItemIterVV" then famA4 = true
                         if unitName == "collections" when famA4 then {
                             skipA4: false
                             if afnP4.stringview == "create" then skipA4 = true
@@ -7928,6 +7972,21 @@ seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
         reg.recordDemand name: "MapKeyIter"
         reg.recordDemand name: "MapItemIter"
         reg.recordDemand name: "MapEntry"
+    }
+    if (reg.isDemanded name: "MapRV") then {
+        reg.recordDemand name: "MapKeyIterRV"
+        reg.recordDemand name: "MapItemIterRV"
+        reg.recordDemand name: "MapEntryRV"
+    }
+    if (reg.isDemanded name: "MapVR") then {
+        reg.recordDemand name: "MapKeyIterVR"
+        reg.recordDemand name: "MapItemIterVR"
+        reg.recordDemand name: "MapEntryVR"
+    }
+    if (reg.isDemanded name: "MapVV") then {
+        reg.recordDemand name: "MapKeyIterVV"
+        reg.recordDemand name: "MapItemIterVV"
+        reg.recordDemand name: "MapEntryVV"
     }
 }
 
@@ -12041,7 +12100,12 @@ getOrMintSpec: function {
         # MapItemIter's iterator element is the derived MapEntry spec (its
         # call's OptionView some-arm), not a trie key
         skipC3: false
-        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIter") then {
+        itemIterC3: false
+        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIter") then itemIterC3 = true
+        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIterRV") then itemIterC3 = true
+        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIterVR") then itemIterC3 = true
+        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIterVV") then itemIterC3 = true
+        if itemIterC3 then {
             skipC3 = true
             micoC4: ty.declChildOfId parentTypeId: mid8 nameId: zast.wkCall.u64
             match (
@@ -12153,6 +12217,15 @@ mintCollectionChildren: function {
     setIterValTid: builtinTidT :ast :ty :reg base: "SetIterVal"
     mapKeyIterTid: builtinTidT :ast :ty :reg base: "MapKeyIter"
     mapItemIterTid: builtinTidT :ast :ty :reg base: "MapItemIter"
+    mapKeyIterRVTid: builtinTidT :ast :ty :reg base: "MapKeyIterRV"
+    mapKeyIterVRTid: builtinTidT :ast :ty :reg base: "MapKeyIterVR"
+    mapKeyIterVVTid: builtinTidT :ast :ty :reg base: "MapKeyIterVV"
+    mapItemIterRVTid: builtinTidT :ast :ty :reg base: "MapItemIterRV"
+    mapItemIterVRTid: builtinTidT :ast :ty :reg base: "MapItemIterVR"
+    mapItemIterVVTid: builtinTidT :ast :ty :reg base: "MapItemIterVV"
+    mapEntryRVTid: builtinTidT :ast :ty :reg base: "MapEntryRV"
+    mapEntryVRTid: builtinTidT :ast :ty :reg base: "MapEntryVR"
+    mapEntryVVTid: builtinTidT :ast :ty :reg base: "MapEntryVV"
     isIter: false
     if templateId == listIterTid then isIter = true
     if templateId == listIterValTid then isIter = true
@@ -12160,6 +12233,12 @@ mintCollectionChildren: function {
     if templateId == setIterValTid then isIter = true
     if templateId == mapKeyIterTid then isIter = true
     if templateId == mapItemIterTid then isIter = true
+    if templateId == mapKeyIterRVTid then isIter = true
+    if templateId == mapKeyIterVRTid then isIter = true
+    if templateId == mapKeyIterVVTid then isIter = true
+    if templateId == mapItemIterRVTid then isIter = true
+    if templateId == mapItemIterVRTid then isIter = true
+    if templateId == mapItemIterVVTid then isIter = true
     isColl: isIter
     if templateId == listTid then isColl = true
     if templateId == listValTid then isColl = true
@@ -12172,6 +12251,9 @@ mintCollectionChildren: function {
     if templateId == mapVRTid then isColl = true
     if templateId == mapVVTid then isColl = true
     if templateId == mapEntryTid then isColl = true
+    if templateId == mapEntryRVTid then isColl = true
+    if templateId == mapEntryVRTid then isColl = true
+    if templateId == mapEntryVVTid then isColl = true
     if templateId == strTid then isColl = true
     if templateId == arrayTid then isColl = true
     if (isColl) == false then return
@@ -12308,7 +12390,12 @@ mintCollectionChildren: function {
     ) case some then {
         boolid = bo9
     } case none then null
-    if templateId == mapEntryTid then {
+    isEntryTpl9: false
+    if templateId == mapEntryTid then isEntryTpl9 = true
+    if templateId == mapEntryRVTid then isEntryTpl9 = true
+    if templateId == mapEntryVRTid then isEntryTpl9 = true
+    if templateId == mapEntryVVTid then isEntryTpl9 = true
+    if isEntryTpl9 then {
         kyId: mintCollectionMethod :ast :ty :reg :monoId m: "key"
         reg.setReturnType typeId: kyId value: elemArg
         vlId: mintCollectionMethod :ast :ty :reg :monoId m: "value"

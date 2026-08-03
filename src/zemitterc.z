@@ -1282,6 +1282,15 @@ Ctx: class {
     setIterValOriginTid: u64
     mapKeyIterOriginTid: u64
     mapItemIterOriginTid: u64
+    mapKeyIterRVOriginTid: u64
+    mapKeyIterVROriginTid: u64
+    mapKeyIterVVOriginTid: u64
+    mapItemIterRVOriginTid: u64
+    mapItemIterVROriginTid: u64
+    mapItemIterVVOriginTid: u64
+    mapEntryRVOriginTid: u64
+    mapEntryVROriginTid: u64
+    mapEntryVVOriginTid: u64
     optionOriginTid: u64
     optionViewOriginTid: u64
     resultOriginTid: u64
@@ -7845,7 +7854,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     return emii
                 }
             }
-            if (originIsTid :symtab tid: bstamp originTid: ctx.mapEntryOriginTid) then {
+            if (isMapEntryOriginOf :symtab :ctx tid: bstamp) then {
                 # a borrowed entry yielded by iterateItems: key/value project
                 # the entry struct's fields. The loop var binds a deref alias
                 # (`(*__borrow_e)`, a value), so access uses `.`; a genuine
@@ -8394,7 +8403,8 @@ dataIndexElemName: function {
 
 # interpBaseIsMapEntry -- true when an interp part is `<entry>.key`/`.value`
 # off a borrowed MapEntry: the projected String views the bucket, so it must
-# be appended inline (freeing the hoisted copy would double-free the bucket key).
+# be appended inline (freeing the hoisted copy would double-free the bucket
+# key). All four entry forms project the same way.
 interpBaseIsMapEntry: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -8411,6 +8421,12 @@ interpBaseIsMapEntry: function {
         bt: stampIdOf :symtab nid: bnid
         meT9: builtinTid :ast :symtab base: "MapEntry"
         if (originIsTid :symtab tid: bt originTid: meT9) then return true
+        meRV9: builtinTid :ast :symtab base: "MapEntryRV"
+        if (originIsTid :symtab tid: bt originTid: meRV9) then return true
+        meVR9: builtinTid :ast :symtab base: "MapEntryVR"
+        if (originIsTid :symtab tid: bt originTid: meVR9) then return true
+        meVV9: builtinTid :ast :symtab base: "MapEntryVV"
+        if (originIsTid :symtab tid: bt originTid: meVV9) then return true
         return false
     } else {
         return false
@@ -14390,7 +14406,16 @@ isListViewOriginOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: 
     return (originIsTid :symtab :tid originTid: ctx.listViewValOriginTid)
 }
 
-# isCollectionOriginTid -- originTid (a genericOriginId) is one of the nine
+# isMapEntryOriginOf -- the type is the borrowed entry projection of any of
+# the four Map forms. key/value project struct fields identically in all four.
+isMapEntryOriginOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: u64} out bool is {
+    if (originIsTid :symtab :tid originTid: ctx.mapEntryOriginTid) then return true
+    if (originIsTid :symtab :tid originTid: ctx.mapEntryRVOriginTid) then return true
+    if (originIsTid :symtab :tid originTid: ctx.mapEntryVROriginTid) then return true
+    return (originIsTid :symtab :tid originTid: ctx.mapEntryVVOriginTid)
+}
+
+# isCollectionOriginTid -- originTid (a genericOriginId) is one of the
 # cached collection/iterator origin ids, i.e. a template that mints a C struct
 # type (List/ListView/Set/Map/MapEntry and the iterators).
 isCollectionOriginTid: function {ctx: Ctx.view originTid: u64} out bool is {
@@ -14412,6 +14437,15 @@ isCollectionOriginTid: function {ctx: Ctx.view originTid: u64} out bool is {
     if originTid == ctx.setIterValOriginTid then return true
     if originTid == ctx.mapKeyIterOriginTid then return true
     if originTid == ctx.mapItemIterOriginTid then return true
+    if originTid == ctx.mapKeyIterRVOriginTid then return true
+    if originTid == ctx.mapKeyIterVROriginTid then return true
+    if originTid == ctx.mapKeyIterVVOriginTid then return true
+    if originTid == ctx.mapItemIterRVOriginTid then return true
+    if originTid == ctx.mapItemIterVROriginTid then return true
+    if originTid == ctx.mapItemIterVVOriginTid then return true
+    if originTid == ctx.mapEntryRVOriginTid then return true
+    if originTid == ctx.mapEntryVROriginTid then return true
+    if originTid == ctx.mapEntryVVOriginTid then return true
     return false
 }
 
@@ -16186,6 +16220,15 @@ emitC: function {
     setIterValOriginTid: u64
     mapKeyIterOriginTid: u64
     mapItemIterOriginTid: u64
+    mapKeyIterRVOriginTid: u64
+    mapKeyIterVROriginTid: u64
+    mapKeyIterVVOriginTid: u64
+    mapItemIterRVOriginTid: u64
+    mapItemIterVROriginTid: u64
+    mapItemIterVVOriginTid: u64
+    mapEntryRVOriginTid: u64
+    mapEntryVROriginTid: u64
+    mapEntryVVOriginTid: u64
     optionOriginTid: u64
     optionViewOriginTid: u64
     resultOriginTid: u64
@@ -16213,6 +16256,15 @@ emitC: function {
         setIterValOriginTid = builtinTid ast: program.ast :symtab base: "SetIterVal"
         mapKeyIterOriginTid = builtinTid ast: program.ast :symtab base: "MapKeyIter"
         mapItemIterOriginTid = builtinTid ast: program.ast :symtab base: "MapItemIter"
+        mapKeyIterRVOriginTid = builtinTid ast: program.ast :symtab base: "MapKeyIterRV"
+        mapKeyIterVROriginTid = builtinTid ast: program.ast :symtab base: "MapKeyIterVR"
+        mapKeyIterVVOriginTid = builtinTid ast: program.ast :symtab base: "MapKeyIterVV"
+        mapItemIterRVOriginTid = builtinTid ast: program.ast :symtab base: "MapItemIterRV"
+        mapItemIterVROriginTid = builtinTid ast: program.ast :symtab base: "MapItemIterVR"
+        mapItemIterVVOriginTid = builtinTid ast: program.ast :symtab base: "MapItemIterVV"
+        mapEntryRVOriginTid = builtinTid ast: program.ast :symtab base: "MapEntryRV"
+        mapEntryVROriginTid = builtinTid ast: program.ast :symtab base: "MapEntryVR"
+        mapEntryVVOriginTid = builtinTid ast: program.ast :symtab base: "MapEntryVV"
         optionOriginTid = builtinTid ast: program.ast :symtab base: "Option"
         optionViewOriginTid = builtinTid ast: program.ast :symtab base: "OptionView"
         resultOriginTid = builtinTid ast: program.ast :symtab base: "Result"
@@ -16336,6 +16388,15 @@ emitC: function {
         :setIterValOriginTid
         :mapKeyIterOriginTid
         :mapItemIterOriginTid
+        :mapKeyIterRVOriginTid
+        :mapKeyIterVROriginTid
+        :mapKeyIterVVOriginTid
+        :mapItemIterRVOriginTid
+        :mapItemIterVROriginTid
+        :mapItemIterVVOriginTid
+        :mapEntryRVOriginTid
+        :mapEntryVROriginTid
+        :mapEntryVVOriginTid
         :optionOriginTid
         :optionViewOriginTid
         :resultOriginTid
