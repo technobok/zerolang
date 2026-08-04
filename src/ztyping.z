@@ -241,8 +241,8 @@ ZTyping: class {
     # mono re-walks read these where the global table is param-suppressed.
     # monoParamSubst maps the CURRENT mono's generic-param tids to its args
     # (flat substitution at stamp time); live only during the instance walk.
-    monoNodeType: (MapVV u64 value: u64)
-    monoParamSubst: (MapVV u64 value: u64)
+    monoNodeType: (MapVV u64 value: ztypes.tid)
+    monoParamSubst: (MapVV ztypes.tid value: ztypes.tid)
     curMonoStamp: u64
     curMonoFnTid: ztypes.tid
     # the unit whose members mainMemberIndex indexes (set once, when that
@@ -281,21 +281,21 @@ ZTyping: class {
     typedefBaseName: (MapVR u64 value: String)
     # a typedef wrapper's base type id, resolved structurally at declaration
     # (a parameterized base rides the spec trie, a bare atom the unit ladder)
-    typedefBaseTid: (MapVV u64 value: u64)
+    typedefBaseTid: (MapVV ztypes.tid value: ztypes.tid)
     protocolThisContext: (Map String value: String)
     mainDefIsReftype: (MapRV String value: bool)
-    dpTaggedParent: (MapVV u64 value: u64)
-    dpArmPredicate: (MapVV u64 value: u64)
-    dpTagRead: (MapVV u64 value: u64)
+    dpTaggedParent: (MapVV u64 value: ztypes.tid)
+    dpArmPredicate: (MapVV u64 value: ztypes.tid)
+    dpTagRead: (MapVV u64 value: ztypes.tid)
     tagAccessorName: (MapVR u64 value: String)
-    tagAccessorTid: (MapVV u64 value: u64)
+    tagAccessorTid: (MapVV ztypes.tid value: ztypes.tid)
     postGuardName: (MapVR u64 value: String)
     # the subject's variable, beside its name: the emitter asks whether the
     # subject is a pointer receiver, and a name cannot answer that once locals
     # are named by id
     postGuardVarId: (MapVV u64 value: ztypes.vid)
     postGuardRecv: (MapVR u64 value: String)
-    postGuardTid: (MapVV u64 value: u64)
+    postGuardTid: (MapVV u64 value: ztypes.tid)
     postGuardArm: (MapVR u64 value: String)
     fullMainUnit: String
     pendingCustomTag: (MapVR u64 value: String)
@@ -317,7 +317,7 @@ ZTyping: class {
 
     # per-node single-valued stamps, indexed by nodeid - 1 (node ids are
     # minted dense 1..N, so the stamp IS the slot); 0 means unstamped
-    nodeType: (ListVal u64)
+    nodeType: (ListVal ztypes.tid)
     callKind: (MapVV u64 value: zast.callkind)
     atomVariableId: (MapVV u64 value: ztypes.vid)
     # variable ids the body MUTATES. Recorded at the two ENFORCEMENT points --
@@ -374,7 +374,7 @@ ZTyping: class {
     # type-ref node id -> base type name; resolved to its real type post-demand
     pendingTyperef: (MapVR u64 value: String)
     pendingTyperefUnit: (MapVR u64 value: String)
-    unitTypesById: (MapVV u64 value: u64)
+    unitTypesById: (MapVV u64 value: ztypes.tid)
     # --- declaration tree (parallel to the string-keyed def tables
     # above; readers migrate to Decls stage by stage) ---
     # every Decl row, indexed by DeclId - 1 (DeclIds are minted dense 1..N in
@@ -391,7 +391,7 @@ ZTyping: class {
     refDecl: (MapVV u64 value: ztypes.declid)
     # canonical mints that predate the def index (their unit root Decl
     # does not exist yet); drained into root-proxy links by indexUnitDefs
-    declProxyTids: (ListVal u64)
+    declProxyTids: (ListVal ztypes.tid)
     declProxyUnits: (List String)
     # Member-type writes that found no declaration to land on. Generator
     # lowering pre-resolves system.optionval and system.Iterator, and the
@@ -1600,21 +1600,21 @@ ZTyping: class {
 
 # nodeTypeAt -- the type id stamped on node `nid`; 0 when nothing is stamped
 # there (nodeTypeSet records neither a 0 node id nor a 0 type id).
-nodeTypeAt: function {tbl: (ListVal u64) nid: u64} out u64 is {
-    if nid == 0 then return 0
+nodeTypeAt: function {tbl: (ListVal ztypes.tid) nid: u64} out ztypes.tid is {
+    if nid == 0 then return (ztypes.tid.create from: 0)
     i9: nid - 1
-    if i9 >= tbl.length then return 0
+    if i9 >= tbl.length then return (ztypes.tid.create from: 0)
     return (tbl.get i: i9)
 }
 
 # nodeTypeSet -- stamp node `nid` with type id `tid`. Node id 0 means "no node"
 # and type id 0 is the unresolved sentinel, so neither is recorded: an absent
 # stamp and a 0 stamp are the same answer to every reader.
-nodeTypeSet: function {tbl: (ListVal u64) nid: u64 tid: ztypes.tid} is {
+nodeTypeSet: function {tbl: (ListVal ztypes.tid) nid: u64 tid: ztypes.tid} is {
     if nid == 0 then return
     if tid.isZero then return
     i9: nid - 1
-    for tbl.length <= i9 loop tbl.append 0
+    for tbl.length <= i9 loop tbl.append ztypes.tid
     v9: tid
     tbl.set i: i9 val: v9
 }
@@ -1638,8 +1638,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingBorrowReadonly: false
         pendingBorrowOwned: false
         walkedMethodOwners: (MapRV String value: bool)
-        monoNodeType: (MapVV u64 value: u64)
-        monoParamSubst: (MapVV u64 value: u64)
+        monoNodeType: (MapVV u64 value: ztypes.tid)
+        monoParamSubst: (MapVV ztypes.tid value: ztypes.tid)
         curMonoStamp: 0
         curMonoFnTid: ztypes.tid
         mainMemberIndex: (MapRV String value: u64)
@@ -1660,18 +1660,18 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         suppressBareCtor: false
         suppressFnAutoCall: false
         typedefBaseName: (MapVR u64 value: String)
-        typedefBaseTid: (MapVV u64 value: u64)
+        typedefBaseTid: (MapVV ztypes.tid value: ztypes.tid)
         protocolThisContext: (Map String value: String)
         mainDefIsReftype: (MapRV String value: bool)
-        dpTaggedParent: (MapVV u64 value: u64)
-        dpArmPredicate: (MapVV u64 value: u64)
-        dpTagRead: (MapVV u64 value: u64)
+        dpTaggedParent: (MapVV u64 value: ztypes.tid)
+        dpArmPredicate: (MapVV u64 value: ztypes.tid)
+        dpTagRead: (MapVV u64 value: ztypes.tid)
         tagAccessorName: (MapVR u64 value: String)
-        tagAccessorTid: (MapVV u64 value: u64)
+        tagAccessorTid: (MapVV ztypes.tid value: ztypes.tid)
         postGuardName: (MapVR u64 value: String)
         postGuardVarId: (MapVV u64 value: ztypes.vid)
         postGuardRecv: (MapVR u64 value: String)
-        postGuardTid: (MapVV u64 value: u64)
+        postGuardTid: (MapVV u64 value: ztypes.tid)
         postGuardArm: (MapVR u64 value: String)
         fullMainUnit: "".string
         pendingCustomTag: (MapVR u64 value: String)
@@ -1688,7 +1688,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         callGenericBinding: (MapVV u64 value: u64)
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
-        nodeType: (ListVal u64 capacity: nodeEst + (nodeEst / 4))
+        nodeType: (ListVal ztypes.tid capacity: nodeEst + (nodeEst / 4))
         callKind: (MapVV u64 value: zast.callkind)
         atomVariableId: (MapVV u64 value: ztypes.vid capacity: nodeEst / 4)
         variableMutated: (MapVV ztypes.vid value: bool)
@@ -1714,12 +1714,12 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         nativeLinkTargetsDone: false
         pendingTyperef: (MapVR u64 value: String)
         pendingTyperefUnit: (MapVR u64 value: String)
-        unitTypesById: (MapVV u64 value: u64)
+        unitTypesById: (MapVV u64 value: ztypes.tid)
         decls: (List Decl)
         declByTypeId: (MapVV u64 value: ztypes.declid)
         unitRootByName: (MapVV u64 value: ztypes.declid)
         refDecl: (MapVV u64 value: ztypes.declid)
-        declProxyTids: (ListVal u64)
+        declProxyTids: (ListVal ztypes.tid)
         declProxyUnits: (List String)
         pendParent: (ListVal u64)
         pendName: (ListVal u64)
