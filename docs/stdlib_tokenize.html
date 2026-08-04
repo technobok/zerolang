@@ -116,9 +116,9 @@ compiler front-end (<code>lib/system/zlexer.z</code>); the raw
 <h2 id="index"><a href="#index">2. Index</a></h2>
 <p><strong>Types</strong></p>
 <ul>
-<li><a href="#tokenizer"><strong>Tokenizer</strong> -- <code>class as { create: function {source: String.take fsno: u32} out this  ...  token: function {:this} out Token }</code></a></li>
-<li><a href="#token"><strong>Token</strong> -- <code>class { toktype: toktype  tokstr: String  fsno: u32  lineno: u32  colno: u32  tokenid: u64 }</code></a></li>
-<li><a href="#tt"><strong>toktype</strong> -- <code>variant { ...one arm per token kind: WS, EOL, COMMENT, EOF, FOR, WHILE, keywords, IDENT, literals, punctuation... }</code></a></li>
+<li><a href="#tokenizer"><strong>Tokenizer</strong> -- <code>class as { create: function {source: String.take fsno: zvfs.fsno} out this  ...  token: function {:this} out Token }</code></a></li>
+<li><a href="#token"><strong>Token</strong> -- <code>class { toktype: toktype  tokstr: String  fsno: zvfs.fsno  lineno: u32  colno: u32  tokenid: u64 }</code></a></li>
+<li><a href="#tt"><strong>toktype</strong> -- <code>variant { ...51 arms: wsTok, eolTok, commentTok, eofTok, refIdTok, keywords (functionTok, ifTok, forTok, ...), literals, punctuation... }</code></a></li>
 </ul>
 <p><strong>Functions</strong></p>
 <ul>
@@ -126,19 +126,24 @@ compiler front-end (<code>lib/system/zlexer.z</code>); the raw
 </ul>
 <h2 id="tokenizer"><a href="#tokenizer">3. tokenizer</a></h2>
 <pre><code class="language-zerolang">  Tokenizer: class as {
-      create: function {source: String.take fsno: u32} out this
+      create: function {source: String.take fsno: zvfs.fsno} out this
       token:  function {:this} out Token
   }</code></pre>
 <p>The raw scanner. <code>create</code> takes ownership of the <code>source</code>
 string and a file number <code>fsno</code> (used only to stamp emitted
-tokens for diagnostics -- pass <code>0</code> for a standalone buffer).
+tokens for diagnostics -- pass the zero value <code>zvfs.fsno</code> for a
+standalone buffer).
 Each call to <code>token</code> returns the next <code>Token</code>, including
-<code>WS</code> / <code>COMMENT</code> / <code>EOL</code> trivia, terminated by an <code>EOF</code>
-token that repeats if called again.</p>
-<pre><code class="language-zerolang">  tk: tokenize.Tokenizer.create source: src.copy fsno: 0
+<code>wsTok</code> / <code>commentTok</code> / <code>eolTok</code> trivia, terminated by an
+<code>eofTok</code> token that repeats if called again.</p>
+<pre><code class="language-zerolang">  tk: tokenize.Tokenizer.create source: src.copy fsno: zvfs.fsno
   for true loop {
       t: tk.token
-      match (t.toktype) case EOF then break else {}
+      match (
+          t.toktype
+      ) case eofTok then {
+          break
+      } else null
       # ... inspect t ...
   }</code></pre>
 <p>Most callers want <code>scan</code> (below) rather than driving the
@@ -147,31 +152,35 @@ tokenizer by hand.</p>
 <pre><code class="language-zerolang">  Token: class {
       toktype: toktype
       tokstr:  String
-      fsno:    u32
+      fsno:    zvfs.fsno
       lineno:  u32
       colno:   u32
       tokenid: u64
   }</code></pre>
 <p>One lexical token. <code>toktype</code> is its <code>toktype</code> classification;
-<code>tokstr</code> is the exact source slice (so a <code>WS</code> token's
-<code>tokstr</code> is the run of spaces, a <code>COMMENT</code> token's is the
+<code>tokstr</code> is the exact source slice (so a <code>wsTok</code> token's
+<code>tokstr</code> is the run of spaces, a <code>commentTok</code> token's is the
 comment text). <code>lineno</code> / <code>colno</code> are 1-based; the token's
 byte width is <code>tokstr.length</code>.</p>
 <h2 id="tt"><a href="#tt">5. tt</a></h2>
 <p><code>toktype</code> is a <code>variant</code> with one arm per token kind. Trivia arms
-<code>WS</code>, <code>COMMENT</code>, and <code>EOL</code> carry the between-token layout;
-<code>EOF</code> terminates the stream. The remaining arms classify
+<code>wsTok</code>, <code>commentTok</code>, and <code>eolTok</code> carry the between-token
+layout; <code>eofTok</code> terminates the stream. The remaining arms classify
 keywords, identifiers, literals, and punctuation. Match on it to
 dispatch:</p>
-<pre><code class="language-zerolang">  match (t.toktype)
-  case WS then {}
-  case COMMENT then {}
-  case EOF then { done = true }
-  else { ... }</code></pre>
+<pre><code class="language-zerolang">  match (
+      t.toktype
+  ) case wsTok then {
+      null
+  } case commentTok then {
+      null
+  } case eofTok then {
+      done = true
+  } else null</code></pre>
 <h2 id="scan"><a href="#scan">6. scan</a></h2>
 <pre><code class="language-zerolang">  scan: function {source: String.take} out (List Token)</code></pre>
 <p>Tokenize <code>source</code> into its full raw token stream -- whitespace,
-comments, and EOL trivia included -- terminated by the <code>EOF</code>
+comments, and EOL trivia included -- terminated by the <code>eofTok</code>
 token. The one-call convenience over <code>Tokenizer</code>.</p>
 <pre><code class="language-zerolang">  toks: tokenize.scan source: src.copy
   print "tokens: \{toks.length}"</code></pre>

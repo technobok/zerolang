@@ -55,9 +55,9 @@ Accessed via qualified names only -- #~"tokenize.scan ...",
 #p: #b:"Types"
 
 #ul:
-  [#*: #> to=tokenizer: #b:"Tokenizer" -- #~"class as { create: function {source: String.take fsno: u32} out this  ...  token: function {:this} out Token }"]
-  [#*: #> to=token: #b:"Token" -- #~"class { toktype: toktype  tokstr: String  fsno: u32  lineno: u32  colno: u32  tokenid: u64 }"]
-  [#*: #> to=tt: #b:"toktype" -- #~"variant { ...one arm per token kind: WS, EOL, COMMENT, EOF, FOR, WHILE, keywords, IDENT, literals, punctuation... }"]
+  [#*: #> to=tokenizer: #b:"Tokenizer" -- #~"class as { create: function {source: String.take fsno: zvfs.fsno} out this  ...  token: function {:this} out Token }"]
+  [#*: #> to=token: #b:"Token" -- #~"class { toktype: toktype  tokstr: String  fsno: zvfs.fsno  lineno: u32  colno: u32  tokenid: u64 }"]
+  [#*: #> to=tt: #b:"toktype" -- #~"variant { ...51 arms: wsTok, eolTok, commentTok, eofTok, refIdTok, keywords (functionTok, ifTok, forTok, ...), literals, punctuation... }"]
 
 #p: #b:"Functions"
 
@@ -69,23 +69,28 @@ Accessed via qualified names only -- #~"tokenize.scan ...",
 
 #code language=zerolang: """
   Tokenizer: class as {
-      create: function {source: String.take fsno: u32} out this
+      create: function {source: String.take fsno: zvfs.fsno} out this
       token:  function {:this} out Token
   }
 """
 
 The raw scanner. #~"create" takes ownership of the #~"source"
 string and a file number #~"fsno" (used only to stamp emitted
-tokens for diagnostics -- pass #~"0" for a standalone buffer).
+tokens for diagnostics -- pass the zero value #~"zvfs.fsno" for a
+standalone buffer).
 Each call to #~"token" returns the next #~"Token", including
-#~"WS" / #~"COMMENT" / #~"EOL" trivia, terminated by an #~"EOF"
-token that repeats if called again.
+#~"wsTok" / #~"commentTok" / #~"eolTok" trivia, terminated by an
+#~"eofTok" token that repeats if called again.
 
 #code language=zerolang: """
-  tk: tokenize.Tokenizer.create source: src.copy fsno: 0
+  tk: tokenize.Tokenizer.create source: src.copy fsno: zvfs.fsno
   for true loop {
       t: tk.token
-      match (t.toktype) case EOF then break else {}
+      match (
+          t.toktype
+      ) case eofTok then {
+          break
+      } else null
       # ... inspect t ...
   }
 """
@@ -100,7 +105,7 @@ tokenizer by hand.
   Token: class {
       toktype: toktype
       tokstr:  String
-      fsno:    u32
+      fsno:    zvfs.fsno
       lineno:  u32
       colno:   u32
       tokenid: u64
@@ -108,8 +113,8 @@ tokenizer by hand.
 """
 
 One lexical token. #~"toktype" is its #~"toktype" classification;
-#~"tokstr" is the exact source slice (so a #~"WS" token's
-#~"tokstr" is the run of spaces, a #~"COMMENT" token's is the
+#~"tokstr" is the exact source slice (so a #~"wsTok" token's
+#~"tokstr" is the run of spaces, a #~"commentTok" token's is the
 comment text). #~"lineno" / #~"colno" are 1-based; the token's
 byte width is #~"tokstr.length".
 
@@ -117,17 +122,21 @@ byte width is #~"tokstr.length".
 #--: tt
 
 #~"toktype" is a #~"variant" with one arm per token kind. Trivia arms
-#~"WS", #~"COMMENT", and #~"EOL" carry the between-token layout;
-#~"EOF" terminates the stream. The remaining arms classify
+#~"wsTok", #~"commentTok", and #~"eolTok" carry the between-token
+layout; #~"eofTok" terminates the stream. The remaining arms classify
 keywords, identifiers, literals, and punctuation. Match on it to
 dispatch:
 
 #code language=zerolang: """
-  match (t.toktype)
-  case WS then {}
-  case COMMENT then {}
-  case EOF then { done = true }
-  else { ... }
+  match (
+      t.toktype
+  ) case wsTok then {
+      null
+  } case commentTok then {
+      null
+  } case eofTok then {
+      done = true
+  } else null
 """
 
 
@@ -138,7 +147,7 @@ dispatch:
 """
 
 Tokenize #~"source" into its full raw token stream -- whitespace,
-comments, and EOL trivia included -- terminated by the #~"EOF"
+comments, and EOL trivia included -- terminated by the #~"eofTok"
 token. The one-call convenience over #~"Tokenizer".
 
 #code language=zerolang: """
