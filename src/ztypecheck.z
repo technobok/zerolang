@@ -3096,7 +3096,7 @@ recordGenericMarkerReturn: function {
 
 # recordFuncReturnNode -- map a function type id to its return type-ref's node id
 # so a call site can read the resolved return type (node_type, post stampTyperefs).
-recordFuncReturnNode: function {ty: ztyping.ZTyping fid: u64 ast: Ast.view oId: u32} is {
+recordFuncReturnNode: function {ty: ztyping.ZTyping fid: ztypes.tid ast: Ast.view oId: u32} is {
     if oId == 0 then return
     o: ast.nodes.get i: (oId - 1).u64
     rn: nodeId n: o
@@ -4109,7 +4109,7 @@ resolveFunction: function {
         :thisName
         oId: fnode.returntype
     )
-    recordFuncReturnNode :ast :ty :fid oId: fnode.returntype
+    recordFuncReturnNode :ast :ty fid: (ztypes.tid.create from: fid.u64) oId: fnode.returntype
     (stampGenericParamRef
         :ty
         :reg
@@ -10085,7 +10085,7 @@ buildUnitMono: function {
     tmplName: StringView
     monoId: ztypes.tid
     monoName: StringView
-    tplId: u64
+    tplId: ztypes.tid
     subs: (MapRV String value: u64)
     templateOpId: u32
 } is {
@@ -10330,7 +10330,7 @@ completeInlineReq: function {
     monoId: ztypes.tid
     monoName: StringView
     tmplName: StringView
-    tplId: u64
+    tplId: ztypes.tid
     subs: (MapRV String value: u64)
     mainOpId: u32
 } is {
@@ -10374,7 +10374,7 @@ inlineTemplateTid: function {
     ast: Ast.view
     mainOpId: u32
     tmplName: StringView
-} out u64 is {
+} out ztypes.tid is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: mainOpId
     found: u64
     {
@@ -10395,7 +10395,7 @@ inlineTemplateTid: function {
             } else null
         }
     }
-    return found
+    return (ztypes.tid.create from: found.u64)
 }
 
 # completeUnitInstantiations -- post-demand pass: with system types
@@ -10482,7 +10482,7 @@ completeUnitInstantiations: function {
             mid9: mgo
             br9: mid9
             reg.setUnitName nameId: rbId9 uid: br9
-            tplId: u64
+            tplId: ztypes.tid
             tk: "\{mainName}.\{rt}"
             tgo: (optionval.none u64)
             tplDecl9: ztypes.declid
@@ -10513,13 +10513,13 @@ completeUnitInstantiations: function {
             match (
                 tgo
             ) case some then {
-                tplId = tgo
+                tplId = ztypes.tid.create from: tgo.u64
             } case none then {
                 ugo: reg.unitNameTid.get key: tnId9.u64
                 match (
                     ugo
                 ) case some then {
-                    tplId = ugo
+                    tplId = ztypes.tid.create from: ugo.u64
                 } case none then null
             }
             if (reg.genericArgCount specId: (ztypes.tid.create from: mid9.u64)) == 0 then {
@@ -10549,7 +10549,7 @@ completeUnitInstantiations: function {
                     pnI9 = pnI9 + 1
                 }
             }
-            if tplId == 0 then {
+            if tplId.isZero then {
                 match (
                     program
                 ) case program then {
@@ -10691,7 +10691,7 @@ runUnitMonoWalks: function {
                                 pnmU9: (pnU9.get i: pjU9).copy
                                 (st.define
                                     nameId: (zast.poolSet pool: ast.names text: pnmU9.stringview)
-                                    ztypeId: avU9
+                                    ztypeId: (ztypes.tid.create from: avU9.u64)
                                 )
                             }
                         }
@@ -17239,7 +17239,10 @@ checkDo: function {
 } out ztypes.tid is {
     doMarker: st.pushBlock name: "block"
     dbk: st.reg.ctlPlaceholder
-    st.define nameId: (zast.poolSet pool: ast.names text: "break") ztypeId: dbk
+    (st.define
+        nameId: (zast.poolSet pool: ast.names text: "break")
+        ztypeId: (ztypes.tid.create from: dbk.u64)
+    )
     checkStatement :st :unitName :ast :unitBody block: (ast.nodes.get i: (donode.statement - 1).u64)
     result: lastStmtType :st :ast block: (ast.nodes.get i: (donode.statement - 1).u64)
     st.popTo marker: doMarker
@@ -17319,9 +17322,15 @@ checkFor: function {
 } out ztypes.tid is {
     forMarker: st.pushBlock name: "for"
     bk: st.reg.ctlPlaceholder
-    st.define nameId: (zast.poolSet pool: ast.names text: "break") ztypeId: bk
+    (st.define
+        nameId: (zast.poolSet pool: ast.names text: "break")
+        ztypeId: (ztypes.tid.create from: bk.u64)
+    )
     ct: st.reg.ctlPlaceholder
-    st.define nameId: (zast.poolSet pool: ast.names text: "continue") ztypeId: ct
+    (st.define
+        nameId: (zast.poolSet pool: ast.names text: "continue")
+        ztypeId: (ztypes.tid.create from: ct.u64)
+    )
     citer: fornode.conditions.iterate
     for condId9: citer loop {
         cond: ast.nodes.get i: (condId9 - 1).u64
@@ -17501,7 +17510,10 @@ checkFor: function {
                         srcName: atomName :ast n: (ast.nodes.get i: (cond.operation - 1).u64)
                         bo: "<iterator>".string
                         if srcName.length > 0 then bo = srcName.copy
-                        v: st.reg.newVariable ztypeId: elem ownership: ztypes.zownership.borrowed
+                        v: (st.reg.newVariable
+                            ztypeId: (ztypes.tid.create from: elem.u64)
+                            ownership: ztypes.zownership.borrowed
+                        )
                         v.borrowOrigin = (Option.some bo)
                         vid: v.variableId
                         nmId9: zast.poolSet pool: ast.names text: nm.stringview
@@ -17570,7 +17582,7 @@ checkFor: function {
                     } else {
                         (st.define
                             nameId: (zast.poolSet pool: ast.names text: nm.stringview)
-                            ztypeId: elem
+                            ztypeId: (ztypes.tid.create from: elem.u64)
                         )
                     }
                 } else {
@@ -21957,7 +21969,13 @@ subjectAtomName: function {ast: Ast.view n: Node.view} out String is {
 # synthesized ones (functions, the tag data record, enums).
 sumSubtypeNames: function {ast: Ast.view st: zenv.ZSymbolTable sid: u64} out List String is {
     arms: (List String)
-    zenv.sumArmNames ty: st.typing reg: st.reg pool: ast.names tid: sid names: arms
+    (zenv.sumArmNames
+        ty: st.typing
+        reg: st.reg
+        pool: ast.names
+        tid: (ztypes.tid.create from: sid.u64)
+        names: arms
+    )
     return arms
 }
 
@@ -23249,7 +23267,7 @@ checkFunctionBody: function {
                         if pown9 == ztypes.zparamownership.viewMode then isRoP9 = true
                         if pown9 == ztypes.zparamownership.holdMode then isRoP9 = true
                     } case none then null
-                    v: st.reg.newVariable ztypeId: ptid ownership: own
+                    v: st.reg.newVariable ztypeId: (ztypes.tid.create from: ptid.u64) ownership: own
                     if (typeExprHasPrivate
                         :ast
                         n: (ast.nodes.get i: (pm.operation - 1).u64)
@@ -23920,7 +23938,10 @@ bindMonoParams: function {
             av9: st.reg.genericArgAt specId: monoId ordinal: pj9
             if av9 > 0 then {
                 pnm9: (pn9.get i: pj9).copy
-                st.define nameId: (zast.poolSet :pool text: pnm9.stringview) ztypeId: av9
+                (st.define
+                    nameId: (zast.poolSet :pool text: pnm9.stringview)
+                    ztypeId: (ztypes.tid.create from: av9.u64)
+                )
                 pto9: st.reg.genericParamTidOf :tdecl paramName: pnm9.stringview
                 match (
                     pto9

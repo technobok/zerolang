@@ -61,6 +61,18 @@ optVidText9: function {o: optionval ztypes.vid} out String is {
     }
 }
 
+# optTidText -- the same for an optional TYPE id; an `optionval tid` is not
+# an `optionval u64`, so the smoke needs its own reader.
+optTidText: function {o: optionval ztypes.tid} out String is {
+    match (
+        o
+    ) case some then {
+        return "\{o.u64}"
+    } case none then {
+        return "none".string
+    }
+}
+
 optU64Text: function {o: optionval u64} out String is {
     match (
         o
@@ -182,7 +194,7 @@ sumArmNames: function {
     ty: ZTyping
     reg: ztypes.ZTypeRegistry
     pool: zast.StringPool.view
-    tid: u64
+    tid: ztypes.tid
     names: List String
 } is {
     nms9: (ListVal u64)
@@ -272,10 +284,10 @@ ZEntryDumpRow: class {
     position: u64
     entryId: u64
     name: u32
-    ztypeId: u64
+    ztypeId: ztypes.tid
     isDefinition: bool
     varId: (optionval ztypes.vid)
-    originalZtypeId: (optionval u64)
+    originalZtypeId: (optionval ztypes.tid)
     isTaken: bool
     takenAt: (optionval ztypes.zsrcpos)
     narrowedSubtype: String
@@ -454,7 +466,7 @@ ZSymbolTable: class {
                 position: (sp - start)
                 entryId: de.entryId
                 name: de.name
-                ztypeId: de.ztypeId
+                ztypeId: (ztypes.tid.create from: de.ztypeId)
                 isDefinition: de.isDefinition
                 varId: de.varId
                 originalZtypeId: de.originalZtypeId
@@ -517,7 +529,11 @@ ZSymbolTable: class {
             zt: mTypes.get i: mi
             already: this.isTakenName nameId: nm
             if already == false then {
-                te: this.reg.newEntry nameId: nm ztypeId: zt isDefinition: false
+                te: (this.reg.newEntry
+                    nameId: nm
+                    ztypeId: (ztypes.tid.create from: zt.u64)
+                    isDefinition: false
+                )
                 te.isTaken = true
                 te.takenAt = (optionval.some (mLocs.get i: mi))
                 this.entries.append te
@@ -551,7 +567,7 @@ ZSymbolTable: class {
 
     # --- entry insertion ---
 
-    define: function {:this nameId: u32 ztypeId: u64} is {
+    define: function {:this nameId: u32 ztypeId: ztypes.tid} is {
         e: this.reg.newEntry :nameId :ztypeId isDefinition: true
         this.entries.append e
     }
@@ -588,20 +604,20 @@ ZSymbolTable: class {
     }
 
     # Resolve a name to its type id, or none (also none when taken).
-    lookup: function {:this nameId: u32} out optionval u64 is {
-        if nameId == 0 then return (optionval.none u64)
+    lookup: function {:this nameId: u32} out optionval ztypes.tid is {
+        if nameId == 0 then return (optionval.none ztypes.tid)
         ne: this.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
             e: this.entries.get i: j2
             if e.name == nameId then {
-                if e.isTaken then return (optionval.none u64)
+                if e.isTaken then return (optionval.none ztypes.tid)
                 return (optionval.some e.ztypeId)
             }
             j = j - 1
         }
-        return (optionval.none u64)
+        return (optionval.none ztypes.tid)
     }
 
     # Declared type of `name`, ignoring narrowing overlays: the entry's
@@ -609,15 +625,15 @@ ZSymbolTable: class {
     # narrowed sum-type target accepts a fresh value of its whole declared
     # type, so a reassignment validates its RHS against this, not the
     # narrowed view.
-    declaredTypeOf: function {:this nameId: u32} out optionval u64 is {
-        if nameId == 0 then return (optionval.none u64)
+    declaredTypeOf: function {:this nameId: u32} out optionval ztypes.tid is {
+        if nameId == 0 then return (optionval.none ztypes.tid)
         ne: this.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
             e: this.entries.get i: j2
             if e.name == nameId then {
-                if e.isTaken then return (optionval.none u64)
+                if e.isTaken then return (optionval.none ztypes.tid)
                 oz9: e.originalZtypeId
                 match (
                     oz9
@@ -628,7 +644,7 @@ ZSymbolTable: class {
             }
             j = j - 1
         }
-        return (optionval.none u64)
+        return (optionval.none ztypes.tid)
     }
 
     # Variable id bound to `name`, skipping lock/narrow overlays; none if
@@ -931,7 +947,7 @@ ZSymbolTable: class {
         }
         if idempotent then return "".string
 
-        le: this.reg.newEntry nameId: rootId ztypeId: 0 isDefinition: false
+        le: this.reg.newEntry nameId: rootId ztypeId: ztypes.tid isDefinition: false
         idxOpt: this.effectiveIndex nameId: rootId
         match (
             idxOpt
@@ -1140,13 +1156,17 @@ ZSymbolTable: class {
             sn: subtypeName.string
             nsName = sn
         }
-        origOpt: (optionval.none u64)
+        origOpt: (optionval.none ztypes.tid)
         if shadow then {
-            oc: originalTypeId
+            oc: ztypes.tid.create from: originalTypeId.u64
             origOpt = (optionval.some oc)
         }
 
-        e: this.reg.newEntry :nameId ztypeId: entryZtype isDefinition: false
+        e: (this.reg.newEntry
+            :nameId
+            ztypeId: (ztypes.tid.create from: entryZtype.u64)
+            isDefinition: false
+        )
         e.narrowedSubtype = nsName
         e.originalZtypeId = origOpt
         this.entries.append e
@@ -1157,7 +1177,13 @@ ZSymbolTable: class {
     # none remain.
     exclude: function {:this pool: zast.StringPool.view nameId: u32 subtypeName: StringView fullTypeId: u64} is {
         allSubs: (List String)
-        sumArmNames ty: this.typing reg: this.reg :pool tid: fullTypeId names: allSubs
+        (sumArmNames
+            ty: this.typing
+            reg: this.reg
+            :pool
+            tid: (ztypes.tid.create from: fullTypeId.u64)
+            names: allSubs
+        )
 
         newExcl: (Set String)
         this.collectExcluded :nameId into: newExcl
@@ -1185,7 +1211,11 @@ ZSymbolTable: class {
                 sole: allSubs.get i: soleIx9
                 narrowedSub = sole.copy
             }
-            e: this.reg.newEntry :nameId ztypeId: fullTypeId isDefinition: false
+            e: (this.reg.newEntry
+                :nameId
+                ztypeId: (ztypes.tid.create from: fullTypeId.u64)
+                isDefinition: false
+            )
             e.narrowedSubtype = narrowedSub.copy
             eit: newExcl.iterate
             for s: eit loop {
@@ -1591,7 +1621,7 @@ smokeLockState: function {o: optionval ztypes.zlockstate} out String is {
 # smoke-test: print the lookup result for `name`.
 smokeLookup: function {st: ZSymbolTable pool: zast.StringPool.view name: StringView} is {
     r: st.lookup nameId: (zast.poolFind :pool text: name)
-    print "lookup \{name} -> \{optU64Text r}"
+    print "lookup \{name} -> \{optTidText r}"
 }
 
 # smoke-test: print the variable id bound to `name`.

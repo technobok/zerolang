@@ -90,7 +90,7 @@ optIdStr: function {o: optionval u64} out String is {
 
 # definedUnitOf9 -- a type's defining unit as an Option, derived off the
 # Decl parent chain.
-definedUnitOf9: function {st: zenv.ZSymbolTable tid: u64} out (Option of: String) is {
+definedUnitOf9: function {st: zenv.ZSymbolTable tid: ztypes.tid} out (Option of: String) is {
     nm9: ztypecheck.unitNameOfTid ty: st.typing reg: st.reg tid: (ztypes.tid.create from: tid.u64)
     if nm9.length == 0 then return (Option.none String)
     return (Option.some nm9)
@@ -599,10 +599,10 @@ ZDumper: class {
     # differential filters to the example's own unit via defined_in_unit.
     appendTypes: function {:this st: zenv.ZSymbolTable pool: zast.StringPool.view} is {
         n: st.reg.nextTypeId
-        tid: u64
+        tid: ztypes.tid
         for tid < n loop {
             if (st.reg.typeValid tid: (ztypes.tid.create from: tid.u64)) == false then {
-                tid = tid + 1
+                tid = tid.next
                 continue
             }
             zt: st.reg.typeById.get i: tid
@@ -620,7 +620,7 @@ ZDumper: class {
             duSql: optStrSql o: (definedUnitOf9 :st :tid)
             row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{valSql}, \{genSql}, \{goSql}, \{ndSql}, \{dnSql}, \{heapSql}, \{duSql});\n"
             this.acc.append s: row
-            tid = tid + 1
+            tid = tid.next
         }
     }
 
@@ -801,7 +801,7 @@ ZDumper: class {
         }
         for e: st.entryDump.iterate loop {
             varSql: optVidStr9 o: e.varId
-            origSql: optIdStr o: e.originalZtypeId
+            origSql: optTidStr o: e.originalZtypeId
             defNum: boolNum b: e.isDefinition
             takNum: boolNum b: e.isTaken
             enmT9: zast.poolTextCopy :pool ref: e.name
@@ -887,7 +887,7 @@ ZDumper: class {
     # parent type-id x argument key -> child spec type-id.
     appendGenericChildren: function {:this st: zenv.ZSymbolTable.view} is {
         n: st.reg.nextTypeId
-        tid: u64
+        tid: ztypes.tid
         for tid < n loop {
             if tid >= st.reg.typeById.length then return
             zt: st.reg.typeById.get i: tid
@@ -900,7 +900,7 @@ ZDumper: class {
                 this.acc.append s: row
                 idx9 = idx9 + 1
             }
-            tid = tid + 1
+            tid = tid.next
         }
     }
 
@@ -908,7 +908,7 @@ ZDumper: class {
     # definition-parameter order.
     appendGenericArgs: function {:this st: zenv.ZSymbolTable} is {
         n: st.reg.nextTypeId
-        tid: u64
+        tid: ztypes.tid
         for tid < n loop {
             gargs9: (ListVal u64)
             if tid < st.reg.typeById.length then {
@@ -934,14 +934,14 @@ ZDumper: class {
                 this.acc.append s: row
                 ai9 = ai9 + 1
             }
-            tid = tid + 1
+            tid = tid.next
         }
     }
 
     appendGenericChildrenCanon: function {:this unm: StringView st: zenv.ZSymbolTable} is {
         rows: (List String)
         n: st.reg.nextTypeId
-        tid: u64
+        tid: ztypes.tid
         for tid < n loop {
             gkeys9: (ListVal u64)
             gtids9: (ListVal u64)
@@ -988,16 +988,16 @@ ZDumper: class {
                         if kIsVal9 then {
                             kn9 = "\{ekey9}"
                         } else {
-                            kn9 = canonTypeName reg: st.reg tid: ekey9
+                            kn9 = canonTypeName reg: st.reg tid: (ztypes.tid.create from: ekey9.u64)
                         }
-                        cn9: canonTypeName reg: st.reg tid: eval9
+                        cn9: canonTypeName reg: st.reg tid: (ztypes.tid.create from: eval9.u64)
                         row: "generic_child \{pn9} \{kn9} \{cn9}"
                         rows.append row
                         idx9 = idx9 + 1
                     }
                 }
             }
-            tid = tid + 1
+            tid = tid.next
         }
         this.emitSection title: "generic_child" :rows
     }
@@ -1005,7 +1005,7 @@ ZDumper: class {
     appendGenericArgsCanon: function {:this unm: StringView st: zenv.ZSymbolTable} is {
         rows: (List String)
         n: st.reg.nextTypeId
-        tid: u64
+        tid: ztypes.tid
         for tid < n loop {
             cargs9: (ListVal u64)
             if tid < st.reg.typeById.length then {
@@ -1043,7 +1043,7 @@ ZDumper: class {
                             iv9 = 1
                             vn9 = "\{av9}"
                         } else {
-                            vn9 = canonTypeName reg: st.reg tid: av9
+                            vn9 = canonTypeName reg: st.reg tid: (ztypes.tid.create from: av9.u64)
                         }
                         row: "generic_arg \{sn9} \{ai9} \{vn9} \{iv9}"
                         rows.append row
@@ -1051,7 +1051,7 @@ ZDumper: class {
                     }
                 }
             }
-            tid = tid + 1
+            tid = tid.next
         }
         this.emitSection title: "generic_arg" :rows
     }
@@ -1059,7 +1059,7 @@ ZDumper: class {
     appendTypesCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
         rows: (List String)
         n: st.reg.nextTypeId
-        tid: u64
+        tid: ztypes.tid
         for tid < n loop {
             if tid >= st.reg.typeById.length then return
             zt: st.reg.typeById.get i: tid
@@ -1081,7 +1081,7 @@ ZDumper: class {
                 line: "\{nameSql} | \{ttSql} | \{valSql} | \{genSql} | \{ndSql} | \{heapSql}"
                 rows.append line
             }
-            tid = tid + 1
+            tid = tid.next
         }
         this.emitSection title: "types" :rows
     }
@@ -1097,7 +1097,7 @@ ZDumper: class {
         for tid9 < tn9 loop {
             pid9: tid9
             tid9 = tid9 + 1
-            pdu: definedUnitOf9 :st tid: pid9
+            pdu: definedUnitOf9 :st tid: (ztypes.tid.create from: pid9.u64)
             inUnit: false
             match (
                 pdu
@@ -1112,13 +1112,16 @@ ZDumper: class {
                     names: nms9
                     tids: tds9
                 )
-                pName: canonTypeName reg: st.reg tid: pid9
+                pName: canonTypeName reg: st.reg tid: (ztypes.tid.create from: pid9.u64)
                 pSql: sqlStr s: pName.stringview
                 pos9: u64
                 cn9: nms9.length
                 for pos9 < cn9 loop {
                     nid9: nms9.get i: pos9
-                    cName: canonTypeName reg: st.reg tid: (tds9.get i: pos9)
+                    cName: (canonTypeName
+                        reg: st.reg
+                        tid: (ztypes.tid.create from: (tds9.get i: pos9))
+                    )
                     cnB8: ast.names.texts.get i: (nid9 - 1).u64
                     cnSql: sqlStr s: cnB8.stringview
                     ctSql: sqlStr s: cName.stringview
@@ -1140,7 +1143,7 @@ ZDumper: class {
         rows: (List String)
         citer: st.typing.conformance.iterate
         for cf: citer loop {
-            idu: definedUnitOf9 :st tid: cf.implTypeId
+            idu: definedUnitOf9 :st tid: (ztypes.tid.create from: cf.implTypeId)
             inUnit: false
             match (
                 idu
@@ -1148,8 +1151,8 @@ ZDumper: class {
                 if idu.stringview == unm then inUnit = true
             } case none then null
             if inUnit then {
-                iName: canonTypeName reg: st.reg tid: cf.implTypeId
-                sName: canonTypeName reg: st.reg tid: cf.specTypeId
+                iName: canonTypeName reg: st.reg tid: (ztypes.tid.create from: cf.implTypeId)
+                sName: canonTypeName reg: st.reg tid: (ztypes.tid.create from: cf.specTypeId)
                 iSql: sqlStr s: iName.stringview
                 sSql: sqlStr s: sName.stringview
                 lblSql: sqlStr s: cf.label.stringview
@@ -1240,7 +1243,7 @@ ZDumper: class {
         varRows: (List String)
         for vid: seen.iterate loop {
             ztId: optU64Or0 o: (st.typing.variableZtype.get key: vid)
-            ztName: canonTypeName reg: st.reg tid: ztId
+            ztName: canonTypeName reg: st.reg tid: (ztypes.tid.create from: ztId.u64)
             ztSql: sqlStr s: ztName.stringview
             ownSql: varOwnSql o: (st.typing.variableOwnership.get key: vid)
             privNum: optBoolNumOr0 o: (st.typing.variableIsPrivate.get key: vid)
@@ -1277,7 +1280,7 @@ ZDumper: class {
                 nid9: cg.key / 4294967296
                 pnid9: (cg.key - (nid9 * 4294967296)).u32.orPanic
                 hld9: zast.poolTextCopy pool: program.ast.names ref: pnid9
-                tn9: canonTypeName reg: st.reg tid: cg.value
+                tn9: canonTypeName reg: st.reg tid: (ztypes.tid.create from: cg.value)
                 hSql9: sqlStr s: hld9.stringview
                 tSql9: sqlStr s: tn9.stringview
                 rows.append "\{hSql9} | \{tSql9}"
@@ -1556,7 +1559,7 @@ optU64Or0: function {o: optionval u64} out u64 is {
 
 # canonTypeName -- a type id's registered name, or "?" when unregistered.
 # Renders foreign-key ids as stable names in the canonical dump.
-canonTypeName: function {reg: ztypes.ZTypeRegistry tid: u64} out String is {
+canonTypeName: function {reg: ztypes.ZTypeRegistry tid: ztypes.tid} out String is {
     if (reg.typeValid tid: (ztypes.tid.create from: tid.u64)) == false then return "?".string
     zt: reg.typeById.get i: tid
     return zt.name.copy
