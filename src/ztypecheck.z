@@ -30,6 +30,7 @@ public: unit {
     :methodReturnOf
     :nodeId
     :nodeLine
+    :optTidOr
     :optU64Or
     :paramIsThisReceiverId
     :regTypeNameOf
@@ -7038,7 +7039,7 @@ declOfUnitDefId: function {
     ) case some then {
         return (ty.declFindChild parentDeclId: ro9 :nameId)
     } case none then null
-    return 0
+    return (ztypes.declid.create from: 0)
 }
 
 # declDefTypetype -- the typetype a declaration's def node declares
@@ -13377,21 +13378,17 @@ validateGenericTypeArgs: function {
 # methodReturnOf -- a method FUNCTION type's return type id: the synthesized
 # returnTypeId link when set, else the AST method's recorded `out T` ref node
 # (funcReturnNode) read through the post-demand stamp.
-methodReturnOf: function {st: zenv.ZSymbolTable mid: u64} out optionval u64 is {
+methodReturnOf: function {st: zenv.ZSymbolTable mid: u64} out optionval ztypes.tid is {
     rto: st.reg.returnTypeOf tid: mid
-    # unwrapped on purpose: this returns `optionval u64` until the tid space
-    # reaches its consumers. Wrapping the tid directly compiles -- the return
-    # check does not see through a cross-unit typedef return inside an
-    # optionval construction -- and emits C that does not.
-    if rto > 0 then return (optionval.some rto.u64)
+    if rto > 0 then return (optionval.some rto)
     rn: st.typing.funcReturnNode.get key: mid
     match (
         rn
     ) case some then {
         nt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn
-        if nt > 0 then return (optionval.some nt)
+        if nt > 0 then return (optionval.some (ztypes.tid.create from: nt))
     } case none then null
-    return (optionval.none u64)
+    return (optionval.none ztypes.tid)
 }
 
 # iterWrapperElem -- when a type is an Option / optionval / OptionView instance,
@@ -13469,6 +13466,21 @@ optVidOr: function {o: optionval ztypes.vid} out ztypes.vid is {
     }
 }
 
+# optTidOr -- the value of optional TYPE id `o`, or `d` when none. A sibling
+# of optU64Or rather than a conversion at each call: `optionval tid` is not an
+# `optionval u64`, a typedef substitutes for its base as a whole value and not
+# as a generic argument.
+optTidOr: function {o: optionval ztypes.tid d: ztypes.tid} out ztypes.tid is {
+    match (
+        o
+    ) case some then {
+        return o
+    } case none then {
+        return d
+    }
+}
+
+# the value of optional u64 `o`, or `d` when none.
 optU64Or: function {o: optionval u64 d: u64} out u64 is {
     match (
         o
@@ -21416,7 +21428,7 @@ checkGenericCall: function {
     calid2: nodeId n: (ast.nodes.get i: (call.callable - 1).u64)
     setc2: mid
     stampGate :st nid: calid2.u64 tid: setc2
-    return (optU64Or o: (methodReturnOf :st :mid) d: 0)
+    return (optTidOr o: (methodReturnOf :st :mid) d: ztypes.tid)
 }
 
 # subjectAtomName -- a match subject's bare-atom name (narrowing requires a
@@ -22540,7 +22552,18 @@ checkFunctionBody: function {
         maybeWalkMethods :st :unitName :ast :unitBody name: defName
         hasBody: defn.body > 0
         isGenDef: false
+        # A dependency unit's definitions arrive with defName ALREADY carrying
+        # their unit ("zast.errCode"), while a method arrives bare of its unit
+        # but not of its type ("Ast.create"). Prefixing unconditionally built
+        # "zast.zast.errCode", which resolves to nothing -- and this key drives
+        # the generic-template gate, the template param binding, AND the
+        # expected return type, so every one of them silently did nothing for
+        # those bodies.
         rkey: "\{unitName}.\{defName}"
+        {
+            upfx9: "\{unitName}."
+            if (defName.startsWith prefix: upfx9) then rkey = defName.string
+        }
         rgot: resolvedByKey :ast ty: st.typing reg: st.reg key: rkey
         match (
             rgot
@@ -22788,8 +22811,8 @@ checkFunctionBody: function {
                 o: (resolvedByKey :ast ty: st.typing reg: st.reg key: rkey)
                 d: 0
             )
-            crt9: u64
-            if fitid9 > 0 then crt9 = optU64Or o: (methodReturnOf :st mid: fitid9) d: 0
+            crt9: ztypes.tid
+            if fitid9 > 0 then crt9 = optTidOr o: (methodReturnOf :st mid: fitid9) d: ztypes.tid
             st.typing.currentReturnTypeId = crt9
             prevRb9: st.typing.currentReturnsBorrow
             st.typing.currentReturnsBorrow = (optBoolOr
@@ -24935,7 +24958,7 @@ declOfTypeId: function {reg: ztypes.ZTypeRegistry.view tid: u64} out ztypes.decl
     hops9: u64
     for cur9 > 0 while hops9 < 8 loop {
         next9: u64
-        if cur9 >= reg.typeById.length then return 0
+        if cur9 >= reg.typeById.length then return (ztypes.declid.create from: 0)
         zo9: reg.typeById.get i: cur9
         if zo9.def > 0 then return zo9.def
         go9: zo9.genericOriginId
@@ -24947,7 +24970,7 @@ declOfTypeId: function {reg: ztypes.ZTypeRegistry.view tid: u64} out ztypes.decl
         cur9 = next9
         hops9 = hops9 + 1
     }
-    return 0
+    return (ztypes.declid.create from: 0)
 }
 
 # unitDeclOfTid -- the top-level unit root Decl that owns type `tid`'s
@@ -24981,14 +25004,14 @@ unitDeclOfTid: function {
             # a FILE unit's own tid links to its own parentless root: the
             # unit is not "defined in" a unit (inline units and root-
             # proxied synths do report the enclosing unit)
-            if selfT9 == tid then return 0
+            if selfT9 == tid then return (ztypes.declid.create from: 0)
             if isU9 then return cur9
-            return 0
+            return (ztypes.declid.create from: 0)
         }
         cur9 = par9
         hops9 = hops9 + 1
     }
-    return 0
+    return (ztypes.declid.create from: 0)
 }
 
 # unitNameOfTid -- the defining unit's name for type `tid`, read off the
@@ -25057,7 +25080,7 @@ declMemberOf: function {
     nameId: u32
 } out ztypes.declid is {
     od9: declOfTypeId :reg tid: ownerTid
-    if od9.isZero then return 0
+    if od9.isZero then return (ztypes.declid.create from: 0)
     return (ty.declFindChild parentDeclId: od9 :nameId)
 }
 
@@ -25107,8 +25130,8 @@ declSurfaceEnsure9: function {
     nameId: u32
     declId: ztypes.declid
     want: u64
-} out u64 is {
-    if declId.isZero then return 0
+} out ztypes.declid is {
+    if declId.isZero then return (ztypes.declid.create from: 0)
     dtid9: u64
     isRx9: false
     {
@@ -25123,7 +25146,7 @@ declSurfaceEnsure9: function {
         dtid9 = resolveAliasKey :ty :reg :ast defUnit: uname name: nm9.stringview
     }
     if dtid9 == want then return declId
-    return 0
+    return (ztypes.declid.create from: 0)
 }
 
 # declProbeUnitChildId -- the Decl-tree unit-child probe: unit root (by
@@ -25929,8 +25952,8 @@ publicNsOf: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} ou
         def9v: reg.defOf :tid
             od9 = def9v
     }
-    if od9.u64 == 0 then return 0
-    r9: u64
+    if od9.u64 == 0 then return (ztypes.declid.create from: 0)
+    r9: ztypes.declid
     kn9: ty.declChildSlots declId: od9
     ki9: u64
     for ki9 < kn9 loop {
