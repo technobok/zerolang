@@ -4403,6 +4403,31 @@ emitTypedefCreateCall: function {
     ctx: Ctx.view
     call: zast.CallData.view
 } out String is {
+    # the call's stamped return IS the typedef (covers the unit-qualified
+    # head, whose base atom is the unit name); the name walk stays as the
+    # fallback for stamp-less shapes. Gated on the stamped callKind -- any
+    # ORDINARY call may return a typedef and must not lose itself here.
+    ckS9: symtab.typing.callKind.get key: call.nodeid.u64
+    isTdCk9: false
+    match (
+        ckS9
+    ) case some then {
+        if ckS9 == zast.callkind.typedefCreate then isTdCk9 = true
+        if ckS9 == zast.callkind.typedefBorrow then isTdCk9 = true
+    } case none then null
+    tidS9: stampIdOf :symtab nid: call.nodeid.u64
+    if isTdCk9 when (isTypedefType :symtab tid: tidS9) then {
+        aiterS9: call.arguments.iterate
+        for aIdS9: aiterS9 loop {
+            aS9: ast.nodes.get i: (aIdS9 - 1).u64
+            match (
+                aS9
+            ) case namedoperation then {
+                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (aS9.operation - 1).u64))
+            } else null
+        }
+        return "0".string
+    }
     calr9: ast.nodes.get i: (call.callable - 1).u64
     bn: dottedBaseAtom :ast n: calr9
     if bn.length == 0 then bn = atomTextOf :ast n: calr9
