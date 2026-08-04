@@ -10,6 +10,7 @@
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
 public: unit {
+    :tid
     :declid
     :vid
     :constraintdesc
@@ -383,6 +384,25 @@ vid: record { val: u64.typedef } as {
     }
 }
 
+# tid -- a type-registry id: an index into ZTypeRegistry.typeById. 0 is
+# `notype`, the no-type / unresolved sentinel every consumer tests, so a
+# zero tid never addresses a real type even though row 0 is registered.
+# Same-space equality; sentinels read isZero. `next` exists because the
+# INHERITED arithmetic on a typedef yields the base -- `t + 1` is a u64 --
+# so walking the id space needs a method to stay in the space.
+tid: record { val: u64.typedef } as {
+    ==: function {:this rhs: tid} out bool is {
+        return this.u64 == rhs.u64
+    }
+    isZero: function {:this} out bool is {
+        return this.u64 == 0
+    }
+    next: function {:this} out tid is {
+        n9: this.u64 + 1
+        return (tid from: n9)
+    }
+}
+
 # declid -- a Decl-tree row id (minted dense 1..N by declNew); 0 is "no
 # decl". A typedef so a decl id cannot cross with the other numeric id
 # spaces; equality is same-space only, sentinels read .u64.
@@ -488,21 +508,21 @@ ZConformance: class {
 # and methods. Per-(parent, child) metadata lives in the type_child
 # table introduced with the symbol-table slice.
 ZType: class {
-    typeId: u64
+    typeId: tid
     name: String
     typetype: ztypetype
-    returnTypeId: (optionval u64)
+    returnTypeId: (optionval tid)
     thisParamNameId: u32
     isgeneric: bool
     isValtype: (optionval bool)
-    genericOriginId: (optionval u64)
+    genericOriginId: (optionval tid)
     isTagGenericOrigin: bool
     # id-keyed specialization tree: one level per generic parameter in
     # definition order -- argument type-id (or numeric value at a numeric
     # parameter level) -> the child specialization's type-id. Specs record
     # their ordered argument ids in genericArgs for backward substitution.
     genericChildKeys: (ListVal u64)
-    genericChildTids: (ListVal u64)
+    genericChildTids: (ListVal tid)
     genericArgs: (ListVal u64)
     # parallel to genericArgs: true when the ordinal is a numeric VALUE
     # (a sized record's `to:`), false when it is a type id
@@ -517,7 +537,7 @@ ZType: class {
     def: declid
     # the type that owns this one (a method's receiver); 0 when the type
     # stands free. The emitter composes C names from it.
-    ownerTid: u64
+    ownerTid: tid
 }
 
 # A single environment entry: a definition (introduces a name) or a
@@ -595,17 +615,17 @@ ParamList: class {
 # and index 0 is `notype`, which is always registered.
 holeType: function {} out ZType is {
     return (ZType
-    typeId: 0
+    typeId: tid
     name: "".string
     typetype: ztypetype.nullType
-    returnTypeId: (optionval.none u64)
+    returnTypeId: (optionval.none tid)
     thisParamNameId: 0
     isgeneric: false
     isValtype: (optionval.none bool)
-    genericOriginId: (optionval.none u64)
+    genericOriginId: (optionval.none tid)
     isTagGenericOrigin: false
     genericChildKeys: (ListVal u64)
-    genericChildTids: (ListVal u64)
+    genericChildTids: (ListVal tid)
     genericArgs: (ListVal u64)
     genericArgIsValue: (ListVal bool)
     destructorNameId: 0
@@ -614,7 +634,7 @@ holeType: function {} out ZType is {
     isNative: false
     runtimeIndexed: false
     def: declid
-    ownerTid: 0)
+    ownerTid: tid)
 }
 
 ZTypeRegistry: class {
@@ -678,21 +698,26 @@ ZTypeRegistry: class {
     # fields afterward. They are registry methods (not free functions)
     # so the id-counter bump persists through the `:this` receiver -- a
     # bump through a plain borrowed param does not propagate back.
-    newType: function {:this name: StringView typetype: ztypetype ownerTid: 0.u64} out u64 is {
-        id: this.nextTypeId
+    # ownerTid stays a bare u64 here: a parameter DEFAULT cannot be a typedef
+    # value -- `(tid from: 0)` in that position reads as a generic instantiation
+    # (tid_0), not a zero -- and 41 callers rely on the default. It converts on
+    # the way into the field.
+    newType: function {:this name: StringView typetype: ztypetype ownerTid: 0.u64} out tid is {
+        id: (tid from: this.nextTypeId)
         this.nextTypeId = this.nextTypeId + 1
+        ow9: (tid from: ownerTid)
         t: (ZType
         typeId: id
         name: name.string
         :typetype
-        returnTypeId: (optionval.none u64)
+        returnTypeId: (optionval.none tid)
         thisParamNameId: 0
         isgeneric: false
         isValtype: (optionval.none bool)
-        genericOriginId: (optionval.none u64)
+        genericOriginId: (optionval.none tid)
         isTagGenericOrigin: false
         genericChildKeys: (ListVal u64)
-        genericChildTids: (ListVal u64)
+        genericChildTids: (ListVal tid)
         genericArgs: (ListVal u64)
         genericArgIsValue: (ListVal bool)
         destructorNameId: 0
@@ -701,7 +726,7 @@ ZTypeRegistry: class {
         isNative: false
         runtimeIndexed: false
         def: declid
-        :ownerTid)
+        ownerTid: ow9)
         this.typeById.append t
         return id
     }
@@ -808,8 +833,8 @@ ZTypeRegistry: class {
     }
 
     # ownerTidOf -- the type owning `tid` as a member, or 0.
-    ownerTidOf: function {:this tid: u64} out u64 is {
-        if tid >= this.typeById.length then return 0
+    ownerTidOf: function {:this tid: u64} out tid is {
+        if tid >= this.typeById.length then return (tid from: 0)
         got: this.typeById.get i: tid
         return got.ownerTid
     }
@@ -842,7 +867,7 @@ ZTypeRegistry: class {
         for idx < gn loop {
             if found == false then {
                 if (got.genericChildKeys.get i: idx) == key then {
-                    got.genericChildTids.set i: idx val: child
+                    got.genericChildTids.set i: idx val: (tid from: child)
                     found = true
                 }
             }
@@ -850,12 +875,12 @@ ZTypeRegistry: class {
         }
         if found == false then {
             got.genericChildKeys.append key
-            got.genericChildTids.append child
+            got.genericChildTids.append (tid from: child)
         }
     }
 
-    getGenericChild: function {:this parentId: u64 key: u64} out optionval u64 is {
-        if parentId >= this.typeById.length then return (optionval.none u64)
+    getGenericChild: function {:this parentId: u64 key: u64} out optionval tid is {
+        if parentId >= this.typeById.length then return (optionval.none tid)
         got: this.typeById.get i: parentId
         idx: u64
         gn: got.genericChildKeys.length
@@ -865,7 +890,7 @@ ZTypeRegistry: class {
             }
             idx = idx + 1
         }
-        return (optionval.none u64)
+        return (optionval.none tid)
     }
 
     appendGenericArg: function {:this specId: u64 arg: u64} is {
@@ -912,7 +937,7 @@ ZTypeRegistry: class {
         if tid >= this.typeById.length then return false
         if tid == 0 then return true
         got: this.typeById.get i: tid
-        return (got.typeId == tid)
+        return (got.typeId.u64 == tid)
     }
 
     # nameOf -- a type's registered name, or "" when the id has none.
@@ -931,8 +956,8 @@ ZTypeRegistry: class {
     }
 
     # returnTypeOf -- a function type's return type id, or 0 when it has none.
-    returnTypeOf: function {:this tid: u64} out u64 is {
-        if tid >= this.typeById.length then return 0
+    returnTypeOf: function {:this tid: u64} out tid is {
+        if tid >= this.typeById.length then return (tid from: 0)
         got: this.typeById.get i: tid
         r9: got.returnTypeId
         match (
@@ -940,7 +965,7 @@ ZTypeRegistry: class {
         ) case some then {
             return r9
         } case none then null
-        return 0
+        return (tid from: 0)
     }
 
     # thisParamNameIdOf -- the pool id of a method's receiver-parameter name,
@@ -1036,8 +1061,8 @@ ZTypeRegistry: class {
 
     # genericOriginOf -- the template a mono was instantiated from, or 0 when
     # the type has no origin (0 is `notype`, never a real origin).
-    genericOriginOf: function {:this tid: u64} out u64 is {
-        if tid >= this.typeById.length then return 0
+    genericOriginOf: function {:this tid: u64} out tid is {
+        if tid >= this.typeById.length then return (tid from: 0)
         got: this.typeById.get i: tid
         go9: got.genericOriginId
         match (
@@ -1045,20 +1070,20 @@ ZTypeRegistry: class {
         ) case some then {
             return go9
         } case none then null
-        return 0
+        return (tid from: 0)
     }
 
     setGenericOrigin: function {:this typeId: u64 value: u64} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
-        vc: value
+        vc: (tid from: value)
         got.genericOriginId = (optionval.some vc)
     }
 
     setReturnType: function {:this typeId: u64 value: u64} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
-        vc: value
+        vc: (tid from: value)
         got.returnTypeId = (optionval.some vc)
     }
 
