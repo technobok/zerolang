@@ -639,12 +639,12 @@ ZTyping: class {
     # declPendWrite -- hold a member-type write whose owner has no declaration
     # yet. In place on a repeat, so the buffer carries one entry per
     # (parent, name).
-    declPendWrite: function {:this parentTypeId: ztypes.tid nameId: u64 typeId: ztypes.tid} is {
+    declPendWrite: function {:this parentTypeId: ztypes.tid nameId: zast.nameid typeId: ztypes.tid} is {
         i9: u64
         n9: this.pendParent.length
         for i9 < n9 loop {
             hit9: (this.pendParent.get i: i9) == parentTypeId
-            if hit9 then hit9 = (this.pendName.get i: i9) == nameId
+            if hit9 then hit9 = (this.pendName.get i: i9) == nameId.u64
             if hit9 then {
                 this.pendType.set i: i9 val: typeId
                 return
@@ -653,7 +653,7 @@ ZTyping: class {
         }
         pp9: parentTypeId
         this.pendParent.append pp9
-        pn9: nameId
+        pn9: nameId.u64
         this.pendName.append pn9
         pt9: typeId
         this.pendType.append pt9
@@ -661,13 +661,17 @@ ZTyping: class {
 
     # declPendMemberType -- the type a pended write recorded for
     # (parent, name); 0 when there is none.
-    declPendMemberType: function {t: this.view parentTypeId: ztypes.tid nameId: u64} out u64 is {
+    declPendMemberType: function {
+        t: this.view
+        parentTypeId: ztypes.tid
+        nameId: zast.nameid
+    } out u64 is {
         r9: u64
         i9: u64
         n9: t.pendParent.length
         for i9 < n9 loop {
             hit9: (t.pendParent.get i: i9) == parentTypeId
-            if hit9 then hit9 = (t.pendName.get i: i9) == nameId
+            if hit9 then hit9 = (t.pendName.get i: i9) == nameId.u64
             if hit9 then r9 = t.pendType.get i: i9
             i9 = i9 + 1
         }
@@ -776,9 +780,8 @@ ZTyping: class {
     # declSetMemberType -- record a member declaration's type. Deliberately
     # not declSetType: the member did not mint the type, so it must not claim
     # the reverse declByTypeId edge.
-    declSetMemberType: function {:this parentTypeId: ztypes.tid nameId: u64 typeId: ztypes.tid} is {
-        nid8: nameId.u32.orPanic
-        md8: this.declMemberIdOf :parentTypeId nameId: (zast.nameid.create from: nid8.u32)
+    declSetMemberType: function {:this parentTypeId: ztypes.tid nameId: zast.nameid typeId: ztypes.tid} is {
+        md8: this.declMemberIdOf :parentTypeId :nameId
         if md8.isZero then {
             # a function type's members are its parameters, and a synthesized
             # constructor gains them after its own declaration exists
@@ -802,7 +805,7 @@ ZTyping: class {
                 return
             }
             md8 = (this.declNew
-                name: nid8
+                name: nameId
                 parent: od8
                 kind: declkind.paramDecl
                 node: node8
@@ -832,17 +835,16 @@ ZTyping: class {
     declChildOf: function {:this pool: zast.StringPool parentTypeId: ztypes.tid name: StringView} out optionval u64 is {
         nid9: pool.find s: name
         if nid9.isZero then return (optionval.none u64)
-        return (this.declChildOfId :parentTypeId nameId: nid9.u64)
+        return (this.declChildOfId :parentTypeId nameId: nid9)
     }
 
     declChildOfId: function {
         t: this.view
         parentTypeId: ztypes.tid
-        nameId: u64
+        nameId: zast.nameid
     } out optionval u64 is {
-        n329: nameId.u32.or d: 0
-        if n329 == 0 then return (optionval.none u64)
-        md9: t.declMemberIdOf :parentTypeId nameId: (zast.nameid.create from: n329.u32)
+        if nameId.isZero then return (optionval.none u64)
+        md9: t.declMemberIdOf :parentTypeId :nameId
         if (md9.isZero) == false then {
             t9: u64
             {
@@ -1099,14 +1101,10 @@ ZTyping: class {
     # `parentTypeId`, appended in member order. A no-op
     # when that type has no declaration of its own, or when the member is
     # already declared (a type writing its own `create` in an is-block).
-    declSynthMember: function {:this parentTypeId: ztypes.tid nameId: u64 kind: declkind} is {
+    declSynthMember: function {:this parentTypeId: ztypes.tid nameId: zast.nameid kind: declkind} is {
         od9: this.declIdOfType typeId: parentTypeId
         if od9.isZero then return
-        nid8: nameId.u32.orPanic
-        if (this.declFindChild
-            parentDeclId: od9
-            nameId: (zast.nameid.create from: nid8.u32)
-        ) > 0 then return
+        if (this.declFindChild parentDeclId: od9 :nameId) > 0 then return
         node9: u32
         {
             if (this.declValid id: od9) then {
@@ -1115,7 +1113,7 @@ ZTyping: class {
             }
         }
         kk9: kind
-        this.declNew name: nid8 parent: od9 kind: kk9 node: node9
+        this.declNew name: nameId parent: od9 kind: kk9 node: node9
     }
 
     # declChildSlots -- how many children a declaration's namespace holds.
@@ -1303,13 +1301,9 @@ ZTyping: class {
 
     # declHasMemberId -- does the type that minted `parentTypeId` declare a
     # typed member `nameId`? The declaration-side form of hasChildId.
-    declHasMemberId: function {:this parentTypeId: ztypes.tid nameId: u64} out bool is {
-        n329: nameId.u32.or d: 0
-        if n329 == 0 then return false
-        return (this.declTypedMemberIdOf
-            :parentTypeId
-            nameId: (zast.nameid.create from: n329.u32)
-        ) > 0
+    declHasMemberId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} out bool is {
+        if nameId.isZero then return false
+        return (this.declTypedMemberIdOf :parentTypeId :nameId) > 0
     }
 
     # declMemberIdOf -- the declaration of member `nameId` under the type
@@ -1350,15 +1344,14 @@ ZTyping: class {
     # ensure the member's declaration, stamp the type onto it, and on first
     # sight position it in the owner's last member slot, so declaration order
     # is built as member order rather than corrected afterwards.
-    setMemberType: function {:this parentTypeId: ztypes.tid nameId: u64 childTypeId: u64} is {
-        n329: nameId.u32.or d: 0
+    setMemberType: function {:this parentTypeId: ztypes.tid nameId: zast.nameid childTypeId: u64} is {
         # first sight is "the declaration does not carry a type yet". It also
         # reads true for a unit's `public:` pseudo-member, which already has
         # one; that costs nothing, because declMoveChildToEnd rotates member
         # slots only and a publicNs child is not among them.
         first9: false
-        if n329 > 0 then {
-            fm9: this.declTypedMemberIdOf :parentTypeId nameId: (zast.nameid.create from: n329.u32)
+        if (nameId.isZero) == false then {
+            fm9: this.declTypedMemberIdOf :parentTypeId :nameId
             first9 = fm9.isZero
         }
         # declSetMemberType can be what CREATES the member declaration, so the
@@ -1372,7 +1365,7 @@ ZTyping: class {
             od9: this.declIdOfType typeId: parentTypeId
             if (od9.isZero) == false then (this.declMoveChildToEnd
                 parentDeclId: od9
-                nameId: (zast.nameid.create from: n329.u32)
+                :nameId
             )
         }
     }
@@ -1400,8 +1393,8 @@ ZTyping: class {
 
     # setChildGrantsPrivateId -- mark a field edge as one whose declared type
     # was a `.private` handle, so reads through it are private-capable.
-    setChildGrantsPrivateId: function {:this parentTypeId: ztypes.tid nameId: u64} is {
-        md8: this.declMemberIdOf :parentTypeId nameId: (zast.nameid.create from: nameId.u32.orPanic)
+    setChildGrantsPrivateId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} is {
+        md8: this.declMemberIdOf :parentTypeId :nameId
         if (md8.isZero) == false then {
             if (this.declValid id: md8) then {
                 do8: this.decls.getMut i: (md8 - 1)
@@ -1548,8 +1541,8 @@ ZTyping: class {
     }
 
     # setChildOwnershipId -- the id-keyed form of setChildOwnership.
-    setChildOwnershipId: function {:this parentTypeId: ztypes.tid nameId: u64 ownership: ztypes.zparamownership} is {
-        md8: this.declMemberIdOf :parentTypeId nameId: (zast.nameid.create from: nameId.u32.orPanic)
+    setChildOwnershipId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid ownership: ztypes.zparamownership} is {
+        md8: this.declMemberIdOf :parentTypeId :nameId
         if (md8.isZero) == false then {
             if (this.declValid id: md8) then {
                 do8: this.decls.getMut i: (md8 - 1)
@@ -1821,10 +1814,10 @@ main: function is {
     )
 
     print "=== children ==="
-    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "x").u64 childTypeId: tInt
-    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "y").u64 childTypeId: tInt
-    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "label").u64 childTypeId: tStr
-    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "x").u64 childTypeId: tInt
+    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "x") childTypeId: tInt
+    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "y") childTypeId: tInt
+    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "label") childTypeId: tStr
+    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "x") childTypeId: tInt
 
     print "memberCount point -> \{ty.declMemberCount ownerTid: pid}"
     smokeHasChild pool: pool9 :ty :pid name: "x"
@@ -1917,7 +1910,7 @@ smokeHasChild: function {pool: zast.StringPool ty: ZTyping pid: u64 name: String
     b: false
     if nid9 > 0 then b = (ty.declHasMemberId
         parentTypeId: (ztypes.tid.create from: pid.u64)
-        nameId: nid9.u64
+        nameId: nid9
     )
     print "hasMember point.\{name} -> \{boolText b}"
 }

@@ -162,16 +162,16 @@ atomName: function {ast: Ast.view n: Node.view} out String is {
 
 # atomNameId -- the Ast.names pool id of an atomid/labelvalue node's name
 # (0 when the node is neither; no pool id is 0, so lookups by it miss).
-atomNameId: function {ast: Ast.view n: Node.view} out u64 is {
+atomNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     ast
     match (
         n
     ) case atomid then {
-        return n.name.u64
+        return n.name
     } case labelvalue then {
-        return n.name.u64
+        return n.name
     } else {
-        return 0
+        return (zast.nameid.create from: 0)
     }
 }
 
@@ -512,7 +512,7 @@ checkBareTypeValueAt: function {
         bareCtorError :st :nodeid :lineno :colno :width msg: mi9 hint: hi9
         return
     }
-    crO9: st.typing.declChildOfId parentTypeId: tid nameId: zast.wkCreate.u64
+    crO9: st.typing.declChildOfId parentTypeId: tid nameId: zast.wkCreate
     hasCr9: false
     match (
         crO9
@@ -1084,7 +1084,7 @@ indexDeclDef: function {
     ty: ztyping.ZTyping
     ast: Ast.view
     parentDeclId: ztypes.declid
-    nameRef: u32
+    nameRef: zast.nameid
     nopNodeId: u32
     opNodeId: u32
 } out ztypes.declid is {
@@ -1119,7 +1119,7 @@ indexDeclDef: function {
         )
         indexDeclObjInner :ty :ast declId: did0 objNodeId: opNodeId
     } case unitdef then {
-        if (zast.nameTextEq :ast ref: (zast.nameid.create from: nameRef.u32) s: "public") then {
+        if (zast.nameTextEq :ast ref: nameRef s: "public") then {
             # the exported-namespace block: entries become name -> sibling
             # edges, filled by indexDeclPublicEntries after the unit walk
             did0 = (ty.declNew
@@ -1349,7 +1349,7 @@ indexDeclAsMember: function {
     ty: ztyping.ZTyping
     ast: Ast.view
     parentDeclId: ztypes.declid
-    nameRef: u32
+    nameRef: zast.nameid
     nopNodeId: u32
     opNodeId: u32
 } is {
@@ -1512,19 +1512,19 @@ declareCanonicalType: function {
     # the type that owns this one when it is a member (`Type.method`), by
     # interned name id; 0 for a free definition. `name` is always the
     # definition's OWN name -- no qualified name is built, and none is parsed.
-    ownerNameId: 0.u32
+    ownerNameId: zast.nameid
     name: StringView
     typetype: ztypes.ztypetype
 } out u64 is {
     qowner9: u64
-    if ownerNameId != 0 then {
+    if (ownerNameId.isZero) == false then {
         cudq: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
         match (
             cudq
         ) case some then {
             bo9: (ty.declChildOfId
                 parentTypeId: (ztypes.tid.create from: cudq.u64)
-                nameId: ownerNameId.u64
+                nameId: ownerNameId
             )
             match (
                 bo9
@@ -1545,7 +1545,7 @@ declareCanonicalType: function {
             return exq
         } case none then null
     }
-    if ownerNameId == 0 then {
+    if ownerNameId.isZero then {
         cudm: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
         match (
             cudm
@@ -1567,11 +1567,11 @@ declareCanonicalType: function {
     if qowner9 > 0 then {
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: qowner9.u64)
-            nameId: (ast.internString text: name).u64
+            nameId: (ast.internString text: name)
             childTypeId: id
         )
     } else {
-        if ownerNameId == 0 then {
+        if ownerNameId.isZero then {
             cud0: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
             match (
                 cud0
@@ -1581,7 +1581,7 @@ declareCanonicalType: function {
                 # linkDeclType to find, so without this nothing declares it and
                 # declChildOf cannot answer. declSynthMember no-ops when the
                 # name is already declared.
-                unid9: (ast.internString text: name).u64
+                unid9: (ast.internString text: name)
                 ukk9: ztyping.declkind.typeDecl
                 if typetype == ztypes.ztypetype.functionType then ukk9 = ztyping.declkind.funcDecl
                 (ty.declSynthMember
@@ -1597,7 +1597,7 @@ declareCanonicalType: function {
             } case none then null
         }
     }
-    if ownerNameId == 0 then linkDeclType :ty :reg :ast :defUnit :name tid: id
+    if ownerNameId.isZero then linkDeclType :ty :reg :ast :defUnit :name tid: id
     prxOk9: false
     if (reg.defOf tid: id).u64 == 0 then prxOk9 = true
     if prxOk9 then {
@@ -1656,6 +1656,7 @@ resolveNamedType: function {
             :ty
             :reg
             defUnit: "system"
+            ownerNameId: zast.nameid
             name: "null"
             typetype: ztypes.ztypetype.nullType
         )
@@ -1666,6 +1667,7 @@ resolveNamedType: function {
             :ty
             :reg
             defUnit: "system"
+            ownerNameId: zast.nameid
             name: "never"
             typetype: ztypes.ztypetype.neverType
         )
@@ -1719,6 +1721,7 @@ resolveNamedType: function {
                 :ty
                 :reg
                 defUnit: duo7.stringview
+                ownerNameId: zast.nameid
                 :name
                 typetype: tto7
             )
@@ -2082,14 +2085,14 @@ declOfFnDef: function {
     ty: ztyping.ZTyping
     ast: Ast
     unitName: StringView
-    ownerNameId: u32
+    ownerNameId: zast.nameid
     defName: StringView
     thisName: StringView
 } out ztypes.declid is {
     if thisName.length == 0 then return (declOfUnitDef :ty :ast defUnit: unitName name: defName)
     mown9: declOfUnitDef :ty :ast defUnit: unitName name: thisName
     mnm9: defName
-    if ownerNameId != 0 then {
+    if (ownerNameId.isZero) == false then {
         if (zast.poolTextEq
             pool: ast.names
             ref: (zast.nameid.create from: ownerNameId.u32)
@@ -2913,7 +2916,7 @@ returnParamTid: function {
 # wrappers and `.borrow`-style strip markers; 0 for any other shape. Reads the
 # declaration only: it resolves nothing and mints nothing, unlike partialTyperefTid
 # below.
-returnWrapperBaseNameId: function {ast: Ast.view n: Node.view} out u64 is {
+returnWrapperBaseNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     match (
         n
     ) case expression then {
@@ -2923,11 +2926,11 @@ returnWrapperBaseNameId: function {ast: Ast.view n: Node.view} out u64 is {
         if (isStripMarker name: dcn7.stringview) then {
             return (returnWrapperBaseNameId :ast n: (ast.nodes.get i: (n.parent - 1).u64))
         }
-        return 0
+        return (zast.nameid.create from: 0)
     } case call then {
         return (atomNameId :ast n: (ast.nodes.get i: (n.callable - 1).u64))
     } else {
-        return 0
+        return (zast.nameid.create from: 0)
     }
 }
 
@@ -3364,7 +3367,7 @@ typeofSourceType: function {ast: Ast.view
         )
     } case atomid then {
         if ownerId == 0 then return 0
-        co: ty.declChildOfId parentTypeId: (ztypes.tid.create from: ownerId.u64) nameId: n.name.u64
+        co: ty.declChildOfId parentTypeId: (ztypes.tid.create from: ownerId.u64) nameId: n.name
         match (
             co
         ) case some then {
@@ -3773,7 +3776,7 @@ resolveFunction: function {
     ast: Ast
     unitName: StringView
     # a method's owner, by interned name id; 0 for a free function
-    ownerNameId: 0.u32
+    ownerNameId: zast.nameid
     defName: StringView
     fnode: zast.FunctionData
     thisName: StringView
@@ -3944,7 +3947,7 @@ resolveFunction: function {
                     }
                     (ty.setMemberType
                         parentTypeId: (ztypes.tid.create from: fid.u64)
-                        nameId: pm.name.u64
+                        nameId: pm.name
                         childTypeId: fpt9
                     )
                 }
@@ -3979,7 +3982,7 @@ resolveFunction: function {
                     if thisName.length != 0 then {
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: fid.u64)
-                            nameId: pm.name.u64
+                            nameId: pm.name
                             childTypeId: gpt2
                         )
                     }
@@ -3996,7 +3999,7 @@ resolveFunction: function {
                 )
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: fid.u64)
-                    nameId: pm.name.u64
+                    nameId: pm.name
                     childTypeId: cid
                 )
                 if (isNumericLiteralName name: ptn.stringview) then {
@@ -4048,7 +4051,7 @@ resolveFunction: function {
                                     name: pname.stringview
                                     node: pm.operation
                                 )
-                            } else if (reg.isUnitName nameId: (nameIdOfU64
+                            } else if (reg.isUnitName nameId: (nameIdOf
                                 :ast
                                 name: prn9.stringview
                             )) == false then {
@@ -4255,7 +4258,7 @@ resolveMethodFn: function {
     reg: ztypes.ZTypeRegistry.view
     ast: Ast.view
     unitName: StringView
-    ownerNameId: u32
+    ownerNameId: zast.nameid
     mname: StringView
     thisName: StringView
     op: Node
@@ -4343,7 +4346,7 @@ resolveSpecFn: function {
     reg: ztypes.ZTypeRegistry.view
     ast: Ast.view
     unitName: StringView
-    ownerNameId: u32
+    ownerNameId: zast.nameid
     mname: StringView
     thisName: StringView
     op: Node
@@ -4534,7 +4537,7 @@ attachMethods: function {
             ) case some then {
                 (ty.setMemberType
                     parentTypeId: parentId
-                    nameId: am.name.u64
+                    nameId: am.name
                     childTypeId: mido
                 )
             } case none then {
@@ -4548,7 +4551,7 @@ attachMethods: function {
                     cid: reg.newType name: clname typetype: ztypes.ztypetype.recordType
                     (ty.setMemberType
                         parentTypeId: parentId
-                        nameId: am.name.u64
+                        nameId: am.name
                         childTypeId: cid
                     )
                     ty.markAsConstClone typeId: cid
@@ -4643,7 +4646,7 @@ attachMarkers: function {
                 mlbl: zast.nameTextCopy :ast ref: mm.name
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: parentId.u64)
-                    nameId: mm.name.u64
+                    nameId: mm.name
                     childTypeId: mtid
                 )
                 if (reg.hasDestructorName typeId: (ztypes.tid.create from: mtid.u64)) then needsDtor = true
@@ -4667,7 +4670,7 @@ attachMarkers: function {
                     )
                     (ty.setMemberType
                         parentTypeId: (ztypes.tid.create from: parentId.u64)
-                        nameId: mm.name.u64
+                        nameId: mm.name
                         childTypeId: amlid
                     )
                     acf: (reg.newConformance
@@ -4711,6 +4714,7 @@ resolveData: function {ast: Ast
         :ty
         :reg
         defUnit: unitName
+        ownerNameId: zast.nameid
         name: defName
         typetype: ztypes.ztypetype.dataType
     )
@@ -4719,7 +4723,7 @@ resolveData: function {ast: Ast
     ordinal: u64
     eiter: dnode.elements.iterate
     for elId9: eiter loop {
-        nmRef9: u32
+        nmRef9: zast.nameid
         isNo9: false
         {
             el: ast.nodes.get i: (elId9 - 1).u64
@@ -4731,9 +4735,9 @@ resolveData: function {ast: Ast
             } else null
         }
         if isNo9 then {
-            if nmRef9 == 0 then {
+            if nmRef9.isZero then {
                 ord: "\{ordinal}"
-                oid9: (ast.internString text: ord.stringview).u64
+                oid9: (ast.internString text: ord.stringview)
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: did.u64)
                     nameId: oid9
@@ -4742,7 +4746,7 @@ resolveData: function {ast: Ast
             } else {
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: did.u64)
-                    nameId: nmRef9.u64
+                    nameId: nmRef9
                     childTypeId: litId
                 )
             }
@@ -4757,17 +4761,18 @@ resolveData: function {ast: Ast
         :ty
         :reg
         defUnit: "system"
+        ownerNameId: zast.nameid
         name: tagName.stringview
         typetype: ztypes.ztypetype.recordType
     )
     (ty.declSynthMember
         parentTypeId: (ztypes.tid.create from: did.u64)
-        nameId: zast.wkTag.u64
+        nameId: zast.wkTag
         kind: ztyping.declkind.fieldDecl
     )
     (ty.setMemberType
         parentTypeId: (ztypes.tid.create from: did.u64)
-        nameId: zast.wkTag.u64
+        nameId: zast.wkTag
         childTypeId: tagId
     )
 }
@@ -5003,7 +5008,7 @@ materializeCreateParams: function {
     for i9 < fnameIds.length loop {
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: createId.u64)
-            nameId: (fnameIds.get i: i9)
+            nameId: (zast.nameid.create from: (fnameIds.get i: i9))
             childTypeId: (ftypeIds.get i: i9)
         )
         i9 = i9 + 1
@@ -5165,7 +5170,7 @@ applyGrantsPrivate: function {ty: ztyping.ZTyping parentId: u64 grants: (ListVal
     for gi9 < gn9 loop {
         (ty.setChildGrantsPrivateId
             parentTypeId: (ztypes.tid.create from: parentId.u64)
-            nameId: (grants.get i: gi9)
+            nameId: (zast.nameid.create from: (grants.get i: gi9))
         )
         gi9 = gi9 + 1
     }
@@ -5477,6 +5482,7 @@ resolveRecord: function {
         :ty
         :reg
         defUnit: unitName
+        ownerNameId: zast.nameid
         name: defName
         typetype: ztypes.ztypetype.recordType
     )
@@ -5546,7 +5552,7 @@ resolveRecord: function {
                     if fname.stringview == "==" then hasEqIs = true
                     (ty.setMemberType
                         parentTypeId: (ztypes.tid.create from: rid.u64)
-                        nameId: fm.name.u64
+                        nameId: fm.name
                         childTypeId: mido
                     )
                     if (fnFieldFlaggableName name: fname.stringview) then {
@@ -5566,7 +5572,7 @@ resolveRecord: function {
                     ) case some then {
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: rid.u64)
-                            nameId: fm.name.u64
+                            nameId: fm.name
                             childTypeId: mrefR9
                         )
                         if (reg.typetypeOf typeId: (ztypes.tid.create from: mrefR9.u64)) == ztypes.ztypetype.functionType then {
@@ -5596,7 +5602,7 @@ resolveRecord: function {
                         )
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: rid.u64)
-                            nameId: fm.name.u64
+                            nameId: fm.name
                             childTypeId: cid
                         )
                         if (reg.typetypeOf typeId: cid) == ztypes.ztypetype.functionType then {
@@ -5624,7 +5630,7 @@ resolveRecord: function {
                                 node: fm.operation
                             )
                         } else {
-                            if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) == false when (reg.isUnitName nameId: (nameIdOfU64
+                            if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) == false when (reg.isUnitName nameId: (nameIdOf
                                 :ast
                                 name: rdnr.stringview
                             )) == false then {
@@ -5669,12 +5675,12 @@ resolveRecord: function {
         createId: reg.newType name: "create" ownerTid: rid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.wkCreate.u64
+            nameId: zast.wkCreate
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.wkCreate.u64
+            nameId: zast.wkCreate
             childTypeId: createId
         )
         materializeCreateParams :ty :reg :ast typeTid: rid :createId
@@ -5683,12 +5689,12 @@ resolveRecord: function {
         borrowId: reg.newType name: "borrow" ownerTid: rid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.wkBorrow.u64
+            nameId: zast.wkBorrow
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.wkBorrow.u64
+            nameId: zast.wkBorrow
             childTypeId: borrowId
         )
     } else {
@@ -5697,23 +5703,23 @@ resolveRecord: function {
                 eqId: reg.newType name: "==" ownerTid: rid typetype: ztypes.ztypetype.functionType
                 (ty.declSynthMember
                     parentTypeId: (ztypes.tid.create from: rid.u64)
-                    nameId: zast.wkOpEq.u64
+                    nameId: zast.wkOpEq
                     kind: ztyping.declkind.methodDecl
                 )
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: rid.u64)
-                    nameId: zast.wkOpEq.u64
+                    nameId: zast.wkOpEq
                     childTypeId: eqId
                 )
                 neqId: reg.newType name: "!=" ownerTid: rid typetype: ztypes.ztypetype.functionType
                 (ty.declSynthMember
                     parentTypeId: (ztypes.tid.create from: rid.u64)
-                    nameId: zast.wkOpNe.u64
+                    nameId: zast.wkOpNe
                     kind: ztyping.declkind.methodDecl
                 )
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: rid.u64)
-                    nameId: zast.wkOpNe.u64
+                    nameId: zast.wkOpNe
                     childTypeId: neqId
                 )
             }
@@ -5730,12 +5736,12 @@ resolveRecord: function {
         hshR9: reg.newType name: "hash" ownerTid: rid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.wkHash.u64
+            nameId: zast.wkHash
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.wkHash.u64
+            nameId: zast.wkHash
             childTypeId: hshR9
         )
     }
@@ -5808,6 +5814,7 @@ resolveVariant: function {
         :ty
         :reg
         defUnit: unitName
+        ownerNameId: zast.nameid
         name: defName
         typetype: ztypes.ztypetype.variantType
     )
@@ -5862,7 +5869,7 @@ resolveVariant: function {
             )
             (ty.setMemberType
                 parentTypeId: (ztypes.tid.create from: vid.u64)
-                nameId: fm.name.u64
+                nameId: fm.name
                 childTypeId: cid
             )
             (recordTyperef
@@ -5888,12 +5895,12 @@ resolveVariant: function {
         }
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkTag.u64
+            nameId: zast.wkTag
             kind: ztyping.declkind.fieldDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkTag.u64
+            nameId: zast.wkTag
             childTypeId: tagId
         )
     }
@@ -5942,7 +5949,7 @@ resolveVariant: function {
                 } else {
                     (ty.setMemberType
                         parentTypeId: (ztypes.tid.create from: vid.u64)
-                        nameId: am.name.u64
+                        nameId: am.name
                         childTypeId: mido
                     )
                 }
@@ -5966,23 +5973,23 @@ resolveVariant: function {
         eqId: reg.newType name: "==" ownerTid: vid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkOpEq.u64
+            nameId: zast.wkOpEq
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkOpEq.u64
+            nameId: zast.wkOpEq
             childTypeId: eqId
         )
         neqId: reg.newType name: "!=" ownerTid: vid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkOpNe.u64
+            nameId: zast.wkOpNe
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkOpNe.u64
+            nameId: zast.wkOpNe
             childTypeId: neqId
         )
     }
@@ -5993,12 +6000,12 @@ resolveVariant: function {
         hshV9: reg.newType name: "hash" ownerTid: vid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkHash.u64
+            nameId: zast.wkHash
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkHash.u64
+            nameId: zast.wkHash
             childTypeId: hshV9
         )
     }
@@ -6141,6 +6148,7 @@ resolveUnion: function {
         :ty
         :reg
         defUnit: unitName
+        ownerNameId: zast.nameid
         name: defName
         typetype: ztypes.ztypetype.unionType
     )
@@ -6260,7 +6268,7 @@ resolveUnion: function {
             }
             (ty.setMemberType
                 parentTypeId: (ztypes.tid.create from: uid.u64)
-                nameId: fm.name.u64
+                nameId: fm.name
                 childTypeId: cid
             )
             # An arm's marker is the payload's, not the union's: the shell
@@ -6321,12 +6329,12 @@ resolveUnion: function {
         }
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: uid.u64)
-            nameId: zast.wkTag.u64
+            nameId: zast.wkTag
             kind: ztyping.declkind.fieldDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: uid.u64)
-            nameId: zast.wkTag.u64
+            nameId: zast.wkTag
             childTypeId: tagId
         )
     }
@@ -6375,7 +6383,7 @@ resolveUnion: function {
                 } else {
                     (ty.setMemberType
                         parentTypeId: (ztypes.tid.create from: uid.u64)
-                        nameId: am.name.u64
+                        nameId: am.name
                         childTypeId: mido
                     )
                 }
@@ -6492,6 +6500,7 @@ resolveClass: function {
         :ty
         :reg
         defUnit: unitName
+        ownerNameId: zast.nameid
         name: defName
         typetype: ztypes.ztypetype.classType
     )
@@ -6590,7 +6599,7 @@ resolveClass: function {
                     ) case some then {
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: cid.u64)
-                            nameId: fm.name.u64
+                            nameId: fm.name
                             childTypeId: mido
                         )
                         if isgen then (reg.setGeneric
@@ -6636,7 +6645,7 @@ resolveClass: function {
                 ) case some then {
                     (ty.setMemberType
                         parentTypeId: (ztypes.tid.create from: cid.u64)
-                        nameId: fm.name.u64
+                        nameId: fm.name
                         childTypeId: mref
                     )
                     if (reg.typetypeOf typeId: (ztypes.tid.create from: mref.u64)) == ztypes.ztypetype.functionType then {
@@ -6703,7 +6712,7 @@ resolveClass: function {
                         )
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: cid.u64)
-                            nameId: fm.name.u64
+                            nameId: fm.name
                             childTypeId: cidf
                         )
                         if (reg.typetypeOf typeId: cidf) == ztypes.ztypetype.functionType then {
@@ -6748,7 +6757,7 @@ resolveClass: function {
                                 node: fm.operation
                             )
                         } else {
-                            if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) == false when (reg.isUnitName nameId: (nameIdOfU64
+                            if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) == false when (reg.isUnitName nameId: (nameIdOf
                                 :ast
                                 name: rdnc.stringview
                             )) == false then {
@@ -6832,7 +6841,7 @@ resolveClass: function {
                     ) case some then {
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: cid.u64)
-                            nameId: amP4.name.u64
+                            nameId: amP4.name
                             childTypeId: amidP4
                         )
                         reg.setGeneric typeId: (ztypes.tid.create from: amidP4.u64) value: true
@@ -6879,12 +6888,12 @@ resolveClass: function {
             )
             (ty.declSynthMember
                 parentTypeId: (ztypes.tid.create from: cid.u64)
-                nameId: zast.wkCreate.u64
+                nameId: zast.wkCreate
                 kind: ztyping.declkind.methodDecl
             )
             (ty.setMemberType
                 parentTypeId: (ztypes.tid.create from: cid.u64)
-                nameId: zast.wkCreate.u64
+                nameId: zast.wkCreate
                 childTypeId: createId
             )
             materializeCreateParams :ty :reg :ast typeTid: cid :createId
@@ -6894,12 +6903,12 @@ resolveClass: function {
         borrowId: reg.newType name: "borrow" ownerTid: cid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: cid.u64)
-            nameId: zast.wkBorrow.u64
+            nameId: zast.wkBorrow
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: cid.u64)
-            nameId: zast.wkBorrow.u64
+            nameId: zast.wkBorrow
             childTypeId: borrowId
         )
     }
@@ -6932,6 +6941,7 @@ resolveFacet: function {
         :ty
         :reg
         defUnit: unitName
+        ownerNameId: zast.nameid
         name: defName
         typetype: ztypes.ztypetype.facetType
     )
@@ -6977,7 +6987,7 @@ resolveFacet: function {
             ) case some then {
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: fid.u64)
-                    nameId: sm.name.u64
+                    nameId: sm.name
                     childTypeId: sido
                 )
             } else null
@@ -6987,23 +6997,23 @@ resolveFacet: function {
         createId: reg.newType name: "create" ownerTid: fid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: fid.u64)
-            nameId: zast.wkCreate.u64
+            nameId: zast.wkCreate
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: fid.u64)
-            nameId: zast.wkCreate.u64
+            nameId: zast.wkCreate
             childTypeId: createId
         )
         borrowId: reg.newType name: "borrow" ownerTid: fid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: fid.u64)
-            nameId: zast.wkBorrow.u64
+            nameId: zast.wkBorrow
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: fid.u64)
-            nameId: zast.wkBorrow.u64
+            nameId: zast.wkBorrow
             childTypeId: borrowId
         )
     }
@@ -7028,6 +7038,7 @@ resolveProtocol: function {
         :ty
         :reg
         defUnit: unitName
+        ownerNameId: zast.nameid
         name: defName
         typetype: ztypes.ztypetype.protocolType
     )
@@ -7082,7 +7093,7 @@ resolveProtocol: function {
             ) case some then {
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: pid.u64)
-                    nameId: sm.name.u64
+                    nameId: sm.name
                     childTypeId: sido
                 )
             } else null
@@ -7092,23 +7103,23 @@ resolveProtocol: function {
         createId: reg.newType name: "create" ownerTid: pid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: pid.u64)
-            nameId: zast.wkCreate.u64
+            nameId: zast.wkCreate
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: pid.u64)
-            nameId: zast.wkCreate.u64
+            nameId: zast.wkCreate
             childTypeId: createId
         )
         borrowId: reg.newType name: "borrow" ownerTid: pid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: pid.u64)
-            nameId: zast.wkBorrow.u64
+            nameId: zast.wkBorrow
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: pid.u64)
-            nameId: zast.wkBorrow.u64
+            nameId: zast.wkBorrow
             childTypeId: borrowId
         )
     }
@@ -7141,12 +7152,12 @@ registerEmptyType: function {
         cci0: reg.newType name: "create" ownerTid: ex0 typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: ex0.u64)
-            nameId: zast.wkCreate.u64
+            nameId: zast.wkCreate
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: ex0.u64)
-            nameId: zast.wkCreate.u64
+            nameId: zast.wkCreate
             childTypeId: cci0
         )
         return ex0
@@ -7156,10 +7167,10 @@ registerEmptyType: function {
     ccid: reg.newType name: "create" ownerTid: nid typetype: ztypes.ztypetype.functionType
     (ty.declSynthMember
         parentTypeId: nid
-        nameId: zast.wkCreate.u64
+        nameId: zast.wkCreate
         kind: ztyping.declkind.methodDecl
     )
-    ty.setMemberType parentTypeId: nid nameId: zast.wkCreate.u64 childTypeId: ccid
+    ty.setMemberType parentTypeId: nid nameId: zast.wkCreate childTypeId: ccid
     linkDeclType :ty :reg :ast defUnit: unitName :name tid: nid
     return nid
 }
@@ -7346,7 +7357,7 @@ resolveAliasKey: function {
     ) case some then {
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: cud9.u64)
-            nameId: (ast.internString text: name).u64
+            nameId: (ast.internString text: name)
             childTypeId: atid9
         )
     } case none then null
@@ -7423,7 +7434,15 @@ descendNamed: function {
         classified9 = true
     } case none then null
     tid9: u64
-    if classified9 then tid9 = declareCanonicalType :ast :ty :reg :defUnit :name typetype: ttv9
+    if classified9 then tid9 = (declareCanonicalType
+        :ast
+        :ty
+        :reg
+        :defUnit
+        ownerNameId: zast.nameid
+        :name
+        typetype: ttv9
+    )
     if classified9 == false then {
         alo9: resolveAliasKey :ty :reg :ast :defUnit :name
         if alo9 > 0 then return (ztypes.tid.create from: alo9.u64)
@@ -7510,6 +7529,7 @@ resolveDef: function {
             :reg
             :ast
             :unitName
+            ownerNameId: zast.nameid
             :defName
             fnode: defn
             thisName: ""
@@ -7905,7 +7925,7 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
                 ty.unitTypesById.set key: opid.u64 value: uid
                 uid3: uid
                 (reg.setUnitName
-                    nameId: (zast.poolSet pool: program.ast.names text: nm9.stringview).u64
+                    nameId: (zast.poolSet pool: program.ast.names text: nm9.stringview)
                     uid: uid3
                 )
             }
@@ -8447,12 +8467,12 @@ fixupCustomTags: function {
                 cuidc: cuid
                 (ty.declSynthMember
                     parentTypeId: (ztypes.tid.create from: cuidc.u64)
-                    nameId: zast.wkTag.u64
+                    nameId: zast.wkTag
                     kind: ztyping.declkind.fieldDecl
                 )
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: cuidc.u64)
-                    nameId: zast.wkTag.u64
+                    nameId: zast.wkTag
                     childTypeId: ctid
                 )
             } else {
@@ -9204,12 +9224,12 @@ attachMonoUnitFuncs: function {
                     )
                     (ty.declSynthMember
                         parentTypeId: monoId
-                        nameId: fmNode9.name.u64
+                        nameId: fmNode9.name
                         kind: ztyping.declkind.methodDecl
                     )
                     (ty.setMemberType
                         parentTypeId: monoId
-                        nameId: fmNode9.name.u64
+                        nameId: fmNode9.name
                         childTypeId: shellId
                     )
                 }
@@ -9322,36 +9342,32 @@ blockHasYieldingLoop: function {ast: Ast.view blk: Node.view} out bool is {
 # nameIdOf -- the pool id of an already-interned name. 0 (absent) is what
 # every symbol-table query treats as a miss, so a name the pool never saw
 # cannot resolve -- which is exactly right, since nothing declared it.
-# nameIdOfU64 -- nameIdOf widened for the u64-keyed unit-name table. A method
+# nameIdOf -- nameIdOf widened for the u64-keyed unit-name table. A method
 # on a CALL RESULT emits `&<call>`, which is not an lvalue, so the widening
 # cannot ride the call site.
-nameIdOfU64: function {ast: Ast name: StringView} out u64 is {
-    return (nameIdOf :ast :name).u64
-}
-
 nameIdOf: function {ast: Ast name: StringView} out zast.nameid is {
     return (zast.poolFind pool: ast.names text: name)
 }
 
 # assignmentLocalName -- the pool id of the local a statement-line binds via
 # `name: value`, or 0.
-assignmentLocalName: function {ast: Ast.view line: Node.view} out u32 is {
+assignmentLocalName: function {ast: Ast.view line: Node.view} out zast.nameid is {
     match (
         line
     ) case statementline then {
         return (assignmentInnerName s: (ast.nodes.get i: (line.statementline - 1).u64))
     } else {
-        return 0
+        return (zast.nameid.create from: 0)
     }
 }
 # the bound name of assignment statement `s`.
-assignmentInnerName: function {s: Node.view} out u32 is {
+assignmentInnerName: function {s: Node.view} out zast.nameid is {
     match (
         s
     ) case assignment then {
         return s.name
     } else {
-        return 0
+        return (zast.nameid.create from: 0)
     }
 }
 
@@ -9386,7 +9402,7 @@ addPromotedLocalsBlk: function {
                 lf: resolveAtomType :ty :reg :ast unitName: "" nm: "i64" thisName: ""
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: iterId.u64)
-                    nameId: nm.u64
+                    nameId: nm
                     childTypeId: lf
                 )
             }
@@ -9449,7 +9465,7 @@ addResumeInputExpr: function {
                     )
                     (ty.setMemberType
                         parentTypeId: (ztypes.tid.create from: iterId.u64)
-                        nameId: zast.wkResumeInput.u64
+                        nameId: zast.wkResumeInput
                         childTypeId: rf
                     )
                     vf: (resolveAtomType
@@ -9462,7 +9478,7 @@ addResumeInputExpr: function {
                     )
                     (ty.setMemberType
                         parentTypeId: (ztypes.tid.create from: callId.u64)
-                        nameId: zast.wkValue.u64
+                        nameId: zast.wkValue
                         childTypeId: vf
                     )
                     own: pathOwnership :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
@@ -9471,7 +9487,7 @@ addResumeInputExpr: function {
                     ) case some then {
                         (ty.setChildOwnershipId
                             parentTypeId: (ztypes.tid.create from: callId.u64)
-                            nameId: zast.wkValue.u64
+                            nameId: zast.wkValue
                             ownership: own
                         )
                     } case none then null
@@ -9566,7 +9582,7 @@ addInlineIterFieldsBlk: function {
                 )
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: iterId.u64)
-                    nameId: (ast.internString text: fieldName.stringview).u64
+                    nameId: (ast.internString text: fieldName.stringview)
                     childTypeId: ft
                 )
                 n = n + 1
@@ -9615,15 +9631,15 @@ synthGeneratorIterClass: function {
     if gfp9 > 0 then reg.setDef typeId: iterId declId: gfp9
     needsDtor: false
     st1: resolveAtomType :ty :reg :ast :unitName nm: "i64" thisName: ""
-    ty.setMemberType parentTypeId: iterId nameId: zast.wkState.u64 childTypeId: st1
+    ty.setMemberType parentTypeId: iterId nameId: zast.wkState childTypeId: st1
     createId: reg.newType name: "create" ownerTid: iterId typetype: ztypes.ztypetype.functionType
     if gfp9 > 0 then reg.setDef typeId: createId declId: gfp9
     callId: reg.newType name: "call" ownerTid: iterId typetype: ztypes.ztypetype.functionType
     if gfp9 > 0 then reg.setDef typeId: callId declId: gfp9
-    ty.setMemberType parentTypeId: callId nameId: zast.wkThis.u64 childTypeId: iterId
+    ty.setMemberType parentTypeId: callId nameId: zast.wkThis childTypeId: iterId
     (ty.setChildOwnershipId
         parentTypeId: callId
-        nameId: zast.wkThis.u64
+        nameId: zast.wkThis
         ownership: ztypes.zparamownership.borrowMode
     )
     piter: fnode.parameters.iterate
@@ -9637,13 +9653,13 @@ synthGeneratorIterClass: function {
             f1: resolveAtomType :ty :reg :ast :unitName nm: ptn.stringview :thisName
             (ty.setMemberType
                 parentTypeId: iterId
-                nameId: pm.name.u64
+                nameId: pm.name
                 childTypeId: f1
             )
             f2: resolveAtomType :ty :reg :ast :unitName nm: ptn.stringview :thisName
             (ty.setMemberType
                 parentTypeId: createId
-                nameId: pm.name.u64
+                nameId: pm.name
                 childTypeId: f2
             )
             pown: pathOwnership :ast n: (ast.nodes.get i: (pm.operation - 1).u64)
@@ -9672,8 +9688,8 @@ synthGeneratorIterClass: function {
         addPromotedLocals :ty :reg :ast :iterId bodyId: fnode.body
     }
     addInlineIterFields :ty :reg :ast :iterId bodyId: fnode.body
-    ty.setMemberType parentTypeId: iterId nameId: zast.wkCreate.u64 childTypeId: createId
-    ty.setMemberType parentTypeId: iterId nameId: zast.wkCall.u64 childTypeId: callId
+    ty.setMemberType parentTypeId: iterId nameId: zast.wkCreate childTypeId: createId
+    ty.setMemberType parentTypeId: iterId nameId: zast.wkCall childTypeId: callId
     if needsDtor then {
         dn: "\{iterName}_destroy"
         (reg.setDestructorName
@@ -9772,7 +9788,7 @@ resolveInlineGenericUnit: function {
             ) case some then {
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: icu0.u64)
-                    nameId: (zast.poolFind pool: ast.names text: defName).u64
+                    nameId: (zast.poolFind pool: ast.names text: defName)
                     childTypeId: rid
                 )
             } case none then null
@@ -9807,7 +9823,7 @@ resolveInlineGenericUnit: function {
                     )
                     (ty.setMemberType
                         parentTypeId: uid
-                        nameId: bmNode9.name.u64
+                        nameId: bmNode9.name
                         childTypeId: mido
                     )
                 } case none then null
@@ -9856,7 +9872,7 @@ createUnitMono: function {
             if mud9 > 0 then ty.declSetType declId: mud9 typeId: monoId
         }
         iur: monoId
-        reg.setUnitName nameId: (zast.poolSet pool: ast.names text: monoName).u64 uid: iur
+        reg.setUnitName nameId: (zast.poolSet pool: ast.names text: monoName) uid: iur
         ccu2: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
         match (
             ccu2
@@ -9864,7 +9880,7 @@ createUnitMono: function {
             # declare the mono's mangled name under the instantiating unit
             # before edging it: it is not a source def, so nothing else
             # declares it and childOf would have only the edge to read
-            mnid9: (ast.internString text: monoName).u64
+            mnid9: (ast.internString text: monoName)
             (ty.declSynthMember
                 parentTypeId: (ztypes.tid.create from: ccu2.u64)
                 nameId: mnid9
@@ -10086,7 +10102,7 @@ registerMonoFnParams: function {
                 ) case some then {
                     (ty.setMemberType
                         parentTypeId: (ztypes.tid.create from: fnId.u64)
-                        nameId: ppm.name.u64
+                        nameId: ppm.name
                         childTypeId: ppgo
                     )
                 } case none then null
@@ -10182,7 +10198,7 @@ buildUnitMono: function {
                             srcId = mo0
                             (ty.setMemberType
                                 parentTypeId: (ztypes.tid.create from: tplId.u64)
-                                nameId: fmNode9.name.u64
+                                nameId: fmNode9.name
                                 childTypeId: mo0
                             )
                         } case none then null
@@ -10198,12 +10214,12 @@ buildUnitMono: function {
                     # here and in registerMonoFnParams -- reach through
                     (ty.declSynthMember
                         parentTypeId: monoId
-                        nameId: fmNode9.name.u64
+                        nameId: fmNode9.name
                         kind: ztyping.declkind.methodDecl
                     )
                     (ty.setMemberType
                         parentTypeId: monoId
-                        nameId: fmNode9.name.u64
+                        nameId: fmNode9.name
                         childTypeId: newFnId
                     )
                     if srcId > 0 then {
@@ -10245,7 +10261,7 @@ buildUnitMono: function {
                             } case none then null
                             (ty.setMemberType
                                 parentTypeId: newFnId
-                                nameId: (zast.poolFind pool: ast.names text: chName.stringview).u64
+                                nameId: (zast.poolFind pool: ast.names text: chName.stringview)
                                 childTypeId: target
                             )
                             ci = ci + 1
@@ -10486,7 +10502,7 @@ completeUnitInstantiations: function {
         }
         mk: "\{mainName}.\{rm}"
         mgo: (optionval.none u64)
-        rbId9: u32
+        rbId9: zast.nameid
         tnId9: u32
         match (
             program
@@ -10792,9 +10808,9 @@ builtinTidT: function {
     reg: ztypes.ZTypeRegistry.view
     base: StringView
 } out ztypes.tid is {
-    bk: (zast.poolFind pool: ast.names text: base).u64
+    bk: (zast.poolFind pool: ast.names text: base)
     if bk > 0 then {
-        m: ty.builtinTidMemo.get key: bk
+        m: ty.builtinTidMemo.get key: bk.u64
         match (
             m
         ) case some then {
@@ -10821,7 +10837,7 @@ builtinTidT: function {
         }
     }
     if r.isZero then return r
-    if bk > 0 then ty.builtinTidMemo.set key: bk value: r
+    if bk > 0 then ty.builtinTidMemo.set key: bk.u64 value: r
     return r
 }
 
@@ -11287,7 +11303,7 @@ cloneMethodInto: function {
     # the method's own function type for its declaration, which is what the
     # parameter writes below reach through. Doing it last leaves every parameter
     # of every cloned method with nowhere to land.
-    mnid5: (zast.poolFind pool: ast.names text: m).u64
+    mnid5: (zast.poolFind pool: ast.names text: m)
     (ty.declSynthMember
         parentTypeId: specId
         nameId: mnid5
@@ -11390,7 +11406,7 @@ cloneMethodInto: function {
         }
         (ty.setMemberType
             parentTypeId: fid5
-            nameId: (zast.poolFind pool: ast.names text: pnm5.stringview).u64
+            nameId: (zast.poolFind pool: ast.names text: pnm5.stringview)
             childTypeId: tgt5
         )
         if (cOh5.get i: pi5) then {
@@ -11773,7 +11789,7 @@ mintMono: function {
         if deep5 == false then {
             (ty.setMemberType
                 parentTypeId: (ztypes.tid.create from: mid.u64)
-                nameId: (zast.poolFind pool: ast.names text: chName.stringview).u64
+                nameId: (zast.poolFind pool: ast.names text: chName.stringview)
                 childTypeId: target
             )
         }
@@ -11868,7 +11884,7 @@ mintMono: function {
                     ) case some then {
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: mid.u64)
-                            nameId: (zast.poolFind pool: ast.names text: pname9.stringview).u64
+                            nameId: (zast.poolFind pool: ast.names text: pname9.stringview)
                             childTypeId: cno9
                         )
                     } case none then null
@@ -11880,17 +11896,17 @@ mintMono: function {
             crId9: reg.newType name: "create" ownerTid: mid typetype: ztypes.ztypetype.functionType
             (ty.declSynthMember
                 parentTypeId: (ztypes.tid.create from: mid.u64)
-                nameId: zast.wkCreate.u64
+                nameId: zast.wkCreate
                 kind: ztyping.declkind.methodDecl
             )
             (ty.setMemberType
                 parentTypeId: (ztypes.tid.create from: mid.u64)
-                nameId: zast.wkCreate.u64
+                nameId: zast.wkCreate
                 childTypeId: crId9
             )
             eqo9: (ty.declChildOfId
                 parentTypeId: (ztypes.tid.create from: mid.u64)
-                nameId: zast.wkOpEq.u64
+                nameId: zast.wkOpEq
             )
             match (
                 eqo9
@@ -11898,23 +11914,23 @@ mintMono: function {
                 reqId9: reg.newType name: "==" ownerTid: mid typetype: ztypes.ztypetype.functionType
                 (ty.declSynthMember
                     parentTypeId: (ztypes.tid.create from: mid.u64)
-                    nameId: zast.wkOpEq.u64
+                    nameId: zast.wkOpEq
                     kind: ztyping.declkind.methodDecl
                 )
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: mid.u64)
-                    nameId: zast.wkOpEq.u64
+                    nameId: zast.wkOpEq
                     childTypeId: reqId9
                 )
                 rneId9: reg.newType name: "!=" ownerTid: mid typetype: ztypes.ztypetype.functionType
                 (ty.declSynthMember
                     parentTypeId: (ztypes.tid.create from: mid.u64)
-                    nameId: zast.wkOpNe.u64
+                    nameId: zast.wkOpNe
                     kind: ztyping.declkind.methodDecl
                 )
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: mid.u64)
-                    nameId: zast.wkOpNe.u64
+                    nameId: zast.wkOpNe
                     childTypeId: rneId9
                 )
             }
@@ -11928,12 +11944,12 @@ mintMono: function {
         tagId: reg.newType name: tagName.stringview typetype: ztypes.ztypetype.dataType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: mid.u64)
-            nameId: zast.wkTag.u64
+            nameId: zast.wkTag
             kind: ztyping.declkind.fieldDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: mid.u64)
-            nameId: zast.wkTag.u64
+            nameId: zast.wkTag
             childTypeId: tagId
         )
     }
@@ -11941,23 +11957,23 @@ mintMono: function {
         eqId: reg.newType name: "==" ownerTid: mid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: mid.u64)
-            nameId: zast.wkOpEq.u64
+            nameId: zast.wkOpEq
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: mid.u64)
-            nameId: zast.wkOpEq.u64
+            nameId: zast.wkOpEq
             childTypeId: eqId
         )
         neId: reg.newType name: "!=" ownerTid: mid typetype: ztypes.ztypetype.functionType
         (ty.declSynthMember
             parentTypeId: (ztypes.tid.create from: mid.u64)
-            nameId: zast.wkOpNe.u64
+            nameId: zast.wkOpNe
             kind: ztyping.declkind.methodDecl
         )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: mid.u64)
-            nameId: zast.wkOpNe.u64
+            nameId: zast.wkOpNe
             childTypeId: neId
         )
     }
@@ -12036,12 +12052,12 @@ mintCollectionMethod: function {
     # parameter has nowhere to land.
     (ty.declSynthMember
         parentTypeId: monoId
-        nameId: mnid9.u64
+        nameId: mnid9
         kind: ztyping.declkind.methodDecl
     )
     (ty.setMemberType
         parentTypeId: monoId
-        nameId: mnid9.u64
+        nameId: mnid9
         childTypeId: fid
     )
     return fid
@@ -12728,13 +12744,13 @@ getOrMintSpec: function {
         if templateId == (builtinTidT :ast :ty :reg base: "MapItemIterVV") then itemIterC3 = true
         if itemIterC3 then {
             skipC3 = true
-            micoC4: ty.declChildOfId parentTypeId: mid8 nameId: zast.wkCall.u64
+            micoC4: ty.declChildOfId parentTypeId: mid8 nameId: zast.wkCall
             match (
                 micoC4
             ) case some then {
                 mrtoC4: reg.returnTypeOf tid: (ztypes.tid.create from: micoC4.u64)
                 if mrtoC4 > 0 then {
-                    mieoC4: ty.declChildOfId parentTypeId: mrtoC4 nameId: zast.wkSome.u64
+                    mieoC4: ty.declChildOfId parentTypeId: mrtoC4 nameId: zast.wkSome
                     match (
                         mieoC4
                     ) case some then {
@@ -12893,8 +12909,8 @@ mintCollectionChildren: function {
             u64L = uoL
         } case none then null
         if u64L > 0 then {
-            ty.setMemberType parentTypeId: monoId nameId: zast.wkLength.u64 childTypeId: u64L
-            ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity.u64 childTypeId: u64L
+            ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64L
+            ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity childTypeId: u64L
         }
         return
     }
@@ -12911,6 +12927,7 @@ mintCollectionChildren: function {
         :ty
         :reg
         defUnit: "system"
+        ownerNameId: zast.nameid
         name: "u64"
         typetype: ztypes.ztypetype.recordType
     )
@@ -12921,7 +12938,7 @@ mintCollectionChildren: function {
     if templateId == listViewTid then isLViewTpl9 = true
     if templateId == listViewValTid then isLViewTpl9 = true
     if isLViewTpl9 then {
-        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength.u64 childTypeId: u64id
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
         mintCollectionMethod :ast :ty :reg :monoId m: "create"
         return
     }
@@ -12932,8 +12949,8 @@ mintCollectionChildren: function {
     if templateId == setTid then isSetTpl9 = true
     if templateId == setValTid then isSetTpl9 = true
     if isSetTpl9 then {
-        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength.u64 childTypeId: u64id
-        ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity.u64 childTypeId: u64id
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity childTypeId: u64id
         mintCollectionMethod :ast :ty :reg :monoId m: "create"
         return
     }
@@ -12959,8 +12976,8 @@ mintCollectionChildren: function {
     if templateId == mapVRTid then isMapTpl9 = true
     if templateId == mapVVTid then isMapTpl9 = true
     if isMapTpl9 when valArg > 0 then {
-        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength.u64 childTypeId: u64id
-        ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity.u64 childTypeId: u64id
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity childTypeId: u64id
         gvT9: String
         if templateId == mapTid then gvT9 = "OptionView".string
         if templateId == mapRVTid then gvT9 = "optionval".string
@@ -13031,7 +13048,7 @@ mintCollectionChildren: function {
         reg.setReturnType typeId: (ztypes.tid.create from: agId.u64) value: elemArg
         asId: mintCollectionMethod :ast :ty :reg :monoId m: "set"
         reg.setReturnType typeId: (ztypes.tid.create from: asId.u64) value: elemArg
-        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength.u64 childTypeId: u64id
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
         mintCollectionMethod :ast :ty :reg :monoId m: "create"
         aeqId: mintCollectionMethod :ast :ty :reg :monoId m: "=="
         reg.setReturnType typeId: (ztypes.tid.create from: aeqId.u64) value: boolid
@@ -13039,8 +13056,8 @@ mintCollectionChildren: function {
         reg.setReturnType typeId: (ztypes.tid.create from: aneId.u64) value: boolid
     }
     if templateId == strTid then {
-        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength.u64 childTypeId: u64id
-        ty.setMemberType parentTypeId: monoId nameId: zast.wkSize.u64 childTypeId: u64id
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkSize childTypeId: u64id
         tstId: mintCollectionMethod :ast :ty :reg :monoId m: "string"
         sgo: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: "String"
         sgid: optU64Or o: sgo d: 0
@@ -13301,17 +13318,17 @@ inferGenericConstruction: function {
         fallbackArg: 0
     )
     if mid.isZero then return (ztypes.tid.create from: 0)
-    cro: st.typing.declChildOfId parentTypeId: mid nameId: zast.wkCreate.u64
+    cro: st.typing.declChildOfId parentTypeId: mid nameId: zast.wkCreate
     match (
         cro
     ) case some then null case none then {
         crId: st.reg.newType name: "create" ownerTid: mid typetype: ztypes.ztypetype.functionType
         (st.typing.declSynthMember
             parentTypeId: mid
-            nameId: zast.wkCreate.u64
+            nameId: zast.wkCreate
             kind: ztyping.declkind.methodDecl
         )
-        st.typing.setMemberType parentTypeId: mid nameId: zast.wkCreate.u64 childTypeId: crId
+        st.typing.setMemberType parentTypeId: mid nameId: zast.wkCreate childTypeId: crId
     }
     return mid
 }
@@ -13782,7 +13799,7 @@ iterWrapperElem: function {
     ) case some then {
         if origin == wo then isWrapper = true
     } case none then null
-    if isWrapper then return (st.typing.declChildOfId parentTypeId: wid nameId: zast.wkSome.u64)
+    if isWrapper then return (st.typing.declChildOfId parentTypeId: wid nameId: zast.wkSome)
     return (optionval.none u64)
 }
 
@@ -13903,13 +13920,13 @@ dottedChildName: function {ast: Ast.view n: Node.view} out String is {
 
 # dottedChildNameId -- the pool id of a dotted path's child atom name
 # (0 when the shape differs).
-dottedChildNameId: function {ast: Ast.view n: Node.view} out u64 is {
+dottedChildNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     match (
         n
     ) case dottedpath then {
         return (atomNameId :ast n: (ast.nodes.get i: (n.child - 1).u64))
     } else {
-        return 0
+        return (zast.nameid.create from: 0)
     }
 }
 
@@ -14281,7 +14298,7 @@ checkTypedefBorrow: function {
 # `this` param (shorthand) or a recorded long-form receiver name. A this-less
 # function member is a callable field, not a method.
 methodHasThisReceiver: function {st: zenv.ZSymbolTable mid: ztypes.tid} out bool is {
-    if (st.typing.declHasMemberId parentTypeId: mid nameId: zast.wkThis.u64) then return true
+    if (st.typing.declHasMemberId parentTypeId: mid nameId: zast.wkThis) then return true
     return (st.reg.hasThisParamName tid: mid)
 }
 
@@ -14828,7 +14845,7 @@ checkDotted: function {
         if btt1 == ztypes.ztypetype.protocolType then isMk = false
         if btt1 == ztypes.ztypetype.facetType then isMk = false
         if isMk then {
-            bco: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkBorrow.u64
+            bco: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkBorrow
             bcid: optU64Or o: bco d: 0
             if bcid > 0 then {
                 if (st.reg.typetypeOf typeId: (ztypes.tid.create from: bcid.u64)) == ztypes.ztypetype.functionType then isMk = false
@@ -15015,7 +15032,7 @@ checkDotted: function {
             if gn8.stringview == "array" then isArr9 = true
         }
         if isArr9 then {
-            go8: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkGet.u64
+            go8: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkGet
             match (
                 go8
             ) case some then {
@@ -15041,7 +15058,7 @@ checkDotted: function {
     # element type rides the data's `tag__{elem}` tag-child name.
     if cn.stringview == "array" then {
         if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType then {
-            tgo: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkTag.u64
+            tgo: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkTag
             match (
                 tgo
             ) case some then {
@@ -15321,7 +15338,7 @@ checkDotted: function {
     }
     if intNmX9.length > 0 then {
         st.typing.setAliasInternalName nodeid: dp.nodeid.u64 internalName: intNmX9.stringview
-        cnId9 = (ast.names.find s: intNmX9.stringview).u64
+        cnId9 = ast.names.find s: intNmX9.stringview
         cn = intNmX9.copy
         aliasViaX9 = true
     }
@@ -15379,7 +15396,7 @@ checkDotted: function {
                     ty: st.typing
                     reg: st.reg
                     ownerTid: bt
-                    nameId: (zast.nameid.create from: cnId9.u32.orPanic)
+                    nameId: cnId9
                 )
                 stampRefDecl ty: st.typing nid: dp.nodeid.u64 declId: mD5
                 stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: tat5.u64)
@@ -15439,7 +15456,7 @@ checkDotted: function {
                 ty: st.typing
                 reg: st.reg
                 ownerTid: bt
-                nameId: (zast.nameid.create from: cnId9.u32.orPanic)
+                nameId: cnId9
             )
             stampRefDecl ty: st.typing nid: dp.nodeid.u64 declId: mD9
         }
@@ -15540,7 +15557,7 @@ checkDotted: function {
         # as the bare type name); route it through the shared construction check
         # so a synthesized create's required fields are enforced and the
         # implicitCreate stamp drives field-wise emission.
-        if coerce when cnId9 == zast.wkCreate.u64 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) == ztypes.ztypetype.functionType when (isImplicitZeroCreateTid
+        if coerce when cnId9 == zast.wkCreate when (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) == ztypes.ztypetype.functionType when (isImplicitZeroCreateTid
             :ast
             :st
             tid: bt
@@ -15618,7 +15635,7 @@ checkDotted: function {
         if coerce when (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) != ztypes.ztypetype.functionType then {
             if (st.typing.declIsMethodId
                 parentTypeId: bt
-                nameId: (zast.nameid.create from: cnId9.u32.orPanic)
+                nameId: cnId9
             ) then {
                 lockAutoCallReceiver :ast :st :dp :bt shared: true
             }
@@ -16906,7 +16923,7 @@ checkReassignment: function {
                         mrvt: materialiseLiteral :ast :st :unitName t: rvt
                         (st.typing.setMemberType
                             parentTypeId: (ztypes.tid.create from: tto.u64)
-                            nameId: (zast.poolFind pool: ast.names text: tfn.stringview).u64
+                            nameId: (zast.poolFind pool: ast.names text: tfn.stringview)
                             childTypeId: mrvt
                         )
                         settof: mrvt
@@ -17408,7 +17425,7 @@ checkFor: function {
                                 if (st.reg.typetypeOf typeId: fro) == ztypes.ztypetype.classType then {
                                     fco: (st.typing.declChildOfId
                                         parentTypeId: fro
-                                        nameId: zast.wkCall.u64
+                                        nameId: zast.wkCall
                                     )
                                     match (
                                         fco
@@ -17457,7 +17474,7 @@ checkFor: function {
                     } case none then null
                 }
                 {
-                    fico9: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall.u64
+                    fico9: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
                     match (
                         fico9
                     ) case some then {
@@ -17491,7 +17508,7 @@ checkFor: function {
                     ) case some then {
                         doProbe9 = true
                     } case none then {
-                        ico9: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall.u64
+                        ico9: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
                         match (
                             ico9
                         ) case some then {
@@ -17527,7 +17544,7 @@ checkFor: function {
                             } case none then null
                         } case none then null
                     } else {
-                        c1: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall.u64
+                        c1: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
                         match (
                             c1
                         ) case some then {
@@ -17930,7 +17947,7 @@ checkBinopMethodDispatch: function {
     ast: Ast
     binop: zast.BinOpData.view
     opn: StringView
-    opnId9: u64
+    opnId9: zast.nameid
     lt: ztypes.tid
     rt: ztypes.tid
     isCmp9: bool
@@ -18029,7 +18046,7 @@ checkBinopMethodDispatch: function {
         if isCmp9 then {
             # `!=` derives from `==`: only error when `==` is also unavailable.
             if opn == "!=" then {
-                eqEdge9: st.typing.declChildOfId parentTypeId: dt9 nameId: zast.wkOpEq.u64
+                eqEdge9: st.typing.declChildOfId parentTypeId: dt9 nameId: zast.wkOpEq
                 if eqEdge9.some then {
                     boD9: builtinTidTc :ast :st base: "bool"
                     if boD9 > 0 then return boD9
@@ -19281,7 +19298,7 @@ missingCtorFields: function {
     effId: funcId
     if isCtor then {
         crId: (optU64Or
-            o: (st.typing.declChildOfId parentTypeId: funcId nameId: zast.wkCreate.u64)
+            o: (st.typing.declChildOfId parentTypeId: funcId nameId: zast.wkCreate)
             d: 0
         )
         if crId > 0 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: crId.u64)) == ztypes.ztypetype.functionType then {
@@ -19429,7 +19446,7 @@ walkCallArgsHoist: function {
         }
         if (isMetaC9) == false then {
             crEff9: (optU64Or
-                o: (st.typing.declChildOfId parentTypeId: funcId nameId: zast.wkCreate.u64)
+                o: (st.typing.declChildOfId parentTypeId: funcId nameId: zast.wkCreate)
                 d: 0
             )
             if crEff9 > 0 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: crEff9.u64)) == ztypes.ztypetype.functionType then effId9 = ztypes.tid.create from: crEff9.u64
@@ -19610,10 +19627,10 @@ walkCallArgsHoist: function {
                     # the parameter's pool id is identity enough: effId9 is
                     # fixed across this call's argument walk, so two args
                     # collide exactly when they name the same parameter
-                    dcnid9: (zast.poolFind pool: ast.names text: pn.stringview).u64
+                    dcnid9: (zast.poolFind pool: ast.names text: pn.stringview)
                     dupSeen9: false
                     with bIt9: boundArgIds.iterate do for bId9: bIt9 loop {
-                        if bId9 == dcnid9 then dupSeen9 = true
+                        if bId9 == dcnid9.u64 then dupSeen9 = true
                     }
                     if dupSeen9 when reportUnknown then {
                         pncD9: pn.copy
@@ -19627,7 +19644,7 @@ walkCallArgsHoist: function {
                             msg: dmm9
                         )
                     } else {
-                        boundArgIds.append dcnid9
+                        boundArgIds.append dcnid9.u64
                     }
                     if wasPos9 then {
                         cpidP9: (optU64Or
@@ -20106,10 +20123,10 @@ checkBoxConstruction: function {
         crId: st.reg.newType name: "create" ownerTid: mid typetype: ztypes.ztypetype.functionType
         (st.typing.declSynthMember
             parentTypeId: mid
-            nameId: zast.wkCreate.u64
+            nameId: zast.wkCreate
             kind: ztyping.declkind.methodDecl
         )
-        st.typing.setMemberType parentTypeId: mid nameId: zast.wkCreate.u64 childTypeId: crId
+        st.typing.setMemberType parentTypeId: mid nameId: zast.wkCreate childTypeId: crId
         # Stage the element's members first: setMemberType appends to the very
         # declaration being iterated.
         cIds2: (ListVal u64)
@@ -20119,7 +20136,7 @@ checkBoxConstruction: function {
         bn2: cNid2.length
         for bi < bn2 loop {
             chi: cIds2.get i: bi
-            chnId: cNid2.get i: bi
+            chnId: (zast.nameid.create from: (cNid2.get i: bi))
             ext9: st.typing.declChildOfId parentTypeId: mid nameId: chnId
             match (
                 ext9
@@ -24858,7 +24875,7 @@ resolveUnitIfDef: function {
             ) case some then {
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: cu9.u64)
-                    nameId: (zast.poolFind pool: ast.names text: defName).u64
+                    nameId: (zast.poolFind pool: ast.names text: defName)
                     childTypeId: t9
                 )
             } case none then null
@@ -24918,7 +24935,7 @@ resolveConstantDef: function {
                     ) case some then {
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: sfU9.u64)
-                            nameId: (zast.poolFind pool: ast.names text: defName).u64
+                            nameId: (zast.poolFind pool: ast.names text: defName)
                             childTypeId: sfT9
                         )
                     } case none then null
@@ -24940,7 +24957,7 @@ resolveConstantDef: function {
                 ) case some then {
                     (ty.setMemberType
                         parentTypeId: (ztypes.tid.create from: cu.u64)
-                        nameId: (zast.poolFind pool: ast.names text: defName).u64
+                        nameId: (zast.poolFind pool: ast.names text: defName)
                         childTypeId: tOpt
                     )
                 } case none then null
@@ -25006,7 +25023,7 @@ resolveConstantDef: function {
                     ) case some then {
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: cu2.u64)
-                            nameId: (zast.poolFind pool: ast.names text: defName).u64
+                            nameId: (zast.poolFind pool: ast.names text: defName)
                             childTypeId: mOpt
                         )
                     } case none then null
@@ -25019,7 +25036,7 @@ resolveConstantDef: function {
                     ) case some then {
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: cu3.u64)
-                            nameId: (zast.poolFind pool: ast.names text: defName).u64
+                            nameId: (zast.poolFind pool: ast.names text: defName)
                             childTypeId: bt
                         )
                     } case none then null
@@ -26014,7 +26031,7 @@ walkUnitProbe9ById: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     uname: StringView
-    baseId: u32
+    baseId: zast.nameid
 } out optionval u64 is {
     dt9: declProbeUnitChildId :ty :reg :ast :uname nameId: (zast.nameid.create from: baseId.u32)
     if dt9 > 0 then return (optionval.some dt9)
@@ -26022,7 +26039,7 @@ walkUnitProbe9ById: function {
     match (
         uido
     ) case some then {
-        co9: ty.declChildOfId parentTypeId: (ztypes.tid.create from: uido.u64) nameId: baseId.u64
+        co9: ty.declChildOfId parentTypeId: (ztypes.tid.create from: uido.u64) nameId: baseId
         match (
             co9
         ) case some then {
@@ -26040,7 +26057,7 @@ walkLookupTyperefById: function {
     ty: ztyping.ZTyping.view
     reg: ztypes.ZTypeRegistry.view
     currentUnit: StringView
-    baseId: u32
+    baseId: zast.nameid
 } out optionval u64 is {
     r9: walkUnitProbe9ById :ast :ty :reg uname: currentUnit :baseId
     match (
@@ -26104,7 +26121,7 @@ resolveUnitChildById: function {
     match (
         ro
     ) case some then {
-        co: ty.declChildOfId parentTypeId: (ztypes.tid.create from: ro.u64) nameId: nameId.u64
+        co: ty.declChildOfId parentTypeId: (ztypes.tid.create from: ro.u64) :nameId
         match (
             co
         ) case some then {
@@ -26135,7 +26152,7 @@ resolveSystemChildById: function {
         if dt9 > 0 then return (optionval.some dt9)
     }
     if ty.systemUnitTid > 0 then {
-        co: ty.declChildOfId parentTypeId: ty.systemUnitTid nameId: nameId.u64
+        co: ty.declChildOfId parentTypeId: ty.systemUnitTid :nameId
         match (
             co
         ) case some then {
@@ -26283,7 +26300,7 @@ resolvedByKey: function {
                 # memo write only when the alias name is interned (always,
                 # once labels intern at parse); the resolution result never
                 # depends on it
-                anid9: (ast.names.find s: an.stringview).u64
+                anid9: (ast.names.find s: an.stringview)
                 if anid9 > 0 then (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: uro.u64)
                     nameId: anid9
@@ -26543,7 +26560,7 @@ canonicalizeShellChildren: function {ast: Ast.view st: zenv.ZSymbolTable mainNam
     rn9: owns9.length
     for ri9 < rn9 loop {
         rpt9: owns9.get i: ri9
-        rnm9: nms9.get i: ri9
+        rnm9: (zast.nameid.create from: (nms9.get i: ri9).u32.orPanic)
         cto9: ctds9.get i: ri9
         ok9: cto9 > 0
         if ok9 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: cto9.u64)) == ztypes.ztypetype.genericParam then {
@@ -26796,6 +26813,7 @@ typecheck: function {
             ty: st.typing
             reg: st.reg
             defUnit: "system"
+            ownerNameId: zast.nameid
             name: "never"
             typetype: ztypes.ztypetype.neverType
         )
@@ -26804,6 +26822,7 @@ typecheck: function {
             ty: st.typing
             reg: st.reg
             defUnit: "system"
+            ownerNameId: zast.nameid
             name: "null"
             typetype: ztypes.ztypetype.nullType
         )

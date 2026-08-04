@@ -189,16 +189,16 @@ paramVidIn: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     params: (ListVal u32).view
-    nameId: u64
+    nameId: zast.nameid
 } out ztypes.vid is {
-    if nameId == 0 then return (ztypes.vid.create from: 0)
+    if nameId.isZero then return (ztypes.vid.create from: 0)
     piter9: params.iterate
     for pmId9: piter9 loop {
         pm9: ast.nodes.get i: (pmId9 - 1).u64
         match (
             pm9
         ) case namedoperation then {
-            if pm9.name.u64 == nameId when pm9.operation > 0 then {
+            if pm9.name == nameId when pm9.operation > 0 then {
                 on9: nodeIdOf9 n: (ast.nodes.get i: (pm9.operation - 1).u64)
                 return (defVid :symtab nid: on9)
             }
@@ -212,7 +212,7 @@ paramVidByNameId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     op: Node.view
-    nameId: u64
+    nameId: zast.nameid
 } out ztypes.vid is {
     match (
         op
@@ -973,14 +973,14 @@ ternaryElse: function {
 # atomTextOf -- an atomid node's name text ("" for any other shape).
 # atomNameIdOf -- an atom's interned name id (0 when the node is not an atom;
 # no pool id is 0, so a lookup by it misses).
-atomNameIdOf: function {ast: Ast.view n: Node.view} out u64 is {
+atomNameIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
     ast
     match (
         n
     ) case atomid then {
-        return n.name.u64
+        return n.name
     } else {
-        return 0
+        return (zast.nameid.create from: 0)
     }
 }
 
@@ -1955,7 +1955,7 @@ implicitTakeFnId: function {
     xq219: ast.nodes.get i: (call.callable - 1).u64
     if ct.isZero then return (stampIdOf :symtab nid: (nodeIdOf9 n: xq219))
     if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.functionType then return ct
-    cco: symtab.typing.declChildOfId parentTypeId: ct nameId: zast.wkCreate.u64
+    cco: symtab.typing.declChildOfId parentTypeId: ct nameId: zast.wkCreate
     match (
         cco
     ) case some then {
@@ -2237,13 +2237,13 @@ svValueForm: function {ctx: Ctx.view expr: StringView isStr: bool vid: ztypes.vi
 # a dotted path ("" when the shape is deeper than one segment).
 # dottedBaseAtomId -- the base atom's interned name id (0 when absent). The
 # id form of dottedBaseAtom, for callers that only need to identify the name.
-dottedBaseAtomId: function {ast: Ast.view n: Node.view} out u64 is {
+dottedBaseAtomId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     match (
         n
     ) case dottedpath then {
         return (atomNameIdOf :ast n: (ast.nodes.get i: (n.parent - 1).u64))
     } else {
-        return 0
+        return (zast.nameid.create from: 0)
     }
 }
 
@@ -5122,7 +5122,7 @@ emitCtorDefaultsFill: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out String is {
-    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wkCreate.u64
+    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wkCreate
     match (
         cco
     ) case some then {
@@ -5230,7 +5230,7 @@ emitRecordCtor: function {
 } out String is {
     # a user-defined `create` (non-empty params) overrides the field-wise ctor:
     # bare-name construction routes through it, args by the create's own labels.
-    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wkCreate.u64
+    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wkCreate
     match (
         cco
     ) case some then {
@@ -6376,7 +6376,7 @@ emitCrossUnitBareCreate: function {ctx: Ctx.view
     if tid9 == 0 then return "".string
     cco9: (symtab.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: tid9.u64)
-        nameId: zast.wkCreate.u64
+        nameId: zast.wkCreate
     )
     match (
         cco9
@@ -6415,7 +6415,7 @@ emitCrossUnitExplicitCreate: function {
         tid = ztypes.tid.create from: (go)
     } case none then null
     if tid.isZero then return "".string
-    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wkCreate.u64
+    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wkCreate
     match (
         cco
     ) case some then {
@@ -6464,7 +6464,7 @@ emitCrossUnitExplicitCreate: function {
 # outerBaseAtom -- the leftmost atom of a LEFT-nested three-segment
 # dotted path `(a.B).c`: "a". "" for shallower shapes.
 # outerBaseAtomId -- the interned name id of outerBaseAtom's leftmost atom.
-outerBaseAtomId: function {ast: Ast.view n: Node.view} out u64 is {
+outerBaseAtomId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     match (
         n
     ) case expression then {
@@ -6472,7 +6472,7 @@ outerBaseAtomId: function {ast: Ast.view n: Node.view} out u64 is {
     } case dottedpath then {
         return (dottedBaseAtomId :ast n: (ast.nodes.get i: (n.parent - 1).u64))
     } else {
-        return 0
+        return (zast.nameid.create from: 0)
     }
 }
 
@@ -6606,7 +6606,7 @@ emitCrossUnitTag: function {
         pool: ast.names
         text: pbase
     )
-    if (symtab.reg.isUnitName nameId: unm9.u64) == false then return "".string
+    if (symtab.reg.isUnitName nameId: unm9) == false then return "".string
     k: "\{pbase}.\{ptype}"
     go: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k
     vtid: ztypes.tid
@@ -7206,7 +7206,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         ) case some then {
             return (emitLocalAtomName :ctx name: av vid: avo9)
         } case none then null
-        cgo: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name.u64)
+        cgo: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name)
         match (
             cgo
         ) case some then {
@@ -7367,7 +7367,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         # text, exactly as a bare reference to a constant of this unit does
         {
             dbU9: String
-            dcId9: u64
+            dcId9: zast.nameid
             {
                 dbA9: ast.nodes.get i: (n.parent - 1).u64
                 if dbA9.atomid then {
@@ -7377,7 +7377,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             }
             {
                 dcA9: ast.nodes.get i: (n.child - 1).u64
-                if dcA9.atomid then dcId9 = dcA9.name.u64
+                if dcA9.atomid then dcId9 = dcA9.name
             }
             if dbU9.length > 0 when dcId9 > 0 then {
                 isU9: false
@@ -8602,7 +8602,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     # unless it already is one.
                     mEqO9: (symtab.typing.declChildOfId
                         parentTypeId: (ztypes.tid.create from: lti.u64)
-                        nameId: rEqNm9.u64
+                        nameId: rEqNm9
                     )
                     match (
                         mEqO9
@@ -9144,7 +9144,7 @@ methodReturnByName: function {ast: Ast symtab: zenv.ZSymbolTable dotted: StringV
     # scan for a parent type named `base` that actually declares the
     # `member` child (a typedef has both a shell and a canonical id;
     # only the canonical bears children).
-    mnid9: (zast.poolFind pool: ast.names text: member.stringview).u64
+    mnid9: (zast.poolFind pool: ast.names text: member.stringview)
     found: ztypes.tid
     if mnid9 > 0 then {
         lastT9: symtab.reg.nextTypeId
@@ -9294,7 +9294,7 @@ evalConstI64: function {ast: Ast.view ctx: Ctx.view n: Node.view} out cfold is {
         ) case ok then {
             return (cfold ok: true val: pl9)
         } case err then null
-        cg9: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name.u64)
+        cg9: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name)
         match (
             cg9
         ) case some then {
@@ -9536,7 +9536,7 @@ emitPrintArg: function {
                 buf.append lpstr9
                 return
             }
-            svco: symtab.typing.declChildOfId parentTypeId: argTid nameId: zast.wkStringview.u64
+            svco: symtab.typing.declChildOfId parentTypeId: argTid nameId: zast.wkStringview
             match (
                 svco
             ) case some then {
@@ -11203,7 +11203,7 @@ typeIdByNameStages9: function {
         if found2 == 0 then {
             co9: (symtab.typing.declChildOfId
                 parentTypeId: (ctx.unitTidsC.get i: uki9)
-                nameId: nameId.u64
+                :nameId
             )
             match (
                 co9
@@ -11824,7 +11824,7 @@ scalarArmLabel: function {ast: Ast ctx: Ctx.view arm: StringView} out String is 
     ck: constKeyIn :ast unitName: ctx.mainName.stringview nameId: (zast.poolFind
         pool: ast.names
         text: arm
-    ).u64
+    )
     cgo: ctx.constVals.get key: ck
     match (
         cgo
@@ -12417,7 +12417,7 @@ emitObjIterFor: function {
             }
             hasCall9: (symtab.typing.declHasMemberId
                 parentTypeId: (ztypes.tid.create from: brt9.u64)
-                nameId: zast.wkCall.u64
+                nameId: zast.wkCall
             )
             if brt9 > 0 when hasCall9 then {
                 itid = ztypes.tid.create from: (brt9)
@@ -12446,11 +12446,11 @@ emitObjIterFor: function {
             }
             hasCallC9: (symtab.typing.declHasMemberId
                 parentTypeId: (ztypes.tid.create from: canoT9.u64)
-                nameId: zast.wkCall.u64
+                nameId: zast.wkCall
             )
             if canoT9 > 0 when hasCallC9 then itid = ztypes.tid.create from: canoT9.u64
         }
-        cco: symtab.typing.declChildOfId parentTypeId: itid nameId: zast.wkCall.u64
+        cco: symtab.typing.declChildOfId parentTypeId: itid nameId: zast.wkCall
         match (
             cco
         ) case some then {
@@ -12591,7 +12591,7 @@ emitObjIterFor: function {
                 payElemName: monoElemName full: ovn prefixLen: payElemPfx
                 payElemTid9: optU64Or9 o: (symtab.typing.declChildOfId
                     parentTypeId: ovid
-                    nameId: zast.wkSome.u64
+                    nameId: zast.wkSome
                 )
                 payScalarC: (cTypeForNameTid
                     :ast
@@ -14685,7 +14685,12 @@ registerReftypeParams: function {
             pid: (ztypes.tid.create from: rpid.u64)
         )
         if regp9 then {
-            rvd9: paramVidByNameId :ast :symtab :op nameId: (pNmIds.get i: ri)
+            rvd9: (paramVidByNameId
+                :ast
+                :symtab
+                :op
+                nameId: (zast.nameid.create from: (pNmIds.get i: ri))
+            )
             ctx.ptrVids.append rvd9
         }
         ri = ri + 1
@@ -14980,7 +14985,12 @@ fnSignature: function {
             params.append "int64_t"
         }
         params.append " "
-        pmnV9: paramVidByNameId :ast :symtab :op nameId: (cNmIds.get i: pi)
+        pmnV9: (paramVidByNameId
+            :ast
+            :symtab
+            :op
+            nameId: (zast.nameid.create from: (cNmIds.get i: pi))
+        )
         pmnDecl9: varCName :ctx vid: pmnV9 name: pname.stringview
         params.append pmnDecl9
         pi = pi + 1
@@ -15541,14 +15551,14 @@ typeNameOfReg9: function {symtab: zenv.ZSymbolTable tid: ztypes.tid} out String 
 # constKeyIn -- the constVals key for constant `nameId` declared in `unitName`:
 # the two pool ids packed into one u64, so units may share constant names.
 # 0 when the unit name is not interned (it can then own no constant).
-constKeyIn: function {ast: Ast unitName: StringView nameId: u64} out u64 is {
-    uid9: (zast.poolFind pool: ast.names text: unitName).u64
-    if uid9 == 0 then return 0
-    return (uid9 * 4294967296) + nameId
+constKeyIn: function {ast: Ast unitName: StringView nameId: zast.nameid} out u64 is {
+    uid9: (zast.poolFind pool: ast.names text: unitName)
+    if uid9.isZero then return 0
+    return (uid9.u64 * 4294967296) + nameId.u64
 }
 
 # constKeyOf -- constKeyIn for the unit currently bound on ctx.
-constKeyOf: function {ast: Ast.view ctx: Ctx.view nameId: u64} out u64 is {
+constKeyOf: function {ast: Ast.view ctx: Ctx.view nameId: zast.nameid} out u64 is {
     return (constKeyIn :ast unitName: ctx.mainName.stringview :nameId)
 }
 
@@ -15581,7 +15591,7 @@ literalSuffixBase: function {
     }
     co9: (symtab.typing.declChildOfId
         parentTypeId: ut9
-        nameId: (zast.poolFind pool: ast.names text: name).u64
+        nameId: (zast.poolFind pool: ast.names text: name)
     )
     st9: ztypes.tid
     match (
@@ -15626,7 +15636,7 @@ isConstShape: function {
                 if b0 <= 57 then return true
             }
         } case none then null
-        cgo: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name.u64)
+        cgo: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name)
         match (
             cgo
         ) case some then {
@@ -16052,7 +16062,7 @@ fillConstValsIn: function {
                 n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
             ) then {
                 cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-                nk: constKeyOf :ast :ctx nameId: bmNode9.name.u64
+                nk: constKeyOf :ast :ctx nameId: bmNode9.name
                 cvv: cv.stringview
                 ck: cvv.string
                 if nk > 0 then ctx.constVals.set key: nk value: ck
@@ -16806,7 +16816,7 @@ emitFnBody: function {
                     :ast
                     :symtab
                     params: op.parameters
-                    nameId: (pids9Nm.get i: pj9)
+                    nameId: (zast.nameid.create from: (pids9Nm.get i: pj9))
                 )
                 pmn9: varCName :ctx vid: pmnB9 name: ppn9.stringview
                 if ppid9 == ctx.strTid then {
@@ -17809,7 +17819,7 @@ monoOriginName: function {symtab: zenv.ZSymbolTable tid: ztypes.tid} out String 
 # listElemType -- a List/ListView mono's element type id (the get-child
 # return), 0 when absent.
 listElemType: function {symtab: zenv.ZSymbolTable monoId: ztypes.tid} out ztypes.tid is {
-    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkGet.u64
+    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkGet
     match (
         go
     ) case some then {
@@ -17848,7 +17858,7 @@ emitArrayMono: function {
     lenStr: monoElemName full: mn prefixLen: lenPfx
     createBody: "    z_\{nm}_t _this = {0};"
     eqBody: String
-    eqo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkOpEq.u64
+    eqo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkOpEq
     match (
         eqo
     ) case some then {
@@ -17904,7 +17914,7 @@ emitStrMono: function {
     capStr: monoElemName full: mn prefixLen: 4
     lenT: capLenT cap: capStr.stringview
     eqBody: String
-    eqo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkOpEq.u64
+    eqo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkOpEq
     match (
         eqo
     ) case some then {
@@ -18025,7 +18035,7 @@ emitListMono: function {
             :buf
         )
     }
-    co: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkContains.u64
+    co: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkContains
     match (
         co
     ) case some then {
@@ -18049,7 +18059,7 @@ emitListMono: function {
         buf.append "    return false;\n"
         buf.append "}\n\n"
     } case none then null
-    so: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkSort.u64
+    so: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkSort
     match (
         so
     ) case some then {
@@ -18135,12 +18145,12 @@ emitListIter: function {
     nm: StringView
     buf: String.borrow
 } is {
-    liId: monoMethodReturn :symtab :monoId nameId: zast.wkIterate.u64
+    liId: monoMethodReturn :symtab :monoId nameId: zast.wkIterate
     if liId == 0 then return
     ovId: (monoMethodReturn
         :symtab
         monoId: (ztypes.tid.create from: liId.u64)
-        nameId: zast.wkCall.u64
+        nameId: zast.wkCall
     )
     if ovId == 0 then return
     ovName: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: ovId.u64)
@@ -18286,7 +18296,7 @@ listviewMethods: function {
     nm: StringView
     ect: StringView
 } out String is {
-    lo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkListview.u64
+    lo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkListview
     match (
         lo
     ) case some then {
@@ -18513,7 +18523,11 @@ payloadDestructor: function {
 # monoMethodReturn -- a mono method child's registered return id (0 when the
 # method or its return is absent). The id-first way to reach a collection's
 # iterator/view/wrapper companions.
-monoMethodReturn: function {symtab: zenv.ZSymbolTable monoId: ztypes.tid nameId: u64} out u64 is {
+monoMethodReturn: function {
+    symtab: zenv.ZSymbolTable
+    monoId: ztypes.tid
+    nameId: zast.nameid
+} out u64 is {
     co: symtab.typing.declChildOfId parentTypeId: monoId :nameId
     match (
         co
@@ -18559,7 +18573,7 @@ declaredKeyFnC: function {
     if nid9.isZero then return "".string
     if (symtab.typing.declIsMethodId parentTypeId: tid nameId: nid9) == false then return "".string
     if (symtab.typing.declMemberIsSynth parentTypeId: tid nameId: nid9) then return "".string
-    mo9: symtab.typing.declChildOfId parentTypeId: tid nameId: nid9.u64
+    mo9: symtab.typing.declChildOfId parentTypeId: tid nameId: nid9
     match (
         mo9
     ) case some then {
@@ -18689,12 +18703,12 @@ emitSetMono: function {
     )
     ekind: keyHashKind :symtab :ctx tid: (ztypes.tid.create from: elemTid.u64)
     isStr: ekind == 1
-    siId: monoMethodReturn :symtab :monoId nameId: zast.wkIterate.u64
+    siId: monoMethodReturn :symtab :monoId nameId: zast.wkIterate
     if siId == 0 then return
     ovId: (monoMethodReturn
         :symtab
         monoId: (ztypes.tid.create from: siId.u64)
-        nameId: zast.wkCall.u64
+        nameId: zast.wkCall
     )
     if ovId == 0 then return
     ovName: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: ovId.u64)
@@ -18829,28 +18843,28 @@ emitMapIters: function {
     valT: StringView
     buf: String.borrow
 } is {
-    miiId: monoMethodReturn :symtab :monoId nameId: zast.wkIterateItems.u64
+    miiId: monoMethodReturn :symtab :monoId nameId: zast.wkIterateItems
     if miiId == 0 then return
-    mkiId: monoMethodReturn :symtab :monoId nameId: zast.wkIterate.u64
+    mkiId: monoMethodReturn :symtab :monoId nameId: zast.wkIterate
     if mkiId == 0 then return
     ovkId: (monoMethodReturn
         :symtab
         monoId: (ztypes.tid.create from: mkiId.u64)
-        nameId: zast.wkCall.u64
+        nameId: zast.wkCall
     )
     if ovkId == 0 then return
     ovkName: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: ovkId.u64)
     oveId: (monoMethodReturn
         :symtab
         monoId: (ztypes.tid.create from: miiId.u64)
-        nameId: zast.wkCall.u64
+        nameId: zast.wkCall
     )
     if oveId == 0 then return
     oveName: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: oveId.u64)
     meId: ztypes.tid
     meo: (symtab.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: oveId.u64)
-        nameId: zast.wkSome.u64
+        nameId: zast.wkSome
     )
     match (
         meo
@@ -18889,13 +18903,13 @@ emitMapIters: function {
 # mapValType -- the canonical Map value type id, off the "set" method's "value"
 # param (mirrors listElemType). 0 when absent.
 mapKeyType: function {symtab: zenv.ZSymbolTable monoId: ztypes.tid} out u64 is {
-    so: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkSet.u64
+    so: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkSet
     match (
         so
     ) case some then {
         ko: (symtab.typing.declChildOfId
             parentTypeId: (ztypes.tid.create from: so.u64)
-            nameId: zast.wkKey.u64
+            nameId: zast.wkKey
         )
         match (
             ko
@@ -18908,13 +18922,13 @@ mapKeyType: function {symtab: zenv.ZSymbolTable monoId: ztypes.tid} out u64 is {
 
 # the element type id of Set instantiation `monoId`.
 setElemType: function {symtab: zenv.ZSymbolTable monoId: ztypes.tid} out u64 is {
-    ao: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkAdd.u64
+    ao: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkAdd
     match (
         ao
     ) case some then {
         io: (symtab.typing.declChildOfId
             parentTypeId: (ztypes.tid.create from: ao.u64)
-            nameId: zast.wkItem.u64
+            nameId: zast.wkItem
         )
         match (
             io
@@ -18927,13 +18941,13 @@ setElemType: function {symtab: zenv.ZSymbolTable monoId: ztypes.tid} out u64 is 
 
 # the value type id of Map instantiation `monoId`.
 mapValType: function {symtab: zenv.ZSymbolTable monoId: ztypes.tid} out ztypes.tid is {
-    so: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkSet.u64
+    so: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkSet
     match (
         so
     ) case some then {
         vo: (symtab.typing.declChildOfId
             parentTypeId: (ztypes.tid.create from: so.u64)
-            nameId: zast.wkValue.u64
+            nameId: zast.wkValue
         )
         match (
             vo
@@ -18956,7 +18970,7 @@ emitMapMono: function {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringview
     ovId: ztypes.tid
-    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkGet.u64
+    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkGet
     match (
         go
     ) case some then {
@@ -19065,7 +19079,7 @@ emitMapMono: function {
         getBody = gbR
     }
     rmWrapId9: ztypes.tid
-    roMm9: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkRemove.u64
+    roMm9: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkRemove
     match (
         roMm9
     ) case some then {
@@ -20192,7 +20206,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
 # resolve the value via the get-return OptionView's element name and the key via
 # the mangled-name remainder, mirroring emitMapMono.
 monoMapKV: function {symtab: zenv.ZSymbolTable monoId: ztypes.tid acc: ListVal u64} is {
-    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkGet.u64
+    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkGet
     match (
         go
     ) case some then {
@@ -22024,7 +22038,7 @@ emitProtocolImpl: function {
     mn: mnames.length
     for mi < mn loop {
         mname: mnames.get i: mi
-        mnameId: midsNm.get i: mi
+        mnameId: (zast.nameid.create from: (midsNm.get i: mi))
         smid: mids.get i: mi
         ret: (methodRetCtype
             :ast
@@ -22180,7 +22194,7 @@ emitFacetImpl: function {
     mn: mnames.length
     for mi < mn loop {
         mname: mnames.get i: mi
-        mnameId: midsNm.get i: mi
+        mnameId: (zast.nameid.create from: (midsNm.get i: mi))
         smid: mids.get i: mi
         ret: (methodRetCtype
             :ast
@@ -22654,7 +22668,7 @@ emitIoWrapperCreate: function {
     if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: wid.u64)) != ztypes.ztypetype.classType then return "".string
     cco: (symtab.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: wid.u64)
-        nameId: zast.wkCreate.u64
+        nameId: zast.wkCreate
     )
     cid: ztypes.tid
     match (
@@ -23045,7 +23059,7 @@ emitCliSpecCreate: function {
     if cid == 0 then return "".string
     cco: (symtab.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: cid.u64)
-        nameId: zast.wkCreate.u64
+        nameId: zast.wkCreate
     )
     crid: ztypes.tid
     match (
@@ -23226,7 +23240,7 @@ emitUserIterCall: function {
         ) case some then {
             hasCallI9: (symtab.typing.declHasMemberId
                 parentTypeId: (ztypes.tid.create from: cano9.u64)
-                nameId: zast.wkCall.u64
+                nameId: zast.wkCall
             )
             if hasCallI9 then iterId = ztypes.tid.create from: cano9.u64
         } case none then null
@@ -23236,7 +23250,7 @@ emitUserIterCall: function {
     if itorig9 > 0 then return "".string
     itn9: typeNameOfReg9 :symtab tid: iterId
     if (canonFnId :ast :symtab :ctx tid: iterId name: itn9.stringview) <= 0 then return "".string
-    cco9: symtab.typing.declChildOfId parentTypeId: iterId nameId: zast.wkCall.u64
+    cco9: symtab.typing.declChildOfId parentTypeId: iterId nameId: zast.wkCall
     match (
         cco9
     ) case some then {
@@ -23931,7 +23945,7 @@ emitOneVariant: function {
         qk: u64
         for qk < an loop {
             qname: anames.get i: qk
-            qnameId: aidsNm.get i: qk
+            qnameId: (zast.nameid.create from: (aidsNm.get i: qk))
             qc: armPayloadC :ast :symtab :ctx :tid arm: qname.stringview
             if qc.length > 0 then {
                 qtg: variantTag :symtab :tid arm: qname.stringview
@@ -25152,7 +25166,12 @@ emitOneMethod: function {
         # rule still applies to class methods only.
         if isRecv9 then {
             pt = "\{pt}*"
-            pvd9: paramVidByNameId :ast :symtab :op nameId: (pidsNm.get i: pi)
+            pvd9: (paramVidByNameId
+                :ast
+                :symtab
+                :op
+                nameId: (zast.nameid.create from: (pidsNm.get i: pi))
+            )
             ctx.ptrVids.append pvd9
         } else {
             if encIsClass then {
@@ -25207,7 +25226,12 @@ emitOneMethod: function {
                 ) then giveptr9 = true
                 if giveptr9 then {
                     pt = "\{pt}*"
-                    pvd9b: paramVidByNameId :ast :symtab :op nameId: (pidsNm.get i: pi)
+                    pvd9b: (paramVidByNameId
+                        :ast
+                        :symtab
+                        :op
+                        nameId: (zast.nameid.create from: (pidsNm.get i: pi))
+                    )
                     ctx.ptrVids.append pvd9b
                 }
             }
@@ -25215,7 +25239,12 @@ emitOneMethod: function {
         if pi > 0 then params.append ", "
         params.append pt
         params.append " "
-        pmnV9b: paramVidByNameId :ast :symtab :op nameId: (pidsNm.get i: pi)
+        pmnV9b: (paramVidByNameId
+            :ast
+            :symtab
+            :op
+            nameId: (zast.nameid.create from: (pidsNm.get i: pi))
+        )
         pmnDecl9: varCName :ctx vid: pmnV9b name: pname.stringview
         if pi == 0 then ctx.genRecvC = pmnDecl9.copy
         if pi == 1 then ctx.genValC = pmnDecl9.copy
