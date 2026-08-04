@@ -527,10 +527,10 @@ ZSymbolTable: class {
         for mi < mc loop {
             nm: mNames.get i: mi
             zt: mTypes.get i: mi
-            already: this.isTakenName nameId: nm
+            already: this.isTakenName nameId: (zast.nameid.create from: nm.u32)
             if already == false then {
                 te: (this.reg.newEntry
-                    nameId: nm
+                    nameId: (zast.nameid.create from: nm.u32)
                     ztypeId: (ztypes.tid.create from: zt.u64)
                     isDefinition: false
                 )
@@ -567,14 +567,14 @@ ZSymbolTable: class {
 
     # --- entry insertion ---
 
-    define: function {:this nameId: u32 ztypeId: ztypes.tid} is {
+    define: function {:this nameId: zast.nameid ztypeId: ztypes.tid} is {
         e: this.reg.newEntry :nameId :ztypeId isDefinition: true
         this.entries.append e
     }
 
     # Define a runtime variable with ownership tracking. The C identifier is
     # the emitter's business -- a variable is known here by its id alone.
-    defineVar: function {:this nameId: u32 var: ZVariable} is {
+    defineVar: function {:this nameId: zast.nameid var: ZVariable} is {
         this.typing.variableZtype.set key: var.variableId value: var.ztypeId
         this.typing.variableOwnership.set key: var.variableId value: var.ownership
         this.typing.variableIsPrivate.set key: var.variableId value: var.isPrivateAccess
@@ -590,8 +590,8 @@ ZSymbolTable: class {
     # --- name resolution ---
 
     # Index of the effective (most-recent) entry for `nameId`, or none.
-    effectiveIndex: function {:this nameId: u32} out optionval u64 is {
-        if nameId == 0 then return (optionval.none u64)
+    effectiveIndex: function {:this nameId: zast.nameid} out optionval u64 is {
+        if nameId.isZero then return (optionval.none u64)
         ne: this.entries.length
         j: ne
         for j > 0 loop {
@@ -604,8 +604,8 @@ ZSymbolTable: class {
     }
 
     # Resolve a name to its type id, or none (also none when taken).
-    lookup: function {:this nameId: u32} out optionval ztypes.tid is {
-        if nameId == 0 then return (optionval.none ztypes.tid)
+    lookup: function {:this nameId: zast.nameid} out optionval ztypes.tid is {
+        if nameId.isZero then return (optionval.none ztypes.tid)
         ne: this.entries.length
         j: ne
         for j > 0 loop {
@@ -625,8 +625,8 @@ ZSymbolTable: class {
     # narrowed sum-type target accepts a fresh value of its whole declared
     # type, so a reassignment validates its RHS against this, not the
     # narrowed view.
-    declaredTypeOf: function {:this nameId: u32} out optionval ztypes.tid is {
-        if nameId == 0 then return (optionval.none ztypes.tid)
+    declaredTypeOf: function {:this nameId: zast.nameid} out optionval ztypes.tid is {
+        if nameId.isZero then return (optionval.none ztypes.tid)
         ne: this.entries.length
         j: ne
         for j > 0 loop {
@@ -649,8 +649,8 @@ ZSymbolTable: class {
 
     # Variable id bound to `name`, skipping lock/narrow overlays; none if
     # taken or unbound.
-    lookupVarId: function {:this nameId: u32} out optionval ztypes.vid is {
-        if nameId == 0 then return (optionval.none ztypes.vid)
+    lookupVarId: function {:this nameId: zast.nameid} out optionval ztypes.vid is {
+        if nameId.isZero then return (optionval.none ztypes.vid)
         ne: this.entries.length
         j: ne
         for j > 0 loop {
@@ -692,7 +692,7 @@ ZSymbolTable: class {
 
     # --- invalidation (take) ---
 
-    invalidate: function {:this nameId: u32 loc: optionval ztypes.zsrcpos} out bool is {
+    invalidate: function {:this nameId: zast.nameid loc: optionval ztypes.zsrcpos} out bool is {
         idxOpt: this.effectiveIndex :nameId
         match (
             idxOpt
@@ -708,8 +708,8 @@ ZSymbolTable: class {
         }
     }
 
-    getTakenLocation: function {:this nameId: u32} out optionval ztypes.zsrcpos is {
-        if nameId == 0 then return (optionval.none ztypes.zsrcpos)
+    getTakenLocation: function {:this nameId: zast.nameid} out optionval ztypes.zsrcpos is {
+        if nameId.isZero then return (optionval.none ztypes.zsrcpos)
         ne: this.entries.length
         j: ne
         for j > 0 loop {
@@ -724,8 +724,8 @@ ZSymbolTable: class {
         return (optionval.none ztypes.zsrcpos)
     }
 
-    isTakenName: function {:this nameId: u32} out bool is {
-        if nameId == 0 then return false
+    isTakenName: function {:this nameId: zast.nameid} out bool is {
+        if nameId.isZero then return false
         ne: this.entries.length
         j: ne
         for j > 0 loop {
@@ -738,8 +738,8 @@ ZSymbolTable: class {
     }
 
     # Index of the most-recent taken entry for `name`, or none.
-    takenIndex: function {:this nameId: u32} out optionval u64 is {
-        if nameId == 0 then return (optionval.none u64)
+    takenIndex: function {:this nameId: zast.nameid} out optionval u64 is {
+        if nameId.isZero then return (optionval.none u64)
         ne: this.entries.length
         j: ne
         for j > 0 loop {
@@ -766,7 +766,7 @@ ZSymbolTable: class {
     }
 
     # Remove the innermost taken record for `name` (match/case restore).
-    clearTaken: function {:this nameId: u32} is {
+    clearTaken: function {:this nameId: zast.nameid} is {
         kOpt: this.takenIndex :nameId
         match (
             kOpt
@@ -792,7 +792,7 @@ ZSymbolTable: class {
         }
     }
 
-    setTakenLocation: function {:this nameId: u32 loc: ztypes.zsrcpos} is {
+    setTakenLocation: function {:this nameId: zast.nameid loc: ztypes.zsrcpos} is {
         kOpt: this.takenIndex :nameId
         match (
             kOpt
@@ -821,7 +821,7 @@ ZSymbolTable: class {
         ) case varKind then {
             nmId9: this.lookupVarNameById vid: (ztypes.vid.create from: holder.id)
             if nmId9 == 0 then return "<var:\{holder.id}>"
-            return (zast.poolTextCopy :pool ref: nmId9)
+            return (zast.poolTextCopy :pool ref: (zast.nameid.create from: nmId9.u32))
         } case callKind then {
             return "call:\{holder.id}"
         } case forKind then {
@@ -975,8 +975,8 @@ ZSymbolTable: class {
         return "".string
     }
 
-    findLock: function {:this nameId: u32} out optionval ztypes.zlockstate is {
-        if nameId == 0 then return (optionval.none ztypes.zlockstate)
+    findLock: function {:this nameId: zast.nameid} out optionval ztypes.zlockstate is {
+        if nameId.isZero then return (optionval.none ztypes.zlockstate)
         ne: this.entries.length
         j: ne
         for j > 0 loop {
@@ -991,8 +991,8 @@ ZSymbolTable: class {
     }
 
     # Holder of the innermost lock on `name` (for the .release-of-locked check).
-    findLockHolder: function {:this nameId: u32} out optionval ztypes.zlockholder is {
-        if nameId == 0 then return (optionval.none ztypes.zlockholder)
+    findLockHolder: function {:this nameId: zast.nameid} out optionval ztypes.zlockholder is {
+        if nameId.isZero then return (optionval.none ztypes.zlockholder)
         ne: this.entries.length
         j: ne
         for j > 0 loop {
@@ -1115,7 +1115,7 @@ ZSymbolTable: class {
     # outer), and the outer is stashed in originalZtypeId for the emitter's
     # C-level unwrap. shadow=false (assignment): the type id stays the outer
     # union; only the subtype name is recorded.
-    narrow: function {:this pool: zast.StringPool.view nameId: u32 toTypeId: u64 subtypeName: StringView shadow: bool} is {
+    narrow: function {:this pool: zast.StringPool.view nameId: zast.nameid toTypeId: u64 subtypeName: StringView shadow: bool} is {
         originalTypeId: toTypeId
         idxOpt: this.effectiveIndex :nameId
         match (
@@ -1175,7 +1175,7 @@ ZSymbolTable: class {
     # Exclude `subtypeName` from `name`'s type. Collapses to a narrowing
     # when one excludable subtype remains; marks the scope unreachable when
     # none remain.
-    exclude: function {:this pool: zast.StringPool.view nameId: u32 subtypeName: StringView fullTypeId: u64} is {
+    exclude: function {:this pool: zast.StringPool.view nameId: zast.nameid subtypeName: StringView fullTypeId: u64} is {
         allSubs: (List String)
         (sumArmNames
             ty: this.typing
@@ -1226,7 +1226,7 @@ ZSymbolTable: class {
     }
 
     # Copy the current exclusion set for `name` into `into`.
-    collectExcluded: function {:this nameId: u32 into: Set String} is {
+    collectExcluded: function {:this nameId: zast.nameid into: Set String} is {
         idxOpt: this.effectiveIndex :nameId
         match (
             idxOpt
@@ -1239,7 +1239,7 @@ ZSymbolTable: class {
         } case none then null
     }
 
-    resetNarrowing: function {:this nameId: u32} is {
+    resetNarrowing: function {:this nameId: zast.nameid} is {
         ne: this.entries.length
         j: ne
         done: false
@@ -1259,7 +1259,7 @@ ZSymbolTable: class {
         }
     }
 
-    isExcluded: function {:this nameId: u32 subtypeName: StringView} out bool is {
+    isExcluded: function {:this nameId: zast.nameid subtypeName: StringView} out bool is {
         tmp: (Set String)
         this.collectExcluded :nameId into: tmp
         q: subtypeName.string
@@ -1271,7 +1271,7 @@ ZSymbolTable: class {
     # or exclusion collapse). Shadow-narrowed entries
     # (originalZtypeId set -- the name IS a payload) and un-narrowed
     # entries yield "".
-    narrowedArmOf: function {:this nameId: u32 fullTypeId: u64} out String is {
+    narrowedArmOf: function {:this nameId: zast.nameid fullTypeId: u64} out String is {
         idxOpt: this.effectiveIndex :nameId
         match (
             idxOpt
@@ -1295,7 +1295,7 @@ ZSymbolTable: class {
     # isShadowNarrowed -- the current entry for `name` is a shadow
     # narrowing (the bare name IS a payload; originalZtypeId records the
     # outer sum type).
-    isShadowNarrowed: function {:this nameId: u32} out bool is {
+    isShadowNarrowed: function {:this nameId: zast.nameid} out bool is {
         idxOpt: this.effectiveIndex :nameId
         match (
             idxOpt
@@ -1314,7 +1314,7 @@ ZSymbolTable: class {
         }
     }
 
-    getSubtypeName: function {:this nameId: u32} out String is {
+    getSubtypeName: function {:this nameId: zast.nameid} out String is {
         idxOpt: this.effectiveIndex :nameId
         match (
             idxOpt
@@ -1640,7 +1640,7 @@ smokeErr: function {s: StringView} out String is {
 dumpNames: function {pool: zast.StringPool.view names: (ListVal u32).view} is {
     iter: names.iterate
     for nm: iter loop {
-        nt9: zast.poolTextCopy :pool ref: nm
+        nt9: zast.poolTextCopy :pool ref: (zast.nameid.create from: nm.u32)
         print "  name \{nt9}"
     }
 }

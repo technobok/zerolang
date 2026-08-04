@@ -512,7 +512,7 @@ ZType: class {
     name: String
     typetype: ztypetype
     returnTypeId: (optionval tid)
-    thisParamNameId: u32
+    thisParamNameId: zast.nameid
     isgeneric: bool
     isValtype: (optionval bool)
     genericOriginId: (optionval tid)
@@ -527,7 +527,7 @@ ZType: class {
     # parallel to genericArgs: true when the ordinal is a numeric VALUE
     # (a sized record's `to:`), false when it is a type id
     genericArgIsValue: (ListVal bool)
-    destructorNameId: u32
+    destructorNameId: zast.nameid
     isHeapAllocated: bool
     isBox: bool
     isNative: bool
@@ -619,7 +619,7 @@ holeType: function {} out ZType is {
     name: "".string
     typetype: ztypetype.nullType
     returnTypeId: (optionval.none tid)
-    thisParamNameId: 0
+    thisParamNameId: zast.nameid
     isgeneric: false
     isValtype: (optionval.none bool)
     genericOriginId: (optionval.none tid)
@@ -628,7 +628,7 @@ holeType: function {} out ZType is {
     genericChildTids: (ListVal tid)
     genericArgs: (ListVal u64)
     genericArgIsValue: (ListVal bool)
-    destructorNameId: 0
+    destructorNameId: zast.nameid
     isHeapAllocated: false
     isBox: false
     isNative: false
@@ -711,7 +711,7 @@ ZTypeRegistry: class {
         name: name.string
         :typetype
         returnTypeId: (optionval.none tid)
-        thisParamNameId: 0
+        thisParamNameId: zast.nameid
         isgeneric: false
         isValtype: (optionval.none bool)
         genericOriginId: (optionval.none tid)
@@ -720,7 +720,7 @@ ZTypeRegistry: class {
         genericChildTids: (ListVal tid)
         genericArgs: (ListVal u64)
         genericArgIsValue: (ListVal bool)
-        destructorNameId: 0
+        destructorNameId: zast.nameid
         isHeapAllocated: false
         isBox: false
         isNative: false
@@ -743,7 +743,7 @@ ZTypeRegistry: class {
             synthOrigin: (Option.none String))
     }
 
-    newEntry: function {:this nameId: u32 ztypeId: tid isDefinition: bool} out ZEntry is {
+    newEntry: function {:this nameId: zast.nameid ztypeId: tid isDefinition: bool} out ZEntry is {
         id: this.nextEntryId
         this.nextEntryId = this.nextEntryId + 1
         return (ZEntry
@@ -795,20 +795,21 @@ ZTypeRegistry: class {
     }
 
     hasDestructorName: function {:this typeId: tid} out bool is {
-        return (this.destructorNameIdOf :typeId) != 0
+        dn9: this.destructorNameIdOf :typeId
+        return (dn9.isZero) == false
     }
 
     # destructorNameIdOf -- the pool id of the destructor's name, or 0 when the
     # type has none.
-    destructorNameIdOf: function {:this typeId: tid} out u32 is {
-        if typeId >= this.typeById.length then return 0
+    destructorNameIdOf: function {:this typeId: tid} out zast.nameid is {
+        if typeId >= this.typeById.length then return (zast.nameid.create from: 0)
         got: this.typeById.get i: typeId
         return got.destructorNameId
     }
 
     # --- post-construction metadata stamps: mutate the stored ZType in
     # place through the by-id table. ---
-    setDestructorName: function {:this typeId: tid nameId: u32} is {
+    setDestructorName: function {:this typeId: tid nameId: zast.nameid} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
         got.destructorNameId = nameId
@@ -970,22 +971,24 @@ ZTypeRegistry: class {
 
     # thisParamNameIdOf -- the pool id of a method's receiver-parameter name,
     # or 0 when it declares none.
-    thisParamNameIdOf: function {:this tid: tid} out u32 is {
-        if tid >= this.typeById.length then return 0
+    thisParamNameIdOf: function {:this tid: tid} out zast.nameid is {
+        if tid >= this.typeById.length then return (zast.nameid.create from: 0)
         got: this.typeById.get i: tid
         return got.thisParamNameId
     }
 
     # hasThisParamName -- the type declares a receiver parameter.
     hasThisParamName: function {:this tid: tid} out bool is {
-        return (this.thisParamNameIdOf :tid) != 0
+        tp9: this.thisParamNameIdOf :tid
+        return (tp9.isZero) == false
     }
 
     # thisParamNameIs -- the receiver parameter is named `name`; false when the
     # type declares none, so an undeclared receiver never matches.
-    thisParamNameIs: function {:this tid: tid nameId: u32} out bool is {
-        if nameId == 0 then return false
-        return (this.thisParamNameIdOf :tid) == nameId
+    thisParamNameIs: function {:this tid: tid nameId: zast.nameid} out bool is {
+        if nameId.isZero then return false
+        tp8: this.thisParamNameIdOf :tid
+        return tp8 == nameId
     }
 
     # isGenericOf -- the type is a generic template.
@@ -1094,7 +1097,7 @@ ZTypeRegistry: class {
         got.def = declId
     }
 
-    setThisParamName: function {:this typeId: tid nameId: u32} is {
+    setThisParamName: function {:this typeId: tid nameId: zast.nameid} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
         got.thisParamNameId = nameId
@@ -1854,7 +1857,7 @@ main: function is {
     reg: newRegistry
     t0: reg.newType name: "point" typetype: ztypetype.recordType
     # the smoke asserts presence only; 1 stands in for a pool id
-    reg.setDestructorName typeId: t0 nameId: 1
+    reg.setDestructorName typeId: t0 nameId: (zast.nameid.create from: 1)
     tt0: reg.typetypeOf typeId: t0
     ht0: reg.hasType typeId: t0
     hd0: reg.hasDestructorName typeId: t0
@@ -1872,7 +1875,7 @@ main: function is {
     v0: reg.newVariable ztypeId: t0 ownership: zownership.owned
     print "var id=\{v0.variableId} ztypeId=\{v0.ztypeId} ownership=\{zownershipName v0.ownership}"
 
-    e0: reg.newEntry nameId: 7 ztypeId: t0 isDefinition: true
+    e0: reg.newEntry nameId: (zast.nameid.create from: 7) ztypeId: t0 isDefinition: true
     print "entry id=\{e0.entryId} nameId=\{e0.name} ztypeId=\{e0.ztypeId} def=\{boolText e0.isDefinition} taken=\{boolText e0.isTaken}"
 
     cf0: reg.newConformance implTypeId: t0 specTypeId: t1 label: "drawable" isFacet: false

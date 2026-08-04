@@ -504,7 +504,7 @@ AtomIdData: class {
     nodeid: u32
     lineno: u32
     colno: u32
-    name: u32
+    name: nameid
 }
 
 # a label-value node (a `name:`-shaped operand): position + interned name id.
@@ -512,7 +512,7 @@ LabelValueData: class {
     nodeid: u32
     lineno: u32
     colno: u32
-    name: u32
+    name: nameid
 }
 
 # Interned-name row: the single owner of one distinct identifier's text.
@@ -775,15 +775,15 @@ StringPool: class {
     }
 
     # get -- an owned copy of id's text; panics on an out-of-range id.
-    get: function {t: this.view id: u32} out String is {
+    get: function {t: this.view id: nameid} out String is {
         t9: t.texts.get i: (id - 1).u64
         return t9.copy
     }
 
     # eq -- does id's text equal s? Zero-allocation compare; id 0 (absent)
     # equals only the empty view.
-    eq: function {:this id: u32 s: StringView} out bool is {
-        if id == 0 then return s.length == 0
+    eq: function {:this id: nameid s: StringView} out bool is {
+        if id.isZero then return s.length == 0
         t9: this.texts.get i: (id - 1).u64
         return t9.stringview == s
     }
@@ -861,7 +861,7 @@ NamedOperationData: class {
     nodeid: u32
     lineno: u32
     colno: u32
-    name: u32
+    name: nameid
     operation: u32
 }
 
@@ -909,7 +909,7 @@ AssignmentData: class {
     nodeid: u32
     lineno: u32
     colno: u32
-    name: u32
+    name: nameid
     value: u32
 }
 
@@ -987,7 +987,7 @@ WithData: class {
     nodeid: u32
     lineno: u32
     colno: u32
-    name: u32
+    name: nameid
     value: u32
     body: u32
 }
@@ -1009,7 +1009,7 @@ CaseClauseData: class {
     nodeid: u32
     lineno: u32
     colno: u32
-    name: u32
+    name: nameid
     matcharm: u32
     statement: u32
 }
@@ -1289,8 +1289,8 @@ printCallKind: function {ck: callkind} is {
 
 # Print a NamedOperation's optional label. The Option is passed by
 # borrow so it can be matched without moving it out of its carrier.
-printPoolName: function {ast: Ast.view ref: u32} is {
-    if ref == 0 then {
+printPoolName: function {ast: Ast.view ref: nameid} is {
+    if ref.isZero then {
         print "  name=<none>"
         return
     }
@@ -1396,25 +1396,25 @@ poolSet: function {pool: StringPool text: StringView} out nameid is {
 # poolTextEq -- compare an interned name's text without copying. Takes the
 # pool itself so a caller holding a view into a sibling Ast field (the node
 # table) does not lock the whole carrier.
-poolTextEq: function {pool: StringPool ref: u32 s: StringView} out bool is {
+poolTextEq: function {pool: StringPool ref: nameid s: StringView} out bool is {
     return (pool.eq id: ref :s)
 }
 
 # poolTextCopy -- an owned copy of an interned name's text ("" when the ref
 # is absent). Pool-taking counterpart of poolTextEq.
-poolTextCopy: function {pool: StringPool.view ref: u32} out String is {
-    if ref == 0 then return "".string
+poolTextCopy: function {pool: StringPool.view ref: nameid} out String is {
+    if ref.isZero then return "".string
     return (pool.get id: ref)
 }
 
 # nameTextEq -- compare an interned name's text without copying.
-nameTextEq: function {ast: Ast ref: u32 s: StringView} out bool is {
+nameTextEq: function {ast: Ast ref: nameid s: StringView} out bool is {
     return (poolTextEq pool: ast.names :ref :s)
 }
 
 # nameTextCopy -- an owned copy of an interned name's text ("" when the
 # ref is absent).
-nameTextCopy: function {ast: Ast ref: u32} out String is {
+nameTextCopy: function {ast: Ast ref: nameid} out String is {
     return (poolTextCopy pool: ast.names :ref)
 }
 
@@ -1734,7 +1734,7 @@ printNodeCanonical: function {ast: Ast.view n: Node.view} is {
 # print a deterministic dump for the harness to compare against
 # tests/fixtures/zast_z/smoke.expected.
 # smokeNameRef -- intern a hand-built smoke node's name.
-smokeNameRef: function {ast: Ast text: StringView} out u32 is {
+smokeNameRef: function {ast: Ast text: StringView} out nameid is {
     return (ast.names.set s: text)
 }
 
@@ -1997,7 +1997,7 @@ main: function is {
         nodeid: 21
         lineno: 19
         colno: 1
-        name: noname
+        name: (nameid.create from: noname.u32)
         operation: (tableAdd :ast n: noval)
     )
     printNode :ast n: n10
@@ -2013,7 +2013,7 @@ main: function is {
         nodeid: 23
         lineno: 20
         colno: 1
-        name: 0
+        name: nameid
         operation: (tableAdd :ast n: noval2)
     )
     printNode :ast n: n11
@@ -2277,7 +2277,7 @@ main: function is {
         nodeid: 59
         lineno: 31
         colno: 4
-        name: 0
+        name: nameid
         operation: (tableAdd :ast n: ifCondOp)
     )
     ifConds: (ListVal u32)
@@ -2328,7 +2328,7 @@ main: function is {
         nodeid: 67
         lineno: 33
         colno: 16
-        name: 0
+        name: nameid
         operation: (tableAdd :ast n: forWhileOp)
     )
     forConds: (ListVal u32)
@@ -2532,7 +2532,7 @@ main: function is {
     print "pool gamma=\{spg9} alphaOwned=\{spg2} text=\{spt9}"
     if (sp9.eq id: spa9 s: "alpha") then print "pool eq alpha ok"
     if (sp9.eq id: spa9 s: "beta") == false then print "pool neq beta ok"
-    if (sp9.eq id: 0 s: "") then print "pool eq absent ok"
+    if (sp9.eq id: nameid s: "") then print "pool eq absent ok"
     spi9: u64
     for spi9 < 20 loop {
         spn9: "k\{spi9}"

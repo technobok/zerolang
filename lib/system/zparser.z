@@ -283,7 +283,7 @@ Parser: class {
 
     # internName -- the pool id for an identifier's text (one
     # shared row per distinct name; minted on first sight).
-    internName: function {:this name: StringView} out u32 is {
+    internName: function {:this name: StringView} out zast.nameid is {
         return (this.ast.names.set s: name)
     }
 
@@ -833,7 +833,7 @@ Parser: class {
             nodeid: this.nextId
             lineno: line
             colno: col
-            :name
+            name: (zast.nameid.create from: name)
             operation: (this.intern n: operation))
         )
     }
@@ -1195,7 +1195,7 @@ Parser: class {
                 nodeid: this.nextId
                 lineno: sLine
                 colno: sCol
-                name: asgnName
+                name: (zast.nameid.create from: asgnName.u32)
                 value: (this.intern n: lv)
             )
             return (Node.statementline (zast.StatementLineData
@@ -1218,7 +1218,7 @@ Parser: class {
                     nodeid: this.nextId
                     lineno: sLine
                     colno: sCol
-                    name: nm
+                    name: (zast.nameid.create from: nm.u32)
                     value: (this.intern n: expr)
                 )
                 return (Node.statementline (zast.StatementLineData
@@ -1547,7 +1547,7 @@ Parser: class {
                         nodeid: this.nextId
                         lineno: cLine
                         colno: cCol
-                        name: nm
+                        name: (zast.nameid.create from: nm.u32)
                         matcharm: (this.intern n: armNode)
                         statement: (this.intern n: body)
                     )
@@ -1888,7 +1888,7 @@ Parser: class {
                         nodeid: this.nextId
                         lineno: wLine
                         colno: wCol
-                        name: nm
+                        name: (zast.nameid.create from: nm.u32)
                         value: (this.intern n: value)
                         body: (this.intern n: body))
                     )
@@ -3322,7 +3322,10 @@ Parser: class {
         if coreOk then {
             defNames.append "core".string
             cnIt: coreNamesOut.iterate
-            for cn: cnIt loop coreNames.append (zast.poolTextCopy pool: this.ast.names ref: cn)
+            for cn: cnIt loop coreNames.append (zast.poolTextCopy
+                pool: this.ast.names
+                ref: (zast.nameid.create from: cn.u32)
+            )
         }
         loadQueue: (List String)
         loadQueue.append mainUnitName.copy
@@ -3413,7 +3416,12 @@ Parser: class {
 
 # Record `name` as an extern unless it is bound, not a valid unit name, or
 # already recorded.
-ewEmit: function {ast: Ast.view externs: ListVal u32 scope: (ListVal u32).view nameId: u32} is {
+ewEmit: function {
+    ast: Ast.view
+    externs: ListVal u32
+    scope: (ListVal u32).view
+    nameId: zast.nameid
+} is {
     inScope: scope.contains item: nameId
     if inScope then return
     dup: externs.contains item: nameId
@@ -3425,8 +3433,8 @@ ewEmit: function {ast: Ast.view externs: ListVal u32 scope: (ListVal u32).view n
 
 # Push an optional bound name (a namedoperation / param / loop label).
 # A ref of 0 -- a positional arm, which binds no name -- pushes nothing.
-ewBindOptName: function {scope: ListVal u32 ref: u32} is {
-    if ref == 0 then return
+ewBindOptName: function {scope: ListVal u32 ref: zast.nameid} is {
+    if ref.isZero then return
     scope.append ref
 }
 
@@ -3670,7 +3678,7 @@ collectExterns: function {ast: Ast body: (ListVal u32).view} out List String is 
     ewWalkBodyIds :ast externs: externIds :scope items: body
     externs: (List String capacity: externIds.length)
     with eit9: externIds.iterate do for eid9: eit9 loop {
-        externs.append (zast.poolTextCopy pool: ast.names ref: eid9)
+        externs.append (zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: eid9.u32))
     }
     return externs
 }

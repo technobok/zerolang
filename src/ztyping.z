@@ -129,7 +129,7 @@ declkindName: function {k: declkind} out String is {
 
 # one name -> child-declaration edge of a Decl's namespace.
 declchild: record {
-    nameId: u32
+    nameId: zast.nameid
     declId: ztypes.declid
 }
 
@@ -439,7 +439,7 @@ ZTyping: class {
         id: ztypes.declid.create from: this.decls.length
         if (parent.isZero) == false then (this.declAddChildEdge
             parentDeclId: parent
-            nameId: name
+            nameId: (zast.nameid.create from: name.u32)
             childDeclId: id
         )
         return id
@@ -449,7 +449,7 @@ ZTyping: class {
     # parent's namespace. Called when the member is first typed, so declaration
     # order IS member order as it is built. Non-member children (a type's
     # `public:` block) keep their positions; only the member slots rotate.
-    declMoveChildToEnd: function {:this parentDeclId: ztypes.declid nameId: u32} is {
+    declMoveChildToEnd: function {:this parentDeclId: ztypes.declid nameId: zast.nameid} is {
         cnt9: this.declChildSlots declId: parentDeclId
         if cnt9 < 2 then return
         # the member is normally the child declSetMemberType just appended, so
@@ -552,7 +552,10 @@ ZTyping: class {
             for wi9 < n9 loop {
                 (wo9.children.set
                     i: wi9
-                    val: (declchild nameId: (cn9.get i: wi9) declId: (cd9.get i: wi9))
+                    val: (declchild
+                        nameId: (zast.nameid.create from: (cn9.get i: wi9))
+                        declId: (cd9.get i: wi9)
+                    )
                 )
                 wi9 = wi9 + 1
             }
@@ -562,7 +565,7 @@ ZTyping: class {
     # declAddChildEdge -- append a name -> declaration edge to a parent's
     # namespace (also used for public-interface entries, whose targets are
     # sibling declarations rather than fresh rows).
-    declAddChildEdge: function {:this parentDeclId: ztypes.declid nameId: u32 childDeclId: ztypes.declid} is {
+    declAddChildEdge: function {:this parentDeclId: ztypes.declid nameId: zast.nameid childDeclId: ztypes.declid} is {
         if (this.declValid id: parentDeclId) then {
             po9: this.decls.getMut i: (parentDeclId - 1)
             po9.children.append (declchild :nameId declId: childDeclId)
@@ -711,7 +714,10 @@ ZTyping: class {
             mtid9: tids9.get i: i9
             i9 = i9 + 1
             if mtid9 > 0 then {
-                md9: this.declFindChild parentDeclId: declId nameId: nid9.u32.orPanic
+                md9: (this.declFindChild
+                    parentDeclId: declId
+                    nameId: (zast.nameid.create from: nid9.u32.orPanic)
+                )
                 if (md9.isZero) == false then {
                     if (this.declValid id: md9) then {
                         do9: this.decls.getMut i: (md9 - 1)
@@ -728,7 +734,7 @@ ZTyping: class {
     declFindChild: function {
         t: this.view
         parentDeclId: ztypes.declid
-        nameId: u32
+        nameId: zast.nameid
     } out ztypes.declid is {
         found9: ztypes.declid
         if (t.declValid id: parentDeclId) then {
@@ -772,7 +778,7 @@ ZTyping: class {
     # the reverse declByTypeId edge.
     declSetMemberType: function {:this parentTypeId: ztypes.tid nameId: u64 typeId: ztypes.tid} is {
         nid8: nameId.u32.orPanic
-        md8: this.declMemberIdOf :parentTypeId nameId: nid8
+        md8: this.declMemberIdOf :parentTypeId nameId: (zast.nameid.create from: nid8.u32)
         if md8.isZero then {
             # a function type's members are its parameters, and a synthesized
             # constructor gains them after its own declaration exists
@@ -836,7 +842,7 @@ ZTyping: class {
     } out optionval u64 is {
         n329: nameId.u32.or d: 0
         if n329 == 0 then return (optionval.none u64)
-        md9: t.declMemberIdOf :parentTypeId nameId: n329
+        md9: t.declMemberIdOf :parentTypeId nameId: (zast.nameid.create from: n329.u32)
         if (md9.isZero) == false then {
             t9: u64
             {
@@ -862,7 +868,7 @@ ZTyping: class {
         return (this.declIsLockFieldId :parentTypeId nameId: nid9)
     }
 
-    declIsLockFieldId: function {:this parentTypeId: ztypes.tid nameId: u32} out bool is {
+    declIsLockFieldId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} out bool is {
         od9: this.declIdOfType typeId: parentTypeId
         if od9.isZero then return false
         lf9: u64
@@ -878,7 +884,7 @@ ZTyping: class {
 
     # declDefaultOfId -- member `nameId`'s recorded default value; none when
     # the member is undeclared or carries none.
-    declDefaultOfId: function {:this parentTypeId: ztypes.tid nameId: u32} out defaultval is {
+    declDefaultOfId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} out defaultval is {
         md9: this.declMemberIdOf :parentTypeId :nameId
         if md9.isZero then return defaultval.none
         r9: defaultval.none
@@ -893,7 +899,7 @@ ZTyping: class {
     }
 
     # declHasDefaultId -- does member `nameId` of parentTypeId carry a default?
-    declHasDefaultId: function {:this parentTypeId: ztypes.tid nameId: u32} out bool is {
+    declHasDefaultId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} out bool is {
         md9: this.declMemberIdOf :parentTypeId :nameId
         if md9.isZero then return false
         r9: false
@@ -912,7 +918,7 @@ ZTyping: class {
     # mode never matches take, borrow or lock.
     # declOwnershipOfId -- a member's recorded parameter ownership, or none
     # when it has none: an unset declaration reads noneMode.
-    declOwnershipOfId: function {:this parentTypeId: ztypes.tid nameId: u32} out optionval ztypes.zparamownership is {
+    declOwnershipOfId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} out optionval ztypes.zparamownership is {
         md9: this.declMemberIdOf :parentTypeId :nameId
         if md9.isZero then return (optionval.none ztypes.zparamownership)
         r9: ztypes.zparamownership.noneMode
@@ -968,7 +974,7 @@ ZTyping: class {
         return (this.declIsFnptrFieldId :parentTypeId nameId: nid9)
     }
 
-    declIsFnptrFieldId: function {:this parentTypeId: ztypes.tid nameId: u32} out bool is {
+    declIsFnptrFieldId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} out bool is {
         md9: this.declMemberIdOf :parentTypeId :nameId
         if md9.isZero then return false
         r9: false
@@ -992,7 +998,11 @@ ZTyping: class {
     # declared member carries its own namedoperation. That difference is the
     # only record of which is which, and the emitter needs it: its byte-compare
     # and byte-copy defaults must yield to a method the author wrote.
-    declMemberIsSynth: function {t: this.view parentTypeId: ztypes.tid nameId: u32} out bool is {
+    declMemberIsSynth: function {
+        t: this.view
+        parentTypeId: ztypes.tid
+        nameId: zast.nameid
+    } out bool is {
         md9: t.declMemberIdOf :parentTypeId :nameId
         if md9.isZero then return false
         od9: t.declIdOfType typeId: parentTypeId
@@ -1008,7 +1018,11 @@ ZTyping: class {
         return r9
     }
 
-    declIsMethodId: function {t: this.view parentTypeId: ztypes.tid nameId: u32} out bool is {
+    declIsMethodId: function {
+        t: this.view
+        parentTypeId: ztypes.tid
+        nameId: zast.nameid
+    } out bool is {
         md9: t.declMemberIdOf :parentTypeId :nameId
         if md9.isZero then return false
         r9: false
@@ -1089,7 +1103,10 @@ ZTyping: class {
         od9: this.declIdOfType typeId: parentTypeId
         if od9.isZero then return
         nid8: nameId.u32.orPanic
-        if (this.declFindChild parentDeclId: od9 nameId: nid8) > 0 then return
+        if (this.declFindChild
+            parentDeclId: od9
+            nameId: (zast.nameid.create from: nid8.u32)
+        ) > 0 then return
         node9: u32
         {
             if (this.declValid id: od9) then {
@@ -1289,7 +1306,10 @@ ZTyping: class {
     declHasMemberId: function {:this parentTypeId: ztypes.tid nameId: u64} out bool is {
         n329: nameId.u32.or d: 0
         if n329 == 0 then return false
-        return (this.declTypedMemberIdOf :parentTypeId nameId: n329) > 0
+        return (this.declTypedMemberIdOf
+            :parentTypeId
+            nameId: (zast.nameid.create from: n329.u32)
+        ) > 0
     }
 
     # declMemberIdOf -- the declaration of member `nameId` under the type
@@ -1298,7 +1318,7 @@ ZTyping: class {
     declMemberIdOf: function {
         t: this.view
         parentTypeId: ztypes.tid
-        nameId: u32
+        nameId: zast.nameid
     } out ztypes.declid is {
         od9: t.declIdOfType typeId: parentTypeId
         if od9.u64 == 0 then return od9
@@ -1310,7 +1330,7 @@ ZTyping: class {
     # otherwise. The narrowing is what lets a member DeclId serve as the
     # identity of a (parent, name) pair: a declaration carrying no type was
     # never a member anything could name.
-    declTypedMemberIdOf: function {:this parentTypeId: ztypes.tid nameId: u32} out ztypes.declid is {
+    declTypedMemberIdOf: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} out ztypes.declid is {
         md9: this.declMemberIdOf :parentTypeId :nameId
         if md9.u64 == 0 then return md9
         t9: u64
@@ -1338,7 +1358,7 @@ ZTyping: class {
         # slots only and a publicNs child is not among them.
         first9: false
         if n329 > 0 then {
-            fm9: this.declTypedMemberIdOf :parentTypeId nameId: n329
+            fm9: this.declTypedMemberIdOf :parentTypeId nameId: (zast.nameid.create from: n329.u32)
             first9 = fm9.isZero
         }
         # declSetMemberType can be what CREATES the member declaration, so the
@@ -1350,7 +1370,10 @@ ZTyping: class {
         )
         if first9 then {
             od9: this.declIdOfType typeId: parentTypeId
-            if (od9.isZero) == false then this.declMoveChildToEnd parentDeclId: od9 nameId: n329
+            if (od9.isZero) == false then (this.declMoveChildToEnd
+                parentDeclId: od9
+                nameId: (zast.nameid.create from: n329.u32)
+            )
         }
     }
 
@@ -1378,7 +1401,7 @@ ZTyping: class {
     # setChildGrantsPrivateId -- mark a field edge as one whose declared type
     # was a `.private` handle, so reads through it are private-capable.
     setChildGrantsPrivateId: function {:this parentTypeId: ztypes.tid nameId: u64} is {
-        md8: this.declMemberIdOf :parentTypeId nameId: nameId.u32.orPanic
+        md8: this.declMemberIdOf :parentTypeId nameId: (zast.nameid.create from: nameId.u32.orPanic)
         if (md8.isZero) == false then {
             if (this.declValid id: md8) then {
                 do8: this.decls.getMut i: (md8 - 1)
@@ -1503,7 +1526,7 @@ ZTyping: class {
                 nm9 = to9.name
             }
         }
-        tx9: zast.poolTextCopy :pool ref: nm9
+        tx9: zast.poolTextCopy :pool ref: (zast.nameid.create from: nm9.u32)
         if isArm9 then return "arm \{tx9}"
         return "func \{tx9}"
     }
@@ -1526,7 +1549,7 @@ ZTyping: class {
 
     # setChildOwnershipId -- the id-keyed form of setChildOwnership.
     setChildOwnershipId: function {:this parentTypeId: ztypes.tid nameId: u64 ownership: ztypes.zparamownership} is {
-        md8: this.declMemberIdOf :parentTypeId nameId: nameId.u32.orPanic
+        md8: this.declMemberIdOf :parentTypeId nameId: (zast.nameid.create from: nameId.u32.orPanic)
         if (md8.isZero) == false then {
             if (this.declValid id: md8) then {
                 do8: this.decls.getMut i: (md8 - 1)

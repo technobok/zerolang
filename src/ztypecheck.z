@@ -595,8 +595,8 @@ isViewFamilyTid: function {ast: Ast.view st: zenv.ZSymbolTable tid: ztypes.tid} 
 # whitelist and works for user types.
 methodReceiverIsView: function {st: zenv.ZSymbolTable mid: ztypes.tid} out bool is {
     rpn9: st.reg.thisParamNameIdOf tid: mid
-    if rpn9 == 0 then return false
-    rpo9: st.typing.declOwnershipOfId parentTypeId: mid nameId: rpn9
+    if rpn9.isZero then return false
+    rpo9: st.typing.declOwnershipOfId parentTypeId: mid nameId: (zast.nameid.create from: rpn9.u32)
     match (
         rpo9
     ) case some then {
@@ -1119,7 +1119,7 @@ indexDeclDef: function {
         )
         indexDeclObjInner :ty :ast declId: did0 objNodeId: opNodeId
     } case unitdef then {
-        if (zast.nameTextEq :ast ref: nameRef s: "public") then {
+        if (zast.nameTextEq :ast ref: (zast.nameid.create from: nameRef.u32) s: "public") then {
             # the exported-namespace block: entries become name -> sibling
             # edges, filled by indexDeclPublicEntries after the unit walk
             did0 = (ty.declNew
@@ -2090,8 +2090,17 @@ declOfFnDef: function {
     mown9: declOfUnitDef :ty :ast defUnit: unitName name: thisName
     mnm9: defName
     if ownerNameId != 0 then {
-        if (zast.poolTextEq pool: ast.names ref: ownerNameId s: thisName) == false then {
-            malt9: declOfUnitDefId :ty :ast defUnit: unitName nameId: ownerNameId
+        if (zast.poolTextEq
+            pool: ast.names
+            ref: (zast.nameid.create from: ownerNameId.u32)
+            s: thisName
+        ) == false then {
+            malt9: (declOfUnitDefId
+                :ty
+                :ast
+                defUnit: unitName
+                nameId: (zast.nameid.create from: ownerNameId.u32)
+            )
             if (ty.declValid id: malt9) then mown9 = malt9
         }
     }
@@ -3556,7 +3565,7 @@ paramIsThisReceiver: function {ast: Ast.view op: Node.view} out bool is {
     ) case expression then {
         return (paramIsThisReceiver :ast op: (ast.nodes.get i: (op.expression - 1).u64))
     } case atomid then {
-        return op.name == zast.wkThis
+        return op.name.u32 == zast.wkThis
     } case dottedpath then {
         pn: atomName :ast n: (ast.nodes.get i: (op.parent - 1).u64)
         return pn.stringview == "this"
@@ -3685,7 +3694,10 @@ typeHasNonOwnedField9: function {ty: ztyping.ZTyping tid: ztypes.tid} out bool i
     for i9 < n9 loop {
         if (found9) == false then {
             nid9: (fn9.get i: i9).u32.orPanic
-            if (ty.declIsLockFieldId parentTypeId: tid nameId: nid9) then found9 = true
+            if (ty.declIsLockFieldId
+                parentTypeId: tid
+                nameId: (zast.nameid.create from: nid9.u32)
+            ) then found9 = true
         }
         i9 = i9 + 1
     }
@@ -4036,7 +4048,7 @@ resolveFunction: function {
                                     name: pname.stringview
                                     node: pm.operation
                                 )
-                            } else if (reg.isUnitName nameId: (nameIdOf
+                            } else if (reg.isUnitName nameId: (nameIdOfU64
                                 :ast
                                 name: prn9.stringview
                             )) == false then {
@@ -4955,7 +4967,7 @@ materializeCreateParams: function {
                 fptr: false
                 fptr = (ty.declIsFnptrFieldId
                     parentTypeId: (ztypes.tid.create from: typeTid.u64)
-                    nameId: tcNameId9.u32.orPanic
+                    nameId: (zast.nameid.create from: tcNameId9.u32.orPanic)
                 )
                 if fptr then {
                     inc = true
@@ -5116,7 +5128,7 @@ scanVisibility: function {
         iRef9: aliasIntRef.get i: ax9
         okAlias9: true
         if (memberIds.has item: iRef9.u64) == false then {
-            iTxt9: zast.nameTextCopy :ast ref: iRef9
+            iTxt9: zast.nameTextCopy :ast ref: (zast.nameid.create from: iRef9.u32)
             (addResolveErrorH
                 :ty
                 nodeid: (aliasNode.get i: ax9)
@@ -5129,7 +5141,7 @@ scanVisibility: function {
             okAlias9 = false
         }
         if okAlias9 when (memberIds.has item: pRef9.u64) then {
-            pTxt9: zast.nameTextCopy :ast ref: pRef9
+            pTxt9: zast.nameTextCopy :ast ref: (zast.nameid.create from: pRef9.u32)
             (addResolveErrorH
                 :ty
                 nodeid: (aliasNode.get i: ax9)
@@ -5254,7 +5266,7 @@ scanUnitVisibility: function {
         iRefU9: aliasIntRef.get i: axU9
         okU9: true
         if (memberIds.has item: iRefU9.u64) == false then {
-            iTxtU9: zast.nameTextCopy :ast ref: iRefU9
+            iTxtU9: zast.nameTextCopy :ast ref: (zast.nameid.create from: iRefU9.u32)
             (addResolveErrorH
                 :ty
                 nodeid: (aliasNode.get i: axU9)
@@ -5267,7 +5279,7 @@ scanUnitVisibility: function {
             okU9 = false
         }
         if okU9 when (memberIds.has item: pRefU9.u64) then {
-            pTxtU9: zast.nameTextCopy :ast ref: pRefU9
+            pTxtU9: zast.nameTextCopy :ast ref: (zast.nameid.create from: pRefU9.u32)
             (addResolveErrorH
                 :ty
                 nodeid: (aliasNode.get i: axU9)
@@ -5612,7 +5624,7 @@ resolveRecord: function {
                                 node: fm.operation
                             )
                         } else {
-                            if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) == false when (reg.isUnitName nameId: (nameIdOf
+                            if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) == false when (reg.isUnitName nameId: (nameIdOfU64
                                 :ast
                                 name: rdnr.stringview
                             )) == false then {
@@ -6736,7 +6748,7 @@ resolveClass: function {
                                 node: fm.operation
                             )
                         } else {
-                            if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) == false when (reg.isUnitName nameId: (nameIdOf
+                            if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) == false when (reg.isUnitName nameId: (nameIdOfU64
                                 :ast
                                 name: rdnc.stringview
                             )) == false then {
@@ -7180,7 +7192,7 @@ declOfUnitDef: function {
 # definition's name id: unit root, then the child edge. No key is built.
 # preIndexKey -- the (unit, def) id pair used while the Decl tree is still
 # being built. Not a lookup key in the tree sense: the tree does not exist yet.
-preIndexKey: function {ast: Ast.view defUnit: StringView nameId: u32} out u64 is {
+preIndexKey: function {ast: Ast.view defUnit: StringView nameId: zast.nameid} out u64 is {
     return (((nameIdOf :ast name: defUnit).u64 * 4294967296) + nameId.u64)
 }
 
@@ -7191,7 +7203,7 @@ defWasResolved: function {
     ty: ztyping.ZTyping
     ast: Ast.view
     defUnit: StringView
-    nameId: u32
+    nameId: zast.nameid
 } out bool is {
     d9: declOfUnitDefId :ty :ast :defUnit :nameId
     if d9 > 0 then {
@@ -7204,9 +7216,9 @@ declOfUnitDefId: function {
     ty: ztyping.ZTyping
     ast: Ast.view
     defUnit: StringView
-    nameId: u32
+    nameId: zast.nameid
 } out ztypes.declid is {
-    if nameId == 0 then return (ztypes.declid.create from: 0)
+    if nameId.isZero then return (ztypes.declid.create from: 0)
     ro9: ty.unitRootByName.get key: (nameIdOf :ast name: defUnit).u64
     match (
         ro9
@@ -7236,7 +7248,7 @@ declDefTypetype: function {
     if dnode9 == 0 then return (optionval.none ztypes.ztypetype)
     nop9: ast.nodes.get i: (dnode9 - 1).u64
     if nop9.namedoperation then {
-        nm9: zast.poolTextCopy pool: ast.names ref: dname9
+        nm9: zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: dname9.u32)
         return (defTypetypeOf
             :ast
             defn: (ast.nodes.get i: (nop9.operation - 1).u64)
@@ -9310,7 +9322,14 @@ blockHasYieldingLoop: function {ast: Ast.view blk: Node.view} out bool is {
 # nameIdOf -- the pool id of an already-interned name. 0 (absent) is what
 # every symbol-table query treats as a miss, so a name the pool never saw
 # cannot resolve -- which is exactly right, since nothing declared it.
-nameIdOf: function {ast: Ast name: StringView} out u32 is {
+# nameIdOfU64 -- nameIdOf widened for the u64-keyed unit-name table. A method
+# on a CALL RESULT emits `&<call>`, which is not an lvalue, so the widening
+# cannot ride the call site.
+nameIdOfU64: function {ast: Ast name: StringView} out u64 is {
+    return (nameIdOf :ast :name).u64
+}
+
+nameIdOf: function {ast: Ast name: StringView} out zast.nameid is {
     return (zast.poolFind pool: ast.names text: name)
 }
 
@@ -11288,8 +11307,11 @@ cloneMethodInto: function {
         tpn0id = tz0.thisParamNameId
     }
     if isNat0 then reg.setNative typeId: fid5 value: true
-    if tpn0id > 0 then reg.setThisParamName typeId: fid5 nameId: tpn0id
-    tpn0: zast.poolTextCopy pool: ast.names ref: tpn0id
+    if tpn0id > 0 then (reg.setThisParamName
+        typeId: fid5
+        nameId: (zast.nameid.create from: tpn0id.u32)
+    )
+    tpn0: zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: tpn0id.u32)
     if (optBoolOr o: (ty.funcReturnsView.get key: tplFnId) d: false) then {
         ty.funcReturnsView.set key: fid5 value: true
     }
@@ -11325,7 +11347,7 @@ cloneMethodInto: function {
             oi5 = oi5 + 1
             oo5: (ty.declOwnershipOfId
                 parentTypeId: (ztypes.tid.create from: tplFnId.u64)
-                nameId: onid5.u32.orPanic
+                nameId: (zast.nameid.create from: onid5.u32.orPanic)
             )
             match (
                 oo5
@@ -12344,8 +12366,11 @@ typeIsHashable: function {
         } case none then hops9 = 8
         hops9 = hops9 + 1
     }
-    if (ty.declIsMethodId parentTypeId: htd9 nameId: zast.wkHash) == false then return false
-    return (ty.declIsMethodId parentTypeId: htd9 nameId: zast.wkOpEq)
+    if (ty.declIsMethodId
+        parentTypeId: htd9
+        nameId: (zast.nameid.create from: zast.wkHash)
+    ) == false then return false
+    return (ty.declIsMethodId parentTypeId: htd9 nameId: (zast.nameid.create from: zast.wkOpEq))
 }
 
 # heapOwningValtypeTid -- a RECORD/VARIANT that transitively owns heap
@@ -14359,7 +14384,10 @@ fnAutoCallable: function {ast: Ast st: zenv.ZSymbolTable mid: ztypes.tid} out bo
         if thisPnId9 > 0 when pnameId == thisPnId9 then isRecv9 = true
         if (isRecv9) == false then {
             userSeen9 = true
-            hd9: st.typing.declHasDefaultId parentTypeId: mid nameId: pnameId
+            hd9: (st.typing.declHasDefaultId
+                parentTypeId: mid
+                nameId: (zast.nameid.create from: pnameId.u32.orPanic)
+            )
             if (hd9) == false then return false
         }
     }
@@ -14431,7 +14459,7 @@ canonicalChildBase: function {ast: Ast st: zenv.ZSymbolTable bt: u64 child: Stri
     if nm.length == 0 then return 0
     uks9: (List String)
     with uit: st.reg.unitNameTid.iterateItems do for ue: uit loop {
-        ukc9: zast.poolTextCopy pool: ast.names ref: ue.key.u32.orPanic
+        ukc9: zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: ue.key.u32.orPanic)
         uks9.append ukc9
     }
     cands9: (ListVal u64)
@@ -15347,7 +15375,12 @@ checkDotted: function {
             tat5: optTidOr o: (st.typing.tagAccessorTid.get key: bt) d: ztypes.tid
             if tat5 > 0 then {
                 st.typing.dpTagRead.set key: dp.nodeid.u64 value: bt
-                mD5: declMemberOf ty: st.typing reg: st.reg ownerTid: bt nameId: cnId9.u32.orPanic
+                mD5: (declMemberOf
+                    ty: st.typing
+                    reg: st.reg
+                    ownerTid: bt
+                    nameId: (zast.nameid.create from: cnId9.u32.orPanic)
+                )
                 stampRefDecl ty: st.typing nid: dp.nodeid.u64 declId: mD5
                 stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: tat5.u64)
                 return (ztypes.tid.create from: tat5)
@@ -15402,7 +15435,12 @@ checkDotted: function {
         # from it to gate the numeric-cast leg (a scalar-named member of a
         # user type is not a conversion).
         if dp.nodeid > 0 when bt > 0 then {
-            mD9: declMemberOf ty: st.typing reg: st.reg ownerTid: bt nameId: cnId9.u32.orPanic
+            mD9: (declMemberOf
+                ty: st.typing
+                reg: st.reg
+                ownerTid: bt
+                nameId: (zast.nameid.create from: cnId9.u32.orPanic)
+            )
             stampRefDecl ty: st.typing nid: dp.nodeid.u64 declId: mD9
         }
         # A subtype member named on a tagged TYPE (not a value of it, not the
@@ -15578,7 +15616,10 @@ checkDotted: function {
         # x` beside it was refused -- both readers, and under the locking model
         # a reader takes SHARED for its duration.
         if coerce when (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) != ztypes.ztypetype.functionType then {
-            if (st.typing.declIsMethodId parentTypeId: bt nameId: cnId9.u32.orPanic) then {
+            if (st.typing.declIsMethodId
+                parentTypeId: bt
+                nameId: (zast.nameid.create from: cnId9.u32.orPanic)
+            ) then {
                 lockAutoCallReceiver :ast :st :dp :bt shared: true
             }
         }
@@ -15861,8 +15902,8 @@ checkAtomid: function {
         # break/continue diverge: the atom's value is never (the scope
         # entry stays the unregistered placeholder).
         isBrk9: false
-        if node.name == zast.wkBreak then isBrk9 = true
-        if node.name == zast.wkContinue then isBrk9 = true
+        if node.name.u32 == zast.wkBreak then isBrk9 = true
+        if node.name.u32 == zast.wkContinue then isBrk9 = true
         if isBrk9 then {
             result = ztypes.tid.create from: (optU64Or
                 o: (walkLookupTyperef
@@ -15886,7 +15927,7 @@ checkAtomid: function {
             st.typing.atomVariableId.set key: node.nodeid.u64 value: setav9
         } case none then null
     } case none then {
-        if node.name == zast.wkReturn then {
+        if node.name.u32 == zast.wkReturn then {
             mrt9: st.typing.currentReturnTypeId
             if mrt9 > 0 then {
                 mtt9: st.reg.typetypeOf typeId: mrt9
@@ -17190,7 +17231,7 @@ blockHasBreak: function {ast: Ast.view n: Node.view} out bool is {
     } case expression then {
         return (blockHasBreak :ast n: (ast.nodes.get i: (n.expression - 1).u64))
     } case atomid then {
-        return n.name == zast.wkBreak
+        return n.name.u32 == zast.wkBreak
     } case ifexpr then {
         cliter: n.clauses.iterate
         for cl0Id9: cliter loop {
@@ -17680,7 +17721,7 @@ restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: SetVal u32 taken: S
     for vn: liveBefore.iterate loop {
         if (liveAfter.has item: vn) == false then {
             taken.add item: vn
-            st.clearTaken nameId: vn
+            st.clearTaken nameId: (zast.nameid.create from: vn.u32)
         }
     }
 }
@@ -17690,7 +17731,7 @@ restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: SetVal u32 taken: S
 # is use-after-take).
 invalidateTakenAcross: function {st: zenv.ZSymbolTable names: SetVal u32} is {
     for vn: names.iterate loop {
-        st.invalidate nameId: vn loc: (optionval.none ztypes.zsrcpos)
+        st.invalidate nameId: (zast.nameid.create from: vn.u32) loc: (optionval.none ztypes.zsrcpos)
     }
 }
 
@@ -18297,7 +18338,7 @@ positionalParamName: function {
                 if tnB9.stringview == "this" then isRecv9 = true
                 if (st.reg.thisParamNameIs
                     tid: funcId
-                    nameId: ppnid9.u32.orPanic
+                    nameId: (zast.nameid.create from: ppnid9.u32.orPanic)
                 ) then isRecv9 = true
             }
             if (isRecv9) == false then {
@@ -18754,10 +18795,10 @@ iterElementIsReadonly: function {
     }
     if ocn9.length == 0 then return false
     cnd9: nameIdOf :ast name: ocn9.stringview
-    clk9: st.findLock nameId: cnd9
+    clk9: st.findLock nameId: (zast.nameid.create from: cnd9.u32)
     if clk9.none then return false
     if clk9 != ztypes.zlockstate.shared then return false
-    clh9: st.findLockHolder nameId: cnd9
+    clh9: st.findLockHolder nameId: (zast.nameid.create from: cnd9.u32)
     if clh9.none then return false
     if clh9.kind != ztypes.zlockholderkind.varKind then return false
     return clh9.id == ivo9
@@ -18839,11 +18880,11 @@ pinnedMoveError: function {
 } out bool is {
     if name.length == 0 then return false
     pnid9: nameIdOf :ast :name
-    pvo9: st.lookupVarId nameId: pnid9
+    pvo9: st.lookupVarId nameId: (zast.nameid.create from: pnid9.u32)
     if pvo9.none then return false
-    plk9: st.findLock nameId: pnid9
+    plk9: st.findLock nameId: (zast.nameid.create from: pnid9.u32)
     if plk9.none then return false
-    plh9: st.findLockHolder nameId: pnid9
+    plh9: st.findLockHolder nameId: (zast.nameid.create from: pnid9.u32)
     if plh9.none then return false
     # A holder that is the binding itself is the readonly case, which
     # readonlyMoveError words better; a call-scoped holder belongs to the
@@ -19176,7 +19217,7 @@ dataFieldNames: function {
                 fptr: false
                 fptr = (st.typing.declIsFnptrFieldId
                     parentTypeId: tid
-                    nameId: tcNameId9.u32.orPanic
+                    nameId: (zast.nameid.create from: tcNameId9.u32.orPanic)
                 )
                 if fptr then {
                     inc = true
@@ -19288,7 +19329,10 @@ missingCtorFields: function {
                 if effTT9 == ztypes.ztypetype.classType then ctorFill9 = true
                 if fhbOk9 when ctorFill9 then need = false
             }
-            if (st.typing.declHasDefaultId parentTypeId: effId nameId: pnameId) then need = false
+            if (st.typing.declHasDefaultId
+                parentTypeId: effId
+                nameId: (zast.nameid.create from: pnameId.u32.orPanic)
+            ) then need = false
             if need then {
                 prov: false
                 if posI < posCount then prov = true
@@ -21686,7 +21730,10 @@ checkGenericCall: function {
                     pnB9: ast.names.texts.get i: (gcNid9 - 1).u64
                     isRecv9: gcNid9 == zast.wkThis.u64
                     if (isRecv9) == false then {
-                        isRecv9 = (st.reg.thisParamNameIs tid: funcId nameId: gcNid9.u32.orPanic)
+                        isRecv9 = (st.reg.thisParamNameIs
+                            tid: funcId
+                            nameId: (zast.nameid.create from: gcNid9.u32.orPanic)
+                        )
                     }
                     if (isRecv9) == false then {
                         pn2: pnB9.copy
@@ -25634,7 +25681,7 @@ declLinkTemplateMethod: function {
     if (ty.declIdOfType typeId: (ztypes.tid.create from: fnTid.u64)) > 0 then return
     tud9: declOfUnitDef :ty :ast defUnit: unitName name: tmplName
     if tud9.isZero then return
-    md9: ty.declFindChild parentDeclId: tud9 nameId: memberNameId
+    md9: ty.declFindChild parentDeclId: tud9 nameId: (zast.nameid.create from: memberNameId.u32)
     if md9.isZero then return
     ty.declSetType declId: md9 typeId: (ztypes.tid.create from: fnTid.u64)
 }
@@ -25662,7 +25709,7 @@ declMemberOf: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     ownerTid: ztypes.tid
-    nameId: u32
+    nameId: zast.nameid
 } out ztypes.declid is {
     od9: declOfTypeId :reg tid: ownerTid
     if od9.isZero then return (ztypes.declid.create from: 0)
@@ -25679,7 +25726,7 @@ declSurfaceOfName: function {
     reg: ztypes.ZTypeRegistry.view
     ast: Ast.view
     currentUnit: StringView
-    nameId: u32
+    nameId: zast.nameid
     tid: ztypes.tid
 } out ztypes.declid is {
     if nameId > 0 then {
@@ -25712,7 +25759,7 @@ declSurfaceEnsure9: function {
     reg: ztypes.ZTypeRegistry.view
     ast: Ast
     uname: StringView
-    nameId: u32
+    nameId: zast.nameid
     declId: ztypes.declid
     want: u64
 } out ztypes.declid is {
@@ -25744,9 +25791,9 @@ declProbeUnitChildId: function {
     reg: ztypes.ZTypeRegistry.view
     ast: Ast.view
     uname: StringView
-    nameId: u32
+    nameId: zast.nameid
 } out u64 is {
-    if nameId == 0 then return 0
+    if nameId.isZero then return 0
     ro9: ty.unitRootByName.get key: (nameIdOf :ast name: uname).u64
     match (
         ro9
@@ -25765,9 +25812,9 @@ declProbeUnitChildRoot: function {
     ast: Ast
     unitRoot: ztypes.declid
     uname: StringView
-    nameId: u32
+    nameId: zast.nameid
 } out u64 is {
-    if nameId == 0 then return 0
+    if nameId.isZero then return 0
     cid9: ty.declFindChild parentDeclId: unitRoot :nameId
     if cid9.isZero then return 0
     ctid9: u64
@@ -25969,7 +26016,7 @@ walkUnitProbe9ById: function {
     uname: StringView
     baseId: u32
 } out optionval u64 is {
-    dt9: declProbeUnitChildId :ty :reg :ast :uname nameId: baseId
+    dt9: declProbeUnitChildId :ty :reg :ast :uname nameId: (zast.nameid.create from: baseId.u32)
     if dt9 > 0 then return (optionval.some dt9)
     uido: reg.unitNameTid.get key: (nameIdOf :ast name: uname).u64
     match (
@@ -26049,7 +26096,7 @@ resolveUnitChildById: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     unitName: StringView
-    nameId: u32
+    nameId: zast.nameid
 } out optionval u64 is {
     dt9: declProbeUnitChildId :ty :reg :ast uname: unitName :nameId
     if dt9 > 0 then return (optionval.some dt9)
@@ -26074,7 +26121,7 @@ resolveSystemChildById: function {
     ast: Ast
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
-    nameId: u32
+    nameId: zast.nameid
 } out optionval u64 is {
     if ty.systemUnitRoot > 0 then {
         dt9: (declProbeUnitChildRoot
@@ -26608,7 +26655,7 @@ declMemberIsPrivate: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     tid: ztypes.tid
-    nameId: u32
+    nameId: zast.nameid
 } out bool is {
     pn9: publicNsOf :ty :reg :tid
     if pn9.isZero then return false
@@ -26653,7 +26700,7 @@ declPublicAliasInternal: function {
     }
     if intName9 == nid9 then return "".string
     if intName9 == 0 then return "".string
-    return (zast.poolTextCopy :pool ref: intName9)
+    return (zast.poolTextCopy :pool ref: (zast.nameid.create from: intName9.u32))
 }
 
 # publicAliasInternalNames -- the internal member names `tid`'s public interface
@@ -26694,7 +26741,7 @@ publicAliasInternalNames: function {
         }
         if intNid9 > 0 when intNid9.u64 != pubNid9 then out9.append from: (zast.poolTextCopy
             :pool
-            ref: intNid9
+            ref: (zast.nameid.create from: intNid9.u32)
         )
     }
     return out9
