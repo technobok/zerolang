@@ -11,6 +11,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :declid
+    :vid
     :constraintdesc
     :ZConformance
     :ZConst
@@ -371,6 +372,17 @@ boolText: function {b: bool} out String is {
 
 # --- value-type carriers ---
 
+# vid -- a symbol-table variable id (locals emit as z_v{vid}); 0 is "no
+# variable". Same-space equality; sentinels read isZero.
+vid: record { val: u64.typedef } as {
+    ==: function {:this rhs: vid} out bool is {
+        return this.u64 == rhs.u64
+    }
+    isZero: function {:this} out bool is {
+        return this.u64 == 0
+    }
+}
+
 # declid -- a Decl-tree row id (minted dense 1..N by declNew); 0 is "no
 # decl". A typedef so a decl id cannot cross with the other numeric id
 # spaces; equality is same-space only, sentinels read .u64.
@@ -441,7 +453,7 @@ ZConst: class {
 # Per-binding ownership info, attached to a scope entry for named
 # runtime bindings.
 ZVariable: class {
-    variableId: u64
+    variableId: vid
     ztypeId: u64
     ownership: zownership
     isPrivateAccess: bool
@@ -520,7 +532,7 @@ ZEntry: class {
     name: u32
     ztypeId: u64
     isDefinition: bool
-    varId: (optionval u64)
+    varId: (optionval ztypes.vid)
     hasLock: bool
     lockType: zlockstate
     lockScope: zlockscope
@@ -688,7 +700,7 @@ ZTypeRegistry: class {
     }
 
     newVariable: function {:this ztypeId: u64 ownership: zownership} out ZVariable is {
-        id: this.nextVariableId
+        id: vid.create from: this.nextVariableId
         this.nextVariableId = this.nextVariableId + 1
         return (ZVariable
             variableId: id
@@ -707,7 +719,7 @@ ZTypeRegistry: class {
             name: nameId
             :ztypeId
             :isDefinition
-            varId: (optionval.none u64)
+            varId: (optionval.none ztypes.vid)
             hasLock: false
             lockType: zlockstate.shared
             lockScope: zlockscope.target

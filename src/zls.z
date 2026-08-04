@@ -1390,7 +1390,7 @@ pathMatches: function {pv: StringView rel: StringView srcDir: StringView} out bo
 # ---- stamp lookups through the snapshot's Option symtab ----
 
 # the variable id referenced at use-site node `nid`, or 0.
-useVarId: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
+useVarId: function {o: (Option zenv.ZSymbolTable) nid: u64} out ztypes.vid is {
     match (
         o
     ) case some then {
@@ -1400,10 +1400,10 @@ useVarId: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
         ) case some then {
             return g9
         } case none then {
-            return 0
+            return (ztypes.vid.create from: 0)
         }
     } case none then {
-        return 0
+        return (ztypes.vid.create from: 0)
     }
 }
 
@@ -1493,7 +1493,7 @@ memberOwnerOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
 }
 
 # the variable id defined at node `nid`, or 0.
-defVarIdOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
+defVarIdOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out ztypes.vid is {
     match (
         o
     ) case some then {
@@ -1503,10 +1503,10 @@ defVarIdOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
         ) case some then {
             return g9
         } case none then {
-            return 0
+            return (ztypes.vid.create from: 0)
         }
     } case none then {
-        return 0
+        return (ztypes.vid.create from: 0)
     }
 }
 
@@ -1522,7 +1522,7 @@ nodeTypeAt: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
 }
 
 # varDefNode -- the binding node that declared variable `vid`.
-varDefNode: function {o: (Option zenv.ZSymbolTable) vid: u64} out u64 is {
+varDefNode: function {o: (Option zenv.ZSymbolTable) vid: ztypes.vid} out u64 is {
     match (
         o
     ) case some then {
@@ -2292,12 +2292,12 @@ locationValue: function {
 defNodeOf: function {
     o: (Option zenv.ZSymbolTable)
     prog: zast.Node.view
-    refVid: u64
+    refVid: ztypes.vid
     refTid: u64
     refOwner: u64
     member: StringView
 } out u64 is {
-    if refVid > 0 then return (varDefNode :o vid: refVid)
+    if (refVid.isZero) == false then return (varDefNode :o vid: refVid)
     if refTid > 0 then return (defNodeInfo :o :prog tid: refTid member: "")
     if refOwner > 0 then return (defNodeInfo :o :prog tid: refOwner :member)
     return 0
@@ -2620,8 +2620,8 @@ inferredGenericLines: function {
 # source) as an in-fence `#` comment body: "owned local" / "borrowed
 # parameter" / "borrowed local, from s" / "static unit-level"; "" when the
 # reference carries no stamped ownership/origin.
-refAnnotation: function {o: (Option zenv.ZSymbolTable) vid: u64 nid: u64} out String is {
-    if vid == 0 then {
+refAnnotation: function {o: (Option zenv.ZSymbolTable) vid: ztypes.vid nid: u64} out String is {
+    if vid.isZero then {
         udo9: useUnitDef :o :nid
         if udo9 > 0 then return "static unit-level".string
         return "".string
@@ -2725,12 +2725,12 @@ navAnswer: function {
     hnid: hit.nodeid.u64
 
     # resolve the hit to a target
-    refVid: u64
+    refVid: ztypes.vid
     refTid: u64
     refOwner: u64
     if bestKind == 1 then {
         refVid = useVarId o: snap.st nid: hnid
-        if refVid == 0 then refTid = useUnitDef o: snap.st nid: hnid
+        if refVid.isZero then refTid = useUnitDef o: snap.st nid: hnid
     }
     if bestKind == 2 then {
         refOwner = memberOwnerOf o: snap.st nid: hnid
@@ -2742,12 +2742,12 @@ navAnswer: function {
     # own Decl); fills the type id for hits only the Decl layer knows
     # (public-interface entries)
     refDeclId9: refDeclOf o: snap.st nid: hnid
-    if refVid == 0 when refTid == 0 when refOwner == 0 then {
+    if refVid.isZero when refTid == 0 when refOwner == 0 then {
         if refDeclId9 > 0 then refTid = declTypeIdOf o: snap.st declId: refDeclId9
     }
 
     unitFsno9: zvfs.fsno
-    if refVid == 0 when refTid == 0 then unitFsno9 = unitFsnoByName :snap name: hname.stringview
+    if refVid.isZero when refTid == 0 then unitFsno9 = unitFsnoByName :snap name: hname.stringview
 
     if mode == 2 then {
         if unitFsno9.u64 > 0 then {
@@ -2929,12 +2929,14 @@ navAnswer: function {
         row2: sp.rows.get i: rj
         n2: row2.nodeid.u64
         add9: false
-        if refVid > 0 then {
+        if (refVid.isZero) == false then {
             if row2.kind == 1 then {
-                if (useVarId o: snap.st nid: n2) == refVid then add9 = true
+                uvN9: useVarId o: snap.st nid: n2
+                if uvN9 == refVid then add9 = true
             }
             if row2.kind == 3 then {
-                if (defVarIdOf o: snap.st nid: n2) == refVid then add9 = true
+                dvN9: defVarIdOf o: snap.st nid: n2
+                if dvN9 == refVid then add9 = true
             }
         }
         if refTid > 0 when row2.kind == 1 then {
