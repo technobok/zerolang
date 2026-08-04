@@ -9,6 +9,7 @@
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
 public: unit {
+    :nameid
     :AssignmentData
     :Ast
     :AtomIdData
@@ -658,6 +659,19 @@ Ast: class {
     }
 }
 
+# nameid -- a StringPool id: the interned identity of one identifier's text.
+# 1-based, 0 is "no name". A typedef so a pool id cannot cross with the node,
+# type or variable id spaces; equality is same-space only, sentinels read
+# isZero.
+nameid: record { val: u32.typedef } as {
+    ==: function {:this rhs: nameid} out bool is {
+        return this.u32 == rhs.u32
+    }
+    isZero: function {:this} out bool is {
+        return this.u32 == 0
+    }
+}
+
 # StringPool -- deduplicating intern table for identifier text. ids are
 # 1-based (0 = absent); texts are never removed, so an id stays valid for
 # the pool's lifetime. The slot index is an open-addressed, linear-probed
@@ -726,38 +740,38 @@ StringPool: class {
     }
 
     # set -- intern s, copying the bytes only on first sight.
-    set: function {:this s: StringView} out u32 is {
+    set: function {:this s: StringView} out nameid is {
         this.reserve
         si: this.probeSlot :s
         sid: this.slots.get i: si
-        if sid > 0 then return sid
+        if sid > 0 then return (nameid.create from: sid.u32)
         this.texts.append s.string
         nid: this.texts.length.u32.orPanic
         this.slots.set i: si val: nid
         this.used = this.used + 1
-        return nid
+        return (nameid.create from: nid.u32)
     }
 
     # setOwned -- intern a donated owned string: moved in on first sight,
     # dropped when the text is already interned.
-    setOwned: function {:this s: String.take} out u32 is {
+    setOwned: function {:this s: String.take} out nameid is {
         this.reserve
         si: this.probeSlot s: s.stringview
         sid: this.slots.get i: si
-        if sid > 0 then return sid
+        if sid > 0 then return (nameid.create from: sid.u32)
         this.texts.append s
         nid: this.texts.length.u32.orPanic
         this.slots.set i: si val: nid
         this.used = this.used + 1
-        return nid
+        return (nameid.create from: nid.u32)
     }
 
     # find -- the id of an already-interned text (0 when absent).
     # Read-only: never interns, never grows the slot table.
-    find: function {t: this.view s: StringView} out u32 is {
-        if t.slots.length == 0 then return 0
+    find: function {t: this.view s: StringView} out nameid is {
+        if t.slots.length == 0 then return (nameid.create from: 0)
         si: t.probeSlot :s
-        return (t.slots.get i: si)
+        return (nameid.create from: (t.slots.get i: si))
     }
 
     # get -- an owned copy of id's text; panics on an out-of-range id.
@@ -1368,14 +1382,14 @@ posOf: function {n: Node.view} out nodepos is {
 # poolFind -- the pool id of an already-interned name (0 when absent). Takes
 # the pool as a sibling arg so a caller holding a view into another Ast field
 # (the node table) does not lock the whole carrier -- read-only, never interns.
-poolFind: function {pool: StringPool.view text: StringView} out u32 is {
+poolFind: function {pool: StringPool.view text: StringView} out nameid is {
     return (pool.find s: text)
 }
 
 # poolSet -- intern `text`, returning its 1-based pool id. Mutating
 # counterpart of poolFind: takes the pool itself so a caller holding a view
 # into a sibling Ast field (the node table) does not lock the whole carrier.
-poolSet: function {pool: StringPool text: StringView} out u32 is {
+poolSet: function {pool: StringPool text: StringView} out nameid is {
     return (pool.set s: text)
 }
 
