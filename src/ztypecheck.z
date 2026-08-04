@@ -727,10 +727,10 @@ typesCompatible: function {
     cur9: a
     for cur9 > 0 loop {
         nb9: typedefBaseOf :ast :st :unitName tid: cur9
-        if nb9 == 0 then {
+        if nb9.isZero then {
             cur9 = 0
         } else {
-            if nb9 == b then return true
+            if nb9.u64 == b then return true
             cur9 = nb9
         }
     }
@@ -10524,7 +10524,7 @@ builtinTidT: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     base: StringView
-} out u64 is {
+} out ztypes.tid is {
     bk: (zast.poolFind pool: ast.names text: base).u64
     if bk > 0 then {
         m: ty.builtinTidMemo.get key: bk
@@ -10534,8 +10534,11 @@ builtinTidT: function {
             return m
         } case none then null
     }
-    r: (optU64Or o: (walkLookupTyperef :ast :ty :reg currentUnit: "" :base) d: 0)
-    if r == 0 then {
+    r: (ztypes.tid.create from: (optU64Or
+        o: (walkLookupTyperef :ast :ty :reg currentUnit: "" :base)
+        d: 0
+    ))
+    if r.isZero then {
         # an internal lookup may still say the aliased container name while
         # the declaration carries the family name (s7): retry the renamed
         # twin -- the alias and the declaration share one canonical tid.
@@ -10544,16 +10547,19 @@ builtinTidT: function {
         if base == "Set" then alt9 = "SetRef"
         if base == "Map" then alt9 = "MapRR"
         if alt9.length > 0 then {
-            r = optU64Or o: (walkLookupTyperef :ast :ty :reg currentUnit: "" base: alt9) d: 0
+            r = ztypes.tid.create from: (optU64Or
+                o: (walkLookupTyperef :ast :ty :reg currentUnit: "" base: alt9)
+                d: 0
+            )
         }
     }
-    if r == 0 then return r
+    if r.isZero then return r
     if bk > 0 then ty.builtinTidMemo.set key: bk value: r
     return r
 }
 
 # the type id of builtin type `base` (typecheck-side lookup).
-builtinTidTc: function {ast: Ast.view st: zenv.ZSymbolTable base: StringView} out u64 is {
+builtinTidTc: function {ast: Ast.view st: zenv.ZSymbolTable base: StringView} out ztypes.tid is {
     return (builtinTidT :ast ty: st.typing reg: st.reg :base)
 }
 
@@ -10894,7 +10900,7 @@ printableInterpTid: function {
     tc9: u64
     for tc9 < 8 loop {
         b9: typedefBaseTidOf :st tid: t9
-        if b9 == 0 then break
+        if b9.isZero then break
         t9 = b9
         tc9 = tc9 + 1
     }
@@ -13761,10 +13767,10 @@ typedefBaseOf: function {
     st: zenv.ZSymbolTable
     unitName: StringView
     tid: u64
-} out u64 is {
+} out ztypes.tid is {
     bn9: copiedMapStr m: st.typing.typedefBaseName key: tid
-    if bn9.length == 0 then return 0
-    return (optU64Or
+    if bn9.length == 0 then return (ztypes.tid.create from: 0)
+    return (ztypes.tid.create from: (optU64Or
         o: (walkLookupTyperef
             :ast
             ty: st.typing
@@ -13773,13 +13779,13 @@ typedefBaseOf: function {
             base: bn9.stringview
         )
         d: 0
-    )
+    ))
 }
 
 # typedefBaseTidOf -- a typedef type's base INSTANCE id, resolved structurally
 # when the wrapper was declared, or 0.
-typedefBaseTidOf: function {st: zenv.ZSymbolTable.view tid: u64} out u64 is {
-    return (optU64Or o: (st.typing.typedefBaseTid.get key: tid) d: 0)
+typedefBaseTidOf: function {st: zenv.ZSymbolTable.view tid: u64} out ztypes.tid is {
+    return (ztypes.tid.create from: (optU64Or o: (st.typing.typedefBaseTid.get key: tid) d: 0))
 }
 
 # checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef:
@@ -14954,7 +14960,7 @@ checkDotted: function {
         tdw9
     ) case some then null case none then {
         tdd9: typedefBaseTidOf :st tid: bt
-        if tdd9 == 0 then {
+        if tdd9.isZero then {
             tdd9 = typedefBaseOf :ast :st :unitName tid: bt
         }
         if tdd9 > 0 then bt = tdd9
@@ -16112,15 +16118,15 @@ materialiseLiteral: function {
     st: zenv.ZSymbolTable.view
     unitName: StringView
     t: u64
-} out u64 is {
+} out ztypes.tid is {
     base: ""
     if t == st.reg.literalIntTid then base = "i64"
     if t == st.reg.literalFloatTid then base = "f64"
-    if base.length == 0 then return t
-    return (optU64Or
+    if base.length == 0 then return (ztypes.tid.create from: t)
+    return (ztypes.tid.create from: (optU64Or
         o: (walkLookupTyperef :ast ty: st.typing reg: st.reg currentUnit: unitName :base)
         d: t
-    )
+    ))
 }
 
 # checkAssignment -- a local binding `name: value`: walk the value, materialise a
@@ -20570,7 +20576,7 @@ checkCall: function {
                                                 # applies to it.
                                                 tdB9: typedefBaseOf :ast :st :unitName tid: uparmid9
                                                 upn9: String
-                                                if tdB9 == uvt when tdB9 > 0 then {
+                                                if tdB9.u64 == uvt when tdB9 > 0 then {
                                                     upn9 = "a base type does not stand in for a typedef of it -- that direction is never implicit".string
                                                 }
                                                 dth9: dtn9.copy
@@ -25207,7 +25213,7 @@ declProbeUnitChildRoot: function {
 # monoOriginTidOf -- a type's genericOriginId (the template it monomorphized
 # from), or 0. A tid with an origin is a registered mono: inherently canonical,
 # never a placeholder shell.
-monoOriginTidOf: function {reg: ztypes.ZTypeRegistry tid: u64} out u64 is {
+monoOriginTidOf: function {reg: ztypes.ZTypeRegistry tid: u64} out ztypes.tid is {
     return (reg.genericOriginOf :tid)
 }
 
