@@ -397,7 +397,7 @@ checkBareTypeConstruction: function {
     unitName: StringView
     ast: Ast.view
     node: zast.AtomIdData.view
-    tid: u64
+    tid: ztypes.tid
 } is {
     cbW9: ast.names.texts.get i: (node.name - 1).u64
     (checkBareTypeValueAt
@@ -422,7 +422,7 @@ checkBareTypeValueAt: function {
     lineno: u32
     colno: u32
     width: u32
-    tid: u64
+    tid: ztypes.tid
 } is {
     tt9: st.reg.typetypeOf typeId: tid
     isFam9: false
@@ -524,7 +524,7 @@ checkBareTypeValueAt: function {
     (missingCtorFields
         :ast
         :st
-        funcId: tid
+        funcId: (ztypes.tid.create from: tid.u64)
         isCtor: true
         provided: prov9
         posCount: 0
@@ -2584,7 +2584,7 @@ resolveMonoRefParts: function {
         }
         if allOk9 == false then return 0
         if sfx9.length == 0 then return 0
-        tplId9: u64
+        tplId9: ztypes.tid
         tduo9: definingUnitFor :ty :ast currentUnit: unitName name: tname9.stringview
         if tduo9.stringview == unitName then {
             tplId9 = (descendNamed
@@ -2595,11 +2595,11 @@ resolveMonoRefParts: function {
                 name: tname9.stringview
             )
         }
-        if tplId9 == 0 then {
+        if tplId9.isZero then {
             tplO9: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: tname9.stringview
-            tplId9 = optU64Or o: tplO9 d: 0
+            tplId9 = ztypes.tid.create from: (optU64Or o: tplO9 d: 0)
         }
-        if tplId9 == 0 then {
+        if tplId9.isZero then {
             if tduo9.length > 0 then {
                 tplId9 = (descendNamed
                     :ty
@@ -2610,7 +2610,7 @@ resolveMonoRefParts: function {
                 )
             }
         }
-        if tplId9 == 0 then return 0
+        if tplId9.isZero then return 0
         ensureNativeLinkTargets :ty :reg :ast
         # generator wrapper collapse: the synth `.call` return's Option over a
         # VALTYPE element is optionval (ownership is a physical no-op there);
@@ -2622,13 +2622,13 @@ resolveMonoRefParts: function {
             if (typeIsValtype :ty :reg tid: firstA9) then {
                 ovd9: descendNamed :ty :reg :ast defUnit: "system" name: "optionval"
                 if ovd9 > 0 then {
-                    tplId9 = ovd9
+                    tplId9 = ztypes.tid.create from: (ovd9)
                     tn9 = "optionval".string
                 }
             } else {
                 obd9: descendNamed :ty :reg :ast defUnit: "system" name: "Option"
                 if obd9 > 0 then {
-                    tplId9 = obd9
+                    tplId9 = ztypes.tid.create from: (obd9)
                     tn9 = "Option".string
                 }
             }
@@ -2646,7 +2646,7 @@ resolveMonoRefParts: function {
             :reg
             mainName: mainName9
             name: mname9.stringview
-            templateId: tplId9
+            templateId: (ztypes.tid.create from: tplId9.u64)
             subs: subs9
             valSubs: valSubsR9
             fallbackArg: firstA9
@@ -2664,7 +2664,7 @@ resolveMonoRefParts: function {
                 :reg
                 mainName: mainName9
                 monoId: mid9
-                templateId: tplId9
+                templateId: (ztypes.tid.create from: tplId9.u64)
                 elemArg: firstA9
                 valArg: 0
             )
@@ -7120,7 +7120,7 @@ resolveAliasKey: function {
     atid9: descendNamed :ty :reg :ast defUnit: tu9.stringview name: tn9.stringview
     ty.declSetResolving declId: adecl9 mark: false
     typeRooted9: false
-    if atid9 == 0 then {
+    if atid9.isZero then {
         # a type-rooted target (`true: bool.true`): the root names a tagged
         # type, the member one of its value arms -- the alias denotes a VALUE
         # of the root type, so the edge binds the ROOT's tid
@@ -7142,14 +7142,14 @@ resolveAliasKey: function {
                     if mtt9 == ztypes.ztypetype.functionType then isMem9 = false
                     if mtt9 == ztypes.ztypetype.dataType then isMem9 = false
                     if isMem9 then {
-                        atid9 = rto9
+                        atid9 = ztypes.tid.create from: (rto9)
                         typeRooted9 = true
                     }
                 } case none then null
             }
         } case none then null
     }
-    if atid9 == 0 then return 0
+    if atid9.isZero then return 0
     cud9: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
     match (
         cud9
@@ -7218,9 +7218,9 @@ descendNamed: function {
     ast: Ast
     defUnit: StringView
     name: StringView
-} out u64 is {
-    if ty.defNodeIndexBuilt == false then return 0
-    if defUnit == "core" then return 0
+} out ztypes.tid is {
+    if ty.defNodeIndexBuilt == false then return (ztypes.tid.create from: 0)
+    if defUnit == "core" then return (ztypes.tid.create from: 0)
     ddec9: declOfUnitDef :ty :ast :defUnit :name
     tto9: (optionval.none ztypes.ztypetype)
     if ddec9 > 0 then tto9 = declDefTypetype :ty :ast declId: ddec9
@@ -7236,7 +7236,7 @@ descendNamed: function {
     if classified9 then tid9 = declareCanonicalType :ast :ty :reg :defUnit :name typetype: ttv9
     if classified9 == false then {
         alo9: resolveAliasKey :ty :reg :ast :defUnit :name
-        if alo9 > 0 then return alo9
+        if alo9 > 0 then return (ztypes.tid.create from: alo9.u64)
     }
     ddecl9: declOfUnitDef :ty :ast :defUnit :name
     if (defWasResolved
@@ -7249,7 +7249,7 @@ descendNamed: function {
         # generic parameters, and the spec trie cannot key a template whose
         # arity reads as zero.
         ensureDefGenericParams :ty :reg :ast declId: ddecl9
-        return tid9
+        return (ztypes.tid.create from: tid9)
     }
     if (ty.declIsResolving declId: ddecl9) then {
         # A grey hit is a back-edge. Reference-kind targets (UNION/CLASS --
@@ -7264,9 +7264,9 @@ descendNamed: function {
                 addResolveError :ty e: zast.err.typeError msg: cem9
             }
         }
-        return tid9
+        return (ztypes.tid.create from: tid9)
     }
-    if ddec9.isZero then return tid9
+    if ddec9.isZero then return (ztypes.tid.create from: tid9.u64)
     dnode9: u64
     {
         if (ty.declValid id: ddec9) then {
@@ -7274,7 +7274,7 @@ descendNamed: function {
             dnode9 = dgo9.node.u64
         }
     }
-    if dnode9 == 0 then return tid9
+    if dnode9 == 0 then return (ztypes.tid.create from: tid9.u64)
     bm9: ast.nodes.get i: (dnode9 - 1)
     if bm9.namedoperation then {
         (resolveDef
@@ -7288,9 +7288,9 @@ descendNamed: function {
     }
     if classified9 == false then {
         ro9: resolveUnitChild :ast :ty :reg unitName: defUnit :name
-        return (optU64Or o: ro9 d: 0)
+        return (ztypes.tid.create from: (optU64Or o: ro9 d: 0))
     }
-    return tid9
+    return (ztypes.tid.create from: tid9)
 }
 
 # resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
@@ -11174,12 +11174,12 @@ respecialize: function {
 } out u64 is {
     an9: reg.genericArgCount specId: specTid
     if an9 == 0 then return 0
-    origin9: u64
+    origin9: ztypes.tid
     {
         og9: reg.genericOriginOf tid: specTid
         if og9 > 0 then origin9 = og9
     }
-    if origin9 == 0 then return 0
+    if origin9.isZero then return 0
     changed9: false
     mapped9: (ListVal u64)
     ai9: u64
@@ -11246,7 +11246,7 @@ respecialize: function {
         :reg
         :mainName
         name: mn9.stringview
-        templateId: origin9
+        templateId: (ztypes.tid.create from: origin9.u64)
         subs: subs9
         valSubs: rvSubs9
         fallbackArg: 0
@@ -11259,7 +11259,7 @@ respecialize: function {
 # template it needs to do that.
 templateTypetypeOf: function {
     reg: ztypes.ZTypeRegistry.view
-    templateId: u64
+    templateId: ztypes.tid
 } out ztypes.ztypetype is {
     if templateId < reg.typeById.length then {
         tpl: reg.typeById.get i: templateId
@@ -11281,7 +11281,7 @@ mintMono: function {
     reg: ztypes.ZTypeRegistry
     mainName: StringView
     name: StringView
-    templateId: u64
+    templateId: ztypes.tid
     subs: (MapRV String value: u64)
     idSubs: (MapVV u64 value: u64)
     fallbackArg: u64
@@ -11730,11 +11730,11 @@ mintCollectionMethod: function {
 # demanded. 0 when any argument is unset or the path is not in the trie.
 specLookup: function {
     reg: ztypes.ZTypeRegistry
-    templateId: u64
+    templateId: ztypes.tid
     args: (ListVal u64).view
-} out u64 is {
-    if templateId == 0 then return 0
-    if args.length == 0 then return 0
+} out ztypes.tid is {
+    if templateId.isZero then return (ztypes.tid.create from: 0)
+    if args.length == 0 then return (ztypes.tid.create from: 0)
     cur9: templateId
     ok9: true
     with ait9: args.iterate do for a9: ait9 loop {
@@ -11753,7 +11753,7 @@ specLookup: function {
             }
         }
     }
-    if ok9 == false then return 0
+    if ok9 == false then return (ztypes.tid.create from: 0)
     return cur9
 }
 
@@ -12085,7 +12085,7 @@ getOrMintSpec: function {
     reg: ztypes.ZTypeRegistry
     mainName: StringView
     name: StringView
-    templateId: u64
+    templateId: ztypes.tid
     subs: (MapRV String value: u64)
     valSubs: (MapRV String value: u64)
     fallbackArg: u64
@@ -12286,7 +12286,7 @@ getOrMintSpec: function {
                 }
                 reg.setGenericChild parentId: cur9 key: k9 child: step9
             }
-            cur9 = step9
+            cur9 = ztypes.tid.create from: (step9)
             ki9 = ki9 + 1
         }
         ka9: u64
@@ -12420,7 +12420,7 @@ mintReturnWrapper: function {
     mainName: StringView
     targetId: u64
     name: StringView
-    templateId: u64
+    templateId: ztypes.tid
     fallbackArg: u64
 } out u64 is {
     weM: (MapRV String value: u64)
@@ -12464,7 +12464,7 @@ mintCollectionChildren: function {
     reg: ztypes.ZTypeRegistry
     mainName: StringView
     monoId: u64
-    templateId: u64
+    templateId: ztypes.tid
     elemArg: u64
     valArg: u64
 } is {
@@ -12628,7 +12628,7 @@ mintCollectionChildren: function {
                     :mainName
                     targetId: gvS9
                     name: wnS9.stringview
-                    templateId: woS9
+                    templateId: (ztypes.tid.create from: woS9.u64)
                     fallbackArg: valArg
                 )
             } case none then null
@@ -12704,7 +12704,7 @@ mintCollectionChildren: function {
 # argument (`(List String)` == `(List of: String)`) to its parameter.
 firstGenericParamName: function {
     reg: ztypes.ZTypeRegistry
-    templateId: u64
+    templateId: ztypes.tid
 } out String is {
     tk: declOfTypeId :reg tid: templateId
     names: reg.genericParamNamesOf tdecl: tk
@@ -12726,11 +12726,11 @@ inferGenericConstruction: function {
     unitName: StringView
     ast: Ast.view unitBody: (ListVal u32).view
     call: zast.CallData.view
-    tplId: u64
+    tplId: ztypes.tid
     reportMissing: bool
-} out u64 is {
+} out ztypes.tid is {
     tname: typeNameOf :st tid: tplId
-    if tname.length == 0 then return 0
+    if tname.length == 0 then return (ztypes.tid.create from: 0)
     tk: declOfTypeId reg: st.reg tid: tplId
     # Stage the template's children, then keep the ones whose TYPE NAME is a
     # registered generic param (field shells carry the param name, not a
@@ -12772,7 +12772,7 @@ inferGenericConstruction: function {
     subs: (MapRV String value: u64)
     boundParams: (Set String)
     firstA: u64
-    primaryName: firstGenericParamName reg: st.reg templateId: tplId
+    primaryName: firstGenericParamName reg: st.reg templateId: (ztypes.tid.create from: tplId.u64)
     # the value-arg walk below is a DRY RUN for type inference: bracket its
     # ownership effects (take overlays, borrow locks) so the real ctor walk
     # re-checks from a clean slate — an explicit `.take` arg otherwise
@@ -12930,9 +12930,9 @@ inferGenericConstruction: function {
                 )
             }
         }
-        return 0
+        return (ztypes.tid.create from: 0)
     }
-    if sfx.length == 0 then return 0
+    if sfx.length == 0 then return (ztypes.tid.create from: 0)
     mname: "\{tname}\{sfx}"
     vsD9: (MapRV String value: u64)
     mid: (getOrMintSpec
@@ -12941,12 +12941,12 @@ inferGenericConstruction: function {
         reg: st.reg
         mainName: unitName
         name: mname.stringview
-        templateId: tplId
+        templateId: (ztypes.tid.create from: tplId.u64)
         :subs
         valSubs: vsD9
         fallbackArg: 0
     )
-    if mid.isZero then return 0
+    if mid.isZero then return (ztypes.tid.create from: 0)
     cro: st.typing.declChildOfId parentTypeId: mid nameId: zast.wkCreate.u64
     match (
         cro
@@ -12973,7 +12973,7 @@ genericTypeConstruction: function {
     unitName: StringView
     unitBody: (ListVal u32).view
     call: zast.CallData.view
-    tplId: u64
+    tplId: ztypes.tid
 } out ztypes.tid is {
     tname: typeNameOf :st tid: tplId
     if tname.length == 0 then return (ztypes.tid.create from: 0)
@@ -12985,7 +12985,7 @@ genericTypeConstruction: function {
     numParamNodes9: (ListVal u32)
     firstA: u64
     anyMiss: false
-    primaryName: firstGenericParamName reg: st.reg templateId: tplId
+    primaryName: firstGenericParamName reg: st.reg templateId: (ztypes.tid.create from: tplId.u64)
     argIdx: u64
     aiter: call.arguments.iterate
     for argId9: aiter loop {
@@ -13147,7 +13147,7 @@ genericTypeConstruction: function {
         reg: st.reg
         mainName: unitName
         name: mname.stringview
-        templateId: tplId
+        templateId: (ztypes.tid.create from: tplId.u64)
         :subs
         valSubs: valSubs2
         fallbackArg: firstA
@@ -13176,7 +13176,7 @@ genericTypeConstruction: function {
             reg: st.reg
             mainName: unitName
             monoId: mid
-            templateId: tplId
+            templateId: (ztypes.tid.create from: tplId.u64)
             elemArg: firstA
             valArg: 0
         )
@@ -13205,7 +13205,7 @@ validateGenericTypeArgs: function {
     st: zenv.ZSymbolTable
     unitName: StringView
     call: zast.CallData.view
-    tplId: u64
+    tplId: ztypes.tid
     allowFrom: bool
 } out bool is {
     tname: typeNameOf :st tid: tplId
@@ -13226,7 +13226,7 @@ validateGenericTypeArgs: function {
             childNames.append cn1
         }
     }
-    primaryName: firstGenericParamName reg: st.reg templateId: tplId
+    primaryName: firstGenericParamName reg: st.reg templateId: (ztypes.tid.create from: tplId.u64)
     seen: (Set String)
     ok: true
     argIdx: u64
@@ -14046,7 +14046,7 @@ bareFnRefError: function {
     lineno: u32
     colno: u32
     width: u32
-    fid: u64
+    fid: ztypes.tid
 } is {
     prov9: (List String)
     misN9: (List String)
@@ -14054,7 +14054,7 @@ bareFnRefError: function {
     (missingCtorFields
         :ast
         :st
-        funcId: fid
+        funcId: (ztypes.tid.create from: fid.u64)
         isCtor: false
         provided: prov9
         posCount: 0
@@ -14720,7 +14720,7 @@ checkDotted: function {
                                 reg: st.reg
                                 mainName: unitName
                                 name: amn.stringview
-                                templateId: ato
+                                templateId: (ztypes.tid.create from: ato.u64)
                                 subs: asubs
                                 valSubs: vsE9
                                 fallbackArg: 0
@@ -14731,7 +14731,7 @@ checkDotted: function {
                                 reg: st.reg
                                 mainName: unitName
                                 monoId: amid
-                                templateId: ato
+                                templateId: (ztypes.tid.create from: ato.u64)
                                 elemArg: elo
                                 valArg: 0
                             )
@@ -14825,7 +14825,7 @@ checkDotted: function {
                         lineno: ufl9
                         colno: ufc9
                         width: cn.length.u32.orPanic
-                        fid: mo9
+                        fid: (ztypes.tid.create from: mo9.u64)
                     )
                 }
                 if (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
@@ -14865,7 +14865,7 @@ checkDotted: function {
                                 lineno: cdl9
                                 colno: cdc9
                                 width: cn.length.u32.orPanic
-                                tid: mo9
+                                tid: (ztypes.tid.create from: mo9.u64)
                             )
                         }
                     }
@@ -15672,7 +15672,7 @@ checkAtomid: function {
                             lineno: node.lineno
                             colno: node.colno
                             width: ndNm9.length.u32.orPanic
-                            fid: fo
+                            fid: (ztypes.tid.create from: fo.u64)
                         )
                     }
                 } else {
@@ -15709,7 +15709,13 @@ checkAtomid: function {
                             icv9: fo
                             st.typing.implicitCreate.set key: node.nodeid.u64 value: icv9
                         } else {
-                            checkBareTypeConstruction :st :unitName :ast :node tid: fo
+                            (checkBareTypeConstruction
+                                :st
+                                :unitName
+                                :ast
+                                :node
+                                tid: (ztypes.tid.create from: fo.u64)
+                            )
                         }
                     }
                 }
@@ -16913,7 +16919,7 @@ checkDo: function {
                     reg: st.reg
                     mainName: unitName
                     name: omn0.stringview
-                    templateId: ovo0
+                    templateId: (ztypes.tid.create from: ovo0.u64)
                     subs: osubs0
                     valSubs: vsF9
                     fallbackArg: 0
@@ -17271,7 +17277,7 @@ checkFor: function {
                     reg: st.reg
                     mainName: unitName
                     name: lmn9.stringview
-                    templateId: lto9
+                    templateId: (ztypes.tid.create from: lto9.u64)
                     subs: lsubs9
                     valSubs: vsG9
                     fallbackArg: 0
@@ -17528,7 +17534,13 @@ checkBinopMethodDispatch: function {
         opo
     ) case some then {
         oParamT9: u64
-        p0n9: positionalParamName :ast :st funcId: opo idx: 0 skipRecv: true
+        p0n9: (positionalParamName
+            :ast
+            :st
+            funcId: (ztypes.tid.create from: opo.u64)
+            idx: 0
+            skipRecv: true
+        )
         if p0n9.length > 0 then {
             ppo9: st.typing.declChildOf pool: ast.names parentTypeId: opo name: p0n9.stringview
             match (
@@ -17878,7 +17890,7 @@ dottedParentNodeId: function {ast: Ast.view n: Node.view} out u32 is {
 positionalParamName: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
-    funcId: u64
+    funcId: ztypes.tid
     idx: u64
     skipRecv: bool
 } out String is {
@@ -18824,7 +18836,7 @@ dataFieldNames: function {
 missingCtorFields: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    funcId: u64
+    funcId: ztypes.tid
     isCtor: bool
     provided: (List String).view
     posCount: u64
@@ -18851,7 +18863,7 @@ missingCtorFields: function {
             ) case some then {
                 crBody9 = true
             } case none then null
-            if crBody9 then effId = crId
+            if crBody9 then effId = ztypes.tid.create from: crId.u64
         }
     }
     names: (List String)
@@ -18910,7 +18922,7 @@ missingCtorFields: function {
 checkMissingCallArgs: function {ast: Ast.view
     st: zenv.ZSymbolTable.view
     call: zast.CallData.view
-    funcId: u64
+    funcId: ztypes.tid
     isCtor: bool
 } is {
     mcb0: metaCreateBaseId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
@@ -18963,7 +18975,7 @@ walkCallArgsHoist: function {
     unitName: StringView
     ast: Ast unitBody: (ListVal u32).view
     call: zast.CallData.view
-    funcId: u64
+    funcId: ztypes.tid
     isCtor: bool
     reportUnknown: bool
     recvImplicit: bool
@@ -18988,7 +19000,7 @@ walkCallArgsHoist: function {
                 o: (st.typing.declChildOfId parentTypeId: funcId nameId: zast.wkCreate.u64)
                 d: 0
             )
-            if crEff9 > 0 when (st.reg.typetypeOf typeId: crEff9) == ztypes.ztypetype.functionType then effId9 = crEff9
+            if crEff9 > 0 when (st.reg.typetypeOf typeId: crEff9) == ztypes.ztypetype.functionType then effId9 = ztypes.tid.create from: crEff9.u64
         }
     }
     aiter: call.arguments.iterate
@@ -19495,7 +19507,7 @@ checkBoxConstruction: function {
     unitName: StringView
     ast: Ast unitBody: (ListVal u32).view
     call: zast.CallData.view
-    tplId: u64
+    tplId: ztypes.tid
 } out ztypes.tid is {
     fnd: false
     vt: u64
@@ -19624,7 +19636,7 @@ checkBoxConstruction: function {
         reg: st.reg
         mainName: unitName
         name: mname.stringview
-        templateId: tplId
+        templateId: (ztypes.tid.create from: tplId.u64)
         :subs
         valSubs: vsJ9
         fallbackArg: 0
@@ -20009,12 +20021,18 @@ checkCall: function {
                     :unitName
                     :ast :unitBody
                     :call
-                    funcId: mtid
+                    funcId: (ztypes.tid.create from: mtid.u64)
                     isCtor: true
                     reportUnknown: false
                     recvImplicit: false
                 )
-                checkMissingCallArgs :ast :st :call funcId: mtid isCtor: true
+                (checkMissingCallArgs
+                    :ast
+                    :st
+                    :call
+                    funcId: (ztypes.tid.create from: mtid.u64)
+                    isCtor: true
+                )
                 st.popTo marker: mcm
                 setmc: mtid
                 stampGate :st nid: call.nodeid.u64 tid: setmc
@@ -20410,7 +20428,7 @@ checkCall: function {
                                 :st
                                 :unitName
                                 :call
-                                tplId: dtp
+                                tplId: (ztypes.tid.create from: dtp.u64)
                                 allowFrom: true
                             )
                             # Generic template: infer the mono (mirrors
@@ -20489,7 +20507,7 @@ checkCall: function {
                                         reg: st.reg
                                         mainName: unitName
                                         name: mname2.stringview
-                                        templateId: dtp
+                                        templateId: (ztypes.tid.create from: dtp.u64)
                                         subs: subs2
                                         valSubs: vsH9
                                         fallbackArg: subT
@@ -21044,7 +21062,7 @@ checkCall: function {
                     # an invalid type-argument list (unknown/duplicate already
                     # diagnosed) never drives field-bound inference; the
                     # single-diagnostic template resolution below stands
-                    gmid: u64
+                    gmid: ztypes.tid
                     if vok9 then {
                         gmid = (inferGenericConstruction
                             :st
@@ -21067,12 +21085,18 @@ checkCall: function {
                             :unitName
                             :ast :unitBody
                             :call
-                            funcId: gmid
+                            funcId: (ztypes.tid.create from: gmid.u64)
                             isCtor: true
                             reportUnknown: false
                             recvImplicit: false
                         )
-                        checkMissingCallArgs :ast :st :call funcId: gmid isCtor: true
+                        (checkMissingCallArgs
+                            :ast
+                            :st
+                            :call
+                            funcId: (ztypes.tid.create from: gmid.u64)
+                            isCtor: true
+                        )
                         st.popTo marker: cm9
                         ctk9: gmid
                         ctv9: true
@@ -25089,7 +25113,7 @@ declMonoType: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     monoTid: u64
-    templateId: u64
+    templateId: ztypes.tid
 } is {
     td9: declOfTypeId :reg tid: templateId
     if td9.isZero then return
