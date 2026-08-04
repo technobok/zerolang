@@ -20499,23 +20499,81 @@ checkCall: function {
                                         :unitBody
                                         node: (ast.nodes.get i: (arg2.operation - 1).u64)
                                     )
+                                    uparmo9: (st.typing.declChildOf
+                                        pool: ast.names
+                                        parentTypeId: dtp
+                                        name: ucArm2.stringview
+                                    )
+                                    uparmid9: optU64Or o: uparmo9 d: 0
                                     # a literal payload coerces at the arm's
                                     # payload type (restamp the bare node).
                                     if (isLiteralTypeId :st tid: uvt) then {
-                                        upo: (st.typing.declChildOf
-                                            pool: ast.names
-                                            parentTypeId: dtp
-                                            name: ucArm2.stringview
-                                        )
-                                        upid: optU64Or o: upo d: 0
-                                        if upid > 0 then {
+                                        if uparmid9 > 0 then {
                                             uiid: (innermostNodeId
                                                 :ast
                                                 n: (ast.nodes.get i: (arg2.operation - 1).u64)
                                             )
                                             if uiid > 0 then {
-                                                setup: upid
+                                                setup: uparmid9
                                                 stampGate :st nid: uiid.u64 tid: setup
+                                            }
+                                        }
+                                    } else {
+                                        # The parent is an ALREADY-monomorphised
+                                        # instance, so the arm's payload type is
+                                        # fixed and the value has to fit it. The
+                                        # generic leg above infers its mono from
+                                        # the payload; here there is nothing to
+                                        # infer, and without this check the call
+                                        # simply wears `dtp` whatever it holds --
+                                        # so the return / argument checks
+                                        # downstream compare that against itself
+                                        # and can never fire.
+                                        # A null-payload arm names a TYPE rather
+                                        # than passing a value (optionval.none
+                                        # u64), so it is not a payload at all.
+                                        upnm9: typeNameOf :st tid: uparmid9
+                                        upNull9: upnm9.stringview == "null"
+                                        if uparmid9 > 0 when uvt > 0 when (upNull9) == false then {
+                                            if (typesCompatible
+                                                :ast
+                                                :st
+                                                :unitName
+                                                a: uvt
+                                                b: uparmid9
+                                            ) == false then {
+                                                epc9: upnm9.copy
+                                                apn9: typeNameOf :st tid: uvt
+                                                apc9: apn9.copy
+                                                dtn9: typeNameOf :st tid: dtp
+                                                arc9: ucArm2.copy
+                                                upm9: "arm '\{arc9}' payload type mismatch: expected \{epc9}, got \{apc9}"
+                                                # Name the rule for the one typedef
+                                                # shape that reaches here. The
+                                                # other direction (a typedef where
+                                                # its base is declared) is ALLOWED
+                                                # and never arrives: an arm payload
+                                                # is a typed slot like a parameter,
+                                                # so the whole-value substitution
+                                                # applies to it.
+                                                tdB9: typedefBaseOf :ast :st :unitName tid: uparmid9
+                                                upn9: String
+                                                if tdB9 == uvt when tdB9 > 0 then {
+                                                    upn9 = "a base type does not stand in for a typedef of it -- that direction is never implicit".string
+                                                }
+                                                dth9: dtn9.copy
+                                                uph9: "convert at the boundary, or declare the target as the '\{dth9}' the value actually makes"
+                                                (addErrorH
+                                                    :st
+                                                    nodeid: arg2.nodeid
+                                                    lineno: arg2.lineno
+                                                    colno: arg2.colno
+                                                    e: zast.err.callError
+                                                    msg: upm9
+                                                    note: upn9
+                                                    hint: uph9
+                                                    width: 0
+                                                )
                                             }
                                         }
                                     }
