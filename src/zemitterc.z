@@ -7809,7 +7809,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             ) case some then {
                 if b1 >= 48 then {
                     if b1 <= 57 then {
-                        cTypeLk3: cTypeOf name: mn2.stringview
+                        cTypeLk3: literalSuffixBase :ast :symtab :ctx name: mn2.stringview
                         if cTypeLk3.length > 0 then {
                             bv1: bn2.stringview
                             bc1: bv1.string
@@ -7818,7 +7818,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                                 pn1: ztypes.parseNumber numstr: bv1
                                 if pn1.err.length == 0 then bc1 = "\{pn1.ival}"
                             }
-                            sfx1: numLitSuffix name: mn2.stringview
+                            sfx1: numLitSuffix name: cTypeLk3.stringview
                             bc1.append sfx1
                             return bc1
                         }
@@ -15552,14 +15552,69 @@ constKeyOf: function {ast: Ast.view ctx: Ctx.view nameId: u64} out u64 is {
     return (constKeyIn :ast unitName: ctx.mainName.stringview :nameId)
 }
 
+# literalSuffixBase -- the builtin scalar name a numeric literal's suffix
+# spells: the suffix itself when it already names a builtin scalar, or the
+# base a scalar typedef chases to (`1.nameid` -> "u32"). "" when it names
+# neither, which is what keeps a non-scalar suffix out of the constant fold.
+# The suffix's type comes from the canonical child of the unit ctx is bound
+# to -- a constant definition's own nodes carry no stamp to read, and the
+# emitter must not re-resolve the name.
+literalSuffixBase: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    name: StringView
+} out String is {
+    sc9: cTypeOf :name
+    if sc9.length > 0 then return name.string
+    uo9: symtab.reg.unitNameTid.get key: (zast.poolFind
+        pool: ast.names
+        text: ctx.mainName.stringview
+    ).u64
+    ut9: ztypes.tid
+    match (
+        uo9
+    ) case some then {
+        ut9 = (ztypes.tid.create from: uo9)
+    } case none then {
+        return "".string
+    }
+    co9: (symtab.typing.declChildOfId
+        parentTypeId: ut9
+        nameId: (zast.poolFind pool: ast.names text: name).u64
+    )
+    st9: ztypes.tid
+    match (
+        co9
+    ) case some then {
+        st9 = (ztypes.tid.create from: co9)
+    } case none then {
+        return "".string
+    }
+    bo9: symtab.typing.typedefBaseName.get key: st9
+    match (
+        bo9
+    ) case some then {
+        bn9: bo9.copy
+        bc9: cTypeOf name: bn9.stringview
+        if bc9.length > 0 then return bn9
+    } case none then null
+    return "".string
+}
+
 # isConstShape -- a unit member value that folds to a C constant
 # expression: numeric/float atoms, already-rendered constant names, and
 # binop trees over those.
-isConstShape: function {ast: Ast.view ctx: Ctx.view n: Node.view} out bool is {
+isConstShape: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    n: Node.view
+} out bool is {
     match (
         n
     ) case expression then {
-        return (isConstShape :ast :ctx n: (ast.nodes.get i: (n.expression - 1).u64))
+        return (isConstShape :ast :symtab :ctx n: (ast.nodes.get i: (n.expression - 1).u64))
     } case atomid then {
         avK9: ast.names.texts.get i: (n.name - 1).u64
         av: avK9.stringview
@@ -15580,8 +15635,8 @@ isConstShape: function {ast: Ast.view ctx: Ctx.view n: Node.view} out bool is {
             return false
         }
     } case binop then {
-        if (isConstShape :ast :ctx n: (ast.nodes.get i: (n.lhs - 1).u64)) then {
-            return (isConstShape :ast :ctx n: (ast.nodes.get i: (n.rhs - 1).u64))
+        if (isConstShape :ast :symtab :ctx n: (ast.nodes.get i: (n.lhs - 1).u64)) then {
+            return (isConstShape :ast :symtab :ctx n: (ast.nodes.get i: (n.rhs - 1).u64))
         } else {
             return false
         }
@@ -15590,7 +15645,7 @@ isConstShape: function {ast: Ast.view ctx: Ctx.view n: Node.view} out bool is {
     } case dottedpath then {
         # a typed numeric literal `0x7F.u64` / `42.i128` folds to a C constant.
         pc9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        cTypeLk4: cTypeOf name: pc9.stringview
+        cTypeLk4: literalSuffixBase :ast :symtab :ctx name: pc9.stringview
         if cTypeLk4.length > 0 then {
             pb9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
             db9: pb9.stringview.byteAt i: 0
@@ -15990,7 +16045,12 @@ fillConstValsIn: function {
     with biter: bodyIds9.iterate do for bm: biter loop {
         bmNode9: ast.nodes.get i: (bm - 1).u64
         if bmNode9.namedoperation then {
-            if (isConstShape :ast :ctx n: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
+            if (isConstShape
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+            ) then {
                 cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
                 nk: constKeyOf :ast :ctx nameId: bmNode9.name.u64
                 cvv: cv.stringview
