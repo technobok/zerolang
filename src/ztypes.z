@@ -10,6 +10,7 @@
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
 public: unit {
+    :declid
     :constraintdesc
     :ZConformance
     :ZConst
@@ -370,6 +371,18 @@ boolText: function {b: bool} out String is {
 
 # --- value-type carriers ---
 
+# declid -- a Decl-tree row id (minted dense 1..N by declNew); 0 is "no
+# decl". A typedef so a decl id cannot cross with the other numeric id
+# spaces; equality is same-space only, sentinels read .u64.
+declid: record { val: u64.typedef } as {
+    ==: function {:this rhs: declid} out bool is {
+        return this.u64 == rhs.u64
+    }
+    isZero: function {:this} out bool is {
+        return this.u64 == 0
+    }
+}
+
 # Source position triple (file, line, column) for take-location
 # tracking on a scope entry.
 zsrcpos: record {
@@ -489,7 +502,7 @@ ZType: class {
     runtimeIndexed: bool
     # the declaration (ztyping DeclId) that minted this type; 0 until the
     # declaration layer links it
-    def: u64
+    def: declid
     # the type that owns this one (a method's receiver); 0 when the type
     # stands free. The emitter composes C names from it.
     ownerTid: u64
@@ -588,7 +601,7 @@ holeType: function {} out ZType is {
     isBox: false
     isNative: false
     runtimeIndexed: false
-    def: 0
+    def: declid
     ownerTid: 0)
 }
 
@@ -609,7 +622,7 @@ ZTypeRegistry: class {
     # generic-template metadata, keyed by the TEMPLATE's DeclId; the
     # per-(template, param-ordinal) GENERIC_PARAM tid rides a composite
     # key (tdecl * 256 + ordinal)
-    genericParams: (MapVR u64 value: ParamList)
+    genericParams: (MapVR declid value: ParamList)
     genericParamTid: (MapVV u64 value: u64)
     # true when the last getOrMintSpec minted a fresh instance (checkGenericCall's wasNew)
     specWasFresh: bool
@@ -668,7 +681,7 @@ ZTypeRegistry: class {
         isBox: false
         isNative: false
         runtimeIndexed: false
-        def: 0
+        def: declid
         :ownerTid)
         this.typeById.append t
         return id
@@ -892,11 +905,10 @@ ZTypeRegistry: class {
     }
 
     # defOf -- the declaration that minted this type, or 0.
-    defOf: function {:this tid: u64} out u64 is {
-        if tid >= this.typeById.length then return 0
+    defOf: function {:this tid: u64} out declid is {
+        if tid >= this.typeById.length then return (declid.create from: 0)
         got: this.typeById.get i: tid
         return got.def
-        return 0
     }
 
     # returnTypeOf -- a function type's return type id, or 0 when it has none.
@@ -1032,7 +1044,7 @@ ZTypeRegistry: class {
     }
 
     # setDef -- link a minted type to the declaration that minted it.
-    setDef: function {:this typeId: u64 declId: u64} is {
+    setDef: function {:this typeId: u64 declId: declid} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
         got.def = declId
@@ -1112,7 +1124,7 @@ ZTypeRegistry: class {
     # child (the oracle resolves a generic type's methods without the
     # type's generic context, so the param type is unresolvable).
     # paramOrdinalOf -- a parameter's declaration ordinal, or none.
-    paramOrdinalOf: function {:this tdecl: u64 paramName: StringView} out optionval u64 is {
+    paramOrdinalOf: function {:this tdecl: declid paramName: StringView} out optionval u64 is {
         plo: this.genericParams.get key: tdecl
         match (
             plo
@@ -1130,7 +1142,7 @@ ZTypeRegistry: class {
 
     # one canonical GENERIC_PARAM type per (template, parameter): references
     # inside the template's members resolve the parameter name to this id.
-    genericParamTidOf: function {:this tdecl: u64 paramName: StringView} out optionval u64 is {
+    genericParamTidOf: function {:this tdecl: declid paramName: StringView} out optionval u64 is {
         po9: this.paramOrdinalOf :tdecl :paramName
         match (
             po9
@@ -1140,7 +1152,7 @@ ZTypeRegistry: class {
         return (optionval.none u64)
     }
 
-    setGenericParamTid: function {:this tdecl: u64 paramName: StringView tid: u64} is {
+    setGenericParamTid: function {:this tdecl: declid paramName: StringView tid: u64} is {
         po9: this.paramOrdinalOf :tdecl :paramName
         match (
             po9
@@ -1150,7 +1162,7 @@ ZTypeRegistry: class {
         } case none then null
     }
 
-    addGenericParam: function {:this tdecl: u64 paramName: StringView kind: constraintkind numericMax: (optionval u64)} is {
+    addGenericParam: function {:this tdecl: declid paramName: StringView kind: constraintkind numericMax: (optionval u64)} is {
         found9: false
         {
             plo: this.genericParams.get key: tdecl
@@ -1184,7 +1196,7 @@ ZTypeRegistry: class {
         }
     }
 
-    isGenericParamOf: function {:this tdecl: u64 name: StringView} out bool is {
+    isGenericParamOf: function {:this tdecl: declid name: StringView} out bool is {
         plo: this.genericParams.get key: tdecl
         match (
             plo
@@ -1202,7 +1214,7 @@ ZTypeRegistry: class {
 
     # genericParamConstraintOf -- the classified constraint for a template
     # parameter, or a NONE-kind descriptor when the parameter is unknown.
-    genericParamConstraintOf: function {:this tdecl: u64 paramName: StringView} out constraintdesc is {
+    genericParamConstraintOf: function {:this tdecl: declid paramName: StringView} out constraintdesc is {
         plo: this.genericParams.get key: tdecl
         match (
             plo
@@ -1223,7 +1235,7 @@ ZTypeRegistry: class {
         return (constraintdesc kind: constraintkind.none numericMax: (optionval.none u64))
     }
 
-    genericParamNamesOf: function {:this tdecl: u64} out List String is {
+    genericParamNamesOf: function {:this tdecl: declid} out List String is {
         names: (List String)
         plo: this.genericParams.get key: tdecl
         match (
@@ -1258,7 +1270,7 @@ newRegistry: function {} out ZTypeRegistry is {
         unitNameTid: (MapVV u64 value: u64)
         unitSeededDemand: (MapRV String value: bool)
         regMainUnit: "".string
-        genericParams: (MapVR u64 value: ParamList)
+        genericParams: (MapVR declid value: ParamList)
         genericParamTid: (MapVV u64 value: u64)
         specWasFresh: false
     )
