@@ -626,6 +626,13 @@ ZTypeRegistry: class {
     # the shared unregistered id worn by every `break` / `continue` entry
     # (see ctlPlaceholder); 0 until first use
     ctlPlaceholderTid: u64
+    # The two literal pseudo-types, reserved by newRegistry so a literal
+    # stamp is an ordinary registered id rather than a magic constant.
+    # A bare numeric literal wears one of these until a coercion boundary
+    # pins a concrete type; foldLiteralStamps rewrites the survivors to
+    # i64 / f64. Data-block elements wear literalIntTid too.
+    literalIntTid: u64
+    literalFloatTid: u64
     typeById: (List ZType)
     crossUnitDemand: (Set String)
     unitNameTid: (MapVV u64 value: u64)
@@ -1268,7 +1275,7 @@ ZTypeRegistry: class {
 
 # construct an empty type registry seeded with the builtin/native types.
 newRegistry: function {} out ZTypeRegistry is {
-    return (ZTypeRegistry
+    r: (ZTypeRegistry
         nextTypeId: 0
         # id 0 is reserved: an atomVariableId stamp of 0 must mean
         # "unset" to every consumer (maps cannot distinguish otherwise)
@@ -1277,6 +1284,8 @@ newRegistry: function {} out ZTypeRegistry is {
         nextEntryId: 0
         nextConformanceId: 0
         ctlPlaceholderTid: 0
+        literalIntTid: 0
+        literalFloatTid: 0
         typeById: (List ZType capacity: 512)
         crossUnitDemand: (Set String)
         unitNameTid: (MapVV u64 value: u64)
@@ -1286,6 +1295,17 @@ newRegistry: function {} out ZTypeRegistry is {
         genericParamTid: (MapVV u64 value: u64)
         specWasFresh: false
     )
+    # The reserved rows, minted here in a fixed order so every caller agrees
+    # on their ids: 0 = notype (the no-type / unresolved sentinel every
+    # `tid == 0` test reads), then the two literal types. Seeding them at
+    # construction is what lets a literal stamp be compared by id instead of
+    # against a magic constant or a type NAME.
+    r.newType name: "notype" typetype: ztypetype.nullType
+    r.literalIntTid = r.newType name: "literal_int" typetype: ztypetype.recordType
+    r.setValtype typeId: r.literalIntTid value: true
+    r.literalFloatTid = r.newType name: "literal_float" typetype: ztypetype.recordType
+    r.setValtype typeId: r.literalFloatTid value: true
+    return r
 }
 
 # a ZConst holding the integer value `v`.

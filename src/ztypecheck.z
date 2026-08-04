@@ -1721,13 +1721,6 @@ resolveAtomType: function {
     return (resolveNamedType :ty :reg :ast :unitName name: nm :thisName)
 }
 
-# literalIntId -- pseudo-type id worn by bare numeric literals during the body
-# walk. Never registered, so symbol-table and node rows carrying it drop out of
-# the dump projections' types join; foldLiteralStamps rewrites surviving node
-# stamps to i64 before the dump.
-literalIntId: 0x7FFFFFFFFFFFFFFF.u64
-literalFloatId: 0x7FFFFFFFFFFFFFFE.u64
-
 # parseDecimalU64 -- a decimal digit string as a u64 value; none when empty
 # or any byte is not a digit (signs, radix prefixes, suffixed forms stay on
 # the name-keyed path).
@@ -4640,11 +4633,7 @@ resolveData: function {ast: Ast
         typetype: ztypes.ztypetype.dataType
     )
     reg.setValtype typeId: did value: false
-    if ty.literalIntShellId == 0 then {
-        ty.literalIntShellId = reg.newType name: "literal_int" typetype: ztypes.ztypetype.recordType
-        reg.setValtype typeId: ty.literalIntShellId value: true
-    }
-    litId: ty.literalIntShellId
+    litId: reg.literalIntTid
     ordinal: u64
     eiter: dnode.elements.iterate
     for elId9: eiter loop {
@@ -10898,10 +10887,8 @@ printableInterpTid: function {
     tid: u64
 } out bool is {
     if tid == 0 then return true
-    if tid == literalIntId then return true
-    if tid == literalFloatId then return true
-    if tid == st.typing.literalIntShellId then return true
-    if tid == st.typing.literalFloatShellId then return true
+    if tid == st.reg.literalIntTid then return true
+    if tid == st.reg.literalFloatTid then return true
     t9: tid
     tc9: u64
     for tc9 < 8 loop {
@@ -15616,9 +15603,9 @@ checkAtomid: function {
                 return 0
             }
             if (isFloatLiteralName name: ndNm9.stringview) then {
-                result = literalFloatId
+                result = st.reg.literalFloatTid
             } else {
-                result = literalIntId
+                result = st.reg.literalIntTid
             }
             setl: result
             stampGate :st nid: node.nodeid.u64 tid: setl
@@ -16111,8 +16098,8 @@ materialiseLiteral: function {
     t: u64
 } out u64 is {
     base: ""
-    if t == literalIntId then base = "i64"
-    if t == literalFloatId then base = "f64"
+    if t == st.reg.literalIntTid then base = "i64"
+    if t == st.reg.literalFloatTid then base = "f64"
     if base.length == 0 then return t
     return (optU64Or
         o: (walkLookupTyperef :ast ty: st.typing reg: st.reg currentUnit: unitName :base)
@@ -16863,29 +16850,12 @@ checkDo: function {
     result: lastStmtType :st :ast block: (ast.nodes.get i: (donode.statement - 1).u64)
     st.popTo marker: doMarker
     # A break-carrying do-block's value wraps in optionval (early exit =
-    # none); the literal pseudo keys the instance as literal_int/float.
+    # none). A literal-typed value needs no special case: it is a registered
+    # row like any other, so its name and its payload id read straight off it.
     # A REFTYPE block value wraps in Option instead (boxed payload).
     if result > 0 when (blockHasBreak :ast n: (ast.nodes.get i: (donode.statement - 1).u64)) then {
         vtn0: typeNameOf :st tid: result
         payId0: result
-        if result == literalIntId then {
-            vtn0 = "literal_int".string
-            if st.typing.literalIntShellId == 0 then {
-                nli0: st.reg.newType name: "literal_int" typetype: ztypes.ztypetype.recordType
-                st.reg.setValtype typeId: nli0 value: true
-                st.typing.literalIntShellId = nli0
-            }
-            payId0 = st.typing.literalIntShellId
-        }
-        if result == literalFloatId then {
-            vtn0 = "literal_float".string
-            if st.typing.literalFloatShellId == 0 then {
-                nlf0: st.reg.newType name: "literal_float" typetype: ztypes.ztypetype.recordType
-                st.reg.setValtype typeId: nlf0 value: true
-                st.typing.literalFloatShellId = nlf0
-            }
-            payId0 = st.typing.literalFloatShellId
-        }
         if vtn0.length > 0 then {
             wrapB0: "optionval"
             if (typeIsReftype :st tid: payId0) then wrapB0 = "Option"
@@ -18609,14 +18579,11 @@ checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast.view n: Node.view verb:
     )
 }
 
-# isLiteralTypeId -- a literal-typed value: the unregistered int/float pseudo
-# ids, or a data block's registered literal_int/literal_float element shell.
+# isLiteralTypeId -- a literal-typed value: one of the registry's two reserved
+# literal rows. Bare numeric literals and data-block elements wear them.
 isLiteralTypeId: function {st: zenv.ZSymbolTable.view tid: u64} out bool is {
-    if tid == literalIntId then return true
-    if tid == literalFloatId then return true
-    nm: typeNameOf :st :tid
-    if nm.stringview == "literal_int" then return true
-    return nm.stringview == "literal_float"
+    if tid == st.reg.literalIntTid then return true
+    return tid == st.reg.literalFloatTid
 }
 
 # hoist a call argument into a temporary, recording its ownership.
@@ -19092,6 +19059,12 @@ walkCallArgsHoist: function {
                                             # when a prior error explains it, else name it
                                             if st.typing.errors.length > 0 then emit7 = false
                                             an7 = "an unresolved value".string
+                                        }
+                                        # a literal got-side would have COERCED had the
+                                        # expected type resolved, so its mismatch is a
+                                        # knock-on whenever an earlier error explains it
+                                        if (isLiteralTypeId :st tid: vt) then {
+                                            if st.typing.errors.length > 0 then emit7 = false
                                         }
                                         if emit7 then {
                                             enc7: en7.copy
@@ -23909,33 +23882,14 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable program: Node.view} is {
         ) case some then {
             floatId = lf
         } case none then null
-        intShells: (ListVal u64)
-        floatShells: (ListVal u64)
-        nshell: st.reg.nextTypeId
-        ti: u64
-        for ti < nshell loop {
-            snm: typeNameOf :st tid: ti
-            if snm.stringview == "literal_int" then {
-                sid: ti
-                intShells.append sid
-            } else {
-                if snm.stringview == "literal_float" then {
-                    sid2: ti
-                    floatShells.append sid2
-                }
-            }
-            ti = ti + 1
-        }
         nn9: st.typing.nodeType.length
         ni9: u64
         for ni9 < nn9 loop {
             fv9: st.typing.nodeType.get i: ni9
             ni9 = ni9 + 1
             if fv9 > 0 then {
-                isInt: fv9 == literalIntId
-                if (intShells.contains item: fv9) then isInt = true
-                isFloat: fv9 == literalFloatId
-                if (floatShells.contains item: fv9) then isFloat = true
+                isInt: fv9 == st.reg.literalIntTid
+                isFloat: fv9 == st.reg.literalFloatTid
                 if isInt when intId > 0 then {
                     ztyping.nodeTypeSet tbl: st.typing.nodeType nid: ni9 tid: intId
                 }
@@ -23984,9 +23938,9 @@ constantOperandType: function {ast: Ast.view
         trN9: ast.names.texts.get i: (n.name - 1).u64
         if (isNumericLiteralName name: trN9.stringview) then {
             if (isFloatLiteralName name: trN9.stringview) then {
-                result = literalFloatId
+                result = reg.literalFloatTid
             } else {
-                result = literalIntId
+                result = reg.literalIntTid
             }
         } else {
             ro: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: trN9.stringview
@@ -24008,11 +23962,11 @@ constantOperandType: function {ast: Ast.view
             # A comparison condition: the result is bool and a literal
             # operand coerces (restamps) at the concrete side's type.
             lLit: false
-            if lt == literalIntId then lLit = true
-            if lt == literalFloatId then lLit = true
+            if lt == reg.literalIntTid then lLit = true
+            if lt == reg.literalFloatTid then lLit = true
             rLit: false
-            if rt == literalIntId then rLit = true
-            if rt == literalFloatId then rLit = true
+            if rt == reg.literalIntTid then rLit = true
+            if rt == reg.literalFloatTid then rLit = true
             conc: u64
             if (lLit) == false then {
                 if lt > 0 then conc = lt
@@ -24047,11 +24001,11 @@ constantOperandType: function {ast: Ast.view
         }
         result: lt
         if lt == 0 then result = rt
-        if lt == literalIntId then {
-            if rt > 0 when rt != literalIntId when rt != literalFloatId then result = rt
+        if lt == reg.literalIntTid then {
+            if rt > 0 when rt != reg.literalIntTid when rt != reg.literalFloatTid then result = rt
         }
-        if lt == literalFloatId then {
-            if rt > 0 when rt != literalIntId when rt != literalFloatId then result = rt
+        if lt == reg.literalFloatTid then {
+            if rt > 0 when rt != reg.literalIntTid when rt != reg.literalFloatTid then result = rt
         }
         if result > 0 then {
             ztyping.nodeTypeSet tbl: ty.nodeType nid: n.nodeid.u64 tid: result
@@ -24086,13 +24040,13 @@ constantBranchWalk: function {
                 sInner9: ast.nodes.get i: (s9.statementline - 1).u64
                 bt0: constantOperandType :ast :ty :reg :mainName n: sInner9
                 mt0: u64
-                if bt0 == literalIntId then {
+                if bt0 == reg.literalIntTid then {
                     mt0 = (optU64Or
                         o: (walkLookupTyperef :ast :ty :reg currentUnit: mainName base: "i64")
                         d: 0
                     )
                 }
-                if bt0 == literalFloatId then {
+                if bt0 == reg.literalFloatTid then {
                     mt0 = (optU64Or
                         o: (walkLookupTyperef :ast :ty :reg currentUnit: mainName base: "f64")
                         d: 0
@@ -24326,8 +24280,8 @@ resolveConstantDef: function {
             # keeps it.
             bt: constantOperandType :ast :ty :reg mainName: unitName n: defn
             base2: ""
-            if bt == literalIntId then base2 = "i64"
-            if bt == literalFloatId then base2 = "f64"
+            if bt == reg.literalIntTid then base2 = "i64"
+            if bt == reg.literalFloatTid then base2 = "f64"
             if base2.length > 0 then {
                 mOpt: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: base2
                 match (
@@ -26050,10 +26004,6 @@ typecheck: function {
     ) case program then {
         reg.setMainUnit name: program.mainUnitName.stringview
     } else null
-    # id 0 is the no-type / unresolved sentinel that checkValue returns on failure.
-    # The null VALUE-type is a normal canonical id resolved by name; a `null` arm's
-    # child type is always that canonical id, never 0.
-    reg.newType name: "notype" typetype: ztypes.ztypetype.nullType
     st: zenv.newSymbolTable :reg typing: ty
     # Stage D: mint every unit's root + fill unitNameTid BEFORE any demand
     # resolution (lowerGenerators pre-resolves system.Iterator/optionval when a
