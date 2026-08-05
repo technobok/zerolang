@@ -13,7 +13,7 @@ static z_String_t z_stringJoin(
         out.data[0] = '\0';
         return out;
     }
-    uint64_t total = sep.length * (n - 1);
+    uint64_t total = sep.size * (n - 1);
     for (uint64_t i = 0; i < n; i++) {
         total += parts->data[i].size;
     }
@@ -22,9 +22,9 @@ static z_String_t z_stringJoin(
     out.data = (char*)z_xmalloc(out.capacity + 1);
     uint64_t pos = 0;
     for (uint64_t i = 0; i < n; i++) {
-        if (i > 0 && sep.length > 0) {
-            memcpy(out.data + pos, sep.data, sep.length);
-            pos += sep.length;
+        if (i > 0 && sep.size > 0) {
+            memcpy(out.data + pos, sep.data, sep.size);
+            pos += sep.size;
         }
         memcpy(out.data + pos, parts->data[i].data, parts->data[i].size);
         pos += parts->data[i].size;

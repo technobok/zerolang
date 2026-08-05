@@ -5,7 +5,7 @@
    so it can null-terminate prefixes in place. */
 static z_Result_null_IoError_t z_io_mkdirp(z_StringView_t path);
 static z_Result_null_IoError_t z_io_mkdirp(z_StringView_t path) {
-    uint64_t n = path.length;
+    uint64_t n = path.size;
     char* buf = (char*)z_xmalloc(n + 1);
     if (n > 0) memcpy(buf, path.data, n);
     buf[n] = '\0';

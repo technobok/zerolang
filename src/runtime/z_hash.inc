@@ -90,7 +90,7 @@ static uint64_t z_siphash_string(z_String_t s) {
 }
 
 static uint64_t z_siphash_stringview(z_StringView_t v) {
-    return z_siphash_bytes(v.data, v.length);
+    return z_siphash_bytes(v.data, v.size);
 }
 
 /* wyhash-style fast path, selected by `zc --fast-hash` for Map / Set
@@ -169,7 +169,7 @@ static uint64_t z_fasthash_string(z_String_t s) {
 }
 
 static uint64_t z_fasthash_stringview(z_StringView_t v) {
-    return z_fasthash_bytes(v.data, v.length);
+    return z_fasthash_bytes(v.data, v.size);
 }
 
 /* splitmix64 finalizer -- single-block mixer for 64-bit integer

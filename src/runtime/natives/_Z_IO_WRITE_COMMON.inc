@@ -29,7 +29,7 @@ static z_Result_null_IoError_t z_io_write_common(
         result.data = boxed;
         return result;
     }
-    int werr = z_io_write_all(fd, content.data, content.length);
+    int werr = z_io_write_all(fd, content.data, content.size);
     close(fd);
     if (werr != 0) {
         z_IoError_t* boxed = (z_IoError_t*)z_xmalloc(sizeof(z_IoError_t));

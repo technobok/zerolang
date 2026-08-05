@@ -13,7 +13,7 @@ static z_Option_StringView_t z_LinesIter_call(z_LinesIter_t* s) {
     if (line_len > 0 && start[line_len - 1] == '\r') line_len--;
     z_StringView_t* boxed = (z_StringView_t*)z_xmalloc(sizeof(z_StringView_t));
     boxed->data = start;
-    boxed->length = line_len;
+    boxed->size = line_len;
     if (i == remaining) {
         s->cursor = s->src_len;
         s->done = true;

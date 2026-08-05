@@ -28,8 +28,8 @@ static int32_t z_os_spawn(
     /* An empty outPath/errPath inherits the parent's fd 1/2 (skip the
        open+dup2). When both are empty (the `zc run` case) inherit stdin
        too; otherwise stdin is /dev/null. Non-empty callers unaffected. */
-    int inherit_out = (outPath.length == 0);
-    int inherit_err = (errPath.length == 0);
+    int inherit_out = (outPath.size == 0);
+    int inherit_err = (errPath.size == 0);
     int inherit_in = (inherit_out && inherit_err);
     char* out_c = inherit_out ? NULL : z_sv_to_cstr(outPath);
     char* err_c = inherit_err ? NULL : z_sv_to_cstr(errPath);
@@ -42,7 +42,7 @@ static int32_t z_os_spawn(
     if (setup_ok) {
         pid_t pid = fork();
         if (pid == 0) {
-            if (cwd.length > 0 && chdir(cwd_c) != 0) _exit(127);
+            if (cwd.size > 0 && chdir(cwd_c) != 0) _exit(127);
             if (!inherit_in) dup2(null_fd, 0);
             if (!inherit_out) dup2(out_fd, 1);
             if (!inherit_err) dup2(err_fd, 2);

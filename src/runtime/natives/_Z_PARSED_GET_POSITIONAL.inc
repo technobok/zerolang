@@ -1,8 +1,8 @@
 static z_Option_String_t z_Parsed_positional(const z_Parsed_t* self, const z_StringView_t* name);
 static z_Option_String_t z_Parsed_positional(const z_Parsed_t* self, const z_StringView_t* name) {
     z_Option_String_t out = {0};
-    z_String_t key = z_String_create(name->length);
-    z_String_append(&key, name->data, name->length);
+    z_String_t key = z_String_create(name->size);
+    z_String_append(&key, name->data, name->size);
     /* map.get returns a borrowed OptionView into the map's storage; deep-copy
        the borrowed String into an owned box so the caller owns the result. */
     z_OptionView_String_t v = z_Map_String_String_get(

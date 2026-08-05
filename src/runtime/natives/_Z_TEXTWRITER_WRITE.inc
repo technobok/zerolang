@@ -8,7 +8,7 @@ static z_Result_u64_IoError_t z_TextWriter_write(
 static z_Result_u64_IoError_t z_TextWriter_write(
     z_TextWriter_t* self, const z_StringView_t* from
 ) {
-    z_ListViewVal_u8_t view = { from->length, (uint8_t*)from->data };
+    z_ListViewVal_u8_t view = { from->size, (uint8_t*)from->data };
     return z_BufWriter_write(self->sink, &view);
 }
 

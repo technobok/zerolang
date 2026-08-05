@@ -3,14 +3,14 @@ static z_resultval_i64_parseerror_t z_StringView_parseI64(const z_StringView_t* 
     z_resultval_i64_parseerror_t out = {0};
     uint64_t i = 0;
     int neg = 0;
-    if (self->length == 0) goto empty;
+    if (self->size == 0) goto empty;
     if (self->data[i] == '+' || self->data[i] == '-') {
         if (self->data[i] == '-') neg = 1;
         i++;
     }
-    if (i >= self->length) goto empty;
+    if (i >= self->size) goto empty;
     uint64_t acc = 0;
-    for (; i < self->length; i++) {
+    for (; i < self->size; i++) {
         unsigned char c = (unsigned char)self->data[i];
         if (c < '0' || c > '9') goto invalid;
         uint64_t d = (uint64_t)(c - '0');
