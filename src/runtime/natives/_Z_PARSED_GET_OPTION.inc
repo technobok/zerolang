@@ -6,7 +6,7 @@ static z_Option_String_t z_Parsed_option(const z_Parsed_t* self, const z_StringV
     /* map.get returns a borrowed OptionView into the map's storage; deep-copy
        the borrowed String into an owned box so the caller owns the result. */
     z_OptionView_String_t v = z_Map_String_String_get(
-        self->optionValues, key);
+        self->optionValues, &key);
     z_String_free(&key);
     if (v.tag == Z_OPTIONVIEW_STRING_TAG_NONE) {
         out.tag = Z_OPTION_STRING_TAG_NONE;

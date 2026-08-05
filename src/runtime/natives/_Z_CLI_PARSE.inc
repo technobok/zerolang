@@ -162,7 +162,7 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
     for (uint64_t k = 0; k < spec->options.length; k++) {
         if (!spec->options.data[k].required) continue;
         z_OptionView_String_t v = z_Map_String_String_get(
-            parsed->optionValues, spec->options.data[k].name);
+            parsed->optionValues, &spec->options.data[k].name);
         bool missing = (v.tag == Z_OPTIONVIEW_STRING_TAG_NONE);
         if (missing) {
             z_Parsed_destroy(parsed); free(parsed);
@@ -175,7 +175,7 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
     for (uint64_t k = 0; k < spec->positionals.length; k++) {
         if (!spec->positionals.data[k].required) continue;
         z_OptionView_String_t v = z_Map_String_String_get(
-            parsed->positionalValues, spec->positionals.data[k].name);
+            parsed->positionalValues, &spec->positionals.data[k].name);
         bool missing = (v.tag == Z_OPTIONVIEW_STRING_TAG_NONE);
         if (missing) {
             z_Parsed_destroy(parsed); free(parsed);

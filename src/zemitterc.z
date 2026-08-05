@@ -4214,6 +4214,39 @@ emitArrayMethodCall: function {
     return "".string
 }
 
+# mapKeyIsStr9 / setElemIsStr9 -- the mono's key/element is a String, i.e.
+# its view-mode probe params are `const String*` in the template C.
+mapKeyIsStr9: function {symtab: zenv.ZSymbolTable ctx: Ctx.view monoId: ztypes.tid} out bool is {
+    kt9: mapKeyType :symtab :monoId
+    return (keyHashKind :symtab :ctx tid: (ztypes.tid.create from: kt9.u64)) == 1
+}
+
+setElemIsStr9: function {symtab: zenv.ZSymbolTable ctx: Ctx.view monoId: ztypes.tid} out bool is {
+    et9: setElemType :symtab :monoId
+    return (keyHashKind :symtab :ctx tid: (ztypes.tid.create from: et9.u64)) == 1
+}
+
+# colStrKeyArg9 -- a String-keyed mono's view-mode key/item argument as a C
+# POINTER: `&lvalue` directly, else a hoisted temp (owned by the statement,
+# freed at its flush -- a probe never retains its key).
+colStrKeyArg9: function {ctx: Ctx expr: StringView} out String is {
+    if (isNonLvalueArg s: expr) then {
+        hnK9: ctx.argHoistCtr
+        ctx.argHoistCtr = ctx.argHoistCtr + 1
+        nmK9: "_ah\{hnK9}"
+        hdtK9: "    \{ctx.strC}_free(&\{nmK9});\n"
+        exc9: expr.string
+        ctx.argHoistVals.append exc9
+        htK9: "\{ctx.strC}_t"
+        ctx.argHoistTypes.append htK9
+        ctx.argHoistDtors.append hdtK9
+        retK9: "&\{nmK9}"
+        ctx.argHoistNames.append nmK9
+        return retK9
+    }
+    return "&\{expr}"
+}
+
 # emitSetMethodCall -- an arg-taking method on a Set-mono receiver (a heap
 # pointer, so the receiver passes directly without `&`). "" when not a Set
 # call; the no-arg `.length`/`.iterate` reads ride the dottedpath leg.
@@ -4236,6 +4269,9 @@ emitSetMethodCall: function {
         viv9: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
         if viv9.length > 0 then return "\{cb}_hasv(\{bn}, \{viv9})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
+        if (setElemIsStr9 :symtab :ctx monoId: bt) then {
+            return "\{cb}_has(\{bn}, \{colStrKeyArg9 :ctx expr: v.stringview})"
+        }
         e1: "\{cb}_has(\{bn}, \{v})"
         return e1
     }
@@ -4243,6 +4279,9 @@ emitSetMethodCall: function {
         viv9: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
         if viv9.length > 0 then return "\{cb}_deletev(\{bn}, \{viv9})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
+        if (setElemIsStr9 :symtab :ctx monoId: bt) then {
+            return "\{cb}_delete(\{bn}, \{colStrKeyArg9 :ctx expr: v.stringview})"
+        }
         e2: "\{cb}_delete(\{bn}, \{v})"
         return e2
     }
@@ -4272,6 +4311,9 @@ emitMapMethodCall: function {
         vkv9: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
         if vkv9.length > 0 then return "\{cb}_getv(\{bn}, \{vkv9})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        if (mapKeyIsStr9 :symtab :ctx monoId: bt) then {
+            return "\{cb}_get(\{bn}, \{colStrKeyArg9 :ctx expr: vk.stringview})"
+        }
         e1: "\{cb}_get(\{bn}, \{vk})"
         return e1
     }
@@ -4279,11 +4321,17 @@ emitMapMethodCall: function {
         vkv9: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
         if vkv9.length > 0 then return "\{cb}_hasv(\{bn}, \{vkv9})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        if (mapKeyIsStr9 :symtab :ctx monoId: bt) then {
+            return "\{cb}_has(\{bn}, \{colStrKeyArg9 :ctx expr: vk.stringview})"
+        }
         e2: "\{cb}_has(\{bn}, \{vk})"
         return e2
     }
     if mn.stringview == "remove" then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        if (mapKeyIsStr9 :symtab :ctx monoId: bt) then {
+            return "\{cb}_remove(\{bn}, \{colStrKeyArg9 :ctx expr: vk.stringview})"
+        }
         e9: "\{cb}_remove(\{bn}, \{vk})"
         return e9
     }
@@ -18710,12 +18758,13 @@ keyHashKind: function {symtab: zenv.ZSymbolTable ctx: Ctx.view tid: ztypes.tid} 
 
 # the C body of a Set's hash function.
 setHashBody: function {kind: u64 fast: bool} out String is {
+    # a String key arrives BY POINTER (the probe never copies the header)
     if fast then {
-        if kind == 1 then return "z_fasthash_string(_key)".string
+        if kind == 1 then return "z_fasthash_bytes(_key->data, _key->size)".string
         if kind == 2 then return "z_fasthash_stringview(_key)".string
         if kind == 3 then return "z_fasthash_bytes(&_key, sizeof(_key))".string
     } else {
-        if kind == 1 then return "z_siphash_string(_key)".string
+        if kind == 1 then return "z_siphash_bytes(_key->data, _key->size)".string
         if kind == 2 then return "z_siphash_stringview(_key)".string
         if kind == 3 then return "z_siphash_bytes(&_key, sizeof(_key))".string
     }
@@ -18724,7 +18773,7 @@ setHashBody: function {kind: u64 fast: bool} out String is {
 
 # the C body of a Set's element-equality function.
 setEqBody: function {kind: u64} out String is {
-    if kind == 1 then return "_a.size == _b.size && memcmp(_a.data, _b.data, _a.size) == 0".string
+    if kind == 1 then return "_a->size == _b->size && memcmp(_a->data, _b->data, _a->size) == 0".string
     if kind == 2 then {
         return "_a.length == _b.length && memcmp(_a.data, _b.data, _a.length) == 0".string
     }
@@ -18857,12 +18906,21 @@ emitSetMono: function {
     destroyItems: setDestroyItems :isStr strC: ctx.strC.stringview
     freeItemDup: setFreeItemDup :isStr strC: ctx.strC.stringview
     freeItemDel: setFreeItemDel :isStr strC: ctx.strC.stringview
-    p: "\{runtimeDir}/z_Set.c.tmpl"
+    # transitional name (see z_Map.ptr.tmpl)
+    p: "\{runtimeDir}/z_Set.ptr.tmpl"
     raw: readTemplateCached :ctx path: p.stringview
     if raw.length > 0 then {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringview
         t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringview
         t3: applyTmpl text: t2 key: "ITEM_T" val: itemT.stringview
+        itemArgT9: itemT.copy
+        itemRef9: String
+        if isStr then {
+            itemArgT9 = "const \{itemT}*"
+            itemRef9 = "&".string
+        }
+        t3 = applyTmpl text: t3 key: "ITEM_ARG_T" val: itemArgT9.stringview
+        t3 = applyTmpl text: t3 key: "ITEM_REF" val: itemRef9.stringview
         t4: applyTmpl text: t3 key: "HASH_BODY" val: hashBody.stringview
         t5: applyTmpl text: t4 key: "EQ_BODY" val: eqBody.stringview
         t6: applyTmpl text: t5 key: "DESTROY_ITEMS" val: destroyItems.stringview
@@ -18882,13 +18940,13 @@ emitSetMono: function {
         buf.append sv0
         sv1: "    \{ctx.strC}_t _k = { _item.size, (char*)_item.data, _item.size };\n"
         buf.append sv1
-        sv2: "    return z_\{nm}_has(_this, _k);\n}\n\n"
+        sv2: "    return z_\{nm}_has(_this, &_k);\n}\n\n"
         buf.append sv2
         sd0: "static int z_\{nm}_deletev(z_\{nm}_t* _this, \{ctx.svC}_t _item) {\n"
         buf.append sd0
         sd1: "    \{ctx.strC}_t _k = { _item.size, (char*)_item.data, _item.size };\n"
         buf.append sd1
-        sd2: "    return z_\{nm}_delete(_this, _k);\n}\n\n"
+        sd2: "    return z_\{nm}_delete(_this, &_k);\n}\n\n"
         buf.append sd2
     }
 }
@@ -19218,13 +19276,23 @@ emitMapMono: function {
     } else {
         removeBody9 = "    z_\{rmWrap9}_t _r = {0};\n    if (idx < 0) {\n        _r.tag = Z_\{rmWrapU9}_TAG_NONE;\n        _r.data = NULL;\n        return _r;\n    }\n    _r.tag = Z_\{rmWrapU9}_TAG_SOME;\n    \{valT}* _box = (\{valT}*)z_xmalloc(sizeof(\{valT}));\n    *_box = _this->entries[idx].value;\n    _r.data = _box;\n\{delTail9}    return _r;"
     }
-    p: "\{runtimeDir}/z_Map.c.tmpl"
+    # transitional name: the committed seed still emits the by-value
+    # template from z_Map.c.tmpl; the swap-back commit unifies them
+    p: "\{runtimeDir}/z_Map.ptr.tmpl"
     raw: readTemplateCached :ctx path: p.stringview
     if raw.length == 0 then return
     {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringview
         t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringview
         t3: applyTmpl text: t2 key: "KEY_T" val: keyT.stringview
+        keyArgT9: keyT.copy
+        keyRef9: String
+        if keyIsStr then {
+            keyArgT9 = "const \{keyT}*"
+            keyRef9 = "&".string
+        }
+        t3 = applyTmpl text: t3 key: "KEY_ARG_T" val: keyArgT9.stringview
+        t3 = applyTmpl text: t3 key: "KEY_REF" val: keyRef9.stringview
         t4: applyTmpl text: t3 key: "VAL_T" val: valT.stringview
         t5: applyTmpl text: t4 key: "HASH_KEY_BODY" val: hashKeyBody.stringview
         t6: applyTmpl text: t5 key: "KEYS_EQUAL_BODY" val: keysEqBody.stringview
@@ -19247,13 +19315,13 @@ emitMapMono: function {
         buf.append gv0
         gv1: "    \{ctx.strC}_t _k = { _key.size, (char*)_key.data, _key.size };\n"
         buf.append gv1
-        gv2: "    return z_\{nm}_get(_this, _k);\n}\n\n"
+        gv2: "    return z_\{nm}_get(_this, &_k);\n}\n\n"
         buf.append gv2
         hv0: "static int z_\{nm}_hasv(const z_\{nm}_t* _this, \{ctx.svC}_t _key) {\n"
         buf.append hv0
         hv1: "    \{ctx.strC}_t _k = { _key.size, (char*)_key.data, _key.size };\n"
         buf.append hv1
-        hv2: "    return z_\{nm}_has(_this, _k);\n}\n\n"
+        hv2: "    return z_\{nm}_has(_this, &_k);\n}\n\n"
         buf.append hv2
     }
     (emitMapIters
