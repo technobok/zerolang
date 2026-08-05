@@ -5569,8 +5569,14 @@ resolveRecord: function {
                     }
                 } case none then {
                     ftnR9: fieldHeadName :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
-                    mkeyR9: "\{unitName}.\{defName}.\{ftnR9}"
-                    mrefR9: resolvedByKey :ast :ty :reg key: mkeyR9
+                    mrefR9: (resolvedByIdsMember
+                        :ast
+                        :ty
+                        :reg
+                        unitId: (nameIdOf :ast name: unitName)
+                        defId: (zast.poolFind pool: ast.names text: defName)
+                        memberId: (zast.poolFind pool: ast.names text: ftnR9.stringview)
+                    )
                     handledR9: false
                     match (
                         mrefR9
@@ -6096,8 +6102,13 @@ unionCustomTagId: function {
                             # custom-tag items (system variants resolve
                             # standalone, unstamped).
                             if unitName == reg.regMainUnit.stringview then {
-                                tgk: "system.tag".string
-                                tgo: resolvedByKey :ast :ty :reg key: tgk
+                                tgo: (resolvedByIds
+                                    :ast
+                                    :ty
+                                    :reg
+                                    unitId: (nameIdOf :ast name: "system")
+                                    name: (zast.poolFind pool: ast.names text: "tag")
+                                )
                                 match (
                                     tgo
                                 ) case some then {
@@ -6643,8 +6654,14 @@ resolveClass: function {
                     if flock0 == ztypes.zparamownership.takexMode then fOwned9 = true
                     if fOwned9 == false then lockField = true
                 } case none then null
-                mkey: "\{unitName}.\{defName}.\{ftn}"
-                mref: resolvedByKey :ast :ty :reg key: mkey
+                mref: (resolvedByIdsMember
+                    :ast
+                    :ty
+                    :reg
+                    unitId: (nameIdOf :ast name: unitName)
+                    defId: (zast.poolFind pool: ast.names text: defName)
+                    memberId: (zast.poolFind pool: ast.names text: ftn.stringview)
+                )
                 match (
                     mref
                 ) case some then {
@@ -8515,8 +8532,13 @@ fixupCustomTags: function {
                 cngo: ty.pendingCustomTagNode.get key: cuidn
                 cnid9: optU64Or o: cngo d: 0
                 if cnid9 > 0 then {
-                    tgk2: "system.tag".string
-                    tgo2: resolvedByKey :ast :ty :reg key: tgk2
+                    tgo2: (resolvedByIds
+                        :ast
+                        :ty
+                        :reg
+                        unitId: (nameIdOf :ast name: "system")
+                        name: (zast.poolFind pool: ast.names text: "tag")
+                    )
                     match (
                         tgo2
                     ) case some then {
@@ -23861,8 +23883,13 @@ depWalkUnit: function {
             ) case namedoperation then {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (bm2.operation - 1).u64)) then {
                     fn: zast.nameTextCopy :ast ref: bm2.name
-                    rk: "\{depName}.\{fn}"
-                    rgo: resolvedByKey :ast ty: st.typing reg: st.reg key: rk
+                    rgo: (resolvedByIds
+                        :ast
+                        ty: st.typing
+                        reg: st.reg
+                        unitId: (nameIdOf :ast name: depName)
+                        name: (zast.poolFind pool: ast.names text: fn.stringview)
+                    )
                     match (
                         rgo
                     ) case some then {
@@ -25594,8 +25621,12 @@ lowerGenerators: function {
                 )
             }
         }
-        ik: "system.Iterator".string
-        iterTid: optU64Or o: (resolvedByKey ast: program.ast :ty :reg key: ik) d: 0
+        sysU9: nameIdOf ast: program.ast name: "system"
+        sysI9: zast.poolFind pool: program.ast.names text: "Iterator"
+        iterTid: (optU64Or
+            o: (resolvedByIds ast: program.ast :ty :reg unitId: sysU9 name: sysI9)
+            d: 0
+        )
         if iterTid == 0 then return
         ui: u64
         un: program.ast.units.length
@@ -26342,6 +26373,29 @@ resolvedByIds: function {
             return (optionval.some tgo9)
         } case none then null
     }
+    return (optionval.none u64)
+}
+
+# resolvedByIdsMember -- `unit.def.member` from ids: the unit-level
+# definition, then one more child edge. The two three-segment keys in this
+# unit were the only reason the walk had to handle an arbitrary segment count.
+resolvedByIdsMember: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    unitId: zast.nameid
+    defId: zast.nameid
+    memberId: zast.nameid
+} out optionval u64 is {
+    do9: resolvedByIds :ast :ty :reg :unitId name: defId
+    match (
+        do9
+    ) case some then {
+        return (ty.declChildOfId
+            parentTypeId: (ztypes.tid.create from: do9.u64)
+            nameId: memberId
+        )
+    } case none then null
     return (optionval.none u64)
 }
 
