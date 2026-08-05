@@ -17177,7 +17177,16 @@ checkWith: function {
     withnode: zast.WithData.view
 } out ztypes.tid is {
     withMarker: st.pushBlock name: "with"
+    errW9: st.typing.errors.length
     vt: checkValue :st :unitName :ast :unitBody node: (ast.nodes.get i: (withnode.value - 1).u64)
+    if vt.u64 == 0 when st.typing.errors.length == errW9 then {
+        (reportUnresolvedValue
+            :st
+            :unitName
+            :ast
+            vnode: (ast.nodes.get i: (withnode.value - 1).u64)
+        )
+    }
     if vt > 0 then {
         own: withValueOwnership :ast :st v: (ast.nodes.get i: (withnode.value - 1).u64)
         # The borrow target: a BORROW-returning auto-call reported the receiver
@@ -19478,12 +19487,114 @@ walkCallArgsHoist: function {
                 }
             }
             vt: ztypes.tid
+            errV9: st.typing.errors.length
             if useNC then {
                 opf49: ast.nodes.get i: (arg.operation - 1).u64
                 vt = ztypes.tid.create from: (valueNoCoerce :st :unitName :ast :unitBody n: opf49)
             } else {
                 opf59: ast.nodes.get i: (arg.operation - 1).u64
                 vt = checkValue :st :unitName :ast :unitBody node: opf59
+            }
+            if vt.u64 == 0 when st.typing.errors.length == errV9 then {
+                (reportUnresolvedValue
+                    :st
+                    :unitName
+                    :ast
+                    vnode: (ast.nodes.get i: (arg.operation - 1).u64)
+                )
+            }
+            # A value that did not type must not take its LABEL checks down
+            # with it: those answer from the parameter list alone. The block
+            # below is gated on the value's type only because the ownership
+            # and lock work there needs it, so the label-shaped checks run
+            # here for the arguments it would otherwise skip entirely.
+            if vt.u64 == 0 then {
+                pnU9: zast.nameTextCopy :ast ref: arg.name
+                if pnU9.length > 0 when effId9 > 0 then {
+                    if (st.typing.declMemberCount ownerTid: effId9) > 0 then {
+                        pcU9: (optU64Or
+                            o: (st.typing.declChildOf
+                                pool: ast.names
+                                parentTypeId: effId9
+                                name: pnU9.stringview
+                            )
+                            d: 0
+                        )
+                        if pcU9 == 0 then {
+                            pncU9: pnU9.copy
+                            mU9: "unknown argument '\{pncU9}'"
+                            sugU9: (suggestSimilar
+                                :ast
+                                :st
+                                parentTypeId: effId9
+                                name: pnU9.stringview
+                            )
+                            hU9: String
+                            if sugU9.length > 0 then {
+                                sgcU9: sugU9.copy
+                                hhU9: "did you mean '\{sgcU9}'?"
+                                hU9 = hhU9
+                            }
+                            enU9b: String
+                            (addErrorH
+                                :st
+                                nodeid: arg.nodeid
+                                lineno: arg.lineno
+                                colno: arg.colno
+                                e: zast.err.callError
+                                msg: mU9
+                                note: enU9b
+                                hint: hU9
+                                width: pnU9.length.u32.orPanic
+                            )
+                        }
+                    }
+                }
+                if reportUnknown when (isCtor) == false when pnU9.length == 0 when funcId > 0 then {
+                    if (st.typing.declMemberCount ownerTid: funcId) == 0 then {
+                        if (st.reg.typetypeOf typeId: funcId) == ztypes.ztypetype.functionType then {
+                            tmU9: "too many arguments: function takes no parameters".string
+                            (addError
+                                :st
+                                nodeid: arg.nodeid
+                                lineno: arg.lineno
+                                colno: arg.colno
+                                e: zast.err.callError
+                                msg: tmU9
+                            )
+                        }
+                    }
+                }
+                if pnU9.length == 0 then {
+                    pnU9 = (positionalParamName
+                        :ast
+                        :st
+                        funcId: effId9
+                        idx: argIdx
+                        skipRecv: recvImplicit
+                    )
+                }
+                if effId9 > 0 when pnU9.length > 0 then {
+                    dcnU9: (zast.poolFind pool: ast.names text: pnU9.stringview)
+                    dupU9: false
+                    with bItU9: boundArgIds.iterate do for bIdU9: bItU9 loop {
+                        if bIdU9 == dcnU9.u64 then dupU9 = true
+                    }
+                    if dupU9 when reportUnknown then {
+                        pndU9: pnU9.copy
+                        dmU9: "argument '\{pndU9}' specified more than once"
+                        (addError
+                            :st
+                            nodeid: arg.nodeid
+                            lineno: arg.lineno
+                            colno: arg.colno
+                            e: zast.err.callError
+                            msg: dmU9
+                        )
+                    } else {
+                        boundArgIds.append dcnU9.u64
+                    }
+                }
             }
             if vt > 0 then {
                 pn: zast.nameTextCopy :ast ref: arg.name
@@ -20245,6 +20356,16 @@ unresolvedBareName: function {ast: Ast.view
     ) case some then {
         return "".string
     } case none then null
+    # lookupVarId reads two in-scope names as absent: a binding that minted no
+    # varId (a `meta.create` result) and a MOVED one (both `lookup` and
+    # `lookupVarId` refuse a taken entry). A declared name is in scope however
+    # it was consumed, so the scope entry itself is the authority here.
+    ubi9: st.effectiveIndex nameId: (nameIdOf :ast :name)
+    match (
+        ubi9
+    ) case some then {
+        return "".string
+    } case none then null
     if (nameClaimedByScope
         :ast
         ty: st.typing
@@ -20302,12 +20423,55 @@ unresolvedBareCallable: function {ast: Ast.view
         if ubc9.length > 0 then return (unresolvedBareName :ast :st :unitName name: ubc9.stringview)
         ubr0: dottedRootName :ast n: cnode9
         return (unresolvedBareName :ast :st :unitName name: ubr0.stringview)
+    } case binop then {
+        # an operand may carry the unresolvable name (`ghost + 1`)
+        ubl9: (unresolvedBareCallable
+            :ast
+            :st
+            :unitName
+            n: (ast.nodes.get i: (n.lhs - 1).u64)
+        )
+        if ubl9.length > 0 then return ubl9
+        return (unresolvedBareCallable
+            :ast
+            :st
+            :unitName
+            n: (ast.nodes.get i: (n.rhs - 1).u64)
+        )
     } case atomid then {
         uba9: zast.nameTextCopy :ast ref: n.name
         return (unresolvedBareName :ast :st :unitName name: uba9.stringview)
     } else {
         return "".string
     }
+}
+
+# reportUnresolvedValue -- a value that typed to nothing and raised nothing is
+# an unresolvable name: report it here, where the value is consumed. Without
+# it the 0 silently disables the consuming site's own checks and the emitter
+# writes the bare name into the C. Mirrors the binding and statement sites.
+reportUnresolvedValue: function {
+    st: zenv.ZSymbolTable
+    unitName: StringView
+    ast: Ast.view
+    vnode: Node.view
+} is {
+    ubU9: unresolvedBareCallable :ast :st :unitName n: vnode
+    if ubU9.length == 0 then return
+    umU9: "Unknown reference '\{ubU9}'"
+    enU9: String
+    ehU9: String
+    (addErrorH
+        :st
+        nodeid: (nodeId n: vnode)
+        lineno: (nodeLine n: vnode)
+        colno: (nodeCol n: vnode)
+        e: zast.err.badReference
+        msg: umU9
+        note: enU9
+        hint: ehU9
+        width: ubU9.length.u32.orPanic
+    )
 }
 
 # checkCall -- type a call. C1 handles the `return <value>` control-flow form:
@@ -20343,6 +20507,12 @@ checkCall: function {
                     :unitBody
                     node: (ast.nodes.get i: (arg.operation - 1).u64)
                 )
+                # NOTE: a returned value that types to 0 is NOT reported here.
+                # Some bodies reach this leg with their locals absent from the
+                # scope table (zlexer's `create`/`acceptAny`: entries=2, no
+                # varId, no node stamp), so the negative proof would reject
+                # valid code. Needs a scope-independent oracle -- see the
+                # roadmap note.
                 bfn9: returnedBareFieldName :ast :st n: (ast.nodes.get i: (arg.operation - 1).u64)
                 if st.typing.currentReturnsBorrow then bfn9 = "".string
                 if bfn9.length > 0 then {
@@ -20402,7 +20572,11 @@ checkCall: function {
         isWrapCall: (zast.kindOf :ast id: call.callable) == zast.astkind.expression
         if isWrapCall then {
             xq119: ast.nodes.get i: (call.callable - 1).u64
+            errX9: st.typing.errors.length
             wcv: checkValue :st :unitName :ast :unitBody node: xq119
+            if wcv.u64 == 0 when st.typing.errors.length == errX9 then {
+                reportUnresolvedValue :st :unitName :ast vnode: xq119
+            }
             if wcv > 0 then {
                 # A non-FUNCTION wrapped callee is the paren-mono construction
                 # form: value args ride the standard ctor walk (call scope,
