@@ -20500,6 +20500,7 @@ checkCall: function {
             match (
                 arg
             ) case namedoperation then {
+                errR9: st.typing.errors.length
                 argT9: (checkValue
                     :st
                     :unitName
@@ -20507,12 +20508,24 @@ checkCall: function {
                     :unitBody
                     node: (ast.nodes.get i: (arg.operation - 1).u64)
                 )
-                # NOTE: a returned value that types to 0 is NOT reported here.
-                # Some bodies reach this leg with their locals absent from the
-                # scope table (zlexer's `create`/`acceptAny`: entries=2, no
-                # varId, no node stamp), so the negative proof would reject
-                # valid code. Needs a scope-independent oracle -- see the
-                # roadmap note.
+                # A returned value that typed to nothing and raised nothing is
+                # an unresolvable name -- but ONLY where this walk knows the
+                # enclosing function's return type. Some bodies reach here
+                # degenerate (zlexer's create/acceptAny: return type unknown,
+                # the local's own binding never registered a scope entry), and
+                # there the scope cannot answer whether a name is in scope.
+                # currentReturnTypeId is exactly the condition under which the
+                # return-type check below already runs.
+                if argT9.u64 == 0 when st.typing.errors.length == errR9 then {
+                    if st.typing.currentReturnTypeId > 0 then {
+                        (reportUnresolvedValue
+                            :st
+                            :unitName
+                            :ast
+                            vnode: (ast.nodes.get i: (arg.operation - 1).u64)
+                        )
+                    }
+                }
                 bfn9: returnedBareFieldName :ast :st n: (ast.nodes.get i: (arg.operation - 1).u64)
                 if st.typing.currentReturnsBorrow then bfn9 = "".string
                 if bfn9.length > 0 then {
