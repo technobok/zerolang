@@ -611,7 +611,7 @@ methodReceiverIsView: function {st: zenv.ZSymbolTable mid: ztypes.tid} out bool 
 # can express has moved to the declarations (methodReceiverIsView, ORed in at
 # every call site); what is left is what a marker cannot cover:
 #
-#   get / getv / listview hand out a mutable interior pointer, so their C
+#   get / listview hand out a mutable interior pointer, so their C
 #   refuses a const receiver and `.view` would let a caller write through an
 #   alias obtained from a readonly receiver;
 #   MapEntry.key / .value are projections through the entry pointer with no
@@ -622,7 +622,7 @@ methodReceiverIsView: function {st: zenv.ZSymbolTable mid: ztypes.tid} out bool 
 # isContainerReaderCall -- the irreducible core. Every entry left here is one a
 # DECLARATION cannot express, and the reason differs per entry:
 #
-#   Map.get / Map.getv / List.get / List.listview  hand back a MUTABLE interior
+#   Map.get / List.get / List.listview  hand back a MUTABLE interior
 #     pointer (`_r.data = &_this->entries[idx].value`), so their C refuses
 #     `const` and `.view` would hand a caller a writable alias out of a readonly
 #     receiver. List.get write-back is load-bearing at 28 sites.
@@ -652,7 +652,6 @@ isContainerReaderCall: function {
     if base9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "MapVV") then isMapB9 = true
     if isMapB9 then {
         if mname == "get" then return true
-        if mname == "getv" then return true
         if mname == "copy" then return true
         return false
     }
@@ -11724,13 +11723,6 @@ mintMono: function {
     cn3: cNames.length
     for ci < cn3 loop {
         chName: cNames.get i: ci
-        # getv: concrete-param native with an inexpressible return -- the
-        # Map fixup re-mints it per mono; the generic-target machinery
-        # (respecialize on the raw template child) must not touch it
-        if chName.stringview == "getv" then {
-            ci = ci + 1
-            continue
-        }
         chId: cIds.get i: ci
         target: chId
         ido9: idSubs.get key: chId
@@ -12843,27 +12835,6 @@ getOrMintSpec: function {
     reg.specWasFresh = true
     return (ztypes.tid.create from: mid8)
 }
-
-# mintReturnWrapper -- mint a no-argument wrapper spec (empty subs/valSubs) and,
-# on a hit, record it as targetId's return type. The element is fixed by
-# fallbackArg (the get/remove collection wrappers).
-mintReturnWrapper: function {
-    ast: Ast.view
-    ty: ztyping.ZTyping.view
-    reg: ztypes.ZTypeRegistry
-    mainName: StringView
-    targetId: u64
-    name: StringView
-    templateId: ztypes.tid
-    fallbackArg: u64
-} out u64 is {
-    weM: (MapRV String value: u64)
-    vsM: (MapRV String value: u64)
-    mid: getOrMintSpec :ast :ty :reg :mainName :name :templateId subs: weM valSubs: vsM :fallbackArg
-    if mid > 0 then reg.setReturnType typeId: (ztypes.tid.create from: targetId.u64) value: mid
-    return mid
-}
-
 # mintCollectionChildren -- the per-instance collection children the
 # produced templates cannot express: length/capacity u64 value children,
 # the create child (except List and Map, which have their own create
@@ -13031,12 +13002,7 @@ mintCollectionChildren: function {
     # Every Map form declares its real returns -- an `optionval` for a valtype
     # value, an `OptionView`/`Option` for a reference one -- so the clone pass
     # heals get/remove like any other composite return and only the
-    # length/capacity fields materialize here. `getv` still needs its return
-    # healed by hand: its parameter is a concrete StringView, so the clone pass
-    # leaves the raw template child in place. Its wrapper is not a choice --
-    # each form's value family is fixed by its own bound -- and the val-key
-    # forms declare no `getv` at all, a String key being the only thing it is
-    # for.
+    # length/capacity fields materialize here.
     isMapTpl9: false
     if templateId == mapTid then isMapTpl9 = true
     if templateId == mapRVTid then isMapTpl9 = true
@@ -13045,29 +13011,6 @@ mintCollectionChildren: function {
     if isMapTpl9 when valArg > 0 then {
         ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
         ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity childTypeId: u64id
-        gvT9: String
-        if templateId == mapTid then gvT9 = "OptionView".string
-        if templateId == mapRVTid then gvT9 = "optionval".string
-        if gvT9.length > 0 then {
-            gvS9: mintCollectionMethod :ast :ty :reg :monoId m: "getv"
-            vnS9: monoValName :ast :ty :reg tid: (ztypes.tid.create from: valArg.u64)
-            woS9: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: gvT9.stringview
-            match (
-                woS9
-            ) case some then {
-                wnS9: "\{gvT9}_\{vnS9}"
-                (mintReturnWrapper
-                    :ast
-                    :ty
-                    :reg
-                    :mainName
-                    targetId: gvS9
-                    name: wnS9.stringview
-                    templateId: (ztypes.tid.create from: woS9.u64)
-                    fallbackArg: valArg
-                )
-            } case none then null
-        }
         return
     }
     isSized: false

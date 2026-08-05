@@ -471,7 +471,7 @@ VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get getMut:ListRef.getMut,ListVie
   contains:ListRef.contains \
   listview:ListRef.listview sort:ListRef.sort iterate:ListRef.iterate \
   call:ListIter.call,ListIterVal.call \
-  iterateMut:ListRef.iterateMut getv:MapRR.getv eq:- extendView:- destroy:- \
+  iterateMut:ListRef.iterateMut getv:MapRR.get eq:- extendView:- destroy:- \
   hasv:MapRR.has,SetRef.has deletev:SetRef.delete
 VIEW_GUARD_BACKS := StringView.eq===,!= StringView.cmp=compare,<,<=,>,>=
 VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp \
@@ -492,7 +492,7 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   SetVal.add:SetRef.add SetVal.has:SetRef.has SetVal.delete:SetRef.delete \
   SetVal.iterate:SetRef.iterate SetIterVal.call:SetIter.call \
   SetVal.length:inline SetVal.capacity:inline \
-  MapRV.get:MapRR.get MapRV.getv:MapRR.getv MapRV.set:MapRR.set MapRV.has:MapRR.has \
+  MapRV.get:MapRR.get MapRV.set:MapRR.set MapRV.has:MapRR.has \
   MapRV.remove:MapRR.remove MapRV.iterate:MapRR.iterate \
   MapRV.iterateItems:MapRR.iterateItems \
   MapRV.length:inline MapRV.capacity:inline \
