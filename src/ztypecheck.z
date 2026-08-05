@@ -10037,36 +10037,50 @@ resolveUnitMono: function {
     match (
         program
     ) case program then {
-        uiter: program.ast.units.iterate
-        for uId9: uiter loop {
-            u: program.ast.nodes.get i: (uId9 - 1).u64
-            match (
-                u
-            ) case namedoperation then {
-                un: zast.poolTextCopy pool: program.ast.names ref: u.name
-                if un.stringview == templateName then {
-                    (createUnitMono
-                        :ty
-                        ast: program.ast
-                        :reg
-                        :unitName
-                        :monoName
-                        :templateName
-                        templateOpId: u.operation
-                    )
-                }
-                if un.stringview == unitName then {
-                    (resolveInlineMono
-                        :ty
-                        :reg
-                        ast: program.ast
-                        :unitName
-                        :monoName
-                        :templateName
-                        mainOpId: u.operation
-                    )
-                }
-            } else null
+        # indexed walk, not an iterator: an iterator would pin
+        # `program.ast.units` shared across the loop, and the calls below
+        # lock `program.ast` exclusively (they intern mono names)
+        uN0: program.ast.units.length
+        uI0: u64
+        for uI0 < uN0 loop {
+            uop9: u32
+            isTpl9: false
+            isInl9: false
+            {
+                uId9: program.ast.units.get i: uI0
+                u: program.ast.nodes.get i: (uId9 - 1).u64
+                match (
+                    u
+                ) case namedoperation then {
+                    un: zast.poolTextCopy pool: program.ast.names ref: u.name
+                    uop9 = u.operation
+                    if un.stringview == templateName then isTpl9 = true
+                    if un.stringview == unitName then isInl9 = true
+                } else null
+            }
+            uI0 = uI0 + 1
+            if isTpl9 then {
+                (createUnitMono
+                    :ty
+                    ast: program.ast
+                    :reg
+                    :unitName
+                    :monoName
+                    :templateName
+                    templateOpId: uop9
+                )
+            }
+            if isInl9 then {
+                (resolveInlineMono
+                    :ty
+                    :reg
+                    ast: program.ast
+                    :unitName
+                    :monoName
+                    :templateName
+                    mainOpId: uop9
+                )
+            }
         }
     } else null
 }
@@ -10676,41 +10690,48 @@ completeUnitInstantiations: function {
                     uI9: u64
                     for uI9 < uN9 loop {
                         u9Id9: program.ast.units.get i: uI9
-                        u9: program.ast.nodes.get i: (u9Id9 - 1).u64
                         uI9 = uI9 + 1
-                        match (
-                            u9
-                        ) case namedoperation then {
-                            un9: zast.poolTextCopy pool: program.ast.names ref: u9.name
-                            if un9.stringview == rt.stringview then {
-                                (buildUnitMono
-                                    :ty
-                                    :reg
-                                    ast: program.ast
-                                    tmplUnitName: un9.stringview
-                                    tmplName: rt.stringview
-                                    monoId: (ztypes.tid.create from: mid9.u64)
-                                    monoName: rm.stringview
-                                    :tplId
-                                    :subs
-                                    templateOpId: u9.operation
-                                )
-                            }
-                            if un9.stringview == mainName.stringview then {
-                                (completeInlineReq
-                                    :ty
-                                    :reg
-                                    ast: program.ast
-                                    mainName: mainName.stringview
-                                    monoId: (ztypes.tid.create from: mid9.u64)
-                                    monoName: rm.stringview
-                                    tmplName: rt.stringview
-                                    :tplId
-                                    :subs
-                                    mainOpId: u9.operation
-                                )
-                            }
-                        } else null
+                        # scope the element borrow: the calls below lock
+                        # `program.ast` exclusively (they intern mono names)
+                        uop29: u32
+                        un29: String
+                        {
+                            u9: program.ast.nodes.get i: (u9Id9 - 1).u64
+                            match (
+                                u9
+                            ) case namedoperation then {
+                                un29 = zast.poolTextCopy pool: program.ast.names ref: u9.name
+                                uop29 = u9.operation
+                            } else null
+                        }
+                        if un29.stringview == rt.stringview then {
+                            (buildUnitMono
+                                :ty
+                                :reg
+                                ast: program.ast
+                                tmplUnitName: un29.stringview
+                                tmplName: rt.stringview
+                                monoId: (ztypes.tid.create from: mid9.u64)
+                                monoName: rm.stringview
+                                :tplId
+                                :subs
+                                templateOpId: uop29
+                            )
+                        }
+                        if un29.stringview == mainName.stringview then {
+                            (completeInlineReq
+                                :ty
+                                :reg
+                                ast: program.ast
+                                mainName: mainName.stringview
+                                monoId: (ztypes.tid.create from: mid9.u64)
+                                monoName: rm.stringview
+                                tmplName: rt.stringview
+                                :tplId
+                                :subs
+                                mainOpId: uop29
+                            )
+                        }
                     }
                 } else null
             }
@@ -16536,6 +16557,9 @@ checkClause: function {
             holds: true
         )
         cs9: ast.nodes.get i: (clause.statement - 1).u64
+        # a condition's borrow residue is dead once the condition value is
+        # consumed -- it must not leak into the block's argument lock seeds
+        drainPendingBorrow :st
         checkStatement :st :unitName :ast :unitBody block: cs9
         return (lastStmtType :st :ast block: cs9)
     } else {
@@ -17342,6 +17366,7 @@ checkDo: function {
         nameId: (zast.poolSet pool: ast.names text: "break")
         ztypeId: (ztypes.tid.create from: dbk.u64)
     )
+    drainPendingBorrow :st
     checkStatement :st :unitName :ast :unitBody block: (ast.nodes.get i: (donode.statement - 1).u64)
     result: lastStmtType :st :ast block: (ast.nodes.get i: (donode.statement - 1).u64)
     st.popTo marker: doMarker
@@ -17701,6 +17726,7 @@ checkFor: function {
             checkValue :st :unitName :ast :unitBody node: pc
         }
     }
+    drainPendingBorrow :st
     walkBodyAt :st :unitName :ast :unitBody bodyId: fornode.body
     elemT9: ztypes.tid
     if fornode.body > 0 then {
@@ -20047,12 +20073,20 @@ walkCallArgsHoist: function {
                         :st
                         tid: (ztypes.tid.create from: vt.u64)
                     ) then {
-                        if st.typing.pendingBorrowPath.length == 0 then {
-                            an9: ast.nodes.get i: (arg.operation - 1).u64
-                            src9: (List String)
-                            appendValueTuple :ast n: an9 dst: src9
-                            if src9.length > 0 then {
-                                rt9: rootNameOf :ast n: an9
+                        an9: ast.nodes.get i: (arg.operation - 1).u64
+                        src9: (List String)
+                        appendValueTuple :ast n: an9 dst: src9
+                        if src9.length > 0 then {
+                            rt9: rootNameOf :ast n: an9
+                            # residue left by an EARLIER argument of this call
+                            # must not stand in for THIS argument's source:
+                            # keep a pending path only when it is rooted at
+                            # this argument's own base
+                            if st.typing.pendingBorrowPath.length > 0 then {
+                                pr9: st.typing.pendingBorrowPath.get i: 0
+                                if pr9.stringview != rt9.stringview then drainPendingBorrow :st
+                            }
+                            if st.typing.pendingBorrowPath.length == 0 then {
                                 rvo9: st.lookupVarId nameId: (nameIdOf :ast name: rt9.stringview)
                                 match (
                                     rvo9
@@ -22583,6 +22617,7 @@ checkCase: function {
             msg: smsg9
         )
     }
+    drainPendingBorrow :st
     targetName: String
     if isSum then {
         tn: subjectAtomName :ast n: (ast.nodes.get i: (casenode.subject - 1).u64)
