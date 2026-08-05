@@ -51,7 +51,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard readable-check
+.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard readable-check perf-strict
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -297,6 +297,28 @@ perf: bin/zc
 	@if command -v valgrind >/dev/null 2>&1; then \
 	  valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: /  /'; \
 	else echo "  (valgrind not installed -- skipping alloc total)"; fi
+
+# perf-strict -- the trustworthy allocation number. Guards against every trap
+# that has produced a wrong reading: a bin/zc silently rebuilt by
+# `make test CC=clang` (clang elides ~750k dead malloc/free pairs, deflating
+# the count), a stale binary, and an early-aborted self-compile posing as a
+# perf win. Rebuilds bin/zc with gcc, PROVES it (.comment section), runs the
+# self-compile once checking the exit code, then requires allocs == frees.
+perf-strict:
+	@if readelf -p .comment bin/zc 2>/dev/null | grep -qi clang; then \
+	  echo "perf-strict: bin/zc is clang-built (a CC=clang test rebuilt it) -- rebuilding with gcc"; \
+	  rm -f bin/zc; \
+	fi
+	@$(MAKE) --no-print-directory bin/zc CC=gcc
+	@readelf -p .comment bin/zc | grep -qi clang \
+	  && { echo "perf-strict: bin/zc still clang-built -- refusing to measure"; exit 1; } || true
+	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
+	  echo "== perf-strict @ $$sha ($$dirty), gcc-built bin/zc =="
+	@$(PERFRUN) > /dev/null || { echo "perf-strict: self-compile FAILED (exit $$?)"; exit 1; }
+	@line=$$(valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'); \
+	  echo "  $$line"; \
+	  a=$$(echo "$$line" | sed 's/ allocs.*//;s/,//g'); f=$$(echo "$$line" | sed 's/.* allocs, //;s/ frees.*//;s/,//g'); \
+	  test "$$a" = "$$f" || { echo "perf-strict: allocs != frees -- incomplete or leaking run"; exit 1; }
 
 # shadow-guard -- ratchet against the user-shadow miscompile class. The C emitter
 # must derive a type's C type from its canonical type id (typeRefC / scalarCTypeFor
