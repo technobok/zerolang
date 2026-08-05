@@ -1,6 +1,5 @@
 typedef struct {
-    /* transitional: `length` aliases `size` until the seed emits `size` */
-    union { uint64_t size; uint64_t length; };  /* byte count of the viewed region */
+    uint64_t size;       /* byte count of the viewed region */
     const char* data;    /* pointer into string buffer or .rodata */
 } z_StringView_t;
 
