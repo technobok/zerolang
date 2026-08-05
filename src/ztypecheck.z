@@ -26192,6 +26192,84 @@ walkLookupTyperef: function {
 # resolveUnitChild -- the (unit, name) form of resolvedByKey's two-segment
 # walk: no composed key, no split. resolveSystemChild probes the cached
 # system unit root with no allocation at all.
+# declOfUnitDefIds -- declOfUnitDefId for a caller holding BOTH ids: unit
+# root by id, then the child edge. No name is interned and no key is built.
+declOfUnitDefIds: function {
+    ty: ztyping.ZTyping
+    unitId: zast.nameid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    if nameId.isZero then return (ztypes.declid.create from: 0)
+    ro9: ty.unitRootByName.get key: unitId.u64
+    match (
+        ro9
+    ) case some then {
+        return (ty.declFindChild parentDeclId: ro9 :nameId)
+    } case none then null
+    return (ztypes.declid.create from: 0)
+}
+
+# childOfWalkIds -- the two-segment walk with both segments already interned.
+# The string form's fast path composed a key, split it back with indexOf +
+# substring, re-interned the unit segment and handed the name segment to a
+# text lookup that interned it again -- all to reach exactly this.
+childOfWalkIds: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    unitId: zast.nameid
+    name: zast.nameid
+} out optionval u64 is {
+    ro9: reg.unitNameTid.get key: unitId.u64
+    match (
+        ro9
+    ) case some then {
+        return (ty.declChildOfId
+            parentTypeId: (ztypes.tid.create from: ro9.u64)
+            nameId: name
+        )
+    } case none then null
+    return (optionval.none u64)
+}
+
+# resolvedByIds -- resolvedByKey for a `unit.name` pair held as ids: the
+# childOf walk, then the same on-demand alias follow (which lays the
+# unit->alias edge so later probes resolve through childOf).
+resolvedByIds: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    unitId: zast.nameid
+    name: zast.nameid
+} out optionval u64 is {
+    wo9: childOfWalkIds :ty :reg :unitId :name
+    match (
+        wo9
+    ) case some then {
+        return (optionval.some wo9)
+    } case none then null
+    alDecl9: declOfUnitDefIds :ty :unitId nameId: name
+    alTgt9: reexportTargetOf :ty :ast declId: alDecl9
+    if alTgt9.length > 0 then {
+        tgo9: childOfWalk :ast :ty :reg key: alTgt9
+        match (
+            tgo9
+        ) case some then {
+            uro9: reg.unitNameTid.get key: unitId.u64
+            match (
+                uro9
+            ) case some then {
+                if (name.isZero) == false then (ty.setMemberType
+                    parentTypeId: (ztypes.tid.create from: uro9.u64)
+                    nameId: name
+                    childTypeId: tgo9
+                )
+            } case none then null
+            return (optionval.some tgo9)
+        } case none then null
+    }
+    return (optionval.none u64)
+}
+
 resolveUnitChild: function {
     ast: Ast
     ty: ztyping.ZTyping
@@ -26199,29 +26277,24 @@ resolveUnitChild: function {
     unitName: StringView
     name: StringView
 } out optionval u64 is {
-    dt9: (declProbeUnitChildId
-        :ty
-        :reg
-        :ast
-        uname: unitName
-        nameId: (zast.poolFind pool: ast.names text: name)
-    )
+    uId9: nameIdOf :ast name: unitName
+    nId9: zast.poolFind pool: ast.names text: name
+    dt9: declProbeUnitChildId :ty :reg :ast uname: unitName nameId: nId9
     if dt9 > 0 then return (optionval.some dt9)
-    ro: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
+    ro: reg.unitNameTid.get key: uId9.u64
     match (
         ro
     ) case some then {
-        co: ty.declChildOf pool: ast.names parentTypeId: (ztypes.tid.create from: ro.u64) :name
+        co: ty.declChildOfId parentTypeId: (ztypes.tid.create from: ro.u64) nameId: nId9
         match (
             co
         ) case some then {
             return (optionval.some co)
         } case none then null
     } case none then null
-    # miss: the composed-key path follows unit-level aliases and lays the
-    # unit->alias edge, so the next probe resolves through childOf above
-    ck9: "\{unitName}.\{name}"
-    return (resolvedByKey :ast :ty :reg key: ck9)
+    # miss: the alias follow lays the unit->alias edge, so the next probe
+    # resolves through childOf above
+    return (resolvedByIds :ast :ty :reg unitId: uId9 name: nId9)
 }
 
 # resolve member `name` of the system/stdlib unit to its type id, or `none`.
@@ -26231,24 +26304,24 @@ resolveSystemChild: function {
     reg: ztypes.ZTypeRegistry.view
     name: StringView
 } out optionval u64 is {
-    dt9: (declProbeUnitChildId
-        :ty
-        :reg
-        :ast
-        uname: "system"
-        nameId: (zast.poolFind pool: ast.names text: name)
-    )
+    nId9: zast.poolFind pool: ast.names text: name
+    dt9: declProbeUnitChildId :ty :reg :ast uname: "system" nameId: nId9
     if dt9 > 0 then return (optionval.some dt9)
     if ty.systemUnitTid > 0 then {
-        co: ty.declChildOf pool: ast.names parentTypeId: ty.systemUnitTid :name
+        co: ty.declChildOfId parentTypeId: ty.systemUnitTid nameId: nId9
         match (
             co
         ) case some then {
             return (optionval.some co)
         } case none then null
     }
-    ck9: "system.\{name}"
-    return (resolvedByKey :ast :ty :reg key: ck9)
+    return (resolvedByIds
+        :ast
+        :ty
+        :reg
+        unitId: (nameIdOf :ast name: "system")
+        name: nId9
+    )
 }
 
 # --- id-keyed resolution twins: same shape as the text resolvers above, but
@@ -26359,9 +26432,13 @@ resolveUnitChildById: function {
             return (optionval.some co)
         } case none then null
     } case none then null
-    nm9: zast.poolTextCopy pool: ast.names ref: nameId
-    ck9: "\{unitName}.\{nm9}"
-    return (resolvedByKey :ast :ty :reg key: ck9)
+    return (resolvedByIds
+        :ast
+        :ty
+        :reg
+        unitId: (nameIdOf :ast name: unitName)
+        name: nameId
+    )
 }
 
 # id-keyed `resolveSystemChild`: the member is a StringPool name-id.
@@ -26390,9 +26467,13 @@ resolveSystemChildById: function {
             return (optionval.some co)
         } case none then null
     }
-    nm9: zast.poolTextCopy pool: ast.names ref: nameId
-    ck9: "system.\{nm9}"
-    return (resolvedByKey :ast :ty :reg key: ck9)
+    return (resolvedByIds
+        :ast
+        :ty
+        :reg
+        unitId: (nameIdOf :ast name: "system")
+        name: nameId
+    )
 }
 
 # resolve a dotted path to a child type id by walking its name segments.
