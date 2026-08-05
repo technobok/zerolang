@@ -471,13 +471,15 @@ VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get getMut:ListRef.getMut,ListVie
   contains:ListRef.contains \
   listview:ListRef.listview sort:ListRef.sort iterate:ListRef.iterate \
   call:ListIter.call,ListIterVal.call \
-  iterateMut:ListRef.iterateMut getv:MapRR.getv eq:- extendView:- destroy:-
+  iterateMut:ListRef.iterateMut getv:MapRR.getv eq:- extendView:- destroy:- \
+  hasv:MapRR.has,SetRef.has deletev:SetRef.delete
 VIEW_GUARD_BACKS := StringView.eq===,!= StringView.cmp=compare,<,<=,>,>=
 VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp \
   StringView.print StringView.indexOfRaw StringView.replaceImpl \
   ListRef.destroy ListRef.grow MapRR.destroy MapRR.grow MapRR.find \
   SetRef.destroy SetRef.grow SetRef.find MapEntry.key MapEntry.value
 VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
+  StringView.asString:inline \
   ListVal.append:ListRef.append ListVal.insert:ListRef.insert \
   ListVal.extend:ListRef.extend ListVal.get:ListRef.get ListVal.set:ListRef.set \
   ListVal.pop:ListRef.pop ListVal.contains:ListRef.contains \

@@ -3681,6 +3681,78 @@ callRhsIsBorrow: function {
     return (funcBorrowFlag :symtab tid: (ztypes.tid.create from: mfid9.u64))
 }
 
+# isSvAsStringNode -- the node is `sv.asString` on a StringView-typed base:
+# the result is a `const String*` cast of the view's address, so a binding or
+# hoist of it is a POINTER local (a 24-byte value copy would read `capacity`
+# past the end of the view).
+isSvAsStringNode: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    n: Node.view
+} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (isSvAsStringNode :ast :symtab :ctx n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case dottedpath then {
+        cn9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
+        if cn9.stringview != "asString" then return false
+        bnidA9: nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64)
+        btA9: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnidA9)
+        return btA9 == ctx.svTid
+    } else {
+        return false
+    }
+}
+
+# svBaseExprOfAsString -- the rendered VIEW expression under `sv.asString`
+# (the container probes pass the view itself, never a materialised String).
+svBaseExprOfAsString: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    n: Node.view
+} out String is {
+    match (
+        n
+    ) case expression then {
+        return (svBaseExprOfAsString :ast :symtab :ctx n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case dottedpath then {
+        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64))
+    } else {
+        return "".string
+    }
+}
+
+# colArgAsStringViewExpr -- when the labelled argument is `sv.asString`, the
+# rendered view expression for the C `_getv`/`_hasv`/`_deletev` probe; "".
+colArgAsStringViewExpr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    call: zast.CallData.view
+    label: StringView
+} out String is {
+    aiter: call.arguments.iterate
+    for aId9: aiter loop {
+        a: ast.nodes.get i: (aId9 - 1).u64
+        match (
+            a
+        ) case namedoperation then {
+            an: zast.nameTextCopy :ast ref: a.name
+            if an.stringview == label then {
+                opn9: ast.nodes.get i: (a.operation - 1).u64
+                if (isSvAsStringNode :ast :symtab :ctx n: opn9) then {
+                    return (svBaseExprOfAsString :ast :symtab :ctx n: opn9)
+                }
+                return "".string
+            }
+        } else null
+    }
+    return "".string
+}
+
 # refBorrowCalleeFid9 -- the CALLEE behind a borrow-returning binding RHS, or 0.
 # Deliberately narrower than bindingRhsIsBorrow, which also answers true for a
 # plain field read: only a declared `.borrow`/`.view` RETURN makes the binding a
@@ -4161,11 +4233,15 @@ emitSetMethodCall: function {
         return e0
     }
     if mn.stringview == "has" then {
+        viv9: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
+        if viv9.length > 0 then return "\{cb}_hasv(\{bn}, \{viv9})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         e1: "\{cb}_has(\{bn}, \{v})"
         return e1
     }
     if mn.stringview == "delete" then {
+        viv9: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
+        if viv9.length > 0 then return "\{cb}_deletev(\{bn}, \{viv9})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         e2: "\{cb}_delete(\{bn}, \{v})"
         return e2
@@ -4193,6 +4269,8 @@ emitMapMethodCall: function {
         return e0
     }
     if mn.stringview == "get" then {
+        vkv9: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
+        if vkv9.length > 0 then return "\{cb}_getv(\{bn}, \{vkv9})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e1: "\{cb}_get(\{bn}, \{vk})"
         return e1
@@ -4203,6 +4281,8 @@ emitMapMethodCall: function {
         return e19
     }
     if mn.stringview == "has" then {
+        vkv9: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
+        if vkv9.length > 0 then return "\{cb}_hasv(\{bn}, \{vkv9})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e2: "\{cb}_has(\{bn}, \{vk})"
         return e2
@@ -7857,6 +7937,14 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     e2: "\{bn2}.size"
                     return e2
                 }
+                if mn2.stringview == "asString" then {
+                    # the cast IS the emission: {size, data} is a prefix of
+                    # String, so the view's address is a readonly String
+                    accA9: "&".string
+                    if (isPtrVid :ctx vid: bn2v9) then accA9 = "".string
+                    ea2: "((const \{ctx.strC}_t*)\{accA9}\{bn2})"
+                    return ea2
+                }
                 if mn2.stringview == "count" then {
                     needsAdd :ctx name: "count"
                     ec2: "\{ctx.svC}_count(&\{bn2})"
@@ -10444,6 +10532,10 @@ emitStmt: function {
                     retTid: ltid
                 ) then {
                     ctB8 = "\{ct}*"
+                    ctx.ptrVids.append nmVid9
+                }
+                if (isSvAsStringNode :ast :symtab :ctx n: avn9) then {
+                    ctB8 = "const \{ct}*"
                     ctx.ptrVids.append nmVid9
                 }
             }
@@ -18787,6 +18879,23 @@ emitSetMono: function {
         buf.append t9
         buf.append "\n"
     }
+    if isStr then {
+        # String sets: view-keyed probes. The temporary String header aliases
+        # the view bytes; has/delete only hash and compare, never store or
+        # free the probe (delete frees the STORED item only).
+        sv0: "static int z_\{nm}_hasv(const z_\{nm}_t* _this, \{ctx.svC}_t _item) {\n"
+        buf.append sv0
+        sv1: "    \{ctx.strC}_t _k = { _item.size, (char*)_item.data, _item.size };\n"
+        buf.append sv1
+        sv2: "    return z_\{nm}_has(_this, _k);\n}\n\n"
+        buf.append sv2
+        sd0: "static int z_\{nm}_deletev(z_\{nm}_t* _this, \{ctx.svC}_t _item) {\n"
+        buf.append sd0
+        sd1: "    \{ctx.strC}_t _k = { _item.size, (char*)_item.data, _item.size };\n"
+        buf.append sd1
+        sd2: "    return z_\{nm}_delete(_this, _k);\n}\n\n"
+        buf.append sd2
+    }
 }
 
 # mapDestroyEntries / mapFreeKeyDup / mapFreeKeyDel -- String-key cleanup
@@ -19145,6 +19254,12 @@ emitMapMono: function {
         buf.append gv1
         gv2: "    return z_\{nm}_get(_this, _k);\n}\n\n"
         buf.append gv2
+        hv0: "static int z_\{nm}_hasv(const z_\{nm}_t* _this, \{ctx.svC}_t _key) {\n"
+        buf.append hv0
+        hv1: "    \{ctx.strC}_t _k = { _key.size, (char*)_key.data, _key.size };\n"
+        buf.append hv1
+        hv2: "    return z_\{nm}_has(_this, _k);\n}\n\n"
+        buf.append hv2
     }
     (emitMapIters
         :symtab
