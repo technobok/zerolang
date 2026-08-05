@@ -14525,6 +14525,10 @@ isReftypeParam: function {
     if monoLk4 > 0 then {
         if (isUserClassMonoTid :symtab :ctx tid: cid) == false then return false
     }
+    # system/collections classes answer through their own family rules, not
+    # the user-class one: containers via isListPtrParam/isSetMapPtrParam,
+    # String via isBorrowStringParam (pointer when non-owned), StringView by
+    # value (16-byte fat pointer, no owned interior).
     duo: definedInUnitOf :symtab tid: cid
     match (
         duo
@@ -14589,9 +14593,13 @@ listGetIsPtr: function {
     return (elemBorrowsByPtr :ast :symtab :ctx tid: (listElemType :symtab :monoId))
 }
 
-# isBorrowStringParam -- a String param with BORROW/LOCK ownership, passed BY
-# REFERENCE so the callee's mutations (append/reserve) persist to the caller. A
-# `.take` String param is moved by value instead; StringView is value-passed.
+# isBorrowStringParam -- a non-owned String param (BORROW/LOCK or VIEW), passed
+# BY REFERENCE: String is 24 bytes with a heap interior, so a copy is never a
+# borrow -- `.borrow` needs the pointer for mutation (append/reserve), `.view`
+# for cost and so a view-projected String (StringView.asString) can alias one.
+# A `.take` String param is moved by value instead. StringView stays BY VALUE
+# for a stated reason: a 16-byte fat pointer with no owned interior -- two
+# registers on SysV, and copying it carries nothing that can dangle.
 isBorrowStringParam: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
@@ -14606,6 +14614,12 @@ isBorrowStringParam: function {
         parentTypeId: fid
         name: pname
         own: ztypes.zparamownership.borrowMode
+    ) then return true
+    if (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: fid
+        name: pname
+        own: ztypes.zparamownership.viewMode
     ) then return true
     return false
 }
