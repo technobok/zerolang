@@ -20495,76 +20495,120 @@ checkCall: function {
         } case none then null
         st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.returnCall
         aiter: call.arguments.iterate
-        for argId9: aiter loop {
-            arg: ast.nodes.get i: (argId9 - 1).u64
-            match (
-                arg
-            ) case namedoperation then {
-                errR9: st.typing.errors.length
-                argT9: (checkValue
-                    :st
-                    :unitName
-                    :ast
-                    :unitBody
-                    node: (ast.nodes.get i: (arg.operation - 1).u64)
-                )
-                # A returned value that typed to nothing and raised nothing is
-                # an unresolvable name -- but ONLY where this walk knows the
-                # enclosing function's return type. Some bodies reach here
-                # degenerate (zlexer's create/acceptAny: return type unknown,
-                # the local's own binding never registered a scope entry), and
-                # there the scope cannot answer whether a name is in scope.
-                # currentReturnTypeId is exactly the condition under which the
-                # return-type check below already runs.
-                if argT9.u64 == 0 when st.typing.errors.length == errR9 then {
-                    if st.typing.currentReturnTypeId > 0 then {
-                        (reportUnresolvedValue
+        # `return` is itself a call, so a LABELLED argument binds to RETURN,
+        # not to the expression being returned: `return f a: 1` hands `a: 1`
+        # to return and leaves `f` bare. Say that, and say it once -- walking
+        # the arguments as return values instead blames the bare callee for
+        # the argument it was denied and then the return type for the
+        # function value, neither of which names the real mistake.
+        rLbl9: false
+        {
+            lIter9: call.arguments.iterate
+            for lArgId9: lIter9 loop {
+                lArg9: ast.nodes.get i: (lArgId9 - 1).u64
+                match (
+                    lArg9
+                ) case namedoperation then {
+                    if (lArg9.name.isZero) == false when (rLbl9) == false then {
+                        rLbl9 = true
+                        lNm9: zast.poolTextCopy pool: ast.names ref: lArg9.name
+                        lNc9: lNm9.copy
+                        lMsg9: "'return' has no argument '\{lNc9}'"
+                        lNote9: "'return' is itself a call, so a labelled argument binds to it".string
+                        lNh9: lNm9.copy
+                        lHint9: "wrap the returned call in parentheses so '\{lNh9}:' binds to it"
+                        (addErrorH
                             :st
-                            :unitName
-                            :ast
-                            vnode: (ast.nodes.get i: (arg.operation - 1).u64)
+                            nodeid: lArg9.nodeid
+                            lineno: lArg9.lineno
+                            colno: lArg9.colno
+                            e: zast.err.callError
+                            msg: lMsg9
+                            note: lNote9
+                            hint: lHint9
+                            width: lNm9.length.u32.orPanic
                         )
                     }
-                }
-                bfn9: returnedBareFieldName :ast :st n: (ast.nodes.get i: (arg.operation - 1).u64)
-                if st.typing.currentReturnsBorrow then bfn9 = "".string
-                if bfn9.length > 0 then {
-                    mbf9: "Cannot return field '\{bfn9}' as a bare read — the owner still frees it; return '\{bfn9}.copy' (duplicate) or '\{bfn9}.take' (move out)"
-                    bfid9: nodeId n: (ast.nodes.get i: (arg.operation - 1).u64)
-                    bfln9: nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64)
-                    bfcl9: nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64)
-                    (addError
+                } else null
+            }
+        }
+        if (rLbl9) == false then {
+            for argId9: aiter loop {
+                arg: ast.nodes.get i: (argId9 - 1).u64
+                match (
+                    arg
+                ) case namedoperation then {
+                    errR9: st.typing.errors.length
+                    argT9: (checkValue
                         :st
-                        nodeid: bfid9
-                        lineno: bfln9
-                        colno: bfcl9
-                        e: zast.err.ownerError
-                        msg: mbf9
+                        :unitName
+                        :ast
+                        :unitBody
+                        node: (ast.nodes.get i: (arg.operation - 1).u64)
                     )
-                }
-                expR9: st.typing.currentReturnTypeId
-                if expR9 > 0 when argT9 > 0 then {
-                    if (typesCompatible :ast :st :unitName a: argT9 b: expR9) == false then {
-                        en9: typeNameOf :st tid: expR9
-                        an9: typeNameOf :st tid: argT9
-                        enc9: en9.copy
-                        anc9: an9.copy
-                        m4: "return type mismatch: function expects \{enc9}, got \{anc9}"
-                        rvid9: nodeId n: (ast.nodes.get i: (arg.operation - 1).u64)
-                        rvln9: nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64)
-                        rvcl9: nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64)
+                    # A returned value that typed to nothing and raised nothing is
+                    # an unresolvable name -- but ONLY where this walk knows the
+                    # enclosing function's return type. Some bodies reach here
+                    # degenerate (zlexer's create/acceptAny: return type unknown,
+                    # the local's own binding never registered a scope entry), and
+                    # there the scope cannot answer whether a name is in scope.
+                    # currentReturnTypeId is exactly the condition under which the
+                    # return-type check below already runs.
+                    if argT9.u64 == 0 when st.typing.errors.length == errR9 then {
+                        if st.typing.currentReturnTypeId > 0 then {
+                            (reportUnresolvedValue
+                                :st
+                                :unitName
+                                :ast
+                                vnode: (ast.nodes.get i: (arg.operation - 1).u64)
+                            )
+                        }
+                    }
+                    bfn9: (returnedBareFieldName
+                        :ast
+                        :st
+                        n: (ast.nodes.get i: (arg.operation - 1).u64)
+                    )
+                    if st.typing.currentReturnsBorrow then bfn9 = "".string
+                    if bfn9.length > 0 then {
+                        mbf9: "Cannot return field '\{bfn9}' as a bare read — the owner still frees it; return '\{bfn9}.copy' (duplicate) or '\{bfn9}.take' (move out)"
+                        bfid9: nodeId n: (ast.nodes.get i: (arg.operation - 1).u64)
+                        bfln9: nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64)
+                        bfcl9: nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64)
                         (addError
                             :st
-                            nodeid: rvid9
-                            lineno: rvln9
-                            colno: rvcl9
-                            e: zast.err.typeError
-                            msg: m4
+                            nodeid: bfid9
+                            lineno: bfln9
+                            colno: bfcl9
+                            e: zast.err.ownerError
+                            msg: mbf9
                         )
                     }
-                }
-            } else null
+                    expR9: st.typing.currentReturnTypeId
+                    if expR9 > 0 when argT9 > 0 then {
+                        if (typesCompatible :ast :st :unitName a: argT9 b: expR9) == false then {
+                            en9: typeNameOf :st tid: expR9
+                            an9: typeNameOf :st tid: argT9
+                            enc9: en9.copy
+                            anc9: an9.copy
+                            m4: "return type mismatch: function expects \{enc9}, got \{anc9}"
+                            rvid9: nodeId n: (ast.nodes.get i: (arg.operation - 1).u64)
+                            rvln9: nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64)
+                            rvcl9: nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64)
+                            (addError
+                                :st
+                                nodeid: rvid9
+                                lineno: rvln9
+                                colno: rvcl9
+                                e: zast.err.typeError
+                                msg: m4
+                            )
+                        }
+                    }
+                } else null
+            }
         }
+
         nvOpt: walkLookupTyperef :ast ty: st.typing reg: st.reg currentUnit: unitName base: "never"
         match (
             nvOpt
