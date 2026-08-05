@@ -115275,9 +115275,9 @@ void z_t3939(z_t1252_t* z_v24421, z_t1486_t* z_v24422, z_t3464_t* z_v24423, z_t1
     z_t77_t z_v24478 = z_t3935(z_v24441, ((z_t108_t){ .data = z_v24423->strC.data, .size = z_v24423->strC.size }));
     z_t77_t z_v24480 = z_t3936(z_v24441, ((z_t108_t){ .data = z_v24423->strC.data, .size = z_v24423->strC.size }));
     z_t77_t z_v24482 = z_t3937(z_v24441, ((z_t108_t){ .data = z_v24423->strC.data, .size = z_v24423->strC.size }));
-    z_t77_t _s16 = z_t77_create((uint64_t)31);
+    z_t77_t _s16 = z_t77_create((uint64_t)29);
     z_t77_append(&_s16, z_v24424.data, z_v24424.size);
-    z_t77_append(&_s16, "/z_Set.ptr.tmpl", sizeof("/z_Set.ptr.tmpl")-1);
+    z_t77_append(&_s16, "/z_Set.c.tmpl", sizeof("/z_Set.c.tmpl")-1);
     z_t77_t z_v24483 = _s16;
     z_t77_t z_v24485 = z_t3554(z_v24423, ((z_t108_t){ .data = z_v24483.data, .size = z_v24483.size }));
     if (z_v24485.size > 0) {
@@ -115985,9 +115985,9 @@ void z_t3948(z_t1252_t* z_v24632, z_t1486_t* z_v24633, z_t3464_t* z_v24634, z_t1
         z_t77_free(&z_v24720);
         z_v24720 = _s36;
     }
-    z_t77_t _s44 = z_t77_create((uint64_t)31);
+    z_t77_t _s44 = z_t77_create((uint64_t)29);
     z_t77_append(&_s44, z_v24635.data, z_v24635.size);
-    z_t77_append(&_s44, "/z_Map.ptr.tmpl", sizeof("/z_Map.ptr.tmpl")-1);
+    z_t77_append(&_s44, "/z_Map.c.tmpl", sizeof("/z_Map.c.tmpl")-1);
     z_t77_t z_v24724 = _s44;
     z_t77_t z_v24726 = z_t3554(z_v24634, ((z_t108_t){ .data = z_v24724.data, .size = z_v24724.size }));
     if (z_v24726.size == 0) {
