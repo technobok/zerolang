@@ -2880,6 +2880,7 @@ Analysis: class {
             this.lintSuffixUnit :prog :uname :st
             this.reportUnusedDefs :prog :uname :st
             this.reportUnusedVars :prog :uname :st
+            this.reportViewableLocals :prog :uname :st
         }
     }
 
@@ -3194,6 +3195,140 @@ Analysis: class {
                                     )
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        } else null
+    }
+
+    # owningConvKind9 -- the RHS is an OWNING String conversion: `.string` on a
+    # StringView base, `.copy` on a String base, or a nameTextCopy/poolTextCopy
+    # call. Returns the spelling for the message, "" otherwise.
+    owningConvKind9: function {
+        :this
+        ast: Ast.view
+        st: zenv.ZSymbolTable
+        rhsId: u32
+    } out String is {
+        if rhsId == 0 then return "".string
+        rn9: ast.nodes.get i: (rhsId - 1).u64
+        match (
+            rn9
+        ) case expression then {
+            return (this.owningConvKind9 :ast :st rhsId: rn9.expression)
+        } case dottedpath then {
+            chn9: ast.nodes.get i: (rn9.child - 1).u64
+            cn9: atomName :ast n: chn9
+            if cn9.length == 0 then return "".string
+            pnn9: ast.nodes.get i: (rn9.parent - 1).u64
+            pin9: nodeInfoOf n: pnn9
+            bt9: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: pin9.id.u64
+            if bt9.isZero then return "".string
+            if cn9.stringview == "string" then {
+                if bt9 == (ztypecheck.builtinTidT
+                    :ast
+                    ty: st.typing
+                    reg: st.reg
+                    base: "StringView"
+                ) then return "`.string`".string
+            }
+            if cn9.stringview == "copy" then {
+                if bt9 == (ztypecheck.builtinTidT
+                    :ast
+                    ty: st.typing
+                    reg: st.reg
+                    base: "String"
+                ) then return "`.copy`".string
+            }
+            return "".string
+        } case call then {
+            cbl9: ast.nodes.get i: (rn9.callable - 1).u64
+            match (
+                cbl9
+            ) case dottedpath then {
+                ccn9: atomName :ast n: (ast.nodes.get i: (cbl9.child - 1).u64)
+                if ccn9.stringview == "nameTextCopy" then return "`nameTextCopy`".string
+                if ccn9.stringview == "poolTextCopy" then return "`poolTextCopy`".string
+                return "".string
+            } else {
+                return "".string
+            }
+        } else {
+            return "".string
+        }
+    }
+
+    # reportViewableLocals -- L022. A String local bound from an OWNING
+    # conversion that is never mutated: every use only reads it, so a borrowed
+    # view serves and the allocation is avoidable (`.stringview` at the uses,
+    # `asString` at a container probe). Mutation evidence is `variableMutated`,
+    # recorded by the lock rules. A local later MOVED into an owner can still
+    # be flagged -- applying the suggestion there fails to compile, so the
+    # output is a WORKLIST, not a proof.
+    reportViewableLocals: function {:this prog: Node uname: StringView st: zenv.ZSymbolTable} is {
+        match (
+            prog
+        ) case program then {
+            mainOp9: u32
+            uN9: prog.ast.units.length
+            uI9: u64
+            for uI9 < uN9 loop {
+                uid9: prog.ast.units.get i: uI9
+                uI9 = uI9 + 1
+                { un9: prog.ast.nodes.get i: (uid9 - 1).u64
+                  match (un9) case namedoperation then {
+                      unm9: zast.poolTextCopy pool: prog.ast.names ref: un9.name
+                      if unm9.stringview == uname then mainOp9 = un9.operation
+                  } else null }
+            }
+            if mainOp9 == 0 then return
+            # the unit node itself is fsno-less; anchor on the first member's
+            # operation node, like the L013 walk does
+            mainFsno9: zvfs.fsno
+            zeroFs9: zvfs.fsno
+            {
+                bodyIds9: zast.unitBodyIdsAt ast: prog.ast unitId: mainOp9
+                with bit9: bodyIds9.iterate do for mid9: bit9 loop {
+                    if mainFsno9 == zeroFs9 then {
+                        anch9: u32
+                        { m9: prog.ast.nodes.get i: (mid9 - 1).u64
+                          if m9.namedoperation then anch9 = m9.operation }
+                        if anch9 > 0 then {
+                            mainFsno9 = prog.ast.fsnoForNode nodeid: anch9
+                        }
+                    }
+                }
+            }
+            if mainFsno9 == zeroFs9 then return
+            used9: (SetVal u64)
+            with uit9: st.typing.atomVariableId.iterateItems do for av9: uit9 loop used9.add item: av9.value
+            with dit9: st.typing.defVariableId.iterateItems do for dv9: dit9 loop {
+                nid9: dv9.key
+                vid9: dv9.value
+                if (used9.has item: vid9) then {
+                    mut9: false
+                    { mo9: st.typing.variableMutated.get key: vid9
+                      match (mo9) case some then { if mo9 then mut9 = true } case none then null }
+                    if (mut9) == false then {
+                        fs9: prog.ast.fsnoForNode nodeid: nid9.u32.orPanic
+                        if fs9 == mainFsno9 then {
+                            nodeL9: prog.ast.nodes.get i: (nid9 - 1).u64
+                            match (
+                                nodeL9
+                            ) case assignment then {
+                                kind9: this.owningConvKind9 ast: prog.ast :st rhsId: nodeL9.value
+                                if kind9.length > 0 then {
+                                    nm9: zast.poolTextCopy pool: prog.ast.names ref: nodeL9.name
+                                    (this.info
+                                        code: "L022"
+                                        msg: "local '\{nm9}' is an owned copy (\{kind9}) that is never mutated -- a borrowed view serves every use (`.stringview`, or `asString` at a probe)"
+                                        line: nodeL9.lineno
+                                        col: nodeL9.colno
+                                        width: nm9.length.u32.orPanic
+                                    )
+                                }
+                            } else null
                         }
                     }
                 }
