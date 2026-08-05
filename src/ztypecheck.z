@@ -15762,6 +15762,28 @@ checkDotted: function {
                     # consumes any receiver-evaluation borrow residue (the get
                     # in `(xs.get i).copy` must not flow to the binding).
                     drainPendingBorrow :st
+                    if (optBoolOr o: (st.typing.funcReturnsTakex.get key: mo) d: false) then {
+                        # `takex`: the result is OWNED but pins its source --
+                        # the same receiver pin a borrow return takes, without
+                        # demoting the binding (`pendingBorrowOwned`).
+                        tupX: (List String)
+                        appendValueTuple :ast n: (ast.nodes.get i: (dp.parent - 1).u64) dst: tupX
+                        tiX: u64
+                        tnX: tupX.length
+                        for tiX < tnX loop {
+                            teX: tupX.get i: tiX
+                            tecX: teX.copy
+                            st.typing.pendingBorrowPath.append tecX
+                            tiX = tiX + 1
+                        }
+                        if (returnIsIteratorTid :st tid: result) == false then {
+                            st.typing.pendingBorrowShared = true
+                        } else {
+                            mrvX9: (methodReceiverIsView :st mid: (ztypes.tid.create from: mo.u64))
+                            if mrvX9 then st.typing.pendingBorrowShared = true
+                        }
+                        st.typing.pendingBorrowOwned = true
+                    }
                 }
             } case none then {
                 # A no-`out` METHOD auto-call resolves to null (the
@@ -21108,16 +21130,50 @@ checkCall: function {
                     if (optBoolOr
                         o: (st.typing.funcReturnsTakex.get key: dro)
                         d: false
-                    ) when mlr.length > 0 then {
-                        # `takex`: pin the argument the result was built from,
-                        # while the binding stays OWNED. `mlr` is the call's
+                    ) then {
+                        # `takex`: pin the source the result was built from,
+                        # while the binding stays OWNED. The source is the
+                        # receiver when there is one; else `mlr`, the call's
                         # lock root, set for any non-owned argument -- which is
                         # what lets a `borrow` parameter source the pin that
                         # `.lock` used to provide on its own.
-                        drainPendingBorrow :st
-                        mlrx9: mlr.copy
-                        st.typing.pendingBorrowPath.append mlrx9
-                        st.typing.pendingBorrowOwned = true
+                        rtupX: (List String)
+                        xq4X: ast.nodes.get i: (call.callable - 1).u64
+                        methodReceiverTuple :ast n: xq4X dst: rtupX
+                        pushedX: false
+                        if rtupX.length > 0 then {
+                            rvoX: st.lookupVarId nameId: (nameIdOf
+                                :ast
+                                name: (rtupX.get i: 0).stringview
+                            )
+                            match (
+                                rvoX
+                            ) case some then {
+                                drainPendingBorrow :st
+                                with tix: rtupX.iterate do for segX: tix loop {
+                                    sgcX: segX.copy
+                                    st.typing.pendingBorrowPath.append sgcX
+                                }
+                                if (returnIsIteratorTid
+                                    :st
+                                    tid: (ztypes.tid.create from: mres.u64)
+                                ) == false then {
+                                    st.typing.pendingBorrowShared = true
+                                } else {
+                                    if (methodReceiverIsView :st mid: dro) then {
+                                        st.typing.pendingBorrowShared = true
+                                    }
+                                }
+                                st.typing.pendingBorrowOwned = true
+                                pushedX = true
+                            } case none then null
+                        }
+                        if (pushedX) == false when mlr.length > 0 then {
+                            drainPendingBorrow :st
+                            mlrx9: mlr.copy
+                            st.typing.pendingBorrowPath.append mlrx9
+                            st.typing.pendingBorrowOwned = true
+                        }
                     }
                     if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: dro) d: false) then {
                         rtupB: (List String)
