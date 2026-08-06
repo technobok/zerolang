@@ -2296,6 +2296,50 @@ aliasChildName: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.v
     }
 }
 
+# the child member name id of dotted-path node `n` (0 when not one).
+dottedChildNameIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    match (
+        n
+    ) case dottedpath then {
+        return (atomNameIdOf :ast n: (ast.nodes.get i: (n.child - 1).u64))
+    } else {
+        return (zast.nameid.create from: 0)
+    }
+}
+
+# the middle segment's name id of a LEFT-nested `(a.B).c` path (0 otherwise).
+dottedParentChildId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    match (
+        n
+    ) case expression then {
+        return (dottedParentChildId :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case dottedpath then {
+        return (dottedChildNameIdOf :ast n: (ast.nodes.get i: (n.parent - 1).u64))
+    } else {
+        return (zast.nameid.create from: 0)
+    }
+}
+
+# aliasChildName's pool id: the internal (renamed) member id when a rename
+# stamp exists, else the child atom's own name id.
+aliasChildNameId: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    n: Node.view
+} out zast.nameid is {
+    match (
+        n
+    ) case dottedpath then {
+        if symtab.typing.renameSeen then {
+            ai9: symtab.typing.aliasInternalNameOf nodeid: n.nodeid.u64
+            if ai9.length > 0 then return (zast.poolFind pool: ast.names text: ai9.stringview)
+        }
+        return (atomNameIdOf :ast n: (ast.nodes.get i: (n.child - 1).u64))
+    } else {
+        return (zast.nameid.create from: 0)
+    }
+}
+
 # the base node id of dotted-path node `n`.
 dottedBaseNodeId: function {ast: Ast.view n: Node.view} out u64 is {
     match (
@@ -6286,16 +6330,18 @@ emitCrossUnitFnCall: function {
     ctx: Ctx.view
     call: zast.CallData.view
 } out String is {
-    base: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    child: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
-    if base.length == 0 then return "".string
-    if child.length == 0 then return "".string
-    if (symtab.reg.isUnitName nameId: (dottedBaseAtomId
+    baseId9: dottedBaseAtomId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    childId9: aliasChildNameId :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
+    if baseId9.isZero then return "".string
+    if childId9.isZero then return "".string
+    if (symtab.reg.isUnitName nameId: baseId9) == false then return "".string
+    go: (ztypecheck.resolvedByIds
         :ast
-        n: (ast.nodes.get i: (call.callable - 1).u64)
-    )) == false then return "".string
-    k: "\{base}.\{child}"
-    go: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k
+        ty: symtab.typing
+        reg: symtab.reg
+        unitId: baseId9
+        name: childId9
+    )
     fid: ztypes.tid
     match (
         go
@@ -6480,16 +6526,18 @@ emitCrossUnitBareCreate: function {ctx: Ctx.view
     child: StringView
 } out String is {
     if child != "create" then return "".string
-    pbase9: dottedBaseAtom :ast n: parent
-    ptype9: dottedChildText :ast n: parent
-    if pbase9.length == 0 then return "".string
-    if ptype9.length == 0 then return "".string
-    if (symtab.reg.isUnitName nameId: (dottedBaseAtomId
+    pbId9: dottedBaseAtomId :ast n: parent
+    ptId9: dottedChildNameIdOf :ast n: parent
+    if pbId9.isZero then return "".string
+    if ptId9.isZero then return "".string
+    if (symtab.reg.isUnitName nameId: pbId9) == false then return "".string
+    go9: (ztypecheck.resolvedByIds
         :ast
-        n: parent
-    )) == false then return "".string
-    k9: "\{pbase9}.\{ptype9}"
-    go9: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k9
+        ty: symtab.typing
+        reg: symtab.reg
+        unitId: pbId9
+        name: ptId9
+    )
     tid9: u64
     match (
         go9
@@ -6521,18 +6569,20 @@ emitCrossUnitExplicitCreate: function {
     ctx: Ctx.view
     call: zast.CallData.view
 } out String is {
-    arm9: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
-    if arm9.stringview != "create" then return "".string
-    pbase: outerBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    ptype: dottedParentChild :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    if pbase.length == 0 then return "".string
-    if ptype.length == 0 then return "".string
-    if (symtab.reg.isUnitName nameId: (outerBaseAtomId
+    armId9: aliasChildNameId :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
+    if armId9 != zast.wkCreate then return "".string
+    obId9: outerBaseAtomId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    pcId9: dottedParentChildId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    if obId9.isZero then return "".string
+    if pcId9.isZero then return "".string
+    if (symtab.reg.isUnitName nameId: obId9) == false then return "".string
+    go: (ztypecheck.resolvedByIds
         :ast
-        n: (ast.nodes.get i: (call.callable - 1).u64)
-    )) == false then return "".string
-    k: "\{pbase}.\{ptype}"
-    go: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k
+        ty: symtab.typing
+        reg: symtab.reg
+        unitId: obId9
+        name: pcId9
+    )
     tid: ztypes.tid
     match (
         go
@@ -6626,20 +6676,22 @@ emitCrossUnitUnionCtor: function {
     ctx: Ctx.view
     call: zast.CallData.view
 } out String is {
-    pbase: outerBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    ptype: dottedParentChild :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    if pbase.length == 0 then return "".string
-    if ptype.length == 0 then return "".string
+    obId9: outerBaseAtomId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    pcId9: dottedParentChildId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    if obId9.isZero then return "".string
+    if pcId9.isZero then return "".string
+    if (symtab.reg.isUnitName nameId: obId9) == false then return "".string
     arm9: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if arm9.length == 0 then return "".string
     if arm9.stringview == "create" then return "".string
     if arm9.stringview == "borrow" then return "".string
-    if (symtab.reg.isUnitName nameId: (outerBaseAtomId
+    go: (ztypecheck.resolvedByIds
         :ast
-        n: (ast.nodes.get i: (call.callable - 1).u64)
-    )) == false then return "".string
-    k: "\{pbase}.\{ptype}"
-    go: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k
+        ty: symtab.typing
+        reg: symtab.reg
+        unitId: obId9
+        name: pcId9
+    )
     utid: ztypes.tid
     match (
         go
@@ -6686,16 +6738,18 @@ emitCrossUnitCtor: function {
     ctx: Ctx.view
     call: zast.CallData.view
 } out String is {
-    base: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    child: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
-    if base.length == 0 then return "".string
-    if child.length == 0 then return "".string
-    if (symtab.reg.isUnitName nameId: (dottedBaseAtomId
+    baseId9: dottedBaseAtomId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    childId9: aliasChildNameId :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
+    if baseId9.isZero then return "".string
+    if childId9.isZero then return "".string
+    if (symtab.reg.isUnitName nameId: baseId9) == false then return "".string
+    go: (ztypecheck.resolvedByIds
         :ast
-        n: (ast.nodes.get i: (call.callable - 1).u64)
-    )) == false then return "".string
-    k: "\{base}.\{child}"
-    go: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k
+        ty: symtab.typing
+        reg: symtab.reg
+        unitId: baseId9
+        name: childId9
+    )
     tid: ztypes.tid
     match (
         go
@@ -6731,8 +6785,13 @@ emitCrossUnitTag: function {
         text: pbase
     )
     if (symtab.reg.isUnitName nameId: unm9) == false then return "".string
-    k: "\{pbase}.\{ptype}"
-    go: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k
+    go: (ztypecheck.resolvedByIds
+        :ast
+        ty: symtab.typing
+        reg: symtab.reg
+        unitId: unm9
+        name: (zast.poolFind pool: ast.names text: ptype)
+    )
     vtid: ztypes.tid
     match (
         go
@@ -7565,17 +7624,14 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             return (emitCtorDefaultsFill :ast :symtab :ctx tid: (ztypes.tid.create from: izd9.u64))
         } case none then null
         dpUb9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
-        if (symtab.reg.isUnitName nameId: (atomNameIdOf
-            :ast
-            n: (ast.nodes.get i: (n.parent - 1).u64)
-        )) then {
-            dpUc9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-            dpUk9: "\{dpUb9}.\{dpUc9}"
-            dpUfo9: (ztypecheck.resolvedByKey
+        dpUbId9: atomNameIdOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
+        if (symtab.reg.isUnitName nameId: dpUbId9) then {
+            dpUfo9: (ztypecheck.resolvedByIds
                 :ast
                 ty: symtab.typing
                 reg: symtab.reg
-                key: dpUk9
+                unitId: dpUbId9
+                name: (atomNameIdOf :ast n: (ast.nodes.get i: (n.child - 1).u64))
             )
             match (
                 dpUfo9
@@ -11352,18 +11408,17 @@ typeIdByNameStages9: function {
         uki9 = uki9 + 1
     }
     if found2 == 0 then {
-        nmTxt9: zast.poolTextCopy pool: ast.names ref: nameId
         uki8: u64
         ukn8: ctx.unitKeysC.length
         for uki8 < ukn8 loop {
             if found2 == 0 then {
                 uk9: ctx.unitKeysC.get i: uki8
-                k2: "\{uk9}.\{nmTxt9}"
-                r2: (ztypecheck.resolvedByKey
+                r2: (ztypecheck.resolvedByIds
                     :ast
                     ty: symtab.typing
                     reg: symtab.reg
-                    key: k2
+                    unitId: (zast.poolFind pool: ast.names text: uk9.stringview)
+                    name: nameId
                 )
                 match (
                     r2
@@ -16258,8 +16313,13 @@ stdFnUndemanded: function {
     fnName: StringView
 } out bool is {
     if (isEmittableFileUnit name: unitName) then return false
-    k9: "\{unitName}.\{fnName}"
-    ro9: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: k9
+    ro9: (ztypecheck.resolvedByIds
+        :ast
+        ty: symtab.typing
+        reg: symtab.reg
+        unitId: (zast.poolFind pool: ast.names text: unitName)
+        name: (zast.poolFind pool: ast.names text: fnName)
+    )
     match (
         ro9
     ) case some then {
@@ -17206,16 +17266,26 @@ emitC: function {
     buf.append "\n"
     strId: ztypes.tid
     svId: ztypes.tid
-    k1: "system.String".string
+    sysId9: zast.nameid
+    strNmId9: zast.nameid
+    svNmId9: zast.nameid
+    match (
+        program
+    ) case program then {
+        sysId9 = zast.poolFind pool: program.ast.names text: "system"
+        strNmId9 = zast.poolFind pool: program.ast.names text: "String"
+        svNmId9 = zast.poolFind pool: program.ast.names text: "StringView"
+    } else null
     sgo: (optionval.none u64)
     match (
         program
     ) case program then {
-        sgo = (ztypecheck.resolvedByKey
+        sgo = (ztypecheck.resolvedByIds
             ast: program.ast
             ty: symtab.typing
             reg: symtab.reg
-            key: k1
+            unitId: sysId9
+            name: strNmId9
         )
     } else null
     match (
@@ -17223,16 +17293,16 @@ emitC: function {
     ) case some then {
         strId = ztypes.tid.create from: (sgo)
     } case none then null
-    k2: "system.StringView".string
     vgo: (optionval.none u64)
     match (
         program
     ) case program then {
-        vgo = (ztypecheck.resolvedByKey
+        vgo = (ztypecheck.resolvedByIds
             ast: program.ast
             ty: symtab.typing
             reg: symtab.reg
-            key: k2
+            unitId: sysId9
+            name: svNmId9
         )
     } else null
     match (
@@ -23160,8 +23230,13 @@ emitNativeFreeFnCall: function {
     if fidHint > 0 then {
         fid = ztypes.tid.create from: (fidHint)
     } else {
-        fk9: "\{un}.\{mn}"
-        fo9: ztypecheck.resolvedByKey :ast ty: symtab.typing reg: symtab.reg key: fk9
+        fo9: (ztypecheck.resolvedByIds
+            :ast
+            ty: symtab.typing
+            reg: symtab.reg
+            unitId: (zast.poolFind pool: ast.names text: un.stringview)
+            name: (zast.poolFind pool: ast.names text: mn.stringview)
+        )
         match (
             fo9
         ) case some then {
