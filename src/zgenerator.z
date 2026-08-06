@@ -32,10 +32,10 @@ Ast: zast.Ast
 NameCtr: class {
     next: u32
 } as {
-    bump: function {:this} out u32 is {
+    bump: function {:this} out zast.nodeid is {
         id: this.next
         this.next = this.next + 1
-        return id
+        return (zast.nodeid.create from: id)
     }
 }
 
@@ -52,7 +52,7 @@ GenLowered: class {
 
 # topNodeId -- a cloned type-path's top node id (the typeref-stamp key the
 # resolution records); 0 for unhandled shapes.
-topNodeId: function {n: Node.view} out u32 is {
+topNodeId: function {n: Node.view} out zast.nodeid is {
     match (
         n
     ) case atomid then {
@@ -66,18 +66,18 @@ topNodeId: function {n: Node.view} out u32 is {
     } case call then {
         return n.nodeid
     } else {
-        return 0
+        return (zast.nodeid.create from: 0)
     }
 }
 
 # the operation node id of parameter node `n`.
-paramOpId: function {ast: Ast.view n: Node.view} out u32 is {
+paramOpId: function {ast: Ast.view n: Node.view} out zast.nodeid is {
     match (
         n
     ) case namedoperation then {
         return (topNodeId n: (ast.nodes.get i: (n.operation - 1).u64))
     } else {
-        return 0
+        return (zast.nodeid.create from: 0)
     }
 }
 
@@ -159,8 +159,8 @@ bodyContainsYield: function {ast: Ast.view n: Node.view} out bool is {
 }
 
 # true when the optional body `oId` contains a `yield`.
-bodyContainsYieldOptAt: function {ast: Ast.view oId: u32} out bool is {
-    if oId == 0 then return false
+bodyContainsYieldOptAt: function {ast: Ast.view oId: zast.nodeid} out bool is {
+    if oId.isZero then return false
     return (bodyContainsYield :ast n: (ast.nodes.get i: (oId - 1).u64))
 }
 
@@ -200,8 +200,8 @@ returnHeadName: function {ast: Ast.view n: Node.view} out String is {
 }
 
 # the return-type head name of optional operation `oId` (or "").
-returnHeadOpt: function {ast: Ast.view oId: u32} out String is {
-    if oId == 0 then return "".string
+returnHeadOpt: function {ast: Ast.view oId: zast.nodeid} out String is {
+    if oId.isZero then return "".string
     o: ast.nodes.get i: (oId - 1).u64
     return (returnHeadOf :ast n: o)
 
@@ -394,8 +394,8 @@ givesParts: function {ast: Ast.view n: Node.view} out GivesParts is {
 }
 
 # fill `dst` with the gives/accepts shape of optional node `oId`.
-givesPartsOpt: function {ast: Ast.view oId: u32 dst: GivesParts} is {
-    if oId == 0 then return
+givesPartsOpt: function {ast: Ast.view oId: zast.nodeid dst: GivesParts} is {
+    if oId.isZero then return
     o: ast.nodes.get i: (oId - 1).u64
     givesPartsOf :ast n: o :dst
 
@@ -461,19 +461,19 @@ acceptsFromOp: function {ast: Ast.view n: Node.view dst: GivesParts} is {
 }
 
 # resumeBaseId -- pathBaseAtomId over an optional path.
-resumeBaseId: function {ast: Ast.view o: Option Node} out u32 is {
+resumeBaseId: function {ast: Ast.view o: Option Node} out zast.nodeid is {
     match (
         o
     ) case some then {
         return (pathBaseAtomId :ast n: o)
     } case none then {
-        return 0
+        return (zast.nodeid.create from: 0)
     }
 }
 
 # pathBaseAtomId -- the head atom's node id of a (possibly dotted /
 # wrapped) type path; 0 for other shapes.
-pathBaseAtomId: function {ast: Ast.view n: Node.view} out u32 is {
+pathBaseAtomId: function {ast: Ast.view n: Node.view} out zast.nodeid is {
     match (
         n
     ) case atomid then {
@@ -485,7 +485,7 @@ pathBaseAtomId: function {ast: Ast.view n: Node.view} out u32 is {
     } case expression then {
         return (pathBaseAtomId :ast n: (ast.nodes.get i: (n.expression - 1).u64))
     } else {
-        return 0
+        return (zast.nodeid.create from: 0)
     }
 }
 
@@ -681,7 +681,7 @@ buildCallMethod: function {
     line: u32
     col: u32
     body: Node.take
-    wrapExprId: u32
+    wrapExprId: zast.nodeid
     valueParam: (Option Node).take
 } out Node is {
     thisP: mkAtom :ast :line :col name: "this"
@@ -1131,9 +1131,9 @@ promoteIterables: function {ast: Ast.view ctr: NameCtr n: Node.view} out Node is
 promoteIterablesOptAt: function {
     ast: Ast.view
     ctr: NameCtr
-    oId: u32
+    oId: zast.nodeid
 } out Option Node is {
-    if oId == 0 then return (Option.none Node)
+    if oId.isZero then return (Option.none Node)
     b9: ast.nodes.get i: (oId - 1).u64
     r9: promoteIterables :ast :ctr n: b9
     return (Option.some r9)
@@ -1143,9 +1143,9 @@ promoteIterablesOptAt: function {
 promoteIterablesIdAt: function {
     ast: Ast.view
     ctr: NameCtr
-    oId: u32
+    oId: zast.nodeid
 } out u32 is {
-    if oId == 0 then return 0
+    if oId.isZero then return 0
     b9: ast.nodes.get i: (oId - 1).u64
     r9: promoteIterables :ast :ctr n: b9
     return (zast.tableAdd :ast n: r9)
@@ -1311,7 +1311,7 @@ promoteFor: function {
             lineno: lnS
             colno: coS
             conditions: nconds
-            body: nbodyId9
+            body: (zast.nodeid.create from: nbodyId9)
             postconditions: nposts)
         )
     } else {
@@ -1615,7 +1615,7 @@ rewriteToThis: function {
             lineno: lnC
             colno: coC
             clauses: ncls
-            elseclause: nels)
+            elseclause: (zast.nodeid.create from: nels))
         )
     } case ifclause then {
         lnD: n.lineno
@@ -1655,7 +1655,7 @@ rewriteToThis: function {
             lineno: lnE
             colno: coE
             conditions: nfconds
-            body: nbody
+            body: (zast.nodeid.create from: nbody)
             postconditions: nposts)
         )
     } case doexpr then {
@@ -1699,7 +1699,7 @@ rewriteToThis: function {
             colno: coH
             subject: (zast.tableAdd :ast n: nsubH)
             clauses: nclsH
-            elseclause: nelsH)
+            elseclause: (zast.nodeid.create from: nelsH))
         )
     } case caseclause then {
         lnI: n.lineno
@@ -1761,10 +1761,10 @@ rewriteToThis: function {
 # returning its id (0 = absent). The clone's own id is the one it carries.
 rewriteOptToThisAt: function {
     ast: Ast.view
-    oId: u32
+    oId: zast.nodeid
     promoted: (MapRV String value: bool)
 } out u32 is {
-    if oId == 0 then return 0
+    if oId.isZero then return 0
     o9: ast.nodes.get i: (oId - 1).u64
     r9: rewriteToThis :ast n: o9 :promoted
     return (zast.tableAdd :ast n: r9)

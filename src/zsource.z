@@ -145,7 +145,7 @@ debraceEligible: function {ast: Ast.view n: Node.view} out bool is {
 clauseBodiesOnLine: function {
     ast: Ast.view
     clauses: (ListVal u32)
-    elseclauseId: u32
+    elseclauseId: zast.nodeid
     ln: u32
 } out bool is {
     ok: true
@@ -171,7 +171,7 @@ clauseBodiesOnLine: function {
 caseBodiesOnLine: function {
     ast: Ast.view
     clauses: (ListVal u32)
-    elseclauseId: u32
+    elseclauseId: zast.nodeid
     ln: u32
 } out bool is {
     ok: true
@@ -463,8 +463,8 @@ Analysis: class {
     }
     # walkOpt -- recurse into an optional child node when present.
     # walkOptAt -- the id-taking entry (0 = absent).
-    walkOptAt: function {:this ast: Ast.view oId: u32} is {
-        if oId == 0 then return
+    walkOptAt: function {:this ast: Ast.view oId: zast.nodeid} is {
+        if oId.isZero then return
         o9: ast.nodes.get i: (oId - 1).u64
         this.walk :ast n: o9
     }
@@ -525,8 +525,8 @@ Analysis: class {
 
     # checkEmpty -- L001 empty `else {}` and, for a backwards single-condition `if`,
     # the empty `then {}` (via checkEmptyThen). Receives an ifexpr's else + clauses.
-    checkEmpty: function {:this ast: Ast.view elseclauseId: u32 clauses: (ListVal u32).view} is {
-        if elseclauseId == 0 then return
+    checkEmpty: function {:this ast: Ast.view elseclauseId: zast.nodeid clauses: (ListVal u32).view} is {
+        if elseclauseId.isZero then return
         elseNode9: ast.nodes.get i: (elseclauseId - 1).u64
         if (isEmptyBlock n: elseNode9) then {
             p: stmtPos n: elseNode9
@@ -1617,7 +1617,7 @@ Analysis: class {
     # would swallow `then`), detected as a top-level colon inside the paren; those and sub-expression
     # precedence parens are left alone. Removes the `(` and `)`.
     # checkNullArms -- L010 over a match's arm and else bodies.
-    checkNullArms: function {:this ast: Ast.view clauses: (ListVal u32).view elseclauseId: u32} is {
+    checkNullArms: function {:this ast: Ast.view clauses: (ListVal u32).view elseclauseId: zast.nodeid} is {
         ccit: clauses.iterate
         for ccId9: ccit loop {
             cc: ast.nodes.get i: (ccId9 - 1).u64
@@ -1902,7 +1902,7 @@ Analysis: class {
     # de-braces only when the whole construct already sits on one line. Unit-level
     # `if`s (funcDepth == 0) keep their braces -- braceless branches are unsafe where
     # EOL filtering is on.
-    checkBracesIf: function {:this ast: Ast.view clauses: (ListVal u32).view elseclauseId: u32 ln: u32} is {
+    checkBracesIf: function {:this ast: Ast.view clauses: (ListVal u32).view elseclauseId: zast.nodeid ln: u32} is {
         if this.funcDepth == 0 then return
         hasElse: elseclauseId > 0
         if (hasElse == false) when (clauses.length == 1) then {
@@ -1932,7 +1932,7 @@ Analysis: class {
 
     # checkBracesMatch -- L008 entry for a `match`: always multi-clause, so its arm
     # and else braces are stripped only when the whole match already sits on one line.
-    checkBracesMatch: function {:this ast: Ast.view clauses: (ListVal u32).view elseclauseId: u32 ln: u32} is {
+    checkBracesMatch: function {:this ast: Ast.view clauses: (ListVal u32).view elseclauseId: zast.nodeid ln: u32} is {
         if this.funcDepth == 0 then return
         if (caseBodiesOnLine :ast :clauses :elseclauseId :ln) == false then return
         cit: clauses.iterate
@@ -1951,7 +1951,7 @@ Analysis: class {
 
     # checkChainBodyBreak -- fmt: in a multi-line `match` or `if`, break any arm/clause
     # body whose first statement clings to the opening `{` onto its own line.
-    checkChainBodyBreak: function {:this ast: Ast.view clauses: (ListVal u32).view elseclauseId: u32} is {
+    checkChainBodyBreak: function {:this ast: Ast.view clauses: (ListVal u32).view elseclauseId: zast.nodeid} is {
         if this.funcDepth == 0 then return
         cit: clauses.iterate
         for clId9: cit loop {
@@ -2577,7 +2577,7 @@ Analysis: class {
 
     # sufCall -- redundant suffixes in a call: a `return` uses the enclosing function's return
     # type; otherwise each named argument's parameter type.
-    sufCall: function {:this ast: Ast.view callNid: u32 callable: Node.view arguments: (ListVal u32).view st: zenv.ZSymbolTable funcretId: u32} is {
+    sufCall: function {:this ast: Ast.view callNid: u32 callable: Node.view arguments: (ListVal u32).view st: zenv.ZSymbolTable funcretId: zast.nodeid} is {
         ck: st.typing.callKind.get key: callNid.u64
         isRet: false
         match (
@@ -2618,7 +2618,7 @@ Analysis: class {
 
     # walkSuf -- preorder over the subtree running the typecheck-based suffix check, threading
     # the enclosing function's return type for `return`s.
-    walkSuf: function {:this ast: Ast.view n: Node.view uname: StringView st: zenv.ZSymbolTable.view funcretId: u32} is {
+    walkSuf: function {:this ast: Ast.view n: Node.view uname: StringView st: zenv.ZSymbolTable.view funcretId: zast.nodeid} is {
         match (
             n
         ) case error then null case placeholder then null case atomid then null case labelvalue then null case stringchunk then null case binop then {
@@ -2797,16 +2797,16 @@ Analysis: class {
     }
 
     # walkSufOptAt -- the id-taking entry (0 = absent).
-    walkSufOptAt: function {:this ast: Ast.view oId: u32 uname: StringView st: zenv.ZSymbolTable.view funcretId: u32} is {
-        if oId == 0 then return
+    walkSufOptAt: function {:this ast: Ast.view oId: zast.nodeid uname: StringView st: zenv.ZSymbolTable.view funcretId: zast.nodeid} is {
+        if oId.isZero then return
         o9: ast.nodes.get i: (oId - 1).u64
         this.walkSuf :ast n: o9 :uname :st :funcretId
     }
 
     # a functiondef returntype doubles as its own funcret: this frame lets
     # the two arguments share one root without aliasing one source path
-    walkSufRet: function {:this ast: Ast.view retId: u32 uname: StringView st: zenv.ZSymbolTable.view} is {
-        if retId == 0 then return
+    walkSufRet: function {:this ast: Ast.view retId: zast.nodeid uname: StringView st: zenv.ZSymbolTable.view} is {
+        if retId.isZero then return
         r9: ast.nodes.get i: (retId - 1).u64
         this.walkSuf :ast n: r9 :uname :st funcretId: retId
     }
@@ -2846,7 +2846,7 @@ Analysis: class {
                     n: (ast.nodes.get i: (namedOp.operation - 1).u64)
                     :uname
                     :st
-                    funcretId: 0
+                    funcretId: (zast.nodeid.create from: 0)
                 )
             }
         } else null
@@ -3019,14 +3019,14 @@ Analysis: class {
         ) case program then {
             used9: (SetVal u64)
             with uit9: st.typing.atomVariableId.iterateItems do for av9: uit9 loop used9.add item: av9.value
-            mainOp9: u32
+            mainOp9: zast.nodeid
             uN9: prog.ast.units.length
             uI9: u64
             for uI9 < uN9 loop {
                 uid9: prog.ast.units.get i: uI9
                 uI9 = uI9 + 1
                 unm9: String
-                uop9: u32
+                uop9: zast.nodeid
                 {
                     un9: prog.ast.nodes.get i: (uid9 - 1).u64
                     if un9.namedoperation then {
@@ -3345,7 +3345,7 @@ Analysis: class {
         match (
             prog
         ) case program then {
-            mainOp9: u32
+            mainOp9: zast.nodeid
             uN9: prog.ast.units.length
             uI9: u64
             for uI9 < uN9 loop {
@@ -3357,7 +3357,7 @@ Analysis: class {
                       if unm9.stringview == uname then mainOp9 = un9.operation
                   } else null }
             }
-            if mainOp9 == 0 then return
+            if mainOp9.isZero then return
             # the unit node itself is fsno-less; anchor on the first member's
             # operation node, like the L013 walk does
             mainFsno9: zvfs.fsno
@@ -3532,14 +3532,14 @@ Analysis: class {
                     )
                     if mdi9 > 0 then usedE9.add item: mdi9
                 }
-                mainOp9: u32
+                mainOp9: zast.nodeid
                 uN9: prog.ast.units.length
                 uI9: u64
                 for uI9 < uN9 loop {
                     uid9: prog.ast.units.get i: uI9
                     uI9 = uI9 + 1
                     unm9: String
-                    uop9: u32
+                    uop9: zast.nodeid
                     {
                         un9: prog.ast.nodes.get i: (uid9 - 1).u64
                         if un9.namedoperation then {
@@ -3976,8 +3976,12 @@ typeNameOfNode: function {n: Node.view st: zenv.ZSymbolTable} out String is {
 
 # typeNameOfOpt -- the resolved type name of an optional node ("" when absent).
 # typeNameOfOptAt -- the id-taking entry (0 = absent).
-typeNameOfOptAt: function {ast: Ast.view oId: u32 st: zenv.ZSymbolTable.view} out String is {
-    if oId == 0 then return "".string
+typeNameOfOptAt: function {
+    ast: Ast.view
+    oId: zast.nodeid
+    st: zenv.ZSymbolTable.view
+} out String is {
+    if oId.isZero then return "".string
     o9: ast.nodes.get i: (oId - 1).u64
     return (typeNameOfNode n: o9 :st)
 }
