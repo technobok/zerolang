@@ -1155,6 +1155,20 @@ indexDeclDef: function {
             kind: ztyping.declkind.reexportDecl
             node: nopNodeId
         )
+    } case atomid then {
+        # a bare name aliases too (`Same: Holder`), exactly as the dotted form
+        # does -- the target just lives in THIS unit, so the alias-follow reads
+        # the enclosing unit for the missing segment. A numeric literal is the
+        # unit-constant shape and keeps its constDecl.
+        anm9: zast.nameTextAt :ast ref: op9.name
+        akind9: ztyping.declkind.reexportDecl
+        if (isNumericLiteralName name: anm9.stringview) then akind9 = ztyping.declkind.constDecl
+        did0 = (ty.declNew
+            name: nameRef
+            parent: parentDeclId
+            kind: akind9
+            node: nopNodeId
+        )
     } else {
         did0 = (ty.declNew
             name: nameRef
@@ -1624,6 +1638,21 @@ dottedDefTargetIds: function {ast: Ast.view n: Node.view} out u64 is {
         return (ztypes.memberKey unitId: pid9 nameId: cid9)
     } else {
         return 0
+    }
+}
+
+# bareDefTargetNameId -- the name id a BARE alias value names (`Same: Holder`),
+# through any expression wrapper; the zero id when the value is not a bare
+# name. The dotted twin is dottedDefTargetIds.
+bareDefTargetNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    match (
+        n
+    ) case expression then {
+        return (bareDefTargetNameId :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case atomid then {
+        return n.name
+    } else {
+        return (zast.nameid.create from: 0)
     }
 }
 
@@ -7325,11 +7354,46 @@ reexportTargetIdsOf: function {ty: ztyping.ZTyping ast: Ast.view declId: ztypes.
         if do9.kind.reexportDecl then {
             nop9: ast.nodes.get i: (do9.node - 1).u64
             if nop9.namedoperation then {
-                return (dottedDefTargetIds :ast n: (ast.nodes.get i: (nop9.operation - 1).u64))
+                vn9: ast.nodes.get i: (nop9.operation - 1).u64
+                dk9: dottedDefTargetIds :ast n: vn9
+                if dk9 > 0 then return dk9
+                # a BARE alias names a target in its OWN unit, so the missing
+                # segment is the enclosing unit's name -- the Decl's parent.
+                bid9: bareDefTargetNameId :ast n: vn9
+                if (bid9.isZero) == false then {
+                    puid9: zast.nameid
+                    if (ty.declValid id: do9.parent) then {
+                        pdo9: ty.decls.get i: (do9.parent - 1)
+                        puid9 = zast.nameid.create from: pdo9.name
+                    }
+                    if (puid9.isZero) == false then {
+                        return (ztypes.memberKey unitId: puid9 nameId: bid9)
+                    }
+                }
             }
         }
     }
     return 0
+}
+
+# aliasIsBareForm -- the alias Decl's value is a BARE name (`Same: Holder`)
+# rather than a dotted one. The packed target pair cannot say: a bare alias
+# borrows its own unit for the missing segment, which a self-unit dotted alias
+# (`Alpha: thisunit.Beta`) spells explicitly.
+aliasIsBareForm: function {ty: ztyping.ZTyping ast: Ast.view declId: ztypes.declid} out bool is {
+    if declId.isZero then return false
+    if (ty.declValid id: declId) then {
+        bdo9: ty.decls.get i: (declId - 1)
+        if bdo9.kind.reexportDecl then {
+            bnp9: ast.nodes.get i: (bdo9.node - 1).u64
+            if bnp9.namedoperation then {
+                bvn9: ast.nodes.get i: (bnp9.operation - 1).u64
+                bnid9: bareDefTargetNameId :ast n: bvn9
+                return (bnid9.isZero) == false
+            }
+        }
+    }
+    return false
 }
 
 # resolveAliasKey -- single-minting for a unit-level re-export alias
@@ -7390,6 +7454,25 @@ resolveAliasKey: function {
                 } case none then null
             }
         } case none then null
+    }
+    if atid9.isZero then {
+        # a BARE alias (`Text: String`, `tally: u64`): its target resolves
+        # current-unit-relative, so it may live in a stdlib unit rather than in
+        # the alias's own -- the pair carries this unit only because a bare name
+        # has no unit segment. resolveAtomType is that precedence walk.
+        if (aliasIsBareForm :ty :ast declId: adecl9) then {
+            ty.declSetResolving declId: adecl9 mark: true
+            bat9: (resolveAtomType
+                :ty
+                :reg
+                :ast
+                unitName: defUnit
+                nm: tn9.stringview
+                thisName: ""
+            )
+            ty.declSetResolving declId: adecl9 mark: false
+            if bat9 > 0 then atid9 = ztypes.tid.create from: (bat9.u64)
+        }
     }
     if atid9.isZero then return 0
     cud9: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
@@ -16228,6 +16311,22 @@ checkAtomid: function {
                         if ndNm9.stringview == "Set" then twn9 = "SetRef"
                         if ndNm9.stringview == "Map" then twn9 = "MapRR"
                         if twn9.length > 0 when twn9 == tnq9.stringview then isTypeAtom9 = true
+                        # a BARE unit-level alias names a TYPE -- a value alias
+                        # is dotted (`true: bool.true`) -- so an atom naming one
+                        # constructs exactly as the type's own name does.
+                        # Without this the atom stays unstamped and the emitter
+                        # writes the alias name into the C.
+                        if (isTypeAtom9) == false then {
+                            aad9: (declOfUnitDef
+                                ty: st.typing
+                                :ast
+                                defUnit: unitName
+                                name: ndNm9.stringview
+                            )
+                            if (aliasIsBareForm ty: st.typing :ast declId: aad9) then {
+                                isTypeAtom9 = true
+                            }
+                        }
                     }
                     if isTypeAtom9 then {
                         if (isImplicitZeroCreateTid
@@ -25604,43 +25703,9 @@ resolveConstantDef: function {
                     )
                 } case none then null
             } case none then null
-        } else {
-            # a bare TYPE name is not a constant value: unit constants take
-            # literal values (a zero value is a function-body binding)
-            bOpt9: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: dfN9.stringview
-            match (
-                bOpt9
-            ) case some then {
-                btt9: reg.typetypeOf typeId: (ztypes.tid.create from: bOpt9.u64)
-                isFam9: false
-                if btt9 == ztypes.ztypetype.recordType then isFam9 = true
-                if btt9 == ztypes.ztypetype.classType then isFam9 = true
-                if btt9 == ztypes.ztypetype.unionType then isFam9 = true
-                if btt9 == ztypes.ztypetype.variantType then isFam9 = true
-                if btt9 == ztypes.ztypetype.protocolType then isFam9 = true
-                if btt9 == ztypes.ztypetype.facetType then isFam9 = true
-                if isFam9 then {
-                    btn9: regTypeNameOf :reg tid: (ztypes.tid.create from: bOpt9.u64)
-                    if btn9.stringview == dfN9.stringview then {
-                        um9: "a unit-level constant takes a literal value, not the type '\{dfN9}'"
-                        un9: "unit constants inline literal numeric values".string
-                        uh9: "a zero value is a function-body binding ('\{defName}: \{dfN9}' inside a function)"
-                        ty.errors.append (zast.ErrorData
-                            nodeid: defn.nodeid
-                            lineno: defn.lineno
-                            colno: defn.colno
-                            width: dfN9.length.u32.orPanic
-                            err: zast.err.typeError
-                            msg: um9
-                            fsno: zvfs.fsno
-                            note: un9
-                            hint: uh9
-                        )
-                        ty.isError = true
-                    }
-                }
-            } case none then null
         }
+        # a NON-numeric bare name is the unit-level alias form (`Same: Holder`),
+        # which resolveDef registers -- it is not this pass's business.
     } else {
         # A construction is not a literal. `origin: Point.create x: 0` used to
         # register nothing and report nothing. The PARENTHESISED call is the
