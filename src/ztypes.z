@@ -667,8 +667,9 @@ ZTypeRegistry: class {
     typeById: (List ZType)
     crossUnitDemand: (Set String)
     unitNameTid: (MapVV u64 value: u64)
-    unitSeededDemand: (MapRV String value: bool)
+    unitSeededDemand: (MapVV u64 value: bool)
     regMainUnit: String
+    regMainUnitId: u64
     # generic-template metadata, keyed by the TEMPLATE's DeclId; the
     # per-(template, param-ordinal) GENERIC_PARAM tid rides a composite
     # key (tdecl * 256 + ordinal)
@@ -1118,28 +1119,31 @@ ZTypeRegistry: class {
     # signature referenced; the typecheck demand pass resolves the ones that
     # name a definition in a non-main unit (mirrors the oracle's on-demand
     # `_resolve_typeref`). A side table, not part of the dumped type system.
-    setMainUnit: function {:this name: StringView} is {
+    setMainUnit: function {:this name: StringView nameId: zast.nameid} is {
         mn: name.string
         this.regMainUnit = mn
+        this.regMainUnitId = nameId.u64
     }
 
-    recordSeededDemand: function {:this un: StringView name: StringView} is {
-        sk: "\{un}.\{name}"
+    # keyed by memberKey (unit id high, name id low); unit id 0 is the
+    # unit-agnostic wildcard.
+    recordSeededDemand: function {:this un: zast.nameid name: zast.nameid} is {
         sv: true
-        this.unitSeededDemand.set key: sk value: sv
+        this.unitSeededDemand.set key: (memberKey unitId: un nameId: name) value: sv
         # a non-main unit's internal demand also records unit-agnostically:
         # any resolver in the demand chain may satisfy it despite a main-unit
         # shadow (the reference resolves within the demanding unit's view).
-        if un != this.regMainUnit.stringview then {
-            sk2: "*.\{name}"
+        if (un.u64 == this.regMainUnitId) == false then {
             sv2: true
-            this.unitSeededDemand.set key: sk2 value: sv2
+            (this.unitSeededDemand.set
+                key: (memberKey unitId: (zast.nameid.create from: 0) nameId: name)
+                value: sv2
+            )
         }
     }
 
-    isSeededDemand: function {:this un: StringView name: StringView} out bool is {
-        sk2: "\{un}.\{name}"
-        g: this.unitSeededDemand.get key: sk2
+    isSeededDemand: function {:this un: zast.nameid name: zast.nameid} out bool is {
+        g: this.unitSeededDemand.get key: (memberKey unitId: un nameId: name)
         match (
             g
         ) case some then {
@@ -1331,8 +1335,9 @@ newRegistry: function {} out ZTypeRegistry is {
         typeById: (List ZType capacity: 512)
         crossUnitDemand: (Set String)
         unitNameTid: (MapVV u64 value: u64)
-        unitSeededDemand: (MapRV String value: bool)
+        unitSeededDemand: (MapVV u64 value: bool)
         regMainUnit: "".string
+        regMainUnitId: 0
         genericParams: (MapVR declid value: ParamList)
         genericParamTid: (MapVV u64 value: u64)
         specWasFresh: false

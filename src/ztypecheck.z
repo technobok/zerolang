@@ -3156,7 +3156,7 @@ demandTyperefNames: function {
         teN9: ast.names.texts.get i: (typeExpr.name - 1).u64
         if (isNumericLiteralName name: teN9.stringview) == false then {
             reg.recordDemand name: teN9.stringview
-            reg.recordSeededDemand un: unitName name: teN9.stringview
+            reg.recordSeededDemand un: (nameIdOf :ast name: unitName) name: typeExpr.name
         }
     } case expression then {
         (demandTyperefNames
@@ -3169,7 +3169,10 @@ demandTyperefNames: function {
         hn: atomName :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64)
         if hn.length > 0 then {
             reg.recordDemand name: hn.stringview
-            reg.recordSeededDemand un: unitName name: hn.stringview
+            (reg.recordSeededDemand
+                un: (nameIdOf :ast name: unitName)
+                name: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
+            )
         }
         aiter: typeExpr.arguments.iterate
         for argId9: aiter loop {
@@ -3235,7 +3238,7 @@ resolveTyperefShell: function {
     ) case atomid then {
         teR9: ast.names.texts.get i: (typeExpr.name - 1).u64
         reg.recordDemand name: teR9.stringview
-        reg.recordSeededDemand un: unitName name: teR9.stringview
+        reg.recordSeededDemand un: (nameIdOf :ast name: unitName) name: typeExpr.name
         return (resolveAtomType
             :ty
             :reg
@@ -3278,7 +3281,10 @@ resolveTyperefShell: function {
         if imid8 > 0 then return imid8
         suffix: atomName :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64)
         reg.recordDemand name: suffix.stringview
-        reg.recordSeededDemand un: unitName name: suffix.stringview
+        (reg.recordSeededDemand
+            un: (nameIdOf :ast name: unitName)
+            name: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
+        )
         aiter: typeExpr.arguments.iterate
         for argId9: aiter loop {
             arg: ast.nodes.get i: (argId9 - 1).u64
@@ -3310,7 +3316,10 @@ resolveTyperefShell: function {
         )) then {
             cNm: atomName :ast n: (ast.nodes.get i: (typeExpr.child - 1).u64)
             reg.recordDemand name: cNm.stringview
-            reg.recordSeededDemand un: unitName name: cNm.stringview
+            (reg.recordSeededDemand
+                un: (nameIdOf :ast name: unitName)
+                name: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.child - 1).u64))
+            )
             did8: descendNamed :ty :reg :ast defUnit: pNm.stringview name: cNm.stringview
             if did8 > 0 then return did8
             return (resolveAtomType :ty :reg :ast :unitName nm: cNm.stringview :thisName)
@@ -5370,8 +5379,11 @@ demandUnitRenameTargets: function {
                                             if tgtNm9.length > 0 then {
                                                 reg.recordDemand name: tgtNm9.stringview
                                                 (reg.recordSeededDemand
-                                                    un: nmD9.stringview
-                                                    name: tgtNm9.stringview
+                                                    un: (nameIdOf
+                                                        ast: program.ast
+                                                        name: nmD9.stringview
+                                                    )
+                                                    name: dubop9.name
                                                 )
                                             }
                                         } else null
@@ -7690,7 +7702,7 @@ resolveDef: function {
             acNm9: atomName :ast n: (ast.nodes.get i: (defn.child - 1).u64)
             acId9: atomNameId :ast n: (ast.nodes.get i: (defn.child - 1).u64)
             reg.recordDemand name: acNm9.stringview
-            reg.recordSeededDemand un: unitName name: acNm9.stringview
+            reg.recordSeededDemand un: (nameIdOf :ast name: unitName) name: acId9
             # The alias target is read off the re-export Decl's node on demand
             # (reexportTargetIdsOf); resolution reuses the target's canonical id.
             if (ty.declIsResolving
@@ -8246,12 +8258,15 @@ resolveDemandedUnitBody: function {
                             shadowed = true
                         } case none then null
                     }
-                    if shadowed when (reg.isSeededDemand un: unitName name: dn.stringview) then {
-                        shadowed = false
-                    }
-                    if shadowed when (reg.isSeededDemand un: "*" name: dn.stringview) then {
-                        shadowed = false
-                    }
+                    dnId9: nameIdOf :ast name: dn.stringview
+                    if shadowed when (reg.isSeededDemand
+                        un: (nameIdOf :ast name: unitName)
+                        name: dnId9
+                    ) then shadowed = false
+                    if shadowed when (reg.isSeededDemand
+                        un: (zast.nameid.create from: 0)
+                        name: dnId9
+                    ) then shadowed = false
                     if (shadowed) == false then {
                         anyDemanded = true
                         if (defWasResolved
@@ -8425,19 +8440,20 @@ seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
 # name-driven, so the closure is seeded explicitly (like seedSystemDemands);
 # IoError/seekorigin precede the protocols in io.z body order, so demands recorded
 # while resolving the protocols would arrive after the pass already walked them.
-seedIoDemands: function {reg: ztypes.ZTypeRegistry} is {
+seedIoDemands: function {reg: ztypes.ZTypeRegistry ast: Ast.view} is {
+    ioU9: nameIdOf :ast name: "io"
     reg.recordDemand name: "Reader"
-    reg.recordSeededDemand un: "io" name: "Reader"
+    reg.recordSeededDemand un: ioU9 name: (nameIdOf :ast name: "Reader")
     reg.recordDemand name: "Writer"
-    reg.recordSeededDemand un: "io" name: "Writer"
+    reg.recordSeededDemand un: ioU9 name: (nameIdOf :ast name: "Writer")
     reg.recordDemand name: "Seeker"
-    reg.recordSeededDemand un: "io" name: "Seeker"
+    reg.recordSeededDemand un: ioU9 name: (nameIdOf :ast name: "Seeker")
     reg.recordDemand name: "Closer"
-    reg.recordSeededDemand un: "io" name: "Closer"
+    reg.recordSeededDemand un: ioU9 name: (nameIdOf :ast name: "Closer")
     reg.recordDemand name: "IoError"
-    reg.recordSeededDemand un: "io" name: "IoError"
+    reg.recordSeededDemand un: ioU9 name: (nameIdOf :ast name: "IoError")
     reg.recordDemand name: "seekorigin"
-    reg.recordSeededDemand un: "io" name: "seekorigin"
+    reg.recordSeededDemand un: ioU9 name: (nameIdOf :ast name: "seekorigin")
 }
 
 # stampCtorDefaults -- a construction fills unprovided defaulted fields: the
@@ -8975,7 +8991,7 @@ onFirstEntry: function {
     if (entered.has item: unitName.string) then return
     entered.add item: unitName.string
     if unitName == "io" then {
-        seedIoDemands :reg
+        seedIoDemands :reg :ast
         resolveConformanceDefs :ty :reg :ast unitName: "io" :unitdefId
         return
     }
@@ -9411,7 +9427,7 @@ blockHasYieldingLoop: function {ast: Ast.view blk: Node.view} out bool is {
 # nameIdOf -- nameIdOf widened for the u64-keyed unit-name table. A method
 # on a CALL RESULT emits `&<call>`, which is not an lvalue, so the widening
 # cannot ride the call site.
-nameIdOf: function {ast: Ast name: StringView} out zast.nameid is {
+nameIdOf: function {ast: Ast.view name: StringView} out zast.nameid is {
     return (zast.poolFind pool: ast.names text: name)
 }
 
@@ -27184,7 +27200,8 @@ typecheck: function {
     match (
         program
     ) case program then {
-        reg.setMainUnit name: program.mainUnitName.stringview
+        muNid9: nameIdOf ast: program.ast name: program.mainUnitName.stringview
+        reg.setMainUnit name: program.mainUnitName.stringview nameId: muNid9
     } else null
     st: zenv.newSymbolTable :reg typing: ty
     # Stage D: mint every unit's root + fill unitNameTid BEFORE any demand
