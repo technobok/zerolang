@@ -9002,6 +9002,61 @@ onFirstEntry: function {
     scanDemandedDepClassBodies :reg :ast :unitdefId
 }
 
+# seedConstantSuffixDemands -- a unit constant whose literal carries a type
+# suffix (`wkFirst: 1.nid`) demands that type. Constants resolve AFTER the
+# demand walk, so without this seed a typedef used nowhere else stays
+# undemanded, the constant registers no type, and every read of it reports an
+# unknown reference instead.
+seedConstantSuffixDemands: function {
+    reg: ztypes.ZTypeRegistry
+    program: Node
+} is {
+    match (
+        program
+    ) case program then {
+        uiterS9: program.ast.units.iterate
+        for uIdS9: uiterS9 loop {
+            uS9: program.ast.nodes.get i: (uIdS9 - 1).u64
+            match (
+                uS9
+            ) case namedoperation then {
+                bodyS9: zast.unitBodyIdsAt ast: program.ast unitId: uS9.operation
+                with bitS9: bodyS9.iterate do for mIdS9: bitS9 loop {
+                    mS9: program.ast.nodes.get i: (mIdS9 - 1).u64
+                    match (
+                        mS9
+                    ) case namedoperation then {
+                        vS9: program.ast.nodes.get i: (mS9.operation - 1).u64
+                        match (
+                            vS9
+                        ) case dottedpath then {
+                            litS9: false
+                            {
+                                pS9: program.ast.nodes.get i: (vS9.parent - 1).u64
+                                match (
+                                    pS9
+                                ) case atomid then {
+                                    lnS9: zast.nameTextAt ast: program.ast ref: pS9.name
+                                    if (isNumericLiteralName name: lnS9.stringview) then litS9 = true
+                                } else null
+                            }
+                            if litS9 then {
+                                cS9: program.ast.nodes.get i: (vS9.child - 1).u64
+                                match (
+                                    cS9
+                                ) case atomid then {
+                                    tnS9: zast.nameTextAt ast: program.ast ref: cS9.name
+                                    if tnS9.length > 0 then reg.recordDemand name: tnS9.stringview
+                                } else null
+                            }
+                        } else null
+                    } else null
+                }
+            } else null
+        }
+    } else null
+}
+
 # resolveDemandsByDescent -- the descent-era demand worklist. Seeds the body-walk
 # demands, then body-drains the main unit and every dependency unit
 # except core to a joint fixpoint; each resolved def's own references descend
@@ -27285,6 +27340,7 @@ typecheck: function {
     resolveMainUnitInstantiations ty: st.typing reg: st.reg :program
     scanMainBodyCalls reg: st.reg :program
     demandUnitRenameTargets ty: st.typing reg: st.reg :program
+    seedConstantSuffixDemands reg: st.reg :program
     resolveDemandsByDescent ty: st.typing reg: st.reg :program
     match (
         program
