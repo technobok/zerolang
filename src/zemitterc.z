@@ -4337,6 +4337,43 @@ colStrKeyArg9: function {ctx: Ctx expr: StringView} out String is {
     return "&\{expr}"
 }
 
+# ownedRecvHoist9 -- a member read whose RECEIVER is a temporary that owns
+# heap: `(mk n: 1).length` emits the call inline, reads `.size` off the result
+# and drops the only reference to it. Hoist the receiver into a statement temp
+# (declared by flushArgHoists, freed with the scope) and read the member off
+# that instead. "" when the receiver is already an lvalue, owns nothing, or is
+# a BORROW-returning call -- a shared view must never be freed here.
+ownedRecvHoist9: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    expr: StringView
+    n: Node.view
+} out String is {
+    if (isNonLvalueArg s: expr) == false then return "".string
+    rtid9: stampIdOf :symtab nid: (nodeIdOf9 :n)
+    if rtid9.isZero then return "".string
+    if (symtab.reg.hasDestructorName typeId: rtid9) == false then return "".string
+    if (bindingRhsIsBorrow :ast :symtab :ctx :n) then return "".string
+    rct9: typeRefC :ast :symtab :ctx tid: rtid9 thisTid: ztypes.tid
+    if rct9.length == 0 then return "".string
+    rhn9: ctx.argHoistCtr
+    ctx.argHoistCtr = ctx.argHoistCtr + 1
+    rnm9: "_ah\{rhn9}"
+    rdt9: "    \{ctx.strC}_free(&\{rnm9});\n"
+    if (rtid9 == ctx.strTid) == false then {
+        rcn9: ctxCname :ctx tid: rtid9
+        rdt9 = "    \{rcn9}_destroy(&\{rnm9});\n"
+    }
+    rex9: expr.string
+    ctx.argHoistVals.append rex9
+    ctx.argHoistTypes.append rct9
+    ctx.argHoistDtors.append rdt9
+    rnc9: rnm9.copy
+    ctx.argHoistNames.append rnc9
+    return rnm9
+}
+
 # emitSetMethodCall -- an arg-taking method on a Set-mono receiver (a heap
 # pointer, so the receiver passes directly without `&`). "" when not a Set
 # call; the no-arg `.length`/`.iterate` reads ride the dottedpath leg.
@@ -8668,6 +8705,16 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         # a nested base (e.g. it.target.a): emit the base expression, then chain
         # `.`/`->` by whether the base resolves to a pointer (ptrVar / lock field).
         base9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
+        {
+            bh9: (ownedRecvHoist9
+                :ast
+                :symtab
+                :ctx
+                expr: base9.stringview
+                n: (ast.nodes.get i: (n.parent - 1).u64)
+            )
+            if bh9.length > 0 then base9 = bh9
+        }
         bs9vid: (atomVidIfPlain
             :ast
             :symtab
