@@ -853,15 +853,15 @@ populatePreludeBody: function {
         bm: ast.nodes.get i: (bmId9 - 1).u64
         if bm.namedoperation then {
             dn: zast.nameTextCopy :ast ref: bm.name
-            atgt0: dottedDefTarget :ast n: (ast.nodes.get i: (bm.operation - 1).u64)
-            if atgt0.length > 0 then {
-                ps0: String
-                with pit: (atgt0.stringview.split sep: ".") do for pseg: pit loop {
-                    if ps0.length == 0 then ps0 = pseg.string
-                }
-                pchk0: ps0.copy
-                if (reg.unitNameTid.has key: (nameIdOf :ast name: pchk0.stringview).u64) then {
+            atgt0: dottedDefTargetIds :ast n: (ast.nodes.get i: (bm.operation - 1).u64)
+            if atgt0 > 0 then {
+                pid0: atgt0 / 4294967296
+                if (reg.unitNameTid.has key: pid0) then {
                     pk0: dn.copy
+                    ps0: (zast.poolTextCopy
+                        pool: ast.names
+                        ref: (zast.nameid.create from: pid0.u32.orPanic)
+                    )
                     ty.preludeUnit.set key: pk0 value: ps0
                 }
             }
@@ -1631,6 +1631,25 @@ dottedDefTarget: function {ast: Ast.view n: Node.view} out String is {
         return "\{pn}.\{cn}"
     } else {
         return "".string
+    }
+}
+
+# dottedDefTargetIds -- dottedDefTarget as a packed id pair: the parent
+# atom's name id in the high 32 bits, the child's in the low 32; 0 when the
+# definition is not a dotted alias.
+dottedDefTargetIds: function {ast: Ast.view n: Node.view} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (dottedDefTargetIds :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case dottedpath then {
+        pid9: atomNameId :ast n: (ast.nodes.get i: (n.parent - 1).u64)
+        cid9: atomNameId :ast n: (ast.nodes.get i: (n.child - 1).u64)
+        if pid9.isZero then return 0
+        if cid9.isZero then return 0
+        return (ztypes.memberKey unitId: pid9 nameId: cid9)
+    } else {
+        return 0
     }
 }
 
@@ -7312,6 +7331,22 @@ reexportTargetOf: function {ty: ztyping.ZTyping ast: Ast.view declId: ztypes.dec
     return "".string
 }
 
+# reexportTargetIdsOf -- reexportTargetOf as a packed id pair (root id
+# high, member id low); 0 when the Decl is absent or not a re-export.
+reexportTargetIdsOf: function {ty: ztyping.ZTyping ast: Ast.view declId: ztypes.declid} out u64 is {
+    if declId.isZero then return 0
+    if (ty.declValid id: declId) then {
+        do9: ty.decls.get i: (declId - 1)
+        if do9.kind.reexportDecl then {
+            nop9: ast.nodes.get i: (do9.node - 1).u64
+            if nop9.namedoperation then {
+                return (dottedDefTargetIds :ast n: (ast.nodes.get i: (nop9.operation - 1).u64))
+            }
+        }
+    }
+    return 0
+}
+
 # resolveAliasKey -- single-minting for a unit-level re-export alias
 # (a reexportDecl in the Decl tree; target read off its def node): resolve the
 # TARGET's canonical id and reuse it -- the alias never mints its own
@@ -7327,18 +7362,13 @@ resolveAliasKey: function {
     name: StringView
 } out u64 is {
     adecl9: declOfUnitDef :ty :ast :defUnit :name
-    tgt9: reexportTargetOf :ty :ast declId: adecl9
-    if tgt9.length == 0 then return 0
+    altK9: reexportTargetIdsOf :ty :ast declId: adecl9
+    if altK9 == 0 then return 0
     if (ty.declIsResolving declId: adecl9) then return 0
-    tu9: String
-    tn9: String
-    with sit9: (tgt9.stringview.split sep: ".") do for seg9: sit9 loop {
-        if tu9.length == 0 then {
-            tu9 = seg9.string
-        } else {
-            tn9 = seg9.string
-        }
-    }
+    atu9: altK9 / 4294967296
+    atn9: altK9 - (atu9 * 4294967296)
+    tu9: zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: atu9.u32.orPanic)
+    tn9: zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: atn9.u32.orPanic)
     ty.declSetResolving declId: adecl9 mark: true
     atid9: descendNamed :ty :reg :ast defUnit: tu9.stringview name: tn9.stringview
     ty.declSetResolving declId: adecl9 mark: false
@@ -7673,24 +7703,22 @@ resolveDef: function {
         # cross-unit leg; mirrors the reference's _type_of_definition dotted-path
         # fallback (ztypecheck.py:1184).
         apNm9: atomName :ast n: (ast.nodes.get i: (defn.parent - 1).u64)
-        if (reg.isUnitName nameId: (atomNameId
-            :ast
-            n: (ast.nodes.get i: (defn.parent - 1).u64)
-        )) then {
+        apId9: atomNameId :ast n: (ast.nodes.get i: (defn.parent - 1).u64)
+        if (reg.isUnitName nameId: apId9) then {
             acNm9: atomName :ast n: (ast.nodes.get i: (defn.child - 1).u64)
+            acId9: atomNameId :ast n: (ast.nodes.get i: (defn.child - 1).u64)
             reg.recordDemand name: acNm9.stringview
             reg.recordSeededDemand un: unitName name: acNm9.stringview
-            tgtKey9: "\{apNm9}.\{acNm9}"
             # The alias target is read off the re-export Decl's node on demand
             # (reexportTargetOf); resolution reuses the target's canonical id.
             if (ty.declIsResolving
                 declId: (declOfUnitDef :ty :ast defUnit: apNm9.stringview name: acNm9.stringview)
             ) then {
-                aem9: "alias cycle: '\{unitName}.\{defName}' aliases '\{tgtKey9}' which is still resolving"
+                aem9: "alias cycle: '\{unitName}.\{defName}' aliases '\{apNm9}.\{acNm9}' which is still resolving"
                 addResolveError :ty e: zast.err.typeError msg: aem9
             }
             descendNamed :ty :reg :ast defUnit: apNm9.stringview name: acNm9.stringview
-            tgo9: resolvedByKey :ast :ty :reg key: tgtKey9
+            tgo9: resolvedByIds :ast :ty :reg unitId: apId9 name: acId9
             aid9: u64
             match (
                 tgo9
@@ -26397,9 +26425,16 @@ resolvedByIds: function {
         return (optionval.some wo9)
     } case none then null
     alDecl9: declOfUnitDefIds :ty :unitId nameId: name
-    alTgt9: reexportTargetOf :ty :ast declId: alDecl9
-    if alTgt9.length > 0 then {
-        tgo9: childOfWalk :ast :ty :reg key: alTgt9
+    alTgt9: reexportTargetIdsOf :ty :ast declId: alDecl9
+    if alTgt9 > 0 then {
+        atu9: alTgt9 / 4294967296
+        atn9: alTgt9 - (atu9 * 4294967296)
+        tgo9: (childOfWalkIds
+            :ty
+            :reg
+            unitId: (zast.nameid.create from: atu9.u32.orPanic)
+            name: (zast.nameid.create from: atn9.u32.orPanic)
+        )
         match (
             tgo9
         ) case some then {
