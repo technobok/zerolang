@@ -7449,6 +7449,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         # stamped tid; unstamped atoms (fn-mono template re-emission walks
         # the shared template AST) fall back to the name probe
         brid: ztypes.tid
+        bdec9: ztypes.declid
         {
             audo9: symtab.typing.refDecl.get key: n.nodeid.u64
             match (
@@ -7457,10 +7458,52 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 if (symtab.typing.declValid id: audo9) then {
                     d0x: symtab.typing.decls.get i: (audo9 - 1)
                     brid = ztypes.tid.create from: (d0x.typeId)
+                    bdec9 = audo9
                 }
             } case none then null
         }
         if brid.isZero then brid = userFnId :ast :symtab :ctx name: av
+        # a VALUE alias (`NO: bool.false`) names one arm of a tagged type: its
+        # Decl carries the ROOT's tid, so without this the atom fell through to
+        # the raw-name fallback and the C referenced the alias name. Emit what
+        # the dotted read emits.
+        if brid > 0 when (bdec9.isZero) == false then {
+            btt9: symtab.reg.typetypeOf typeId: brid
+            isTag9: false
+            if btt9 == ztypes.ztypetype.variantType then isTag9 = true
+            if btt9 == ztypes.ztypetype.unionType then isTag9 = true
+            # a tagged type whose C form is a SCALAR (bool) carries no tag
+            # struct: `true` / `false` are already valid C, and core.z ships
+            # them as arm aliases. cTypeOf is the shadow-safe scalar gate.
+            {
+                atn0: typeNameOfReg9 :symtab tid: brid
+                atc0: cTypeOf name: atn0.stringview
+                if atc0.length > 0 then isTag9 = false
+            }
+            if isTag9 then {
+                atk9: (ztypecheck.reexportTargetIdsOf
+                    ty: symtab.typing
+                    :ast
+                    declId: bdec9
+                )
+                if atk9 > 0 then {
+                    atu9: atk9 / 4294967296
+                    atn9: atk9 - (atu9 * 4294967296)
+                    arm9: (zast.poolTextAt
+                        pool: ast.names
+                        ref: (zast.nameid.create from: atn9.u32.orPanic)
+                    )
+                    if arm9.length > 0 then {
+                        atg9: variantTag :symtab tid: brid arm: arm9.stringview
+                        if atg9.length > 0 then {
+                            avc9: ctxCname :ctx tid: brid
+                            ave9: "((\{avc9}_t){ .tag = \{atg9} })"
+                            return ave9
+                        }
+                    }
+                }
+            }
+        }
         if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.recordType then {
             btn: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: brid.u64)
             cTypeLk1: cTypeOf name: btn.stringview

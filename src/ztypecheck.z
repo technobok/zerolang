@@ -42,6 +42,7 @@ public: unit {
     :resolveSystemChildById
     :resolveUnitChild
     :resolveUnitChildById
+    :reexportTargetIdsOf
     :resolvedByIds
     :rootNameOf
     :specLookup
@@ -7396,6 +7397,38 @@ aliasIsBareForm: function {ty: ztyping.ZTyping ast: Ast.view declId: ztypes.decl
     return false
 }
 
+# aliasNamesType -- the alias denotes a TYPE, not a value. A bare alias always
+# does (`Same: Holder`); a dotted one does when its parent names a UNIT
+# (`Node: zast.Node`) rather than a type, because a TYPE parent means the child
+# is one arm and the alias denotes a VALUE of it (`false: bool.false`). This is
+# the same split that decides how the alias registers.
+aliasNamesType: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out bool is {
+    if declId.isZero then return false
+    if (aliasIsBareForm :ty :ast :declId) then return true
+    if (ty.declValid id: declId) then {
+        ndo9: ty.decls.get i: (declId - 1)
+        if ndo9.kind.reexportDecl then {
+            nnp9: ast.nodes.get i: (ndo9.node - 1).u64
+            if nnp9.namedoperation then {
+                nvn9: ast.nodes.get i: (nnp9.operation - 1).u64
+                ntk9: dottedDefTargetIds :ast n: nvn9
+                if ntk9 > 0 then {
+                    ntu9: ntk9 / 4294967296
+                    return (reg.isUnitName
+                        nameId: (zast.nameid.create from: ntu9.u32.orPanic)
+                    )
+                }
+            }
+        }
+    }
+    return false
+}
+
 # resolveAliasKey -- single-minting for a unit-level re-export alias
 # (a reexportDecl in the Decl tree; target read off its def node): resolve the
 # TARGET's canonical id and reuse it -- the alias never mints its own
@@ -7427,6 +7460,14 @@ resolveAliasKey: function {
         # type, the member one of its value arms -- the alias denotes a VALUE
         # of the root type, so the edge binds the ROOT's tid
         rto9: walkLookupTyperef :ast :ty :reg currentUnit: defUnit base: tu9.stringview
+        if rto9.none then {
+            # a tagged type declared in THIS file is invisible to the typeref
+            # walk while resolution runs, so `READY: mode.ready` never reached
+            # the arm test below. resolveAtomType is the current-unit-relative
+            # resolver that sees it.
+            rtb9: resolveAtomType :ty :reg :ast unitName: defUnit nm: tu9.stringview thisName: ""
+            if rtb9 > 0 then rto9 = optionval.some rtb9.u64
+        }
         match (
             rto9
         ) case some then {
@@ -16321,11 +16362,12 @@ checkAtomid: function {
                         if ndNm9.stringview == "Set" then twn9 = "SetRef"
                         if ndNm9.stringview == "Map" then twn9 = "MapRR"
                         if twn9.length > 0 when twn9 == tnq9.stringview then isTypeAtom9 = true
-                        # a BARE unit-level alias names a TYPE -- a value alias
-                        # is dotted (`true: bool.true`) -- so an atom naming one
-                        # constructs exactly as the type's own name does.
-                        # Without this the atom stays unstamped and the emitter
-                        # writes the alias name into the C.
+                        # an atom naming a TYPE alias constructs exactly as the
+                        # type's own name does. The tid cannot say so -- a VALUE
+                        # alias resolves to its root type's tid too -- but the
+                        # alias's own shape can. Without this the atom stays
+                        # unstamped and the emitter writes the alias name into
+                        # the C.
                         if (isTypeAtom9) == false then {
                             aad9: (declOfUnitDef
                                 ty: st.typing
@@ -16333,9 +16375,12 @@ checkAtomid: function {
                                 defUnit: unitName
                                 name: ndNm9.stringview
                             )
-                            if (aliasIsBareForm ty: st.typing :ast declId: aad9) then {
-                                isTypeAtom9 = true
-                            }
+                            if (aliasNamesType
+                                ty: st.typing
+                                reg: st.reg
+                                :ast
+                                declId: aad9
+                            ) then isTypeAtom9 = true
                         }
                     }
                     if isTypeAtom9 then {
