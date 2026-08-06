@@ -4855,6 +4855,8 @@ emitInlineVariantCtor: function {
         e0: "((\{vc}_t){ .tag = \{tg}, .data.\{arm} = (\{av}) })"
         return e0
     } else {
+        av19: armValueC :symtab :tid :arm
+        if av19.length > 0 then return av19
         e1: "((\{vc}_t){ .tag = \{tg} })"
         return e1
     }
@@ -5199,6 +5201,12 @@ renderDefault: function {
                 tid: (ztypes.tid.create from: vtarget9.u64)
                 thisTid: ztypes.tid
             )
+            avd9: (armValueC
+                :symtab
+                tid: (ztypes.tid.create from: vtarget9.u64)
+                arm: arm.stringview
+            )
+            if avd9.length > 0 then return avd9
             return "(\{tc}){ .tag = \{tg} }"
         }
     }
@@ -6854,6 +6862,12 @@ emitCrossUnitTag: function {
     if pc.length == 0 then {
         tg: variantTag :symtab tid: (ztypes.tid.create from: vtid.u64) :arm
         vc: ctxCname :ctx tid: (ztypes.tid.create from: vtid.u64)
+        avx9: (armValueC
+            :symtab
+            tid: (ztypes.tid.create from: vtid.u64)
+            :arm
+        )
+        if avx9.length > 0 then return avx9
         e: "((\{vc}_t){ .tag = \{tg} })"
         return e
     }
@@ -7472,14 +7486,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             isTag9: false
             if btt9 == ztypes.ztypetype.variantType then isTag9 = true
             if btt9 == ztypes.ztypetype.unionType then isTag9 = true
-            # a tagged type whose C form is a SCALAR (bool) carries no tag
-            # struct: `true` / `false` are already valid C, and core.z ships
-            # them as arm aliases. cTypeOf is the shadow-safe scalar gate.
-            {
-                atn0: typeNameOfReg9 :symtab tid: brid
-                atc0: scalarCTypeFor :symtab name: atn0.stringview tid: brid
-                if atc0.length > 0 then isTag9 = false
-            }
             if isTag9 then {
                 atk9: (ztypecheck.reexportTargetIdsOf
                     ty: symtab.typing
@@ -7494,6 +7500,8 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                         ref: (zast.nameid.create from: atn9.u32.orPanic)
                     )
                     if arm9.length > 0 then {
+                        ava9: armValueC :symtab tid: brid arm: arm9.stringview
+                        if ava9.length > 0 then return ava9
                         atg9: variantTag :symtab tid: brid arm: arm9.stringview
                         if atg9.length > 0 then {
                             avc9: ctxCname :ctx tid: brid
@@ -7906,6 +7914,12 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                             tid: (ztypes.tid.create from: dtp9.u64)
                             arm: mnc0.stringview
                         )
+                        avh9: (armValueC
+                            :symtab
+                            tid: (ztypes.tid.create from: dtp9.u64)
+                            arm: mnc0.stringview
+                        )
+                        if avh9.length > 0 then return avh9
                         eH9: "((\{vcH9}_t){ .tag = \{tgH9} })"
                         return eH9
                     }
@@ -8213,6 +8227,12 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                         arm: mn2.stringview
                     )
                     vc2: ctxCname :ctx tid: (ztypes.tid.create from: vtid2.u64)
+                    av89: (armValueC
+                        :symtab
+                        tid: (ztypes.tid.create from: vtid2.u64)
+                        arm: mn2.stringview
+                    )
+                    if av89.length > 0 then return av89
                     e8: "((\{vc2}_t){ .tag = \{tg2} })"
                     return e8
                 }
@@ -15820,6 +15840,25 @@ variantTag: function {
     au: cUpperOf text: arm
     t9: "Z_\{vu}_TAG_\{au}"
     return t9
+}
+
+# armValueC -- a no-payload arm's VALUE when the tagged type's C form is a
+# SCALAR: `bool` lowers to C `bool`, not to a tag struct, so the struct literal
+# every caller composes is invalid there. The tag enum is emitted for such
+# types and its constants are the arm ordinals, so the value is the constant
+# cast to that C form. Returns "" when the type carries a real tag struct --
+# callers keep composing it, byte for byte.
+armValueC: function {
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    arm: StringView
+} out String is {
+    avn9: typeNameOfReg9 :symtab :tid
+    avs9: scalarCTypeFor :symtab name: avn9.stringview :tid
+    if avs9.length == 0 then return "".string
+    avt9: variantTag :symtab :tid :arm
+    avr9: "((\{avs9})\{avt9})"
+    return avr9
 }
 
 # armPayloadC -- an arm's payload C type ("" for null arms).
