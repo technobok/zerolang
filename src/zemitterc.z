@@ -2321,7 +2321,7 @@ dottedChildText: function {ast: Ast.view n: Node.view} out String is {
 aliasOrChild: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
-    aliasId: u64
+    aliasId: zast.nodeid
     childId: u32
 } out String is {
     if symtab.typing.renameSeen then {
@@ -2336,7 +2336,7 @@ aliasChildName: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.v
     match (
         n
     ) case dottedpath then {
-        return (aliasOrChild :ast :symtab aliasId: n.nodeid.u64 childId: n.child)
+        return (aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child)
     } else {
         return "".string
     }
@@ -2377,7 +2377,7 @@ aliasChildNameId: function {
         n
     ) case dottedpath then {
         if symtab.typing.renameSeen then {
-            ai9: symtab.typing.aliasInternalNameOf nodeid: n.nodeid.u64
+            ai9: symtab.typing.aliasInternalNameOf nodeid: n.nodeid
             if ai9.length > 0 then return (zast.poolFind pool: ast.names text: ai9.stringview)
         }
         return (atomNameIdOf :ast n: (ast.nodes.get i: (n.child - 1).u64))
@@ -5867,8 +5867,8 @@ argSlotList: function {
 
 # nodeConstText -- the C literal for a node carrying a compile-time
 # const stamp (folded .LABEL data access, unit constants); "" otherwise.
-nodeConstText: function {symtab: zenv.ZSymbolTable.view nid: u64} out String is {
-    if nid == 0 then return "".string
+nodeConstText: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out String is {
+    if nid.isZero then return "".string
     res: String
     if symtab.typing.nodeConst.length == 0 then return res
     with citer: symtab.typing.nodeConst.iterate do for row: citer loop {
@@ -7398,7 +7398,7 @@ emitLocalAtomName: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out
 # emitExpr -- the C expression text for a node (calls inline; the scalar
 # examples carry no order-sensitive multi-call arguments).
 emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} out String is {
-    cv9: nodeConstText :symtab nid: (nodeIdOf9 :n)
+    cv9: nodeConstText :symtab nid: (zast.nodeid.create from: (nodeIdOf9 :n).u32.orPanic)
     if cv9.length > 0 then return cv9
     match (
         n
@@ -7710,7 +7710,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 }
             } case none then null
         }
-        mnc0: aliasOrChild :ast :symtab aliasId: n.nodeid.u64 childId: n.child
+        mnc0: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
         dps9: ast.nodes.get i: (n.parent - 1).u64
         ccbc9: emitCrossUnitBareCreate :ctx :ast :symtab parent: dps9 child: mnc0.stringview
         if ccbc9.length > 0 then return ccbc9
@@ -7933,7 +7933,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             bn2v9 = (atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)))
         }
         bn2: emitLocalAtomName :ctx name: bn2r.stringview vid: bn2a9V0
-        mn2: aliasOrChild :ast :symtab aliasId: n.nodeid.u64 childId: n.child
+        mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
         if bn2r.stringview == "io" then {
             isStdS9: false
             if mn2.stringview == "stdout" then isStdS9 = true
@@ -15989,7 +15989,7 @@ fillDataElems: function {program: Node symtab: zenv.ZSymbolTable.view ctx: Ctx.v
         uCnt9a: program.ast.units.length
         uIdx9a: u64
         for uIdx9a < uCnt9a loop {
-            uId9: program.ast.units.get i: uIdx9a
+            uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9a))
             uIdx9a = uIdx9a + 1
             opId9: zast.nodeid
             {
@@ -16095,7 +16095,7 @@ fillNeeds: function {program: Node ctx: Ctx.view} is {
         uCnt9b: program.ast.units.length
         uIdx9b: u64
         for uIdx9b < uCnt9b loop {
-            uId9: program.ast.units.get i: uIdx9b
+            uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9b))
             uIdx9b = uIdx9b + 1
             opId9: zast.nodeid
             {
@@ -16117,7 +16117,7 @@ fillNeeds: function {program: Node ctx: Ctx.view} is {
 }
 
 # scan one unit for the runtime helpers it needs.
-fillNeedsIn: function {ctx: Ctx.view ast: Ast.view mainOpId: u32} is {
+fillNeedsIn: function {ctx: Ctx.view ast: Ast.view mainOpId: zast.nodeid} is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: mainOpId
     with biter: bodyIds9.iterate do for bm: biter loop {
         bmNode9: ast.nodes.get i: (bm - 1).u64
@@ -16236,7 +16236,7 @@ fillMethodReturns: function {program: Node ctx: Ctx.view} is {
         uCnt9c: program.ast.units.length
         uIdx9c: u64
         for uIdx9c < uCnt9c loop {
-            uId9: program.ast.units.get i: uIdx9c
+            uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9c))
             uIdx9c = uIdx9c + 1
             opId9: zast.nodeid
             {
@@ -16321,7 +16321,7 @@ fillConstVals: function {program: Node symtab: zenv.ZSymbolTable.view ctx: Ctx.v
         uCnt9d: program.ast.units.length
         uIdx9d: u64
         for uIdx9d < uCnt9d loop {
-            uId9: program.ast.units.get i: uIdx9d
+            uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9d))
             uIdx9d = uIdx9d + 1
             opId9: zast.nodeid
             un9: String
@@ -16580,7 +16580,7 @@ emitFnsPass: function {
         uCnt9e: program.ast.units.length
         uIdx9e: u64
         for uIdx9e < uCnt9e loop {
-            uId9: program.ast.units.get i: uIdx9e
+            uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9e))
             uIdx9e = uIdx9e + 1
             opId9: zast.nodeid
             un9: String
@@ -17202,7 +17202,7 @@ collectUnitLiterals: function {
         uCnt9f: program.ast.units.length
         uIdx9f: u64
         for uIdx9f < uCnt9f loop {
-            uId9: program.ast.units.get i: uIdx9f
+            uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9f))
             uIdx9f = uIdx9f + 1
             opId9: zast.nodeid
             un9: String
@@ -17850,7 +17850,7 @@ programHasMain: function {program: Node} out bool is {
         uCnt9g: program.ast.units.length
         uIdx9g: u64
         for uIdx9g < uCnt9g loop {
-            uId9: program.ast.units.get i: uIdx9g
+            uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9g))
             uIdx9g = uIdx9g + 1
             opId9: zast.nodeid
             {
@@ -17871,7 +17871,7 @@ programHasMain: function {program: Node} out bool is {
 }
 
 # true when a unit defines a `main`.
-unitHasMain9: function {ast: Ast.view mainOpId: u32} out bool is {
+unitHasMain9: function {ast: Ast.view mainOpId: zast.nodeid} out bool is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: mainOpId
     biter: bodyIds9.iterate
     for bm: biter loop {
@@ -21970,7 +21970,7 @@ emitRecordDefs: function {
             uCnt9h: program.ast.units.length
             uIdx9h: u64
             for uIdx9h < uCnt9h loop {
-                uId9: program.ast.units.get i: uIdx9h
+                uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9h))
                 uIdx9h = uIdx9h + 1
                 opId9: zast.nodeid
                 un9: String
