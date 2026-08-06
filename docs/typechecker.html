@@ -109,6 +109,8 @@ Table of Contents</div>
 </li>
 <li><a href="#type-name-resolution-and-the-canonical-id-rule">Type-name resolution and the canonical-id rule</a>
 </li>
+<li><a href="#unit-members-three-passes-each-keyed-on-the-value-s-arm">Unit members: three passes, each keyed on the value's ARM</a>
+</li>
 <li><a href="#the-numeric-id-spaces">The numeric id spaces</a>
 </li>
 <li><a href="#cross-cutting-concerns">Cross-Cutting Concerns</a>
@@ -540,7 +542,32 @@ same-named types, and the mono NAME (<code>Map_String_i64</code>) remains only a
 display / C-name stem; a user shadow of a builtin still appends its canonical
 id to that name (<code>monoValName</code>: <code>optionval_i64_7</code>) so generated wrapper
 names stay distinct too.</p>
-<h2 id="the-numeric-id-spaces"><a href="#the-numeric-id-spaces">8. The numeric id spaces</a></h2>
+<h2 id="unit-members-three-passes-each-keyed-on-the-value-s-arm"><a href="#unit-members-three-passes-each-keyed-on-the-value-s-arm">8. Unit members: three passes, each keyed on the value's ARM</a></h2>
+<p>A unit-level definition is dispatched three times, and every one of them
+matches on the shape of the member's VALUE node. Reading only one of
+them is how a shape ends up silently registering nothing:</p>
+<ul>
+<li><code>indexDeclDef</code> (the Decl tree) -- <code>functiondef</code> -&gt; funcDecl,
+<code>objectdef</code> -&gt; typeDecl, <code>unitdef</code> -&gt; unitDecl, <code>datablock</code> -&gt;
+dataDecl, <code>dottedpath</code> and a non-numeric <code>atomid</code> -&gt; reexportDecl
+(the alias), everything else -&gt; constDecl.</li>
+<li><code>resolveDef</code> (resolution) -- the same definition arms, plus the
+dotted alias leg; anything else is skipped.</li>
+<li><code>resolveConstantDef</code> (post-demand) -- the literal shapes:
+a numeric <code>atomid</code>, a suffixed literal (<code>1.u32</code>, a dotted path
+whose parent is the literal), a constant expression. A dotted value
+whose parent is neither a literal nor a unit, and a parenthesised
+call, are constructions and are refused here.</li>
+</ul>
+<p>Two consequences worth knowing before adding a leg. A definition's own
+unit is NOT resolvable through the typeref walk while this runs, so a
+same-file type or unit answers only through the Decl tree
+(<code>declOfUnitDef</code>, <code>declDefTypetype</code>, the Decl's <code>kind</code>) -- the
+registry says "no". And <code>origin: Point.create x: 0</code> parses as TWO
+members, the dotted value <code>Point.create</code> and a separate constant
+<code>x: 0</code>, so a construction never arrives as a call unless it is
+parenthesised.</p>
+<h2 id="the-numeric-id-spaces"><a href="#the-numeric-id-spaces">9. The numeric id spaces</a></h2>
 <p>Every id the compiler carries is a zero-overhead typedef over its base
 integer, so one space cannot silently stand in for another: equality is
 same-space only and a sentinel reads <code>isZero</code> rather than <code>== 0</code>.</p>
@@ -567,11 +594,11 @@ more than one space: <code>genericChildKeys</code>, <code>genericArgs</code>,
 <code>zlockholder.id</code> (a vid OR a node id), and the emitter's
 <code>nodeIdOf9</code>, whose consumers ARE the u64-keyed stamp tables. <code>zvfs</code>
 carries its own <code>dentryid</code> / <code>providerid</code> pair, out of this scope.</p>
-<h2 id="cross-cutting-concerns"><a href="#cross-cutting-concerns">9. Cross-Cutting Concerns</a></h2>
+<h2 id="cross-cutting-concerns"><a href="#cross-cutting-concerns">10. Cross-Cutting Concerns</a></h2>
 <p>Each subsection below points at <em><strong>where</strong></em> a concern lives in the
 typechecker. For <em><strong>why</strong></em> it works that way, follow the links to
 the semantic documents.</p>
-<h3 id="ownership-enforcement"><a href="#ownership-enforcement">9.1. Ownership enforcement</a></h3>
+<h3 id="ownership-enforcement"><a href="#ownership-enforcement">10.1. Ownership enforcement</a></h3>
 <p>The 2-state ownership model (see <code>compiler.pdoc:Ownership and
 Lifetime</code>) is enforced at the assignment and call sites:</p>
 <ul>
@@ -609,7 +636,7 @@ make genuinely-mutated caller bindings mutable, restructure
 iterator overlaps). Until that arc lands, a readonly binding
 passed via <code>:name</code> to a mutable-borrow parameter is accepted
 without a diagnostic.</p>
-<h3 id="lock-checking"><a href="#lock-checking">9.2. Lock checking</a></h3>
+<h3 id="lock-checking"><a href="#lock-checking">10.2. Lock checking</a></h3>
 <p>The typechecker chooses <em><strong>when</strong></em> to install a lock; <code>zenv.z</code>
 owns the conflict rule (<code>lockAcquireConflict</code>) and the
 prefix-overlap path test (<code>pathsOverlap</code>). Two scopes of
@@ -636,7 +663,7 @@ value escape its scope.</p>
 stack and <code>zlockholder</code> tagging: <code>tryLock</code>
 skips the conflict check when the existing holder matches the
 current call's identity.</p>
-<h3 id="borrow-correctness-for-parameters"><a href="#borrow-correctness-for-parameters">9.3. Borrow correctness for parameters</a></h3>
+<h3 id="borrow-correctness-for-parameters"><a href="#borrow-correctness-for-parameters">10.3. Borrow correctness for parameters</a></h3>
 <p>Deep methods that take a borrow into a return value record the
 source path on a pending-borrow slot, which
 <code>checkExpression</code> captures into <code>ZExprResult.borrowTarget</code>
@@ -657,7 +684,7 @@ exactly when the type's <code>publicNs</code> subtree reaches it. Two gates in
 private member from a non-capable base raises E0101, and taking <code>.private</code> of
 a non-capable base raises E0102. Construction argument labels never reach
 <code>checkDotted</code>, so naming private fields at construction is unaffected.</p>
-<h3 id="monomorphisation"><a href="#monomorphisation">9.4. Monomorphisation</a></h3>
+<h3 id="monomorphisation"><a href="#monomorphisation">10.4. Monomorphisation</a></h3>
 <p>Generic types and functions are monomorphised by deep-cloning
 the original AST subtree, binding the generic parameters to
 concrete types, and re-running the standard resolvers on the
@@ -687,7 +714,7 @@ only requirement is that their declaration in
 <code>lib/system/system.z</code> or <code>lib/system/collections.z</code> carries
 the <code>is native</code> form. Resolution flows through the standard
 child-lookup path.</p>
-<h3 id="type-narrowing"><a href="#type-narrowing">9.5. Type narrowing</a></h3>
+<h3 id="type-narrowing"><a href="#type-narrowing">10.5. Type narrowing</a></h3>
 <p>Narrowing for <code>union</code> and <code>variant</code> subjects in match arms
 is implemented via overlay entries. When a match arm narrows
 subject <code>s</code> to subtype <code>ok</code>, an overlay <code>ZEntry</code> with
@@ -708,7 +735,7 @@ reassignment resets it.</p>
 <code>ZType.allocChild</code>. String fields remain authoritative; the
 ids are the hot-path key prepared for future migration to the
 SQL-backed representation.</p>
-<h3 id="auto-call-coercion"><a href="#auto-call-coercion">9.6. Auto-call coercion</a></h3>
+<h3 id="auto-call-coercion"><a href="#auto-call-coercion">10.6. Auto-call coercion</a></h3>
 <p>A no-user-arg method dotted path read in value position
 (<code>v: s.stringview</code>, <code>p1.distance</code> inside a string
 interpolation) is auto-called to its return type. The coercion
@@ -720,7 +747,7 @@ normally instead of constructing the return type. Path
 resolution itself is context-free: it
 always returns the FUNCTION type for a method path. Behaviour is
 identical for <code>is native</code> and user-defined methods.</p>
-<h3 id="unified-call-dispatch"><a href="#unified-call-dispatch">9.7. Unified call dispatch</a></h3>
+<h3 id="unified-call-dispatch"><a href="#unified-call-dispatch">10.7. Unified call dispatch</a></h3>
 <p>A type used in callable position is rewritten through the
 unified-dispatch route. The bare-name construction call
 <code>Point x: 1 y: 2</code> resolves the callee to the <code>Point</code>
@@ -752,7 +779,7 @@ main unit completes and only when the program's demand loop referenced
 them (<code>unitHasDemandedBodiedFn</code> gates;
 <code>resolveDemandedStdDeps</code> mirrors the demand driver's fixpoint).
 See the compiler doc's "Runtime-backed stdlib units".</p>
-<h2 id="error-reporting"><a href="#error-reporting">10. Error Reporting</a></h2>
+<h2 id="error-reporting"><a href="#error-reporting">11. Error Reporting</a></h2>
 <p>Type errors are <code>zast.ErrorData</code> value objects, appended to
 <code>ZTyping.errors</code> via the <code>addError</code> helper. Errors are never
 raised as exceptions; the typechecker tries to continue
@@ -770,7 +797,7 @@ Error codes (the <code>err</code> variant in <code>lib/system/zast.z</code>) are
 <code>loc</code> / <code>Token</code>. After <code>typecheck()</code> returns, the caller
 inspects <code>ZTyping.errors</code> to decide whether to proceed to
 emission.</p>
-<h2 id="what-lives-elsewhere"><a href="#what-lives-elsewhere">11. What Lives Elsewhere</a></h2>
+<h2 id="what-lives-elsewhere"><a href="#what-lives-elsewhere">12. What Lives Elsewhere</a></h2>
 <p>Module boundaries the typechecker relies on:</p>
 <ul>
 <li><code>src/ztypes.z</code> -- <code>ZType</code>, <code>ZVariable</code>,
@@ -790,7 +817,7 @@ mangler <code>mangleVarName</code></li>
 <p>Collection-type predicates (<code>typeIsReftype</code>, <code>typeIsValtype</code>,
 ...), node synthesis, and the monomorphisation dedup hashing have
 no separate module -- they live within <code>src/ztypecheck.z</code> itself.</p>
-<h2 id="reading-order"><a href="#reading-order">12. Reading Order</a></h2>
+<h2 id="reading-order"><a href="#reading-order">13. Reading Order</a></h2>
 <p>When opening the typechecker for the first time, read in this
 order:</p>
 <ol>
@@ -808,7 +835,7 @@ A good first dive is <code>typecheck</code> &#x2192; <code>resolveDef</code> &#x
 <code>checkCall</code>. That path touches almost every cross-
 cutting concern in turn.</li>
 </ol>
-<h2 id="related-documents"><a href="#related-documents">13. Related Documents</a></h2>
+<h2 id="related-documents"><a href="#related-documents">14. Related Documents</a></h2>
 <ul>
 <li><code>compiler.pdoc</code> -- the pipeline overview and the
 semantic descriptions of demand-driven resolution,
