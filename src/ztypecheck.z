@@ -25428,6 +25428,35 @@ resolveUnitIfDef: function {
     } else null
 }
 
+# reportUnitConstantShape -- the diagnostic for a unit-level definition whose
+# value is not a literal. Unit constants inline literal numeric values BY
+# DESIGN (resolveConstantDef registers the literal, suffixed-literal and
+# constant-expression shapes only); without a report the definition registers
+# nothing and every downstream read blames the reader instead.
+reportUnitConstantShape: function {
+    ty: ztyping.ZTyping
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    width: u32
+    msg: String
+    hint: String
+} is {
+    un9: "unit constants inline literal numeric values".string
+    ty.errors.append (zast.ErrorData
+        :nodeid
+        :lineno
+        :colno
+        :width
+        err: zast.err.typeError
+        msg: msg.copy
+        fsno: zvfs.fsno
+        note: un9
+        hint: hint.copy
+    )
+    ty.isError = true
+}
+
 # resolveConstantDef -- one definition: an (expression-wrapped) numeric-literal
 # atomid is a unit constant. Record resolved[unit.name] as the literal's concrete
 # default (i64 / f64 -- both pre-demanded by seedSystemDemands). The definition's
@@ -25469,6 +25498,74 @@ resolveConstantDef: function {
             if sfC9.atomid then sfTy9 = zast.nameTextCopy :ast ref: sfC9.name
         }
         if sfLit9.length > 0 when sfTy9.length > 0 then {
+            # `origin: Point.create x: 0` parses as TWO unit members -- the
+            # dotted value `Point.create` and a separate constant `x: 0` --
+            # so the construction never reaches this pass as a call. A dotted
+            # value is a suffixed literal (`1.u32`) or the unit-alias form
+            # (`Node: zast.Node`, whose parent names a UNIT and which
+            # resolveDef registers); anything else is a member read on a type.
+            if (isNumericLiteralName name: sfLit9.stringview) == false then {
+                # `false: bool.false` reads a variant ARM -- a compile-time
+                # value, and the shape core.z uses 41 times. A FUNCTION member
+                # (`Point.create`) is a runtime construction instead, which a
+                # unit constant cannot hold.
+                # The parent's FAMILY decides: a variant or union parent means
+                # the child is an ARM -- a compile-time value. Any other family
+                # means a member read or a construction. `declDefTypetype`
+                # classifies a definition without resolving it, which is what
+                # reaches a SAME-UNIT type at this stage; the typeref walk
+                # answers for the resolvable ones.
+                isCtor9: false
+                if (reg.isUnitName nameId: (nameIdOf :ast name: sfLit9.stringview)) == false then {
+                    ptt9: ztypes.ztypetype.nullType
+                    known9: false
+                    {
+                        pdc9: declOfUnitDef :ty :ast defUnit: unitName name: sfLit9.stringview
+                        if (pdc9.isZero) == false then {
+                            pdt9: declDefTypetype :ty :ast declId: pdc9
+                            match (
+                                pdt9
+                            ) case some then {
+                                ptt9 = pdt9
+                                known9 = true
+                            } case none then null
+                        }
+                    }
+                    if (known9) == false then {
+                        pTo9: (walkLookupTyperef
+                            :ast
+                            :ty
+                            :reg
+                            currentUnit: unitName
+                            base: sfLit9.stringview
+                        )
+                        match (
+                            pTo9
+                        ) case some then {
+                            ptt9 = reg.typetypeOf typeId: (ztypes.tid.create from: pTo9.u64)
+                            known9 = true
+                        } case none then null
+                    }
+                    if known9 then {
+                        isCtor9 = true
+                        if ptt9 == ztypes.ztypetype.variantType then isCtor9 = false
+                        if ptt9 == ztypes.ztypetype.unionType then isCtor9 = false
+                    }
+                }
+                if isCtor9 then {
+                    dm9: "a unit-level constant takes a literal value, not a construction".string
+                    dh9: "construct it inside a function, or make '\{defName}' a function that returns the value"
+                    (reportUnitConstantShape
+                        :ty
+                        nodeid: defn.nodeid
+                        lineno: defn.lineno
+                        colno: defn.colno
+                        width: sfLit9.length.u32.orPanic
+                        msg: dm9
+                        hint: dh9
+                    )
+                }
+            }
             if (isNumericLiteralName name: sfLit9.stringview) then {
                 sfT9: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: sfTy9.stringview
                 match (
@@ -25545,6 +25642,45 @@ resolveConstantDef: function {
             } case none then null
         }
     } else {
+        # A construction is not a literal. `origin: Point.create x: 0` used to
+        # register nothing and report nothing. The PARENTHESISED call is the
+        # generic-unit instantiation form (`intmath: (genmath t: i64)`) and
+        # stays legal -- its callee names a UNIT, which is the test here; the
+        # definition arms (functiondef, objectdef, unitdef, datablock) reach
+        # this leg too and must never be reported.
+        match (
+            defn
+        ) case call then {
+            ccn9: ast.nodes.get i: (defn.callable - 1).u64
+            cbn9: atomName :ast n: ccn9
+            if cbn9.length == 0 then cbn9 = dottedRootName :ast n: ccn9
+            if cbn9.length > 0 then {
+                # a unit declared in THIS file is not in the registry yet, so
+                # the Decl tree answers where `isUnitName` cannot -- without it
+                # every `intmath: (mathops t: i64)` reads as a construction.
+                cbu9: reg.isUnitName nameId: (nameIdOf :ast name: cbn9.stringview)
+                if (cbu9) == false then {
+                    cdc9: declOfUnitDef :ty :ast defUnit: unitName name: cbn9.stringview
+                    if (cdc9.isZero) == false when (ty.declValid id: cdc9) then {
+                        cdo9: ty.decls.get i: (cdc9 - 1)
+                        if cdo9.kind.unitDecl then cbu9 = true
+                    }
+                }
+                if (cbu9) == false then {
+                    cm9: "a unit-level constant takes a literal value, not a construction".string
+                    ch9: "construct it inside a function, or make '\{defName}' a function that returns the value"
+                    (reportUnitConstantShape
+                        :ty
+                        nodeid: defn.nodeid
+                        lineno: defn.lineno
+                        colno: defn.colno
+                        width: cbn9.length.u32.orPanic
+                        msg: cm9
+                        hint: ch9
+                    )
+                }
+            }
+        } else null
         if (isBinopNode n: defn) then {
             # A constant expression (`COMBINED: OFFSET + SCALE`): the operand
             # walk stamps the refs and the binop; a literal result materialises
