@@ -1911,6 +1911,23 @@ moveMarkerBase: function {ast: Ast.view n: Node.view} out u64 is {
     }
 }
 
+# isBareNameValue -- the value is a BARE name (through any expression wrapper).
+# The binding legs test this before asking implicitTakeSource for a move source:
+# that answer costs a String, and only a bare name can move an owned local.
+isBareNameValue: function {ast: Ast.view n: Node.view} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (isBareNameValue :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case atomid then {
+        return true
+    } case labelvalue then {
+        return true
+    } else {
+        return false
+    }
+}
+
 # the source path an implicit `.take` moves from, if any.
 implicitTakeSource: function {
     ast: Ast.view
@@ -10605,6 +10622,16 @@ emitStmt: function {
                     nmc3: nm.copy
                     tmp.frees.append nmc3
                     tmp.freeRaw.append nmVid9
+                    # a binding from a bare owned local is a MOVE, exactly as a
+                    # reassignment from one is: zero the source so its scope-exit
+                    # free no-ops now that this binding owns the buffer.
+                    if (isBareNameValue :ast n: avn9) then {
+                        szs9: implicitTakeSource :ast :symtab :ctx n: avn9
+                        if szs9.length > 0 then {
+                            szi9: "\{ind}\{szs9} = (\{ctx.strC}_t){0};\n"
+                            buf.append szi9
+                        }
+                    }
                 }
             }
             return
@@ -10698,6 +10725,46 @@ emitStmt: function {
                 if bts9.length > 0 then {
                     bzz9: "\{ind}\{rv} = (\{ct}){0};\n"
                     buf.append bzz9
+                } else {
+                    # a binding from a bare owned local is a MOVE, exactly as a
+                    # reassignment from one is: zero the source so its scope-exit
+                    # free no-ops now that this binding owns the heap. A borrow
+                    # binding owns nothing, so its source keeps its value.
+                    # ownership is decided from the type BEFORE the source text
+                    # is composed: a scalar binding moves nothing, and asking for
+                    # the source costs a String.
+                    if (isBareNameValue :ast n: avn9) then {
+                        bzt9: stampIdOf :symtab nid: (nodeIdOf9 n: avn9)
+                        bzp9: isHeapPtrCollection :symtab :ctx tid: bzt9
+                        bzo9: bzp9
+                        if (symtab.reg.hasDestructorName typeId: bzt9) then bzo9 = true
+                        if bzo9 when (bindingRhsIsBorrow
+                            :ast
+                            :symtab
+                            :ctx
+                            n: avn9
+                        ) == false then {
+                            bzs9: implicitTakeSource :ast :symtab :ctx n: avn9
+                            if bzs9.length > 0 then {
+                                if bzp9 then {
+                                    bzh9: "\{ind}\{bzs9} = NULL;\n"
+                                    buf.append bzh9
+                                } else {
+                                    bzc9: (typeRefC
+                                        :ast
+                                        :symtab
+                                        :ctx
+                                        tid: bzt9
+                                        thisTid: ztypes.tid
+                                    )
+                                    if bzc9.length > 0 then {
+                                        bzi9: "\{ind}\{bzs9} = (\{bzc9}){0};\n"
+                                        buf.append bzi9
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             # an owned class/record local with heap fields is destroyed at scope
