@@ -74,22 +74,51 @@ optU64Or9: function {o: optionval u64} out u64 is {
 # cnameOf -- the id-based C name base for a type ("z_t{id}_{name}", dots
 # joined with underscores). Mirrors the reference's _assign_cname scheme;
 # ids differ between the two typecheckers by design.
+# opCnameOf -- a C-identifier spelling for an operator method name (a
+# typedef's shadowed `==`, a numeric `+`), "" for ordinary names.
+opCnameOf: function {name: StringView} out String is {
+    if name == "==" then return "op_eq".string
+    if name == "!=" then return "op_ne".string
+    if name == "<=" then return "op_le".string
+    if name == ">=" then return "op_ge".string
+    if name == "<" then return "op_lt".string
+    if name == ">" then return "op_gt".string
+    if name == "+" then return "op_add".string
+    if name == "-" then return "op_sub".string
+    if name == "*" then return "op_mul".string
+    if name == "/" then return "op_div".string
+    if name == "%" then return "op_mod".string
+    if name == "&" then return "op_and".string
+    return "".string
+}
+
 cnameOf: function {tid: ztypes.tid ownerName: StringView name: StringView} out String is {
-    flat: String
-    biter: u64
-    n: name.length
-    for biter < n loop {
-        bo: name.byteAt i: biter
-        match (
-            bo
-        ) case some then {
-            if bo == 46 then {
-                flat.append "_"
-            } else {
-                flat.appendByte b: bo
-            }
-        } case none then null
-        biter = biter + 1
+    flat: opCnameOf :name
+    if flat.length == 0 then {
+        biter: u64
+        n: name.length
+        for biter < n loop {
+            bo: name.byteAt i: biter
+            match (
+                bo
+            ) case some then {
+                if bo == 46 then {
+                    flat.append "_"
+                } else {
+                    identB9: false
+                    if bo >= 97 when bo <= 122 then identB9 = true
+                    if bo >= 65 when bo <= 90 then identB9 = true
+                    if bo >= 48 when bo <= 57 then identB9 = true
+                    if bo == 95 then identB9 = true
+                    if identB9 then {
+                        flat.appendByte b: bo
+                    } else {
+                        flat.append "_"
+                    }
+                }
+            } case none then null
+            biter = biter + 1
+        }
     }
     if ownerName.length == 0 then return "z_t\{tid}_\{flat}"
     oflat: ownerName.replace needle: "." replacement: "_"
@@ -8289,7 +8318,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                         # receiver (fbtn9 is the enclosing type's name). The
                         # native scalar/String creates have no C symbol: the
                         # zero value is the construction.
-                        if bn2.stringview == fbtn9.stringview when mn2.stringview == "create" then {
+                        if bn2v9.isZero when bn2.stringview == fbtn9.stringview when mn2.stringview == "create" then {
                             zsc9: scalarCTypeFor :symtab name: fbtn9.stringview tid: bstamp
                             if zsc9.length > 0 then {
                                 zse9: "((\{zsc9})0)"
@@ -8300,7 +8329,11 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                                 return zst9
                             }
                         }
-                        if bn2.stringview == fbtn9.stringview then {
+                        # static/type-qualified only when the base is the TYPE
+                        # NAME, not a local that happens to share its spelling
+                        # (--readable-names keeps source names, so the text
+                        # alone cannot discriminate; a local base has a vid)
+                        if bn2v9.isZero when bn2.stringview == fbtn9.stringview then {
                             sda9: (renderedMethodDefaultArgs
                                 :ast
                                 :symtab
@@ -8336,7 +8369,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                         name: mn2.stringview
                     ) then {
                         mcFp: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
-                        if bn2.stringview == fbtn9.stringview then return mcFp
+                        if bn2v9.isZero when bn2.stringview == fbtn9.stringview then return mcFp
                         if (fnTypeTakesThis :symtab tid: (ztypes.tid.create from: mco.u64)) then {
                             accFp: ".".string
                             rcvFp: "&\{bn2}"

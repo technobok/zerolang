@@ -122,7 +122,7 @@ ci-corpus: bin/zc $(BUILDDIR)/ztestrunner
 # only in identifier spelling, so the built programs must behave identically.
 readable-check: bin/zc
 	@mkdir -p $(BUILDDIR)/rn
-	@for n in hello vector records fibonacci; do \
+	@for n in hello vector records fibonacci typedefs; do \
 	  bin/zc $$n --src examples --system lib/system --emit-c $(BUILDDIR)/rn/$$n-id.c || exit 1; \
 	  bin/zc $$n --src examples --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/$$n-rn.c || exit 1; \
 	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-id $(BUILDDIR)/rn/$$n-id.c -lquadmath -lm || exit 1; \
