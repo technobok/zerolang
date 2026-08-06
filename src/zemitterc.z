@@ -6521,11 +6521,13 @@ emitCrossUnitExplicitCreate: function {
     ctx: Ctx.view
     call: zast.CallData.view
 } out String is {
-    pbase: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    arm9: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
+    if arm9.stringview != "create" then return "".string
+    pbase: outerBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     ptype: dottedParentChild :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     if pbase.length == 0 then return "".string
     if ptype.length == 0 then return "".string
-    if (symtab.reg.isUnitName nameId: (dottedBaseAtomId
+    if (symtab.reg.isUnitName nameId: (outerBaseAtomId
         :ast
         n: (ast.nodes.get i: (call.callable - 1).u64)
     )) == false then return "".string
@@ -6538,6 +6540,9 @@ emitCrossUnitExplicitCreate: function {
         tid = ztypes.tid.create from: (go)
     } case none then null
     if tid.isZero then return "".string
+    # a generic template's create resolves through the callable's mono
+    # stamp (the constructor leg below); this leg handles concrete types only
+    if (isGenericType :symtab :tid) then return "".string
     cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wkCreate
     match (
         cco
@@ -6685,10 +6690,6 @@ emitCrossUnitCtor: function {
     child: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if base.length == 0 then return "".string
     if child.length == 0 then return "".string
-    if child.stringview == "create" then {
-        ce9: emitCrossUnitExplicitCreate :ast :symtab :ctx :call
-        if ce9.length > 0 then return ce9
-    }
     if (symtab.reg.isUnitName nameId: (dottedBaseAtomId
         :ast
         n: (ast.nodes.get i: (call.callable - 1).u64)
@@ -6961,6 +6962,8 @@ emitCallValue: function {
     }
     iwc: emitIoWrapperCreate :ast :symtab :ctx :call
     if iwc.length > 0 then return iwc
+    xcc9: emitCrossUnitExplicitCreate :ast :symtab :ctx :call
+    if xcc9.length > 0 then return xcc9
     ctc: emitColTypedefCall :ast :symtab :ctx :call
     if ctc.length > 0 then return ctc
     tq: emitTypeQualCall :ast :symtab :ctx :call
