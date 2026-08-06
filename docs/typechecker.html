@@ -561,6 +561,25 @@ escape checks.</li>
 <p>Parameters default to <code>.borrow</code>; <code>.take</code> and <code>.borrow</code> are
 the opt-in transfers. The annotations live on the parameter's own
 <code>Decl</code>, not on the parameter <code>ZType</code>.</p>
+<p><strong>The `:name` shorthand at the argument site.</strong> A <code>:name</code>
+argument parses as a <code>labelvalue</code> node, not an <code>atomid</code>, so
+<code>walkCallArgsHoist</code>'s bare-name leg resolves it explicitly. At a
+<code>.take</code> parameter the shorthand transfers ownership exactly as
+the written-out <code>name: name</code> form does (the source is
+invalidated; a later use is E0200). At lock/borrow parameters the
+shorthand currently takes <em><strong>no</strong></em> call-scoped lock -- the
+written-out form takes <code>EXCLUSIVE</code>/<code>SHARED</code> via
+<code>lockCallArg</code>, the shorthand form skips it. Closing that gap is
+a measured, recorded follow-on: routing <code>labelvalue</code> through
+<code>lockCallArg</code> surfaces 1,934 E0200s at 1,848 unique sites in the
+compiler's own tree (1,239 readonly-into-mutable-borrow, 477
+shared-lock overlaps, 124 enclosing-call aliasing, 87
+same-reftype-twice, 6 exclusive overlaps), and converging them is
+per-callee dataflow work (widen read-only callees to <code>.view</code>,
+make genuinely-mutated caller bindings mutable, restructure
+iterator overlaps). Until that arc lands, a readonly binding
+passed via <code>:name</code> to a mutable-borrow parameter is accepted
+without a diagnostic.</p>
 <h3 id="lock-checking"><a href="#lock-checking">8.2. Lock checking</a></h3>
 <p>The typechecker chooses <em><strong>when</strong></em> to install a lock; <code>zenv.z</code>
 owns the conflict rule (<code>lockAcquireConflict</code>) and the

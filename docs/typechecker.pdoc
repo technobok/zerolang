@@ -530,6 +530,26 @@ Parameters default to #~".borrow"; #~".take" and #~".borrow" are
 the opt-in transfers. The annotations live on the parameter's own
 #~"Decl", not on the parameter #~"ZType".
 
+#b:"The `:name` shorthand at the argument site." A #~":name"
+argument parses as a #~"labelvalue" node, not an #~"atomid", so
+#~"walkCallArgsHoist"'s bare-name leg resolves it explicitly. At a
+#~".take" parameter the shorthand transfers ownership exactly as
+the written-out #~"name: name" form does (the source is
+invalidated; a later use is E0200). At lock/borrow parameters the
+shorthand currently takes #_*"no" call-scoped lock -- the
+written-out form takes #~"EXCLUSIVE"/#~"SHARED" via
+#~"lockCallArg", the shorthand form skips it. Closing that gap is
+a measured, recorded follow-on: routing #~"labelvalue" through
+#~"lockCallArg" surfaces 1,934 E0200s at 1,848 unique sites in the
+compiler's own tree (1,239 readonly-into-mutable-borrow, 477
+shared-lock overlaps, 124 enclosing-call aliasing, 87
+same-reftype-twice, 6 exclusive overlaps), and converging them is
+per-callee dataflow work (widen read-only callees to #~".view",
+make genuinely-mutated caller bindings mutable, restructure
+iterator overlaps). Until that arc lands, a readonly binding
+passed via #~":name" to a mutable-borrow parameter is accepted
+without a diagnostic.
+
 
 #---: Lock checking
 
