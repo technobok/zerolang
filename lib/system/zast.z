@@ -10,6 +10,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :nameid
+    :nodeid
     :AssignmentData
     :Ast
     :AtomIdData
@@ -298,7 +299,7 @@ astkind: variant {
 # because they hold reftype fields (String, Node, List); records
 # cannot hold reftypes.
 ErrorData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     width: u32
@@ -504,7 +505,7 @@ explainText: function {code: u32} out String is {
 
 # an atom node (a bare identifier reference): position + interned name id.
 AtomIdData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     name: nameid
@@ -512,7 +513,7 @@ AtomIdData: class {
 
 # a label-value node (a `name:`-shaped operand): position + interned name id.
 LabelValueData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     name: nameid
@@ -677,6 +678,20 @@ nameid: record { val: u32.typedef } as {
     }
 }
 
+# nodeid -- an Ast node id: the identity of one node in the single monotonic
+# node space (1-based; 0 is "no node", and a synthesized node reads
+# `fsnoForNode == 0`). A typedef so a node id cannot cross with the pool,
+# type, variable or declaration id spaces; equality is same-space only,
+# sentinels read isZero.
+nodeid: record { val: u32.typedef } as {
+    ==: function {:this rhs: nodeid} out bool is {
+        return this.u32 == rhs.u32
+    }
+    isZero: function {:this} out bool is {
+        return this.u32 == 0
+    }
+}
+
 # StringPool -- deduplicating intern table for identifier text. ids are
 # 1-based (0 = absent); texts are never removed, so an id stays valid for
 # the pool's lifetime. The slot index is an open-addressed, linear-probed
@@ -800,7 +815,7 @@ StringPool: class {
 
 # one chunk of an interpolated string -- literal text or an embedded expression, tagged by `chunkKind`.
 StringChunkData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     text: String
@@ -812,7 +827,7 @@ StringChunkData: class {
 # specific child-type constraints (e.g. operator must be an
 # AtomId) live in the typechecker.
 BinOpData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     lhs: u32
@@ -824,7 +839,7 @@ BinOpData: class {
 # children representing the literal text chunks and embedded
 # interpolation expressions.
 AtomStringData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     stringparts: (ListVal u32)
@@ -833,7 +848,7 @@ AtomStringData: class {
 # Dotted-path node payload: a parent path and a child selector,
 # both Node children (the child is an AtomId arm).
 DottedPathData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     parent: u32
@@ -843,7 +858,7 @@ DottedPathData: class {
 # Call node payload: the callable path and an ordered list of
 # argument nodes (each a NamedOperation arm once that arm lands).
 CallData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     callable: u32
@@ -853,7 +868,7 @@ CallData: class {
 # typeof-expression payload (compiler-synthesised): the operation
 # whose static type is taken.
 TypeOfExprData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     source: u32
@@ -863,7 +878,7 @@ TypeOfExprData: class {
 # operation value. Appears as a Call/Data argument; `name` is the
 # label's Ast.names pool id (0 = absent / positional).
 NamedOperationData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     name: nameid
@@ -874,7 +889,7 @@ NamedOperationData: class {
 # nodes and an optional `out <type-ref>` annotation that pins the
 # element type for the whole block.
 DataBlockData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     elements: (ListVal u32)
@@ -884,7 +899,7 @@ DataBlockData: class {
 # Yield payload: the expression whose value is yielded out of a
 # generator function at this suspension point.
 YieldExprData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     expr: u32
@@ -893,7 +908,7 @@ YieldExprData: class {
 # Statement payload: an ordered list of StatementLine nodes — the
 # lines of a brace-delimited code block.
 StatementData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     statements: (ListVal u32)
@@ -902,7 +917,7 @@ StatementData: class {
 # StatementLine payload: one line of a block, wrapping exactly one of
 # assignment / reassignment / swapstmt / expression.
 StatementLineData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     statementline: u32
@@ -911,7 +926,7 @@ StatementLineData: class {
 # Assignment payload: bind a new local (an interned name id) to the
 # value of an expression node.
 AssignmentData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     name: nameid
@@ -921,7 +936,7 @@ AssignmentData: class {
 # Reassignment payload: update the target path with the value of an
 # expression node.
 ReassignmentData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     topath: u32
@@ -931,7 +946,7 @@ ReassignmentData: class {
 # Swap payload: exchange the contents of two owned reference paths.
 # (Arm named swapstmt because `swap` is a keyword.)
 SwapStmtData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     lhs: u32
@@ -941,7 +956,7 @@ SwapStmtData: class {
 # Expression payload: wraps the single operation/control-flow node
 # that forms an expression.
 ExpressionData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     expression: u32
@@ -949,7 +964,7 @@ ExpressionData: class {
 
 # If payload: ordered if/when clauses plus an optional else statement.
 IfData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     clauses: (ListVal u32)
@@ -959,7 +974,7 @@ IfData: class {
 # IfClause payload: the clause conditions (each a namedoperation arm;
 # unnamed = positional when-condition) and the statement to run.
 IfClauseData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     conditions: (ListVal u32)
@@ -970,7 +985,7 @@ IfClauseData: class {
 # unnamed = while-condition), an optional loop body, and the bool
 # postconditions re-checked each iteration.
 ForData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     conditions: (ListVal u32)
@@ -980,7 +995,7 @@ ForData: class {
 
 # Do payload: a statement block evaluated as an expression.
 DoData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     statement: u32
@@ -989,7 +1004,7 @@ DoData: class {
 # With payload: a scoped binding (an interned name id), its value, and
 # the body expression evaluated under that binding.
 WithData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     name: nameid
@@ -1000,7 +1015,7 @@ WithData: class {
 # Case payload: the subject operation, the ordered match clauses, and
 # an optional else statement.
 CaseData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     subject: u32
@@ -1011,7 +1026,7 @@ CaseData: class {
 # CaseClause payload: the binding name (an interned name id), the AtomId
 # arm being matched, and the statement to run.
 CaseClauseData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     name: nameid
@@ -1024,7 +1039,7 @@ CaseClauseData: class {
 # and the `as`-block members (namedoperation arms). Member maps are
 # ordered name+node lists, not keyed Maps.
 FunctionData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     returntype: u32
@@ -1039,7 +1054,7 @@ FunctionData: class {
 # PROTOCOL/FACET). `isItems` are the `is`-block members and `asItems`
 # the `as`-block members, each a namedoperation arm.
 ObjectDefData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     kind: nodetype
@@ -1050,7 +1065,7 @@ ObjectDefData: class {
 
 # Unit payload: the unit's top-level definitions as namedoperation arms.
 UnitData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     body: (ListVal u32)
@@ -1061,7 +1076,7 @@ UnitData: class {
 # carried only for error reporting in the Python reference and is not
 # part of the AST tree; omitted here.)
 ProgramData: class {
-    nodeid: u32
+    nodeid: nodeid
     lineno: u32
     colno: u32
     mainUnitName: String
@@ -1861,7 +1876,7 @@ main: function is {
 
     print "=== Node ==="
     n1: Node.error (ErrorData
-        nodeid: 1
+        nodeid: 1.nodeid
         lineno: 10
         colno: 5
         width: 8
@@ -1873,21 +1888,21 @@ main: function is {
     )
     printNode :ast n: n1
     n2: Node.atomid (AtomIdData
-        nodeid: 2
+        nodeid: 2.nodeid
         lineno: 11
         colno: 3
         name: (smokeNameRef :ast text: "myvar")
     )
     printNode :ast n: n2
     n3: Node.labelvalue (LabelValueData
-        nodeid: 3
+        nodeid: 3.nodeid
         lineno: 12
         colno: 7
         name: (smokeNameRef :ast text: "x")
     )
     printNode :ast n: n3
     n4: Node.stringchunk (StringChunkData
-        nodeid: 4
+        nodeid: 4.nodeid
         lineno: 13
         colno: 9
         text: "hello".string
@@ -1898,7 +1913,7 @@ main: function is {
     # Recursive: an atomstring containing two child nodes (list of Node).
     parts: (ListVal u32)
     parts.append (tableAdd :ast n: (Node.stringchunk (StringChunkData
-        nodeid: 5
+        nodeid: 5.nodeid
         lineno: 14
         colno: 1
         text: "hello ".string
@@ -1907,32 +1922,37 @@ main: function is {
     parts.append (tableAdd
         :ast
         n: (Node.atomid (AtomIdData
-            nodeid: 6
+            nodeid: 6.nodeid
             lineno: 14
             colno: 8
             name: (smokeNameRef :ast text: "name")
         ))
     )
-    n5: Node.atomstring (AtomStringData nodeid: 7 lineno: 14 colno: 1 stringparts: parts)
+    n5: Node.atomstring (AtomStringData nodeid: 7.nodeid lineno: 14 colno: 1 stringparts: parts)
     printNode :ast n: n5
 
     # Recursive: a binop "x + y" with three Node children stored
     # by value on the carrier class.
     lhs: Node.atomid (AtomIdData
-        nodeid: 8
+        nodeid: 8.nodeid
         lineno: 15
         colno: 1
         name: (smokeNameRef :ast text: "x")
     )
-    op: Node.atomid (AtomIdData nodeid: 9 lineno: 15 colno: 3 name: (smokeNameRef :ast text: "+"))
+    op: Node.atomid (AtomIdData
+        nodeid: 9.nodeid
+        lineno: 15
+        colno: 3
+        name: (smokeNameRef :ast text: "+")
+    )
     rhs: Node.atomid (AtomIdData
-        nodeid: 10
+        nodeid: 10.nodeid
         lineno: 15
         colno: 5
         name: (smokeNameRef :ast text: "y")
     )
     n6: Node.binop (BinOpData
-        nodeid: 11
+        nodeid: 11.nodeid
         lineno: 15
         colno: 3
         lhs: (tableAdd :ast n: lhs)
@@ -1943,19 +1963,19 @@ main: function is {
 
     # dottedpath "a.b": parent and child are atomid Node children.
     dpp: Node.atomid (AtomIdData
-        nodeid: 12
+        nodeid: 12.nodeid
         lineno: 16
         colno: 1
         name: (smokeNameRef :ast text: "a")
     )
     dpc: Node.atomid (AtomIdData
-        nodeid: 13
+        nodeid: 13.nodeid
         lineno: 16
         colno: 3
         name: (smokeNameRef :ast text: "b")
     )
     n7: Node.dottedpath (DottedPathData
-        nodeid: 14
+        nodeid: 14.nodeid
         lineno: 16
         colno: 2
         parent: (tableAdd :ast n: dpp)
@@ -1965,7 +1985,7 @@ main: function is {
 
     # call "f arg": callable atomid + one-element argument list.
     callee: Node.atomid (AtomIdData
-        nodeid: 15
+        nodeid: 15.nodeid
         lineno: 17
         colno: 1
         name: (smokeNameRef :ast text: "f")
@@ -1974,14 +1994,14 @@ main: function is {
     args.append (tableAdd
         :ast
         n: (Node.atomid (AtomIdData
-            nodeid: 16
+            nodeid: 16.nodeid
             lineno: 17
             colno: 3
             name: (smokeNameRef :ast text: "arg")
         ))
     )
     n8: Node.call (CallData
-        nodeid: 17
+        nodeid: 17.nodeid
         lineno: 17
         colno: 1
         callable: (tableAdd :ast n: callee)
@@ -1991,13 +2011,13 @@ main: function is {
 
     # typeofexpr over a single source operation.
     tsrc: Node.atomid (AtomIdData
-        nodeid: 18
+        nodeid: 18.nodeid
         lineno: 18
         colno: 1
         name: (smokeNameRef :ast text: "x")
     )
     n9: Node.typeofexpr (TypeOfExprData
-        nodeid: 19
+        nodeid: 19.nodeid
         lineno: 18
         colno: 1
         source: (tableAdd :ast n: tsrc)
@@ -2006,14 +2026,14 @@ main: function is {
 
     # namedoperation "label: x" — a labelled argument value.
     noval: Node.atomid (AtomIdData
-        nodeid: 20
+        nodeid: 20.nodeid
         lineno: 19
         colno: 8
         name: (smokeNameRef :ast text: "x")
     )
     noname: smokeNameRef :ast text: "label"
     n10: Node.namedoperation (NamedOperationData
-        nodeid: 21
+        nodeid: 21.nodeid
         lineno: 19
         colno: 1
         name: (nameid.create from: noname.u32)
@@ -2023,13 +2043,13 @@ main: function is {
 
     # namedoperation with no label (positional argument).
     noval2: Node.atomid (AtomIdData
-        nodeid: 22
+        nodeid: 22.nodeid
         lineno: 20
         colno: 1
         name: (smokeNameRef :ast text: "y")
     )
     n11: Node.namedoperation (NamedOperationData
-        nodeid: 23
+        nodeid: 23.nodeid
         lineno: 20
         colno: 1
         name: nameid
@@ -2042,7 +2062,7 @@ main: function is {
     elems.append (tableAdd
         :ast
         n: (Node.atomid (AtomIdData
-            nodeid: 24
+            nodeid: 24.nodeid
             lineno: 21
             colno: 8
             name: (smokeNameRef :ast text: "a")
@@ -2051,20 +2071,20 @@ main: function is {
     elems.append (tableAdd
         :ast
         n: (Node.atomid (AtomIdData
-            nodeid: 25
+            nodeid: 25.nodeid
             lineno: 21
             colno: 10
             name: (smokeNameRef :ast text: "b")
         ))
     )
     douttype: Node.atomid (AtomIdData
-        nodeid: 26
+        nodeid: 26.nodeid
         lineno: 21
         colno: 18
         name: (smokeNameRef :ast text: "T")
     )
     n12: Node.datablock (DataBlockData
-        nodeid: 27
+        nodeid: 27.nodeid
         lineno: 21
         colno: 1
         elements: elems
@@ -2077,14 +2097,14 @@ main: function is {
     elems2.append (tableAdd
         :ast
         n: (Node.atomid (AtomIdData
-            nodeid: 28
+            nodeid: 28.nodeid
             lineno: 22
             colno: 8
             name: (smokeNameRef :ast text: "c")
         ))
     )
     n13: Node.datablock (DataBlockData
-        nodeid: 29
+        nodeid: 29.nodeid
         lineno: 22
         colno: 1
         elements: elems2
@@ -2094,13 +2114,13 @@ main: function is {
 
     # yieldexpr "yield x" — a generator suspension point.
     yval: Node.atomid (AtomIdData
-        nodeid: 30
+        nodeid: 30.nodeid
         lineno: 23
         colno: 7
         name: (smokeNameRef :ast text: "x")
     )
     n14: Node.yieldexpr (YieldExprData
-        nodeid: 31
+        nodeid: 31.nodeid
         lineno: 23
         colno: 1
         expr: (tableAdd :ast n: yval)
@@ -2109,13 +2129,13 @@ main: function is {
 
     # expression wrapping an atomid operation.
     exprop: Node.atomid (AtomIdData
-        nodeid: 32
+        nodeid: 32.nodeid
         lineno: 24
         colno: 4
         name: (smokeNameRef :ast text: "y")
     )
     n15: Node.expression (ExpressionData
-        nodeid: 33
+        nodeid: 33.nodeid
         lineno: 24
         colno: 4
         expression: (tableAdd :ast n: exprop)
@@ -2124,19 +2144,19 @@ main: function is {
 
     # assignment "x: y" — bind x to the expression node above (rebuilt).
     asgexprop: Node.atomid (AtomIdData
-        nodeid: 34
+        nodeid: 34.nodeid
         lineno: 25
         colno: 4
         name: (smokeNameRef :ast text: "y")
     )
     asgval: Node.expression (ExpressionData
-        nodeid: 35
+        nodeid: 35.nodeid
         lineno: 25
         colno: 4
         expression: (tableAdd :ast n: asgexprop)
     )
     n16: Node.assignment (AssignmentData
-        nodeid: 36
+        nodeid: 36.nodeid
         lineno: 25
         colno: 1
         name: (smokeNameRef :ast text: "x")
@@ -2146,38 +2166,38 @@ main: function is {
 
     # reassignment "a.b = z" — target dotted path, expression value.
     raparent: Node.atomid (AtomIdData
-        nodeid: 37
+        nodeid: 37.nodeid
         lineno: 26
         colno: 1
         name: (smokeNameRef :ast text: "a")
     )
     rachild: Node.atomid (AtomIdData
-        nodeid: 38
+        nodeid: 38.nodeid
         lineno: 26
         colno: 3
         name: (smokeNameRef :ast text: "b")
     )
     rapath: Node.dottedpath (DottedPathData
-        nodeid: 39
+        nodeid: 39.nodeid
         lineno: 26
         colno: 2
         parent: (tableAdd :ast n: raparent)
         child: (tableAdd :ast n: rachild)
     )
     raexprop: Node.atomid (AtomIdData
-        nodeid: 40
+        nodeid: 40.nodeid
         lineno: 26
         colno: 7
         name: (smokeNameRef :ast text: "z")
     )
     raval: Node.expression (ExpressionData
-        nodeid: 41
+        nodeid: 41.nodeid
         lineno: 26
         colno: 7
         expression: (tableAdd :ast n: raexprop)
     )
     n17: Node.reassignment (ReassignmentData
-        nodeid: 42
+        nodeid: 42.nodeid
         lineno: 26
         colno: 1
         topath: (tableAdd :ast n: rapath)
@@ -2187,19 +2207,19 @@ main: function is {
 
     # swapstmt "swap p q" — two owned paths.
     swlhs: Node.atomid (AtomIdData
-        nodeid: 43
+        nodeid: 43.nodeid
         lineno: 27
         colno: 6
         name: (smokeNameRef :ast text: "p")
     )
     swrhs: Node.atomid (AtomIdData
-        nodeid: 44
+        nodeid: 44.nodeid
         lineno: 27
         colno: 8
         name: (smokeNameRef :ast text: "q")
     )
     n18: Node.swapstmt (SwapStmtData
-        nodeid: 45
+        nodeid: 45.nodeid
         lineno: 27
         colno: 1
         lhs: (tableAdd :ast n: swlhs)
@@ -2209,26 +2229,26 @@ main: function is {
 
     # statementline wrapping a standalone assignment.
     slexprop: Node.atomid (AtomIdData
-        nodeid: 46
+        nodeid: 46.nodeid
         lineno: 28
         colno: 4
         name: (smokeNameRef :ast text: "m")
     )
     slval: Node.expression (ExpressionData
-        nodeid: 47
+        nodeid: 47.nodeid
         lineno: 28
         colno: 4
         expression: (tableAdd :ast n: slexprop)
     )
     slasg: Node.assignment (AssignmentData
-        nodeid: 48
+        nodeid: 48.nodeid
         lineno: 28
         colno: 1
         name: (smokeNameRef :ast text: "k")
         value: (tableAdd :ast n: slval)
     )
     n19: Node.statementline (StatementLineData
-        nodeid: 49
+        nodeid: 49.nodeid
         lineno: 28
         colno: 1
         statementline: (tableAdd :ast n: slasg)
@@ -2238,62 +2258,62 @@ main: function is {
     # statement block holding two statementlines (exercises the list iterator).
     lines: (ListVal u32)
     l1op: Node.atomid (AtomIdData
-        nodeid: 50
+        nodeid: 50.nodeid
         lineno: 29
         colno: 8
         name: (smokeNameRef :ast text: "u")
     )
     l1val: Node.expression (ExpressionData
-        nodeid: 51
+        nodeid: 51.nodeid
         lineno: 29
         colno: 8
         expression: (tableAdd :ast n: l1op)
     )
     l1asg: Node.assignment (AssignmentData
-        nodeid: 52
+        nodeid: 52.nodeid
         lineno: 29
         colno: 5
         name: (smokeNameRef :ast text: "t")
         value: (tableAdd :ast n: l1val)
     )
     lines.append (tableAdd :ast n: (Node.statementline (StatementLineData
-        nodeid: 53
+        nodeid: 53.nodeid
         lineno: 29
         colno: 5
         statementline: (tableAdd :ast n: l1asg))
     ))
     l2op: Node.atomid (AtomIdData
-        nodeid: 54
+        nodeid: 54.nodeid
         lineno: 30
         colno: 5
         name: (smokeNameRef :ast text: "v")
     )
     l2expr: Node.expression (ExpressionData
-        nodeid: 55
+        nodeid: 55.nodeid
         lineno: 30
         colno: 5
         expression: (tableAdd :ast n: l2op)
     )
     lines.append (tableAdd :ast n: (Node.statementline (StatementLineData
-        nodeid: 56
+        nodeid: 56.nodeid
         lineno: 30
         colno: 5
         statementline: (tableAdd :ast n: l2expr))
     ))
-    n20: Node.statement (StatementData nodeid: 57 lineno: 29 colno: 1 statements: lines)
+    n20: Node.statement (StatementData nodeid: 57.nodeid lineno: 29 colno: 1 statements: lines)
     printNode :ast n: n20
 
     # --- control flow (PR-C) ---
 
     # ifexpr: one ifclause (positional condition + empty body) + else.
     ifCondOp: Node.atomid (AtomIdData
-        nodeid: 58
+        nodeid: 58.nodeid
         lineno: 31
         colno: 4
         name: (smokeNameRef :ast text: "cond")
     )
     ifCond: Node.namedoperation (NamedOperationData
-        nodeid: 59
+        nodeid: 59.nodeid
         lineno: 31
         colno: 4
         name: nameid
@@ -2302,9 +2322,14 @@ main: function is {
     ifConds: (ListVal u32)
     ifConds.append (tableAdd :ast n: ifCond)
     ifStmtItems: (ListVal u32)
-    ifStmt: Node.statement (StatementData nodeid: 60 lineno: 31 colno: 12 statements: ifStmtItems)
+    ifStmt: Node.statement (StatementData
+        nodeid: 60.nodeid
+        lineno: 31
+        colno: 12
+        statements: ifStmtItems
+    )
     ifClause0: Node.ifclause (IfClauseData
-        nodeid: 61
+        nodeid: 61.nodeid
         lineno: 31
         colno: 1
         conditions: ifConds
@@ -2313,9 +2338,14 @@ main: function is {
     ifClauses: (ListVal u32)
     ifClauses.append (tableAdd :ast n: ifClause0)
     elseItems: (ListVal u32)
-    elseStmt: Node.statement (StatementData nodeid: 62 lineno: 32 colno: 5 statements: elseItems)
+    elseStmt: Node.statement (StatementData
+        nodeid: 62.nodeid
+        lineno: 32
+        colno: 5
+        statements: elseItems
+    )
     n21: Node.ifexpr (IfData
-        nodeid: 63
+        nodeid: 63.nodeid
         lineno: 31
         colno: 1
         clauses: ifClauses
@@ -2325,26 +2355,26 @@ main: function is {
 
     # forexpr: one binding + one positional while-condition, body, one postcondition.
     forBindOp: Node.atomid (AtomIdData
-        nodeid: 64
+        nodeid: 64.nodeid
         lineno: 33
         colno: 8
         name: (smokeNameRef :ast text: "items")
     )
     forBind: Node.namedoperation (NamedOperationData
-        nodeid: 65
+        nodeid: 65.nodeid
         lineno: 33
         colno: 5
         name: (smokeNameRef :ast text: "i")
         operation: (tableAdd :ast n: forBindOp)
     )
     forWhileOp: Node.atomid (AtomIdData
-        nodeid: 66
+        nodeid: 66.nodeid
         lineno: 33
         colno: 16
         name: (smokeNameRef :ast text: "more")
     )
     forWhile: Node.namedoperation (NamedOperationData
-        nodeid: 67
+        nodeid: 67.nodeid
         lineno: 33
         colno: 16
         name: nameid
@@ -2354,9 +2384,14 @@ main: function is {
     forConds.append (tableAdd :ast n: forBind)
     forConds.append (tableAdd :ast n: forWhile)
     forBodyItems: (ListVal u32)
-    forBody: Node.statement (StatementData nodeid: 68 lineno: 33 colno: 24 statements: forBodyItems)
+    forBody: Node.statement (StatementData
+        nodeid: 68.nodeid
+        lineno: 33
+        colno: 24
+        statements: forBodyItems
+    )
     forPostOp: Node.atomid (AtomIdData
-        nodeid: 69
+        nodeid: 69.nodeid
         lineno: 33
         colno: 30
         name: (smokeNameRef :ast text: "go")
@@ -2364,7 +2399,7 @@ main: function is {
     forPost: (ListVal u32)
     forPost.append (tableAdd :ast n: forPostOp)
     n22: Node.forexpr (ForData
-        nodeid: 70
+        nodeid: 70.nodeid
         lineno: 33
         colno: 1
         conditions: forConds
@@ -2375,25 +2410,30 @@ main: function is {
 
     # doexpr: an empty statement block.
     doItems: (ListVal u32)
-    doStmt: Node.statement (StatementData nodeid: 71 lineno: 34 colno: 4 statements: doItems)
-    n23: Node.doexpr (DoData nodeid: 72 lineno: 34 colno: 1 statement: (tableAdd :ast n: doStmt))
+    doStmt: Node.statement (StatementData nodeid: 71.nodeid lineno: 34 colno: 4 statements: doItems)
+    n23: Node.doexpr (DoData
+        nodeid: 72.nodeid
+        lineno: 34
+        colno: 1
+        statement: (tableAdd :ast n: doStmt)
+    )
     printNode :ast n: n23
 
     # withexpr "with w: v do e".
     withVal: Node.atomid (AtomIdData
-        nodeid: 73
+        nodeid: 73.nodeid
         lineno: 35
         colno: 9
         name: (smokeNameRef :ast text: "v")
     )
     withBody: Node.atomid (AtomIdData
-        nodeid: 74
+        nodeid: 74.nodeid
         lineno: 35
         colno: 14
         name: (smokeNameRef :ast text: "e")
     )
     n24: Node.withexpr (WithData
-        nodeid: 75
+        nodeid: 75.nodeid
         lineno: 35
         colno: 1
         name: (smokeNameRef :ast text: "w")
@@ -2404,26 +2444,26 @@ main: function is {
 
     # caseexpr: subject + one caseclause (matcharm atomid), no else.
     caseSubject: Node.atomid (AtomIdData
-        nodeid: 76
+        nodeid: 76.nodeid
         lineno: 36
         colno: 6
         name: (smokeNameRef :ast text: "opt")
     )
     caseMatch: Node.atomid (AtomIdData
-        nodeid: 77
+        nodeid: 77.nodeid
         lineno: 37
         colno: 6
         name: (smokeNameRef :ast text: "some")
     )
     caseStmtItems: (ListVal u32)
     caseStmt: Node.statement (StatementData
-        nodeid: 78
+        nodeid: 78.nodeid
         lineno: 37
         colno: 16
         statements: caseStmtItems
     )
     caseClause0: Node.caseclause (CaseClauseData
-        nodeid: 79
+        nodeid: 79.nodeid
         lineno: 37
         colno: 1
         name: (smokeNameRef :ast text: "c")
@@ -2433,7 +2473,7 @@ main: function is {
     caseClauses: (ListVal u32)
     caseClauses.append (tableAdd :ast n: caseClause0)
     n25: Node.caseexpr (CaseData
-        nodeid: 80
+        nodeid: 80.nodeid
         lineno: 36
         colno: 1
         subject: (tableAdd :ast n: caseSubject)
@@ -2446,13 +2486,13 @@ main: function is {
 
     # objectdef: a record with one field (isItems entry), no as-members.
     objFieldType: Node.atomid (AtomIdData
-        nodeid: 81
+        nodeid: 81.nodeid
         lineno: 40
         colno: 11
         name: (smokeNameRef :ast text: "i64")
     )
     objField: Node.namedoperation (NamedOperationData
-        nodeid: 82
+        nodeid: 82.nodeid
         lineno: 40
         colno: 5
         name: (smokeNameRef :ast text: "x")
@@ -2462,7 +2502,7 @@ main: function is {
     objIsItems.append (tableAdd :ast n: objField)
     objAsItems: (ListVal u32)
     n26: Node.objectdef (ObjectDefData
-        nodeid: 83
+        nodeid: 83.nodeid
         lineno: 40
         colno: 1
         kind: nodetype.recordDef
@@ -2475,19 +2515,19 @@ main: function is {
     # functiondef "greet: function {x: i64} out i64 is { ... }" -> nested
     # in a unit, in a program; only the program is printed (recurses).
     fnRet: Node.atomid (AtomIdData
-        nodeid: 84
+        nodeid: 84.nodeid
         lineno: 41
         colno: 30
         name: (smokeNameRef :ast text: "i64")
     )
     fnParamType: Node.atomid (AtomIdData
-        nodeid: 85
+        nodeid: 85.nodeid
         lineno: 41
         colno: 21
         name: (smokeNameRef :ast text: "i64")
     )
     fnParam: Node.namedoperation (NamedOperationData
-        nodeid: 86
+        nodeid: 86.nodeid
         lineno: 41
         colno: 18
         name: (smokeNameRef :ast text: "x")
@@ -2496,10 +2536,15 @@ main: function is {
     fnParams: (ListVal u32)
     fnParams.append (tableAdd :ast n: fnParam)
     fnBodyItems: (ListVal u32)
-    fnBody: Node.statement (StatementData nodeid: 87 lineno: 41 colno: 40 statements: fnBodyItems)
+    fnBody: Node.statement (StatementData
+        nodeid: 87.nodeid
+        lineno: 41
+        colno: 40
+        statements: fnBodyItems
+    )
     fnAsItems: (ListVal u32)
     fnDef: Node.functiondef (FunctionData
-        nodeid: 88
+        nodeid: 88.nodeid
         lineno: 41
         colno: 1
         returntype: (tableAdd :ast n: fnRet)
@@ -2510,7 +2555,7 @@ main: function is {
     )
 
     unitMember: Node.namedoperation (NamedOperationData
-        nodeid: 89
+        nodeid: 89.nodeid
         lineno: 41
         colno: 1
         name: (smokeNameRef :ast text: "greet")
@@ -2518,10 +2563,10 @@ main: function is {
     )
     unitBody: (ListVal u32)
     unitBody.append (tableAdd :ast n: unitMember)
-    unitDef: Node.unitdef (UnitData nodeid: 90 lineno: 39 colno: 1 body: unitBody)
+    unitDef: Node.unitdef (UnitData nodeid: 90.nodeid lineno: 39 colno: 1 body: unitBody)
 
     progUnit: Node.namedoperation (NamedOperationData
-        nodeid: 91
+        nodeid: 91.nodeid
         lineno: 39
         colno: 1
         name: (smokeNameRef :ast text: "main")
@@ -2531,7 +2576,7 @@ main: function is {
     progUnits.append (tableAdd :ast n: progUnit)
     progUnits swap ast.units
     n27: Node.program (ProgramData
-        nodeid: 92
+        nodeid: 92.nodeid
         lineno: 39
         colno: 1
         mainUnitName: "main".string
@@ -2596,9 +2641,9 @@ printProgramCanonicalRoot: function {prog: Node.view} is {
 # tableReserve -- reserve a table slot for a node not yet built; the
 # slot holds the placeholder arm until tableAdd moves the finished
 # node in.
-tableReserve: function {ast: Ast} out u32 is {
+tableReserve: function {ast: Ast} out nodeid is {
     ast.nodes.append from: Node.placeholder
-    return (ast.nodes.length).u32.orPanic
+    return (nodeid.create from: (ast.nodes.length).u32.orPanic)
 }
 
 # tableSet -- move a converted parent's child into its reserved slot
@@ -2608,13 +2653,14 @@ tableSet: function {ast: Ast id: u32 child: Node.take} is {
 }
 
 # nodeIdOf -- a node's own id (any arm).
-nodeIdOf: function {n: Node.view} out u32 is {
+nodeIdOf: function {n: Node.view} out nodeid is {
+    zn9: nodeid
     match (
         n
     ) case error then {
         return n.nodeid
     } case placeholder then {
-        return 0
+        return zn9
     } case atomid then {
         return n.nodeid
     } case labelvalue then {
