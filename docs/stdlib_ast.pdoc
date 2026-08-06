@@ -61,7 +61,7 @@ Accessed via qualified names only -- #~"ast.parseSource ...",
 
 #ul:
   [#*: #> to=node: #b:"Node" -- #~"variant { ...29 arms: program, unitdef, functiondef, objectdef, call, binop, ifexpr, statement, error, ... }"]
-  [#*: #> to=node: #b:"UnitData" -- #~"class { nodeid: u32  lineno: u32  colno: u32  body: (ListVal u32) }" (the #~"unitdef" arm's payload)]
+  [#*: #> to=node: #b:"UnitData" -- #~"class { nodeid: nodeid  lineno: u32  colno: u32  body: (ListVal u32) }" (the #~"unitdef" arm's payload)]
   [#*: #> to=pos: #b:"nodepos" -- #~"record { line: u32  col: u32 }"]
   [#*: #> to=pos: #b:"posOf" -- #~"function {n: Node} out nodepos"]
 
@@ -77,7 +77,7 @@ Accessed via qualified names only -- #~"ast.parseSource ...",
 #p: #b:"Errors"
 
 #ul:
-  [#*: #> to=errors: #b:"ErrorData" -- #~"class { nodeid: u32  lineno: u32  colno: u32  width: u32  err: err  msg: String  ... }"]
+  [#*: #> to=errors: #b:"ErrorData" -- #~"class { nodeid: nodeid  lineno: u32  colno: u32  width: u32  err: err  msg: String  ... }"]
   [#*: #> to=errors: #b:"err" -- #~"variant { ...one arm per error kind }"]
   [#*: #> to=errors: #b:"errCode" -- #~"function {c: err} out u32"]
 
@@ -144,6 +144,14 @@ it to dispatch:
 
 #--: names
 
+Two zero-overhead typedefs name the tree's id spaces, so one cannot
+stand in for the other: #~"nodeid" (a #~"u32" over the single monotonic
+node space -- #~"nodeid - 1" indexes #~"Ast.nodes", #~"0" means "no
+node") and #~"nameid" (a #~"u32" over the pool). Both compare
+same-space only and read their sentinel with #~"isZero"; a container
+never carries either, so a #~"(ListVal u32)" of child ids mints at the
+read.
+
 #code language=zerolang: """
   Ast: class {
       nodes: (List Node)     # the master node table; nodeid - 1 indexes it
@@ -152,10 +160,11 @@ it to dispatch:
   }
 
   StringPool: class as {
-      set:      function {:this s: StringView} out u32   # intern; copies on first sight
-      setOwned: function {:this s: String.take} out u32  # intern a donated String
-      get:      function {:this id: u32} out String      # owned copy; panics out of range
-      eq:       function {:this id: u32 s: StringView} out bool
+      set:      function {:this s: StringView} out nameid   # intern; copies on first sight
+      setOwned: function {:this s: String.take} out nameid  # intern a donated String
+      find:     function {t: this.view s: StringView} out nameid  # 0 when absent
+      get:      function {:this id: nameid} out String       # owned copy; panics out of range
+      eq:       function {:this id: nameid s: StringView} out bool
       length:   function {:this} out u64
   }
 
@@ -165,8 +174,8 @@ it to dispatch:
 """
 
 The #~"program" node carries the tree's #~"Ast". Identifier text is
-#b:"interned": #~"atomid" / #~"labelvalue" arms hold a #~"u32" pool
-id in #~"name" (1-based; #~"0" = absent), and equal ids always name
+#b:"interned": #~"atomid" / #~"labelvalue" arms hold a #~"nameid"
+pool id in #~"name" (1-based; #~"0" = absent), and equal ids always name
 the same identifier, so id compares replace text compares within one
 tree. #~"nameTextEq" answers "is this node named X" without
 allocating; #~"nameTextCopy" returns an owned copy of the text
@@ -211,7 +220,7 @@ instead.
 
 #code language=zerolang: """
   ErrorData: class {
-      nodeid: u32  lineno: u32  colno: u32  width: u32
+      nodeid: nodeid  lineno: u32  colno: u32  width: u32
       err: err  msg: String  fsno: zvfs.fsno  note: String  hint: String
   }
   errCode: function {c: err} out u32

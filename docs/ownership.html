@@ -99,6 +99,8 @@ Table of Contents</div>
 </li>
 <li><a href="#implicit-take">Implicit take</a>
 </li>
+<li><a href="#a-bare-bind-is-a-move">A bare bind is a move</a>
+</li>
 <li><a href="#scope-exit">Scope exit</a>
 </li>
 </ul>
@@ -363,7 +365,20 @@ explicitly to make the transfer visible in the source. After the call, the
 variable name is invalidated (for reftypes) or a copy was made (for valtypes).
 Note that <code>.take</code> must be explicitly written on the parameter definition --
 parameters default to <code>.borrow</code>.</p>
-<h3 id="scope-exit"><a href="#scope-exit">3.3. Scope exit</a></h3>
+<h3 id="a-bare-bind-is-a-move"><a href="#a-bare-bind-is-a-move">3.3. A bare bind is a move</a></h3>
+<p>Binding an owned reftype to a new name with no ownership method
+(<code>q: p</code>) is the same transfer as the reassignment <code>q = p</code>: the new
+name owns the value, the old one is invalidated, and a later read of it
+is <code>cannot use 'p' after ownership transfer</code>. The emitted code moves
+the struct and zeroes the source, so the source's scope-exit destroy is
+a no-op rather than a second free.</p>
+<p>The same rule reaches a match arm's payload: inside <code>case some then</code>
+the subject name IS the payload, so <code>s: opt</code> moves the payload out of
+the box and the subject is invalidated for the rest of the scope. Use
+<code>.copy</code> to keep the subject usable, or read it through a view. (A
+bare <em><strong>return</strong></em> of that payload is refused, because it would escape
+the arm's scope while the subject still owns the value.)</p>
+<h3 id="scope-exit"><a href="#scope-exit">3.4. Scope exit</a></h3>
 <p>When an owned variable falls out of scope without being consumed:</p>
 <ul>
 <li>Reftype: the instance is destroyed (destructor called, memory freed)</li>

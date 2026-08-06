@@ -125,7 +125,7 @@ syntactic and does not resolve names or types.</p>
 <p><strong>Tree</strong></p>
 <ul>
 <li><a href="#node"><strong>Node</strong> -- <code>variant { ...29 arms: program, unitdef, functiondef, objectdef, call, binop, ifexpr, statement, error, ... }</code></a></li>
-<li><a href="#node"><strong>UnitData</strong> -- <code>class { nodeid: u32  lineno: u32  colno: u32  body: (ListVal u32) }</code> (the <code>unitdef</code> arm's payload)</a></li>
+<li><a href="#node"><strong>UnitData</strong> -- <code>class { nodeid: nodeid  lineno: u32  colno: u32  body: (ListVal u32) }</code> (the <code>unitdef</code> arm's payload)</a></li>
 <li><a href="#pos"><strong>nodepos</strong> -- <code>record { line: u32  col: u32 }</code></a></li>
 <li><a href="#pos"><strong>posOf</strong> -- <code>function {n: Node} out nodepos</code></a></li>
 </ul>
@@ -139,7 +139,7 @@ syntactic and does not resolve names or types.</p>
 </ul>
 <p><strong>Errors</strong></p>
 <ul>
-<li><a href="#errors"><strong>ErrorData</strong> -- <code>class { nodeid: u32  lineno: u32  colno: u32  width: u32  err: err  msg: String  ... }</code></a></li>
+<li><a href="#errors"><strong>ErrorData</strong> -- <code>class { nodeid: nodeid  lineno: u32  colno: u32  width: u32  err: err  msg: String  ... }</code></a></li>
 <li><a href="#errors"><strong>err</strong> -- <code>variant { ...one arm per error kind }</code></a></li>
 <li><a href="#errors"><strong>errCode</strong> -- <code>function {c: err} out u32</code></a></li>
 </ul>
@@ -182,6 +182,13 @@ it to dispatch:</p>
   case error then { ... n.msg ... n.err ... }
   else {}</code></pre>
 <h2 id="names"><a href="#names">6. names</a></h2>
+<p>Two zero-overhead typedefs name the tree's id spaces, so one cannot
+stand in for the other: <code>nodeid</code> (a <code>u32</code> over the single monotonic
+node space -- <code>nodeid - 1</code> indexes <code>Ast.nodes</code>, <code>0</code> means "no
+node") and <code>nameid</code> (a <code>u32</code> over the pool). Both compare
+same-space only and read their sentinel with <code>isZero</code>; a container
+never carries either, so a <code>(ListVal u32)</code> of child ids mints at the
+read.</p>
 <pre><code class="language-zerolang">  Ast: class {
       nodes: (List Node)     # the master node table; nodeid - 1 indexes it
       names: StringPool      # interned identifier text
@@ -189,10 +196,11 @@ it to dispatch:</p>
   }
 
   StringPool: class as {
-      set:      function {:this s: StringView} out u32   # intern; copies on first sight
-      setOwned: function {:this s: String.take} out u32  # intern a donated String
-      get:      function {:this id: u32} out String      # owned copy; panics out of range
-      eq:       function {:this id: u32 s: StringView} out bool
+      set:      function {:this s: StringView} out nameid   # intern; copies on first sight
+      setOwned: function {:this s: String.take} out nameid  # intern a donated String
+      find:     function {t: this.view s: StringView} out nameid  # 0 when absent
+      get:      function {:this id: nameid} out String       # owned copy; panics out of range
+      eq:       function {:this id: nameid s: StringView} out bool
       length:   function {:this} out u64
   }
 
@@ -200,8 +208,8 @@ it to dispatch:</p>
   nameTextCopy: function {ast: Ast ref: nameid} out String
   nameTextAt:   function {ast: Ast.view ref: nameid} out String.borrow</code></pre>
 <p>The <code>program</code> node carries the tree's <code>Ast</code>. Identifier text is
-<strong>interned</strong>: <code>atomid</code> / <code>labelvalue</code> arms hold a <code>u32</code> pool
-id in <code>name</code> (1-based; <code>0</code> = absent), and equal ids always name
+<strong>interned</strong>: <code>atomid</code> / <code>labelvalue</code> arms hold a <code>nameid</code>
+pool id in <code>name</code> (1-based; <code>0</code> = absent), and equal ids always name
 the same identifier, so id compares replace text compares within one
 tree. <code>nameTextEq</code> answers "is this node named X" without
 allocating; <code>nameTextCopy</code> returns an owned copy of the text
@@ -232,7 +240,7 @@ statement, and clause arms are not operand-position and return
 instead.</p>
 <h2 id="errors"><a href="#errors">8. errors</a></h2>
 <pre><code class="language-zerolang">  ErrorData: class {
-      nodeid: u32  lineno: u32  colno: u32  width: u32
+      nodeid: nodeid  lineno: u32  colno: u32  width: u32
       err: err  msg: String  fsno: zvfs.fsno  note: String  hint: String
   }
   errCode: function {c: err} out u32</code></pre>
