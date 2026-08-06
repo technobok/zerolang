@@ -3204,6 +3204,49 @@ Analysis: class {
     # owningConvKind9 -- the RHS is an OWNING String conversion: `.string` on a
     # StringView base, `.copy` on a String base, or a nameTextCopy/poolTextCopy
     # call. Returns the spelling for the message, "" otherwise.
+    # srcIsFieldRead9 -- the conversion's source is a FIELD read (`ctx.mainName`)
+    # rather than a local, a call, or a method chain. A field holds its bytes only
+    # until something rebinds it, and any call in the local's live range may do
+    # exactly that -- the save/restore idiom around a rebinding setter frees the
+    # old String, so an alias of the field would dangle. The owned copy is
+    # load-bearing there, and L022 leaves it alone.
+    srcIsFieldRead9: function {
+        :this
+        ast: Ast.view
+        st: zenv.ZSymbolTable
+        n: Node.view
+    } out bool is {
+        match (
+            n
+        ) case expression then {
+            return (this.srcIsFieldRead9 :ast :st n: (ast.nodes.get i: (n.expression - 1).u64))
+        } case dottedpath then {
+            fcn9: atomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
+            if fcn9.length == 0 then return false
+            fpn9: ast.nodes.get i: (n.parent - 1).u64
+            fpi9: nodeInfoOf n: fpn9
+            fpt9: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: fpi9.id.u64
+            if fpt9.isZero then return false
+            fnid9: zast.poolFind pool: ast.names text: fcn9.stringview
+            if fnid9.isZero then return false
+            fmo9: (st.typing.declChildOfId
+                parentTypeId: fpt9
+                nameId: fnid9
+            )
+            match (
+                fmo9
+            ) case some then {
+                if (st.reg.typetypeOf
+                    typeId: (ztypes.tid.create from: fmo9.u64)
+                ) == ztypes.ztypetype.functionType then return false
+                return true
+            } case none then null
+            return false
+        } else {
+            return false
+        }
+    }
+
     owningConvKind9: function {
         :this
         ast: Ast.view
@@ -3221,6 +3264,7 @@ Analysis: class {
             cn9: atomName :ast n: chn9
             if cn9.length == 0 then return "".string
             pnn9: ast.nodes.get i: (rn9.parent - 1).u64
+            if (this.srcIsFieldRead9 :ast :st n: pnn9) then return "".string
             pin9: nodeInfoOf n: pnn9
             bt9: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: pin9.id.u64
             if bt9.isZero then return "".string
@@ -3255,6 +3299,39 @@ Analysis: class {
             }
         } else {
             return "".string
+        }
+    }
+
+    # convSourceRootVid9 -- the variable id at the ROOT of an owning conversion's
+    # source path (`ctx.mainName.copy` -> `ctx`), or the zero vid when the source
+    # is not rooted at a name.
+    convSourceRootVid9: function {
+        :this
+        ast: Ast.view
+        st: zenv.ZSymbolTable
+        rhsId: u32
+    } out ztypes.vid is {
+        zv9: ztypes.vid
+        if rhsId == 0 then return zv9
+        rn9: ast.nodes.get i: (rhsId - 1).u64
+        match (
+            rn9
+        ) case expression then {
+            return (this.convSourceRootVid9 :ast :st rhsId: rn9.expression)
+        } case dottedpath then {
+            return (this.convSourceRootVid9 :ast :st rhsId: rn9.parent)
+        } case call then {
+            return (this.convSourceRootVid9 :ast :st rhsId: rn9.callable)
+        } case atomid then {
+            avo9: st.typing.atomVariableId.get key: rn9.nodeid.u64
+            match (
+                avo9
+            ) case some then {
+                zv9 = avo9
+            } case none then null
+            return zv9
+        } else {
+            return zv9
         }
     }
 
@@ -3318,7 +3395,29 @@ Analysis: class {
                                 nodeL9
                             ) case assignment then {
                                 kind9: this.owningConvKind9 ast: prog.ast :st rhsId: nodeL9.value
-                                if kind9.length > 0 then {
+                                # a view is only equivalent while the SOURCE holds
+                                # the same bytes: a root that is written -- directly,
+                                # or by a callee taking it as a mutable borrow --
+                                # rebinds or frees them, so the copy is load-bearing
+                                # (the save/restore idiom around a rebinding setter,
+                                # and a loop whose tail reassigns the source).
+                                srcMut9: false
+                                {
+                                    rvid9: (this.convSourceRootVid9
+                                        ast: prog.ast
+                                        :st
+                                        rhsId: nodeL9.value
+                                    )
+                                    if (rvid9.isZero) == false then {
+                                        sm09: st.typing.variableMutated.get key: rvid9
+                                        match (
+                                            sm09
+                                        ) case some then {
+                                            if sm09 then srcMut9 = true
+                                        } case none then null
+                                    }
+                                }
+                                if kind9.length > 0 when (srcMut9) == false then {
                                     nm9: zast.poolTextAt pool: prog.ast.names ref: nodeL9.name
                                     (this.info
                                         code: "L022"
