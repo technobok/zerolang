@@ -343,3 +343,26 @@ sometimes the same key twice in adjacent statements. Both halves are already
 pool ids, so a composite u64 key removes a String allocation from the hottest
 loop of the phase that regressed.
 
+## Toolchain findings (2026-08-06 @ ebe15c0d)
+
+The series stays **gcc -O1** (`OPTFLAGS` in the Makefile): every row above was
+measured that way, and neither alternative moves what the series tracks.
+
+- **gcc -O2**: wall 0.55s -> 0.40s (bin/zc.c compile time 14s -> 20s);
+  allocation count 9,597,630 vs -O1's 9,597,793 -- identical modulo run
+  wobble. The wall gap against clang is -O1 codegen quality, nothing
+  allocation-shaped; if a faster release build is ever wanted, -O2 is the
+  flag, on a build OUTSIDE the perf series.
+- **clang -O1**: wall 0.37s and ~750k (-7.8%) fewer allocations. Same-source
+  A/B at the String/StringView arc end: gcc 9,576,316 vs clang 8,826,150
+  (delta 750,166). The delta is dead malloc->memcpy->free chain elision --
+  LLVM read-forwards to the source bytes and deletes the provably-dead copy
+  chain -- which gcc performs at no tested level; an allocator attribute on
+  `z_xmalloc` (`malloc, returns_nonnull, alloc_size`) changes nothing.
+- **Rule**: the clang-vs-gcc allocation delta approximates the remaining
+  trivially-dead-copy pool -- a machine-level estimate of what the L022
+  viewable-local migration can reclaim at the source (the ~692-site worklist
+  overlaps it). Re-measure the pair (perf-strict vs a scratch clang build)
+  as the migration lands; the delta should shrink from gcc's side, and the
+  migration improves both builds.
+

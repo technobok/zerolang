@@ -17,6 +17,11 @@ MAKEFLAGS += -j$(NPROC)
 # -fno-strict-aliasing pin down the C the emitter relies on. Bootstrap
 # intermediates and the test runner stay -O0: they are built once and run
 # once, so gcc time dominates.
+# -O1 is DELIBERATE: every row in docs/perf-baseline.md is measured at
+# gcc -O1, and the alternatives move wall, not allocations -- gcc -O2 cuts
+# self-compile wall 0.55s -> 0.40s (bin/zc.c compile 14s -> 20s) with an
+# IDENTICAL allocation count. See "Toolchain findings" in
+# docs/perf-baseline.md before changing this.
 OPTFLAGS := -O1 -fno-strict-aliasing -fwrapv
 # Daily drivers also emit with the wyhash-style fast path for their own
 # Map/Set dispatch (their inputs are trusted source trees). Everything
@@ -304,6 +309,12 @@ perf: bin/zc
 # the count), a stale binary, and an early-aborted self-compile posing as a
 # perf win. Rebuilds bin/zc with gcc, PROVES it (.comment section), runs the
 # self-compile once checking the exit code, then requires allocs == frees.
+# The clang elision is REAL behavior, not a bug: at -O1 LLVM removes provably
+# dead malloc->memcpy->free chains (read-forwarding to the source bytes),
+# which gcc does at no tested level -- an allocator attribute on z_xmalloc
+# (malloc, returns_nonnull, alloc_size) changes nothing. So a clang bin/zc
+# is a different measurement, not a wrong one; the series is gcc -O1 and the
+# clang-vs-gcc delta is the dead-copy progress meter (docs/perf-baseline.md).
 perf-strict:
 	@if readelf -p .comment bin/zc 2>/dev/null | grep -qi clang; then \
 	  echo "perf-strict: bin/zc is clang-built (a CC=clang test rebuilt it) -- rebuilding with gcc"; \
