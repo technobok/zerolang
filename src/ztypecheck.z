@@ -42,7 +42,6 @@ public: unit {
     :resolveSystemChildById
     :resolveUnitChild
     :resolveUnitChildById
-    :resolvedByKey
     :resolvedByIds
     :rootNameOf
     :specLookup
@@ -1617,22 +1616,6 @@ declareCanonicalType: function {
         }
     }
     return id
-}
-
-# dottedDefTarget -- the "unit.Type" target of a cross-unit type alias
-# (`Node: zast.Node`), or "" when the definition is not a dotted alias.
-dottedDefTarget: function {ast: Ast.view n: Node.view} out String is {
-    match (
-        n
-    ) case expression then {
-        return (dottedDefTarget :ast n: (ast.nodes.get i: (n.expression - 1).u64))
-    } case dottedpath then {
-        pn: atomName :ast n: (ast.nodes.get i: (n.parent - 1).u64)
-        cn: atomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        return "\{pn}.\{cn}"
-    } else {
-        return "".string
-    }
 }
 
 # dottedDefTargetIds -- dottedDefTarget as a packed id pair: the parent
@@ -4405,16 +4388,21 @@ resolveSpecFn: function {
 # (`m: measurable` / `myreader: Reader`), or none for a method / `create: null` /
 # any other as-item. The target must already be resolved (defined earlier in the unit).
 markerTargetId: function {
-    ty: ztyping.ZTyping.view
+    ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     unitName: StringView
     ast: Ast.view
     op: Node.view
 } out optionval u64 is {
-    tn: atomName :ast n: op
-    if tn.length == 0 then return (optionval.none u64)
-    rkey: "\{unitName}.\{tn}"
-    rr: resolvedByKey :ast :ty :reg key: rkey
+    tnId9: atomNameId :ast n: op
+    if tnId9.isZero then return (optionval.none u64)
+    rr: (resolvedByIds
+        :ast
+        :ty
+        :reg
+        unitId: (nameIdOf :ast name: unitName)
+        name: tnId9
+    )
     match (
         rr
     ) case some then {
@@ -6068,11 +6056,16 @@ dottedTyperefId: function {ast: Ast.view st: zenv.ZSymbolTable op: Node.view} ou
     ) case expression then {
         return (dottedTyperefId :ast :st op: (ast.nodes.get i: (op.expression - 1).u64))
     } case dottedpath then {
-        pn: atomName :ast n: (ast.nodes.get i: (op.parent - 1).u64)
-        cn: atomName :ast n: (ast.nodes.get i: (op.child - 1).u64)
-        if (st.reg.unitNameTid.has key: (nameIdOf :ast name: pn.stringview).u64) then {
-            k: "\{pn}.\{cn}"
-            ro: resolvedByKey :ast ty: st.typing reg: st.reg key: k
+        pnId9: atomNameId :ast n: (ast.nodes.get i: (op.parent - 1).u64)
+        cnId9: atomNameId :ast n: (ast.nodes.get i: (op.child - 1).u64)
+        if (st.reg.unitNameTid.has key: pnId9.u64) then {
+            ro: (resolvedByIds
+                :ast
+                ty: st.typing
+                reg: st.reg
+                unitId: pnId9
+                name: cnId9
+            )
             return (optU64Or o: ro d: 0)
         } else {
             return 0
@@ -6501,10 +6494,15 @@ fieldTypeNeedsCleanup: function {
     }
     # key by the DEFINING unit: a bare cross-unit field type (Bytes from
     # collections) resolves under its own unit, not the class's
-    ku8: unitName.string
-    if duo8.length > 0 then ku8 = duo8.copy
-    rkey: "\{ku8.stringview}.\{name}"
-    rr: resolvedByKey :ast :ty :reg key: rkey
+    ku8: nameIdOf :ast name: unitName
+    if duo8.length > 0 then ku8 = nameIdOf :ast name: duo8.stringview
+    rr: (resolvedByIds
+        :ast
+        :ty
+        :reg
+        unitId: ku8
+        name: (nameIdOf :ast :name)
+    )
     match (
         rr
     ) case some then {
@@ -7315,23 +7313,6 @@ declDefTypetype: function {
     return (optionval.none ztypes.ztypetype)
 }
 
-# reexportTargetOf -- the "unit.name" (or "Type.member") dotted target of
-# a re-export alias declaration, read off the alias Decl's own def node;
-# "" when the Decl is absent or not a re-export.
-reexportTargetOf: function {ty: ztyping.ZTyping ast: Ast.view declId: ztypes.declid} out String is {
-    if declId.isZero then return "".string
-    if (ty.declValid id: declId) then {
-        do9: ty.decls.get i: (declId - 1)
-        if do9.kind.reexportDecl then {
-            nop9: ast.nodes.get i: (do9.node - 1).u64
-            if nop9.namedoperation then {
-                return (dottedDefTarget :ast n: (ast.nodes.get i: (nop9.operation - 1).u64))
-            }
-        }
-    }
-    return "".string
-}
-
 # reexportTargetIdsOf -- reexportTargetOf as a packed id pair (root id
 # high, member id low); 0 when the Decl is absent or not a re-export.
 reexportTargetIdsOf: function {ty: ztyping.ZTyping ast: Ast.view declId: ztypes.declid} out u64 is {
@@ -7711,7 +7692,7 @@ resolveDef: function {
             reg.recordDemand name: acNm9.stringview
             reg.recordSeededDemand un: unitName name: acNm9.stringview
             # The alias target is read off the re-export Decl's node on demand
-            # (reexportTargetOf); resolution reuses the target's canonical id.
+            # (reexportTargetIdsOf); resolution reuses the target's canonical id.
             if (ty.declIsResolving
                 declId: (declOfUnitDef :ty :ast defUnit: apNm9.stringview name: acNm9.stringview)
             ) then {
@@ -7751,7 +7732,7 @@ resolveDef: function {
         }
     } else null
     # Unit -> def childOf edges are built at mint (declareCanonicalType) for real
-    # defs and on demand (resolvedByKey's alias-follow) for aliases; no tail pass.
+    # defs and on demand (resolvedByIds' alias-follow) for aliases; no tail pass.
     ty.inContainmentEdge = prevCE0
     rdecl1: declOfUnitDef :ty :ast defUnit: unitName name: defName
     ty.declSetResolving declId: rdecl1 mark: false
@@ -9929,8 +9910,13 @@ createUnitMono: function {
     templateName: StringView
     templateOpId: u32
 } is {
-    rkey: "\{unitName}.\{monoName}"
-    got: resolvedByKey :ast :ty :reg key: rkey
+    got: (resolvedByIds
+        :ast
+        :ty
+        :reg
+        unitId: (nameIdOf :ast name: unitName)
+        name: (nameIdOf :ast name: monoName)
+    )
     exists: false
     match (
         got
@@ -10604,14 +10590,21 @@ completeUnitInstantiations: function {
             }
             aiR9 = aiR9 + 1
         }
-        mk: "\{mainName}.\{rm}"
         mgo: (optionval.none u64)
         rbId9: zast.nameid
         tnId9: u32
         match (
             program
         ) case program then {
-            mgo = resolvedByKey ast: program.ast :ty :reg key: mk
+            mnUid9: nameIdOf ast: program.ast name: mainName.stringview
+            rmNid9: nameIdOf ast: program.ast name: rm.stringview
+            mgo = (resolvedByIds
+                ast: program.ast
+                :ty
+                :reg
+                unitId: mnUid9
+                name: rmNid9
+            )
             rbId9 = zast.poolSet pool: program.ast.names text: rb.stringview
             tnId9 = nameIdOf ast: program.ast name: rt.stringview
         } else null
@@ -10622,13 +10615,20 @@ completeUnitInstantiations: function {
             br9: mid9
             reg.setUnitName nameId: rbId9 uid: br9
             tplId: ztypes.tid
-            tk: "\{mainName}.\{rt}"
             tgo: (optionval.none u64)
             tplDecl9: ztypes.declid
             match (
                 program
             ) case program then {
-                tgo = resolvedByKey ast: program.ast :ty :reg key: tk
+                mnUid8: nameIdOf ast: program.ast name: mainName.stringview
+                rtNid9: nameIdOf ast: program.ast name: rt.stringview
+                tgo = (resolvedByIds
+                    ast: program.ast
+                    :ty
+                    :reg
+                    unitId: mnUid8
+                    name: rtNid9
+                )
                 tplDecl9 = (declOfUnitDef
                     :ty
                     ast: program.ast
@@ -14535,18 +14535,21 @@ bareFnRefError: function {
 canonicalChildBase: function {ast: Ast st: zenv.ZSymbolTable bt: u64 child: StringView} out u64 is {
     nm: typeNameOf :st tid: (ztypes.tid.create from: bt.u64)
     if nm.length == 0 then return 0
-    uks9: (List String)
-    with uit: st.reg.unitNameTid.iterateItems do for ue: uit loop {
-        ukc9: zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: ue.key.u32.orPanic)
-        uks9.append ukc9
-    }
+    nmId9: nameIdOf :ast name: nm.stringview
+    uks9: (ListVal u64)
+    with uit: st.reg.unitNameTid.iterateItems do for ue: uit loop uks9.append ue.key
     cands9: (ListVal u64)
     uki9: u64
     ukn9: uks9.length
     for uki9 < ukn9 loop {
         uk9: uks9.get i: uki9
-        k: "\{uk9}.\{nm}"
-        ro9: resolvedByKey :ast ty: st.typing reg: st.reg key: k
+        ro9: (resolvedByIds
+            :ast
+            ty: st.typing
+            reg: st.reg
+            unitId: (zast.nameid.create from: uk9.u32.orPanic)
+            name: nmId9
+        )
         match (
             ro9
         ) case some then {
@@ -23533,12 +23536,51 @@ checkFunctionBody: function {
         # the generic-template gate, the template param binding, AND the
         # expected return type, so every one of them silently did nothing for
         # those bodies.
-        rkey: "\{unitName}.\{defName}"
+        # A dependency unit's definitions arrive with defName ALREADY
+        # carrying their unit ("zast.errCode"); strip the duplicate prefix,
+        # then resolve one or two remaining segments by ids.
+        fnUid9: nameIdOf :ast name: unitName
+        rest9: defName
         {
-            upfx9: "\{unitName}."
-            if (defName.startsWith prefix: upfx9) then rkey = defName.string
+            dfd9: defName.indexOf needle: "."
+            match (
+                dfd9
+            ) case some then {
+                if dfd9 == unitName.length when (defName.substring
+                    from: 0
+                    to: dfd9
+                ) == unitName then {
+                    rest9 = defName.substring from: (dfd9 + 1) to: defName.length
+                }
+            } case none then null
         }
-        rgot: resolvedByKey :ast ty: st.typing reg: st.reg key: rkey
+        rgot: (optionval.none u64)
+        {
+            rsd9: rest9.indexOf needle: "."
+            match (
+                rsd9
+            ) case some then {
+                rgot = (resolvedByIdsMember
+                    :ast
+                    ty: st.typing
+                    reg: st.reg
+                    unitId: fnUid9
+                    defId: (nameIdOf :ast name: (rest9.substring from: 0 to: rsd9))
+                    memberId: (nameIdOf
+                        :ast
+                        name: (rest9.substring from: (rsd9 + 1) to: rest9.length)
+                    )
+                )
+            } case none then {
+                rgot = (resolvedByIds
+                    :ast
+                    ty: st.typing
+                    reg: st.reg
+                    unitId: fnUid9
+                    name: (nameIdOf :ast name: rest9)
+                )
+            }
+        }
         match (
             rgot
         ) case some then {
@@ -23589,7 +23631,7 @@ checkFunctionBody: function {
                         # a template's own bare param carries no stamp; bind
                         # the canonical param tid from the FUNCTION child so
                         # the walk types it (stampGate suppresses the stamp)
-                        fgo3: resolvedByKey :ast ty: st.typing reg: st.reg key: rkey
+                        fgo3: rgot
                         match (
                             fgo3
                         ) case some then {
@@ -23781,10 +23823,7 @@ checkFunctionBody: function {
             st.typing.currentThisName = tnl
             if depUnits.length > 0 then runDepUnitWalks :st :ast mainName: unitName :depUnits
             prevRet9: st.typing.currentReturnTypeId
-            fitid9: (optU64Or
-                o: (resolvedByKey :ast ty: st.typing reg: st.reg key: rkey)
-                d: 0
-            )
+            fitid9: (optU64Or o: rgot d: 0)
             crt9: ztypes.tid
             if fitid9 > 0 then crt9 = (optTidOr
                 o: (methodReturnOf :st mid: (ztypes.tid.create from: fitid9.u64))
@@ -23803,10 +23842,7 @@ checkFunctionBody: function {
             # the function's concrete return type, stamped on the statement
             # line (the node the reference coerces by id).
             ftid: ztypes.tid
-            ftid = ztypes.tid.create from: (optU64Or
-                o: (resolvedByKey :ast ty: st.typing reg: st.reg key: rkey)
-                d: ftid
-            )
+            ftid = ztypes.tid.create from: (optU64Or o: rgot d: ftid)
             if ftid > 0 then {
                 ro: methodReturnOf :st mid: ftid
                 match (
@@ -24740,12 +24776,14 @@ stampUnitMonoTemplates: function {st: zenv.ZSymbolTable program: zast.ProgramDat
                         if fnOp9 > 0 then {
                             fnTid9: u64
                             {
-                                frk9: "\{uNm9}.\{fnNm9}"
-                                fro9: (resolvedByKey
+                                fuUid9: nameIdOf ast: program.ast name: uNm9.stringview
+                                fnNmId9: nameIdOf ast: program.ast name: fnNm9.stringview
+                                fro9: (resolvedByIds
                                     ast: program.ast
                                     ty: st.typing
                                     reg: st.reg
-                                    key: frk9
+                                    unitId: fuUid9
+                                    name: fnNmId9
                                 )
                                 match (
                                     fro9
@@ -26362,14 +26400,11 @@ walkLookupTyperef: function {
     return (optionval.none u64)
 }
 
-# resolvedByKey -- resolve a "unit.name[.member]" key by walking childOf from the
-# unit root; falls back to the flat resolved map for keys not yet mirrored in
-# childOf (during-resolution reads) or non-type binding keys. The read path off
-# the flat map (Stage A). Free fn (not a ZTyping method) so smoke-built low-level
-# modules never pull in .split.
-# resolveUnitChild -- the (unit, name) form of resolvedByKey's two-segment
-# walk: no composed key, no split. resolveSystemChild probes the cached
-# system unit root with no allocation at all.
+# resolvedByIds / resolvedByIdsMember -- resolve a (unit, name[, member])
+# id tuple by walking childOf from the unit root, with the on-demand alias
+# follow on a miss. resolveUnitChild / resolveSystemChild are the text-view
+# entry points; resolveSystemChild probes the cached system unit root with
+# no allocation at all.
 # declOfUnitDefIds -- declOfUnitDefId for a caller holding BOTH ids: unit
 # root by id, then the child edge. No name is interned and no key is built.
 declOfUnitDefIds: function {
@@ -26409,8 +26444,8 @@ childOfWalkIds: function {
     return (optionval.none u64)
 }
 
-# resolvedByIds -- resolvedByKey for a `unit.name` pair held as ids: the
-# childOf walk, then the same on-demand alias follow (which lays the
+# resolvedByIds -- resolve a `unit.name` id pair to its type id: the
+# childOf walk, then the on-demand alias follow (which lays the
 # unit->alias edge so later probes resolve through childOf).
 resolvedByIds: function {
     ast: Ast.view
@@ -26682,155 +26717,6 @@ resolveSystemChildById: function {
         unitId: (nameIdOf :ast name: "system")
         name: nameId
     )
-}
-
-# resolve a dotted path to a child type id by walking its name segments.
-childOfWalk: function {
-    ast: Ast
-    ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry.view
-    key: String
-} out optionval u64 is {
-    # two-segment fast path ("unit.name" -- the dominant key shape): view
-    # slices instead of a splitter iterator and per-segment strings
-    {
-        kv9: key.stringview
-        d1: kv9.indexOf needle: "."
-        match (
-            d1
-        ) case some then {
-            twoSeg9: false
-            {
-                rest0: kv9.substring from: d1 + 1 to: kv9.length
-                d2: rest0.indexOf needle: "."
-                match (
-                    d2
-                ) case some then null case none then twoSeg9 = true
-            }
-            if twoSeg9 then {
-                ro9: u64
-                roOk9: false
-                {
-                    useg9: kv9.substring from: 0 to: d1
-                    rg9: reg.unitNameTid.get key: (nameIdOf :ast name: useg9).u64
-                    match (
-                        rg9
-                    ) case some then {
-                        ro9 = rg9
-                        roOk9 = true
-                    } case none then null
-                }
-                rox9: (optionval.none u64)
-                if roOk9 then rox9 = (optionval.some ro9)
-                roN9: rox9
-                match (
-                    roN9
-                ) case some then {
-                    rest9: kv9.substring from: d1 + 1 to: kv9.length
-                    return (ty.declChildOf
-                        pool: ast.names
-                        parentTypeId: (ztypes.tid.create from: roN9.u64)
-                        name: rest9
-                    )
-                } case none then {
-                    return (optionval.none u64)
-                }
-            }
-        } case none then null
-    }
-    cur: u64
-    started: false
-    ok: true
-    with it: (key.stringview.split sep: ".") do for seg: it loop {
-        if ok then {
-            if started == false then {
-                ro: reg.unitNameTid.get key: (nameIdOf :ast name: seg).u64
-                match (
-                    ro
-                ) case some then {
-                    cur = ro
-                    started = true
-                } case none then {
-                    ok = false
-                }
-            } else {
-                co: (ty.declChildOf
-                    pool: ast.names
-                    parentTypeId: (ztypes.tid.create from: cur.u64)
-                    name: seg
-                )
-                match (
-                    co
-                ) case some then {
-                    cur = co
-                } case none then {
-                    ok = false
-                }
-            }
-        }
-    }
-    if ok when started then return (optionval.some cur)
-    return (optionval.none u64)
-}
-
-# resolve a dotted type path, pre-encoded as the resolution-cache `key`,
-# to its type id, or `none`.
-resolvedByKey: function {
-    ast: Ast
-    ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry.view
-    key: String
-} out optionval u64 is {
-    wo: childOfWalk :ast :ty :reg :key
-    match (
-        wo
-    ) case some then {
-        return (optionval.some wo)
-    } case none then null
-    # On-demand alias resolution (no descend, no units): if `key` is a unit-level type
-    # alias, resolve its target with a childOf-only walk and lay the unit->alias edge,
-    # so this and future lookups resolve through childOf instead of the flat map. The
-    # target walk does NOT recurse through this alias-follow, so it always terminates
-    # and a cyclic alias (whose target never has a childOf edge) falls through to the
-    # existing cycle diagnostic rather than being silently followed.
-    au: String
-    an: String
-    segs9: u64
-    with sk: (key.stringview.split sep: ".") do for sg: sk loop {
-        segs9 = segs9 + 1
-        if au.length == 0 then {
-            au = sg.string
-        } else {
-            an = sg.string
-        }
-    }
-    alDecl9: ztypes.declid
-    if segs9 == 2 then alDecl9 = declOfUnitDef :ty :ast defUnit: au.stringview name: an.stringview
-    alTgt9: reexportTargetOf :ty :ast declId: alDecl9
-    alHit9: alTgt9.length > 0
-    if alHit9 then {
-        tgo: childOfWalk :ast :ty :reg key: alTgt9
-        match (
-            tgo
-        ) case some then {
-            uro: reg.unitNameTid.get key: (nameIdOf :ast name: au.stringview).u64
-            match (
-                uro
-            ) case some then {
-                # memo write only when the alias name is interned (always,
-                # once labels intern at parse); the resolution result never
-                # depends on it
-                anid9: (ast.names.find s: an.stringview)
-                if anid9 > 0 then (ty.setMemberType
-                    parentTypeId: (ztypes.tid.create from: uro.u64)
-                    nameId: anid9
-                    childTypeId: tgo
-                )
-            } case none then null
-            return (optionval.some tgo)
-        } case none then null
-    }
-    return (optionval.none u64)
 }
 
 # shellScalarName -- a shell named like a C scalar stays a shell: the
