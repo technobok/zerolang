@@ -18631,6 +18631,59 @@ takenHere: function {} out optionval ztypes.zsrcpos is {
     return (optionval.some (ztypes.zsrcpos fsno: zvfs.fsno lineno: 0 colno: 0))
 }
 
+# consumeBareArgOwnership -- a bare-name reftype value at an OWNING slot (a
+# take parameter, a constructor field, a tagged-arm payload): refuse a
+# readonly / pinned / borrowed source, else transfer ownership out of it.
+consumeBareArgOwnership: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    name: StringView
+    vid: ztypes.vid
+    nodeid: u32
+    lineno: u32
+    colno: u32
+} is {
+    # Readonly first, then ownership: ANY borrowed binding refuses the move
+    # (the view-family test predates element borrows).
+    if (nameIsReadonly :st :ast :name) then {
+        (readonlyMoveError
+            :st
+            :nodeid
+            :lineno
+            :colno
+            :name
+            verb: "into a taking argument"
+        )
+    } else {
+        apin7: (pinnedMoveError
+            :st
+            :ast
+            :nodeid
+            :lineno
+            :colno
+            :name
+            verb: "into a taking argument"
+        )
+        if apin7 then null else if (isBorrowedVar :st :vid) then {
+            bnc7: name.string
+            mb7: "Cannot move borrowed variable '\{bnc7}' into a taking argument — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+            (addError
+                :st
+                :nodeid
+                :lineno
+                :colno
+                e: zast.err.ownerError
+                msg: mb7
+            )
+        } else {
+            (st.invalidate
+                nameId: (nameIdOf :ast :name)
+                loc: takenHere
+            )
+        }
+    }
+}
+
 # appendValueTuple -- the source path of a value node (root first), appended onto
 # dst. Ownership and access markers are not addressable segments, so
 # `rec.field.borrow` contributes (rec, field); non-path shapes contribute nothing.
@@ -19974,6 +20027,12 @@ walkCallArgsHoist: function {
                         # borrow (ctor field params keep their recorded flow).
                         if (isCtor) == false then isLockish = true
                     }
+                if funcId > 0 when pn.length == 0 when isCtor then {
+                    # a POSITIONAL constructor argument (a tagged-sum arm
+                    # payload) transfers ownership exactly like its named
+                    # form: the arm stores it owned
+                    if (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64)) then isTake = true
+                }
                     if isCtor then {
                         # Field ownership flows to the constructor param:
                         # a `.lock` field locks the caller's argument, any
@@ -20034,49 +20093,15 @@ walkCallArgsHoist: function {
                             bvo
                         ) case some then {
                             if isTake then {
-                                aid7: nodeId n: (ast.nodes.get i: (arg.operation - 1).u64)
-                                aln7: nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64)
-                                acl7: nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64)
-                                # Readonly first, then ownership: ANY borrowed
-                                # binding refuses the move (the view-family
-                                # test predates element borrows).
-                                if (nameIsReadonly :st :ast name: bn.stringview) then {
-                                    (readonlyMoveError
-                                        :st
-                                        nodeid: aid7
-                                        lineno: aln7
-                                        colno: acl7
-                                        name: bn.stringview
-                                        verb: "into a taking argument"
-                                    )
-                                } else {
-                                    apin7: (pinnedMoveError
-                                        :st
-                                        :ast
-                                        nodeid: aid7
-                                        lineno: aln7
-                                        colno: acl7
-                                        name: bn.stringview
-                                        verb: "into a taking argument"
-                                    )
-                                    if apin7 then null else if (isBorrowedVar :st vid: bvo) then {
-                                        bnc7: bn.copy
-                                        mb7: "Cannot move borrowed variable '\{bnc7}' into a taking argument — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
-                                        (addError
-                                            :st
-                                            nodeid: aid7
-                                            lineno: aln7
-                                            colno: acl7
-                                            e: zast.err.ownerError
-                                            msg: mb7
-                                        )
-                                    } else {
-                                        (st.invalidate
-                                            nameId: (nameIdOf :ast name: bn.stringview)
-                                            loc: takenHere
-                                        )
-                                    }
-                                }
+                                (consumeBareArgOwnership
+                                    :st
+                                    :ast
+                                    name: bn.stringview
+                                    vid: bvo
+                                    nodeid: (nodeId n: (ast.nodes.get i: (arg.operation - 1).u64))
+                                    lineno: (nodeLine n: (ast.nodes.get i: (arg.operation - 1).u64))
+                                    colno: (nodeCol n: (ast.nodes.get i: (arg.operation - 1).u64))
+                                )
                             } else {
                                 if isLockish then {
                                     (lockCallArg
@@ -21390,6 +21415,32 @@ checkCall: function {
                                                 )
                                                 mvt2: materialiseLiteral :ast :st :unitName t: avt2
                                                 subT = mvt2
+                                                fpbn9: (bareAtomName
+                                                    :ast
+                                                    n: (ast.nodes.get i: (farg.operation - 1).u64)
+                                                )
+                                                if fpbn9.length > 0 when (typeIsReftype
+                                                    :st
+                                                    tid: mvt2
+                                                ) then {
+                                                    fpvo9: st.lookupVarId nameId: (nameIdOf
+                                                        :ast
+                                                        name: fpbn9.stringview
+                                                    )
+                                                    match (
+                                                        fpvo9
+                                                    ) case some then {
+                                                        (consumeBareArgOwnership
+                                                            :st
+                                                            :ast
+                                                            name: fpbn9.stringview
+                                                            vid: fpvo9
+                                                            nodeid: farg.nodeid
+                                                            lineno: farg.lineno
+                                                            colno: farg.colno
+                                                        )
+                                                    } case none then null
+                                                }
                                             }
                                         }
                                     } else null
@@ -21458,6 +21509,34 @@ checkCall: function {
                                         :unitBody
                                         node: (ast.nodes.get i: (arg2.operation - 1).u64)
                                     )
+                                    # the arm stores its payload OWNED: a
+                                    # bare-name reftype payload transfers
+                                    upbn9: (bareAtomName
+                                        :ast
+                                        n: (ast.nodes.get i: (arg2.operation - 1).u64)
+                                    )
+                                    if upbn9.length > 0 when uvt > 0 when (typeIsReftype
+                                        :st
+                                        tid: uvt
+                                    ) then {
+                                        upvo9: st.lookupVarId nameId: (nameIdOf
+                                            :ast
+                                            name: upbn9.stringview
+                                        )
+                                        match (
+                                            upvo9
+                                        ) case some then {
+                                            (consumeBareArgOwnership
+                                                :st
+                                                :ast
+                                                name: upbn9.stringview
+                                                vid: upvo9
+                                                nodeid: arg2.nodeid
+                                                lineno: arg2.lineno
+                                                colno: arg2.colno
+                                            )
+                                        } case none then null
+                                    }
                                     uparmo9: (st.typing.declChildOf
                                         pool: ast.names
                                         parentTypeId: (ztypes.tid.create from: dtp.u64)
