@@ -393,7 +393,10 @@ shadow-guard:
 # typechecker stamps and canonical ids; every remaining by-name resolution is a
 # counted residual (template re-emission, probe-chain legs). A rising count
 # means a new name-resolved site -- resolve from stamps/ids instead, or lower
-# the baseline when a residual is legitimately removed.
+# the baseline when a residual is legitimately removed. typeNameOfReg9 went
+# 91 -> 92 for the arm-alias leg's scalar test: `scalarCTypeFor` is the
+# shadow-SAFE wrapper (it re-checks the tid for a user shadow) and it needs
+# the type's name, so the name lookup is the sanctioned shape here.
 # The last two pin where C names are BUILT: the type checker composes none, and
 # the emitter spells the z_t{id} shape only inside its one composer, which the
 # per-program table in emitC calls once per type.
@@ -419,7 +422,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 22; \
 	chk "userFnId" "$$e4" 35; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "typeNameOfReg9" "$$e6" 91; \
+	chk "typeNameOfReg9" "$$e6" 92; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 5; \
 	chk "monoOriginName" "$$e9" 8; \
