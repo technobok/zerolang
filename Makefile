@@ -56,7 +56,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard readable-check perf-strict
+.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard readable-check perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -289,7 +289,8 @@ warn-check: bin/zc
 # numbers as a row to docs/perf-baseline.md in the commit that lands a perf-relevant
 # change. The glibc wall (make MIMALLOC=0), corpus wall (make test) and the DHAT
 # allocation-site census stay manual -- see the command list in that doc.
-PERFRUN := bin/zc zc --src src --system lib/system --emit-c /dev/null
+PERFARGS := zc --src src --system lib/system --emit-c /dev/null
+PERFRUN  := bin/zc $(PERFARGS)
 perf: bin/zc
 	@echo "== zerolang line count (.z) =="
 	@lsrc=$$(cat src/*.z | wc -l); llib=$$(cat lib/system/*.z | wc -l); \
@@ -305,16 +306,16 @@ perf: bin/zc
 
 # perf-strict -- the trustworthy allocation number. Guards against every trap
 # that has produced a wrong reading: a bin/zc silently rebuilt by
-# `make test CC=clang` (clang elides ~750k dead malloc/free pairs, deflating
-# the count), a stale binary, and an early-aborted self-compile posing as a
+# `make test CC=clang` (clang deletes write-only allocations, deflating the
+# count), a stale binary, and an early-aborted self-compile posing as a
 # perf win. Rebuilds bin/zc with gcc, PROVES it (.comment section), runs the
 # self-compile once checking the exit code, then requires allocs == frees.
-# The clang elision is REAL behavior, not a bug: at -O1 LLVM removes provably
-# dead malloc->memcpy->free chains (read-forwarding to the source bytes),
-# which gcc does at no tested level -- an allocator attribute on z_xmalloc
-# (malloc, returns_nonnull, alloc_size) changes nothing. So a clang bin/zc
-# is a different measurement, not a wrong one; the series is gcc -O1 and the
-# clang-vs-gcc delta is the dead-copy progress meter (docs/perf-baseline.md).
+# The clang deletion is REAL behavior, not a bug: at -O1 LLVM removes an
+# allocation whose bytes are written but never READ and whose pointer never
+# escapes -- a read of the copied bytes blocks it -- which gcc does at no
+# tested level (an allocator attribute on z_xmalloc changes nothing). So a
+# clang bin/zc is a different measurement, not a wrong one; the series is
+# gcc -O1, and `make perf-elision` measures the pool clang deletes.
 perf-strict:
 	@if readelf -p .comment bin/zc 2>/dev/null | grep -qi clang; then \
 	  echo "perf-strict: bin/zc is clang-built (a CC=clang test rebuilt it) -- rebuilding with gcc"; \
@@ -330,6 +331,34 @@ perf-strict:
 	  echo "  $$line"; \
 	  a=$$(echo "$$line" | sed 's/ allocs.*//;s/,//g'); f=$$(echo "$$line" | sed 's/.* allocs, //;s/ frees.*//;s/,//g'); \
 	  test "$$a" = "$$f" || { echo "perf-strict: allocs != frees -- incomplete or leaking run"; exit 1; }
+
+# perf-elision -- how much of the emitted code's allocation the C compiler
+# throws away for us. LLVM deletes an allocation whose bytes are written but
+# never read and whose pointer never escapes; gcc keeps it, because the memcpy
+# into the buffer counts as a use. Building bin/zc.c TWICE WITH THE SAME clang
+# -- once with -fno-builtin-malloc, which stops LLVM recognising the allocator
+# and changes nothing else -- isolates that pool exactly: the no-builtin build
+# has matched a gcc build to within 4 allocations. The delta is emitted code
+# that allocates, fills a buffer, and frees it unread, so it belongs at zero;
+# a growing one means a new write-only allocation crept in. Both builds are
+# scratch, glibc-only (no mimalloc, so valgrind counts every block) and land in
+# $(BUILDDIR) -- bin/zc must stay gcc-built for perf-strict.
+ELIDECC   ?= clang
+NOBUILTIN := -fno-builtin-malloc -fno-builtin-free -fno-builtin-calloc -fno-builtin-realloc
+perf-elision: bin/zc
+	@command -v $(ELIDECC) >/dev/null 2>&1 || { echo "perf-elision: $(ELIDECC) not installed -- skipping"; exit 0; }
+	@command -v valgrind >/dev/null 2>&1 || { echo "perf-elision: valgrind not installed -- skipping"; exit 0; }
+	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
+	  echo "== perf-elision @ $$sha ($$dirty), $(ELIDECC) A/B over bin/zc.c =="
+	@$(ELIDECC) -std=c17 -w $(OPTFLAGS) -o $(BUILDDIR)/zc-elide bin/zc.c -lpthread -lquadmath -lm
+	@$(ELIDECC) -std=c17 -w $(OPTFLAGS) $(NOBUILTIN) -o $(BUILDDIR)/zc-noelide bin/zc.c -lpthread -lquadmath -lm
+	@blocks() { valgrind --tool=memcheck $$1 $(PERFARGS) 2>&1 \
+	    | grep 'total heap usage' | sed 's/.*usage: //;s/ allocs.*//;s/,//g'; }; \
+	  kept=$$(blocks $(BUILDDIR)/zc-noelide); left=$$(blocks $(BUILDDIR)/zc-elide); \
+	  test -n "$$kept" -a -n "$$left" || { echo "perf-elision: no allocation total -- a run failed"; exit 1; }; \
+	  printf "  as emitted:            %s allocs\n" "$$kept"; \
+	  printf "  after LLVM deletion:   %s allocs\n" "$$left"; \
+	  printf "  write-only pool:       %s\n" "$$((kept - left))"
 
 # shadow-guard -- ratchet against the user-shadow miscompile class. The C emitter
 # must derive a type's C type from its canonical type id (typeRefC / scalarCTypeFor
