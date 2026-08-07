@@ -221,20 +221,30 @@ zc: bin/zc
 # front-end via the compiler. A separate binary from zc so the compiler stays
 # lean; zl links the front-end + typecheck (for --full's suffix rule), but never
 # the emitter.
-bin/zl: bin/zc $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
-	@mkdir -p bin out
+out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) | bin/zc
+	@mkdir -p out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -c out/zl.c -o $(BUILDDIR)/zl.o
+
+$(BUILDDIR)/zl.o: out/zl.c
+	$(CC) $(CFLAGS) $(OPTFLAGS) -c out/zl.c -o $@
+
+bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
+	@mkdir -p bin
 	$(CC) -o bin/zl $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lquadmath -lm
 
 # bin/zls -- the zerolang language server (src/zls.z): JSON-RPC over
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
 # lsp test kind in ztestrunner builds its own copy; this rule is the
 # editor-facing binary.
-bin/zls: bin/zc $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
-	@mkdir -p bin out
+out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) | bin/zc
+	@mkdir -p out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -c out/zls.c -o $(BUILDDIR)/zls.o
+
+$(BUILDDIR)/zls.o: out/zls.c
+	$(CC) $(CFLAGS) $(OPTFLAGS) -c out/zls.c -o $@
+
+bin/zls: $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
+	@mkdir -p bin
 	$(CC) -o bin/zls $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lquadmath -lm
 
 # zl -- convenience alias for bin/zl.
