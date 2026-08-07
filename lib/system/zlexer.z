@@ -139,6 +139,15 @@ Token: class {
     tokenid: u64
 }
 
+# Position and identity of a token, without its text. A valtype, so a
+# reader that needs only where a token is pays no allocation.
+tokpos: record {
+    fsno: zvfs.fsno
+    lineno: u32
+    colno: u32
+    tokenid: u64
+}
+
 # kwlookup result: a token type plus a "found" flag. Returned by
 # `kwlookup` instead of routing through a `toktype` sentinel arm.
 kwresult: record { found: bool tt: toktype }
@@ -1301,9 +1310,32 @@ Lexer: class {
         }
     }
 
-    # The buffered token, without advancing. Returns an owned copy.
+    # The buffered token, without advancing. Returns an owned copy, so the
+    # token text is duplicated: reach for peekType / peekPos / peekText when
+    # the whole token is not needed.
     peek: function {:this} out Token is {
         return this.currentCopy
+    }
+
+    # The buffered token's type.
+    peekType: function {:this} out toktype is {
+        return this.thistoken.toktype
+    }
+
+    # Where the buffered token is, and which token it is.
+    peekPos: function {:this} out tokpos is {
+        return (tokpos
+            fsno: this.thistoken.fsno
+            lineno: this.thistoken.lineno
+            colno: this.thistoken.colno
+            tokenid: this.thistoken.tokenid
+        )
+    }
+
+    # A view of the buffered token's text. Pins the lexer, so the view must
+    # not be live across advance / accept / acceptAny.
+    peekText: function {t: this.view} out StringView.takex is {
+        return t.thistoken.tokstr.stringview
     }
 
     # Accept and advance if the buffered token matches tt; else none.
