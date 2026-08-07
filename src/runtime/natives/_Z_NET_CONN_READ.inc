@@ -8,13 +8,12 @@ static z_Result_u64_IoError_t z_Conn_read(
         buf->data = (uint8_t*)z_xrealloc(buf->data, newcap);
         buf->capacity = newcap;
     }
+    long n;
     for (;;) {
-        long n = read(c->fd, buf->data + buf->length, max);
-        if (n >= 0) {
-            buf->length += (uint64_t)n;
-            return z_io_u64_ok((uint64_t)n);
-        }
-        if (errno == EINTR) continue;
-        return z_io_u64_err(errno);
+        n = read(c->fd, buf->data + buf->length, max);
+        if (n >= 0) break;
+        if (errno != EINTR) return z_io_u64_err(errno);
     }
+    buf->length += (uint64_t)n;
+    return z_io_u64_ok((uint64_t)n);
 }

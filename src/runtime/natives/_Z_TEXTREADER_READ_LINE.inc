@@ -3,7 +3,9 @@
    at that offset, validate the line (without its LF) as UTF-8,
    emit `ioerror.badencoding` on failure or `result.ok(line)` on
    success. On a zero-byte read with buf non-empty, surface the
-   unterminated tail once; with buf empty, surface `ioerror.eof`. */
+   unterminated tail once; with buf empty, surface `ioerror.eof`. Both
+   success paths break out with `line` set so the body ends in its
+   return -- c2mir miscompiles a struct return otherwise. */
 static z_Result_String_IoError_t z_TextReader_readLine(
     z_TextReader_t* self
 );
@@ -11,13 +13,14 @@ static z_Result_String_IoError_t z_TextReader_readLine(
     z_TextReader_t* self
 ) {
     uint64_t scan_start = 0;
+    z_String_t line = {0};
+    bool found = false;
     for (;;) {
         for (uint64_t i = scan_start; i < self->buf.length; i++) {
             if (self->buf.data[i] == (uint8_t)'\n') {
                 if (!z_io_utf8_is_valid(self->buf.data, i)) {
                     return z_io_String_err_arm(Z_IOERROR_TAG_BADENCODING);
                 }
-                z_String_t line = {0};
                 line.size = i;
                 line.capacity = i + 1;
                 line.data = (char*)z_xmalloc(line.capacity + 1);
@@ -28,9 +31,11 @@ static z_Result_String_IoError_t z_TextReader_readLine(
                     memmove(self->buf.data, self->buf.data + i + 1, tail);
                 }
                 self->buf.length = tail;
-                return z_io_String_ok(line);
+                found = true;
+                break;
             }
         }
+        if (found) break;
         scan_start = self->buf.length;
         uint64_t cap = self->source->cap;
         if (cap == 0) cap = 4096;
@@ -53,15 +58,15 @@ static z_Result_String_IoError_t z_TextReader_readLine(
             if (!z_io_utf8_is_valid(self->buf.data, size)) {
                 return z_io_String_err_arm(Z_IOERROR_TAG_BADENCODING);
             }
-            z_String_t line = {0};
             line.size = size;
             line.capacity = size + 1;
             line.data = (char*)z_xmalloc(line.capacity + 1);
             if (size > 0) memcpy(line.data, self->buf.data, size);
             line.data[size] = '\0';
             self->buf.length = 0;
-            return z_io_String_ok(line);
+            break;
         }
     }
+    return z_io_String_ok(line);
 }
 
