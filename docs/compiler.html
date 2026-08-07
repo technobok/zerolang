@@ -210,6 +210,20 @@ It also keeps a small stack to maintain context for handling end-of-line (EOL).<
 EOL's are coalesced into a single EOL token. In parenthesized expressions, all
 EOL's are ignored. In string literals, all EOL's are passed through as-is and
 form part of that string literal.</p>
+<p>The Lexer buffers one token of lookahead. <code>peek</code> hands back an owned copy of
+it, which duplicates the token text, so a parser rule that only needs to know
+what the next token is asks one of the three readers that copy nothing:
+<code>peekType</code> for the token type, <code>peekPos</code> for a <code>tokpos</code> valtype spanning
+the token (fsno, line, column, and the text's byte width), and <code>peekText</code> for
+a view of the text. The view pins the Lexer, so it must not still be live
+across <code>advance</code>, <code>accept</code> or <code>acceptAny</code>; a <code>tokpos</code> copies out and
+survives them, which is what lets a rule name its first token in a diagnostic
+raised much later. <code>accept</code> / <code>acceptAny</code> move the buffered text out rather
+than copying it, so a rule that consumes the token pays nothing either.</p>
+<p><code>peek</code> itself is then what a rule reaches for only when it needs the token
+text it may never read -- in the parser that is the failure arms, where the
+error node wants the offending text and the copy is paid once per failed
+parse.</p>
 <h2 id="parser"><a href="#parser">5. Parser</a></h2>
 <p>The parser creates an abstract syntax tree (AST) based on the source units
 supplied. It begins with the 'core' system module and the user 'main' module

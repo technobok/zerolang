@@ -289,10 +289,9 @@ Parser: class {
 
 
     # Build an error node located at `tok`.
-    # isReservedWordTok -- true when tok names a keyword or a future-reserved
-    # word (illegal where a declaration name is expected -> E0033).
-    isReservedWordTok: function {:this tok: zlexer.Token} out bool is {
-        sv9: tok.tokstr.stringview
+    # True when `sv9` names a keyword or a future-reserved word (illegal
+    # where a declaration name is expected -> E0033).
+    svIsReservedWord: function {sv9: StringView} out bool is {
         kr9: zlexer.kwlookup sv9
         if kr9.found then return true
         return (zlexer.islookupReserved sv: sv9)
@@ -415,9 +414,9 @@ Parser: class {
         } case strBegTok then {
             return (this.parseAtomString :lex)
         } else {
-            bad: lex.peek
-            return (this.mkError
-                tok: bad
+            badPos: lex.peekPos
+            return (this.mkErrorAt
+                pos: badPos
                 code: zast.err.badReference
                 msg: "Expected an atom".string
             )
@@ -435,9 +434,9 @@ Parser: class {
                 name: (this.internName name: r.tokstr.stringview))
             )
         } case none then {
-            t: lex.peek
-            return (this.mkError
-                tok: t
+            tPos: lex.peekPos
+            return (this.mkErrorAt
+                pos: tPos
                 code: zast.err.badReference
                 msg: "Expected an identifier".string
             )
@@ -537,9 +536,9 @@ Parser: class {
             match closeOpt case some then {
                 return expr
             } case none then {
-                bad: lex.peek
-                return (this.mkError
-                    tok: bad
+                badPos: lex.peekPos
+                return (this.mkErrorAt
+                    pos: badPos
                     code: zast.err.badExpression
                     msg: "Expected closing parenthesis".string
                 )
@@ -601,9 +600,9 @@ Parser: class {
                     }
                     lex.advance
                 } else {
-                    bad: lex.peek
-                    return (this.mkError
-                        tok: bad
+                    badPos: lex.peekPos
+                    return (this.mkErrorAt
+                        pos: badPos
                         code: zast.err.badExpression
                         msg: "Bad expression in string interpolation".string
                     )
@@ -1074,9 +1073,9 @@ Parser: class {
         paths: this.operationPaths :lex
         n: paths.length
         if n == 0 then {
-            bad: lex.peek
-            return (this.mkError
-                tok: bad
+            badPos: lex.peekPos
+            return (this.mkErrorAt
+                pos: badPos
                 code: zast.err.badArgument
                 msg: "Expected type reference".string
             )
@@ -1875,9 +1874,9 @@ Parser: class {
                 vpaths: this.operationPaths :lex
                 n: vpaths.length
                 if n == 0 then {
-                    bad: lex.peek
-                    return (this.mkError
-                        tok: bad
+                    badPos: lex.peekPos
+                    return (this.mkErrorAt
+                        pos: badPos
                         code: zast.err.expectedExp
                         msg: "Expected operation for with value".string
                     )
@@ -1888,9 +1887,9 @@ Parser: class {
                 value: this.wrapExpression inner: op
                 doOpt: lex.accept tt: zlexer.toktype.doTok
                 match doOpt case none then {
-                    bad: lex.peek
-                    return (this.mkError
-                        tok: bad
+                    badPos: lex.peekPos
+                    return (this.mkErrorAt
+                        pos: badPos
                         code: zast.err.expectedExp
                         msg: "Expected do after with definition".string
                     )
@@ -2000,9 +1999,9 @@ Parser: class {
                                 )
                                 elements.append (this.intern n: no)
                             } else {
-                                bad: lex.peek
-                                return (this.mkError
-                                    tok: bad
+                                badPos: lex.peekPos
+                                return (this.mkErrorAt
+                                    pos: badPos
                                     code: zast.err.badData
                                     msg: "Expected term after data label".string
                                 )
@@ -2129,9 +2128,9 @@ Parser: class {
     buildReassignment: function {:this paths: (List Node).take lex: zlexer.Lexer startLine: u32 startCol: u32} out Node is {
         n: paths.length
         if n != 1 then {
-            bad: lex.peek
-            return (this.mkError
-                tok: bad
+            badPos: lex.peekPos
+            return (this.mkErrorAt
+                pos: badPos
                 code: zast.err.badStatement
                 msg: "Reassignment must be to a single path on the LHS".string
             )
@@ -2156,9 +2155,9 @@ Parser: class {
     buildSwap: function {:this paths: (List Node).take lex: zlexer.Lexer startLine: u32 startCol: u32} out Node is {
         n: paths.length
         if n != 1 then {
-            bad: lex.peek
-            return (this.mkError
-                tok: bad
+            badPos: lex.peekPos
+            return (this.mkErrorAt
+                pos: badPos
                 code: zast.err.badStatement
                 msg: "Swap must be to a single path on the LHS".string
             )
@@ -2198,9 +2197,9 @@ Parser: class {
         names: (List String)
         openOpt: lex.accept tt: zlexer.toktype.braceOpenTok
         match openOpt case none then {
-            bad: lex.peek
-            params.append (this.intern n: (this.mkError
-                tok: bad
+            badPos: lex.peekPos
+            params.append (this.intern n: (this.mkErrorAt
+                pos: badPos
                 code: zast.err.badArgument
                 msg: "Expected open brace for parameter block".string
             ))
@@ -2264,9 +2263,9 @@ Parser: class {
                             )
                             params.append (this.intern n: no)
                         } else {
-                            bad: lex.peek
-                            params.append (this.intern n: (this.mkError
-                                tok: bad
+                            badPos: lex.peekPos
+                            params.append (this.intern n: (this.mkErrorAt
+                                pos: badPos
                                 code: zast.err.badParameter
                                 msg: "Expected type reference for parameter".string
                             ))
@@ -2279,17 +2278,17 @@ Parser: class {
             }
             closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok
             match closeOpt case none then {
-                bad: lex.peek
-                if (this.isReservedWordTok tok: bad) then {
-                    params.append (this.intern n: (this.mkError
-                        tok: bad
+                badPos: lex.peekPos
+                if (this.svIsReservedWord sv9: lex.peekText) then {
+                    params.append (this.intern n: (this.mkErrorAt
+                        pos: badPos
                         code: zast.err.reservedName
-                        msg: "'\{bad.tokstr.stringview}' is a reserved word and cannot be used as a name"
+                        msg: "'\{lex.peekText}' is a reserved word and cannot be used as a name"
                     ))
                     return params
                 }
-                params.append (this.intern n: (this.mkError
-                    tok: bad
+                params.append (this.intern n: (this.mkErrorAt
+                    pos: badPos
                     code: zast.err.badParameterBlock
                     msg: "Expected closing brace after parameters".string
                 ))
@@ -2551,9 +2550,9 @@ Parser: class {
         names: (List String)
         openOpt: lex.accept tt: zlexer.toktype.braceOpenTok
         match openOpt case none then {
-            bad: lex.peek
-            items.append (this.intern n: (this.mkError
-                tok: bad
+            badPos: lex.peekPos
+            items.append (this.intern n: (this.mkErrorAt
+                pos: badPos
                 code: zast.err.badObjectBlock
                 msg: "Expected open brace for object body".string
             ))
@@ -2639,17 +2638,17 @@ Parser: class {
             }
             closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok
             match closeOpt case none then {
-                bad: lex.peek
-                if (this.isReservedWordTok tok: bad) then {
-                    items.append (this.intern n: (this.mkError
-                        tok: bad
+                badPos: lex.peekPos
+                if (this.svIsReservedWord sv9: lex.peekText) then {
+                    items.append (this.intern n: (this.mkErrorAt
+                        pos: badPos
                         code: zast.err.reservedName
-                        msg: "'\{bad.tokstr.stringview}' is a reserved word and cannot be used as a name"
+                        msg: "'\{lex.peekText}' is a reserved word and cannot be used as a name"
                     ))
                     return items
                 }
-                items.append (this.intern n: (this.mkError
-                    tok: bad
+                items.append (this.intern n: (this.mkErrorAt
+                    pos: badPos
                     code: zast.err.badObjectBlock
                     msg: "Expected closing brace for object body".string
                 ))
@@ -2846,9 +2845,9 @@ Parser: class {
         lex.accept tt: zlexer.toktype.asTok
         openOpt: lex.accept tt: zlexer.toktype.braceOpenTok
         match openOpt case none then {
-            bad: lex.peek
-            return (this.mkError
-                tok: bad
+            badPos: lex.peekPos
+            return (this.mkErrorAt
+                pos: badPos
                 code: zast.err.badArgument
                 msg: "Expected open brace for unit body".string
             )
@@ -2864,14 +2863,14 @@ Parser: class {
             }
             closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok
             match closeOpt case none then {
-                bad: lex.peek
-                if (this.isReservedWordTok tok: bad) then return (this.mkError
-                    tok: bad
+                badPos: lex.peekPos
+                if (this.svIsReservedWord sv9: lex.peekText) then return (this.mkErrorAt
+                    pos: badPos
                     code: zast.err.reservedName
-                    msg: "'\{bad.tokstr.stringview}' is a reserved word and cannot be used as a name"
+                    msg: "'\{lex.peekText}' is a reserved word and cannot be used as a name"
                 )
-                return (this.mkError
-                    tok: bad
+                return (this.mkErrorAt
+                    pos: badPos
                     code: zast.err.badUnit
                     msg: "Expected closing brace at end of unit".string
                 )
@@ -3241,14 +3240,14 @@ Parser: class {
             match (
                 eofOpt
             ) case none then {
-                bad: lx.peek
-                if (this.isReservedWordTok tok: bad) then return (this.mkError
-                    tok: bad
+                badPos: lx.peekPos
+                if (this.svIsReservedWord sv9: lx.peekText) then return (this.mkErrorAt
+                    pos: badPos
                     code: zast.err.reservedName
-                    msg: "'\{bad.tokstr.stringview}' is a reserved word and cannot be used as a name"
+                    msg: "'\{lx.peekText}' is a reserved word and cannot be used as a name"
                 )
-                return (this.mkError
-                    tok: bad
+                return (this.mkErrorAt
+                    pos: badPos
                     code: zast.err.badUnit
                     msg: "Expected EOF at end of unit file".string
                 )

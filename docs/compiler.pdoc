@@ -94,6 +94,21 @@ EOL's are coalesced into a single EOL token. In parenthesized expressions, all
 EOL's are ignored. In string literals, all EOL's are passed through as-is and
 form part of that string literal.
 
+The Lexer buffers one token of lookahead, and never copies it out. A rule that
+wants to know what comes next asks #~"peekType" for the token type or
+#~"peekPos" for a #~"tokpos" -- a valtype spanning the token: fsno, line,
+column, and the text's byte width, which is everything a diagnostic needs from
+the text without the text itself. A rule that must read the characters asks
+#~"peekText" for a #~"StringView" and makes its own owned copy if it needs one.
+
+The split follows the two lifetimes. A #~"tokpos" copies out, so a rule can
+capture where its construct began and still report an error against it a
+hundred lines and several #~"advance" calls later. A #~"peekText" view pins the
+Lexer and must not be live across #~"advance", #~"accept" or #~"acceptAny",
+because those overwrite the buffer it points into. Consuming a token is free
+either way: #~"accept" / #~"acceptAny" #*"move" the buffered text out rather
+than duplicating it.
+
 #--: Parser
 
 The parser creates an abstract syntax tree (AST) based on the source units
