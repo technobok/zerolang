@@ -12,17 +12,14 @@ CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
 # serial (NPROC feeds both -j and the runner's --jobs).
 NPROC    ?= $(shell nproc 2>/dev/null || echo 1)
 MAKEFLAGS += -j$(NPROC)
-# Daily-driver binaries only (bin/zc, bin/zl, bin/zls): light optimization
-# makes self-compilation ~35% faster (1.30s -> 0.86s). -fwrapv and
-# -fno-strict-aliasing pin down the C the emitter relies on. Bootstrap
-# intermediates and the test runner stay -O0: they are built once and run
-# once, so gcc time dominates.
-# -O1 is DELIBERATE: every row in docs/perf-baseline.md is measured at
-# gcc -O1, and the alternatives move wall, not allocations -- gcc -O2 cuts
-# self-compile wall 0.55s -> 0.40s (bin/zc.c compile 14s -> 20s) with an
-# IDENTICAL allocation count. See "Toolchain findings" in
-# docs/perf-baseline.md before changing this.
-OPTFLAGS := -O1 -fno-strict-aliasing -fwrapv
+# Daily-driver binaries only (bin/zc, bin/zl, bin/zls -- the three `make
+# install` lays down). -fwrapv and -fno-strict-aliasing pin down the C the
+# emitter relies on. Bootstrap intermediates and the test runner stay -O0:
+# they are built once and run once, so gcc time dominates.
+# -O2 is the RELEASE level: self-compile wall 0.53s -> 0.37s, for a bin/zc.c
+# compile of 14s -> 20s. Set OPTFLAGS='-O1 -fno-strict-aliasing -fwrapv' for
+# a faster edit-test loop.
+OPTFLAGS := -O2 -fno-strict-aliasing -fwrapv
 # Daily drivers also emit with the wyhash-style fast path for their own
 # Map/Set dispatch (their inputs are trusted source trees). Everything
 # else -- corpus, goldens, bootstrap fixpoint -- emits with the SipHash
@@ -40,6 +37,17 @@ MIMALLOC_OBJ := $(BUILDDIR)/mimalloc.o
 else
 MIMALLOC_OBJ :=
 endif
+
+# The perf series is -O1 and stays -O1, on a binary of its own. Every row in
+# docs/perf-baseline.md was measured that way; -O2 moves wall but not one
+# allocation, so mixing levels would make the wall column meaningless while
+# leaving the allocation column looking fine. A dedicated binary also means a
+# driver rebuild -- at another level, or by another compiler -- can never leak
+# into a measurement, which is the trap perf-strict used to guard against by
+# inspecting bin/zc. See "Toolchain findings" in docs/perf-baseline.md.
+PERFOPT  := -O1 -fno-strict-aliasing -fwrapv
+PERFCC   ?= gcc
+PERFBIN  := $(BUILDDIR)/zc-perf
 
 # Bootstrap compiler for building the .z sources: the committed, Python-free
 # seed (bootstrap/zc.c -> $(BUILDDIR)/zc-seed; see bootstrap/README.md). A C
@@ -290,42 +298,45 @@ warn-check: bin/zc
 # change. The glibc wall (make MIMALLOC=0), corpus wall (make test) and the DHAT
 # allocation-site census stay manual -- see the command list in that doc.
 PERFARGS := zc --src src --system lib/system --emit-c /dev/null
-PERFRUN  := bin/zc $(PERFARGS)
-perf: bin/zc
+PERFRUN  := $(PERFBIN) $(PERFARGS)
+
+# The series binary: the same emitted C as bin/zc, compiled at the series
+# level by the series compiler. Depends on bin/zc because that rule is what
+# emits bin/zc.c.
+$(PERFBIN): bin/zc $(MIMALLOC_OBJ)
+	@$(PERFCC) -std=c17 -w $(PERFOPT) -o $@ $(MIMALLOC_OBJ) bin/zc.c -lpthread -lquadmath -lm
+
+perf: $(PERFBIN)
 	@echo "== zerolang line count (.z) =="
 	@lsrc=$$(cat src/*.z | wc -l); llib=$$(cat lib/system/*.z | wc -l); \
 	  printf "  src/*.z: %s    lib/system/*.z: %s    total: %s\n" "$$lsrc" "$$llib" "$$((lsrc + llib))"
 	@echo "== self-compile wall best-of-5 (mimalloc; drop run 1) + peak RSS =="
 	@for i in 1 2 3 4 5; do /usr/bin/time -f "  %es  %MkB" $(PERFRUN) 2>&1 | tail -1; done
 	@echo "== phase split (parse / typecheck / emit) =="
-	@bin/zc zc --src src --system lib/system --time --emit-c /dev/null 2>&1 | tail -1 | sed 's/^/  /'
+	@$(PERFBIN) zc --src src --system lib/system --time --emit-c /dev/null 2>&1 | tail -1 | sed 's/^/  /'
 	@echo "== allocations (valgrind memcheck: total heap blocks for one self-compile) =="
 	@if command -v valgrind >/dev/null 2>&1; then \
 	  valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: /  /'; \
 	else echo "  (valgrind not installed -- skipping alloc total)"; fi
 
-# perf-strict -- the trustworthy allocation number. Guards against every trap
-# that has produced a wrong reading: a bin/zc silently rebuilt by
-# `make test CC=clang` (clang deletes write-only allocations, deflating the
-# count), a stale binary, and an early-aborted self-compile posing as a
-# perf win. Rebuilds bin/zc with gcc, PROVES it (.comment section), runs the
-# self-compile once checking the exit code, then requires allocs == frees.
-# The clang deletion is REAL behavior, not a bug: at -O1 LLVM removes an
-# allocation whose bytes are written but never READ and whose pointer never
-# escapes -- a read of the copied bytes blocks it -- which gcc does at no
-# tested level (an allocator attribute on z_xmalloc changes nothing). So a
-# clang bin/zc is a different measurement, not a wrong one; the series is
-# gcc -O1, and `make perf-elision` measures the pool clang deletes.
-perf-strict:
-	@if readelf -p .comment bin/zc 2>/dev/null | grep -qi clang; then \
-	  echo "perf-strict: bin/zc is clang-built (a CC=clang test rebuilt it) -- rebuilding with gcc"; \
-	  rm -f bin/zc; \
-	fi
-	@$(MAKE) --no-print-directory bin/zc CC=gcc
-	@readelf -p .comment bin/zc | grep -qi clang \
-	  && { echo "perf-strict: bin/zc still clang-built -- refusing to measure"; exit 1; } || true
+# perf-strict -- the trustworthy allocation number. $(PERFBIN) is compiled
+# here, by PERFCC at PERFOPT, so the two traps that produced wrong readings
+# before -- a bin/zc silently rebuilt by `make test CC=clang`, and a driver
+# built at another optimization level -- cannot reach the measurement at all;
+# the .comment probe stays as a cheap assertion. The remaining guards are on
+# the RUN: check the exit code (an early-aborted self-compile reads as a huge
+# perf win) and require allocs == frees.
+# The clang deletion is REAL behavior, not a bug: LLVM removes an allocation
+# whose bytes are written but never READ and whose pointer never escapes -- a
+# read of the copied bytes blocks it -- which gcc does at no tested level (an
+# allocator attribute on z_xmalloc changes nothing). So a clang build is a
+# different measurement, not a wrong one; `make perf-elision` measures that
+# pool deliberately, and it belongs at zero.
+perf-strict: $(PERFBIN)
+	@readelf -p .comment $(PERFBIN) | grep -qi clang \
+	  && { echo "perf-strict: $(PERFBIN) is clang-built (PERFCC=$(PERFCC)) -- refusing to measure"; exit 1; } || true
 	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
-	  echo "== perf-strict @ $$sha ($$dirty), gcc-built bin/zc =="
+	  echo "== perf-strict @ $$sha ($$dirty), $(PERFCC) $(firstword $(PERFOPT)) =="
 	@$(PERFRUN) > /dev/null || { echo "perf-strict: self-compile FAILED (exit $$?)"; exit 1; }
 	@line=$$(valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'); \
 	  echo "  $$line"; \
@@ -341,8 +352,8 @@ perf-strict:
 # has matched a gcc build to within 4 allocations. The delta is emitted code
 # that allocates, fills a buffer, and frees it unread, so it belongs at zero;
 # a growing one means a new write-only allocation crept in. Both builds are
-# scratch, glibc-only (no mimalloc, so valgrind counts every block) and land in
-# $(BUILDDIR) -- bin/zc must stay gcc-built for perf-strict.
+# scratch, glibc-only (no mimalloc, so valgrind counts every block), built at
+# PERFOPT so the pool stays comparable with the series, and land in $(BUILDDIR).
 ELIDECC   ?= clang
 NOBUILTIN := -fno-builtin-malloc -fno-builtin-free -fno-builtin-calloc -fno-builtin-realloc
 perf-elision: bin/zc
@@ -350,8 +361,8 @@ perf-elision: bin/zc
 	@command -v valgrind >/dev/null 2>&1 || { echo "perf-elision: valgrind not installed -- skipping"; exit 0; }
 	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
 	  echo "== perf-elision @ $$sha ($$dirty), $(ELIDECC) A/B over bin/zc.c =="
-	@$(ELIDECC) -std=c17 -w $(OPTFLAGS) -o $(BUILDDIR)/zc-elide bin/zc.c -lpthread -lquadmath -lm
-	@$(ELIDECC) -std=c17 -w $(OPTFLAGS) $(NOBUILTIN) -o $(BUILDDIR)/zc-noelide bin/zc.c -lpthread -lquadmath -lm
+	@$(ELIDECC) -std=c17 -w $(PERFOPT) -o $(BUILDDIR)/zc-elide bin/zc.c -lpthread -lquadmath -lm
+	@$(ELIDECC) -std=c17 -w $(PERFOPT) $(NOBUILTIN) -o $(BUILDDIR)/zc-noelide bin/zc.c -lpthread -lquadmath -lm
 	@blocks() { valgrind --tool=memcheck $$1 $(PERFARGS) 2>&1 \
 	    | grep 'total heap usage' | sed 's/.*usage: //;s/ allocs.*//;s/,//g'; }; \
 	  kept=$$(blocks $(BUILDDIR)/zc-noelide); left=$$(blocks $(BUILDDIR)/zc-elide); \

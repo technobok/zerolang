@@ -7,6 +7,14 @@ changes.
 
 ## Commands (run from the repo root, warm tree)
 
+**Every row measures `out/zc-perf`, not `bin/zc`.** The two are the same emitted
+C: `bin/zc` is the driver you run, built at `OPTFLAGS` (**-O2**), and
+`out/zc-perf` is the series binary, built by `PERFCC` at `PERFOPT` (**gcc -O1**)
+and rebuilt by every perf target. The split exists because -O2 moves wall by
+~30% and allocations by nothing, so a driver rebuilt at another level would
+quietly rewrite the wall column while the allocation column still looked right.
+Never hand-time `bin/zc` for a row.
+
 `make perf` prints the core row: the zerolang line count, self-compile wall
 best-of-5 + peak RSS, the parse/typecheck/emit phase split, and (when valgrind is
 installed) the allocation total. It measures with the default hash and
@@ -14,17 +22,22 @@ installed) the allocation total. It measures with the default hash and
 
 ```bash
 make perf                       # LOC + wall + RSS + phases + allocs (the core row)
-# glibc wall: rebuild pure-glibc, time it, then rebuild the mimalloc driver back:
-touch src/zc.z && make MIMALLOC=0 zc
+# glibc wall: relink the series binary without mimalloc, time it, then restore:
+rm -f out/zc-perf && make MIMALLOC=0 out/zc-perf
 for i in 1 2 3 4 5; do /usr/bin/time -f "%es %MkB" \
-    bin/zc zc --src src --system lib/system --emit-c /dev/null 2>&1 | tail -1; done
-touch src/zc.z && make zc
+    out/zc-perf zc --src src --system lib/system --emit-c /dev/null 2>&1 | tail -1; done
+rm -f out/zc-perf && make out/zc-perf
 # corpus wall (bimodal -- see the 2026-07-21 note):
 time make test
 # allocation-site census (optional, slow):
-valgrind --tool=dhat --dhat-out-file=/tmp/zc.dhat bin/zc zc --src src \
+valgrind --tool=dhat --dhat-out-file=/tmp/zc.dhat out/zc-perf zc --src src \
     --system lib/system --emit-c /dev/null
 ```
+
+A speed claim needs BOTH binaries on the SAME input -- `perf stat -r 7` over
+instructions, which resolves below 2% where wall does not. The wall column is
+not an A/B across rows: it times the compiler on its own current source, so it
+moves with LOC. See the 2026-08-07 row.
 
 ## Baseline table
 
@@ -351,14 +364,15 @@ loop of the phase that regressed.
 The series stays **gcc -O1** (`OPTFLAGS` in the Makefile): every row above was
 measured that way, and neither alternative moves what the series tracks.
 
-- **gcc -O2**: allocation count identical to -O1 modulo run wobble
-  (9,597,630 vs 9,597,793 when first measured) -- the wall gap against clang
-  is -O1 codegen quality, nothing allocation-shaped. Wall, best of 7 on the
-  same input: **-O1 0.53s vs -O2 0.37s** at `c88e16fb` (0.55s -> 0.40s when
-  first measured at `ebe15c0d`), for a `bin/zc.c` compile time of 14s -> 20s.
-  If a faster release build is ever wanted, -O2 is the flag, on a build
-  OUTSIDE the perf series -- the series is -O1 because it tracks allocations,
-  which -O2 does not move.
+- **gcc -O2 -- now the RELEASE level** (`OPTFLAGS`, 2026-08-07): allocation
+  count identical to -O1 modulo run wobble (9,597,630 vs 9,597,793 when first
+  measured), so the wall gap against clang was always -O1 codegen quality and
+  nothing allocation-shaped. Wall, best of 7 on the same input: **-O1 0.53s vs
+  -O2 0.37s** at `c88e16fb` (0.55s -> 0.40s when first measured at
+  `ebe15c0d`), for a `bin/zc.c` compile of 14s -> 20s. `bin/zc`, `bin/zl` and
+  `bin/zls` -- the three `make install` ships -- are built at -O2; the series
+  keeps its own `out/zc-perf` at gcc -O1 so the table stays one measurement.
+  `make warn-check` passes at -O2 under a global `-Werror`.
 - **clang -O1**: wall 0.37s and ~750k (-7.8%) fewer allocations. Same-source
   A/B at the String/StringView arc end: gcc 9,576,316 vs clang 8,826,150
   (delta 750,166); at the L022 migration's end (`5c59c47a`) gcc 8,999,867 vs
