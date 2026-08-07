@@ -49,6 +49,17 @@ PERFOPT  := -O1 -fno-strict-aliasing -fwrapv
 PERFCC   ?= gcc
 PERFBIN  := $(BUILDDIR)/zc-perf
 
+# The build stamp the three drivers link in, so `zc --version` can name the
+# commit it was built from. Empty when git is unavailable (a release tarball,
+# an exported tree), and the version line then simply carries no build
+# metadata. It arrives as a LINKED SYMBOL, overriding the weak default in
+# src/runtime/natives/_Z_OS_BUILD_COMMIT.inc, rather than as a -D: the natives
+# that read it live inside the drivers' single multi-megabyte translation
+# unit, so a define costs a 20s recompile per commit where a link costs 41ms.
+BUILDID   := $(shell git rev-parse --short=8 HEAD 2>/dev/null)
+BUILDID   := $(if $(BUILDID),$(BUILDID)$(shell git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || echo .dirty))
+BUILDDATE := $(if $(BUILDID),$(shell git show -s --format=%cs HEAD 2>/dev/null))
+
 # Bootstrap compiler for building the .z sources: the committed, Python-free
 # seed (bootstrap/zc.c -> $(BUILDDIR)/zc-seed; see bootstrap/README.md). A C
 # toolchain is the only requirement to build and test zerolang.
@@ -159,6 +170,23 @@ build: $(EXBINS)
 
 # out/mimalloc.o -- the vendored allocator, one TU (own flags: third-party
 # code is exempt from the project -Werror set). zc_tune.c is the option hook.
+# out/buildstamp.c -- regenerated every run but REWRITTEN only when its text
+# changes, so its timestamp (and the relink it triggers) moves only when the
+# commit or the tree's cleanliness actually moved. FORCE is what makes the
+# recipe run; cmp is what makes the write conditional.
+.PHONY: FORCE
+FORCE:
+
+$(BUILDDIR)/buildstamp.c: FORCE
+	@mkdir -p $(BUILDDIR)
+	@printf 'const char z_build_commit[] = "%s";\nconst char z_build_date[] = "%s";\n' \
+	  '$(BUILDID)' '$(BUILDDATE)' > $@.tmp
+	@cmp -s $@.tmp $@ || mv -f $@.tmp $@
+	@rm -f $@.tmp
+
+$(BUILDDIR)/buildstamp.o: $(BUILDDIR)/buildstamp.c
+	$(CC) $(CFLAGS) $(OPTFLAGS) -c $< -o $@
+
 $(BUILDDIR)/mimalloc.o: vendor/mimalloc/src/static.c vendor/mimalloc/zc_tune.c $(wildcard vendor/mimalloc/src/*.c) $(wildcard vendor/mimalloc/include/*.h)
 	@mkdir -p $(BUILDDIR)
 	$(CC) -O2 -DNDEBUG -DMI_MALLOC_OVERRIDE -I vendor/mimalloc/include -c vendor/mimalloc/src/static.c -o $(BUILDDIR)/mimalloc-core.o
@@ -174,10 +202,17 @@ $(BUILDDIR)/zc-seed: bootstrap/zc.c
 # bin/zc -- the self-hosted compiler, bootstrapped by the seed. Persistent +
 # git-ignored; rebuilt when the compiler sources change. The dev bin/zc
 # self-locates to this repo (lib/system here; runtime falls back to src/runtime).
-bin/zc: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(ZC_DEP) $(MIMALLOC_OBJ)
+bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(ZC_DEP)
 	@mkdir -p bin
 	$(ZC) zc --src src --system lib/system $(ZCHASH) --emit-c bin/zc.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zc $(MIMALLOC_OBJ) bin/zc.c -lpthread -lquadmath -lm
+
+$(BUILDDIR)/zc.o: bin/zc.c
+	@mkdir -p $(BUILDDIR)
+	$(CC) $(CFLAGS) $(OPTFLAGS) -c bin/zc.c -o $@
+
+bin/zc: $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
+	@mkdir -p bin
+	$(CC) -o bin/zc $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lquadmath -lm
 
 # zc -- convenience alias for bin/zc.
 zc: bin/zc
@@ -186,19 +221,21 @@ zc: bin/zc
 # front-end via the compiler. A separate binary from zc so the compiler stays
 # lean; zl links the front-end + typecheck (for --full's suffix rule), but never
 # the emitter.
-bin/zl: bin/zc $(MIMALLOC_OBJ) $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
+bin/zl: bin/zc $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zl $(MIMALLOC_OBJ) out/zl.c -lpthread -lquadmath -lm
+	$(CC) $(CFLAGS) $(OPTFLAGS) -c out/zl.c -o $(BUILDDIR)/zl.o
+	$(CC) -o bin/zl $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lquadmath -lm
 
 # bin/zls -- the zerolang language server (src/zls.z): JSON-RPC over
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
 # lsp test kind in ztestrunner builds its own copy; this rule is the
 # editor-facing binary.
-bin/zls: bin/zc $(MIMALLOC_OBJ) $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
+bin/zls: bin/zc $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zls $(MIMALLOC_OBJ) out/zls.c -lpthread -lquadmath -lm
+	$(CC) $(CFLAGS) $(OPTFLAGS) -c out/zls.c -o $(BUILDDIR)/zls.o
+	$(CC) -o bin/zls $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lquadmath -lm
 
 # zl -- convenience alias for bin/zl.
 zl: bin/zl
@@ -285,7 +322,7 @@ docs:
 	@echo "rendered docs/ -- commit the regenerated .html"
 
 # warn-check -- compile the emitted compiler C with every warning as an error.
-warn-check: bin/zc
+warn-check: bin/zc.c
 	$(CC) $(CFLAGS) $(OPTFLAGS) -Werror -c bin/zc.c -o /dev/null
 	@echo "warn-check OK: zero compiler warnings"
 
@@ -303,8 +340,8 @@ PERFRUN  := $(PERFBIN) $(PERFARGS)
 # The series binary: the same emitted C as bin/zc, compiled at the series
 # level by the series compiler. Depends on bin/zc because that rule is what
 # emits bin/zc.c.
-$(PERFBIN): bin/zc $(MIMALLOC_OBJ)
-	@$(PERFCC) -std=c17 -w $(PERFOPT) -o $@ $(MIMALLOC_OBJ) bin/zc.c -lpthread -lquadmath -lm
+$(PERFBIN): bin/zc.c $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o
+	@$(PERFCC) -std=c17 -w $(PERFOPT) -o $@ $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o bin/zc.c -lpthread -lquadmath -lm
 
 perf: $(PERFBIN)
 	@echo "== zerolang line count (.z) =="
@@ -356,7 +393,7 @@ perf-strict: $(PERFBIN)
 # PERFOPT so the pool stays comparable with the series, and land in $(BUILDDIR).
 ELIDECC   ?= clang
 NOBUILTIN := -fno-builtin-malloc -fno-builtin-free -fno-builtin-calloc -fno-builtin-realloc
-perf-elision: bin/zc
+perf-elision: bin/zc.c
 	@command -v $(ELIDECC) >/dev/null 2>&1 || { echo "perf-elision: $(ELIDECC) not installed -- skipping"; exit 0; }
 	@command -v valgrind >/dev/null 2>&1 || { echo "perf-elision: valgrind not installed -- skipping"; exit 0; }
 	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
