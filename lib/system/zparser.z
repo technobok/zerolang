@@ -436,9 +436,9 @@ Parser: class {
     # selectors, folded left into nested DottedPath ast.nodes. Used by the
     # greedy operation-path collector, which appends owned ast.nodes.
     parsePath: function {:this lex: zlexer.Lexer} out Node is {
-        startTok: lex.peek
-        sLine: startTok.lineno
-        sCol: startTok.colno
+        startPos: lex.peekPos
+        sLine: startPos.lineno
+        sCol: startPos.colno
         node: this.parseAtom :lex
         nIsErr: this.isError :node
         if nIsErr then return node
@@ -1185,10 +1185,10 @@ Parser: class {
     # guarantees blocklineLookahead, so the bare-expression tail always
     # finds an expression. Returns a bare StatementLine node.
     parseBlockline: function {:this lex: zlexer.Lexer} out Node is {
-        startTok: lex.peek
-        sLine: startTok.lineno
-        sCol: startTok.colno
-        tt: startTok.toktype
+        startPos: lex.peekPos
+        sLine: startPos.lineno
+        sCol: startPos.colno
+        tt: lex.peekType
         if tt == zlexer.toktype.labelPreTok then {
             lblTok: lex.acceptAny
             lvName: lblTok.tokstr.copy
@@ -1306,9 +1306,9 @@ Parser: class {
 
     # bareblock -> "{ ... }" as an expression; wraps a block in a Do node.
     acceptBareblock: function {:this lex: zlexer.Lexer} out Node is {
-        startTok: lex.peek
-        sLine: startTok.lineno
-        sCol: startTok.colno
+        startPos: lex.peekPos
+        sLine: startPos.lineno
+        sCol: startPos.colno
         blk: this.acceptBlock :lex
         bErr: this.isError node: blk
         if bErr then return blk
@@ -1324,9 +1324,9 @@ Parser: class {
     # to an empty block: `then null` / `else null` declare an empty body.
     # Loop bodies do not take this form.
     acceptClauseBody: function {:this lex: zlexer.Lexer} out Node is {
-        t: lex.peek
-        bLine: t.lineno
-        bCol: t.colno
+        bodyPos: lex.peekPos
+        bLine: bodyPos.lineno
+        bCol: bodyPos.colno
         body: this.acceptPrimaryExpression :lex
         bErr: this.isError node: body
         if bErr then return body
@@ -1429,13 +1429,13 @@ Parser: class {
                 statement: (this.intern n: stmt)
             )
             clauses.append (this.intern n: clause)
-            nextTok: lex.peek
+            nextPos: lex.peekPos
             return (this.ifClausesTail
                 :lex
                 :clauses
                 conditions: (ListVal u32)
-                clauseLine: nextTok.lineno
-                clauseCol: nextTok.colno
+                clauseLine: nextPos.lineno
+                clauseCol: nextPos.colno
                 :ifLine
                 :ifCol
             )
@@ -1484,9 +1484,9 @@ Parser: class {
                 msg: "Expected if".string
             )
         } case some then {
-            clauseStart: lex.peek
-            cLine: clauseStart.lineno
-            cCol: clauseStart.colno
+            clausePos: lex.peekPos
+            cLine: clausePos.lineno
+            cCol: clausePos.colno
             vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
@@ -1523,11 +1523,11 @@ Parser: class {
     # body -- mirrors ifClausesTail. `case` adds a clause; anything else
     # ends the clauses and parses an optional `else`.
     caseClausesTail: function {:this lex: zlexer.Lexer subjectId: u32 clauses: (ListVal u32).take mLine: u32 mCol: u32} out Node is {
-        clStart: lex.peek
-        isCase: clStart.toktype == zlexer.toktype.caseTok
+        isCase: lex.peekType == zlexer.toktype.caseTok
         if isCase then {
-            cLine: clStart.lineno
-            cCol: clStart.colno
+            clausePos: lex.peekPos
+            cLine: clausePos.lineno
+            cCol: clausePos.colno
             lex.advance
             lex.accept tt: zlexer.toktype.eolTok
             idOpt: lex.accept tt: zlexer.toktype.refIdTok
@@ -3196,7 +3196,7 @@ Parser: class {
         } case ok then {
             tk: zlexer.Tokenizer.create source: r.take fsno: fsid
             lx: zlexer.Lexer.create lexer: tk
-            firstTok: lx.peek
+            firstPos: lx.peekPos
             segStart9: this.nextNodeId
             body: this.acceptUnitBody lex: lx
             bn: body.length
@@ -3267,15 +3267,15 @@ Parser: class {
             }
             root: Node.unitdef (zast.UnitData
                 nodeid: this.nextId
-                lineno: firstTok.lineno
-                colno: firstTok.colno
+                lineno: firstPos.lineno
+                colno: firstPos.colno
                 :body
             )
             outBody.append (this.intern n: (this.mkNamedOp
                 name: (this.internName name: unitname.stringview)
                 operation: root
-                line: firstTok.lineno
-                col: firstTok.colno
+                line: firstPos.lineno
+                col: firstPos.colno
             ))
             return (Node.atomid (zast.AtomIdData
                 nodeid: this.nextId
@@ -3896,12 +3896,12 @@ main: function is {
                 p: Parser.create
                 tk: zlexer.Tokenizer.create source: r.take fsno: zvfs.fsno
                 lx: zlexer.Lexer.create lexer: tk
-                firstTok: lx.peek
+                firstPos: lx.peekPos
                 body: p.acceptUnitBody lex: lx
                 root: Node.unitdef (zast.UnitData
                     nodeid: p.nextId
-                    lineno: firstTok.lineno
-                    colno: firstTok.colno
+                    lineno: firstPos.lineno
+                    colno: firstPos.colno
                     :body
                 )
                 zast.printNodeCanonical ast: p.ast n: root
