@@ -376,8 +376,8 @@ Parser: class {
 
     # Does an atom start at the current token? (PARENOPEN | REFID | STRBEG)
     atomLookahead: function {:this lex: zlexer.Lexer} out bool is {
-        t: lex.peek
-        match t.toktype case parenOpenTok then {
+        tt: lex.peekType
+        match tt case parenOpenTok then {
             return true
         } case refIdTok then {
             return true
@@ -393,15 +393,20 @@ Parser: class {
     # Dispatch on the leading token. Precondition: atomLookahead is true,
     # so the else arm is unreachable (guarded with an error node).
     parseAtom: function {:this lex: zlexer.Lexer} out Node is {
-        t: lex.peek
-        match t.toktype case parenOpenTok then {
+        tt: lex.peekType
+        match tt case parenOpenTok then {
             return (this.parseAtomExpr :lex)
         } case refIdTok then {
             return (this.parseAtomId :lex)
         } case strBegTok then {
             return (this.parseAtomString :lex)
         } else {
-            return (this.mkError tok: t code: zast.err.badReference msg: "Expected an atom".string)
+            bad: lex.peek
+            return (this.mkError
+                tok: bad
+                code: zast.err.badReference
+                msg: "Expected an atom".string
+            )
         }
     }
 
@@ -437,8 +442,7 @@ Parser: class {
         node: this.parseAtom :lex
         nIsErr: this.isError :node
         if nIsErr then return node
-        nx: lex.peek
-        nxIsDot: nx.toktype == zlexer.toktype.dotTok
+        nxIsDot: lex.peekType == zlexer.toktype.dotTok
         if nxIsDot then {
             return (this.parsePathTail :lex parent: node startLine: sLine startCol: sCol)
         }
@@ -1109,8 +1113,8 @@ Parser: class {
     # Does an expression start at the current token? Control-flow forms
     # begin with a keyword; everything else begins with an atom.
     exprLookahead: function {:this lex: zlexer.Lexer} out bool is {
-        t: lex.peek
-        match t.toktype case ifTok then {
+        tt: lex.peekType
+        match tt case ifTok then {
             return true
         } case forTok then {
             return true
@@ -1147,8 +1151,8 @@ Parser: class {
 
     # True for a block-line separator token (EOL or ';').
     atSeparator: function {:this lex: zlexer.Lexer} out bool is {
-        t: lex.peek
-        match t.toktype case eolTok then {
+        tt: lex.peekType
+        match tt case eolTok then {
             return true
         } case semicolonTok then {
             return true
@@ -1160,15 +1164,14 @@ Parser: class {
     # True when the current token is an EOL (a unit-body definition
     # separator; only observable while EOL filtering is off).
     atEol: function {:this lex: zlexer.Lexer} out bool is {
-        t: lex.peek
-        return (t.toktype == zlexer.toktype.eolTok)
+        return (lex.peekType == zlexer.toktype.eolTok)
     }
 
     # Does a block line start at the current token? (a binding label, a
     # label shorthand, or an expression)
     blocklineLookahead: function {:this lex: zlexer.Lexer} out bool is {
-        t: lex.peek
-        match t.toktype case labelTok then {
+        tt: lex.peekType
+        match tt case labelTok then {
             return true
         } case labelPreTok then {
             return true
@@ -1536,8 +1539,7 @@ Parser: class {
                     colno: idOpt.colno
                     name: (this.internName name: idOpt.tokstr.stringview)
                 )
-                tk: lex.peek
-                isThen: tk.toktype == zlexer.toktype.thenTok
+                isThen: lex.peekType == zlexer.toktype.thenTok
                 if isThen then {
                     lex.advance
                     body: this.acceptClauseBody :lex
@@ -1853,8 +1855,7 @@ Parser: class {
                 msg: "Expected with".string
             )
         } case some then {
-            t: lex.peek
-            isLabel: t.toktype == zlexer.toktype.labelTok
+            isLabel: lex.peekType == zlexer.toktype.labelTok
             if isLabel then {
                 lblTok: lex.acceptAny
                 nm: this.internName name: lblTok.tokstr.stringview
@@ -1933,8 +1934,7 @@ Parser: class {
                 elements: (ListVal u32)
                 datanames: (List String)
                 for true loop {
-                    et: lex.peek
-                    ett: et.toktype
+                    ett: lex.peekType
                     if ett == zlexer.toktype.labelPreTok then {
                         lblTok: lex.acceptAny
                         checkName: lblTok.tokstr.copy
@@ -2195,8 +2195,7 @@ Parser: class {
         } case some then {
             for true loop {
                 lex.accept tt: zlexer.toktype.eolTok
-                pk: lex.peek
-                pktt: pk.toktype
+                pktt: lex.peekType
                 if pktt == zlexer.toktype.labelPreTok then {
                     lblTok: lex.acceptAny
                     nm: lblTok.tokstr.copy
@@ -2446,8 +2445,7 @@ Parser: class {
     functionDefinitionInner: function {:this lex: zlexer.Lexer startLine: u32 startCol: u32} out Node is {
         parameters: (ListVal u32)
         asItems: (ListVal u32)
-        pk: lex.peek
-        isBrace: pk.toktype == zlexer.toktype.braceOpenTok
+        isBrace: lex.peekType == zlexer.toktype.braceOpenTok
         if isBrace then {
             pb: this.acceptParamBlock :lex
             pn: pb.length
@@ -2534,8 +2532,7 @@ Parser: class {
         } case some then {
             for true loop {
                 for (this.atEol :lex) loop lex.advance
-                pk: lex.peek
-                pktt: pk.toktype
+                pktt: lex.peekType
                 if pktt == zlexer.toktype.labelPreTok then {
                     lblTok: lex.acceptAny
                     nm: lblTok.tokstr.copy
@@ -2731,8 +2728,7 @@ Parser: class {
         lex.setFilterEol enabled: false
         for true loop {
             for (this.atEol :lex) loop lex.advance
-            pk: lex.peek
-            pktt: pk.toktype
+            pktt: lex.peekType
             if pktt == zlexer.toktype.labelPreTok then {
                 lblTok: lex.acceptAny
                 nm: lblTok.tokstr.copy
