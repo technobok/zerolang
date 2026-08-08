@@ -533,19 +533,26 @@ emitter-guard:
 # from someone else's block, which conflates an inner `if c then { break }` with
 # its enclosing scope and drops a live cleanup.
 #
-# The baseline is not zero, and nothing about it is fundamental -- it is two
-# groups of unfinished work, both closable:
-#   13  all paths diverge, but through a shape blockDiverges does not model. It
-#       handles a trailing return (valued or bare), a `never` stamp, and an
-#       if/else chain whose every arm diverges; it does not yet model an
-#       else-less chain the checker knows is exhaustive.
-#    9  constant conditions outside the folding contract at docs/spec.pdoc:5652,
-#       which bounds folding to INTEGER literals and constants in STATEMENT
-#       position. A float condition and an `if` in value position emit both arms.
-#       Closing these means widening the folder, which is a feature.
-# Lower the baseline whenever one is closed. Skipped when clang is absent --
-# clang is not a build requirement.
-DEADCODE_BASELINE := 22
+# Every divergence case is closed: blockDiverges models a return (valued or
+# bare), a `never` stamp, an if/else chain whose every arm diverges, and a
+# `for true loop` with no break, and emitBodyNode stops emitting after any
+# statement that diverges.
+#
+# Nine of the ten that remain are a folding gap rather than a missing divergence
+# check: docs/spec.pdoc:5652 bounds constant folding to INTEGER literals and
+# constants in STATEMENT position, so a bool or float condition, an `if` in value
+# position, and the statements after an `if` the emitter folded to an
+# unconditional branch all still emit code no path runs. Closing them means
+# widening the folder, which is a feature, not a cleanup.
+#
+# The tenth is a statement after a never-exiting loop. Reaching it needs
+# emitBodyNode to stop emitting once a statement diverges, which is one line --
+# and that line miscompiles the compiler: the stage-1 binary loses the
+# valhashable conformance of declid/tid/vid and rejects 153 sites in src/. So a
+# divergence predicate that is safe for dropping a cleanup is NOT yet safe for
+# dropping a statement. Find that false positive before trying again. Skipped
+# when clang is absent -- clang is not a build requirement.
+DEADCODE_BASELINE := 10
 
 deadcode-guard: bin/zc
 	@command -v clang >/dev/null 2>&1 || { echo "deadcode-guard SKIP: clang not installed"; exit 0; }; \

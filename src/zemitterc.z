@@ -1194,23 +1194,41 @@ blockDiverges: function {
     match (
         n
     ) case statement then {
-        ne9: n.statements.length
-        if ne9 == 0 then return false
-        sid9: n.statements.get i: (ne9 - 1)
-        if (matchDiverges :symtab nid: sid9.u64) then return true
-        sn9: ast.nodes.get i: (sid9 - 1).u64
-        match (
-            sn9
-        ) case statementline then {
-            if (matchDiverges :symtab nid: sn9.statementline.u64) then return true
-            inn9: ast.nodes.get i: (sn9.statementline - 1).u64
-            # a bare `return` is an atom, not a call, so ztypecheck's
-            # blockEndsInReturn (which looks for a return CALL) misses it
-            if (bareReturn9 :ast n: inn9) then return true
-            return (ifDiverges :ast :symtab n: inn9)
-        } else {
-            return false
+        # ANY diverging statement makes the rest of the block unreachable, so
+        # the block diverges -- not just a diverging last statement
+        with dit9: n.statements.iterate do for dsId9: dit9 loop {
+            if (stmtDiverges9
+                :ast
+                :symtab
+                sid: (zast.nodeid.create from: dsId9.u64)
+            ) then return true
         }
+        return false
+    } else {
+        return false
+    }
+}
+
+# stmtDiverges9 -- one statement leaves its block on every path: a `never` stamp
+# (panic, unreachable, break, continue, an all-arms-diverge match), a `return`
+# valued or bare, an if/else chain whose every arm diverges, or a `for true loop`
+# with no break.
+stmtDiverges9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    sid: zast.nodeid
+} out bool is {
+    if sid.isZero then return false
+    if (matchDiverges :symtab nid: sid.u64) then return true
+    sn9: ast.nodes.get i: (sid - 1).u64
+    match (
+        sn9
+    ) case statementline then {
+        if (matchDiverges :symtab nid: sn9.statementline.u64) then return true
+        inn9: ast.nodes.get i: (sn9.statementline - 1).u64
+        if (bareReturn9 :ast n: inn9) then return true
+        if (loopNeverExits9 :ast n: inn9) then return true
+        return (ifDiverges :ast :symtab n: inn9)
     } else {
         return false
     }
@@ -1225,6 +1243,51 @@ bareReturn9: function {ast: Ast.view n: Node.view} out bool is {
         return (bareReturn9 :ast n: (ast.nodes.get i: (n.expression - 1).u64))
     } case atomid then {
         return n.name.u32 == zast.wkReturn
+    } else {
+        return false
+    }
+}
+
+# loopNeverExits9 -- a `for true loop` with no break: its only exits are the
+# return/panic statements inside it, so anything after the loop is unreachable.
+# The condition is checked as the literal `true`; a computed condition, a
+# postcondition, or any break leaves a normal exit and the answer is false.
+loopNeverExits9: function {
+    ast: Ast.view
+    n: Node.view
+} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (loopNeverExits9 :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case forexpr then {
+        if n.body.isZero then return false
+        if n.postconditions.length > 0 then return false
+        if n.conditions.length != 1 then return false
+        c09: ast.nodes.get i: ((n.conditions.get i: 0) - 1).u64
+        alwaysT9: false
+        match (
+            c09
+        ) case namedoperation then {
+            if c09.name.isZero then {
+                cop9: ast.nodes.get i: (c09.operation - 1).u64
+                # bind, never compare an unbound String temporary: it leaks
+                at9: atomTextDeep :ast n: cop9
+                if at9.stringview == "true" then alwaysT9 = true
+                # `true` also arrives as the dotted tag bool.true
+                match (
+                    cop9
+                ) case dottedpath then {
+                    ch9: atomTextOf :ast n: (ast.nodes.get i: (cop9.child - 1).u64)
+                    if ch9.stringview == "true" then alwaysT9 = true
+                } else null
+            }
+        } else null
+        if (alwaysT9) == false then return false
+        return (ztypecheck.blockHasBreak
+            :ast
+            n: (ast.nodes.get i: (n.body - 1).u64)
+        ) == false
     } else {
         return false
     }
