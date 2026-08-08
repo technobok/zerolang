@@ -545,12 +545,14 @@ emitter-guard:
 # unconditional branch all still emit code no path runs. Closing them means
 # widening the folder, which is a feature, not a cleanup.
 #
-# Every divergence case is closed and the check is sound. The `never` stamp is a
-# node's VALUE type; neverStampIsControlFlow reads it as "control does not
-# continue" for a panic, unreachable, break, continue or diverging call, and
-# makes a MATCH show its work instead -- every clause body and the else must
-# diverge. Believing a match's bare stamp dropped an arm's C `break;` and the
-# switch fell into the next case, a silent wrong answer
+# Every divergence case is closed. Divergence is the typechecker's `never`
+# stamp and nothing else: checkCase stamps it on an exhaustive match whose every
+# arm -- else included -- diverges, and a panic or diverging call carries it
+# because it does not return. The emitter reads that stamp and does no
+# shape-matching of its own. It used to be wrong, not because the stamp is the
+# wrong idea but because checkCase left the else arm out of the all-diverge
+# test, so a match whose else completed still stamped `never`; an enclosing arm
+# then lost its C `break;` and the switch fell through
 # (tests/fixtures/emitc_corpus/match_arm_fallthrough.z: 1 instead of 9).
 #
 # Nine of the ten that remain are the folding contract at docs/spec.pdoc:5652,
