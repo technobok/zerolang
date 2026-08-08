@@ -561,13 +561,13 @@ emitter-guard:
 # `error` builtin can prove REACHABLE, which is a different question. So these
 # are gaps, not decisions:
 #
-#   2  the folder still misses two shapes. A bool unit constant reaches
-#      evalConstI64 as something other than its rendered tag text, so
-#      `if NO` where `NO: bool.false` does not fold (bool_arm_value); and a
-#      folded if-BIND whose live branch is a multi-statement block keeps the
-#      runtime if, because the shortcut only handles a branch emitExpr can
-#      render (ifexpr). Value-position ifs, the bind form with a simple branch,
-#      and float comparisons all fold now.
+#   1  a bool unit constant does not fold. `NO: bool.false` parses to a
+#      DottedPath, and fillConstValsIn only records a member isConstShape
+#      accepts -- numerals, known constants, binops over them. Teaching it the
+#      dotted bool tag did NOT make `if NO` fold, so something between
+#      isConstShape and evalConstI64 still refuses it; instrument those two
+#      before guessing again. Everything else folds: statement, value and bind
+#      position, simple and multi-statement branches, and float comparisons.
 # The other class -- a statement after something already diverged -- is closed:
 # both statement walks stop on a diverging statement, and ifDiverges models a
 # chain whose conditions all fold, where only the branch the emitter actually
@@ -575,7 +575,7 @@ emitter-guard:
 #
 # Lower the baseline as each folder gap is closed. Skipped when clang is absent -- clang is
 # not a build requirement.
-DEADCODE_BASELINE := 2
+DEADCODE_BASELINE := 1
 
 deadcode-guard: bin/zc
 	@command -v clang >/dev/null 2>&1 || { echo "deadcode-guard SKIP: clang not installed"; exit 0; }; \
