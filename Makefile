@@ -533,14 +533,19 @@ emitter-guard:
 # from someone else's block, which conflates an inner `if c then { break }` with
 # its enclosing scope and drops a live cleanup.
 #
-# The baseline is not zero. What remains is three classes, none of them a
-# missing divergence check: emitter-synthesized returns the AST predicate cannot
-# see; statements after a folded unconditional break; and constant conditions
-# outside the folding contract in docs/spec.pdoc:5652 (floats, and `if` in value
-# position, which emit both arms of a ternary). Lower the baseline when one of
-# those is closed. Skipped when clang is absent -- clang is not a build
-# requirement.
-DEADCODE_BASELINE := 31
+# The baseline is not zero, and nothing about it is fundamental -- it is two
+# groups of unfinished work, both closable:
+#   13  all paths diverge, but through a shape blockDiverges does not model. It
+#       handles a trailing return (valued or bare), a `never` stamp, and an
+#       if/else chain whose every arm diverges; it does not yet model an
+#       else-less chain the checker knows is exhaustive.
+#    9  constant conditions outside the folding contract at docs/spec.pdoc:5652,
+#       which bounds folding to INTEGER literals and constants in STATEMENT
+#       position. A float condition and an `if` in value position emit both arms.
+#       Closing these means widening the folder, which is a feature.
+# Lower the baseline whenever one is closed. Skipped when clang is absent --
+# clang is not a build requirement.
+DEADCODE_BASELINE := 22
 
 deadcode-guard: bin/zc
 	@command -v clang >/dev/null 2>&1 || { echo "deadcode-guard SKIP: clang not installed"; exit 0; }; \
