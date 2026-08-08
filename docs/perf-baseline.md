@@ -438,3 +438,31 @@ member blocks. Arc 1b removes the seeds, and that is where the rest is.
 `--eager` restores the old behaviour and is what `zls`, `zl lint --full` and
 `make ci`'s `eager-guard` run, so a definition nothing references is still
 type-checked somewhere.
+
+## A create's parameters are its fields
+
+A synthesized `.create` takes one parameter per data field, so
+`materializeCreateParams` forced every member of the type before reading the
+field list. Every member includes every METHOD, forced only for the field
+filter to see a FUNCTION type and drop it again -- the same thing it does with
+the type 0 an unresolved member carries. `StringView` has 42 members, two of
+them `parseF16` and `parseF128`, so every program that named `StringView` --
+which is every program -- resolved f16 and f128 and emitted the two `resultval`
+monos that carry `_Float16` and `__float128`.
+
+`forceAllFields` resolves what a field walk reads: everything that is not a
+methodDecl, plus the methodDecls holding a function-pointer slot. `fnptrField`
+is a declaration flag written before any signature resolves, so the test forces
+nothing itself.
+
+| | before | after |
+|---|---|---|
+| `hello.c` | 37,473 B | **32,814 B (-12.4%)** |
+| all 418 programs | 18,381,192 B | **16,453,801 B (-10.5%)** |
+| `_Float16` lines, all programs | 429 | **12** |
+| `__float128` lines, all programs | 1,684 | **1,267** |
+
+What remains is what the source asks for: `float_widths` and `float_mod` are
+the only programs left emitting either type, and the 1,254 `__float128` in the
+count are three lines per program inside `#if __SIZEOF_FLOAT128__`, which a
+backend without `__float128` preprocesses away.
