@@ -30559,8 +30559,6 @@ static void z_t4289(z_t4284_t* z_v28777, z_t78_t z_v28778, z_t78_t z_v28779) {
     (void)(z_v28778);
     (void)(z_v28779);
     z_panic((const char*)_zs435.data);
-    z_t78_free(&z_v28778);
-    z_t78_free(&z_v28779);
 }
 
 static uint32_t z_t1473(z_t1472_t* z_v28780) {
@@ -30611,15 +30609,12 @@ static uint32_t z_t1475(z_t1472_t* z_v28801, z_t78_t z_v28802, z_t78_t z_v28803)
                 }
                 case Z_FILEKIND_TAG_FILE: {
                     z_panic((const char*)_zs438.data);
-                    break;
                 }
                 case Z_FILEKIND_TAG_SYMLINK: {
                     z_panic((const char*)_zs439.data);
-                    break;
                 }
                 case Z_FILEKIND_TAG_OTHER: {
                     z_panic((const char*)_zs440.data);
-                    break;
                 }
                 default: break;
             }
@@ -30628,7 +30623,6 @@ static uint32_t z_t1475(z_t1472_t* z_v28801, z_t78_t z_v28802, z_t78_t z_v28803)
         case Z_RESULT_BOX_FILESTAT_IOERROR_TAG_ERR: {
             /* alias: sr => (*(z_t1483_t*)_m0.data) */
             z_panic((const char*)_zs441.data);
-            break;
         }
         default: break;
     }
@@ -30972,8 +30966,6 @@ static void z_t4369(z_t4343_t* z_v28933, z_t78_t z_v28934, z_t78_t z_v28935) {
     (void)(z_v28934);
     (void)(z_v28935);
     z_panic((const char*)_zs447.data);
-    z_t78_free(&z_v28934);
-    z_t78_free(&z_v28935);
 }
 
 static uint32_t z_t1216(z_t1048_t* z_v28936) {
@@ -31030,15 +31022,12 @@ static uint32_t z_t1218(z_t1048_t* z_v28963, z_t78_t z_v28964, z_t78_t z_v28965)
                 }
                 case Z_FILEKIND_TAG_FILE: {
                     z_panic((const char*)_zs452.data);
-                    break;
                 }
                 case Z_FILEKIND_TAG_SYMLINK: {
                     z_panic((const char*)_zs453.data);
-                    break;
                 }
                 case Z_FILEKIND_TAG_OTHER: {
                     z_panic((const char*)_zs454.data);
-                    break;
                 }
                 default: break;
             }
@@ -31047,7 +31036,6 @@ static uint32_t z_t1218(z_t1048_t* z_v28963, z_t78_t z_v28964, z_t78_t z_v28965)
         case Z_RESULT_BOX_FILESTAT_IOERROR_TAG_ERR: {
             /* alias: sr => (*(z_t1483_t*)_m0.data) */
             z_panic((const char*)_zs455.data);
-            break;
         }
         default: break;
     }
@@ -31130,7 +31118,6 @@ static uint32_t z_t1219(z_t1048_t* z_v28987, uint32_t z_v28988, z_t109_t z_v2898
     switch (_m4.tag) {
         case Z_DENTRY_TAG_ROOT: {
             z_panic((const char*)_zs457.data);
-            break;
         }
         case Z_DENTRY_TAG_FILE: {
             z_t1126_t z_v29002 = _m4.data.file;
@@ -31157,7 +31144,6 @@ static uint32_t z_t1219(z_t1048_t* z_v28987, uint32_t z_v28988, z_t109_t z_v2898
             z_t1136_t z_v29002 = _m4.data.mount;
             (void)z_v29002;
             z_panic((const char*)_zs458.data);
-            break;
         }
         default: break;
     }
@@ -31552,7 +31538,6 @@ static z_t1482_t z_t1249(z_t1048_t* z_v29085, uint32_t z_v29086) {
             z_t1136_t z_v29088 = _m0.data.mount;
             (void)z_v29088;
             z_panic((const char*)_zs469.data);
-            break;
         }
         case Z_DENTRY_TAG_FILE: {
             z_t1126_t z_v29088 = _m0.data.file;
@@ -35201,7 +35186,6 @@ static z_t1260_t z_t2612(z_t2514_t* z_v30430, z_t2540_t* z_v30431, z_t1349_t z_v
     z_t2586_destroy(&z_v30466);
     z_t2586_destroy(&z_v30446);
                         goto __zbrk_904;
-                        break;
                     }
                     default: break;
                 }
@@ -46831,7 +46815,6 @@ uint32_t z_t1468(z_t1169_t* z_v850, uint64_t z_v851) {
             z_t925_t z_v854 = _m0.data.err;
             (void)z_v854;
             z_panic((const char*)_zs472.data);
-            break;
         }
         default: z_unreachable();
     }
@@ -47452,7 +47435,6 @@ void z_t1488(z_t109_t z_v1010, z_t1119_t* z_v1011, z_t1472_t* z_v1012, z_t1048_t
         return;
     }
     z_panic((const char*)_zs562.data);
-    z_t1169_destroy(&z_v1014);
 }
 
 void z_t1489(z_t78_t* z_v1017, z_t1119_t* z_v1018, z_t1472_t* z_v1019, z_t1048_t* z_v1020) {
@@ -54172,13 +54154,6 @@ uint64_t z_t2920(z_t1934_t* z_v3246, z_t1684_t* z_v3247, z_t1259_t* z_v3248, z_t
     z_t3104_destroy(z_v3257);
     z_t3104_destroy(z_v3258);
     return z_v3330;
-    z_t78_free(&z_v3255);
-    z_t78_free(&z_v3256);
-    z_t78_free(&z_v3308);
-    z_t78_free(&z_v3316);
-    z_t78_free(&z_v3326);
-    z_t3104_destroy(z_v3257);
-    z_t3104_destroy(z_v3258);
 }
 
 void z_t2921(z_t1934_t* z_v3337, z_t1684_t* z_v3338, z_t1259_t* z_v3339, z_t109_t z_v3340, z_t109_t z_v3341, z_t1260_t z_v3342) {
@@ -85130,7 +85105,7 @@ bool z_t3604(z_t1259_t* z_v16231, z_t1497_t* z_v16232, z_t1260_t z_v16233) {
             return z_t3600(z_v16231, z_v16232, _ah948);
         }
         default: {
-            return ((bool)Z_BOOL_TAG_FALSE);
+            return ((bool)Z_BOOL_TAG_TRUE);
         }
     }
 }
@@ -91444,7 +91419,6 @@ z_t78_t z_t3743(z_t1259_t* z_v18545, z_t1497_t* z_v18546, z_t3487_t* z_v18547, z
                         z_t78_append(&_s2, _b3, (uint64_t)_b3_n);
                         z_t78_t z_v18569 = _s2;
                         z_panic((const char*)z_v18569.data);
-    z_t78_free(&z_v18569);
                     }
                     if (z_t2398(&z_v18546->typing, &z_v18545->names, z_v18553, ((z_t109_t){ .data = (*__borrow_z_v18560).data, .size = (*__borrow_z_v18560).size })) && z_t4089(z_v18545, z_v18546, z_v18547, ((uint64_t)z_v18564))) {
                         z_t78_t _s4 = z_t78_create((uint64_t)17);
@@ -101951,7 +101925,6 @@ _s0; });
                 z_t78_append(&_s220, _b221, (uint64_t)_b221_n);
                 z_t78_t z_v20976 = _s220;
                 z_panic((const char*)z_v20976.data);
-    z_t78_free(&z_v20976);
             }
             uint64_t z_v20977 = z_t3675(z_v20717);
             z_t78_t _s222 = z_t78_create((uint64_t)18);
@@ -107456,8 +107429,6 @@ z_t78_t z_t3874(z_t1259_t* z_v23137, z_t1497_t* z_v23138, z_t3487_t* z_v23139, u
         z_t78_append(&_s3, _b5, (uint64_t)_b5_n);
         z_t78_t z_v23149 = _s3;
         z_panic((const char*)z_v23149.data);
-    z_t78_free(&z_v23149);
-    z_t78_free(&z_v23145);
     }
     z_t78_t _ret6 = z_t78_from_view(_zs3284);
     z_t78_free(&z_v23141);
@@ -111509,12 +111480,6 @@ z_t78_t z_t3957(z_t3487_t* z_v24673, z_t1497_t* z_v24674, uint64_t z_v24675, z_t
                 z_t78_free(&z_v24689);
                 z_t78_free(&z_v24690);
                 return z_v24686;
-    z_t78_free(&z_v24690);
-    z_t78_free(&z_v24689);
-    z_t78_free(&z_v24688);
-    z_t78_free(&z_v24687);
-    z_t78_free(&z_v24686);
-    z_t78_free(&z_v24685);
             }
             break;
         }

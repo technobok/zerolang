@@ -545,21 +545,22 @@ emitter-guard:
 # unconditional branch all still emit code no path runs. Closing them means
 # widening the folder, which is a feature, not a cleanup.
 #
-# The baseline ROSE from 10 to 29, deliberately. The lower number was bought
-# with an unsound predicate: divergence was inferred from a match's `never`
-# STAMP, which is the match's VALUE type, not a statement about control. A
-# statement-position match whose else is a no-op is typed `never` and control
-# walks straight out of it, so arms that do not diverge were losing their C
-# `break;` and the switch fell into the next case -- a silent wrong answer, not
-# a crash (tests/fixtures/emitc_corpus/match_arm_fallthrough.z: 1 instead of 9).
-# matchArmsAllDiverge now confirms every clause body and the else, and the 19
-# statements that recovers are the honest cost of a sound check.
+# Every divergence case is closed and the check is sound. The `never` stamp is a
+# node's VALUE type; neverStampIsControlFlow reads it as "control does not
+# continue" for a panic, unreachable, break, continue or diverging call, and
+# makes a MATCH show its work instead -- every clause body and the else must
+# diverge. Believing a match's bare stamp dropped an arm's C `break;` and the
+# switch fell into the next case, a silent wrong answer
+# (tests/fixtures/emitc_corpus/match_arm_fallthrough.z: 1 instead of 9).
 #
-# Truncating the statement walk after a diverging statement would close a few
-# more. It bootstraps cleanly once the predicate is sound -- but it RAISES the
-# count, so it is not a win as written. Skipped when clang is absent -- clang is
-# not a build requirement.
-DEADCODE_BASELINE := 29
+# Nine of the ten that remain are the folding contract at docs/spec.pdoc:5652,
+# which bounds folding to INTEGER literals and constants in STATEMENT position:
+# a bool or float condition, an `if` in value position, and the statements after
+# an `if` the emitter folded to an unconditional branch. Widening the folder is a
+# feature, not a cleanup. The tenth wants the statement walk truncated after a
+# diverging statement -- that bootstraps cleanly now, but RAISES the count, so it
+# buys nothing. Skipped when clang is absent -- clang is not a build requirement.
+DEADCODE_BASELINE := 10
 
 deadcode-guard: bin/zc
 	@command -v clang >/dev/null 2>&1 || { echo "deadcode-guard SKIP: clang not installed"; exit 0; }; \

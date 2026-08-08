@@ -1228,7 +1228,7 @@ stmtDiverges9: function {
         stamped9: false
         if (matchDiverges :symtab nid: sid.u64) then stamped9 = true
         if (matchDiverges :symtab nid: sn9.statementline.u64) then stamped9 = true
-        if stamped9 when (matchArmsAllDiverge :ast :symtab n: inn9) then return true
+        if stamped9 when (neverStampIsControlFlow :ast :symtab n: inn9) then return true
         if (bareReturn9 :ast n: inn9) then return true
         if (loopNeverExits9 :ast n: inn9) then return true
         return (ifDiverges :ast :symtab n: inn9)
@@ -1296,12 +1296,15 @@ loopNeverExits9: function {
     }
 }
 
-# matchArmsAllDiverge -- every clause body of a `match` diverges, and so does its
-# else. The `never` STAMP alone does not answer this: the stamp is the match's
-# VALUE type, and a statement-position match whose else is a no-op is typed
-# `never` while control walks straight out of it (hoisted_args.z: `case pair then
-# { return ... } else null`, followed by a live `return`). Stamp AND arms.
-matchArmsAllDiverge: function {
+# neverStampIsControlFlow -- may a `never` stamp on this node be read as "control
+# does not continue"? For a panic, `unreachable`, break, continue or a diverging
+# call, yes: the stamp says the node produces no value BECAUSE it does not
+# return. For a MATCH it does not follow -- the stamp is the match's value type,
+# and a statement-position match whose else is a no-op is typed `never` while
+# control walks straight out of it (hoisted_args.z: `case pair then { return ...
+# } else null`, followed by a live `return`). So a match must show its work:
+# every clause body and the else have to diverge.
+neverStampIsControlFlow: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     n: Node.view
@@ -1309,7 +1312,7 @@ matchArmsAllDiverge: function {
     match (
         n
     ) case expression then {
-        return (matchArmsAllDiverge
+        return (neverStampIsControlFlow
             :ast
             :symtab
             n: (ast.nodes.get i: (n.expression - 1).u64)
@@ -1338,7 +1341,8 @@ matchArmsAllDiverge: function {
             n: (ast.nodes.get i: (n.elseclause - 1).u64)
         )
     } else {
-        return false
+        # not a match: the stamp is a genuine "does not return"
+        return true
     }
 }
 
