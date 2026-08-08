@@ -4419,7 +4419,12 @@ forceMemberDecl: function {
     ty.declSetDefined declId: memberDeclId
     match (
         mid9
+    ) case some then null case none then null
+    match (
+        mid9
     ) case some then {
+        rn9: optU64Or o: (ty.funcReturnNode.get key: (ztypes.tid.create from: mid9.u64)) d: 0
+        stampForcedTyperef :ty :reg :ast unitName: un9.stringview nid: rn9
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: otid9.u64)
             nameId: (zast.nameid.create from: mnm9)
@@ -4428,6 +4433,33 @@ forceMemberDecl: function {
         return (optionval.some mid9)
     } case none then null
     return (optionval.none u64)
+}
+
+# stampForcedTyperef -- stamp one type-ref node that resolved AFTER stampTyperefs
+# ran. recordFuncReturnNode routes a call site's return type through the node
+# stamp, and stampTyperefs fills those before the body walk -- so a member forced
+# DURING the body walk records its return type-ref too late and reads back as
+# null. Mirrors that pass's success leg for the one node.
+stampForcedTyperef: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast.view
+    unitName: StringView
+    nid: u64
+} is {
+    if nid == 0 then return
+    if (ztyping.nodeTypeAt tbl: ty.nodeType :nid) > 0 then return
+    pv9: ty.pendingTyperef.get key: nid
+    match (
+        pv9
+    ) case some then {
+        r9: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: pv9.stringview
+        match (
+            r9
+        ) case some then {
+            ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: (ztypes.tid.create from: r9.u64)
+        } case none then null
+    } case none then null
 }
 
 # forceMemberOf -- the member `nameId` of `parentTypeId`, resolved if it is not
@@ -4695,6 +4727,9 @@ attachMethods: function {
     asItems: (ListVal u32).view
 } out bool is {
     hasCreate: false
+    # a generic template's methods are cloned BY ID into every instance
+    # (mintMono reads a member list), so a template's signatures resolve eagerly
+    agen9: hasGenericParam :ast items: asItems
     aiter: asItems.iterate
     for amId9: aiter loop {
         am: ast.nodes.get i: (amId9 - 1).u64
@@ -4727,7 +4762,7 @@ attachMethods: function {
                 mname: mname.stringview
                 thisName: defName
                 op: (ast.nodes.get i: (am.operation - 1).u64)
-                lazyOk: true
+                lazyOk: (agen9) == false
             )
             match (
                 mido
@@ -4782,6 +4817,7 @@ attachMethods: function {
 recordConformance: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
+    ast: Ast.view
     implTypeId: u64
     specTypeId: u64
     label: StringView
@@ -4800,6 +4836,10 @@ recordConformance: function {
     if recordIt then {
         cf: reg.newConformance :implTypeId :specTypeId :label isFacet: isFacetC
         ty.conformance.append cf
+        # the vtable wrapper names every member the spec names, and it is
+        # emitted from the conformance row rather than from a use site, so
+        # nothing else would ever demand the impl's signatures
+        forceAllMembers :ty :reg :ast tid: (ztypes.tid.create from: implTypeId.u64)
     }
 }
 
@@ -4850,6 +4890,7 @@ attachMarkers: function {
                 (recordConformance
                     :ty
                     :reg
+                    :ast
                     implTypeId: parentId
                     specTypeId: mtid
                     label: mlbl.stringview
@@ -5744,7 +5785,7 @@ resolveRecord: function {
                     mname: fname.stringview
                     thisName: defName
                     op: (ast.nodes.get i: (fm.operation - 1).u64)
-                    lazyOk: true
+                    lazyOk: (isgen) == false
                 )
                 match (
                     mido
@@ -6127,7 +6168,7 @@ resolveVariant: function {
                 mname: mname.stringview
                 thisName: defName
                 op: (ast.nodes.get i: (am.operation - 1).u64)
-                lazyOk: true
+                lazyOk: (isgen) == false
             )
             match (
                 mido
@@ -6572,7 +6613,7 @@ resolveUnion: function {
                 mname: mname.stringview
                 thisName: defName
                 op: (ast.nodes.get i: (am.operation - 1).u64)
-                lazyOk: true
+                lazyOk: (isgen) == false
             )
             match (
                 mido
@@ -7057,7 +7098,7 @@ resolveClass: function {
                     }
                 }
                 if prodA4 then {
-                    amidP4: (resolveMethodFnLazy
+                    amidP4: (resolveMethodFn
                         :ty
                         :reg
                         :ast
@@ -7066,7 +7107,6 @@ resolveClass: function {
                         mname: afnP4.stringview
                         thisName: defName
                         op: (ast.nodes.get i: (amP4.operation - 1).u64)
-                        lazyOk: true
                     )
                     match (
                         amidP4
