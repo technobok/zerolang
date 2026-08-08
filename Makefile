@@ -561,13 +561,12 @@ emitter-guard:
 # `error` builtin can prove REACHABLE, which is a different question. So these
 # are gaps, not decisions:
 #
-#   1  a bool unit constant does not fold. `NO: bool.false` parses to a
-#      DottedPath, and fillConstValsIn only records a member isConstShape
-#      accepts -- numerals, known constants, binops over them. Teaching it the
-#      dotted bool tag did NOT make `if NO` fold, so something between
-#      isConstShape and evalConstI64 still refuses it; instrument those two
-#      before guessing again. Everything else folds: statement, value and bind
-#      position, simple and multi-statement branches, and float comparisons.
+# The baseline is ZERO: the emitter emits no statement that no path can reach,
+# across every example and corpus program. Keep it there. A rise is a real
+# regression, not a number to bump -- the two ways it happens are appending
+# after a block that has already diverged (ask blockDiverges about the block you
+# just emitted) and emitting a constant-condition branch that spec.pdoc:5616
+# promises not to emit (fold it, in whatever position it appears).
 # The other class -- a statement after something already diverged -- is closed:
 # both statement walks stop on a diverging statement, and ifDiverges models a
 # chain whose conditions all fold, where only the branch the emitter actually
@@ -575,7 +574,7 @@ emitter-guard:
 #
 # Lower the baseline as each folder gap is closed. Skipped when clang is absent -- clang is
 # not a build requirement.
-DEADCODE_BASELINE := 1
+DEADCODE_BASELINE := 0
 
 deadcode-guard: bin/zc
 	@command -v clang >/dev/null 2>&1 || { echo "deadcode-guard SKIP: clang not installed"; exit 0; }; \
