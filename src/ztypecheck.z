@@ -4449,16 +4449,59 @@ stampForcedTyperef: function {
 } is {
     if nid == 0 then return
     if (ztyping.nodeTypeAt tbl: ty.nodeType :nid) > 0 then return
-    pv9: ty.pendingTyperef.get key: nid
-    match (
-        pv9
-    ) case some then {
-        r9: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: pv9.stringview
+    # a DOTTED return (`out zast.nodeid`) names its type in another unit, which
+    # no single base name reaches
+    {
+        rootN9: rootNameOf :ast n: (ast.nodes.get i: (nid - 1))
+        childN9: dottedChildName :ast n: (ast.nodes.get i: (nid - 1))
+        if childN9.length > 0 when rootN9.length > 0 then {
+            dd9: (descendNamed
+                :ty
+                :reg
+                :ast
+                defUnit: rootN9.stringview
+                name: childN9.stringview
+            )
+            if dd9 > 0 then {
+                ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: dd9
+                return
+            }
+        }
+    }
+    # the base name: from the pending record when the demand pass saw this
+    # node, else off the type-expr itself -- a member resolved on demand never
+    # went through a pass that records one
+    base9: String
+    {
+        pv9: ty.pendingTyperef.get key: nid
         match (
-            r9
+            pv9
         ) case some then {
-            ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: (ztypes.tid.create from: r9.u64)
+            base9 = pv9.copy
         } case none then null
+    }
+    if base9.length == 0 then base9 = (baseTypeName :ast n: (ast.nodes.get i: (nid - 1)))
+    if base9.length == 0 then return
+    r9: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: base9.stringview
+    match (
+        r9
+    ) case some then {
+        ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: (ztypes.tid.create from: r9.u64)
+        return
+    } case none then null
+    # the name resolves nowhere because nothing ever demanded it: a member
+    # resolved on demand can be the FIRST reference to a type, and the demand
+    # fixpoint finished before the body walk. Descend into it here.
+    dn9: descendNamed :ty :reg :ast defUnit: unitName name: base9.stringview
+    if dn9 > 0 then {
+        ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: dn9
+        return
+    }
+    r9b: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: base9.stringview
+    match (
+        r9b
+    ) case some then {
+        ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: (ztypes.tid.create from: r9b.u64)
     } case none then null
 }
 
@@ -5195,6 +5238,10 @@ materializeCreateParams: function {
     typeTid: u64
     createId: u64
 } is {
+    # the synthesized constructor's parameters ARE the member list, so an
+    # unresolved fn-ptr field -- an is-block `function {..} out T` with no
+    # body -- would be silently absent from the signature
+    forceAllMembers :ty :reg :ast tid: (ztypes.tid.create from: typeTid.u64)
     # every field edge is written by now -- only the synthesized borrow / == /
     # != follow this call -- so settle the type here rather than waiting for
     # resolveDef's settle, which lands after the parameter order is decided
@@ -18560,6 +18607,18 @@ checkBinopMethodDispatch: function {
         (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: dt9 nameId: opnId9)
         opo = st.typing.declChildOfId parentTypeId: dt9 nameId: opnId9
     }
+    # a Box is a heap pointer around ONE valtype and declares no members of its
+    # own, so its operators are the boxed element's
+    if opo.none when (st.reg.isBoxOf tid: dt9) then {
+        if (st.reg.genericArgCount specId: dt9) == 1 then {
+            bx9: st.reg.genericArgAt specId: dt9 ordinal: 0
+            if bx9 > 0 then {
+                dt9 = ztypes.tid.create from: bx9.u64
+                (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: dt9 nameId: opnId9)
+                opo = st.typing.declChildOfId parentTypeId: dt9 nameId: opnId9
+            }
+        }
+    }
     match (
         opo
     ) case some then {
@@ -19978,6 +20037,10 @@ missingCtorFields: function {
     names: (List String)
     ids: (ListVal u64)
     idsNm: (ListVal u64)
+    # a WALK consumer: an is-block `function {..} out T` with no body is an
+    # fn-ptr FIELD, and an unresolved member carries no type, so it is
+    # invisible here rather than reported missing
+    forceAllMembers ty: st.typing reg: st.reg :ast tid: effId
     dataFieldNames :ast :st tid: effId :names :ids nameIds: idsNm
     pcnt: names.length
     if pcnt == 0 then return
@@ -20106,6 +20169,13 @@ walkCallArgsHoist: function {
             } case none then null
         }
         if (isMetaC9) == false then {
+            (forceMemberOf
+                ty: st.typing
+                reg: st.reg
+                :ast
+                parentTypeId: funcId
+                nameId: zast.wkCreate
+            )
             crEff9: (optU64Or
                 o: (st.typing.declChildOfId parentTypeId: funcId nameId: zast.wkCreate)
                 d: 0
@@ -20113,6 +20183,7 @@ walkCallArgsHoist: function {
             if crEff9 > 0 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: crEff9.u64)) == ztypes.ztypetype.functionType then effId9 = ztypes.tid.create from: crEff9.u64
         }
     }
+    forceAllMembers ty: st.typing reg: st.reg :ast tid: effId9
     aiter: call.arguments.iterate
     for argId9: aiter loop {
         arg: ast.nodes.get i: (argId9 - 1).u64
