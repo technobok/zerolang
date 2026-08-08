@@ -555,13 +555,23 @@ emitter-guard:
 # then lost its C `break;` and the switch fell through
 # (tests/fixtures/emitc_corpus/match_arm_fallthrough.z: 1 instead of 9).
 #
-# Nine of the ten that remain are the folding contract at docs/spec.pdoc:5652,
-# which bounds folding to INTEGER literals and constants in STATEMENT position:
-# a bool or float condition, an `if` in value position, and the statements after
-# an `if` the emitter folded to an unconditional branch. Widening the folder is a
-# feature, not a cleanup. The tenth wants the statement walk truncated after a
-# diverging statement -- that bootstraps cleanly now, but RAISES the count, so it
-# buys nothing. Skipped when clang is absent -- clang is not a build requirement.
+# The ten that remain are not conforming output. docs/spec.pdoc:5616 promises,
+# without qualification, that a constant-condition `if` does not emit its false
+# branch; the "bounded to integer literals" clause at :5652 bounds what the
+# `error` builtin can prove REACHABLE, which is a different question. So these
+# are gaps, not decisions:
+#
+#   6  the folder is weaker than that promise. evalConstI64 folds integer
+#      literals, unit integer constants and binops over them, so an f64
+#      comparison (constfold), a bool constant (bool_arm_value) and an `if` in
+#      VALUE position (ifexpr, emitted as a ternary with both arms) all survive.
+#   4  a statement after something that has already diverged: three where the
+#      emitter itself folded an `if` to an unconditional break (dobreak,
+#      dobreak_float) and one after a never-exiting loop (astdemo). The first
+#      three need no predicate at all -- the emitter knows it folded.
+#
+# Lower the baseline as each is closed. Skipped when clang is absent -- clang is
+# not a build requirement.
 DEADCODE_BASELINE := 10
 
 deadcode-guard: bin/zc
