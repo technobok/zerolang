@@ -203,3 +203,40 @@ The `examples/` directory contains v1 target programs:
 | `swap.z` | Swap keyword, reassignment |
 | `data.z` | Constant data arrays |
 | `multimod.z` | Multi-module imports |
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option. SPDX: `MIT OR Apache-2.0`.
+
+Copyright is held collectively by The Zerolang Authors; see [AUTHORS](AUTHORS).
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license,
+shall be dual licensed as above, without any additional terms or conditions.
+
+### Compiled output
+
+`zc` copies the C runtime fragments in `src/runtime/` into the C it emits, so
+they end up in the binary you build. That embedding carries no attribution or
+notice requirement: you may distribute programs built with `zc` under any terms
+you choose, and nothing in this license applies to your own source.
+
+## Third-party components
+
+The compiler vendors third-party source under `vendor/`. Each directory keeps
+its upstream license alongside a `VERSION.md` recording the origin, the pinned
+commit, and exactly what was copied.
+
+| Component | License | Linked |
+|---|---|---|
+| [mimalloc](vendor/mimalloc) | MIT | statically, into the driver binaries; `make MIMALLOC=0` builds without it |
+
+These licenses govern those components, not the rest of the project.
