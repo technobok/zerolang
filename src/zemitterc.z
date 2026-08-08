@@ -2084,6 +2084,27 @@ implicitTakeFnId: function {
     return ct
 }
 
+# paramIsHold9 -- the LABELLED parameter this argument binds is declared `hold`.
+# A hold param is passed by pointer and the callee never destroys it, so the
+# caller keeps the storage and an explicit `.take` must NOT zero the source.
+# Positional args keep the unconditional behaviour: the index-to-parameter walk
+# misreads generic monos, and no positional case is known to need this.
+paramIsHold9: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ftid: ztypes.tid
+    label: StringView
+} out bool is {
+    if ftid.isZero then return false
+    if label.length == 0 then return false
+    return (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: ftid
+        name: label
+        own: ztypes.zparamownership.holdMode
+    )
+}
+
 # emitCallTakeInvalidations -- zero the source local of each ownership-moved arg
 # of a call so its scope-exit destructor is a no-op (the move transferred
 # ownership). An explicit `<atom>.take` uses takeStringSource; a bare owning-
@@ -2178,9 +2199,23 @@ emitCallTakeInvalidations: function {
         ) case namedoperation then {
             ts9: takeStringSource :ast :symtab :ctx n: (ast.nodes.get i: (a9.operation - 1).u64)
             if ts9.length > 0 then {
-                tc9: takeMoveCtype :ast :symtab :ctx n: (ast.nodes.get i: (a9.operation - 1).u64)
-                inv9: "\{ind}\{ts9} = (\{tc9}){0};\n"
-                buf.append inv9
+                holdSkip9: false
+                if (ctorOwner9) == false then holdSkip9 = (paramIsHold9
+                    :ast
+                    :symtab
+                    ftid: (ztypes.tid.create from: ftid9.u64)
+                    label: (zast.nameTextAt :ast ref: a9.name).stringview
+                )
+                if (holdSkip9) == false then {
+                    tc9: (takeMoveCtype
+                        :ast
+                        :symtab
+                        :ctx
+                        n: (ast.nodes.get i: (a9.operation - 1).u64)
+                    )
+                    inv9: "\{ind}\{ts9} = (\{tc9}){0};\n"
+                    buf.append inv9
+                }
             } else {
                 isTake9: ctorOwner9
                 if collMove9 then isTake9 = true
@@ -2197,6 +2232,15 @@ emitCallTakeInvalidations: function {
                         parentTypeId: (ztypes.tid.create from: ftid9.u64)
                         name: lbl9.stringview
                         own: ztypes.zparamownership.borrowMode
+                    ) then isTake9 = false
+                    # a hold param is passed by pointer and the CALLEE never
+                    # destroys it, so the caller keeps the storage: zeroing its
+                    # source here would strand the allocation
+                    if (symtab.typing.declOwnershipIs
+                        pool: ast.names
+                        parentTypeId: (ztypes.tid.create from: ftid9.u64)
+                        name: lbl9.stringview
+                        own: ztypes.zparamownership.holdMode
                     ) then isTake9 = false
                 } else {
                     pnames9: (List String)
@@ -9511,6 +9555,11 @@ emitInterpPart: function {
                 buf.append l8
             }
         }
+        # the part's value has been appended, so a `.take` argument inside it
+        # has been consumed: zero its source here, as the statement paths do.
+        # Without this the callee frees the moved value and the caller frees it
+        # again at scope end.
+        emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
     }
 }
 
