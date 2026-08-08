@@ -565,14 +565,14 @@ emitter-guard:
 #      literals, unit integer constants and binops over them, so an f64
 #      comparison (constfold), a bool constant (bool_arm_value) and an `if` in
 #      VALUE position (ifexpr, emitted as a ternary with both arms) all survive.
-#   4  a statement after something that has already diverged: three where the
-#      emitter itself folded an `if` to an unconditional break (dobreak,
-#      dobreak_float) and one after a never-exiting loop (astdemo). The first
-#      three need no predicate at all -- the emitter knows it folded.
+# The other class -- a statement after something already diverged -- is closed:
+# both statement walks stop on a diverging statement, and ifDiverges models a
+# chain whose conditions all fold, where only the branch the emitter actually
+# emits decides.
 #
-# Lower the baseline as each is closed. Skipped when clang is absent -- clang is
+# Lower the baseline as each folder gap is closed. Skipped when clang is absent -- clang is
 # not a build requirement.
-DEADCODE_BASELINE := 10
+DEADCODE_BASELINE := 6
 
 deadcode-guard: bin/zc
 	@command -v clang >/dev/null 2>&1 || { echo "deadcode-guard SKIP: clang not installed"; exit 0; }; \
