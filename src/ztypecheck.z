@@ -8030,6 +8030,7 @@ resolveUnitBody: function {
                         ) == false then eager = false
                     }
                 }
+                if ty.eagerAll then eager = true
                 if eager then {
                     if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
                         (resolveInlineGenericUnit
@@ -8136,6 +8137,35 @@ demandAllUnitDefs: function {reg: ztypes.ZTypeRegistry ast: Ast.view unitdefId: 
             if dn9.length > 0 then reg.recordDemand name: dn9.stringview
         }
     }
+}
+
+# demandAllDefs -- demand every top-level definition of EVERY unit. Without
+# it a definition nothing references is never resolved, so an error inside
+# it is reported by nothing; the seeds cover system's names only.
+demandAllDefs: function {
+    ty: ztyping.ZTyping.view
+    reg: ztypes.ZTypeRegistry
+    program: Node
+} is {
+    if (ty.eagerAll) == false then return
+    match (
+        program
+    ) case program then {
+        duN9: program.ast.units.length
+        duI9: u64
+        for duI9 < duN9 loop {
+            duId9: (zast.nodeid.create from: (program.ast.units.get i: duI9))
+            duI9 = duI9 + 1
+            duOp9: zast.nodeid
+            {
+                dun9: program.ast.nodes.get i: (duId9 - 1).u64
+                if dun9.namedoperation then duOp9 = dun9.operation
+            }
+            if duOp9 > 0 then {
+                demandAllUnitDefs :reg ast: program.ast unitdefId: duOp9
+            }
+        }
+    } else null
 }
 
 # nativeOnlyBodyError -- one diagnostic for a bodied function declared in a
@@ -27535,6 +27565,7 @@ publicAliasInternalNames: function {
 typecheck: function {
     program: Node
     reg: ztypes.ZTypeRegistry.take
+    eager: bool
 } out zenv.ZSymbolTable is {
     nodeEstT9: u64
     match (
@@ -27543,6 +27574,7 @@ typecheck: function {
         nodeEstT9 = program.ast.nodes.length
     } else null
     ty: ztyping.newTyping nodeEst: nodeEstT9
+    ty.eagerAll = eager
     match (
         program
     ) case program then {
@@ -27604,6 +27636,7 @@ typecheck: function {
     scanMainBodyCalls reg: st.reg :program
     demandUnitRenameTargets ty: st.typing reg: st.reg :program
     seedConstantSuffixDemands reg: st.reg :program
+    demandAllDefs ty: st.typing reg: st.reg :program
     resolveDemandsByDescent ty: st.typing reg: st.reg :program
     match (
         program

@@ -129,7 +129,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard readable-check ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard readable-check ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -598,6 +598,26 @@ deadcode-guard: bin/zc
 	else \
 	  echo "deadcode-guard OK: $$n unreachable statements (baseline $(DEADCODE_BASELINE))"; \
 	fi
+
+# eager-guard -- `--eager` resolves every definition of every unit, not only the
+# ones a use site demands, so an error inside a definition nothing references is
+# still reported. Nothing else exercises the mode; without this it would rot.
+# Every corpus program must be clean in BOTH modes.
+eager-guard: bin/zc
+	@n=0; rep=""; \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	  b=$$(basename $$f .z); \
+	  if ! bin/zc emit $$f --eager -o /dev/null >/dev/null 2>&1; then \
+	    n=$$(($$n + 1)); rep="$$rep  $$b\n"; \
+	  fi; \
+	done; \
+	if [ "$$n" -gt 0 ]; then \
+	  echo "eager-guard FAIL: $$n program(s) error under --eager"; \
+	  printf "$$rep"; \
+	  echo "  An error inside a definition nothing references -- fix it, do not drop the guard."; \
+	  exit 1; \
+	fi; \
+	echo "eager-guard OK: examples + corpus clean under --eager"
 
 # member-guard -- ratchet against declaration-bypassing member special-cases in
 # the type checker. The single-source-of-truth arc removed the hardcoded member
