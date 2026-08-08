@@ -4504,7 +4504,33 @@ stampForcedTyperef: function {
     nid: u64
 } is {
     if nid == 0 then return
-    if (ztyping.nodeTypeAt tbl: ty.nodeType :nid) > 0 then return
+    # an ownership marker (`zlexer.Token.view`) is not part of the type.
+    # paramTypeId peels it and reads the PARENT's stamp, so that is the node
+    # to stamp -- stamping the marker node leaves the parameter untyped.
+    tnid9: nid
+    peel9: u64
+    for peel9 < 4 loop {
+        peel9 = peel9 + 1
+        stop9: true
+        {
+            pk9: ast.nodes.get i: (tnid9 - 1)
+            match (
+                pk9
+            ) case dottedpath then {
+                mcn9: atomName :ast n: (ast.nodes.get i: (pk9.child - 1).u64)
+                if (isStripMarker name: mcn9.stringview) then {
+                    tnid9 = pk9.parent.u64
+                    stop9 = false
+                }
+            } else null
+        }
+        if stop9 then peel9 = 4
+    }
+    if tnid9 == 0 then return
+    if (ztyping.nodeTypeAt tbl: ty.nodeType nid: tnid9) > 0 when (ztyping.nodeTypeAt
+        tbl: ty.nodeType
+        :nid
+    ) > 0 then return
     # the real resolver first: it handles a PARAMETERIZED type-expr
     # (`out (resultval t: u32 e: converror)`), where a base name would name the
     # TEMPLATE and stamping that is worse than not stamping at all.
@@ -4514,10 +4540,11 @@ stampForcedTyperef: function {
             :reg
             :ast
             :unitName
-            typeExpr: (ast.nodes.get i: (nid - 1))
+            typeExpr: (ast.nodes.get i: (tnid9 - 1))
             :thisName
         )
         if rs9 > 0 then {
+            ztyping.nodeTypeSet tbl: ty.nodeType nid: tnid9 tid: (ztypes.tid.create from: rs9.u64)
             ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: (ztypes.tid.create from: rs9.u64)
             return
         }
@@ -4525,8 +4552,8 @@ stampForcedTyperef: function {
     # a DOTTED return (`out zast.nodeid`) names its type in another unit, which
     # no single base name reaches
     {
-        rootN9: rootNameOf :ast n: (ast.nodes.get i: (nid - 1))
-        childN9: dottedChildName :ast n: (ast.nodes.get i: (nid - 1))
+        rootN9: rootNameOf :ast n: (ast.nodes.get i: (tnid9 - 1))
+        childN9: dottedChildName :ast n: (ast.nodes.get i: (tnid9 - 1))
         if childN9.length > 0 when rootN9.length > 0 then {
             dd9: (descendNamed
                 :ty
@@ -4536,6 +4563,7 @@ stampForcedTyperef: function {
                 name: childN9.stringview
             )
             if dd9 > 0 then {
+                ztyping.nodeTypeSet tbl: ty.nodeType nid: tnid9 tid: dd9
                 ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: dd9
                 return
             }
@@ -4546,19 +4574,20 @@ stampForcedTyperef: function {
     # went through a pass that records one
     base9: String
     {
-        pv9: ty.pendingTyperef.get key: nid
+        pv9: ty.pendingTyperef.get key: tnid9
         match (
             pv9
         ) case some then {
             base9 = pv9.copy
         } case none then null
     }
-    if base9.length == 0 then base9 = (baseTypeName :ast n: (ast.nodes.get i: (nid - 1)))
+    if base9.length == 0 then base9 = (baseTypeName :ast n: (ast.nodes.get i: (tnid9 - 1)))
     if base9.length == 0 then return
     r9: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: base9.stringview
     match (
         r9
     ) case some then {
+        ztyping.nodeTypeSet tbl: ty.nodeType nid: tnid9 tid: (ztypes.tid.create from: r9.u64)
         ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: (ztypes.tid.create from: r9.u64)
         return
     } case none then null
@@ -4567,6 +4596,7 @@ stampForcedTyperef: function {
     # fixpoint finished before the body walk. Descend into it here.
     dn9: descendNamed :ty :reg :ast defUnit: unitName name: base9.stringview
     if dn9 > 0 then {
+        ztyping.nodeTypeSet tbl: ty.nodeType nid: tnid9 tid: dn9
         ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: dn9
         return
     }
@@ -4574,6 +4604,7 @@ stampForcedTyperef: function {
     match (
         r9b
     ) case some then {
+        ztyping.nodeTypeSet tbl: ty.nodeType nid: tnid9 tid: (ztypes.tid.create from: r9b.u64)
         ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: (ztypes.tid.create from: r9b.u64)
     } case none then null
 }
@@ -28063,7 +28094,7 @@ typecheck: function {
     } else null
     ty: ztyping.newTyping nodeEst: nodeEstT9
     ty.eagerAll = eager
-    ty.lazyMembers = false
+    ty.lazyMembers = (eager) == false
     match (
         program
     ) case program then {

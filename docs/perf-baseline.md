@@ -413,3 +413,28 @@ The mechanism recorded here was wrong, and so was the rule built on it.
   find it by diffing DHAT profiles of the two builds, which share inlining and
   frame names, so only the deleted allocations differ.
 
+
+## Member signatures resolve on demand (Arc 1a)
+
+A type's METHOD signatures no longer resolve when the type is named; they
+resolve when a consumer first needs one. Fields, sum arms and the synthesized
+`create` / `==` / `hash` stay eager -- a field's type is part of the type's
+identity and every arm is part of its layout, so both are needed to lay the
+type out at all. A method's signature is neither.
+
+The measurement is emitted C, because that is what the cut is for: less C to
+parse is the whole point of the arc.
+
+| | eager | on demand |
+|---|---|---|
+| `hello.c` | 49,459 B | **37,472 B (-24.2%)** |
+| all 148 examples | 8,572,267 B | **6,785,376 B (-20.8%)** |
+
+Not the census's projected floor, and the gap is accounted for: the seeds are
+still in. `seedSystemDemands` demands fourteen numeric records unconditionally
+in every program, so their RECORDS still resolve -- laziness only stops their
+member blocks. Arc 1b removes the seeds, and that is where the rest is.
+
+`--eager` restores the old behaviour and is what `zls`, `zl lint --full` and
+`make ci`'s `eager-guard` run, so a definition nothing references is still
+type-checked somewhere.
