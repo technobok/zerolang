@@ -1180,6 +1180,80 @@ matchDiverges: function {symtab: zenv.ZSymbolTable nid: u64} out bool is {
     return false
 }
 
+# blockDiverges -- the block's last statement leaves the block on every path: a
+# `return`, or any statement the typechecker stamped `never` (panic, unreachable,
+# break, continue, an exhaustive all-arms-diverge match). Whatever a caller would
+# append after such a block is unreachable. Ask it about the block YOU emitted --
+# an `if c then { break }` diverges as a block, its enclosing block does not.
+blockDiverges: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    n: Node.view
+} out bool is {
+    if (ztypecheck.blockEndsInReturn :ast block: n) then return true
+    match (
+        n
+    ) case statement then {
+        ne9: n.statements.length
+        if ne9 == 0 then return false
+        sid9: n.statements.get i: (ne9 - 1)
+        if (matchDiverges :symtab nid: sid9.u64) then return true
+        sn9: ast.nodes.get i: (sid9 - 1).u64
+        match (
+            sn9
+        ) case statementline then {
+            if (matchDiverges :symtab nid: sn9.statementline.u64) then return true
+            return (ifDiverges
+                :ast
+                :symtab
+                n: (ast.nodes.get i: (sn9.statementline - 1).u64)
+            )
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+# ifDiverges -- an if/else chain every arm of which diverges, else included. No
+# else clause means the fall-through path is live, so the chain does not.
+ifDiverges: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    n: Node.view
+} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (ifDiverges :ast :symtab n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case ifexpr then {
+        if n.elseclause.isZero then return false
+        with cit9: n.clauses.iterate do for cId9: cit9 loop {
+            cl9: ast.nodes.get i: (cId9 - 1).u64
+            match (
+                cl9
+            ) case ifclause then {
+                if cl9.statement.isZero then return false
+                if (blockDiverges
+                    :ast
+                    :symtab
+                    n: (ast.nodes.get i: (cl9.statement - 1).u64)
+                ) == false then return false
+            } else {
+                return false
+            }
+        }
+        return (blockDiverges
+            :ast
+            :symtab
+            n: (ast.nodes.get i: (n.elseclause - 1).u64)
+        )
+    } else {
+        return false
+    }
+}
+
 # stampNameOf -- the registry name of a node's stamped type ("" unstamped).
 stampNameOf: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
     go: ztyping.nodeTypeAt tbl: symtab.typing.nodeType :nid
@@ -1306,10 +1380,6 @@ Ctx: class {
     fastHash: bool
     readableNames: bool
     tailRetActive: bool
-    # set by emitBodyNode: the block it just emitted ends in a `return`, so
-    # anything the caller appends next is unreachable. Valid only until the
-    # next emitBodyNode call.
-    blockDiverged: bool
     defUnitId: (MapVV u64 value: u64)
     unitIdByName: (MapRV String value: u64)
     unitTidsC: (ListVal ztypes.tid)
@@ -10423,7 +10493,8 @@ emitStmt: function {
             slL9: tmp.listFrees.length
             dst9: ast.nodes.get i: (n.statement - 1).u64
             emitBodyNode :ast :symtab :ctx n: dst9 ind: indd9.stringview :tmp :buf
-            flushBlockFrees :ctx :tmp fL: sfL9 lL: slL9 :buf
+            dvF9: blockDiverges :ast :symtab n: dst9
+            flushBlockFrees :ctx :tmp fL: sfL9 lL: slL9 diverged: dvF9 :buf
             lwh9: "\{ind}} while (0);\n"
             buf.append lwh9
             popLoopLabel :ctx id: sdoId9 :ind :buf
@@ -11122,7 +11193,8 @@ emitStmt: function {
                 lLE9: tmp.listFrees.length
                 ewn9: ast.nodes.get i: (ewb9 - 1).u64
                 emitBodyNode :ast :symtab :ctx n: ewn9 ind: indE9.stringview :tmp :buf
-                flushBlockFrees :ctx :tmp fL: fLE9 lL: lLE9 :buf
+                dvF9: blockDiverges :ast :symtab n: ewn9
+                flushBlockFrees :ctx :tmp fL: fLE9 lL: lLE9 diverged: dvF9 :buf
                 lfc9: "\{ind}}\n"
                 buf.append lfc9
             }
@@ -11227,7 +11299,8 @@ emitStmt: function {
                 lLM9: tmp.listFrees.length
                 mwn9: ast.nodes.get i: (mwb9 - 1).u64
                 emitBodyNode :ast :symtab :ctx n: mwn9 ind: indM9.stringview :tmp :buf
-                flushBlockFrees :ctx :tmp fL: fLM9 lL: lLM9 :buf
+                dvF9: blockDiverges :ast :symtab n: mwn9
+                flushBlockFrees :ctx :tmp fL: fLM9 lL: lLM9 diverged: dvF9 :buf
                 lmc9: "\{ind}}\n"
                 buf.append lmc9
             }
@@ -11295,11 +11368,13 @@ emitStmt: function {
             ind2d: "\{ind}    "
             fLd9: tmp.frees.length
             lLd9: tmp.listFrees.length
+            dvG9: false
             if n.body > 0 then {
                 fbd9: ast.nodes.get i: (n.body - 1).u64
                 emitBodyNode :ast :symtab :ctx n: fbd9 ind: ind2d.stringview :tmp :buf
+                dvG9 = blockDiverges :ast :symtab n: fbd9
             }
-            flushBlockFrees :ctx :tmp fL: fLd9 lL: lLd9 :buf
+            flushBlockFrees :ctx :tmp fL: fLd9 lL: lLd9 diverged: dvG9 :buf
             pcond: String
             pkiter: n.postconditions.iterate
             for pk: pkiter loop {
@@ -11332,11 +11407,13 @@ emitStmt: function {
         ind2: "\{ind}    "
         fLw9: tmp.frees.length
         lLw9: tmp.listFrees.length
+        dvG9: false
         if n.body > 0 then {
             fbw9: ast.nodes.get i: (n.body - 1).u64
             emitBodyNode :ast :symtab :ctx n: fbw9 ind: ind2.stringview :tmp :buf
+            dvG9 = blockDiverges :ast :symtab n: fbw9
         }
-        flushBlockFrees :ctx :tmp fL: fLw9 lL: lLw9 :buf
+        flushBlockFrees :ctx :tmp fL: fLw9 lL: lLw9 diverged: dvG9 :buf
         emitContLabel :ctx id: lidW ind: ind2.stringview :buf
         lwc: "\{ind}}\n"
         buf.append lwc
@@ -12183,7 +12260,8 @@ emitBoolMatch: function {
                 lLB9: tmp.listFrees.length
                 cstB9: ast.nodes.get i: (c.statement - 1).u64
                 emitBodyNode :ast :symtab :ctx n: cstB9 ind: indB9.stringview :tmp :buf
-                flushBlockFrees :ctx :tmp fL: fLB9 lL: lLB9 :buf
+                dvF9: blockDiverges :ast :symtab n: cstB9
+                flushBlockFrees :ctx :tmp fL: fLB9 lL: lLB9 diverged: dvF9 :buf
             }
             lcB9: "\{ind}}\n"
             buf.append lcB9
@@ -12218,7 +12296,8 @@ emitBoolElse: function {
             fLE9: tmp.frees.length
             lLE9: tmp.listFrees.length
             emitBodyNode :ast :symtab :ctx n: o ind: indE9.stringview :tmp :buf
-            flushBlockFrees :ctx :tmp fL: fLE9 lL: lLE9 :buf
+            dvF9: blockDiverges :ast :symtab n: o
+            flushBlockFrees :ctx :tmp fL: fLE9 lL: lLE9 diverged: dvF9 :buf
         }
         lceB9: "\{ind}}\n"
         buf.append lceB9
@@ -12257,11 +12336,19 @@ scalarArmLabel: function {ast: Ast ctx: Ctx.view arm: StringView} out String is 
 # flushBlockFrees -- emit + reclaim the heap/collection destructors registered
 # since (fL, lL) so a local declared inside a block (a match arm) is freed at
 # block end, not function end (where it is out of C scope). LIFO order.
-flushBlockFrees: function {ctx: Ctx.view tmp: TmpCtr fL: u64 lL: u64 buf: String.borrow} is {
-    # after a block that ended in a return, emitReturnCleanup already freed
-    # these on the diverging path: pop them (the locals leave C scope either
-    # way) but emit nothing, or the frees land as unreachable code
-    live9: ctx.blockDiverged == false
+flushBlockFrees: function {
+    ctx: Ctx.view
+    tmp: TmpCtr
+    fL: u64
+    lL: u64
+    diverged: bool
+    buf: String.borrow
+} is {
+    # a block that diverges on every path already freed these -- through
+    # emitReturnCleanup on a return, emitBreakFrees on a break -- so pop them
+    # (the locals leave C scope either way) but emit nothing, or the frees land
+    # after the diverging statement as unreachable code
+    live9: diverged == false
     for tmp.listFrees.length > lL loop {
         lvo: tmp.listFrees.pop
         tmp.listFreeVars.pop
@@ -12357,8 +12444,8 @@ emitScalarClause: function {
             lL9: tmp.listFrees.length
             cst9: ast.nodes.get i: (c.statement - 1).u64
             emitBodyNode :ast :symtab :ctx n: cst9 ind: ind3.stringview :tmp :buf
-            dv9 = ctx.blockDiverged
-            flushBlockFrees :ctx :tmp fL: fL9 lL: lL9 :buf
+            dv9 = blockDiverges :ast :symtab n: cst9
+            flushBlockFrees :ctx :tmp fL: fL9 lL: lL9 diverged: dv9 :buf
         }
         if dv9 == false then {
             l5: "\{ind}    break;\n"
@@ -12427,8 +12514,8 @@ emitMatchClause: function {
             lL9: tmp.listFrees.length
             cst9: ast.nodes.get i: (c.statement - 1).u64
             emitBodyNode :ast :symtab :ctx n: cst9 ind: ind3.stringview :tmp :buf
-            dv9 = ctx.blockDiverged
-            flushBlockFrees :ctx :tmp fL: fL9 lL: lL9 :buf
+            dv9 = blockDiverges :ast :symtab n: cst9
+            flushBlockFrees :ctx :tmp fL: fL9 lL: lL9 diverged: dv9 :buf
         }
         if didSeed then {
             vvRemove xs: ctx.narrowBox vid: snameVid
@@ -12469,8 +12556,8 @@ emitMatchElse: function {
             fLe9: tmp.frees.length
             lLe9: tmp.listFrees.length
             emitBodyNode :ast :symtab :ctx n: o ind: ind3.stringview :tmp :buf
-            dv8 = ctx.blockDiverged
-            flushBlockFrees :ctx :tmp fL: fLe9 lL: lLe9 :buf
+            dv8 = blockDiverges :ast :symtab n: o
+            flushBlockFrees :ctx :tmp fL: fLe9 lL: lLe9 diverged: dv8 :buf
         }
         if dv8 == false then {
             l8: "\{ind}    break;\n"
@@ -12617,7 +12704,8 @@ emitDoBindValue: function {
                 :tmp
                 :buf
             )
-            flushBlockFrees :ctx :tmp fL: fLd9 lL: lLd9 :buf
+            dvO9: blockDiverges :ast :symtab n: (ast.nodes.get i: (n.statement - 1).u64)
+            flushBlockFrees :ctx :tmp fL: fLd9 lL: lLd9 diverged: dvO9 :buf
             l2: "\{ind}} while (0);\n"
             buf.append l2
             popLoopLabel :ctx id: doId9 :ind :buf
@@ -12647,7 +12735,7 @@ emitDoBindValue: function {
                 :tmp
                 :buf
             )
-            flushBlockFrees :ctx :tmp fL: fLe9 lL: lLe9 :buf
+            flushBlockFrees :ctx :tmp fL: fLe9 lL: lLe9 diverged: false :buf
             l4: "\{ind}}\n"
             buf.append l4
         }
@@ -13070,15 +13158,17 @@ emitObjIterFor: function {
             ind2: "\{ind}    "
             fLO9: tmp.frees.length
             lLO9: tmp.listFrees.length
+            dvG9: false
             if m.body > 0 then {
                 mb9: ast.nodes.get i: (m.body - 1).u64
                 emitBodyNode :ast :symtab :ctx n: mb9 ind: ind2.stringview :tmp :buf
+                dvG9 = blockDiverges :ast :symtab n: mb9
             }
             if payCleanup9.length > 0 then {
                 l3od: "\{ind}    \{payCleanup9}"
                 buf.append l3od
             }
-            flushBlockFrees :ctx :tmp fL: fLO9 lL: lLO9 :buf
+            flushBlockFrees :ctx :tmp fL: fLO9 lL: lLO9 diverged: dvG9 :buf
             indO9: "\{ind}    "
             emitContLabel :ctx id: lidO ind: indO9.stringview :buf
             l9: "\{ind}}\n"
@@ -14064,7 +14154,8 @@ emitIfClause: function {
             fLi9: tmp.frees.length
             lLi9: tmp.listFrees.length
             emitBodyNode :ast :symtab :ctx n: cst9 ind: ind2.stringview :tmp :buf
-            flushBlockFrees :ctx :tmp fL: fLi9 lL: lLi9 :buf
+            dvF9: blockDiverges :ast :symtab n: cst9
+            flushBlockFrees :ctx :tmp fL: fLi9 lL: lLi9 diverged: dvF9 :buf
         }
         ri9: u64
         for ri9 < sN9.length loop {
@@ -14231,7 +14322,8 @@ emitElse9: function {
             fLe9: tmp.frees.length
             lLe9: tmp.listFrees.length
             emitBodyNode :ast :symtab :ctx n: o ind: ind2.stringview :tmp :buf
-            flushBlockFrees :ctx :tmp fL: fLe9 lL: lLe9 :buf
+            dvF9: blockDiverges :ast :symtab n: o
+            flushBlockFrees :ctx :tmp fL: fLe9 lL: lLe9 diverged: dvF9 :buf
         }
         ri9: u64
         for ri9 < sN9.length loop {
@@ -14754,9 +14846,6 @@ emitBodyNode: function {
     } else {
         emitStmt :ast :symtab :ctx :n :ind :tmp :buf
     }
-    # record for the caller whether what it appends next is reachable; false for
-    # a lone statement, which blockEndsInReturn reports for any non-block node
-    ctx.blockDiverged = ztypecheck.blockEndsInReturn :ast block: n
 }
 
 # forexprValue -- the value being bound is a for-loop (a list comprehension).
@@ -17342,10 +17431,10 @@ emitFnBody: function {
             if rbnT9.length > 0 when ctx.genActive == false then ctx.tailRetActive = true
             emitBodyNode :ast :symtab :ctx n: opb9 ind: "    " :tmp :buf
             ctx.tailRetActive = false
-            endsRet9 = ztypecheck.bodyEndsInReturn :ast bodyId: op.body
+            endsRet9 = blockDiverges :ast :symtab n: opb9
         }
-        # a body ending in a return never reaches this flush; emitReturnCleanup
-        # freed the same locals on that path
+        # a body that diverges on every path never reaches this flush; the
+        # return/break cleanups already freed the same locals on those paths
         if endsRet9 == false then {
             fiter9: tmp.frees.iterate
             for fv: fiter9 loop {
@@ -17819,7 +17908,6 @@ emitC: function {
         usedLits: (MapVV u64 value: bool)
         constVals: (MapVR u64 value: String)
         tailRetActive: false
-        blockDiverged: false
         defUnitId: (MapVV u64 value: u64)
         unitIdByName: (MapRV String value: u64)
         unitTidsC: (ListVal ztypes.tid)

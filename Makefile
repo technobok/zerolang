@@ -75,7 +75,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard readable-check perf-strict perf-elision
+.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard readable-check perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -129,7 +129,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard readable-check ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard readable-check ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -520,6 +520,50 @@ emitter-guard:
 	  exit 1; \
 	fi; \
 	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9"
+
+# deadcode-guard -- ratchet on emitted statements that no path can reach. clang's
+# -Wunreachable-code family is the oracle; gcc accepts the flag but never warns.
+# Every example and corpus program is emitted and counted, so a new dead-code
+# shape anywhere raises the number, not just one in the dedicated fixture
+# (tests/fixtures/emitc_corpus/deadcode_shapes.z, which must stay at zero).
+#
+# A rise means an emitting site appended a statement after a block that had
+# already diverged. The fix is to ask blockDiverges (src/zemitterc.z) about the
+# block you just emitted and skip the append -- never to read a flag left over
+# from someone else's block, which conflates an inner `if c then { break }` with
+# its enclosing scope and drops a live cleanup.
+#
+# The baseline is not zero. What remains is three classes, none of them a
+# missing divergence check: emitter-synthesized returns the AST predicate cannot
+# see; statements after a folded unconditional break; and constant conditions
+# outside the folding contract in docs/spec.pdoc:5652 (floats, and `if` in value
+# position, which emit both arms of a ternary). Lower the baseline when one of
+# those is closed. Skipped when clang is absent -- clang is not a build
+# requirement.
+DEADCODE_BASELINE := 31
+
+deadcode-guard: bin/zc
+	@command -v clang >/dev/null 2>&1 || { echo "deadcode-guard SKIP: clang not installed"; exit 0; }; \
+	d=$$(mktemp -d); n=0; rep=""; \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	  b=$$(basename $$f .z); \
+	  bin/zc emit $$f -o $$d/$$b.c 2>/dev/null || continue; \
+	  c=$$(clang -fsyntax-only -std=c17 -Wunreachable-code -Wunreachable-code-break \
+	       -Wunreachable-code-return $$d/$$b.c 2>&1 | grep -c 'unreachable-code'); \
+	  n=$$(($$n + $$c)); \
+	  if [ "$$c" -gt 0 ]; then rep="$$rep  $$b: $$c\n"; fi; \
+	done; \
+	rm -rf $$d; \
+	if [ "$$n" -gt "$(DEADCODE_BASELINE)" ]; then \
+	  echo "deadcode-guard FAIL: $$n unreachable statements (baseline $(DEADCODE_BASELINE))"; \
+	  printf "$$rep"; \
+	  echo "  A site appended after a diverged block. See blockDiverges in src/zemitterc.z."; \
+	  exit 1; \
+	elif [ "$$n" -lt "$(DEADCODE_BASELINE)" ]; then \
+	  echo "deadcode-guard: $$n < baseline $(DEADCODE_BASELINE) -- lower DEADCODE_BASELINE here"; \
+	else \
+	  echo "deadcode-guard OK: $$n unreachable statements (baseline $(DEADCODE_BASELINE))"; \
+	fi
 
 # member-guard -- ratchet against declaration-bypassing member special-cases in
 # the type checker. The single-source-of-truth arc removed the hardcoded member

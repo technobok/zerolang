@@ -1,0 +1,65 @@
+# deadcode_shapes.z -- the emission shapes that used to carry statements no
+# path could reach. `make deadcode-guard` counts unreachable statements across
+# the examples plus this file; if a fix here is lost the count rises.
+#
+# 1. a match arm that returns: no trailing `break;`, no arm-close free flush
+# 2. a body that ends in `panic`: no function-end take-param flush after it
+# 3. a loop body that returns: no loop-close flush after it
+# 4. a breakable do-block with an owned temp: the fall-through free must STILL
+#    be emitted -- dropping it is a leak, and that regression is what the
+#    tmpfree_dobreak_temps case caught
+
+consume: function {s: String.take} out u64 is {
+    n: s.length
+    if n > 1000 then {
+        panic msg: "consume: not reachable in this test"
+    }
+    return n
+}
+
+pick: function {k: u64} out u64 is {
+    o: (optionval.some k)
+    match (
+        o
+    ) case some then {
+        t: "arm-owned".string
+        return t.length + o
+    } case none then {
+        return 0
+    }
+}
+
+firstOver: function {limit: u64} out u64 is {
+    i: u64
+    for i < 100 loop {
+        tag: "loop-owned".string
+        if i > limit then {
+            return tag.length + i
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+main: function is {
+    a: "hello".string
+    # bound first, not called inside the interpolation: a `.take` argument
+    # inside an interpolation loses its move-invalidation and double-frees
+    c: consume s: a.take
+    print "consume=\{c}"
+    print "pick=\{pick k: 7}"
+    print "firstOver=\{firstOver limit: 3}"
+
+    v: {
+        tmp: "prefix".string
+        if tmp.length > 100 then { break }
+        tmp.length
+    }
+    match (
+        v
+    ) case some then {
+        print "v=\{v}"
+    } case none then {
+        print "v=none"
+    }
+}
