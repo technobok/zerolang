@@ -8560,6 +8560,20 @@ demandAllDefs: function {
     } else null
 }
 
+# seedTagBoolDemands -- the last blanket seed, and still a SEED rather than a
+# discovery point. Both names are written somewhere: every numeric record
+# carries an as-block `tag: tag` (system.z:52, :233) and core re-exports
+# true/false against system.bool. So "nothing names them" would be false --
+# what is measured is only that removing this breaks 416 of 418 programs,
+# i.e. those references do not reach the descent. Finding out why, and
+# demanding at that point, is the conversion this pair still wants; the
+# numeric scalars already got theirs (a literal demands its own default in
+# materialiseLiteral, which is what let twelve names go).
+seedTagBoolDemands: function {reg: ztypes.ZTypeRegistry} is {
+    reg.recordDemand name: "tag"
+    reg.recordDemand name: "bool"
+}
+
 # nativeOnlyBodyError -- one diagnostic for a bodied function declared in a
 # native-only stdlib unit (its C would never be emitted; calls fail at link).
 nativeOnlyBodyError: function {
@@ -8909,31 +8923,6 @@ resolveConformanceDefs: function {
             }
         }
     }
-}
-
-# seedSystemDemands -- the literal-materialization set: the system types a
-# program can require without ever writing a resolvable reference to them.
-# Numeric scalars + tag back per-use literal shells (resolveAtomType mints
-# them by name; the canonical defs must exist as typedef/emission bases),
-# and bool backs core's true/false re-exports (the Decl probe resolves them
-# on first touch against the already-resolved system.bool). Every other system
-# type is
-# reached by reference descent at its first use.
-seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
-    reg.recordDemand name: "i8"
-    reg.recordDemand name: "i16"
-    reg.recordDemand name: "i32"
-    reg.recordDemand name: "i64"
-    reg.recordDemand name: "i128"
-    reg.recordDemand name: "u8"
-    reg.recordDemand name: "u16"
-    reg.recordDemand name: "u32"
-    reg.recordDemand name: "u64"
-    reg.recordDemand name: "u128"
-    reg.recordDemand name: "f32"
-    reg.recordDemand name: "f64"
-    reg.recordDemand name: "tag"
-    reg.recordDemand name: "bool"
 }
 
 # stampCtorDefaults -- a construction fills unprovided defaulted fields: the
@@ -9603,7 +9592,7 @@ resolveDemandsByDescent: function {
         againU9: true
         for againU9 loop {
             beforeU9: reg.nextTypeId
-            seedSystemDemands :reg
+            seedTagBoolDemands :reg
             udN9: program.ast.units.length
             udI9: u64
             for udI9 < udN9 loop {
@@ -17204,7 +17193,7 @@ lastStmtType: function {st: zenv.ZSymbolTable ast: Ast.view block: Node.view} ou
 # (i64 / f64); concrete ids pass through.
 materialiseLiteral: function {
     ast: Ast.view
-    st: zenv.ZSymbolTable.view
+    st: zenv.ZSymbolTable
     unitName: StringView
     t: u64
 } out ztypes.tid is {
@@ -17212,10 +17201,19 @@ materialiseLiteral: function {
     if t == st.reg.literalIntTid then base = "i64"
     if t == st.reg.literalFloatTid then base = "f64"
     if base.length == 0 then return (ztypes.tid.create from: t)
-    return (ztypes.tid.create from: (optU64Or
+    got9: (optU64Or
         o: (walkLookupTyperef :ast ty: st.typing reg: st.reg currentUnit: unitName :base)
-        d: t
-    ))
+        d: 0
+    )
+    if got9 > 0 then return (ztypes.tid.create from: got9)
+    # a bare literal in a value context with no expected type IS `42.i64`: it
+    # demands its own default scalar, the way the suffixed form and the
+    # literal-NAME form (resolveNamedType) already do. Without this nothing
+    # demands i64 for `x: 42` -- the demand pass is name-driven and a literal
+    # names nothing.
+    dn9: descendNamed ty: st.typing reg: st.reg :ast defUnit: "system" name: base
+    if dn9 > 0 then return dn9
+    return (ztypes.tid.create from: t)
 }
 
 # checkAssignment -- a local binding `name: value`: walk the value, materialise a
@@ -26098,7 +26096,7 @@ reportUnitConstantShape: function {
 
 # resolveConstantDef -- one definition: an (expression-wrapped) numeric-literal
 # atomid is a unit constant. Record resolved[unit.name] as the literal's concrete
-# default (i64 / f64 -- both pre-demanded by seedSystemDemands). The definition's
+# default (i64 / f64, which materialiseLiteral demands). The definition's
 # own nodes stay unstamped: the oracle's stamps there carry its unregistered
 # literal pseudo-type (NULL in the dump), invisible to every projection.
 resolveConstantDef: function {
