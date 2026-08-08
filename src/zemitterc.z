@@ -1306,6 +1306,10 @@ Ctx: class {
     fastHash: bool
     readableNames: bool
     tailRetActive: bool
+    # set by emitBodyNode: the block it just emitted ends in a `return`, so
+    # anything the caller appends next is unreachable. Valid only until the
+    # next emitBodyNode call.
+    blockDiverged: bool
     defUnitId: (MapVV u64 value: u64)
     unitIdByName: (MapRV String value: u64)
     unitTidsC: (ListVal ztypes.tid)
@@ -12254,15 +12258,21 @@ scalarArmLabel: function {ast: Ast ctx: Ctx.view arm: StringView} out String is 
 # since (fL, lL) so a local declared inside a block (a match arm) is freed at
 # block end, not function end (where it is out of C scope). LIFO order.
 flushBlockFrees: function {ctx: Ctx.view tmp: TmpCtr fL: u64 lL: u64 buf: String.borrow} is {
+    # after a block that ended in a return, emitReturnCleanup already freed
+    # these on the diverging path: pop them (the locals leave C scope either
+    # way) but emit nothing, or the frees land as unreachable code
+    live9: ctx.blockDiverged == false
     for tmp.listFrees.length > lL loop {
         lvo: tmp.listFrees.pop
         tmp.listFreeVars.pop
-        buf.append lvo
+        if live9 then buf.append lvo
     }
     for tmp.frees.length > fL loop {
         fvo: tmp.frees.pop
-        ff9: "    \{ctx.strC}_free(&\{fvo});\n"
-        buf.append ff9
+        if live9 then {
+            ff9: "    \{ctx.strC}_free(&\{fvo});\n"
+            buf.append ff9
+        }
     }
 }
 
@@ -12337,6 +12347,7 @@ emitScalarClause: function {
         l2: "\{ind}case \{lbl}: {\n"
         buf.append l2
         ind3: "\{ind}    "
+        dv9: false
         if assignTo.length > 0 then {
             vx9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (c.statement - 1).u64)
             la9: "\{ind}    \{assignTo} = \{vx9};\n"
@@ -12346,10 +12357,13 @@ emitScalarClause: function {
             lL9: tmp.listFrees.length
             cst9: ast.nodes.get i: (c.statement - 1).u64
             emitBodyNode :ast :symtab :ctx n: cst9 ind: ind3.stringview :tmp :buf
+            dv9 = ctx.blockDiverged
             flushBlockFrees :ctx :tmp fL: fL9 lL: lL9 :buf
         }
-        l5: "\{ind}    break;\n"
-        buf.append l5
+        if dv9 == false then {
+            l5: "\{ind}    break;\n"
+            buf.append l5
+        }
         l6: "\{ind}}\n"
         buf.append l6
     } else null
@@ -12403,6 +12417,7 @@ emitMatchClause: function {
                 buf.append l4
             }
         }
+        dv9: false
         if assignTo.length > 0 then {
             vx9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (c.statement - 1).u64)
             la9: "\{ind}    \{assignTo} = \{vx9};\n"
@@ -12412,14 +12427,17 @@ emitMatchClause: function {
             lL9: tmp.listFrees.length
             cst9: ast.nodes.get i: (c.statement - 1).u64
             emitBodyNode :ast :symtab :ctx n: cst9 ind: ind3.stringview :tmp :buf
+            dv9 = ctx.blockDiverged
             flushBlockFrees :ctx :tmp fL: fL9 lL: lL9 :buf
         }
         if didSeed then {
             vvRemove xs: ctx.narrowBox vid: snameVid
             vtRemove xs: ctx.narrowTid vid: snameVid
         }
-        l5: "\{ind}    break;\n"
-        buf.append l5
+        if dv9 == false then {
+            l5: "\{ind}    break;\n"
+            buf.append l5
+        }
         l6: "\{ind}}\n"
         buf.append l6
     } else null
@@ -12442,6 +12460,7 @@ emitMatchElse: function {
         l7: "\{ind}default: {\n"
         buf.append l7
         ind3: "\{ind}    "
+        dv8: false
         if assignTo.length > 0 then {
             vx8: emitExpr :ast :symtab :ctx n: o
             la8: "\{ind}    \{assignTo} = \{vx8};\n"
@@ -12450,10 +12469,13 @@ emitMatchElse: function {
             fLe9: tmp.frees.length
             lLe9: tmp.listFrees.length
             emitBodyNode :ast :symtab :ctx n: o ind: ind3.stringview :tmp :buf
+            dv8 = ctx.blockDiverged
             flushBlockFrees :ctx :tmp fL: fLe9 lL: lLe9 :buf
         }
-        l8: "\{ind}    break;\n"
-        buf.append l8
+        if dv8 == false then {
+            l8: "\{ind}    break;\n"
+            buf.append l8
+        }
         l9: "\{ind}}\n"
         buf.append l9
     } else {
@@ -14732,6 +14754,9 @@ emitBodyNode: function {
     } else {
         emitStmt :ast :symtab :ctx :n :ind :tmp :buf
     }
+    # record for the caller whether what it appends next is reachable; false for
+    # a lone statement, which blockEndsInReturn reports for any non-block node
+    ctx.blockDiverged = ztypecheck.blockEndsInReturn :ast block: n
 }
 
 # forexprValue -- the value being bound is a for-loop (a list comprehension).
@@ -17794,6 +17819,7 @@ emitC: function {
         usedLits: (MapVV u64 value: bool)
         constVals: (MapVR u64 value: String)
         tailRetActive: false
+        blockDiverged: false
         defUnitId: (MapVV u64 value: u64)
         unitIdByName: (MapRV String value: u64)
         unitTidsC: (ListVal ztypes.tid)
