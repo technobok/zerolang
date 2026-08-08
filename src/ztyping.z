@@ -452,123 +452,6 @@ ZTyping: class {
         return id
     }
 
-    # declMoveChildToEnd -- move a member's entry to the LAST MEMBER SLOT of its
-    # parent's namespace. Called when the member is first typed, so declaration
-    # order IS member order as it is built. Non-member children (a type's
-    # `public:` block) keep their positions; only the member slots rotate.
-    declMoveChildToEnd: function {:this parentDeclId: ztypes.declid nameId: zast.nameid} is {
-        cnt9: this.declChildSlots declId: parentDeclId
-        if cnt9 < 2 then return
-        # the member is normally the child declSetMemberType just appended, so
-        # it already holds the last member slot. Probe that slot first: when it
-        # is the one asked for there is nothing to rotate and nothing to stage.
-        pi9: cnt9
-        for pi9 > 0 loop {
-            pi9 = pi9 - 1
-            pn9: u32
-            pd9: ztypes.declid
-            {
-                if (this.declValid id: parentDeclId) then {
-                    po8: this.decls.get i: (parentDeclId - 1)
-                    pe9: po8.children.get i: pi9
-                    pn9 = pe9.nameId
-                    pd9 = pe9.declId
-                }
-            }
-            isMem8: false
-            {
-                if (this.declValid id: pd9) then {
-                    ko8: this.decls.get i: (pd9 - 1)
-                    if ko8.kind.fieldDecl then isMem8 = true
-                    if ko8.kind.methodDecl then isMem8 = true
-                    if ko8.kind.paramDecl then isMem8 = true
-                    if ko8.kind.armDecl then isMem8 = true
-                }
-            }
-            if isMem8 then {
-                if pn9 == nameId then return
-                pi9 = 0
-            }
-        }
-        cn9: (ListVal u32)
-        cd9: (ListVal ztypes.declid)
-        {
-            if (this.declValid id: parentDeclId) then {
-                po9: this.decls.get i: (parentDeclId - 1)
-                with cit9: po9.children.iterate do for c9: cit9 loop {
-                    cn9.append c9.nameId
-                    cd9.append c9.declId
-                }
-            }
-        }
-        n9: cn9.length
-        if n9 < 2 then return
-        # the member slots, probed once the children borrow is released
-        slots9: (ListVal u64)
-        si9: u64
-        for si9 < n9 loop {
-            isMem9: false
-            {
-                kd9: cd9.get i: si9
-                if (this.declValid id: kd9) then {
-                    ko9: this.decls.get i: (kd9 - 1)
-                    if ko9.kind.fieldDecl then isMem9 = true
-                    if ko9.kind.methodDecl then isMem9 = true
-                    if ko9.kind.paramDecl then isMem9 = true
-                    if ko9.kind.armDecl then isMem9 = true
-                }
-            }
-            if isMem9 then slots9.append si9
-            si9 = si9 + 1
-        }
-        m9: slots9.length
-        if m9 < 2 then return
-        # the LAST match, not the first: declFindChild is last-wins, so a
-        # variant arm and an as-block method sharing a name must keep their
-        # relative order or the name resolves to the other one
-        at9: u64
-        found9: false
-        ki9: u64
-        for ki9 < m9 loop {
-            sp9: slots9.get i: ki9
-            if (cn9.get i: sp9) == nameId then {
-                at9 = ki9
-                found9 = true
-            }
-            ki9 = ki9 + 1
-        }
-        if (found9) == false then return
-        if at9 == (m9 - 1) then return
-        movS9: slots9.get i: at9
-        movN9: cn9.get i: movS9
-        movD9: cd9.get i: movS9
-        ri9: at9
-        for ri9 < (m9 - 1) loop {
-            dst9: slots9.get i: ri9
-            src9: slots9.get i: (ri9 + 1)
-            cn9.set i: dst9 val: (cn9.get i: src9)
-            cd9.set i: dst9 val: (cd9.get i: src9)
-            ri9 = ri9 + 1
-        }
-        lst9: slots9.get i: (m9 - 1)
-        cn9.set i: lst9 val: movN9
-        cd9.set i: lst9 val: movD9
-        if (this.declValid id: parentDeclId) then {
-            wo9: this.decls.getMut i: (parentDeclId - 1)
-            wi9: u64
-            for wi9 < n9 loop {
-                (wo9.children.set
-                    i: wi9
-                    val: (declchild
-                        nameId: (zast.nameid.create from: (cn9.get i: wi9))
-                        declId: (cd9.get i: wi9)
-                    )
-                )
-                wi9 = wi9 + 1
-            }
-        }
-    }
-
     # declAddChildEdge -- append a name -> declaration edge to a parent's
     # namespace (also used for public-interface entries, whose targets are
     # sibling declarations rather than fresh rows).
@@ -1191,8 +1074,9 @@ ZTyping: class {
     # names (pool ids) and their types. Members are the field / method / arm /
     # param children carrying a type; a unit's definitions and a type's
     # `public:` block are not members and are skipped. Declaration order IS
-    # member order -- declMoveChildToEnd places each member in the last member
-    # slot as it is first typed.
+    # member order because the index builds the member Decls in that order and
+    # nothing reorders them -- member order does not depend on the order the
+    # members are typed in.
     declMemberList: function {:this ownerTid: ztypes.tid names: (ListVal u64).view tids: (ListVal u64).view} is {
         this.declChildWalk :ownerTid membersOnly: true :names :tids
     }
@@ -1352,29 +1236,11 @@ ZTyping: class {
     # sight position it in the owner's last member slot, so declaration order
     # is built as member order rather than corrected afterwards.
     setMemberType: function {:this parentTypeId: ztypes.tid nameId: zast.nameid childTypeId: u64} is {
-        # first sight is "the declaration does not carry a type yet". It also
-        # reads true for a unit's `public:` pseudo-member, which already has
-        # one; that costs nothing, because declMoveChildToEnd rotates member
-        # slots only and a publicNs child is not among them.
-        first9: false
-        if (nameId.isZero) == false then {
-            fm9: this.declTypedMemberIdOf :parentTypeId :nameId
-            first9 = fm9.isZero
-        }
-        # declSetMemberType can be what CREATES the member declaration, so the
-        # position is fixed after it, not before
         (this.declSetMemberType
             :parentTypeId
             :nameId
             typeId: (ztypes.tid.create from: childTypeId.u64)
         )
-        if first9 then {
-            od9: this.declIdOfType typeId: parentTypeId
-            if (od9.isZero) == false then (this.declMoveChildToEnd
-                parentDeclId: od9
-                :nameId
-            )
-        }
     }
 
     # --- per-member flags ---
