@@ -9110,6 +9110,35 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         emitFail :ctx what: "unhandled atomstring expr".string line: n.lineno
         return "/* zemitterc: unhandled atomstring expr */0".string
     } case ifexpr then {
+        # a chain whose every condition folds has ONE live branch: emit its
+        # value alone. spec.pdoc:5616 promises the false branch is not emitted,
+        # and that promise is not limited to statement position.
+        vfold9: true
+        vwin9: u32
+        with vcit9: n.clauses.iterate do for vcId9: vcit9 loop {
+            if vfold9 then {
+                vcn9: ast.nodes.get i: (vcId9 - 1).u64
+                match (
+                    vcn9
+                ) case ifclause then {
+                    vfr9: foldIfClause9 :ast :ctx conds: vcn9.conditions
+                    if vfr9.ok then {
+                        if vfr9.val == 1 when vwin9 == 0 then vwin9 = vcn9.statement
+                    } else {
+                        vfold9 = false
+                    }
+                } else {
+                    vfold9 = false
+                }
+            }
+        }
+        if vfold9 then {
+            vwb9: vwin9
+            if vwb9 == 0 then vwb9 = n.elseclause
+            if vwb9 > 0 then {
+                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (vwb9 - 1).u64))
+            }
+        }
         tx: String
         depth: u64
         citer: n.clauses.iterate
@@ -9870,6 +9899,33 @@ cfold: record {
     val: i64
 }
 
+# evalConstF64 -- a float literal at emit time. Only literals: a float-valued
+# unit constant renders through the same text path but nothing needs it yet.
+# ok=false for anything else, which leaves the caller on the integer path.
+ffold: record {
+    ok: bool
+    val: f64
+}
+
+evalConstF64: function {ast: Ast.view n: Node.view} out ffold is {
+    match (
+        n
+    ) case expression then {
+        return (evalConstF64 :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case atomid then {
+        aft9: ast.names.texts.get i: (n.name - 1).u64
+        pf9: aft9.stringview.parseF64
+        match (
+            pf9
+        ) case ok then {
+            return (ffold ok: true val: pf9)
+        } case err then null
+        return (ffold ok: false val: 0.0)
+    } else {
+        return (ffold ok: false val: 0.0)
+    }
+}
+
 # evalConstI64 -- best-effort integer fold of an expression at emit time:
 # int literals, unit constants whose pre-rendered C text is a plain integer,
 # and arithmetic/comparison binops over folded operands. ok=false when any
@@ -9899,11 +9955,49 @@ evalConstI64: function {ast: Ast.view ctx: Ctx.view n: Node.view} out cfold is {
             ) case ok then {
                 return (cfold ok: true val: pc9)
             } case err then null
+            # a bool constant's rendered C is the tag, not a numeral
+            if (cgv9.contains needle: "Z_BOOL_TAG_TRUE") then return (cfold ok: true val: 1)
+            if (cgv9.contains needle: "Z_BOOL_TAG_FALSE") then return (cfold ok: true val: 0)
         } case none then null
         return (cfold ok: false val: 0)
     } case binop then {
         lf9: evalConstI64 :ast :ctx n: (ast.nodes.get i: (n.lhs - 1).u64)
         rf9: evalConstI64 :ast :ctx n: (ast.nodes.get i: (n.rhs - 1).u64)
+        # a float COMPARISON folds to a bool even though the operands are not
+        # integers; arithmetic over them stays unfolded, nothing needs it
+        if lf9.ok == false then {
+            lg9: evalConstF64 :ast n: (ast.nodes.get i: (n.lhs - 1).u64)
+            rg9: evalConstF64 :ast n: (ast.nodes.get i: (n.rhs - 1).u64)
+            if lg9.ok when rg9.ok then {
+                fop9: atomTextOf :ast n: (ast.nodes.get i: (n.operator - 1).u64)
+                fos9: fop9.stringview
+                fb9: false
+                fhit9: false
+                if fos9 == "==" then {
+                    fb9 = lg9.val == rg9.val
+                    fhit9 = true
+                } else if fos9 == "!=" then {
+                    fb9 = lg9.val != rg9.val
+                    fhit9 = true
+                } else if fos9 == "<" then {
+                    fb9 = lg9.val < rg9.val
+                    fhit9 = true
+                } else if fos9 == "<=" then {
+                    fb9 = lg9.val <= rg9.val
+                    fhit9 = true
+                } else if fos9 == ">" then {
+                    fb9 = lg9.val > rg9.val
+                    fhit9 = true
+                } else if fos9 == ">=" then {
+                    fb9 = lg9.val >= rg9.val
+                    fhit9 = true
+                }
+                if fhit9 then {
+                    if fb9 then return (cfold ok: true val: 1)
+                    return (cfold ok: true val: 0)
+                }
+            }
+        }
         if lf9.ok when rf9.ok then {
             opt9: atomTextOf :ast n: (ast.nodes.get i: (n.operator - 1).u64)
             ops9: opt9.stringview
@@ -12953,6 +13047,23 @@ emitMatchBindValue: function {
     }
 }
 
+# simpleValueNode9 -- the node is a value expression, not a multi-statement
+# block. A folded if-bind can only shortcut to emitExpr when its live branch is
+# one; a block branch stays on the clause path, which knows how to assign from
+# a body.
+simpleValueNode9: function {ast: Ast.view n: Node.view} out bool is {
+    ast
+    match (
+        n
+    ) case statement then {
+        # emitExpr copes with a one-statement block; a longer body needs the
+        # clause path, which assigns from a walked body
+        return n.statements.length <= 1
+    } else {
+        return true
+    }
+}
+
 # emitIfBindValue -- `s: if c then a else b`: declare the local and emit
 # an if-statement assigning the branch value to it; false otherwise.
 emitIfBindValue: function {
@@ -12972,6 +13083,40 @@ emitIfBindValue: function {
         iexI9: ast.nodes.get i: (n.expression - 1).u64
         return (emitIfBindValue :ast :symtab :ctx n: iexI9 :nm :ct :ind :tmp :buf)
     } case ifexpr then {
+        # every condition folds: declare the local and assign the one live
+        # branch, rather than emitting a runtime if whose other arms are dead
+        bfold9: true
+        bwin9: u32
+        with bcit9: n.clauses.iterate do for bcId9: bcit9 loop {
+            if bfold9 then {
+                bcn9: ast.nodes.get i: (bcId9 - 1).u64
+                match (
+                    bcn9
+                ) case ifclause then {
+                    bfr9: foldIfClause9 :ast :ctx conds: bcn9.conditions
+                    if bfr9.ok then {
+                        if bfr9.val == 1 when bwin9 == 0 then bwin9 = bcn9.statement
+                    } else {
+                        bfold9 = false
+                    }
+                } else {
+                    bfold9 = false
+                }
+            }
+        }
+        if bfold9 then {
+            bwb9: bwin9
+            if bwb9 == 0 then bwb9 = n.elseclause
+            if bwb9 > 0 when (simpleValueNode9
+                :ast
+                n: (ast.nodes.get i: (bwb9 - 1).u64)
+            ) then {
+                bvx9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (bwb9 - 1).u64)
+                lbf9: "\{ind}\{ct} \{nm} = \{bvx9};\n"
+                buf.append lbf9
+                return true
+            }
+        }
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
         first: true

@@ -561,10 +561,13 @@ emitter-guard:
 # `error` builtin can prove REACHABLE, which is a different question. So these
 # are gaps, not decisions:
 #
-#   6  the folder is weaker than that promise. evalConstI64 folds integer
-#      literals, unit integer constants and binops over them, so an f64
-#      comparison (constfold), a bool constant (bool_arm_value) and an `if` in
-#      VALUE position (ifexpr, emitted as a ternary with both arms) all survive.
+#   2  the folder still misses two shapes. A bool unit constant reaches
+#      evalConstI64 as something other than its rendered tag text, so
+#      `if NO` where `NO: bool.false` does not fold (bool_arm_value); and a
+#      folded if-BIND whose live branch is a multi-statement block keeps the
+#      runtime if, because the shortcut only handles a branch emitExpr can
+#      render (ifexpr). Value-position ifs, the bind form with a simple branch,
+#      and float comparisons all fold now.
 # The other class -- a statement after something already diverged -- is closed:
 # both statement walks stop on a diverging statement, and ifDiverges models a
 # chain whose conditions all fold, where only the branch the emitter actually
@@ -572,7 +575,7 @@ emitter-guard:
 #
 # Lower the baseline as each folder gap is closed. Skipped when clang is absent -- clang is
 # not a build requirement.
-DEADCODE_BASELINE := 6
+DEADCODE_BASELINE := 2
 
 deadcode-guard: bin/zc
 	@command -v clang >/dev/null 2>&1 || { echo "deadcode-guard SKIP: clang not installed"; exit 0; }; \
