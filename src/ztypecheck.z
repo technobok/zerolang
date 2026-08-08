@@ -5738,82 +5738,6 @@ scanUnitVisibility: function {
     }
 }
 
-# demandUnitRenameTargets -- a `public: unit { alias: internal }` rename
-# references its target only through the alias, so the ordinary demand scan
-# never demands `internal`. Seed those demands up front (before the descent)
-# so the target's signature resolves and its unit childOf edge is created;
-# otherwise a cross-unit reference to the renamed def resolves to nothing.
-demandUnitRenameTargets: function {
-    ty: ztyping.ZTyping.view
-    reg: ztypes.ZTypeRegistry
-    program: Node
-} is {
-    ty
-    match (
-        program
-    ) case program then {
-        uCntD9: program.ast.units.length
-        uIdxD9: u64
-        for uIdxD9 < uCntD9 loop {
-            uIdD9: (zast.nodeid.create from: (program.ast.units.get i: uIdxD9))
-            uIdxD9 = uIdxD9 + 1
-            opIdD9: u32
-            nmD9: String
-            {
-                ruD9: program.ast.nodes.get i: (uIdD9 - 1).u64
-                if ruD9.namedoperation then {
-                    nmtD9: zast.poolTextAt pool: program.ast.names ref: ruD9.name
-                    opIdD9 = ruD9.operation
-                    nmD9 = nmtD9.copy
-                }
-            }
-            if opIdD9 > 0 then {
-                bodyIdsD9: zast.unitBodyIdsAt ast: program.ast unitId: opIdD9
-                with dit9: bodyIdsD9.iterate do for dmId9: dit9 loop {
-                    dm9: program.ast.nodes.get i: (dmId9 - 1).u64
-                    if dm9.namedoperation then {
-                        if (zast.poolTextEq
-                            pool: program.ast.names
-                            ref: dm9.name
-                            s: "public"
-                        ) then {
-                            duop9: program.ast.nodes.get i: (dm9.operation - 1).u64
-                            match (
-                                duop9
-                            ) case unitdef then {
-                                with dubit9: duop9.body.iterate do for dubId9: dubit9 loop {
-                                    dubn9: program.ast.nodes.get i: (dubId9 - 1).u64
-                                    if dubn9.namedoperation then {
-                                        dubop9: program.ast.nodes.get i: (dubn9.operation - 1).u64
-                                        match (
-                                            dubop9
-                                        ) case atomid then {
-                                            tgtNm9: (zast.poolTextAt
-                                                pool: program.ast.names
-                                                ref: dubop9.name
-                                            )
-                                            if tgtNm9.length > 0 then {
-                                                reg.recordDemand name: tgtNm9.stringview
-                                                (reg.recordSeededDemand
-                                                    un: (nameIdOf
-                                                        ast: program.ast
-                                                        name: nmD9.stringview
-                                                    )
-                                                    name: dubop9.name
-                                                )
-                                            }
-                                        } else null
-                                    }
-                                }
-                            } else null
-                        }
-                    }
-                }
-            }
-        }
-    } else null
-}
-
 # applyUnitVisibility -- run scanUnitVisibility for every file unit that
 # declares a `public:` block, after all unit members are registered.
 applyUnitVisibility: function {
@@ -28077,7 +28001,6 @@ typecheck: function {
     registerAndResolveMain ty: st.typing reg: st.reg :program
     resolveMainUnitInstantiations ty: st.typing reg: st.reg :program
     scanMainBodyCalls reg: st.reg :program
-    demandUnitRenameTargets ty: st.typing reg: st.reg :program
     seedConstantSuffixDemands reg: st.reg :program
     demandAllDefs ty: st.typing reg: st.reg :program
     resolveDemandsByDescent ty: st.typing reg: st.reg :program
