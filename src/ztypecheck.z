@@ -4428,7 +4428,6 @@ forceMemberDecl: function {
         par9 = mo9.parent
     }
     if have9 > 0 then return (optionval.some have9)
-    if (isM9) == false then return (optionval.none u64)
     if (ty.declIsDefined declId: memberDeclId) then return (optionval.none u64)
     if (ty.declIsResolving declId: memberDeclId) then return (optionval.none u64)
     if mnd9 == 0 then return (optionval.none u64)
@@ -4452,16 +4451,28 @@ forceMemberDecl: function {
     tn9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: onm9)
     mn9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: mnm9)
     ty.declSetResolving declId: memberDeclId mark: true
-    mid9: (resolveMethodFn
-        :ty
-        :reg
-        :ast
-        unitName: un9.stringview
-        ownerNameId: (zast.nameid.create from: onm9)
-        mname: mn9.stringview
-        thisName: tn9.stringview
-        op: (ast.nodes.get i: (opId9 - 1).u64)
-    )
+    mid9: (optionval.none u64)
+    if isM9 then {
+        mid9 = (resolveMethodFn
+            :ty
+            :reg
+            :ast
+            unitName: un9.stringview
+            ownerNameId: (zast.nameid.create from: onm9)
+            mname: mn9.stringview
+            thisName: tn9.stringview
+            op: (ast.nodes.get i: (opId9 - 1).u64)
+        )
+    } else {
+        # an as-block MARKER designates a type rather than declaring a field
+        mid9 = (markerTargetId
+            :ty
+            :reg
+            unitName: un9.stringview
+            :ast
+            op: (ast.nodes.get i: (opId9 - 1).u64)
+        )
+    }
     ty.declSetResolving declId: memberDeclId mark: false
     ty.declSetDefined declId: memberDeclId
     match (
@@ -4470,7 +4481,7 @@ forceMemberDecl: function {
     match (
         mid9
     ) case some then {
-        (stampMemberSignature
+        if isM9 then (stampMemberSignature
             :ty
             :reg
             :ast
@@ -5026,7 +5037,16 @@ attachMarkers: function {
             mm
         ) case namedoperation then {
             cnm: atomName :ast n: (ast.nodes.get i: (mm.operation - 1).u64)
-            if (isNumericLiteralName name: cnm.stringview) == false then {
+            # `tag: tag` is not a field of the numeric record that carries it:
+            # it designates the discriminator STORAGE type so a sum type can
+            # spell `u8.tag`. A program declaring no sum type never names it,
+            # so it resolves when something does -- forceMemberDecl.
+            lazyTag9: false
+            if ty.lazyMembers when cnm.stringview == "tag" then {
+                mlbT9: zast.nameTextAt :ast ref: mm.name
+                if mlbT9.stringview == "tag" then lazyTag9 = true
+            }
+            if (isNumericLiteralName name: cnm.stringview) == false when (lazyTag9) == false then {
                 (recordTyperef
                     :ty
                     :reg
@@ -5036,7 +5056,8 @@ attachMarkers: function {
                     node: (ast.nodes.get i: (mm.operation - 1).u64)
                 )
             }
-            mtid: (markerTargetId
+            mtid: (optionval.none u64)
+            if (lazyTag9) == false then mtid = (markerTargetId
                 :ty
                 :reg
                 :unitName
@@ -8560,20 +8581,6 @@ demandAllDefs: function {
     } else null
 }
 
-# seedTagBoolDemands -- the last blanket seed, and still a SEED rather than a
-# discovery point. Both names are written somewhere: every numeric record
-# carries an as-block `tag: tag` (system.z:52, :233) and core re-exports
-# true/false against system.bool. So "nothing names them" would be false --
-# what is measured is only that removing this breaks 416 of 418 programs,
-# i.e. those references do not reach the descent. Finding out why, and
-# demanding at that point, is the conversion this pair still wants; the
-# numeric scalars already got theirs (a literal demands its own default in
-# materialiseLiteral, which is what let twelve names go).
-seedTagBoolDemands: function {reg: ztypes.ZTypeRegistry} is {
-    reg.recordDemand name: "tag"
-    reg.recordDemand name: "bool"
-}
-
 # nativeOnlyBodyError -- one diagnostic for a bodied function declared in a
 # native-only stdlib unit (its C would never be emitted; calls fail at link).
 nativeOnlyBodyError: function {
@@ -9592,7 +9599,6 @@ resolveDemandsByDescent: function {
         againU9: true
         for againU9 loop {
             beforeU9: reg.nextTypeId
-            seedTagBoolDemands :reg
             udN9: program.ast.units.length
             udI9: u64
             for udI9 < udN9 loop {
