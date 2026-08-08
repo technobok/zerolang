@@ -1219,13 +1219,16 @@ stmtDiverges9: function {
     sid: zast.nodeid
 } out bool is {
     if sid.isZero then return false
-    if (matchDiverges :symtab nid: sid.u64) then return true
     sn9: ast.nodes.get i: (sid - 1).u64
     match (
         sn9
     ) case statementline then {
-        if (matchDiverges :symtab nid: sn9.statementline.u64) then return true
         inn9: ast.nodes.get i: (sn9.statementline - 1).u64
+        # the never stamp is necessary but NOT sufficient: confirm every arm
+        stamped9: false
+        if (matchDiverges :symtab nid: sid.u64) then stamped9 = true
+        if (matchDiverges :symtab nid: sn9.statementline.u64) then stamped9 = true
+        if stamped9 when (matchArmsAllDiverge :ast :symtab n: inn9) then return true
         if (bareReturn9 :ast n: inn9) then return true
         if (loopNeverExits9 :ast n: inn9) then return true
         return (ifDiverges :ast :symtab n: inn9)
@@ -1288,6 +1291,52 @@ loopNeverExits9: function {
             :ast
             n: (ast.nodes.get i: (n.body - 1).u64)
         ) == false
+    } else {
+        return false
+    }
+}
+
+# matchArmsAllDiverge -- every clause body of a `match` diverges, and so does its
+# else. The `never` STAMP alone does not answer this: the stamp is the match's
+# VALUE type, and a statement-position match whose else is a no-op is typed
+# `never` while control walks straight out of it (hoisted_args.z: `case pair then
+# { return ... } else null`, followed by a live `return`). Stamp AND arms.
+matchArmsAllDiverge: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    n: Node.view
+} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (matchArmsAllDiverge
+            :ast
+            :symtab
+            n: (ast.nodes.get i: (n.expression - 1).u64)
+        )
+    } case caseexpr then {
+        if n.clauses.length == 0 then return false
+        with cmit9: n.clauses.iterate do for cmId9: cmit9 loop {
+            cm9: ast.nodes.get i: (cmId9 - 1).u64
+            match (
+                cm9
+            ) case caseclause then {
+                if cm9.statement.isZero then return false
+                if (blockDiverges
+                    :ast
+                    :symtab
+                    n: (ast.nodes.get i: (cm9.statement - 1).u64)
+                ) == false then return false
+            } else {
+                return false
+            }
+        }
+        if n.elseclause.isZero then return true
+        return (blockDiverges
+            :ast
+            :symtab
+            n: (ast.nodes.get i: (n.elseclause - 1).u64)
+        )
     } else {
         return false
     }

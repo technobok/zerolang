@@ -545,14 +545,21 @@ emitter-guard:
 # unconditional branch all still emit code no path runs. Closing them means
 # widening the folder, which is a feature, not a cleanup.
 #
-# The tenth is a statement after a never-exiting loop. Reaching it needs
-# emitBodyNode to stop emitting once a statement diverges, which is one line --
-# and that line miscompiles the compiler: the stage-1 binary loses the
-# valhashable conformance of declid/tid/vid and rejects 153 sites in src/. So a
-# divergence predicate that is safe for dropping a cleanup is NOT yet safe for
-# dropping a statement. Find that false positive before trying again. Skipped
-# when clang is absent -- clang is not a build requirement.
-DEADCODE_BASELINE := 10
+# The baseline ROSE from 10 to 29, deliberately. The lower number was bought
+# with an unsound predicate: divergence was inferred from a match's `never`
+# STAMP, which is the match's VALUE type, not a statement about control. A
+# statement-position match whose else is a no-op is typed `never` and control
+# walks straight out of it, so arms that do not diverge were losing their C
+# `break;` and the switch fell into the next case -- a silent wrong answer, not
+# a crash (tests/fixtures/emitc_corpus/match_arm_fallthrough.z: 1 instead of 9).
+# matchArmsAllDiverge now confirms every clause body and the else, and the 19
+# statements that recovers are the honest cost of a sound check.
+#
+# Truncating the statement walk after a diverging statement would close a few
+# more. It bootstraps cleanly once the predicate is sound -- but it RAISES the
+# count, so it is not a win as written. Skipped when clang is absent -- clang is
+# not a build requirement.
+DEADCODE_BASELINE := 29
 
 deadcode-guard: bin/zc
 	@command -v clang >/dev/null 2>&1 || { echo "deadcode-guard SKIP: clang not installed"; exit 0; }; \
