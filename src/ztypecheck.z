@@ -4523,6 +4523,25 @@ forceMemberOf: function {
     forceMemberDecl :ty :reg :ast memberDeclId: md9
 }
 
+# forceUnitDefMember -- force `unit.def.member` from ids. Body checking reaches
+# a method by NAME rather than through a receiver's type, so it is the one
+# demand point that cannot go through a tid.
+forceUnitDefMember: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast.view
+    unitId: zast.nameid
+    defId: zast.nameid
+    memberId: zast.nameid
+} is {
+    if (ty.lazyMembers) == false then return
+    dd9: declOfUnitDefIds :ty :unitId nameId: defId
+    if dd9.isZero then return
+    md9: ty.declFindChild parentDeclId: dd9 nameId: memberId
+    if md9.isZero then return
+    forceMemberDecl :ty :reg :ast memberDeclId: md9
+}
+
 # forceAllMembers -- every member signature of `tid`, in declaration order. The
 # WALK demand point: a caller reading a member LIST (the mono clone, the
 # emitter's member tables) cannot name what it has not seen, and an unresolved
@@ -24093,7 +24112,7 @@ objectdefHasMethodBodies: function {ast: Ast.view op: Node.view} out bool is {
 # as-block functiondefs, declaration order). The scopes land under the walk's
 # current scope, mirroring the oracle's resolve-at-first-demand placement.
 checkMethodBodies: function {
-    st: zenv.ZSymbolTable.view
+    st: zenv.ZSymbolTable
     unitName: StringView
     ast: Ast.view unitBody: (ListVal u32).view
     typeName: StringView
@@ -24110,6 +24129,16 @@ checkMethodBodies: function {
             ) case namedoperation then {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (im.operation - 1).u64)) then {
                     mname: zast.nameTextAt :ast ref: im.name
+                    # about to check this body, so its signature is needed:
+                    # `this` binds from the resolved receiver
+                    (forceUnitDefMember
+                        ty: st.typing
+                        reg: st.reg
+                        :ast
+                        unitId: (nameIdOf :ast name: unitName)
+                        defId: (nameIdOf :ast name: typeName)
+                        memberId: im.name
+                    )
                     qn: "\{typeName}.\{mname}"
                     ed7: (ListVal u32)
                     (checkFunctionBody
@@ -24132,6 +24161,14 @@ checkMethodBodies: function {
             ) case namedoperation then {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (am.operation - 1).u64)) then {
                     mname2: zast.nameTextAt :ast ref: am.name
+                    (forceUnitDefMember
+                        ty: st.typing
+                        reg: st.reg
+                        :ast
+                        unitId: (nameIdOf :ast name: unitName)
+                        defId: (nameIdOf :ast name: typeName)
+                        memberId: am.name
+                    )
                     qn2: "\{typeName}.\{mname2}"
                     ed6: (ListVal u32)
                     (checkFunctionBody
@@ -24224,6 +24261,17 @@ checkFunctionBody: function {
             match (
                 rsd9
             ) case some then {
+                (forceUnitDefMember
+                    ty: st.typing
+                    reg: st.reg
+                    :ast
+                    unitId: fnUid9
+                    defId: (nameIdOf :ast name: (rest9.substring from: 0 to: rsd9))
+                    memberId: (nameIdOf
+                        :ast
+                        name: (rest9.substring from: (rsd9 + 1) to: rest9.length)
+                    )
+                )
                 rgot = (resolvedByIdsMember
                     :ast
                     ty: st.typing
