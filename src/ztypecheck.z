@@ -4355,6 +4355,53 @@ resolveMethodFnLazy: function {
     return (resolveMethodFn :ty :reg :ast :unitName :ownerNameId :mname :thisName :op)
 }
 
+# stampMemberSignature -- stamp a member's return and parameter type-refs.
+# paramTypeId and methodReturnOf both read the node stamp first, and
+# stampTyperefs has already run by the time a member resolves on demand, so
+# without this every parameter -- `this` included -- binds to nothing.
+# Idempotent: stampForcedTyperef skips a node that already carries a type.
+stampMemberSignature: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast.view
+    unitName: StringView
+    thisName: StringView
+    ownerTid: u64
+    fnNodeId: u32
+    mid: u64
+} is {
+    rn9: optU64Or o: (ty.funcReturnNode.get key: (ztypes.tid.create from: mid.u64)) d: 0
+    stampForcedTyperef :ty :reg :ast :unitName :thisName nid: rn9
+    if fnNodeId == 0 then return
+    fnN9: ast.nodes.get i: (fnNodeId - 1).u64
+    match (
+        fnN9
+    ) case functiondef then {
+        with pit9: fnN9.parameters.iterate do for pId9: pit9 loop {
+            pn9: ast.nodes.get i: (pId9 - 1).u64
+            if pn9.namedoperation then {
+                pRoot9: rootNameOf :ast n: (ast.nodes.get i: (pn9.operation - 1).u64)
+                if pRoot9.stringview == "this" then {
+                    (ztyping.nodeTypeSet
+                        tbl: ty.nodeType
+                        nid: pn9.operation.u64
+                        tid: (ztypes.tid.create from: ownerTid.u64)
+                    )
+                } else {
+                    (stampForcedTyperef
+                        :ty
+                        :reg
+                        :ast
+                        :unitName
+                        :thisName
+                        nid: pn9.operation.u64
+                    )
+                }
+            }
+        }
+    } else null
+}
+
 # forceMemberDecl -- resolve one member's signature on demand: the rung below
 # descendNamed. The grey / done marks are read off the MEMBER's own Decl rather
 # than its type's, because the conversion lattice cycles through members --
@@ -4423,8 +4470,16 @@ forceMemberDecl: function {
     match (
         mid9
     ) case some then {
-        rn9: optU64Or o: (ty.funcReturnNode.get key: (ztypes.tid.create from: mid9.u64)) d: 0
-        stampForcedTyperef :ty :reg :ast unitName: un9.stringview nid: rn9
+        (stampMemberSignature
+            :ty
+            :reg
+            :ast
+            unitName: un9.stringview
+            thisName: tn9.stringview
+            ownerTid: otid9
+            fnNodeId: opId9
+            mid: mid9
+        )
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: otid9.u64)
             nameId: (zast.nameid.create from: mnm9)
@@ -4445,10 +4500,28 @@ stampForcedTyperef: function {
     reg: ztypes.ZTypeRegistry
     ast: Ast.view
     unitName: StringView
+    thisName: StringView
     nid: u64
 } is {
     if nid == 0 then return
     if (ztyping.nodeTypeAt tbl: ty.nodeType :nid) > 0 then return
+    # the real resolver first: it handles a PARAMETERIZED type-expr
+    # (`out (resultval t: u32 e: converror)`), where a base name would name the
+    # TEMPLATE and stamping that is worse than not stamping at all.
+    {
+        rs9: (resolveTyperefShell
+            :ty
+            :reg
+            :ast
+            :unitName
+            typeExpr: (ast.nodes.get i: (nid - 1))
+            :thisName
+        )
+        if rs9 > 0 then {
+            ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: (ztypes.tid.create from: rs9.u64)
+            return
+        }
+    }
     # a DOTTED return (`out zast.nodeid`) names its type in another unit, which
     # no single base name reaches
     {
