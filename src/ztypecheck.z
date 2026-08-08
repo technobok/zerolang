@@ -510,6 +510,7 @@ checkBareTypeValueAt: function {
         bareCtorError :st :nodeid :lineno :colno :width msg: mi9 hint: hi9
         return
     }
+    (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: tid nameId: zast.wkCreate)
     crO9: st.typing.declChildOfId parentTypeId: tid nameId: zast.wkCreate
     hasCr9: false
     match (
@@ -1528,6 +1529,13 @@ declareCanonicalType: function {
         match (
             cudq
         ) case some then {
+            (forceMemberOf
+                :ty
+                :reg
+                :ast
+                parentTypeId: (ztypes.tid.create from: cudq.u64)
+                nameId: ownerNameId
+            )
             bo9: (ty.declChildOfId
                 parentTypeId: (ztypes.tid.create from: cudq.u64)
                 nameId: ownerNameId
@@ -4327,6 +4335,150 @@ resolveMethodFn: function {
     }
 }
 
+# resolveMethodFnLazy -- resolveMethodFn under the member-demand mode. The item
+# is still reported AS a method, carrying no type yet; forceMemberDecl mints the
+# signature when a consumer first needs it. `lazyOk` is false where the caller
+# READS the returned id rather than only recording it -- a generic class's
+# methods feed reg.setGeneric, and a unit template's feed declLinkTemplateMethod.
+resolveMethodFnLazy: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    ast: Ast.view
+    unitName: StringView
+    ownerNameId: zast.nameid
+    mname: StringView
+    thisName: StringView
+    op: Node
+    lazyOk: bool
+} out optionval u64 is {
+    if lazyOk when ty.lazyMembers when (isFunctionDefOp :op) then return (optionval.some 0.u64)
+    return (resolveMethodFn :ty :reg :ast :unitName :ownerNameId :mname :thisName :op)
+}
+
+# forceMemberDecl -- resolve one member's signature on demand: the rung below
+# descendNamed. The grey / done marks are read off the MEMBER's own Decl rather
+# than its type's, because the conversion lattice cycles through members --
+# u8's `.i128` names i128, whose `.u8` names u8 -- and a member reached while its
+# owner is still resolving is not the owner's back-edge.
+forceMemberDecl: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast.view
+    memberDeclId: ztypes.declid
+} out optionval u64 is {
+    if (ty.declValid id: memberDeclId) == false then return (optionval.none u64)
+    isM9: false
+    have9: u64
+    mnm9: u32
+    mnd9: u32
+    par9: ztypes.declid
+    {
+        mo9: ty.decls.get i: (memberDeclId - 1)
+        if mo9.kind.methodDecl then isM9 = true
+        have9 = mo9.typeId
+        mnm9 = mo9.name
+        mnd9 = mo9.node
+        par9 = mo9.parent
+    }
+    if have9 > 0 then return (optionval.some have9)
+    if (isM9) == false then return (optionval.none u64)
+    if (ty.declIsDefined declId: memberDeclId) then return (optionval.none u64)
+    if (ty.declIsResolving declId: memberDeclId) then return (optionval.none u64)
+    if mnd9 == 0 then return (optionval.none u64)
+    if (ty.declValid id: par9) == false then return (optionval.none u64)
+    otid9: u64
+    onm9: u32
+    {
+        po9: ty.decls.get i: (par9 - 1)
+        otid9 = po9.typeId
+        onm9 = po9.name
+    }
+    if otid9 == 0 then return (optionval.none u64)
+    opId9: u32
+    {
+        nn9: ast.nodes.get i: (mnd9 - 1).u64
+        if nn9.namedoperation then opId9 = nn9.operation
+    }
+    if opId9 == 0 then return (optionval.none u64)
+    un9: unitNameOfTid :ty :reg tid: (ztypes.tid.create from: otid9.u64)
+    if un9.length == 0 then return (optionval.none u64)
+    tn9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: onm9)
+    mn9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: mnm9)
+    ty.declSetResolving declId: memberDeclId mark: true
+    mid9: (resolveMethodFn
+        :ty
+        :reg
+        :ast
+        unitName: un9.stringview
+        ownerNameId: (zast.nameid.create from: onm9)
+        mname: mn9.stringview
+        thisName: tn9.stringview
+        op: (ast.nodes.get i: (opId9 - 1).u64)
+    )
+    ty.declSetResolving declId: memberDeclId mark: false
+    ty.declSetDefined declId: memberDeclId
+    match (
+        mid9
+    ) case some then {
+        (ty.setMemberType
+            parentTypeId: (ztypes.tid.create from: otid9.u64)
+            nameId: (zast.nameid.create from: mnm9)
+            childTypeId: mid9
+        )
+        return (optionval.some mid9)
+    } case none then null
+    return (optionval.none u64)
+}
+
+# forceMemberOf -- the member `nameId` of `parentTypeId`, resolved if it is not
+# yet. The by-NAME demand point: declChildOfId is a readonly view holding no
+# registry and no ast, so it can never resolve anything itself -- every force
+# sits in front of a lookup, never inside one.
+forceMemberOf: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast.view
+    parentTypeId: ztypes.tid
+    nameId: zast.nameid
+} is {
+    if (ty.lazyMembers) == false then return
+    if nameId.isZero then return
+    md9: ty.declMemberIdOf :parentTypeId :nameId
+    if md9.isZero then return
+    forceMemberDecl :ty :reg :ast memberDeclId: md9
+}
+
+# forceAllMembers -- every member signature of `tid`, in declaration order. The
+# WALK demand point: a caller reading a member LIST (the mono clone, the
+# emitter's member tables) cannot name what it has not seen, and an unresolved
+# member carries no type so declChildWalk skips it silently.
+forceAllMembers: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast.view
+    tid: ztypes.tid
+} is {
+    if (ty.lazyMembers) == false then return
+    od9: ty.declIdOfType typeId: tid
+    if od9.isZero then return
+    n9: ty.declChildSlots declId: od9
+    i9: u64
+    for i9 < n9 loop {
+        did9: ztypes.declid
+        {
+            if (ty.declValid id: od9) then {
+                oo9: ty.decls.get i: (od9 - 1)
+                ce9: oo9.children.get i: i9
+                did9 = ce9.declId
+            }
+        }
+        i9 = i9 + 1
+        if (did9.isZero) == false then {
+            forceMemberDecl :ty :reg :ast memberDeclId: did9
+        }
+    }
+}
+
 # functiondefIsNative -- an is-block method marked `is native` (no body to
 # check or emit; its members come from the native materializer).
 functiondefIsNative: function {op: Node.view} out bool is {
@@ -4566,7 +4718,7 @@ attachMethods: function {
                     )
                 } else null
             }
-            mido: (resolveMethodFn
+            mido: (resolveMethodFnLazy
                 :ty
                 :reg
                 :ast
@@ -4575,6 +4727,7 @@ attachMethods: function {
                 mname: mname.stringview
                 thisName: defName
                 op: (ast.nodes.get i: (am.operation - 1).u64)
+                lazyOk: true
             )
             match (
                 mido
@@ -5582,7 +5735,7 @@ resolveRecord: function {
                 fm
             ) case namedoperation then {
                 fname: zast.nameTextAt :ast ref: fm.name
-                mido: (resolveMethodFn
+                mido: (resolveMethodFnLazy
                     :ty
                     :reg
                     :ast
@@ -5591,6 +5744,7 @@ resolveRecord: function {
                     mname: fname.stringview
                     thisName: defName
                     op: (ast.nodes.get i: (fm.operation - 1).u64)
+                    lazyOk: true
                 )
                 match (
                     mido
@@ -5964,7 +6118,7 @@ resolveVariant: function {
             am
         ) case namedoperation then {
             mname: zast.nameTextAt :ast ref: am.name
-            mido: (resolveMethodFn
+            mido: (resolveMethodFnLazy
                 :ty
                 :reg
                 :ast
@@ -5973,6 +6127,7 @@ resolveVariant: function {
                 mname: mname.stringview
                 thisName: defName
                 op: (ast.nodes.get i: (am.operation - 1).u64)
+                lazyOk: true
             )
             match (
                 mido
@@ -6408,7 +6563,7 @@ resolveUnion: function {
             am
         ) case namedoperation then {
             mname: zast.nameTextAt :ast ref: am.name
-            mido: (resolveMethodFn
+            mido: (resolveMethodFnLazy
                 :ty
                 :reg
                 :ast
@@ -6417,6 +6572,7 @@ resolveUnion: function {
                 mname: mname.stringview
                 thisName: defName
                 op: (ast.nodes.get i: (am.operation - 1).u64)
+                lazyOk: true
             )
             match (
                 mido
@@ -6652,7 +6808,7 @@ resolveClass: function {
                     }
                 }
                 if prodM4 then {
-                    mido: (resolveMethodFn
+                    mido: (resolveMethodFnLazy
                         :ty
                         :reg
                         :ast
@@ -6661,6 +6817,7 @@ resolveClass: function {
                         mname: fname.stringview
                         thisName: defName
                         op: (ast.nodes.get i: (fm.operation - 1).u64)
+                        lazyOk: (isgen) == false
                     )
                     match (
                         mido
@@ -6900,7 +7057,7 @@ resolveClass: function {
                     }
                 }
                 if prodA4 then {
-                    amidP4: (resolveMethodFn
+                    amidP4: (resolveMethodFnLazy
                         :ty
                         :reg
                         :ast
@@ -6909,6 +7066,7 @@ resolveClass: function {
                         mname: afnP4.stringview
                         thisName: defName
                         op: (ast.nodes.get i: (amP4.operation - 1).u64)
+                        lazyOk: true
                     )
                     match (
                         amidP4
@@ -11983,6 +12141,7 @@ mintMono: function {
     }
     cNames: (List String)
     cIds: (ListVal u64)
+    forceAllMembers :ty :reg :ast tid: templateId
     {
         mmNms9: (ListVal u64)
         ty.declMemberList ownerTid: templateId names: mmNms9 tids: cIds
@@ -12240,6 +12399,13 @@ mintMono: function {
                 parentTypeId: (ztypes.tid.create from: mid.u64)
                 nameId: zast.wkCreate
                 childTypeId: crId9
+            )
+            (forceMemberOf
+                :ty
+                :reg
+                :ast
+                parentTypeId: (ztypes.tid.create from: mid.u64)
+                nameId: zast.wkOpEq
             )
             eqo9: (ty.declChildOfId
                 parentTypeId: (ztypes.tid.create from: mid.u64)
@@ -13081,12 +13247,14 @@ getOrMintSpec: function {
         if templateId == (builtinTidT :ast :ty :reg base: "MapItemIterVV") then itemIterC3 = true
         if itemIterC3 then {
             skipC3 = true
+            (forceMemberOf :ty :reg :ast parentTypeId: mid8 nameId: zast.wkCall)
             micoC4: ty.declChildOfId parentTypeId: mid8 nameId: zast.wkCall
             match (
                 micoC4
             ) case some then {
                 mrtoC4: reg.returnTypeOf tid: (ztypes.tid.create from: micoC4.u64)
                 if mrtoC4 > 0 then {
+                    (forceMemberOf :ty :reg :ast parentTypeId: mrtoC4 nameId: zast.wkSome)
                     mieoC4: ty.declChildOfId parentTypeId: mrtoC4 nameId: zast.wkSome
                     match (
                         mieoC4
@@ -13605,6 +13773,7 @@ inferGenericConstruction: function {
         fallbackArg: 0
     )
     if mid.isZero then return (ztypes.tid.create from: 0)
+    (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: mid nameId: zast.wkCreate)
     cro: st.typing.declChildOfId parentTypeId: mid nameId: zast.wkCreate
     match (
         cro
@@ -15129,6 +15298,7 @@ checkDotted: function {
         if btt1 == ztypes.ztypetype.protocolType then isMk = false
         if btt1 == ztypes.ztypetype.facetType then isMk = false
         if isMk then {
+            (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: bt nameId: zast.wkBorrow)
             bco: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkBorrow
             bcid: optU64Or o: bco d: 0
             if bcid > 0 then {
@@ -15311,6 +15481,7 @@ checkDotted: function {
             if gn8.stringview == "array" then isArr9 = true
         }
         if isArr9 then {
+            (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: bt nameId: zast.wkGet)
             go8: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkGet
             match (
                 go8
@@ -15337,6 +15508,7 @@ checkDotted: function {
     # element type rides the data's `tag__{elem}` tag-child name.
     if cn.stringview == "array" then {
         if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType then {
+            (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: bt nameId: zast.wkTag)
             tgo: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkTag
             match (
                 tgo
@@ -15619,6 +15791,7 @@ checkDotted: function {
     }
     # a typedef member that isn't on the wrapper delegates to the base
     # (Bytes.append is List_u8.append).
+    (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: bt nameId: cnId9)
     tdw9: st.typing.declChildOfId parentTypeId: bt nameId: cnId9
     match (
         tdw9
@@ -15701,6 +15874,14 @@ checkDotted: function {
     # children are not registered (cross-unit demand mints a shell id distinct
     # from the canonical defining-unit id); on a member miss retarget the base
     # to a same-named type in another unit's resolved scope that has the member.
+    (forceMemberOf
+        ty: st.typing
+        reg: st.reg
+        :ast
+        parentTypeId: bt
+        nameId: cnId9
+    )
+    (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: bt nameId: cnId9)
     mo: st.typing.declChildOfId parentTypeId: bt nameId: cnId9
     preHas9: false
     match (
@@ -16138,6 +16319,7 @@ checkDotted: function {
                 # re-probe before declaring the member unknown
                 btnMm0: typeNameOf :st tid: bt
                 maybeWalkMethods :st :unitName :ast :unitBody name: btnMm0.stringview
+                (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: bt nameId: cnId9)
                 moMm9: st.typing.declChildOfId parentTypeId: bt nameId: cnId9
                 stillMiss9: true
                 match (
@@ -17739,6 +17921,13 @@ checkFor: function {
                                 fro
                             ) case some then {
                                 if (st.reg.typetypeOf typeId: fro) == ztypes.ztypetype.classType then {
+                                    (forceMemberOf
+                                        ty: st.typing
+                                        reg: st.reg
+                                        :ast
+                                        parentTypeId: fro
+                                        nameId: zast.wkCall
+                                    )
                                     fco: (st.typing.declChildOfId
                                         parentTypeId: fro
                                         nameId: zast.wkCall
@@ -17790,6 +17979,13 @@ checkFor: function {
                     } case none then null
                 }
                 {
+                    (forceMemberOf
+                        ty: st.typing
+                        reg: st.reg
+                        :ast
+                        parentTypeId: vt
+                        nameId: zast.wkCall
+                    )
                     fico9: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
                     match (
                         fico9
@@ -17824,6 +18020,13 @@ checkFor: function {
                     ) case some then {
                         doProbe9 = true
                     } case none then {
+                        (forceMemberOf
+                            ty: st.typing
+                            reg: st.reg
+                            :ast
+                            parentTypeId: vt
+                            nameId: zast.wkCall
+                        )
                         ico9: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
                         match (
                             ico9
@@ -17860,6 +18063,13 @@ checkFor: function {
                             } case none then null
                         } case none then null
                     } else {
+                        (forceMemberOf
+                            ty: st.typing
+                            reg: st.reg
+                            :ast
+                            parentTypeId: vt
+                            nameId: zast.wkCall
+                        )
                         c1: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
                         match (
                             c1
@@ -18272,6 +18482,7 @@ checkBinopMethodDispatch: function {
     ltLit9: isLiteralTypeId :st tid: (ztypes.tid.create from: lt.u64)
     dt9: lt
     if ltLit9 then dt9 = materialiseLiteral :ast :st :unitName t: lt
+    (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: dt9 nameId: opnId9)
     opo: st.typing.declChildOfId parentTypeId: dt9 nameId: opnId9
     for opo.none while (typedefBaseOf
         :ast
@@ -18361,6 +18572,7 @@ checkBinopMethodDispatch: function {
         if isCmp9 then {
             # `!=` derives from `==`: only error when `==` is also unavailable.
             if opn == "!=" then {
+                (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: dt9 nameId: zast.wkOpEq)
                 eqEdge9: st.typing.declChildOfId parentTypeId: dt9 nameId: zast.wkOpEq
                 if eqEdge9.some then {
                     boD9: builtinTidTc :ast :st base: "bool"
@@ -20595,6 +20807,7 @@ checkBoxConstruction: function {
         for bi < bn2 loop {
             chi: cIds2.get i: bi
             chnId: (zast.nameid.create from: (cNid2.get i: bi))
+            (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: mid nameId: chnId)
             ext9: st.typing.declChildOfId parentTypeId: mid nameId: chnId
             match (
                 ext9
@@ -20662,6 +20875,13 @@ returnedBareFieldName: function {ast: Ast.view st: zenv.ZSymbolTable n: Node.vie
         bfp9: nodeId n: (ast.nodes.get i: (n.parent - 1).u64)
         bft9: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: bfp9.u64
         if bft9.isZero then return "".string
+        (forceMemberOf
+            ty: st.typing
+            reg: st.reg
+            :ast
+            parentTypeId: (ztypes.tid.create from: bft9.u64)
+            nameId: bfcId9
+        )
         bfo9: (st.typing.declChildOfId
             parentTypeId: (ztypes.tid.create from: bft9.u64)
             nameId: bfcId9
@@ -21567,6 +21787,13 @@ checkCall: function {
                             armnId9: (dottedChildNameId
                                 :ast
                                 n: (ast.nodes.get i: (call.callable - 1).u64)
+                            )
+                            (forceMemberOf
+                                ty: st.typing
+                                reg: st.reg
+                                :ast
+                                parentTypeId: (ztypes.tid.create from: dtp.u64)
+                                nameId: armnId9
                             )
                             co: (st.typing.declChildOfId
                                 parentTypeId: (ztypes.tid.create from: dtp.u64)
@@ -27575,6 +27802,7 @@ typecheck: function {
     } else null
     ty: ztyping.newTyping nodeEst: nodeEstT9
     ty.eagerAll = eager
+    ty.lazyMembers = false
     match (
         program
     ) case program then {
