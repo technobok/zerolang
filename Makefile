@@ -129,7 +129,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard readable-check ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard readable-check ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -593,6 +593,29 @@ case-guard:
 	  exit 1; \
 	fi; \
 	echo "case-guard OK: every program declaring main is in a case list"
+
+# zlink-guard -- a `require:` block earns its keep only if it applies to the
+# programs that reach the declaring unit and to no others. Nothing else can
+# catch a mistake here: gcc always has libquadmath, so a requiredLibs that
+# returned "quadmath" unconditionally would link fine and pass every other
+# gate. A rise means something now reaches a unit it did not; a fall means a
+# program lost a need it had.
+ZLINK_BASELINE := 2
+
+zlink-guard: bin/zc
+	@n=0; rep=""; \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	  b=$$(basename $$f .z); \
+	  l=$$(bin/zc emit $$f --system lib/system 2>/dev/null \
+	        | sed -n '2s|^/\* zlink: \(.*\) \*/$$|\1|p'); \
+	  if [ -n "$$l" ]; then n=$$(($$n + 1)); rep="$$rep  $$b: $$l\n"; fi; \
+	done; \
+	if [ "$$n" -ne $(ZLINK_BASELINE) ]; then \
+	  echo "zlink-guard FAIL: $$n program(s) declare a link library (baseline $(ZLINK_BASELINE))"; \
+	  printf "$$rep"; \
+	  exit 1; \
+	fi; \
+	echo "zlink-guard OK: $$n programs declare a link library (baseline $(ZLINK_BASELINE))"
 
 # Lower the baseline as each folder gap is closed. Skipped when clang is absent -- clang is
 # not a build requirement.

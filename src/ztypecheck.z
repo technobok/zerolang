@@ -47,6 +47,7 @@ public: unit {
     :resolveUnitChildById
     :reexportTargetIdsOf
     :resolvedByIds
+    :requiredLibs
     :rootNameOf
     :specLookup
     :sumSubtypeNames
@@ -5909,6 +5910,111 @@ checkOneRequireBlock: function {
             width: 7
         )
     }
+}
+
+# requireLibraryText -- the library a `require:` block names, or "" when it
+# names none. checkRequireBlocks has already rejected any other shape.
+requireLibraryText: function {ast: Ast.view opId: u32 libNid: zast.nameid} out String is {
+    lib9w: String
+    if opId == 0 then return lib9w
+    on9w: ast.nodes.get i: (opId - 1).u64
+    match (
+        on9w
+    ) case unitdef then {
+        with bit9w: on9w.body.iterate do for mId9w: bit9w loop {
+            mn9w: ast.nodes.get i: (mId9w - 1).u64
+            match (
+                mn9w
+            ) case namedoperation then {
+                if mn9w.name == libNid then {
+                    vn9w: ast.nodes.get i: (mn9w.operation - 1).u64
+                    match (
+                        vn9w
+                    ) case atomstring then {
+                        if vn9w.stringparts.length == 1 then {
+                            pn9w: ast.nodes.get i: ((vn9w.stringparts.get i: 0) - 1).u64
+                            match (
+                                pn9w
+                            ) case stringchunk then {
+                                lib9w = pn9w.text.copy
+                            } else null
+                        }
+                    } else null
+                }
+            } else null
+        }
+    } else null
+    return lib9w
+}
+
+# requiredLibs -- the link libraries the program's reached units declare. A
+# `require:` block applies only when the program reaches its unit, which is
+# what makes the declaration a requirement rather than a link-everything list:
+# a definition of the unit OTHER than the block itself must have resolved. The
+# block is a top-level definition like any other, so counting it would let
+# every unit light itself.
+requiredLibs: function {ty: ztyping.ZTyping program: Node} out List String is {
+    libs9w: (List String)
+    match (
+        program
+    ) case program then {
+        reqNid9w: zast.poolFind pool: program.ast.names text: "require"
+        if reqNid9w.isZero then return libs9w
+        libNid9w: zast.poolFind pool: program.ast.names text: "library"
+        if libNid9w.isZero then return libs9w
+        uCnt9w: program.ast.units.length
+        uIdx9w: u64
+        for uIdx9w < uCnt9w loop {
+            uId9w: (zast.nodeid.create from: (program.ast.units.get i: uIdx9w))
+            uIdx9w = uIdx9w + 1
+            unm9w: String
+            uOp9w: u32
+            {
+                un9w: program.ast.nodes.get i: (uId9w - 1).u64
+                match (
+                    un9w
+                ) case namedoperation then {
+                    ut9w: zast.poolTextAt pool: program.ast.names ref: un9w.name
+                    unm9w = ut9w.copy
+                    uOp9w = un9w.operation
+                } else null
+            }
+            if uOp9w > 0 then {
+                lib9x: String
+                reached9w: false
+                bodyIds9w: zast.unitBodyIdsAt ast: program.ast unitId: uOp9w
+                with bit9x: bodyIds9w.iterate do for mId9x: bit9x loop {
+                    mn9x: program.ast.nodes.get i: (mId9x - 1).u64
+                    match (
+                        mn9x
+                    ) case namedoperation then {
+                        if mn9x.name == reqNid9w then {
+                            lib9x = (requireLibraryText
+                                ast: program.ast
+                                opId: mn9x.operation
+                                libNid: libNid9w
+                            )
+                        } else {
+                            if (defWasResolved
+                                :ty
+                                ast: program.ast
+                                defUnit: unm9w.stringview
+                                nameId: mn9x.name
+                            ) then reached9w = true
+                        }
+                    } else null
+                }
+                if reached9w when lib9x.length > 0 then {
+                    dup9w: false
+                    with dit9w: libs9w.iterate do for e9w: dit9w loop {
+                        if e9w.stringview == lib9x.stringview then dup9w = true
+                    }
+                    if (dup9w) == false then libs9w.append from: lib9x.copy
+                }
+            }
+        }
+    } else null
+    return libs9w
 }
 
 # checkRequireBlocks -- a unit's `require:` block states what the unit needs
