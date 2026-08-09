@@ -115,7 +115,7 @@ style-lint: bin/zl
 $(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c -lquadmath -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c -lm
 
 # test -- build the compiler + the corpus runner, then run the fast corpus gate
 # (run/leak/error/dump/smoke/differential kinds, all driven via os.spawn; no
@@ -144,8 +144,8 @@ readable-check: bin/zc
 	@for n in hello vector records fibonacci typedefs; do \
 	  bin/zc $$n --src examples --system lib/system --emit-c $(BUILDDIR)/rn/$$n-id.c || exit 1; \
 	  bin/zc $$n --src examples --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/$$n-rn.c || exit 1; \
-	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-id $(BUILDDIR)/rn/$$n-id.c -lquadmath -lm || exit 1; \
-	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-rn $(BUILDDIR)/rn/$$n-rn.c -lquadmath -lm || exit 1; \
+	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-id $(BUILDDIR)/rn/$$n-id.c -lm || exit 1; \
+	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-rn $(BUILDDIR)/rn/$$n-rn.c -lm || exit 1; \
 	  $(BUILDDIR)/rn/$$n-id > $(BUILDDIR)/rn/$$n-id.out 2>&1; \
 	  $(BUILDDIR)/rn/$$n-rn > $(BUILDDIR)/rn/$$n-rn.out 2>&1; \
 	  diff -q $(BUILDDIR)/rn/$$n-id.out $(BUILDDIR)/rn/$$n-rn.out > /dev/null \
@@ -197,7 +197,7 @@ $(BUILDDIR)/mimalloc.o: vendor/mimalloc/src/static.c vendor/mimalloc/zc_tune.c $
 # seed (bootstrap/zc.c). See bootstrap/README.md and `make test-bootstrap`.
 $(BUILDDIR)/zc-seed: bootstrap/zc.c
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c -lquadmath -lm
+	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c -lm
 
 # bin/zc -- the self-hosted compiler, bootstrapped by the seed. Persistent +
 # git-ignored; rebuilt when the compiler sources change. The dev bin/zc
@@ -212,7 +212,7 @@ $(BUILDDIR)/zc.o: bin/zc.c
 
 bin/zc: $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
-	$(CC) -o bin/zc $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lquadmath -lm
+	$(CC) -o bin/zc $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lm
 
 # zc -- convenience alias for bin/zc.
 zc: bin/zc
@@ -230,7 +230,7 @@ $(BUILDDIR)/zl.o: out/zl.c
 
 bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
-	$(CC) -o bin/zl $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lquadmath -lm
+	$(CC) -o bin/zl $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lm
 
 # bin/zls -- the zerolang language server (src/zls.z): JSON-RPC over
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
@@ -245,7 +245,7 @@ $(BUILDDIR)/zls.o: out/zls.c
 
 bin/zls: $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
-	$(CC) -o bin/zls $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lquadmath -lm
+	$(CC) -o bin/zls $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lm
 
 # zl -- convenience alias for bin/zl.
 zl: bin/zl
@@ -258,12 +258,12 @@ zls: bin/zls
 out/zlexer: bin/zc $(wildcard lib/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zlexer --src src --system lib/system --emit-c $(BUILDDIR)/zlexer.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c -lquadmath -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c -lm
 
 out/zparser: bin/zc $(wildcard lib/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zparser --src src --system lib/system --emit-c $(BUILDDIR)/zparser.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c -lquadmath -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c -lm
 
 # Regenerate the lexer / parser / whole-program goldens from the .z dump
 # binaries (no Python). Always review the resulting diff before committing.
@@ -291,11 +291,11 @@ bump-seed: bin/zc
 # Slow (3 zc.c compiles).
 test-bootstrap:
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-seed bootstrap/zc.c -lquadmath -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-seed bootstrap/zc.c -lm
 	$(BUILDDIR)/zc-seed zc --src src --system lib/system --emit-c $(BUILDDIR)/b1.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b1 $(BUILDDIR)/b1.c -lquadmath -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b1 $(BUILDDIR)/b1.c -lm
 	$(BUILDDIR)/zc-b1 zc --src src --system lib/system --emit-c $(BUILDDIR)/b2.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b2 $(BUILDDIR)/b2.c -lquadmath -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b2 $(BUILDDIR)/b2.c -lm
 	$(BUILDDIR)/zc-b2 zc --src src --system lib/system --emit-c $(BUILDDIR)/b3.c
 	@diff $(BUILDDIR)/b2.c $(BUILDDIR)/b3.c \
 		&& echo "fixpoint OK (b2 == b3)" \
@@ -304,7 +304,7 @@ test-bootstrap:
 		&& echo "seed is current (b1 == committed seed)" \
 		|| echo "note: seed has lagged (b1 != committed seed) -- run 'make bump-seed' when convenient"
 	$(BUILDDIR)/zc-b1 ztypes --src src --system lib/system --emit-c $(BUILDDIR)/zt.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zt $(BUILDDIR)/zt.c -lquadmath -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zt $(BUILDDIR)/zt.c -lm
 	$(BUILDDIR)/zt | diff - tests/fixtures/ztypes_z/smoke.expected \
 		&& echo "correctness OK (seed-built zc compiles ztypes to golden)"
 	@echo "bootstrap seed OK: 'cc bootstrap/zc.c' builds a correct self-hosting zc (no Python)"
@@ -351,7 +351,7 @@ PERFRUN  := $(PERFBIN) $(PERFARGS)
 # level by the series compiler. Depends on bin/zc because that rule is what
 # emits bin/zc.c.
 $(PERFBIN): bin/zc.c $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o
-	@$(PERFCC) -std=c17 -w $(PERFOPT) -o $@ $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o bin/zc.c -lpthread -lquadmath -lm
+	@$(PERFCC) -std=c17 -w $(PERFOPT) -o $@ $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o bin/zc.c -lpthread -lm
 
 perf: $(PERFBIN)
 	@echo "== zerolang line count (.z) =="
@@ -408,8 +408,8 @@ perf-elision: bin/zc.c
 	@command -v valgrind >/dev/null 2>&1 || { echo "perf-elision: valgrind not installed -- skipping"; exit 0; }
 	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
 	  echo "== perf-elision @ $$sha ($$dirty), $(ELIDECC) A/B over bin/zc.c =="
-	@$(ELIDECC) -std=c17 -w $(PERFOPT) -o $(BUILDDIR)/zc-elide bin/zc.c -lpthread -lquadmath -lm
-	@$(ELIDECC) -std=c17 -w $(PERFOPT) $(NOBUILTIN) -o $(BUILDDIR)/zc-noelide bin/zc.c -lpthread -lquadmath -lm
+	@$(ELIDECC) -std=c17 -w $(PERFOPT) -o $(BUILDDIR)/zc-elide bin/zc.c -lpthread -lm
+	@$(ELIDECC) -std=c17 -w $(PERFOPT) $(NOBUILTIN) -o $(BUILDDIR)/zc-noelide bin/zc.c -lpthread -lm
 	@blocks() { valgrind --tool=memcheck $$1 $(PERFARGS) 2>&1 \
 	    | grep 'total heap usage' | sed 's/.*usage: //;s/ allocs.*//;s/,//g'; }; \
 	  kept=$$(blocks $(BUILDDIR)/zc-noelide); left=$$(blocks $(BUILDDIR)/zc-elide); \
