@@ -1324,7 +1324,7 @@ ifDiverges: function {
                 match (
                     fcn9
                 ) case ifclause then {
-                    ffr9: foldIfClause9 :ast :ctx conds: fcn9.conditions
+                    ffr9: foldIfClause9 :ast :symtab :ctx conds: fcn9.conditions
                     if ffr9.ok then {
                         if ffr9.val == 1 when fwin9 == 0 then fwin9 = fcn9.statement
                     } else {
@@ -7974,45 +7974,8 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         # `unit.CONST` -- a constant of another unit inlines its rendered C
         # text, exactly as a bare reference to a constant of this unit does
         {
-            dbU9: String
-            dcId9: zast.nameid
-            {
-                dbA9: ast.nodes.get i: (n.parent - 1).u64
-                if dbA9.atomid then {
-                    dbT9: ast.names.texts.get i: (dbA9.name - 1).u64
-                    dbU9 = dbT9.copy
-                }
-            }
-            {
-                dcA9: ast.nodes.get i: (n.child - 1).u64
-                if dcA9.atomid then dcId9 = dcA9.name
-            }
-            if dbU9.length > 0 when dcId9 > 0 then {
-                isU9: false
-                {
-                    duo9: symtab.reg.unitNameTid.get key: (zast.poolFind
-                        pool: ast.names
-                        text: dbU9.stringview
-                    ).u64
-                    match (
-                        duo9
-                    ) case some then {
-                        isU9 = true
-                    } case none then null
-                }
-                if isU9 then {
-                    ckU9: constKeyIn :ast unitName: dbU9.stringview nameId: dcId9
-                    if ckU9 > 0 then {
-                        cvo9: ctx.constVals.get key: ckU9
-                        match (
-                            cvo9
-                        ) case some then {
-                            cvs9: cvo9.stringview
-                            return cvs9.string
-                        } case none then null
-                    }
-                }
-            }
+            ucv9: unitConstTextOf :ast :symtab :ctx :n
+            if ucv9.length > 0 then return ucv9
         }
         # a stamped implicit zero-create on a unit-qualified type path
         # (`unit.Conf`) constructs like the bare-atom legs
@@ -9171,7 +9134,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 match (
                     vcn9
                 ) case ifclause then {
-                    vfr9: foldIfClause9 :ast :ctx conds: vcn9.conditions
+                    vfr9: foldIfClause9 :ast :symtab :ctx conds: vcn9.conditions
                     if vfr9.ok then {
                         if vfr9.val == 1 when vwin9 == 0 then vwin9 = vcn9.statement
                     } else {
@@ -9982,11 +9945,16 @@ evalConstF64: function {ast: Ast.view n: Node.view} out ffold is {
 # int literals, unit constants whose pre-rendered C text is a plain integer,
 # and arithmetic/comparison binops over folded operands. ok=false when any
 # part is not provably constant.
-evalConstI64: function {ast: Ast.view ctx: Ctx.view n: Node.view} out cfold is {
+evalConstI64: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    n: Node.view
+} out cfold is {
     match (
         n
     ) case expression then {
-        return (evalConstI64 :ast :ctx n: (ast.nodes.get i: (n.expression - 1).u64))
+        return (evalConstI64 :ast :symtab :ctx n: (ast.nodes.get i: (n.expression - 1).u64))
     } case atomid then {
         atC9: ast.names.texts.get i: (n.name - 1).u64
         at9: atC9.stringview
@@ -10013,8 +9981,8 @@ evalConstI64: function {ast: Ast.view ctx: Ctx.view n: Node.view} out cfold is {
         } case none then null
         return (cfold ok: false val: 0)
     } case binop then {
-        lf9: evalConstI64 :ast :ctx n: (ast.nodes.get i: (n.lhs - 1).u64)
-        rf9: evalConstI64 :ast :ctx n: (ast.nodes.get i: (n.rhs - 1).u64)
+        lf9: evalConstI64 :ast :symtab :ctx n: (ast.nodes.get i: (n.lhs - 1).u64)
+        rf9: evalConstI64 :ast :symtab :ctx n: (ast.nodes.get i: (n.rhs - 1).u64)
         # a float COMPARISON folds to a bool even though the operands are not
         # integers; arithmetic over them stays unfolded, nothing needs it
         if lf9.ok == false then {
@@ -10083,6 +10051,21 @@ evalConstI64: function {ast: Ast.view ctx: Ctx.view n: Node.view} out cfold is {
             }
         }
         return (cfold ok: false val: 0)
+    } case dottedpath then {
+        dv9: unitConstTextOf :ast :symtab :ctx :n
+        if dv9.length > 0 then {
+            dvs9: dv9.stringview
+            pd9: dvs9.parseI64
+            match (
+                pd9
+            ) case ok then {
+                return (cfold ok: true val: pd9)
+            } case err then null
+            # a bool constant's rendered C is the tag, not a numeral
+            if (dvs9.contains needle: "Z_BOOL_TAG_TRUE") then return (cfold ok: true val: 1)
+            if (dvs9.contains needle: "Z_BOOL_TAG_FALSE") then return (cfold ok: true val: 0)
+        }
+        return (cfold ok: false val: 0)
     } else {
         return (cfold ok: false val: 0)
     }
@@ -10090,7 +10073,12 @@ evalConstI64: function {ast: Ast.view ctx: Ctx.view n: Node.view} out cfold is {
 
 # foldIfClause9 -- fold every plain (non-binding) condition of an ifclause;
 # ok only when all fold, val 1 when all are true.
-foldIfClause9: function {ast: Ast.view ctx: Ctx.view conds: (ListVal u32).view} out cfold is {
+foldIfClause9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    conds: (ListVal u32).view
+} out cfold is {
     tv9: 1
     with citer: conds.iterate do for cid9: citer loop {
         c9: ast.nodes.get i: (cid9 - 1).u64
@@ -10100,7 +10088,7 @@ foldIfClause9: function {ast: Ast.view ctx: Ctx.view conds: (ListVal u32).view} 
             cl9: zast.nameTextAt :ast ref: c9.name
             clv9: cl9.stringview
             if clv9.length > 0 when clv9 != "when" then return (cfold ok: false val: 0)
-            f9: evalConstI64 :ast :ctx n: (ast.nodes.get i: (c9.operation - 1).u64)
+            f9: evalConstI64 :ast :symtab :ctx n: (ast.nodes.get i: (c9.operation - 1).u64)
             if f9.ok == false then return (cfold ok: false val: 0)
             if f9.val == 0 then tv9 = 0
         } else {
@@ -11489,7 +11477,7 @@ emitStmt: function {
                 match (
                     pcn9
                 ) case ifclause then {
-                    fr9: foldIfClause9 :ast :ctx conds: pcn9.conditions
+                    fr9: foldIfClause9 :ast :symtab :ctx conds: pcn9.conditions
                     if fr9.ok then {
                         if fr9.val == 1 when ewin9 == 0 then ewin9 = pcn9.statement
                     } else {
@@ -11576,7 +11564,7 @@ emitStmt: function {
         ctx.condDepth = ctx.condDepth - 1
     } case caseexpr then {
         # constant subject over literal arms: emit only the matching arm.
-        msub9: evalConstI64 :ast :ctx n: (ast.nodes.get i: (n.subject - 1).u64)
+        msub9: evalConstI64 :ast :symtab :ctx n: (ast.nodes.get i: (n.subject - 1).u64)
         melim9: msub9.ok
         mwin9: u32
         if melim9 then {
@@ -11591,6 +11579,7 @@ emitStmt: function {
                         } else {
                             maf9: (evalConstI64
                                 :ast
+                                :symtab
                                 :ctx
                                 n: (ast.nodes.get i: (mcn9.matcharm - 1).u64)
                             )
@@ -13147,7 +13136,7 @@ emitIfBindValue: function {
                 match (
                     bcn9
                 ) case ifclause then {
-                    bfr9: foldIfClause9 :ast :ctx conds: bcn9.conditions
+                    bfr9: foldIfClause9 :ast :symtab :ctx conds: bcn9.conditions
                     if bfr9.ok then {
                         if bfr9.val == 1 when bwin9 == 0 then bwin9 = bcn9.statement
                     } else {
@@ -16529,6 +16518,59 @@ constKeyOf: function {ast: Ast.view ctx: Ctx.view nameId: zast.nameid} out u64 i
     return (constKeyIn :ast unitName: ctx.mainName.stringview :nameId)
 }
 
+# unitConstTextOf -- the rendered C text of a `unit.CONST` dotted path, or ""
+# when the path names no constant of a known unit. Emission, the constant-shape
+# test and the integer fold all ask this one question: a constant that folds
+# under a bare name has to fold under this spelling too, and the difference was
+# the spelling alone -- the same unit's own constant did not fold either.
+unitConstTextOf: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    n: zast.DottedPathData.view
+} out String is {
+    ub8: String
+    cn8: zast.nameid
+    {
+        pa8: ast.nodes.get i: (n.parent - 1).u64
+        if pa8.atomid then {
+            pt8: ast.names.texts.get i: (pa8.name - 1).u64
+            ub8 = pt8.copy
+        }
+    }
+    {
+        ca8: ast.nodes.get i: (n.child - 1).u64
+        if ca8.atomid then cn8 = ca8.name
+    }
+    if ub8.length > 0 when cn8 > 0 then {
+        isU8: false
+        {
+            uo8: symtab.reg.unitNameTid.get key: (zast.poolFind
+                pool: ast.names
+                text: ub8.stringview
+            ).u64
+            match (
+                uo8
+            ) case some then {
+                isU8 = true
+            } case none then null
+        }
+        if isU8 then {
+            ck8: constKeyIn :ast unitName: ub8.stringview nameId: cn8
+            if ck8 > 0 then {
+                cv8: ctx.constVals.get key: ck8
+                match (
+                    cv8
+                ) case some then {
+                    cs8: cv8.stringview
+                    return cs8.string
+                } case none then null
+            }
+        }
+    }
+    return "".string
+}
+
 # literalSuffixBase -- the builtin scalar name a numeric literal's suffix
 # spells: the suffix itself when it already names a builtin scalar, or the
 # base a scalar typedef chases to (`1.nameid` -> "u32"). "" when it names
@@ -16638,6 +16680,10 @@ isConstShape: function {
                     if db9 <= 57 then return true
                 }
             } case none then null
+        }
+        {
+            ucs8: unitConstTextOf :ast :symtab :ctx :n
+            if ucs8.length > 0 then return true
         }
         return false
     } else {
