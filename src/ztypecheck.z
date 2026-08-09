@@ -26787,6 +26787,50 @@ foldIfBranch: function {
     }
 }
 
+# constArmRead -- `<typeName>.<armName>` looked up from `lookupUnit`, as a
+# value. The parent's FAMILY decides, the same test resolveConstantDef uses to
+# tell an arm read from a construction: variant or union means the child is an
+# arm, and anything else is a member read a constant cannot hold.
+constArmRead: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    lookupUnit: StringView
+    typeName: StringView
+    armName: StringView
+} out ztypes.cval is {
+    ptu9: (optU64Or
+        o: (walkLookupTyperef :ast :ty :reg currentUnit: lookupUnit base: typeName)
+        d: 0
+    )
+    if ptu9 == 0 then {
+        # a variant NOTHING ELSE mentions is not demanded, so the lookup finds
+        # nothing and the arm read silently yields no value. Descending mints
+        # it, which is what a use site would have done -- a constant reading an
+        # arm IS a use of the type.
+        ptu9 = (descendNamed :ty :reg :ast defUnit: lookupUnit name: typeName).u64
+    }
+    if ptu9 == 0 then return ztypes.noConst
+    ptid9: ztypes.tid.create from: ptu9.u64
+    ptt9: reg.typetypeOf typeId: ptid9
+    isSum9: false
+    if ptt9 == ztypes.ztypetype.variantType then isSum9 = true
+    if ptt9 == ztypes.ztypetype.unionType then isSum9 = true
+    if (isSum9) == false then return ztypes.noConst
+    # bool's arms are the language's bool VALUES, not tags a user compares:
+    # they fold to a plain bool so every reader of a folded CONDITION gets one
+    # without having to know that bool is a variant.
+    if typeName == "bool" then {
+        if armName == "true" then return (ztypes.makeBoolConst true)
+        if armName == "false" then return (ztypes.makeBoolConst false)
+        return ztypes.noConst
+    }
+    return (ztypes.makeArmConst
+        armTid: ptid9
+        armName: (zast.poolFind pool: ast.names text: armName)
+    )
+}
+
 # evalConstNode -- the compile-time value of a node, or `none` when the node is
 # not a constant shape. Numeric shapes only for now: bool and variant arms,
 # strings and static string methods arrive with the paths that render them.
@@ -26883,48 +26927,20 @@ evalConstNode: function {
                 if cn9.stringview == "false" then return (ztypes.makeBoolConst ((pcv9.bval) == false))
                 return ztypes.noConst
             }
-            # `oskind.linux` reads a variant ARM. The parent's FAMILY decides,
-            # the same test resolveConstantDef uses to tell an arm read from a
-            # construction: variant or union means the child is an arm, and
-            # anything else is a member read a constant cannot hold.
-            ptu9: (optU64Or
-                o: (walkLookupTyperef :ast :ty :reg currentUnit: unitName base: pt9.stringview)
-                d: 0
+            return (constArmRead
+                :ast
+                :ty
+                :reg
+                lookupUnit: unitName
+                typeName: pt9.stringview
+                armName: cn9.stringview
             )
-            if ptu9 == 0 then {
-                # a variant NOTHING ELSE mentions is not demanded, so the
-                # lookup finds nothing and the arm read silently yields no
-                # value. Descending mints it, which is what a use site would
-                # have done -- a constant reading an arm IS a use of the type.
-                ptu9 = (descendNamed :ty :reg :ast defUnit: unitName name: pt9.stringview).u64
-            }
-            if ptu9 > 0 then {
-                ptid9: ztypes.tid.create from: ptu9.u64
-                ptt9: reg.typetypeOf typeId: ptid9
-                isSum9: false
-                if ptt9 == ztypes.ztypetype.variantType then isSum9 = true
-                if ptt9 == ztypes.ztypetype.unionType then isSum9 = true
-                if isSum9 then {
-                    # bool's arms are the language's bool values, not tags a
-                    # user compares: they fold to a plain bool so every reader
-                    # of a CONDITION gets one without knowing about bool's type
-                    if pt9.stringview == "bool" then {
-                        if cn9.stringview == "true" then return (ztypes.makeBoolConst true)
-                        if cn9.stringview == "false" then return (ztypes.makeBoolConst false)
-                        return ztypes.noConst
-                    }
-                    return (ztypes.makeArmConst
-                        armTid: ptid9
-                        armName: (zast.poolFind pool: ast.names text: cn9.stringview)
-                    )
-                }
-            }
-            return ztypes.noConst
         }
-        # `platform.os.linux` -- the ARM-PREDICATE form. `value.arm` is always a
-        # predicate in this language, so a dotted path whose PARENT is itself a
-        # constant asks "does it hold this arm", which is a bool. A different
-        # path from `==` against a tag, and the one `if platform.os.linux` takes.
+        # `platform.os.linux` -- the ARM-PREDICATE form, asked FIRST for the
+        # same reason the atomid case asks the constant first: `tsrc.os` is a
+        # constant whose TYPE is a variant, so reading it as a qualified type
+        # name would find that variant and answer with an arm where the
+        # question was "does it hold this one".
         pv9: evalConstNode :ast :ty :reg :unitName n: pn9
         if pv9.kind.armKind then {
             cnid9: zast.poolFind pool: ast.names text: cn9.stringview
@@ -26934,6 +26950,30 @@ evalConstNode: function {
         if pv9.kind.bvalKind then {
             if cn9.stringview == "true" then return (ztypes.makeBoolConst pv9.bval)
             if cn9.stringview == "false" then return (ztypes.makeBoolConst ((pv9.bval) == false))
+        }
+        # `platform.oskind.linux` -- an arm of a type reached THROUGH its unit.
+        # The parent is a dotted path of its own, so the type must be looked up
+        # from that unit rather than from the one being evaluated.
+        if pn9.dottedpath then {
+            gp9: ast.nodes.get i: (pn9.parent - 1).u64
+            gc9: ast.nodes.get i: (pn9.child - 1).u64
+            if gp9.atomid when gc9.atomid then {
+                gpt9: zast.nameTextCopy :ast ref: gp9.name
+                gct9: zast.nameTextCopy :ast ref: gc9.name
+                if gpt9.length > 0 when gct9.length > 0 then {
+                    if (reg.isUnitName nameId: (nameIdOf :ast name: gpt9.stringview)) then {
+                        qa9: (constArmRead
+                            :ast
+                            :ty
+                            :reg
+                            lookupUnit: gpt9.stringview
+                            typeName: gct9.stringview
+                            armName: cn9.stringview
+                        )
+                        if (qa9.kind.none) == false then return qa9
+                    }
+                }
+            }
         }
         return ztypes.noConst
     } case binop then {
