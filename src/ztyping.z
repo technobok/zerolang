@@ -20,6 +20,7 @@ public: unit {
     :SynthNode
     :Decl
     :defaultval
+    :foldedbranch
     :declchild
     :declkind
     :declkindName
@@ -48,12 +49,13 @@ ZTypeGenericArg: class {
     position: u64
 }
 
-# Per-node compile-time constant value, carried via the shared ZConst
-# (kind/ival/fval). bool consts fold onto IVAL until the producer
-# slice needs a distinct encoding.
-NodeConstRow: class {
-    nodeid: zast.nodeid
-    value: ztypes.ZConst
+# The clause a constant fold selected for an `if`. `known` false means the
+# conditions did not all fold, so a runtime `if` must be emitted; `known` true
+# with `stmt` 0 means every condition was false and there was no else clause,
+# so nothing is emitted at all.
+foldedbranch: record {
+    known: bool
+    stmt: u32
 }
 
 # One typecheck-synthesised AST row for the dump: a node minted during the
@@ -342,8 +344,23 @@ ZTyping: class {
     funcReturnNode: (MapVV u64 value: u64)
     defVariableId: (MapVV u64 value: ztypes.vid)
 
-    # per-node collection-valued stamps, flattened to append-only rows
-    nodeConst: (List NodeConstRow)
+    # --- compile-time constant values ---
+    # The value domain, keyed two ways. nodeConst answers "what does this
+    # node evaluate to" for a use site; memberConst answers it for a named
+    # definition, keyed exactly as setMemberType keys the TYPE channel so the
+    # two cannot disagree about what a constant is. Both are sparse -- a few
+    # dozen nodes out of a couple hundred thousand -- so a map, not the dense
+    # ListVal nodeType uses.
+    nodeConst: (MapVV u64 value: ztypes.cval)
+    memberConst: (MapVV u64 value: ztypes.cval)
+    # evaluation state per memberConst key: 0 unvisited, 1 evaluating, 2 done.
+    # Constants are not written in dependency order, so the evaluator pulls
+    # rather than pushes and this is its cycle guard.
+    constEvalState: (MapVV u64 value: u8)
+    # the svalKind payload pool; cval.strId indexes it 1-based (0 = none)
+    constStrings: (List String)
+    # ifexpr nodeid -> the clause the fold selected
+    foldedBranch: (MapVV u64 value: foldedbranch)
 
     # aggregate typecheck state
     conformance: (List ztypes.ZConformance)
@@ -1243,6 +1260,43 @@ ZTyping: class {
         )
     }
 
+    # --- member constant values ---
+
+    # memberConstKey -- the (parent type, member name) packing memberConst and
+    # constEvalState share. One helper, so the remap in
+    # canonicalizeShellNodeStamps and every read site cannot drift apart.
+    memberConstKey: function {
+        t: this.view
+        parentTypeId: ztypes.tid
+        nameId: zast.nameid
+    } out u64 is {
+        return (parentTypeId * 4294967296) + nameId.u64
+    }
+
+    # setMemberConst -- record the compile-time VALUE of member `nameId` on
+    # `parentTypeId`, the channel parallel to setMemberType's type.
+    setMemberConst: function {:this parentTypeId: ztypes.tid nameId: zast.nameid value: ztypes.cval} is {
+        k9: this.memberConstKey :parentTypeId :nameId
+        this.memberConst.set key: k9 :value
+    }
+
+    # memberConstOf -- that value, or `none` when the member has none.
+    memberConstOf: function {
+        t: this.view
+        parentTypeId: ztypes.tid
+        nameId: zast.nameid
+    } out ztypes.cval is {
+        k9: t.memberConstKey :parentTypeId :nameId
+        g9: t.memberConst.get key: k9
+        match (
+            g9
+        ) case some then {
+            return g9
+        } case none then {
+            return ztypes.noConst
+        }
+    }
+
     # --- per-member flags ---
 
     # setAliasInternalName / aliasInternalNameOf -- per dotted-path-node record
@@ -1592,7 +1646,11 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         variableSynthOrigin: (MapVR u64 value: String)
         funcReturnNode: (MapVV u64 value: u64)
         defVariableId: (MapVV u64 value: ztypes.vid)
-        nodeConst: (List NodeConstRow)
+        nodeConst: (MapVV u64 value: ztypes.cval)
+        memberConst: (MapVV u64 value: ztypes.cval)
+        constEvalState: (MapVV u64 value: u8)
+        constStrings: (List String)
+        foldedBranch: (MapVV u64 value: foldedbranch)
         conformance: (List ztypes.ZConformance)
         preludeUnit: (Map String value: String)
         eagerAll: false
@@ -1769,8 +1827,18 @@ main: function is {
 
     print "=== node tables ==="
     k0: ztypes.makeIntConst 1024.i64
-    ty.nodeConst.append (NodeConstRow nodeid: (zast.nodeid.create from: 200) value: k0)
+    ty.nodeConst.set key: 200 value: k0
+    ty.nodeConst.set key: 201 value: (ztypes.makeBoolConst true)
+    (ty.setMemberConst
+        parentTypeId: pid
+        nameId: (zast.nameid.create from: 9)
+        value: (ztypes.makeStrConst 4.u32)
+    )
     dumpNodeConst :ty
+    mc: ty.memberConstOf parentTypeId: pid nameId: (zast.nameid.create from: 9)
+    print "  memberConst[point.#9] kind=\{ztypes.zconstkindName mc.kind} strId=\{mc.strId}"
+    mx: ty.memberConstOf parentTypeId: pid nameId: (zast.nameid.create from: 10)
+    print "  memberConst[point.#10] kind=\{ztypes.zconstkindName mx.kind}"
 
     print "=== aggregates ==="
     cf: reg.newConformance implTypeId: pid specTypeId: lid label: "drawable" isFacet: false
@@ -1834,11 +1902,11 @@ dumpChildren: function {ty: ZTyping pool: zast.StringPool.view parentTypeId: zty
     }
 }
 
-# smoke-test: print the node-constant table.
-dumpNodeConst: function {ty: ZTyping.view} is {
-    iter: ty.nodeConst.iterate
-    for row: iter loop {
-        print "  const node=\{row.nodeid} kind=\{ztypes.zconstkindName row.value.kind} ival=\{row.value.ival}"
+# smoke-test: print the node-constant table. Takes the mutable typing because
+# a map's item iterator borrows its receiver, as appendAtomStamps does.
+dumpNodeConst: function {ty: ZTyping} is {
+    with iter: ty.nodeConst.iterateItems do for row: iter loop {
+        print "  const node=\{row.key} kind=\{ztypes.zconstkindName row.value.kind} ival=\{row.value.ival} bval=\{boolText row.value.bval}"
     }
 }
 

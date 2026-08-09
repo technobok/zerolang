@@ -15,18 +15,23 @@ public: unit {
     :vid
     :constraintdesc
     :ZConformance
-    :ZConst
     :ZEntry
     :ZType
     :ZTypeRegistry
     :ZVariable
     :constraintkind
+    :cval
     :floatFitsFloat
     :intFitsFloat
     :isFloatKind
+    :makeArmConst
+    :makeBoolConst
+    :makeFloatConst
     :makeIntConst
+    :makeStrConst
     :mangleVarName
     :newRegistry
+    :noConst
     :numkindByName
     :parseLiteralValue
     :memberKey
@@ -130,12 +135,17 @@ zlockholderkind: variant {
     forKind: null
 } as { tag: u8.tag }
 
-# the payload kind of a compile-time constant: integer, float, or string.
+# the payload kind of a compile-time constant. bool is its own kind rather
+# than an `armKind` over bool's type: every consumer of a folded CONDITION
+# wants a plain bool, and the emitter renders bool as a C bool, not as a
+# tagged struct. `armKind` is for user variants and unions.
 zconstkind: variant {
     none: null
     ivalKind: null
     fvalKind: null
     svalKind: null
+    bvalKind: null
+    armKind: null
 } as { tag: u8.tag }
 
 # Concrete numeric type a literal resolves to. Parsing accumulates in
@@ -322,6 +332,10 @@ zconstkindName: function {t: zconstkind} out String is {
         return "FVAL".string
     } case svalKind then {
         return "SVAL".string
+    } case bvalKind then {
+        return "BVAL".string
+    } case armKind then {
+        return "ARM".string
     }
 }
 
@@ -466,12 +480,24 @@ NumRange: class {
 # the registry by a later slice. Owned sub-objects (a variable, a lock)
 # are held by value via Option.
 
-# Compile-time constant value carried by an as-block constant or a
-# numeric generic-arg wrapper.
-ZConst: class {
+# A compile-time constant value, as the evaluator passes it around.
+#
+# A VALTYPE, deliberately: it copies out of a stamp table instead of handing
+# back a borrow, so a memoised evaluator can read one entry of a table it is
+# about to write. A class here would make every read hold a lock on the map.
+#
+# The string payload is an index into ZTyping.constStrings (1-based, 0 = none)
+# because a valtype owns no heap. An arm is identified by its OWNING type plus
+# its name-pool id, not by an ordinal: the emitter's one arm-to-tag helper
+# takes a name, and an ordinal would rot the first time an arm was inserted.
+cval: record {
     kind: zconstkind
     ival: i64
     fval: f64
+    bval: bool
+    strId: u32
+    armTid: tid
+    armName: zast.nameid
 }
 
 # Per-binding ownership info, attached to a scope entry for named
@@ -1348,9 +1374,59 @@ newRegistry: function {} out ZTypeRegistry is {
     return r
 }
 
-# a ZConst holding the integer value `v`.
-makeIntConst: function {v: i64} out ZConst is {
-    return (ZConst kind: zconstkind.ivalKind ival: v fval: 0.0)
+# noConst -- "this node is not a compile-time constant". The absent value,
+# so a caller can return one answer type rather than an Option of one.
+noConst: function out cval is {
+    return (cval
+        kind: zconstkind.none
+        ival: 0
+        fval: 0.0
+        bval: false
+        strId: 0
+        armTid: (tid.create from: 0)
+        armName: (zast.nameid.create from: 0)
+    )
+}
+
+# a cval holding the integer value `v`.
+makeIntConst: function {v: i64} out cval is {
+    c9: noConst
+    c9.kind = zconstkind.ivalKind
+    c9.ival = v
+    return c9
+}
+
+# a cval holding the f64 value `v`.
+makeFloatConst: function {v: f64} out cval is {
+    c9: noConst
+    c9.kind = zconstkind.fvalKind
+    c9.fval = v
+    return c9
+}
+
+# a cval holding the bool value `v`.
+makeBoolConst: function {v: bool} out cval is {
+    c9: noConst
+    c9.kind = zconstkind.bvalKind
+    c9.bval = v
+    return c9
+}
+
+# a cval naming the string interned at `id` in ZTyping.constStrings.
+makeStrConst: function {id: u32} out cval is {
+    c9: noConst
+    c9.kind = zconstkind.svalKind
+    c9.strId = id
+    return c9
+}
+
+# a cval naming the arm `armName` of the variant or union type `armTid`.
+makeArmConst: function {armTid: tid armName: zast.nameid} out cval is {
+    c9: noConst
+    c9.kind = zconstkind.armKind
+    c9.armTid = armTid
+    c9.armName = armName
+    return c9
 }
 
 # --- C name mangling ---
@@ -1864,6 +1940,8 @@ main: function is {
     print (zconstkindName zconstkind.ivalKind)
     print (zconstkindName zconstkind.fvalKind)
     print (zconstkindName zconstkind.svalKind)
+    print (zconstkindName zconstkind.bvalKind)
+    print (zconstkindName zconstkind.armKind)
 
     print "=== carriers ==="
     reg: newRegistry
@@ -1895,6 +1973,12 @@ main: function is {
 
     k0: makeIntConst 1024.i64
     print "const kind=\{zconstkindName k0.kind} ival=\{k0.ival}"
+    k1: makeBoolConst true
+    print "const kind=\{zconstkindName k1.kind} bval=\{boolText k1.bval}"
+    k2: makeStrConst 3.u32
+    print "const kind=\{zconstkindName k2.kind} strId=\{k2.strId}"
+    k3: (makeArmConst armTid: (tid.create from: 12) armName: (zast.nameid.create from: 5))
+    print "const kind=\{zconstkindName k3.kind} armTid=\{k3.armTid} armName=\{k3.armName}"
 
     lh0: zlockholder kind: zlockholderkind.varKind id: 5
     print "lockholder kind=\{zlockholderkindName lh0.kind} id=\{lh0.id}"
