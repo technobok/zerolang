@@ -1382,10 +1382,19 @@ stampNameOf: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
     return "".string
 }
 
-# builtinTid -- the canonical registry id of a stdlib builtin type (String, List,
-# Map, ...) resolved by base name against system/collections; mainName "" so a
-# user type of the same name never shadows it. 0 when absent from the program.
-builtinTid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view base: StringView} out u64 is {
+# builtinTidInU -- builtinTid for a builtin DECLARED IN `unit`: currentUnit is
+# walkLookupTyperef's first probe, so naming the unit resolves without leaning on
+# the stdlib fallbacks. For the builtins `core` does not re-export.
+# builtinTidInU -- the canonical registry id of a stdlib builtin DECLARED IN
+# `unitName`: currentUnit is walkLookupTyperef's first probe, so naming the unit
+# is the qualified lookup, for the builtins `core` does not re-export. Passing
+# "" is the unqualified form and the only other caller is builtinTid.
+builtinTidInU: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    unitName: StringView
+    base: StringView
+} out u64 is {
     # every caller names the declared family form directly (ListRef, MapRR,
     # ...); the memoized builtinTidT is not usable here -- its memo write
     # needs an exclusive typing, and the emitter holds a view.
@@ -1393,9 +1402,15 @@ builtinTid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view base: StringV
         :ast
         ty: symtab.typing
         reg: symtab.reg
-        currentUnit: ""
+        currentUnit: unitName
         :base)
     )
+}
+
+# builtinTid -- builtinTidInU with no unit named, so a user type of the same
+# name never shadows it. 0 when absent from the program.
+builtinTid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view base: StringView} out u64 is {
+    return (builtinTidInU :ast :symtab unitName: "" :base)
 }
 
 # specStemTid -- the minted instance of a system template over one or two
@@ -20278,7 +20293,7 @@ ioCanonTid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view canon: String
             a1: (specTidArgs
                 :symtab
                 templateTid: (builtinTid :ast :symtab base: "Box")
-                a1: (builtinTid :ast :symtab base: "filestat")
+                a1: (builtinTidInU :ast :symtab unitName: "io" base: "filestat")
                 a2: 0)
             a2: (builtinTid :ast :symtab base: "IoError")
         )
@@ -26432,7 +26447,7 @@ emitCodepointsNatives: function {
     runtimeDir: StringView
     buf: String.borrow
 } is {
-    cpId: builtinTid :ast :symtab base: "CpIter"
+    cpId: builtinTidInU :ast :symtab unitName: "system" base: "CpIter"
     ovId: specStemTid :ast :symtab base: "optionval" arg1: "u32" arg2: ""
     cpc: ctxCname :ctx tid: (ztypes.tid.create from: cpId.u64)
     ovc: ctxCname :ctx tid: (ztypes.tid.create from: ovId.u64)

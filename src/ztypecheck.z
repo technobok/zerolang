@@ -19,6 +19,7 @@ public: unit {
     :blockEndsInReturn
     :blockHasBreak
     :bodyEndsInReturn
+    :builtinTidIn
     :builtinTidT
     :dataFieldNames
     :descendNamed
@@ -501,9 +502,27 @@ checkBareTypeValueAt: function {
     }
     # source-produced iterators have no standalone construction
     isIt9: false
-    if tid == (builtinTidT :ast ty: st.typing reg: st.reg base: "CpIter") then isIt9 = true
-    if tid == (builtinTidT :ast ty: st.typing reg: st.reg base: "Splitter") then isIt9 = true
-    if tid == (builtinTidT :ast ty: st.typing reg: st.reg base: "LinesIter") then isIt9 = true
+    if tid == (builtinTidIn
+        :ast
+        ty: st.typing
+        reg: st.reg
+        unitName: "system"
+        base: "CpIter"
+    ) then isIt9 = true
+    if tid == (builtinTidIn
+        :ast
+        ty: st.typing
+        reg: st.reg
+        unitName: "system"
+        base: "Splitter"
+    ) then isIt9 = true
+    if tid == (builtinTidIn
+        :ast
+        ty: st.typing
+        reg: st.reg
+        unitName: "system"
+        base: "LinesIter"
+    ) then isIt9 = true
     if isIt9 then {
         mi9: "cannot construct '\{tn9}' from its bare name: iterators are produced by their source"
         hi9: "call '.iterate' / '.split' / '.codepoints' / '.lines' on the source value".string
@@ -11419,6 +11438,24 @@ resolveMainUnitInstantiations: function {
 # typecheck -- entry point. Registers a UNIT type per unit and resolves the main
 # unit's definition signatures, then demand-resolves the cross-unit types those
 # signatures referenced. The registry is supplied by the caller, read by the dumper.
+# builtinTidIn -- the canonical registry id of a stdlib builtin DECLARED IN
+# `unit`: walkLookupTyperef probes currentUnit first, so naming the unit is the
+# qualified lookup. For the builtins `core` does not re-export, which would
+# otherwise reach only through the fallback probes. Unmemoized -- the callers
+# are guards, not hot paths.
+builtinTidIn: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    unitName: StringView
+    base: StringView
+} out ztypes.tid is {
+    return (ztypes.tid.create from: (optU64Or
+        o: (walkLookupTyperef :ast :ty :reg currentUnit: unitName :base)
+        d: 0
+    ))
+}
+
 # builtinTidTc -- the canonical registry id of a stdlib builtin by base name
 # (mainName "" so a user type of the same name never shadows it). 0 when absent.
 builtinTidT: function {
