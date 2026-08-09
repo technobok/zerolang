@@ -3855,6 +3855,17 @@ collectionValueCallRhs: function {
         # no-arg method auto-call or field access -- a value, never a construction.
         atc9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         return atc9.length > 0
+    } case atomid then {
+        # a bare name resolving to a VARIABLE is that container's value -- a
+        # move. A bare TYPE atom (`Bytes`, `ByteView`) is a construction, so the
+        # variable stamp is what separates them.
+        cav9: symtab.typing.atomVariableId.get key: n.nodeid.u64
+        match (
+            cav9
+        ) case some then {
+            return true
+        } case none then null
+        return false
     } case call then {
         cko9: symtab.typing.callKind.get key: n.nodeid.u64
         match (
@@ -10986,6 +10997,16 @@ emitStmt: function {
                         lb0: "\{ind}\{lcb}_t \{nm} = \{lvr0};\n"
                         buf.append lb0
                         emitValueTakeInvalidations :ast :symtab :ctx n: avn9 :ind :buf
+                        # a binding from a bare owned local is a MOVE: zero the
+                        # source so its scope-exit free no-ops now that this
+                        # binding owns the buffer
+                        if (isBareNameValue :ast n: avn9) then {
+                            lzs0: implicitTakeSource :ast :symtab :ctx n: avn9
+                            if lzs0.length > 0 then {
+                                lzi0: "\{ind}\{lzs0} = (\{lcb}_t){0};\n"
+                                buf.append lzi0
+                            }
+                        }
                     } else {
                         lcap: listCapArg :ast :symtab :ctx n: avn9
                         lb1: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
@@ -11013,6 +11034,16 @@ emitStmt: function {
                 sbc: "\{ind}\{scb}_t* \{nm} = \{svr};\n"
                 buf.append sbc
                 emitValueTakeInvalidations :ast :symtab :ctx n: avn9 :ind :buf
+                # a heap collection binding from a bare owned local is a MOVE:
+                # clear the source so its scope-exit destroy no-ops now that
+                # this binding owns the allocation
+                if (isBareNameValue :ast n: avn9) then {
+                    hzs0: implicitTakeSource :ast :symtab :ctx n: avn9
+                    if hzs0.length > 0 then {
+                        hzi0: "\{ind}\{hzs0} = NULL;\n"
+                        buf.append hzi0
+                    }
+                }
             } else {
                 scap: listCapArg :ast :symtab :ctx n: avn9
                 sb0: "\{ind}\{scb}_t* \{nm} = \{scb}_create((uint64_t)\{scap});\n"
@@ -11038,6 +11069,16 @@ emitStmt: function {
                 mbc: "\{ind}\{mcb}_t* \{nm} = \{mvr};\n"
                 buf.append mbc
                 emitValueTakeInvalidations :ast :symtab :ctx n: avn9 :ind :buf
+                # a heap collection binding from a bare owned local is a MOVE:
+                # clear the source so its scope-exit destroy no-ops now that
+                # this binding owns the allocation
+                if (isBareNameValue :ast n: avn9) then {
+                    hzs0: implicitTakeSource :ast :symtab :ctx n: avn9
+                    if hzs0.length > 0 then {
+                        hzi0: "\{ind}\{hzs0} = NULL;\n"
+                        buf.append hzi0
+                    }
+                }
             } else {
                 mcap: listCapArg :ast :symtab :ctx n: avn9
                 mb0: "\{ind}\{mcb}_t* \{nm} = \{mcb}_create((uint64_t)\{mcap});\n"
