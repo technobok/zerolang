@@ -1,0 +1,176 @@
+#doc.lang: en
+
+#//: Zerolang Standard Library: platform
+
+#doc.title: Zerolang Standard Library -- platform
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-08-10
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: platform
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+The #~"platform" unit is what the compiler knows about the build it
+is performing: the operating system and architecture it is building
+for, and the C compiler it will hand the emitted C to.
+
+Every definition in it is a #b:"compile-time constant". A read is
+folded while compiling, so it can drive a unit-level #~"if" or a
+#~"require:" block, and a branch it decides never reaches the C.
+
+#code language=zerolang: """
+  require: unit {
+      library: if platform.cc == platform.cckind.tcc then {
+          error "this unit needs a compiler with __float128"
+      } else {
+          "quadmath"
+      }
+  }
+"""
+
+Each kind is named for its #b:"values" rather than for the member
+that reads it. That is what keeps #~"platform.platform" from ever
+arising: the member is #~"os", its type is #~"oskind", and an arm is
+#~"platform.oskind.linux".
+
+#p: #b:"Members"
+
+#ul:
+  [#*: #> to=os: #b:"platform.os" -- #~"oskind"]
+  [#*: #> to=arch: #b:"platform.arch" -- #~"archkind"]
+  [#*: #> to=cc: #b:"platform.cc" -- #~"cckind"]
+  [#*: #> to=target: #b:"platform.target" -- #~"String"]
+
+#p: #b:"Kinds"
+
+#ul:
+  [#*: #> to=oskind: #b:"oskind" -- #~"variant { linux: null  darwin: null  windows: null  other: null }"]
+  [#*: #> to=archkind: #b:"archkind" -- #~"variant { x86_64: null  aarch64: null  other: null }"]
+  [#*: #> to=cckind: #b:"cckind" -- #~"variant { gcc: null  clang: null  tcc: null  other: null }"]
+
+
+#--: oskind
+
+#code language=zerolang: """
+  oskind: variant {
+      linux:   null
+      darwin:  null
+      windows: null
+      other:   null
+  }
+"""
+
+Host operating-system family.
+
+
+#--: archkind
+
+#code language=zerolang: """
+  archkind: variant {
+      x86_64:  null
+      aarch64: null
+      other:   null
+  }
+"""
+
+CPU architecture family.
+
+
+#--: cckind
+
+#code language=zerolang: """
+  cckind: variant {
+      gcc:   null
+      clang: null
+      tcc:   null
+      other: null
+  }
+"""
+
+The C compiler #~"zc" will hand the emitted C to, classified by the
+#b:"basename" of the resolved path -- the same resolution order
+#~"zc" itself uses: #~"--cc", then #~"<target>-gcc", then #~"$CC",
+then #~"cc".
+
+Classification is by name alone. Probing #~"--version" would add a
+subprocess to every compile, so a #~"--cc" pointing at a wrapper
+script reads as #~"other" and a guard keyed on one compiler will not
+fire for it.
+
+
+#--: os
+
+#code language=zerolang: """
+  os: oskind
+"""
+
+The operating-system family being built for.
+
+#code language=zerolang: """
+  if platform.os.linux then { ... }
+  if platform.os == platform.oskind.linux then { ... }
+"""
+
+Both spellings fold and agree: #~"value.arm" is always a predicate,
+so the first asks whether the constant holds that arm.
+
+
+#--: arch
+
+#code language=zerolang: """
+  arch: archkind
+"""
+
+The CPU architecture family being built for.
+
+
+#--: cc
+
+#code language=zerolang: """
+  cc: cckind
+"""
+
+The C compiler #~"zc" will invoke.
+
+This is #b:"not" #> to=./stdlib_os.html: #~"os.buildCompiler", which
+reports the compiler that built the running #~"zc" binary. This one
+is the compiler that #~"zc" is about to run.
+
+
+#--: target
+
+#code language=zerolang: """
+  target: String
+"""
+
+The #~"--target" triple, or the empty string for a native build.
+
+#p: #b:"Caveat"
+
+#~"os" and #~"arch" come from #~"--target" when one is given and from
+the host otherwise. A cross #~"--cc" used #b:"without" #~"--target"
+therefore leaves them describing the host while the C compiler
+targets something else.
