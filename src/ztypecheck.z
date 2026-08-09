@@ -5808,6 +5808,163 @@ scanUnitVisibility: function {
     }
 }
 
+# checkOneRequireBlock -- the schema for one `require:` block: it introduces a
+# unit, declares at least one requirement, and every entry is a key the
+# compiler consumes -- today only `library:`, whose value is a plain string
+# literal. A key nothing reads would be silently ignored, so it is rejected.
+checkOneRequireBlock: function {
+    ty: ztyping.ZTyping
+    ast: Ast.view
+    declId: ztypes.declid
+    libNid: zast.nameid
+} is {
+    rnode9q: u32
+    {
+        if (ty.declValid id: declId) then {
+            dr9q: ty.decls.get i: (declId - 1)
+            rnode9q = dr9q.node
+        }
+    }
+    if rnode9q == 0 then return
+    opId9q: u32
+    rline9q: u32
+    rcol9q: u32
+    {
+        rn9q: ast.nodes.get i: (rnode9q - 1).u64
+        match (
+            rn9q
+        ) case namedoperation then {
+            opId9q = rn9q.operation
+            rline9q = rn9q.lineno
+            rcol9q = rn9q.colno
+        } else null
+    }
+    if opId9q == 0 then return
+    on9q: ast.nodes.get i: (opId9q - 1).u64
+    match (
+        on9q
+    ) case unitdef then {
+        nmem9q: u64
+        with rit9q: on9q.body.iterate do for mId9q: rit9q loop {
+            nmem9q = nmem9q + 1
+            mn9q: ast.nodes.get i: (mId9q - 1).u64
+            match (
+                mn9q
+            ) case namedoperation then {
+                if mn9q.name == libNid then {
+                    ok9q: false
+                    vn9q: ast.nodes.get i: (mn9q.operation - 1).u64
+                    match (
+                        vn9q
+                    ) case atomstring then {
+                        if vn9q.stringparts.length == 1 then {
+                            pn9q: ast.nodes.get i: ((vn9q.stringparts.get i: 0) - 1).u64
+                            if pn9q.stringchunk then ok9q = true
+                        }
+                    } else null
+                    if (ok9q) == false then {
+                        (addResolveErrorH
+                            :ty
+                            nodeid: mn9q.nodeid
+                            lineno: mn9q.lineno
+                            colno: mn9q.colno
+                            e: zast.err.requireBlock
+                            msg: "'library:' must be a plain string literal naming a link library".string
+                            width: 7
+                        )
+                    }
+                } else {
+                    kt9q: zast.nameTextAt :ast ref: mn9q.name
+                    (addResolveErrorH
+                        :ty
+                        nodeid: mn9q.nodeid
+                        lineno: mn9q.lineno
+                        colno: mn9q.colno
+                        e: zast.err.requireBlock
+                        msg: "unknown 'require:' entry '\{kt9q}' -- the compiler consumes only 'library:'"
+                        width: 1
+                    )
+                }
+            } else null
+        }
+        if nmem9q == 0 then {
+            (addResolveErrorH
+                :ty
+                nodeid: (zast.nodeid.create from: rnode9q)
+                lineno: rline9q
+                colno: rcol9q
+                e: zast.err.requireBlock
+                msg: "a 'require:' block must declare at least one requirement".string
+                width: 7
+            )
+        }
+    } else {
+        (addResolveErrorH
+            :ty
+            nodeid: (zast.nodeid.create from: rnode9q)
+            lineno: rline9q
+            colno: rcol9q
+            e: zast.err.requireBlock
+            msg: "'require:' must introduce a unit definition, e.g. `require: unit { library: \"m\" }`".string
+            width: 7
+        )
+    }
+}
+
+# checkRequireBlocks -- a unit's `require:` block states what the unit needs
+# from the host toolchain. The block is an ordinary nested subunit, so the
+# standard unit machinery indexes it and resolves nothing inside it; its schema
+# is layered on here. declFindChild reads the pre-resolution def index, so a
+# block in a unit the program never demands is still checked.
+checkRequireBlocks: function {ty: ztyping.ZTyping program: Node} is {
+    match (
+        program
+    ) case program then {
+        reqNid9q: zast.poolFind pool: program.ast.names text: "require"
+        if reqNid9q.isZero then return
+        libNid9q: zast.poolFind pool: program.ast.names text: "library"
+        uCnt9q: program.ast.units.length
+        uIdx9q: u64
+        for uIdx9q < uCnt9q loop {
+            uId9q: (zast.nodeid.create from: (program.ast.units.get i: uIdx9q))
+            uIdx9q = uIdx9q + 1
+            unm9q: String
+            {
+                un9q: program.ast.nodes.get i: (uId9q - 1).u64
+                match (
+                    un9q
+                ) case namedoperation then {
+                    ut9q: zast.poolTextAt pool: program.ast.names ref: un9q.name
+                    unm9q = ut9q.copy
+                } else null
+            }
+            udecl9q: ztypes.declid
+            if unm9q.length > 0 then {
+                ro9q: ty.unitRootByName.get key: (nameIdOf
+                    ast: program.ast
+                    name: unm9q.stringview
+                ).u64
+                match (
+                    ro9q
+                ) case some then {
+                    udecl9q = ztypes.declid.create from: ro9q
+                } case none then null
+            }
+            if (udecl9q.isZero) == false then {
+                rdecl9q: ty.declFindChild parentDeclId: udecl9q nameId: reqNid9q
+                if (rdecl9q.isZero) == false then {
+                    (checkOneRequireBlock
+                        :ty
+                        ast: program.ast
+                        declId: rdecl9q
+                        libNid: libNid9q
+                    )
+                }
+            }
+        }
+    } else null
+}
+
 # applyUnitVisibility -- run scanUnitVisibility for every file unit that
 # declares a `public:` block, after all unit members are registered.
 applyUnitVisibility: function {
@@ -28048,6 +28205,7 @@ typecheck: function {
     resolveConstantDefs ty: st.typing reg: st.reg :program
     completeUnitInstantiations ty: st.typing reg: st.reg :program
     applyUnitVisibility ty: st.typing reg: st.reg :program
+    checkRequireBlocks ty: st.typing :program
     stampTyperefs ty: st.typing reg: st.reg :program
     checkBodies :st :program
     walkGenericUnitTemplates :st :program
