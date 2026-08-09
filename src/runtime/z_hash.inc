@@ -98,9 +98,31 @@ static uint64_t z_siphash_stringview(z_StringView_t v) {
    SipHash but NOT hash-flood resistant: use only when map keys are
    trusted input. SipHash stays the default. */
 
-static inline uint64_t z_fh_mix(uint64_t a, uint64_t b) {
+/* 64x64 -> 128 multiply, both halves. The __uint128_t form is one mulq on
+   gcc/clang; the fallback is the same product in four 32-bit partial
+   products, for a C compiler with no 128-bit integer type. */
+#if defined(__SIZEOF_INT128__)
+static inline void z_fh_mul128(uint64_t a, uint64_t b, uint64_t* lo, uint64_t* hi) {
     __uint128_t m = (__uint128_t)a * b;
-    return (uint64_t)m ^ (uint64_t)(m >> 64);
+    *lo = (uint64_t)m;
+    *hi = (uint64_t)(m >> 64);
+}
+#else
+static inline void z_fh_mul128(uint64_t a, uint64_t b, uint64_t* lo, uint64_t* hi) {
+    uint64_t al = a & 0xFFFFFFFFu, ah = a >> 32;
+    uint64_t bl = b & 0xFFFFFFFFu, bh = b >> 32;
+    uint64_t ll = al * bl, lh = al * bh, hl = ah * bl, hh = ah * bh;
+    uint64_t mid = (ll >> 32) + (lh & 0xFFFFFFFFu) + (hl & 0xFFFFFFFFu);
+    *lo = (mid << 32) | (ll & 0xFFFFFFFFu);
+    *hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+}
+#endif
+
+static inline uint64_t z_fh_mix(uint64_t a, uint64_t b) {
+    uint64_t lo;
+    uint64_t hi;
+    z_fh_mul128(a, b, &lo, &hi);
+    return lo ^ hi;
 }
 
 static inline uint64_t z_fh_r8(const uint8_t* p) {
@@ -158,9 +180,11 @@ static uint64_t z_fasthash_bytes(const void* in, uint64_t inlen) {
     }
     a ^= c1;
     b ^= seed;
-    __uint128_t m = (__uint128_t)a * b;
-    a = (uint64_t)m;
-    b = (uint64_t)(m >> 64);
+    uint64_t mlo;
+    uint64_t mhi;
+    z_fh_mul128(a, b, &mlo, &mhi);
+    a = mlo;
+    b = mhi;
     return z_fh_mix(a ^ c0 ^ inlen, b ^ c1);
 }
 
