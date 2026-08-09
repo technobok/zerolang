@@ -7179,6 +7179,26 @@ emitFnptrFieldCall: function {
     rptr: dottedReceiverIsPtr :ast :symtab :ctx callable: (ast.nodes.get i: (call.callable - 1).u64)
     acc: ".".string
     if rptr then acc = "->".string
+    # the slot's own parameter list decides how each argument is passed:
+    # fnptrParamTypeC pointerizes a param exactly when paramTypeIsPointer does,
+    # and a receiver-typed param (`r: this` on a record) is one of those.
+    fnTid9: ztypes.tid
+    {
+        mnId9: zast.poolFind pool: ast.names text: mn.stringview
+        if mnId9 > 0 then {
+            fnTid9 = (ztypes.tid.create
+                from: (optU64Or9
+                    o: (symtab.typing.declChildOfId parentTypeId: rtid nameId: mnId9)
+                )
+            )
+        }
+    }
+    pNames9: (List String)
+    pIds9: (ListVal u64)
+    pNmIds9: (ListVal u64)
+    if fnTid9 > 0 then {
+        recFieldLists :ast :symtab tid: fnTid9 names: pNames9 ids: pIds9 nameIds: pNmIds9
+    }
     args: String
     ai: u64
     aiter: call.arguments.iterate
@@ -7188,7 +7208,36 @@ emitFnptrFieldCall: function {
             a
         ) case namedoperation then {
             av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (a.operation - 1).u64)
+            addr9: false
+            {
+                anm9: zast.nameTextAt :ast ref: a.name
+                pj9: u64
+                pjn9: pNames9.length
+                for pj9 < pjn9 loop {
+                    pnm9: pNames9.get i: pj9
+                    if pnm9.stringview == anm9.stringview then {
+                        if (paramTypeIsPointer
+                            :ast
+                            :symtab
+                            :ctx
+                            fid: fnTid9
+                            pname: anm9.stringview
+                            pid: (ztypes.tid.create from: (pIds9.get i: pj9))
+                        ) then addr9 = true
+                    }
+                    pj9 = pj9 + 1
+                }
+            }
+            # an argument that already holds a pointer must not be addressed
+            # again -- the same guard the reftype/List param sweep uses
+            if addr9 when (pathIsPointer
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: (a.operation - 1).u64)
+            ) then addr9 = false
             if ai > 0 then args.append ", "
+            if addr9 then args.append "&"
             args.append av
             ai = ai + 1
         } else null
