@@ -26271,6 +26271,13 @@ resolveUnitIfDef: function {
         n
     ) case ifexpr then {
         t9: u64
+        # every clause is still walked and typed -- a dead branch's type errors
+        # are still type errors -- but the definition takes the type of the
+        # branch that WINS, per the spec's "the type of the first arm whose
+        # condition is true". w9 is that type; t9 stays the first-typed
+        # fallback for an `if` whose conditions did not fold.
+        w9: u64
+        fb9: foldIfBranch :ast :ty :reg unitName: mainName :n
         cliter: n.clauses.iterate
         for clauseId9: cliter loop {
             clause: ast.nodes.get i: (clauseId9 - 1).u64
@@ -26300,6 +26307,7 @@ resolveUnitIfDef: function {
                     block: (ast.nodes.get i: (clause.statement - 1).u64)
                 )
                 if t9 == 0 then t9 = bt9
+                if fb9.known when clause.statement == fb9.stmt then w9 = bt9
             } else null
         }
         if n.elseclause > 0 then {
@@ -26311,7 +26319,9 @@ resolveUnitIfDef: function {
                 block: (ast.nodes.get i: (n.elseclause - 1).u64)
             )
             if t9 == 0 then t9 = et9
+            if fb9.known when n.elseclause == fb9.stmt then w9 = et9
         }
+        if fb9.known when w9 > 0 then t9 = w9
         if t9 > 0 then {
             (ztyping.nodeTypeSet
                 tbl: ty.nodeType
@@ -26645,6 +26655,111 @@ constValueOfMember: function {
     return v9
 }
 
+# constBlockValue -- the value a branch block yields: its LAST statement's,
+# the way constantBranchWalk takes the block's type from the last statement.
+constBlockValue: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    block: Node.view
+} out ztypes.cval is {
+    match (
+        block
+    ) case statement then {
+        r9: ztypes.noConst
+        siter9: block.statements.iterate
+        for sId9: siter9 loop {
+            s9: ast.nodes.get i: (sId9 - 1).u64
+            match (
+                s9
+            ) case statementline then {
+                r9 = (evalConstNode
+                    :ast
+                    :ty
+                    :reg
+                    :unitName
+                    n: (ast.nodes.get i: (s9.statementline - 1).u64)
+                )
+            } else null
+        }
+        return r9
+    } else {
+        return ztypes.noConst
+    }
+}
+
+# foldIfBranch -- which clause of an `if` the constant fold selects, stamped on
+# the If so every consumer reads ONE answer instead of recomputing its own.
+# Every condition of a clause must fold and be true for that clause to win; the
+# first winner takes it and the else clause is the fallback. `known` false means
+# a condition did not fold: this is a runtime `if` and nothing may be elided.
+foldIfBranch: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    n: zast.IfData.view
+} out ztyping.foldedbranch is {
+    {
+        known9: true
+        stmt9: zast.nodeid
+        decided9: false
+        cliter9: n.clauses.iterate
+        for clauseId9: cliter9 loop {
+            if decided9 == false then {
+                clause9: ast.nodes.get i: (clauseId9 - 1).u64
+                match (
+                    clause9
+                ) case ifclause then {
+                    allTrue9: true
+                    undecided9: false
+                    coiter9: clause9.conditions.iterate
+                    for condId9: coiter9 loop {
+                        cond9: ast.nodes.get i: (condId9 - 1).u64
+                        match (
+                            cond9
+                        ) case namedoperation then {
+                            # a labelled condition other than `when` is not a
+                            # plain guard, and this fold does not speak for it
+                            cl9: zast.nameTextAt :ast ref: cond9.name
+                            if cl9.length > 0 when cl9.stringview != "when" then {
+                                undecided9 = true
+                            } else {
+                                cv9: (evalConstNode
+                                    :ast
+                                    :ty
+                                    :reg
+                                    :unitName
+                                    n: (ast.nodes.get i: (cond9.operation - 1).u64)
+                                )
+                                if cv9.kind.bvalKind then {
+                                    if (cv9.bval) == false then allTrue9 = false
+                                } else {
+                                    undecided9 = true
+                                }
+                            }
+                        } else null
+                    }
+                    if undecided9 then {
+                        known9 = false
+                        decided9 = true
+                    } else {
+                        if allTrue9 then {
+                            stmt9 = clause9.statement
+                            decided9 = true
+                        }
+                    }
+                } else null
+            }
+        }
+        if decided9 == false then stmt9 = n.elseclause
+        fb9: ztyping.foldedbranch known: known9 stmt: stmt9
+        ty.foldedBranch.set key: n.nodeid.u64 value: fb9
+        return fb9
+    }
+}
+
 # evalConstNode -- the compile-time value of a node, or `none` when the node is
 # not a constant shape. Numeric shapes only for now: bool and variant arms,
 # strings and static string methods arrive with the paths that render them.
@@ -26727,6 +26842,17 @@ evalConstNode: function {
             return (constArithFloat op: op9.stringview a: lf9.val b: rf9.val)
         }
         return ztypes.noConst
+    } case ifexpr then {
+        fb9: foldIfBranch :ast :ty :reg :unitName :n
+        if (fb9.known) == false then return ztypes.noConst
+        if fb9.stmt.isZero then return ztypes.noConst
+        return (constBlockValue
+            :ast
+            :ty
+            :reg
+            :unitName
+            block: (ast.nodes.get i: (fb9.stmt - 1).u64)
+        )
     } else {
         return ztypes.noConst
     }
