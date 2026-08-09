@@ -4869,10 +4869,20 @@ truncation. Comparisons produce <code>bool</code> values (<code>true</code>/<cod
 <p>Division by a constant zero is a compile time error (for both integer
 and float types). If the result of a constant integer operation overflows
 the target type, a compile time error is reported.</p>
-<p><code>f32</code> operations are not folded. The host compiler (Python) uses 64 bit
-floats internally, so folding <code>f32</code> arithmetic could produce results that
-differ from native <code>f32</code> computation on the target. This limitation will
-be addressed when zerolang becomes self hosting.</p>
+<p><code>f32</code> operations are not folded. The evaluator works in <code>i64</code> and
+<code>f64</code>, so folding <code>f32</code> arithmetic could produce a result that differs
+from the same computation performed natively on the target.</p>
+<p>Integer overflow is checked against that <code>i64</code> evaluation range rather
+than against the target type: a value carries no target type until it is
+materialized, so a result that fits <code>i64</code> but not the narrower type it is
+assigned to is caught where that assignment is checked, not here.</p>
+<p>Strings, <code>bool</code> values and variant arms are compile-time values too. A
+string literal folds, two compare by text, and an arm read
+(<code>platform.oskind.linux</code>) compares by arm identity -- the owning type and
+the arm name -- never by rendered text. The predicate form <code>value.arm</code>
+folds to the <code>bool</code> it always means. An expression the compiler cannot
+evaluate in constant position is an error (<code>E0600</code>), not a silent fall
+back to run time.</p>
 <p>Named constants propagate: if <code>a: 1</code> and <code>b: a + 2</code> are defined at
 unit level, then <code>b</code> has a compile time constant value of <code>3</code>. Chains
 of constant definitions are fully resolved. Float constants propagate the
@@ -4916,6 +4926,11 @@ compile-time constant, the compiler evaluates the condition statically.
 If the condition is false, the branch (and its <code>error</code>) is dead code
 and is suppressed. If the condition is true, the error triggers at
 compile time.</p>
+<p>A reached <code>error</code> is reported as <code>E0601</code> with the author's message
+verbatim: the compiler is relaying an assertion, not diagnosing a fault.
+Only the winning branch of a fold is ever evaluated, which is what makes the
+suppression above hold -- the dead branch is never visited, so nothing in it
+can report.</p>
 <p>Provability is bounded by what the emitter can fold: integer literals,
 unit-level integer constants, and arithmetic / comparison expressions
 over them, in statement-position <code>if</code> chains and <code>match</code> statements

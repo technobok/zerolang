@@ -5613,10 +5613,22 @@ Division by a constant zero is a compile time error (for both integer
 and float types). If the result of a constant integer operation overflows
 the target type, a compile time error is reported.
 
-#~"f32" operations are not folded. The host compiler (Python) uses 64 bit
-floats internally, so folding #~"f32" arithmetic could produce results that
-differ from native #~"f32" computation on the target. This limitation will
-be addressed when zerolang becomes self hosting.
+#~"f32" operations are not folded. The evaluator works in #~"i64" and
+#~"f64", so folding #~"f32" arithmetic could produce a result that differs
+from the same computation performed natively on the target.
+
+Integer overflow is checked against that #~"i64" evaluation range rather
+than against the target type: a value carries no target type until it is
+materialized, so a result that fits #~"i64" but not the narrower type it is
+assigned to is caught where that assignment is checked, not here.
+
+Strings, #~"bool" values and variant arms are compile-time values too. A
+string literal folds, two compare by text, and an arm read
+(#~"platform.oskind.linux") compares by arm identity -- the owning type and
+the arm name -- never by rendered text. The predicate form #~"value.arm"
+folds to the #~"bool" it always means. An expression the compiler cannot
+evaluate in constant position is an error (#~"E0600"), not a silent fall
+back to run time.
 
 Named constants propagate: if #~"a: 1" and #~"b: a + 2" are defined at
 unit level, then #~"b" has a compile time constant value of #~"3". Chains
@@ -5677,6 +5689,12 @@ compile-time constant, the compiler evaluates the condition statically.
 If the condition is false, the branch (and its #~"error") is dead code
 and is suppressed. If the condition is true, the error triggers at
 compile time.
+
+A reached #~"error" is reported as #~"E0601" with the author's message
+verbatim: the compiler is relaying an assertion, not diagnosing a fault.
+Only the winning branch of a fold is ever evaluated, which is what makes the
+suppression above hold -- the dead branch is never visited, so nothing in it
+can report.
 
 Provability is bounded by what the emitter can fold: integer literals,
 unit-level integer constants, and arithmetic / comparison expressions
