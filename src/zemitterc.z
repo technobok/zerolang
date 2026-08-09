@@ -6178,7 +6178,12 @@ argSlotList: function {
 # cvalText -- the C literal for a compile-time value the typechecker folded.
 # "" for a kind this emitter cannot render yet, which leaves the caller on its
 # ordinary path rather than emitting something wrong.
-cvalText: function {v: ztypes.cval} out String is {
+cvalText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    v: ztypes.cval
+} out String is {
     if v.kind.ivalKind then {
         iv: v.ival
         return "\{iv}"
@@ -6187,18 +6192,38 @@ cvalText: function {v: ztypes.cval} out String is {
         fv: v.fval
         return "\{fv}"
     }
+    if v.kind.armKind then {
+        if v.armTid.isZero then return "".string
+        if v.armName.isZero then return "".string
+        an9: ast.names.texts.get i: (v.armName.u32 - 1).u64
+        # a variant that maps onto a scalar C type (bool) renders as that
+        # scalar; anything else is the payload-less compound literal
+        # emitInlineVariantCtor builds for the same arm written as a call
+        av9: armValueC :symtab tid: v.armTid arm: an9.stringview
+        if av9.length > 0 then return av9
+        tg9: variantTag :symtab tid: v.armTid arm: an9.stringview
+        if tg9.length == 0 then return "".string
+        vc9: ctxCname :ctx tid: v.armTid
+        if vc9.length == 0 then return "".string
+        return "((\{vc9}_t){ .tag = \{tg9} })"
+    }
     return "".string
 }
 
 # nodeConstText -- the C literal for a node carrying a compile-time
 # const stamp (folded .LABEL data access, unit constants); "" otherwise.
-nodeConstText: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out String is {
+nodeConstText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: zast.nodeid
+} out String is {
     if nid.isZero then return "".string
     g9: symtab.typing.nodeConst.get key: nid.u64
     match (
         g9
     ) case some then {
-        return (cvalText v: g9)
+        return (cvalText :ast :symtab :ctx v: g9)
     } case none then {
         return "".string
     }
@@ -7770,7 +7795,7 @@ emitLocalAtomName: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out
 # emitExpr -- the C expression text for a node (calls inline; the scalar
 # examples carry no order-sensitive multi-call arguments).
 emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} out String is {
-    cv9: nodeConstText :symtab nid: (zast.nodeid.create from: (nodeIdOf9 :n).u32.orPanic)
+    cv9: nodeConstText :ast :symtab :ctx nid: (zast.nodeid.create from: (nodeIdOf9 :n).u32.orPanic)
     if cv9.length > 0 then return cv9
     match (
         n
@@ -16637,6 +16662,27 @@ unitConstTextOf: function {
                     return cs8.string
                 } case none then null
             }
+            # no rendered text: ask the typechecker for the VALUE. Kinds this
+            # emitter never learned to render as text -- a variant arm -- have
+            # one, and it is the only thing that can answer for them. The text
+            # path stays first so every constant that already rendered keeps
+            # rendering identically.
+            uto8: symtab.reg.unitNameTid.get key: (zast.poolFind
+                pool: ast.names
+                text: ub8.stringview
+            ).u64
+            match (
+                uto8
+            ) case some then {
+                mcv8: (symtab.typing.memberConstOf
+                    parentTypeId: (ztypes.tid.create from: uto8.u64)
+                    nameId: cn8
+                )
+                if (mcv8.kind.none) == false then {
+                    mct8: cvalText :ast :symtab :ctx v: mcv8
+                    if mct8.length > 0 then return mct8
+                }
+            } case none then null
         }
     }
     return "".string
