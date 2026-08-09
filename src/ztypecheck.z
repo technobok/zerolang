@@ -9521,6 +9521,14 @@ scanCallsInNode: function {ast: Ast.view reg: ztypes.ZTypeRegistry node: Node.vi
         scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.topath - 1).u64)
         scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.value - 1).u64)
     } case ifexpr then {
+        # Deliberately branch-blind. This pass runs before resolveConstantDefs,
+        # so no fold exists yet and a dead clause's names are demanded anyway.
+        # Over-demanding is CONSERVATIVE, and the invariant it protects is that
+        # the constant fold may only ever remove EMISSION -- never change which
+        # names resolve, and never be the thing that reports an error from a
+        # branch that cannot run. That is why a reached `error` is reported by
+        # the evaluator, which visits only the winning branch, and not by a
+        # walk like this one, which sees every arm.
         for clId9: node.clauses.iterate loop {
             scanCallsInNode :ast :reg node: (ast.nodes.get i: (clId9 - 1).u64)
         }
@@ -23478,6 +23486,7 @@ checkCase: function {
     ast: Ast.view unitBody: (ListVal u32).view
     casenode: zast.CaseData.view
 } out ztypes.tid is {
+    foldCaseArm :ast ty: st.typing reg: st.reg :unitName n: casenode
     matchMarker: st.pushBlock name: "match"
     subjT: (checkValue
         :st
@@ -26872,6 +26881,94 @@ constArmRead: function {
         armTid: ptid9
         armName: (zast.poolFind pool: ast.names text: armName)
     )
+}
+
+# constValEq -- do two compile-time values denote the same thing? Only defined
+# within a kind: comparing an int to a tag is not false, it is unanswerable,
+# which is what `has` reports.
+constValEq: function {ty: ztyping.ZTyping.view a: ztypes.cval b: ztypes.cval} out ffoldval is {
+    if a.kind.ivalKind when b.kind.ivalKind then {
+        r9: 0.0
+        if a.ival == b.ival then r9 = 1.0
+        return (ffoldval has: true val: r9)
+    }
+    if a.kind.bvalKind when b.kind.bvalKind then {
+        r9: 0.0
+        if a.bval == b.bval then r9 = 1.0
+        return (ffoldval has: true val: r9)
+    }
+    if a.kind.armKind when b.kind.armKind then {
+        r9: 0.0
+        if a.armTid == b.armTid when a.armName == b.armName then r9 = 1.0
+        return (ffoldval has: true val: r9)
+    }
+    if a.kind.svalKind when b.kind.svalKind then {
+        as9: constStringAt :ty id: a.strId
+        bs9: constStringAt :ty id: b.strId
+        r9: 0.0
+        if as9.stringview == bs9.stringview then r9 = 1.0
+        return (ffoldval has: true val: r9)
+    }
+    return (ffoldval has: false val: 0.0)
+}
+
+# foldCaseArm -- which arm of a `match` a constant subject selects, stamped on
+# the match the way foldIfBranch stamps an `if`. A BINDING arm (`case x then`)
+# names its payload rather than testing a value, so a match holding one is not
+# decidable here at all.
+foldCaseArm: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    n: zast.CaseData.view
+} is {
+    sv9: (evalConstNode
+        :ast
+        :ty
+        :reg
+        :unitName
+        n: (ast.nodes.get i: (n.subject - 1).u64)
+    )
+    if sv9.kind.none then return
+    known9: true
+    stmt9: zast.nodeid
+    decided9: false
+    cliter9: n.clauses.iterate
+    for clId9: cliter9 loop {
+        if known9 then {
+            cl9: ast.nodes.get i: (clId9 - 1).u64
+            match (
+                cl9
+            ) case caseclause then {
+                if cl9.name != 0 then {
+                    known9 = false
+                } else {
+                    av9: (evalConstNode
+                        :ast
+                        :ty
+                        :reg
+                        :unitName
+                        n: (ast.nodes.get i: (cl9.matcharm - 1).u64)
+                    )
+                    eq9: constValEq :ty a: av9 b: sv9
+                    if eq9.has then {
+                        if eq9.val > 0.0 when decided9 == false then {
+                            stmt9 = cl9.statement
+                            decided9 = true
+                        }
+                    } else {
+                        known9 = false
+                    }
+                }
+            } else {
+                known9 = false
+            }
+        }
+    }
+    if known9 == false then return
+    if decided9 == false then stmt9 = n.elseclause
+    ty.foldedBranch.set key: n.nodeid.u64 value: (ztyping.foldedbranch known: true stmt: stmt9)
 }
 
 # evalConstNode -- the compile-time value of a node, or `none` when the node is

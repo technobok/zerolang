@@ -541,12 +541,12 @@ emitter-guard:
 # `for true loop` with no break, and emitBodyNode stops emitting after any
 # statement that diverges.
 #
-# Nine of the ten that remain are a folding gap rather than a missing divergence
-# check: docs/spec.pdoc:5652 bounds constant folding to INTEGER literals and
-# constants in STATEMENT position, so a bool or float condition, an `if` in value
-# position, and the statements after an `if` the emitter folded to an
-# unconditional branch all still emit code no path runs. Closing them means
-# widening the folder, which is a feature, not a cleanup.
+# The folding gap that used to account for nine of the ten is closed. Branch
+# selection is the typechecker's: it folds bool, float, string and variant-tag
+# conditions as readily as integer ones, in value position as well as statement
+# position, and stamps the winning clause for the emitter to read. What remains
+# is the statements after a folded branch, which are a divergence question
+# rather than a folding one.
 #
 # Every divergence case is closed. Divergence is the typechecker's `never`
 # stamp and nothing else: checkCase stamps it on an exhaustive match whose every

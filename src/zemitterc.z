@@ -1316,35 +1316,15 @@ ifDiverges: function {
         # a chain whose every condition folds emits ONE branch, so only that
         # branch decides -- the arms the emitter dropped cannot run. Mirrors the
         # fold in emitStmt's ifexpr case.
-        fchk9: true
-        fwin9: u32
-        with fcit9: n.clauses.iterate do for fcId9: fcit9 loop {
-            if fchk9 then {
-                fcn9: ast.nodes.get i: (fcId9 - 1).u64
-                match (
-                    fcn9
-                ) case ifclause then {
-                    ffr9: foldIfClause9 :ast :symtab :ctx conds: fcn9.conditions
-                    if ffr9.ok then {
-                        if ffr9.val == 1 when fwin9 == 0 then fwin9 = fcn9.statement
-                    } else {
-                        fchk9 = false
-                    }
-                } else {
-                    fchk9 = false
-                }
-            }
-        }
-        if fchk9 then {
-            fwb9: fwin9
-            if fwb9 == 0 then fwb9 = n.elseclause
+        ffb9: foldedBranchOf9 :symtab nid: n.nodeid.u64
+        if ffb9.known then {
             # every branch folded away: nothing is emitted, so nothing diverges
-            if fwb9 == 0 then return false
+            if ffb9.stmt.isZero then return false
             return (blockDiverges
                 :ast
                 :symtab
                 :ctx
-                n: (ast.nodes.get i: (fwb9 - 1).u64)
+                n: (ast.nodes.get i: (ffb9.stmt - 1).u64)
             )
         }
         if n.elseclause.isZero then return false
@@ -6210,6 +6190,21 @@ cvalText: function {
     return "".string
 }
 
+# foldedBranchOf9 -- the clause the typechecker's constant fold selected for an
+# `if` or a `match`. `known` false means the conditions did not all fold, so a
+# runtime branch must be emitted; `known` true with a zero stmt means nothing
+# was selected and nothing is emitted at all.
+foldedBranchOf9: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztyping.foldedbranch is {
+    go: symtab.typing.foldedBranch.get key: nid
+    match (
+        go
+    ) case some then {
+        return go
+    } case none then {
+        return (ztyping.foldedbranch known: false stmt: zast.nodeid)
+    }
+}
+
 # nodeConstText -- the C literal for a node carrying a compile-time
 # const stamp (folded .LABEL data access, unit constants); "" otherwise.
 nodeConstText: function {
@@ -9184,30 +9179,10 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         # a chain whose every condition folds has ONE live branch: emit its
         # value alone. spec.pdoc:5616 promises the false branch is not emitted,
         # and that promise is not limited to statement position.
-        vfold9: true
-        vwin9: u32
-        with vcit9: n.clauses.iterate do for vcId9: vcit9 loop {
-            if vfold9 then {
-                vcn9: ast.nodes.get i: (vcId9 - 1).u64
-                match (
-                    vcn9
-                ) case ifclause then {
-                    vfr9: foldIfClause9 :ast :symtab :ctx conds: vcn9.conditions
-                    if vfr9.ok then {
-                        if vfr9.val == 1 when vwin9 == 0 then vwin9 = vcn9.statement
-                    } else {
-                        vfold9 = false
-                    }
-                } else {
-                    vfold9 = false
-                }
-            }
-        }
-        if vfold9 then {
-            vwb9: vwin9
-            if vwb9 == 0 then vwb9 = n.elseclause
-            if vwb9 > 0 then {
-                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (vwb9 - 1).u64))
+        vfb9: foldedBranchOf9 :symtab nid: n.nodeid.u64
+        if vfb9.known then {
+            if (vfb9.stmt.isZero) == false then {
+                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (vfb9.stmt - 1).u64))
             }
         }
         tx: String
@@ -9964,196 +9939,6 @@ emitPrintStmt: function {
         } else null
     }
     if (emitted) == false then buf.append "    /* zemitterc: print with no argument */\n"
-}
-
-# cfold -- an emit-time integer fold result.
-cfold: record {
-    ok: bool
-    val: i64
-}
-
-# evalConstF64 -- a float literal at emit time. Only literals: a float-valued
-# unit constant renders through the same text path but nothing needs it yet.
-# ok=false for anything else, which leaves the caller on the integer path.
-ffold: record {
-    ok: bool
-    val: f64
-}
-
-evalConstF64: function {ast: Ast.view n: Node.view} out ffold is {
-    match (
-        n
-    ) case expression then {
-        return (evalConstF64 :ast n: (ast.nodes.get i: (n.expression - 1).u64))
-    } case atomid then {
-        aft9: ast.names.texts.get i: (n.name - 1).u64
-        pf9: aft9.stringview.parseF64
-        match (
-            pf9
-        ) case ok then {
-            return (ffold ok: true val: pf9)
-        } case err then null
-        return (ffold ok: false val: 0.0)
-    } else {
-        return (ffold ok: false val: 0.0)
-    }
-}
-
-# evalConstI64 -- best-effort integer fold of an expression at emit time:
-# int literals, unit constants whose pre-rendered C text is a plain integer,
-# and arithmetic/comparison binops over folded operands. ok=false when any
-# part is not provably constant.
-evalConstI64: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx.view
-    n: Node.view
-} out cfold is {
-    match (
-        n
-    ) case expression then {
-        return (evalConstI64 :ast :symtab :ctx n: (ast.nodes.get i: (n.expression - 1).u64))
-    } case atomid then {
-        atC9: ast.names.texts.get i: (n.name - 1).u64
-        at9: atC9.stringview
-        pl9: at9.parseI64
-        match (
-            pl9
-        ) case ok then {
-            return (cfold ok: true val: pl9)
-        } case err then null
-        cg9: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name)
-        match (
-            cg9
-        ) case some then {
-            cgv9: cg9.stringview
-            pc9: cgv9.parseI64
-            match (
-                pc9
-            ) case ok then {
-                return (cfold ok: true val: pc9)
-            } case err then null
-            # a bool constant's rendered C is the tag, not a numeral
-            if (cgv9.contains needle: "Z_BOOL_TAG_TRUE") then return (cfold ok: true val: 1)
-            if (cgv9.contains needle: "Z_BOOL_TAG_FALSE") then return (cfold ok: true val: 0)
-        } case none then null
-        return (cfold ok: false val: 0)
-    } case binop then {
-        lf9: evalConstI64 :ast :symtab :ctx n: (ast.nodes.get i: (n.lhs - 1).u64)
-        rf9: evalConstI64 :ast :symtab :ctx n: (ast.nodes.get i: (n.rhs - 1).u64)
-        # a float COMPARISON folds to a bool even though the operands are not
-        # integers; arithmetic over them stays unfolded, nothing needs it
-        if lf9.ok == false then {
-            lg9: evalConstF64 :ast n: (ast.nodes.get i: (n.lhs - 1).u64)
-            rg9: evalConstF64 :ast n: (ast.nodes.get i: (n.rhs - 1).u64)
-            if lg9.ok when rg9.ok then {
-                fop9: atomTextOf :ast n: (ast.nodes.get i: (n.operator - 1).u64)
-                fos9: fop9.stringview
-                fb9: false
-                fhit9: false
-                if fos9 == "==" then {
-                    fb9 = lg9.val == rg9.val
-                    fhit9 = true
-                } else if fos9 == "!=" then {
-                    fb9 = lg9.val != rg9.val
-                    fhit9 = true
-                } else if fos9 == "<" then {
-                    fb9 = lg9.val < rg9.val
-                    fhit9 = true
-                } else if fos9 == "<=" then {
-                    fb9 = lg9.val <= rg9.val
-                    fhit9 = true
-                } else if fos9 == ">" then {
-                    fb9 = lg9.val > rg9.val
-                    fhit9 = true
-                } else if fos9 == ">=" then {
-                    fb9 = lg9.val >= rg9.val
-                    fhit9 = true
-                }
-                if fhit9 then {
-                    if fb9 then return (cfold ok: true val: 1)
-                    return (cfold ok: true val: 0)
-                }
-            }
-        }
-        if lf9.ok when rf9.ok then {
-            opt9: atomTextOf :ast n: (ast.nodes.get i: (n.operator - 1).u64)
-            ops9: opt9.stringview
-            if ops9 == "+" then return (cfold ok: true val: lf9.val + rf9.val)
-            if ops9 == "-" then return (cfold ok: true val: lf9.val - rf9.val)
-            if ops9 == "*" then return (cfold ok: true val: lf9.val * rf9.val)
-            cb9: false
-            hit9: false
-            if ops9 == "==" then {
-                cb9 = lf9.val == rf9.val
-                hit9 = true
-            } else if ops9 == "!=" then {
-                cb9 = lf9.val != rf9.val
-                hit9 = true
-            } else if ops9 == "<" then {
-                cb9 = lf9.val < rf9.val
-                hit9 = true
-            } else if ops9 == "<=" then {
-                cb9 = lf9.val <= rf9.val
-                hit9 = true
-            } else if ops9 == ">" then {
-                cb9 = lf9.val > rf9.val
-                hit9 = true
-            } else if ops9 == ">=" then {
-                cb9 = lf9.val >= rf9.val
-                hit9 = true
-            }
-            if hit9 then {
-                if cb9 then return (cfold ok: true val: 1)
-                return (cfold ok: true val: 0)
-            }
-        }
-        return (cfold ok: false val: 0)
-    } case dottedpath then {
-        dv9: unitConstTextOf :ast :symtab :ctx :n
-        if dv9.length > 0 then {
-            dvs9: dv9.stringview
-            pd9: dvs9.parseI64
-            match (
-                pd9
-            ) case ok then {
-                return (cfold ok: true val: pd9)
-            } case err then null
-            # a bool constant's rendered C is the tag, not a numeral
-            if (dvs9.contains needle: "Z_BOOL_TAG_TRUE") then return (cfold ok: true val: 1)
-            if (dvs9.contains needle: "Z_BOOL_TAG_FALSE") then return (cfold ok: true val: 0)
-        }
-        return (cfold ok: false val: 0)
-    } else {
-        return (cfold ok: false val: 0)
-    }
-}
-
-# foldIfClause9 -- fold every plain (non-binding) condition of an ifclause;
-# ok only when all fold, val 1 when all are true.
-foldIfClause9: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx.view
-    conds: (ListVal u32).view
-} out cfold is {
-    tv9: 1
-    with citer: conds.iterate do for cid9: citer loop {
-        c9: ast.nodes.get i: (cid9 - 1).u64
-        match (
-            c9
-        ) case namedoperation then {
-            cl9: zast.nameTextAt :ast ref: c9.name
-            clv9: cl9.stringview
-            if clv9.length > 0 when clv9 != "when" then return (cfold ok: false val: 0)
-            f9: evalConstI64 :ast :symtab :ctx n: (ast.nodes.get i: (c9.operation - 1).u64)
-            if f9.ok == false then return (cfold ok: false val: 0)
-            if f9.val == 0 then tv9 = 0
-        } else {
-            return (cfold ok: false val: 0)
-        }
-    }
-    return (cfold ok: true val: tv9)
 }
 
 # plainStringLiteral9 -- the text of a single-chunk string literal (through
@@ -11561,29 +11346,10 @@ emitStmt: function {
         # constant guards: when every clause folds at emit time, only the
         # winning body is emitted -- provably-dead branches (including dead
         # `error` arms) are eliminated from the C.
-        efold9: true
-        ewin9: u32
-        with pciter: n.clauses.iterate do for pcId9: pciter loop {
-            if efold9 then {
-                pcn9: ast.nodes.get i: (pcId9 - 1).u64
-                match (
-                    pcn9
-                ) case ifclause then {
-                    fr9: foldIfClause9 :ast :symtab :ctx conds: pcn9.conditions
-                    if fr9.ok then {
-                        if fr9.val == 1 when ewin9 == 0 then ewin9 = pcn9.statement
-                    } else {
-                        efold9 = false
-                    }
-                } else {
-                    efold9 = false
-                }
-            }
-        }
-        if efold9 then {
-            ewb9: ewin9
-            if ewb9 == 0 then ewb9 = n.elseclause
-            if ewb9 > 0 then {
+        efb9: foldedBranchOf9 :symtab nid: n.nodeid.u64
+        if efb9.known then {
+            ewb9: efb9.stmt
+            if (ewb9.isZero) == false then {
                 lfo9: "\{ind}{\n"
                 buf.append lfo9
                 indE9: "\{ind}    "
@@ -11655,42 +11421,12 @@ emitStmt: function {
         buf.append le
         ctx.condDepth = ctx.condDepth - 1
     } case caseexpr then {
-        # constant subject over literal arms: emit only the matching arm.
-        msub9: evalConstI64 :ast :symtab :ctx n: (ast.nodes.get i: (n.subject - 1).u64)
-        melim9: msub9.ok
-        mwin9: u32
-        if melim9 then {
-            with mciter: n.clauses.iterate do for mcId9: mciter loop {
-                if melim9 then {
-                    mcn9: ast.nodes.get i: (mcId9 - 1).u64
-                    match (
-                        mcn9
-                    ) case caseclause then {
-                        if mcn9.name != 0 then {
-                            melim9 = false
-                        } else {
-                            maf9: (evalConstI64
-                                :ast
-                                :symtab
-                                :ctx
-                                n: (ast.nodes.get i: (mcn9.matcharm - 1).u64)
-                            )
-                            if maf9.ok then {
-                                if maf9.val == msub9.val when mwin9 == 0 then mwin9 = mcn9.statement
-                            } else {
-                                melim9 = false
-                            }
-                        }
-                    } else {
-                        melim9 = false
-                    }
-                }
-            }
-        }
-        if melim9 then {
-            mwb9: mwin9
-            if mwb9 == 0 then mwb9 = n.elseclause
-            if mwb9 > 0 then {
+        # constant subject over literal arms: emit only the matching arm, as
+        # the typechecker resolved it.
+        mfb9: foldedBranchOf9 :symtab nid: n.nodeid.u64
+        if mfb9.known then {
+            mwb9: mfb9.stmt
+            if (mwb9.isZero) == false then {
                 lmo9: "\{ind}{\n"
                 buf.append lmo9
                 indM9: "\{ind}    "
@@ -13224,29 +12960,10 @@ emitIfBindValue: function {
     } case ifexpr then {
         # every condition folds: declare the local and assign the one live
         # branch, rather than emitting a runtime if whose other arms are dead
-        bfold9: true
-        bwin9: u32
-        with bcit9: n.clauses.iterate do for bcId9: bcit9 loop {
-            if bfold9 then {
-                bcn9: ast.nodes.get i: (bcId9 - 1).u64
-                match (
-                    bcn9
-                ) case ifclause then {
-                    bfr9: foldIfClause9 :ast :symtab :ctx conds: bcn9.conditions
-                    if bfr9.ok then {
-                        if bfr9.val == 1 when bwin9 == 0 then bwin9 = bcn9.statement
-                    } else {
-                        bfold9 = false
-                    }
-                } else {
-                    bfold9 = false
-                }
-            }
-        }
-        if bfold9 then {
-            bwb9: bwin9
-            if bwb9 == 0 then bwb9 = n.elseclause
-            if bwb9 > 0 then {
+        bfb9: foldedBranchOf9 :symtab nid: n.nodeid.u64
+        if bfb9.known then {
+            bwb9: bfb9.stmt
+            if (bwb9.isZero) == false then {
                 bwn9: ast.nodes.get i: (bwb9 - 1).u64
                 if (simpleValueNode9 :ast n: bwn9) then {
                     bvx9: emitExpr :ast :symtab :ctx n: bwn9
@@ -16781,7 +16498,7 @@ isConstShape: function {
     } case dottedpath then {
         # a typed numeric literal `0x7F.u64` / `42.i128` folds to a C constant,
         # and so does a bool tag: `bool.true` / `bool.false` render to
-        # ((bool)Z_BOOL_TAG_*), which evalConstI64 reads back as 1 / 0.
+        # ((bool)Z_BOOL_TAG_*).
         pc9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         pcs9: pc9.stringview
         if pcs9 == "true" then return true
