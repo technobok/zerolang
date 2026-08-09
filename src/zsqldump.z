@@ -71,6 +71,30 @@ constValueText: function {v: ztypes.cval} out String is {
     return "NONE".string
 }
 
+# constValueCanonText -- the same value for the CANONICAL dump, with every id
+# resolved: an arm reads as `ARM:<type>.<arm>` and a string as its text. Raw
+# ids would make the golden move whenever an unrelated type or pool entry was
+# added ahead of it, which is the whole reason the canon form exists.
+constValueCanonText: function {
+    pool: zast.StringPool.view
+    st: zenv.ZSymbolTable
+    v: ztypes.cval
+} out String is {
+    if v.kind.armKind then {
+        tn9: canonTypeName reg: st.reg tid: v.armTid
+        an9: "?".string
+        if (v.armName.isZero) == false then an9 = pool.texts.get i: (v.armName.u32 - 1).u64
+        return "ARM:\{tn9}.\{an9}"
+    }
+    if v.kind.svalKind then {
+        if v.strId == 0 then return "SVAL:".string
+        if v.strId.u64 > st.typing.constStrings.length then return "SVAL:?".string
+        sv9: st.typing.constStrings.get i: (v.strId - 1).u64
+        return "SVAL:\{sv9}"
+    }
+    return (constValueText :v)
+}
+
 optTidStr: function {o: optionval ztypes.tid} out String is {
     match (
         o
@@ -1218,7 +1242,8 @@ ZDumper: class {
             tn9: canonTypeName reg: st.reg tid: (ztypes.tid.create from: pt9.u64)
             if tn9.stringview == unm then {
                 mn9: pool.texts.get i: (nm9 - 1)
-                line: "\{sqlStr s: mn9.stringview} | \{sqlStr s: (constValueText v: mc.value).stringview}"
+                cvt9: constValueCanonText :pool :st v: mc.value
+                line: "\{sqlStr s: mn9.stringview} | \{sqlStr s: cvt9.stringview}"
                 rows.append line
             }
         }

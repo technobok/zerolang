@@ -26786,30 +26786,99 @@ evalConstNode: function {
         }
         return (constValueOfMember :ast :ty :reg :unitName defName: an9.stringview)
     } case dottedpath then {
-        pn9: ast.nodes.get i: (n.parent - 1).u64
-        if (pn9.atomid) == false then return ztypes.noConst
-        pt9: zast.nameTextCopy :ast ref: pn9.name
-        if pt9.length == 0 then return ztypes.noConst
-        # `1.u32` is a width-suffixed literal, not a member read: the value is
-        # the parent's lexeme and the child only names its type.
-        if (isNumericLiteralName name: pt9.stringview) then {
-            return (constLiteralValue name: pt9.stringview)
+        cn9: String
+        {
+            chn9: ast.nodes.get i: (n.child - 1).u64
+            if chn9.atomid then cn9 = zast.nameTextCopy :ast ref: chn9.name
         }
-        # `unit.CONST` reads a constant out of another unit.
-        if (reg.isUnitName nameId: (nameIdOf :ast name: pt9.stringview)) then {
-            cn9: String
-            {
-                chn9: ast.nodes.get i: (n.child - 1).u64
-                if chn9.atomid then cn9 = zast.nameTextCopy :ast ref: chn9.name
+        if cn9.length == 0 then return ztypes.noConst
+        pn9: ast.nodes.get i: (n.parent - 1).u64
+        pt9: String
+        if pn9.atomid then pt9 = zast.nameTextCopy :ast ref: pn9.name
+        if pt9.length > 0 then {
+            # `1.u32` is a width-suffixed literal, not a member read: the value
+            # is the parent's lexeme and the child only names its type.
+            if (isNumericLiteralName name: pt9.stringview) then {
+                return (constLiteralValue name: pt9.stringview)
             }
-            if cn9.length == 0 then return ztypes.noConst
-            return (constValueOfMember
-                :ast
-                :ty
-                :reg
-                unitName: pt9.stringview
-                defName: cn9.stringview
+            # `unit.CONST` reads a constant out of another unit.
+            if (reg.isUnitName nameId: (nameIdOf :ast name: pt9.stringview)) then {
+                return (constValueOfMember
+                    :ast
+                    :ty
+                    :reg
+                    unitName: pt9.stringview
+                    defName: cn9.stringview
+                )
+            }
+            # A same-unit name can be a CONSTANT or a TYPE, and the two read
+            # identically: `CC.tcc` asks whether the constant CC holds that arm,
+            # `cckind.tcc` names an arm of the type. The constant is asked
+            # first because it is the narrower question -- a name is not both,
+            # and classifying a constant by its definition's shape would call
+            # `CC: cckind.tcc` a variant and read a nonexistent arm off it.
+            pcv9: constValueOfMember :ast :ty :reg :unitName defName: pt9.stringview
+            if pcv9.kind.armKind then {
+                cnid0: zast.poolFind pool: ast.names text: cn9.stringview
+                if cnid0.isZero then return ztypes.noConst
+                return (ztypes.makeBoolConst (pcv9.armName == cnid0))
+            }
+            if pcv9.kind.bvalKind then {
+                if cn9.stringview == "true" then return (ztypes.makeBoolConst pcv9.bval)
+                if cn9.stringview == "false" then return (ztypes.makeBoolConst ((pcv9.bval) == false))
+                return ztypes.noConst
+            }
+            # `oskind.linux` reads a variant ARM. The parent's FAMILY decides,
+            # the same test resolveConstantDef uses to tell an arm read from a
+            # construction: variant or union means the child is an arm, and
+            # anything else is a member read a constant cannot hold.
+            ptu9: (optU64Or
+                o: (walkLookupTyperef :ast :ty :reg currentUnit: unitName base: pt9.stringview)
+                d: 0
             )
+            if ptu9 == 0 then {
+                # a variant NOTHING ELSE mentions is not demanded, so the
+                # lookup finds nothing and the arm read silently yields no
+                # value. Descending mints it, which is what a use site would
+                # have done -- a constant reading an arm IS a use of the type.
+                ptu9 = (descendNamed :ty :reg :ast defUnit: unitName name: pt9.stringview).u64
+            }
+            if ptu9 > 0 then {
+                ptid9: ztypes.tid.create from: ptu9.u64
+                ptt9: reg.typetypeOf typeId: ptid9
+                isSum9: false
+                if ptt9 == ztypes.ztypetype.variantType then isSum9 = true
+                if ptt9 == ztypes.ztypetype.unionType then isSum9 = true
+                if isSum9 then {
+                    # bool's arms are the language's bool values, not tags a
+                    # user compares: they fold to a plain bool so every reader
+                    # of a CONDITION gets one without knowing about bool's type
+                    if pt9.stringview == "bool" then {
+                        if cn9.stringview == "true" then return (ztypes.makeBoolConst true)
+                        if cn9.stringview == "false" then return (ztypes.makeBoolConst false)
+                        return ztypes.noConst
+                    }
+                    return (ztypes.makeArmConst
+                        armTid: ptid9
+                        armName: (zast.poolFind pool: ast.names text: cn9.stringview)
+                    )
+                }
+            }
+            return ztypes.noConst
+        }
+        # `platform.os.linux` -- the ARM-PREDICATE form. `value.arm` is always a
+        # predicate in this language, so a dotted path whose PARENT is itself a
+        # constant asks "does it hold this arm", which is a bool. A different
+        # path from `==` against a tag, and the one `if platform.os.linux` takes.
+        pv9: evalConstNode :ast :ty :reg :unitName n: pn9
+        if pv9.kind.armKind then {
+            cnid9: zast.poolFind pool: ast.names text: cn9.stringview
+            if cnid9.isZero then return ztypes.noConst
+            return (ztypes.makeBoolConst (pv9.armName == cnid9))
+        }
+        if pv9.kind.bvalKind then {
+            if cn9.stringview == "true" then return (ztypes.makeBoolConst pv9.bval)
+            if cn9.stringview == "false" then return (ztypes.makeBoolConst ((pv9.bval) == false))
         }
         return ztypes.noConst
     } case binop then {
@@ -26819,6 +26888,21 @@ evalConstNode: function {
         if rv9.kind.none then return ztypes.noConst
         op9: atomName :ast n: (ast.nodes.get i: (n.operator - 1).u64)
         if op9.length == 0 then return ztypes.noConst
+        # two tags compare by ARM IDENTITY -- the owning type and the arm's
+        # name-pool id -- never by rendered text. Only equality is defined:
+        # arms have no order.
+        if lv9.kind.armKind when rv9.kind.armKind then {
+            same9: false
+            if lv9.armTid == rv9.armTid when lv9.armName == rv9.armName then same9 = true
+            if op9.stringview == "==" then return (ztypes.makeBoolConst same9)
+            if op9.stringview == "!=" then return (ztypes.makeBoolConst ((same9) == false))
+            return ztypes.noConst
+        }
+        if lv9.kind.bvalKind when rv9.kind.bvalKind then {
+            if op9.stringview == "==" then return (ztypes.makeBoolConst (lv9.bval == rv9.bval))
+            if op9.stringview == "!=" then return (ztypes.makeBoolConst (lv9.bval != rv9.bval))
+            return ztypes.noConst
+        }
         if lv9.kind.ivalKind when rv9.kind.ivalKind then {
             if (isComparisonOp name: op9.stringview) then {
                 return (constCompareInt op: op9.stringview a: lv9.ival b: rv9.ival)
