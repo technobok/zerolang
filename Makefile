@@ -129,7 +129,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard readable-check ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard readable-check ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -572,6 +572,28 @@ emitter-guard:
 # chain whose conditions all fold, where only the branch the emitter actually
 # emits decides.
 #
+# case-guard: a program declaring `main` is an entry point, so some case list has to
+# compile it -- run_cases (build + compare a golden), smoke_cases (build, output not
+# compared) or dump_cases. A unit with NO main exists to be opened by another program and
+# is compiled through its dependant, so it is exempt by construction rather than by a list.
+# record_method_ref_default was in no list at all: it emitted C that gcc rejected, and
+# nothing noticed until a backend sweep compiled every emitted file by hand.
+case-guard:
+	@fail=0; \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	  b=$$(basename $$f .z); \
+	  grep -qE '^main: *function' $$f || continue; \
+	  awk -v b="$$b" '$$1 == b {found = 1} END {exit !found}' \
+	    tests/fixtures/run_cases.txt tests/fixtures/smoke_cases.txt tests/fixtures/dump_cases.txt \
+	    || { echo "case-guard: $$b declares main but is in no case list -- nothing compiles it"; fail=1; }; \
+	done; \
+	if [ $$fail -ne 0 ]; then \
+	  echo "  add it to run_cases.txt with a tests/fixtures/run_golden/<name>.out, or to"; \
+	  echo "  smoke_cases.txt when the output is environment-dependent (build only)"; \
+	  exit 1; \
+	fi; \
+	echo "case-guard OK: every program declaring main is in a case list"
+
 # Lower the baseline as each folder gap is closed. Skipped when clang is absent -- clang is
 # not a build requirement.
 DEADCODE_BASELINE := 0
