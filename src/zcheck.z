@@ -18,6 +18,7 @@ public: unit {
     :exeRoot
     :fsnoFor
     :joinPath
+    :pickCc
     :resolveRuntimeDir
     :resolveSystemDir
 }
@@ -108,7 +109,16 @@ check: function {
         )
     }
     reg: ztypes.newRegistry
-    st: ztypecheck.typecheck program: prog :reg eager: true
+    # no --cc reaches the tooling front ends, so they resolve the DEFAULT the
+    # same way a flagless build would: same answer, same folded guards.
+    ccPath9: pickCc ccFlag: "" targetTriple: ""
+    st: (ztypecheck.typecheck
+        program: prog
+        :reg
+        eager: true
+        ccPath: ccPath9.stringview
+        target: ""
+    )
     nerr: st.typing.errors.length
     return (CheckResult
         parseOk: true
@@ -271,6 +281,28 @@ pickRuntimeUnder: function {root: StringView} out String is {
 
 # resolveSystemDir -- the stdlib dir by precedence: explicit flag >
 # $ZEROLANG_SYSTEM > $ZEROLANG_ROOT-relative > exePath-relative > cwd.
+# pickCc -- the C compiler this build will use: --cc > <target>-gcc > $CC > cc.
+# Shared, not zc-local, because every front end has to agree about it: the
+# `platform` unit's `cc` constant is folded during TYPE CHECKING, so zls and
+# zl must resolve it the same way zc does or a require: guard would decide
+# differently in the editor than in the build.
+pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
+    if ccFlag.length > 0 then return ccFlag.string
+    if targetTriple.length > 0 then {
+        r: String
+        r.append targetTriple
+        r.append "-gcc"
+        return r
+    }
+    ce: os.env key: "CC"
+    match (
+        ce
+    ) case some then {
+        if ce.length > 0 then return ce.copy
+    } case none then null
+    return "cc".string
+}
+
 resolveSystemDir: function {flagVal: StringView} out String is {
     if flagVal.length > 0 then return flagVal.string
     ev: os.env key: "ZEROLANG_SYSTEM"

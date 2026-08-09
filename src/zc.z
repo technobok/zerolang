@@ -253,24 +253,6 @@ stripDotZ: function {p: StringView} out String is {
     return p.string
 }
 
-# pickCc -- the C compiler: --cc > <target>-gcc > $CC > cc.
-pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
-    if ccFlag.length > 0 then return ccFlag.string
-    if targetTriple.length > 0 then {
-        r: String
-        r.append targetTriple
-        r.append "-gcc"
-        return r
-    }
-    ce: os.env key: "CC"
-    match (
-        ce
-    ) case some then {
-        if ce.length > 0 then return ce.copy
-    } case none then null
-    return "cc".string
-}
-
 # printEnv -- resolved tool paths and settings as KEY=VALUE lines (stdout).
 printEnv: function {
     systemFlag: StringView
@@ -280,7 +262,7 @@ printEnv: function {
 } is {
     sysd: zcheck.resolveSystemDir flagVal: systemFlag
     rund: zcheck.resolveRuntimeDir flagVal: runtimeFlag
-    cc: pickCc :ccFlag :targetTriple
+    cc: zcheck.pickCc :ccFlag :targetTriple
     root: zcheck.exeRoot
     ver: zversion.semver
     commit9: os.buildCommit
@@ -706,6 +688,10 @@ main: function is {
 
     systemdir: zcheck.resolveSystemDir flagVal: systemFlag.stringview
     runtimeDir: zcheck.resolveRuntimeDir flagVal: runtimeFlag.stringview
+    # resolved BEFORE the parse: the `platform` unit's constants are folded
+    # during type checking, so the answer has to exist by then. The build
+    # branch below reuses this rather than resolving a second time.
+    ccPath: zcheck.pickCc ccFlag: ccFlag.stringview targetTriple: targetTriple.stringview
 
 
     tParse0: os.monotonicMillis
@@ -738,7 +724,13 @@ main: function is {
         os.exit code: 1
     } else {
         reg: ztypes.newRegistry
-        st: ztypecheck.typecheck program: prog :reg eager: eagerCheck
+        st: (ztypecheck.typecheck
+            program: prog
+            :reg
+            eager: eagerCheck
+            ccPath: ccPath.stringview
+            target: targetTriple.stringview
+        )
         tCheck1: os.monotonicMillis
         nerr: st.typing.errors.length
         if nerr > 0 then {
@@ -809,7 +801,7 @@ main: function is {
                 io.eprintln "zc: could not write temporary C"
                 os.exit code: 1
             }
-            cc: pickCc ccFlag: ccFlag.stringview targetTriple: targetTriple.stringview
+            cc: ccPath.copy
             exe: String
             if isRun then {
                 exe = tempPath uname: unitname.stringview ext: ".bin"

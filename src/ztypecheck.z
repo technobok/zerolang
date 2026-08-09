@@ -27354,6 +27354,107 @@ resolveConstantDefsInUnit: function {
     }
 }
 
+# ccKindArm -- the `cckind` arm a resolved compiler PATH names, by basename.
+# By name alone: probing --version would put a subprocess in every compile, so
+# a --cc pointing at a wrapper script reads as `other` and a guard keyed on one
+# compiler will not fire for it. `tcc` is tested before `cc` and `clang` before
+# `gcc`, since the shorter spelling is a substring of paths naming the longer.
+ccKindArm: function {ccPath: StringView} out String is {
+    b9: ccPath
+    i9: ccPath.length
+    for i9 > 0 loop {
+        i9 = i9 - 1
+        ch9: ccPath.byteAt i9
+        match (
+            ch9
+        ) case some then {
+            if ch9 == 47 then {
+                b9 = ccPath.substring from: (i9 + 1) to: ccPath.length
+                i9 = 0
+            }
+        } case none then null
+    }
+    if (b9.contains needle: "tcc") then return "tcc".string
+    if (b9.contains needle: "clang") then return "clang".string
+    if (b9.contains needle: "gcc") then return "gcc".string
+    return "other".string
+}
+
+# seedPlatformConsts -- fill the `platform` unit in for THIS build.
+#
+# The file on disk carries defaults so the seed compiler can build a working
+# zc from a clean checkout; those defaults describe nothing in particular. The
+# real values are known only here, so they are written straight onto the
+# member-constant table and the definitions on disk are marked evaluated so
+# nothing reads them back.
+#
+# A no-op when the unit was never loaded, which is every program that does not
+# mention `platform`.
+seedPlatformConsts: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+} is {
+    pu9: constUnitTid :ast :reg unitName: "platform"
+    if pu9 == 0 then return
+    ptid9: ztypes.tid.create from: pu9.u64
+    # os/arch are not seeded yet: reading the host needs os.hostOsName /
+    # os.hostArchName, and the SEED's emitter has not learned those natives, so
+    # the compiler's own source cannot call them until the seed is bumped.
+    # They keep the on-disk defaults until then.
+    cka9: ccKindArm ccPath: ty.ccPath.stringview
+    (seedPlatformArm
+        :ast :ty :reg :ptid9
+        member: "cc"
+        typeName: "cckind"
+        armName: cka9.stringview
+    )
+    (seedPlatformValue
+        :ty
+        :ptid9
+        :ast
+        member: "target"
+        value: (ztypes.makeStrConst (constInternString :ty text: ty.targetTriple.stringview))
+    )
+}
+
+# seedPlatformArm -- one platform member, as an arm of one of its kinds.
+seedPlatformArm: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ptid9: ztypes.tid
+    member: StringView
+    typeName: StringView
+    armName: StringView
+} is {
+    v9: (constArmRead
+        :ast
+        :ty
+        :reg
+        lookupUnit: "platform"
+        :typeName
+        :armName
+    )
+    if v9.kind.none then return
+    (seedPlatformValue :ty :ptid9 :ast :member value: v9)
+}
+
+# seedPlatformValue -- record the value and mark the member EVALUATED, so the
+# on-demand walk returns this instead of folding the placeholder on disk.
+seedPlatformValue: function {
+    ty: ztyping.ZTyping
+    ptid9: ztypes.tid
+    ast: Ast
+    member: StringView
+    value: ztypes.cval
+} is {
+    nid9: zast.poolFind pool: ast.names text: member
+    if nid9.isZero then return
+    ty.setMemberConst parentTypeId: ptid9 nameId: nid9 :value
+    ty.constEvalState.set key: (ty.memberConstKey parentTypeId: ptid9 nameId: nid9) value: 2.u8
+}
+
 # resolveConstantDefs -- materialise every unit's constant definitions the way
 # the oracle resolves them on first name lookup, so a constant is a member of
 # the unit that declares it and `unit.NAME` resolves across units the way
@@ -28950,6 +29051,8 @@ typecheck: function {
     program: Node
     reg: ztypes.ZTypeRegistry.take
     eager: bool
+    ccPath: StringView
+    target: StringView
 } out zenv.ZSymbolTable is {
     nodeEstT9: u64
     match (
@@ -28959,6 +29062,8 @@ typecheck: function {
     } else null
     ty: ztyping.newTyping nodeEst: nodeEstT9
     ty.eagerAll = eager
+    ty.ccPath = ccPath.string
+    ty.targetTriple = target.string
     match (
         program
     ) case program then {
@@ -29030,6 +29135,11 @@ typecheck: function {
             reg: st.reg
             mainName: program.mainUnitName.stringview
         )
+    } else null
+    match (
+        program
+    ) case program then {
+        seedPlatformConsts ast: program.ast ty: st.typing reg: st.reg
     } else null
     resolveConstantDefs ty: st.typing reg: st.reg :program
     completeUnitInstantiations ty: st.typing reg: st.reg :program
