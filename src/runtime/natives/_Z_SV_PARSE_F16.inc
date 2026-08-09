@@ -23,7 +23,7 @@ static z_resultval_f16_parseerror_t z_StringView_parseF16(const z_StringView_t* 
         return out;
     }
     _Float16 h = (_Float16)v;
-    if (err == ERANGE || (!__builtin_isinf(v) && __builtin_isinf((float)h))) {
+    if (err == ERANGE || (!isinf(v) && isinf((float)h))) {
         out.tag = Z_RESULTVAL_F16_PARSEERROR_TAG_ERR;
         out.data.err.tag = Z_PARSEERROR_TAG_OVERFLOW;
         return out;
