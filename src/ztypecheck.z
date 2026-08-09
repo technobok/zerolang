@@ -26337,6 +26337,401 @@ resolveUnitIfDef: function {
     } else null
 }
 
+# --- compile-time constant evaluation ---
+#
+# The value domain the emitter used to answer for itself. evalConstNode walks a
+# constant expression once and yields a cval; constValueOfMember pulls the value
+# of a NAMED constant on demand and memoises it. On demand rather than in source
+# order because definitions are not written in dependency order and units are
+# not visited in dependency order: `B: A + 2` may precede `A: 1`, and a
+# `require:` block in one unit reads a constant declared in another.
+
+# reportConstError -- the E0600 diagnostic: the compiler was asked for a value
+# at compile time and could not produce one. One code for the whole category
+# with a distinct message per case, the way typeError carries its own. Distinct
+# from E0500, which is the emitter reporting a construct it cannot emit.
+reportConstError: function {
+    ty: ztyping.ZTyping
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    width: u32
+    msg: String
+    hint: String
+} is {
+    cn9: "a unit constant is evaluated at compile time".string
+    ty.errors.append (zast.ErrorData
+        :nodeid
+        :lineno
+        :colno
+        :width
+        err: zast.err.constError
+        msg: msg.copy
+        fsno: zvfs.fsno
+        note: cn9
+        hint: hint.copy
+    )
+    ty.isError = true
+}
+
+# constLiteralValue -- a numeric literal lexeme as a value, parsed through the
+# same parseI64 / parseF64 the emitter's fold uses so the two cannot disagree
+# about what a literal means. A magnitude outside i64 reads as "not a constant"
+# rather than as a wrapped one.
+constLiteralValue: function {name: StringView} out ztypes.cval is {
+    if (isFloatLiteralName :name) then {
+        pf9: name.parseF64
+        match (
+            pf9
+        ) case ok then {
+            return (ztypes.makeFloatConst pf9)
+        } case err then {
+            return ztypes.noConst
+        }
+    }
+    pi9: name.parseI64
+    match (
+        pi9
+    ) case ok then {
+        return (ztypes.makeIntConst pi9)
+    } case err then {
+        return ztypes.noConst
+    }
+}
+
+# constFloatOf -- an integer or float value as an f64, for a mixed-kind binop.
+# `has` false means the value is neither.
+constFloatOf: function {v: ztypes.cval} out ffoldval is {
+    if v.kind.fvalKind then return (ffoldval has: true val: v.fval)
+    if v.kind.ivalKind then {
+        cf9: v.ival.f64
+        match (
+            cf9
+        ) case ok then {
+            return (ffoldval has: true val: cf9)
+        } case err then {
+            return (ffoldval has: false val: 0.0)
+        }
+    }
+    return (ffoldval has: false val: 0.0)
+}
+
+# a float operand of a folded binop; `has` false = not a numeric value.
+ffoldval: record {
+    has: bool
+    val: f64
+}
+
+# constArithInt -- fold an arithmetic operator over two integers. Reports the
+# two failures the spec names: division by a constant zero, and a result the
+# evaluator cannot represent. Overflow is checked against i64, the range the
+# evaluator works in -- a value carries no target type until it materialises,
+# so a narrower target's overflow is still the materialiser's business.
+constArithInt: function {
+    ty: ztyping.ZTyping
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    op: StringView
+    a: i64
+    b: i64
+} out ztypes.cval is {
+    mx9: 9223372036854775807
+    mn9: (0 - 9223372036854775807) - 1
+    ovf9: "constant integer operation overflows".string
+    ovh9: "the compile-time evaluator works in i64; this result does not fit".string
+    if op == "+" then {
+        if b > 0 when a > (mx9 - b) then {
+            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            return ztypes.noConst
+        }
+        if b < 0 when a < (mn9 - b) then {
+            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            return ztypes.noConst
+        }
+        return (ztypes.makeIntConst (a + b))
+    }
+    if op == "-" then {
+        if b < 0 when a > (mx9 + b) then {
+            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            return ztypes.noConst
+        }
+        if b > 0 when a < (mn9 + b) then {
+            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            return ztypes.noConst
+        }
+        return (ztypes.makeIntConst (a - b))
+    }
+    if op == "*" then {
+        if a == 0 then return (ztypes.makeIntConst 0)
+        if b == 0 then return (ztypes.makeIntConst 0)
+        # -fwrapv makes the product defined, so dividing it back is a valid
+        # test; MIN * -1 wraps to itself and passes it, hence the pair below.
+        bad9: false
+        if a == (0 - 1) when b == mn9 then bad9 = true
+        if b == (0 - 1) when a == mn9 then bad9 = true
+        r9: a * b
+        if (r9 / a) != b then bad9 = true
+        if bad9 then {
+            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            return ztypes.noConst
+        }
+        return (ztypes.makeIntConst r9)
+    }
+    if op == "/" then {
+        if b == 0 then {
+            dm9: "division by a constant zero".string
+            dh9: "the divisor is a compile-time constant equal to 0".string
+            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: dm9 hint: dh9)
+            return ztypes.noConst
+        }
+        if a == mn9 when b == (0 - 1) then {
+            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            return ztypes.noConst
+        }
+        return (ztypes.makeIntConst (a / b))
+    }
+    return ztypes.noConst
+}
+
+# constCompareInt / constCompareFloat -- the six comparisons, yielding a bool
+# value. Written twice rather than once over f64 because an i64 comparison must
+# not lose precision by routing through a float.
+constCompareInt: function {op: StringView a: i64 b: i64} out ztypes.cval is {
+    if op == "==" then return (ztypes.makeBoolConst (a == b))
+    if op == "!=" then return (ztypes.makeBoolConst (a != b))
+    if op == "<" then return (ztypes.makeBoolConst (a < b))
+    if op == "<=" then return (ztypes.makeBoolConst (a <= b))
+    if op == ">" then return (ztypes.makeBoolConst (a > b))
+    if op == ">=" then return (ztypes.makeBoolConst (a >= b))
+    return ztypes.noConst
+}
+
+constCompareFloat: function {op: StringView a: f64 b: f64} out ztypes.cval is {
+    if op == "==" then return (ztypes.makeBoolConst (a == b))
+    if op == "!=" then return (ztypes.makeBoolConst (a != b))
+    if op == "<" then return (ztypes.makeBoolConst (a < b))
+    if op == "<=" then return (ztypes.makeBoolConst (a <= b))
+    if op == ">" then return (ztypes.makeBoolConst (a > b))
+    if op == ">=" then return (ztypes.makeBoolConst (a >= b))
+    return ztypes.noConst
+}
+
+constArithFloat: function {op: StringView a: f64 b: f64} out ztypes.cval is {
+    if op == "+" then return (ztypes.makeFloatConst (a + b))
+    if op == "-" then return (ztypes.makeFloatConst (a - b))
+    if op == "*" then return (ztypes.makeFloatConst (a * b))
+    if op == "/" then return (ztypes.makeFloatConst (a / b))
+    return ztypes.noConst
+}
+
+# constUnitTid -- the type id of unit `unitName`, or 0.
+constUnitTid: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    unitName: StringView
+} out u64 is {
+    cu9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
+    match (
+        cu9
+    ) case some then {
+        return cu9
+    } case none then {
+        return 0
+    }
+}
+
+# constDefNodeId -- the AST nodeid of the namedoperation declaring `defName` in
+# `unitName`, or 0. The Decl tree already records it, so the evaluator can
+# descend into a constant it has not reached yet without a second index.
+constDefNodeId: function {
+    ast: Ast
+    ty: ztyping.ZTyping.view
+    unitName: StringView
+    defName: StringView
+} out u32 is {
+    dc9: declOfUnitDef :ty :ast defUnit: unitName name: defName
+    if dc9.isZero then return 0
+    if (ty.declValid id: dc9) == false then return 0
+    do9: ty.decls.get i: (dc9 - 1)
+    return do9.node
+}
+
+# constDefIsComputed -- the definition COMPUTES a value from others, as against
+# the ALIAS forms (`Same: Holder`, `Node: zast.Node`) which name a type and are
+# resolveDef's business. Only a computed definition can be self-referential in
+# the constant sense: a ring of aliases is an alias cycle, and the resolver
+# already reports that with its own diagnostic and its own wording.
+constDefIsComputed: function {ast: Ast.view n: Node.view} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (constDefIsComputed :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } else {
+        return (isBinopNode :n)
+    }
+}
+
+# constValueOfMember -- the compile-time value of `unitName.defName`, evaluated
+# on demand and memoised in memberConst. constEvalState carries the cycle
+# guard: re-entering a member that is still evaluating is `A: B + 1` paired
+# with `B: A + 1`, which has no value and must say so once rather than recur.
+constValueOfMember: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    defName: StringView
+} out ztypes.cval is {
+    ut9: constUnitTid :ast :reg :unitName
+    if ut9 == 0 then return ztypes.noConst
+    utid9: ztypes.tid.create from: ut9.u64
+    nid9: zast.poolFind pool: ast.names text: defName
+    if nid9.isZero then return ztypes.noConst
+    k9: ty.memberConstKey parentTypeId: utid9 nameId: nid9
+    st9: 0
+    {
+        sg9: ty.constEvalState.get key: k9
+        match (
+            sg9
+        ) case some then {
+            st9 = sg9.u64
+        } case none then null
+    }
+    if st9 == 2 then return (ty.memberConstOf parentTypeId: utid9 nameId: nid9)
+    dnid9: constDefNodeId :ast :ty :unitName :defName
+    if dnid9 == 0 then return ztypes.noConst
+    opid9: u32
+    dline9: u32
+    dcol9: u32
+    dnode9: zast.nodeid
+    {
+        dn9: ast.nodes.get i: (dnid9 - 1).u64
+        match (
+            dn9
+        ) case namedoperation then {
+            opid9 = dn9.operation
+            dline9 = dn9.lineno
+            dcol9 = dn9.colno
+            dnode9 = dn9.nodeid
+        } else null
+    }
+    if opid9 == 0 then return ztypes.noConst
+    if st9 == 1 then {
+        if (constDefIsComputed :ast n: (ast.nodes.get i: (opid9 - 1).u64)) == false then {
+            ty.constEvalState.set key: k9 value: 2.u8
+            return ztypes.noConst
+        }
+        cm9: "constant '\{defName}' is defined in terms of itself"
+        ch9: "a unit constant may only read constants that do not read it back".string
+        (reportConstError
+            :ty
+            nodeid: dnode9
+            lineno: dline9
+            colno: dcol9
+            width: defName.length.u32.orPanic
+            msg: cm9
+            hint: ch9
+        )
+        ty.constEvalState.set key: k9 value: 2.u8
+        return ztypes.noConst
+    }
+    ty.constEvalState.set key: k9 value: 1.u8
+    v9: (evalConstNode :ast :ty :reg :unitName n: (ast.nodes.get i: (opid9 - 1).u64))
+    ty.constEvalState.set key: k9 value: 2.u8
+    if (v9.kind.none) == false then {
+        ty.setMemberConst parentTypeId: utid9 nameId: nid9 value: v9
+    }
+    return v9
+}
+
+# evalConstNode -- the compile-time value of a node, or `none` when the node is
+# not a constant shape. Numeric shapes only for now: bool and variant arms,
+# strings and static string methods arrive with the paths that render them.
+# Silence is deliberate here -- a shape with no value is not automatically an
+# error, because this walk also runs over definitions that are not constants at
+# all. The E0600s below are the cases where a value was genuinely required and
+# the operands were there.
+evalConstNode: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    n: Node.view
+} out ztypes.cval is {
+    match (
+        n
+    ) case expression then {
+        return (evalConstNode :ast :ty :reg :unitName n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case atomid then {
+        an9: zast.nameTextCopy :ast ref: n.name
+        if an9.length == 0 then return ztypes.noConst
+        if (isNumericLiteralName name: an9.stringview) then {
+            return (constLiteralValue name: an9.stringview)
+        }
+        return (constValueOfMember :ast :ty :reg :unitName defName: an9.stringview)
+    } case dottedpath then {
+        pn9: ast.nodes.get i: (n.parent - 1).u64
+        if (pn9.atomid) == false then return ztypes.noConst
+        pt9: zast.nameTextCopy :ast ref: pn9.name
+        if pt9.length == 0 then return ztypes.noConst
+        # `1.u32` is a width-suffixed literal, not a member read: the value is
+        # the parent's lexeme and the child only names its type.
+        if (isNumericLiteralName name: pt9.stringview) then {
+            return (constLiteralValue name: pt9.stringview)
+        }
+        # `unit.CONST` reads a constant out of another unit.
+        if (reg.isUnitName nameId: (nameIdOf :ast name: pt9.stringview)) then {
+            cn9: String
+            {
+                chn9: ast.nodes.get i: (n.child - 1).u64
+                if chn9.atomid then cn9 = zast.nameTextCopy :ast ref: chn9.name
+            }
+            if cn9.length == 0 then return ztypes.noConst
+            return (constValueOfMember
+                :ast
+                :ty
+                :reg
+                unitName: pt9.stringview
+                defName: cn9.stringview
+            )
+        }
+        return ztypes.noConst
+    } case binop then {
+        lv9: evalConstNode :ast :ty :reg :unitName n: (ast.nodes.get i: (n.lhs - 1).u64)
+        if lv9.kind.none then return ztypes.noConst
+        rv9: evalConstNode :ast :ty :reg :unitName n: (ast.nodes.get i: (n.rhs - 1).u64)
+        if rv9.kind.none then return ztypes.noConst
+        op9: atomName :ast n: (ast.nodes.get i: (n.operator - 1).u64)
+        if op9.length == 0 then return ztypes.noConst
+        if lv9.kind.ivalKind when rv9.kind.ivalKind then {
+            if (isComparisonOp name: op9.stringview) then {
+                return (constCompareInt op: op9.stringview a: lv9.ival b: rv9.ival)
+            }
+            return (constArithInt
+                :ty
+                nodeid: n.nodeid
+                lineno: n.lineno
+                colno: n.colno
+                op: op9.stringview
+                a: lv9.ival
+                b: rv9.ival
+            )
+        }
+        lf9: constFloatOf v: lv9
+        rf9: constFloatOf v: rv9
+        if lf9.has when rf9.has then {
+            if (isComparisonOp name: op9.stringview) then {
+                return (constCompareFloat op: op9.stringview a: lf9.val b: rf9.val)
+            }
+            return (constArithFloat op: op9.stringview a: lf9.val b: rf9.val)
+        }
+        return ztypes.noConst
+    } else {
+        return ztypes.noConst
+    }
+}
+
 # reportUnitConstantShape -- the diagnostic for a unit-level definition whose
 # value is not a literal. Unit constants inline literal numeric values BY
 # DESIGN (resolveConstantDef registers the literal, suffixed-literal and
@@ -26624,6 +27019,18 @@ resolveConstantDefsInUnit: function {
                         :unitName
                         defName: defName.stringview
                         defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                    )
+                    # The VALUE channel, beside the type channel above. Source
+                    # order drives the visit but not the evaluation: each pull
+                    # descends into whatever it names and memoises, so a
+                    # definition already reached as a dependency is a no-op
+                    # here and one written before its dependency still works.
+                    (constValueOfMember
+                        :ast
+                        :ty
+                        :reg
+                        :unitName
+                        defName: defName.stringview
                     )
                 }
             } else null

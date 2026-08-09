@@ -135,6 +135,7 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS decl_child (parent_decl_id INTEGER NOT NULL, name TEXT NOT NULL, child_decl_id INTEGER NOT NULL, position INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS ref_decl (node_id INTEGER PRIMARY KEY, decl_id INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS typed_nodes (node_id INTEGER PRIMARY KEY, type_id INTEGER, is_const INTEGER, const_value TEXT);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS member_const (parent_type_id INTEGER NOT NULL, name_id INTEGER NOT NULL, value TEXT NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS scope (scope_id INTEGER PRIMARY KEY, parent_id INTEGER, kind TEXT NOT NULL, name TEXT NOT NULL, depth INTEGER NOT NULL, opened_at_seq INTEGER NOT NULL, closed_at_seq INTEGER, unreachable INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS variable (variable_id INTEGER PRIMARY KEY, ztype_id INTEGER, ownership TEXT NOT NULL, is_private_access INTEGER NOT NULL, borrow_origin TEXT, synth_origin TEXT);\n"
@@ -790,6 +791,19 @@ ZDumper: class {
         }
     }
 
+    # appendMemberConst -- one row per named constant the compile-time evaluator
+    # produced a value for. The key is packed (parentTypeId << 32 | nameId), the
+    # same packing setMemberConst uses, and it is unpacked here so the two
+    # columns line up with the decl tables.
+    appendMemberConst: function {:this typing: ztyping.ZTyping} is {
+        with mcit: typing.memberConst.iterateItems do for mc: mcit loop {
+            pt9: mc.key / 4294967296
+            nm9: mc.key - (pt9 * 4294967296)
+            row: "INSERT OR IGNORE INTO member_const VALUES (\{pt9}, \{nm9}, '\{constValueText v: mc.value}');\n"
+            this.acc.append s: row
+        }
+    }
+
     # appendConformance -- one row per recorded conformance (impl satisfies spec
     # under a label).
     appendConformance: function {:this typing: ztyping.ZTyping.view} is {
@@ -1189,6 +1203,28 @@ ZDumper: class {
         this.emitSection title: "conformance" :rows
     }
 
+    # appendMemberConstCanon -- the compile-time VALUE of each named constant
+    # this unit declares, keyed by name rather than by the packed
+    # (parentTypeId, nameId) the table uses, and sorted like every canon
+    # section so the golden does not depend on map order.
+    appendMemberConstCanon: function {:this pool: zast.StringPool.view unm: StringView st: zenv.ZSymbolTable} is {
+        rows: (List String)
+        with mcit: st.typing.memberConst.iterateItems do for mc: mcit loop {
+            pt9: mc.key / 4294967296
+            nm9: mc.key - (pt9 * 4294967296)
+            # the parent of a unit constant IS the unit type, whose name is the
+            # unit name -- definedUnitOf9 answers for a type declared INSIDE a
+            # unit and has nothing to say about the unit type itself.
+            tn9: canonTypeName reg: st.reg tid: (ztypes.tid.create from: pt9.u64)
+            if tn9.stringview == unm then {
+                mn9: pool.texts.get i: (nm9 - 1)
+                line: "\{sqlStr s: mn9.stringview} | \{sqlStr s: (constValueText v: mc.value).stringview}"
+                rows.append line
+            }
+        }
+        this.emitSection title: "member_const" :rows
+    }
+
     # appendSymbolTableCanon -- the body-walk symbol table (scope / entry /
     # variable / narrowed_subtype), id-normalized: scope/entry/variable PK ids and
     # the scope open/close seqs are dropped, foreign keys resolved to names (scope
@@ -1571,6 +1607,7 @@ dumpSql: function {program: Node.view vfs: zvfs.ZVfs.view symtab: zenv.ZSymbolTa
     overrideExpressionStamps typing: symtab.typing :program
     d.appendTypedNodes typing: symtab.typing
     d.appendAtomStamps typing: symtab.typing
+    d.appendMemberConst typing: symtab.typing
     d.appendConformance typing: symtab.typing
     match (
         program
@@ -1635,6 +1672,7 @@ dumpCanon: function {program: Node.view symtab: zenv.ZSymbolTable} out String is
     match (
         program
     ) case program then {
+        d.appendMemberConstCanon pool: program.ast.names unm: mu.stringview st: symtab
         d.appendSymbolTableCanon pool: program.ast.names st: symtab
     } else null
     d.appendCallGenericBindingCanon :program st: symtab
