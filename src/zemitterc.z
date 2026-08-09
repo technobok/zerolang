@@ -1464,7 +1464,6 @@ Ctx: class {
     cnames: (List String)
     litIds: (ListVal u64)
     usedLits: (MapVV u64 value: bool)
-    constVals: (MapVR u64 value: String)
     needs: (MapRV String value: bool)
     methodReturns: (Map String value: String)
     dataElems: (Map String value: String)
@@ -6158,15 +6157,47 @@ argSlotList: function {
 # cvalText -- the C literal for a compile-time value the typechecker folded.
 # "" for a kind this emitter cannot render yet, which leaves the caller on its
 # ordinary path rather than emitting something wrong.
+# constSuffixForTid -- the C literal suffix a constant of type `tid` needs, so
+# a value renders the way the rendered TEXT used to: `u32` wants U, `u64` wants
+# ULL, and a scalar typedef wants whatever its base wants (`nameid` -> u32 ->
+# U). The name-based half of this is literalSuffixBase's, which answers the
+# same question starting from a suffix NAME rather than from a type.
+constSuffixForTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
+    if tid.isZero then return "".string
+    tn9: typeNameOfReg9 :symtab :tid
+    if tn9.length == 0 then return "".string
+    # scalarCTypeFor rather than cTypeOf: it re-checks the tid for a user
+    # shadow, so a user type named `u32` cannot pick up u32's C suffix. The
+    # name lookup it needs is the shape shadow-guard sanctions.
+    if (scalarCTypeFor :symtab name: tn9.stringview :tid).length > 0 then {
+        return (numLitSuffix name: tn9.stringview)
+    }
+    # a scalar TYPEDEF chases to the builtin it spells, keyed by tid so the
+    # answer does not depend on which unit the read happens in. numLitSuffix
+    # yields "" for a name that is not a builtin, so no second scalar test is
+    # needed here.
+    bo9: symtab.typing.typedefBaseName.get key: tid
+    match (
+        bo9
+    ) case some then {
+        bn9: bo9.copy
+        return (numLitSuffix name: bn9.stringview)
+    } case none then null
+    return "".string
+}
+
 cvalText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
+    tid: ztypes.tid
     v: ztypes.cval
 } out String is {
     if v.kind.ivalKind then {
         iv: v.ival
-        return "\{iv}"
+        r9: "\{iv}"
+        r9.append (constSuffixForTid :symtab :tid)
+        return r9
     }
     if v.kind.fvalKind then {
         fv: v.fval
@@ -6209,7 +6240,7 @@ foldedBranchOf9: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztyping.
 # const stamp (folded .LABEL data access, unit constants); "" otherwise.
 nodeConstText: function {
     ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
+    symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     nid: zast.nodeid
 } out String is {
@@ -6218,9 +6249,53 @@ nodeConstText: function {
     match (
         g9
     ) case some then {
-        return (cvalText :ast :symtab :ctx v: g9)
+        tv9: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: nid.u64
+        return (cvalText :ast :symtab :ctx tid: tv9 v: g9)
     } case none then {
         return "".string
+    }
+}
+
+# memberConstTextOf9 -- the C text for a unit constant, rendered from its VALUE
+# and carrying the literal suffix its declared type asks for. "" when the
+# member has no compile-time value, which is what leaves the caller on its
+# ordinary path.
+memberConstTextOf9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    unitTid: ztypes.tid
+    nameId: zast.nameid
+} out String is {
+    if unitTid.isZero then return "".string
+    if nameId.isZero then return "".string
+    mv9: symtab.typing.memberConstOf parentTypeId: unitTid :nameId
+    if mv9.kind.none then return "".string
+    mt9: ztypes.tid
+    {
+        co9: symtab.typing.declChildOfId parentTypeId: unitTid :nameId
+        match (
+            co9
+        ) case some then {
+            mt9 = ztypes.tid.create from: co9
+        } case none then null
+    }
+    return (cvalText :ast :symtab :ctx tid: mt9 v: mv9)
+}
+
+# unitTidOf9 -- the type id of the unit named `unitName`, or 0.
+unitTidOf9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    unitName: StringView
+} out ztypes.tid is {
+    uo9: symtab.reg.unitNameTid.get key: (zast.poolFind pool: ast.names text: unitName).u64
+    match (
+        uo9
+    ) case some then {
+        return (ztypes.tid.create from: uo9)
+    } case none then {
+        return ztypes.tid
     }
 }
 
@@ -7829,14 +7904,14 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         ) case some then {
             return (emitLocalAtomName :ctx name: av vid: avo9)
         } case none then null
-        cgo: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name)
-        match (
-            cgo
-        ) case some then {
-            cvv: cgo.stringview
-            cvc: cvv.string
-            return cvc
-        } case none then null
+        mca9: (memberConstTextOf9
+            :ast
+            :symtab
+            :ctx
+            unitTid: (unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview)
+            nameId: n.name
+        )
+        if mca9.length > 0 then return mca9
         # stamped unit-def reference: the RECORD / FUNCTION legs run off the
         # stamped tid; unstamped atoms (fn-mono template re-emission walks
         # the shared template AST) fall back to the name probe
@@ -12454,22 +12529,22 @@ emitBoolElse: function {
 
 # scalarArmLabel -- the C case label for a scalar arm: the constant
 # pool's rendering when the arm names a constant, else the name itself.
-scalarArmLabel: function {ast: Ast ctx: Ctx.view arm: StringView} out String is {
-    ck: constKeyIn :ast unitName: ctx.mainName.stringview nameId: (zast.poolFind
-        pool: ast.names
-        text: arm
+scalarArmLabel: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    arm: StringView
+} out String is {
+    lv9: (memberConstTextOf9
+        :ast
+        :symtab
+        :ctx
+        unitTid: (unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview)
+        nameId: (zast.poolFind pool: ast.names text: arm)
     )
-    cgo: ctx.constVals.get key: ck
-    match (
-        cgo
-    ) case some then {
-        cvv: cgo.stringview
-        cvc: cvv.string
-        return cvc
-    } case none then {
-        ac: arm.string
-        return ac
-    }
+    if lv9.length > 0 then return lv9
+    ac: arm.string
+    return ac
 }
 
 # flushBlockFrees -- emit + reclaim the heap/collection destructors registered
@@ -12569,7 +12644,7 @@ emitScalarClause: function {
     ) case caseclause then {
         armC9: zast.nameTextAt :ast ref: c.name
         arm: armC9.stringview
-    lbl: scalarArmLabel :ast :ctx :arm
+    lbl: scalarArmLabel :ast :symtab :ctx :arm
         l2: "\{ind}case \{lbl}: {\n"
         buf.append l2
         ind3: "\{ind}    "
@@ -16317,20 +16392,6 @@ typeNameOfReg9: function {symtab: zenv.ZSymbolTable tid: ztypes.tid} out String 
     return (ztypecheck.regTypeNameOf reg: symtab.reg tid: (ztypes.tid.create from: tid.u64))
 }
 
-# constKeyIn -- the constVals key for constant `nameId` declared in `unitName`:
-# the two pool ids packed into one u64, so units may share constant names.
-# 0 when the unit name is not interned (it can then own no constant).
-constKeyIn: function {ast: Ast unitName: StringView nameId: zast.nameid} out u64 is {
-    uid9: (zast.poolFind pool: ast.names text: unitName)
-    if uid9.isZero then return 0
-    return (uid9.u64 * 4294967296) + nameId.u64
-}
-
-# constKeyOf -- constKeyIn for the unit currently bound on ctx.
-constKeyOf: function {ast: Ast.view ctx: Ctx.view nameId: zast.nameid} out u64 is {
-    return (constKeyIn :ast unitName: ctx.mainName.stringview :nameId)
-}
-
 # unitConstTextOf -- the rendered C text of a `unit.CONST` dotted path, or ""
 # when the path names no constant of a known unit. Emission, the constant-shape
 # test and the integer fold all ask this one question: a constant that folds
@@ -16369,37 +16430,16 @@ unitConstTextOf: function {
             } case none then null
         }
         if isU8 then {
-            ck8: constKeyIn :ast unitName: ub8.stringview nameId: cn8
-            if ck8 > 0 then {
-                cv8: ctx.constVals.get key: ck8
-                match (
-                    cv8
-                ) case some then {
-                    cs8: cv8.stringview
-                    return cs8.string
-                } case none then null
-            }
-            # no rendered text: ask the typechecker for the VALUE. Kinds this
-            # emitter never learned to render as text -- a variant arm -- have
-            # one, and it is the only thing that can answer for them. The text
-            # path stays first so every constant that already rendered keeps
-            # rendering identically.
-            uto8: symtab.reg.unitNameTid.get key: (zast.poolFind
-                pool: ast.names
-                text: ub8.stringview
-            ).u64
-            match (
-                uto8
-            ) case some then {
-                mcv8: (symtab.typing.memberConstOf
-                    parentTypeId: (ztypes.tid.create from: uto8.u64)
-                    nameId: cn8
-                )
-                if (mcv8.kind.none) == false then {
-                    mct8: cvalText :ast :symtab :ctx v: mcv8
-                    if mct8.length > 0 then return mct8
-                }
-            } case none then null
+            # the VALUE is the only source: the emitter no longer renders a
+            # constant to text ahead of time and then re-reads that text.
+            mct8: (memberConstTextOf9
+                :ast
+                :symtab
+                :ctx
+                unitTid: (unitTidOf9 :ast :symtab unitName: ub8.stringview)
+                nameId: cn8
+            )
+            if mct8.length > 0 then return mct8
         }
     }
     return "".string
@@ -16453,76 +16493,6 @@ literalSuffixBase: function {
         if bc9.length > 0 then return bn9
     } case none then null
     return "".string
-}
-
-# isConstShape -- a unit member value that folds to a C constant
-# expression: numeric/float atoms, already-rendered constant names, and
-# binop trees over those.
-isConstShape: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx.view
-    n: Node.view
-} out bool is {
-    match (
-        n
-    ) case expression then {
-        return (isConstShape :ast :symtab :ctx n: (ast.nodes.get i: (n.expression - 1).u64))
-    } case atomid then {
-        avK9: ast.names.texts.get i: (n.name - 1).u64
-        av: avK9.stringview
-        b0: av.byteAt i: 0
-        match (
-            b0
-        ) case some then {
-            if b0 >= 48 then {
-                if b0 <= 57 then return true
-            }
-        } case none then null
-        cgo: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name)
-        match (
-            cgo
-        ) case some then {
-            return true
-        } case none then {
-            return false
-        }
-    } case binop then {
-        if (isConstShape :ast :symtab :ctx n: (ast.nodes.get i: (n.lhs - 1).u64)) then {
-            return (isConstShape :ast :symtab :ctx n: (ast.nodes.get i: (n.rhs - 1).u64))
-        } else {
-            return false
-        }
-    } case ifexpr then {
-        return true
-    } case dottedpath then {
-        # a typed numeric literal `0x7F.u64` / `42.i128` folds to a C constant,
-        # and so does a bool tag: `bool.true` / `bool.false` render to
-        # ((bool)Z_BOOL_TAG_*).
-        pc9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        pcs9: pc9.stringview
-        if pcs9 == "true" then return true
-        if pcs9 == "false" then return true
-        cTypeLk4: literalSuffixBase :ast :symtab :ctx name: pcs9
-        if cTypeLk4.length > 0 then {
-            pb9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
-            db9: pb9.stringview.byteAt i: 0
-            match (
-                db9
-            ) case some then {
-                if db9 >= 48 then {
-                    if db9 <= 57 then return true
-                }
-            } case none then null
-        }
-        {
-            ucs8: unitConstTextOf :ast :symtab :ctx :n
-            if ucs8.length > 0 then return true
-        }
-        return false
-    } else {
-        return false
-    }
 }
 
 # fillMethodReturns -- record each main-unit type method's return
@@ -16855,72 +16825,6 @@ fillTypeMethodReturns: function {
             } else null
         }
     } else null
-}
-
-# fillConstVals -- pre-render each main-unit constant's C text in
-# definition order (constants reference only earlier ones; C folds the
-# arithmetic in the emitted expression).
-fillConstVals: function {program: Node symtab: zenv.ZSymbolTable.view ctx: Ctx.view} is {
-    match (
-        program
-    ) case program then {
-        uCnt9d: program.ast.units.length
-        uIdx9d: u64
-        for uIdx9d < uCnt9d loop {
-            uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9d))
-            uIdx9d = uIdx9d + 1
-            opId9: zast.nodeid
-            un9: String
-            {
-                u: program.ast.nodes.get i: (uId9 - 1).u64
-                if u.namedoperation then {
-                    un: zast.poolTextAt pool: program.ast.names ref: u.name
-                    if (isEmittableFileUnit name: un.stringview) then {
-                        opId9 = u.operation
-                        un9 = un.copy
-                    }
-                }
-            }
-            if opId9 > 0 then {
-                sm9: ctx.mainName.copy
-                ctxBindMain :ctx name: un9.stringview
-                (fillConstValsIn
-                    :symtab
-                    :ctx
-                    ast: program.ast
-                    mainOpId: opId9
-                )
-                ctxBindMain :ctx name: sm9.stringview
-            }
-        }
-    } else null
-}
-
-# record a unit's constant values for inlining.
-fillConstValsIn: function {
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    ast: Ast.view
-    mainOpId: zast.nodeid
-} is {
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: mainOpId
-    with biter: bodyIds9.iterate do for bm: biter loop {
-        bmNode9: ast.nodes.get i: (bm - 1).u64
-        if bmNode9.namedoperation then {
-            if (isConstShape
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-            ) then {
-                cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-                nk: constKeyOf :ast :ctx nameId: bmNode9.name
-                cvv: cv.stringview
-                ck: cvv.string
-                if nk > 0 then ctx.constVals.set key: nk value: ck
-            }
-        }
-    }
 }
 
 # emitFns -- the main unit's function declarations then definitions
@@ -18216,7 +18120,6 @@ emitC: function {
         cnames: cnames9
         :litIds
         usedLits: (MapVV u64 value: bool)
-        constVals: (MapVR u64 value: String)
         tailRetActive: false
         defUnitId: (MapVV u64 value: u64)
         unitIdByName: (MapRV String value: u64)
@@ -18319,7 +18222,6 @@ emitC: function {
     }
     buildDefUnitIndex :symtab :ctx
     ctxBindMain :ctx name: ctx.realMain.stringview
-    fillConstVals :program :symtab :ctx
     fillMethodReturns :program :ctx
     fillDataElems :program :symtab :ctx
     fillNeeds :program :ctx
