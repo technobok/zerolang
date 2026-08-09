@@ -1480,8 +1480,14 @@ defTypetypeOf: function {
         match (
             defn.kind
         ) case recordDef then {
-            if name == "null" then return (optionval.none ztypes.ztypetype)
-            if name == "never" then return (optionval.none ztypes.ztypetype)
+            # `null` and `never` parse as empty records but ARE their own
+            # typetypes, which resolveNamedType and resolveDef already know.
+            # Reporting none here left them "unclassified" alongside dotted
+            # aliases, and an unclassified def resolves to tid 0 -- which is
+            # why core's `null:`/`never:` re-exports never resolved and the
+            # lookup chain's system probe had to answer for them.
+            if name == "null" then return (optionval.some ztypes.ztypetype.nullType)
+            if name == "never" then return (optionval.some ztypes.ztypetype.neverType)
             return (optionval.some ztypes.ztypetype.recordType)
         } case variantDef then {
             return (optionval.some ztypes.ztypetype.variantType)
@@ -27189,7 +27195,10 @@ walkUnitProbe9: function {
 }
 
 # resolve a dotted type reference `base` from `currentUnit` by walking
-# the name path; returns the referent's type id, or `none`.
+# the name path; returns the referent's type id, or `none`. Two roots only:
+# the unit itself, then `core` -- the prelude every program opens, and the one
+# unit the resolver names. Every other unit, stdlib or not, is reached the same
+# way a user unit is: through core's re-exports or a qualified path.
 walkLookupTyperef: function {
     ast: Ast.view
     ty: ztyping.ZTyping.view
@@ -27203,39 +27212,15 @@ walkLookupTyperef: function {
     ) case some then {
         return (optionval.some r9)
     } case none then null
-    # `Any` is not user-reachable through the stdlib fallbacks: only its own
-    # unit (system.z, or a user unit defining one) resolves it. The
-    # constraint-position gate is checkAnyBounds.
+    # `Any` is not user-reachable through core: only its own unit (system.z,
+    # or a user unit defining one) resolves it. The constraint-position gate
+    # is checkAnyBounds.
     if base == "Any" then return (optionval.none u64)
-    r8: walkUnitProbe9 :ast :ty :reg uname: "system" :base
-    match (
-        r8
-    ) case some then {
-        return (optionval.some r8)
-    } case none then null
-    r6: walkUnitProbe9 :ast :ty :reg uname: "io" :base
-    match (
-        r6
-    ) case some then {
-        return (optionval.some r6)
-    } case none then null
     r5: walkUnitProbe9 :ast :ty :reg uname: "core" :base
     match (
         r5
     ) case some then {
         return (optionval.some r5)
-    } case none then null
-    r4: walkUnitProbe9 :ast :ty :reg uname: "os" :base
-    match (
-        r4
-    ) case some then {
-        return (optionval.some r4)
-    } case none then null
-    r3: walkUnitProbe9 :ast :ty :reg uname: "cli" :base
-    match (
-        r3
-    ) case some then {
-        return (optionval.some r3)
     } case none then null
     return (optionval.none u64)
 }
@@ -27455,41 +27440,11 @@ walkLookupTyperefById: function {
     # `Any` is not user-reachable through the stdlib fallbacks (see the
     # text-keyed twin above).
     if baseId == (zast.poolFind pool: ast.names text: "Any") then return (optionval.none u64)
-    r8: walkUnitProbe9ById :ast :ty :reg uname: "system" :baseId
-    match (
-        r8
-    ) case some then {
-        return (optionval.some r8)
-    } case none then null
-    r7: walkUnitProbe9ById :ast :ty :reg uname: "collections" :baseId
-    match (
-        r7
-    ) case some then {
-        return (optionval.some r7)
-    } case none then null
-    r6: walkUnitProbe9ById :ast :ty :reg uname: "io" :baseId
-    match (
-        r6
-    ) case some then {
-        return (optionval.some r6)
-    } case none then null
     r5: walkUnitProbe9ById :ast :ty :reg uname: "core" :baseId
     match (
         r5
     ) case some then {
         return (optionval.some r5)
-    } case none then null
-    r4: walkUnitProbe9ById :ast :ty :reg uname: "os" :baseId
-    match (
-        r4
-    ) case some then {
-        return (optionval.some r4)
-    } case none then null
-    r3: walkUnitProbe9ById :ast :ty :reg uname: "cli" :baseId
-    match (
-        r3
-    ) case some then {
-        return (optionval.some r3)
     } case none then null
     return (optionval.none u64)
 }
