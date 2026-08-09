@@ -5815,7 +5815,9 @@ scanUnitVisibility: function {
 # literal. A key nothing reads would be silently ignored, so it is rejected.
 checkOneRequireBlock: function {
     ty: ztyping.ZTyping
-    ast: Ast.view
+    ast: Ast
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
     declId: ztypes.declid
     libNid: zast.nameid
 } is {
@@ -5853,26 +5855,36 @@ checkOneRequireBlock: function {
                 mn9q
             ) case namedoperation then {
                 if mn9q.name == libNid then {
-                    ok9q: false
-                    vn9q: ast.nodes.get i: (mn9q.operation - 1).u64
-                    match (
-                        vn9q
-                    ) case atomstring then {
-                        if vn9q.stringparts.length == 1 then {
-                            pn9q: ast.nodes.get i: ((vn9q.stringparts.get i: 0) - 1).u64
-                            if pn9q.stringchunk then ok9q = true
+                    # any expression the compiler can evaluate to a string,
+                    # not just a literal: the point of the block is to let a
+                    # unit decide what it needs from the toolchain it is being
+                    # built with, and deciding means an `if`.
+                    nerr9q: ty.errors.length
+                    lv9q: (evalConstNode
+                        :ast
+                        :ty
+                        :reg
+                        :unitName
+                        n: (ast.nodes.get i: (mn9q.operation - 1).u64)
+                    )
+                    if (lv9q.kind.svalKind) == false then {
+                        # when the evaluation itself reported -- a reached
+                        # `error`, an interpolation -- it has already said what
+                        # is wrong, and "must evaluate to a string" on top of
+                        # that is noise. Compared against THIS call's count
+                        # rather than ty.isError, which any earlier error in
+                        # the program would have set.
+                        if ty.errors.length == nerr9q then {
+                            (addResolveErrorH
+                                :ty
+                                nodeid: mn9q.nodeid
+                                lineno: mn9q.lineno
+                                colno: mn9q.colno
+                                e: zast.err.requireBlock
+                                msg: "'library:' must evaluate to a string at compile time".string
+                                width: 7
+                            )
                         }
-                    } else null
-                    if (ok9q) == false then {
-                        (addResolveErrorH
-                            :ty
-                            nodeid: mn9q.nodeid
-                            lineno: mn9q.lineno
-                            colno: mn9q.colno
-                            e: zast.err.requireBlock
-                            msg: "'library:' must be a plain string literal naming a link library".string
-                            width: 7
-                        )
                     }
                 } else {
                     kt9q: zast.nameTextAt :ast ref: mn9q.name
@@ -5914,36 +5926,41 @@ checkOneRequireBlock: function {
 
 # requireLibraryText -- the library a `require:` block names, or "" when it
 # names none. checkRequireBlocks has already rejected any other shape.
-requireLibraryText: function {ast: Ast.view opId: u32 libNid: zast.nameid} out String is {
+requireLibraryText: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    opId: u32
+    libNid: zast.nameid
+} out String is {
     lib9w: String
     if opId == 0 then return lib9w
-    on9w: ast.nodes.get i: (opId - 1).u64
-    match (
-        on9w
-    ) case unitdef then {
-        with bit9w: on9w.body.iterate do for mId9w: bit9w loop {
-            mn9w: ast.nodes.get i: (mId9w - 1).u64
-            match (
-                mn9w
-            ) case namedoperation then {
-                if mn9w.name == libNid then {
-                    vn9w: ast.nodes.get i: (mn9w.operation - 1).u64
-                    match (
-                        vn9w
-                    ) case atomstring then {
-                        if vn9w.stringparts.length == 1 then {
-                            pn9w: ast.nodes.get i: ((vn9w.stringparts.get i: 0) - 1).u64
-                            match (
-                                pn9w
-                            ) case stringchunk then {
-                                lib9w = pn9w.text.copy
-                            } else null
-                        }
-                    } else null
-                }
-            } else null
-        }
-    } else null
+    mop9w: u32
+    {
+        on9w: ast.nodes.get i: (opId - 1).u64
+        match (
+            on9w
+        ) case unitdef then {
+            with bit9w: on9w.body.iterate do for mId9w: bit9w loop {
+                mn9w: ast.nodes.get i: (mId9w - 1).u64
+                match (
+                    mn9w
+                ) case namedoperation then {
+                    if mn9w.name == libNid then mop9w = mn9w.operation
+                } else null
+            }
+        } else null
+    }
+    if mop9w == 0 then return lib9w
+    v9w: (evalConstNode
+        :ast
+        :ty
+        :reg
+        :unitName
+        n: (ast.nodes.get i: (mop9w - 1).u64)
+    )
+    if v9w.kind.svalKind then lib9w = constStringAt :ty id: v9w.strId
     return lib9w
 }
 
@@ -5953,7 +5970,11 @@ requireLibraryText: function {ast: Ast.view opId: u32 libNid: zast.nameid} out S
 # a definition of the unit OTHER than the block itself must have resolved. The
 # block is a top-level definition like any other, so counting it would let
 # every unit light itself.
-requiredLibs: function {ty: ztyping.ZTyping program: Node} out List String is {
+requiredLibs: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    program: Node
+} out List String is {
     libs9w: (List String)
     match (
         program
@@ -5982,6 +6003,10 @@ requiredLibs: function {ty: ztyping.ZTyping program: Node} out List String is {
             if uOp9w > 0 then {
                 lib9x: String
                 reached9w: false
+                # stage the block's operation id and evaluate AFTER the walk:
+                # evaluating takes an exclusive lock on program.ast, which
+                # cannot run while this iteration holds a shared one
+                reqOp9x: u32
                 bodyIds9w: zast.unitBodyIdsAt ast: program.ast unitId: uOp9w
                 with bit9x: bodyIds9w.iterate do for mId9x: bit9x loop {
                     mn9x: program.ast.nodes.get i: (mId9x - 1).u64
@@ -5989,11 +6014,7 @@ requiredLibs: function {ty: ztyping.ZTyping program: Node} out List String is {
                         mn9x
                     ) case namedoperation then {
                         if mn9x.name == reqNid9w then {
-                            lib9x = (requireLibraryText
-                                ast: program.ast
-                                opId: mn9x.operation
-                                libNid: libNid9w
-                            )
+                            reqOp9x = mn9x.operation
                         } else {
                             if (defWasResolved
                                 :ty
@@ -6003,6 +6024,16 @@ requiredLibs: function {ty: ztyping.ZTyping program: Node} out List String is {
                             ) then reached9w = true
                         }
                     } else null
+                }
+                if reqOp9x > 0 then {
+                    lib9x = (requireLibraryText
+                        ast: program.ast
+                        :ty
+                        :reg
+                        unitName: unm9w.stringview
+                        opId: reqOp9x
+                        libNid: libNid9w
+                    )
                 }
                 if reached9w when lib9x.length > 0 then {
                     dup9w: false
@@ -6022,7 +6053,11 @@ requiredLibs: function {ty: ztyping.ZTyping program: Node} out List String is {
 # standard unit machinery indexes it and resolves nothing inside it; its schema
 # is layered on here. declFindChild reads the pre-resolution def index, so a
 # block in a unit the program never demands is still checked.
-checkRequireBlocks: function {ty: ztyping.ZTyping program: Node} is {
+checkRequireBlocks: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    program: Node
+} is {
     match (
         program
     ) case program then {
@@ -6062,6 +6097,8 @@ checkRequireBlocks: function {ty: ztyping.ZTyping program: Node} is {
                     (checkOneRequireBlock
                         :ty
                         ast: program.ast
+                        :reg
+                        unitName: unm9q.stringview
                         declId: rdecl9q
                         libNid: libNid9q
                     )
@@ -27032,6 +27069,44 @@ evalConstNode: function {
             return (constArithFloat op: op9.stringview a: lf9.val b: rf9.val)
         }
         return ztypes.noConst
+    } case call then {
+        # `error "..."` in constant position is the program asserting. Only the
+        # WINNING branch of a fold is ever evaluated, so an `error` in a dead
+        # one is never visited -- which is why this lives in the evaluator and
+        # not in a tree walk, and why the spec can promise that a statically
+        # false branch's error goes unreported.
+        cbn9: atomName :ast n: (ast.nodes.get i: (n.callable - 1).u64)
+        if cbn9.stringview != "error" then return ztypes.noConst
+        umsg9: "compile-time error".string
+        with ait9: n.arguments.iterate do for aId9: ait9 loop {
+            an9: ast.nodes.get i: (aId9 - 1).u64
+            match (
+                an9
+            ) case namedoperation then {
+                av9: (evalConstNode
+                    :ast
+                    :ty
+                    :reg
+                    :unitName
+                    n: (ast.nodes.get i: (an9.operation - 1).u64)
+                )
+                if av9.kind.svalKind then umsg9 = constStringAt :ty id: av9.strId
+            } else null
+        }
+        uh9: "the compiler proved this `error` reachable".string
+        ty.errors.append (zast.ErrorData
+            nodeid: n.nodeid
+            lineno: n.lineno
+            colno: n.colno
+            width: 5
+            err: zast.err.userError
+            msg: umsg9.copy
+            fsno: zvfs.fsno
+            note: "".string
+            hint: uh9
+        )
+        ty.isError = true
+        return ztypes.noConst
     } case ifexpr then {
         fb9: foldIfBranch :ast :ty :reg :unitName :n
         if (fb9.known) == false then return ztypes.noConst
@@ -29174,7 +29249,7 @@ typecheck: function {
     resolveConstantDefs ty: st.typing reg: st.reg :program
     completeUnitInstantiations ty: st.typing reg: st.reg :program
     applyUnitVisibility ty: st.typing reg: st.reg :program
-    checkRequireBlocks ty: st.typing :program
+    checkRequireBlocks ty: st.typing reg: st.reg :program
     stampTyperefs ty: st.typing reg: st.reg :program
     checkBodies :st :program
     walkGenericUnitTemplates :st :program
