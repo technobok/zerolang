@@ -26409,6 +26409,33 @@ constLiteralValue: function {name: StringView} out ztypes.cval is {
     }
 }
 
+# constInternString -- the pool index of `text` in ZTyping.constStrings, 1-based
+# so 0 can mean "no string". Interned rather than stored inline because a cval
+# is a valtype and owns no heap; deduplicated by a linear scan, which is right
+# for a table that holds a handful of entries.
+constInternString: function {ty: ztyping.ZTyping text: StringView} out u32 is {
+    i9: u64
+    n9: ty.constStrings.length
+    for i9 < n9 loop {
+        e9: ty.constStrings.get i: i9
+        if e9.stringview == text then return (i9 + 1).u32.orPanic
+        i9 = i9 + 1
+    }
+    ty.constStrings.append text.string
+    return ty.constStrings.length.u32.orPanic
+}
+
+# constStringAt -- the interned text a svalKind names, "" when the id is out
+# of range (which cannot happen for a value this evaluator produced).
+constStringAt: function {ty: ztyping.ZTyping.view id: u32} out String is {
+    if id == 0 then return "".string
+    if id.u64 > ty.constStrings.length then return "".string
+    # a list `get` hands back a NON-OWNING shallow copy; returning it as an
+    # owned String hands the caller a buffer the pool still owns
+    e9: ty.constStrings.get i: (id - 1).u64
+    return e9.copy
+}
+
 # constFloatOf -- an integer or float value as an f64, for a mixed-kind binop.
 # `has` false means the value is neither.
 constFloatOf: function {v: ztypes.cval} out ffoldval is {
@@ -26785,6 +26812,34 @@ evalConstNode: function {
             return (constLiteralValue name: an9.stringview)
         }
         return (constValueOfMember :ast :ty :reg :unitName defName: an9.stringview)
+    } case atomstring then {
+        # one chunk and nothing else is a plain literal. An INTERPOLATION has a
+        # value only at run time, and a unit-level definition is required to be
+        # a compile-time constant, so this is a case where the value was
+        # genuinely required and could not be produced -- it reports rather
+        # than falling silent the way an unrecognised shape does.
+        parts9: n.stringparts.length
+        if parts9 == 1 then {
+            p09: ast.nodes.get i: ((n.stringparts.get i: 0) - 1).u64
+            match (
+                p09
+            ) case stringchunk then {
+                return (ztypes.makeStrConst (constInternString :ty text: p09.text.stringview))
+            } else null
+        }
+        if parts9 == 0 then return (ztypes.makeStrConst (constInternString :ty text: ""))
+        im9: "an interpolated string has no compile-time value".string
+        ih9: "interpolation reads its parts at run time; use a plain literal".string
+        (reportConstError
+            :ty
+            nodeid: n.nodeid
+            lineno: n.lineno
+            colno: n.colno
+            width: 1
+            msg: im9
+            hint: ih9
+        )
+        return ztypes.noConst
     } case dottedpath then {
         cn9: String
         {
@@ -26896,6 +26951,17 @@ evalConstNode: function {
             if lv9.armTid == rv9.armTid when lv9.armName == rv9.armName then same9 = true
             if op9.stringview == "==" then return (ztypes.makeBoolConst same9)
             if op9.stringview == "!=" then return (ztypes.makeBoolConst ((same9) == false))
+            return ztypes.noConst
+        }
+        # two string constants compare by their interned TEXT. Only equality is
+        # folded: ordering is defined but nothing needs it at compile time yet,
+        # and a wrong answer here would be silent.
+        if lv9.kind.svalKind when rv9.kind.svalKind then {
+            ls9: constStringAt :ty id: lv9.strId
+            rs9: constStringAt :ty id: rv9.strId
+            eq9: ls9.stringview == rs9.stringview
+            if op9.stringview == "==" then return (ztypes.makeBoolConst eq9)
+            if op9.stringview == "!=" then return (ztypes.makeBoolConst ((eq9) == false))
             return ztypes.noConst
         }
         if lv9.kind.bvalKind when rv9.kind.bvalKind then {
