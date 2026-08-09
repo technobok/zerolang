@@ -103,6 +103,47 @@ dumpArgv: function {
     return a
 }
 
+# zlinkArgs -- the `-l` flags the emitted C declares on its fixed second line,
+# `/* zlink: name name */`. The generated file states its own link
+# requirements, so the harness reads them off the artifact rather than being
+# told separately. Only the header is parsed: these files reach 5.8 MB.
+zlinkArgs: function {csrc: StringView} out List String is {
+    flags9k: (List String)
+    txt9k: slurp path: csrc
+    if txt9k.length == 0 then return flags9k
+    end9k: txt9k.length
+    if end9k > 512 then end9k = 512
+    head9k: txt9k.stringview.substring from: 0 to: end9k
+    idx9k: u64
+    with lit9k: (head9k.split sep: "\n") do for line9k: lit9k loop {
+        if idx9k == 1 then {
+            seen9k: false
+            with tit9k: (line9k.split sep: " ") do for tok9k: tit9k loop {
+                if tok9k == "*/" then seen9k = false
+                if seen9k then {
+                    la9k: "-l".string
+                    la9k.append tok9k
+                    flags9k.append from: la9k
+                }
+                if tok9k == "zlink:" then seen9k = true
+            }
+        }
+        idx9k = idx9k + 1
+    }
+    return flags9k
+}
+
+# withZlink -- `argv` plus the `-l` flags `csrc` declares. The emitted C must
+# already exist, so a pipeline step whose C is written by an earlier step
+# resolves this at spawn time instead (PoolStep.zlinkFrom).
+withZlink: function {argv: (List String).take csrc: StringView} out List String is {
+    zl9m: zlinkArgs :csrc
+    with zit9m: zl9m.iterate do for zf9m: zit9m loop {
+        argv.append from: zf9m.copy
+    }
+    return argv
+}
+
 # gccArgv -- the C build command argv; `asan` selects the ASan flags
 # (-fsanitize=address -g -O0 -std=c17 -w) over the strict CF set.
 gccArgv: function {cc: StringView bin: StringView csrc: StringView asan: bool} out List String is {
@@ -128,7 +169,6 @@ gccArgv: function {cc: StringView bin: StringView csrc: StringView asan: bool} o
     a.append from: "-o".string
     a.append from: bin.string
     a.append from: csrc.string
-    a.append from: "-lquadmath".string
     a.append from: "-lm".string
     return a
 }
@@ -158,6 +198,9 @@ PoolStep: class {
     errPath: String
     timeoutSecs: i32
     allowFail: bool
+    # the emitted C whose declared link libraries this step must add, resolved
+    # when the step runs because an earlier step in the pipeline writes it
+    zlinkFrom: String
 }
 
 # build one pipeline step (a named command) for a test job.
@@ -168,6 +211,7 @@ mkStep: function {
     errPath: StringView
     timeoutSecs: i32
     allowFail: bool
+    zlinkFrom: StringView
 } out PoolStep is {
     return (PoolStep
         :argv
@@ -176,7 +220,19 @@ mkStep: function {
         errPath: errPath.string
         :timeoutSecs
         :allowFail
+        zlinkFrom: zlinkFrom.string
     )
+}
+
+# stepArgv -- a step's argv as spawned: the link flags its C declares are
+# resolved now, because the C is written by an earlier step of this pipeline.
+stepArgv: function {step: PoolStep.view} out List String is {
+    a9n: (List String)
+    with ait9n: step.argv.iterate do for e9n: ait9n loop {
+        a9n.append from: e9n.copy
+    }
+    if step.zlinkFrom.length == 0 then return a9n
+    return (withZlink argv: a9n csrc: step.zlinkFrom.stringview)
 }
 
 # PoolJob -- a test case's sequential spawn pipeline (immutable; the
@@ -232,8 +288,9 @@ runJobs: function {
             j: jobs.get i: ji
             if jpid == 0 when jfail == -1 when jstep < j.steps.length then {
                 st: j.steps.get i: jstep
+                sargv: stepArgv step: st
                 pid: (os.spawnAsync
-                    argv: st.argv
+                    argv: sargv
                     cwd: st.cwd.stringview
                     outPath: st.outPath.stringview
                     errPath: st.errPath.stringview
@@ -515,6 +572,7 @@ main: function is {
                     errPath: "/dev/null"
                     timeoutSecs: 0
                     allowFail: false
+                    zlinkFrom: ""
                 )
                 ga: (gccArgv
                     cc: cc.stringview
@@ -529,6 +587,7 @@ main: function is {
                     errPath: "/dev/null"
                     timeoutSecs: 0
                     allowFail: false
+                    zlinkFrom: cpath.stringview
                 )
                 ba: binArgv bin: bpath.stringview argsFile: argsFile.stringview
                 steps.append (mkStep
@@ -538,6 +597,7 @@ main: function is {
                     errPath: "/dev/null"
                     :timeoutSecs
                     allowFail: true
+                    zlinkFrom: ""
                 )
                 runPool.append (mkJob name: nameStr.stringview :steps)
             }
@@ -616,11 +676,14 @@ main: function is {
             print "FAIL(lsp) zls (zc)"
             fails = fails + 1
         } else {
-            ga9: (gccArgv
-                cc: cc.stringview
-                bin: zlsB9.stringview
+            ga9: (withZlink
+                argv: (gccArgv
+                    cc: cc.stringview
+                    bin: zlsB9.stringview
+                    csrc: zlsC9.stringview
+                    asan: false
+                )
                 csrc: zlsC9.stringview
-                asan: false
             )
             bc9: (os.spawn
                 argv: ga9
@@ -738,6 +801,7 @@ main: function is {
                         errPath: "/dev/null"
                         timeoutSecs: 0
                         allowFail: false
+                        zlinkFrom: ""
                     )
                     ga2: (gccArgv
                         cc: cc.stringview
@@ -752,6 +816,7 @@ main: function is {
                         errPath: "/dev/null"
                         timeoutSecs: 0
                         allowFail: false
+                        zlinkFrom: lc.stringview
                     )
                     ba2: binArgv bin: lb.stringview argsFile: argsFile2.stringview
                     steps.append (mkStep
@@ -761,6 +826,7 @@ main: function is {
                         errPath: lerr.stringview
                         :timeoutSecs
                         allowFail: true
+                        zlinkFrom: ""
                     )
                     leakPool.append (mkJob name: nm :steps)
                 } case none then null
@@ -835,6 +901,7 @@ main: function is {
                     errPath: epe.stringview
                     timeoutSecs: 0
                     allowFail: true
+                    zlinkFrom: ""
                 )
                 errPool.append (mkJob name: enm :steps)
             } case none then null
@@ -911,6 +978,7 @@ main: function is {
                     errPath: "/dev/null"
                     :timeoutSecs
                     allowFail: true
+                    zlinkFrom: ""
                 )
                 dumpPool.append (mkJob name: nameStr.stringview :steps)
             }
@@ -971,7 +1039,10 @@ main: function is {
         errPath: "/dev/null"
         timeoutSecs: 0
     ) == 0 then {
-        zlxG: gccArgv cc: cc.stringview bin: zlxB.stringview csrc: zlxC.stringview asan: false
+        zlxG: (withZlink
+            argv: (gccArgv cc: cc.stringview bin: zlxB.stringview csrc: zlxC.stringview asan: false)
+            csrc: zlxC.stringview
+        )
         if (os.spawn
             argv: zlxG
             cwd: ""
@@ -994,7 +1065,10 @@ main: function is {
         errPath: "/dev/null"
         timeoutSecs: 0
     ) == 0 then {
-        zpsG: gccArgv cc: cc.stringview bin: zpsB.stringview csrc: zpsC.stringview asan: false
+        zpsG: (withZlink
+            argv: (gccArgv cc: cc.stringview bin: zpsB.stringview csrc: zpsC.stringview asan: false)
+            csrc: zpsC.stringview
+        )
         if (os.spawn
             argv: zpsG
             cwd: ""
@@ -1141,7 +1215,10 @@ main: function is {
         errPath: "/dev/null"
         timeoutSecs: 0
     ) == 0 then {
-        zvfG: gccArgv cc: cc.stringview bin: zvfB.stringview csrc: zvfC.stringview asan: false
+        zvfG: (withZlink
+            argv: (gccArgv cc: cc.stringview bin: zvfB.stringview csrc: zvfC.stringview asan: false)
+            csrc: zvfC.stringview
+        )
         if (os.spawn
             argv: zvfG
             cwd: ""
@@ -1242,6 +1319,7 @@ main: function is {
                     errPath: "/dev/null"
                     timeoutSecs: 0
                     allowFail: false
+                    zlinkFrom: ""
                 )
                 ga: (gccArgv
                     cc: cc.stringview
@@ -1256,6 +1334,7 @@ main: function is {
                     errPath: "/dev/null"
                     timeoutSecs: 0
                     allowFail: false
+                    zlinkFrom: cpath.stringview
                 )
                 ba: binArgv bin: bpath.stringview argsFile: ""
                 steps.append (mkStep
@@ -1265,6 +1344,7 @@ main: function is {
                     errPath: "/dev/null"
                     :timeoutSecs
                     allowFail: true
+                    zlinkFrom: ""
                 )
                 smokePool.append (mkJob name: nameStr.stringview :steps)
             }
@@ -1326,7 +1406,15 @@ main: function is {
             errPath: "/dev/null"
             timeoutSecs: 0
         ) == 0 then {
-            gza: gccArgv cc: cc.stringview bin: zcaB.stringview csrc: zcaC.stringview asan: true
+            gza: (withZlink
+                argv: (gccArgv
+                    cc: cc.stringview
+                    bin: zcaB.stringview
+                    csrc: zcaC.stringview
+                    asan: true
+                )
+                csrc: zcaC.stringview
+            )
             if (os.spawn
                 argv: gza
                 cwd: ""
@@ -1445,7 +1533,15 @@ main: function is {
             errPath: "/dev/null"
             timeoutSecs: 0
         ) == 0 then {
-            g1: gccArgv cc: cc.stringview bin: fp1bin.stringview csrc: fp1.stringview asan: false
+            g1: (withZlink
+                argv: (gccArgv
+                    cc: cc.stringview
+                    bin: fp1bin.stringview
+                    csrc: fp1.stringview
+                    asan: false
+                )
+                csrc: fp1.stringview
+            )
             if (os.spawn
                 argv: g1
                 cwd: ""

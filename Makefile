@@ -162,8 +162,11 @@ $(EXDIR)/%.c: examples/%.z bin/zc
 	@mkdir -p $(EXDIR)
 	bin/zc $* --src examples --system lib/system --emit-c $@
 
+# the emitted C names the libraries its reached units declared on its fixed
+# second line, so the link follows the program rather than a blanket flag.
 $(EXDIR)/%.bin: $(EXDIR)/%.c
-	$(CC) $(CFLAGS) -o $@ $< -lquadmath -lm
+	$(CC) $(CFLAGS) -o $@ $< \
+	  $$(sed -n '2s|^/\* zlink: \(.*\) \*/$$|\1|p' $< | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|') -lm
 
 build: $(EXBINS)
 	@echo "$(words $(EXBINS)) examples built ($(EXDIR)/)"
