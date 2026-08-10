@@ -136,7 +136,10 @@ These apply to #~"build", #~"run", #~"emit", and #~"dump".
     (#~"-O0 -g").]
   [#*: #~"--save-temps" — keep the generated C file and print its path
     (#~"build" / #~"run").]
-  [#*: #~"--cc CC" — the C compiler to invoke.]
+  [#*: #~"--cc CC" — the C compiler to invoke. A bare #~"tcc" resolves to
+    the one this tree vendors (see #> to=the-vendored-tcc: The vendored tcc).]
+  [#*: #~"--tcc-lib DIR" — where tcc's runtime payload lives; only tcc reads
+    it (see #> to=the-vendored-tcc: The vendored tcc).]
   [#*: #~"--target TRIPLE" — cross-compile (see
     #> to=cross-compilation: Cross-compilation).]
   [#*: #~"--cflags STR" / #~"--ldflags STR" — extra compiler / linker flags,
@@ -180,6 +183,31 @@ match wins:
 #~"--src" (user code) always defaults to the current directory, never the
 install tree. The C compiler is chosen as #~"--cc" > #~"--target"-derived
 (#~"<triple>-gcc") > #~"$CC" > #~"cc".
+
+tcc's runtime payload follows the same chain: #~"--tcc-lib" > #~"$ZEROLANG_TCC"
+> #~"$ZEROLANG_ROOT/lib/tcc" > #~"<root>/lib/tcc" > #~"out/tcc-lib".
+
+
+#--: The vendored tcc
+
+The compiler vendors #b:"tinycc" (#~"vendor/tinycc") and #~"make install"
+lays it down as #~"bin/tcc" beside the three tools, with its runtime payload
+— #~"libtcc1.a", tcc's own headers — in #~"lib/tcc". #~"--cc tcc" finds it:
+the install symlinks only #~"zc", #~"zl" and #~"zls" onto #~"PATH", so a
+plain lookup never would.
+
+tcc cannot locate that payload on its own. The directory is fixed when tcc is
+#b:"configured", so a tree that has moved has to be told, and until it is,
+tcc cannot resolve even #~"stddef.h". #~"zc" passes #~"-B" for you whenever
+the compiler it resolved is a tcc and a payload directory exists; point
+#~"--tcc-lib" at a different one when you are using a tcc of your own.
+
+tcc compiles the corpus in about a fifth of gcc's time and rejects a handful
+of programs that use a 128-bit or half-precision type. Where a unit declares
+what it needs — as #~"quadfloat" does for #~"__float128" — you get that
+unit's own message instead of a parse error naming a type you never wrote;
+#~"tests/tcc-known-failures.txt" records which programs are in which state,
+and #~"make test-tcc" holds that set steady.
 
 
 #--: Building and running
@@ -260,8 +288,9 @@ companions read it, and #~"--cflags" passes the define through. See
 
 #~"zc env" prints the resolved tool paths and settings as #~"KEY=VALUE"
 lines — #~"ZEROLANG_ROOT", #~"ZEROLANG_SYSTEM", #~"ZEROLANG_RUNTIME",
-#~"ZC_CC", #~"ZC_TARGET", #~"ZC_VERSION", #~"ZC_COMMIT", #~"ZC_BUILD_DATE",
-#~"ZC_BUILD_CC", and #~"ZC_EXE". It honours the same flags as a build, so
+#~"ZC_CC", #~"ZC_TCC", #~"ZC_TCC_LIB", #~"ZC_TARGET", #~"ZC_VERSION",
+#~"ZC_COMMIT", #~"ZC_BUILD_DATE", #~"ZC_BUILD_CC", and #~"ZC_EXE". It
+honours the same flags as a build, so
 #~"zc env --target x86_64-w64-mingw32" reports the cross compiler that would
 be used.
 
@@ -289,8 +318,9 @@ self-contained, GOROOT-style tree to #~"ROOT" (default
   make install ROOT=/opt/zerolang BINDIR=/usr/local/bin
   """
 
-The tree contains #~"bin/{zc,zl,zls}", #~"lib/system", #~"lib/runtime"
-(copied from #~"src/runtime"), #~"docs", and #~"src". Because #~"os.exePath"
+The tree contains #~"bin/{zc,zl,zls}", #~"bin/tcc", #~"lib/system",
+#~"lib/runtime" (copied from #~"src/runtime"), #~"lib/tcc", #~"docs", and
+#~"src". Because #~"os.exePath"
 resolves the symlink to the real binary, each installed tool finds its
 stdlib and runtime from any working directory. (A bare #~"make" builds the
 same three tools without installing.)

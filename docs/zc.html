@@ -97,6 +97,8 @@ Table of Contents</div>
 </li>
 <li><a href="#tree-resolution">Tree resolution</a>
 </li>
+<li><a href="#the-vendored-tcc">The vendored tcc</a>
+</li>
 <li><a href="#building-and-running">Building and running</a>
 </li>
 <li><a href="#cross-compilation">Cross-compilation</a>
@@ -209,7 +211,10 @@ for <code>emit</code>, the model for <code>dump</code>).</li>
 (<code>-O0 -g</code>).</li>
 <li><code>--save-temps</code> &#x2014; keep the generated C file and print its path
 (<code>build</code> / <code>run</code>).</li>
-<li><code>--cc CC</code> &#x2014; the C compiler to invoke.</li>
+<li><code>--cc CC</code> &#x2014; the C compiler to invoke. A bare <code>tcc</code> resolves to
+the one this tree vendors (see <a href="#the-vendored-tcc">The vendored tcc).</a></li>
+<li><code>--tcc-lib DIR</code> &#x2014; where tcc's runtime payload lives; only tcc reads
+it (see <a href="#the-vendored-tcc">The vendored tcc).</a></li>
 <li><code>--target TRIPLE</code> &#x2014; cross-compile (see
 <a href="#cross-compilation">Cross-compilation).</a></li>
 <li><code>--cflags STR</code> / <code>--ldflags STR</code> &#x2014; extra compiler / linker flags,
@@ -250,7 +255,26 @@ match wins:</p>
 <p><code>--src</code> (user code) always defaults to the current directory, never the
 install tree. The C compiler is chosen as <code>--cc</code> &gt; <code>--target</code>-derived
 (<code>&lt;triple&gt;-gcc</code>) &gt; <code>$CC</code> &gt; <code>cc</code>.</p>
-<h2 id="building-and-running"><a href="#building-and-running">7. Building and running</a></h2>
+<p>tcc's runtime payload follows the same chain: <code>--tcc-lib</code> &gt; <code>$ZEROLANG_TCC</code>
+&gt; <code>$ZEROLANG_ROOT/lib/tcc</code> &gt; <code>&lt;root&gt;/lib/tcc</code> &gt; <code>out/tcc-lib</code>.</p>
+<h2 id="the-vendored-tcc"><a href="#the-vendored-tcc">7. The vendored tcc</a></h2>
+<p>The compiler vendors <strong>tinycc</strong> (<code>vendor/tinycc</code>) and <code>make install</code>
+lays it down as <code>bin/tcc</code> beside the three tools, with its runtime payload
+&#x2014; <code>libtcc1.a</code>, tcc's own headers &#x2014; in <code>lib/tcc</code>. <code>--cc tcc</code> finds it:
+the install symlinks only <code>zc</code>, <code>zl</code> and <code>zls</code> onto <code>PATH</code>, so a
+plain lookup never would.</p>
+<p>tcc cannot locate that payload on its own. The directory is fixed when tcc is
+<strong>configured</strong>, so a tree that has moved has to be told, and until it is,
+tcc cannot resolve even <code>stddef.h</code>. <code>zc</code> passes <code>-B</code> for you whenever
+the compiler it resolved is a tcc and a payload directory exists; point
+<code>--tcc-lib</code> at a different one when you are using a tcc of your own.</p>
+<p>tcc compiles the corpus in about a fifth of gcc's time and rejects a handful
+of programs that use a 128-bit or half-precision type. Where a unit declares
+what it needs &#x2014; as <code>quadfloat</code> does for <code>__float128</code> &#x2014; you get that
+unit's own message instead of a parse error naming a type you never wrote;
+<code>tests/tcc-known-failures.txt</code> records which programs are in which state,
+and <code>make test-tcc</code> holds that set steady.</p>
+<h2 id="building-and-running"><a href="#building-and-running">8. Building and running</a></h2>
 <p><strong>build</strong> type-checks the unit, emits self-contained C to a temporary
 file, and invokes the C compiler to produce an executable. Because the
 runtime is inlined at emit time, the single <code>.c</code> needs no extra include
@@ -271,7 +295,7 @@ line of the generated C, so a hand-run <code>cc</code> can read them off the fil
 executable with the parent's stdin / stdout / stderr (a live terminal),
 forwards the trailing program arguments, and exits with the program's own
 exit code.</p>
-<h2 id="cross-compilation"><a href="#cross-compilation">8. Cross-compilation</a></h2>
+<h2 id="cross-compilation"><a href="#cross-compilation">9. Cross-compilation</a></h2>
 <p><code>--target TRIPLE</code> selects a cross compiler: when <code>--cc</code> is not given,
 the compiler name is <code>&lt;triple&gt;-gcc</code> (for example
 <code>x86_64-w64-mingw32-gcc</code>). The executable name gains a <code>.exe</code> suffix
@@ -281,7 +305,7 @@ runtime natives (<code>os.spawn</code>, <code>io</code> file operations, directo
 will not link for Windows until those natives gain a Win32 backend &#x2014; a
 follow-on. Core, POSIX-free programs cross-build where the cross <code>cc</code> is
 installed.</p>
-<h2 id="the-version-line"><a href="#the-version-line">9. The version line</a></h2>
+<h2 id="the-version-line"><a href="#the-version-line">10. The version line</a></h2>
 <p><code>zc --version</code> (also <code>-V</code>, also the <code>version</code> command) prints one
 line: the release number, the commit the binary was built from as SemVer
 build metadata, that commit's date, and the C compiler that built it.</p>
@@ -299,11 +323,12 @@ identical.</p>
 companions read it, and <code>--cflags</code> passes the define through. See
 <code>docs/stdlib_os.pdoc</code>.</p>
 <pre><code>zc build myprog --cflags '-DZC_BUILD_COMMIT="a1b2c3d4"'</code></pre>
-<h2 id="inspecting-the-environment"><a href="#inspecting-the-environment">10. Inspecting the environment</a></h2>
+<h2 id="inspecting-the-environment"><a href="#inspecting-the-environment">11. Inspecting the environment</a></h2>
 <p><code>zc env</code> prints the resolved tool paths and settings as <code>KEY=VALUE</code>
 lines &#x2014; <code>ZEROLANG_ROOT</code>, <code>ZEROLANG_SYSTEM</code>, <code>ZEROLANG_RUNTIME</code>,
-<code>ZC_CC</code>, <code>ZC_TARGET</code>, <code>ZC_VERSION</code>, <code>ZC_COMMIT</code>, <code>ZC_BUILD_DATE</code>,
-<code>ZC_BUILD_CC</code>, and <code>ZC_EXE</code>. It honours the same flags as a build, so
+<code>ZC_CC</code>, <code>ZC_TCC</code>, <code>ZC_TCC_LIB</code>, <code>ZC_TARGET</code>, <code>ZC_VERSION</code>,
+<code>ZC_COMMIT</code>, <code>ZC_BUILD_DATE</code>, <code>ZC_BUILD_CC</code>, and <code>ZC_EXE</code>. It
+honours the same flags as a build, so
 <code>zc env --target x86_64-w64-mingw32</code> reports the cross compiler that would
 be used.</p>
 <p>Note that <code>ZC_CC</code> and <code>ZC_BUILD_CC</code> answer different questions:
@@ -312,7 +337,7 @@ be used.</p>
 release number alone; the full build line is what <code>--version</code> prints.</p>
 <pre><code>zc env
 zc env --target x86_64-w64-mingw32</code></pre>
-<h2 id="installation"><a href="#installation">11. Installation</a></h2>
+<h2 id="installation"><a href="#installation">12. Installation</a></h2>
 <p><code>make install</code> builds the three tools (<code>bin/zc</code>, the <code>zl</code>
 linter/formatter, and the <code>zls</code> language server) and copies a
 self-contained, GOROOT-style tree to <code>ROOT</code> (default
@@ -320,12 +345,13 @@ self-contained, GOROOT-style tree to <code>ROOT</code> (default
 <code>~/.local/bin</code>):</p>
 <pre><code>make install
 make install ROOT=/opt/zerolang BINDIR=/usr/local/bin</code></pre>
-<p>The tree contains <code>bin/{zc,zl,zls}</code>, <code>lib/system</code>, <code>lib/runtime</code>
-(copied from <code>src/runtime</code>), <code>docs</code>, and <code>src</code>. Because <code>os.exePath</code>
+<p>The tree contains <code>bin/{zc,zl,zls}</code>, <code>bin/tcc</code>, <code>lib/system</code>,
+<code>lib/runtime</code> (copied from <code>src/runtime</code>), <code>lib/tcc</code>, <code>docs</code>, and
+<code>src</code>. Because <code>os.exePath</code>
 resolves the symlink to the real binary, each installed tool finds its
 stdlib and runtime from any working directory. (A bare <code>make</code> builds the
 same three tools without installing.)</p>
-<h2 id="exit-codes"><a href="#exit-codes">12. Exit Codes</a></h2>
+<h2 id="exit-codes"><a href="#exit-codes">13. Exit Codes</a></h2>
 <ul>
 <li><code>0</code> &#x2014; Success. For <code>build</code> the executable was produced; for
 <code>run</code> the program ran (its own exit code is propagated); for <code>emit</code>
@@ -337,11 +363,11 @@ or invalid directory paths.</li>
 <li>other &#x2014; for <code>build</code> / <code>run</code>, a non-zero exit from the C compiler
     or from the program itself is propagated unchanged.</li>
 </ul>
-<h2 id="error-format"><a href="#error-format">13. Error Format</a></h2>
+<h2 id="error-format"><a href="#error-format">14. Error Format</a></h2>
 <p>The compiler uses a rustc-inspired error format designed for readability
 and tool integration. Each error includes an error code, source location,
 and the relevant source line with a caret pointing to the error.</p>
-<h3 id="basic-error-format"><a href="#basic-error-format">13.1. Basic Error Format</a></h3>
+<h3 id="basic-error-format"><a href="#basic-error-format">14.1. Basic Error Format</a></h3>
 <pre><code>error[E0008]: undefined identifier: x
  --&gt; MyFile.z:5:10
      |
@@ -352,7 +378,7 @@ The second line shows the file path, line number, and column number in
 the standard <code>File:line:col</code> format used by gcc, clang, and rustc.
 The source line is displayed with a caret marker pointing to the exact
 location of the error.</p>
-<h3 id="notes-and-hints"><a href="#notes-and-hints">13.2. Notes and Hints</a></h3>
+<h3 id="notes-and-hints"><a href="#notes-and-hints">14.2. Notes and Hints</a></h3>
 <p>Some errors include additional context as <em><strong>notes</strong></em> (explaining why the
 error occurred) or <em><strong>hints</strong></em> (suggesting how to fix it):</p>
 <pre><code>error[E0200]: a `.borrow` return must borrow from a non-owned parameter --
@@ -368,7 +394,7 @@ mark the source `.view` (readonly) or `.borrow` (mutable), e.g.
    2 |     pritn "hello"
      |     ^^^^^
      = hint: did you mean 'print'?</code></pre>
-<h3 id="error-code-numbering"><a href="#error-code-numbering">13.3. Error Code Numbering</a></h3>
+<h3 id="error-code-numbering"><a href="#error-code-numbering">14.3. Error Code Numbering</a></h3>
 <p>Error codes are grouped by category:</p>
 <ul>
 <li><code>E0001&#x2013;E0099</code>: Parser and syntax errors &#x2014; malformed source code,
@@ -391,7 +417,7 @@ itself, or an expression that is not statically evaluable</li>
 <p>Run <code>zc explain &lt;code&gt;</code> for a longer description of any code (for example
 <code>zc explain E0200</code>). An error count summary is printed at the end:</p>
 <pre><code>3 errors found</code></pre>
-<h2 id="compiling-emitted-c"><a href="#compiling-emitted-c">14. Compiling Emitted C</a></h2>
+<h2 id="compiling-emitted-c"><a href="#compiling-emitted-c">15. Compiling Emitted C</a></h2>
 <p><code>zc build</code> and <code>zc run</code> invoke the C compiler for you. If you instead
 <code>emit</code> C, the result is a standalone file that compiles with any C17
 compiler &#x2014; the runtime is inlined, so no extra include paths are needed:</p>
@@ -402,7 +428,7 @@ gcc -std=c17 -Wno-unused-function -o hello hello.c
 errors:</p>
 <pre><code>gcc -std=c17 -fsanitize=address,undefined -Wno-unused-function -o hello hello.c
 ./hello</code></pre>
-<h2 id="examples"><a href="#examples">15. Examples</a></h2>
+<h2 id="examples"><a href="#examples">16. Examples</a></h2>
 <p>Build and run a program:</p>
 <pre><code>zc run hello --src examples</code></pre>
 <p>Build a release executable at a chosen path:</p>

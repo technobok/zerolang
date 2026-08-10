@@ -165,7 +165,7 @@ printUsage: function is {
     io.eprintln "  -o OUT  --src DIR  --release  --cc CC  --target TRIPLE"
     io.eprintln "  --cflags STR  --ldflags STR  --save-temps  --time  --fast-hash"
     io.eprintln "  --readable-names  --eager"
-    io.eprintln "  --system DIR  --runtime DIR  -h/--help  -V/--version"
+    io.eprintln "  --system DIR  --runtime DIR  --tcc-lib DIR  -h/--help  -V/--version"
 }
 
 # printCommandHelp -- detailed help for one command (stderr).
@@ -175,7 +175,7 @@ printCommandHelp: function {cmd: StringView} is {
         io.eprintln "Compile <src> to a native executable."
         io.eprintln "Output goes to -o OUT, else ./<unit> (./<unit>.exe for windows targets)."
         io.eprintln "Flags: --release --cc CC --target TRIPLE --save-temps"
-        io.eprintln "       --cflags STR --ldflags STR --src DIR"
+        io.eprintln "       --cflags STR --ldflags STR --src DIR --tcc-lib DIR"
     } else if cmd == "run" then {
         io.eprintln "usage: zc run <src> [args] [flags]"
         io.eprintln "Build <src>, then run it. Flags before <src> configure the build;"
@@ -194,7 +194,7 @@ printCommandHelp: function {cmd: StringView} is {
         io.eprintln "Explain a diagnostic error code, e.g. zc explain E0200."
     } else if cmd == "env" then {
         io.eprintln "usage: zc env"
-        io.eprintln "Print resolved tool paths and settings: system and runtime dirs,"
+        io.eprintln "Print resolved tool paths and settings: system, runtime and tcc dirs,"
         io.eprintln "the C compiler, the target triple, and the version."
     } else if cmd == "version" then {
         io.eprintln "usage: zc version"
@@ -259,10 +259,13 @@ printEnv: function {
     runtimeFlag: StringView
     ccFlag: StringView
     targetTriple: StringView
+    tccLibFlag: StringView
 } is {
     sysd: zcheck.resolveSystemDir flagVal: systemFlag
     rund: zcheck.resolveRuntimeDir flagVal: runtimeFlag
     cc: zcheck.pickCc :ccFlag :targetTriple
+    tccd: zcheck.resolveTccDir flagVal: tccLibFlag
+    tccx: zcheck.vendoredTcc
     root: zcheck.exeRoot
     ver: zversion.semver
     commit9: os.buildCommit
@@ -284,6 +287,10 @@ printEnv: function {
     buf.append rund
     buf.append "\nZC_CC="
     buf.append cc
+    buf.append "\nZC_TCC="
+    buf.append tccx
+    buf.append "\nZC_TCC_LIB="
+    buf.append tccd
     buf.append "\nZC_TARGET="
     buf.append targetTriple
     buf.append "\nZC_VERSION="
@@ -332,6 +339,7 @@ buildExe: function {
     cflags: StringView
     ldflags: StringView
     libs: (List String).view
+    tccDir: StringView
 } out i32 is {
     a: (List String)
     a.append from: cc.string
@@ -342,6 +350,14 @@ buildExe: function {
         a.append from: "-g".string
     }
     a.append from: "-std=c17".string
+    # tcc's runtime payload -- libtcc1.a and its own headers -- is fixed at
+    # CONFIGURE time, so a tree that moved has to say where it went: without
+    # -B, tcc cannot resolve stddef.h and rejects every program. Empty for
+    # every other compiler, and the caller decides that.
+    if tccDir.length > 0 then {
+        a.append from: "-B".string
+        a.append from: tccDir.string
+    }
     with cf: (cflags.split sep: " ") do for piece: cf loop {
         if piece.length > 0 then {
             a.append from: piece.string
@@ -556,6 +572,7 @@ main: function is {
     readableNames: false
     eagerCheck: false
     ccFlag: String
+    tccLibFlag: String
     targetTriple: String
     cflags: String
     ldflags: String
@@ -604,6 +621,9 @@ main: function is {
         } else if a.stringview == "--cc" then {
             i = i + 1
             ccFlag = (argv.get :i).copy
+        } else if a.stringview == "--tcc-lib" then {
+            i = i + 1
+            tccLibFlag = (argv.get :i).copy
         } else if a.stringview == "--target" then {
             i = i + 1
             targetTriple = (argv.get :i).copy
@@ -642,6 +662,7 @@ main: function is {
             runtimeFlag: runtimeFlag.stringview
             ccFlag: ccFlag.stringview
             targetTriple: targetTriple.stringview
+            tccLibFlag: tccLibFlag.stringview
         )
         os.exit code: 0
     }
@@ -692,6 +713,10 @@ main: function is {
     # during type checking, so the answer has to exist by then. The build
     # branch below reuses this rather than resolving a second time.
     ccPath: zcheck.pickCc ccFlag: ccFlag.stringview targetTriple: targetTriple.stringview
+    # resolved here for the same reason: the payload directory belongs to the
+    # compiler choice, and the build branch below reuses this rather than
+    # resolving a second time.
+    tccDir: zcheck.resolveTccDir flagVal: tccLibFlag.stringview
 
 
     tParse0: os.monotonicMillis
@@ -815,6 +840,14 @@ main: function is {
                     exe = e2
                 }
             }
+            # -B goes to tcc and to nothing else: another compiler would
+            # reject it, and a tcc that is not the one this tree ships has a
+            # payload of its own. `--tcc-lib` overrides when both are present.
+            ccTcc9: String
+            cka9: ztypecheck.ccKindArm ccPath: cc.stringview
+            if cka9.stringview == "tcc" then {
+                if (io.exists path: tccDir) then ccTcc9 = tccDir.copy
+            }
             rc: (buildExe
                 cc: cc.stringview
                 tempC: tmpc.stringview
@@ -823,6 +856,7 @@ main: function is {
                 cflags: cflags.stringview
                 ldflags: ldflags.stringview
                 libs: emitLibs2
+                tccDir: ccTcc9.stringview
             )
             if saveTemps then {
                 kept9: "zc: kept generated C at \{tmpc.stringview}"

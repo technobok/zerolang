@@ -75,7 +75,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard readable-check perf-strict perf-elision
+.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard test-tcc readable-check perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -129,12 +129,37 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard require-guard static-tcc-guard readable-check ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
 ci-corpus: bin/zc $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
+
+# test-tcc -- the vendored tcc compiles the corpus. --cc-forward is what makes
+# this a test of the tcc BACKEND and not merely of tcc-the-C-compiler: zc folds
+# `platform.cc` during type checking, so quadfloat's `require:` guard fires and
+# its two programs are rejected by name instead of dying in tcc's parser.
+# tests/tcc-known-failures.txt records the split, program and stage; a move in
+# EITHER direction fails, so gaining a guard is a deliberate edit there.
+# Cheap enough to be unconditional -- tcc does the corpus in ~3s.
+TCC_KNOWN := tests/tcc-known-failures.txt
+
+test-tcc: bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
+	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(BUILDDIR)/tcc --cc-forward \
+	   --ccflags "-B $(TCCLIB)" --root . --jobs $(NPROC) \
+	   > $(BUILDDIR)/tcc-run.log 2>&1; \
+	awk '/^FAIL/ { print $$2, (NF >= 3 ? $$3 : "(?)") }' $(BUILDDIR)/tcc-run.log \
+	  | sort > $(BUILDDIR)/tcc-fails.txt; \
+	grep -v '^#' $(TCC_KNOWN) | grep -v '^ *$$' | sort > $(BUILDDIR)/tcc-known.txt; \
+	if ! diff -u $(BUILDDIR)/tcc-known.txt $(BUILDDIR)/tcc-fails.txt; then \
+	  echo "test-tcc FAIL: the tcc failure set moved (-known +actual above)"; \
+	  echo "  a gained line is a regression; a lost line, or one moving from (cc)"; \
+	  echo "  to (zc), means a unit now guards itself -- record it in $(TCC_KNOWN)"; \
+	  echo "  in the same commit. Full log: $(BUILDDIR)/tcc-run.log"; \
+	  exit 1; \
+	fi; \
+	echo "test-tcc OK: $$(grep -c . $(BUILDDIR)/tcc-fails.txt) known failures, none new"
 
 # readable-check -- --readable-names is a debug affordance, so nothing else
 # exercises it; without this it would rot unnoticed. The two schemes differ
@@ -359,20 +384,22 @@ test-bootstrap:
 	@echo "bootstrap seed OK: 'cc bootstrap/zc.c' builds a correct self-hosting zc (no Python)"
 
 # install -- a self-contained tree at $(ROOT) + a $(BINDIR)/zc symlink.
-install: bin/zc bin/zl bin/zls
+install: bin/zc bin/zl bin/zls $(BUILDDIR)/tcc
 	mkdir -p $(ROOT)/bin $(ROOT)/lib $(BINDIR)
 	cp bin/zc $(ROOT)/bin/zc
 	cp bin/zl $(ROOT)/bin/zl
 	cp bin/zls $(ROOT)/bin/zls
-	rm -rf $(ROOT)/lib/system $(ROOT)/lib/runtime $(ROOT)/docs $(ROOT)/src
+	rm -rf $(ROOT)/lib/system $(ROOT)/lib/runtime $(ROOT)/lib/tcc $(ROOT)/docs $(ROOT)/src
 	cp -r lib/system $(ROOT)/lib/system
 	cp -r src/runtime $(ROOT)/lib/runtime
+	cp $(BUILDDIR)/tcc $(ROOT)/bin/tcc
+	cp -r $(TCCLIB) $(ROOT)/lib/tcc
 	cp -r docs $(ROOT)/docs
 	cp -r src $(ROOT)/src
 	ln -sf $(ROOT)/bin/zc $(BINDIR)/zc
 	ln -sf $(ROOT)/bin/zl $(BINDIR)/zl
 	ln -sf $(ROOT)/bin/zls $(BINDIR)/zls
-	@echo "installed zc, zl, zls -> $(BINDIR) (tree: $(ROOT))"
+	@echo "installed zc, zl, zls -> $(BINDIR) (tree: $(ROOT), tcc: $(ROOT)/bin/tcc)"
 
 # docs -- render the .pdoc documentation to HTML. Commit the regenerated .html.
 # Needs the picodoc renderer at ../picodoc-c/picodoc (see docs/Makefile).

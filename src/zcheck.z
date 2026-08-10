@@ -21,6 +21,8 @@ public: unit {
     :pickCc
     :resolveRuntimeDir
     :resolveSystemDir
+    :resolveTccDir
+    :vendoredTcc
 }
 
 Node: zast.Node
@@ -279,15 +281,43 @@ pickRuntimeUnder: function {root: StringView} out String is {
     return (joinPath a: root b: "src/runtime")
 }
 
-# resolveSystemDir -- the stdlib dir by precedence: explicit flag >
-# $ZEROLANG_SYSTEM > $ZEROLANG_ROOT-relative > exePath-relative > cwd.
+# pickTccUnder -- <root>/bin/tcc if it exists, else "".
+pickTccUnder: function {root: StringView} out String is {
+    cand: joinPath a: root b: "bin/tcc"
+    if (io.exists path: cand) then return cand
+    return "".string
+}
+
+# vendoredTcc -- the tcc this tree ships, if it ships one: <root>/bin/tcc in an
+# installed tree, out/tcc in the dev tree, "" when neither is there.
+vendoredTcc: function out String is {
+    root: exeRoot
+    if root.length > 0 then {
+        c: pickTccUnder root: root.stringview
+        if c.length > 0 then return c
+    }
+    if (io.exists path: "out/tcc") then return "out/tcc".string
+    return "".string
+}
+
 # pickCc -- the C compiler this build will use: --cc > <target>-gcc > $CC > cc.
 # Shared, not zc-local, because every front end has to agree about it: the
 # `platform` unit's `cc` constant is folded during TYPE CHECKING, so zls and
 # zl must resolve it the same way zc does or a require: guard would decide
 # differently in the editor than in the build.
 pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
-    if ccFlag.length > 0 then return ccFlag.string
+    if ccFlag.length > 0 then {
+        # a bare `tcc` means the one this tree vendors, when it has one:
+        # `install` symlinks zc/zl/zls onto PATH and nothing else, so a plain
+        # PATH lookup would never find <root>/bin/tcc. Resolving it here does
+        # not move any folded constant -- ccKindArm reads the BASENAME, and
+        # `tcc` and `<root>/bin/tcc` classify the same.
+        if ccFlag == "tcc" then {
+            v: vendoredTcc
+            if v.length > 0 then return v
+        }
+        return ccFlag.string
+    }
     if targetTriple.length > 0 then {
         r: String
         r.append targetTriple
@@ -303,6 +333,8 @@ pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
     return "cc".string
 }
 
+# resolveSystemDir -- the stdlib dir by precedence: explicit flag >
+# $ZEROLANG_SYSTEM > $ZEROLANG_ROOT-relative > exePath-relative > cwd.
 resolveSystemDir: function {flagVal: StringView} out String is {
     if flagVal.length > 0 then return flagVal.string
     ev: os.env key: "ZEROLANG_SYSTEM"
@@ -347,4 +379,31 @@ resolveRuntimeDir: function {flagVal: StringView} out String is {
         if (io.exists path: rd) then return rd
     }
     return "src/runtime".string
+}
+
+# resolveTccDir -- tcc's runtime payload (libtcc1.a, include/, libtcc.so) by
+# the same precedence. tcc cannot find this on its own: the directory is baked
+# in at CONFIGURE time, so a relocated tree needs `-B <dir>` on the driver or
+# `tcc_set_lib_path` on libtcc, and without it tcc cannot even resolve
+# `stddef.h`. One directory holds all three so one answer serves both modes.
+resolveTccDir: function {flagVal: StringView} out String is {
+    if flagVal.length > 0 then return flagVal.string
+    ev: os.env key: "ZEROLANG_TCC"
+    match (
+        ev
+    ) case some then {
+        return ev.copy
+    } case none then null
+    rv: os.env key: "ZEROLANG_ROOT"
+    match (
+        rv
+    ) case some then {
+        return (joinPath a: rv.stringview b: "lib/tcc")
+    } case none then null
+    root: exeRoot
+    if root.length > 0 then {
+        cand: joinPath a: root.stringview b: "lib/tcc"
+        if (io.exists path: cand) then return cand
+    }
+    return "out/tcc-lib".string
 }

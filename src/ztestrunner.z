@@ -64,9 +64,14 @@ isLeak: function {s: StringView} out bool is {
     return (s.contains needle: " byte")
 }
 
-# zcArgv -- the port-zc emit command argv.
+# zcArgv -- the port-zc emit command argv. `ccFwd`, when non-empty, names the
+# C compiler to zc ITSELF rather than only to the harness's compile step: the
+# `platform` unit folds on it during type checking, so a `require:` guard
+# decides differently with it than without. Empty by default, because passing
+# it unconditionally would move platform.cc off `other` for every ordinary run.
 zcArgv: function {
     zc: StringView
+    ccFwd: StringView
     name: StringView
     srcdir: StringView
     sys: StringView
@@ -75,6 +80,10 @@ zcArgv: function {
     a: (List String)
     a.append from: zc.string
     a.append from: name.string
+    if ccFwd.length > 0 then {
+        a.append from: "--cc".string
+        a.append from: ccFwd.string
+    }
     a.append from: "--src".string
     a.append from: srcdir.string
     a.append from: "--system".string
@@ -161,10 +170,22 @@ withExtraArgs: function {argv: (List String).take file: StringView} out List Str
 }
 
 # gccArgv -- the C build command argv; `asan` selects the ASan flags
-# (-fsanitize=address -g -O0 -std=c17 -w) over the strict CF set.
-gccArgv: function {cc: StringView bin: StringView csrc: StringView asan: bool} out List String is {
+# (-fsanitize=address -g -O0 -std=c17 -w) over the strict CF set. `ccflags`
+# carries what the harness cannot infer about the compiler -- tcc needs
+# `-B <payload>` or it cannot resolve its own stddef.h, since the directory it
+# was configured with is not the one it is running from.
+gccArgv: function {
+    cc: StringView
+    ccflags: StringView
+    bin: StringView
+    csrc: StringView
+    asan: bool
+} out List String is {
     a: (List String)
     a.append from: cc.string
+    with cfit9g: (ccflags.split sep: " ") do for cf9g: cfit9g loop {
+        if cf9g.length > 0 then a.append from: cf9g.string
+    }
     if asan then {
         a.append from: "-fsanitize=address".string
         a.append from: "-g".string
@@ -459,6 +480,8 @@ main: function is {
     n: argv.length
     zc: "out/zc".string
     cc: "gcc".string
+    ccflags: String
+    ccFwdOn: false
     root: ".".string
     report: false
     heavy: false
@@ -475,6 +498,11 @@ main: function is {
         } else if av == "--cc" then {
             i = i + 1
             cc = (argv.get :i).copy
+        } else if av == "--ccflags" then {
+            i = i + 1
+            ccflags = (argv.get :i).copy
+        } else if av == "--cc-forward" then {
+            ccFwdOn = true
         } else if av == "--root" then {
             i = i + 1
             root = (argv.get :i).copy
@@ -507,6 +535,12 @@ main: function is {
         }
         i = i + 1
     }
+
+    # resolved after the loop, not inside the --cc-forward arm: the flags may
+    # arrive in either order, and reading `cc` early would make `--cc-forward
+    # --cc X` forward the default instead of X.
+    ccFwd: String
+    if ccFwdOn then ccFwd = cc.copy
 
     sys: "\{root.stringview}/lib/system"
     errors: "\{root.stringview}/tests/fixtures/errors"
@@ -576,6 +610,7 @@ main: function is {
                 steps: (List PoolStep)
                 za: (zcArgv
                     zc: zc.stringview
+                    ccFwd: ccFwd.stringview
                     name: nameStr.stringview
                     srcdir: srcAbs.stringview
                     sys: sys.stringview
@@ -592,6 +627,7 @@ main: function is {
                 )
                 ga: (gccArgv
                     cc: cc.stringview
+                    ccflags: ccflags.stringview
                     bin: bpath.stringview
                     csrc: cpath.stringview
                     asan: false
@@ -675,6 +711,7 @@ main: function is {
         srcD9: "\{root.stringview}/src"
         za9: (zcArgv
             zc: zc.stringview
+            ccFwd: ccFwd.stringview
             name: "zls"
             srcdir: srcD9.stringview
             sys: sys.stringview
@@ -695,6 +732,7 @@ main: function is {
             ga9: (withZlink
                 argv: (gccArgv
                     cc: cc.stringview
+                    ccflags: ccflags.stringview
                     bin: zlsB9.stringview
                     csrc: zlsC9.stringview
                     asan: false
@@ -805,6 +843,7 @@ main: function is {
                     steps: (List PoolStep)
                     za2: (zcArgv
                         zc: zc.stringview
+                        ccFwd: ccFwd.stringview
                         name: nm
                         srcdir: ld.stringview
                         sys: sys.stringview
@@ -821,6 +860,7 @@ main: function is {
                     )
                     ga2: (gccArgv
                         cc: cc.stringview
+                        ccflags: ccflags.stringview
                         bin: lb.stringview
                         csrc: lc.stringview
                         asan: true
@@ -905,6 +945,7 @@ main: function is {
                 steps: (List PoolStep)
                 eza: (zcArgv
                     zc: zc.stringview
+                    ccFwd: ccFwd.stringview
                     name: enm
                     srcdir: errors.stringview
                     sys: sys.stringview
@@ -1044,6 +1085,7 @@ main: function is {
     parseOk: false
     zlxE: (zcArgv
         zc: zc.stringview
+        ccFwd: ccFwd.stringview
         name: "zlexer"
         srcdir: srcDir.stringview
         sys: sys.stringview
@@ -1057,7 +1099,13 @@ main: function is {
         timeoutSecs: 0
     ) == 0 then {
         zlxG: (withZlink
-            argv: (gccArgv cc: cc.stringview bin: zlxB.stringview csrc: zlxC.stringview asan: false)
+            argv: (gccArgv
+                cc: cc.stringview
+                ccflags: ccflags.stringview
+                bin: zlxB.stringview
+                csrc: zlxC.stringview
+                asan: false
+            )
             csrc: zlxC.stringview
         )
         if (os.spawn
@@ -1070,6 +1118,7 @@ main: function is {
     }
     zpsE: (zcArgv
         zc: zc.stringview
+        ccFwd: ccFwd.stringview
         name: "zparser"
         srcdir: srcDir.stringview
         sys: sys.stringview
@@ -1083,7 +1132,13 @@ main: function is {
         timeoutSecs: 0
     ) == 0 then {
         zpsG: (withZlink
-            argv: (gccArgv cc: cc.stringview bin: zpsB.stringview csrc: zpsC.stringview asan: false)
+            argv: (gccArgv
+                cc: cc.stringview
+                ccflags: ccflags.stringview
+                bin: zpsB.stringview
+                csrc: zpsC.stringview
+                asan: false
+            )
             csrc: zpsC.stringview
         )
         if (os.spawn
@@ -1220,6 +1275,7 @@ main: function is {
     vfsOk: false
     zvfE: (zcArgv
         zc: zc.stringview
+        ccFwd: ccFwd.stringview
         name: "zvfs"
         srcdir: srcDir.stringview
         sys: sys.stringview
@@ -1233,7 +1289,13 @@ main: function is {
         timeoutSecs: 0
     ) == 0 then {
         zvfG: (withZlink
-            argv: (gccArgv cc: cc.stringview bin: zvfB.stringview csrc: zvfC.stringview asan: false)
+            argv: (gccArgv
+                cc: cc.stringview
+                ccflags: ccflags.stringview
+                bin: zvfB.stringview
+                csrc: zvfC.stringview
+                asan: false
+            )
             csrc: zvfC.stringview
         )
         if (os.spawn
@@ -1324,6 +1386,7 @@ main: function is {
                 steps: (List PoolStep)
                 za: (zcArgv
                     zc: zc.stringview
+                    ccFwd: ccFwd.stringview
                     name: nameStr.stringview
                     srcdir: srcAbs.stringview
                     sys: sys.stringview
@@ -1340,6 +1403,7 @@ main: function is {
                 )
                 ga: (gccArgv
                     cc: cc.stringview
+                    ccflags: ccflags.stringview
                     bin: bpath.stringview
                     csrc: cpath.stringview
                     asan: false
@@ -1411,6 +1475,7 @@ main: function is {
         zcaOk: false
         ea: (zcArgv
             zc: zc.stringview
+            ccFwd: ccFwd.stringview
             name: "zc"
             srcdir: srcDir.stringview
             sys: sys.stringview
@@ -1426,6 +1491,7 @@ main: function is {
             gza: (withZlink
                 argv: (gccArgv
                     cc: cc.stringview
+                    ccflags: ccflags.stringview
                     bin: zcaB.stringview
                     csrc: zcaC.stringview
                     asan: true
@@ -1538,6 +1604,7 @@ main: function is {
         fpOk: false
         e1: (zcArgv
             zc: zc.stringview
+            ccFwd: ccFwd.stringview
             name: "zc"
             srcdir: srcDir.stringview
             sys: sys.stringview
@@ -1553,6 +1620,7 @@ main: function is {
             g1: (withZlink
                 argv: (gccArgv
                     cc: cc.stringview
+                    ccflags: ccflags.stringview
                     bin: fp1bin.stringview
                     csrc: fp1.stringview
                     asan: false
@@ -1568,6 +1636,7 @@ main: function is {
             ) == 0 then {
                 e2: (zcArgv
                     zc: fp1bin.stringview
+                    ccFwd: ccFwd.stringview
                     name: "zc"
                     srcdir: srcDir.stringview
                     sys: sys.stringview
