@@ -781,7 +781,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 # returned "quadmath" unconditionally would link fine and pass every other
 # gate. A rise means something now reaches a unit it did not; a fall means a
 # program lost a need it had.
-ZLINK_BASELINE := 2
+ZLINK_BASELINE := 3
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \

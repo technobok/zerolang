@@ -18863,8 +18863,17 @@ checkIf: function {
     # so -- `known: false` means "emit a runtime if", which is the answer for
     # every ordinary branch. Only a condition made of constants decides
     # anything here.
-    foldIfBranch :ast ty: st.typing reg: st.reg :unitName n: ifnode
+    fbr9: foldIfBranch :ast ty: st.typing reg: st.reg :unitName n: ifnode
     constFailClear ty: st.typing
+    # A clause the fold proved dead is reached by no use site, and the language
+    # does not promise to resolve names or check types inside it. NOT walking it
+    # is what keeps a statically-eliminated branch from demanding its unit's
+    # link library, and from being refused by a toolchain that never sees the
+    # type it names. `--eager` -- and so zls and `zl lint --full` -- still walks
+    # everything, which is what keeps the editor alive inside a branch that is
+    # dead only on this host; neither of those emits C, so no artifact differs.
+    skipDead9: false
+    if fbr9.known when (st.typing.eagerAll) == false then skipDead9 = true
     ifMarker: st.pushBlock name: "if"
     liveBefore: st.getLiveOwnedVars
     takenAcross: (SetVal u32)
@@ -18889,11 +18898,14 @@ checkIf: function {
     cliter: ifnode.clauses.iterate
     for clauseId9: cliter loop {
         clause: ast.nodes.get i: (clauseId9 - 1).u64
+        dead9: false
         match (
             clause
         ) case ifclause then {
             if (isEmptyBody n: (ast.nodes.get i: (clause.statement - 1).u64)) then anyEmpty = true
+            if skipDead9 when clause.statement != fbr9.stmt then dead9 = true
         } else null
+        if dead9 then continue
         bm: st.pushBlock name: "if_branch"
         with pfit9: accFacts.iterate do for pf9: pfit9 loop (applyPredFact
             :ast
@@ -18941,25 +18953,29 @@ checkIf: function {
     if ifnode.elseclause > 0 then {
         hasElse = true
         if (isEmptyBody n: (ast.nodes.get i: (ifnode.elseclause - 1).u64)) then anyEmpty = true
-        ebm: st.pushBlock name: "if_else"
-        with efit9: accFacts.iterate do for ef9: efit9 loop (applyPredFact
-            :ast
-            :st
-            f: ef9
-            holds: false
-        )
-        walkBodyAt :st :unitName :ast :unitBody bodyId: ifnode.elseclause
-        et9: lastStmtType :st :ast block: (ast.nodes.get i: (ifnode.elseclause - 1).u64)
-        if st.isUnreachable then elseDvg9 = true
-        etc9: et9
-        branchTypes.append etc9
-        if st.isUnreachable then {
-            st.discardTakenInCurrentScope
-        } else {
-            allDiverge = false
-            restoreTakenArm :st :liveBefore taken: takenAcross
+        elseDead9: false
+        if skipDead9 when ifnode.elseclause != fbr9.stmt then elseDead9 = true
+        if (elseDead9) == false then {
+            ebm: st.pushBlock name: "if_else"
+            with efit9: accFacts.iterate do for ef9: efit9 loop (applyPredFact
+                :ast
+                :st
+                f: ef9
+                holds: false
+            )
+            walkBodyAt :st :unitName :ast :unitBody bodyId: ifnode.elseclause
+            et9: lastStmtType :st :ast block: (ast.nodes.get i: (ifnode.elseclause - 1).u64)
+            if st.isUnreachable then elseDvg9 = true
+            etc9: et9
+            branchTypes.append etc9
+            if st.isUnreachable then {
+                st.discardTakenInCurrentScope
+            } else {
+                allDiverge = false
+                restoreTakenArm :st :liveBefore taken: takenAcross
+            }
+            st.popTo marker: ebm
         }
-        st.popTo marker: ebm
     } else {
         allDiverge = false
     }
