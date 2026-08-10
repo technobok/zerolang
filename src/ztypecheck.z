@@ -17376,7 +17376,43 @@ checkAtomid: function {
                 )
                 stampRefDecl ty: st.typing nid: node.nodeid.u64 declId: sfF9
                 maybeWalkMethods :st :unitName :ast :unitBody name: ndNm9.stringview
-            } case none then null
+            } case none then {
+                # A name a hidden subunit cannot reach but its PARENT defines:
+                # the parser resolved it (an unresolved name is promoted to the
+                # parent unit, which is the file-search rule), so nothing else
+                # will report it, and without this the reference reaches C as a
+                # bare identifier. Only the parent's own definitions are
+                # claimed here -- a name nothing defines is still the general
+                # unresolved case.
+                if st.typing.nsOwnerIsSubunit when unitName == st.typing.nsOwnerUnit.stringview then {
+                    po9: (walkLookupTyperef
+                        :ast
+                        ty: st.typing
+                        reg: st.reg
+                        currentUnit: unitName
+                        base: ndNm9.stringview
+                    )
+                    match (
+                        po9
+                    ) case some then {
+                        pnm9: typeNameOf :st tid: (ztypes.tid.create from: st.typing.nsOwnerTid.u64)
+                        pm9: "'\{ndNm9}' is defined in the parent unit '\{unitName}'"
+                        pn9: "an implementation subunit cannot refer to its parent".string
+                        ph9: "subunit '\{pnm9}' sees its own definitions, its own subunits, top-level units and core"
+                        (addErrorH
+                            :st
+                            nodeid: node.nodeid
+                            lineno: node.lineno
+                            colno: node.colno
+                            e: zast.err.badReference
+                            msg: pm9
+                            note: pn9
+                            hint: ph9
+                            width: ndNm9.length.u32.orPanic
+                        )
+                    } case none then null
+                }
+            }
         }
     }
     return result

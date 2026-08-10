@@ -1462,6 +1462,9 @@ Ctx: class {
     # IT first: `deep.mul` in mymod/helper.z names helper's subunit, not one of
     # mymod's, and ctx.mainName can only ever name the file.
     nsTid: ztypes.tid
+    # whether that namespace is a hidden subunit, which does not fall through
+    # to its parent -- so a constant of the parent must not inline here
+    nsIsSubunit: bool
     realMain: String
     strC: String
     svC: String
@@ -8035,6 +8038,14 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             if nsca9.length > 0 then return nsca9
             nscs9: memberConstStrText9 :symtab :ctx unitTid: ctx.nsTid nameId: n.name
             if nscs9.length > 0 then return nscs9
+            # a hidden subunit stops here: its parent's constants are not in
+            # scope, so falling through to the file unit would inline a value
+            # the typechecker refuses to name
+            if ctx.nsIsSubunit then return (emitLocalAtomName
+                :ctx
+                name: av
+                vid: (atomVid :symtab nid: n.nodeid.u64)
+            )
         }
         mutd9: unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview
         mca9: (memberConstTextOf9
@@ -17463,6 +17474,11 @@ emitFnsIn: function {
                     opId: iuOpId9
                     k: zast.unitkind.subunit
                 ) then isNs9 = true
+                isSub9: (zast.unitOpKindIs
+                    :ast
+                    opId: iuOpId9
+                    k: zast.unitkind.subunit
+                )
                 if isNs9 then {
                     nsTid9: ztypes.tid
                     {
@@ -17479,7 +17495,9 @@ emitFnsIn: function {
                     }
                     if (nsTid9.isZero) == false then {
                         sns9: ctx.nsTid
+                        ssub9: ctx.nsIsSubunit
                         ctx.nsTid = nsTid9
+                        ctx.nsIsSubunit = isSub9
                         (emitFnsIn
                             :ast
                             :symtab
@@ -17490,6 +17508,7 @@ emitFnsIn: function {
                             :buf
                         )
                         ctx.nsTid = sns9
+                        ctx.nsIsSubunit = ssub9
                     }
                 }
             }
@@ -18433,6 +18452,7 @@ emitC: function {
     ctx: (Ctx
         mainName: mn
         nsTid: ztypes.tid
+        nsIsSubunit: false
         realMain: rm
         :fastHash
         :readableNames
