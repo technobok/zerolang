@@ -10081,6 +10081,11 @@ callableUnitName: function {ast: Ast.view op: Node.view} out String is {
 # InstReq -- one generic-unit instantiation binding (intmath: (mathops t: i64)):
 # the names the mint needs plus the binding's node ids for the instantiation stamps.
 InstReq: class {
+    # the unit the instantiation was WRITTEN in. Every lookup a request drives
+    # -- the template, the type arguments, the binding name -- is relative to
+    # it, and reading them off the main unit is why a generic unit worked only
+    # there.
+    declUnit: String
     bind: String
     mono: String
     tmpl: String
@@ -10155,7 +10160,12 @@ fillUnitArgs: function {ast: Ast.view r: InstReq op: Node.view} is {
 }
 
 # collect the generic instantiation requests reachable from main.
-collectMainInstantiations: function {ast: Ast.view o: Node.view reqs: List InstReq} is {
+collectMainInstantiations: function {
+    ast: Ast.view
+    o: Node.view
+    unitName: StringView
+    reqs: List InstReq
+} is {
     match (
         o
     ) case unitdef then {
@@ -10169,6 +10179,7 @@ collectMainInstantiations: function {ast: Ast.view o: Node.view reqs: List InstR
                 if tn.length != 0 then {
                     bindn: zast.nameTextCopy :ast ref: bmNode9.name
                     r9: (InstReq
+                        declUnit: unitName.string
                         bind: bindn
                         mono: "".string
                         tmpl: tn.copy
@@ -10204,7 +10215,6 @@ scanMainForInstantiations: function {program: Node reqs: (List InstReq).view} is
     match (
         program
     ) case program then {
-        mainName: program.mainUnitName.stringview
         uiter: program.ast.units.iterate
         for uId9: uiter loop {
             u: program.ast.nodes.get i: (uId9 - 1).u64
@@ -10212,9 +10222,10 @@ scanMainForInstantiations: function {program: Node reqs: (List InstReq).view} is
                 u
             ) case namedoperation then {
                 un: zast.poolTextAt pool: program.ast.names ref: u.name
-                if un.stringview == mainName then (collectMainInstantiations
+                (collectMainInstantiations
                     ast: program.ast
                     o: (program.ast.nodes.get i: (u.operation - 1).u64)
+                    unitName: un.stringview
                     :reqs
                 )
             } else null
@@ -11587,7 +11598,6 @@ completeUnitInstantiations: function {
     reg: ztypes.ZTypeRegistry
     program: Node
 } is {
-    mainName: programMainName :program
     reqs: (List InstReq)
     scanMainForInstantiations :program :reqs
     i: u64
@@ -11599,6 +11609,8 @@ completeUnitInstantiations: function {
         rm: rmv1
         rtv1: r.tmpl.stringview
         rt: rtv1
+        ruv1: r.declUnit.stringview
+        ru: ruv1
         re: r.exprId
         rc: r.callId
         rl: r.calId
@@ -11626,7 +11638,7 @@ completeUnitInstantiations: function {
                         ast: program.ast
                         :ty
                         :reg
-                        currentUnit: mainName.stringview
+                        currentUnit: ru
                         base: anmR9.stringview
                     )
                 } else null
@@ -11651,7 +11663,7 @@ completeUnitInstantiations: function {
         match (
             program
         ) case program then {
-            mnUid9: nameIdOf ast: program.ast name: mainName.stringview
+            mnUid9: nameIdOf ast: program.ast name: ru
             rmNid9: nameIdOf ast: program.ast name: rm
             mgo = (resolvedByIds
                 ast: program.ast
@@ -11675,7 +11687,7 @@ completeUnitInstantiations: function {
             match (
                 program
             ) case program then {
-                mnUid8: nameIdOf ast: program.ast name: mainName.stringview
+                mnUid8: nameIdOf ast: program.ast name: ru
                 rtNid9: nameIdOf ast: program.ast name: rt
                 tgo = (resolvedByIds
                     ast: program.ast
@@ -11687,7 +11699,7 @@ completeUnitInstantiations: function {
                 tplDecl9 = (declOfUnitDef
                     :ty
                     ast: program.ast
-                    defUnit: mainName.stringview
+                    defUnit: ru
                     name: rt
                 )
                 if tplDecl9.isZero then {
@@ -11754,7 +11766,7 @@ completeUnitInstantiations: function {
                             tu
                         ) case namedoperation then {
                             tun: zast.poolTextAt pool: program.ast.names ref: tu.name
-                            if tun.stringview == mainName.stringview then {
+                            if tun.stringview == ru then {
                                 tplId = (inlineTemplateTid
                                     :ty
                                     ast: program.ast
@@ -11802,12 +11814,12 @@ completeUnitInstantiations: function {
                                 templateOpId: uop29
                             )
                         }
-                        if un29.stringview == mainName.stringview then {
+                        if un29.stringview == ru then {
                             (completeInlineReq
                                 :ty
                                 :reg
                                 ast: program.ast
-                                mainName: mainName.stringview
+                                mainName: ru
                                 monoId: (ztypes.tid.create from: mid9.u64)
                                 monoName: rm
                                 tmplName: rt
@@ -11920,28 +11932,16 @@ runUnitMonoWalks: function {
     }
 }
 
-# resolveMainUnitInstantiations -- resolve generic-unit instantiation bindings in the main
-# unit (intmath: (genmath t: i64)) into mono UNIT types. Two passes avoid nested
+# resolveMainUnitInstantiations -- resolve generic-unit instantiation bindings
+# (intmath: (genmath t: i64)) into mono UNIT types. Two passes avoid nested
 # program.ast.units iteration: collect requests (separate fn), then create each mono.
-# programMainName -- the main unit's name as an owned copy (no lingering lock on
-# program, so program stays freely passable as a Node).
-programMainName: function {program: Node.view} out String is {
-    match (
-        program
-    ) case program then {
-        return (program.mainUnitName.copy)
-    } else {
-        return "".string
-    }
-}
-
-# resolve every generic instantiation reachable from the main unit.
+# resolve every generic instantiation the program declares, in whichever unit
+# it was written.
 resolveMainUnitInstantiations: function {
     ty: ztyping.ZTyping.view
     reg: ztypes.ZTypeRegistry.view
     program: Node.view
 } is {
-    mainName: programMainName :program
     reqs: (List InstReq)
     scanMainForInstantiations :program :reqs
     i: u64
@@ -11951,11 +11951,13 @@ resolveMainUnitInstantiations: function {
         rm: rmv0
         rtv0: r.tmpl.stringview
         rt: rtv0
+        ruv0: r.declUnit.stringview
+        ru0: ruv0
         (resolveUnitMono
             :ty
             :reg
             :program
-            unitName: mainName.stringview
+            unitName: ru0
             monoName: rm
             templateName: rt
         )
