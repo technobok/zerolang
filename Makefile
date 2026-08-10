@@ -75,7 +75,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard static-tcc-guard readable-check perf-strict perf-elision
+.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard readable-check perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -129,7 +129,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard static-tcc-guard readable-check ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard require-guard static-tcc-guard readable-check ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -644,6 +644,32 @@ case-guard:
 	  exit 1; \
 	fi; \
 	echo "case-guard OK: every program declaring main is in a case list"
+
+# require-guard -- zlink-guard's other half. That one pins which programs a
+# `require:` block CONTRIBUTES a library to; this pins which programs it is
+# allowed to REJECT. Both read the same rule -- a block speaks only for a
+# program that reaches its unit -- and only a toolchain the block objects to
+# exercises this side, so it is measured under `--cc tcc`: quadfloat's block
+# reports E0601 there. A rise means a unit now rejects programs that never
+# touch it (which is what made `--cc tcc` reject the entire corpus); a fall
+# means a guard stopped firing for a program that does touch it.
+REQUIRE_TCC_BASELINE := 2
+
+require-guard: bin/zc
+	@n=0; rep=""; \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	  b=$$(basename $$f .z); \
+	  if bin/zc emit $$f --system lib/system --cc tcc -o /dev/null 2>&1 | grep -q 'error\[E0601\]'; then \
+	    n=$$(($$n + 1)); rep="$$rep  $$b\n"; \
+	  fi; \
+	done; \
+	if [ "$$n" -ne $(REQUIRE_TCC_BASELINE) ]; then \
+	  echo "require-guard FAIL: $$n program(s) rejected under --cc tcc (baseline $(REQUIRE_TCC_BASELINE))"; \
+	  printf "$$rep"; \
+	  echo "  a require: block speaks only for a program that REACHES its unit."; \
+	  exit 1; \
+	fi; \
+	echo "require-guard OK: $$n programs rejected under --cc tcc (baseline $(REQUIRE_TCC_BASELINE))"
 
 # static-tcc-guard -- the vendored tinycc is LGPL-2.1 inside a dual MIT/Apache
 # tree, so it may be reached by dlopen and by nothing else: linking it, static

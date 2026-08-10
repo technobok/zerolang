@@ -5820,6 +5820,7 @@ checkOneRequireBlock: function {
     unitName: StringView
     declId: ztypes.declid
     libNid: zast.nameid
+    reached: bool
 } is {
     rnode9q: u32
     {
@@ -5868,15 +5869,35 @@ checkOneRequireBlock: function {
                         :unitName
                         n: (ast.nodes.get i: (mn9q.operation - 1).u64)
                     )
-                    reportPendingConstFail :ty
+                    cf9q: ty.constFail
+                    failed9q: (cf9q.kind.none) == false
+                    if reached then {
+                        reportPendingConstFail :ty
+                    } else {
+                        # a unit the program never reaches demands nothing OF
+                        # it. `library:` may legitimately evaluate to a reached
+                        # `error` under this toolchain -- quadfloat's does, for
+                        # every tcc build -- and that is a diagnostic for a
+                        # program that USES the unit. requiredLibs applies the
+                        # same rule to the VALUE; this applies it to the
+                        # failure, which is what keeps one unguarded unit from
+                        # rejecting every program in the tree.
+                        constFailClear :ty
+                    }
                     if (lv9q.kind.svalKind) == false then {
+                        # a failed evaluation in an unreached unit said nothing
+                        # about this program, so nothing follows from it; one
+                        # that SUCCEEDED and produced a non-string is a schema
+                        # error whether the unit is reached or not.
+                        say9q: reached
+                        if (failed9q) == false then say9q = true
                         # when the evaluation itself reported -- a reached
                         # `error`, an interpolation -- it has already said what
                         # is wrong, and "must evaluate to a string" on top of
                         # that is noise. Compared against THIS call's count
                         # rather than ty.isError, which any earlier error in
                         # the program would have set.
-                        if ty.errors.length == nerr9q then {
+                        if say9q when ty.errors.length == nerr9q then {
                             (addResolveErrorH
                                 :ty
                                 nodeid: mn9q.nodeid
@@ -5968,12 +5989,43 @@ requireLibraryText: function {
     return lib9w
 }
 
+# unitWasReached -- did the program resolve a definition of `unitName` OTHER
+# than its own `require:` block? That is what makes a require: block a
+# requirement of the PROGRAM rather than a claim the unit makes about itself:
+# the block is a top-level definition like any other, so counting it would let
+# every unit light itself. Shared by the two readers of a require: block --
+# what it CONTRIBUTES (requiredLibs) and whether its failure is this program's
+# to hear (checkOneRequireBlock) -- because they must agree.
+unitWasReached: function {
+    ty: ztyping.ZTyping
+    ast: Ast
+    unitName: StringView
+    unitOp: u32
+    reqNid: zast.nameid
+} out bool is {
+    r9u: false
+    bodyIds9u: zast.unitBodyIdsAt :ast unitId: unitOp
+    with bit9u: bodyIds9u.iterate do for mId9u: bit9u loop {
+        mn9u: ast.nodes.get i: (mId9u - 1).u64
+        match (
+            mn9u
+        ) case namedoperation then {
+            if (mn9u.name == reqNid) == false then {
+                if (defWasResolved
+                    :ty
+                    :ast
+                    defUnit: unitName
+                    nameId: mn9u.name
+                ) then r9u = true
+            }
+        } else null
+    }
+    return r9u
+}
+
 # requiredLibs -- the link libraries the program's reached units declare. A
 # `require:` block applies only when the program reaches its unit, which is
-# what makes the declaration a requirement rather than a link-everything list:
-# a definition of the unit OTHER than the block itself must have resolved. The
-# block is a top-level definition like any other, so counting it would let
-# every unit light itself.
+# what makes the declaration a requirement rather than a link-everything list.
 requiredLibs: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -6006,7 +6058,13 @@ requiredLibs: function {
             }
             if uOp9w > 0 then {
                 lib9x: String
-                reached9w: false
+                reached9w: (unitWasReached
+                    :ty
+                    ast: program.ast
+                    unitName: unm9w.stringview
+                    unitOp: uOp9w
+                    reqNid: reqNid9w
+                )
                 # stage the block's operation id and evaluate AFTER the walk:
                 # evaluating takes an exclusive lock on program.ast, which
                 # cannot run while this iteration holds a shared one
@@ -6017,16 +6075,7 @@ requiredLibs: function {
                     match (
                         mn9x
                     ) case namedoperation then {
-                        if mn9x.name == reqNid9w then {
-                            reqOp9x = mn9x.operation
-                        } else {
-                            if (defWasResolved
-                                :ty
-                                ast: program.ast
-                                defUnit: unm9w.stringview
-                                nameId: mn9x.name
-                            ) then reached9w = true
-                        }
+                        if mn9x.name == reqNid9w then reqOp9x = mn9x.operation
                     } else null
                 }
                 if reqOp9x > 0 then {
@@ -6056,7 +6105,8 @@ requiredLibs: function {
 # from the host toolchain. The block is an ordinary nested subunit, so the
 # standard unit machinery indexes it and resolves nothing inside it; its schema
 # is layered on here. declFindChild reads the pre-resolution def index, so a
-# block in a unit the program never demands is still checked.
+# block in a unit the program never demands is still SCHEMA-checked -- but only
+# a program that reaches the unit hears its `library:` fail to evaluate.
 checkRequireBlocks: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -6074,6 +6124,7 @@ checkRequireBlocks: function {
             uId9q: (zast.nodeid.create from: (program.ast.units.get i: uIdx9q))
             uIdx9q = uIdx9q + 1
             unm9q: String
+            uOp9q: u32
             {
                 un9q: program.ast.nodes.get i: (uId9q - 1).u64
                 match (
@@ -6081,6 +6132,7 @@ checkRequireBlocks: function {
                 ) case namedoperation then {
                     ut9q: zast.poolTextAt pool: program.ast.names ref: un9q.name
                     unm9q = ut9q.copy
+                    uOp9q = un9q.operation
                 } else null
             }
             udecl9q: ztypes.declid
@@ -6098,6 +6150,16 @@ checkRequireBlocks: function {
             if (udecl9q.isZero) == false then {
                 rdecl9q: ty.declFindChild parentDeclId: udecl9q nameId: reqNid9q
                 if (rdecl9q.isZero) == false then {
+                    reach9q: false
+                    if uOp9q > 0 then {
+                        reach9q = (unitWasReached
+                            :ty
+                            ast: program.ast
+                            unitName: unm9q.stringview
+                            unitOp: uOp9q
+                            reqNid: reqNid9q
+                        )
+                    }
                     (checkOneRequireBlock
                         :ty
                         ast: program.ast
@@ -6105,6 +6167,7 @@ checkRequireBlocks: function {
                         unitName: unm9q.stringview
                         declId: rdecl9q
                         libNid: libNid9q
+                        reached: reach9q
                     )
                 }
             }
@@ -29787,9 +29850,13 @@ typecheck: function {
     resolveConstantDefs ty: st.typing reg: st.reg :program
     completeUnitInstantiations ty: st.typing reg: st.reg :program
     applyUnitVisibility ty: st.typing reg: st.reg :program
-    checkRequireBlocks ty: st.typing reg: st.reg :program
     stampTyperefs ty: st.typing reg: st.reg :program
     checkBodies :st :program
+    # AFTER checkBodies: whether a program reaches a unit is not settled until
+    # its bodies have been walked -- `x: 1.5.f128` is what pulls quadfloat in,
+    # and nothing before this point knows that. Running earlier made every
+    # require: block a claim about every program.
+    checkRequireBlocks ty: st.typing reg: st.reg :program
     walkGenericUnitTemplates :st :program
     match (
         program
