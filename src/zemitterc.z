@@ -1457,6 +1457,11 @@ originIsTid: function {
 # the literal pool, and the resolved-name map access).
 Ctx: class {
     mainName: String
+    # the namespace unit whose functions are being emitted, 0 while emitting
+    # the file unit's own. A name written inside a namespace resolves against
+    # IT first: `deep.mul` in mymod/helper.z names helper's subunit, not one of
+    # mymod's, and ctx.mainName can only ever name the file.
+    nsTid: ztypes.tid
     realMain: String
     strC: String
     svC: String
@@ -6882,6 +6887,52 @@ emitUnitMethodCall: function {
     return e9
 }
 
+# dottedMemberTidOf9 -- the type id a dotted callable's `base.child` names. A
+# file-unit base answers through the unit-name index, which also follows
+# re-exports; a namespace base is absent from that index by design, so it
+# answers off its own type id. 0 when the base names no unit.
+dottedMemberTidOf9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    callableId: u32
+} out ztypes.tid is {
+    baseId9: dottedBaseAtomId :ast n: (ast.nodes.get i: (callableId - 1).u64)
+    childId9: aliasChildNameId :ast :symtab n: (ast.nodes.get i: (callableId - 1).u64)
+    if childId9.isZero then return ztypes.tid
+    if (baseId9.isZero) == false then {
+        if (symtab.reg.isUnitName nameId: baseId9) then {
+            go9: (ztypecheck.resolvedByIds
+                :ast
+                ty: symtab.typing
+                reg: symtab.reg
+                unitId: baseId9
+                name: childId9
+            )
+            match (
+                go9
+            ) case some then {
+                return (ztypes.tid.create from: (go9))
+            } case none then null
+            return ztypes.tid
+        }
+    }
+    pb9: u32
+    {
+        cln9: ast.nodes.get i: (callableId - 1).u64
+        if cln9.dottedpath then pb9 = cln9.parent
+    }
+    nst9: pathUnitTidOf9 :ast :symtab :ctx baseId: pb9
+    if nst9.isZero then return ztypes.tid
+    co9: symtab.typing.declChildOfId parentTypeId: nst9 nameId: childId9
+    match (
+        co9
+    ) case some then {
+        return (ztypes.tid.create from: (co9))
+    } case none then null
+    return ztypes.tid
+}
+
 # emit a call to a function in another unit.
 emitCrossUnitFnCall: function {
     ast: Ast
@@ -6889,24 +6940,7 @@ emitCrossUnitFnCall: function {
     ctx: Ctx.view
     call: zast.CallData.view
 } out String is {
-    baseId9: dottedBaseAtomId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    childId9: aliasChildNameId :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
-    if baseId9.isZero then return "".string
-    if childId9.isZero then return "".string
-    if (symtab.reg.isUnitName nameId: baseId9) == false then return "".string
-    go: (ztypecheck.resolvedByIds
-        :ast
-        ty: symtab.typing
-        reg: symtab.reg
-        unitId: baseId9
-        name: childId9
-    )
-    fid: ztypes.tid
-    match (
-        go
-    ) case some then {
-        fid = ztypes.tid.create from: (go)
-    } case none then null
+    fid: dottedMemberTidOf9 :ast :symtab :ctx callableId: call.callable
     if fid.isZero then return "".string
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
     fc: ctxCname :ctx tid: fid
@@ -7297,24 +7331,7 @@ emitCrossUnitCtor: function {
     ctx: Ctx.view
     call: zast.CallData.view
 } out String is {
-    baseId9: dottedBaseAtomId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    childId9: aliasChildNameId :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
-    if baseId9.isZero then return "".string
-    if childId9.isZero then return "".string
-    if (symtab.reg.isUnitName nameId: baseId9) == false then return "".string
-    go: (ztypecheck.resolvedByIds
-        :ast
-        ty: symtab.typing
-        reg: symtab.reg
-        unitId: baseId9
-        name: childId9
-    )
-    tid: ztypes.tid
-    match (
-        go
-    ) case some then {
-        tid = ztypes.tid.create from: (go)
-    } case none then null
+    tid: dottedMemberTidOf9 :ast :symtab :ctx callableId: call.callable
     if tid.isZero then return "".string
     tt: symtab.reg.typetypeOf typeId: tid
     isRc: false
@@ -16567,10 +16584,9 @@ pathUnitTidOf9: function {
         ) case some then {
             return (ztypes.tid.create from: uo9)
         } case none then null
-        ho9: (symtab.typing.declChildOfId
-            parentTypeId: (unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview)
-            nameId: b9.name
-        )
+        encl9: ctx.nsTid
+        if encl9.isZero then encl9 = unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview
+        ho9: symtab.typing.declChildOfId parentTypeId: encl9 nameId: b9.name
         match (
             ho9
         ) case some then {
@@ -17260,6 +17276,7 @@ emitFnsPass: function {
                         :ctx
                         ast: program.ast
                         mainOpId: opId9
+                        ownerTid: ztypes.tid
                         :declOnly
                         :buf
                     )
@@ -17359,6 +17376,12 @@ emitFnsIn: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     mainOpId: zast.nodeid
+    # the unit whose functions these are: 0 for the file unit ctx is bound to,
+    # whose children the name-keyed lookup below already answers for, and the
+    # namespace's own type id for a nested unit -- whose functions are children
+    # of IT, so resolving them against the file unit misses and hands the
+    # signature a tid of 0, which renders as `z_t0(void)`.
+    ownerTid: ztypes.tid
     declOnly: bool
     buf: String.borrow
 } is {
@@ -17379,6 +17402,46 @@ emitFnsIn: function {
                         :declOnly
                         :buf
                     )
+                }
+                isNs9: false
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: iuOpId9
+                    k: zast.unitkind.namespace
+                ) then isNs9 = true
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: iuOpId9
+                    k: zast.unitkind.subunit
+                ) then isNs9 = true
+                if isNs9 then {
+                    nsTid9: ztypes.tid
+                    {
+                        ownr9: ownerTid
+                        if ownr9.isZero then {
+                            ownr9 = unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview
+                        }
+                        no9: symtab.typing.declChildOfId parentTypeId: ownr9 nameId: ium9.name
+                        match (
+                            no9
+                        ) case some then {
+                            nsTid9 = ztypes.tid.create from: (no9)
+                        } case none then null
+                    }
+                    if (nsTid9.isZero) == false then {
+                        sns9: ctx.nsTid
+                        ctx.nsTid = nsTid9
+                        (emitFnsIn
+                            :ast
+                            :symtab
+                            :ctx
+                            mainOpId: (zast.nodeid.create from: iuOpId9)
+                            ownerTid: nsTid9
+                            :declOnly
+                            :buf
+                        )
+                        ctx.nsTid = sns9
+                    }
                 }
             }
         }
@@ -17425,7 +17488,20 @@ emitFnsIn: function {
             match (
                 dm2
             ) case namedoperation then {
-                fid: userFnId :ast :symtab :ctx name: nm2.stringview
+                fid: ztypes.tid
+                if ownerTid.isZero then {
+                    fid = userFnId :ast :symtab :ctx name: nm2.stringview
+                } else {
+                    fo9: (symtab.typing.declChildOfId
+                        parentTypeId: ownerTid
+                        nameId: (zast.poolFind pool: ast.names text: nm2.stringview)
+                    )
+                    match (
+                        fo9
+                    ) case some then {
+                        fid = ztypes.tid.create from: (fo9)
+                    } case none then null
+                }
                 isGenFn9: false
                 if fid > 0 then {
                     if (isGenericType :symtab tid: fid) then {
@@ -18307,6 +18383,7 @@ emitC: function {
     rm: mn.copy
     ctx: (Ctx
         mainName: mn
+        nsTid: ztypes.tid
         realMain: rm
         :fastHash
         :readableNames
