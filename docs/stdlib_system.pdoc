@@ -127,12 +127,12 @@ operation can fail for reasons the caller needs to handle
   i16:  record { ... } as { tag: tag }
   i32:  record { ... } as { tag: tag }
   i64:  record { ... } as { tag: tag }
-  i128: record { ... } as { tag: tag }
+  i128: record { ... } as { tag: tag }   # declared in wideint
   u8:   record { ... } as { tag: tag }
   u16:  record { ... } as { tag: tag }
   u32:  record { ... } as { tag: tag }
   u64:  record { ... } as { tag: tag }
-  u128: record { ... } as { tag: tag }
+  u128: record { ... } as { tag: tag }   # declared in wideint
   f16:  record { ... } as { tag: tag }
   f32:  record { ... } as { tag: tag }
   f64:  record { ... } as { tag: tag }
@@ -148,13 +148,18 @@ scalars (#~"c8" a UTF-8 byte, #~"c32" a Unicode scalar value). All
 are valtypes (records): copied on assignment, no heap allocation,
 no destructor.
 
-#~"f128" is the one declared outside #~"system", in a #~"quadfloat"
-unit of its own: its runtime needs libquadmath, which not every host
-toolchain carries, and a unit is the granularity at which a program
-says what it needs from one -- #~"quadfloat" carries
-#~"require: unit { library: \"quadmath\" }", and the library is linked
-only into programs that actually reach the unit. #~"core" re-exports it
-like the rest, so #~"1.5.f128" and #~"x.f128" read no differently.
+Three are declared outside #~"system", each in a unit of its own,
+because each needs something from the host toolchain that not every
+compiler has -- and a unit is the granularity at which a program says
+what it needs from one. #~"quadfloat" holds #~"f128", whose runtime
+needs libquadmath; #~"wideint" holds #~"i128" and #~"u128", which need
+a compiler with #~"__int128". Each carries a #~"require:" block, and it
+applies only to programs that actually reach the unit: quadfloat's names
+a library to link, wideint's names none, and both turn away a toolchain
+that cannot build the type -- by name, before any C is written, instead
+of letting the C compiler reject a type the program never wrote.
+#~"core" re-exports all three like the rest, so #~"1.5.f128" and
+#~"x.i128" read no differently.
 
 #b:"Literals." Integer literals default to #~"i64"; float literals
 default to #~"f64". Use the dotted suffix form to choose a different
@@ -217,8 +222,12 @@ wrap-around (C #~"-fwrapv" semantics), unsigned overflow wraps
 modulo 2^N. No trapping or saturating variants yet.
 
 #b:"#~\"i128\" / #~\"u128\" caveat." These rely on C compiler
-support for #~"__int128" (gcc / clang). Width on platforms without
-native 128-bit support is determined at C compile time.
+support for #~"__int128" (gcc / clang). That reliance is declared
+rather than assumed: they live in #~"wideint", whose #~"require:"
+block rejects a build with #b:"tcc" and says why, so a program using
+them fails at type-check with its own message instead of inside the C
+compiler. Width on platforms without native 128-bit support is
+determined at C compile time.
 
 
 #--: bool

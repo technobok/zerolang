@@ -153,7 +153,8 @@ test-tcc: bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(BUILDDIR)/tcc --cc-forward \
 	   --ccflags "-B $(TCCLIB)" --root . --jobs $(NPROC) \
 	   > $(BUILDDIR)/tcc-run.log 2>&1; \
-	awk '/^FAIL/ { print $$2, (NF >= 3 ? $$3 : "(?)") }' $(BUILDDIR)/tcc-run.log \
+	awk '/^FAIL/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
+	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/tcc-run.log \
 	  | sort > $(BUILDDIR)/tcc-fails.txt; \
 	grep -v '^#' $(TCC_KNOWN) | grep -v '^ *$$' | sort > $(BUILDDIR)/tcc-known.txt; \
 	if ! diff -u $(BUILDDIR)/tcc-known.txt $(BUILDDIR)/tcc-fails.txt; then \
@@ -684,7 +685,7 @@ case-guard:
 # reports E0601 there. A rise means a unit now rejects programs that never
 # touch it (which is what made `--cc tcc` reject the entire corpus); a fall
 # means a guard stopped firing for a program that does touch it.
-REQUIRE_TCC_BASELINE := 2
+REQUIRE_TCC_BASELINE := 5
 
 require-guard: bin/zc
 	@n=0; rep=""; \

@@ -217,12 +217,12 @@ operation can fail for reasons the caller needs to handle
   i16:  record { ... } as { tag: tag }
   i32:  record { ... } as { tag: tag }
   i64:  record { ... } as { tag: tag }
-  i128: record { ... } as { tag: tag }
+  i128: record { ... } as { tag: tag }   # declared in wideint
   u8:   record { ... } as { tag: tag }
   u16:  record { ... } as { tag: tag }
   u32:  record { ... } as { tag: tag }
   u64:  record { ... } as { tag: tag }
-  u128: record { ... } as { tag: tag }
+  u128: record { ... } as { tag: tag }   # declared in wideint
   f16:  record { ... } as { tag: tag }
   f32:  record { ... } as { tag: tag }
   f64:  record { ... } as { tag: tag }
@@ -235,13 +235,18 @@ integers, four IEEE 754 floats (<code>f16</code> half precision, <code>f32</code
 scalars (<code>c8</code> a UTF-8 byte, <code>c32</code> a Unicode scalar value). All
 are valtypes (records): copied on assignment, no heap allocation,
 no destructor.</p>
-<p><code>f128</code> is the one declared outside <code>system</code>, in a <code>quadfloat</code>
-unit of its own: its runtime needs libquadmath, which not every host
-toolchain carries, and a unit is the granularity at which a program
-says what it needs from one -- <code>quadfloat</code> carries
-<code>require: unit { library: "quadmath" }</code>, and the library is linked
-only into programs that actually reach the unit. <code>core</code> re-exports it
-like the rest, so <code>1.5.f128</code> and <code>x.f128</code> read no differently.</p>
+<p>Three are declared outside <code>system</code>, each in a unit of its own,
+because each needs something from the host toolchain that not every
+compiler has -- and a unit is the granularity at which a program says
+what it needs from one. <code>quadfloat</code> holds <code>f128</code>, whose runtime
+needs libquadmath; <code>wideint</code> holds <code>i128</code> and <code>u128</code>, which need
+a compiler with <code>__int128</code>. Each carries a <code>require:</code> block, and it
+applies only to programs that actually reach the unit: quadfloat's names
+a library to link, wideint's names none, and both turn away a toolchain
+that cannot build the type -- by name, before any C is written, instead
+of letting the C compiler reject a type the program never wrote.
+<code>core</code> re-exports all three like the rest, so <code>1.5.f128</code> and
+<code>x.i128</code> read no differently.</p>
 <p><strong>Literals.</strong> Integer literals default to <code>i64</code>; float literals
 default to <code>f64</code>. Use the dotted suffix form to choose a different
 type: <code>65.u8</code>, <code>1.5.f32</code>, <code>0xff.u32</code>. Do <strong>not</strong> write
@@ -294,8 +299,12 @@ runtime for the full rule.</p>
 wrap-around (C <code>-fwrapv</code> semantics), unsigned overflow wraps
 modulo 2^N. No trapping or saturating variants yet.</p>
 <p><strong>#~"i128" / #~"u128" caveat.</strong> These rely on C compiler
-support for <code>__int128</code> (gcc / clang). Width on platforms without
-native 128-bit support is determined at C compile time.</p>
+support for <code>__int128</code> (gcc / clang). That reliance is declared
+rather than assumed: they live in <code>wideint</code>, whose <code>require:</code>
+block rejects a build with <strong>tcc</strong> and says why, so a program using
+them fails at type-check with its own message instead of inside the C
+compiler. Width on platforms without native 128-bit support is
+determined at C compile time.</p>
 <h2 id="bool"><a href="#bool">4. bool</a></h2>
 <pre><code class="language-zerolang">  bool: variant { false: null  true: null } as {
       tag: u8.tag
