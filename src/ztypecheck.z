@@ -15752,6 +15752,46 @@ memberStrictType: function {st: zenv.ZSymbolTable bt: u64} out bool is {
 }
 
 # typecheck a dotted member-access expression, enforcing visibility and locks.
+# isSubunitMemberOf -- the member `member` of unit `unitTid` is a hidden
+# implementation subunit. Read off the AST node the member's declaration points
+# at, because subunit-ness is how the unit was WRITTEN and the registry records
+# only that it is a unit.
+isSubunitMemberOf: function {
+    ast: Ast.view
+    ty: ztyping.ZTyping.view
+    reg: ztypes.ZTypeRegistry.view
+    unitTid: ztypes.tid
+    member: optionval u64
+} out bool is {
+    unitTid
+    mt9: u64
+    match (
+        member
+    ) case some then {
+        mt9 = member
+    } case none then {
+        return false
+    }
+    if (reg.typetypeOf typeId: (ztypes.tid.create from: mt9)) != ztypes.ztypetype.unitType then {
+        return false
+    }
+    dc9: declOfTypeId :reg tid: (ztypes.tid.create from: mt9)
+    if dc9.isZero then return false
+    if (ty.declValid id: dc9) == false then return false
+    dn9: u32
+    {
+        do9: ty.decls.get i: (dc9 - 1)
+        dn9 = do9.node
+    }
+    if dn9 == 0 then return false
+    op9: u32
+    {
+        nn9: ast.nodes.get i: (dn9 - 1).u64
+        if nn9.namedoperation then op9 = nn9.operation
+    }
+    return (zast.unitOpKindIs :ast opId: op9 k: zast.unitkind.subunit)
+}
+
 # unitMemberTypeOf -- the type a member of unit `unitTid` names. A FILE unit
 # answers through the unit-name index, which also follows re-exports, demands
 # the definition and falls back to core. A nested unit -- an inline `m: unit
@@ -16359,6 +16399,27 @@ checkDotted: function {
             unitName: un9.stringview
             member: effUcn9.stringview
         )
+        # A hidden subunit is private to its parent: it is read only because
+        # the parent named it, so it was never declared surface. `public:`
+        # governs an inline unit, which is an ordinary top-level definition.
+        if (isSubunitMemberOf :ast ty: st.typing reg: st.reg unitTid: bt member: mo9) then {
+            if un9.stringview != unitName then {
+                sbl9: nodeLine n: (ast.nodes.get i: (dp.child - 1).u64)
+                sbc9: nodeCol n: (ast.nodes.get i: (dp.child - 1).u64)
+                (addErrorH
+                    :st
+                    nodeid: (nodeId n: (ast.nodes.get i: (dp.child - 1).u64))
+                    lineno: sbl9
+                    colno: sbc9
+                    e: zast.err.notPublic
+                    msg: "'\{cn}' is an implementation subunit of '\{un9}' and is private to it"
+                    note: "a subunit is loaded only because its own unit named it".string
+                    hint: "reach it through a definition '\{un9}' exposes"
+                    width: cn.length.u32.orPanic
+                )
+                return (ztypes.tid.create from: 0)
+            }
+        }
         match (
             mo9
         ) case some then {
