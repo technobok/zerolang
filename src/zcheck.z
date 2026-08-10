@@ -19,6 +19,7 @@ public: unit {
     :fsnoFor
     :joinPath
     :pickCc
+    :pickCcMode
     :resolveRuntimeDir
     :resolveSystemDir
     :resolveTccDir
@@ -114,11 +115,13 @@ check: function {
     # no --cc reaches the tooling front ends, so they resolve the DEFAULT the
     # same way a flagless build would: same answer, same folded guards.
     ccPath9: pickCc ccFlag: "" targetTriple: ""
+    ccMode9: pickCcMode modeFlag: ""
     st: (ztypecheck.typecheck
         program: prog
         :reg
         eager: true
         ccPath: ccPath9.stringview
+        ccMode: ccMode9.stringview
         target: ""
     )
     nerr: st.typing.errors.length
@@ -335,6 +338,18 @@ pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
 
 # resolveSystemDir -- the stdlib dir by precedence: explicit flag >
 # $ZEROLANG_SYSTEM > $ZEROLANG_ROOT-relative > exePath-relative > cwd.
+# pickCcMode -- how zc reaches the C compiler: `spawn` unless `--cc-mode`
+# says otherwise. Shared for exactly the reason pickCc is: `platform.ccmode`
+# is folded during TYPE CHECKING, so zl and zls must answer this the way zc
+# does or a require: guard would decide differently in the editor than in the
+# build. An unrecognised value is `spawn` here -- zc rejects it at the flag,
+# which is where a typo can still be reported against the argument that
+# carried it.
+pickCcMode: function {modeFlag: StringView} out String is {
+    if modeFlag == "inproc" then return "inproc".string
+    return "spawn".string
+}
+
 resolveSystemDir: function {flagVal: StringView} out String is {
     if flagVal.length > 0 then return flagVal.string
     ev: os.env key: "ZEROLANG_SYSTEM"

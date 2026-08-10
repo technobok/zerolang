@@ -162,7 +162,8 @@ printUsage: function is {
     io.eprintln "<src> is a unit name (hello) or a path (hello.z, ./sub/hello.z)."
     io.eprintln ""
     io.eprintln "common flags:"
-    io.eprintln "  -o OUT  --src DIR  --release  --cc CC  --target TRIPLE"
+    io.eprintln "  -o OUT  --src DIR  --release  --cc CC  --cc-mode MODE"
+    io.eprintln "  --target TRIPLE"
     io.eprintln "  --cflags STR  --ldflags STR  --save-temps  --time  --fast-hash"
     io.eprintln "  --readable-names  --eager"
     io.eprintln "  --system DIR  --runtime DIR  --tcc-lib DIR  -h/--help  -V/--version"
@@ -174,7 +175,8 @@ printCommandHelp: function {cmd: StringView} is {
         io.eprintln "usage: zc build <src> [flags]"
         io.eprintln "Compile <src> to a native executable."
         io.eprintln "Output goes to -o OUT, else ./<unit> (./<unit>.exe for windows targets)."
-        io.eprintln "Flags: --release --cc CC --target TRIPLE --save-temps"
+        io.eprintln "Flags: --release --cc CC --cc-mode spawn|inproc --target TRIPLE"
+        io.eprintln "       --save-temps"
         io.eprintln "       --cflags STR --ldflags STR --src DIR --tcc-lib DIR"
     } else if cmd == "run" then {
         io.eprintln "usage: zc run <src> [args] [flags]"
@@ -258,12 +260,14 @@ printEnv: function {
     systemFlag: StringView
     runtimeFlag: StringView
     ccFlag: StringView
+    ccModeFlag: StringView
     targetTriple: StringView
     tccLibFlag: StringView
 } is {
     sysd: zcheck.resolveSystemDir flagVal: systemFlag
     rund: zcheck.resolveRuntimeDir flagVal: runtimeFlag
     cc: zcheck.pickCc :ccFlag :targetTriple
+    ccm: zcheck.pickCcMode modeFlag: ccModeFlag
     tccd: zcheck.resolveTccDir flagVal: tccLibFlag
     tccx: zcheck.vendoredTcc
     root: zcheck.exeRoot
@@ -287,6 +291,8 @@ printEnv: function {
     buf.append rund
     buf.append "\nZC_CC="
     buf.append cc
+    buf.append "\nZC_CC_MODE="
+    buf.append ccm
     buf.append "\nZC_TCC="
     buf.append tccx
     buf.append "\nZC_TCC_LIB="
@@ -572,6 +578,7 @@ main: function is {
     readableNames: false
     eagerCheck: false
     ccFlag: String
+    ccModeFlag: String
     tccLibFlag: String
     targetTriple: String
     cflags: String
@@ -621,6 +628,22 @@ main: function is {
         } else if a.stringview == "--cc" then {
             i = i + 1
             ccFlag = (argv.get :i).copy
+        } else if a.stringview == "--cc-mode" then {
+            i = i + 1
+            ccModeFlag = (argv.get :i).copy
+            # the one value-taking flag here that validates. It has to: an
+            # unrecognised mode would otherwise resolve to `spawn` and the
+            # build would silently do something other than what was asked,
+            # which is the same failure `--cc-mode` exists to rule out.
+            mv9: ccModeFlag.stringview
+            known9: false
+            if mv9 == "spawn" then known9 = true
+            if mv9 == "inproc" then known9 = true
+            if known9 == false then {
+                mm9: "zc: --cc-mode must be 'spawn' or 'inproc', not '\{mv9}'"
+                io.eprintln mm9
+                os.exit code: 2
+            }
         } else if a.stringview == "--tcc-lib" then {
             i = i + 1
             tccLibFlag = (argv.get :i).copy
@@ -661,6 +684,7 @@ main: function is {
             systemFlag: systemFlag.stringview
             runtimeFlag: runtimeFlag.stringview
             ccFlag: ccFlag.stringview
+            ccModeFlag: ccModeFlag.stringview
             targetTriple: targetTriple.stringview
             tccLibFlag: tccLibFlag.stringview
         )
@@ -717,6 +741,7 @@ main: function is {
     # compiler choice, and the build branch below reuses this rather than
     # resolving a second time.
     tccDir: zcheck.resolveTccDir flagVal: tccLibFlag.stringview
+    ccMode: zcheck.pickCcMode modeFlag: ccModeFlag.stringview
 
 
     tParse0: os.monotonicMillis
@@ -754,6 +779,7 @@ main: function is {
             :reg
             eager: eagerCheck
             ccPath: ccPath.stringview
+            ccMode: ccMode.stringview
             target: targetTriple.stringview
         )
         tCheck1: os.monotonicMillis
