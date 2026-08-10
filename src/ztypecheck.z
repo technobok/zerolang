@@ -25486,6 +25486,82 @@ walkGenericUnitTemplates: function {st: zenv.ZSymbolTable.view program: Node} is
 }
 
 # typecheck every definition body in a unit.
+# checkNamespaceBodies -- walk the function bodies of a namespace unit. Its
+# members resolve against ITS body list, not the file unit's, so a name written
+# inside a namespace finds the namespace's definition first. Without this a
+# namespace's signatures reach the emitter with unstamped nodes, which surfaces
+# as a loud E0500 rather than a diagnostic.
+checkNamespaceBodies: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    unitName: StringView
+    unitdefId: zast.nodeid
+    depUnits: (ListVal u32).view
+} is {
+    prevTid9: st.typing.nsOwnerTid
+    prevDecl9: st.typing.nsOwnerDeclId
+    prevUnit9: st.typing.nsOwnerUnit.copy
+    {
+        un9: unitdefNodeId :ast nId: unitdefId
+        if (un9.isZero) == false then {
+            nt9: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: un9.u64
+            if nt9 > 0 then {
+                ntid9: ztypes.tid.create from: nt9
+                st.typing.nsOwnerTid = ntid9
+                st.typing.nsOwnerDeclId = declOfTypeId reg: st.reg tid: ntid9
+                nu9: unitName.string
+                st.typing.nsOwnerUnit = nu9
+            }
+        }
+    }
+    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
+    bn9: bodyIds9.length
+    bi9: u64
+    for bi9 < bn9 loop {
+        bmId9: bodyIds9.get i: bi9
+        bi9 = bi9 + 1
+        bm: ast.nodes.get i: (bmId9 - 1).u64
+        if bm.namedoperation then {
+            isNs9: false
+            if (zast.unitOpKindIs
+                :ast
+                opId: bm.operation
+                k: zast.unitkind.namespace
+            ) then isNs9 = true
+            if (zast.unitOpKindIs
+                :ast
+                opId: bm.operation
+                k: zast.unitkind.subunit
+            ) then isNs9 = true
+            if isNs9 then {
+                (checkNamespaceBodies
+                    :ast
+                    :st
+                    :unitName
+                    unitdefId: bm.operation
+                    :depUnits
+                )
+            } else {
+                defName9: zast.nameTextAt :ast ref: bm.name
+                (checkFunctionBody
+                    :st
+                    :unitName
+                    defName: defName9.stringview
+                    defn: (ast.nodes.get i: (bm.operation - 1).u64)
+                    thisName: ""
+                    :ast
+                    unitBody: bodyIds9
+                    :depUnits
+                )
+            }
+        }
+    }
+    st.typing.nsOwnerTid = prevTid9
+    st.typing.nsOwnerDeclId = prevDecl9
+    pu9: prevUnit9.copy
+    st.typing.nsOwnerUnit = pu9
+}
+
 checkUnitBodies: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
@@ -25538,7 +25614,26 @@ checkUnitBodies: function {
             bm: ast.nodes.get i: (bmId9 - 1).u64
             if bm.namedoperation then {
                 defName: zast.nameTextAt :ast ref: bm.name
-                if defName.stringview != "main" then {
+                isNs9: false
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: bm.operation
+                    k: zast.unitkind.namespace
+                ) then isNs9 = true
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: bm.operation
+                    k: zast.unitkind.subunit
+                ) then isNs9 = true
+                if isNs9 then {
+                    (checkNamespaceBodies
+                        :ast
+                        :st
+                        :unitName
+                        unitdefId: bm.operation
+                        depUnits: emptyDeps9
+                    )
+                } else if defName.stringview != "main" then {
                     (checkFunctionBody
                         :st
                         :unitName
@@ -27009,14 +27104,33 @@ constArithFloat: function {op: StringView a: f64 b: f64} out ztypes.cval is {
 }
 
 # constUnitTid -- the type id of unit `unitName`, or 0.
-constUnitTid: function {
+# constOwnerTidFor -- the type id a constant named `defName` is keyed on. A
+# name written inside a namespace resolves against that namespace first and
+# falls back to the file unit, which is the chain spec.pdoc describes for an
+# inline unit. The TYPE and VALUE channels must agree about this, so both ask
+# here rather than each deciding for itself.
+constOwnerTidFor: function {
     ast: Ast.view
     ty: ztyping.ZTyping.view
     reg: ztypes.ZTypeRegistry.view
     unitName: StringView
+    defName: StringView
 } out u64 is {
-    # inside a namespace unit, its members' constants are keyed on ITS type id
-    if ty.nsOwnerTid > 0 when unitName == ty.nsOwnerUnit.stringview then return ty.nsOwnerTid.u64
+    if ty.nsOwnerTid > 0 when unitName == ty.nsOwnerUnit.stringview then {
+        nd9: (ty.declFindChild
+            parentDeclId: ty.nsOwnerDeclId
+            nameId: (zast.poolFind pool: ast.names text: defName)
+        )
+        if (nd9.isZero) == false then return ty.nsOwnerTid.u64
+    }
+    return (constUnitTid :ast :reg :unitName)
+}
+
+constUnitTid: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    unitName: StringView
+} out u64 is {
     cu9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
     match (
         cu9
@@ -27042,9 +27156,8 @@ constDefNodeId: function {
             parentDeclId: ty.nsOwnerDeclId
             nameId: (zast.poolFind pool: ast.names text: defName)
         )
-    } else {
-        dc9 = declOfUnitDef :ty :ast defUnit: unitName name: defName
     }
+    if dc9.isZero then dc9 = declOfUnitDef :ty :ast defUnit: unitName name: defName
     if dc9.isZero then return 0
     if (ty.declValid id: dc9) == false then return 0
     do9: ty.decls.get i: (dc9 - 1)
@@ -27100,7 +27213,7 @@ constValueOfMember: function {
     unitName: StringView
     defName: StringView
 } out ztypes.cval is {
-    ut9: constUnitTid :ast :ty :reg :unitName
+    ut9: constOwnerTidFor :ast :ty :reg :unitName :defName
     if ut9 == 0 then return ztypes.noConst
     utid9: ztypes.tid.create from: ut9.u64
     nid9: zast.poolFind pool: ast.names text: defName
@@ -28191,7 +28304,7 @@ constRegisterValueType: function {
     v: ztypes.cval
 } is {
     if v.kind.none then return
-    ut9: constUnitTid :ast :ty :reg :unitName
+    ut9: constOwnerTidFor :ast :ty :reg :unitName :defName
     if ut9 == 0 then return
     utid9: ztypes.tid.create from: ut9.u64
     nid9: zast.poolFind pool: ast.names text: defName
@@ -28413,7 +28526,7 @@ seedPlatformConsts: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
 } is {
-    pu9: constUnitTid :ast :ty :reg unitName: "platform"
+    pu9: constUnitTid :ast :reg unitName: "platform"
     if pu9 == 0 then return
     ptid9: ztypes.tid.create from: pu9.u64
     # os/arch describe what the build is FOR: the --target triple decides when
