@@ -334,9 +334,15 @@ tempPath: function {uname: StringView ext: StringView} out String is {
     return r
 }
 
-# buildExe -- spawn the C compiler to turn the emitted C into an executable.
-# Debug is -O0 -g; --release is -O2. cflags/ldflags split on spaces. Empty
-# out/err paths inherit the terminal so cc diagnostics print live.
+# buildExe -- turn the emitted C into an executable, by running the C
+# compiler as a child process or by loading libtcc into this one. Debug is
+# -O0 -g; --release is -O2. cflags/ldflags split on spaces. Empty out/err
+# paths inherit the terminal so cc diagnostics print live.
+#
+# Both modes return the same i32 and write the same kind of artifact -- a
+# file on disk -- so `zc run` spawns the result either way and exit codes,
+# signals and the leak corpus see no difference. In-process buys the fast
+# COMPILE and nothing else.
 buildExe: function {
     cc: StringView
     tempC: StringView
@@ -346,7 +352,20 @@ buildExe: function {
     ldflags: StringView
     libs: (List String).view
     tccDir: StringView
+    inproc: bool
 } out i32 is {
+    if inproc then {
+        # ldflags has no in-process counterpart: libtcc links through the
+        # same state that compiled, and what it accepts arrives via cflags.
+        return (tcc.compileToExe
+            csrc: tempC
+            :exe
+            :tccDir
+            :release
+            :cflags
+            :libs
+        )
+    }
     a: (List String)
     a.append from: cc.string
     if release then {
@@ -871,8 +890,26 @@ main: function is {
             # payload of its own. `--tcc-lib` overrides when both are present.
             ccTcc9: String
             cka9: ztypecheck.ccKindArm ccPath: cc.stringview
-            if cka9.stringview == "tcc" then {
+            isTcc9: cka9.stringview == "tcc"
+            if isTcc9 then {
                 if (io.exists path: tccDir) then ccTcc9 = tccDir.copy
+            }
+            # `--cc-mode inproc` means libtcc, so it means tcc. Rejecting the
+            # combination here rather than letting the mode quietly apply to a
+            # gcc build is the same rule as everywhere else in this arc: the
+            # resolved mode is the requested one, or it is an error.
+            inproc9: ccMode.stringview == "inproc"
+            if inproc9 then {
+                if (isTcc9) == false then {
+                    nm9: "zc: --cc-mode inproc needs a tcc compiler; --cc resolved to '\{cc.stringview}'"
+                    io.eprintln nm9
+                    os.exit code: 2
+                }
+                if ccTcc9.length == 0 then {
+                    nd9: "zc: --cc-mode inproc found no tcc runtime payload at '\{tccDir.stringview}'; set --tcc-lib or ZEROLANG_TCC"
+                    io.eprintln nd9
+                    os.exit code: 2
+                }
             }
             rc: (buildExe
                 cc: cc.stringview
@@ -883,6 +920,7 @@ main: function is {
                 ldflags: ldflags.stringview
                 libs: emitLibs2
                 tccDir: ccTcc9.stringview
+                inproc: inproc9
             )
             if saveTemps then {
                 kept9: "zc: kept generated C at \{tmpc.stringview}"
@@ -892,7 +930,13 @@ main: function is {
             }
             if rc != 0 then {
                 if rc == 127 then {
+                    # 127 from either mode: os.spawn returns it when exec
+                    # fails, tcc.compileToExe when libtcc will not load. One
+                    # code, one report, with the path that was actually tried.
                     cmsg: "zc: could not run C compiler '\{cc.stringview}' (not found?); set --cc or install it"
+                    if inproc9 then {
+                        cmsg = "zc: could not load libtcc from '\{ccTcc9.stringview}/libtcc.so'; set --tcc-lib, or drop --cc-mode inproc to run tcc as a child process"
+                    }
                     io.eprintln cmsg
                 }
                 os.exit code: rc

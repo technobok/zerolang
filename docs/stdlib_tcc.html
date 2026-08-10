@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zerolang Standard Library -- tcc</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-08-10">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="tcc"><a href="#tcc">tcc</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#tcc">tcc</a>
+<ul>
+<li><a href="#overview">Overview</a>
+</li>
+<li><a href="#available">available</a>
+</li>
+<li><a href="#compiletoexe">compileToExe</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<h2 id="overview"><a href="#overview">1. Overview</a></h2>
+<p><code>lib/system/tcc.z</code> compiles C <strong>in this process</strong>, through <code>libtcc</code>.
+It is what <code>zc --cc-mode inproc</code> uses instead of running a C compiler as
+a child process, and it is available to any program that wants the same.</p>
+<p>It buys the fast <strong>compile</strong> and nothing else. The result is an executable
+on disk, never a run in memory, so a program built this way still executes
+as its own process: its exit code, its signals and its leaks are observed
+exactly as they would be otherwise, and a program that crashes cannot take
+its compiler down with it.</p>
+<p><strong>Loaded, not linked</strong></p>
+<p><code>libtcc</code> is opened with <code>dlopen</code> at the point of use. tinycc is
+LGPL-2.1 and this tree is dual MIT/Apache, so dynamic loading is what keeps
+a binary built here out of the combined-work question; <code>make
+static-tcc-guard</code> fails the build if a libtcc symbol reaches any binary,
+rather than leaving the rule to discipline.</p>
+<p>The loader is what needs <code>dl</code>, and this unit says so:</p>
+<pre><code class="language-zerolang">  require: unit {
+      library: "dl"
+  }</code></pre>
+<p>A program that never mentions <code>tcc</code> therefore links no <code>dl</code> -- the link
+line is written from the units a program actually reaches, not from a list
+of everything the standard library might want.</p>
+<p><strong>Members</strong></p>
+<ul>
+<li><a href="#available"><strong>tcc.available</strong> -- <code>{tccDir: StringView} out bool</code></a></li>
+<li><a href="#compiletoexe"><strong>tcc.compileToExe</strong> -- <code>... out i32</code></a></li>
+</ul>
+<h2 id="available"><a href="#available">2. available</a></h2>
+<pre><code class="language-zerolang">  available: function {tccDir: StringView} out bool is native</code></pre>
+<p>Can libtcc be loaded from <code>tccDir</code> and driven from here? Loads and
+immediately unloads.</p>
+<p>For diagnostics, and for a program deciding what to offer. <code>zc</code> does
+<strong>not</strong> ask this before building: <code>--cc-mode inproc</code> never falls back,
+so it has nothing to decide, and asking would make a compile depend on a
+probe.</p>
+<h2 id="compiletoexe"><a href="#compiletoexe">3. compileToExe</a></h2>
+<pre><code class="language-zerolang">  compileToExe: function {
+      csrc:    StringView
+      exe:     StringView
+      tccDir:  StringView
+      release: bool
+      cflags:  StringView
+      libs:    (List String).view
+  } out i32 is native</code></pre>
+<p>Compile <code>csrc</code> and link it to the executable <code>exe</code>.</p>
+<p><code>tccDir</code> holds tcc's runtime payload -- <code>libtcc1.a</code>, tcc's own headers,
+and <code>libtcc.so</code> itself. tcc cannot find it alone: the path is fixed when
+tcc is <strong>configured</strong>, so a tcc that has moved cannot resolve even
+<code>stddef.h</code> until it is told. One directory answers every question, which
+is why there is one parameter and not three.</p>
+<p><code>cflags</code> is parsed by tcc in the spelling it accepts on the command line.
+<code>libs</code> are the <code>-l</code> names to link, the same ones the emitted C declares
+on its own second line; <code>m</code> is added for you.</p>
+<p><strong>Return</strong></p>
+<ul>
+<li><code>0</code> -- the executable was written.</li>
+<li><code>1</code> -- tcc rejected the program, or the link failed. Diagnostics
+have already gone to stderr, in the same words the <code>tcc</code> driver would
+have printed.</li>
+<li><code>127</code> -- libtcc could not be loaded. This is the code
+<code>os.spawn</code> already returns for "could not run the compiler", so a
+caller reports a missing compiler and an unloadable one through one
+path instead of growing a second.</li>
+</ul>
+</main>
+</body>
+</html>

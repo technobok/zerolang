@@ -31,6 +31,10 @@ ZCHASH   := --fast-hash
 # drivers. Everything else (bootstrap intermediates, ztestrunner, corpus
 # and user emission) stays glibc; the allocator never changes emitted C.
 BUILDDIR := out
+# the -l flags a driver's own emitted C declares on its fixed second line.
+# bin/zc reaches lib/system/tcc.z and so needs -ldl; zl and zls do not. Read
+# off the artifact rather than hardcoded, exactly as $(EXDIR)/%.bin does.
+ZLINKOF = $$(sed -n '2s|^/\* zlink: \(.*\) \*/$$|\1|p' $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|')
 MIMALLOC ?= 1
 ifeq ($(MIMALLOC),1)
 MIMALLOC_OBJ := $(BUILDDIR)/mimalloc.o
@@ -75,7 +79,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard test-tcc readable-check perf-strict perf-elision
+.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard test-tcc mode-parity readable-check perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -129,7 +133,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -286,7 +290,7 @@ $(BUILDDIR)/zc.o: bin/zc.c
 
 bin/zc: $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
-	$(CC) -o bin/zc $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lm
+	$(CC) -o bin/zc $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,bin/zc.c) -lpthread -lm
 
 # zc -- convenience alias for bin/zc.
 zc: bin/zc
@@ -304,7 +308,7 @@ $(BUILDDIR)/zl.o: out/zl.c
 
 bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
-	$(CC) -o bin/zl $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lm
+	$(CC) -o bin/zl $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,$(BUILDDIR)/zl.c) -lpthread -lm
 
 # bin/zls -- the zerolang language server (src/zls.z): JSON-RPC over
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
@@ -319,7 +323,7 @@ $(BUILDDIR)/zls.o: out/zls.c
 
 bin/zls: $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
-	$(CC) -o bin/zls $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) -lpthread -lm
+	$(CC) -o bin/zls $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,$(BUILDDIR)/zls.c) -lpthread -lm
 
 # zl -- convenience alias for bin/zl.
 zl: bin/zl
@@ -697,6 +701,55 @@ require-guard: bin/zc
 	  exit 1; \
 	fi; \
 	echo "require-guard OK: $$n programs rejected under --cc tcc (baseline $(REQUIRE_TCC_BASELINE))"
+
+# mode-parity -- `--cc-mode inproc` must be a faster way to reach the same
+# program, not a different backend. It compares program OUTPUT and exit code,
+# never the binaries: the two link paths legitimately produce different bytes
+# (libtcc links through the state that compiled; the driver re-reads the
+# object), and diffing those would fail for no reason anyone could act on.
+# The run cases are the sample -- they are the ones with a golden to be wrong
+# against. The programs tcc rejects are compared too: a REFUSAL has to match
+# in both modes as much as a result does, which is what proves the in-process
+# error callback reports what the driver prints. Only the pid in the temp path
+# zc names is normalised away; it differs between two runs of the same mode.
+# os_platform is the one exclusion, and it is not an exception to the rule: it
+# PRINTS platform.ccmode, so its output is supposed to differ. A program that
+# reports which mode built it is the one program that cannot be mode-invariant.
+mode-parity: bin/zc $(BUILDDIR)/tcc
+	@mkdir -p $(BUILDDIR)/parity; n=0; bad=0; \
+	while read -r name dir rest; do \
+	  [ -n "$$name" ] || continue; \
+	  [ "$$name" = os_platform ] && continue; \
+	  args=$(BUILDDIR)/parity/$$name.args; \
+	  : > $$args; \
+	  [ -f tests/fixtures/run_golden/$$name.args ] && cp tests/fixtures/run_golden/$$name.args $$args; \
+	  for mode in spawn inproc; do \
+	    bin/zc build $$name --src $$dir --system lib/system --cc tcc \
+	      --cc-mode $$mode -o $(BUILDDIR)/parity/$$name.$$mode \
+	      > $(BUILDDIR)/parity/$$name.$$mode.build 2>&1 || true; \
+	    if [ -x $(BUILDDIR)/parity/$$name.$$mode ]; then \
+	      ( cd $(BUILDDIR)/parity && xargs -a $$name.args ./$$name.$$mode ) \
+	        > $(BUILDDIR)/parity/$$name.$$mode.out 2>&1; \
+	      echo "exit=$$?" >> $(BUILDDIR)/parity/$$name.$$mode.out; \
+	    else \
+	      cp $(BUILDDIR)/parity/$$name.$$mode.build $(BUILDDIR)/parity/$$name.$$mode.out; \
+	    fi; \
+	  done; \
+	  n=$$(($$n + 1)); \
+	  for mode in spawn inproc; do \
+	    sed -i -e 's|/zc-[0-9][0-9]*-|/zc-PID-|g' $(BUILDDIR)/parity/$$name.$$mode.out; \
+	  done; \
+	  if ! cmp -s $(BUILDDIR)/parity/$$name.spawn.out $(BUILDDIR)/parity/$$name.inproc.out; then \
+	    echo "mode-parity FAIL: $$name differs between spawn and inproc"; \
+	    diff $(BUILDDIR)/parity/$$name.spawn.out $(BUILDDIR)/parity/$$name.inproc.out | head -6; \
+	    bad=1; \
+	  fi; \
+	done < tests/fixtures/run_cases.txt; \
+	if [ $$bad -ne 0 ]; then \
+	  echo "  in-process compilation must produce the same PROGRAM, not the same bytes."; \
+	  exit 1; \
+	fi; \
+	echo "mode-parity OK: $$n run cases identical under --cc-mode spawn and inproc (output and exit code, not bytes)"
 
 # static-tcc-guard -- the vendored tinycc is LGPL-2.1 inside a dual MIT/Apache
 # tree, so it may be reached by dlopen and by nothing else: linking it, static
@@ -1225,7 +1278,7 @@ clean:
 NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
 native-guard:
 	@fail=0; conv=""; \
-	for u in io os cli net; do \
+	for u in io os cli net tcc; do \
 	  for n in $$(awk '/^[a-zA-Z][a-zA-Z0-9]*: function/ {name=$$1; sub(/:.*/,"",name); pending=1} pending && /is native/ {print name; pending=0} pending && /is \{/ {pending=0}' lib/system/$$u.z); do \
 	    case " $(NATIVE_GUARD_EXCEPTIONS) " in *" $$u.$$n "*) continue;; esac; \
 	    snake=$$(echo "$$n" | sed 's/\([A-Z]\)/_\1/g' | tr 'a-z' 'A-Z'); \

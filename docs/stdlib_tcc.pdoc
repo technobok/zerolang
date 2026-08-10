@@ -1,0 +1,123 @@
+#doc.lang: en
+
+#//: Zerolang Standard Library: tcc
+
+#doc.title: Zerolang Standard Library -- tcc
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-08-10
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: tcc
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+#~"lib/system/tcc.z" compiles C #b:"in this process", through #~"libtcc".
+It is what #~"zc --cc-mode inproc" uses instead of running a C compiler as
+a child process, and it is available to any program that wants the same.
+
+It buys the fast #b:"compile" and nothing else. The result is an executable
+on disk, never a run in memory, so a program built this way still executes
+as its own process: its exit code, its signals and its leaks are observed
+exactly as they would be otherwise, and a program that crashes cannot take
+its compiler down with it.
+
+#p: #b:"Loaded, not linked"
+
+#~"libtcc" is opened with #~"dlopen" at the point of use. tinycc is
+LGPL-2.1 and this tree is dual MIT/Apache, so dynamic loading is what keeps
+a binary built here out of the combined-work question; #~"make
+static-tcc-guard" fails the build if a libtcc symbol reaches any binary,
+rather than leaving the rule to discipline.
+
+The loader is what needs #~"dl", and this unit says so:
+
+#code language=zerolang: """
+  require: unit {
+      library: "dl"
+  }
+"""
+
+A program that never mentions #~"tcc" therefore links no #~"dl" -- the link
+line is written from the units a program actually reaches, not from a list
+of everything the standard library might want.
+
+#p: #b:"Members"
+
+#ul:
+  [#*: #> to=available: #b:"tcc.available" -- #~"{tccDir: StringView} out bool"]
+  [#*: #> to=compiletoexe: #b:"tcc.compileToExe" -- #~"... out i32"]
+
+
+#--: available
+
+#code language=zerolang: """
+  available: function {tccDir: StringView} out bool is native
+"""
+
+Can libtcc be loaded from #~"tccDir" and driven from here? Loads and
+immediately unloads.
+
+For diagnostics, and for a program deciding what to offer. #~"zc" does
+#b:"not" ask this before building: #~"--cc-mode inproc" never falls back,
+so it has nothing to decide, and asking would make a compile depend on a
+probe.
+
+
+#--: compileToExe
+
+#code language=zerolang: """
+  compileToExe: function {
+      csrc:    StringView
+      exe:     StringView
+      tccDir:  StringView
+      release: bool
+      cflags:  StringView
+      libs:    (List String).view
+  } out i32 is native
+"""
+
+Compile #~"csrc" and link it to the executable #~"exe".
+
+#~"tccDir" holds tcc's runtime payload -- #~"libtcc1.a", tcc's own headers,
+and #~"libtcc.so" itself. tcc cannot find it alone: the path is fixed when
+tcc is #b:"configured", so a tcc that has moved cannot resolve even
+#~"stddef.h" until it is told. One directory answers every question, which
+is why there is one parameter and not three.
+
+#~"cflags" is parsed by tcc in the spelling it accepts on the command line.
+#~"libs" are the #~"-l" names to link, the same ones the emitted C declares
+on its own second line; #~"m" is added for you.
+
+#p: #b:"Return"
+
+#ul:
+  [#*: #~"0" -- the executable was written.]
+  [#*: #~"1" -- tcc rejected the program, or the link failed. Diagnostics
+    have already gone to stderr, in the same words the #~"tcc" driver would
+    have printed.]
+  [#*: #~"127" -- libtcc could not be loaded. This is the code
+    #~"os.spawn" already returns for "could not run the compiler", so a
+    caller reports a missing compiler and an unloadable one through one
+    path instead of growing a second.]

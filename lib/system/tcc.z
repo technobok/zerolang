@@ -1,0 +1,45 @@
+# tcc -- in-process C compilation through libtcc.
+#
+# `zc --cc-mode inproc` uses this instead of running a C compiler as a child
+# process. It buys the fast COMPILE only: the result is an executable on
+# disk, so the program still runs as its own process and its exit code,
+# signals and leaks are observed exactly as before.
+#
+# libtcc is LOADED at the point of use, never linked. tinycc is LGPL-2.1 and
+# this tree is dual MIT/Apache, so dynamic loading is what keeps a binary
+# built here out of the combined-work question; `make static-tcc-guard`
+# enforces it rather than leaving it to discipline.
+
+# The loader is what needs `dl`. Declaring it here rather than in the build
+# means a program that never mentions `tcc` links no `dl`: the reachability
+# machinery writes the link line from the units a program actually reaches.
+require: unit {
+    library: "dl"
+}
+
+# available -- can libtcc be loaded from `tccDir` and driven from here?
+# For diagnostics, and for a program deciding what to offer. The build path
+# does NOT ask: `--cc-mode inproc` never falls back, so it has nothing to
+# decide, and asking would make a compile depend on a probe.
+available: function {tccDir: StringView} out bool is native
+
+# compileToExe -- compile `csrc` and link it to the executable `exe`.
+#
+# `tccDir` holds tcc's runtime payload -- libtcc1.a, tcc's own headers, and
+# libtcc.so itself. tcc cannot find it alone: the path is fixed when tcc is
+# configured, so a relocated one cannot resolve even `stddef.h` until told.
+#
+# `cflags` is parsed by tcc, in the spelling it accepts on the command line.
+# `libs` are the `-l` names the emitted C declared on its own second line.
+#
+# 0 on success; 1 when tcc rejected the program or the link failed; 127 when
+# libtcc could not be loaded -- the code `os.spawn` already uses for "could
+# not run the compiler", so a caller reports both through one path.
+compileToExe: function {
+    csrc: StringView
+    exe: StringView
+    tccDir: StringView
+    release: bool
+    cflags: StringView
+    libs: (List String).view
+} out i32 is native
