@@ -26520,6 +26520,15 @@ reportPendingConstFail: function {ty: ztyping.ZTyping} is {
         msg9 = "constant '\{cn9}' is defined in terms of itself"
         hint9 = "a unit constant may only read constants that do not read it back".string
     }
+    if f9.kind.unsupportedMethod then {
+        mn9: constStringAt :ty id: f9.strId
+        msg9 = "'\{mn9}' has no compile-time value"
+        hint9 = "a string constant may use length, startsWith, endsWith, contains and substring".string
+    }
+    if f9.kind.substringRange then {
+        msg9 = "constant 'substring' range is out of bounds".string
+        hint9 = "from and to must satisfy from <= to <= length; the run-time call panics".string
+    }
     if msg9.length == 0 then return
     (reportConstError
         :ty
@@ -27069,6 +27078,150 @@ foldCaseArm: function {
     ty.foldedBranch.set key: n.nodeid.u64 value: (ztyping.foldedbranch known: true stmt: stmt9)
 }
 
+# constStrArgAt -- one argument of a static string method, found by LABEL or by
+# POSITION. Argument labels are optional (`sv.startsWith "ztr_"` is legal), so a
+# namedoperation carrying no name is the positional form and is matched on its
+# ordinal instead.
+constStrArgAt: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    args: (ListVal u32).view
+    label: StringView
+    idx: u64
+} out ztypes.cval is {
+    res9: ztypes.noConst
+    found9: false
+    i9: u64
+    with it9: args.iterate do for aId9: it9 loop {
+        if (found9) == false then {
+            an9: ast.nodes.get i: (aId9 - 1).u64
+            match (
+                an9
+            ) case namedoperation then {
+                hit9: false
+                if an9.name.isZero when i9 == idx then hit9 = true
+                if (an9.name.isZero) == false then {
+                    lt9: zast.nameTextAt :ast ref: an9.name
+                    if lt9.stringview == label then hit9 = true
+                }
+                if hit9 then {
+                    res9 = (evalConstNode
+                        :ast
+                        :ty
+                        :reg
+                        :unitName
+                        n: (ast.nodes.get i: (an9.operation - 1).u64)
+                    )
+                    found9 = true
+                }
+                i9 = i9 + 1
+            } else null
+        }
+    }
+    return res9
+}
+
+# constUnsupportedMethod -- "this name is a method on a string constant that
+# does not fold". Records rather than reports, so it is an error only where a
+# value was REQUIRED; a body `if` drops it and emits a runtime branch.
+constUnsupportedMethod: function {
+    ty: ztyping.ZTyping
+    name: StringView
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} out ztypes.cval is {
+    (constFailRecord
+        :ty
+        kind: ztypes.constfailkind.unsupportedMethod
+        :nodeid
+        :lineno
+        :colno
+        width: name.length.u32.orPanic
+        strId: (constInternString :ty text: name)
+    )
+    return ztypes.noConst
+}
+
+# constStringDotted -- a member read on a string constant written as a bare
+# dotted path, which is how `S.length` parses. `length` is the BYTE count,
+# String.length's own answer; `count` is the codepoint one and is not folded.
+constStringDotted: function {
+    ty: ztyping.ZTyping
+    v: ztypes.cval
+    name: StringView
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} out ztypes.cval is {
+    s9: constStringAt :ty id: v.strId
+    if name == "length" then return (ztypes.makeIntConst s9.length.i64.orPanic)
+    return (constUnsupportedMethod :ty :name :nodeid :lineno :colno)
+}
+
+# constStringMethod -- fold a static method call on a string constant. Every
+# answer is computed by CALLING the same method the run time would, so a folded
+# result and a run-time one cannot disagree about an empty prefix, an empty
+# needle, or a boundary index. `substring` PANICS out of range rather than
+# clamping, so out of range at compile time means there is no value -- not a
+# clamped one, and not a silent `none` that would let the definition through.
+constStringMethod: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    args: (ListVal u32).view
+    recv: ztypes.cval
+    name: StringView
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} out ztypes.cval is {
+    s9: constStringAt :ty id: recv.strId
+    if name == "length" then return (ztypes.makeIntConst s9.length.i64.orPanic)
+    lbl9: ""
+    if name == "startsWith" then lbl9 = "prefix"
+    if name == "endsWith" then lbl9 = "suffix"
+    if name == "contains" then lbl9 = "needle"
+    if lbl9.length > 0 then {
+        a9: (constStrArgAt :ast :ty :reg :unitName :args label: lbl9 idx: 0)
+        if (a9.kind.svalKind) == false then return ztypes.noConst
+        as9: constStringAt :ty id: a9.strId
+        if name == "startsWith" then return (ztypes.makeBoolConst (s9.startsWith prefix: as9))
+        if name == "endsWith" then return (ztypes.makeBoolConst (s9.endsWith suffix: as9))
+        return (ztypes.makeBoolConst (s9.contains needle: as9))
+    }
+    if name == "substring" then {
+        f9: constStrArgAt :ast :ty :reg :unitName :args label: "from" idx: 0
+        t9: constStrArgAt :ast :ty :reg :unitName :args label: "to" idx: 1
+        if (f9.kind.ivalKind) == false then return ztypes.noConst
+        if (t9.kind.ivalKind) == false then return ztypes.noConst
+        sz9: s9.length.i64.orPanic
+        bad9: false
+        if f9.ival < 0 then bad9 = true
+        if t9.ival < 0 then bad9 = true
+        if f9.ival > sz9 then bad9 = true
+        if t9.ival > sz9 then bad9 = true
+        if f9.ival > t9.ival then bad9 = true
+        if bad9 then {
+            (constFailRecord
+                :ty
+                kind: ztypes.constfailkind.substringRange
+                :nodeid
+                :lineno
+                :colno
+                width: 1
+            )
+            return ztypes.noConst
+        }
+        sub9: s9.substring from: f9.ival.u64.orPanic to: t9.ival.u64.orPanic
+        return (ztypes.makeStrConst (constInternString :ty text: sub9))
+    }
+    return (constUnsupportedMethod :ty :name :nodeid :lineno :colno)
+}
+
 # evalConstNode -- the compile-time value of a node, or `none` when the node is
 # not a constant shape. Numeric shapes only for now: bool and variant arms,
 # strings and static string methods arrive with the paths that render them.
@@ -27162,6 +27315,16 @@ evalConstNode: function {
                 if cn9.stringview == "false" then return (ztypes.makeBoolConst ((pcv9.bval) == false))
                 return ztypes.noConst
             }
+            if pcv9.kind.svalKind then {
+                return (constStringDotted
+                    :ty
+                    v: pcv9
+                    name: cn9.stringview
+                    nodeid: n.nodeid
+                    lineno: n.lineno
+                    colno: n.colno
+                )
+            }
             return (constArmRead
                 :ast
                 :ty
@@ -27185,6 +27348,19 @@ evalConstNode: function {
         if pv9.kind.bvalKind then {
             if cn9.stringview == "true" then return (ztypes.makeBoolConst pv9.bval)
             if cn9.stringview == "false" then return (ztypes.makeBoolConst ((pv9.bval) == false))
+        }
+        # a literal receiver (`"abcd".length`) or a qualified constant
+        # (`quadfloat.LIB.length`): the parent is not a bare atom, so its value
+        # comes from the recursive walk above rather than from a member read.
+        if pv9.kind.svalKind then {
+            return (constStringDotted
+                :ty
+                v: pv9
+                name: cn9.stringview
+                nodeid: n.nodeid
+                lineno: n.lineno
+                colno: n.colno
+            )
         }
         # `platform.oskind.linux` -- an arm of a type reached THROUGH its unit.
         # The parent is a dotted path of its own, so the type must be looked up
@@ -27280,6 +27456,38 @@ evalConstNode: function {
         # one is never visited -- which is why this lives in the evaluator and
         # not in a tree walk, and why the spec can promise that a statically
         # false branch's error goes unreported.
+        # A static method on a string constant is a CALL whose callable is a
+        # dotted path, so atomName is "" for it and the `error` test below would
+        # bail before ever looking at the receiver. Intercept first.
+        {
+            cnode9: ast.nodes.get i: (n.callable - 1).u64
+            if cnode9.dottedpath then {
+                rcv9: (evalConstNode
+                    :ast
+                    :ty
+                    :reg
+                    :unitName
+                    n: (ast.nodes.get i: (cnode9.parent - 1).u64)
+                )
+                if rcv9.kind.svalKind then {
+                    mnc9: atomName :ast n: (ast.nodes.get i: (cnode9.child - 1).u64)
+                    if mnc9.length > 0 then {
+                        return (constStringMethod
+                            :ast
+                            :ty
+                            :reg
+                            :unitName
+                            args: n.arguments
+                            recv: rcv9
+                            name: mnc9.stringview
+                            nodeid: n.nodeid
+                            lineno: n.lineno
+                            colno: n.colno
+                        )
+                    }
+                }
+            }
+        }
         cbn9: atomName :ast n: (ast.nodes.get i: (n.callable - 1).u64)
         if cbn9.stringview != "error" then return ztypes.noConst
         umsg9: "compile-time error".string
@@ -27527,6 +27735,21 @@ resolveConstantDef: function {
                         cdo9: ty.decls.get i: (cdc9 - 1)
                         if cdo9.kind.unitDecl then cbu9 = true
                     }
+                }
+                # ASK THE CONSTANT FIRST, the same ordering the dotted-path
+                # value read uses: `CT: (LIB.contains needle: "x")` is a call
+                # whose receiver is a string CONSTANT, so it is a value and not
+                # a construction. Classifying by the callee's shape alone calls
+                # every static string method a construction.
+                if (cbu9) == false then {
+                    crv9: (constValueOfMember
+                        :ast
+                        :ty
+                        :reg
+                        :unitName
+                        defName: cbn9.stringview
+                    )
+                    if crv9.kind.svalKind then cbu9 = true
                 }
                 if (cbu9) == false then {
                     cm9: "a unit-level constant takes a literal value, not a construction".string
