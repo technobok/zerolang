@@ -8274,7 +8274,13 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         } case none then null
         dpUb9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
         dpUbId9: atomNameIdOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
-        if (symtab.reg.isUnitName nameId: dpUbId9) then {
+        dpIsFile9: false
+        if (symtab.reg.isUnitName nameId: dpUbId9) then dpIsFile9 = true
+        # a zero-argument function member reads as a dotted path, not a call,
+        # so a namespace's own needs the by-id route here too
+        dpNsTid9: ztypes.tid
+        if (dpIsFile9) == false then dpNsTid9 = pathUnitTidOf9 :ast :symtab :ctx baseId: n.parent
+        if dpIsFile9 when (dpNsTid9.isZero) then {
             dpUfo9: (ztypecheck.resolvedByIds
                 :ast
                 ty: symtab.typing
@@ -8310,6 +8316,35 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     )
                     if dpAd9.length > 0 then return dpAd9
                     return "\{dpUfc9}()"
+                }
+            } case none then null
+        }
+        if (dpNsTid9.isZero) == false then {
+            nfo9: (symtab.typing.declChildOfId
+                parentTypeId: dpNsTid9
+                nameId: (atomNameIdOf :ast n: (ast.nodes.get i: (n.child - 1).u64))
+            )
+            match (
+                nfo9
+            ) case some then {
+                nftid9: ztypes.tid.create from: (nfo9)
+                if (symtab.reg.typetypeOf typeId: nftid9) == ztypes.ztypetype.functionType then {
+                    nfcn9: ctxCname :ctx tid: nftid9
+                    nfs9: stampIdOf :symtab nid: n.nodeid.u64
+                    if nfs9 > 0 then {
+                        if (symtab.reg.typetypeOf
+                            typeId: nfs9
+                        ) == ztypes.ztypetype.functionType then return nfcn9
+                    }
+                    nfad9: (emitAllDefaultedCall
+                        :ast
+                        :symtab
+                        :ctx
+                        fnTid: nftid9
+                        fcn: nfcn9.stringview
+                    )
+                    if nfad9.length > 0 then return nfad9
+                    return "\{nfcn9}()"
                 }
             } case none then null
         }
