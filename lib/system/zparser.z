@@ -137,6 +137,17 @@ isReservedMemberName: function {name: StringView} out bool is {
     return false
 }
 
+# The kind a `unit` body carries, from the label that introduces it. This is
+# the one place a unit's meaning is read from a name; every later reader asks
+# `zast.UnitData.kind`. `require:` is a unit-level block only, so a type-body
+# member of that name is an ordinary namespace.
+unitKindForLabel: function {name: StringView unitBody: bool} out zast.unitkind is {
+    if name == "public" then return zast.unitkind.publicNs
+    if name == "private" then return zast.unitkind.privateNs
+    if unitBody when name == "require" then return zast.unitkind.requirement
+    return zast.unitkind.namespace
+}
+
 # True when the node is the bare identifier `null` (through an
 # `expression` wrapper).
 nodeIsBareNull: function {ast: Ast.view n: Node.view} out bool is {
@@ -2600,8 +2611,9 @@ Parser: class {
                         }
                         names.append nm
                         opName: lblTok.tokstr
+                        mKind9: unitKindForLabel name: lblTok.tokstr.stringview unitBody: false
                         lex.accept tt: zlexer.toktype.eolTok
-                        member: this.objectBodyMember :lex
+                        member: this.objectBodyMember :lex unitKind: mKind9
                         mErr: this.isError node: member
                         if mErr then {
                             items.append (this.intern n: member)
@@ -2609,8 +2621,8 @@ Parser: class {
                         }
                         if typeBody when (isReservedMemberName name: lblTok.tokstr.stringview) then {
                             visUnit: false
-                            if lblTok.tokstr.stringview == "public" then visUnit = true
-                            if lblTok.tokstr.stringview == "private" then visUnit = true
+                            if mKind9.publicNs then visUnit = true
+                            if mKind9.privateNs then visUnit = true
                             allowed: false
                             if visUnit when (this.isUnitDef node: member) then allowed = true
                             if (allowed) == false then {
@@ -2662,14 +2674,18 @@ Parser: class {
     # The value of a `name:` item inside an object body: a method, an
     # inline unit, or a field operation (no named arguments). Inline type
     # definitions (record / class / ...) are rejected. Returns a bare Node.
-    objectBodyMember: function {:this lex: zlexer.Lexer} out Node is {
+    objectBodyMember: function {:this lex: zlexer.Lexer unitKind: zast.unitkind} out Node is {
         startPos: lex.peekPos
         tt: lex.peekType
         if tt == zlexer.toktype.functionTok then return (this.parseFunctionDefinition
             :lex
             :startPos
         )
-        if tt == zlexer.toktype.unitTok then return (this.parseUnitDefinition :lex :startPos)
+        if tt == zlexer.toktype.unitTok then return (this.parseUnitDefinition
+            :lex
+            :startPos
+            kind: unitKind
+        )
         inlineTypedef: isInlineTypedefTok :tt
         if inlineTypedef then {
             bad: lex.acceptAny
@@ -2697,11 +2713,11 @@ Parser: class {
     # expression forms (wrapped as an Expression) / else a bare operation.
     # Returns a bare Node; an absent definition becomes an EXPECTEDTYPEDEF
     # error node.
-    acceptTypeDefinition: function {:this lex: zlexer.Lexer} out Node is {
+    acceptTypeDefinition: function {:this lex: zlexer.Lexer unitKind: zast.unitkind} out Node is {
         startPos: lex.peekPos
         tt: lex.peekType
         match tt case unitTok then {
-            return (this.parseUnitDefinition :lex :startPos)
+            return (this.parseUnitDefinition :lex :startPos kind: unitKind)
         } case functionTok then {
             return (this.parseFunctionDefinition :lex :startPos)
         } case recordTok then {
@@ -2799,9 +2815,10 @@ Parser: class {
                     }
                     names.append nm
                     opName: lblTok.tokstr
+                    dKind9: unitKindForLabel name: lblTok.tokstr.stringview unitBody: true
                     lex.accept tt: zlexer.toktype.eolTok
                     lex.setFilterEol enabled: true
-                    defNode: this.acceptTypeDefinition :lex
+                    defNode: this.acceptTypeDefinition :lex unitKind: dKind9
                     lex.setFilterEol enabled: false
                     dErr: this.isError node: defNode
                     if dErr then {
@@ -2810,8 +2827,8 @@ Parser: class {
                         return body
                     }
                     isVisU: false
-                    if lblTok.tokstr.stringview == "public" then isVisU = true
-                    if lblTok.tokstr.stringview == "private" then isVisU = true
+                    if dKind9.publicNs then isVisU = true
+                    if dKind9.privateNs then isVisU = true
                     if isVisU when (this.isUnitDef node: defNode) == false then {
                         body.append (this.intern n: (this.mkError
                             tok: lblTok
@@ -2838,9 +2855,9 @@ Parser: class {
     }
 
     # subunit -> "unit" [ "as" ] "{" unit-body "}". The caller has peeked
-    # the `unit` keyword (startPos); this consumes it. Returns a bare
-    # unitdef Node positioned at the keyword.
-    parseUnitDefinition: function {:this lex: zlexer.Lexer startPos: zlexer.tokpos} out Node is {
+    # the `unit` keyword (startPos); this consumes it and stamps the `kind`
+    # its label implies. Returns a bare unitdef Node positioned at the keyword.
+    parseUnitDefinition: function {:this lex: zlexer.Lexer startPos: zlexer.tokpos kind: zast.unitkind} out Node is {
         lex.advance
         lex.accept tt: zlexer.toktype.asTok
         openOpt: lex.accept tt: zlexer.toktype.braceOpenTok
@@ -2879,6 +2896,7 @@ Parser: class {
                     nodeid: this.nextId
                     lineno: startPos.lineno
                     colno: startPos.colno
+                    :kind
                     :body)
                 )
             }
@@ -3170,7 +3188,7 @@ Parser: class {
     # Returns an `error` Node on failure (FILENOTFOUND distinguishable via
     # isFileNotFound) or a benign `atomid` "ok" sentinel on success -- so a
     # bare Node return avoids disassembling an owned result carrier.
-    loadUnit: function {:this vfs: zvfs.ZVfs parentid: zvfs.fsno unitname: String coreNames: (List String).view outBody: ListVal u32 outExterns: List String outNames: (ListVal u32).view} out Node is {
+    loadUnit: function {:this vfs: zvfs.ZVfs parentid: zvfs.fsno unitname: String kind: zast.unitkind coreNames: (List String).view outBody: ListVal u32 outExterns: List String outNames: (ListVal u32).view} out Node is {
         valid: isValidUnitName name: unitname.stringview
         if (valid) == false then {
             return (Node.error (zast.ErrorData
@@ -3278,6 +3296,7 @@ Parser: class {
                             :vfs
                             parentid: dirid
                             unitname: rname
+                            kind: zast.unitkind.subunit
                             :coreNames
                             outBody: body
                             outExterns: raw
@@ -3298,6 +3317,7 @@ Parser: class {
                 nodeid: this.nextId
                 lineno: firstPos.lineno
                 colno: firstPos.colno
+                :kind
                 :body
             )
             outBody.append (this.intern n: (this.mkNamedOp
@@ -3330,6 +3350,7 @@ Parser: class {
             :vfs
             parentid: rootid
             unitname: "core".string
+            kind: zast.unitkind.namespace
             :coreNames
             outBody: units
             outExterns: coreExterns
@@ -3366,6 +3387,7 @@ Parser: class {
                     :vfs
                     parentid: rootid
                     unitname: name
+                    kind: zast.unitkind.namespace
                     :coreNames
                     outBody: units
                     outExterns: unitExterns
@@ -3802,7 +3824,7 @@ runDef: function {label: StringView src: String.take} is {
     p: Parser.create
     tk: zlexer.Tokenizer.create source: src fsno: zvfs.fsno
     lx: zlexer.Lexer.create lexer: tk
-    r: p.acceptTypeDefinition lex: lx
+    r: p.acceptTypeDefinition lex: lx unitKind: zast.unitkind.namespace
     zast.printNode ast: p.ast n: r
 }
 
@@ -3931,6 +3953,7 @@ main: function is {
                     nodeid: p.nextId
                     lineno: firstPos.lineno
                     colno: firstPos.colno
+                    kind: zast.unitkind.namespace
                     :body
                 )
                 zast.printNodeCanonical ast: p.ast n: root

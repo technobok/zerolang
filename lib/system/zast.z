@@ -70,6 +70,9 @@ public: unit {
     :tableReserve
     :tableTake
     :unitBodyIdsAt
+    :unitOpKindIs
+    :unitkind
+    :unitkindname
     :wkThis
     :wkReturn
     :wkBreak
@@ -219,6 +222,26 @@ callkind: variant {
     continueCall: null
     errorCall: null
     panicCall: null
+} as { tag: u8.tag }
+
+# What a `unit` body means, set by the parser at construction. Readers
+# ask the kind rather than comparing the introducing label to a name.
+unitkind: variant {
+    # a file unit root, or an inline `m: unit { }`: a namespace of
+    # static definitions, public by default
+    namespace: null
+    # a hidden implementation subunit (`foo/bar.z`): private to its
+    # parent, and it cannot refer to the parent's definitions
+    subunit: null
+    # a generic template, `m: unit as { t: anyval.generic }`
+    template: null
+    # a `public:` block: the unit's or type's exported interface
+    publicNs: null
+    # a `private:` block, which is always rejected -- `private` already
+    # covers every member
+    privateNs: null
+    # a `require:` toolchain-requirement block
+    requirement: null
 } as { tag: u8.tag }
 
 # The AST node, as a reftype tagged sum. The arm is the
@@ -1078,11 +1101,13 @@ ObjectDefData: class {
     isNative: bool
 }
 
-# Unit payload: the unit's top-level definitions as namedoperation arms.
+# Unit payload: `kind` is how the unit was written and what it means;
+# `body` holds its top-level definitions as namedoperation arms.
 UnitData: class {
     nodeid: nodeid
     lineno: u32
     colno: u32
+    kind: unitkind
     body: (ListVal u32)
 }
 
@@ -1305,6 +1330,25 @@ callkindname: function {ck: callkind} out String is {
         return "ERROR".string
     } case panicCall then {
         return "PANIC".string
+    }
+}
+
+# the printable name of a `unitkind`.
+unitkindname: function {uk: unitkind} out String is {
+    match (
+        uk
+    ) case namespace then {
+        return "NAMESPACE".string
+    } case subunit then {
+        return "SUBUNIT".string
+    } case template then {
+        return "TEMPLATE".string
+    } case publicNs then {
+        return "PUBLIC".string
+    } case privateNs then {
+        return "PRIVATE".string
+    } case requirement then {
+        return "REQUIREMENT".string
     }
 }
 
@@ -1603,7 +1647,7 @@ printNode: function {ast: Ast.view n: Node.view} is {
         oaiter: n.asItems.iterate
         for oamId9: oaiter loop printNode :ast n: (ast.nodes.get i: (oamId9 - 1).u64)
     } case unitdef then {
-        print "\{n.nodeid}: unitdef @\{n.lineno}:\{n.colno} body=\{n.body.length}"
+        print "\{n.nodeid}: unitdef @\{n.lineno}:\{n.colno} kind=\{unitkindname n.kind} body=\{n.body.length}"
         ubi9: u64
         ubn9: n.body.length
         for ubi9 < ubn9 loop {
@@ -1765,7 +1809,7 @@ printNodeCanonical: function {ast: Ast.view n: Node.view} is {
         oaiter: n.asItems.iterate
         for oamId9: oaiter loop printNodeCanonical :ast n: (ast.nodes.get i: (oamId9 - 1).u64)
     } case unitdef then {
-        print "unitdef @\{n.lineno}:\{n.colno} body=\{n.body.length}"
+        print "unitdef @\{n.lineno}:\{n.colno} kind=\{unitkindname n.kind} body=\{n.body.length}"
         ubi9: u64
         ubn9: n.body.length
         for ubi9 < ubn9 loop {
@@ -2586,7 +2630,13 @@ main: function is {
     )
     unitBody: (ListVal u32)
     unitBody.append (tableAdd :ast n: unitMember)
-    unitDef: Node.unitdef (UnitData nodeid: 90.nodeid lineno: 39 colno: 1 body: unitBody)
+    unitDef: Node.unitdef (UnitData
+        nodeid: 90.nodeid
+        lineno: 39
+        colno: 1
+        kind: unitkind.namespace
+        body: unitBody
+    )
 
     progUnit: Node.namedoperation (NamedOperationData
         nodeid: 91.nodeid
@@ -2828,6 +2878,23 @@ kindOf: function {ast: Ast.view id: u32} out astkind is {
 # fetch so the caller may lend the table exclusively afterwards; the ids are
 # values, so the returned list is independent of the table. An id that does
 # not name a unit yields an empty list.
+# True when node `opId` is a unit definition of kind `k`, unwrapping an
+# `expression` wrapper the way indexDeclDef and resolveDef do. False when the
+# node is not a unit definition at all.
+unitOpKindIs: function {ast: Ast.view opId: u32 k: unitkind} out bool is {
+    if opId == 0 then return false
+    n9: ast.nodes.get i: (opId - 1).u64
+    match (
+        n9
+    ) case expression then {
+        return (unitOpKindIs :ast opId: n9.expression :k)
+    } case unitdef then {
+        return n9.kind.tag == k.tag
+    } else {
+        return false
+    }
+}
+
 unitBodyIdsAt: function {ast: Ast.view unitId: u32} out (ListVal u32) is {
     out9: (ListVal u32)
     {
