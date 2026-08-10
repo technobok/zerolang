@@ -19,6 +19,9 @@ public: unit {
     :ZType
     :ZTypeRegistry
     :ZVariable
+    :constfail
+    :constfailkind
+    :noConstFail
     :constraintkind
     :cval
     :floatFitsFloat
@@ -147,6 +150,37 @@ zconstkind: variant {
     bvalKind: null
     armKind: null
 } as { tag: u8.tag }
+
+# Why a compile-time evaluation could not produce a value. The evaluator
+# RECORDS one of these and never reports; the caller that REQUIRED the value
+# renders it. A body `if` fold requires nothing of its condition -- it takes a
+# value when there is one and emits a runtime branch when there is not -- so it
+# renders nothing, and an optimisation cannot turn a legal program into an
+# error.
+#
+# The kind is an ARM, not rendered text: the renderer owns the wording, so the
+# message can change without every recording site knowing it.
+constfailkind: variant {
+    none: null
+    interp: null
+    overflow: null
+    divZero: null
+    cycle: null
+    reachedError: null
+} as { tag: u8.tag }
+
+# One recorded evaluation failure. A VALTYPE for the reason cval is: it copies
+# out of the typing state rather than holding a lock on it. Text the message
+# needs -- a constant's name, a user `error`'s own words -- is interned in
+# ZTyping.constStrings and reached through strId, 1-based, 0 = none.
+constfail: record {
+    kind: constfailkind
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    width: u32
+    strId: u32
+}
 
 # Concrete numeric type a literal resolves to. Parsing accumulates in
 # u64; the 128-bit kinds carry the classification but true 128-bit
@@ -1372,6 +1406,20 @@ newRegistry: function {} out ZTypeRegistry is {
     r.literalFloatTid = r.newType name: "literal_float" typetype: ztypetype.recordType
     r.setValtype typeId: r.literalFloatTid value: true
     return r
+}
+
+# noConstFail -- "nothing is pending". The cleared state of ZTyping.constFail;
+# a record has no bare-name zero form, so the absent value is spelled once here
+# the way noConst spells cval's.
+noConstFail: function out constfail is {
+    return (constfail
+        kind: constfailkind.none
+        nodeid: (zast.nodeid.create from: 0)
+        lineno: 0
+        colno: 0
+        width: 0
+        strId: 0
+    )
 }
 
 # noConst -- "this node is not a compile-time constant". The absent value,

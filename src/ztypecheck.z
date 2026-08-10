@@ -5860,6 +5860,7 @@ checkOneRequireBlock: function {
                     # unit decide what it needs from the toolchain it is being
                     # built with, and deciding means an `if`.
                     nerr9q: ty.errors.length
+                    constFailClear :ty
                     lv9q: (evalConstNode
                         :ast
                         :ty
@@ -5867,6 +5868,7 @@ checkOneRequireBlock: function {
                         :unitName
                         n: (ast.nodes.get i: (mn9q.operation - 1).u64)
                     )
+                    reportPendingConstFail :ty
                     if (lv9q.kind.svalKind) == false then {
                         # when the evaluation itself reported -- a reached
                         # `error`, an interpolation -- it has already said what
@@ -5953,6 +5955,7 @@ requireLibraryText: function {
         } else null
     }
     if mop9w == 0 then return lib9w
+    constFailClear :ty
     v9w: (evalConstNode
         :ast
         :ty
@@ -5960,6 +5963,7 @@ requireLibraryText: function {
         :unitName
         n: (ast.nodes.get i: (mop9w - 1).u64)
     )
+    constFailClear :ty
     if v9w.kind.svalKind then lib9w = constStringAt :ty id: v9w.strId
     return lib9w
 }
@@ -18772,6 +18776,7 @@ checkIf: function {
     # every ordinary branch. Only a condition made of constants decides
     # anything here.
     foldIfBranch :ast ty: st.typing reg: st.reg :unitName n: ifnode
+    constFailClear ty: st.typing
     ifMarker: st.pushBlock name: "if"
     liveBefore: st.getLiveOwnedVars
     takenAcross: (SetVal u32)
@@ -23487,6 +23492,7 @@ checkCase: function {
     casenode: zast.CaseData.view
 } out ztypes.tid is {
     foldCaseArm :ast ty: st.typing reg: st.reg :unitName n: casenode
+    constFailClear ty: st.typing
     matchMarker: st.pushBlock name: "match"
     subjT: (checkValue
         :st
@@ -26436,6 +26442,96 @@ reportConstError: function {
     ty.isError = true
 }
 
+# constFailClear -- drop any pending failure. Called before a pull that will
+# render, and after one that will not, so a failure recorded for a body branch
+# can never be attributed to the next definition.
+constFailClear: function {ty: ztyping.ZTyping} is {
+    ty.constFail = ztypes.noConstFail
+}
+
+# constFailRecord -- the evaluator's way of saying "there is no value, and this
+# is why". FIRST failure wins: the innermost one is the specific one, and an
+# outer operand walk that fails afterwards would only say "an operand did not
+# fold", which the caller already knows.
+constFailRecord: function {
+    ty: ztyping.ZTyping
+    kind: ztypes.constfailkind
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    width: u32
+    strId: 0.u32
+} is {
+    if (ty.constFail.kind.none) == false then return
+    ty.constFail = (ztypes.constfail
+        :kind
+        :nodeid
+        :lineno
+        :colno
+        :width
+        :strId
+    )
+}
+
+# reportPendingConstFail -- render the recorded failure, if any, and clear it.
+# Only a caller that REQUIRED a value calls this: a unit-level definition, a
+# `require:` block. A body fold never does, which is what keeps an unfoldable
+# body condition an ordinary runtime branch instead of an error.
+reportPendingConstFail: function {ty: ztyping.ZTyping} is {
+    f9: ty.constFail
+    if f9.kind.none then return
+    constFailClear :ty
+    if f9.kind.reachedError then {
+        # E0601: the program itself asserting, in the user's own words. Not an
+        # E0600 -- the evaluator worked, and what it found was a reached
+        # `error`.
+        um9: constStringAt :ty id: f9.strId
+        uh9: "the compiler proved this `error` reachable".string
+        ty.errors.append (zast.ErrorData
+            nodeid: f9.nodeid
+            lineno: f9.lineno
+            colno: f9.colno
+            width: f9.width
+            err: zast.err.userError
+            msg: um9.copy
+            fsno: zvfs.fsno
+            note: "".string
+            hint: uh9
+        )
+        ty.isError = true
+        return
+    }
+    msg9: String
+    hint9: String
+    if f9.kind.interp then {
+        msg9 = "an interpolated string has no compile-time value".string
+        hint9 = "interpolation reads its parts at run time; use a plain literal".string
+    }
+    if f9.kind.overflow then {
+        msg9 = "constant integer operation overflows".string
+        hint9 = "the compile-time evaluator works in i64; this result does not fit".string
+    }
+    if f9.kind.divZero then {
+        msg9 = "division by a constant zero".string
+        hint9 = "the divisor is a compile-time constant equal to 0".string
+    }
+    if f9.kind.cycle then {
+        cn9: constStringAt :ty id: f9.strId
+        msg9 = "constant '\{cn9}' is defined in terms of itself"
+        hint9 = "a unit constant may only read constants that do not read it back".string
+    }
+    if msg9.length == 0 then return
+    (reportConstError
+        :ty
+        nodeid: f9.nodeid
+        lineno: f9.lineno
+        colno: f9.colno
+        width: f9.width
+        msg: msg9
+        hint: hint9
+    )
+}
+
 # constLiteralValue -- a numeric literal lexeme as a value, parsed through the
 # same parseI64 / parseF64 the emitter's fold uses so the two cannot disagree
 # about what a literal means. A magnitude outside i64 reads as "not a constant"
@@ -26527,26 +26623,25 @@ constArithInt: function {
 } out ztypes.cval is {
     mx9: 9223372036854775807
     mn9: (0 - 9223372036854775807) - 1
-    ovf9: "constant integer operation overflows".string
-    ovh9: "the compile-time evaluator works in i64; this result does not fit".string
+    ovk9: ztypes.constfailkind.overflow
     if op == "+" then {
         if b > 0 when a > (mx9 - b) then {
-            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            (constFailRecord :ty kind: ovk9 :nodeid :lineno :colno width: 1)
             return ztypes.noConst
         }
         if b < 0 when a < (mn9 - b) then {
-            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            (constFailRecord :ty kind: ovk9 :nodeid :lineno :colno width: 1)
             return ztypes.noConst
         }
         return (ztypes.makeIntConst (a + b))
     }
     if op == "-" then {
         if b < 0 when a > (mx9 + b) then {
-            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            (constFailRecord :ty kind: ovk9 :nodeid :lineno :colno width: 1)
             return ztypes.noConst
         }
         if b > 0 when a < (mn9 + b) then {
-            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            (constFailRecord :ty kind: ovk9 :nodeid :lineno :colno width: 1)
             return ztypes.noConst
         }
         return (ztypes.makeIntConst (a - b))
@@ -26562,20 +26657,25 @@ constArithInt: function {
         r9: a * b
         if (r9 / a) != b then bad9 = true
         if bad9 then {
-            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            (constFailRecord :ty kind: ovk9 :nodeid :lineno :colno width: 1)
             return ztypes.noConst
         }
         return (ztypes.makeIntConst r9)
     }
     if op == "/" then {
         if b == 0 then {
-            dm9: "division by a constant zero".string
-            dh9: "the divisor is a compile-time constant equal to 0".string
-            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: dm9 hint: dh9)
+            (constFailRecord
+                :ty
+                kind: ztypes.constfailkind.divZero
+                :nodeid
+                :lineno
+                :colno
+                width: 1
+            )
             return ztypes.noConst
         }
         if a == mn9 when b == (0 - 1) then {
-            (reportConstError :ty :nodeid :lineno :colno width: 1 msg: ovf9 hint: ovh9)
+            (constFailRecord :ty kind: ovk9 :nodeid :lineno :colno width: 1)
             return ztypes.noConst
         }
         return (ztypes.makeIntConst (a / b))
@@ -26711,16 +26811,14 @@ constValueOfMember: function {
             ty.constEvalState.set key: k9 value: 2.u8
             return ztypes.noConst
         }
-        cm9: "constant '\{defName}' is defined in terms of itself"
-        ch9: "a unit constant may only read constants that do not read it back".string
-        (reportConstError
+        (constFailRecord
             :ty
+            kind: ztypes.constfailkind.cycle
             nodeid: dnode9
             lineno: dline9
             colno: dcol9
             width: defName.length.u32.orPanic
-            msg: cm9
-            hint: ch9
+            strId: (constInternString :ty text: defName)
         )
         ty.constEvalState.set key: k9 value: 2.u8
         return ztypes.noConst
@@ -27012,16 +27110,13 @@ evalConstNode: function {
             } else null
         }
         if parts9 == 0 then return (ztypes.makeStrConst (constInternString :ty text: ""))
-        im9: "an interpolated string has no compile-time value".string
-        ih9: "interpolation reads its parts at run time; use a plain literal".string
-        (reportConstError
+        (constFailRecord
             :ty
+            kind: ztypes.constfailkind.interp
             nodeid: n.nodeid
             lineno: n.lineno
             colno: n.colno
             width: 1
-            msg: im9
-            hint: ih9
         )
         return ztypes.noConst
     } case dottedpath then {
@@ -27196,19 +27291,15 @@ evalConstNode: function {
                 if av9.kind.svalKind then umsg9 = constStringAt :ty id: av9.strId
             } else null
         }
-        uh9: "the compiler proved this `error` reachable".string
-        ty.errors.append (zast.ErrorData
+        (constFailRecord
+            :ty
+            kind: ztypes.constfailkind.reachedError
             nodeid: n.nodeid
             lineno: n.lineno
             colno: n.colno
             width: 5
-            err: zast.err.userError
-            msg: umsg9.copy
-            fsno: zvfs.fsno
-            note: "".string
-            hint: uh9
+            strId: (constInternString :ty text: umsg9.stringview)
         )
-        ty.isError = true
         return ztypes.noConst
     } case ifexpr then {
         fb9: foldIfBranch :ast :ty :reg :unitName :n
@@ -27506,6 +27597,7 @@ resolveConstantDefsInUnit: function {
             ) case namedoperation then {
                 defName: zast.nameTextAt :ast ref: bmNode9.name
                 if defName.length > 0 then {
+                    constFailClear :ty
                     (resolveConstantDef
                         :ast
                         :ty
@@ -27526,6 +27618,7 @@ resolveConstantDefsInUnit: function {
                         :unitName
                         defName: defName.stringview
                     )
+                    reportPendingConstFail :ty
                 }
             } else null
         }
