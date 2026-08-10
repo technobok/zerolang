@@ -17235,7 +17235,7 @@ checkAtomid: function {
             setl: result
             stampGate :st nid: node.nodeid.u64 tid: setl
         } else {
-            fo: (walkLookupTyperef
+            fo: (nsThenUnitLookup
                 :ast
                 ty: st.typing
                 reg: st.reg
@@ -25325,6 +25325,7 @@ depWalkUnit: function {
         emptyD: (ListVal u32)
         idxs: (ListVal u64)
         di0: u64
+        nsIdx9: (ListVal u64)
         with biter: bodyIds9.iterate do for bmId9: biter loop {
             bm: ast.nodes.get i: (bmId9 - 1).u64
             match (
@@ -25334,8 +25335,39 @@ depWalkUnit: function {
                     dv0: di0
                     idxs.append dv0
                 }
+                isNs0: false
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: bm.operation
+                    k: zast.unitkind.namespace
+                ) then isNs0 = true
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: bm.operation
+                    k: zast.unitkind.subunit
+                ) then isNs0 = true
+                if isNs0 then {
+                    nv0: di0
+                    nsIdx9.append nv0
+                }
             } else null
             di0 = di0 + 1
+        }
+        ni9: u64
+        for ni9 < nsIdx9.length loop {
+            nidx9: nsIdx9.get i: ni9
+            ni9 = ni9 + 1
+            nm2Id9: bodyIds9.get i: nidx9
+            nm2: ast.nodes.get i: (nm2Id9 - 1).u64
+            if nm2.namedoperation then {
+                (checkNamespaceBodies
+                    :ast
+                    :st
+                    unitName: depName
+                    unitdefId: nm2.operation
+                    depUnits: emptyD
+                )
+            }
         }
         wi: u64
         for wi < idxs.length loop {
@@ -25503,6 +25535,7 @@ checkNamespaceBodies: function {
     prevTid9: st.typing.nsOwnerTid
     prevDecl9: st.typing.nsOwnerDeclId
     prevUnit9: st.typing.nsOwnerUnit.copy
+    prevSub9: st.typing.nsOwnerIsSubunit
     {
         un9: unitdefNodeId :ast nId: unitdefId
         if (un9.isZero) == false then {
@@ -25513,6 +25546,11 @@ checkNamespaceBodies: function {
                 st.typing.nsOwnerDeclId = declOfTypeId reg: st.reg tid: ntid9
                 nu9: unitName.string
                 st.typing.nsOwnerUnit = nu9
+                st.typing.nsOwnerIsSubunit = (zast.unitOpKindIs
+                    :ast
+                    opId: unitdefId
+                    k: zast.unitkind.subunit
+                )
             }
         }
     }
@@ -25562,6 +25600,7 @@ checkNamespaceBodies: function {
     st.typing.nsOwnerDeclId = prevDecl9
     pu9: prevUnit9.copy
     st.typing.nsOwnerUnit = pu9
+    st.typing.nsOwnerIsSubunit = prevSub9
 }
 
 checkUnitBodies: function {
@@ -27124,6 +27163,8 @@ constOwnerTidFor: function {
             nameId: (zast.poolFind pool: ast.names text: defName)
         )
         if (nd9.isZero) == false then return ty.nsOwnerTid.u64
+        # a hidden subunit does not fall through to its parent
+        if ty.nsOwnerIsSubunit then return 0
     }
     return (constUnitTid :ast :reg :unitName)
 }
@@ -29453,6 +29494,37 @@ walkUnitProbe9: function {
 # the unit itself, then `core` -- the prelude every program opens, and the one
 # unit the resolver names. Every other unit, stdlib or not, is reached the same
 # way a user unit is: through core's re-exports or a qualified path.
+# nsThenUnitLookup -- a bare name written inside a namespace resolves against
+# that namespace first. A hidden SUBUNIT stops there and falls through to core
+# alone: it is read only because its parent named it, so it may name its own
+# definitions, its own subunits, top-level units and core, but not its parent's
+# (units.pdoc: "modules can only refer to submodules further down the directory
+# tree"). An INLINE unit falls through to the enclosing unit, which is the
+# chain spec.pdoc gives it.
+nsThenUnitLookup: function {
+    ast: Ast.view
+    ty: ztyping.ZTyping.view
+    reg: ztypes.ZTypeRegistry.view
+    currentUnit: StringView
+    base: StringView
+} out optionval u64 is {
+    if ty.nsOwnerTid > 0 when currentUnit == ty.nsOwnerUnit.stringview then {
+        nid9: zast.poolFind pool: ast.names text: base
+        if (nid9.isZero) == false then {
+            no9: ty.declChildOfId parentTypeId: ty.nsOwnerTid nameId: nid9
+            match (
+                no9
+            ) case some then {
+                return (optionval.some no9)
+            } case none then null
+        }
+        if ty.nsOwnerIsSubunit then {
+            return (walkLookupTyperef :ast :ty :reg currentUnit: "core" :base)
+        }
+    }
+    return (walkLookupTyperef :ast :ty :reg :currentUnit :base)
+}
+
 walkLookupTyperef: function {
     ast: Ast.view
     ty: ztyping.ZTyping.view
