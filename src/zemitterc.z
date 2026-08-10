@@ -1464,6 +1464,13 @@ Ctx: class {
     cnames: (List String)
     litIds: (ListVal u64)
     usedLits: (MapVV u64 value: bool)
+    # the FOLDED-string pool, beside the AST-literal one. A folded value has no
+    # literal to point at -- a concatenation and a selected branch were never
+    # written anywhere -- so litIndexOf cannot serve it. Rendered `_zcsN` in the
+    # same static z_StringView_t shape as `_zs`, and MINTING IS THE USE: an
+    # entry exists only because something asked to emit it, so unlike usedLits
+    # there is no separate mark.
+    constLits: (List String)
     needs: (MapRV String value: bool)
     methodReturns: (Map String value: String)
     dataElems: (Map String value: String)
@@ -6256,6 +6263,36 @@ cvalText: function {
     return "".string
 }
 
+# cvalStrText -- the C text for a folded STRING value: a `_zcsN` static minted
+# in ctx.constLits. "" for any other kind, which leaves the caller on its
+# ordinary path exactly as cvalText's "" does.
+#
+# Deduplicated by TEXT, not by origin: two constants that fold to the same bytes
+# are one static, and a folded value has no node identity to key on anyway.
+cvalStrText: function {symtab: zenv.ZSymbolTable.view ctx: Ctx v: ztypes.cval} out String is {
+    if (v.kind.svalKind) == false then return "".string
+    if v.strId == 0 then return "".string
+    if v.strId.u64 > symtab.typing.constStrings.length then return "".string
+    t9: symtab.typing.constStrings.get i: (v.strId - 1).u64
+    i9: u64
+    n9: ctx.constLits.length
+    hit9: u64
+    for i9 < n9 loop {
+        if hit9 == 0 then {
+            e9: ctx.constLits.get i: i9
+            if e9.stringview == t9.stringview then hit9 = i9 + 1
+        }
+        i9 = i9 + 1
+    }
+    if hit9 > 0 then {
+        rh9: "_zcs\{hit9}"
+        return rh9
+    }
+    ctx.constLits.append t9.copy
+    r0: "_zcs\{ctx.constLits.length}"
+    return r0
+}
+
 # foldedBranchOf9 -- the clause the typechecker's constant fold selected for an
 # `if` or a `match`. `known` false means the conditions did not all fold, so a
 # runtime branch must be emitted; `known` true with a zero stmt means nothing
@@ -6276,7 +6313,7 @@ foldedBranchOf9: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztyping.
 nodeConstText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
-    ctx: Ctx.view
+    ctx: Ctx
     nid: zast.nodeid
 } out String is {
     if nid.isZero then return "".string
@@ -6285,16 +6322,36 @@ nodeConstText: function {
         g9
     ) case some then {
         tv9: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: nid.u64
-        return (cvalText :ast :symtab :ctx tid: tv9 v: g9)
+        sc9: cvalText :ast :symtab :ctx tid: tv9 v: g9
+        if sc9.length > 0 then return sc9
+        return (cvalStrText :symtab :ctx v: g9)
     } case none then {
         return "".string
+    }
+}
+
+# memberCvalTid9 -- the declared type of a unit constant, 0 when it has none.
+memberCvalTid9: function {
+    symtab: zenv.ZSymbolTable.view
+    unitTid: ztypes.tid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    co9: symtab.typing.declChildOfId parentTypeId: unitTid :nameId
+    match (
+        co9
+    ) case some then {
+        return (ztypes.tid.create from: co9)
+    } case none then {
+        return ztypes.tid
     }
 }
 
 # memberConstTextOf9 -- the C text for a unit constant, rendered from its VALUE
 # and carrying the literal suffix its declared type asks for. "" when the
 # member has no compile-time value, which is what leaves the caller on its
-# ordinary path.
+# ordinary path. SCALARS ONLY: it answers on a Ctx.view, which is what lets
+# scalarArmLabel keep using it, and a folded string needs the mutable Ctx that
+# memberConstStrText9 takes.
 memberConstTextOf9: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -6306,16 +6363,25 @@ memberConstTextOf9: function {
     if nameId.isZero then return "".string
     mv9: symtab.typing.memberConstOf parentTypeId: unitTid :nameId
     if mv9.kind.none then return "".string
-    mt9: ztypes.tid
-    {
-        co9: symtab.typing.declChildOfId parentTypeId: unitTid :nameId
-        match (
-            co9
-        ) case some then {
-            mt9 = ztypes.tid.create from: co9
-        } case none then null
-    }
+    mt9: memberCvalTid9 :symtab :unitTid :nameId
     return (cvalText :ast :symtab :ctx tid: mt9 v: mv9)
+}
+
+# memberConstStrText9 -- the `_zcsN` a STRING constant renders as. The string
+# half of memberConstTextOf9, split off rather than folded into it because
+# minting needs a mutable Ctx and one caller -- scalarArmLabel, building a C
+# case label -- can only ever want the scalar half: a case label is a scalar by
+# definition, so the string pool must not be on its path.
+memberConstStrText9: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    unitTid: ztypes.tid
+    nameId: zast.nameid
+} out String is {
+    if unitTid.isZero then return "".string
+    if nameId.isZero then return "".string
+    mv9: symtab.typing.memberConstOf parentTypeId: unitTid :nameId
+    return (cvalStrText :symtab :ctx v: mv9)
 }
 
 # unitTidOf9 -- the type id of the unit named `unitName`, or 0.
@@ -7939,14 +8005,17 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         ) case some then {
             return (emitLocalAtomName :ctx name: av vid: avo9)
         } case none then null
+        mutd9: unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview
         mca9: (memberConstTextOf9
             :ast
             :symtab
             :ctx
-            unitTid: (unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview)
+            unitTid: mutd9
             nameId: n.name
         )
         if mca9.length > 0 then return mca9
+        mcsa9: memberConstStrText9 :symtab :ctx unitTid: mutd9 nameId: n.name
+        if mcsa9.length > 0 then return mcsa9
         # stamped unit-def reference: the RECORD / FUNCTION legs run off the
         # stamped tid; unstamped atoms (fn-mono template re-emission walks
         # the shared template AST) fall back to the name probe
@@ -10229,6 +10298,23 @@ emitPrintArg: function {
         # anm stays the SOURCE name (the alias/narrow lookups key on it); anmE
         # is what reaches the C
         anmE: emitLocalAtomName :ctx name: an9 vid: anmV0
+        # a unit string CONSTANT reaching print by name. emitExpr answers for a
+        # constant on its own first line; print resolves atoms itself and never
+        # goes through it, so without this the NAME reaches the C undeclared.
+        # A stamped local is not a constant, so the probe is skipped for one --
+        # the same order emitExpr's atomid arm uses.
+        {
+            alo9: symtab.typing.atomVariableId.get key: n.nodeid.u64
+            if alo9.none then {
+                cst9: (memberConstStrText9
+                    :symtab
+                    :ctx
+                    unitTid: (unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview)
+                    nameId: n.name
+                )
+                if cst9.length > 0 then anmE = cst9.copy
+            }
+        }
         sid79: stampIdOf :symtab nid: n.nodeid.u64
         if sid79 == ctx.strTid then {
             if (isPtrVid :ctx vid: anv9) then {
@@ -16466,7 +16552,7 @@ typeNameOfReg9: function {symtab: zenv.ZSymbolTable tid: ztypes.tid} out String 
 unitConstTextOf: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
-    ctx: Ctx.view
+    ctx: Ctx
     n: zast.DottedPathData.view
 } out String is {
     ub8: String
@@ -16498,14 +16584,17 @@ unitConstTextOf: function {
         if isU8 then {
             # the VALUE is the only source: the emitter no longer renders a
             # constant to text ahead of time and then re-reads that text.
+            utd8: unitTidOf9 :ast :symtab unitName: ub8.stringview
             mct8: (memberConstTextOf9
                 :ast
                 :symtab
                 :ctx
-                unitTid: (unitTidOf9 :ast :symtab unitName: ub8.stringview)
+                unitTid: utd8
                 nameId: cn8
             )
             if mct8.length > 0 then return mct8
+            mcs8: memberConstStrText9 :symtab :ctx unitTid: utd8 nameId: cn8
+            if mcs8.length > 0 then return mcs8
         }
     }
     return "".string
@@ -18186,6 +18275,7 @@ emitC: function {
         cnames: cnames9
         :litIds
         usedLits: (MapVV u64 value: bool)
+        constLits: (List String)
         tailRetActive: false
         defUnitId: (MapVV u64 value: u64)
         unitIdByName: (MapRV String value: u64)
@@ -18359,6 +18449,23 @@ emitC: function {
             poolBuf.append pl29
         } case none then null
         pi9 = pi9 + 1
+    }
+    # the folded-string pool, written after the literal one and into the same
+    # buffer, so both precede the code. Every entry here was minted BY an
+    # emission that asked for it, so there is nothing unused to skip.
+    ci9: u64
+    cn9p: ctx.constLits.length
+    for ci9 < cn9p loop {
+        ct9: ctx.constLits.get i: ci9
+        ctv9: ct9.stringview
+        cesc9: cEscape text: ctv9
+        cblen9: ctv9.length
+        cidx9: ci9 + 1
+        cl19: "static const char _zcs\{cidx9}_d[] = \"\{cesc9}\";\n"
+        poolBuf.append cl19
+        cl29: "static const \{ctx.svC}_t _zcs\{cidx9} = { .data = _zcs\{cidx9}_d, .size = \{cblen9} };\n"
+        poolBuf.append cl29
+        ci9 = ci9 + 1
     }
     # every body has emitted by now, so a need registered inside a type
     # method -- which emits after emitNeededNatives -- is still in time

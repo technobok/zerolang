@@ -17058,18 +17058,35 @@ checkAtomid: function {
                         # unstamped and the emitter writes the alias name into
                         # the C.
                         if (isTypeAtom9) == false then {
-                            aad9: (declOfUnitDef
-                                ty: st.typing
+                            # ASK THE CONSTANT FIRST. `ECHO: LIB` names a string
+                            # CONSTANT, whose own type is StringView, so the
+                            # alias test below sees a decl carrying a type and
+                            # calls ECHO a type alias -- and a bare StringView
+                            # is then an unconstructible view. A definition with
+                            # a compile-time value is a VALUE alias, the case
+                            # this leg's own comment names for `true: bool.true`.
+                            ecv9: (constValueOfMember
                                 :ast
-                                defUnit: unitName
-                                name: ndNm9.stringview
-                            )
-                            if (aliasNamesType
                                 ty: st.typing
                                 reg: st.reg
-                                :ast
-                                declId: aad9
-                            ) then isTypeAtom9 = true
+                                :unitName
+                                defName: ndNm9.stringview
+                            )
+                            constFailClear ty: st.typing
+                            if ecv9.kind.none then {
+                                aad9: (declOfUnitDef
+                                    ty: st.typing
+                                    :ast
+                                    defUnit: unitName
+                                    name: ndNm9.stringview
+                                )
+                                if (aliasNamesType
+                                    ty: st.typing
+                                    reg: st.reg
+                                    :ast
+                                    declId: aad9
+                                ) then isTypeAtom9 = true
+                            }
                         }
                     }
                     if isTypeAtom9 then {
@@ -27656,6 +27673,20 @@ resolveConstantDef: function {
                         if ptt9 == ztypes.ztypetype.unionType then isCtor9 = false
                     }
                 }
+                # ASK THE CONSTANT FIRST. `LEN: LIB.length` reads a member of
+                # a string CONSTANT, and LIB's own type is StringView -- a
+                # class -- so the typeref walk above finds a non-variant parent
+                # and calls the read a construction. The value settles it.
+                if isCtor9 then {
+                    pcs9: (constValueOfMember
+                        :ast
+                        :ty
+                        :reg
+                        :unitName
+                        defName: sfLit9.stringview
+                    )
+                    if pcs9.kind.svalKind then isCtor9 = false
+                }
                 if isCtor9 then {
                     dm9: "a unit-level constant takes a literal value, not a construction".string
                     dh9: "construct it inside a function, or make '\{defName}' a function that returns the value"
@@ -27809,6 +27840,74 @@ resolveConstantDef: function {
     }
 }
 
+# constRegisterValueType -- give a constant the type of its VALUE, for the
+# shapes the shape-driven pass registers nothing for: a string literal, a
+# concatenation, and any of the static string methods (`LIB.length` is an i64,
+# `LIB.startsWith ...` a bool). A constant IS its value, so its type is the
+# value's.
+#
+# A folded string types as StringView, never String, whatever produced it. The
+# fold replaces the call outright and the value materialises as a static view
+# -- nothing is allocated and nothing is owned -- so typing it String would
+# hand a use site an owned type backed by a static. `+`'s declared `out String`
+# governs the RUN-TIME path only.
+#
+# The shape-driven registrations win wherever they spoke: they know about
+# typedefs and literal suffixes that a value does not carry.
+constRegisterValueType: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    defName: StringView
+    v: ztypes.cval
+} is {
+    if v.kind.none then return
+    ut9: constUnitTid :ast :reg :unitName
+    if ut9 == 0 then return
+    utid9: ztypes.tid.create from: ut9.u64
+    nid9: zast.poolFind pool: ast.names text: defName
+    if nid9.isZero then return
+    {
+        eo9: ty.declChildOfId parentTypeId: utid9 nameId: nid9
+        if (eo9.none) == false then return
+    }
+    if v.kind.armKind then {
+        if v.armTid.isZero then return
+        (ty.setMemberType
+            parentTypeId: utid9
+            nameId: nid9
+            childTypeId: v.armTid.u64
+        )
+        return
+    }
+    base9: ""
+    if v.kind.ivalKind then base9 = "i64"
+    if v.kind.fvalKind then base9 = "f64"
+    if v.kind.bvalKind then base9 = "bool"
+    if v.kind.svalKind then base9 = "StringView"
+    if base9.length == 0 then return
+    # NON-MINTING on purpose. The registration exists for the benefit of a
+    # READ, and a program that reads a string constant has already resolved
+    # StringView through the read itself. Demanding it here instead would make
+    # EVERY program resolve StringView for `platform.target` -- a
+    # compiler-seeded constant almost nothing reads -- which is the
+    # resolve-one-to-classify-one shape that dragged quadfloat into half the
+    # corpus once already.
+    bo9: (resolvedByIds
+        :ast
+        :ty
+        :reg
+        unitId: (nameIdOf :ast name: "system")
+        name: (zast.poolFind pool: ast.names text: base9)
+    )
+    match (
+        bo9
+    ) case some then {
+        ty.setMemberType parentTypeId: utid9 nameId: nid9 childTypeId: bo9
+    } case none then null
+}
+
 # resolve a unit's compile-time constant definitions.
 resolveConstantDefsInUnit: function {
     ast: Ast.view
@@ -27841,12 +27940,20 @@ resolveConstantDefsInUnit: function {
                     # descends into whatever it names and memoises, so a
                     # definition already reached as a dependency is a no-op
                     # here and one written before its dependency still works.
-                    (constValueOfMember
+                    cvv9: (constValueOfMember
                         :ast
                         :ty
                         :reg
                         :unitName
                         defName: defName.stringview
+                    )
+                    (constRegisterValueType
+                        :ast
+                        :ty
+                        :reg
+                        :unitName
+                        defName: defName.stringview
+                        v: cvv9
                     )
                     reportPendingConstFail :ty
                 }

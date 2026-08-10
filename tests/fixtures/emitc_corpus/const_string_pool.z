@@ -1,0 +1,47 @@
+# What reaches the C, and what does not.
+#
+# A string used only at COMPILE TIME never emits, and that is true by
+# construction rather than by an elision pass, two ways over:
+#
+#   - collectFnLiterals descends only function bodies, objectdef items and
+#     unitdef bodies. A constant is a namedoperation over a binop, so SAME's
+#     "abc" and "xyz" never enter the _zs pool at all.
+#   - litIndexOf is the only writer of ctx.usedLits, and a folded node returns
+#     on emitExpr's first line. So BOTH literals of the `if "a" == "b"` below
+#     are pooled and NEITHER is emitted -- the surviving _zs numbering is
+#     gapped, which is safe because _zs is a positional index.
+#
+# A string that IS read at run time has no AST literal to point at once it has
+# been folded -- a concatenation and a selected branch were never written
+# anywhere -- so it materialises in the second pool, `_zcs`. GREETING and ECHO
+# fold to the same bytes and share one entry.
+
+LIB: "quadmath"
+ECHO: LIB
+GREETING: "hello, " + "world"
+SAME: "abc" == "xyz"
+PICK: if LIB == "quadmath" then { "yes" } else { "no" }
+SLICE: (LIB.substring from: 0 to: 4)
+
+main: function is {
+    # read at run time: one _zcs each, and one shared by LIB and ECHO
+    print LIB
+    print ECHO
+    print GREETING
+    print PICK
+    print SLICE
+
+    # compile-time only: no _zs and no _zcs for "abc" or "xyz"
+    if SAME then {
+        print "SAME BAD"
+    } else {
+        print "compared without emitting"
+    }
+
+    # both literals pool, neither emits -- the fold picks the else arm
+    if "a" == "b" then {
+        print "IMPOSSIBLE"
+    } else {
+        print "folded in a body"
+    }
+}
