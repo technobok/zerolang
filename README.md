@@ -238,5 +238,10 @@ commit, and exactly what was copied.
 | Component | License | Linked |
 |---|---|---|
 | [mimalloc](vendor/mimalloc) | MIT | statically, into the driver binaries; `make MIMALLOC=0` builds without it |
+| [tinycc](vendor/tinycc) | LGPL-2.1 | never. `zc` reaches `libtcc.so` through `dlopen` only, so no binary here is a combined work; `make static-tcc-guard` fails the build if a libtcc symbol appears in one |
 
 These licenses govern those components, not the rest of the project.
+
+`bin/tcc` and `lib/tcc/` in an installed tree are tinycc itself, unmodified and
+under its own license; `make install` places them, and `zc --cc tcc` invokes
+them the way it would any other C compiler on the system.

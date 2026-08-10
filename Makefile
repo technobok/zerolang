@@ -75,7 +75,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard readable-check perf-strict perf-elision
+.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard static-tcc-guard readable-check perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -129,7 +129,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard readable-check ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard static-tcc-guard readable-check ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -195,6 +195,52 @@ $(BUILDDIR)/mimalloc.o: vendor/mimalloc/src/static.c vendor/mimalloc/zc_tune.c $
 	$(CC) -O2 -DNDEBUG -DMI_MALLOC_OVERRIDE -I vendor/mimalloc/include -c vendor/mimalloc/src/static.c -o $(BUILDDIR)/mimalloc-core.o
 	$(CC) -O2 -DNDEBUG -I vendor/mimalloc/include -c vendor/mimalloc/zc_tune.c -o $(BUILDDIR)/mimalloc-tune.o
 	ld -r $(BUILDDIR)/mimalloc-core.o $(BUILDDIR)/mimalloc-tune.o -o $@
+
+# out/tcc + out/tcc-lib -- the vendored tinycc (vendor/tinycc), built by
+# UPSTREAM's Makefile from a staged copy rather than by rules of our own:
+# libtcc1.a is produced by the freshly built tcc through tcc's lib/Makefile,
+# which includes its root Makefile, so a hand-rolled object list would have to
+# track upstream by hand. Own flags, third-party code. This is NOT on the
+# bin/zc path -- `make bin/zc` never builds it; test-tcc, install and ci do.
+#
+# GITHASH=no -- upstream stamps `git rev-parse` output into tcc.o, which from a
+# staged copy inside THIS repo would bake zerolang's branch and dirty flag into
+# `tcc -v`. CPPFLAGS=-fPIC rather than CFLAGS= (which would clobber
+# config.mak's): the driver and libtcc.so share one set of objects and only
+# libtcc.so carries -fPIC upstream, so without this the objects' flags depend
+# on which target make reaches first. Sequential -j1 sub-makes: libtcc1.a needs
+# the built tcc, and upstream documents a c2str/tccdefs_.h race under -j.
+#
+# libtcc.so is staged INTO the payload dir beside libtcc1.a and include/, so
+# one resolved directory answers every question zc has and `install` is one cp.
+TCC_TRIPLE ?= linux-x86_64
+TCC_CONFIGDIR := vendor/tinycc/config/$(TCC_TRIPLE)
+TCC_SRC := $(wildcard vendor/tinycc/src/*.c vendor/tinycc/src/*.h \
+                      vendor/tinycc/src/Makefile vendor/tinycc/src/lib/* \
+                      vendor/tinycc/src/include/*)
+TCC_MAKE = $(MAKE) -C $(BUILDDIR)/tinycc -j1 GITHASH=no CPPFLAGS=-fPIC
+TCCLIB := $(BUILDDIR)/tcc-lib
+
+$(BUILDDIR)/tcc: $(TCC_SRC) $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.mak
+	@mkdir -p $(BUILDDIR)
+	rm -rf $(BUILDDIR)/tinycc $(TCCLIB)
+	mkdir -p $(BUILDDIR)/tinycc $(TCCLIB)
+	cp -r vendor/tinycc/src/. $(BUILDDIR)/tinycc/
+	cp $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.mak $(BUILDDIR)/tinycc/
+	$(TCC_MAKE) tcc
+	$(TCC_MAKE) libtcc.so
+	$(TCC_MAKE) libtcc1.a
+	cp $(BUILDDIR)/tinycc/libtcc1.a $(BUILDDIR)/tinycc/libtcc.so $(TCCLIB)/
+	cp $(BUILDDIR)/tinycc/runmain.o $(BUILDDIR)/tinycc/bt-exe.o \
+	   $(BUILDDIR)/tinycc/bt-log.o $(BUILDDIR)/tinycc/bcheck.o $(TCCLIB)/
+	cp -r vendor/tinycc/src/include $(TCCLIB)/include
+	cp $(BUILDDIR)/tinycc/tcc $@
+
+# the payload comes out of the same recipe; the driver is its stamp.
+$(TCCLIB)/libtcc.so: $(BUILDDIR)/tcc ;
+
+tcc: $(BUILDDIR)/tcc $(TCCLIB)/libtcc.so
+	@echo "vendored tcc: $(BUILDDIR)/tcc (payload $(TCCLIB))"
 
 # out/zc-seed -- the bootstrap compiler built from the committed, Python-free
 # seed (bootstrap/zc.c). See bootstrap/README.md and `make test-bootstrap`.
@@ -598,6 +644,29 @@ case-guard:
 	  exit 1; \
 	fi; \
 	echo "case-guard OK: every program declaring main is in a case list"
+
+# static-tcc-guard -- the vendored tinycc is LGPL-2.1 inside a dual MIT/Apache
+# tree, so it may be reached by dlopen and by nothing else: linking it, static
+# or dynamic, is what makes zc a combined work and triggers LGPL section 6's
+# relink obligation. dlopen names its entry points as STRINGS, so a compliant
+# zc has no tcc symbol at all -- a static link leaves `T tcc_new`, a `-ltcc`
+# link leaves `U tcc_new`, and this catches both. The leading space keeps our
+# own natives (z_tcc_compileToExe and friends) from matching. A licence posture
+# that lives only in a comment rots; this one is mechanised.
+static-tcc-guard: bin/zc bin/zl bin/zls
+	@fail=0; \
+	for b in bin/zc bin/zl bin/zls; do \
+	  if nm -A $$b 2>/dev/null | grep -qE ' tcc_(new|delete|set_lib_path|output_file|add_file)$$'; then \
+	    echo "static-tcc-guard FAIL: $$b names a libtcc symbol -- it must be dlopen'd, never linked"; \
+	    fail=1; \
+	  fi; \
+	done; \
+	if [ $$fail -ne 0 ]; then \
+	  echo "  vendored tinycc is LGPL-2.1 in a dual MIT/Apache tree: dynamic LOADING only."; \
+	  echo "  See vendor/tinycc/VERSION.md and the Third-party table in README.md."; \
+	  exit 1; \
+	fi; \
+	echo "static-tcc-guard OK: no libtcc symbols in the driver binaries"
 
 # zlink-guard -- a `require:` block earns its keep only if it applies to the
 # programs that reach the declaring unit and to no others. Nothing else can
