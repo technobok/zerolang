@@ -3518,6 +3518,41 @@ hoistBorrowValArg: function {
     return vnmh
 }
 
+# svBinopOperand9 -- the `&view` form of one string operand of `+`. A plain
+# atom or a pooled literal addresses directly. An owned String that is not an
+# lvalue -- the inner `+` of a chain -- must HOIST first: svValueForm reads its
+# expression twice, once for `.data` and once for `.size`, and a concat spelled
+# twice allocates twice and leaks both. A non-lvalue StringView is the shape the
+# sv-native call path already cannot address (`a.trim.concat other: b` reports
+# the same `lvalue required` today), so it is left to say so rather than given a
+# second answer here.
+svBinopOperand9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node.view
+    expr: StringView
+    tname: StringView
+} out String is {
+    src9: expr.string
+    if (isNonLvalueArg s: expr) then {
+        hv9: (hoistBorrowValArg
+            :ast
+            :symtab
+            :ctx
+            av: expr
+            pid: (stampIdDeep :ast :symtab :n)
+            paramTake: false
+            isBorrow: false
+        )
+        if hv9.length > 0 then src9 = hv9.copy
+    }
+    vid9: atomVidIfPlain :ast :symtab :ctx :n text: src9.stringview
+    vf9: svValueForm :ctx expr: src9.stringview isStr: (tname == "String") vid: vid9
+    r9: "&\{vf9}"
+    return r9
+}
+
 # emit a call to an instance method.
 emitInstanceMethodCall: function {
     ast: Ast
@@ -9438,6 +9473,37 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 }
                 cm1: "(\{ctx.svC}_cmp(\{lf}, \{rf}) \{op} 0)"
                 return cm1
+            }
+        }
+        # `+` on strings BUILDS -- the same _Z_SV_CONCAT the `concat` method
+        # calls, handing back an owned String. Outside the isCompareOp block
+        # because `+` is not a comparison: left inside it, this would fall
+        # through to the scalar `(l + r)` and add two structs. A String lhs
+        # projects to a view exactly as the sv-native call path projects a
+        # String receiver, so both receivers reach one native.
+        if op.stringview == "+" then {
+            ltc9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.lhs - 1).u64)
+            if (isStringy name: ltc9.stringview) then {
+                needsAdd :ctx name: "concat"
+                rtc9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.rhs - 1).u64)
+                lfc9: (svBinopOperand9
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: (n.lhs - 1).u64)
+                    expr: l.stringview
+                    tname: ltc9.stringview
+                )
+                rfc9: (svBinopOperand9
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: (n.rhs - 1).u64)
+                    expr: r.stringview
+                    tname: rtc9.stringview
+                )
+                cc9: "\{ctx.svC}_concat(\{lfc9}, \{rfc9})"
+                return cc9
             }
         }
         if op.stringview == "%" then {

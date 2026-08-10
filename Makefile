@@ -788,7 +788,8 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   String.hash:StringView.hash String.substring:StringView.substring \
   String.==:StringView.== String.!=:StringView.!= String.<:StringView.< \
   String.<=:StringView.<= String.>:StringView.> String.>=:StringView.>= \
-  String.compare:StringView.compare
+  String.compare:StringView.compare \
+  String.+:StringView.concat StringView.+:StringView.concat
 
 define VIEW_GUARD_AWK
 # Reads lib/system/*.z (declarations) and the C backings, then joins them.
