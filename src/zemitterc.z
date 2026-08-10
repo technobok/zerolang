@@ -16544,6 +16544,64 @@ typeNameOfReg9: function {symtab: zenv.ZSymbolTable tid: ztypes.tid} out String 
     return (ztypecheck.regTypeNameOf reg: symtab.reg tid: (ztypes.tid.create from: tid.u64))
 }
 
+# pathUnitTidOf9 -- the type id of the unit a dotted path's BASE names, or 0
+# when the base names no unit. A file unit answers from the unit-name index; a
+# nested namespace is deliberately absent from it, so it is found as a member
+# of the unit being emitted, and `outer.inner` by walking that chain by id.
+pathUnitTidOf9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    baseId: u32
+} out ztypes.tid is {
+    if baseId == 0 then return ztypes.tid
+    b9: ast.nodes.get i: (baseId - 1).u64
+    match (
+        b9
+    ) case expression then {
+        return (pathUnitTidOf9 :ast :symtab :ctx baseId: b9.expression)
+    } case atomid then {
+        uo9: symtab.reg.unitNameTid.get key: b9.name.u64
+        match (
+            uo9
+        ) case some then {
+            return (ztypes.tid.create from: uo9)
+        } case none then null
+        ho9: (symtab.typing.declChildOfId
+            parentTypeId: (unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview)
+            nameId: b9.name
+        )
+        match (
+            ho9
+        ) case some then {
+            if (symtab.reg.typetypeOf
+                typeId: (ztypes.tid.create from: ho9)
+            ) == ztypes.ztypetype.unitType then return (ztypes.tid.create from: ho9)
+        } case none then null
+        return ztypes.tid
+    } case dottedpath then {
+        pt9: pathUnitTidOf9 :ast :symtab :ctx baseId: b9.parent
+        if pt9.isZero then return ztypes.tid
+        cn9: zast.nameid
+        {
+            ca9: ast.nodes.get i: (b9.child - 1).u64
+            if ca9.atomid then cn9 = ca9.name
+        }
+        if cn9.isZero then return ztypes.tid
+        co9: symtab.typing.declChildOfId parentTypeId: pt9 nameId: cn9
+        match (
+            co9
+        ) case some then {
+            if (symtab.reg.typetypeOf
+                typeId: (ztypes.tid.create from: co9)
+            ) == ztypes.ztypetype.unitType then return (ztypes.tid.create from: co9)
+        } case none then null
+        return ztypes.tid
+    } else {
+        return ztypes.tid
+    }
+}
+
 # unitConstTextOf -- the rendered C text of a `unit.CONST` dotted path, or ""
 # when the path names no constant of a known unit. Emission, the constant-shape
 # test and the integer fold all ask this one question: a constant that folds
@@ -16555,36 +16613,16 @@ unitConstTextOf: function {
     ctx: Ctx
     n: zast.DottedPathData.view
 } out String is {
-    ub8: String
     cn8: zast.nameid
-    {
-        pa8: ast.nodes.get i: (n.parent - 1).u64
-        if pa8.atomid then {
-            pt8: ast.names.texts.get i: (pa8.name - 1).u64
-            ub8 = pt8.copy
-        }
-    }
     {
         ca8: ast.nodes.get i: (n.child - 1).u64
         if ca8.atomid then cn8 = ca8.name
     }
-    if ub8.length > 0 when cn8 > 0 then {
-        isU8: false
-        {
-            uo8: symtab.reg.unitNameTid.get key: (zast.poolFind
-                pool: ast.names
-                text: ub8.stringview
-            ).u64
-            match (
-                uo8
-            ) case some then {
-                isU8 = true
-            } case none then null
-        }
-        if isU8 then {
+    if cn8 > 0 then {
+        utd8: pathUnitTidOf9 :ast :symtab :ctx baseId: n.parent
+        if (utd8.isZero) == false then {
             # the VALUE is the only source: the emitter no longer renders a
             # constant to text ahead of time and then re-reads that text.
-            utd8: unitTidOf9 :ast :symtab unitName: ub8.stringview
             mct8: (memberConstTextOf9
                 :ast
                 :symtab

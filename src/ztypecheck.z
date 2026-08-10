@@ -1546,7 +1546,17 @@ declareCanonicalType: function {
     typetype: ztypes.ztypetype
 } out u64 is {
     qowner9: u64
-    if (ownerNameId.isZero) == false then {
+    # Inside a namespace unit, the enclosing type is a child of THAT unit, not
+    # of the file unit -- the unit-name index only ever holds file units.
+    if (ownerNameId.isZero) == false when ty.nsOwnerTid > 0 then {
+        nso9: ty.declChildOfId parentTypeId: ty.nsOwnerTid nameId: ownerNameId
+        match (
+            nso9
+        ) case some then {
+            qowner9 = nso9
+        } case none then null
+    }
+    if (ownerNameId.isZero) == false when qowner9 == 0 then {
         cudq: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
         match (
             cudq
@@ -1569,6 +1579,9 @@ declareCanonicalType: function {
             } case none then null
         } case none then null
     }
+    if ownerNameId.isZero when ty.nsOwnerTid > 0 then {
+        if ty.nsOwnerName.stringview == name then qowner9 = ty.nsOwnerTid.u64
+    }
     if qowner9 > 0 then {
         exq: (ty.declChildOf
             pool: ast.names
@@ -1581,7 +1594,7 @@ declareCanonicalType: function {
             return exq
         } case none then null
     }
-    if ownerNameId.isZero then {
+    if ownerNameId.isZero when qowner9 == 0 then {
         cudm: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
         match (
             cudm
@@ -2232,19 +2245,7 @@ genericConstraintBase: function {ast: Ast.view n: Node.view} out String is {
 # hasGenericParam / registerGenericParams -- id-list flavors for
 # converted unit bodies (declaration lists stay embedded until S4).
 hasGenericParam: function {ast: Ast.view items: (ListVal u32).view} out bool is {
-    hi9: u64
-    hn9: items.length
-    for hi9 < hn9 loop {
-        hid9: items.get i: hi9
-        hm9: ast.nodes.get i: (hid9 - 1).u64
-        match (
-            hm9
-        ) case namedoperation then {
-            if (isGenericParam :ast op: (ast.nodes.get i: (hm9.operation - 1).u64)) then return true
-        } else null
-        hi9 = hi9 + 1
-    }
-    return false
+    return (zast.itemsHaveGenericParam :ast :items)
 }
 
 # register a template's generic parameters, classifying each constraint.
@@ -8819,7 +8820,49 @@ resolveUnitBody: function {
                 }
                 if ty.eagerAll then eager = true
                 if eager then {
-                    if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
+                    isNs9: false
+                    if (zast.unitOpKindIs
+                        :ast
+                        opId: bmNode9.operation
+                        k: zast.unitkind.namespace
+                    ) then isNs9 = true
+                    if (zast.unitOpKindIs
+                        :ast
+                        opId: bmNode9.operation
+                        k: zast.unitkind.subunit
+                    ) then isNs9 = true
+                    if isNs9 then {
+                        pt9: ztypes.tid
+                        pd9: ztypes.declid
+                        {
+                            uo9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
+                            match (
+                                uo9
+                            ) case some then {
+                                pt9 = ztypes.tid.create from: uo9
+                            } case none then null
+                        }
+                        {
+                            ro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+                            match (
+                                ro9
+                            ) case some then {
+                                pd9 = ro9
+                            } case none then null
+                        }
+                        (resolveNamespaceUnit
+                            :ty
+                            :reg
+                            :ast
+                            :unitName
+                            defName: defName.stringview
+                            parentTid: pt9
+                            parentDeclId: pd9
+                            unitOpId: bmNode9.operation
+                        )
+                    } else if (isUnitOp
+                        op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                    ) then {
                         (resolveInlineGenericUnit
                             :ty
                             :reg
@@ -10691,6 +10734,102 @@ isUnitOp: function {op: Node.view} out bool is {
         return true
     } else {
         return false
+    }
+}
+
+# resolveNamespaceUnit -- resolve a namespace unit: an inline `m: unit { }` or a
+# hidden subunit, which are the same node after parsing. Its members are
+# children of ITS type id, not of the enclosing unit's, so two namespaces may
+# each declare a `twice` without colliding. Members go through resolveDef, so a
+# constant, a record, a class and a nested namespace all resolve the way a file
+# unit's members do -- which is the whole point: a unit is one concept however
+# it was written.
+resolveNamespaceUnit: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    unitName: StringView
+    defName: StringView
+    parentTid: ztypes.tid
+    parentDeclId: ztypes.declid
+    unitOpId: zast.nodeid
+} is {
+    nameRef9: zast.poolFind pool: ast.names text: defName
+    if nameRef9.isZero then return
+    udnid9: unitdefNodeId :ast nId: unitOpId
+    if udnid9.isZero then return
+    # reg.newType has no dedup and resolveDemandsByDescent runs its unit loop
+    # to a fixpoint, so the node stamp is what makes a second visit a no-op.
+    uid9: ztypes.tid
+    {
+        prev9: ztyping.nodeTypeAt tbl: ty.nodeType nid: udnid9.u64
+        if prev9 > 0 then uid9 = ztypes.tid.create from: prev9
+    }
+    declId9: ty.declFindChild :parentDeclId nameId: nameRef9
+    if uid9.isZero then {
+        uid9 = reg.newType name: defName typetype: ztypes.ztypetype.unitType
+        ztyping.nodeTypeSet tbl: ty.nodeType nid: udnid9.u64 tid: uid9
+        if (parentTid.isZero) == false then {
+            (ty.setMemberType
+                parentTypeId: parentTid
+                nameId: nameRef9
+                childTypeId: uid9
+            )
+        }
+        if (declId9.isZero) == false then {
+            ty.declSetType declId: declId9 typeId: uid9
+            reg.setDef typeId: uid9 declId: declId9
+        }
+    }
+    prevTid9: ty.nsOwnerTid
+    prevDecl9: ty.nsOwnerDeclId
+    prevName9: ty.nsOwnerName.copy
+    prevUnit9: ty.nsOwnerUnit.copy
+    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitOpId
+    with biter9: bodyIds9.iterate do for bm9: biter9 loop {
+        bmNode9: ast.nodes.get i: (bm9 - 1).u64
+        match (
+            bmNode9
+        ) case namedoperation then {
+            mName9: zast.nameTextCopy :ast ref: bmNode9.name
+            if mName9.length > 0 then {
+                if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
+                    (resolveNamespaceUnit
+                        :ty
+                        :reg
+                        :ast
+                        :unitName
+                        defName: mName9.stringview
+                        parentTid: uid9
+                        parentDeclId: declId9
+                        unitOpId: bmNode9.operation
+                    )
+                } else {
+                    ty.nsOwnerTid = uid9
+                    ty.nsOwnerDeclId = declId9
+                    nsn9: mName9.copy
+                    ty.nsOwnerName = nsn9
+                    nsu9: unitName.string
+                    ty.nsOwnerUnit = nsu9
+                    (resolveDef
+                        :ty
+                        :reg
+                        :ast
+                        :unitName
+                        defName: mName9.stringview
+                        defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                    )
+                    ty.nsOwnerTid = prevTid9
+                    ty.nsOwnerDeclId = prevDecl9
+                    pn9: prevName9.copy
+                    ty.nsOwnerName = pn9
+                    pu9: prevUnit9.copy
+                    ty.nsOwnerUnit = pu9
+                    md9: ty.declFindChild parentDeclId: declId9 nameId: bmNode9.name
+                    if (md9.isZero) == false then ty.declSetDefined declId: md9
+                }
+            }
+        } else null
     }
 }
 
@@ -15611,6 +15750,35 @@ memberStrictType: function {st: zenv.ZSymbolTable bt: u64} out bool is {
 }
 
 # typecheck a dotted member-access expression, enforcing visibility and locks.
+# unitMemberTypeOf -- the type a member of unit `unitTid` names. A FILE unit
+# answers through the unit-name index, which also follows re-exports, demands
+# the definition and falls back to core. A nested unit -- an inline `m: unit
+# { }` or a hidden subunit -- is deliberately not in that index (two units in
+# different files may share a name), so its members are read off its own type
+# id, where declareCanonicalType laid them.
+unitMemberTypeOf: function {
+    ast: Ast.view
+    ty: ztyping.ZTyping.view
+    reg: ztypes.ZTypeRegistry.view
+    unitTid: ztypes.tid
+    unitName: StringView
+    member: StringView
+} out optionval u64 is {
+    isFileU9: false
+    {
+        fuo9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
+        match (
+            fuo9
+        ) case some then {
+            if fuo9 == unitTid.u64 then isFileU9 = true
+        } case none then null
+    }
+    if isFileU9 then return (walkLookupTyperef :ast :ty :reg currentUnit: unitName base: member)
+    nid9: zast.poolFind pool: ast.names text: member
+    if nid9.isZero then return (optionval.none u64)
+    return (ty.declChildOfId parentTypeId: unitTid nameId: nid9)
+}
+
 checkDotted: function {
     st: zenv.ZSymbolTable
     unitName: StringView
@@ -16181,12 +16349,13 @@ checkDotted: function {
                 return (ztypes.tid.create from: 0)
             }
         }
-        mo9: (walkLookupTyperef
+        mo9: (unitMemberTypeOf
             :ast
             ty: st.typing
             reg: st.reg
-            currentUnit: un9.stringview
-            base: effUcn9.stringview
+            unitTid: bt
+            unitName: un9.stringview
+            member: effUcn9.stringview
         )
         match (
             mo9
@@ -26842,9 +27011,12 @@ constArithFloat: function {op: StringView a: f64 b: f64} out ztypes.cval is {
 # constUnitTid -- the type id of unit `unitName`, or 0.
 constUnitTid: function {
     ast: Ast.view
+    ty: ztyping.ZTyping.view
     reg: ztypes.ZTypeRegistry.view
     unitName: StringView
 } out u64 is {
+    # inside a namespace unit, its members' constants are keyed on ITS type id
+    if ty.nsOwnerTid > 0 when unitName == ty.nsOwnerUnit.stringview then return ty.nsOwnerTid.u64
     cu9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
     match (
         cu9
@@ -26864,7 +27036,15 @@ constDefNodeId: function {
     unitName: StringView
     defName: StringView
 } out u32 is {
-    dc9: declOfUnitDef :ty :ast defUnit: unitName name: defName
+    dc9: ztypes.declid
+    if ty.nsOwnerDeclId > 0 when unitName == ty.nsOwnerUnit.stringview then {
+        dc9 = (ty.declFindChild
+            parentDeclId: ty.nsOwnerDeclId
+            nameId: (zast.poolFind pool: ast.names text: defName)
+        )
+    } else {
+        dc9 = declOfUnitDef :ty :ast defUnit: unitName name: defName
+    }
     if dc9.isZero then return 0
     if (ty.declValid id: dc9) == false then return 0
     do9: ty.decls.get i: (dc9 - 1)
@@ -26886,6 +27066,29 @@ constDefIsComputed: function {ast: Ast.view n: Node.view} out bool is {
     }
 }
 
+# constValueOfMemberTid -- the memoised compile-time value of a member of the
+# unit whose type id is `unitTid`. A nested namespace has no unit-name index
+# entry to reach it through, but resolveNamespaceUnit has already evaluated its
+# members against this id, so the read is a pure lookup rather than a descent.
+constValueOfMemberTid: function {
+    ast: Ast.view
+    ty: ztyping.ZTyping.view
+    unitTid: ztypes.tid
+    defName: StringView
+} out ztypes.cval is {
+    if unitTid.isZero then return ztypes.noConst
+    nid9: zast.poolFind pool: ast.names text: defName
+    if nid9.isZero then return ztypes.noConst
+    k9: ty.memberConstKey parentTypeId: unitTid nameId: nid9
+    sg9: ty.constEvalState.get key: k9
+    match (
+        sg9
+    ) case some then {
+        if sg9 == 2 then return (ty.memberConstOf parentTypeId: unitTid nameId: nid9)
+    } case none then null
+    return ztypes.noConst
+}
+
 # constValueOfMember -- the compile-time value of `unitName.defName`, evaluated
 # on demand and memoised in memberConst. constEvalState carries the cycle
 # guard: re-entering a member that is still evaluating is `A: B + 1` paired
@@ -26897,7 +27100,7 @@ constValueOfMember: function {
     unitName: StringView
     defName: StringView
 } out ztypes.cval is {
-    ut9: constUnitTid :ast :reg :unitName
+    ut9: constUnitTid :ast :ty :reg :unitName
     if ut9 == 0 then return ztypes.noConst
     utid9: ztypes.tid.create from: ut9.u64
     nid9: zast.poolFind pool: ast.names text: defName
@@ -27413,6 +27616,32 @@ evalConstNode: function {
                     unitName: pt9.stringview
                     defName: cn9.stringview
                 )
+            }
+            # A nested namespace (`m: unit { NUM: 7 }`) is a definition of THIS
+            # unit whose type is a unit; it is deliberately absent from the
+            # unit-name index, so its members are read off its type id.
+            {
+                nso9: (resolvedByIds
+                    :ast
+                    :ty
+                    :reg
+                    unitId: (nameIdOf :ast name: unitName)
+                    name: (nameIdOf :ast name: pt9.stringview)
+                )
+                match (
+                    nso9
+                ) case some then {
+                    nst9: ztypes.tid.create from: nso9
+                    if (reg.typetypeOf typeId: nst9) == ztypes.ztypetype.unitType then {
+                        nsv9: (constValueOfMemberTid
+                            :ast
+                            :ty
+                            unitTid: nst9
+                            defName: cn9.stringview
+                        )
+                        if (nsv9.kind.none) == false then return nsv9
+                    }
+                } case none then null
             }
             # A same-unit name can be a CONSTANT or a TYPE, and the two read
             # identically: `CC.tcc` asks whether the constant CC holds that arm,
@@ -27962,7 +28191,7 @@ constRegisterValueType: function {
     v: ztypes.cval
 } is {
     if v.kind.none then return
-    ut9: constUnitTid :ast :reg :unitName
+    ut9: constUnitTid :ast :ty :reg :unitName
     if ut9 == 0 then return
     utid9: ztypes.tid.create from: ut9.u64
     nid9: zast.poolFind pool: ast.names text: defName
@@ -28010,11 +28239,54 @@ constRegisterValueType: function {
 # resolve a unit's compile-time constant definitions.
 resolveConstantDefsInUnit: function {
     ast: Ast.view
-    ty: ztyping.ZTyping.view
+    ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     unitName: StringView
     unitdefId: zast.nodeid
 } is {
+    rd9: ztypes.declid
+    {
+        ro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+        match (
+            ro9
+        ) case some then {
+            rd9 = ro9
+        } case none then null
+    }
+    (resolveConstantDefsIn
+        :ast
+        :ty
+        :reg
+        :unitName
+        :unitdefId
+        ownerTid: ztypes.tid
+        ownerDeclId: rd9
+    )
+}
+
+# resolveConstantDefsIn -- the walk resolveConstantDefsInUnit drives, once for
+# the file unit and once for each namespace nested in it. `ownerTid` is 0 for
+# the file unit, whose constants key on the unit-name index as they always
+# have; for a namespace it is that namespace's type id, which is the only
+# thing the constant channel needs to hold a nested unit's members apart.
+resolveConstantDefsIn: function {
+    ast: Ast.view
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    unitName: StringView
+    unitdefId: zast.nodeid
+    ownerTid: ztypes.tid
+    ownerDeclId: ztypes.declid
+} is {
+    prevTid9: ty.nsOwnerTid
+    prevDecl9: ty.nsOwnerDeclId
+    prevUnit9: ty.nsOwnerUnit.copy
+    if (ownerTid.isZero) == false then {
+        ty.nsOwnerTid = ownerTid
+        ty.nsOwnerDeclId = ownerDeclId
+        nsu9: unitName.string
+        ty.nsOwnerUnit = nsu9
+    }
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
     {
         biter: bodyIds9.iterate
@@ -28024,7 +28296,42 @@ resolveConstantDefsInUnit: function {
                 bmNode9
             ) case namedoperation then {
                 defName: zast.nameTextAt :ast ref: bmNode9.name
-                if defName.length > 0 then {
+                isNs9: false
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: bmNode9.operation
+                    k: zast.unitkind.namespace
+                ) then isNs9 = true
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: bmNode9.operation
+                    k: zast.unitkind.subunit
+                ) then isNs9 = true
+                if isNs9 then {
+                    ct9: ztypes.tid
+                    {
+                        un9: unitdefNodeId :ast nId: bmNode9.operation
+                        if (un9.isZero) == false then {
+                            ct9 = (ztypes.tid.create
+                                from: (ztyping.nodeTypeAt tbl: ty.nodeType nid: un9.u64)
+                            )
+                        }
+                    }
+                    if (ct9.isZero) == false then {
+                        (resolveConstantDefsIn
+                            :ast
+                            :ty
+                            :reg
+                            :unitName
+                            unitdefId: bmNode9.operation
+                            ownerTid: ct9
+                            ownerDeclId: (ty.declFindChild
+                                parentDeclId: ownerDeclId
+                                nameId: bmNode9.name
+                            )
+                        )
+                    }
+                } else if defName.length > 0 then {
                     constFailClear :ty
                     (resolveConstantDef
                         :ast
@@ -28059,6 +28366,10 @@ resolveConstantDefsInUnit: function {
             } else null
         }
     }
+    ty.nsOwnerTid = prevTid9
+    ty.nsOwnerDeclId = prevDecl9
+    pu9: prevUnit9.copy
+    ty.nsOwnerUnit = pu9
 }
 
 # ccKindArm -- the `cckind` arm a resolved compiler PATH names, by basename.
@@ -28102,7 +28413,7 @@ seedPlatformConsts: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
 } is {
-    pu9: constUnitTid :ast :reg unitName: "platform"
+    pu9: constUnitTid :ast :ty :reg unitName: "platform"
     if pu9 == 0 then return
     ptid9: ztypes.tid.create from: pu9.u64
     # os/arch describe what the build is FOR: the --target triple decides when

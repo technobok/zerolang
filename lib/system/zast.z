@@ -70,6 +70,8 @@ public: unit {
     :tableReserve
     :tableTake
     :unitBodyIdsAt
+    :isGenericParamOp
+    :itemsHaveGenericParam
     :unitOpKindIs
     :unitkind
     :unitkindname
@@ -2878,6 +2880,59 @@ kindOf: function {ast: Ast.view id: u32} out astkind is {
 # fetch so the caller may lend the table exclusively afterwards; the ids are
 # values, so the returned list is independent of the table. An id that does
 # not name a unit yields an empty list.
+# True when `opId` declares a generic parameter -- `<constraint>.generic`,
+# `.valtype` or `.reftype` -- unwrapping the expression and call wrappers the
+# form can carry. The parser marks a unit body holding one as a template; the
+# typechecker asks the same question of a type body.
+isGenericParamOp: function {ast: Ast.view opId: u32} out bool is {
+    if opId == 0 then return false
+    n9: ast.nodes.get i: (opId - 1).u64
+    match (
+        n9
+    ) case expression then {
+        return (isGenericParamOp :ast opId: n9.expression)
+    } case call then {
+        return (isGenericParamOp :ast opId: n9.callable)
+    } case dottedpath then {
+        c9: ast.nodes.get i: (n9.child - 1).u64
+        match (
+            c9
+        ) case atomid then {
+            if (nameTextEq :ast ref: c9.name s: "generic") then return true
+            if (nameTextEq :ast ref: c9.name s: "valtype") then return true
+            if (nameTextEq :ast ref: c9.name s: "reftype") then return true
+            return false
+        } case labelvalue then {
+            if (nameTextEq :ast ref: c9.name s: "generic") then return true
+            if (nameTextEq :ast ref: c9.name s: "valtype") then return true
+            if (nameTextEq :ast ref: c9.name s: "reftype") then return true
+            return false
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+# True when any member of the definition list `items` declares a generic
+# parameter, i.e. the body it came from is a template.
+itemsHaveGenericParam: function {ast: Ast.view items: (ListVal u32).view} out bool is {
+    hi9: u64
+    hn9: items.length
+    for hi9 < hn9 loop {
+        hid9: items.get i: hi9
+        hm9: ast.nodes.get i: (hid9 - 1).u64
+        match (
+            hm9
+        ) case namedoperation then {
+            if (isGenericParamOp :ast opId: hm9.operation) then return true
+        } else null
+        hi9 = hi9 + 1
+    }
+    return false
+}
+
 # True when node `opId` is a unit definition of kind `k`, unwrapping an
 # `expression` wrapper the way indexDeclDef and resolveDef do. False when the
 # node is not a unit definition at all.
