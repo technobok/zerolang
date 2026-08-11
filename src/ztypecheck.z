@@ -8526,7 +8526,7 @@ resolveDef: function {
     # FSProvider) and reached none of the per-caller copies of this. recordDemand
     # is a set add, so a repeat visit costs a probe and cannot grow the registry,
     # which is what the demand fixpoint measures progress by.
-    scanDefCalls :ast :reg op: defn
+    scanDefCalls :ast :reg scanUnit: (nameIdOf :ast name: unitName) op: defn
     ty.declSetResolving declId: rdecl0 mark: true
     # A containment edge is ONE hop: this def's own resolution starts a
     # fresh context (its field/arm legs re-arm the flag), so an outer field
@@ -9824,17 +9824,22 @@ unitHasObjectMethodBody: function {ast: Ast.view defId: u32} out bool is {
 # expression/statement subtree (the body-walk pre-pass): `return` pulls
 # return+never, any other bare-atom callable (e.g. `print`) is demanded by name
 # so the cross-unit pass resolves it before the walk runs.
-scanCallsInNode: function {ast: Ast.view reg: ztypes.ZTypeRegistry node: Node.view} is {
+scanCallsInNode: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry
+    scanUnit: zast.nameid
+    node: Node.view
+} is {
     match (
         node
     ) case statement then {
         for stmId9: node.statements.iterate loop {
-            scanCallsInNode :ast :reg node: (ast.nodes.get i: (stmId9 - 1).u64)
+            scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (stmId9 - 1).u64)
         }
     } case statementline then {
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.statementline - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.statementline - 1).u64)
     } case expression then {
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.expression - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.expression - 1).u64)
     } case call then {
         cn: atomName :ast n: (ast.nodes.get i: (node.callable - 1).u64)
         if cn.stringview == "return" then {
@@ -9842,19 +9847,25 @@ scanCallsInNode: function {ast: Ast.view reg: ztypes.ZTypeRegistry node: Node.vi
             reg.recordDemand name: "never"
         } else {
             if cn.length > 0 then reg.recordDemand name: cn.stringview
+            # a bare callable in unit U's body is U's own internal demand:
+            # record it per-unit so U's def survives a main-unit shadow
+            if cn.length > 0 when (scanUnit.isZero) == false then (reg.recordUnitDemand
+                un: scanUnit
+                name: (atomNameId :ast n: (ast.nodes.get i: (node.callable - 1).u64))
+            )
         }
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.callable - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.callable - 1).u64)
         for argId9: node.arguments.iterate loop {
             arg: ast.nodes.get i: (argId9 - 1).u64
             match (
                 arg
             ) case namedoperation then {
-                scanCallsInNode :ast :reg node: (ast.nodes.get i: (arg.operation - 1).u64)
+                scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (arg.operation - 1).u64)
             } else null
         }
     } case atomstring then {
         for spId9: node.stringparts.iterate loop {
-            scanCallsInNode :ast :reg node: (ast.nodes.get i: (spId9 - 1).u64)
+            scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (spId9 - 1).u64)
         }
     } case atomid then {
         # bare body identifiers demand main-unit definitions (unit constants,
@@ -9862,15 +9873,16 @@ scanCallsInNode: function {ast: Ast.view reg: ztypes.ZTypeRegistry node: Node.vi
         scN9: ast.names.texts.get i: (node.name - 1).u64
         if (isNumericLiteralName name: scN9.stringview) == false then {
             reg.recordDemand name: scN9.stringview
+            if (scanUnit.isZero) == false then reg.recordUnitDemand un: scanUnit name: node.name
         }
     } case binop then {
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.lhs - 1).u64)
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.rhs - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.lhs - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.rhs - 1).u64)
     } case assignment then {
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.value - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.value - 1).u64)
     } case reassignment then {
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.topath - 1).u64)
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.value - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.topath - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.value - 1).u64)
     } case ifexpr then {
         # Deliberately branch-blind. This pass runs before resolveConstantDefs,
         # so no fold exists yet and a dead clause's names are demanded anyway.
@@ -9881,9 +9893,9 @@ scanCallsInNode: function {ast: Ast.view reg: ztypes.ZTypeRegistry node: Node.vi
         # the evaluator, which visits only the winning branch, and not by a
         # walk like this one, which sees every arm.
         for clId9: node.clauses.iterate loop {
-            scanCallsInNode :ast :reg node: (ast.nodes.get i: (clId9 - 1).u64)
+            scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (clId9 - 1).u64)
         }
-        scanBodyAt :ast :reg bodyId: node.elseclause
+        scanBodyAt :ast :reg :scanUnit bodyId: node.elseclause
     } case forexpr then {
         reg.recordDemand name: "never"
         for fcId9: node.conditions.iterate loop {
@@ -9891,16 +9903,16 @@ scanCallsInNode: function {ast: Ast.view reg: ztypes.ZTypeRegistry node: Node.vi
             match (
                 fc
             ) case namedoperation then {
-                scanCallsInNode :ast :reg node: (ast.nodes.get i: (fc.operation - 1).u64)
+                scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (fc.operation - 1).u64)
             } else null
         }
-        scanBodyAt :ast :reg bodyId: node.body
+        scanBodyAt :ast :reg :scanUnit bodyId: node.body
         for fpId9: node.postconditions.iterate loop {
             fp: ast.nodes.get i: (fpId9 - 1).u64
             match (
                 fp
             ) case namedoperation then {
-                scanCallsInNode :ast :reg node: (ast.nodes.get i: (fp.operation - 1).u64)
+                scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (fp.operation - 1).u64)
             } else null
         }
     } case doexpr then {
@@ -9908,10 +9920,10 @@ scanCallsInNode: function {ast: Ast.view reg: ztypes.ZTypeRegistry node: Node.vi
         if (blockHasBreak :ast n: (ast.nodes.get i: (node.statement - 1).u64)) then {
             reg.recordDemand name: "optionval"
         }
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.statement - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.statement - 1).u64)
     } case withexpr then {
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.value - 1).u64)
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.body - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.value - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.body - 1).u64)
     } case dottedpath then {
         bn: atomName :ast n: (ast.nodes.get i: (node.parent - 1).u64)
         if bn.length > 0 then {
@@ -9929,43 +9941,59 @@ scanCallsInNode: function {ast: Ast.view reg: ztypes.ZTypeRegistry node: Node.vi
             if isUnitQ then {
                 mn0: atomName :ast n: (ast.nodes.get i: (node.child - 1).u64)
                 if mn0.length > 0 then reg.recordDemand name: mn0.stringview
+                # a qualified reference names its unit: un-shadow exactly that
+                # member, so `unit.member` resolves though main defines `member`
+                if mn0.length > 0 then (reg.recordUnitDemand
+                    un: (atomNameId :ast n: (ast.nodes.get i: (node.parent - 1).u64))
+                    name: (atomNameId :ast n: (ast.nodes.get i: (node.child - 1).u64))
+                )
             }
         }
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.parent - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.parent - 1).u64)
     } case caseexpr then {
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.subject - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.subject - 1).u64)
         for clId9: node.clauses.iterate loop {
-            scanCallsInNode :ast :reg node: (ast.nodes.get i: (clId9 - 1).u64)
+            scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (clId9 - 1).u64)
         }
-        scanBodyAt :ast :reg bodyId: node.elseclause
+        scanBodyAt :ast :reg :scanUnit bodyId: node.elseclause
     } case caseclause then {
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.statement - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.statement - 1).u64)
     } case ifclause then {
         for cndId9: node.conditions.iterate loop {
             cnd: ast.nodes.get i: (cndId9 - 1).u64
             match (
                 cnd
             ) case namedoperation then {
-                scanCallsInNode :ast :reg node: (ast.nodes.get i: (cnd.operation - 1).u64)
+                scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (cnd.operation - 1).u64)
             } else null
         }
-        scanCallsInNode :ast :reg node: (ast.nodes.get i: (node.statement - 1).u64)
+        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.statement - 1).u64)
     } else null
 }
 
 # scanBodyAt -- scan a function body table id for call demands (0 = absent).
-scanBodyAt: function {ast: Ast.view reg: ztypes.ZTypeRegistry.view bodyId: zast.nodeid} is {
-    if bodyId > 0 then scanCallsInNode :ast :reg node: (ast.nodes.get i: (bodyId - 1).u64)
+scanBodyAt: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    scanUnit: zast.nameid
+    bodyId: zast.nodeid
+} is {
+    if bodyId > 0 then scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (bodyId - 1).u64)
 }
 
 # scanDefCalls -- scan a functiondef's body, or an objectdef's is/as method
 # bodies, for call demands. A type constructed only inside a method body must be
 # demanded here or it never resolves and the construction stamps type 0.
-scanDefCalls: function {ast: Ast.view reg: ztypes.ZTypeRegistry.view op: Node.view} is {
+scanDefCalls: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    scanUnit: zast.nameid
+    op: Node.view
+} is {
     match (
         op
     ) case functiondef then {
-        scanBodyAt :ast :reg bodyId: op.body
+        scanBodyAt :ast :reg :scanUnit bodyId: op.body
     } case objectdef then {
         iiter: op.isItems.iterate
         for imId9: iiter loop {
@@ -9976,6 +10004,7 @@ scanDefCalls: function {ast: Ast.view reg: ztypes.ZTypeRegistry.view op: Node.vi
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (im.operation - 1).u64)) then (scanDefCalls
                     :ast
                     :reg
+                    :scanUnit
                     op: (ast.nodes.get i: (im.operation - 1).u64)
                 )
             } else null
@@ -9989,6 +10018,7 @@ scanDefCalls: function {ast: Ast.view reg: ztypes.ZTypeRegistry.view op: Node.vi
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (am.operation - 1).u64)) then (scanDefCalls
                     :ast
                     :reg
+                    :scanUnit
                     op: (ast.nodes.get i: (am.operation - 1).u64)
                 )
             } else null
@@ -10006,6 +10036,7 @@ scanDefCalls: function {ast: Ast.view reg: ztypes.ZTypeRegistry.view op: Node.vi
 scanDemandedDepClassBodies: function {
     reg: ztypes.ZTypeRegistry
     ast: Ast.view
+    scanUnit: zast.nameid
     unitdefId: zast.nodeid
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
@@ -10019,7 +10050,12 @@ scanDemandedDepClassBodies: function {
                     :ast
                     o: (ast.nodes.get i: (bm.operation - 1).u64)
                 ) then hasm = false
-                if hasm then scanDefCalls :ast :reg op: (ast.nodes.get i: (bm.operation - 1).u64)
+                if hasm then (scanDefCalls
+                    :ast
+                    :reg
+                    :scanUnit
+                    op: (ast.nodes.get i: (bm.operation - 1).u64)
+                )
             }
         }
     }
@@ -10038,6 +10074,7 @@ scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry.view program: Node} is {
             uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9f))
             uIdx9f = uIdx9f + 1
             opId9: zast.nodeid
+            unId9f: zast.nameid
             eager9: false
             {
                 u: program.ast.nodes.get i: (uId9 - 1).u64
@@ -10046,12 +10083,14 @@ scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry.view program: Node} is {
                     eager9 = isFileUnit name: nm.stringview
                     if nm.stringview == mainName then eager9 = true
                     opId9 = u.operation
+                    unId9f = u.name
                 }
             }
             if eager9 when opId9 > 0 then {
                 (scanUnitCalls
                     :reg
                     ast: program.ast
+                    scanUnit: unId9f
                     unitdefId: opId9
                 )
             }
@@ -10060,12 +10099,17 @@ scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry.view program: Node} is {
 }
 
 # scanUnitCalls -- scan each function definition's body in a unit for call demands.
-scanUnitCalls: function {reg: ztypes.ZTypeRegistry.view ast: Ast.view unitdefId: zast.nodeid} is {
+scanUnitCalls: function {
+    reg: ztypes.ZTypeRegistry.view
+    ast: Ast.view
+    scanUnit: zast.nameid
+    unitdefId: zast.nodeid
+} is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
     for bmId9: bodyIds9.iterate loop {
         bm: ast.nodes.get i: (bmId9 - 1).u64
         if bm.namedoperation then {
-            scanDefCalls :ast :reg op: (ast.nodes.get i: (bm.operation - 1).u64)
+            scanDefCalls :ast :reg :scanUnit op: (ast.nodes.get i: (bm.operation - 1).u64)
         }
     }
 }
@@ -10121,7 +10165,7 @@ onFirstEntry: function {
     resolveConformanceDefs :ty :reg :ast :unitName :unitdefId
     reg.recordDemand name: "return"
     reg.recordDemand name: "never"
-    scanDemandedDepClassBodies :reg :ast :unitdefId
+    scanDemandedDepClassBodies :reg :ast :unitdefId scanUnit: (nameIdOf :ast name: unitName)
 }
 
 # seedConstantSuffixDemands -- a unit constant whose literal carries a type
@@ -26072,16 +26116,18 @@ runDepUnitWalks: function {
             if (isKnownD) == false then {
                 # Resolve this unit's OWN demanded top-level definitions before
                 # its bodies are walked. The demand set is keyed by bare name,
-                # so a main-unit definition of the same name would otherwise
-                # satisfy the demand and this unit's definition would never be
-                # resolved -- its references then bind to main's. shadowUnit is
-                # empty here on purpose: inside a unit, its own definition wins.
+                # so a main-unit definition of the same name shadows this
+                # unit's. A unit's internal references and any qualified
+                # `unit.member` reference are recorded per-unit by the body
+                # scan (recordUnitDemand) and un-shadow exactly the member
+                # they name -- so the shadow can apply here, and a name only
+                # MAIN demanded stays what it is: unresolved dead code.
                 (resolveDemandedUnitBody
                     ty: st.typing
                     reg: st.reg
                     :ast
                     unitName: dn.stringview
-                    shadowUnit: ""
+                    shadowUnit: mainName
                     unitdefId: du.operation
                 )
                 (depWalkUnit
