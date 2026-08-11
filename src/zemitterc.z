@@ -1743,6 +1743,12 @@ Ctx: class {
     # there is no separate mark.
     constLits: (List String)
     needs: (MapRV String value: bool)
+    # convention-fragment demands, as the (unit, member) PAIRS they are:
+    # parallel rows, never joined. Joining them would only have to be split
+    # apart again to name the fragment -- which is why the per-unit skip lists
+    # already carry the member half alone.
+    needUnits: (List String)
+    needMembs: (List String)
     methodReturns: (Map String value: String)
     dataElems: (Map String value: String)
     dataConst: (Map String value: String)
@@ -2729,6 +2735,30 @@ needsAdd: function {ctx: Ctx name: StringView} is {
     k: name.string
     v: true
     ctx.needs.set key: k value: v
+}
+
+# needsAddM -- record a convention-fragment demand as a (unit, member) pair.
+# The fragment name is composed from the pair once, where the fragment is
+# loaded; nothing else ever needs the two halves stuck together.
+needsAddM: function {ctx: Ctx uname: StringView memb: StringView} is {
+    if (needsHasM :ctx :uname :memb) then return
+    ctx.needUnits.append from: uname.string
+    ctx.needMembs.append from: memb.string
+}
+
+# needsHasM -- true when the (unit, member) pair was demanded.
+needsHasM: function {ctx: Ctx.view uname: StringView memb: StringView} out bool is {
+    i9: u64
+    n9: ctx.needUnits.length
+    for i9 < n9 loop {
+        u9: ctx.needUnits.get i: i9
+        if u9.stringview == uname then {
+            m9: ctx.needMembs.get i: i9
+            if m9.stringview == memb then return true
+        }
+        i9 = i9 + 1
+    }
+    return false
 }
 
 # true when runtime helper `name` was marked needed.
@@ -8865,8 +8895,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         )
         if nnu9.length > 0 then {
             needsAdd :ctx name: nnu9.stringview
-            nname9: "\{nnu9}_\{mn2}"
-            needsAdd :ctx name: nname9.stringview
+            needsAddM :ctx uname: nnu9.stringview memb: mn2.stringview
             return "z_\{nnu9}_\{mn2}()"
         }
         # `.private` is a compile-time friend marker -- it emits the receiver itself.
@@ -9190,8 +9219,8 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                             needsAdd :ctx name: "net"
                         } else {
                             needsAdd :ctx name: "io"
-                            ffn9: "io_file_\{mn2}"
-                            needsAdd :ctx name: ffn9.stringview
+                            ffm9: "file_\{mn2}"
+                            needsAddM :ctx uname: "io" memb: ffm9.stringview
                         }
                         frecv9: "&\{bn2}"
                         if (isPtrVid :ctx vid: bn2v9) then frecv9 = "\{bn2}"
@@ -17279,8 +17308,7 @@ scanNativeNeed9: function {
         duo9
     ) case some then {
         needsAdd :ctx name: duo9.stringview
-        nk9: "\{duo9}_\{memb}"
-        needsAdd :ctx name: nk9.stringview
+        needsAddM :ctx uname: duo9.stringview :memb
     } case none then null
 }
 
@@ -18994,6 +19022,8 @@ emitC: function {
         condDepth: 0
         emitErrors: (List String)
         needs: (MapRV String value: bool)
+        needUnits: (List String)
+        needMembs: (List String)
         methodReturns: (Map String value: String)
         dataElems: (Map String value: String)
         dataConst: (Map String value: String)
@@ -19115,11 +19145,11 @@ emitC: function {
         emitNeededNatives ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
         if (ioFileLive ast: program.ast :symtab :ctx) then {
             needsAdd :ctx name: "io"
-            needsAdd :ctx name: "io_file_close"
-            needsAdd :ctx name: "io_file_read"
-            needsAdd :ctx name: "io_file_write"
-            needsAdd :ctx name: "io_file_seek"
-            needsAdd :ctx name: "io_file_flush"
+            needsAddM :ctx uname: "io" memb: "file_close"
+            needsAddM :ctx uname: "io" memb: "file_read"
+            needsAddM :ctx uname: "io" memb: "file_write"
+            needsAddM :ctx uname: "io" memb: "file_seek"
+            needsAddM :ctx uname: "io" memb: "file_flush"
         }
         emitRuntimeIo ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
         emitIoFileConformance ast: program.ast :symtab :ctx buf: codeBuf
@@ -19183,7 +19213,7 @@ emitC: function {
     buf.append codeBuf
     buf.append fnsBuf
     buf.append "int main(int argc, char* argv[]) {\n"
-    if (needsHas :ctx name: "os_args") then {
+    if (needsHasM :ctx uname: "os" memb: "args") then {
         buf.append "    z_os_argc_g = argc;\n"
         buf.append "    z_os_argv_g = argv;\n"
     }
@@ -21088,6 +21118,27 @@ loadIoFragment: function {
     }
 }
 
+# ioFragIfM -- emit a runtime fragment when its (unit, member) pair is
+# demanded. The flat ioFragIf below serves the needs that are genuinely flat
+# names (sv_split, coll_join) rather than unit members.
+ioFragIfM: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    runtimeDir: StringView
+    uname: StringView
+    memb: StringView
+    frag: StringView
+    buf: String.borrow
+} is {
+    if (needsHasM :ctx :uname :memb) then {
+        p9: nativePath :runtimeDir :frag
+        f9: loadIoFragment :ast :symtab :ctx path: p9.stringview
+        buf.append f9
+        buf.append "\n"
+    }
+}
+
 # ioFragIf -- emit an io runtime fragment when its need flag is set.
 ioFragIf: function {
     ast: Ast.view
@@ -21260,8 +21311,8 @@ emitIoFileConformance: function {
                     if cn9.stringview == "File" then {
                         okEmit9 = ioFileLive :ast :symtab :ctx
                     } else {
-                        unc9: "io_uses_\{cn9}"
-                        if (needsHas :ctx name: unc9.stringview) then okEmit9 = true
+                        umc9: "uses_\{cn9}"
+                        if (needsHasM :ctx uname: "io" memb: umc9.stringview) then okEmit9 = true
                     }
                     if okEmit9 then {
                         (emitProtocolImplsForType
@@ -21288,24 +21339,24 @@ emitIoStdStreams: function {
     buf: String.borrow
 } is {
     needAny: false
-    if (needsHas :ctx name: "io_stdout") then needAny = true
-    if (needsHas :ctx name: "io_stderr") then needAny = true
-    if (needsHas :ctx name: "io_stdin") then needAny = true
+    if (needsHasM :ctx uname: "io" memb: "stdout") then needAny = true
+    if (needsHasM :ctx uname: "io" memb: "stderr") then needAny = true
+    if (needsHasM :ctx uname: "io" memb: "stdin") then needAny = true
     if (needAny) == false then return
     fid: ioFileId :symtab :ctx
     if fid == 0 then return
     fbase: ctxCname :ctx tid: (ztypes.tid.create from: fid.u64)
     wcn: ioCanonCname :ast :symtab :ctx canon: "Writer"
     rcn: ioCanonCname :ast :symtab :ctx canon: "Reader"
-    if (needsHas :ctx name: "io_stdout") then {
+    if (needsHasM :ctx uname: "io" memb: "stdout") then {
         b0: "static \{fbase}_t z_io_stdout_File = { 1, true };\nstatic \{wcn}_t z_io_stdout(void) {\n    return \{fbase}_Writer_create(&z_io_stdout_File);\n}\n\n"
         buf.append b0
     }
-    if (needsHas :ctx name: "io_stderr") then {
+    if (needsHasM :ctx uname: "io" memb: "stderr") then {
         b1: "static \{fbase}_t z_io_stderr_File = { 2, true };\nstatic \{wcn}_t z_io_stderr(void) {\n    return \{fbase}_Writer_create(&z_io_stderr_File);\n}\n\n"
         buf.append b1
     }
-    if (needsHas :ctx name: "io_stdin") then {
+    if (needsHasM :ctx uname: "io" memb: "stdin") then {
         b2: "static \{fbase}_t z_io_stdin_File = { 0, true };\nstatic \{rcn}_t z_io_stdin(void) {\n    return \{fbase}_Reader_create(&z_io_stdin_File);\n}\n\n"
         buf.append b2
     }
@@ -21465,18 +21516,20 @@ loadConventionFrags: function {
     skip: (List String).view
     buf: String.borrow
 } is {
-    pre9: "\{uname}_"
     names9: (List String)
-    with kit9: ctx.needs.iterate do for k9: kit9 loop {
-        kv9: k9.stringview
-        if kv9.startsWith pre9 then {
-            rest9: kv9.substring from: pre9.length to: kv9.length
+    i9: u64
+    n9: ctx.needUnits.length
+    for i9 < n9 loop {
+        u9: ctx.needUnits.get i: i9
+        if u9.stringview == uname then {
+            m9: ctx.needMembs.get i: i9
             skipped9: false
             with sit9: skip.iterate do for sk9: sit9 loop {
-                if sk9.stringview == rest9 then skipped9 = true
+                if sk9.stringview == m9.stringview then skipped9 = true
             }
-            if (skipped9) == false then names9.append rest9.string
+            if (skipped9) == false then names9.append from: m9.copy
         }
+        i9 = i9 + 1
     }
     names9.sort
     un9: upperSnakeOf name: uname
@@ -21487,11 +21540,18 @@ loadConventionFrags: function {
         ni9 = ni9 + 1
         sn9: upperSnakeOf name: nm9.stringview
         fr9: "_Z_\{un9}_\{sn9}"
-        nd9: "\{uname}_\{nm9}"
-        ioFragIf :ast :symtab :ctx :runtimeDir need: nd9.stringview frag: fr9.stringview :buf
+        (ioFragIfM
+            :ast
+            :symtab
+            :ctx
+            :runtimeDir
+            :uname
+            memb: nm9.stringview
+            frag: fr9.stringview
+            :buf
+        )
     }
 }
-
 # emit the runtime I/O support code.
 emitRuntimeIo: function {
     ast: Ast.view
@@ -21511,37 +21571,37 @@ emitRuntimeIo: function {
     needErr9: ioAct9
     if osEr9 then needErr9 = true
     if needErr9 then ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_IO_ERRNO_MAP" :buf
-    needWC: needsHas :ctx name: "io_writeText"
-    if (needsHas :ctx name: "io_appendText") then needWC = true
+    needWC: needsHasM :ctx uname: "io" memb: "writeText"
+    if (needsHasM :ctx uname: "io" memb: "appendText") then needWC = true
     if needWC then {
         p8: nativePath :runtimeDir frag: "_Z_IO_WRITE_COMMON"
         f8: loadIoFragment :ast :symtab :ctx path: p8.stringview
         buf.append f8
         buf.append "\n"
     }
-    needU64: needsHas :ctx name: "io_file_read"
-    if (needsHas :ctx name: "io_file_write") then needU64 = true
-    if (needsHas :ctx name: "io_file_seek") then needU64 = true
+    needU64: needsHasM :ctx uname: "io" memb: "file_read"
+    if (needsHasM :ctx uname: "io" memb: "file_write") then needU64 = true
+    if (needsHasM :ctx uname: "io" memb: "file_seek") then needU64 = true
     if needU64 then {
         pwu: nativePath :runtimeDir frag: "_Z_IO_WRAP_U64_RESULT"
         fwu: loadIoFragment :ast :symtab :ctx path: pwu.stringview
         buf.append fwu
         buf.append "\n"
     }
-    needNull: needsHas :ctx name: "io_file_close"
-    if (needsHas :ctx name: "io_file_flush") then needNull = true
-    if (needsHas :ctx name: "io_mkdir") then needNull = true
-    if (needsHas :ctx name: "io_mkdirp") then needNull = true
-    if (needsHas :ctx name: "io_remove") then needNull = true
-    if (needsHas :ctx name: "io_rename") then needNull = true
+    needNull: needsHasM :ctx uname: "io" memb: "file_close"
+    if (needsHasM :ctx uname: "io" memb: "file_flush") then needNull = true
+    if (needsHasM :ctx uname: "io" memb: "mkdir") then needNull = true
+    if (needsHasM :ctx uname: "io" memb: "mkdirp") then needNull = true
+    if (needsHasM :ctx uname: "io" memb: "remove") then needNull = true
+    if (needsHasM :ctx uname: "io" memb: "rename") then needNull = true
     if needNull then {
         pwn: nativePath :runtimeDir frag: "_Z_IO_WRAP_NULL_RESULT"
         fwn: loadIoFragment :ast :symtab :ctx path: pwn.stringview
         buf.append fwn
         buf.append "\n"
     }
-    needFstat: needsHas :ctx name: "io_stat"
-    if (needsHas :ctx name: "io_lstat") then needFstat = true
+    needFstat: needsHasM :ctx uname: "io" memb: "stat"
+    if (needsHasM :ctx uname: "io" memb: "lstat") then needFstat = true
     if needFstat then {
         psf: nativePath :runtimeDir frag: "_Z_IO_STAT_FILL"
         fsf: loadIoFragment :ast :symtab :ctx path: psf.stringview
@@ -21568,27 +21628,54 @@ emitRuntimeIo: function {
     ioSkip9.append "stderr".string
     ioSkip9.append "stdin".string
     loadConventionFrags :ast :symtab :ctx :runtimeDir uname: "io" skip: ioSkip9 :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "io_file_close" frag: "_Z_FILE_CLOSE" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "io_file_write" frag: "_Z_FILE_WRITE" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "io_file_read" frag: "_Z_FILE_READ" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "io_file_seek" frag: "_Z_FILE_SEEK" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "io_file_flush" frag: "_Z_FILE_FLUSH" :buf
-    if (needsHas :ctx name: "io_uses_BufWriter") then {
+    (ioFragIfM
+        :ast
+        :symtab
+        :ctx
+        :runtimeDir
+        uname: "io"
+        memb: "file_close"
+        frag: "_Z_FILE_CLOSE"
+        :buf
+    )
+    (ioFragIfM
+        :ast
+        :symtab
+        :ctx
+        :runtimeDir
+        uname: "io"
+        memb: "file_write"
+        frag: "_Z_FILE_WRITE"
+        :buf
+    )
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "file_read" frag: "_Z_FILE_READ" :buf
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "file_seek" frag: "_Z_FILE_SEEK" :buf
+    (ioFragIfM
+        :ast
+        :symtab
+        :ctx
+        :runtimeDir
+        uname: "io"
+        memb: "file_flush"
+        frag: "_Z_FILE_FLUSH"
+        :buf
+    )
+    if (needsHasM :ctx uname: "io" memb: "uses_BufWriter") then {
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_BUFWRITER_CREATE" :buf
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_BUFWRITER_FLUSH" :buf
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_BUFWRITER_WRITE" :buf
     }
-    if (needsHas :ctx name: "io_uses_BufReader") then {
+    if (needsHasM :ctx uname: "io" memb: "uses_BufReader") then {
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_BUFREADER_CREATE" :buf
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_BUFREADER_READ" :buf
     }
-    if (needsHas :ctx name: "io_uses_TextWriter") then {
+    if (needsHasM :ctx uname: "io" memb: "uses_TextWriter") then {
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTWRITER_CREATE" :buf
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTWRITER_WRITE" :buf
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTWRITER_WRITE_LINE" :buf
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTWRITER_FLUSH" :buf
     }
-    if (needsHas :ctx name: "io_uses_TextReader") then {
+    if (needsHasM :ctx uname: "io" memb: "uses_TextReader") then {
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_IO_UTF8_VALIDATE" :buf
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTREADER_CREATE" :buf
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTREADER_READ_LINE" :buf
@@ -21616,16 +21703,35 @@ emitRuntimeCli: function {
     cliSkip9.append "option".string
     cliSkip9.append "positional".string
     loadConventionFrags :ast :symtab :ctx :runtimeDir uname: "cli" skip: cliSkip9 :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "cli_parse" frag: "_Z_CLI_HELPERS" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "cli_parse" frag: "_Z_CLI_PARSE" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "cli_hasFlag" frag: "_Z_PARSED_HAS_FLAG" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "cli_option" frag: "_Z_PARSED_GET_OPTION" :buf
-    (ioFragIf
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "cli" memb: "parse" frag: "_Z_CLI_HELPERS" :buf
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "cli" memb: "parse" frag: "_Z_CLI_PARSE" :buf
+    (ioFragIfM
         :ast
         :symtab
         :ctx
         :runtimeDir
-        need: "cli_positional"
+        uname: "cli"
+        memb: "hasFlag"
+        frag: "_Z_PARSED_HAS_FLAG"
+        :buf
+    )
+    (ioFragIfM
+        :ast
+        :symtab
+        :ctx
+        :runtimeDir
+        uname: "cli"
+        memb: "option"
+        frag: "_Z_PARSED_GET_OPTION"
+        :buf
+    )
+    (ioFragIfM
+        :ast
+        :symtab
+        :ctx
+        :runtimeDir
+        uname: "cli"
+        memb: "positional"
         frag: "_Z_PARSED_GET_POSITIONAL"
         :buf
     )
@@ -21642,13 +21748,13 @@ emitRuntimeOs: function {
     buf: String.borrow
 } is {
     if (needsHas :ctx name: "os") == false then return
-    if (needsHas :ctx name: "os_args") then {
+    if (needsHasM :ctx uname: "os" memb: "args") then {
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_OS_ARGV_GLOBALS" :buf
         ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_OS_ARGS" :buf
     }
     # env's fragment is renamed (GET_ENV); args is a bundle -- both above.
     # Every other os_<name> need is convention-loaded.
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "os_env" frag: "_Z_OS_GET_ENV" :buf
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "os" memb: "env" frag: "_Z_OS_GET_ENV" :buf
     osSkip9: (List String)
     osSkip9.append "env".string
     osSkip9.append "args".string
@@ -23277,8 +23383,8 @@ emitMonos: function {
     for tsc < wIoWrap9.length loop {
         scId9: wIoWrap9.get i: tsc
         scn: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: scId9.u64)
-        unb9: "io_uses_\{scn}"
-        if (needsHas :ctx name: unb9.stringview) then {
+        umb9: "uses_\{scn}"
+        if (needsHasM :ctx uname: "io" memb: umb9.stringview) then {
             emitOneRecord :ast :symtab :ctx tid: (ztypes.tid.create from: scId9.u64) :buf
         }
         tsc = tsc + 1
@@ -24223,8 +24329,8 @@ emitFileMethodCall: function {
         needsAdd :ctx name: "net"
     } else {
         needsAdd :ctx name: "io"
-        fmn: "io_file_\{mn}"
-        needsAdd :ctx name: fmn.stringview
+        fmm: "file_\{mn}"
+        needsAddM :ctx uname: "io" memb: fmm.stringview
     }
     if mn.stringview == "accept" then {
         if (isNet9) == false then return "".string
@@ -24410,8 +24516,8 @@ emitIoWrapperCreate: function {
         pi = pi + 1
     }
     wcn: ctxCname :ctx tid: (ztypes.tid.create from: wid.u64)
-    un9w: "io_uses_\{wn}"
-    needsAdd :ctx name: un9w.stringview
+    um9w: "uses_\{wn}"
+    needsAddM :ctx uname: "io" memb: um9w.stringview
     return "\{wcn}_create(\{args})"
 }
 
@@ -24519,24 +24625,24 @@ noArgNativeRhs: function {
 
 # osNeedsSvCstr -- an os native that converts a StringView arg to a C string.
 osNeedsSvCstr: function {ctx: Ctx.view} out bool is {
-    if (needsHas :ctx name: "os_env") then return true
-    if (needsHas :ctx name: "os_setEnv") then return true
-    if (needsHas :ctx name: "os_unsetEnv") then return true
-    if (needsHas :ctx name: "os_setCwd") then return true
-    if (needsHas :ctx name: "os_spawn") then return true
+    if (needsHasM :ctx uname: "os" memb: "env") then return true
+    if (needsHasM :ctx uname: "os" memb: "setEnv") then return true
+    if (needsHasM :ctx uname: "os" memb: "unsetEnv") then return true
+    if (needsHasM :ctx uname: "os" memb: "setCwd") then return true
+    if (needsHasM :ctx uname: "os" memb: "spawn") then return true
     return false
 }
 
 # osNeedsErrno -- an os native that maps errno to an IoError.
 osNeedsErrno: function {ctx: Ctx.view} out bool is {
-    if (needsHas :ctx name: "os_setEnv") then return true
-    if (needsHas :ctx name: "os_unsetEnv") then return true
-    if (needsHas :ctx name: "os_cwd") then return true
-    if (needsHas :ctx name: "os_setCwd") then return true
-    if (needsHas :ctx name: "os_userName") then return true
-    if (needsHas :ctx name: "os_homeDir") then return true
-    if (needsHas :ctx name: "os_hostname") then return true
-    if (needsHas :ctx name: "os_exePath") then return true
+    if (needsHasM :ctx uname: "os" memb: "setEnv") then return true
+    if (needsHasM :ctx uname: "os" memb: "unsetEnv") then return true
+    if (needsHasM :ctx uname: "os" memb: "cwd") then return true
+    if (needsHasM :ctx uname: "os" memb: "setCwd") then return true
+    if (needsHasM :ctx uname: "os" memb: "userName") then return true
+    if (needsHasM :ctx uname: "os" memb: "homeDir") then return true
+    if (needsHasM :ctx uname: "os" memb: "hostname") then return true
+    if (needsHasM :ctx uname: "os" memb: "exePath") then return true
     return false
 }
 
@@ -24749,8 +24855,7 @@ emitNativeFreeFnCall: function {
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
     if (fnIsNativeId :symtab :fid) == false then return "".string
     needsAdd :ctx name: un.stringview
-    nk9: "\{un}_\{mn}"
-    needsAdd :ctx name: nk9.stringview
+    needsAddM :ctx uname: un.stringview memb: mn.stringview
     pn: (List String)
     pidl: (ListVal u64)
     pidlNm: (ListVal u64)
@@ -24858,7 +24963,7 @@ emitCliSpecCreate: function {
         pi = pi + 1
     }
     needsAdd :ctx name: "cli"
-    needsAdd :ctx name: "cli_spec_create"
+    needsAddM :ctx uname: "cli" memb: "spec_create"
     ccb: ctxCname :ctx tid: (ztypes.tid.create from: cid.u64)
     return "\{ccb}_create(\{args})"
 }
@@ -24956,8 +25061,7 @@ emitParsedMethodCall: function {
     recvExpr: "&\{recvC}"
     if (isPtrVid :ctx vid: recvV9) then recvExpr = recvC
     needsAdd :ctx name: "cli"
-    pneed: "cli_\{mn}"
-    needsAdd :ctx name: pneed.stringview
+    needsAddM :ctx uname: "cli" memb: mn.stringview
     nameArg: ctorArgByLabel :ast :symtab :ctx :call label: "name"
     return "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})"
 }

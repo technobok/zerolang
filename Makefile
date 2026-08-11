@@ -1282,7 +1282,9 @@ clean:
 # statement-special; stdin/stdout/stderr live in the stream fragments;
 # env->GET_ENV and pollReadable->POLL are renamed). Bodied free functions
 # emit generically and are exempt. Leg 2: every _Z_* fragment name the
-# emitter references exists on disk. Leg 3: every `z_@Name@` hole a fragment
+# emitter references exists on disk, and no fragment on disk is unreferenced --
+# a convention fragment is reached through the (unit, member) demand pair, so
+# the member half alone counts as a reference. Leg 3: every `z_@Name@` hole a fragment
 # spells names a canon the loader can actually fill -- a type declared in the
 # convention units (core.z carries the io/system aliases: File, IoError,
 # Reader, Writer, openmode, seekorigin, TextReader, Splitter, LinesIter,
@@ -1309,7 +1311,15 @@ native-guard:
 	  stem=$$(basename $$f .inc); \
 	  case " $$conv " in *" $$stem "*) continue;; esac; \
 	  need=$$(echo "$$stem" | sed 's/^_Z_//' | tr 'A-Z' 'a-z'); \
-	  grep -qF "\"$$stem\"" src/zemitterc.z || grep -qF "\"$$need\"" src/zemitterc.z || { echo "native-guard: $$stem.inc on disk but nothing references it (orphan -- delete it or load it)"; fail=1; }; \
+	  ref=0; \
+	  grep -qF "\"$$stem\"" src/zemitterc.z && ref=1; \
+	  grep -qF "\"$$need\"" src/zemitterc.z && ref=1; \
+	  for u in io os cli net tcc; do \
+	    case "$$need" in "$$u"_*) \
+	      grep -qF "memb: \"$${need#$$u\_}\"" src/zemitterc.z && ref=1;; \
+	    esac; \
+	  done; \
+	  [ "$$ref" = 1 ] || { echo "native-guard: $$stem.inc on disk but nothing references it (orphan -- delete it or load it)"; fail=1; }; \
 	done; \
 	known=$$({ grep -oE 'if canon == "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
 	    grep -oE 'mono: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
