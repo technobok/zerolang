@@ -9214,7 +9214,7 @@ registerAndResolveMain: function {
 # main-unit signature referenced (reg.isDemanded) and that aren't resolved yet,
 # stamping them with that unit's name (mirrors the oracle's on-demand resolution).
 resolveDemandedUnitBody: function {
-    ty: ztyping.ZTyping.view
+    ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     ast: Ast.view
     unitName: StringView
@@ -9222,6 +9222,26 @@ resolveDemandedUnitBody: function {
     unitdefId: zast.nodeid
 } out bool is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
+    # the unit root's tid + Decl: the parent every top-level member hangs
+    # under, read once, exactly as resolveUnitBody reads the same pair.
+    dbPt9: ztypes.tid
+    dbPd9: ztypes.declid
+    {
+        duo9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
+        match (
+            duo9
+        ) case some then {
+            dbPt9 = ztypes.tid.create from: duo9
+        } case none then null
+    }
+    {
+        dro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+        match (
+            dro9
+        ) case some then {
+            dbPd9 = dro9
+        } case none then null
+    }
     anyDemanded: false
     {
         biter: bodyIds9.iterate
@@ -9267,14 +9287,76 @@ resolveDemandedUnitBody: function {
                             defUnit: unitName
                             nameId: bmNode9.name
                         ) == false then {
-                            (resolveDef
-                                :ty
-                                :reg
+                            # dispatch by KIND, as resolveUnitBody and
+                            # resolveNamespaceUnit do. This path had one arm and
+                            # one call, so a namespace or a template in a
+                            # demand-resolved unit reached resolveDef, which
+                            # knows neither shape. Nothing could declare one
+                            # here while the eager pass covered every user unit;
+                            # retiring that list makes this the only path.
+                            dIsNs9: false
+                            if (zast.unitOpKindIs
                                 :ast
-                                :unitName
-                                defName: dn.stringview
-                                defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                                opId: bmNode9.operation
+                                k: zast.unitkind.namespace
+                            ) then dIsNs9 = true
+                            if (zast.unitOpKindIs
+                                :ast
+                                opId: bmNode9.operation
+                                k: zast.unitkind.subunit
+                            ) then dIsNs9 = true
+                            dIsTmpl9: (zast.unitOpKindIs
+                                :ast
+                                opId: bmNode9.operation
+                                k: zast.unitkind.template
                             )
+                            if dIsNs9 then {
+                                (resolveNamespaceUnit
+                                    :ty
+                                    :reg
+                                    :ast
+                                    :unitName
+                                    defName: dn.stringview
+                                    parentTid: dbPt9
+                                    parentDeclId: dbPd9
+                                    unitOpId: bmNode9.operation
+                                )
+                            } else if dIsTmpl9 then {
+                                (resolveInlineGenericUnit
+                                    :ty
+                                    :reg
+                                    :ast
+                                    :unitName
+                                    defName: dn.stringview
+                                    parentTid: dbPt9
+                                    parentDeclId: dbPd9
+                                    unitOpId: bmNode9.operation
+                                )
+                            } else {
+                                (resolveDef
+                                    :ty
+                                    :reg
+                                    :ast
+                                    :unitName
+                                    defName: dn.stringview
+                                    defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                                )
+                            }
+                            # mark it done. resolveDef marks its own; the two
+                            # unit legs do not, and this walk runs to a fixpoint
+                            # -- a leg that re-resolves is not merely wasteful,
+                            # it never terminates.
+                            dAnyU9: dIsNs9
+                            if dIsTmpl9 then dAnyU9 = true
+                            if dAnyU9 then {
+                                dmd9: (ty.declFindChild
+                                    parentDeclId: dbPd9
+                                    nameId: bmNode9.name
+                                )
+                                if (dmd9.isZero) == false then {
+                                    ty.declSetDefined declId: dmd9
+                                }
+                            }
                         }
                     }
                 }
@@ -11145,15 +11227,22 @@ resolveInlineGenericUnit: function {
     unitOpId: zast.nodeid
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitOpId
+    # this template's own Decl, under the parent the CALLER names: the unit
+    # root for a top-level template, the namespace's Decl for a nested one.
+    # A (unit, name) walk reaches only the first.
+    nRef5: zast.poolFind pool: ast.names text: defName
+    tdl5: ty.declFindChild :parentDeclId nameId: nRef5
+    # reg.newType has no dedup and the demand walk runs its unit loop to a
+    # FIXPOINT whose progress test is whether the registry GREW, so a second
+    # visit must mint nothing at all -- guarding after the mint is not a no-op,
+    # it is the engine of the non-termination. resolveNamespaceUnit carries the
+    # equivalent node-stamp guard for the same reason. The Decl below records
+    # the id this minted, so it is the durable "already done" mark.
+    if (declTypeIdOf :ty declId: tdl5) > 0 then return
     {
         uid: reg.newType name: defName typetype: ztypes.ztypetype.unitType
         did: uid
         rid: uid
-        # this template's own Decl, under the parent the CALLER names: the unit
-        # root for a top-level template, the namespace's Decl for a nested one.
-        # A (unit, name) walk reaches only the first.
-        nRef5: zast.poolFind pool: ast.names text: defName
-        tdl5: ty.declFindChild :parentDeclId nameId: nRef5
         if (hasGenericParam :ast items: bodyIds9) then {
             reg.setGeneric typeId: uid value: true
             registerGenericParams :reg :ast tdecl: tdl5 items: bodyIds9
