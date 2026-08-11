@@ -8803,6 +8803,27 @@ resolveUnitBody: function {
                 cci = cci + 1
             }
         }
+        # the unit root's tid + Decl: the parent of every top-level member, and
+        # what both dispatch legs hang their own children under. Stable across
+        # the loop -- registerUnitRoots and indexUnitDefs both ran already.
+        ubPt9: ztypes.tid
+        ubPd9: ztypes.declid
+        {
+            uo9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
+            match (
+                uo9
+            ) case some then {
+                ubPt9 = ztypes.tid.create from: uo9
+            } case none then null
+        }
+        {
+            ro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+            match (
+                ro9
+            ) case some then {
+                ubPd9 = ro9
+            } case none then null
+        }
         biter: bodyIds9.iterate
         for bm: biter loop {
             bmNode9: ast.nodes.get i: (bm - 1).u64
@@ -8832,32 +8853,14 @@ resolveUnitBody: function {
                         k: zast.unitkind.subunit
                     ) then isNs9 = true
                     if isNs9 then {
-                        pt9: ztypes.tid
-                        pd9: ztypes.declid
-                        {
-                            uo9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-                            match (
-                                uo9
-                            ) case some then {
-                                pt9 = ztypes.tid.create from: uo9
-                            } case none then null
-                        }
-                        {
-                            ro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-                            match (
-                                ro9
-                            ) case some then {
-                                pd9 = ro9
-                            } case none then null
-                        }
                         (resolveNamespaceUnit
                             :ty
                             :reg
                             :ast
                             :unitName
                             defName: defName.stringview
-                            parentTid: pt9
-                            parentDeclId: pd9
+                            parentTid: ubPt9
+                            parentDeclId: ubPd9
                             unitOpId: bmNode9.operation
                         )
                     } else if (isUnitOp
@@ -8869,6 +8872,8 @@ resolveUnitBody: function {
                             :ast
                             :unitName
                             defName: defName.stringview
+                            parentTid: ubPt9
+                            parentDeclId: ubPd9
                             unitOpId: bmNode9.operation
                         )
                     } else {
@@ -10804,7 +10809,47 @@ resolveNamespaceUnit: function {
         ) case namedoperation then {
             mName9: zast.nameTextCopy :ast ref: bmNode9.name
             if mName9.length > 0 then {
-                if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
+                # dispatch by KIND, as resolveUnitBody does. A unit body that
+                # declares a generic param parses as `template`, and only
+                # resolveInlineGenericUnit marks it generic, registers its
+                # params and stamps its def node. A `public:`/`require:` block
+                # stays on resolveDef, which is what folds its members.
+                isTmpl9: (zast.unitOpKindIs
+                    :ast
+                    opId: bmNode9.operation
+                    k: zast.unitkind.template
+                )
+                isUnit9: isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                if isTmpl9 then {
+                    # the template is a child of THIS namespace, not of the
+                    # file unit, and the mint funnel reaches an enclosing owner
+                    # only through ty.nsOwner* -- the same channel the
+                    # resolveDef leg below sets. Without it the template's
+                    # methods mint with no owner and their parameter Decls
+                    # never bind a type.
+                    ty.nsOwnerTid = uid9
+                    ty.nsOwnerDeclId = declId9
+                    tsn9: mName9.copy
+                    ty.nsOwnerName = tsn9
+                    tsu9: unitName.string
+                    ty.nsOwnerUnit = tsu9
+                    (resolveInlineGenericUnit
+                        :ty
+                        :reg
+                        :ast
+                        :unitName
+                        defName: mName9.stringview
+                        parentTid: uid9
+                        parentDeclId: declId9
+                        unitOpId: bmNode9.operation
+                    )
+                    ty.nsOwnerTid = prevTid9
+                    ty.nsOwnerDeclId = prevDecl9
+                    tpn9: prevName9.copy
+                    ty.nsOwnerName = tpn9
+                    tpu9: prevUnit9.copy
+                    ty.nsOwnerUnit = tpu9
+                } else if isUnit9 then {
                     (resolveNamespaceUnit
                         :ty
                         :reg
@@ -10854,6 +10899,8 @@ resolveInlineGenericUnit: function {
     ast: Ast
     unitName: StringView
     defName: StringView
+    parentTid: ztypes.tid
+    parentDeclId: ztypes.declid
     unitOpId: zast.nodeid
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitOpId
@@ -10861,9 +10908,13 @@ resolveInlineGenericUnit: function {
         uid: reg.newType name: defName typetype: ztypes.ztypetype.unitType
         did: uid
         rid: uid
+        # this template's own Decl, under the parent the CALLER names: the unit
+        # root for a top-level template, the namespace's Decl for a nested one.
+        # A (unit, name) walk reaches only the first.
+        nRef5: zast.poolFind pool: ast.names text: defName
+        tdl5: ty.declFindChild :parentDeclId nameId: nRef5
         if (hasGenericParam :ast items: bodyIds9) then {
             reg.setGeneric typeId: uid value: true
-            tdl5: declOfUnitDef :ty :ast defUnit: unitName name: defName
             registerGenericParams :reg :ast tdecl: tdl5 items: bodyIds9
             if ty.fullMainUnit.length > 0 then {
                 # mirror the reference's inline-template touch:
@@ -10909,21 +10960,21 @@ resolveInlineGenericUnit: function {
                 }
             }
         }
-        linkDeclType :ty :reg :ast defUnit: unitName name: defName tid: did
+        if (tdl5.isZero) == false then {
+            ty.declSetType declId: tdl5 typeId: did
+            reg.setDef typeId: did declId: tdl5
+        }
         # A non-generic inline unit is a real type; lay its unit->def childOf edge
         # (a generic template must NOT get one -- its id is the pre-instantiation
         # template, which would shadow instance lookups).
         if (hasGenericParam :ast items: bodyIds9) == false then {
-            icu0: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-            match (
-                icu0
-            ) case some then {
+            if (parentTid.isZero) == false then {
                 (ty.setMemberType
-                    parentTypeId: (ztypes.tid.create from: icu0.u64)
-                    nameId: (zast.poolFind pool: ast.names text: defName)
+                    parentTypeId: parentTid
+                    nameId: nRef5
                     childTypeId: rid
                 )
-            } case none then null
+            }
         }
         biter: bodyIds9.iterate
         for bm: biter loop {
@@ -10947,9 +10998,7 @@ resolveInlineGenericUnit: function {
                 ) case some then {
                     (declLinkTemplateMethod
                         :ty
-                        :ast
-                        :unitName
-                        tmplName: defName
+                        tmplDeclId: tdl5
                         memberNameId: bmNode9.name
                         fnTid: mido
                     )
@@ -11339,11 +11388,15 @@ buildUnitMono: function {
                         )
                         {
                             mo0v9: optU64Or o: mo0 d: 0
-                            (declLinkTemplateMethod
+                            tdl0: (declOfUnitDef
                                 :ty
                                 :ast
-                                unitName: tmplUnitName
-                                :tmplName
+                                defUnit: tmplUnitName
+                                name: tmplName
+                            )
+                            (declLinkTemplateMethod
+                                :ty
+                                tmplDeclId: tdl0
                                 memberNameId: fmNode9.name
                                 fnTid: mo0v9
                             )
@@ -29376,20 +29429,22 @@ unitNameOfTid: function {
 # mangled `Tmpl_fn` name that no top-level def carries, so linkDeclType cannot
 # find a declaration for it and the function type ends up with none. Bind the
 # template's own method declaration to that type, which makes its parameters --
-# indexed in AST order at pre-index time -- reachable from the type id.
+# indexed in AST order at pre-index time -- reachable from the type id. The
+# template's Decl is passed IN: a template declared inside a namespace is not a
+# child of its unit root, so no (unit, name) pair reaches it.
 declLinkTemplateMethod: function {
     ty: ztyping.ZTyping
-    ast: Ast.view
-    unitName: StringView
-    tmplName: StringView
+    tmplDeclId: ztypes.declid
     memberNameId: u32
     fnTid: u64
 } is {
     if fnTid == 0 then return
     if (ty.declIdOfType typeId: (ztypes.tid.create from: fnTid.u64)) > 0 then return
-    tud9: declOfUnitDef :ty :ast defUnit: unitName name: tmplName
-    if tud9.isZero then return
-    md9: ty.declFindChild parentDeclId: tud9 nameId: (zast.nameid.create from: memberNameId.u32)
+    if tmplDeclId.isZero then return
+    md9: (ty.declFindChild
+        parentDeclId: tmplDeclId
+        nameId: (zast.nameid.create from: memberNameId.u32)
+    )
     if md9.isZero then return
     ty.declSetType declId: md9 typeId: (ztypes.tid.create from: fnTid.u64)
 }
