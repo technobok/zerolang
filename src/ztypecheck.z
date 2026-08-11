@@ -8983,19 +8983,6 @@ resolveUnitBody: function {
 # registerAndResolveMain -- register a UNIT type per unit, then resolve the main
 # unit's definition signatures. Iterates program.ast.units transiently so the demand
 # pass can re-iterate it without an overlapping exclusive lock.
-# isFileUnit -- a user FILE unit (main or a loaded dependency like zlexer/zast/
-# zvfs) whose body must be fully resolved + checked so its types/functions emit;
-# system library units ride the demand pass + native fragments instead.
-isFileUnit: function {name: StringView} out bool is {
-    if name == "system" then return false
-    if name == "core" then return false
-    if name == "collections" then return false
-    if name == "io" then return false
-    if name == "os" then return false
-    if name == "cli" then return false
-    return true
-}
-
 # registerUnitRoots -- Stage D: register a UNIT type + name for EVERY unit up
 # front, before lowerGenerators / indexUnitDefs / demand resolution, so
 # reg.unitNameTid is complete and childOf-at-mint (declareCanonicalType) always sees
@@ -9267,8 +9254,8 @@ registerAndResolveMain: function {
                     unitdefId: opId9
                 )
                 # what a unit's own `main` names about its conformers is a
-                # property of its declarations too. resolveUnitBody ran this on
-                # entry, so it ran only for the units the denylist let through.
+                # property of its declarations too, recorded for every unit:
+                # only the main unit's body is eagerly resolved.
                 (recordUnitConformerContexts
                     :ty
                     ast: program.ast
@@ -9283,16 +9270,15 @@ registerAndResolveMain: function {
                         unitdefId: opId9
                     )
                 }
-                eager9: isFileUnit name: nm9.stringview
-                if nm9.stringview == mainName then {
+                eager9: nm9.stringview == mainName
+                if eager9 when (isStdlibUnitName name: nm9.stringview) then {
                     # a stdlib unit opened as main: demand all of its
                     # defs so every signature typeref resolves + stamps.
-                    if (eager9) == false then (demandAllUnitDefs
+                    (demandAllUnitDefs
                         :reg
                         ast: program.ast
                         unitdefId: opId9
                     )
-                    eager9 = true
                 }
                 if eager9 then {
                     (resolveUnitBody
@@ -10080,7 +10066,6 @@ scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry.view program: Node} is {
                 u: program.ast.nodes.get i: (uId9 - 1).u64
                 if u.namedoperation then {
                     nm: zast.poolTextAt pool: program.ast.names ref: u.name
-                    eager9 = isFileUnit name: nm.stringview
                     if nm.stringview == mainName then eager9 = true
                     opId9 = u.operation
                     unId9f = u.name
