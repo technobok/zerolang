@@ -12069,8 +12069,19 @@ completeUnitInstantiations: function {
                     tplId = ztypes.tid.create from: ugo.u64
                 } case none then null
             }
-            if (reg.genericArgCount specId: (ztypes.tid.create from: mid9.u64)) == 0 then {
+            # neither probe reaches a template nested in a namespace or living
+            # in another unit; the request resolved one at COLLECTION. Settled
+            # HERE, before the arguments are keyed -- the trie join below needs
+            # the template as its root.
+            if tplId.isZero then tplId = rtid
+            # the mono's arguments in DECLARATION order: what the generic_arg
+            # rows record, and what keys its level of the id trie.
+            mkeys9: (ListVal u64)
+            mkval9: (ListVal bool)
+            mkOk9: true
+            {
                 pnR9: reg.genericParamNamesOf tdecl: tplDecl9
+                if pnR9.length == 0 then mkOk9 = false
                 pnN9: pnR9.length
                 pnI9: u64
                 for pnI9 < pnN9 loop {
@@ -12079,21 +12090,77 @@ completeUnitInstantiations: function {
                     match (
                         tgoR9
                     ) case some then {
-                        reg.appendGenericArg specId: (ztypes.tid.create from: mid9.u64) arg: tgoR9
+                        mkeys9.append tgoR9
+                        mkval9.append false
                     } case none then {
                         vgoR9: valSubs.get key: pnmR9.copy
                         match (
                             vgoR9
                         ) case some then {
-                            (reg.appendGenericArgValue
-                                specId: (ztypes.tid.create from: mid9.u64)
-                                value: vgoR9
-                            )
+                            mkeys9.append vgoR9
+                            mkval9.append true
                         } case none then {
-                            reg.appendGenericArg specId: (ztypes.tid.create from: mid9.u64) arg: 0
+                            mkeys9.append 0
+                            mkval9.append false
+                            mkOk9 = false
                         }
                     }
                     pnI9 = pnI9 + 1
+                }
+            }
+            if (reg.genericArgCount specId: (ztypes.tid.create from: mid9.u64)) == 0 then {
+                aiM9: u64
+                anM9: mkeys9.length
+                for aiM9 < anM9 loop {
+                    kM9: mkeys9.get i: aiM9
+                    if (mkval9.get i: aiM9) then {
+                        (reg.appendGenericArgValue
+                            specId: (ztypes.tid.create from: mid9.u64)
+                            value: kM9
+                        )
+                    } else {
+                        reg.appendGenericArg specId: (ztypes.tid.create from: mid9.u64) arg: kM9
+                    }
+                    aiM9 = aiM9 + 1
+                }
+            }
+            # JOIN THE ID TRIE. getOrMintSpec keys a record specialization on
+            # (templateId, ordered argument ids) through reg.getGenericChild /
+            # setGenericChild -- plain (parentId, key) -> tid maps on the type
+            # record, which never asked what kind of type the parent was. A unit
+            # tid parents a trie node exactly as a record tid does; only the
+            # instantiation's lack of a template ID kept unit monos out, and it
+            # has one now. Registered rather than minted through getOrMintSpec
+            # because the mono already exists: it is minted a pass earlier, so
+            # the demand walk between the passes can see its members.
+            if mkOk9 when tplId > 0 then {
+                curT9: tplId.u64
+                kiT9: u64
+                knT9: mkeys9.length
+                for kiT9 < knT9 loop {
+                    kT9: mkeys9.get i: kiT9
+                    lastT9: false
+                    if kiT9 + 1 == knT9 then lastT9 = true
+                    stepT9: u64
+                    nT9: reg.getGenericChild parentId: curT9 key: kT9
+                    match (
+                        nT9
+                    ) case some then {
+                        stepT9 = nT9
+                    } case none then {
+                        if lastT9 then {
+                            stepT9 = mid9
+                        } else {
+                            inmT9: "\{rt}__node"
+                            stepT9 = (reg.newType
+                                name: inmT9.stringview
+                                typetype: ztypes.ztypetype.genericParam
+                            )
+                        }
+                        reg.setGenericChild parentId: curT9 key: kT9 child: stepT9
+                    }
+                    curT9 = stepT9
+                    kiT9 = kiT9 + 1
                 }
             }
             # the request resolved its template at COLLECTION: its id, the
@@ -12101,7 +12168,6 @@ completeUnitInstantiations: function {
             # One call covers both shapes the scans below split -- a file unit
             # named by the template, and an inline binding of the instantiating
             # unit -- because neither is found by name any more.
-            if tplId.isZero then tplId = rtid
             if rtop > 0 when tplId > 0 then {
                 match (
                     program
