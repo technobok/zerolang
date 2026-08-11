@@ -2072,6 +2072,7 @@ fnBodyMentions: function {ast: Ast.view op: Node.view name: StringView} out bool
 recordConformerContexts: function {
     ast: Ast.view
     ty: ztyping.ZTyping
+    unitId: zast.nameid
     defName: StringView
     op: Node.view
 } is {
@@ -2095,9 +2096,12 @@ recordConformerContexts: function {
                 if cn.length == 0 then skipIt = true
                 if (isNumericLiteralName name: cn.stringview) then skipIt = true
                 if (skipIt) == false then {
-                    if (ty.protocolThisContext.has key: cn) == false then {
-                        ck2: cn.copy
-                        cv: defName.string
+                    ck2: (ztypes.memberKey
+                        :unitId
+                        nameId: (zast.poolFind pool: ast.names text: cn.stringview)
+                    )
+                    if (ty.protocolThisContext.has key: ck2) == false then {
+                        cv: dk0
                         ty.protocolThisContext.set key: ck2 value: cv
                     }
                 }
@@ -7816,13 +7820,20 @@ resolveFacet: function {
     if isgen then reg.setGeneric typeId: (ztypes.tid.create from: fid.u64) value: true
     specThisStr: defName.string
     dropThis: true
-    if unitName == ty.fullMainUnit.stringview then {
-        fdk: defName
-        fcto: ty.protocolThisContext.get key: fdk.asString
+    {
+        fcto: (ty.protocolThisContext.get
+            key: (ztypes.memberKey
+                unitId: (nameIdOf :ast name: unitName)
+                nameId: (zast.poolFind pool: ast.names text: defName)
+            )
+        )
         match (
             fcto
         ) case some then {
-            specThisStr = fcto.copy
+            specThisStr = (zast.nameTextCopy
+                :ast
+                ref: (zast.nameid.create from: fcto.u32.orPanic)
+            )
             dropThis = false
         } case none then null
     }
@@ -7922,13 +7933,20 @@ resolveProtocol: function {
             dropThis = false
         }
     }
-    if dropThis when unitName == ty.fullMainUnit.stringview then {
-        dk: defName
-        cto: ty.protocolThisContext.get key: dk.asString
+    if dropThis then {
+        cto: (ty.protocolThisContext.get
+            key: (ztypes.memberKey
+                unitId: (nameIdOf :ast name: unitName)
+                nameId: (zast.poolFind pool: ast.names text: defName)
+            )
+        )
         match (
             cto
         ) case some then {
-            specThisStr = cto.copy
+            specThisStr = (zast.nameTextCopy
+                :ast
+                ref: (zast.nameid.create from: cto.u32.orPanic)
+            )
             dropThis = false
         } case none then null
     }
@@ -8744,6 +8762,82 @@ registerUnitGenericParams: function {
 }
 
 
+# recordUnitConformerContexts -- record, for each of this unit's definitions
+# that its own `main` names, the conformer its as-block markers bind their spec
+# `this` to. The reference binds a spec receiver only when the conformer's
+# resolution triggers the protocol's; a main body that never names the conformer
+# resolves the protocol context-free (e.g. through a function signature).
+# A property of the unit's own declarations, not of whether its body is walked
+# eagerly -- so it runs for every unit, at the point in unit order the eager
+# walk used to run it. A unit with no `main` of its own has nothing to record,
+# which today is every unit but one.
+recordUnitConformerContexts: function {
+    ty: ztyping.ZTyping
+    ast: Ast.view
+    unitName: StringView
+    unitdefId: zast.nodeid
+} is {
+    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
+    # collect member names first -- the body list cannot be passed while its
+    # iterator is live.
+    ccNames: (List String)
+    with cmiter: bodyIds9.iterate do for cmmId9: cmiter loop {
+        cmm: ast.nodes.get i: (cmmId9 - 1).u64
+        ccn0: String
+        match (
+            cmm
+        ) case namedoperation then {
+            ccn1: zast.nameTextCopy :ast ref: cmm.name
+            ccn0 = ccn1
+        } else null
+        ccNames.append ccn0
+    }
+    mainOp9: zast.nodeid
+    with cmit0: bodyIds9.iterate do for cmm0: cmit0 loop {
+        if mainOp9.isZero then {
+            cmn0: ast.nodes.get i: (cmm0 - 1).u64
+            match (
+                cmn0
+            ) case namedoperation then {
+                if (zast.nameTextEq
+                    :ast
+                    ref: cmn0.name
+                    s: "main"
+                ) then mainOp9 = cmn0.operation
+            } else null
+        }
+    }
+    if mainOp9.isZero then return
+    uid9: nameIdOf :ast name: unitName
+    cci: u64
+    ccTotal: ccNames.length
+    for cci < ccTotal loop {
+        cnm2: ccNames.get i: cci
+        if cnm2.length > 0 then {
+            if (fnBodyMentions
+                :ast
+                op: (ast.nodes.get i: (mainOp9 - 1).u64)
+                name: cnm2.stringview
+            ) then {
+                mem2Id9: bodyIds9.get i: cci
+                mem2: ast.nodes.get i: (mem2Id9 - 1).u64
+                match (
+                    mem2
+                ) case namedoperation then {
+                    (recordConformerContexts
+                        :ast
+                        :ty
+                        unitId: uid9
+                        defName: cnm2.stringview
+                        op: (ast.nodes.get i: (mem2.operation - 1).u64)
+                    )
+                } else null
+            }
+        }
+        cci = cci + 1
+    }
+}
+
 # resolveUnitBody -- resolve every top-level definition signature in a unit.
 # resolveUnitBody -- resolve a unit's definition signatures. Signature-only
 # resolves every member; the full body-walk mode mirrors check()'s eager set
@@ -8758,68 +8852,6 @@ resolveUnitBody: function {
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
     {
-        {
-            # The reference binds a spec receiver only when the conformer's
-            # resolution triggers the protocol's; a main body that never
-            # names the conformer resolves the protocol context-free (e.g.
-            # through a function signature). Collect member names first --
-            # the body list cannot be passed while its iterator is live.
-            fmu: unitName.string
-            ty.fullMainUnit = fmu
-            ccNames: (List String)
-            with cmiter: bodyIds9.iterate do for cmmId9: cmiter loop {
-                cmm: ast.nodes.get i: (cmmId9 - 1).u64
-                ccn0: String
-                match (
-                    cmm
-                ) case namedoperation then {
-                    ccn1: zast.nameTextCopy :ast ref: cmm.name
-                    ccn0 = ccn1
-                } else null
-                ccNames.append ccn0
-            }
-            mainOp9: zast.nodeid
-            with cmit0: bodyIds9.iterate do for cmm0: cmit0 loop {
-                if mainOp9.isZero then {
-                    cmn0: ast.nodes.get i: (cmm0 - 1).u64
-                    match (
-                        cmn0
-                    ) case namedoperation then {
-                        if (zast.nameTextEq
-                            :ast
-                            ref: cmn0.name
-                            s: "main"
-                        ) then mainOp9 = cmn0.operation
-                    } else null
-                }
-            }
-            cci: u64
-            ccTotal: ccNames.length
-            for cci < ccTotal loop {
-                cnm2: ccNames.get i: cci
-                if cnm2.length > 0 when mainOp9 > 0 then {
-                    if (fnBodyMentions
-                        :ast
-                        op: (ast.nodes.get i: (mainOp9 - 1).u64)
-                        name: cnm2.stringview
-                    ) then {
-                        mem2Id9: bodyIds9.get i: cci
-                        mem2: ast.nodes.get i: (mem2Id9 - 1).u64
-                        match (
-                            mem2
-                        ) case namedoperation then {
-                            (recordConformerContexts
-                                :ast
-                                :ty
-                                defName: cnm2.stringview
-                                op: (ast.nodes.get i: (mem2.operation - 1).u64)
-                            )
-                        } else null
-                    }
-                }
-                cci = cci + 1
-            }
-        }
         # the unit root's tid + Decl: the parent of every top-level member, and
         # what both dispatch legs hang their own children under. Stable across
         # the loop -- registerUnitRoots and indexUnitDefs both ran already.
@@ -9201,6 +9233,15 @@ registerAndResolveMain: function {
                 (registerUnitGenericParams
                     :ty
                     :reg
+                    ast: program.ast
+                    unitName: nm9.stringview
+                    unitdefId: opId9
+                )
+                # what a unit's own `main` names about its conformers is a
+                # property of its declarations too. resolveUnitBody ran this on
+                # entry, so it ran only for the units the denylist let through.
+                (recordUnitConformerContexts
+                    :ty
                     ast: program.ast
                     unitName: nm9.stringview
                     unitdefId: opId9
@@ -11298,48 +11339,50 @@ resolveInlineGenericUnit: function {
         if (hasGenericParam :ast items: bodyIds9) then {
             reg.setGeneric typeId: uid value: true
             registerGenericParams :reg :ast tdecl: tdl5 items: bodyIds9
-            if ty.fullMainUnit.length > 0 then {
-                # mirror the reference's inline-template touch:
-                # the unit node and each bare generic-param def stamp, and
-                # the param name resolves so signature t-refs stamp.
-                udnid: unitdefNodeId :ast nId: unitOpId
-                ztyping.nodeTypeSet tbl: ty.nodeType nid: udnid.u64 tid: uid
-                with gpiter: bodyIds9.iterate do for gmId9: gpiter loop {
-                    gm: ast.nodes.get i: (gmId9 - 1).u64
-                    match (
-                        gm
-                    ) case namedoperation then {
-                        if (isBareGenericParam
-                            :ast
-                            op: (ast.nodes.get i: (gm.operation - 1).u64)
-                        ) then {
-                            gpn5: zast.nameTextAt :ast ref: gm.name
-                            gtid5: u64
-                            gpo5: reg.genericParamTidOf tdecl: tdl5 paramName: gpn5.stringview
-                            match (
-                                gpo5
-                            ) case some then {
-                                gtid5 = gpo5
-                            } case none then {
-                                gtid5 = (reg.newType
-                                    name: gpn5.stringview
-                                    typetype: ztypes.ztypetype.genericParam
-                                )
-                                (reg.setGenericParamTid
-                                    tdecl: tdl5
-                                    paramName: gpn5.stringview
-                                    tid: (ztypes.tid.create from: gtid5.u64)
-                                )
-                            }
-                            gpnid: nodeId n: (ast.nodes.get i: (gm.operation - 1).u64)
-                            (ztyping.nodeTypeSet
-                                tbl: ty.nodeType
-                                nid: gpnid.u64
+            # mirror the reference's inline-template touch: the unit node and
+            # each bare generic-param def stamp, and the param name resolves so
+            # signature t-refs stamp. Unconditional -- createUnitMono falls back
+            # to this def-node stamp to find a template with no childOf edge, so
+            # laying it is a property of resolving the template, not of which
+            # walk got here. The guard this replaces asked ty.fullMainUnit,
+            # which the first eager unit sets and nothing ever clears.
+            udnid: unitdefNodeId :ast nId: unitOpId
+            ztyping.nodeTypeSet tbl: ty.nodeType nid: udnid.u64 tid: uid
+            with gpiter: bodyIds9.iterate do for gmId9: gpiter loop {
+                gm: ast.nodes.get i: (gmId9 - 1).u64
+                match (
+                    gm
+                ) case namedoperation then {
+                    if (isBareGenericParam
+                        :ast
+                        op: (ast.nodes.get i: (gm.operation - 1).u64)
+                    ) then {
+                        gpn5: zast.nameTextAt :ast ref: gm.name
+                        gtid5: u64
+                        gpo5: reg.genericParamTidOf tdecl: tdl5 paramName: gpn5.stringview
+                        match (
+                            gpo5
+                        ) case some then {
+                            gtid5 = gpo5
+                        } case none then {
+                            gtid5 = (reg.newType
+                                name: gpn5.stringview
+                                typetype: ztypes.ztypetype.genericParam
+                            )
+                            (reg.setGenericParamTid
+                                tdecl: tdl5
+                                paramName: gpn5.stringview
                                 tid: (ztypes.tid.create from: gtid5.u64)
                             )
                         }
-                    } else null
-                }
+                        gpnid: nodeId n: (ast.nodes.get i: (gm.operation - 1).u64)
+                        (ztyping.nodeTypeSet
+                            tbl: ty.nodeType
+                            nid: gpnid.u64
+                            tid: (ztypes.tid.create from: gtid5.u64)
+                        )
+                    }
+                } else null
             }
         }
         if (tdl5.isZero) == false then {
@@ -24519,8 +24562,11 @@ checkCase: function {
             }
             if gdecl9.isZero then {
                 # the template's own body walk runs with unitName = the
-                # TEMPLATE's name; the template def lives in the main unit
-                fmu9: st.typing.fullMainUnit
+                # TEMPLATE's name; the template def lives in the main unit,
+                # which the registry names -- the eager walk's current unit
+                # happened to be it for every program that reaches here, but
+                # only because such a template is declared where main is.
+                fmu9: st.reg.regMainUnit
                 gcand9: (declOfUnitDef
                     ty: st.typing
                     :ast
