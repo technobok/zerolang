@@ -17123,17 +17123,35 @@ isEmittableUnitFns: function {name: StringView} out bool is {
     return true
 }
 
-# stdFnUndemanded -- a bodied free fn in a runtime-backed stdlib unit that
-# the program never referenced: its def was not resolved (no composed key),
-# so its body carries no stamps -- skip it everywhere (definition, needs
-# pre-scan, literal pooling). Emittable user/dep units always emit.
+# stdFnUndemanded -- a bodied free fn the program never referenced: its def was
+# not resolved, so its body carries no stamps and emitting it renders the
+# signature as `z_t0(void)` over unbound parameter names. Skip it everywhere
+# (definition, needs pre-scan, literal pooling). Whether the fn resolved is a
+# fact about the DEFINITION, not about which unit declares it: a demand-gated
+# unit and an emittable one both leave an unreferenced body unresolved, and
+# only the eager pass hid that for the second. ownerTid names the enclosing
+# namespace / subunit type for a nested fn -- its members are children of IT,
+# so the unit-root key below misses them and would drop a fn that IS used.
 stdFnUndemanded: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     unitName: StringView
     fnName: StringView
+    ownerTid: ztypes.tid
 } out bool is {
-    if (isEmittableFileUnit name: unitName) then return false
+    if (ownerTid.isZero) == false then {
+        co9: (symtab.typing.declChildOfId
+            parentTypeId: ownerTid
+            nameId: (zast.poolFind pool: ast.names text: fnName)
+        )
+        match (
+            co9
+        ) case some then {
+            return false
+        } case none then {
+            return true
+        }
+    }
     ro9: (ztypecheck.resolvedByIds
         :ast
         ty: symtab.typing
@@ -17531,6 +17549,7 @@ emitFnsIn: function {
                         :symtab
                         unitName: ctx.mainName.stringview
                         fnName: nm.stringview
+                        :ownerTid
                     ) then skipDepMain = true
                     if nm.stringview == "main" then {
                         if ctx.mainName.stringview != ctx.realMain.stringview then {
@@ -18041,7 +18060,13 @@ collectUnitLiteralsIn: function {
         bmNode9: ast.nodes.get i: (bm - 1).u64
         if bmNode9.namedoperation then {
             bn9: zast.nameTextAt :ast ref: bmNode9.name
-            skipU9: stdFnUndemanded :ast :symtab :unitName fnName: bn9.stringview
+            skipU9: (stdFnUndemanded
+                :ast
+                :symtab
+                :unitName
+                fnName: bn9.stringview
+                ownerTid: ztypes.tid
+            )
             if (skipU9) == false then (collectFnLiterals
                 :ast
                 n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
@@ -21811,8 +21836,12 @@ stdFnRefEmittable: function {ast: Ast.view symtab: zenv.ZSymbolTable fid: ztypes
         # name off the id-keyed registry entry to compose it
         fnm9: symtab.reg.nameOf tid: fid
         if fnm9.length == 0 then return false
-        return (
-            stdFnUndemanded :ast :symtab unitName: duo9.stringview fnName: fnm9.stringview
+        return (stdFnUndemanded
+            :ast
+            :symtab
+            unitName: duo9.stringview
+            fnName: fnm9.stringview
+            ownerTid: ztypes.tid
         ) == false
     } case none then {
         return false
