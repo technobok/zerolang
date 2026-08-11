@@ -1,8 +1,8 @@
-static z_Option_StringView_t z_StringView_stripSuffix(
-    const z_StringView_t* self, const z_StringView_t* s);
-static z_Option_StringView_t z_StringView_stripSuffix(
-    const z_StringView_t* self, const z_StringView_t* s) {
-    z_Option_StringView_t out = {0};
+static z_@Option_StringView@_t z_@StringView@_stripSuffix(
+    const z_@StringView@_t* self, const z_@StringView@_t* s);
+static z_@Option_StringView@_t z_@StringView@_stripSuffix(
+    const z_@StringView@_t* self, const z_@StringView@_t* s) {
+    z_@Option_StringView@_t out = {0};
     if (s->size > self->size
         || (s->size > 0
             && memcmp(self->data + (self->size - s->size),
@@ -10,7 +10,7 @@ static z_Option_StringView_t z_StringView_stripSuffix(
         out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
         return out;
     }
-    z_StringView_t* boxed = (z_StringView_t*)z_xmalloc(sizeof(z_StringView_t));
+    z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
     boxed->data = self->data;
     boxed->size = self->size - s->size;
     out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;

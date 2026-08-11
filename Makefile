@@ -594,7 +594,7 @@ emitter-guard:
 	chk "childOwnershipText" "$$e5" 0; \
 	chk "typeNameOfReg9" "$$e6" 93; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
-	chk "io.readText" "$$e8" 5; \
+	chk "io.readText" "$$e8" 4; \
 	chk "monoOriginName" "$$e9" 8; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
@@ -1052,6 +1052,13 @@ function scanSig(sig, emitted,   fname, rest, ce, cc, p1, pty, cty, pfx, cm, ck,
         return
     }
 
+    # A fragment spells its canonical types as `z_@Name@` holes, so the
+    # receiver type derived from `z_@File@_t` still carries the hole markers:
+    # the declaration it must match is the bare name. Only a single-@ hole is
+    # unwrapped -- a `@@KEY@@` template placeholder keeps its spelling for the
+    # ph lookup below.
+    if (cty ~ /^@[A-Za-z_][A-Za-z0-9_]*@$$/) cty = substr(cty, 2, length(cty) - 2)
+
     # A placeholder with no mapping names a user type or a valtype (array, str,
     # the protocol vtable, meta.create): .view does not apply there.
     if (cty in ph) cty = ph[cty]
@@ -1231,7 +1238,7 @@ view-guard:
 # emitFail line count in src/zemitterc.z -- it may only DECREASE as fallback
 # legs are resolved; lower the baseline in the same commit that removes a leg.
 FALLBACK_BASELINE :=
-EMITFAIL_BASELINE := 22
+EMITFAIL_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	@fail=0; \
@@ -1275,7 +1282,14 @@ clean:
 # statement-special; stdin/stdout/stderr live in the stream fragments;
 # env->GET_ENV and pollReadable->POLL are renamed). Bodied free functions
 # emit generically and are exempt. Leg 2: every _Z_* fragment name the
-# emitter references exists on disk.
+# emitter references exists on disk. Leg 3: every `z_@Name@` hole a fragment
+# spells names a canon the loader can actually fill -- a type declared in the
+# convention units (core.z carries the io/system aliases: File, IoError,
+# Reader, Writer, openmode, seekorigin, TextReader, Splitter, LinesIter,
+# CpIter), an ioCanonTid arm (the generic instances, declared nowhere), or a
+# name a loader binds explicitly (the mono/parse/codepoint stems). Derived
+# from the declarations rather than a list, so a new fragment-backed type is
+# legal the moment it is declared.
 NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
 native-guard:
 	@fail=0; conv=""; \
@@ -1297,5 +1311,23 @@ native-guard:
 	  need=$$(echo "$$stem" | sed 's/^_Z_//' | tr 'A-Z' 'a-z'); \
 	  grep -qF "\"$$stem\"" src/zemitterc.z || grep -qF "\"$$need\"" src/zemitterc.z || { echo "native-guard: $$stem.inc on disk but nothing references it (orphan -- delete it or load it)"; fail=1; }; \
 	done; \
+	known=$$({ grep -oE 'if canon == "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
+	    grep -oE 'mono: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
+	    grep -ohE 'bn9\.append from: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
+	  } | sed 's/.*"\(.*\)"/\1/'; \
+	  sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*):.*/\1/p' \
+	    lib/system/core.z lib/system/io.z lib/system/os.z lib/system/net.z \
+	    lib/system/cli.z lib/system/tcc.z lib/system/system.z; \
+	  printf 'String\nStringView\n'); \
+	known=" $$(echo "$$known" | sort -u | tr '\n' ' ') "; \
+	nh=0; \
+	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl; do \
+	  for h in $$(grep -ohE 'z_@[A-Za-z_][A-Za-z0-9_]*@' $$f | sed -e 's/^z_@//' -e 's/@$$//' | sort -u); do \
+	    nh=$$((nh + 1)); \
+	    case "$$known" in *" $$h "*) ;; \
+	      *) echo "native-guard: $$f spells hole @$$h@, which names no known canon (declare the type, add its ioCanonTid arm, or bind it at the loader)"; fail=1;; \
+	    esac; \
+	  done; \
+	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans)"
+	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known)"

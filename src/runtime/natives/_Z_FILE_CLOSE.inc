@@ -1,8 +1,8 @@
 /* file.close — explicit close that surfaces delayed write errors.
-   Marks the file as closed so z_File_destroy skips a second close. */
-static z_Result_null_IoError_t z_File_close(z_File_t* p);
-static z_Result_null_IoError_t z_File_close(z_File_t* p) {
-    z_Result_null_IoError_t result = {0};
+   Marks the file as closed so z_@File@_destroy skips a second close. */
+static z_@Result_null_IoError@_t z_@File@_close(z_@File@_t* p);
+static z_@Result_null_IoError@_t z_@File@_close(z_@File@_t* p) {
+    z_@Result_null_IoError@_t result = {0};
     if (!p || p->closed) {
         result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
         result.data = NULL;

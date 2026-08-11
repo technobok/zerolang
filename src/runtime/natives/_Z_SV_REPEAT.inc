@@ -1,6 +1,6 @@
-static z_String_t z_StringView_repeated(const z_StringView_t* self, uint64_t n);
-static z_String_t z_StringView_repeated(const z_StringView_t* self, uint64_t n) {
-    z_String_t z = {0};
+static z_@String@_t z_@StringView@_repeated(const z_@StringView@_t* self, uint64_t n);
+static z_@String@_t z_@StringView@_repeated(const z_@StringView@_t* self, uint64_t n) {
+    z_@String@_t z = {0};
     uint64_t total = self->size * n;
     z.size = total;
     z.capacity = total + 1;

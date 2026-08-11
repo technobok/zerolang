@@ -1,6 +1,6 @@
-static z_optionval_u8_t z_StringView_byteAt(const z_StringView_t* self, uint64_t i);
-static z_optionval_u8_t z_StringView_byteAt(const z_StringView_t* self, uint64_t i) {
-    z_optionval_u8_t out = {0};
+static z_@optionval_u8@_t z_@StringView@_byteAt(const z_@StringView@_t* self, uint64_t i);
+static z_@optionval_u8@_t z_@StringView@_byteAt(const z_@StringView@_t* self, uint64_t i) {
+    z_@optionval_u8@_t out = {0};
     if (i >= self->size) {
         out.tag = Z_OPTIONVAL_U8_TAG_NONE;
         return out;

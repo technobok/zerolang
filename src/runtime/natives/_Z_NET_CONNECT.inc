@@ -1,6 +1,6 @@
 /* net.connect — open a client connection to 127.0.0.1:port. */
-static z_Result_Conn_IoError_t z_net_connect(uint16_t port) {
-    z_Result_Conn_IoError_t result = {0};
+static z_@Result_Conn_IoError@_t z_net_connect(uint16_t port) {
+    z_@Result_Conn_IoError@_t result = {0};
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd >= 0) {
         struct sockaddr_in addr = {0};
@@ -13,7 +13,7 @@ static z_Result_Conn_IoError_t z_net_connect(uint16_t port) {
             if (rc >= 0 || errno != EINTR) break;
         }
         if (rc >= 0) {
-            z_Conn_t* boxed = (z_Conn_t*)z_xmalloc(sizeof(z_Conn_t));
+            z_@Conn@_t* boxed = (z_@Conn@_t*)z_xmalloc(sizeof(z_@Conn@_t));
             boxed->fd = (int32_t)fd;
             boxed->closed = false;
             result.tag = Z_RESULT_CONN_IOERROR_TAG_OK;
@@ -23,7 +23,7 @@ static z_Result_Conn_IoError_t z_net_connect(uint16_t port) {
     }
     int e = errno;
     if (fd >= 0) close(fd);
-    z_IoError_t* boxed = (z_IoError_t*)z_xmalloc(sizeof(z_IoError_t));
+    z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
     *boxed = z_io_errno_to_IoError(e);
     result.tag = Z_RESULT_CONN_IOERROR_TAG_ERR;
     result.data = boxed;

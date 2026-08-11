@@ -1,12 +1,12 @@
-static z_String_t z_StringView_replace_impl(
-    const z_StringView_t* self, const z_StringView_t* needle,
-    const z_StringView_t* repl, bool once);
-static z_String_t z_StringView_replace_impl(
-    const z_StringView_t* self, const z_StringView_t* needle,
-    const z_StringView_t* repl, bool once) {
+static z_@String@_t z_@StringView@_replace_impl(
+    const z_@StringView@_t* self, const z_@StringView@_t* needle,
+    const z_@StringView@_t* repl, bool once);
+static z_@String@_t z_@StringView@_replace_impl(
+    const z_@StringView@_t* self, const z_@StringView@_t* needle,
+    const z_@StringView@_t* repl, bool once) {
     /* empty needle: just copy self */
     if (needle->size == 0) {
-        z_String_t z = {0};
+        z_@String@_t z = {0};
         z.size = self->size;
         z.capacity = self->size + 1;
         z.data = (char*)z_xmalloc(z.capacity + 1);
@@ -38,7 +38,7 @@ static z_String_t z_StringView_replace_impl(
             ? (needle->size - repl->size)
             : 0;
     uint64_t out_len = self->size + matches * delta_per - matches * shrink_per;
-    z_String_t z = {0};
+    z_@String@_t z = {0};
     z.size = out_len;
     z.capacity = out_len + 1;
     z.data = (char*)z_xmalloc(z.capacity + 1);

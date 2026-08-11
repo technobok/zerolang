@@ -1,6 +1,6 @@
-static z_Option_StringView_t z_Splitter_call(z_Splitter_t* s);
-static z_Option_StringView_t z_Splitter_call(z_Splitter_t* s) {
-    z_Option_StringView_t out = {0};
+static z_@Option_StringView@_t z_@Splitter@_call(z_@Splitter@_t* s);
+static z_@Option_StringView@_t z_@Splitter@_call(z_@Splitter@_t* s) {
+    z_@Option_StringView@_t out = {0};
     if (s->done) {
         out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
         return out;
@@ -9,7 +9,7 @@ static z_Option_StringView_t z_Splitter_call(z_Splitter_t* s) {
     uint64_t remaining = s->src_len - s->cursor;
     if (s->sep_len > remaining) {
         /* no more separators possible — return the tail */
-        z_StringView_t* boxed = (z_StringView_t*)z_xmalloc(sizeof(z_StringView_t));
+        z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
         boxed->data = start;
         boxed->size = remaining;
         s->cursor = s->src_len;
@@ -21,7 +21,7 @@ static z_Option_StringView_t z_Splitter_call(z_Splitter_t* s) {
     uint64_t scan_end = remaining - s->sep_len;
     for (uint64_t i = 0; i <= scan_end; i++) {
         if (memcmp(start + i, s->sep, s->sep_len) == 0) {
-            z_StringView_t* boxed = (z_StringView_t*)z_xmalloc(sizeof(z_StringView_t));
+            z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
             boxed->data = start;
             boxed->size = i;
             s->cursor += i + s->sep_len;
@@ -31,7 +31,7 @@ static z_Option_StringView_t z_Splitter_call(z_Splitter_t* s) {
         }
     }
     /* no separator in remaining — final fragment */
-    z_StringView_t* boxed = (z_StringView_t*)z_xmalloc(sizeof(z_StringView_t));
+    z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
     boxed->data = start;
     boxed->size = remaining;
     s->cursor = s->src_len;

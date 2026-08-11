@@ -3,8 +3,8 @@
    exists as a directory; fails with ioerror if any component
    exists as a non-directory. Allocates a mutable copy of path
    so it can null-terminate prefixes in place. */
-static z_Result_null_IoError_t z_io_mkdirp(z_StringView_t path);
-static z_Result_null_IoError_t z_io_mkdirp(z_StringView_t path) {
+static z_@Result_null_IoError@_t z_io_mkdirp(z_@StringView@_t path);
+static z_@Result_null_IoError@_t z_io_mkdirp(z_@StringView@_t path) {
     uint64_t n = path.size;
     char* buf = (char*)z_xmalloc(n + 1);
     if (n > 0) memcpy(buf, path.data, n);

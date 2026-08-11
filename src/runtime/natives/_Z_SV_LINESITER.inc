@@ -1,2 +1,2 @@
-typedef z_Splitter_t z_LinesIter_t;
+typedef z_@Splitter@_t z_@LinesIter@_t;
 

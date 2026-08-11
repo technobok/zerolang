@@ -9,4 +9,4 @@ typedef struct {
     uint64_t    sep_len;
     uint64_t    cursor;
     bool        done;
-} z_Splitter_t;
+} z_@Splitter@_t;

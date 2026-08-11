@@ -757,9 +757,255 @@ substituteAll: function {text: String needle: StringView repl: StringView} out S
     return buf
 }
 
+# holeNames9 -- every distinct `@Name@` hole in a fragment, in first-seen
+# order: the holes a fragment spells ARE its demand. `@@KEY@@` template keys
+# are opaque, so the mixed z_str.c.tmpl (which spells both) never reads the
+# `@NAME@` inside a `@@NAME@@` as a hole.
+holeNames9: function {text: StringView} out (List String) is {
+    names: (List String)
+    pos: u64
+    total: text.length
+    for pos < total loop {
+        rem9: text.substring from: pos to: total
+        ao9: rem9.indexOf needle: "@"
+        match (
+            ao9
+        ) case some then {
+            at9: pos + ao9
+            dbl9: false
+            {
+                nx9: text.byteAt i: (at9 + 1)
+                match (
+                    nx9
+                ) case some then {
+                    if nx9 == 64 then dbl9 = true
+                } case none then null
+            }
+            if dbl9 then {
+                aft9: text.substring from: (at9 + 2) to: total
+                cl9: aft9.indexOf needle: "@@"
+                match (
+                    cl9
+                ) case some then {
+                    pos = ((at9 + 2) + cl9) + 2
+                } case none then {
+                    pos = at9 + 2
+                }
+            } else {
+                sub9: text.substring from: (at9 + 1) to: total
+                ho9: sub9.indexOf needle: "@"
+                match (
+                    ho9
+                ) case some then {
+                    endn9: (at9 + 1) + ho9
+                    nm9: text.substring from: (at9 + 1) to: endn9
+                    seen9: false
+                    si9: u64
+                    sn9: names.length
+                    for si9 < sn9 loop {
+                        e9: names.get i: si9
+                        if e9.stringview == nm9 then seen9 = true
+                        si9 = si9 + 1
+                    }
+                    if seen9 == false then names.append from: nm9.string
+                    pos = endn9 + 1
+                } case none then {
+                    pos = at9 + 1
+                }
+            }
+        } case none then {
+            pos = total
+        }
+    }
+    return names
+}
+
+# hasHole9 -- true when an unfilled single-`@` hole survives. `@@KEY@@` keys
+# are opaque here too, so a template key still awaiting applyTmpl does not
+# read as a hole.
+hasHole9: function {text: StringView} out bool is {
+    pos: u64
+    total: text.length
+    for pos < total loop {
+        rem9: text.substring from: pos to: total
+        ao9: rem9.indexOf needle: "@"
+        match (
+            ao9
+        ) case some then {
+            at9: pos + ao9
+            dbl9: false
+            {
+                nx9: text.byteAt i: (at9 + 1)
+                match (
+                    nx9
+                ) case some then {
+                    if nx9 == 64 then dbl9 = true
+                } case none then null
+            }
+            if dbl9 then {
+                aft9: text.substring from: (at9 + 2) to: total
+                cl9: aft9.indexOf needle: "@@"
+                match (
+                    cl9
+                ) case some then {
+                    pos = ((at9 + 2) + cl9) + 2
+                } case none then {
+                    pos = at9 + 2
+                }
+            } else {
+                return true
+            }
+        } case none then {
+            pos = total
+        }
+    }
+    return false
+}
+
+# bindLookup9 -- the text a hole fills with: the bound cname minus its `z_`
+# prefix, because the fragment spells that prefix itself (`z_@File@_t`). ""
+# when the name is unbound, resolved to nothing, or carries no `z_` prefix --
+# each of which the fill site reports as fatal.
+bindLookup9: function {
+    name: StringView
+    bindNames: (List String)
+    bindVals: (List String)
+} out String is {
+    bi9: u64
+    bn9: bindNames.length
+    for bi9 < bn9 loop {
+        k9: bindNames.get i: bi9
+        if k9.stringview == name then {
+            v9: bindVals.get i: bi9
+            vv9: v9.stringview
+            if (vv9.startsWith prefix: "z_") == false then return "".string
+            rest9: vv9.substring from: 2 to: vv9.length
+            return rest9.string
+        }
+        bi9 = bi9 + 1
+    }
+    return "".string
+}
+
+# fillHoles -- fill every `z_@Name@` hole in a runtime fragment from the
+# caller's bindings. The single substitution pass for every fragment loader:
+# it scans once, so no needle order can matter, and `@@KEY@@` template keys
+# pass through untouched for applyTmpl. Every failure is fatal and names the
+# fragment and the hole.
+fillHoles: function {
+    text: String
+    path: StringView
+    bindNames: (List String)
+    bindVals: (List String)
+    fails: List String
+} out String is {
+    buf: String
+    tv9: text.stringview
+    total: tv9.length
+    pos: u64
+    bad9: false
+    for pos < total loop {
+        rem9: tv9.substring from: pos to: total
+        ao9: rem9.indexOf needle: "@"
+        match (
+            ao9
+        ) case some then {
+            pre9: rem9.substring from: 0 to: ao9
+            buf.append pre9
+            at9: pos + ao9
+            dbl9: false
+            {
+                nx9: tv9.byteAt i: (at9 + 1)
+                match (
+                    nx9
+                ) case some then {
+                    if nx9 == 64 then dbl9 = true
+                } case none then null
+            }
+            if dbl9 then {
+                aft9: tv9.substring from: (at9 + 2) to: total
+                cl9: aft9.indexOf needle: "@@"
+                match (
+                    cl9
+                ) case some then {
+                    ex9: ((at9 + 2) + cl9) + 2
+                    run9: tv9.substring from: at9 to: ex9
+                    buf.append run9
+                    pos = ex9
+                } case none then {
+                    buf.append "@@"
+                    pos = at9 + 2
+                }
+            } else {
+                sub9: tv9.substring from: (at9 + 1) to: total
+                ho9: sub9.indexOf needle: "@"
+                match (
+                    ho9
+                ) case some then {
+                    endn9: (at9 + 1) + ho9
+                    nm9: tv9.substring from: (at9 + 1) to: endn9
+                    val9: bindLookup9 name: nm9 :bindNames :bindVals
+                    if val9.length > 0 then {
+                        buf.append val9
+                    } else {
+                        fh9: "fragment \{path}: hole @\{nm9}@ fills with no z_-prefixed cname"
+                        fails.append from: fh9
+                        bad9 = true
+                        buf.append "@"
+                        buf.append nm9
+                        buf.append "@"
+                    }
+                    pos = endn9 + 1
+                } case none then {
+                    fu9: "fragment \{path}: unterminated hole"
+                    fails.append from: fu9
+                    bad9 = true
+                    buf.append "@"
+                    pos = at9 + 1
+                }
+            }
+        } case none then {
+            buf.append rem9
+            pos = total
+        }
+    }
+    if bad9 == false then {
+        if (hasHole9 text: buf.stringview) then {
+            fr9: "fragment \{path}: a hole survived the fill"
+            fails.append from: fr9
+        }
+    }
+    return buf
+}
+
+# fillHolesCtx9 -- fillHoles for every loader that holds a Ctx: the fill's
+# failures are reported through the emit-failure channel, so a bad fragment
+# fails the run. The three unconditional loads in emitC run before Ctx exists
+# and drain fillHoles' sink into their own fails list instead.
+fillHolesCtx9: function {
+    ctx: Ctx.view
+    text: String
+    path: StringView
+    bindNames: (List String)
+    bindVals: (List String)
+} out String is {
+    ferr9: (List String)
+    cur9: fillHoles :text :path :bindNames :bindVals fails: ferr9
+    fi9: u64
+    fn9: ferr9.length
+    for fi9 < fn9 loop {
+        m9: ferr9.get i: fi9
+        emitFail :ctx what: m9.copy line: 0
+        fi9 = fi9 + 1
+    }
+    return cur9
+}
+
+
 # readTemplateCached -- the raw text of a runtime template file, read once
-# per emit and cached by path. "" when the file is missing -- callers treat
-# an empty read as the missing-template path.
+# per emit and cached by path. A missing file is fatal and reported once (the
+# "" is cached so the read is not retried); no fragment on disk is empty, so a
+# cached "" is unambiguously the missing-file path.
 readTemplateCached: function {ctx: Ctx path: StringView} out String is {
     cached9: String
     hit9: false
@@ -779,7 +1025,9 @@ readTemplateCached: function {ctx: Ctx path: StringView} out String is {
         rd
     ) case ok then {
         txt = rd.take
-    } case err then null
+    } case err then {
+        emitFail :ctx what: "missing runtime template \{path}" line: 0
+    }
     ctx.tmplCache.set key: path.string value: txt.copy
     return txt
 }
@@ -797,9 +1045,10 @@ emitFail: function {ctx: Ctx what: String line: u32} is {
     ctx.emitErrors.append from: msg9
 }
 
-# loadFragment -- read a runtime fragment and substitute the canonical
-# z_StringView / z_String names with the registry's id-based ones
-# (StringView first: z_String is its prefix).
+# loadFragment -- read a runtime fragment and fill its holes. Every fragment
+# on this path spells only `z_@String@` / `z_@StringView@`, so the two
+# bindings are the whole vocabulary and no registry lookup is needed -- which
+# is what lets the three unconditional loads run before Ctx exists.
 loadFragment: function {
     path: StringView
     svC: StringView
@@ -810,9 +1059,23 @@ loadFragment: function {
     match (
         rd
     ) case ok then {
-        s1: substituteAll text: rd needle: "z_StringView" repl: svC
-        s2: substituteAll text: s1 needle: "z_String" repl: strC
-        return s2
+        bn9: (List String)
+        bv9: (List String)
+        bn9.append from: "StringView".string
+        bv9.append from: svC.string
+        bn9.append from: "String".string
+        bv9.append from: strC.string
+        ferr9: (List String)
+        cur9: fillHoles text: rd :path bindNames: bn9 bindVals: bv9 fails: ferr9
+        fi9: u64
+        fn9: ferr9.length
+        for fi9 < fn9 loop {
+            m9: ferr9.get i: fi9
+            fm9: "zemitterc: \{m9}"
+            fails.append from: fm9
+            fi9 = fi9 + 1
+        }
+        return cur9
     } case err then {
         f9: "zemitterc: missing runtime fragment \{path}"
         fails.append from: f9
@@ -20607,10 +20870,11 @@ ioCanonCnameUncached: function {
     return "".string
 }
 
-# loadIoFragment -- read an io/cli runtime `.inc` and substitute the canonical
-# names it references (`z_<canon>` -> the typecheck cname) plus StringView/
-# String. Tags (Z_IOERROR_TAG_*) are name-based and already match. Unregistered
-# canons resolve to "" and are skipped. StringView before String (prefix).
+# loadIoFragment -- read an io/cli runtime `.inc` and fill the `z_@Name@`
+# holes it spells. The holes found in the file ARE the demand: each name
+# resolves through StringView/String or the canon path, and a name that
+# resolves to nothing is fatal. Tags (Z_IOERROR_TAG_*) are name-based and
+# already match.
 loadIoFragment: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -20621,66 +20885,34 @@ loadIoFragment: function {
     match (
         rd
     ) case ok then {
-        cur: substituteAll text: rd needle: "z_StringView" repl: ctx.svC.stringview
-        canons: (List String)
-        canons.append "Option_StringView".string
-        canons.append "Splitter".string
-        canons.append "LinesIter".string
-        canons.append "Result_List_String_IoError".string
-        canons.append "Result_filestat_IoError".string
-        canons.append "Result_String_IoError".string
-        canons.append "Result_File_IoError".string
-        canons.append "Result_null_IoError".string
-        canons.append "Result_u64_IoError".string
-        canons.append "Result_Listener_IoError".string
-        canons.append "Result_Conn_IoError".string
-        canons.append "Result_bool_IoError".string
-        canons.append "Option_String".string
-        canons.append "OptionView_String".string
-        canons.append "ListViewVal_u8".string
-        canons.append "List_String".string
-        canons.append "ListVal_u8".string
-        canons.append "BufWriter".string
-        canons.append "BufReader".string
-        canons.append "TextWriter".string
-        canons.append "TextReader".string
-        canons.append "IoError".string
-        canons.append "filestat".string
-        canons.append "openmode".string
-        canons.append "seekorigin".string
-        canons.append "filekind".string
-        canons.append "Reader".string
-        canons.append "Writer".string
-        canons.append "Closer".string
-        canons.append "Seeker".string
-        canons.append "File".string
-        canons.append "Listener".string
-        canons.append "Conn".string
-        canons.append "Result_Parsed_CliError".string
-        canons.append "Map_String_String".string
-        canons.append "List_PositionalDef".string
-        canons.append "List_OptionDef".string
-        canons.append "List_FlagDef".string
-        canons.append "PositionalDef".string
-        canons.append "OptionDef".string
-        canons.append "FlagDef".string
-        canons.append "CliError".string
-        canons.append "Parsed".string
-        canons.append "Spec".string
-        canons.append "procexit".string
-        ci: u64
-        cn: canons.length
-        for ci < cn loop {
-            canon: canons.get i: ci
-            cc: ioCanonCname :ast :symtab :ctx canon: canon.stringview
-            if cc.length > 0 then {
-                needle: "z_\{canon}"
-                cur = substituteAll text: cur needle: needle.stringview repl: cc.stringview
+        bn9: (List String)
+        bv9: (List String)
+        names9: holeNames9 text: rd.stringview
+        ni9: u64
+        nn9: names9.length
+        for ni9 < nn9 loop {
+            nm9: names9.get i: ni9
+            nv9: nm9.stringview
+            bn9.append from: nv9.string
+            if nv9 == "StringView" then {
+                sv9: ctx.svC
+                bv9.append from: sv9.copy
+            } else if nv9 == "String" then {
+                st9: ctx.strC
+                bv9.append from: st9.copy
+            } else {
+                cc9: ioCanonCname :ast :symtab :ctx canon: nv9
+                bv9.append from: cc9
             }
-            ci = ci + 1
+            ni9 = ni9 + 1
         }
-        cur = substituteAll text: cur needle: "z_String" repl: ctx.strC.stringview
-        return cur
+        return (fillHolesCtx9
+            :ctx
+            text: rd
+            :path
+            bindNames: bn9
+            bindVals: bv9
+        )
     } case err then {
         emitFail :ctx what: "missing io fragment \{path}" line: 0
         return "/* zemitterc: missing io fragment \{path} */\n"
@@ -26596,8 +26828,8 @@ emitOneMethod: function {
     ctx.exclTids = (List VidTid)
 }
 
-# emitMonoNative -- a native fragment substituting z_StringView and (when
-# mono is non-empty) the canonical z_{mono} to the mono's id-based cname.
+# emitMonoNative -- a native fragment whose holes are `z_@StringView@` and
+# (when mono is non-empty) the mono's own stem, bound to its id-based cname.
 emitMonoNative: function {
     ctx: Ctx.view
     runtimeDir: StringView
@@ -26608,21 +26840,29 @@ emitMonoNative: function {
 } is {
     p: "\{runtimeDir}/natives/\{frag}.inc"
     raw: readTemplateCached :ctx path: p.stringview
-    if raw.length > 0 then {
-        scv: ctx.svC
-        cur: substituteAll text: raw needle: "z_StringView" repl: scv.stringview
-        if mono.length > 0 then {
-            mc: ctxCname :ctx tid: (ztypes.tid.create from: stemTid.u64)
-            cn: "z_\{mono}"
-            cur = substituteAll text: cur needle: cn.stringview repl: mc.stringview
-        }
-        buf.append cur
-        buf.append "\n"
+    bn9: (List String)
+    bv9: (List String)
+    scv: ctx.svC
+    bn9.append from: "StringView".string
+    bv9.append from: scv.copy
+    if mono.length > 0 then {
+        mc: ctxCname :ctx tid: (ztypes.tid.create from: stemTid.u64)
+        bn9.append from: mono.string
+        bv9.append from: mc
     }
+    cur: (fillHolesCtx9
+        :ctx
+        text: raw
+        path: p.stringview
+        bindNames: bn9
+        bindVals: bv9
+    )
+    buf.append cur
+    buf.append "\n"
 }
 
-# emitParseNative -- a parse fragment, substituting the canonical
-# z_resultval_*_parseerror to the mono's id-based cname and z_StringView.
+# emitParseNative -- a parse fragment whose holes are the resultval mono's
+# own stem, bound to its id-based cname, and `z_@StringView@`.
 emitParseNative: function {
     ctx: Ctx.view
     runtimeDir: StringView
@@ -26634,14 +26874,22 @@ emitParseNative: function {
     mc: ctxCname :ctx tid: (ztypes.tid.create from: stemTid.u64)
     p: "\{runtimeDir}/natives/\{frag}.inc"
     raw: readTemplateCached :ctx path: p.stringview
-    if raw.length > 0 then {
-        cn: "z_\{mono}"
-        s1: substituteAll text: raw needle: cn.stringview repl: mc.stringview
-        scv: ctx.svC
-        s2: substituteAll text: s1 needle: "z_StringView" repl: scv.stringview
-        buf.append s2
-        buf.append "\n"
-    }
+    bn9: (List String)
+    bv9: (List String)
+    bn9.append from: mono.string
+    bv9.append from: mc
+    scv: ctx.svC
+    bn9.append from: "StringView".string
+    bv9.append from: scv.copy
+    cur: (fillHolesCtx9
+        :ctx
+        text: raw
+        path: p.stringview
+        bindNames: bn9
+        bindVals: bv9
+    )
+    buf.append cur
+    buf.append "\n"
 }
 
 # emitCodepointsNatives -- the CpIter struct + codepoints factory + call,
@@ -26658,6 +26906,7 @@ emitCodepointsNatives: function {
     cpc: ctxCname :ctx tid: (ztypes.tid.create from: cpId.u64)
     ovc: ctxCname :ctx tid: (ztypes.tid.create from: ovId.u64)
     (emitCpFrag
+        :ctx
         :runtimeDir
         frag: "_Z_SV_CPITER_STRUCT"
         svC: ctx.svC.stringview
@@ -26666,6 +26915,7 @@ emitCodepointsNatives: function {
         :buf
     )
     (emitCpFrag
+        :ctx
         :runtimeDir
         frag: "_Z_SV_CODEPOINTS"
         svC: ctx.svC.stringview
@@ -26674,6 +26924,7 @@ emitCodepointsNatives: function {
         :buf
     )
     (emitCpFrag
+        :ctx
         :runtimeDir
         frag: "_Z_SV_CPITER_CALL"
         svC: ctx.svC.stringview
@@ -26683,8 +26934,10 @@ emitCodepointsNatives: function {
     )
 }
 
-# emit a `.copy` fragment for a value.
+# emit a `.copy` fragment for a value. Its holes are the codepoint iterator
+# and its optionval mono, plus `z_@StringView@`.
 emitCpFrag: function {
+    ctx: Ctx.view
     runtimeDir: StringView
     frag: StringView
     svC: StringView
@@ -26693,16 +26946,24 @@ emitCpFrag: function {
     buf: String.borrow
 } is {
     p: "\{runtimeDir}/natives/\{frag}.inc"
-    raw: io.readText path: p
-    match (
-        raw
-    ) case ok then {
-        s1: substituteAll text: raw needle: "z_CpIter" repl: cpc
-        s2: substituteAll text: s1 needle: "z_optionval_u32" repl: ovc
-        s3: substituteAll text: s2 needle: "z_StringView" repl: svC
-        buf.append s3
-        buf.append "\n"
-    } case err then null
+    raw: readTemplateCached :ctx path: p.stringview
+    bn9: (List String)
+    bv9: (List String)
+    bn9.append from: "CpIter".string
+    bv9.append from: cpc.string
+    bn9.append from: "optionval_u32".string
+    bv9.append from: ovc.string
+    bn9.append from: "StringView".string
+    bv9.append from: svC.string
+    cur: (fillHolesCtx9
+        :ctx
+        text: raw
+        path: p.stringview
+        bindNames: bn9
+        bindVals: bv9
+    )
+    buf.append cur
+    buf.append "\n"
 }
 
 # the C name of the program's `main`.

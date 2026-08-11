@@ -6,7 +6,7 @@
 #endif
 __attribute__((weak)) const char z_build_date[] = ZC_BUILD_DATE;
 
-static z_String_t z_os_buildDate(void);
-static z_String_t z_os_buildDate(void) {
-    return z_String_new(z_build_date);
+static z_@String@_t z_os_buildDate(void);
+static z_@String@_t z_os_buildDate(void) {
+    return z_@String@_new(z_build_date);
 }

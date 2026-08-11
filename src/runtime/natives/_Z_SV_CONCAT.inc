@@ -1,8 +1,8 @@
-static z_String_t z_StringView_concat(
-    const z_StringView_t* self, const z_StringView_t* other);
-static z_String_t z_StringView_concat(
-    const z_StringView_t* self, const z_StringView_t* other) {
-    z_String_t z = {0};
+static z_@String@_t z_@StringView@_concat(
+    const z_@StringView@_t* self, const z_@StringView@_t* other);
+static z_@String@_t z_@StringView@_concat(
+    const z_@StringView@_t* self, const z_@StringView@_t* other) {
+    z_@String@_t z = {0};
     uint64_t total = self->size + other->size;
     z.size = total;
     z.capacity = total + 1;

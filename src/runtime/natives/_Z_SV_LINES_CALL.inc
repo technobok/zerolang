@@ -1,6 +1,6 @@
-static z_Option_StringView_t z_LinesIter_call(z_LinesIter_t* s);
-static z_Option_StringView_t z_LinesIter_call(z_LinesIter_t* s) {
-    z_Option_StringView_t out = {0};
+static z_@Option_StringView@_t z_@LinesIter@_call(z_@LinesIter@_t* s);
+static z_@Option_StringView@_t z_@LinesIter@_call(z_@LinesIter@_t* s) {
+    z_@Option_StringView@_t out = {0};
     if (s->done) {
         out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
         return out;
@@ -11,7 +11,7 @@ static z_Option_StringView_t z_LinesIter_call(z_LinesIter_t* s) {
     while (i < remaining && start[i] != '\n') i++;
     uint64_t line_len = i;
     if (line_len > 0 && start[line_len - 1] == '\r') line_len--;
-    z_StringView_t* boxed = (z_StringView_t*)z_xmalloc(sizeof(z_StringView_t));
+    z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
     boxed->data = start;
     boxed->size = line_len;
     if (i == remaining) {

@@ -37,11 +37,11 @@ static int z_io_utf8_is_valid(const uint8_t* data, uint64_t len) {
 }
 
 /* Box a null-payload ioerror arm into result(string, ioerror). */
-static z_Result_String_IoError_t z_io_String_err_arm(z_IoError_tag_t tag);
-static z_Result_String_IoError_t z_io_String_err_arm(z_IoError_tag_t tag) {
-    z_Result_String_IoError_t result = {0};
-    z_IoError_t* boxed = (z_IoError_t*)z_xmalloc(sizeof(z_IoError_t));
-    z_IoError_t e = {0};
+static z_@Result_String_IoError@_t z_io_String_err_arm(z_@IoError@_tag_t tag);
+static z_@Result_String_IoError@_t z_io_String_err_arm(z_@IoError@_tag_t tag) {
+    z_@Result_String_IoError@_t result = {0};
+    z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+    z_@IoError@_t e = {0};
     e.tag = tag;
     *boxed = e;
     result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
@@ -51,10 +51,10 @@ static z_Result_String_IoError_t z_io_String_err_arm(z_IoError_tag_t tag) {
 
 /* Box a string value into result(string, ioerror) ok arm. Takes
    ownership of `s` (its heap buffer moves into the boxed copy). */
-static z_Result_String_IoError_t z_io_String_ok(z_String_t s);
-static z_Result_String_IoError_t z_io_String_ok(z_String_t s) {
-    z_Result_String_IoError_t result = {0};
-    z_String_t* boxed = (z_String_t*)z_xmalloc(sizeof(z_String_t));
+static z_@Result_String_IoError@_t z_io_String_ok(z_@String@_t s);
+static z_@Result_String_IoError@_t z_io_String_ok(z_@String@_t s) {
+    z_@Result_String_IoError@_t result = {0};
+    z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
     *boxed = s;
     result.tag = Z_RESULT_STRING_IOERROR_TAG_OK;
     result.data = boxed;

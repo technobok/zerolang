@@ -1,6 +1,6 @@
-static z_resultval_f64_parseerror_t z_StringView_parseF64(const z_StringView_t* self);
-static z_resultval_f64_parseerror_t z_StringView_parseF64(const z_StringView_t* self) {
-    z_resultval_f64_parseerror_t out = {0};
+static z_@resultval_f64_parseerror@_t z_@StringView@_parseF64(const z_@StringView@_t* self);
+static z_@resultval_f64_parseerror@_t z_@StringView@_parseF64(const z_@StringView@_t* self) {
+    z_@resultval_f64_parseerror@_t out = {0};
     if (self->size == 0) {
         out.tag = Z_RESULTVAL_F64_PARSEERROR_TAG_ERR;
         out.data.err.tag = Z_PARSEERROR_TAG_EMPTY;

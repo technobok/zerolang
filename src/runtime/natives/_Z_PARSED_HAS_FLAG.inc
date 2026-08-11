@@ -1,7 +1,7 @@
-static bool z_Parsed_hasFlag(const z_Parsed_t* self, const z_StringView_t* name);
-static bool z_Parsed_hasFlag(const z_Parsed_t* self, const z_StringView_t* name) {
+static bool z_@Parsed@_hasFlag(const z_@Parsed@_t* self, const z_@StringView@_t* name);
+static bool z_@Parsed@_hasFlag(const z_@Parsed@_t* self, const z_@StringView@_t* name) {
     for (uint64_t i = 0; i < self->flagSet.length; i++) {
-        z_String_t* s = &self->flagSet.data[i];
+        z_@String@_t* s = &self->flagSet.data[i];
         if (s->size == name->size
             && memcmp(s->data, name->data, name->size) == 0) {
             return true;

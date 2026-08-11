@@ -5,18 +5,18 @@
    /dev/null). A non-empty cwd chdirs
    the child. The redirection files are opened in the parent before
    fork so the child's chdir cannot change their resolution. argv
-   element buffers are NUL-terminated (z_String), borrowed directly;
+   element buffers are NUL-terminated (z_@String@), borrowed directly;
    only the three view paths need z_sv_to_cstr. Returns the child's
    exit status; 127 on exec/setup failure; 124 if timeoutSecs > 0 and
    the child outlived it (SIGKILLed). timeoutSecs <= 0 waits forever. */
 static void z_os_spawn_on_alarm(int sig) { (void)sig; }
 static int32_t z_os_spawn(
-    z_List_String_t* argv, z_StringView_t cwd, z_StringView_t outPath,
-    z_StringView_t errPath, int32_t timeoutSecs
+    z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
+    z_@StringView@_t errPath, int32_t timeoutSecs
 );
 static int32_t z_os_spawn(
-    z_List_String_t* argv, z_StringView_t cwd, z_StringView_t outPath,
-    z_StringView_t errPath, int32_t timeoutSecs
+    z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
+    z_@StringView@_t errPath, int32_t timeoutSecs
 ) {
     if (argv->length == 0) return 127;
     char** c_argv = (char**)z_xmalloc((argv->length + 1) * sizeof(char*));

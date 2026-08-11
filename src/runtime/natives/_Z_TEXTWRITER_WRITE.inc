@@ -2,13 +2,13 @@
    underlying bufwriter. Stringviews are UTF-8 by construction
    (the compiler's string/stringview types enforce it at their
    ingress points), so no validation is performed here. */
-static z_Result_u64_IoError_t z_TextWriter_write(
-    z_TextWriter_t* self, const z_StringView_t* from
+static z_@Result_u64_IoError@_t z_@TextWriter@_write(
+    z_@TextWriter@_t* self, const z_@StringView@_t* from
 );
-static z_Result_u64_IoError_t z_TextWriter_write(
-    z_TextWriter_t* self, const z_StringView_t* from
+static z_@Result_u64_IoError@_t z_@TextWriter@_write(
+    z_@TextWriter@_t* self, const z_@StringView@_t* from
 ) {
-    z_ListViewVal_u8_t view = { from->size, (uint8_t*)from->data };
-    return z_BufWriter_write(self->sink, &view);
+    z_@ListViewVal_u8@_t view = { from->size, (uint8_t*)from->data };
+    return z_@BufWriter@_write(self->sink, &view);
 }
 

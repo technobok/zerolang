@@ -1,11 +1,11 @@
 /* file.seek — reposition the fd head. Maps seekorigin to the
    matching POSIX whence constant. Returns the new absolute
    position measured from the start of the file. */
-static z_Result_u64_IoError_t z_File_seek(
-    z_File_t* f, int64_t off, z_seekorigin_t origin
+static z_@Result_u64_IoError@_t z_@File@_seek(
+    z_@File@_t* f, int64_t off, z_@seekorigin@_t origin
 );
-static z_Result_u64_IoError_t z_File_seek(
-    z_File_t* f, int64_t off, z_seekorigin_t origin
+static z_@Result_u64_IoError@_t z_@File@_seek(
+    z_@File@_t* f, int64_t off, z_@seekorigin@_t origin
 ) {
     int whence;
     switch (origin.tag) {

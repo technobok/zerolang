@@ -8,7 +8,7 @@
 #endif
 __attribute__((weak)) const char z_build_commit[] = ZC_BUILD_COMMIT;
 
-static z_String_t z_os_buildCommit(void);
-static z_String_t z_os_buildCommit(void) {
-    return z_String_new(z_build_commit);
+static z_@String@_t z_os_buildCommit(void);
+static z_@String@_t z_os_buildCommit(void) {
+    return z_@String@_new(z_build_commit);
 }

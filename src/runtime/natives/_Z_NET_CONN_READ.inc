@@ -1,7 +1,7 @@
 /* conn.read — read up to `max` bytes, appending to `buf`; 0 = peer
    closed. EINTR retries. Mirrors file.read. */
-static z_Result_u64_IoError_t z_Conn_read(
-    z_Conn_t* c, z_ListVal_u8_t* buf, uint64_t max
+static z_@Result_u64_IoError@_t z_@Conn@_read(
+    z_@Conn@_t* c, z_@ListVal_u8@_t* buf, uint64_t max
 ) {
     if (buf->capacity < buf->length + max) {
         uint64_t newcap = buf->length + max;

@@ -1,4 +1,4 @@
-static z_Result_null_IoError_t z_io_mkdir(z_StringView_t path) {
+static z_@Result_null_IoError@_t z_io_mkdir(z_@StringView@_t path) {
     char* path_cstr = z_sv_to_cstr(path);
     int rc = mkdir(path_cstr, 0755);
     int e = errno;

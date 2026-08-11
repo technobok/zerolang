@@ -1,6 +1,6 @@
-static z_resultval_i64_parseerror_t z_StringView_parseI64(const z_StringView_t* self);
-static z_resultval_i64_parseerror_t z_StringView_parseI64(const z_StringView_t* self) {
-    z_resultval_i64_parseerror_t out = {0};
+static z_@resultval_i64_parseerror@_t z_@StringView@_parseI64(const z_@StringView@_t* self);
+static z_@resultval_i64_parseerror@_t z_@StringView@_parseI64(const z_@StringView@_t* self) {
+    z_@resultval_i64_parseerror@_t out = {0};
     uint64_t i = 0;
     int neg = 0;
     if (self->size == 0) goto empty;

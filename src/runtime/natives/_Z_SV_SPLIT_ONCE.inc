@@ -1,8 +1,8 @@
-static z_optionval_u64_t z_StringView_splitOnce(
-    const z_StringView_t* self, const z_StringView_t* sep);
-static z_optionval_u64_t z_StringView_splitOnce(
-    const z_StringView_t* self, const z_StringView_t* sep) {
-    z_optionval_u64_t out = {0};
+static z_@optionval_u64@_t z_@StringView@_splitOnce(
+    const z_@StringView@_t* self, const z_@StringView@_t* sep);
+static z_@optionval_u64@_t z_@StringView@_splitOnce(
+    const z_@StringView@_t* self, const z_@StringView@_t* sep) {
+    z_@optionval_u64@_t out = {0};
     if (sep->size == 0) {
         out.tag = Z_OPTIONVAL_U64_TAG_SOME;
         out.data.some = 0;

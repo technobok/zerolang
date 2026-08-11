@@ -1,7 +1,7 @@
 /* conn.write — write all bytes from `src`; loops on short writes,
    retries EINTR. Mirrors file.write. */
-static z_Result_u64_IoError_t z_Conn_write(
-    z_Conn_t* c, z_ListViewVal_u8_t* src
+static z_@Result_u64_IoError@_t z_@Conn@_write(
+    z_@Conn@_t* c, z_@ListViewVal_u8@_t* src
 ) {
     uint64_t total = 0;
     while (total < src->length) {

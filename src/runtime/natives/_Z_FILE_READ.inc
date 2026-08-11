@@ -2,11 +2,11 @@
    Grows the list capacity as needed. Returns actual bytes read
    (0 indicates EOF); retries on EINTR. The loop breaks out so the body
    ends in its return -- c2mir miscompiles a struct return otherwise. */
-static z_Result_u64_IoError_t z_File_read(
-    z_File_t* f, z_ListVal_u8_t* buf, uint64_t max
+static z_@Result_u64_IoError@_t z_@File@_read(
+    z_@File@_t* f, z_@ListVal_u8@_t* buf, uint64_t max
 );
-static z_Result_u64_IoError_t z_File_read(
-    z_File_t* f, z_ListVal_u8_t* buf, uint64_t max
+static z_@Result_u64_IoError@_t z_@File@_read(
+    z_@File@_t* f, z_@ListVal_u8@_t* buf, uint64_t max
 ) {
     if (buf->capacity < buf->length + max) {
         uint64_t newcap = buf->length + max;

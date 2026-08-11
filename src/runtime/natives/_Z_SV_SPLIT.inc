@@ -1,8 +1,8 @@
-static z_Splitter_t z_StringView_split(
-    const z_StringView_t* self, const z_StringView_t* sep);
-static z_Splitter_t z_StringView_split(
-    const z_StringView_t* self, const z_StringView_t* sep) {
-    z_Splitter_t s;
+static z_@Splitter@_t z_@StringView@_split(
+    const z_@StringView@_t* self, const z_@StringView@_t* sep);
+static z_@Splitter@_t z_@StringView@_split(
+    const z_@StringView@_t* self, const z_@StringView@_t* sep) {
+    z_@Splitter@_t s;
     s.src = self->data;
     s.src_len = self->size;
     s.sep = sep->data;

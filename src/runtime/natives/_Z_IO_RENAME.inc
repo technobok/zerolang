@@ -1,5 +1,5 @@
-static z_Result_null_IoError_t z_io_rename(
-    z_StringView_t from, z_StringView_t to
+static z_@Result_null_IoError@_t z_io_rename(
+    z_@StringView@_t from, z_@StringView@_t to
 ) {
     char* from_cstr = z_sv_to_cstr(from);
     char* to_cstr = z_sv_to_cstr(to);

@@ -37,7 +37,7 @@ static void z_tcc_on_error(void* opaque, const char* msg) {
     fprintf(stderr, "%s\n", msg);
 }
 
-static char* z_tcc_lib_path(z_StringView_t tccDir) {
+static char* z_tcc_lib_path(z_@StringView@_t tccDir) {
     char* dir = z_sv_to_cstr(tccDir);
     size_t n = strlen(dir);
     char* p = (char*)z_xmalloc(n + sizeof("/libtcc.so"));
@@ -49,7 +49,7 @@ static char* z_tcc_lib_path(z_StringView_t tccDir) {
 
 /* 1 when every entry point resolved. A partial load is a failed load: a
    libtcc missing one of these is not one this code can drive. */
-static int z_tcc_open(z_tcc_api_t* a, z_StringView_t tccDir) {
+static int z_tcc_open(z_tcc_api_t* a, z_@StringView@_t tccDir) {
     char* path = z_tcc_lib_path(tccDir);
     memset(a, 0, sizeof(*a));
     a->handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);

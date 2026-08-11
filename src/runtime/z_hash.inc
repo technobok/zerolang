@@ -85,11 +85,11 @@ static uint64_t z_siphash_bytes(const void* in, uint64_t inlen) {
     return v0 ^ v1 ^ v2 ^ v3;
 }
 
-static uint64_t z_siphash_string(z_String_t s) {
+static uint64_t z_siphash_string(z_@String@_t s) {
     return z_siphash_bytes(s.data, s.size);
 }
 
-static uint64_t z_siphash_stringview(z_StringView_t v) {
+static uint64_t z_siphash_stringview(z_@StringView@_t v) {
     return z_siphash_bytes(v.data, v.size);
 }
 
@@ -188,11 +188,11 @@ static uint64_t z_fasthash_bytes(const void* in, uint64_t inlen) {
     return z_fh_mix(a ^ c0 ^ inlen, b ^ c1);
 }
 
-static uint64_t z_fasthash_string(z_String_t s) {
+static uint64_t z_fasthash_string(z_@String@_t s) {
     return z_fasthash_bytes(s.data, s.size);
 }
 
-static uint64_t z_fasthash_stringview(z_StringView_t v) {
+static uint64_t z_fasthash_stringview(z_@StringView@_t v) {
     return z_fasthash_bytes(v.data, v.size);
 }
 

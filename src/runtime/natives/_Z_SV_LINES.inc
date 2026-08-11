@@ -1,6 +1,6 @@
-static z_LinesIter_t z_StringView_lines(const z_StringView_t* self);
-static z_LinesIter_t z_StringView_lines(const z_StringView_t* self) {
-    z_LinesIter_t s;
+static z_@LinesIter@_t z_@StringView@_lines(const z_@StringView@_t* self);
+static z_@LinesIter@_t z_@StringView@_lines(const z_@StringView@_t* self) {
+    z_@LinesIter@_t s;
     s.src = self->data;
     s.src_len = self->size;
     s.sep = NULL;

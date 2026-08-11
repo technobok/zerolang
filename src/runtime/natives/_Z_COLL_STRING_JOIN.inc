@@ -1,11 +1,11 @@
 /* string_join -- borrow `parts` (read-only) and return a new
    owned string. `parts` is pointer-passed (Phase A default for
    stack-reftype params); caller retains ownership. */
-static z_String_t z_stringJoin(
-    z_List_String_t* parts, z_StringView_t sep);
-static z_String_t z_stringJoin(
-    z_List_String_t* parts, z_StringView_t sep) {
-    z_String_t out = {0};
+static z_@String@_t z_stringJoin(
+    z_@List_String@_t* parts, z_@StringView@_t sep);
+static z_@String@_t z_stringJoin(
+    z_@List_String@_t* parts, z_@StringView@_t sep) {
+    z_@String@_t out = {0};
     uint64_t n = parts->length;
     if (n == 0) {
         out.capacity = 1;

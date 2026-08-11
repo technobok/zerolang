@@ -1,6 +1,6 @@
-static z_optionval_u32_t z_CpIter_call(z_CpIter_t* it);
-static z_optionval_u32_t z_CpIter_call(z_CpIter_t* it) {
-    z_optionval_u32_t out = {0};
+static z_@optionval_u32@_t z_@CpIter@_call(z_@CpIter@_t* it);
+static z_@optionval_u32@_t z_@CpIter@_call(z_@CpIter@_t* it) {
+    z_@optionval_u32@_t out = {0};
     if (it->cursor >= it->length) {
         out.tag = Z_OPTIONVAL_U32_TAG_NONE;
         return out;

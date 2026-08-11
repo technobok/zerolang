@@ -17,12 +17,12 @@
    already uses for "could not run the compiler", so the driver reports
    both through one path rather than growing a second. */
 static int32_t z_tcc_compileToExe(
-    z_StringView_t csrc, z_StringView_t exe, z_StringView_t tccDir,
-    bool release, z_StringView_t cflags, z_List_String_t* libs
+    z_@StringView@_t csrc, z_@StringView@_t exe, z_@StringView@_t tccDir,
+    bool release, z_@StringView@_t cflags, z_@List_String@_t* libs
 );
 static int32_t z_tcc_compileToExe(
-    z_StringView_t csrc, z_StringView_t exe, z_StringView_t tccDir,
-    bool release, z_StringView_t cflags, z_List_String_t* libs
+    z_@StringView@_t csrc, z_@StringView@_t exe, z_@StringView@_t tccDir,
+    bool release, z_@StringView@_t cflags, z_@List_String@_t* libs
 ) {
     z_tcc_api_t a;
     if (!z_tcc_open(&a, tccDir)) return 127;

@@ -1,4 +1,4 @@
-static z_Result_null_IoError_t z_io_remove(z_StringView_t path) {
+static z_@Result_null_IoError@_t z_io_remove(z_@StringView@_t path) {
     char* path_cstr = z_sv_to_cstr(path);
     /* try unlink first; if EISDIR, fall back to rmdir */
     int rc = unlink(path_cstr);

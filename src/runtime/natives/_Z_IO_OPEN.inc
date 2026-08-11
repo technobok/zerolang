@@ -1,8 +1,8 @@
 /* translate openmode variant tag to open(2) flags + default mode */
-static z_Result_File_IoError_t z_io_open(
-    z_StringView_t path, z_openmode_t mode
+static z_@Result_File_IoError@_t z_io_open(
+    z_@StringView@_t path, z_@openmode@_t mode
 ) {
-    z_Result_File_IoError_t result = {0};
+    z_@Result_File_IoError@_t result = {0};
     int flags;
     mode_t perm = 0644;
     switch (mode.tag) {
@@ -16,13 +16,13 @@ static z_Result_File_IoError_t z_io_open(
     int e = errno;
     free(path_cstr);
     if (fd < 0) {
-        z_IoError_t* boxed = (z_IoError_t*)z_xmalloc(sizeof(z_IoError_t));
+        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(e);
         result.tag = Z_RESULT_FILE_IOERROR_TAG_ERR;
         result.data = boxed;
         return result;
     }
-    z_File_t* boxed = (z_File_t*)z_xmalloc(sizeof(z_File_t));
+    z_@File@_t* boxed = (z_@File@_t*)z_xmalloc(sizeof(z_@File@_t));
     boxed->fd = (int32_t)fd;
     boxed->closed = false;
     result.tag = Z_RESULT_FILE_IOERROR_TAG_OK;

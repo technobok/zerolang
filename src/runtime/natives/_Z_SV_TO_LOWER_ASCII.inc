@@ -1,6 +1,6 @@
-static z_String_t z_StringView_toLowerAscii(const z_StringView_t* self);
-static z_String_t z_StringView_toLowerAscii(const z_StringView_t* self) {
-    z_String_t z = {0};
+static z_@String@_t z_@StringView@_toLowerAscii(const z_@StringView@_t* self);
+static z_@String@_t z_@StringView@_toLowerAscii(const z_@StringView@_t* self) {
+    z_@String@_t z = {0};
     z.size = self->size;
     z.capacity = self->size + 1;
     z.data = (char*)z_xmalloc(z.capacity + 1);

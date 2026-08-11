@@ -1,20 +1,20 @@
-static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t args);
-static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t args) {
-    z_Parsed_t* parsed = (z_Parsed_t*)z_xmalloc(sizeof(z_Parsed_t));
-    parsed->flagSet = z_List_String_create(0);
-    parsed->optionValues = z_Map_String_String_create(0);
-    parsed->positionalValues = z_Map_String_String_create(0);
-    parsed->extraArgs = z_List_String_create(0);
+static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String@_t args);
+static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String@_t args) {
+    z_@Parsed@_t* parsed = (z_@Parsed@_t*)z_xmalloc(sizeof(z_@Parsed@_t));
+    parsed->flagSet = z_@List_String@_create(0);
+    parsed->optionValues = z_@Map_String_String@_create(0);
+    parsed->positionalValues = z_@Map_String_String@_create(0);
+    parsed->extraArgs = z_@List_String@_create(0);
     uint64_t next_pos = 0;
     uint64_t i = 1;  /* skip argv[0] */
     while (i < args.length) {
-        z_String_t* a = &args.data[i];
+        z_@String@_t* a = &args.data[i];
         /* `--` alone terminates option parsing */
         if (a->size == 2 && a->data[0] == '-' && a->data[1] == '-') {
             for (uint64_t j = i + 1; j < args.length; j++) {
-                z_List_String_append(
+                z_@List_String@_append(
                     &parsed->extraArgs,
-                    z_String_new(args.data[j].data)
+                    z_@String@_new(args.data[j].data)
                 );
             }
             break;
@@ -27,14 +27,14 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
             int64_t fi = z_cli_find_flag_long(&spec->flags, a->data, name_len);
             if (fi >= 0) {
                 if (eq) {
-                    z_Parsed_destroy(parsed); free(parsed); z_List_String_destroy(&args);
+                    z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
                     return z_cli_wrap_err(
                         z_cli_err(Z_CLIERROR_TAG_UNEXPECTEDARG,
                                   a->data, a->size));
                 }
-                z_List_String_append(
+                z_@List_String@_append(
                     &parsed->flagSet,
-                    z_String_new(spec->flags.data[fi].name.data)
+                    z_@String@_new(spec->flags.data[fi].name.data)
                 );
                 i++;
                 continue;
@@ -42,29 +42,29 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
             int64_t oi = z_cli_findOption_long(
                 &spec->options, a->data, name_len);
             if (oi >= 0) {
-                z_String_t key = z_String_new(spec->options.data[oi].name.data);
-                z_String_t val = {0};
+                z_@String@_t key = z_@String@_new(spec->options.data[oi].name.data);
+                z_@String@_t val = {0};
                 if (eq) {
                     uint64_t vlen = a->size - (name_len + 1);
-                    val = z_String_create(vlen);
-                    z_String_append(&val, eq + 1, vlen);
+                    val = z_@String@_create(vlen);
+                    z_@String@_append(&val, eq + 1, vlen);
                 } else {
                     if (i + 1 >= args.length) {
-                        z_String_free(&key);
-                        z_Parsed_destroy(parsed); free(parsed); z_List_String_destroy(&args);
+                        z_@String@_free(&key);
+                        z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
                         return z_cli_wrap_err(
                             z_cli_err(Z_CLIERROR_TAG_MISSINGVALUE,
                                       a->data, a->size));
                     }
-                    val = z_String_new(args.data[i + 1].data);
+                    val = z_@String@_new(args.data[i + 1].data);
                     i++;
                 }
-                z_Map_String_String_set(
+                z_@Map_String_String@_set(
                     parsed->optionValues, key, val);
                 i++;
                 continue;
             }
-            z_Parsed_destroy(parsed); free(parsed); z_List_String_destroy(&args);
+            z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
             return z_cli_wrap_err(
                 z_cli_err(Z_CLIERROR_TAG_UNKNOWNFLAG,
                           a->data, a->size));
@@ -74,9 +74,9 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
             /* full-token match first (e.g. -v, -o with separate value) */
             int64_t fi = z_cli_find_flag_short(&spec->flags, a->data, a->size);
             if (fi >= 0) {
-                z_List_String_append(
+                z_@List_String@_append(
                     &parsed->flagSet,
-                    z_String_new(spec->flags.data[fi].name.data)
+                    z_@String@_new(spec->flags.data[fi].name.data)
                 );
                 i++;
                 continue;
@@ -85,14 +85,14 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
                 &spec->options, a->data, a->size);
             if (oi >= 0) {
                 if (i + 1 >= args.length) {
-                    z_Parsed_destroy(parsed); free(parsed); z_List_String_destroy(&args);
+                    z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
                     return z_cli_wrap_err(
                         z_cli_err(Z_CLIERROR_TAG_MISSINGVALUE,
                                   a->data, a->size));
                 }
-                z_String_t key = z_String_new(spec->options.data[oi].name.data);
-                z_String_t val = z_String_new(args.data[i + 1].data);
-                z_Map_String_String_set(
+                z_@String@_t key = z_@String@_new(spec->options.data[oi].name.data);
+                z_@String@_t val = z_@String@_new(args.data[i + 1].data);
+                z_@Map_String_String@_set(
                     parsed->optionValues, key, val);
                 i += 2;
                 continue;
@@ -106,9 +106,9 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
                     char buf[2] = { '-', a->data[k] };
                     int64_t bfi = z_cli_find_flag_short(&spec->flags, buf, 2);
                     if (bfi >= 0) {
-                        z_List_String_append(
+                        z_@List_String@_append(
                             &parsed->flagSet,
-                            z_String_new(spec->flags.data[bfi].name.data)
+                            z_@String@_new(spec->flags.data[bfi].name.data)
                         );
                         continue;
                     }
@@ -116,11 +116,11 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
                         &spec->options, buf, 2);
                     if (boi >= 0) {
                         uint64_t vlen = a->size - (k + 1);
-                        z_String_t key = z_String_new(
+                        z_@String@_t key = z_@String@_new(
                             spec->options.data[boi].name.data);
-                        z_String_t val = z_String_create(vlen);
-                        if (vlen > 0) z_String_append(&val, a->data + k + 1, vlen);
-                        z_Map_String_String_set(
+                        z_@String@_t val = z_@String@_create(vlen);
+                        if (vlen > 0) z_@String@_append(&val, a->data + k + 1, vlen);
+                        z_@Map_String_String@_set(
                             parsed->optionValues, key, val);
                         /* consume rest of arg as value */
                         break;
@@ -128,7 +128,7 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
                     ok = false;
                 }
                 if (!ok) {
-                    z_Parsed_destroy(parsed); free(parsed); z_List_String_destroy(&args);
+                    z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
                     return z_cli_wrap_err(
                         z_cli_err(Z_CLIERROR_TAG_UNKNOWNFLAG,
                                   a->data, a->size));
@@ -140,32 +140,32 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
         }
         /* positional */
         if (next_pos < spec->positionals.length) {
-            z_String_t key = z_String_new(
+            z_@String@_t key = z_@String@_new(
                 spec->positionals.data[next_pos].name.data);
-            z_String_t val = z_String_new(a->data);
-            z_Map_String_String_set(
+            z_@String@_t val = z_@String@_new(a->data);
+            z_@Map_String_String@_set(
                 parsed->positionalValues, key, val);
             next_pos++;
         } else {
-            z_List_String_append(
-                &parsed->extraArgs, z_String_new(a->data));
+            z_@List_String@_append(
+                &parsed->extraArgs, z_@String@_new(a->data));
         }
         i++;
     }
     /* parse loop finished reading — args copies have been
-       materialised via z_String_new wherever needed. Free the
+       materialised via z_@String@_new wherever needed. Free the
        incoming list now so every exit path (ok or err) is
        leak-free. */
-    z_List_String_destroy(&args);
+    z_@List_String@_destroy(&args);
     /* required checks: map.get returns a borrowed OptionView into the map's
        storage; read the tag only -- the map owns the value, so no free. */
     for (uint64_t k = 0; k < spec->options.length; k++) {
         if (!spec->options.data[k].required) continue;
-        z_OptionView_String_t v = z_Map_String_String_get(
+        z_@OptionView_String@_t v = z_@Map_String_String@_get(
             parsed->optionValues, &spec->options.data[k].name);
         bool missing = (v.tag == Z_OPTIONVIEW_STRING_TAG_NONE);
         if (missing) {
-            z_Parsed_destroy(parsed); free(parsed);
+            z_@Parsed@_destroy(parsed); free(parsed);
             return z_cli_wrap_err(
                 z_cli_err(Z_CLIERROR_TAG_MISSINGREQUIRED,
                           spec->options.data[k].name.data,
@@ -174,18 +174,18 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
     }
     for (uint64_t k = 0; k < spec->positionals.length; k++) {
         if (!spec->positionals.data[k].required) continue;
-        z_OptionView_String_t v = z_Map_String_String_get(
+        z_@OptionView_String@_t v = z_@Map_String_String@_get(
             parsed->positionalValues, &spec->positionals.data[k].name);
         bool missing = (v.tag == Z_OPTIONVIEW_STRING_TAG_NONE);
         if (missing) {
-            z_Parsed_destroy(parsed); free(parsed);
+            z_@Parsed@_destroy(parsed); free(parsed);
             return z_cli_wrap_err(
                 z_cli_err(Z_CLIERROR_TAG_MISSINGREQUIRED,
                           spec->positionals.data[k].name.data,
                           spec->positionals.data[k].name.size));
         }
     }
-    z_Result_Parsed_CliError_t r = {0};
+    z_@Result_Parsed_CliError@_t r = {0};
     r.tag = Z_RESULT_PARSED_CLIERROR_TAG_OK;
     r.data = parsed;
     return r;

@@ -6,14 +6,14 @@
    unterminated tail once; with buf empty, surface `ioerror.eof`. Both
    success paths break out with `line` set so the body ends in its
    return -- c2mir miscompiles a struct return otherwise. */
-static z_Result_String_IoError_t z_TextReader_readLine(
-    z_TextReader_t* self
+static z_@Result_String_IoError@_t z_@TextReader@_readLine(
+    z_@TextReader@_t* self
 );
-static z_Result_String_IoError_t z_TextReader_readLine(
-    z_TextReader_t* self
+static z_@Result_String_IoError@_t z_@TextReader@_readLine(
+    z_@TextReader@_t* self
 ) {
     uint64_t scan_start = 0;
-    z_String_t line = {0};
+    z_@String@_t line = {0};
     bool found = false;
     for (;;) {
         for (uint64_t i = scan_start; i < self->buf.length; i++) {
@@ -39,11 +39,11 @@ static z_Result_String_IoError_t z_TextReader_readLine(
         scan_start = self->buf.length;
         uint64_t cap = self->source->cap;
         if (cap == 0) cap = 4096;
-        z_Result_u64_IoError_t rr = z_BufReader_read(
+        z_@Result_u64_IoError@_t rr = z_@BufReader@_read(
             self->source, &self->buf, cap
         );
         if (rr.tag != Z_RESULT_BOX_U64_IOERROR_TAG_OK) {
-            z_Result_String_IoError_t result = {0};
+            z_@Result_String_IoError@_t result = {0};
             result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
             result.data = rr.data;
             return result;

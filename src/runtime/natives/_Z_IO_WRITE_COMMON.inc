@@ -14,16 +14,16 @@ static int z_io_write_all(int fd, const char* data, uint64_t size) {
 
 /* shared helper: path + open flags -> write content -> close.
    path and content are borrowed views; caller retains. */
-static z_Result_null_IoError_t z_io_write_common(
-    z_StringView_t path, z_StringView_t content, int flags
+static z_@Result_null_IoError@_t z_io_write_common(
+    z_@StringView@_t path, z_@StringView@_t content, int flags
 ) {
-    z_Result_null_IoError_t result = {0};
+    z_@Result_null_IoError@_t result = {0};
     char* path_cstr = z_sv_to_cstr(path);
     int fd = open(path_cstr, flags, 0644);
     free(path_cstr);
     if (fd < 0) {
         int e = errno;
-        z_IoError_t* boxed = (z_IoError_t*)z_xmalloc(sizeof(z_IoError_t));
+        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(e);
         result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;
         result.data = boxed;
@@ -32,7 +32,7 @@ static z_Result_null_IoError_t z_io_write_common(
     int werr = z_io_write_all(fd, content.data, content.size);
     close(fd);
     if (werr != 0) {
-        z_IoError_t* boxed = (z_IoError_t*)z_xmalloc(sizeof(z_IoError_t));
+        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(werr);
         result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;
         result.data = boxed;

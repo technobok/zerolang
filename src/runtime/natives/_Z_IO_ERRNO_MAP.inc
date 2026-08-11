@@ -1,5 +1,5 @@
-static z_IoError_t z_io_errno_to_IoError(int e) {
-    z_IoError_t r = {0};
+static z_@IoError@_t z_io_errno_to_IoError(int e) {
+    z_@IoError@_t r = {0};
     r.data = NULL;
     switch (e) {
         case ENOENT:  r.tag = Z_IOERROR_TAG_NOTFOUND; break;
