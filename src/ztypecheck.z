@@ -12556,7 +12556,7 @@ runUnitMonoWalks: function {
 resolveMainUnitInstantiations: function {
     ty: ztyping.ZTyping.view
     reg: ztypes.ZTypeRegistry.view
-    program: Node.view
+    program: Node
 } is {
     reqs: (List InstReq)
     scanMainForInstantiations :ty :program :reqs
@@ -12569,6 +12569,38 @@ resolveMainUnitInstantiations: function {
         rt: rtv0
         ruv0: r.declUnit.stringview
         ru0: ruv0
+        # the template has to be RESOLVED before a mono is minted from it:
+        # createUnitMono reads the template's id -- for an inline one, the stamp
+        # resolveInlineGenericUnit lays on its def node -- to record the mono's
+        # generic origin, and a template in a unit the eager pass did not walk
+        # has none. The request already carries what it takes to resolve it:
+        # instTemplateDecl found the template's Decl at COLLECTION, through the
+        # scope the instantiation was written in. resolveInlineGenericUnit
+        # self-guards on that Decl's type id, so this is a no-op whenever
+        # anything already resolved the template -- which today is always.
+        # A parentless Decl is a file unit of the template's name, not an
+        # inline template: registerUnitRoots has already minted it.
+        {
+            tpd9: declParentIdOf :ty declId: r.tmplDeclId
+            tuv9: r.tmplUnit.stringview
+            tu9: tuv9
+            if (tpd9.isZero) == false when r.tmplOpId > 0 then {
+                match (
+                    program
+                ) case program then {
+                    (resolveInlineGenericUnit
+                        :ty
+                        :reg
+                        ast: program.ast
+                        unitName: tu9
+                        defName: rt
+                        parentTid: (declTypeIdOf :ty declId: tpd9)
+                        parentDeclId: tpd9
+                        unitOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
+                    )
+                } else null
+            }
+        }
         (resolveUnitMono
             :ty
             :reg
