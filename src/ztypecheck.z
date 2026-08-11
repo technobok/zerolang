@@ -9270,6 +9270,37 @@ resolveDemandedUnitBody: function {
             dbPd9 = dro9
         } case none then null
     }
+    # a demand on an EXPORTED name must reach the definition it renames:
+    # `perimeter: perimImpl` records the demand on `perimeter` while the member
+    # to resolve is `perimImpl`. indexDeclPublicEntries already built the
+    # pubDecl --exportedName--> targetDecl edges, so read that block once per
+    # unit -- as publicAliasInternalNames reads it -- and carry the demanded
+    # targets as DeclIds. An exported name never names a member.
+    dbPubT9: (SetVal u64)
+    {
+        dbPn9: publicNsOf :ty :reg tid: dbPt9
+        if (dbPn9.isZero) == false then {
+            dbEn9: (ListVal zast.nameid)
+            dbEd9: (ListVal ztypes.declid)
+            {
+                if (ty.declValid id: dbPn9) then {
+                    dbPo9: ty.decls.get i: (dbPn9 - 1)
+                    with dbCit9: dbPo9.children.iterate do for dbC9: dbCit9 loop {
+                        dbEn9.append from: dbC9.nameId
+                        dbEd9.append from: dbC9.declId
+                    }
+                }
+            }
+            dbEi9: u64
+            dbEc9: dbEn9.length
+            for dbEi9 < dbEc9 loop {
+                dbTd9: dbEd9.get i: dbEi9
+                dbEt9: zast.nameTextAt :ast ref: (dbEn9.get i: dbEi9)
+                dbEi9 = dbEi9 + 1
+                if (reg.isDemanded name: dbEt9.stringview) then dbPubT9.add item: dbTd9.u64
+            }
+        }
+    }
     anyDemanded: false
     {
         biter: bodyIds9.iterate
@@ -9279,7 +9310,12 @@ resolveDemandedUnitBody: function {
                 bmNode9
             ) case namedoperation then {
                 dn: zast.nameTextAt :ast ref: bmNode9.name
-                if (reg.isDemanded name: dn.stringview) then {
+                dbDem9: reg.isDemanded name: dn.stringview
+                if (dbDem9) == false then {
+                    dbMd9: ty.declFindChild parentDeclId: dbPd9 nameId: bmNode9.name
+                    if (dbMd9.isZero) == false when (dbPubT9.has item: dbMd9.u64) then dbDem9 = true
+                }
+                if dbDem9 then {
                     # A name the main unit defines shadows this unit's def --
                     # unless the unit's own internals demand it (seeded io
                     # names): the reference resolves those io-locally.
