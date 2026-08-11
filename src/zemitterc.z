@@ -8852,25 +8852,22 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         }
         bn2: emitLocalAtomName :ctx name: bn2r.stringview vid: bn2a9V0
         mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
-        if bn2r.stringview == "io" then {
-            isStdS9: false
-            if mn2.stringview == "stdout" then isStdS9 = true
-            if mn2.stringview == "stderr" then isStdS9 = true
-            if mn2.stringview == "stdin" then isStdS9 = true
-            if isStdS9 then {
-                needsAdd :ctx name: "io"
-                sname9: "io_\{mn2}"
-                needsAdd :ctx name: sname9.stringview
-                return "z_io_\{mn2}()"
-            }
-        }
-        if bn2r.stringview == "os" then {
-            if (isOsNoArgFn name: mn2.stringview) then {
-                needsAdd :ctx name: "os"
-                osn9: "os_\{mn2}"
-                needsAdd :ctx name: osn9.stringview
-                return "z_os_\{mn2}()"
-            }
+        # a zero-parameter native read without parens auto-calls: the member's
+        # DECLARATION says so, so io.stdout and os.pid take one leg and the
+        # sixteen os names and three io names no longer need listing
+        nnu9: (nativeNoArgOf9
+            :ast
+            :symtab
+            unitName: ctx.mainName.stringview
+            baseId: (atomNameIdOf :ast n: (ast.nodes.get i: (n.parent - 1).u64))
+            base: bn2r.stringview
+            membId: (atomNameIdOf :ast n: (ast.nodes.get i: (n.child - 1).u64))
+        )
+        if nnu9.length > 0 then {
+            needsAdd :ctx name: nnu9.stringview
+            nname9: "\{nnu9}_\{mn2}"
+            needsAdd :ctx name: nname9.stringview
+            return "z_\{nnu9}_\{mn2}()"
         }
         # `.private` is a compile-time friend marker -- it emits the receiver itself.
         if mn2.stringview == "private" then {
@@ -11354,7 +11351,7 @@ emitStmt: function {
         ltid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: ltid)
         if (isListOriginOf :symtab :ctx tid: ltid) then {
             lcb: ctxCname :ctx tid: ltid
-            if (osNoArgCallRhs :ast n: avn9) then {
+            if (noArgNativeRhs :ast :symtab unitName: ctx.mainName.stringview n: avn9) then {
                 # owned List returned by os.args / os.envNames: emit the call.
                 losr: emitExpr :ast :symtab :ctx n: avn9
                 losb: "\{ind}\{lcb}_t \{nm} = \{losr};\n"
@@ -21567,7 +21564,6 @@ emitRuntimeIo: function {
     ioSkip9.append "uses_BufReader".string
     ioSkip9.append "uses_TextWriter".string
     ioSkip9.append "uses_TextReader".string
-    ioSkip9.append "removeTree".string
     ioSkip9.append "stdout".string
     ioSkip9.append "stderr".string
     ioSkip9.append "stdin".string
@@ -24423,43 +24419,99 @@ emitIoWrapperCreate: function {
 # eprintln/open/exists/mkdir/.../stat/listDir): `z_io_<name>(args...)` in the
 # native's parameter order, setting the per-call need so emitRuntimeIo emits
 # the body. Returns "" for any non-io callee.
-# isOsNoArgFn -- a no-arg os.* function (auto-called bare: os.pid / os.platform
-# / os.cwd / ...). args is here too (the existing os.args leg).
-isOsNoArgFn: function {name: StringView} out bool is {
-    if name == "args" then return true
-    if name == "pid" then return true
-    if name == "ppid" then return true
-    if name == "monotonicMillis" then return true
-    if name == "waitAny" then return true
-    if name == "cwd" then return true
-    if name == "hostname" then return true
-    if name == "userName" then return true
-    if name == "homeDir" then return true
-    if name == "envNames" then return true
-    if name == "exePath" then return true
-    if name == "hostOsName" then return true
-    if name == "hostArchName" then return true
-    if name == "buildCommit" then return true
-    if name == "buildDate" then return true
-    if name == "buildCompiler" then return true
-    return false
+# nativeNoArgOf9 -- the unit that DECLARES `base.memb` when the member is a
+# native taking no parameters, so a no-paren read auto-calls it (os.pid,
+# io.stdout). "" otherwise. The gates run cheapest first: nearly every dotted
+# path has a non-unit base and stops at the registry lookup, and the shadow
+# check -- a declaration of the base name in `unitName` displaces the unit,
+# since name ids are pooled program-wide -- runs only once a native is in
+# hand.
+nativeNoArgOf9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    unitName: StringView
+    baseId: zast.nameid
+    base: StringView
+    membId: zast.nameid
+} out String is {
+    if baseId.isZero then return "".string
+    if (symtab.reg.isUnitName nameId: baseId) == false then return "".string
+    fo9: (ztypecheck.resolvedByIds
+        :ast
+        ty: symtab.typing
+        reg: symtab.reg
+        unitId: baseId
+        name: membId
+    )
+    fid9: ztypes.tid
+    match (
+        fo9
+    ) case some then {
+        fid9 = ztypes.tid.create from: (fo9)
+    } case none then {
+        return "".string
+    }
+    if (symtab.reg.typetypeOf typeId: fid9) != ztypes.ztypetype.functionType then return "".string
+    if (fnIsNativeId :symtab fid: fid9) == false then return "".string
+    pn9: (List String)
+    pi9: (ListVal u64)
+    pnm9: (ListVal u64)
+    recFieldLists :ast :symtab tid: fid9 names: pn9 ids: pi9 nameIds: pnm9
+    if pn9.length > 0 then return "".string
+    sh9: (ztypecheck.resolveUnitChild
+        :ast
+        ty: symtab.typing
+        reg: symtab.reg
+        :unitName
+        name: base
+    )
+    match (
+        sh9
+    ) case some then {
+        shT9: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: sh9)
+        if shT9 != ztypes.ztypetype.unitType then return "".string
+    } case none then null
+    duo9: definedInUnitOf :symtab tid: fid9
+    match (
+        duo9
+    ) case some then {
+        return duo9.copy
+    } case none then {
+        return "".string
+    }
 }
 
-# osNoArgCallRhs -- a binding RHS that is a bare `os.<noArgFn>` auto-call
-# (os.args / os.envNames return an owned List, so the binding's List branch
-# must emit the call, not a fresh empty list).
-osNoArgCallRhs: function {ast: Ast.view n: Node.view} out bool is {
+# noArgNativeRhs -- a binding RHS that is a bare zero-parameter native
+# auto-call (os.args / os.envNames return an owned List, so the binding's List
+# branch must emit the call, not a fresh empty list).
+noArgNativeRhs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    unitName: StringView
+    n: Node.view
+} out bool is {
     match (
         n
     ) case expression then {
-        return (osNoArgCallRhs :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+        return (noArgNativeRhs :ast :symtab :unitName n: (ast.nodes.get i: (n.expression - 1).u64))
     } case statementline then {
-        return (osNoArgCallRhs :ast n: (ast.nodes.get i: (n.statementline - 1).u64))
+        return (noArgNativeRhs
+            :ast
+            :symtab
+            :unitName
+            n: (ast.nodes.get i: (n.statementline - 1).u64)
+        )
     } case dottedpath then {
         base9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
-        if base9.stringview != "os" then return false
-        memb9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        return (isOsNoArgFn name: memb9.stringview)
+        nu9: (nativeNoArgOf9
+            :ast
+            :symtab
+            :unitName
+            baseId: (atomNameIdOf :ast n: (ast.nodes.get i: (n.parent - 1).u64))
+            base: base9.stringview
+            membId: (atomNameIdOf :ast n: (ast.nodes.get i: (n.child - 1).u64))
+        )
+        return nu9.length > 0
     } else {
         return false
     }
