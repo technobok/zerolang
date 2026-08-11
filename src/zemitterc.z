@@ -17194,57 +17194,174 @@ fillNeedsIn: function {
                 ownerTid: ztypes.tid
                 wantWalked: true
             ) == false then {
-                scanNeeds :ast :ctx n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                (scanNeeds
+                    :ast
+                    :symtab
+                    :ctx
+                    :unitName
+                    n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                )
             }
         }
     }
+}
+
+# scanNativeNeed9 -- register the unit + `<unit>_<member>` needs behind a
+# callee that RESOLVES to a native declaration. The discriminator is the
+# resolved declaration and the unit that declares it, never the spelling of
+# the base atom: a user unit named `os` declares bodied functions, so it
+# resolves to nothing native and gates no fragment, while a native reached
+# through any spelling is recorded under the unit that declares it.
+scanNativeNeed9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    unitName: StringView
+    baseId: zast.nameid
+    base: StringView
+    membId: zast.nameid
+    memb: StringView
+} is {
+    fid9: ztypes.tid
+    if baseId.isZero == false when memb.length > 0 then {
+        # a qualified path names a unit only when the base IS one: a program
+        # may declare a TYPE with a runtime unit's name (a variant `io` with a
+        # `stdout` arm), and `io.stdout` there constructs an arm rather than
+        # reaching the native. Name ids are pooled program-wide, so resolving
+        # the child without this gate would find the stdlib declaration.
+        if (symtab.reg.isUnitName nameId: baseId) == false then return
+        # ... but a DECLARATION of that name in the scanning unit shadows it:
+        # a variant `io` with a `stdout` arm makes `io.stdout` an arm
+        # construction, and the unit registry still answers isUnitName because
+        # name ids are pooled program-wide.
+        sh9: (ztypecheck.resolveUnitChild
+            :ast
+            ty: symtab.typing
+            reg: symtab.reg
+            :unitName
+            name: base
+        )
+        match (
+            sh9
+        ) case some then {
+            shT9: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: sh9)
+            if shT9 != ztypes.ztypetype.unitType then return
+        } case none then null
+        fo9: (ztypecheck.resolvedByIds
+            :ast
+            ty: symtab.typing
+            reg: symtab.reg
+            unitId: baseId
+            name: membId
+        )
+        match (
+            fo9
+        ) case some then {
+            fid9 = ztypes.tid.create from: (fo9)
+        } case none then return
+    } else {
+        if memb.length == 0 then return
+        go9: (ztypecheck.resolveUnitChild
+            :ast
+            ty: symtab.typing
+            reg: symtab.reg
+            :unitName
+            name: memb
+        )
+        match (
+            go9
+        ) case some then {
+            fid9 = ztypes.tid.create from: (go9)
+        } case none then return
+    }
+    if fid9.isZero then return
+    if (symtab.reg.typetypeOf typeId: fid9) != ztypes.ztypetype.functionType then return
+    if (fnIsNativeId :symtab fid: fid9) == false then return
+    duo9: definedInUnitOf :symtab tid: fid9
+    match (
+        duo9
+    ) case some then {
+        needsAdd :ctx name: duo9.stringview
+        nk9: "\{duo9}_\{memb}"
+        needsAdd :ctx name: nk9.stringview
+    } case none then null
 }
 
 # scanNeeds -- recursively register io/os native needs for every call in a
 # def/body. Structurally mirrors collectLiterals; emitFns registers free-fn
 # needs ahead of emitRuntimeIo, but type-method bodies emit afterwards (via
 # emitRecordDefs), so a native used only inside a method (e.g. io.stat in
-# zvfs's providers) would never have its runtime body emitted. At a call node
-# it inspects the callable's `base.member` shape and registers io/os +
-# io_<m>/os_<m> (an unrecognized member gates no fragment, so over-registering
-# is harmless).
-scanNeeds: function {ast: Ast.view ctx: Ctx.view n: Node.view} is {
+# zvfs's providers) would never have its runtime body emitted. A callee that
+# RESOLVES to a native declaration registers the unit that declares it plus
+# `<unit>_<member>`; a callee that resolves to anything else registers
+# nothing, so a user unit named io or os gates no fragment.
+scanNeeds: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    unitName: StringView
+    n: Node.view
+} is {
     match (
         n
     ) case functiondef then {
-        if n.body > 0 then scanNeeds :ast :ctx n: (ast.nodes.get i: (n.body - 1).u64)
+        if n.body > 0 then (scanNeeds
+            :ast
+            :symtab
+            :ctx
+            :unitName
+            n: (ast.nodes.get i: (n.body - 1).u64)
+        )
     } case objectdef then {
         with aiter: n.asItems.iterate do for amId9: aiter loop {
             am: ast.nodes.get i: (amId9 - 1).u64
             match (
                 am
             ) case namedoperation then {
-                scanNeeds :ast :ctx n: (ast.nodes.get i: (am.operation - 1).u64)
+                scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (am.operation - 1).u64)
+            } else null
+        }
+        with iiter: n.isItems.iterate do for imId9: iiter loop {
+            im: ast.nodes.get i: (imId9 - 1).u64
+            match (
+                im
+            ) case namedoperation then {
+                scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (im.operation - 1).u64)
             } else null
         }
     } case statement then {
         siter: n.statements.iterate
-        for sId9: siter loop scanNeeds :ast :ctx n: (ast.nodes.get i: (sId9 - 1).u64)
+        for sId9: siter loop (scanNeeds
+            :ast
+            :symtab
+            :ctx
+            :unitName
+            n: (ast.nodes.get i: (sId9 - 1).u64)
+        )
     } case statementline then {
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.statementline - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.statementline - 1).u64)
     } case expression then {
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.expression - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.expression - 1).u64)
     } case namedoperation then {
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.operation - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.operation - 1).u64)
     } case call then {
-        bn0: dottedBaseAtom :ast n: (ast.nodes.get i: (n.callable - 1).u64)
         mn0: dottedChildText :ast n: (ast.nodes.get i: (n.callable - 1).u64)
-        if bn0.stringview == "io" when mn0.length > 0 then {
-            needsAdd :ctx name: "io"
-            iname0: "io_\{mn0}"
-            needsAdd :ctx name: iname0.stringview
+        cbi0: dottedBaseAtomId :ast n: (ast.nodes.get i: (n.callable - 1).u64)
+        cbt0: dottedBaseAtom :ast n: (ast.nodes.get i: (n.callable - 1).u64)
+        cmb0: mn0.copy
+        if cbi0.isZero then {
+            cmb0 = atomTextOf :ast n: (ast.nodes.get i: (n.callable - 1).u64)
         }
-        if bn0.stringview == "os" when mn0.length > 0 then {
-            needsAdd :ctx name: "os"
-            oname0: "os_\{mn0}"
-            needsAdd :ctx name: oname0.stringview
-        }
-        if bn0.stringview == "net" when mn0.length > 0 then needsAdd :ctx name: "net"
+        (scanNativeNeed9
+            :ast
+            :symtab
+            :ctx
+            :unitName
+            baseId: cbi0
+            base: cbt0.stringview
+            membId: (dottedChildNameIdOf :ast n: (ast.nodes.get i: (n.callable - 1).u64))
+            memb: cmb0.stringview
+        )
         if (isSvArgNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
         if (isSvSimpleNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
         # substring emits through its own leg (recv/from/to), so the arg-native
@@ -17261,7 +17378,7 @@ scanNeeds: function {ast: Ast.view ctx: Ctx.view n: Node.view} is {
         cjn0: atomTextOf :ast n: (ast.nodes.get i: (n.callable - 1).u64)
         if cjn0.stringview == "stringJoin" then needsAdd :ctx name: "coll_join"
         aiter2: n.arguments.iterate
-        for a: aiter2 loop scanNeeds :ast :ctx n: (ast.nodes.get i: (a - 1).u64)
+        for a: aiter2 loop scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (a - 1).u64)
     } case dottedpath then {
         pdm9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         if pdm9.stringview == "parseF64" then needsAdd :ctx name: "parseF64"
@@ -17274,38 +17391,93 @@ scanNeeds: function {ast: Ast.view ctx: Ctx.view n: Node.view} is {
         # isEmpty, ...) arrive as dottedpath too -- same parity the call arm has
         if (isSvSimpleNative name: pdm9.stringview) then needsAdd :ctx name: pdm9.stringview
         if pdm9.stringview == "lines" then needsAdd :ctx name: "sv_lines"
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
+        # a no-paren member read auto-calls, so a zero-parameter native (os.pid,
+        # io.stdout) arrives here rather than at the call arm
+        pdb9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
+        (scanNativeNeed9
+            :ast
+            :symtab
+            :ctx
+            :unitName
+            baseId: (atomNameIdOf :ast n: (ast.nodes.get i: (n.parent - 1).u64))
+            base: pdb9.stringview
+            membId: (atomNameIdOf :ast n: (ast.nodes.get i: (n.child - 1).u64))
+            memb: pdm9.stringview
+        )
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.parent - 1).u64)
     } case binop then {
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.lhs - 1).u64)
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.rhs - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.lhs - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.rhs - 1).u64)
     } case assignment then {
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.value - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.value - 1).u64)
     } case reassignment then {
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.value - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.value - 1).u64)
     } case ifexpr then {
         citer: n.clauses.iterate
-        for cId9: citer loop scanNeeds :ast :ctx n: (ast.nodes.get i: (cId9 - 1).u64)
-        if n.elseclause > 0 then scanNeeds :ast :ctx n: (ast.nodes.get i: (n.elseclause - 1).u64)
+        for cId9: citer loop (scanNeeds
+            :ast
+            :symtab
+            :ctx
+            :unitName
+            n: (ast.nodes.get i: (cId9 - 1).u64)
+        )
+        if n.elseclause > 0 then (scanNeeds
+            :ast
+            :symtab
+            :ctx
+            :unitName
+            n: (ast.nodes.get i: (n.elseclause - 1).u64)
+        )
     } case caseexpr then {
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.subject - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.subject - 1).u64)
         miter9: n.clauses.iterate
-        for mc9Id9: miter9 loop scanNeeds :ast :ctx n: (ast.nodes.get i: (mc9Id9 - 1).u64)
-        if n.elseclause > 0 then scanNeeds :ast :ctx n: (ast.nodes.get i: (n.elseclause - 1).u64)
+        for mc9Id9: miter9 loop (scanNeeds
+            :ast
+            :symtab
+            :ctx
+            :unitName
+            n: (ast.nodes.get i: (mc9Id9 - 1).u64)
+        )
+        if n.elseclause > 0 then (scanNeeds
+            :ast
+            :symtab
+            :ctx
+            :unitName
+            n: (ast.nodes.get i: (n.elseclause - 1).u64)
+        )
     } case caseclause then {
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.statement - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.statement - 1).u64)
     } case ifclause then {
         kiter: n.conditions.iterate
-        for kId9: kiter loop scanNeeds :ast :ctx n: (ast.nodes.get i: (kId9 - 1).u64)
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.statement - 1).u64)
+        for kId9: kiter loop (scanNeeds
+            :ast
+            :symtab
+            :ctx
+            :unitName
+            n: (ast.nodes.get i: (kId9 - 1).u64)
+        )
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.statement - 1).u64)
     } case withexpr then {
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.value - 1).u64)
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.body - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.value - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.body - 1).u64)
     } case doexpr then {
-        scanNeeds :ast :ctx n: (ast.nodes.get i: (n.statement - 1).u64)
+        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (n.statement - 1).u64)
     } case forexpr then {
         fiter: n.conditions.iterate
-        for fId9: fiter loop scanNeeds :ast :ctx n: (ast.nodes.get i: (fId9 - 1).u64)
-        if n.body > 0 then scanNeeds :ast :ctx n: (ast.nodes.get i: (n.body - 1).u64)
+        for fId9: fiter loop (scanNeeds
+            :ast
+            :symtab
+            :ctx
+            :unitName
+            n: (ast.nodes.get i: (fId9 - 1).u64)
+        )
+        if n.body > 0 then (scanNeeds
+            :ast
+            :symtab
+            :ctx
+            :unitName
+            n: (ast.nodes.get i: (n.body - 1).u64)
+        )
     } else null
 }
 
