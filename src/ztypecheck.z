@@ -8517,6 +8517,16 @@ resolveDef: function {
     defn: Node
 } is {
     rdecl0: declOfUnitDef :ty :ast defUnit: unitName name: defName
+    # a definition's BODY reaches names its signature does not: a type
+    # constructed, or a sibling function called, only inside it must be demanded
+    # or it never resolves -- and the body walk then reports a perfectly valid
+    # reference as unknown. It goes HERE because every resolver funnels through
+    # resolveDef: the demanded-unit walk, the descent, and the conformance pass,
+    # which resolves any definition carrying an as-block marker (zvfs
+    # FSProvider) and reached none of the per-caller copies of this. recordDemand
+    # is a set add, so a repeat visit costs a probe and cannot grow the registry,
+    # which is what the demand fixpoint measures progress by.
+    scanDefCalls :ast :reg op: defn
     ty.declSetResolving declId: rdecl0 mark: true
     # A containment edge is ONE hop: this def's own resolution starts a
     # fresh context (its field/arm legs re-arm the flag), so an outer field
@@ -9418,21 +9428,6 @@ resolveDemandedUnitBody: function {
                             defUnit: unitName
                             nameId: bmNode9.name
                         ) == false then {
-                            # a resolved definition's BODY reaches names its
-                            # signature does not: a type constructed only inside
-                            # it must be demanded here, or it never resolves and
-                            # the construction stamps type 0. The eager pass
-                            # scanned every file unit's bodies up front
-                            # (scanMainBodyCalls); on the demand path the scan
-                            # belongs where the definition actually resolves.
-                            # recordDemand is a set add, so a second visit costs
-                            # a probe and cannot grow the registry -- which is
-                            # what the fixpoint measures progress by.
-                            (scanDefCalls
-                                :ast
-                                :reg
-                                op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-                            )
                             # dispatch by KIND, as resolveUnitBody and
                             # resolveNamespaceUnit do. This path had one arm and
                             # one call, so a namespace or a template in a
@@ -26725,6 +26720,47 @@ sweepUnwalkedMethods: function {st: zenv.ZSymbolTable ast: Ast.view} is {
                                 swDo9 = true
                             }
                         } else null
+                        # Whose dead code it is decides whether this compile
+                        # cares. An owner in the program's OWN unit is worth
+                        # reporting on: the author wrote it and can fix it. A
+                        # DEPENDENCY's unreached type is not -- a build must not
+                        # spend time probing definitions the program cannot
+                        # reach, in code it does not own, and its body names
+                        # siblings nothing demanded, so checking it reports
+                        # valid references as unknown. `--eager` -- and so
+                        # eager-guard, zls and `zl lint --full` -- checks
+                        # everything regardless, which is the point of it.
+                        # Asked HERE, not per member: resolvedByIds RESOLVES as
+                        # it walks, so probing every member of every unit
+                        # settles types this compile never needed.
+                        if swDo9 when (objectdefHasMethodBodies
+                            :ast
+                            op: swop9
+                        ) then {
+                            swKeep9: st.typing.eagerAll
+                            if (swKeep9) == false then {
+                                swMu9: st.reg.regMainUnit
+                                if swun9.stringview == swMu9.stringview then swKeep9 = true
+                            }
+                            if (swKeep9) == false then {
+                                swKeep9 = st.reg.isDemanded name: swmn9.stringview
+                            }
+                            if (swKeep9) == false then {
+                                swRo9: (resolvedByIds
+                                    :ast
+                                    ty: st.typing
+                                    reg: st.reg
+                                    unitId: (nameIdOf :ast name: swun9.stringview)
+                                    name: swm9.name
+                                )
+                                match (
+                                    swRo9
+                                ) case some then {
+                                    swKeep9 = true
+                                } case none then null
+                            }
+                            if (swKeep9) == false then swDo9 = false
+                        }
                         if swDo9 when (objectdefHasMethodBodies :ast op: swop9) then {
                             mvS9: true
                             st.typing.walkedMethodOwners.set key: swk9 value: mvS9
