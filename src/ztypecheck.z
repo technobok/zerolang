@@ -26100,9 +26100,14 @@ runDepUnitWalks: function {
     }
 }
 
-# depWalkUnit -- walk one dependency unit's resolved free-function bodies
-# (two passes: indices first, so the body list is free for the walk itself).
-# Method-owning types are the completion sweep's concern.
+# depWalkUnit -- walk one dependency unit's RESOLVED definitions: its free
+# function bodies, and the method bodies of its resolved types (two passes:
+# indices first, so the body list is free for the walk itself). A type's methods
+# are walked because the type resolved -- because something reached it -- which
+# is the same rule its signature already follows. Leaving them to the completion
+# sweep instead meant the demand walk resolved a type and never checked what its
+# methods do, so the sweep had to walk every method-owning type in the program
+# to cover the reached ones.
 depWalkUnit: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -26116,6 +26121,7 @@ depWalkUnit: function {
         idxs: (ListVal u64)
         di0: u64
         nsIdx9: (ListVal u64)
+        ownIdx9: (ListVal u64)
         with biter: bodyIds9.iterate do for bmId9: biter loop {
             bm: ast.nodes.get i: (bmId9 - 1).u64
             match (
@@ -26124,6 +26130,15 @@ depWalkUnit: function {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (bm.operation - 1).u64)) then {
                     dv0: di0
                     idxs.append dv0
+                }
+                {
+                    dOp0: ast.nodes.get i: (bm.operation - 1).u64
+                    if (objectdefHasMethodBodies :ast op: dOp0) then {
+                        if (objectdefIsGeneric :ast o: dOp0) == false then {
+                            ov0: di0
+                            ownIdx9.append ov0
+                        }
+                    }
                 }
                 isNs0: false
                 if (zast.unitOpKindIs
@@ -26158,6 +26173,46 @@ depWalkUnit: function {
                     depUnits: emptyD
                 )
             }
+        }
+        oi9: u64
+        for oi9 < ownIdx9.length loop {
+            oidx9: ownIdx9.get i: oi9
+            oi9 = oi9 + 1
+            om9Id9: bodyIds9.get i: oidx9
+            om9: ast.nodes.get i: (om9Id9 - 1).u64
+            match (
+                om9
+            ) case namedoperation then {
+                onm9: zast.nameTextAt :ast ref: om9.name
+                orgo9: (resolvedByIds
+                    :ast
+                    ty: st.typing
+                    reg: st.reg
+                    unitId: (nameIdOf :ast name: depName)
+                    name: om9.name
+                )
+                match (
+                    orgo9
+                ) case some then {
+                    owk9: (ztypes.memberKey
+                        unitId: (nameIdOf :ast name: depName)
+                        nameId: om9.name
+                    )
+                    owalked9: optBoolOr o: (st.typing.walkedMethodOwners.get key: owk9) d: false
+                    if (owalked9) == false then {
+                        ovv9: true
+                        st.typing.walkedMethodOwners.set key: owk9 value: ovv9
+                        (walkOwnerMethods
+                            :st
+                            unitName: depName
+                            :ast
+                            unitBody: bodyIds9
+                            memId9: om9Id9
+                            name: onm9.stringview
+                        )
+                    }
+                } case none then null
+            } else null
         }
         wi: u64
         for wi < idxs.length loop {
