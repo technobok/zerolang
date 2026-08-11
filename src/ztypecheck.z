@@ -8675,6 +8675,75 @@ resolveDef: function {
     }
 }
 
+# registerUnitGenericParams -- a generic FILE unit's own parameters: registered
+# against its root Decl, each with a canonical per-(unit, param) GENERIC_PARAM
+# tid the definition's value node carries, so template signatures and bodies
+# stamp it. Run for EVERY unit, not only an eagerly-resolved one: it is a
+# property of the declaration, and a unit that is resolved on demand has the
+# same parameters as one that is not.
+registerUnitGenericParams: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast.view
+    unitName: StringView
+    unitdefId: zast.nodeid
+} is {
+    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
+    if (hasGenericParam :ast items: bodyIds9) then {
+        urd0: ztypes.declid
+        {
+            uro0: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+            match (
+                uro0
+            ) case some then {
+                urd0 = uro0
+            } case none then null
+        }
+        registerGenericParams :reg :ast tdecl: urd0 items: bodyIds9
+        # Each generic-param name gets a canonical per-(unit,param)
+        # GENERIC_PARAM tid (get-or-mint), attributed to the unit; the
+        # param definition's value node carries it so template signatures
+        # and bodies stamp it.
+        with gpiter: bodyIds9.iterate do for gmId9: gpiter loop {
+            gm: ast.nodes.get i: (gmId9 - 1).u64
+            match (
+                gm
+            ) case namedoperation then {
+                if (isBareGenericParam
+                    :ast
+                    op: (ast.nodes.get i: (gm.operation - 1).u64)
+                ) then {
+                    gpn0: zast.nameTextAt :ast ref: gm.name
+                    gtid0: ztypes.tid
+                    gpo0: reg.genericParamTidOf tdecl: urd0 paramName: gpn0.stringview
+                    match (
+                        gpo0
+                    ) case some then {
+                        gtid0 = ztypes.tid.create from: (gpo0)
+                    } case none then {
+                        gtid0 = (reg.newType
+                            name: gpn0.stringview
+                            typetype: ztypes.ztypetype.genericParam
+                        )
+                        reg.setGenericParamTid tdecl: urd0 paramName: gpn0.stringview tid: gtid0
+                    }
+                    (linkDeclType
+                        :ty
+                        :reg
+                        :ast
+                        defUnit: unitName
+                        name: gpn0.stringview
+                        tid: (ztypes.tid.create from: gtid0.u64)
+                    )
+                    gpnid: nodeId n: (ast.nodes.get i: (gm.operation - 1).u64)
+                    ztyping.nodeTypeSet tbl: ty.nodeType nid: gpnid.u64 tid: gtid0
+                }
+            } else null
+        }
+    }
+}
+
+
 # resolveUnitBody -- resolve every top-level definition signature in a unit.
 # resolveUnitBody -- resolve a unit's definition signatures. Signature-only
 # resolves every member; the full body-walk mode mirrors check()'s eager set
@@ -8689,58 +8758,6 @@ resolveUnitBody: function {
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
     {
-        if (hasGenericParam :ast items: bodyIds9) then {
-            urd0: ztypes.declid
-            {
-                uro0: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-                match (
-                    uro0
-                ) case some then {
-                    urd0 = uro0
-                } case none then null
-            }
-            registerGenericParams :reg :ast tdecl: urd0 items: bodyIds9
-            # Each generic-param name gets a canonical per-(unit,param)
-            # GENERIC_PARAM tid (get-or-mint), attributed to the unit; the
-            # param definition's value node carries it so template signatures
-            # and bodies stamp it.
-            with gpiter: bodyIds9.iterate do for gmId9: gpiter loop {
-                gm: ast.nodes.get i: (gmId9 - 1).u64
-                match (
-                    gm
-                ) case namedoperation then {
-                    if (isBareGenericParam
-                        :ast
-                        op: (ast.nodes.get i: (gm.operation - 1).u64)
-                    ) then {
-                        gpn0: zast.nameTextAt :ast ref: gm.name
-                        gtid0: ztypes.tid
-                        gpo0: reg.genericParamTidOf tdecl: urd0 paramName: gpn0.stringview
-                        match (
-                            gpo0
-                        ) case some then {
-                            gtid0 = ztypes.tid.create from: (gpo0)
-                        } case none then {
-                            gtid0 = (reg.newType
-                                name: gpn0.stringview
-                                typetype: ztypes.ztypetype.genericParam
-                            )
-                            reg.setGenericParamTid tdecl: urd0 paramName: gpn0.stringview tid: gtid0
-                        }
-                        (linkDeclType
-                            :ty
-                            :reg
-                            :ast
-                            defUnit: unitName
-                            name: gpn0.stringview
-                            tid: (ztypes.tid.create from: gtid0.u64)
-                        )
-                        gpnid: nodeId n: (ast.nodes.get i: (gm.operation - 1).u64)
-                        ztyping.nodeTypeSet tbl: ty.nodeType nid: gpnid.u64 tid: gtid0
-                    }
-                } else null
-            }
-        }
         {
             # The reference binds a spec receiver only when the conformer's
             # resolution triggers the protocol's; a main body that never
@@ -9177,6 +9194,17 @@ registerAndResolveMain: function {
                 }
             }
             if opId9 > 0 then {
+                # a unit's own generic parameters are a property of its
+                # DECLARATION, not of whether its body is walked eagerly. Kept
+                # at this point in the unit order so an eagerly-resolved unit
+                # mints them exactly when it did before.
+                (registerUnitGenericParams
+                    :ty
+                    :reg
+                    ast: program.ast
+                    unitName: nm9.stringview
+                    unitdefId: opId9
+                )
                 if (isStdlibUnitName name: nm9.stringview) then {
                     (checkNativeOnlyUnitBodies
                         :ty
