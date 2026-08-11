@@ -16873,7 +16873,7 @@ dataElemLabel: function {ast: Ast.view n: Node.view} out String is {
 }
 
 # scan the program for the runtime helpers it needs.
-fillNeeds: function {program: Node ctx: Ctx.view} is {
+fillNeeds: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx.view} is {
     match (
         program
     ) case program then {
@@ -16883,17 +16883,23 @@ fillNeeds: function {program: Node ctx: Ctx.view} is {
             uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9b))
             uIdx9b = uIdx9b + 1
             opId9: zast.nodeid
+            un9: String
             {
                 u: program.ast.nodes.get i: (uId9 - 1).u64
                 if u.namedoperation then {
                     un: zast.poolTextAt pool: program.ast.names ref: u.name
-                    if (isEmittableFileUnit name: un.stringview) then opId9 = u.operation
+                    if (isEmittableFileUnit name: un.stringview) then {
+                        opId9 = u.operation
+                        un9 = un.copy
+                    }
                 }
             }
             if opId9 > 0 then {
                 (fillNeedsIn
+                    :symtab
                     :ctx
                     ast: program.ast
+                    unitName: un9.stringview
                     mainOpId: opId9
                 )
             }
@@ -16902,12 +16908,31 @@ fillNeeds: function {program: Node ctx: Ctx.view} is {
 }
 
 # scan one unit for the runtime helpers it needs.
-fillNeedsIn: function {ctx: Ctx.view ast: Ast.view mainOpId: zast.nodeid} is {
+fillNeedsIn: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    ast: Ast.view
+    unitName: StringView
+    mainOpId: zast.nodeid
+} is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: mainOpId
     with biter: bodyIds9.iterate do for bm: biter loop {
         bmNode9: ast.nodes.get i: (bm - 1).u64
         if bmNode9.namedoperation then {
-            scanNeeds :ast :ctx n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+            # a body that will not be emitted must not register needs either:
+            # a runtime fragment pulled in by dead code carries the signature
+            # types that code named, and nothing minted them.
+            fnn9: zast.nameTextAt :ast ref: bmNode9.name
+            if (stdFnUndemanded
+                :ast
+                :symtab
+                :unitName
+                fnName: fnn9.stringview
+                ownerTid: ztypes.tid
+                wantWalked: true
+            ) == false then {
+                scanNeeds :ast :ctx n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+            }
         }
     }
 }
@@ -17138,6 +17163,11 @@ stdFnUndemanded: function {
     unitName: StringView
     fnName: StringView
     ownerTid: ztypes.tid
+    # ask whether the body was WALKED, not merely resolved. Only the definition
+    # pass may: the literal pool has to cover everything that might be emitted,
+    # including a generic template unit's monos, whose template is never walked
+    # under its own name.
+    wantWalked: bool
 } out bool is {
     if (ownerTid.isZero) == false then {
         co9: (symtab.typing.declChildOfId
@@ -17159,13 +17189,35 @@ stdFnUndemanded: function {
         unitId: (zast.poolFind pool: ast.names text: unitName)
         name: (zast.poolFind pool: ast.names text: fnName)
     )
+    rres9: false
     match (
         ro9
     ) case some then {
-        return false
-    } case none then {
-        return true
+        rres9 = true
+    } case none then null
+    if (rres9) == false then return true
+    # resolved is not enough: emitting a body that was never WALKED emits code
+    # whose types were never minted. json.at is resolved because the demand set
+    # is keyed by bare name and another unit's `at` was demanded, and it then
+    # emits a call whose return spec nothing ever created -- `z_t0_t`. The walk
+    # is what stamps a body, so being walked is the honest question. The main
+    # unit is walked in full and keeps no such mark.
+    if (wantWalked) == false then return false
+    if unitName == symtab.reg.regMainUnit.stringview then return false
+    wk9: (ztypes.memberKey
+        unitId: (zast.poolFind pool: ast.names text: unitName)
+        nameId: (zast.poolFind pool: ast.names text: fnName)
+    )
+    wres9: false
+    {
+        wg9: symtab.typing.walkedMethodOwners.get key: wk9
+        match (
+            wg9
+        ) case some then {
+            wres9 = true
+        } case none then null
     }
+    return (wres9) == false
 }
 
 # isGenericTemplateUnitOp -- a file unit that is a generic template (declares a
@@ -17550,6 +17602,7 @@ emitFnsIn: function {
                         unitName: ctx.mainName.stringview
                         fnName: nm.stringview
                         :ownerTid
+                        wantWalked: true
                     ) then skipDepMain = true
                     if nm.stringview == "main" then {
                         if ctx.mainName.stringview != ctx.realMain.stringview then {
@@ -18066,6 +18119,7 @@ collectUnitLiteralsIn: function {
                 :unitName
                 fnName: bn9.stringview
                 ownerTid: ztypes.tid
+                wantWalked: false
             )
             if (skipU9) == false then (collectFnLiterals
                 :ast
@@ -18591,7 +18645,7 @@ emitC: function {
     ctxBindMain :ctx name: ctx.realMain.stringview
     fillMethodReturns :program :ctx
     fillDataElems :program :symtab :ctx
-    fillNeeds :program :ctx
+    fillNeeds :program :symtab :ctx
     nodeEstE9: u64
     match (
         program
@@ -21842,6 +21896,7 @@ stdFnRefEmittable: function {ast: Ast.view symtab: zenv.ZSymbolTable fid: ztypes
             unitName: duo9.stringview
             fnName: fnm9.stringview
             ownerTid: ztypes.tid
+            wantWalked: false
         ) == false
     } case none then {
         return false
