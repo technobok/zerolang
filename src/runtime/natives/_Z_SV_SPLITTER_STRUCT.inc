@@ -10,6 +10,3 @@ typedef struct {
     uint64_t    cursor;
     bool        done;
 } z_Splitter_t;
-
-typedef z_Splitter_t z_LinesIter_t;
-
