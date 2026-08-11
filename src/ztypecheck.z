@@ -8396,6 +8396,24 @@ ensureDefGenericParams: function {
     }
 }
 
+# isDeadDepMain -- `main` in a unit that is not the program's main unit. A
+# program has ONE entry point, and the emitter already refuses to emit any other
+# unit's `main`. The demand set is keyed by bare NAME, so the program's own
+# entry point satisfies every unit's, and several units here export `:main` from
+# their public interface besides -- they double as their own smoke harness. What
+# that resolves is dead code, whose body is then scanned for further demands and
+# walked, reporting the helpers it names as unknown references because nothing
+# else reaches them either.
+isDeadDepMain: function {
+    reg: ztypes.ZTypeRegistry.view
+    unitName: StringView
+    defName: StringView
+} out bool is {
+    if (defName == "main") == false then return false
+    mu9: reg.regMainUnit
+    return (unitName == mu9.stringview) == false
+}
+
 descendNamed: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
@@ -8405,6 +8423,7 @@ descendNamed: function {
 } out ztypes.tid is {
     if ty.defNodeIndexBuilt == false then return (ztypes.tid.create from: 0)
     if defUnit == "core" then return (ztypes.tid.create from: 0)
+    if (isDeadDepMain :reg unitName: defUnit defName: name) then return (ztypes.tid.create from: 0)
     ddec9: declOfUnitDef :ty :ast :defUnit :name
     tto9: (optionval.none ztypes.ztypetype)
     if ddec9 > 0 then tto9 = declDefTypetype :ty :ast declId: ddec9
@@ -9356,6 +9375,13 @@ resolveDemandedUnitBody: function {
                     dbMd9: ty.declFindChild parentDeclId: dbPd9 nameId: bmNode9.name
                     if (dbMd9.isZero) == false when (dbPubT9.has item: dbMd9.u64) then dbDem9 = true
                 }
+                # LAST, because the exported-name route above reaches a `main`
+                # too: these units list `:main` in their public block.
+                if (isDeadDepMain
+                    :reg
+                    :unitName
+                    defName: dn.stringview
+                ) then dbDem9 = false
                 if dbDem9 then {
                     # A name the main unit defines shadows this unit's def --
                     # unless the unit's own internals demand it (seeded io
