@@ -10066,9 +10066,44 @@ resolveDemandsByDescent: function {
     } else null
 }
 
-# callableUnitName -- the callable's name when a binding value is a (possibly
-# expression-wrapped) call, else "". Spots a generic-unit instantiation binding
-# (intmath: (genmath t: i64)).
+# instCallablePath -- an instantiation callable's name path as pool ids,
+# outermost first: `mathops` -> [mathops], `helperu.mathops` -> [helperu,
+# mathops]. A segment that is not a plain name appends 0, which
+# instTemplateDecl then rejects -- there is no name to look up.
+instCallablePath: function {ast: Ast.view op: Node.view segs: (ListVal u64)} is {
+    match (
+        op
+    ) case expression then {
+        instCallablePath :ast op: (ast.nodes.get i: (op.expression - 1).u64) :segs
+    } case dottedpath then {
+        instCallablePath :ast op: (ast.nodes.get i: (op.parent - 1).u64) :segs
+        segs.append (atomNameId :ast n: (ast.nodes.get i: (op.child - 1).u64)).u64
+    } case atomid then {
+        segs.append op.name.u64
+    } else {
+        segs.append 0
+    }
+}
+
+# callableInstPath -- the path of a binding whose value is a (possibly
+# expression-wrapped) call. Empty for anything else, which is what says a
+# binding is not an instantiation. Replaces reading a single atom name: a
+# dotted callable named another unit's template and yielded "" instead, so no
+# request was built at all -- silently, not as an error.
+callableInstPath: function {ast: Ast.view op: Node.view segs: (ListVal u64)} is {
+    match (
+        op
+    ) case expression then {
+        callableInstPath :ast op: (ast.nodes.get i: (op.expression - 1).u64) :segs
+    } case call then {
+        instCallablePath :ast op: (ast.nodes.get i: (op.callable - 1).u64) :segs
+    } else null
+}
+
+# callableUnitName -- the callable's bare name when a binding value is a
+# (possibly expression-wrapped) call, else "". A for-loop's inline generator
+# iterable is named this way; a generic-unit instantiation is not -- it reads
+# callableInstPath, which a dotted callable does not defeat.
 callableUnitName: function {ast: Ast.view op: Node.view} out String is {
     match (
         op
@@ -10079,6 +10114,131 @@ callableUnitName: function {ast: Ast.view op: Node.view} out String is {
     } else {
         return "".string
     }
+}
+
+
+# declParentIdOf -- a declaration's enclosing declaration (0 at a tree root).
+declParentIdOf: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out ztypes.declid is {
+    r9: ztypes.declid
+    if (ty.declValid id: declId) then {
+        do9: ty.decls.get i: (declId - 1)
+        r9 = do9.parent
+    }
+    return r9
+}
+
+# instTemplateDecl -- the DECLARATION an instantiation's callable path names,
+# resolved through the scope the instantiation was WRITTEN in: this namespace,
+# then each enclosing one out to the unit root, then a file unit of that name.
+# Nothing reaches into another unit except by naming it -- a dependency unit
+# cannot see the main unit's constants or namespaces, and an instantiation is
+# no different. 0 when the path names no declaration.
+instTemplateDecl: function {
+    ty: ztyping.ZTyping.view
+    scopeDeclId: ztypes.declid
+    segs: (ListVal u64).view
+} out ztypes.declid is {
+    cur: ztypes.declid
+    if segs.length == 0 then return cur
+    s0v9: segs.get i: 0
+    if s0v9 == 0 then return cur
+    s0: zast.nameid.create from: s0v9.u32.orPanic
+    probe: scopeDeclId
+    for probe > 0 loop {
+        c9: ty.declFindChild parentDeclId: probe nameId: s0
+        if (c9.isZero) == false then cur = c9
+        if (cur.isZero) == false then {
+            probe = ztypes.declid.create from: 0
+        } else {
+            probe = declParentIdOf :ty declId: probe
+        }
+    }
+    if cur.isZero then {
+        ro9: ty.unitRootByName.get key: s0.u64
+        match (
+            ro9
+        ) case some then {
+            cur = ro9
+        } case none then null
+    }
+    if cur.isZero then return cur
+    si9: u64
+    si9 = 1
+    for si9 < segs.length loop {
+        sv9: segs.get i: si9
+        if sv9 == 0 then return (ztypes.declid.create from: 0)
+        cur = (ty.declFindChild
+            parentDeclId: cur
+            nameId: (zast.nameid.create from: sv9.u32.orPanic)
+        )
+        if cur.isZero then return cur
+        si9 = si9 + 1
+    }
+    return cur
+}
+
+# instTemplateOpOf -- the unitdef node a template declaration introduces, and 0
+# when the declaration is not a generic unit at all. Both spellings count: an
+# inline `unit as {...}` parses as `template`, and a generic FILE unit's root
+# keeps its own kind but declares a generic parameter.
+instTemplateOpOf: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out zast.nodeid is {
+    none9: zast.nodeid
+    if declId.isZero then return none9
+    dn9: u32
+    {
+        if (ty.declValid id: declId) then {
+            do9: ty.decls.get i: (declId - 1)
+            dn9 = do9.node
+        }
+    }
+    if dn9 == 0 then return none9
+    op9: zast.nodeid
+    {
+        nop9: ast.nodes.get i: (dn9 - 1).u64
+        if nop9.namedoperation then op9 = nop9.operation
+    }
+    if op9.isZero then return none9
+    if (zast.unitOpKindIs :ast opId: op9 k: zast.unitkind.template) then return op9
+    udn9: unitdefNodeId :ast nId: op9
+    if udn9.isZero then return none9
+    if (unitDefIsGeneric :ast oId: udn9) then return op9
+    return none9
+}
+
+# declRootUnitName -- the unit a declaration lives in: the name on its tree
+# root. What a mono's completion needs to walk the template's own AST.
+declRootUnitName: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out String is {
+    cur: declId
+    nm9: u32
+    for cur > 0 loop {
+        nxt9: ztypes.declid
+        if (ty.declValid id: cur) then {
+            do9: ty.decls.get i: (cur - 1)
+            nxt9 = do9.parent
+            if nxt9.isZero then nm9 = do9.name
+        }
+        cur = nxt9
+    }
+    if nm9 == 0 then return "".string
+    return (zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: nm9.u32))
+}
+
+# declTypeIdOf -- the type a declaration carries (0 until one is bound).
+declTypeIdOf: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out ztypes.tid is {
+    r9: ztypes.tid
+    if (ty.declValid id: declId) then {
+        do9: ty.decls.get i: (declId - 1)
+        r9 = do9.typeId
+    }
+    return r9
 }
 
 # collectMainInstantiations -- scan a unit body for generic-unit instantiation bindings
@@ -10094,6 +10254,18 @@ InstReq: class {
     bind: String
     mono: String
     tmpl: String
+    # the template's own id, the unitdef node that declares it, and the unit
+    # whose AST that node lives in -- all resolved at COLLECTION, through the
+    # scope the instantiation was written in. A name reached only a top-level
+    # binding of the instantiating unit; an id reaches a dotted or
+    # namespace-nested template too.
+    tmplTid: ztypes.tid
+    tmplDeclId: ztypes.declid
+    tmplOpId: u64
+    tmplUnit: String
+    # the Decl the instantiation was written under: the unit root, or the
+    # namespace when it is nested. Where the binding's own name belongs.
+    scopeDeclId: ztypes.declid
     argLabels: (List String)
     argNames: (List String)
     argAtomIds: (ListVal u64)
@@ -10121,6 +10293,8 @@ instFillCallable: function {r: InstReq op: Node.view} is {
     match (
         op
     ) case atomid then {
+        r.calId = op.nodeid.u64
+    } case dottedpath then {
         r.calId = op.nodeid.u64
     } else null
 }
@@ -10166,9 +10340,11 @@ fillUnitArgs: function {ast: Ast.view r: InstReq op: Node.view} is {
 
 # collect the generic instantiation requests reachable from main.
 collectMainInstantiations: function {
+    ty: ztyping.ZTyping.view
     ast: Ast.view
     o: Node.view
     unitName: StringView
+    scopeDeclId: ztypes.declid
     reqs: List InstReq
 } is {
     match (
@@ -10180,43 +10356,97 @@ collectMainInstantiations: function {
             match (
                 bmNode9
             ) case namedoperation then {
-                tn: callableUnitName :ast op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-                if tn.length != 0 then {
-                    bindn: zast.nameTextCopy :ast ref: bmNode9.name
-                    r9: (InstReq
-                        declUnit: unitName.string
-                        bind: bindn
-                        mono: "".string
-                        tmpl: tn.copy
-                        argLabels: (List String)
-                        argNames: (List String)
-                        argAtomIds: (ListVal u64)
-                        exprId: 0
-                        callId: 0
-                        calId: 0
+                mop9: ast.nodes.get i: (bmNode9.operation - 1).u64
+                # a namespace or subunit is a scope of its own: descend, so an
+                # instantiation written one level in is collected too. A
+                # template is not descended into -- it declares, it does not
+                # instantiate.
+                isNs9: false
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: bmNode9.operation
+                    k: zast.unitkind.namespace
+                ) then isNs9 = true
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: bmNode9.operation
+                    k: zast.unitkind.subunit
+                ) then isNs9 = true
+                if isNs9 then {
+                    (collectMainInstantiations
+                        :ty
+                        :ast
+                        o: mop9
+                        :unitName
+                        scopeDeclId: (ty.declFindChild
+                            parentDeclId: scopeDeclId
+                            nameId: bmNode9.name
+                        )
+                        :reqs
                     )
-                    fillUnitArgs :ast r: r9 op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-                    mn9: tn.copy
-                    naC9: r9.argNames.length
-                    nai9: u64
-                    for nai9 < naC9 loop {
-                        mn9.append "_"
-                        mn9.append (r9.argNames.get i: nai9)
-                        nai9 = nai9 + 1
+                } else {
+                    segs9: (ListVal u64)
+                    callableInstPath :ast op: mop9 segs: segs9
+                    tdecl9: instTemplateDecl :ty :scopeDeclId segs: segs9
+                    topId9: instTemplateOpOf :ty :ast declId: tdecl9
+                    tn: String
+                    if segs9.length > 0 then {
+                        lastv9: segs9.get i: (segs9.length - 1)
+                        if lastv9 > 0 then {
+                            tnt9: (zast.poolTextAt
+                                pool: ast.names
+                                ref: (zast.nameid.create from: lastv9.u32.orPanic)
+                            )
+                            tn = tnt9.copy
+                        }
                     }
-                    r9.mono = mn9
-                    instFillIds :ast r: r9 op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-                    reqs.append r9
+                    if tn.length != 0 then {
+                        bindn: zast.nameTextCopy :ast ref: bmNode9.name
+                        tuN9: declRootUnitName :ty :ast declId: tdecl9
+                        r9: (InstReq
+                            declUnit: unitName.string
+                            bind: bindn
+                            mono: "".string
+                            tmpl: tn.copy
+                            tmplTid: (declTypeIdOf :ty declId: tdecl9)
+                            tmplDeclId: tdecl9
+                            tmplOpId: topId9.u64
+                            tmplUnit: tuN9
+                            :scopeDeclId
+                            argLabels: (List String)
+                            argNames: (List String)
+                            argAtomIds: (ListVal u64)
+                            exprId: 0
+                            callId: 0
+                            calId: 0
+                        )
+                        fillUnitArgs :ast r: r9 op: mop9
+                        mn9: tn.copy
+                        naC9: r9.argNames.length
+                        nai9: u64
+                        for nai9 < naC9 loop {
+                            mn9.append "_"
+                            mn9.append (r9.argNames.get i: nai9)
+                            nai9 = nai9 + 1
+                        }
+                        r9.mono = mn9
+                        instFillIds :ast r: r9 op: mop9
+                        reqs.append r9
+                    }
                 }
             } else null
         }
     } else null
 }
 
-# scanMainForInstantiations -- find the main unit and collect its instantiation requests.
+# scanMainForInstantiations -- collect every unit's instantiation requests.
 # Its own function scope bounds the program.ast.units iterator so it releases before the
 # mono-creation pass (which iterates program.ast.units again).
-scanMainForInstantiations: function {program: Node reqs: (List InstReq).view} is {
+scanMainForInstantiations: function {
+    ty: ztyping.ZTyping.view
+    program: Node
+    reqs: (List InstReq).view
+} is {
     match (
         program
     ) case program then {
@@ -10227,10 +10457,21 @@ scanMainForInstantiations: function {program: Node reqs: (List InstReq).view} is
                 u
             ) case namedoperation then {
                 un: zast.poolTextAt pool: program.ast.names ref: u.name
+                rd9: ztypes.declid
+                {
+                    ro9: ty.unitRootByName.get key: u.name.u64
+                    match (
+                        ro9
+                    ) case some then {
+                        rd9 = ro9
+                    } case none then null
+                }
                 (collectMainInstantiations
+                    :ty
                     ast: program.ast
                     o: (program.ast.nodes.get i: (u.operation - 1).u64)
                     unitName: un.stringview
+                    scopeDeclId: rd9
                     :reqs
                 )
             } else null
@@ -11163,7 +11404,28 @@ resolveUnitMono: function {
     unitName: StringView
     monoName: StringView
     templateName: StringView
+    templateOpId: zast.nodeid
 } is {
+    # the request resolved its template at collection: mint straight from that
+    # node. The scans below are the pre-tid path -- they only ever reached a
+    # top-level binding of the instantiating unit, or a file unit of the
+    # template's name.
+    if (templateOpId.isZero) == false then {
+        match (
+            program
+        ) case program then {
+            (createUnitMono
+                :ty
+                ast: program.ast
+                :reg
+                :unitName
+                :monoName
+                :templateName
+                :templateOpId
+            )
+        } else null
+        return
+    }
     match (
         program
     ) case program then {
@@ -11652,7 +11914,7 @@ completeUnitInstantiations: function {
     program: Node
 } is {
     reqs: (List InstReq)
-    scanMainForInstantiations :program :reqs
+    scanMainForInstantiations :ty :program :reqs
     i: u64
     for i < reqs.length loop {
         r: reqs.get :i
@@ -11667,6 +11929,12 @@ completeUnitInstantiations: function {
         re: r.exprId
         rc: r.callId
         rl: r.calId
+        rtuv1: r.tmplUnit.stringview
+        rtu: rtuv1
+        rtop: r.tmplOpId
+        rtid: r.tmplTid
+        rtdecl: r.tmplDeclId
+        rscope: r.scopeDeclId
         subs: (MapRV String value: u64)
         valSubs: (MapRV String value: u64)
         naR9: r.argLabels.length
@@ -11734,6 +12002,25 @@ completeUnitInstantiations: function {
             mid9: mgo
             br9: mid9
             reg.setUnitName nameId: rbId9 uid: br9
+            # A binding written inside a NAMESPACE is a member of that
+            # namespace -- `outer.intmath`. The unit-name index above is the
+            # file-unit channel; it is keyed on a bare name, so it cannot hold
+            # two namespaces' bindings apart, which is the whole reason a
+            # namespace's members live on its own type id.
+            if (declParentIdOf :ty declId: rscope) > 0 then {
+                sTid9: declTypeIdOf :ty declId: rscope
+                if (sTid9.isZero) == false then {
+                    (ty.setMemberType
+                        parentTypeId: sTid9
+                        nameId: rbId9
+                        childTypeId: mid9
+                    )
+                }
+                bDecl9: ty.declFindChild parentDeclId: rscope nameId: rbId9
+                if (bDecl9.isZero) == false then {
+                    ty.declSetType declId: bDecl9 typeId: (ztypes.tid.create from: mid9.u64)
+                }
+            }
             tplId: ztypes.tid
             tgo: (optionval.none u64)
             tplDecl9: ztypes.declid
@@ -11755,6 +12042,7 @@ completeUnitInstantiations: function {
                     defUnit: ru
                     name: rt
                 )
+                if tplDecl9.isZero then tplDecl9 = rtdecl
                 if tplDecl9.isZero then {
                     # a generic FILE unit used as the template: its params
                     # live on its root Decl
@@ -11808,81 +12096,106 @@ completeUnitInstantiations: function {
                     pnI9 = pnI9 + 1
                 }
             }
-            if tplId.isZero then {
+            # the request resolved its template at COLLECTION: its id, the
+            # node that declares it, and the unit whose AST holds that node.
+            # One call covers both shapes the scans below split -- a file unit
+            # named by the template, and an inline binding of the instantiating
+            # unit -- because neither is found by name any more.
+            if tplId.isZero then tplId = rtid
+            if rtop > 0 when tplId > 0 then {
                 match (
                     program
                 ) case program then {
-                    tuiter: program.ast.units.iterate
-                    for tuId9: tuiter loop {
-                        tu: program.ast.nodes.get i: (tuId9 - 1).u64
-                        match (
-                            tu
-                        ) case namedoperation then {
-                            tun: zast.poolTextAt pool: program.ast.names ref: tu.name
-                            if tun.stringview == ru then {
-                                tplId = (inlineTemplateTid
-                                    :ty
-                                    ast: program.ast
-                                    mainOpId: tu.operation
-                                    tmplName: rt
-                                )
-                            }
-                        } else null
-                    }
+                    (buildUnitMono
+                        :ty
+                        :reg
+                        ast: program.ast
+                        tmplUnitName: rtu
+                        tmplName: rt
+                        monoId: (ztypes.tid.create from: mid9.u64)
+                        monoName: rm
+                        :tplId
+                        :subs
+                        templateOpId: (zast.nodeid.create from: rtop.u32.orPanic)
+                    )
                 } else null
-            }
-            if tplId > 0 then {
-                match (
-                    program
-                ) case program then {
-                    uN9: program.ast.units.length
-                    uI9: u64
-                    for uI9 < uN9 loop {
-                        u9Id9: (zast.nodeid.create from: (program.ast.units.get i: uI9))
-                        uI9 = uI9 + 1
-                        # scope the element borrow: the calls below lock
-                        # `program.ast` exclusively (they intern mono names)
-                        uop29: zast.nodeid
-                        un29: String
-                        {
-                            u9: program.ast.nodes.get i: (u9Id9 - 1).u64
+            } else {
+                if tplId.isZero then {
+                    match (
+                        program
+                    ) case program then {
+                        tuiter: program.ast.units.iterate
+                        for tuId9: tuiter loop {
+                            tu: program.ast.nodes.get i: (tuId9 - 1).u64
                             match (
-                                u9
+                                tu
                             ) case namedoperation then {
-                                un29 = zast.poolTextCopy pool: program.ast.names ref: u9.name
-                                uop29 = u9.operation
+                                tun: zast.poolTextAt pool: program.ast.names ref: tu.name
+                                if tun.stringview == ru then {
+                                    tplId = (inlineTemplateTid
+                                        :ty
+                                        ast: program.ast
+                                        mainOpId: tu.operation
+                                        tmplName: rt
+                                    )
+                                }
                             } else null
                         }
-                        if un29 == rt then {
-                            (buildUnitMono
-                                :ty
-                                :reg
-                                ast: program.ast
-                                tmplUnitName: un29.stringview
-                                tmplName: rt
-                                monoId: (ztypes.tid.create from: mid9.u64)
-                                monoName: rm
-                                :tplId
-                                :subs
-                                templateOpId: uop29
-                            )
+                    } else null
+                }
+                if tplId > 0 then {
+                    match (
+                        program
+                    ) case program then {
+                        uN9: program.ast.units.length
+                        uI9: u64
+                        for uI9 < uN9 loop {
+                            u9Id9: (zast.nodeid.create from: (program.ast.units.get i: uI9))
+                            uI9 = uI9 + 1
+                            # scope the element borrow: the calls below lock
+                            # `program.ast` exclusively (they intern mono names)
+                            uop29: zast.nodeid
+                            un29: String
+                            {
+                                u9: program.ast.nodes.get i: (u9Id9 - 1).u64
+                                match (
+                                    u9
+                                ) case namedoperation then {
+                                    un29 = zast.poolTextCopy pool: program.ast.names ref: u9.name
+                                    uop29 = u9.operation
+                                } else null
+                            }
+                            if un29 == rt then {
+                                (buildUnitMono
+                                    :ty
+                                    :reg
+                                    ast: program.ast
+                                    tmplUnitName: un29.stringview
+                                    tmplName: rt
+                                    monoId: (ztypes.tid.create from: mid9.u64)
+                                    monoName: rm
+                                    :tplId
+                                    :subs
+                                    templateOpId: uop29
+                                )
+                            }
+                            if un29.stringview == ru then {
+                                (completeInlineReq
+                                    :ty
+                                    :reg
+                                    ast: program.ast
+                                    mainName: ru
+                                    monoId: (ztypes.tid.create from: mid9.u64)
+                                    monoName: rm
+                                    tmplName: rt
+                                    :tplId
+                                    :subs
+                                    mainOpId: uop29
+                                )
+                            }
                         }
-                        if un29.stringview == ru then {
-                            (completeInlineReq
-                                :ty
-                                :reg
-                                ast: program.ast
-                                mainName: ru
-                                monoId: (ztypes.tid.create from: mid9.u64)
-                                monoName: rm
-                                tmplName: rt
-                                :tplId
-                                :subs
-                                mainOpId: uop29
-                            )
-                        }
-                    }
-                } else null
+                    } else null
+                }
             }
             if re > 0 then {
                 ev: mid9
@@ -11996,7 +12309,7 @@ resolveMainUnitInstantiations: function {
     program: Node.view
 } is {
     reqs: (List InstReq)
-    scanMainForInstantiations :program :reqs
+    scanMainForInstantiations :ty :program :reqs
     i: u64
     for i < reqs.length loop {
         r: reqs.get :i
@@ -12013,6 +12326,7 @@ resolveMainUnitInstantiations: function {
             unitName: ru0
             monoName: rm
             templateName: rt
+            templateOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
         )
         i = i + 1
     }
@@ -28212,6 +28526,35 @@ reportUnitConstantShape: function {
     ty.isError = true
 }
 
+# reportUnitConstantRef -- the callee of a unit-level construction names
+# nothing in scope. Reporting a malformed CONSTANT there blames the shape of a
+# definition whose callee does not exist; the reference is what is wrong. The
+# usual way here is a dependency unit naming a main-unit definition, which the
+# language does not allow for a constant or a namespace either.
+reportUnitConstantRef: function {
+    ty: ztyping.ZTyping
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    width: u32
+    msg: String
+} is {
+    en9: String
+    eh9: String
+    ty.errors.append (zast.ErrorData
+        :nodeid
+        :lineno
+        :colno
+        :width
+        err: zast.err.badReference
+        msg: msg.copy
+        fsno: zvfs.fsno
+        note: en9
+        hint: eh9
+    )
+    ty.isError = true
+}
+
 # resolveConstantDef -- one definition: an (expression-wrapped) numeric-literal
 # atomid is a unit constant. Record resolved[unit.name] as the literal's concrete
 # default (i64 / f64, which materialiseLiteral demands). The definition's
@@ -28395,7 +28738,24 @@ resolveConstantDef: function {
                 # every `intmath: (mathops t: i64)` reads as a construction.
                 cbu9: reg.isUnitName nameId: (nameIdOf :ast name: cbn9.stringview)
                 if (cbu9) == false then {
-                    cdc9: declOfUnitDef :ty :ast defUnit: unitName name: cbn9.stringview
+                    # the same scope walk the instantiation collector uses --
+                    # this namespace, each enclosing one, the unit root, then a
+                    # file unit of that name. declOfUnitDef reached only a
+                    # TOP-LEVEL binding of this unit, so a template nested in a
+                    # namespace, or named through another unit, read as a
+                    # construction and was reported as a malformed constant.
+                    cscp9: ty.nsOwnerDeclId
+                    if cscp9.isZero then {
+                        cro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+                        match (
+                            cro9
+                        ) case some then {
+                            cscp9 = cro9
+                        } case none then null
+                    }
+                    csg9: (ListVal u64)
+                    instCallablePath :ast op: ccn9 segs: csg9
+                    cdc9: instTemplateDecl :ty scopeDeclId: cscp9 segs: csg9
                     if (cdc9.isZero) == false when (ty.declValid id: cdc9) then {
                         cdo9: ty.decls.get i: (cdc9 - 1)
                         if cdo9.kind.unitDecl then cbu9 = true
@@ -28415,6 +28775,35 @@ resolveConstantDef: function {
                         defName: cbn9.stringview
                     )
                     if crv9.kind.svalKind then cbu9 = true
+                }
+                if (cbu9) == false then {
+                    ckn9: false
+                    {
+                        cko9: (walkLookupTyperef
+                            :ast
+                            :ty
+                            :reg
+                            currentUnit: unitName
+                            base: cbn9.stringview
+                        )
+                        match (
+                            cko9
+                        ) case some then {
+                            ckn9 = true
+                        } case none then null
+                    }
+                    if (ckn9) == false then {
+                        crm9: "Unknown reference '\{cbn9}'"
+                        (reportUnitConstantRef
+                            :ty
+                            nodeid: defn.nodeid
+                            lineno: defn.lineno
+                            colno: defn.colno
+                            width: cbn9.length.u32.orPanic
+                            msg: crm9
+                        )
+                        cbu9 = true
+                    }
                 }
                 if (cbu9) == false then {
                     cm9: "a unit-level constant takes a literal value, not a construction".string
