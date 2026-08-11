@@ -10022,37 +10022,26 @@ seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
     } else null
 }
 
-# onFirstEntry -- run a stdlib / dependency unit's one-time demand machinery the
-# first time the descent worklist resolves a def in it: seed io's internal
-# closure (under the full body-walk driver), resolve the conformance declarers
-# reference-following cannot reach (io / collections / system), and prime a user
-# dependency unit's return / never demands plus its class-body call scan.
+# onFirstEntry -- run a unit's one-time demand machinery the first time the
+# descent worklist resolves a def in it: resolve the conformance declarers
+# reference-following cannot reach, and prime the unit's return / never demands
+# plus its class-body call scan. Which of those a unit needs is not a property
+# of its NAME -- a conformer is as unreachable in a user dependency as it is in
+# collections, and a demanded class body is as worth scanning in io -- so every
+# unit gets all three. The entered set is what keeps this once-per-unit, and it
+# has to: the demand fixpoint's progress test is whether the registry grew, and
+# resolveConformanceDefs mints.
 onFirstEntry: function {
     ty: ztyping.ZTyping.view
     reg: ztypes.ZTypeRegistry
     ast: Ast.view
     unitName: StringView
-    mainName: StringView
     unitdefId: zast.nodeid
     entered: Set String
 } is {
     if (entered.has item: unitName.string) then return
     entered.add item: unitName.string
-    if unitName == "io" then {
-        resolveConformanceDefs :ty :reg :ast unitName: "io" :unitdefId
-        return
-    }
-    if unitName == "collections" then {
-        resolveConformanceDefs :ty :reg :ast unitName: "collections" :unitdefId
-        return
-    }
-    if unitName == "system" then {
-        resolveConformanceDefs :ty :reg :ast unitName: "system" :unitdefId
-        return
-    }
-    if unitName == "os" then return
-    if unitName == "cli" then return
-    if unitName == mainName then return
+    resolveConformanceDefs :ty :reg :ast :unitName :unitdefId
     reg.recordDemand name: "return"
     reg.recordDemand name: "never"
     scanDemandedDepClassBodies :reg :ast :unitdefId
@@ -10200,7 +10189,6 @@ resolveDemandsByDescent: function {
                             :reg
                             ast: program.ast
                             unitName: un9.stringview
-                            mainName: mainName9
                             unitdefId: uOpId9
                             entered: entered9
                         )
