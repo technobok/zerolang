@@ -9211,6 +9211,38 @@ nativeOnlyBodyError: function {
     ty.isError = true
 }
 
+# noMainError -- the target unit declares no `main`, so demand has no root.
+# Positioned on the unit's own definition: there is no node to point at, the
+# absence IS the error.
+noMainError: function {
+    ty: ztyping.ZTyping
+    ast: Ast.view
+    unitName: StringView
+    unitdefId: zast.nodeid
+} is {
+    unc9: unitName
+    em9: "unit '\{unc9}' declares no 'main': there is nothing to compile it from"
+    en9: (
+        "compilation is demand-driven -- `main` is the root, and what it reaches is what gets checked and emitted"
+    ).string
+    eh9: (
+        "add `main: function is { ... }`, or compile the program that opens this unit instead"
+    ).string
+    un9: ast.nodes.get i: (unitdefId - 1).u64
+    ty.errors.append (zast.ErrorData
+        nodeid: (nodeId n: un9)
+        lineno: (nodeLine n: un9)
+        colno: (nodeCol n: un9)
+        width: unitName.length.u32.orPanic
+        err: zast.err.noMain
+        msg: em9
+        fsno: zvfs.fsno
+        note: en9
+        hint: eh9
+    )
+    ty.isError = true
+}
+
 # nativeOnlyCheckOp -- one unit member: a bodied top-level function errors
 # directly; a type's is/as members are scanned for bodied methods.
 nativeOnlyCheckOp: function {
@@ -26704,13 +26736,17 @@ checkUnitBodies: function {
         }
         mn9: bodyIds9.length
         mi9: u64
+        foundMain9: false
         for mi9 < mn9 loop {
             mmId9: bodyIds9.get i: mi9
             mi9 = mi9 + 1
             mm: ast.nodes.get i: (mmId9 - 1).u64
             if mm.namedoperation then {
                 mainName: zast.nameTextAt :ast ref: mm.name
-                if mainName.stringview == "main" then {
+                if mainName.stringview == "main" when (isFunctionDefOp
+                    op: (ast.nodes.get i: (mm.operation - 1).u64)
+                ) then {
+                    foundMain9 = true
                     (checkFunctionBody
                         :st
                         :unitName
@@ -26723,6 +26759,22 @@ checkUnitBodies: function {
                     )
                 }
             }
+        }
+        # E0039 -- there is no root to demand from. Compilation is demand-driven
+        # and `main` is the root, so a target unit without one has no entry point
+        # and nothing to reach from: it is a LIBRARY, and the program that opens
+        # it is what should be compiled. `--eager` is exempt on the same
+        # reasoning rather than as a convenience -- it resolves every definition
+        # instead of what a root reaches, so it needs no root. That exemption is
+        # what keeps `zl lint --full`, zls and eager-guard (all eager: true)
+        # working on a library unit.
+        if (foundMain9) == false when (st.typing.eagerAll) == false when st.typing.requireMain then {
+            (noMainError
+                ty: st.typing
+                :ast
+                :unitName
+                :unitdefId
+            )
         }
         bn9: bodyIds9.length
         bi9: u64
@@ -31520,6 +31572,7 @@ typecheck: function {
     program: Node
     reg: ztypes.ZTypeRegistry.take
     eager: bool
+    requireMain: bool
     ccPath: StringView
     ccMode: StringView
     target: StringView
@@ -31532,6 +31585,7 @@ typecheck: function {
     } else null
     ty: ztyping.newTyping nodeEst: nodeEstT9
     ty.eagerAll = eager
+    ty.requireMain = requireMain
     ty.ccPath = ccPath.string
     ty.ccMode = ccMode.string
     ty.targetTriple = target.string

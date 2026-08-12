@@ -31,6 +31,27 @@ slurp: function {path: StringView} out String is {
     return "".string
 }
 
+# declaresMain -- the file declares a top-level `main: function`. A unit with
+# none is a LIBRARY: it exists to be opened by another program and is compiled
+# through its dependant, so compiling it AS a program is E0039. The two sweeps
+# below walk a whole directory rather than a case list, so they are the only
+# places that would hand one to the compiler on its own. Mirrors the same
+# `^main: *function` test the Makefile's case-guard uses on the other side.
+declaresMain: function {path: StringView} out bool is {
+    c9: slurp :path
+    with it9: c9.stringview.lines do for ln9: it9 loop {
+        if (ln9.startsWith prefix: "main:") then {
+            # bound, not chained: `(a.substring ...).trimStart` emits broken C
+            # (the native is called undeclared, and the emitter takes & of the
+            # call's result). Pre-existing; the seed compiler does it too.
+            a9: ln9.substring from: 5 to: ln9.length
+            r9: a9.trimStart
+            if (r9.startsWith prefix: "function") then return true
+        }
+    }
+    return false
+}
+
 # normErr -- keep only the stable error contract: the error code+message
 # lines and the "N error(s) found" summary, each newline-terminated.
 # Mirrors run_corpus.sh's grep -aE '^error\[E..\]:|[0-9]+ error(s)? found'.
@@ -834,6 +855,11 @@ main: function is {
                     sfx
                 ) case some then {
                     nm: sfx
+                    lpath9: "\{ld}/\{ent}"
+                    if (declaresMain path: lpath9.stringview) == false then {
+                        li = li + 1
+                        continue
+                    }
                     lc: "\{d}/L_\{nm}.c"
                     lb: "\{d}/L_\{nm}.bin"
                     lerr: "\{d}/L_\{nm}.err"
