@@ -1305,6 +1305,22 @@ NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.poll
 # the three streams have no fragment of their own, and os.args is a bundle its
 # emitter loads by hand (argv globals first).
 CONVENTION_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.args
+
+# TABLE_TODO -- natives that do not yet resolve through natives.tbl. The io
+# stream methods come from `uses_<Type>` bundles and net's from its own
+# unconditional block, neither of which reads the table yet; os.args is a
+# hand-ordered bundle and collections.stringJoin a helper. This list is the
+# remaining work, and it is empty when the check at the declaration can go in.
+TABLE_TODO := \
+  collections.stringJoin io.BufReader.create io.BufReader.read \
+  io.BufWriter.create io.BufWriter.flush io.BufWriter.write \
+  io.TextReader.call io.TextReader.create io.TextReader.readLine \
+  io.TextWriter.create io.TextWriter.flush io.TextWriter.write \
+  io.TextWriter.writeLine io.print io.stderr \
+  io.stdin io.stdout net.Conn.close \
+  net.Conn.flush net.Conn.read net.Conn.write \
+  net.Listener.accept net.Listener.close net.connect \
+  net.listen net.pollReadable os.args
 native-guard:
 	@fail=0; conv=""; \
 	for u in io os cli net tcc; do \
@@ -1438,50 +1454,22 @@ natives-tbl-guard: bin/zc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "natives-tbl-guard OK: $$nf fragment-backed rows, every named fragment on disk"; \
 	d4=$$(mktemp -d); fail=0; \
-	for u in io os cli tcc; do \
-	  awk -v U=$$u '/^[a-zA-Z][a-zA-Z0-9]*: function/ {name=$$1; sub(/:.*/,"",name); pending=1} \
-	    pending && /is native/ {print U"."name; pending=0} \
-	    pending && /is \{/ {pending=0}' lib/system/$$u.z; \
-	done | LC_ALL=C sort -u > $$d4/freefns; \
-	grep -oE '^\[[a-z]+\.[A-Za-z0-9_]+[] ]' src/runtime/natives.tbl \
-	  | sed -E 's/^\[//; s/[] ]$$//' | LC_ALL=C sort -u > $$d4/rowpaths; \
-	for d in $$(LC_ALL=C comm -23 $$d4/freefns $$d4/rowpaths); do \
-	  case " $(CONVENTION_EXCEPTIONS) " in *" $$d "*) continue;; esac; \
-	  echo "natives-tbl-guard FAIL: $$d is convention-loaded but has no row"; fail=1; \
+	for f in lib/system/*.z; do u=$$(basename $$f .z); \
+	  awk -v U=$$u '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class|facet|protocol)( |$$)/ {o=$$1; sub(/:$$/,"",o); pend=""; next} \
+	    /^[A-Za-z_][A-Za-z0-9_]*: function/ {o=""; n=$$1; sub(/:$$/,"",n); pend=U"."n} \
+	    o != "" && /^    [^ ]+: function/ {n=$$1; sub(/:$$/,"",n); pend=U"."o"."n} \
+	    pend != "" && /is native/ {print pend; pend=""} \
+	    pend != "" && /is \{/ {pend=""}' $$f; \
+	done | LC_ALL=C sort -u > $$d4/decls; \
+	grep -oE "^\[[^]  ]+" src/runtime/natives.tbl | sed "s/^\[//" | LC_ALL=C sort -u > $$d4/rows; \
+	for d in $$(LC_ALL=C comm -23 $$d4/decls $$d4/rows); do \
+	  case " $(TABLE_TODO) " in *" $$d "*) continue;; esac; \
+	  echo "natives-tbl-guard FAIL: $$d is declared is-native but has no row"; fail=1; \
 	done; \
-	nc=$$(wc -l < $$d4/freefns); rm -rf $$d4; \
+	nd=$$(wc -l < $$d4/decls); ng=$$(LC_ALL=C comm -23 $$d4/decls $$d4/rows | wc -l); rm -rf $$d4; \
 	if [ $$fail -ne 0 ]; then \
-	  echo "  loadConventionFrags reads the fragment name off the row now, so a"; \
-	  echo "  declaration with no row cannot be emitted at all -- and the corpus only"; \
-	  echo "  catches the ones it happens to call."; \
+	  echo "  Every native resolves through natives.tbl. A declaration with no row"; \
+	  echo "  cannot be emitted, and the corpus only catches the ones it calls."; \
 	  exit 1; \
 	fi; \
-	echo "natives-tbl-guard OK: $$nc convention-unit free functions, each with a row or an exception"; \
-	d5=$$(mktemp -d); fail=0; \
-	awk '/^[A-Za-z_][A-Za-z0-9_]*: / {o=""; if ($$0 ~ /^(String|StringView): class/) {o=$$1; sub(/:$$/,"",o)}} \
-	     o != "" && /^    [^ ]+: function/ {n=$$1; sub(/:$$/,"",n); pend=n} \
-	     pend != "" && /is native/ {print "system."o"."pend; pend=""} \
-	     pend != "" && /is \{/ {pend=""}' lib/system/system.z \
-	  | LC_ALL=C sort -u > $$d5/svdecl; \
-	grep -oE '^\[system\.(String|StringView)\.[^]  ]+' src/runtime/natives.tbl \
-	  | sed 's/^\[//' | LC_ALL=C sort -u > $$d5/svrows; \
-	for d in $$(LC_ALL=C comm -23 $$d5/svdecl $$d5/svrows); do \
-	  echo "natives-tbl-guard FAIL: $$d has no row"; fail=1; \
-	done; \
-	ns=$$(wc -l < $$d5/svdecl); rm -rf $$d5; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "natives-tbl-guard OK: $$ns String/StringView natives, each with a row"; \
-	d6=$$(mktemp -d); fail=0; \
-	awk '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
-	     o != "" && /^    [^ ]+: function/ {n=$$1; sub(/:$$/,"",n); pend=n} \
-	     pend != "" && /is native/ {print "collections."o"."pend; pend=""} \
-	     pend != "" && /is \{/ {pend=""}' lib/system/collections.z \
-	  | LC_ALL=C sort -u > $$d6/cdecl; \
-	grep -oE '^\[collections\.[^]  ]+' src/runtime/natives.tbl \
-	  | sed 's/^\[//' | LC_ALL=C sort -u > $$d6/crows; \
-	for d in $$(LC_ALL=C comm -23 $$d6/cdecl $$d6/crows); do \
-	  echo "natives-tbl-guard FAIL: $$d has no row"; fail=1; \
-	done; \
-	ncl=$$(wc -l < $$d6/cdecl); rm -rf $$d6; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "natives-tbl-guard OK: $$ncl collections natives, each with a row"
+	echo "natives-tbl-guard OK: $$nd native declarations, $$ng still on the TODO list"
