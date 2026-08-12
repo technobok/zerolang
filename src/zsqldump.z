@@ -180,7 +180,7 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS arg_disposition (node_id INTEGER PRIMARY KEY, disposition INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS variable_origin (variable_id INTEGER PRIMARY KEY, is_param INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS call_generic_binding (key INTEGER PRIMARY KEY, type_id INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS binop_operator (key INTEGER PRIMARY KEY, owner_type_id INTEGER NOT NULL, method_id INTEGER NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS binop_operator (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, owner_type_id INTEGER NOT NULL, method_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
     return acc
 }
 
@@ -826,8 +826,23 @@ ZDumper: class {
             ) case some then {
                 bm9 = bmo9
             } case none then null
-            rowBo9: "INSERT OR IGNORE INTO binop_operator VALUES (\{bo.key}, \{bo.value}, \{bm9});\n"
+            rowBo9: "INSERT OR IGNORE INTO binop_operator VALUES (0, \{bo.key}, \{bo.value}, \{bm9});\n"
             this.acc.append s: rowBo9
+        }
+        # the mono pair's key is packed (monoId << 32 | nodeid); unpacked here
+        # so the two columns line up with the nodeid-keyed rows above
+        with mbit: typing.monoBinopOwner.iterateItems do for mb: mbit loop {
+            mi9: mb.key / 4294967296
+            mn9: mb.key - (mi9 * 4294967296)
+            mm9: u64
+            mmo9: typing.monoBinopMethod.get key: mb.key
+            match (
+                mmo9
+            ) case some then {
+                mm9 = mmo9
+            } case none then null
+            rowMb9: "INSERT OR IGNORE INTO binop_operator VALUES (\{mi9}, \{mn9}, \{mb.value}, \{mm9});\n"
+            this.acc.append s: rowMb9
         }
     }
 
