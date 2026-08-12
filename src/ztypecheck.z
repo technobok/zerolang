@@ -20186,14 +20186,25 @@ checkBinopMethodDispatch: function {
         }
     }
     # a Box is a heap pointer around ONE valtype and declares no members of its
-    # own, so its operators are the boxed element's
-    if opo.none when (st.reg.isBoxOf tid: dt9) then {
+    # own, so its operators are the boxed element's -- ALWAYS, not only when
+    # the Box itself resolves nothing. Under --eager every member is minted,
+    # the Box then answers the lookup with an edge of its own, and the operator
+    # would be attributed to a type that declares no operators: the same
+    # program resolved `Box i64 + i64` to i64 when demanded and to Box_i64 when
+    # eager. The element's declaration wins wherever there is one.
+    if (st.reg.isBoxOf tid: dt9) then {
         if (st.reg.genericArgCount specId: dt9) == 1 then {
             bx9: st.reg.genericArgAt specId: dt9 ordinal: 0
             if bx9 > 0 then {
-                dt9 = ztypes.tid.create from: bx9.u64
-                (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: dt9 nameId: opnId9)
-                opo = st.typing.declChildOfId parentTypeId: dt9 nameId: opnId9
+                bxt9: ztypes.tid.create from: bx9.u64
+                (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: bxt9 nameId: opnId9)
+                bxo9: st.typing.declChildOfId parentTypeId: bxt9 nameId: opnId9
+                match (
+                    bxo9
+                ) case some then {
+                    dt9 = bxt9
+                    opo = optionval.some (bxo9)
+                } case none then null
             }
         }
     }
