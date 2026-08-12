@@ -1470,4 +1470,18 @@ natives-tbl-guard: bin/zc
 	done; \
 	ns=$$(wc -l < $$d5/svdecl); rm -rf $$d5; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "natives-tbl-guard OK: $$ns String/StringView natives, each with a row"
+	echo "natives-tbl-guard OK: $$ns String/StringView natives, each with a row"; \
+	d6=$$(mktemp -d); fail=0; \
+	awk '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
+	     o != "" && /^    [^ ]+: function/ {n=$$1; sub(/:$$/,"",n); pend=n} \
+	     pend != "" && /is native/ {print "collections."o"."pend; pend=""} \
+	     pend != "" && /is \{/ {pend=""}' lib/system/collections.z \
+	  | LC_ALL=C sort -u > $$d6/cdecl; \
+	grep -oE '^\[collections\.[^]  ]+' src/runtime/natives.tbl \
+	  | sed 's/^\[//' | LC_ALL=C sort -u > $$d6/crows; \
+	for d in $$(LC_ALL=C comm -23 $$d6/cdecl $$d6/crows); do \
+	  echo "natives-tbl-guard FAIL: $$d has no row"; fail=1; \
+	done; \
+	ncl=$$(wc -l < $$d6/cdecl); rm -rf $$d6; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "natives-tbl-guard OK: $$ncl collections natives, each with a row"
