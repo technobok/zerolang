@@ -27145,6 +27145,123 @@ stampOneClassMono: function {
 # where the global table is param-suppressed. Runs under suppressParamStamps
 # so its scopes/entries stay out of the dump log; skipped when diagnostics
 # exist (nothing will be emitted).
+# stampUnitMonoMembers -- the generic templates a unit's body declares, at any
+# depth. A unit is a scope, and a scope nests: a template declared inside a
+# plain unit inside another one is still a template, so a non-generic member
+# unit is descended into rather than skipped. Reached only through
+# stampUnitMonoTemplates, which supplies the file unit that both the templates
+# and their instance bodies resolve against.
+stampUnitMonoMembers: function {
+    st: zenv.ZSymbolTable
+    program: zast.ProgramData
+    unitName: StringView
+    unitOpId: zast.nodeid
+} is {
+    ibody9: zast.unitBodyIdsAt ast: program.ast unitId: unitOpId
+    ibn9: ibody9.length
+    ibi9: u64
+    for ibi9 < ibn9 loop {
+        imId9: ibody9.get i: ibi9
+        ibi9 = ibi9 + 1
+        imOp9: zast.nodeid
+        imNm9: String
+        fnOp9: u32
+        fnNm9: String
+        clsOp9: u32
+        clsNm9: String
+        {
+            im9: program.ast.nodes.get i: (imId9 - 1).u64
+            if im9.namedoperation then {
+                if (isUnitOp op: (program.ast.nodes.get i: (im9.operation - 1).u64)) then {
+                    imOp9 = im9.operation
+                    imNm9 = (zast.poolTextCopy
+                        pool: program.ast.names
+                        ref: im9.name
+                    )
+                } else {
+                    if (isFunctionDefWithBody o: (program.ast.nodes.get i: (im9.operation - 1).u64)) then {
+                        fnOp9 = im9.operation
+                        fnNm9 = (zast.poolTextCopy
+                            pool: program.ast.names
+                            ref: im9.name
+                        )
+                    } else {
+                        opn2: program.ast.nodes.get i: (im9.operation - 1).u64
+                        if opn2.objectdef then {
+                            clsOp9 = im9.operation
+                            clsNm9 = (zast.poolTextCopy
+                                pool: program.ast.names
+                                ref: im9.name
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if imOp9 > 0 then {
+            if (unitDefIsGeneric ast: program.ast oId: imOp9) then {
+                (stampMonoTemplateUnit
+                    :st
+                    ast: program.ast
+                    :unitName
+                    templateName: imNm9.stringview
+                    unitOpId: imOp9
+                )
+            } else {
+                stampUnitMonoMembers :st :program :unitName unitOpId: imOp9
+            }
+        }
+        if fnOp9 > 0 then {
+            fnTid9: u64
+            {
+                fuUid9: nameIdOf ast: program.ast name: unitName
+                fnNmId9: nameIdOf ast: program.ast name: fnNm9.stringview
+                fro9: (resolvedByIds
+                    ast: program.ast
+                    ty: st.typing
+                    reg: st.reg
+                    unitId: fuUid9
+                    name: fnNmId9
+                )
+                match (
+                    fro9
+                ) case some then {
+                    fnTid9 = fro9
+                } case none then null
+            }
+            isGenFn9: false
+            if fnTid9 > 0 then {
+                if (st.reg.typetypeOf typeId: (ztypes.tid.create from: fnTid9.u64)) == ztypes.ztypetype.functionType then {
+                    {
+                        isgeneric9v: st.reg.isGenericOf tid: (ztypes.tid.create from: fnTid9.u64)
+                            if isgeneric9v then isGenFn9 = true
+                    }
+                }
+            }
+            if isGenFn9 then {
+                (stampMonoTemplateFn
+                    :st
+                    ast: program.ast
+                    :unitName
+                    :unitOpId
+                    fnOpId: fnOp9
+                    templateFnId: fnTid9
+                )
+            }
+        }
+        if clsOp9 > 0 then {
+            (stampMonoTemplateClass
+                :st
+                ast: program.ast
+                :unitName
+                clsName: clsNm9.stringview
+                :unitOpId
+                clsOpId: clsOp9
+            )
+        }
+    }
+}
+
 stampUnitMonoTemplates: function {st: zenv.ZSymbolTable program: zast.ProgramData} is {
     if st.typing.errors.length > 0 then return
     {
@@ -27172,105 +27289,12 @@ stampUnitMonoTemplates: function {st: zenv.ZSymbolTable program: zast.ProgramDat
                         unitOpId: uOp9
                     )
                 } else {
-                    ibody9: zast.unitBodyIdsAt ast: program.ast unitId: uOp9
-                    ibn9: ibody9.length
-                    ibi9: u64
-                    for ibi9 < ibn9 loop {
-                        imId9: ibody9.get i: ibi9
-                        ibi9 = ibi9 + 1
-                        imOp9: zast.nodeid
-                        imNm9: String
-                        fnOp9: u32
-                        fnNm9: String
-                        clsOp9: u32
-                        clsNm9: String
-                        {
-                            im9: program.ast.nodes.get i: (imId9 - 1).u64
-                            if im9.namedoperation then {
-                                if (isUnitOp op: (program.ast.nodes.get i: (im9.operation - 1).u64)) then {
-                                    imOp9 = im9.operation
-                                    imNm9 = (zast.poolTextCopy
-                                        pool: program.ast.names
-                                        ref: im9.name
-                                    )
-                                } else {
-                                    if (isFunctionDefWithBody o: (program.ast.nodes.get i: (im9.operation - 1).u64)) then {
-                                        fnOp9 = im9.operation
-                                        fnNm9 = (zast.poolTextCopy
-                                            pool: program.ast.names
-                                            ref: im9.name
-                                        )
-                                    } else {
-                                        opn2: program.ast.nodes.get i: (im9.operation - 1).u64
-                                        if opn2.objectdef then {
-                                            clsOp9 = im9.operation
-                                            clsNm9 = (zast.poolTextCopy
-                                                pool: program.ast.names
-                                                ref: im9.name
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if imOp9 > 0 when (unitDefIsGeneric ast: program.ast oId: imOp9) then {
-                            (stampMonoTemplateUnit
-                                :st
-                                ast: program.ast
-                                unitName: uNm9.stringview
-                                templateName: imNm9.stringview
-                                unitOpId: imOp9
-                            )
-                        }
-                        if fnOp9 > 0 then {
-                            fnTid9: u64
-                            {
-                                fuUid9: nameIdOf ast: program.ast name: uNm9.stringview
-                                fnNmId9: nameIdOf ast: program.ast name: fnNm9.stringview
-                                fro9: (resolvedByIds
-                                    ast: program.ast
-                                    ty: st.typing
-                                    reg: st.reg
-                                    unitId: fuUid9
-                                    name: fnNmId9
-                                )
-                                match (
-                                    fro9
-                                ) case some then {
-                                    fnTid9 = fro9
-                                } case none then null
-                            }
-                            isGenFn9: false
-                            if fnTid9 > 0 then {
-                                if (st.reg.typetypeOf typeId: (ztypes.tid.create from: fnTid9.u64)) == ztypes.ztypetype.functionType then {
-                                    {
-                                        isgeneric9v: st.reg.isGenericOf tid: (ztypes.tid.create from: fnTid9.u64)
-                                            if isgeneric9v then isGenFn9 = true
-                                    }
-                                }
-                            }
-                            if isGenFn9 then {
-                                (stampMonoTemplateFn
-                                    :st
-                                    ast: program.ast
-                                    unitName: uNm9.stringview
-                                    unitOpId: uOp9
-                                    fnOpId: fnOp9
-                                    templateFnId: fnTid9
-                                )
-                            }
-                        }
-                        if clsOp9 > 0 then {
-                            (stampMonoTemplateClass
-                                :st
-                                ast: program.ast
-                                unitName: uNm9.stringview
-                                clsName: clsNm9.stringview
-                                unitOpId: uOp9
-                                clsOpId: clsOp9
-                            )
-                        }
-                    }
+                    (stampUnitMonoMembers
+                        :st
+                        :program
+                        unitName: uNm9.stringview
+                        unitOpId: uOp9
+                    )
                 }
             }
         }
