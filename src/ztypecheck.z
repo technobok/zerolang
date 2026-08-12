@@ -27002,16 +27002,28 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                 }
             }
         }
-        sweepUnwalkedMethods :st ast: program.ast
+        walkLateResolvedOwners :st ast: program.ast
         stampUnitMonoTemplates :st :program
     } else null
 }
 
-# sweepUnwalkedMethods -- after the demand-driven walks, check the method
-# bodies of every concrete type the walks never reached (a type whose
-# name is never used). Template owners are skipped: their bodies check
-# per instantiation. Deterministic: unit load order, declaration order.
-sweepUnwalkedMethods: function {st: zenv.ZSymbolTable ast: Ast.view} is {
+# walkLateResolvedOwners -- complete the demand walk. A type can resolve AFTER
+# its unit's walk has already run -- zvfs.ZVfs and DentryTable do it in astdemo,
+# and a typedef constant does it in its own unit -- and nothing re-walks that
+# unit, so its methods would be emitted with nothing stamped (E0500, "unhandled
+# binding type"). The walk is what stamps a body, so the completion pass is not
+# optional; it is the price of walking a unit once rather than to a fixpoint.
+#
+# What it no longer does is check a type NOTHING reached. That was its other
+# half, and it is retired: with the root demand-driven, a definition the program
+# cannot reach is not the compiler's to spend time on, and reporting on it is a
+# LINT concern. So the keep test is `resolved or demanded` alone -- the blanket
+# keep for the target unit's own owners is gone, which is the whole of the
+# dead-code job.
+#
+# Template owners are skipped: their bodies check per instantiation.
+# Deterministic: unit load order, declaration order.
+walkLateResolvedOwners: function {st: zenv.ZSymbolTable ast: Ast.view} is {
     swN9: ast.units.length
     swI9: u64
     for swI9 < swN9 loop {
@@ -27074,10 +27086,6 @@ sweepUnwalkedMethods: function {st: zenv.ZSymbolTable ast: Ast.view} is {
                             op: swop9
                         ) then {
                             swKeep9: st.typing.eagerAll
-                            if (swKeep9) == false then {
-                                swMu9: st.reg.regMainUnit
-                                if swun9.stringview == swMu9.stringview then swKeep9 = true
-                            }
                             if (swKeep9) == false then {
                                 swKeep9 = st.reg.isDemanded name: swmn9.stringview
                             }
