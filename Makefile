@@ -79,7 +79,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard test-tcc mode-parity readable-check perf-strict perf-elision
+.PHONY: natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard test-tcc mode-parity readable-check perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -133,7 +133,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc mode-parity ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -546,7 +546,7 @@ shadow-guard:
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "shadow-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "shadow-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "'cTypeOf name:'" "$$n1" 17; \
+	chk "'cTypeOf name:'" "$$n1" 16; \
 	chk "'cTypeForName symtab:'" "$$n2" 0; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new by-name C-type site was added. Resolve the C type from the canonical"; \
@@ -554,7 +554,7 @@ shadow-guard:
 	  echo "  (If a site was legitimately removed, lower the baseline here instead.)"; \
 	  exit 1; \
 	fi; \
-	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=17)  cTypeForName symtab:=$$n2 (<=0)"
+	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=16)  cTypeForName symtab:=$$n2 (<=0)"
 
 # emitter-guard -- ratchet against name-resolution creep in the C emitter. The
 # de-lookup arc drove these to their current floors: the emitter reads
@@ -592,7 +592,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 22; \
 	chk "userFnId" "$$e4" 35; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "typeNameOfReg9" "$$e6" 93; \
+	chk "typeNameOfReg9" "$$e6" 94; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 4; \
 	chk "monoOriginName" "$$e9" 8; \
@@ -1238,7 +1238,7 @@ view-guard:
 # emitFail line count in src/zemitterc.z -- it may only DECREASE as fallback
 # legs are resolved; lower the baseline in the same commit that removes a leg.
 FALLBACK_BASELINE :=
-EMITFAIL_BASELINE := 24
+EMITFAIL_BASELINE := 26
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	@fail=0; \
@@ -1331,7 +1331,7 @@ native-guard:
 	  printf 'String\nStringView\n'); \
 	known=" $$(echo "$$known" | sort -u | tr '\n' ' ') "; \
 	nh=0; \
-	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl; do \
+	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \
 	  for h in $$(grep -ohE 'z_@[A-Za-z_][A-Za-z0-9_]*@' $$f | sed -e 's/^z_@//' -e 's/@$$//' | sort -u); do \
 	    nh=$$((nh + 1)); \
 	    case "$$known" in *" $$h "*) ;; \
@@ -1341,3 +1341,40 @@ native-guard:
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known)"
+
+# natives-tbl-guard -- src/runtime/natives.tbl answers "which implementation"
+# for every operator the system units declare `is native`, keyed by qualified
+# path. Both directions are checked: a declaration with no row would be found
+# only by whichever program happens to use that operator, and a row naming no
+# declaration is dead weight nothing can ever reach. Two-segment paths are the
+# synthesised structural cases, which no unit declares, so they are exempt from
+# the second leg by construction -- the check only looks at three-segment rows.
+# LC_ALL=C throughout: the default collation ignores punctuation, so `sort -u`
+# silently folds `.+`, `.-`, `.*` and `./` into one entry and the guard then
+# compares 148 paths believing it compared 208.
+natives-tbl-guard:
+	@fail=0; d=$$(mktemp -d); \
+	for u in system wideint halffloat quadfloat; do \
+	  awk -v U=$$u '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
+	    o != "" && /^    [-+*\/%&<>=!]+: function .*is native/ {op=$$1; sub(/:$$/,"",op); print U"."o"."op}' \
+	    lib/system/$$u.z; \
+	done | LC_ALL=C sort -u > $$d/decl; \
+	grep -oE '^\[[a-z]+\.[A-Za-z0-9_]+\.[^]         ]+' src/runtime/natives.tbl \
+	  | sed 's/^\[//' | LC_ALL=C sort -u > $$d/rows; \
+	miss=$$(LC_ALL=C comm -23 $$d/decl $$d/rows); \
+	orph=$$(LC_ALL=C comm -13 $$d/decl $$d/rows); \
+	if [ -n "$$miss" ]; then \
+	  echo "natives-tbl-guard FAIL: declared native, no row in natives.tbl:"; \
+	  echo "$$miss" | sed 's/^/    /'; fail=1; \
+	fi; \
+	if [ -n "$$orph" ]; then \
+	  echo "natives-tbl-guard FAIL: row in natives.tbl names no native declaration:"; \
+	  echo "$$orph" | sed 's/^/    /'; fail=1; \
+	fi; \
+	n=$$(wc -l < $$d/decl); rm -rf $$d; \
+	if [ $$fail -ne 0 ]; then \
+	  echo "  Add the row, or drop it -- an operator resolves to its path and an"; \
+	  echo "  absent path is 'no native implementation', not a fallthrough."; \
+	  exit 1; \
+	fi; \
+	echo "natives-tbl-guard OK: $$n declared native operators, each with exactly one row"

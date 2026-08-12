@@ -862,14 +862,19 @@ hasHole9: function {text: StringView} out bool is {
     return false
 }
 
-# bindLookup9 -- the text a hole fills with: the bound cname minus its `z_`
-# prefix, because the fragment spells that prefix itself (`z_@File@_t`). ""
-# when the name is unbound, resolved to nothing, or carries no `z_` prefix --
-# each of which the fill site reports as fatal.
+# bindLookup9 -- the text a hole fills with. A CNAME binding fills with the
+# bound name minus its `z_` prefix, because the body spells that prefix itself
+# (`z_@File@_t`), and a value carrying no `z_` is a canon that resolved to
+# nothing -- reported as fatal at the fill site. A RAW binding fills verbatim:
+# an emitted operand is an arbitrary C expression, not a type's name, so the
+# prefix rule would be a lie about it. Cnames are consulted first; a name in
+# neither list is fatal.
 bindLookup9: function {
     name: StringView
     bindNames: (List String)
     bindVals: (List String)
+    rawNames: (List String)
+    rawVals: (List String)
 } out String is {
     bi9: u64
     bn9: bindNames.length
@@ -884,6 +889,16 @@ bindLookup9: function {
         }
         bi9 = bi9 + 1
     }
+    ri9: u64
+    rn9: rawNames.length
+    for ri9 < rn9 loop {
+        rk9: rawNames.get i: ri9
+        if rk9.stringview == name then {
+            rv9: rawVals.get i: ri9
+            return rv9.copy
+        }
+        ri9 = ri9 + 1
+    }
     return "".string
 }
 
@@ -897,6 +912,8 @@ fillHoles: function {
     path: StringView
     bindNames: (List String)
     bindVals: (List String)
+    rawNames: (List String)
+    rawVals: (List String)
     fails: List String
 } out String is {
     buf: String
@@ -944,11 +961,11 @@ fillHoles: function {
                 ) case some then {
                     endn9: (at9 + 1) + ho9
                     nm9: tv9.substring from: (at9 + 1) to: endn9
-                    val9: bindLookup9 name: nm9 :bindNames :bindVals
+                    val9: bindLookup9 name: nm9 :bindNames :bindVals :rawNames :rawVals
                     if val9.length > 0 then {
                         buf.append val9
                     } else {
-                        fh9: "fragment \{path}: hole @\{nm9}@ fills with no z_-prefixed cname"
+                        fh9: "fragment \{path}: hole @\{nm9}@ is bound to nothing"
                         fails.append from: fh9
                         bad9 = true
                         buf.append "@"
@@ -988,9 +1005,19 @@ fillHolesCtx9: function {
     path: StringView
     bindNames: (List String)
     bindVals: (List String)
+    rawNames: (List String)
+    rawVals: (List String)
 } out String is {
     ferr9: (List String)
-    cur9: fillHoles :text :path :bindNames :bindVals fails: ferr9
+    cur9: (fillHoles
+        :text
+        :path
+        :bindNames
+        :bindVals
+        :rawNames
+        :rawVals
+        fails: ferr9
+    )
     fi9: u64
     fn9: ferr9.length
     for fi9 < fn9 loop {
@@ -1032,6 +1059,109 @@ readTemplateCached: function {ctx: Ctx path: StringView} out String is {
     return txt
 }
 
+# loadNativeTbl -- parse natives.tbl into the three row tables. A row is
+# `[<path> attr=value ...] <body>`; `#` starts a comment and blank lines are
+# skipped. Read through readTemplateCached, which caches it and reports a
+# missing file as an emission failure -- the table is not optional, so a
+# program that cannot find it fails rather than falling back to something.
+loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
+    p9: "\{runtimeDir}/natives.tbl"
+    txt9: readTemplateCached :ctx path: p9.stringview
+    if txt9.length == 0 then return
+    with lit9: txt9.stringview.lines do for ln9: lit9 loop {
+        t9: ln9.trim
+        if t9.length > 0 when (t9.startsWith prefix: "#") == false then {
+            if (t9.startsWith prefix: "[") then {
+                co9: t9.indexOf needle: "]"
+                match (
+                    co9
+                ) case some then {
+                    head9: t9.substring from: 1 to: co9
+                    rest9: t9.substring from: (co9 + 1) to: t9.length
+                    body9: rest9.trim
+                    key9: String
+                    need9: String
+                    ptr9: false
+                    with fit9: (head9.split sep: " ") do for f9: fit9 loop {
+                        if f9.length > 0 then {
+                            if key9.length == 0 then {
+                                key9 = f9.string
+                            } else {
+                                if f9 == "args=ptr" then ptr9 = true
+                                so9: f9.stripPrefix p: "needs="
+                                match (
+                                    so9
+                                ) case some then {
+                                    need9 = so9.string
+                                } case none then null
+                            }
+                        }
+                    }
+                    if key9.length > 0 when body9.length > 0 then {
+                        kb9: key9.copy
+                        ctx.nativeTbl.set key: kb9 value: body9.string
+                        if need9.length > 0 then {
+                            kn9: key9.copy
+                            ctx.nativeNeed.set key: kn9 value: need9.copy
+                        }
+                        if ptr9 then {
+                            kp9: key9.copy
+                            ctx.nativePtrArgs.set key: kp9 value: true
+                        }
+                    }
+                } case none then null
+            }
+        }
+    }
+}
+
+# nativeImplOf -- the C body natives.tbl gives for a qualified path, "" when
+# the table has no row for it. "" is the error case at every call site: the
+# compiler supplies no implementation for that declaration.
+nativeImplOf: function {ctx: Ctx.view path: StringView} out String is {
+    out9: String
+    {
+        g9: ctx.nativeTbl.get key: path.asString
+        match (
+            g9
+        ) case some then {
+            out9 = g9.copy
+        } case none then null
+    }
+    return out9
+}
+
+# nativeNeedOf -- the runtime fragment a row's body calls, "" when it calls
+# none. Recorded as data because the demand has to be registered before the
+# fragment pass runs, and only the row knows it is needed.
+nativeNeedOf: function {ctx: Ctx.view path: StringView} out String is {
+    out9: String
+    {
+        g9: ctx.nativeNeed.get key: path.asString
+        match (
+            g9
+        ) case some then {
+            out9 = g9.copy
+        } case none then null
+    }
+    return out9
+}
+
+# nativePtrArgsOf -- true when a row's body takes its operands by pointer, so
+# they must be projected as lvalues rather than values.
+nativePtrArgsOf: function {ctx: Ctx.view path: StringView} out bool is {
+    out9: false
+    {
+        g9: ctx.nativePtrArgs.get key: path.asString
+        match (
+            g9
+        ) case some then {
+            out9 = g9
+        } case none then null
+    }
+    return out9
+}
+
 # emitFail -- record an emission failure for an unhandled construct. The
 # marker comment still lands in the emitted C for context, but zc reports
 # every recorded failure and exits nonzero without writing any output.
@@ -1066,7 +1196,17 @@ loadFragment: function {
         bn9.append from: "String".string
         bv9.append from: strC.string
         ferr9: (List String)
-        cur9: fillHoles text: rd :path bindNames: bn9 bindVals: bv9 fails: ferr9
+        rwn9: (List String)
+        rwv9: (List String)
+        cur9: (fillHoles
+            text: rd
+            :path
+            bindNames: bn9
+            bindVals: bv9
+            rawNames: rwn9
+            rawVals: rwv9
+            fails: ferr9
+        )
         fi9: u64
         fn9: ferr9.length
         for fi9 < fn9 loop {
@@ -1329,6 +1469,110 @@ monoStampIdOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: u64} 
     } case none then {
         return (ztypes.tid.create from: 0)
     }
+}
+
+# binopOwnerAt / binopMethodAt -- the operator resolution the type checker
+# recorded for a binop node: the type that DECLARES the operator, and the
+# method it resolved to (0 where none was declared). The instance-walk answer
+# comes first, because a monomorphised body re-walks the TEMPLATE's nodes --
+# the flat table holds nothing for them, and one template node carries a
+# different answer per instance. Both facts read through one accessor each so
+# that no caller can consult one table and forget the other; consulting only
+# the flat one is exactly what makes stampIdDeep blind inside a generic body.
+binopOwnerAt: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: u64
+} out ztypes.tid is {
+    if ctx.curThisTid > 0 then {
+        mk9: (ctx.curThisTid * 4294967296) + nid
+        mo9: symtab.typing.monoBinopOwner.get key: mk9
+        match (
+            mo9
+        ) case some then {
+            return (ztypes.tid.create from: mo9)
+        } case none then null
+    }
+    go9: symtab.typing.binopOwner.get key: nid
+    match (
+        go9
+    ) case some then {
+        return (ztypes.tid.create from: go9)
+    } case none then {
+        return (ztypes.tid.create from: 0)
+    }
+}
+
+binopMethodAt: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: u64
+} out ztypes.tid is {
+    if ctx.curThisTid > 0 then {
+        mk9: (ctx.curThisTid * 4294967296) + nid
+        mo9: symtab.typing.monoBinopMethod.get key: mk9
+        match (
+            mo9
+        ) case some then {
+            return (ztypes.tid.create from: mo9)
+        } case none then null
+    }
+    go9: symtab.typing.binopMethod.get key: nid
+    match (
+        go9
+    ) case some then {
+        return (ztypes.tid.create from: go9)
+    } case none then {
+        return (ztypes.tid.create from: 0)
+    }
+}
+
+# binopKeyOf -- the natives.tbl path for an operator on `owner`. A declared
+# native is three segments, `<declaring unit>.<type>.<operator>`, built from
+# the owner's id rather than from anything the source spelled. The synthesised
+# structural cases have no declaration and so no unit: they key on the SHAPE
+# the emitter would have built by hand -- a variant's tag compare, a record's
+# byte compare, or the inline compare a record whose typedef chain ends at a
+# scalar gets instead.
+binopKeyOf: function {
+    symtab: zenv.ZSymbolTable
+    owner: ztypes.tid
+    isNative: bool
+    op: StringView
+} out String is {
+    if isNative then {
+        uo9: definedInUnitOf :symtab tid: owner
+        match (
+            uo9
+        ) case some then {
+            tn9: typeNameOfReg9 :symtab tid: owner
+            k9: "\{uo9}.\{tn9}.\{op}"
+            return k9
+        } case none then null
+        return "".string
+    }
+    tt9: symtab.reg.typetypeOf typeId: owner
+    if tt9 == ztypes.ztypetype.variantType then {
+        k1: "variant.\{op}"
+        return k1
+    }
+    if tt9 == ztypes.ztypetype.recordType then {
+        bn9: typedefChaseBaseName9 :symtab tid: owner
+        if bn9.length > 0 then {
+            sc9: (scalarCTypeFor
+                :symtab
+                name: bn9.stringview
+                tid: (typedefChaseTid9 :symtab tid: owner)
+            )
+            if sc9.length > 0 then {
+                k2: "scalar.\{op}"
+                return k2
+            }
+        }
+        k3: "record.\{op}"
+        return k3
+    }
+    return "".string
 }
 
 # dpTaggedOf9 -- the tagged-construction stamp for a dotted node: the
@@ -1796,6 +2040,13 @@ Ctx: class {
     fwdDeclaredTypes: (MapVV u64 value: bool)
     tmplCache: (Map String value: String)
     ioCanonC: (Map String value: String)
+    # natives.tbl, read once at emit start: qualified path -> the C body, plus
+    # the two row attributes. Parsed eagerly rather than on first lookup
+    # because the lookup site is inside emitExpr, which holds a Ctx but not the
+    # runtime dir; emitC has both.
+    nativeTbl: (Map String value: String)
+    nativeNeed: (Map String value: String)
+    nativePtrArgs: (MapRV String value: bool)
     argHoistNames: (List String)
     argHoistVals: (List String)
     argHoistTypes: (List String)
@@ -2772,17 +3023,6 @@ needsHas: function {ctx: Ctx.view name: StringView} out bool is {
     } case none then {
         return false
     }
-}
-
-# true when `name` is a comparison operator.
-isCompareOp: function {name: StringView} out bool is {
-    if name == "==" then return true
-    if name == "!=" then return true
-    if name == "<" then return true
-    if name == "<=" then return true
-    if name == ">" then return true
-    if name == ">=" then return true
-    return false
 }
 
 # true when `name` is a string-like type.
@@ -9763,209 +10003,168 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             :ctx
             n: (ast.nodes.get i: (n.rhs - 1).u64)
         ) then r = "(*\{r})"
-        if (isCompareOp name: op.stringview) then {
-            lt: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.lhs - 1).u64)
-            lti: (canonFnId
-                :ast
-                :symtab
-                :ctx
-                tid: (stampIdDeep :ast :symtab n: (ast.nodes.get i: (n.lhs - 1).u64))
-                name: lt.stringview
-            )
-            if lti == 0 then {
-                ltSc9: cTypeOf name: lt.stringview
-                if ltSc9.length == 0 then {
-                    if (isStringy name: lt.stringview) == false then {
-                        lti = (canonTypeId
-                            :ast
-                            :symtab
-                            :ctx
-                            tid: (stampIdDeep :ast :symtab n: (ast.nodes.get i: (n.lhs - 1).u64))
-                            name: lt.stringview
-                        )
-                    }
-                }
-            }
-            if lti > 0 when (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: lti.u64)) == ztypes.ztypetype.recordType then {
-                rce: ctxCname :ctx tid: (ztypes.tid.create from: lti.u64)
-                # The byte-compare helper is the DEFAULT and must yield to an
-                # `==` the author wrote, exactly as the byte-copy default
-                # yields to a declared `copy` (`5640ee9`). Without this the
-                # author's method compiles, links, and is never called.
-                rEqNm9: zast.poolFind pool: ast.names text: "=="
-                rOwnEq9: false
-                if rEqNm9 > 0 then {
-                    if (symtab.typing.declIsMethodId
-                        parentTypeId: (ztypes.tid.create from: lti.u64)
-                        nameId: rEqNm9
-                    ) then {
-                        if (symtab.typing.declMemberIsSynth
-                            parentTypeId: (ztypes.tid.create from: lti.u64)
-                            nameId: rEqNm9
-                        ) == false then rOwnEq9 = true
-                    }
-                }
-                if rOwnEq9 then {
-                    # dispatch to the author's method. Its receiver is a
-                    # pointer like any other method's, so address the lhs
-                    # unless it already is one.
-                    mEqO9: (symtab.typing.declChildOfId
-                        parentTypeId: (ztypes.tid.create from: lti.u64)
-                        nameId: rEqNm9
-                    )
-                    match (
-                        mEqO9
-                    ) case some then {
-                        eqc9: ctxCname :ctx tid: (ztypes.tid.create from: mEqO9.u64)
-                        lrecv9: l.copy
-                        if (pathIsPointer
-                            :ast
-                            :symtab
-                            :ctx
-                            n: (ast.nodes.get i: (n.lhs - 1).u64)
-                        ) == false then {
-                            lamp9: "&\{l}"
-                            lrecv9 = lamp9
-                        }
-                        if op.stringview == "==" then {
-                            ue1: "\{eqc9}(\{lrecv9}, \{r})"
-                            return ue1
-                        }
-                        if op.stringview == "!=" then {
-                            ue2: "!\{eqc9}(\{lrecv9}, \{r})"
-                            return ue2
-                        }
-                    } case none then null
-                }
-                # a typedef record emits no _eq of its own: a scalar base
-                # compares inline, any other base uses ITS helper
-                tdEqN9: typedefChaseBaseName9 :symtab tid: (ztypes.tid.create from: lti.u64)
-                if tdEqN9.length > 0 then {
-                    tdEqC9: (scalarCTypeFor
-                        :symtab
-                        name: tdEqN9.stringview
-                        tid: (typedefChaseTid9 :symtab tid: (ztypes.tid.create from: lti.u64))
-                    )
-                    if tdEqC9.length > 0 then {
-                        if op.stringview == "==" then return "(\{l} == \{r})"
-                        if op.stringview == "!=" then return "(\{l} != \{r})"
-                    }
-                    rce = (ctxCname
-                        :ctx
-                        tid: (typedefChaseTid9 :symtab tid: (ztypes.tid.create from: lti.u64))
-                    )
-                }
-                if op.stringview == "==" then {
-                    re1: "\{rce}_eq(\{l}, \{r})"
-                    return re1
-                }
-                if op.stringview == "!=" then {
-                    re2: "!\{rce}_eq(\{l}, \{r})"
-                    return re2
-                }
-            }
-            if lti > 0 when (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: lti.u64)) == ztypes.ztypetype.variantType then {
-                vce: (ctxCname
-                    :ctx
-                    tid: (typedefChaseTid9 :symtab tid: (ztypes.tid.create from: lti.u64))
-                )
-                if op.stringview == "==" then {
-                    ee1: "\{vce}_eq(\{l}, \{r})"
-                    return ee1
-                }
-                if op.stringview == "!=" then {
-                    ee2: "!\{vce}_eq(\{l}, \{r})"
-                    return ee2
-                }
-            }
-            if (isStringy name: lt.stringview) then {
-                rt: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.rhs - 1).u64)
-                ltIsStr9: lt.stringview == "String"
-                rtIsStr9: rt.stringview == "String"
-                lq9: (atomVidIfPlain
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: (n.lhs - 1).u64)
-                    text: l.stringview
-                )
-                rq9: (atomVidIfPlain
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: (n.rhs - 1).u64)
-                    text: r.stringview
-                )
-                lf: svValueForm :ctx expr: l.stringview isStr: ltIsStr9 vid: lq9
-                rf: svValueForm :ctx expr: r.stringview isStr: rtIsStr9 vid: rq9
-                if op.stringview == "==" then {
-                    eq1: "\{ctx.svC}_eq(\{lf}, \{rf})"
-                    return eq1
-                }
-                if op.stringview == "!=" then {
-                    eq2: "!\{ctx.svC}_eq(\{lf}, \{rf})"
-                    return eq2
-                }
-                cm1: "(\{ctx.svC}_cmp(\{lf}, \{rf}) \{op} 0)"
-                return cm1
-            }
-        }
-        # `+` on strings BUILDS -- the same _Z_SV_CONCAT the `concat` method
-        # calls, handing back an owned String. Outside the isCompareOp block
-        # because `+` is not a comparison: left inside it, this would fall
-        # through to the scalar `(l + r)` and add two structs. A String lhs
-        # projects to a view exactly as the sv-native call path projects a
-        # String receiver, so both receivers reach one native.
-        if op.stringview == "+" then {
-            ltc9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.lhs - 1).u64)
-            if (isStringy name: ltc9.stringview) then {
-                needsAdd :ctx name: "concat"
-                rtc9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.rhs - 1).u64)
-                lfc9: (svBinopOperand9
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: (n.lhs - 1).u64)
-                    expr: l.stringview
-                    tname: ltc9.stringview
-                )
-                rfc9: (svBinopOperand9
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: (n.rhs - 1).u64)
-                    expr: r.stringview
-                    tname: rtc9.stringview
-                )
-                cc9: "\{ctx.svC}_concat(\{lfc9}, \{rfc9})"
-                return cc9
-            }
-        }
-        if op.stringview == "%" then {
-            # C has no float %: route through the fmod family (f16 computes
-            # in float and rounds back -- fmod results are exact in-format)
-            lmt9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.lhs - 1).u64)
-            lmTd9: (typedefChaseBaseName9
-                :symtab
-                tid: (stampIdDeep :ast :symtab n: (ast.nodes.get i: (n.lhs - 1).u64))
-            )
-            if lmTd9.length > 0 then lmt9 = lmTd9.copy
-            lmn9: numericFormatName :ast :symtab :ctx tn: lmt9.stringview
-            if (isFloatName name: lmn9.stringview) then {
-                if lmn9.stringview == "f32" then return "fmodf(\{l}, \{r})"
-                if lmn9.stringview == "f64" then return "fmod(\{l}, \{r})"
-                if lmn9.stringview == "f128" then return "fmodq(\{l}, \{r})"
-                return "((_Float16)fmodf((float)\{l}, (float)\{r}))"
-            }
-        }
-        e9: "(\{l} \{op} \{r})"
-        return e9
+        return (emitBinop9 :ast :symtab :ctx binop: n :l :r op: op.stringview)
     } case call then {
         return (emitCallValue :ast :symtab :ctx call: n)
     } else {
         emitFail :ctx what: "unhandled expr".string line: (ztypecheck.nodeLine :n)
         return "/* zemitterc: unhandled expr */0".string
     }
+}
+
+# emitBinop9 -- emit a binary operator by asking what it RESOLVED to, never
+# what it was spelled. The type checker recorded the type that declares the
+# operator and the method it found; from those the operator is one of three
+# things, and the operator's text is a lookup key rather than a branch:
+#
+#   the author wrote it   -- an ordinary method call, negated for an inequality
+#                            derived from a declared equality
+#   the runtime owns it   -- a natives.tbl row, keyed by qualified path
+#   nobody declared it    -- the synthesised structural compare, keyed by the
+#                            shape the emitter would otherwise have built
+#
+# The receiver-shape derivations stay here because they choose WHICH row
+# applies and what its operands look like; the C itself lives in the table.
+emitBinop9: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    binop: zast.BinOpData.view
+    l: String
+    r: String
+    op: StringView
+} out String is {
+    owner9: binopOwnerAt :symtab :ctx nid: binop.nodeid.u64
+    if owner9.isZero then {
+        emitFail :ctx what: "operator '\{op}' resolved no declaring type" line: binop.lineno
+        return "/* zemitterc: unresolved operator */0".string
+    }
+    opId9: atomNameIdOf :ast n: (ast.nodes.get i: (binop.operator - 1).u64)
+    call9: binopMethodAt :symtab :ctx nid: binop.nodeid.u64
+    callName9: opId9
+    neg9: false
+    if call9.isZero then {
+        # an inequality the checker derived: the type declares equality and
+        # says nothing about its negation, so the negation is emitted here
+        eqo9: symtab.typing.declChildOfId parentTypeId: owner9 nameId: zast.wkOpEq
+        match (
+            eqo9
+        ) case some then {
+            call9 = ztypes.tid.create from: eqo9.u64
+            callName9 = zast.wkOpEq
+            neg9 = true
+        } case none then null
+    }
+    isNat9: false
+    isSyn9: false
+    if call9 > 0 then {
+        isNat9 = fnIsNativeId :symtab fid: call9
+        isSyn9 = (symtab.typing.declMemberIsSynth
+            parentTypeId: owner9
+            nameId: callName9
+        )
+    }
+    if call9 > 0 when (isNat9 == false) then {
+        if (isSyn9) == false then {
+            # a body the author wrote. Its receiver is a pointer like every
+            # other method's, so address the lhs unless it already is one.
+            cn9: ctxCname :ctx tid: call9
+            recv9: l.copy
+            if (pathIsPointer
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: (binop.lhs - 1).u64)
+            ) == false then {
+                amp9: "&\{l}"
+                recv9 = amp9
+            }
+            if neg9 then {
+                u1: "!\{cn9}(\{recv9}, \{r})"
+                return u1
+            }
+            u2: "\{cn9}(\{recv9}, \{r})"
+            return u2
+        }
+    }
+    key9: binopKeyOf :symtab owner: owner9 isNative: isNat9 :op
+    body9: nativeImplOf :ctx path: key9.stringview
+    if body9.length == 0 then {
+        emitFail :ctx what: "no native implementation for '\{key9}'" line: binop.lineno
+        return "/* zemitterc: no native implementation */0".string
+    }
+    nd9: nativeNeedOf :ctx path: key9.stringview
+    if nd9.length > 0 then needsAdd :ctx name: nd9.stringview
+    # String and StringView reach one native: both project to a view, by value
+    # for the compares and as an lvalue for the row that takes pointers.
+    lf9: l.copy
+    rf9: r.copy
+    if (isStringyTid :ctx tid: owner9) then {
+        lt9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (binop.lhs - 1).u64)
+        rt9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (binop.rhs - 1).u64)
+        if (nativePtrArgsOf :ctx path: key9.stringview) then {
+            lf9 = (svBinopOperand9
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: (binop.lhs - 1).u64)
+                expr: l.stringview
+                tname: lt9.stringview
+            )
+            rf9 = (svBinopOperand9
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: (binop.rhs - 1).u64)
+                expr: r.stringview
+                tname: rt9.stringview
+            )
+        } else {
+            lq9: (atomVidIfPlain
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: (binop.lhs - 1).u64)
+                text: l.stringview
+            )
+            rq9: (atomVidIfPlain
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: (binop.rhs - 1).u64)
+                text: r.stringview
+            )
+            lf9 = svValueForm :ctx expr: l.stringview isStr: (lt9.stringview == "String") vid: lq9
+            rf9 = svValueForm :ctx expr: r.stringview isStr: (rt9.stringview == "String") vid: rq9
+        }
+    }
+    # a typedef emits no helper of its own: the chain end owns it
+    tcn9: ctxCname :ctx tid: owner9
+    tdb9: typedefChaseBaseName9 :symtab tid: owner9
+    if tdb9.length > 0 then {
+        tcn9 = ctxCname :ctx tid: (typedefChaseTid9 :symtab tid: owner9)
+    }
+    bn9: (List String)
+    bv9: (List String)
+    bn9.append from: "StringView".string
+    bv9.append from: ctx.svC.copy
+    bn9.append from: "T".string
+    bv9.append from: tcn9.copy
+    rn9: (List String)
+    rv9: (List String)
+    rn9.append from: "L".string
+    rv9.append from: lf9.copy
+    rn9.append from: "R".string
+    rv9.append from: rf9.copy
+    return (fillHolesCtx9
+        :ctx
+        text: body9
+        path: key9.stringview
+        bindNames: bn9
+        bindVals: bv9
+        rawNames: rn9
+        rawVals: rv9
+    )
 }
 
 # emitInterpPrint -- the interpolated-print temp chain: create, per-part
@@ -19041,6 +19240,9 @@ emitC: function {
         fwdDeclaredTypes: (MapVV u64 value: bool)
         tmplCache: (Map String value: String)
         ioCanonC: (Map String value: String)
+        nativeTbl: (Map String value: String)
+        nativeNeed: (Map String value: String)
+        nativePtrArgs: (MapRV String value: bool)
         argHoistNames: (List String)
         argHoistVals: (List String)
         argHoistTypes: (List String)
@@ -19103,6 +19305,7 @@ emitC: function {
             ctx.colGetFromCode = true
         }
     }
+    loadNativeTbl :ctx :runtimeDir
     buildDefUnitIndex :symtab :ctx
     ctxBindMain :ctx name: ctx.realMain.stringview
     fillMethodReturns :program :ctx
@@ -21096,12 +21299,16 @@ loadIoFragment: function {
             }
             ni9 = ni9 + 1
         }
+        rwn9: (List String)
+        rwv9: (List String)
         return (fillHolesCtx9
             :ctx
             text: rd
             :path
             bindNames: bn9
             bindVals: bv9
+            rawNames: rwn9
+            rawVals: rwv9
         )
     } case err then {
         emitFail :ctx what: "missing io fragment \{path}" line: 0
@@ -27169,12 +27376,16 @@ emitMonoNative: function {
         bn9.append from: mono.string
         bv9.append from: mc
     }
+    rwn9: (List String)
+    rwv9: (List String)
     cur: (fillHolesCtx9
         :ctx
         text: raw
         path: p.stringview
         bindNames: bn9
         bindVals: bv9
+        rawNames: rwn9
+        rawVals: rwv9
     )
     buf.append cur
     buf.append "\n"
@@ -27200,12 +27411,16 @@ emitParseNative: function {
     scv: ctx.svC
     bn9.append from: "StringView".string
     bv9.append from: scv.copy
+    rwn9: (List String)
+    rwv9: (List String)
     cur: (fillHolesCtx9
         :ctx
         text: raw
         path: p.stringview
         bindNames: bn9
         bindVals: bv9
+        rawNames: rwn9
+        rawVals: rwv9
     )
     buf.append cur
     buf.append "\n"
@@ -27274,12 +27489,16 @@ emitCpFrag: function {
     bv9.append from: ovc.string
     bn9.append from: "StringView".string
     bv9.append from: svC.string
+    rwn9: (List String)
+    rwv9: (List String)
     cur: (fillHolesCtx9
         :ctx
         text: raw
         path: p.stringview
         bindNames: bn9
         bindVals: bv9
+        rawNames: rwn9
+        rawVals: rwv9
     )
     buf.append cur
     buf.append "\n"
