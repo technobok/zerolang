@@ -551,7 +551,7 @@ shadow-guard:
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "shadow-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "shadow-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "'cTypeOf name:'" "$$n1" 15; \
+	chk "'cTypeOf name:'" "$$n1" 13; \
 	chk "'cTypeForName symtab:'" "$$n2" 0; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new by-name C-type site was added. Resolve the C type from the canonical"; \
@@ -559,7 +559,7 @@ shadow-guard:
 	  echo "  (If a site was legitimately removed, lower the baseline here instead.)"; \
 	  exit 1; \
 	fi; \
-	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=15)  cTypeForName symtab:=$$n2 (<=0)"
+	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=13)  cTypeForName symtab:=$$n2 (<=0)"
 
 # emitter-guard -- ratchet against name-resolution creep in the C emitter. The
 # de-lookup arc drove these to their current floors: the emitter reads
@@ -592,7 +592,7 @@ emitter-guard:
 	  elif [ "$$2" -lt "$$3" ]; then echo "emitter-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
 	chk "composeCname in src/ztypes.z" "$$g1" 0; \
 	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
-	chk "ztypecheck.resolvedByKey" "$$e1" 12; \
+	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
 	chk "resolveTypeIdByName" "$$e3" 22; \
 	chk "userFnId" "$$e4" 35; \
