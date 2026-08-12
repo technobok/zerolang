@@ -4721,6 +4721,71 @@ forceUnitDefMember: function {
     forceMemberDecl :ty :reg :ast memberDeclId: md9
 }
 
+# forceUnitDef -- resolve ONE top-level TYPE definition of a unit now, and
+# answer its type id (0 when it does not resolve). Every other `force*` resolves
+# a MEMBER, and every resolver of a DEFINITION is a whole-unit loop, so a caller
+# holding a single member node -- the method walk -- had no way to say "resolve
+# this owner first". It walked the bodies regardless, with the owner's Decl
+# still carrying typeId 0: `this` typed as notype, so a correct body was
+# REJECTED and a wrong return type was ACCEPTED, one per body shape. The probe
+# it used (resolveUnitChild) cannot mint -- a probe reads what resolution left.
+forceUnitDef: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    unitName: StringView
+    memId9: u32
+} out u64 is {
+    nmId9: zast.nameid
+    opId9: zast.nodeid
+    {
+        mm9: ast.nodes.get i: (memId9 - 1).u64
+        if mm9.namedoperation then {
+            nmId9 = mm9.name
+            opId9 = mm9.operation
+        }
+    }
+    if nmId9.isZero then return 0
+    uId9: nameIdOf :ast name: unitName
+    {
+        got9: resolvedByIds :ast :ty :reg unitId: uId9 name: nmId9
+        match (
+            got9
+        ) case some then {
+            return got9.u64
+        } case none then null
+    }
+    if opId9.isZero then return 0
+    # a TYPE only: a namespace, a template and a function each reach their own
+    # resolver, and none of them owns the method bodies this guards.
+    isObj9: false
+    {
+        oo9: ast.nodes.get i: (opId9 - 1).u64
+        if oo9.objectdef then isObj9 = true
+    }
+    if (isObj9) == false then return 0
+    if (defWasResolved :ty :ast defUnit: unitName nameId: nmId9) then return 0
+    # re-entry: a method that constructs its own type walks back through here
+    # while the definition is mid-resolution.
+    if (ty.declIsResolving declId: (declOfUnitDefIds :ty unitId: uId9 nameId: nmId9)) then return 0
+    dn9: zast.poolTextAt pool: ast.names ref: nmId9
+    (resolveDef
+        :ty
+        :reg
+        :ast
+        :unitName
+        defName: dn9.stringview
+        defn: (ast.nodes.get i: (opId9 - 1).u64)
+    )
+    ro9: resolvedByIds :ast :ty :reg unitId: uId9 name: nmId9
+    match (
+        ro9
+    ) case some then {
+        return ro9.u64
+    } case none then null
+    return 0
+}
+
 # forceAllMembers -- every member signature of `tid`, in declaration order. The
 # WALK demand point: a caller reading a member LIST (the mono clone, the
 # emitter's member tables) cannot name what it has not seen, and an unresolved
@@ -25621,6 +25686,17 @@ walkOwnerMethods: function {
         st.typing.suppressBareCtor = false
         mwSupFn9: st.typing.suppressFnAutoCall
         st.typing.suppressFnAutoCall = false
+        # outside-in: the owner type resolves BEFORE anything reads it. A body
+        # walked ahead of its owner binds `this` to notype, and every check that
+        # hangs off the receiver -- member reads, the declared return type --
+        # silently stops asking.
+        owTid9: (forceUnitDef
+            ty: st.typing
+            reg: st.reg
+            :ast
+            :unitName
+            :memId9
+        )
         (scanMemberSignatures
             :st
             :unitName
@@ -25629,6 +25705,10 @@ walkOwnerMethods: function {
             op: (ast.nodes.get i: (mem.operation - 1).u64)
         )
         canWalk: objectdefHasMethodBodies :ast op: (ast.nodes.get i: (mem.operation - 1).u64)
+        # an owner that will not resolve is not walked at all: its own
+        # resolution reports its own error, while a body walk on notype only
+        # cascades that failure into every line of every method.
+        if canWalk when owTid9 == 0 then canWalk = false
         if canWalk then {
             prev: st.typing.synthLabel.copy
             prevThis: st.typing.currentThisName.copy
@@ -26913,15 +26993,21 @@ sweepUnwalkedMethods: function {st: zenv.ZSymbolTable ast: Ast.view} is {
                             if (swKeep9) == false then swDo9 = false
                         }
                         if swDo9 when (objectdefHasMethodBodies :ast op: swop9) then {
-                            mvS9: true
-                            st.typing.walkedMethodOwners.set key: swk9 value: mvS9
-                            (resolveUnitChild
-                                :ast
+                            # the walked mark is what emission reads, so it is
+                            # earned by a walk that can happen: resolve first,
+                            # and a miss marks nothing.
+                            swTid9: (forceUnitDef
                                 ty: st.typing
                                 reg: st.reg
+                                :ast
                                 unitName: swun9.stringview
-                                name: swmn9.stringview
+                                memId9: swmId9
                             )
+                            if swTid9 == 0 then swDo9 = false
+                        }
+                        if swDo9 when (objectdefHasMethodBodies :ast op: swop9) then {
+                            mvS9: true
+                            st.typing.walkedMethodOwners.set key: swk9 value: mvS9
                             (walkOwnerMethods
                                 :st
                                 unitName: swun9.stringview
