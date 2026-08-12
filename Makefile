@@ -1301,6 +1301,10 @@ clean:
 # from the declarations rather than a list, so a new fragment-backed type is
 # legal the moment it is declared.
 NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
+# reached by something other than a per-member demand: the statement-special and
+# the three streams have no fragment of their own, and os.args is a bundle its
+# emitter loads by hand (argv globals first).
+CONVENTION_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.args
 native-guard:
 	@fail=0; conv=""; \
 	for u in io os cli net tcc; do \
@@ -1432,4 +1436,24 @@ natives-tbl-guard: bin/zc
 	done < $$d3/fr; \
 	nf=$$(wc -l < $$d3/fr); rm -rf $$d3; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "natives-tbl-guard OK: $$nf fragment-backed rows, every named fragment on disk"
+	echo "natives-tbl-guard OK: $$nf fragment-backed rows, every named fragment on disk"; \
+	d4=$$(mktemp -d); fail=0; \
+	for u in io os cli tcc; do \
+	  awk -v U=$$u '/^[a-zA-Z][a-zA-Z0-9]*: function/ {name=$$1; sub(/:.*/,"",name); pending=1} \
+	    pending && /is native/ {print U"."name; pending=0} \
+	    pending && /is \{/ {pending=0}' lib/system/$$u.z; \
+	done | LC_ALL=C sort -u > $$d4/freefns; \
+	grep -oE '^\[[a-z]+\.[A-Za-z0-9_]+[] ]' src/runtime/natives.tbl \
+	  | sed -E 's/^\[//; s/[] ]$$//' | LC_ALL=C sort -u > $$d4/rowpaths; \
+	for d in $$(LC_ALL=C comm -23 $$d4/freefns $$d4/rowpaths); do \
+	  case " $(CONVENTION_EXCEPTIONS) " in *" $$d "*) continue;; esac; \
+	  echo "natives-tbl-guard FAIL: $$d is convention-loaded but has no row"; fail=1; \
+	done; \
+	nc=$$(wc -l < $$d4/freefns); rm -rf $$d4; \
+	if [ $$fail -ne 0 ]; then \
+	  echo "  loadConventionFrags reads the fragment name off the row now, so a"; \
+	  echo "  declaration with no row cannot be emitted at all -- and the corpus only"; \
+	  echo "  catches the ones it happens to call."; \
+	  exit 1; \
+	fi; \
+	echo "natives-tbl-guard OK: $$nc convention-unit free functions, each with a row or an exception"
