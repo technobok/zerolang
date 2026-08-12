@@ -1163,6 +1163,7 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                     need9: String
                     frag9: String
                     dem9: String
+                    ord9: String
                     ptr9: false
                     with fit9: (head9.split sep: " ") do for f9: fit9 loop {
                         if f9.length > 0 then {
@@ -1188,8 +1189,21 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                                 ) case some then {
                                     need9 = so9.string
                                 } case none then null
+                                oo9: f9.stripPrefix p: "order="
+                                match (
+                                    oo9
+                                ) case some then {
+                                    ord9 = oo9.string
+                                } case none then null
                             }
                         }
+                    }
+                    if key9 == "@units" then {
+                        # not a row: the order the units' runtimes run in
+                        with oit9: (ord9.stringview.split sep: ",") do for ou9: oit9 loop {
+                            if ou9.length > 0 then ctx.unitOrder.append from: ou9.string
+                        }
+                        key9 = "".string
                     }
                     if key9.length > 0 then {
                     kk9: key9.copy
@@ -1283,32 +1297,6 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
             }
         }
     }
-}
-
-# fragsForDemand -- the fragments the rows reached by this (unit, member) demand
-# need, in table order, comma separated; "" when no row claims the pair. SEVERAL
-# rows may share one demand -- a `uses_<Type>` bundle is exactly that, one need
-# standing for a type's whole method set -- so every match is collected, and the
-# order they load in is the order they are written in. The pair is
-# compared as a pair -- the two halves are never joined into one key, which is
-# what a demand key stopped being when it stopped having to be split apart.
-fragsForDemand: function {ctx: Ctx.view uname: StringView memb: StringView} out String is {
-    out9: String
-    i9: u64
-    n9: ctx.fragUnits.length
-    for i9 < n9 loop {
-        u9: ctx.fragUnits.get i: i9
-        if u9.stringview == uname then {
-            m9: ctx.fragMembs.get i: i9
-            if m9.stringview == memb then {
-                f9: ctx.fragNames.get i: i9
-                if out9.length > 0 then out9.append ","
-                out9.append f9
-            }
-        }
-        i9 = i9 + 1
-    }
-    return out9
 }
 
 # nativeIsConvOf -- whether `<srcPath>.<memb>` is a numeric CONVERSION, asked
@@ -2318,6 +2306,9 @@ Ctx: class {
     fragUnits: (List String)
     fragMembs: (List String)
     fragNames: (List String)
+    # the units the table orders, in that order. A unit with rows that is not
+    # named here runs after those that are.
+    unitOrder: (List String)
     argHoistNames: (List String)
     argHoistVals: (List String)
     argHoistTypes: (List String)
@@ -3522,7 +3513,7 @@ dottedBaseNodeId: function {ast: Ast.view n: Node.view} out u64 is {
 # (not a shell id stamped on a nested `.stringview` projection).
 # isSvNoArgNative -- no-arg StringView natives whose fragments must be
 # registered by the scanNeeds pre-pass: type-method bodies emit after
-# emitNeededNatives, so an in-body demand comes too late to matter.
+# the runtime pass, so an in-body demand comes too late to matter.
 isSvNoArgNative: function {name: StringView} out bool is {
     if name == "count" then return true
     if name == "hash" then return true
@@ -3758,7 +3749,7 @@ emitDottedCall: function {
         :ctx
         tid: (ztypes.tid.create from: btid.u64)
     ) when mn.stringview == "split" then {
-        needsAddM :ctx uname: "system" memb: "sv_split"
+        needsAddM :ctx uname: "sviter" memb: "sv_split"
         sepx9: String
         with siter9: call.arguments.iterate do for sa9Id9: siter9 loop {
             sa9: ast.nodes.get i: (sa9Id9 - 1).u64
@@ -3821,7 +3812,7 @@ emitDottedCall: function {
         :ctx
         tid: (ztypes.tid.create from: btid.u64)
     ) when mn.stringview == "lines" then {
-        needsAddM :ctx uname: "system" memb: "sv_lines"
+        needsAddM :ctx uname: "sviter" memb: "sv_lines"
         el9: "\{ctx.svC}_lines(&\{bn})"
         return el9
     }
@@ -9649,7 +9640,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     return e4
                 }
                 if mn2.stringview == "lines" then {
-                    needsAddM :ctx uname: "system" memb: "sv_lines"
+                    needsAddM :ctx uname: "sviter" memb: "sv_lines"
                     eln2: "\{ctx.svC}_lines(&\{bn2})"
                     return eln2
                 }
@@ -10777,13 +10768,13 @@ emitInterpPart: function {
         flushArgHoists :ctx :ind :tmp :buf floor: hoistFloor rawFloor: hoistRawFloor
         bN: tmp.next
         if tn.stringview == "i128" then {
-            needsAddM :ctx uname: "system" memb: "fmt_128"
+            needsAddM :ctx uname: "prelude" memb: "fmt_128"
             l4a: "\{ind}char _b\{bN}[48]; int _b\{bN}_n = z_fmt_i128(_b\{bN}, (__int128)\{val});\n"
             buf.append l4a
             l5a: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
             buf.append l5a
         } else if tn.stringview == "u128" then {
-            needsAddM :ctx uname: "system" memb: "fmt_128"
+            needsAddM :ctx uname: "prelude" memb: "fmt_128"
             l4b: "\{ind}char _b\{bN}[48]; int _b\{bN}_n = z_fmt_u128(_b\{bN}, (unsigned __int128)\{val});\n"
             buf.append l4b
             l5b: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
@@ -17914,7 +17905,7 @@ scanNativeNeed9: function {
 
 # scanNeeds -- recursively register io/os native needs for every call in a
 # def/body. Structurally mirrors collectLiterals; emitFns registers free-fn
-# needs ahead of emitRuntimeIo, but type-method bodies emit afterwards (via
+# needs ahead of the runtime pass, but type-method bodies emit afterwards (via
 # emitRecordDefs), so a native used only inside a method (e.g. io.stat in
 # zvfs's providers) would never have its runtime body emitted. A callee that
 # RESOLVES to a native declaration registers the unit that declares it plus
@@ -17999,7 +17990,7 @@ scanNeeds: function {
         )
         # substring emits through its own leg (recv/from/to), so the arg-native
         # table cannot carry it; the need still must pre-register for method
-        # bodies, which emit after emitNeededNatives runs
+        # bodies, which emit after the runtime pass runs
         if mn0.stringview == "substring" then needsAddM :ctx uname: "system" memb: "substring"
         if (isSvParseNative name: mn0.stringview) then (needsAddM
             :ctx
@@ -18013,9 +18004,9 @@ scanNeeds: function {
         )
         # split/lines emit through the iterator fragments (Splitter/LinesIter),
         # so the native tables cannot carry them; the sv_* needs still must
-        # pre-register for method bodies, which emit after emitRuntimeSvIter runs
-        if mn0.stringview == "split" then needsAddM :ctx uname: "system" memb: "sv_split"
-        if mn0.stringview == "lines" then needsAddM :ctx uname: "system" memb: "sv_lines"
+        # pre-register for method bodies, which emit after the runtime pass runs
+        if mn0.stringview == "split" then needsAddM :ctx uname: "sviter" memb: "sv_split"
+        if mn0.stringview == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
         cjn0: atomTextOf :ast n: (ast.nodes.get i: (n.callable - 1).u64)
         if cjn0.stringview == "stringJoin" then (needsAddM
             :ctx
@@ -18043,7 +18034,7 @@ scanNeeds: function {
             uname: "system"
             memb: pdm9.stringview
         )
-        if pdm9.stringview == "lines" then needsAddM :ctx uname: "system" memb: "sv_lines"
+        if pdm9.stringview == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
         # a no-paren member read auto-calls, so a zero-parameter native (os.pid,
         # io.stdout) arrives here rather than at the call arm
         pdb9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
@@ -19682,6 +19673,7 @@ emitC: function {
         fragUnits: (List String)
         fragMembs: (List String)
         fragNames: (List String)
+        unitOrder: (List String)
         argHoistNames: (List String)
         argHoistVals: (List String)
         argHoistTypes: (List String)
@@ -19774,8 +19766,8 @@ emitC: function {
         program
     ) case program then {
         emitMonos ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
-        emitRuntimeSvIter ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
-        emitNeededNatives ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
+        # File's methods are demanded by the class being REACHABLE rather than
+        # by a call, so the injection runs before any row is consulted
         if (ioFileLive ast: program.ast :symtab :ctx) then {
             needsAddM :ctx uname: "io" memb: "@unit"
             needsAddM :ctx uname: "io" memb: "file_close"
@@ -19784,13 +19776,30 @@ emitC: function {
             needsAddM :ctx uname: "io" memb: "file_seek"
             needsAddM :ctx uname: "io" memb: "file_flush"
         }
-        emitRuntimeIo ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
-        emitIoFileConformance ast: program.ast :symtab :ctx buf: codeBuf
-        emitIoStdStreams ast: program.ast :symtab :ctx buf: codeBuf
-        emitRuntimeCli ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
-        emitRuntimeOs ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
-        emitRuntimeNet ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
-        emitRuntimeTcc ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
+        # every unit's runtime, in the order the table gives. The two io
+        # emitters between io and cli generate C rather than load fragments, so
+        # they stay named here -- they are the one seam the rows cannot state.
+        with uoit9: ctx.unitOrder.iterate do for uo9: uoit9 loop {
+            (emitRuntimeUnit9
+                ast: program.ast
+                :symtab
+                :ctx
+                :runtimeDir
+                uname: uo9.stringview
+                buf: codeBuf
+            )
+            if uo9.stringview == "io" then {
+                emitIoFileConformance ast: program.ast :symtab :ctx buf: codeBuf
+                emitIoStdStreams ast: program.ast :symtab :ctx buf: codeBuf
+            }
+        }
+        (emitUnorderedUnits9
+            ast: program.ast
+            :symtab
+            :ctx
+            :runtimeDir
+            buf: codeBuf
+        )
     } else null
     match (
         program
@@ -19838,17 +19847,18 @@ emitC: function {
         ci9 = ci9 + 1
     }
     # every body has emitted by now, so a need registered inside a type
-    # method -- which emits after emitNeededNatives -- is still in time
+    # method -- which emits after the runtime pass -- is still in time. This is
+    # why `prelude` is a unit of its own: it goes into the header, ahead of the
+    # literal pool, and no codeBuf walk may claim it.
     match (
         program
     ) case program then {
-        (ioFragIfM
+        (emitRuntimeUnit9
             ast: program.ast
             :symtab
             :ctx
             :runtimeDir
-            uname: "system"
-            memb: "fmt_128"
+            uname: "prelude"
             :buf
         )
     } else null
@@ -19911,67 +19921,6 @@ unitHasMain9: function {ast: Ast.view mainOpId: zast.nodeid} out bool is {
         }
     }
     return false
-}
-
-# emitNeededNatives -- the gated native fragments for the needs the body
-# walk collected, in the reference's emission order.
-emitNeededNatives: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    runtimeDir: StringView
-    buf: String.borrow
-} is {
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "isEmpty" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "isAscii" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "startsWith" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "endsWith" :buf
-    needRaw: needsHasM :ctx uname: "system" memb: "contains"
-    if (needsHasM :ctx uname: "system" memb: "indexOf") then needRaw = true
-    if (needsHasM :ctx uname: "system" memb: "lastIndexOf") then needRaw = true
-    if needRaw then ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_SV_INDEX_OF_RAW" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "contains" :buf
-    hasTrim: needsHasM :ctx uname: "system" memb: "trim"
-    hasTrimS: needsHasM :ctx uname: "system" memb: "trimStart"
-    hasTrimE: needsHasM :ctx uname: "system" memb: "trimEnd"
-    anyTrim: hasTrim
-    if hasTrimS then anyTrim = true
-    if hasTrimE then anyTrim = true
-    if anyTrim then ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_SV_IS_ASCII_WS" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "substring" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "hash" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "trim" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "trimStart" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "trimEnd" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "toLowerAscii" :buf
-    hasRep: needsHasM :ctx uname: "system" memb: "replace"
-    hasRepF: needsHasM :ctx uname: "system" memb: "replaceFirst"
-    anyRep: hasRep
-    if hasRepF then anyRep = true
-    if anyRep then ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_SV_REPLACE_IMPL" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "replace" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "replaceFirst" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "repeated" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "concat" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "toUpperAscii" :buf
-    hasCount: needsHasM :ctx uname: "system" memb: "count"
-    hasCp: needsHasM :ctx uname: "system" memb: "codepoints"
-    anyUtf8: hasCount
-    if hasCp then anyUtf8 = true
-    if anyUtf8 then ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_SV_UTF8_DECODE" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "count" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "codepoints" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "indexOf" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "lastIndexOf" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "byteAt" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "stripPrefix" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "stripSuffix" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "splitOnce" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "parseI64" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "parseU64" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "parseF64" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "parseF16" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "system" memb: "parseF128" :buf
 }
 
 # the path to a native runtime fragment under `runtimeDir`.
@@ -21633,67 +21582,6 @@ loadIoFragment: function {
     }
 }
 
-# ioFragIfM -- emit a runtime fragment when its (unit, member) pair is
-# demanded. The flat ioFragIf below serves the needs that are genuinely flat
-# names (sv_split, coll_join) rather than unit members.
-ioFragIfM: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    runtimeDir: StringView
-    uname: StringView
-    memb: StringView
-    buf: String.borrow
-} is {
-    if (needsHasM :ctx :uname :memb) then {
-        emitFragsFor :ast :symtab :ctx :runtimeDir :uname :memb :buf
-    }
-}
-
-# emitFragsFor -- load every fragment the (unit, member) demand's rows name, in
-# table order. The demand check is the caller's: a per-member demand asks the
-# pair, while a unit whose runtime is all-or-nothing has already asked its own
-# flag by the time it gets here.
-emitFragsFor: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    runtimeDir: StringView
-    uname: StringView
-    memb: StringView
-    buf: String.borrow
-} is {
-    fl9: fragsForDemand :ctx :uname :memb
-    if fl9.length == 0 then {
-        emitFail :ctx what: "no native implementation for the '\{uname}.\{memb}' demand" line: 0
-        return
-    }
-    with fit9: (fl9.stringview.split sep: ",") do for fr9: fit9 loop {
-        if fr9.length > 0 then {
-            p9: nativePath :runtimeDir frag: fr9
-            f9: loadIoFragment :ast :symtab :ctx path: p9.stringview
-            buf.append f9
-        }
-    }
-}
-
-# ioFragIf -- emit an io runtime fragment when its need flag is set.
-ioFragIf: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    runtimeDir: StringView
-    need: StringView
-    frag: StringView
-    buf: String.borrow
-} is {
-    if (needsHasM :ctx uname: "system" memb: need) then {
-        p9: nativePath :runtimeDir :frag
-        f9: loadIoFragment :ast :symtab :ctx path: p9.stringview
-        buf.append f9
-    }
-}
-
 # ioFileId -- the io File class type id (0 when File is not reachable).
 ioFileId: function {symtab: zenv.ZSymbolTable ctx: Ctx.view} out u64 is {
     last: symtab.reg.nextTypeId
@@ -21800,6 +21688,87 @@ emitCliFwdDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view buf: Str
     buf.append l0
     l1: "static void \{pc}_destroy(\{pc}_t* p);\n"
     buf.append l1
+}
+
+# rowFires9 -- true when ANY demand the row at `i` names was demanded for that
+# row's unit. `demand=a,b,c` means ANY OF: a helper several members share is one
+# row naming the members that reach it, so it loads once however many fired.
+rowFires9: function {ctx: Ctx.view i: u64} out bool is {
+    u9: ctx.fragUnits.get :i
+    d9: ctx.fragMembs.get :i
+    fired9: false
+    with dit9: (d9.stringview.split sep: ",") do for dm9: dit9 loop {
+        if dm9.length > 0 then {
+            if (needsHasM :ctx uname: u9.stringview memb: dm9) then fired9 = true
+        }
+    }
+    return fired9
+}
+
+# emitRuntimeUnit9 -- one unit's runtime: every row it owns, in TABLE ORDER,
+# loaded when its demands fired. This is the whole of what emitRuntimeIo,
+# emitRuntimeCli, emitRuntimeOs, emitRuntimeNet, emitRuntimeTcc,
+# emitNeededNatives and emitRuntimeSvIter did by hand. The order they spelled is
+# the order the rows are written in -- including the alphabetical convention
+# runs, because a subset of an alphabetically ordered list, taken in order, is
+# already sorted. The per-unit skip lists are gone with them: a member the
+# runtime does not supply has no row to walk.
+emitRuntimeUnit9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    runtimeDir: StringView
+    uname: StringView
+    buf: String.borrow
+} is {
+    i9: u64
+    n9: ctx.fragUnits.length
+    for i9 < n9 loop {
+        u9: ctx.fragUnits.get i: i9
+        if u9.stringview == uname then {
+            if (rowFires9 :ctx i: i9) then {
+                fl9: ctx.fragNames.get i: i9
+                with fit9: (fl9.stringview.split sep: ",") do for fr9: fit9 loop {
+                    if fr9.length > 0 then {
+                        ioFrag :ast :symtab :ctx :runtimeDir frag: fr9 :buf
+                    }
+                }
+            }
+        }
+        i9 = i9 + 1
+    }
+}
+
+# emitUnorderedUnits9 -- the units with rows the order directive does not name,
+# each once, in the order the table first mentions them. A unit shipping its own
+# natives.tbl rows is not in the compiler's list, and this is the slot it gets.
+# `prelude` is not one of them: emitC emits it into the header itself.
+emitUnorderedUnits9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    runtimeDir: StringView
+    buf: String.borrow
+} is {
+    done9: (List String)
+    i9: u64
+    n9: ctx.fragUnits.length
+    for i9 < n9 loop {
+        u9: ctx.fragUnits.get i: i9
+        skip9: false
+        if u9.stringview == "prelude" then skip9 = true
+        with oit9: ctx.unitOrder.iterate do for o9: oit9 loop {
+            if o9.stringview == u9.stringview then skip9 = true
+        }
+        with dit9: done9.iterate do for d9: dit9 loop {
+            if d9.stringview == u9.stringview then skip9 = true
+        }
+        if (skip9) == false then {
+            done9.append from: u9.copy
+            emitRuntimeUnit9 :ast :symtab :ctx :runtimeDir uname: u9.stringview :buf
+        }
+        i9 = i9 + 1
+    }
 }
 
 # ioFrag -- load + append an io runtime fragment unconditionally.
@@ -21979,306 +21948,6 @@ emitNetClasses: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view buf: Stri
     if (needsHasM :ctx uname: "net" memb: "@unit") == false then return
     emitNetFdClass :symtab :ctx name: "Listener" :buf
     emitNetFdClass :symtab :ctx name: "Conn" :buf
-}
-
-# emitRuntimeSvIter -- the StringView split/lines iterator natives (Splitter +
-# LinesIter struct, builders, and .call). Need-gated; emitted after the monos so
-# Option_StringView (the .call yield) is already defined.
-emitRuntimeSvIter: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    runtimeDir: StringView
-    buf: String.borrow
-} is {
-    anyNeed: false
-    svNeed9: false
-    if (needsHasM :ctx uname: "system" memb: "sv_split") then {
-        anyNeed = true
-        svNeed9 = true
-    }
-    if (needsHasM :ctx uname: "system" memb: "sv_lines") then {
-        anyNeed = true
-        svNeed9 = true
-    }
-    if (needsHasM :ctx uname: "collections" memb: "coll_join") then anyNeed = true
-    if (anyNeed) == false then return
-    if svNeed9 then ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_SV_SPLITTER_STRUCT" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_lines" frag: "_Z_SV_LINESITER" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_split" frag: "_Z_SV_SPLIT" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_split" frag: "_Z_SV_SPLITTER_CALL" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_lines" frag: "_Z_SV_LINES" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_lines" frag: "_Z_SV_LINES_CALL" :buf
-    if (needsHasM :ctx uname: "collections" memb: "coll_join") then {
-        emitFragsFor :ast :symtab :ctx :runtimeDir uname: "collections" memb: "coll_join" :buf
-    }
-}
-
-# loadConventionFrags -- load the convention-named runtime fragment for
-# every recorded `<unit>_<name>` need: `_Z_<UNIT>_<UPPER_SNAKE(name)>.inc`.
-# Needs whose fragment is a bundle/rename/base (listed in `skip`, bare
-# member names) are the caller's explicit business. Sorted for
-# deterministic output (the needs map iterates in hash order).
-loadConventionFrags: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    runtimeDir: StringView
-    uname: StringView
-    skip: (List String).view
-    buf: String.borrow
-} is {
-    names9: (List String)
-    i9: u64
-    n9: ctx.needUnits.length
-    for i9 < n9 loop {
-        u9: ctx.needUnits.get i: i9
-        if u9.stringview == uname then {
-            m9: ctx.needMembs.get i: i9
-            skipped9: false
-            # `@unit` is the unit itself being demanded, not one of its
-            # members: the `@` marks a name outside the member space, exactly
-            # as it does on a row's path, and no fragment answers to it
-            if (m9.stringview.startsWith prefix: "@") then skipped9 = true
-            with sit9: skip.iterate do for sk9: sit9 loop {
-                if sk9.stringview == m9.stringview then skipped9 = true
-            }
-            if (skipped9) == false then names9.append from: m9.copy
-        }
-        i9 = i9 + 1
-    }
-    names9.sort
-    ni9: u64
-    nn9: names9.length
-    for ni9 < nn9 loop {
-        nm9: names9.get i: ni9
-        ni9 = ni9 + 1
-        (ioFragIfM
-            :ast
-            :symtab
-            :ctx
-            :runtimeDir
-            :uname
-            memb: nm9.stringview
-            :buf
-        )
-    }
-}
-# emit the runtime I/O support code.
-emitRuntimeIo: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    runtimeDir: StringView
-    buf: String.borrow
-} is {
-    ioAct9: needsHasM :ctx uname: "io" memb: "@unit"
-    osEr9: needsHasM :ctx uname: "io" memb: "@errno"
-    runIo9: ioAct9
-    if (needsHasM :ctx uname: "io" memb: "@sv_cstr") then runIo9 = true
-    if osEr9 then runIo9 = true
-    if (runIo9) == false then return
-    # sv_to_cstr is a runtime fragment like everything else around it; it was
-    # a string literal here only because it was written before the fragments
-    # had holes. It loads without a trailing newline because the file carries
-    # its own blank line, which is what the literal spelled.
-    pcs9: nativePath :runtimeDir frag: "_Z_IO_SV_TO_CSTR"
-    fcs9: loadIoFragment :ast :symtab :ctx path: pcs9.stringview
-    buf.append fcs9
-    needErr9: ioAct9
-    if osEr9 then needErr9 = true
-    if needErr9 then ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_IO_ERRNO_MAP" :buf
-    needWC: needsHasM :ctx uname: "io" memb: "writeText"
-    if (needsHasM :ctx uname: "io" memb: "appendText") then needWC = true
-    if needWC then {
-        p8: nativePath :runtimeDir frag: "_Z_IO_WRITE_COMMON"
-        f8: loadIoFragment :ast :symtab :ctx path: p8.stringview
-        buf.append f8
-    }
-    needU64: needsHasM :ctx uname: "io" memb: "file_read"
-    if (needsHasM :ctx uname: "io" memb: "file_write") then needU64 = true
-    if (needsHasM :ctx uname: "io" memb: "file_seek") then needU64 = true
-    if needU64 then {
-        pwu: nativePath :runtimeDir frag: "_Z_IO_WRAP_U64_RESULT"
-        fwu: loadIoFragment :ast :symtab :ctx path: pwu.stringview
-        buf.append fwu
-    }
-    needNull: needsHasM :ctx uname: "io" memb: "file_close"
-    if (needsHasM :ctx uname: "io" memb: "file_flush") then needNull = true
-    if (needsHasM :ctx uname: "io" memb: "mkdir") then needNull = true
-    if (needsHasM :ctx uname: "io" memb: "mkdirp") then needNull = true
-    if (needsHasM :ctx uname: "io" memb: "remove") then needNull = true
-    if (needsHasM :ctx uname: "io" memb: "rename") then needNull = true
-    if needNull then {
-        pwn: nativePath :runtimeDir frag: "_Z_IO_WRAP_NULL_RESULT"
-        fwn: loadIoFragment :ast :symtab :ctx path: pwn.stringview
-        buf.append fwn
-    }
-    needFstat: needsHasM :ctx uname: "io" memb: "stat"
-    if (needsHasM :ctx uname: "io" memb: "lstat") then needFstat = true
-    if needFstat then {
-        psf: nativePath :runtimeDir frag: "_Z_IO_STAT_FILL"
-        fsf: loadIoFragment :ast :symtab :ctx path: psf.stringview
-        buf.append fsf
-    }
-    # every remaining io_<name> need loads its convention fragment
-    # (_Z_IO_<UPPER_SNAKE>); the File-method and stream families load
-    # from their own explicit blocks below
-    ioSkip9: (List String)
-    ioSkip9.append "file_close".string
-    ioSkip9.append "file_write".string
-    ioSkip9.append "file_read".string
-    ioSkip9.append "file_seek".string
-    ioSkip9.append "file_flush".string
-    ioSkip9.append "file_readLine".string
-    ioSkip9.append "file_writeLine".string
-    ioSkip9.append "file_accept".string
-    ioSkip9.append "uses_BufWriter".string
-    ioSkip9.append "uses_BufReader".string
-    ioSkip9.append "uses_TextWriter".string
-    ioSkip9.append "uses_TextReader".string
-    ioSkip9.append "print".string
-    ioSkip9.append "stdout".string
-    ioSkip9.append "stderr".string
-    ioSkip9.append "stdin".string
-    loadConventionFrags :ast :symtab :ctx :runtimeDir uname: "io" skip: ioSkip9 :buf
-    (ioFragIfM
-        :ast
-        :symtab
-        :ctx
-        :runtimeDir
-        uname: "io"
-        memb: "file_close"
-        :buf
-    )
-    (ioFragIfM
-        :ast
-        :symtab
-        :ctx
-        :runtimeDir
-        uname: "io"
-        memb: "file_write"
-        :buf
-    )
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "file_read" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "file_seek" :buf
-    (ioFragIfM
-        :ast
-        :symtab
-        :ctx
-        :runtimeDir
-        uname: "io"
-        memb: "file_flush"
-        :buf
-    )
-    # a stream type's whole method set rides one demand; the rows name the
-    # fragments and the order they load in
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "uses_BufWriter" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "uses_BufReader" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "uses_TextWriter" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "uses_TextReader" :buf
-}
-
-# emitRuntimeCli -- the cli runtime bodies (need-gated, dependency-ordered),
-# reusing the io fragment loader/gate. The helpers ride the parse need (parse is
-# their only caller) and precede parse's body for a clean forward declaration.
-emitRuntimeCli: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    runtimeDir: StringView
-    buf: String.borrow
-} is {
-    if (needsHasM :ctx uname: "cli" memb: "@unit") == false then return
-    # parse is a bundle -- its row names the helpers first, then its own body,
-    # so the forward declaration is clean -- and the Parsed methods name the
-    # renamed _Z_PARSED_* family. All of that is in the row now; the skip list
-    # only says which loads are ORDERED by hand rather than alphabetically.
-    cliSkip9: (List String)
-    cliSkip9.append "parse".string
-    cliSkip9.append "hasFlag".string
-    cliSkip9.append "option".string
-    cliSkip9.append "positional".string
-    loadConventionFrags :ast :symtab :ctx :runtimeDir uname: "cli" skip: cliSkip9 :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "cli" memb: "parse" :buf
-    (ioFragIfM
-        :ast
-        :symtab
-        :ctx
-        :runtimeDir
-        uname: "cli"
-        memb: "hasFlag"
-        :buf
-    )
-    (ioFragIfM
-        :ast
-        :symtab
-        :ctx
-        :runtimeDir
-        uname: "cli"
-        memb: "option"
-        :buf
-    )
-    (ioFragIfM
-        :ast
-        :symtab
-        :ctx
-        :runtimeDir
-        uname: "cli"
-        memb: "positional"
-        :buf
-    )
-}
-
-# emitRuntimeOs -- the os runtime bodies (need-gated). Only os.args is wired so
-# far: its argc/argv globals + the args() copy, both gated on the os_args need
-# (main() captures argc/argv into the globals when the same need is set).
-emitRuntimeOs: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    runtimeDir: StringView
-    buf: String.borrow
-} is {
-    if (needsHasM :ctx uname: "os" memb: "@unit") == false then return
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "os" memb: "args" :buf
-    # env's fragment is renamed (GET_ENV); args is a bundle -- both above.
-    # Every other os_<name> need is convention-loaded.
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "os" memb: "env" :buf
-    osSkip9: (List String)
-    osSkip9.append "env".string
-    osSkip9.append "args".string
-    loadConventionFrags :ast :symtab :ctx :runtimeDir uname: "os" skip: osSkip9 :buf
-}
-
-# emitRuntimeTcc -- the tcc runtime bodies (need-gated on any tcc use). The
-# helpers are a bundle -- the dlopen and the entry-point table, shared by both
-# members -- so they precede the convention-loaded bodies that call them.
-emitRuntimeTcc: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    runtimeDir: StringView
-    buf: String.borrow
-} is {
-    if (needsHasM :ctx uname: "tcc" memb: "@unit") == false then return
-    ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TCC_HELPERS" :buf
-    tccSkip9: (List String)
-    loadConventionFrags :ast :symtab :ctx :runtimeDir uname: "tcc" skip: tccSkip9 :buf
-}
-
-# emitRuntimeNet -- the net runtime bodies (need-gated on any net use).
-emitRuntimeNet: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    runtimeDir: StringView
-    buf: String.borrow
-} is {
-    # net's runtime is all-or-nothing: the unit flag is the whole gate, so the
-    # rows are loaded directly rather than through a per-member demand
-    if (needsHasM :ctx uname: "net" memb: "@unit") == false then return
-    emitFragsFor :ast :symtab :ctx :runtimeDir uname: "net" memb: "uses_net" :buf
 }
 
 # maybePreEmitElem -- a user type (variant/record/class/union) used as a
@@ -25009,7 +24678,7 @@ emitIoWrapperCreate: function {
 
 # emitIoCall -- a free io.* native call (io.readText/writeText/appendText/
 # eprintln/open/exists/mkdir/.../stat/listDir): `z_io_<name>(args...)` in the
-# native's parameter order, setting the per-call need so emitRuntimeIo emits
+# native's parameter order, setting the per-call need so the runtime pass emits
 # the body. Returns "" for any non-io callee.
 # nativeNoArgOf9 -- the unit that DECLARES `base.memb` when the member is a
 # native taking no parameters, so a no-paren read auto-calls it (os.pid,

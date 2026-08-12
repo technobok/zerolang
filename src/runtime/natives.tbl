@@ -290,27 +290,43 @@
 #   demand=X    the (unit, member) demand that reaches this row, when it is not
 #               the path's last segment -- File's methods are demanded as
 #               `file_close`, cli's Spec.create as `spec_create`
+#   demand=X,Y  ANY OF. A helper several members share is ONE row naming the
+#               members that reach it, loaded once if any of them fired
+#   demand=@unit  the unit ITSELF was demanded. `@` marks a demand outside the
+#               member space, as it marks a path outside the declaration space
+#
+# ROW ORDER IS LOAD ORDER within a unit, and the units run in the order the
+# directive gives. A unit the directive does not name runs after those it does,
+# which is how a unit shipping its own rows gets a slot. `prelude` is not among
+# them: emitC emits it into the header, ahead of the literal pool, because a
+# need registered inside a type method arrives after the pass has run.
+[@units order=sviter,collections,system,io,cli,os,net,tcc]
 
-# cli
-[cli.addFlag frag=_Z_CLI_ADD_FLAG]
-[cli.addOption frag=_Z_CLI_ADD_OPTION]
-[cli.addPositional frag=_Z_CLI_ADD_POSITIONAL]
-[cli.Parsed.hasFlag frag=_Z_PARSED_HAS_FLAG]
-[cli.helpText frag=_Z_CLI_HELP_TEXT]
-[cli.Parsed.option frag=_Z_PARSED_GET_OPTION]
-[cli.parse frag=_Z_CLI_HELPERS,_Z_CLI_PARSE]
-[cli.Parsed.positional frag=_Z_PARSED_GET_POSITIONAL]
-[cli.Spec.create demand=spec_create frag=_Z_CLI_SPEC_CREATE]
+# @sviter -- the split / lines iterator types. They are StringView natives, but
+# they DECLARE types the collections join and the rest of system go on to spell,
+# so they load ahead of both and carry a unit of their own. Their five fragments
+# interleave: the shared struct, then the lines typedef, then split's pair, then
+# lines'.
+[@sviter.splitter_struct demand=sv_split,sv_lines frag=_Z_SV_SPLITTER_STRUCT]
+[@sviter.linesiter demand=sv_lines frag=_Z_SV_LINESITER]
+[@sviter.split demand=sv_split frag=_Z_SV_SPLIT,_Z_SV_SPLITTER_CALL]
+[@sviter.lines demand=sv_lines frag=_Z_SV_LINES,_Z_SV_LINES_CALL]
 
-# io
+# the collections string join
+[collections.stringJoin demand=coll_join frag=_Z_COLL_STRING_JOIN]
+
+# io -- the shared helpers first, each naming the members that pull it, then the
+# convention loads alphabetically, then File's methods in their own order and
+# the stream bundles.
+[@io.sv_to_cstr demand=@unit,@sv_cstr,@errno frag=_Z_IO_SV_TO_CSTR]
+[@io.errno_map demand=@unit,@errno frag=_Z_IO_ERRNO_MAP]
+[@io.write_common demand=writeText,appendText frag=_Z_IO_WRITE_COMMON]
+[@io.wrap_u64_result demand=file_read,file_write,file_seek frag=_Z_IO_WRAP_U64_RESULT]
+[@io.wrap_null_result demand=file_close,file_flush,mkdir,mkdirp,remove,rename frag=_Z_IO_WRAP_NULL_RESULT]
+[@io.stat_fill demand=stat,lstat frag=_Z_IO_STAT_FILL]
 [io.appendText frag=_Z_IO_APPEND_TEXT]
 [io.eprintln frag=_Z_IO_EPRINTLN]
 [io.exists frag=_Z_IO_EXISTS]
-[io.File.close demand=file_close frag=_Z_FILE_CLOSE]
-[io.File.flush demand=file_flush frag=_Z_FILE_FLUSH]
-[io.File.read demand=file_read frag=_Z_FILE_READ]
-[io.File.seek demand=file_seek frag=_Z_FILE_SEEK]
-[io.File.write demand=file_write frag=_Z_FILE_WRITE]
 [io.listDir frag=_Z_IO_LIST_DIR]
 [io.lstat frag=_Z_IO_LSTAT]
 [io.mkdir frag=_Z_IO_MKDIR]
@@ -323,42 +339,11 @@
 [io.stat frag=_Z_IO_STAT]
 [io.symlink frag=_Z_IO_SYMLINK]
 [io.writeText frag=_Z_IO_WRITE_TEXT]
-
-# os
-[os.buildCommit frag=_Z_OS_BUILD_COMMIT]
-[os.buildCompiler frag=_Z_OS_BUILD_COMPILER]
-[os.buildDate frag=_Z_OS_BUILD_DATE]
-[os.cwd frag=_Z_OS_CWD]
-[os.env frag=_Z_OS_GET_ENV]
-[os.envNames frag=_Z_OS_ENV_NAMES]
-[os.exePath frag=_Z_OS_EXE_PATH]
-[os.exit frag=_Z_OS_EXIT]
-[os.homeDir frag=_Z_OS_HOME_DIR]
-[os.hostArchName frag=_Z_OS_HOST_ARCH_NAME]
-[os.hostOsName frag=_Z_OS_HOST_OS_NAME]
-[os.hostname frag=_Z_OS_HOSTNAME]
-[os.kill frag=_Z_OS_KILL]
-[os.monotonicMillis frag=_Z_OS_MONOTONIC_MILLIS]
-[os.pid frag=_Z_OS_PID]
-[os.ppid frag=_Z_OS_PPID]
-[os.setCwd frag=_Z_OS_SET_CWD]
-[os.setEnv frag=_Z_OS_SET_ENV]
-[os.sleepMillis frag=_Z_OS_SLEEP_MILLIS]
-[os.spawn frag=_Z_OS_SPAWN]
-[os.spawnAsync frag=_Z_OS_SPAWN_ASYNC]
-[os.unsetEnv frag=_Z_OS_UNSET_ENV]
-[os.userName frag=_Z_OS_USER_NAME]
-[os.waitAny frag=_Z_OS_WAIT_ANY]
-
-# tcc
-[tcc.compileToExe frag=_Z_TCC_COMPILE_TO_EXE]
-[tcc.available frag=_Z_TCC_AVAILABLE]
-
-
-
-# io stream types -- a `uses_<Type>` demand stands for the whole method set, so
-# these rows share one and load in the order they are written. TextReader's set
-# opens with a helper no declaration names.
+[io.File.close demand=file_close frag=_Z_FILE_CLOSE]
+[io.File.write demand=file_write frag=_Z_FILE_WRITE]
+[io.File.read demand=file_read frag=_Z_FILE_READ]
+[io.File.seek demand=file_seek frag=_Z_FILE_SEEK]
+[io.File.flush demand=file_flush frag=_Z_FILE_FLUSH]
 [io.BufWriter.create demand=uses_BufWriter frag=_Z_BUFWRITER_CREATE]
 [io.BufWriter.flush demand=uses_BufWriter frag=_Z_BUFWRITER_FLUSH]
 [io.BufWriter.write demand=uses_BufWriter frag=_Z_BUFWRITER_WRITE]
@@ -380,23 +365,61 @@
 [io.stdout]
 [io.stderr]
 
-# os.args is a hand-ordered pair -- the argv globals main() fills, then the copy
-[os.args demand=args frag=_Z_OS_ARGV_GLOBALS,_Z_OS_ARGS]
+# cli -- the convention loads, then parse's ordered pair and Parsed's methods
+[cli.addFlag frag=_Z_CLI_ADD_FLAG]
+[cli.addOption frag=_Z_CLI_ADD_OPTION]
+[cli.addPositional frag=_Z_CLI_ADD_POSITIONAL]
+[cli.helpText frag=_Z_CLI_HELP_TEXT]
+[cli.Spec.create demand=spec_create frag=_Z_CLI_SPEC_CREATE]
+[cli.parse frag=_Z_CLI_HELPERS,_Z_CLI_PARSE]
+[cli.Parsed.hasFlag frag=_Z_PARSED_HAS_FLAG]
+[cli.Parsed.option frag=_Z_PARSED_GET_OPTION]
+[cli.Parsed.positional frag=_Z_PARSED_GET_POSITIONAL]
 
-# net's runtime is all-or-nothing: the unit flag gates it, and these load in
-# this order. Listener.close and Conn.flush share the Conn close / are no-ops.
-[net.listen demand=uses_net frag=_Z_NET_LISTEN]
-[net.Listener.accept demand=uses_net frag=_Z_NET_ACCEPT]
-[net.connect demand=uses_net frag=_Z_NET_CONNECT]
-[net.Conn.read demand=uses_net frag=_Z_NET_CONN_READ]
-[net.Conn.write demand=uses_net frag=_Z_NET_CONN_WRITE]
-[net.Conn.close demand=uses_net frag=_Z_NET_CONN_CLOSE]
-[net.pollReadable demand=uses_net frag=_Z_NET_POLL]
+# os -- args (a hand-ordered pair: the argv globals main() fills, then the copy)
+# and env come first, then the convention loads
+[os.args demand=args frag=_Z_OS_ARGV_GLOBALS,_Z_OS_ARGS]
+[os.env frag=_Z_OS_GET_ENV]
+[os.buildCommit frag=_Z_OS_BUILD_COMMIT]
+[os.buildCompiler frag=_Z_OS_BUILD_COMPILER]
+[os.buildDate frag=_Z_OS_BUILD_DATE]
+[os.cwd frag=_Z_OS_CWD]
+[os.envNames frag=_Z_OS_ENV_NAMES]
+[os.exePath frag=_Z_OS_EXE_PATH]
+[os.exit frag=_Z_OS_EXIT]
+[os.homeDir frag=_Z_OS_HOME_DIR]
+[os.hostArchName frag=_Z_OS_HOST_ARCH_NAME]
+[os.hostOsName frag=_Z_OS_HOST_OS_NAME]
+[os.hostname frag=_Z_OS_HOSTNAME]
+[os.kill frag=_Z_OS_KILL]
+[os.monotonicMillis frag=_Z_OS_MONOTONIC_MILLIS]
+[os.pid frag=_Z_OS_PID]
+[os.ppid frag=_Z_OS_PPID]
+[os.setCwd frag=_Z_OS_SET_CWD]
+[os.setEnv frag=_Z_OS_SET_ENV]
+[os.sleepMillis frag=_Z_OS_SLEEP_MILLIS]
+[os.spawn frag=_Z_OS_SPAWN]
+[os.spawnAsync frag=_Z_OS_SPAWN_ASYNC]
+[os.unsetEnv frag=_Z_OS_UNSET_ENV]
+[os.userName frag=_Z_OS_USER_NAME]
+[os.waitAny frag=_Z_OS_WAIT_ANY]
+
+# net -- all-or-nothing on the unit demand, loading in this order.
+# Listener.close and Conn.flush share the Conn close / are no-ops.
+[net.listen demand=@unit frag=_Z_NET_LISTEN]
+[net.Listener.accept demand=@unit frag=_Z_NET_ACCEPT]
+[net.connect demand=@unit frag=_Z_NET_CONNECT]
+[net.Conn.read demand=@unit frag=_Z_NET_CONN_READ]
+[net.Conn.write demand=@unit frag=_Z_NET_CONN_WRITE]
+[net.Conn.close demand=@unit frag=_Z_NET_CONN_CLOSE]
+[net.pollReadable demand=@unit frag=_Z_NET_POLL]
 [net.Listener.close]
 [net.Conn.flush]
 
-# the collections string join, reached by a flat need
-[collections.stringJoin demand=coll_join frag=_Z_COLL_STRING_JOIN]
+# tcc -- the shared helpers, then the convention loads
+[@tcc.helpers demand=@unit frag=_Z_TCC_HELPERS]
+[tcc.available frag=_Z_TCC_AVAILABLE]
+[tcc.compileToExe frag=_Z_TCC_COMPILE_TO_EXE]
 
 # -- String and StringView ---------------------------------------------
 # The demand-gated bodies live in _Z_SV_* fragments; everything else is in the
@@ -423,47 +446,54 @@
 [system.String.hash]
 [system.String.create]
 
-# system.StringView
+# system.StringView -- ROW ORDER IS LOAD ORDER. The three shared helpers sit
+# ahead of the members that pull them, each naming those members.
 [system.StringView.length]
 [system.StringView.string]
 [system.StringView.asString]
 [system.StringView.compare]
+[system.StringView.split]
+[system.StringView.lines]
 [system.StringView.isEmpty frag=_Z_SV_IS_EMPTY]
 [system.StringView.isAscii frag=_Z_SV_IS_ASCII]
 [system.StringView.startsWith frag=_Z_SV_STARTS_WITH]
 [system.StringView.endsWith frag=_Z_SV_ENDS_WITH]
+[@system.index_of_raw demand=contains,indexOf,lastIndexOf frag=_Z_SV_INDEX_OF_RAW]
 [system.StringView.contains frag=_Z_SV_CONTAINS]
-[system.StringView.indexOf frag=_Z_SV_INDEX_OF]
-[system.StringView.lastIndexOf frag=_Z_SV_LAST_INDEX_OF]
-[system.StringView.byteAt frag=_Z_SV_BYTE_AT]
+[@system.is_ascii_ws demand=trim,trimStart,trimEnd frag=_Z_SV_IS_ASCII_WS]
 [system.StringView.substring frag=_Z_SV_SUBSTRING]
+[system.StringView.hash frag=_Z_SV_HASH]
 [system.StringView.trim frag=_Z_SV_TRIM]
 [system.StringView.trimStart frag=_Z_SV_TRIM_START]
 [system.StringView.trimEnd frag=_Z_SV_TRIM_END]
-[system.StringView.stripPrefix frag=_Z_SV_STRIP_PREFIX]
-[system.StringView.stripSuffix frag=_Z_SV_STRIP_SUFFIX]
-[system.StringView.split]
-[system.StringView.splitOnce frag=_Z_SV_SPLIT_ONCE]
-[system.StringView.lines]
 [system.StringView.toLowerAscii frag=_Z_SV_TO_LOWER_ASCII]
-[system.StringView.toUpperAscii frag=_Z_SV_TO_UPPER_ASCII]
+[@system.replace_impl demand=replace,replaceFirst frag=_Z_SV_REPLACE_IMPL]
 [system.StringView.replace frag=_Z_SV_REPLACE]
 [system.StringView.replaceFirst frag=_Z_SV_REPLACE_FIRST]
 [system.StringView.repeated frag=_Z_SV_REPEAT]
 [system.StringView.concat frag=_Z_SV_CONCAT]
+[system.StringView.toUpperAscii frag=_Z_SV_TO_UPPER_ASCII]
+[@system.utf8_decode demand=count,codepoints frag=_Z_SV_UTF8_DECODE]
 [system.StringView.count frag=_Z_SV_COUNT]
 [system.StringView.codepoints frag=_Z_SV_CPITER_STRUCT,_Z_SV_CODEPOINTS,_Z_SV_CPITER_CALL]
+[system.StringView.indexOf frag=_Z_SV_INDEX_OF]
+[system.StringView.lastIndexOf frag=_Z_SV_LAST_INDEX_OF]
+[system.StringView.byteAt frag=_Z_SV_BYTE_AT]
+[system.StringView.stripPrefix frag=_Z_SV_STRIP_PREFIX]
+[system.StringView.stripSuffix frag=_Z_SV_STRIP_SUFFIX]
+[system.StringView.splitOnce frag=_Z_SV_SPLIT_ONCE]
 [system.StringView.parseI64 frag=_Z_SV_PARSE_I64]
 [system.StringView.parseU64 frag=_Z_SV_PARSE_U64]
 [system.StringView.parseF64 frag=_Z_SV_PARSE_F64]
 [system.StringView.parseF16 frag=_Z_SV_PARSE_F16]
 [system.StringView.parseF128 frag=_Z_SV_PARSE_F128]
-[system.StringView.hash frag=_Z_SV_HASH]
 
 # a runtime helper no declaration names: the 128-bit formatter, demanded by any
 # program that prints one. The `@` marks it as standing outside the declaration
-# space, as the synthesised comparisons do.
-[@system.fmt_128 frag=_Z_FMT_128]
+# space, as the synthesised comparisons do. Its unit is `prelude` because of
+# WHERE it goes: emitC emits it into the header, ahead of the literal pool, so
+# that a need registered inside a type method is still in time.
+[@prelude.fmt_128 frag=_Z_FMT_128]
 
 
 # -- collections -------------------------------------------------------
