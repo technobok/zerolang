@@ -16385,6 +16385,45 @@ markDataRuntimeIndexed: function {st: zenv.ZSymbolTable tid: ztypes.tid} is {
     to9.runtimeIndexed = true
 }
 
+# dataElemTypeOf -- the element type of a data block, 0 when it cannot be
+# derived. A data block records its `out T` as the name of its tag child
+# (`tag__u8`), so the element type is that name resolved in the reading unit's
+# scope. Both `.index` and `.array` read it -- `.index` yields one element,
+# `.array` an array of them -- so it is derived once.
+dataElemTypeOf: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    unitName: StringView
+    dataTid: ztypes.tid
+} out ztypes.tid is {
+    (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: dataTid nameId: zast.wkTag)
+    tgo9: st.typing.declChildOfId parentTypeId: dataTid nameId: zast.wkTag
+    match (
+        tgo9
+    ) case some then {
+        tagn9: typeNameOf :st tid: (ztypes.tid.create from: tgo9.u64)
+        eno9: tagn9.stringview.stripPrefix p: "tag__"
+        match (
+            eno9
+        ) case some then {
+            den9: eno9
+            elo9: (walkLookupTyperef
+                :ast
+                ty: st.typing
+                reg: st.reg
+                currentUnit: unitName
+                base: den9
+            )
+            match (
+                elo9
+            ) case some then {
+                return (ztypes.tid.create from: elo9.u64)
+            } case none then null
+        } case none then null
+    } case none then null
+    return (ztypes.tid.create from: 0)
+}
+
 # checkDotted -- a dotted method reference in a body: type the base, look the
 # member up on the base's type, and stamp the dotted node -- with the method's
 # return when the method takes no user parameters beyond the receiver (the
@@ -16977,7 +17016,14 @@ checkDotted: function {
     # `.index` / `.array` on a data block need its static array emitted (label
     # accesses fold to constants); mark the type so the emitter keeps the array.
     if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType then {
-        if cn.stringview == "index" then markDataRuntimeIndexed :st tid: bt
+        if cn.stringview == "index" then {
+            markDataRuntimeIndexed :st tid: bt
+            sedi9: dataElemTypeOf :ast :st :unitName dataTid: bt
+            if sedi9 > 0 then {
+                stampGate :st nid: dp.nodeid.u64 tid: sedi9
+                return sedi9
+            }
+        }
         if cn.stringview == "array" then markDataRuntimeIndexed :st tid: bt
     }
     # `.array` on a data block copies the elements into the sized array
