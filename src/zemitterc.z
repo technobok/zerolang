@@ -3392,6 +3392,66 @@ aliasChildName: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.v
     }
 }
 
+# stmtFormName9 -- the statement form a DOTTED callee resolves to ("print",
+# "panic", "error", "return"), else "". Those four are core aliases onto natives
+# in `io` and `system`, and the dispatch below reads the ATOM, so a program that
+# spelled one qualified reached the generic native path instead: `io.print`
+# failed at emit for want of a fragment it does not have, and `system.panic`
+# emitted the mono's own cname as a function. Asking the resolved declaration
+# routes both spellings to one emitter, and is what keeps a user unit's own
+# `print` out of it.
+stmtFormName9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    n: Node.view
+} out String is {
+    memb9: dottedChildText :ast :n
+    if memb9.length == 0 then return "".string
+    isSf9: false
+    if memb9.stringview == "print" then isSf9 = true
+    if memb9.stringview == "panic" then isSf9 = true
+    if memb9.stringview == "error" then isSf9 = true
+    if memb9.stringview == "return" then isSf9 = true
+    if (isSf9) == false then return "".string
+    bid9: dottedBaseAtomId :ast :n
+    if bid9.isZero then return "".string
+    if (symtab.reg.isUnitName nameId: bid9) == false then return "".string
+    # ... and a DECLARATION of that name here shadows the unit: name ids are
+    # pooled program-wide, so the registry answers isUnitName either way
+    base9: dottedBaseAtom :ast :n
+    sh9: (ztypecheck.resolveUnitChild
+        :ast
+        ty: symtab.typing
+        reg: symtab.reg
+        unitName: ctx.mainName.stringview
+        name: base9.stringview
+    )
+    match (
+        sh9
+    ) case some then {
+        shT9: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: sh9)
+        if shT9 != ztypes.ztypetype.unitType then return "".string
+    } case none then null
+    fo9: (ztypecheck.resolvedByIds
+        :ast
+        ty: symtab.typing
+        reg: symtab.reg
+        unitId: bid9
+        name: (dottedChildNameIdOf :ast :n)
+    )
+    match (
+        fo9
+    ) case some then {
+        fid9: ztypes.tid.create from: (fo9)
+        tt9: symtab.reg.typetypeOf typeId: fid9
+        if tt9 != ztypes.ztypetype.functionType then return "".string
+        if (fnIsNativeId :symtab fid: fid9) == false then return "".string
+        return memb9.copy
+    } case none then null
+    return "".string
+}
+
 # the child member name id of dotted-path node `n` (0 when not one).
 dottedChildNameIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
     match (
@@ -11590,19 +11650,30 @@ emitCallStmt: function {
         if (symtab.reg.typetypeOf typeId: reltid) == ztypes.ztypetype.protocolType then return
     }
     cn0: atomTextOf :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    if cn0.stringview == "print" then {
+    # a statement form arrives either as its core alias (an atom) or spelled
+    # qualified (a dotted path, whose atom text is empty)
+    sfn9: cn0.copy
+    if cn0.length == 0 then {
+        sfn9 = (stmtFormName9
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: (call.callable - 1).u64)
+        )
+    }
+    if sfn9.stringview == "print" then {
         emitPrintStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
-    if cn0.stringview == "panic" then {
+    if sfn9.stringview == "panic" then {
         emitPanicStmt :ast :symtab :ctx :call :ind :buf
         return
     }
-    if cn0.stringview == "error" then {
+    if sfn9.stringview == "error" then {
         emitErrorStmt :ast :symtab :ctx :call :ind :buf
         return
     }
-    if cn0.stringview == "return" then {
+    if sfn9.stringview == "return" then {
         hasArg: false
         aiter: call.arguments.iterate
         for aId9: aiter loop {
@@ -22156,6 +22227,7 @@ emitRuntimeIo: function {
     ioSkip9.append "uses_BufReader".string
     ioSkip9.append "uses_TextWriter".string
     ioSkip9.append "uses_TextReader".string
+    ioSkip9.append "print".string
     ioSkip9.append "stdout".string
     ioSkip9.append "stderr".string
     ioSkip9.append "stdin".string
