@@ -2236,11 +2236,13 @@ Ctx: class {
     # entry exists only because something asked to emit it, so unlike usedLits
     # there is no separate mark.
     constLits: (List String)
-    needs: (MapRV String value: bool)
-    # convention-fragment demands, as the (unit, member) PAIRS they are:
-    # parallel rows, never joined. Joining them would only have to be split
-    # apart again to name the fragment -- which is why the per-unit skip lists
-    # already carry the member half alone.
+    # every runtime demand, as the (unit, member) PAIRS they are: parallel
+    # rows, never joined. Joining them would only have to be split apart again
+    # to name the fragment -- which is why the per-unit skip lists already carry
+    # the member half alone. A member of `@unit` is the unit ITSELF being
+    # demanded, which is what the flat vocabulary used to say with no unit at
+    # all: the bare name "io" was always the pair (io, the unit), and every
+    # other flat name was a member of `system` or of `collections`.
     needUnits: (List String)
     needMembs: (List String)
     methodReturns: (Map String value: String)
@@ -3250,16 +3252,9 @@ emitValueTakeInvalidations: function {
     } else null
 }
 
-# mark runtime helper `name` as needed by this program.
-needsAdd: function {ctx: Ctx name: StringView} is {
-    k: name.string
-    v: true
-    ctx.needs.set key: k value: v
-}
-
-# needsAddM -- record a convention-fragment demand as a (unit, member) pair.
-# The fragment name is composed from the pair once, where the fragment is
-# loaded; nothing else ever needs the two halves stuck together.
+# needsAddM -- record a runtime demand as a (unit, member) pair. The fragment
+# name is composed from the pair once, where the fragment is loaded; nothing
+# else ever needs the two halves stuck together.
 needsAddM: function {ctx: Ctx uname: StringView memb: StringView} is {
     if (needsHasM :ctx :uname :memb) then return
     ctx.needUnits.append from: uname.string
@@ -3279,19 +3274,6 @@ needsHasM: function {ctx: Ctx.view uname: StringView memb: StringView} out bool 
         i9 = i9 + 1
     }
     return false
-}
-
-# true when runtime helper `name` was marked needed.
-needsHas: function {ctx: Ctx.view name: StringView} out bool is {
-    k: name
-    g: ctx.needs.get key: k.asString
-    match (
-        g
-    ) case some then {
-        return true
-    } case none then {
-        return false
-    }
 }
 
 # true when `name` is a string-like type.
@@ -3512,7 +3494,7 @@ dottedBaseNodeId: function {ast: Ast.view n: Node.view} out u64 is {
 # (not a shell id stamped on a nested `.stringview` projection).
 # isSvNoArgNative -- no-arg StringView natives whose fragments must be
 # registered by the scanNeeds pre-pass: type-method bodies emit after
-# emitNeededNatives, so an in-body needsAdd comes too late to matter.
+# emitNeededNatives, so an in-body demand comes too late to matter.
 isSvNoArgNative: function {name: StringView} out bool is {
     if name == "count" then return true
     if name == "hash" then return true
@@ -3738,7 +3720,7 @@ emitDottedCall: function {
                 recvp9 = "&((\{ctx.svC}_t){ .data = \{bn}\{sacc9}data, .size = \{bn}\{sacc9}len })"
             } }
             if recvp9.length > 0 then {
-                needsAdd :ctx name: "substring"
+                needsAddM :ctx uname: "system" memb: "substring"
                 esb9: "\{ctx.svC}_substring(\{recvp9}, \{fromA9}, \{toA9})"
                 return esb9
             }
@@ -3748,7 +3730,7 @@ emitDottedCall: function {
         :ctx
         tid: (ztypes.tid.create from: btid.u64)
     ) when mn.stringview == "split" then {
-        needsAdd :ctx name: "sv_split"
+        needsAddM :ctx uname: "system" memb: "sv_split"
         sepx9: String
         with siter9: call.arguments.iterate do for sa9Id9: siter9 loop {
             sa9: ast.nodes.get i: (sa9Id9 - 1).u64
@@ -3811,7 +3793,7 @@ emitDottedCall: function {
         :ctx
         tid: (ztypes.tid.create from: btid.u64)
     ) when mn.stringview == "lines" then {
-        needsAdd :ctx name: "sv_lines"
+        needsAddM :ctx uname: "system" memb: "sv_lines"
         el9: "\{ctx.svC}_lines(&\{bn})"
         return el9
     }
@@ -3820,7 +3802,7 @@ emitDottedCall: function {
         tid: (ztypes.tid.create from: btid.u64)
     ) when (isSvParseNative name: mn.stringview) then {
         bfp9: svValueForm :ctx expr: bn.stringview isStr: btIsStr9 vid: dcbV9
-        needsAdd :ctx name: mn.stringview
+        needsAddM :ctx uname: "system" memb: mn.stringview
         epn9: "\{ctx.svC}_\{mn}(&\{bfp9})"
         return epn9
     }
@@ -3828,7 +3810,7 @@ emitDottedCall: function {
         :ctx
         tid: (ztypes.tid.create from: btid.u64)
     ) when (isSvArgNative name: mn.stringview) then {
-        needsAdd :ctx name: mn.stringview
+        needsAddM :ctx uname: "system" memb: mn.stringview
         argx: String
         with aiter9: call.arguments.iterate do for a9Id9: aiter9 loop {
             a9: ast.nodes.get i: (a9Id9 - 1).u64
@@ -3903,7 +3885,7 @@ emitDottedCall: function {
     if btIsStr9 then svRecvOk9 = true
     if svRecvOk9 then {
         if (isSvSimpleNative name: mn.stringview) then {
-            needsAdd :ctx name: mn.stringview
+            needsAddM :ctx uname: "system" memb: mn.stringview
             # a String receiver projects to a view value, like the
             # substring/parse legs (a StringView receiver is one already)
             recvS9: "&\{bn}"
@@ -8742,7 +8724,7 @@ emitCallValue: function {
         return e8
     } else {
         if cn0.stringview == "stringJoin" then {
-            needsAdd :ctx name: "coll_join"
+            needsAddM :ctx uname: "collections" memb: "coll_join"
             sjargs9: String
             sji9: u64
             with sjiter9: call.arguments.iterate do for sja9Id9: sjiter9 loop {
@@ -9463,7 +9445,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             membId: (atomNameIdOf :ast n: (ast.nodes.get i: (n.child - 1).u64))
         )
         if nnu9.length > 0 then {
-            needsAdd :ctx name: nnu9.stringview
+            needsAddM :ctx uname: nnu9.stringview memb: "@unit"
             needsAddM :ctx uname: nnu9.stringview memb: mn2.stringview
             return "z_\{nnu9}_\{mn2}()"
         }
@@ -9579,7 +9561,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             if bareStr9 when (isSvNoArgNative name: mn2.stringview) then {
                 # String receivers project to a view for the no-arg SV
                 # natives, mirroring the chained/auto-call legs
-                needsAdd :ctx name: mn2.stringview
+                needsAddM :ctx uname: "system" memb: mn2.stringview
                 svfb9: svValueForm :ctx expr: bn2.stringview isStr: true vid: bn2v9
                 efb9: "\{ctx.svC}_\{mn2}(&\{svfb9})"
                 return efb9
@@ -9598,48 +9580,48 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     return ea2
                 }
                 if mn2.stringview == "count" then {
-                    needsAdd :ctx name: "count"
+                    needsAddM :ctx uname: "system" memb: "count"
                     ec2: "\{ctx.svC}_count(&\{bn2})"
                     return ec2
                 }
                 if mn2.stringview == "codepoints" then {
-                    needsAdd :ctx name: "codepoints"
+                    needsAddM :ctx uname: "system" memb: "codepoints"
                     ecp: "\{ctx.svC}_codepoints(&\{bn2})"
                     return ecp
                 }
                 if mn2.stringview == "parseI64" then {
-                    needsAdd :ctx name: "parseI64"
+                    needsAddM :ctx uname: "system" memb: "parseI64"
                     epi: "\{ctx.svC}_parseI64(&\{bn2})"
                     return epi
                 }
                 if mn2.stringview == "parseU64" then {
-                    needsAdd :ctx name: "parseU64"
+                    needsAddM :ctx uname: "system" memb: "parseU64"
                     epu: "\{ctx.svC}_parseU64(&\{bn2})"
                     return epu
                 }
                 if mn2.stringview == "parseF64" then {
-                    needsAdd :ctx name: "parseF64"
+                    needsAddM :ctx uname: "system" memb: "parseF64"
                     epf: "\{ctx.svC}_parseF64(&\{bn2})"
                     return epf
                 }
                 if mn2.stringview == "parseF16" then {
-                    needsAdd :ctx name: "parseF16"
+                    needsAddM :ctx uname: "system" memb: "parseF16"
                     eph: "\{ctx.svC}_parseF16(&\{bn2})"
                     return eph
                 }
                 if mn2.stringview == "parseF128" then {
-                    needsAdd :ctx name: "parseF128"
+                    needsAddM :ctx uname: "system" memb: "parseF128"
                     epq: "\{ctx.svC}_parseF128(&\{bn2})"
                     return epq
                 }
                 if (isSvSimpleNative name: mn2.stringview) then {
                     # a no-paren method reference auto-calls
-                    needsAdd :ctx name: mn2.stringview
+                    needsAddM :ctx uname: "system" memb: mn2.stringview
                     e4: "\{ctx.svC}_\{mn2}(&\{bn2})"
                     return e4
                 }
                 if mn2.stringview == "lines" then {
-                    needsAdd :ctx name: "sv_lines"
+                    needsAddM :ctx uname: "system" memb: "sv_lines"
                     eln2: "\{ctx.svC}_lines(&\{bn2})"
                     return eln2
                 }
@@ -9776,9 +9758,9 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                         ffcc9: ioCanonCname :ast :symtab :ctx canon: fbtn9.stringview
                         if ffcc9.length > 0 then ffc9 = ffcc9
                         if isNetU9 then {
-                            needsAdd :ctx name: "net"
+                            needsAddM :ctx uname: "net" memb: "@unit"
                         } else {
-                            needsAdd :ctx name: "io"
+                            needsAddM :ctx uname: "io" memb: "@unit"
                             ffm9: "file_\{mn2}"
                             needsAddM :ctx uname: "io" memb: ffm9.stringview
                         }
@@ -9829,7 +9811,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                             :ctx
                             tid: bstamp
                         ) then {
-                            needsAdd :ctx name: mn2.stringview
+                            needsAddM :ctx uname: "system" memb: mn2.stringview
                             svfa9: (svValueForm
                                 :ctx
                                 expr: bn2.stringview
@@ -10149,7 +10131,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             if nsm9.length > 0 then return nsm9
         }
         if (isStringy name: nptn9.stringview) when (isSvParseNative name: mn2.stringview) then {
-            needsAdd :ctx name: mn2.stringview
+            needsAddM :ctx uname: "system" memb: mn2.stringview
             npIsStr9: nptn9.stringview == "String"
             pnv9: svValueForm :ctx expr: base9.stringview isStr: npIsStr9 vid: bs9vid
             epnv9: "\{ctx.svC}_\{mn2}(&\{pnv9})"
@@ -10233,7 +10215,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                             :ctx
                             tid: nlid9
                         ) then {
-                            needsAdd :ctx name: mn2.stringview
+                            needsAddM :ctx uname: "system" memb: mn2.stringview
                             svfn9: (svValueForm
                                 :ctx
                                 expr: base9.stringview
@@ -10414,7 +10396,7 @@ emitBinop9: function {
         return "/* zemitterc: no native implementation */0".string
     }
     nd9: nativeNeedOf :ctx path: key9.stringview
-    if nd9.length > 0 then needsAdd :ctx name: nd9.stringview
+    if nd9.length > 0 then needsAddM :ctx uname: "system" memb: nd9.stringview
     # String and StringView reach one native: both project to a view, by value
     # for the compares and as an lvalue for the row that takes pointers.
     lf9: l.copy
@@ -10767,13 +10749,13 @@ emitInterpPart: function {
         flushArgHoists :ctx :ind :tmp :buf floor: hoistFloor rawFloor: hoistRawFloor
         bN: tmp.next
         if tn.stringview == "i128" then {
-            needsAdd :ctx name: "fmt_128"
+            needsAddM :ctx uname: "system" memb: "fmt_128"
             l4a: "\{ind}char _b\{bN}[48]; int _b\{bN}_n = z_fmt_i128(_b\{bN}, (__int128)\{val});\n"
             buf.append l4a
             l5a: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
             buf.append l5a
         } else if tn.stringview == "u128" then {
-            needsAdd :ctx name: "fmt_128"
+            needsAddM :ctx uname: "system" memb: "fmt_128"
             l4b: "\{ind}char _b\{bN}[48]; int _b\{bN}_n = z_fmt_u128(_b\{bN}, (unsigned __int128)\{val});\n"
             buf.append l4b
             l5b: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
@@ -17897,7 +17879,7 @@ scanNativeNeed9: function {
     match (
         duo9
     ) case some then {
-        needsAdd :ctx name: duo9.stringview
+        needsAddM :ctx uname: duo9.stringview memb: "@unit"
         needsAddM :ctx uname: duo9.stringview :memb
     } case none then null
 }
@@ -17977,35 +17959,63 @@ scanNeeds: function {
             membId: (dottedChildNameIdOf :ast n: (ast.nodes.get i: (n.callable - 1).u64))
             memb: cmb0.stringview
         )
-        if (isSvArgNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
-        if (isSvSimpleNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
+        if (isSvArgNative name: mn0.stringview) then (needsAddM
+            :ctx
+            uname: "system"
+            memb: mn0.stringview
+        )
+        if (isSvSimpleNative name: mn0.stringview) then (needsAddM
+            :ctx
+            uname: "system"
+            memb: mn0.stringview
+        )
         # substring emits through its own leg (recv/from/to), so the arg-native
         # table cannot carry it; the need still must pre-register for method
         # bodies, which emit after emitNeededNatives runs
-        if mn0.stringview == "substring" then needsAdd :ctx name: "substring"
-        if (isSvParseNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
-        if (isSvNoArgNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
+        if mn0.stringview == "substring" then needsAddM :ctx uname: "system" memb: "substring"
+        if (isSvParseNative name: mn0.stringview) then (needsAddM
+            :ctx
+            uname: "system"
+            memb: mn0.stringview
+        )
+        if (isSvNoArgNative name: mn0.stringview) then (needsAddM
+            :ctx
+            uname: "system"
+            memb: mn0.stringview
+        )
         # split/lines emit through the iterator fragments (Splitter/LinesIter),
         # so the native tables cannot carry them; the sv_* needs still must
         # pre-register for method bodies, which emit after emitRuntimeSvIter runs
-        if mn0.stringview == "split" then needsAdd :ctx name: "sv_split"
-        if mn0.stringview == "lines" then needsAdd :ctx name: "sv_lines"
+        if mn0.stringview == "split" then needsAddM :ctx uname: "system" memb: "sv_split"
+        if mn0.stringview == "lines" then needsAddM :ctx uname: "system" memb: "sv_lines"
         cjn0: atomTextOf :ast n: (ast.nodes.get i: (n.callable - 1).u64)
-        if cjn0.stringview == "stringJoin" then needsAdd :ctx name: "coll_join"
+        if cjn0.stringview == "stringJoin" then (needsAddM
+            :ctx
+            uname: "collections"
+            memb: "coll_join"
+        )
         aiter2: n.arguments.iterate
         for a: aiter2 loop scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: (a - 1).u64)
     } case dottedpath then {
         pdm9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if pdm9.stringview == "parseF64" then needsAdd :ctx name: "parseF64"
-        if pdm9.stringview == "parseF16" then needsAdd :ctx name: "parseF16"
-        if pdm9.stringview == "parseF128" then needsAdd :ctx name: "parseF128"
-        if pdm9.stringview == "parseI64" then needsAdd :ctx name: "parseI64"
-        if pdm9.stringview == "parseU64" then needsAdd :ctx name: "parseU64"
-        if (isSvNoArgNative name: pdm9.stringview) then needsAdd :ctx name: pdm9.stringview
+        if pdm9.stringview == "parseF64" then needsAddM :ctx uname: "system" memb: "parseF64"
+        if pdm9.stringview == "parseF16" then needsAddM :ctx uname: "system" memb: "parseF16"
+        if pdm9.stringview == "parseF128" then needsAddM :ctx uname: "system" memb: "parseF128"
+        if pdm9.stringview == "parseI64" then needsAddM :ctx uname: "system" memb: "parseI64"
+        if pdm9.stringview == "parseU64" then needsAddM :ctx uname: "system" memb: "parseU64"
+        if (isSvNoArgNative name: pdm9.stringview) then (needsAddM
+            :ctx
+            uname: "system"
+            memb: pdm9.stringview
+        )
         # a no-paren member read auto-calls, so the simple natives (trim,
         # isEmpty, ...) arrive as dottedpath too -- same parity the call arm has
-        if (isSvSimpleNative name: pdm9.stringview) then needsAdd :ctx name: pdm9.stringview
-        if pdm9.stringview == "lines" then needsAdd :ctx name: "sv_lines"
+        if (isSvSimpleNative name: pdm9.stringview) then (needsAddM
+            :ctx
+            uname: "system"
+            memb: pdm9.stringview
+        )
+        if pdm9.stringview == "lines" then needsAddM :ctx uname: "system" memb: "sv_lines"
         # a no-paren member read auto-calls, so a zero-parameter native (os.pid,
         # io.stdout) arrives here rather than at the call arm
         pdb9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
@@ -19609,7 +19619,6 @@ emitC: function {
         mainUnitId: 0
         condDepth: 0
         emitErrors: (List String)
-        needs: (MapRV String value: bool)
         needUnits: (List String)
         needMembs: (List String)
         methodReturns: (Map String value: String)
@@ -19743,7 +19752,7 @@ emitC: function {
         emitRuntimeSvIter ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
         emitNeededNatives ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
         if (ioFileLive ast: program.ast :symtab :ctx) then {
-            needsAdd :ctx name: "io"
+            needsAddM :ctx uname: "io" memb: "@unit"
             needsAddM :ctx uname: "io" memb: "file_close"
             needsAddM :ctx uname: "io" memb: "file_read"
             needsAddM :ctx uname: "io" memb: "file_write"
@@ -19880,9 +19889,9 @@ emitNeededNatives: function {
     emitNativeIf :ctx need: "isAscii" :runtimeDir :buf
     emitNativeIf :ctx need: "startsWith" :runtimeDir :buf
     emitNativeIf :ctx need: "endsWith" :runtimeDir :buf
-    needRaw: needsHas :ctx name: "contains"
-    if (needsHas :ctx name: "indexOf") then needRaw = true
-    if (needsHas :ctx name: "lastIndexOf") then needRaw = true
+    needRaw: needsHasM :ctx uname: "system" memb: "contains"
+    if (needsHasM :ctx uname: "system" memb: "indexOf") then needRaw = true
+    if (needsHasM :ctx uname: "system" memb: "lastIndexOf") then needRaw = true
     if needRaw then (emitMonoNative
         :ctx
         :runtimeDir
@@ -19892,9 +19901,9 @@ emitNeededNatives: function {
         :buf
     )
     emitNativeIf :ctx need: "contains" :runtimeDir :buf
-    hasTrim: needsHas :ctx name: "trim"
-    hasTrimS: needsHas :ctx name: "trimStart"
-    hasTrimE: needsHas :ctx name: "trimEnd"
+    hasTrim: needsHasM :ctx uname: "system" memb: "trim"
+    hasTrimS: needsHasM :ctx uname: "system" memb: "trimStart"
+    hasTrimE: needsHasM :ctx uname: "system" memb: "trimEnd"
     anyTrim: hasTrim
     if hasTrimS then anyTrim = true
     if hasTrimE then anyTrim = true
@@ -19916,8 +19925,8 @@ emitNeededNatives: function {
     emitNativeIf :ctx need: "trimStart" :runtimeDir :buf
     emitNativeIf :ctx need: "trimEnd" :runtimeDir :buf
     emitNativeIf :ctx need: "toLowerAscii" :runtimeDir :buf
-    hasRep: needsHas :ctx name: "replace"
-    hasRepF: needsHas :ctx name: "replaceFirst"
+    hasRep: needsHasM :ctx uname: "system" memb: "replace"
+    hasRepF: needsHasM :ctx uname: "system" memb: "replaceFirst"
     anyRep: hasRep
     if hasRepF then anyRep = true
     if anyRep then {
@@ -19937,8 +19946,8 @@ emitNeededNatives: function {
     emitNativeIf :ctx need: "repeated" :runtimeDir :buf
     emitNativeIf :ctx need: "concat" :runtimeDir :buf
     emitNativeIf :ctx need: "toUpperAscii" :runtimeDir :buf
-    hasCount: needsHas :ctx name: "count"
-    hasCp: needsHas :ctx name: "codepoints"
+    hasCount: needsHasM :ctx uname: "system" memb: "count"
+    hasCp: needsHasM :ctx uname: "system" memb: "codepoints"
     anyUtf8: hasCount
     if hasCp then anyUtf8 = true
     if anyUtf8 then {
@@ -19955,7 +19964,7 @@ emitNeededNatives: function {
     }
     emitNativeIf :ctx need: "count" :runtimeDir :buf
     if hasCp then emitCodepointsNatives :ast :symtab :ctx :runtimeDir :buf
-    if (needsHas :ctx name: "indexOf") then {
+    if (needsHasM :ctx uname: "system" memb: "indexOf") then {
         (emitMonoNative
             :ctx
             :runtimeDir
@@ -19965,7 +19974,7 @@ emitNeededNatives: function {
             :buf
         )
     }
-    if (needsHas :ctx name: "lastIndexOf") then {
+    if (needsHasM :ctx uname: "system" memb: "lastIndexOf") then {
         (emitMonoNative
             :ctx
             :runtimeDir
@@ -19975,7 +19984,7 @@ emitNeededNatives: function {
             :buf
         )
     }
-    if (needsHas :ctx name: "byteAt") then {
+    if (needsHasM :ctx uname: "system" memb: "byteAt") then {
         (emitMonoNative
             :ctx
             :runtimeDir
@@ -19985,7 +19994,7 @@ emitNeededNatives: function {
             :buf
         )
     }
-    if (needsHas :ctx name: "stripPrefix") then {
+    if (needsHasM :ctx uname: "system" memb: "stripPrefix") then {
         (emitMonoNative
             :ctx
             :runtimeDir
@@ -19995,7 +20004,7 @@ emitNeededNatives: function {
             :buf
         )
     }
-    if (needsHas :ctx name: "stripSuffix") then {
+    if (needsHasM :ctx uname: "system" memb: "stripSuffix") then {
         (emitMonoNative
             :ctx
             :runtimeDir
@@ -20005,7 +20014,7 @@ emitNeededNatives: function {
             :buf
         )
     }
-    if (needsHas :ctx name: "splitOnce") then {
+    if (needsHasM :ctx uname: "system" memb: "splitOnce") then {
         (emitMonoNative
             :ctx
             :runtimeDir
@@ -20015,7 +20024,7 @@ emitNeededNatives: function {
             :buf
         )
     }
-    if (needsHas :ctx name: "parseI64") then {
+    if (needsHasM :ctx uname: "system" memb: "parseI64") then {
         (emitParseNative
             :ctx
             :runtimeDir
@@ -20025,7 +20034,7 @@ emitNeededNatives: function {
             :buf
         )
     }
-    if (needsHas :ctx name: "parseU64") then {
+    if (needsHasM :ctx uname: "system" memb: "parseU64") then {
         (emitParseNative
             :ctx
             :runtimeDir
@@ -20035,7 +20044,7 @@ emitNeededNatives: function {
             :buf
         )
     }
-    if (needsHas :ctx name: "parseF64") then {
+    if (needsHasM :ctx uname: "system" memb: "parseF64") then {
         (emitParseNative
             :ctx
             :runtimeDir
@@ -20045,7 +20054,7 @@ emitNeededNatives: function {
             :buf
         )
     }
-    if (needsHas :ctx name: "parseF16") then {
+    if (needsHasM :ctx uname: "system" memb: "parseF16") then {
         (emitParseNative
             :ctx
             :runtimeDir
@@ -20055,7 +20064,7 @@ emitNeededNatives: function {
             :buf
         )
     }
-    if (needsHas :ctx name: "parseF128") then {
+    if (needsHasM :ctx uname: "system" memb: "parseF128") then {
         (emitParseNative
             :ctx
             :runtimeDir
@@ -20080,7 +20089,7 @@ emitNativeIf: function {
     runtimeDir: StringView
     buf: String.borrow
 } is {
-    if (needsHas :ctx name: need) then {
+    if (needsHasM :ctx uname: "system" memb: need) then {
         fl9: fragsForDemand :ctx uname: "system" memb: need
         if fl9.length == 0 then {
             emitFail :ctx what: "no native implementation for the 'system.\{need}' demand" line: 0
@@ -21780,7 +21789,7 @@ ioFragIf: function {
     frag: StringView
     buf: String.borrow
 } is {
-    if (needsHas :ctx name: need) then {
+    if (needsHasM :ctx uname: "system" memb: need) then {
         p9: nativePath :runtimeDir :frag
         f9: loadIoFragment :ast :symtab :ctx path: p9.stringview
         buf.append f9
@@ -22071,7 +22080,7 @@ emitNetFdClass: function {
 
 # emitNetClasses -- the net fd-holder value reps (Listener/Conn), need-gated.
 emitNetClasses: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view buf: String.borrow} is {
-    if (needsHas :ctx name: "net") == false then return
+    if (needsHasM :ctx uname: "net" memb: "@unit") == false then return
     emitNetFdClass :symtab :ctx name: "Listener" :buf
     emitNetFdClass :symtab :ctx name: "Conn" :buf
 }
@@ -22088,15 +22097,15 @@ emitRuntimeSvIter: function {
 } is {
     anyNeed: false
     svNeed9: false
-    if (needsHas :ctx name: "sv_split") then {
+    if (needsHasM :ctx uname: "system" memb: "sv_split") then {
         anyNeed = true
         svNeed9 = true
     }
-    if (needsHas :ctx name: "sv_lines") then {
+    if (needsHasM :ctx uname: "system" memb: "sv_lines") then {
         anyNeed = true
         svNeed9 = true
     }
-    if (needsHas :ctx name: "coll_join") then anyNeed = true
+    if (needsHasM :ctx uname: "collections" memb: "coll_join") then anyNeed = true
     if (anyNeed) == false then return
     if svNeed9 then ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_SV_SPLITTER_STRUCT" :buf
     ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_lines" frag: "_Z_SV_LINESITER" :buf
@@ -22104,7 +22113,7 @@ emitRuntimeSvIter: function {
     ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_split" frag: "_Z_SV_SPLITTER_CALL" :buf
     ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_lines" frag: "_Z_SV_LINES" :buf
     ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_lines" frag: "_Z_SV_LINES_CALL" :buf
-    if (needsHas :ctx name: "coll_join") then {
+    if (needsHasM :ctx uname: "collections" memb: "coll_join") then {
         emitFragsFor :ast :symtab :ctx :runtimeDir uname: "collections" memb: "coll_join" :buf
     }
 }
@@ -22131,6 +22140,10 @@ loadConventionFrags: function {
         if u9.stringview == uname then {
             m9: ctx.needMembs.get i: i9
             skipped9: false
+            # `@unit` is the unit itself being demanded, not one of its
+            # members: the `@` marks a name outside the member space, exactly
+            # as it does on a row's path, and no fragment answers to it
+            if (m9.stringview.startsWith prefix: "@") then skipped9 = true
             with sit9: skip.iterate do for sk9: sit9 loop {
                 if sk9.stringview == m9.stringview then skipped9 = true
             }
@@ -22163,7 +22176,7 @@ emitRuntimeIo: function {
     runtimeDir: StringView
     buf: String.borrow
 } is {
-    ioAct9: needsHas :ctx name: "io"
+    ioAct9: needsHasM :ctx uname: "io" memb: "@unit"
     osEr9: osNeedsErrno :ctx
     runIo9: ioAct9
     if (osNeedsSvCstr :ctx) then runIo9 = true
@@ -22279,7 +22292,7 @@ emitRuntimeCli: function {
     runtimeDir: StringView
     buf: String.borrow
 } is {
-    if (needsHas :ctx name: "cli") == false then return
+    if (needsHasM :ctx uname: "cli" memb: "@unit") == false then return
     # parse is a bundle -- its row names the helpers first, then its own body,
     # so the forward declaration is clean -- and the Parsed methods name the
     # renamed _Z_PARSED_* family. All of that is in the row now; the skip list
@@ -22330,7 +22343,7 @@ emitRuntimeOs: function {
     runtimeDir: StringView
     buf: String.borrow
 } is {
-    if (needsHas :ctx name: "os") == false then return
+    if (needsHasM :ctx uname: "os" memb: "@unit") == false then return
     ioFragIfM :ast :symtab :ctx :runtimeDir uname: "os" memb: "args" :buf
     # env's fragment is renamed (GET_ENV); args is a bundle -- both above.
     # Every other os_<name> need is convention-loaded.
@@ -22351,7 +22364,7 @@ emitRuntimeTcc: function {
     runtimeDir: StringView
     buf: String.borrow
 } is {
-    if (needsHas :ctx name: "tcc") == false then return
+    if (needsHasM :ctx uname: "tcc" memb: "@unit") == false then return
     ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TCC_HELPERS" :buf
     tccSkip9: (List String)
     loadConventionFrags :ast :symtab :ctx :runtimeDir uname: "tcc" skip: tccSkip9 :buf
@@ -22367,7 +22380,7 @@ emitRuntimeNet: function {
 } is {
     # net's runtime is all-or-nothing: the unit flag is the whole gate, so the
     # rows are loaded directly rather than through a per-member demand
-    if (needsHas :ctx name: "net") == false then return
+    if (needsHasM :ctx uname: "net" memb: "@unit") == false then return
     emitFragsFor :ast :symtab :ctx :runtimeDir uname: "net" memb: "uses_net" :buf
 }
 
@@ -23608,7 +23621,7 @@ emitMonos: function {
     # one classification sweep over the registry fills the per-category
     # worklists; the category loops below emit in the original sequence.
     # Every predicate reads only registry/typing state (immutable during
-    # emission); the io-wrapper needsHas gate stays at emission time.
+    # emission); the io-wrapper demand gate stays at emission time.
     wStr9: (ListVal u64)
     wBox9: (ListVal u64)
     wIoUnion9: (ListVal u64)
@@ -23954,7 +23967,7 @@ emitMonos: function {
     }
     # reachable io wrapper CLASSes (BufWriter/BufReader/TextWriter/TextReader) --
     # after the protocols their .lock fields hold. File has its own emitter.
-    # The needsHas gate stays here (needs may accrue during emission).
+    # The demand gate stays here (needs may accrue during emission).
     tsc: u64
     for tsc < wIoWrap9.length loop {
         scId9: wIoWrap9.get i: tsc
@@ -24902,9 +24915,9 @@ emitFileMethodCall: function {
         } case none then null
     }
     if isNet9 then {
-        needsAdd :ctx name: "net"
+        needsAddM :ctx uname: "net" memb: "@unit"
     } else {
-        needsAdd :ctx name: "io"
+        needsAddM :ctx uname: "io" memb: "@unit"
         fmm: "file_\{mn}"
         needsAddM :ctx uname: "io" memb: fmm.stringview
     }
@@ -25415,7 +25428,7 @@ emitNativeFreeFnCall: function {
     }
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
     if (fnIsNativeId :symtab :fid) == false then return "".string
-    needsAdd :ctx name: un.stringview
+    needsAddM :ctx uname: un.stringview memb: "@unit"
     needsAddM :ctx uname: un.stringview memb: mn.stringview
     pn: (List String)
     pidl: (ListVal u64)
@@ -25523,7 +25536,7 @@ emitCliSpecCreate: function {
         args.append astr
         pi = pi + 1
     }
-    needsAdd :ctx name: "cli"
+    needsAddM :ctx uname: "cli" memb: "@unit"
     needsAddM :ctx uname: "cli" memb: "spec_create"
     ccb: ctxCname :ctx tid: (ztypes.tid.create from: cid.u64)
     return "\{ccb}_create(\{args})"
@@ -25621,7 +25634,7 @@ emitParsedMethodCall: function {
     recvC: emitLocalAtomName :ctx name: bn.stringview vid: recvV0
     recvExpr: "&\{recvC}"
     if (isPtrVid :ctx vid: recvV9) then recvExpr = recvC
-    needsAdd :ctx name: "cli"
+    needsAddM :ctx uname: "cli" memb: "@unit"
     needsAddM :ctx uname: "cli" memb: mn.stringview
     nameArg: ctorArgByLabel :ast :symtab :ctx :call label: "name"
     return "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})"
