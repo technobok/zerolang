@@ -3259,6 +3259,34 @@ needsAddM: function {ctx: Ctx uname: StringView memb: StringView} is {
     if (needsHasM :ctx :uname :memb) then return
     ctx.needUnits.append from: uname.string
     ctx.needMembs.append from: memb.string
+    if uname == "os" then osCrossNeeds9 :ctx :memb
+}
+
+# osCrossNeeds9 -- the io helpers an os native's body calls. os.env builds a C
+# string out of a StringView and os.cwd maps errno to an IoError: that C is
+# io's, so the demand is io's. Recorded HERE, where the os member is demanded,
+# rather than recomputed at emission by reading os's demands back -- which is
+# what let io's runtime gate on a predicate no row could state. Both names wear
+# the `@` that marks a demand outside the member space: no declaration is
+# called sv_cstr, and no fragment answers to the name alone.
+osCrossNeeds9: function {ctx: Ctx memb: StringView} is {
+    svc9: false
+    if memb == "env" then svc9 = true
+    if memb == "setEnv" then svc9 = true
+    if memb == "unsetEnv" then svc9 = true
+    if memb == "setCwd" then svc9 = true
+    if memb == "spawn" then svc9 = true
+    if svc9 then needsAddM :ctx uname: "io" memb: "@sv_cstr"
+    er9: false
+    if memb == "setEnv" then er9 = true
+    if memb == "unsetEnv" then er9 = true
+    if memb == "cwd" then er9 = true
+    if memb == "setCwd" then er9 = true
+    if memb == "userName" then er9 = true
+    if memb == "homeDir" then er9 = true
+    if memb == "hostname" then er9 = true
+    if memb == "exePath" then er9 = true
+    if er9 then needsAddM :ctx uname: "io" memb: "@errno"
 }
 
 # needsHasM -- true when the (unit, member) pair was demanded.
@@ -22089,9 +22117,9 @@ emitRuntimeIo: function {
     buf: String.borrow
 } is {
     ioAct9: needsHasM :ctx uname: "io" memb: "@unit"
-    osEr9: osNeedsErrno :ctx
+    osEr9: needsHasM :ctx uname: "io" memb: "@errno"
     runIo9: ioAct9
-    if (osNeedsSvCstr :ctx) then runIo9 = true
+    if (needsHasM :ctx uname: "io" memb: "@sv_cstr") then runIo9 = true
     if osEr9 then runIo9 = true
     if (runIo9) == false then return
     # sv_to_cstr is a runtime fragment like everything else around it; it was
@@ -25123,29 +25151,6 @@ noArgNativeRhs: function {
     } else {
         return false
     }
-}
-
-# osNeedsSvCstr -- an os native that converts a StringView arg to a C string.
-osNeedsSvCstr: function {ctx: Ctx.view} out bool is {
-    if (needsHasM :ctx uname: "os" memb: "env") then return true
-    if (needsHasM :ctx uname: "os" memb: "setEnv") then return true
-    if (needsHasM :ctx uname: "os" memb: "unsetEnv") then return true
-    if (needsHasM :ctx uname: "os" memb: "setCwd") then return true
-    if (needsHasM :ctx uname: "os" memb: "spawn") then return true
-    return false
-}
-
-# osNeedsErrno -- an os native that maps errno to an IoError.
-osNeedsErrno: function {ctx: Ctx.view} out bool is {
-    if (needsHasM :ctx uname: "os" memb: "setEnv") then return true
-    if (needsHasM :ctx uname: "os" memb: "unsetEnv") then return true
-    if (needsHasM :ctx uname: "os" memb: "cwd") then return true
-    if (needsHasM :ctx uname: "os" memb: "setCwd") then return true
-    if (needsHasM :ctx uname: "os" memb: "userName") then return true
-    if (needsHasM :ctx uname: "os" memb: "homeDir") then return true
-    if (needsHasM :ctx uname: "os" memb: "hostname") then return true
-    if (needsHasM :ctx uname: "os" memb: "exePath") then return true
-    return false
 }
 
 # lowerNativeArg -- lower one native-call argument from the DECLARED
