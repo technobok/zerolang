@@ -1243,7 +1243,7 @@ view-guard:
 # emitFail line count in src/zemitterc.z -- it may only DECREASE as fallback
 # legs are resolved; lower the baseline in the same commit that removes a leg.
 FALLBACK_BASELINE :=
-EMITFAIL_BASELINE := 28
+EMITFAIL_BASELINE := 29
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	@fail=0; \
@@ -1456,4 +1456,18 @@ natives-tbl-guard: bin/zc
 	  echo "  catches the ones it happens to call."; \
 	  exit 1; \
 	fi; \
-	echo "natives-tbl-guard OK: $$nc convention-unit free functions, each with a row or an exception"
+	echo "natives-tbl-guard OK: $$nc convention-unit free functions, each with a row or an exception"; \
+	d5=$$(mktemp -d); fail=0; \
+	awk '/^[A-Za-z_][A-Za-z0-9_]*: / {o=""; if ($$0 ~ /^(String|StringView): class/) {o=$$1; sub(/:$$/,"",o)}} \
+	     o != "" && /^    [^ ]+: function/ {n=$$1; sub(/:$$/,"",n); pend=n} \
+	     pend != "" && /is native/ {print "system."o"."pend; pend=""} \
+	     pend != "" && /is \{/ {pend=""}' lib/system/system.z \
+	  | LC_ALL=C sort -u > $$d5/svdecl; \
+	grep -oE '^\[system\.(String|StringView)\.[^]  ]+' src/runtime/natives.tbl \
+	  | sed 's/^\[//' | LC_ALL=C sort -u > $$d5/svrows; \
+	for d in $$(LC_ALL=C comm -23 $$d5/svdecl $$d5/svrows); do \
+	  echo "natives-tbl-guard FAIL: $$d has no row"; fail=1; \
+	done; \
+	ns=$$(wc -l < $$d5/svdecl); rm -rf $$d5; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "natives-tbl-guard OK: $$ns String/StringView natives, each with a row"

@@ -1228,7 +1228,17 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                                 match (
                                     fd9
                                 ) case some then {
-                                    du9 = (key9.stringview.substring from: 0 to: fd9).string
+                                    hd9: key9.stringview.substring from: 0 to: fd9
+                                    # the `@` marks a path outside the declaration
+                                    # space; the unit it names is still the unit
+                                    so9: hd9.stripPrefix p: "@"
+                                    match (
+                                        so9
+                                    ) case some then {
+                                        du9 = so9.string
+                                    } case none then {
+                                        du9 = hd9.string
+                                    }
                                 } case none then null
                             }
                             if dem9.length == 0 then {
@@ -19607,7 +19617,7 @@ emitC: function {
     }
     # every body has emitted by now, so a need registered inside a type
     # method -- which emits after emitNeededNatives -- is still in time
-    emitNativeIf :ctx need: "fmt_128" frag: "_Z_FMT_128" :runtimeDir :buf
+    emitNativeIf :ctx need: "fmt_128" :runtimeDir :buf
     buf.reserve n: poolBuf.length + codeBuf.length + fnsBuf.length + 4096
     buf.append poolBuf
     buf.append "\n"
@@ -19678,10 +19688,10 @@ emitNeededNatives: function {
     runtimeDir: StringView
     buf: String.borrow
 } is {
-    emitNativeIf :ctx need: "isEmpty" frag: "_Z_SV_IS_EMPTY" :runtimeDir :buf
-    emitNativeIf :ctx need: "isAscii" frag: "_Z_SV_IS_ASCII" :runtimeDir :buf
-    emitNativeIf :ctx need: "startsWith" frag: "_Z_SV_STARTS_WITH" :runtimeDir :buf
-    emitNativeIf :ctx need: "endsWith" frag: "_Z_SV_ENDS_WITH" :runtimeDir :buf
+    emitNativeIf :ctx need: "isEmpty" :runtimeDir :buf
+    emitNativeIf :ctx need: "isAscii" :runtimeDir :buf
+    emitNativeIf :ctx need: "startsWith" :runtimeDir :buf
+    emitNativeIf :ctx need: "endsWith" :runtimeDir :buf
     needRaw: needsHas :ctx name: "contains"
     if (needsHas :ctx name: "indexOf") then needRaw = true
     if (needsHas :ctx name: "lastIndexOf") then needRaw = true
@@ -19693,7 +19703,7 @@ emitNeededNatives: function {
         stemTid: ztypes.tid
         :buf
     )
-    emitNativeIf :ctx need: "contains" frag: "_Z_SV_CONTAINS" :runtimeDir :buf
+    emitNativeIf :ctx need: "contains" :runtimeDir :buf
     hasTrim: needsHas :ctx name: "trim"
     hasTrimS: needsHas :ctx name: "trimStart"
     hasTrimE: needsHas :ctx name: "trimEnd"
@@ -19712,12 +19722,12 @@ emitNeededNatives: function {
         )
         buf.append f0
     }
-    emitNativeIf :ctx need: "substring" frag: "_Z_SV_SUBSTRING" :runtimeDir :buf
-    emitNativeIf :ctx need: "hash" frag: "_Z_SV_HASH" :runtimeDir :buf
-    emitNativeIf :ctx need: "trim" frag: "_Z_SV_TRIM" :runtimeDir :buf
-    emitNativeIf :ctx need: "trimStart" frag: "_Z_SV_TRIM_START" :runtimeDir :buf
-    emitNativeIf :ctx need: "trimEnd" frag: "_Z_SV_TRIM_END" :runtimeDir :buf
-    emitNativeIf :ctx need: "toLowerAscii" frag: "_Z_SV_TO_LOWER_ASCII" :runtimeDir :buf
+    emitNativeIf :ctx need: "substring" :runtimeDir :buf
+    emitNativeIf :ctx need: "hash" :runtimeDir :buf
+    emitNativeIf :ctx need: "trim" :runtimeDir :buf
+    emitNativeIf :ctx need: "trimStart" :runtimeDir :buf
+    emitNativeIf :ctx need: "trimEnd" :runtimeDir :buf
+    emitNativeIf :ctx need: "toLowerAscii" :runtimeDir :buf
     hasRep: needsHas :ctx name: "replace"
     hasRepF: needsHas :ctx name: "replaceFirst"
     anyRep: hasRep
@@ -19734,11 +19744,11 @@ emitNeededNatives: function {
         )
         buf.append fR
     }
-    emitNativeIf :ctx need: "replace" frag: "_Z_SV_REPLACE" :runtimeDir :buf
-    emitNativeIf :ctx need: "replaceFirst" frag: "_Z_SV_REPLACE_FIRST" :runtimeDir :buf
-    emitNativeIf :ctx need: "repeated" frag: "_Z_SV_REPEAT" :runtimeDir :buf
-    emitNativeIf :ctx need: "concat" frag: "_Z_SV_CONCAT" :runtimeDir :buf
-    emitNativeIf :ctx need: "toUpperAscii" frag: "_Z_SV_TO_UPPER_ASCII" :runtimeDir :buf
+    emitNativeIf :ctx need: "replace" :runtimeDir :buf
+    emitNativeIf :ctx need: "replaceFirst" :runtimeDir :buf
+    emitNativeIf :ctx need: "repeated" :runtimeDir :buf
+    emitNativeIf :ctx need: "concat" :runtimeDir :buf
+    emitNativeIf :ctx need: "toUpperAscii" :runtimeDir :buf
     hasCount: needsHas :ctx name: "count"
     hasCp: needsHas :ctx name: "codepoints"
     anyUtf8: hasCount
@@ -19755,7 +19765,7 @@ emitNeededNatives: function {
         )
         buf.append fu
     }
-    emitNativeIf :ctx need: "count" frag: "_Z_SV_COUNT" :runtimeDir :buf
+    emitNativeIf :ctx need: "count" :runtimeDir :buf
     if hasCp then emitCodepointsNatives :ast :symtab :ctx :runtimeDir :buf
     if (needsHas :ctx name: "indexOf") then {
         (emitMonoNative
@@ -19879,12 +19889,16 @@ nativePath: function {runtimeDir: StringView frag: StringView} out String is {
 emitNativeIf: function {
     ctx: Ctx
     need: StringView
-    frag: StringView
     runtimeDir: StringView
     buf: String.borrow
 } is {
     if (needsHas :ctx name: need) then {
-        p9: nativePath :runtimeDir :frag
+        fl9: fragsForDemand :ctx uname: "system" memb: need
+        if fl9.length == 0 then {
+            emitFail :ctx what: "no native implementation for the 'system.\{need}' demand" line: 0
+            return
+        }
+        p9: nativePath :runtimeDir frag: fl9.stringview
         sc9: ctx.svC
         tc9: ctx.strC
         f9: (loadFragment
