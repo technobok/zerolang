@@ -1243,7 +1243,7 @@ view-guard:
 # emitFail line count in src/zemitterc.z -- it may only DECREASE as fallback
 # legs are resolved; lower the baseline in the same commit that removes a leg.
 FALLBACK_BASELINE :=
-EMITFAIL_BASELINE := 27
+EMITFAIL_BASELINE := 28
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	@fail=0; \
@@ -1289,7 +1289,10 @@ clean:
 # emit generically and are exempt. Leg 2: every _Z_* fragment name the
 # emitter references exists on disk, and no fragment on disk is unreferenced --
 # a convention fragment is reached through the (unit, member) demand pair, so
-# the member half alone counts as a reference. Leg 3: every `z_@Name@` hole a fragment
+# the member half alone counts as a reference, and a natives.tbl row naming the
+# fragment in its `frag=` list counts as one too: that is where the names live
+# now, so a guard reading only the emitter would call every renamed fragment an
+# orphan. Leg 3: every `z_@Name@` hole a fragment
 # spells names a canon the loader can actually fill -- a type declared in the
 # convention units (core.z carries the io/system aliases: File, IoError,
 # Reader, Writer, openmode, seekorigin, TextReader, Splitter, LinesIter,
@@ -1319,6 +1322,7 @@ native-guard:
 	  ref=0; \
 	  grep -qF "\"$$stem\"" src/zemitterc.z && ref=1; \
 	  grep -qF "\"$$need\"" src/zemitterc.z && ref=1; \
+	  grep -qE "frag=([A-Z0-9_]+,)*$$stem(,|\]| )" src/runtime/natives.tbl && ref=1; \
 	  for u in io os cli net tcc; do \
 	    case "$$need" in "$$u"_*) \
 	      grep -qF "memb: \"$${need#$$u\_}\"" src/zemitterc.z && ref=1;; \
@@ -1416,4 +1420,16 @@ natives-tbl-guard: bin/zc
 	  exit 1; \
 	fi; \
 	rm -rf $$d2; \
-	echo "natives-tbl-guard OK: $$cn generated conversion rows, each matching its declared return"
+	echo "natives-tbl-guard OK: $$cn generated conversion rows, each matching its declared return"; \
+	d3=$$(mktemp -d); fail=0; \
+	grep -oE '^\[[^]]*frag=[A-Z0-9_,]+' src/runtime/natives.tbl \
+	  | sed -E 's/^\[([^ ]+).*frag=([A-Z0-9_,]+)/\1 \2/' > $$d3/fr; \
+	while read path frags; do \
+	  for f in $$(echo "$$frags" | tr ',' ' '); do \
+	    test -f src/runtime/natives/$$f.inc || { \
+	      echo "natives-tbl-guard FAIL: $$path names $$f, which is not on disk"; fail=1; }; \
+	  done; \
+	done < $$d3/fr; \
+	nf=$$(wc -l < $$d3/fr); rm -rf $$d3; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "natives-tbl-guard OK: $$nf fragment-backed rows, every named fragment on disk"

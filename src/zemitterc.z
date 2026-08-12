@@ -1161,6 +1161,8 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                     body9: rest9.trim
                     key9: String
                     need9: String
+                    frag9: String
+                    dem9: String
                     ptr9: false
                     with fit9: (head9.split sep: " ") do for f9: fit9 loop {
                         if f9.length > 0 then {
@@ -1168,6 +1170,18 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                                 key9 = f9.string
                             } else {
                                 if f9 == "args=ptr" then ptr9 = true
+                                fo9: f9.stripPrefix p: "frag="
+                                match (
+                                    fo9
+                                ) case some then {
+                                    frag9 = fo9.string
+                                } case none then null
+                                do9: f9.stripPrefix p: "demand="
+                                match (
+                                    do9
+                                ) case some then {
+                                    dem9 = do9.string
+                                } case none then null
                                 so9: f9.stripPrefix p: "needs="
                                 match (
                                     so9
@@ -1177,10 +1191,13 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                             }
                         }
                     }
-                    if key9.length > 0 when body9.length > 0 then {
-                        # a conversion path is <unit>.<type>.<type>: three
-                        # segments whose last is an identifier, not an operator
-                        {
+                    if key9.length > 0 then {
+                        # a conversion path is <unit>.<type>.<type>: three segments whose last
+                        # is an identifier, AND it carries a body. A fragment-backed row has
+                        # three segments too -- io.File.close -- and must not make `close` read
+                        # as a conversion member, which is what routed a File close through the
+                        # numeric cast.
+                        if body9.length > 0 then {
                             d19: key9.stringview.indexOf needle: "."
                             match (
                                 d19
@@ -1201,8 +1218,44 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                                 } case none then null
                             } case none then null
                         }
-                        kb9: key9.copy
-                        ctx.nativeTbl.set key: kb9 value: body9.string
+                        if frag9.length > 0 then {
+                            # the row's own halves, split here and nowhere else: the unit is the
+                            # path's first segment, the demand is `demand=` or the last segment
+                            du9: key9.copy
+                            dm9: key9.copy
+                            {
+                                fd9: key9.stringview.indexOf needle: "."
+                                match (
+                                    fd9
+                                ) case some then {
+                                    du9 = (key9.stringview.substring from: 0 to: fd9).string
+                                } case none then null
+                            }
+                            if dem9.length == 0 then {
+                                li9: u64
+                                kn9: key9.length
+                                cut9: u64
+                                for li9 < kn9 loop {
+                                    bo9: key9.stringview.byteAt i: li9
+                                    match (
+                                        bo9
+                                    ) case some then {
+                                        if bo9 == 46 then cut9 = li9 + 1
+                                    } case none then null
+                                    li9 = li9 + 1
+                                }
+                                dm9 = (key9.stringview.substring from: cut9 to: kn9).string
+                            } else {
+                                dm9 = dem9.copy
+                            }
+                            ctx.fragUnits.append from: du9
+                            ctx.fragMembs.append from: dm9
+                            ctx.fragNames.append from: frag9.copy
+                        }
+                        if body9.length > 0 then {
+                            kb9: key9.copy
+                            ctx.nativeTbl.set key: kb9 value: body9.string
+                        }
                         if need9.length > 0 then {
                             kn9: key9.copy
                             ctx.nativeNeed.set key: kn9 value: need9.copy
@@ -1216,6 +1269,27 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
             }
         }
     }
+}
+
+# fragsForDemand -- the fragments the row reached by this (unit, member) demand
+# needs, in order, comma separated; "" when no row claims the pair. The pair is
+# compared as a pair -- the two halves are never joined into one key, which is
+# what a demand key stopped being when it stopped having to be split apart.
+fragsForDemand: function {ctx: Ctx.view uname: StringView memb: StringView} out String is {
+    i9: u64
+    n9: ctx.fragUnits.length
+    for i9 < n9 loop {
+        u9: ctx.fragUnits.get i: i9
+        if u9.stringview == uname then {
+            m9: ctx.fragMembs.get i: i9
+            if m9.stringview == memb then {
+                f9: ctx.fragNames.get i: i9
+                return f9.copy
+            }
+        }
+        i9 = i9 + 1
+    }
+    return "".string
 }
 
 # nativeIsConvOf -- whether `<srcPath>.<memb>` is a numeric CONVERSION, asked
@@ -2178,6 +2252,12 @@ Ctx: class {
     # write the dotted path through to the C compiler.
     nativeConvSrc: (MapRV String value: bool)
     nativeConvMemb: (MapRV String value: bool)
+    # the fragment-backed rows, as the (unit, demand) PAIR each is reached by
+    # plus the fragments it needs. Parallel lists because the demand is a pair
+    # and stays one: nothing here joins the halves, and nothing splits them.
+    fragUnits: (List String)
+    fragMembs: (List String)
+    fragNames: (List String)
     argHoistNames: (List String)
     argHoistVals: (List String)
     argHoistTypes: (List String)
@@ -19367,6 +19447,9 @@ emitC: function {
         nativePtrArgs: (MapRV String value: bool)
         nativeConvSrc: (MapRV String value: bool)
         nativeConvMemb: (MapRV String value: bool)
+        fragUnits: (List String)
+        fragMembs: (List String)
+        fragNames: (List String)
         argHoistNames: (List String)
         argHoistVals: (List String)
         argHoistTypes: (List String)
@@ -21450,14 +21533,22 @@ ioFragIfM: function {
     runtimeDir: StringView
     uname: StringView
     memb: StringView
-    frag: StringView
     buf: String.borrow
 } is {
     if (needsHasM :ctx :uname :memb) then {
-        p9: nativePath :runtimeDir :frag
-        f9: loadIoFragment :ast :symtab :ctx path: p9.stringview
-        buf.append f9
-        buf.append "\n"
+        fl9: fragsForDemand :ctx :uname :memb
+        if fl9.length == 0 then {
+            emitFail :ctx what: "no native implementation for the '\{uname}.\{memb}' demand" line: 0
+            return
+        }
+        with fit9: (fl9.stringview.split sep: ",") do for fr9: fit9 loop {
+            if fr9.length > 0 then {
+                p9: nativePath :runtimeDir frag: fr9
+                f9: loadIoFragment :ast :symtab :ctx path: p9.stringview
+                buf.append f9
+                buf.append "\n"
+            }
+        }
     }
 }
 
@@ -21798,32 +21889,6 @@ emitRuntimeSvIter: function {
     ioFragIf :ast :symtab :ctx :runtimeDir need: "coll_join" frag: "_Z_COLL_STRING_JOIN" :buf
 }
 
-# emitRuntimeIo -- the io runtime bodies (need-gated, dependency-ordered). The
-# universal helpers (z_sv_to_cstr inline, errno-map) emit whenever any io call
-# is present; the rest gate on their specific need.
-# upperSnakeOf -- camelCase (or snake_case) to UPPER_SNAKE: `listDir` ->
-# `LIST_DIR`, `spec_create` -> `SPEC_CREATE`. Fragment-name convention.
-upperSnakeOf: function {name: StringView} out String is {
-    r: String
-    i: u64
-    n: name.length
-    for i < n loop {
-        bo: name.byteAt :i
-        match (
-            bo
-        ) case some then {
-            if bo >= 97 when bo <= 122 then {
-                r.appendByte b: (bo - 32)
-            } else {
-                if bo >= 65 when bo <= 90 then r.appendByte b: 95
-                r.appendByte b: bo
-            }
-        } case none then null
-        i = i + 1
-    }
-    return r
-}
-
 # loadConventionFrags -- load the convention-named runtime fragment for
 # every recorded `<unit>_<name>` need: `_Z_<UNIT>_<UPPER_SNAKE(name)>.inc`.
 # Needs whose fragment is a bundle/rename/base (listed in `skip`, bare
@@ -21854,14 +21919,11 @@ loadConventionFrags: function {
         i9 = i9 + 1
     }
     names9.sort
-    un9: upperSnakeOf name: uname
     ni9: u64
     nn9: names9.length
     for ni9 < nn9 loop {
         nm9: names9.get i: ni9
         ni9 = ni9 + 1
-        sn9: upperSnakeOf name: nm9.stringview
-        fr9: "_Z_\{un9}_\{sn9}"
         (ioFragIfM
             :ast
             :symtab
@@ -21869,7 +21931,6 @@ loadConventionFrags: function {
             :runtimeDir
             :uname
             memb: nm9.stringview
-            frag: fr9.stringview
             :buf
         )
     }
@@ -21957,7 +22018,6 @@ emitRuntimeIo: function {
         :runtimeDir
         uname: "io"
         memb: "file_close"
-        frag: "_Z_FILE_CLOSE"
         :buf
     )
     (ioFragIfM
@@ -21967,11 +22027,10 @@ emitRuntimeIo: function {
         :runtimeDir
         uname: "io"
         memb: "file_write"
-        frag: "_Z_FILE_WRITE"
         :buf
     )
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "file_read" frag: "_Z_FILE_READ" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "file_seek" frag: "_Z_FILE_SEEK" :buf
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "file_read" :buf
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "file_seek" :buf
     (ioFragIfM
         :ast
         :symtab
@@ -21979,7 +22038,6 @@ emitRuntimeIo: function {
         :runtimeDir
         uname: "io"
         memb: "file_flush"
-        frag: "_Z_FILE_FLUSH"
         :buf
     )
     if (needsHasM :ctx uname: "io" memb: "uses_BufWriter") then {
@@ -22016,17 +22074,17 @@ emitRuntimeCli: function {
     buf: String.borrow
 } is {
     if (needsHas :ctx name: "cli") == false then return
-    # parse is a bundle (helpers precede its body); the Parsed methods load
-    # the renamed _Z_PARSED_* family. Every other cli_<name> need is
-    # convention-loaded.
+    # parse is a bundle -- its row names the helpers first, then its own body,
+    # so the forward declaration is clean -- and the Parsed methods name the
+    # renamed _Z_PARSED_* family. All of that is in the row now; the skip list
+    # only says which loads are ORDERED by hand rather than alphabetically.
     cliSkip9: (List String)
     cliSkip9.append "parse".string
     cliSkip9.append "hasFlag".string
     cliSkip9.append "option".string
     cliSkip9.append "positional".string
     loadConventionFrags :ast :symtab :ctx :runtimeDir uname: "cli" skip: cliSkip9 :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "cli" memb: "parse" frag: "_Z_CLI_HELPERS" :buf
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "cli" memb: "parse" frag: "_Z_CLI_PARSE" :buf
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "cli" memb: "parse" :buf
     (ioFragIfM
         :ast
         :symtab
@@ -22034,7 +22092,6 @@ emitRuntimeCli: function {
         :runtimeDir
         uname: "cli"
         memb: "hasFlag"
-        frag: "_Z_PARSED_HAS_FLAG"
         :buf
     )
     (ioFragIfM
@@ -22044,7 +22101,6 @@ emitRuntimeCli: function {
         :runtimeDir
         uname: "cli"
         memb: "option"
-        frag: "_Z_PARSED_GET_OPTION"
         :buf
     )
     (ioFragIfM
@@ -22054,7 +22110,6 @@ emitRuntimeCli: function {
         :runtimeDir
         uname: "cli"
         memb: "positional"
-        frag: "_Z_PARSED_GET_POSITIONAL"
         :buf
     )
 }
@@ -22076,7 +22131,7 @@ emitRuntimeOs: function {
     }
     # env's fragment is renamed (GET_ENV); args is a bundle -- both above.
     # Every other os_<name> need is convention-loaded.
-    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "os" memb: "env" frag: "_Z_OS_GET_ENV" :buf
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "os" memb: "env" :buf
     osSkip9: (List String)
     osSkip9.append "env".string
     osSkip9.append "args".string
