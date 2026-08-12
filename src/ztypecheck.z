@@ -9383,15 +9383,6 @@ registerAndResolveMain: function {
                     )
                 }
                 eager9: nm9.stringview == mainName
-                if eager9 when (isStdlibUnitName name: nm9.stringview) then {
-                    # a stdlib unit opened as main: demand all of its
-                    # defs so every signature typeref resolves + stamps.
-                    (demandAllUnitDefs
-                        :reg
-                        ast: program.ast
-                        unitdefId: opId9
-                    )
-                }
                 if eager9 then {
                     (resolveUnitBody
                         :ty
@@ -14025,6 +14016,21 @@ isSortEligibleTid: function {
 # shadowing a builtin name (e.g. a user `String`) is NOT the native builtin, so it
 # earns no builtin contains/sort (like any other user type). isUserShadowElem is true
 # when the element is defined in a user file unit (not a stdlib unit, not a scalar).
+#
+# The demand seeding this list once gated is gone: a stdlib unit opened as main is
+# demand-driven like any other main unit. What is left asks a question the demand
+# arc cannot answer -- "are this unit's TYPES runtime-backed?" -- and neither the
+# name nor `is native` is the honest form of it. Only 29 of the 91 objectdefs in
+# these nine units carry `is native`: `u8`/`i32`/`f64` are plain records, `bool` is
+# a variant, and all fourteen of io's types and all six of cli's are unmarked, yet
+# every one of them has its layout owned by the C runtime. The list also has a twin
+# in the emitter (`isEmittableFileUnit`, thirteen call sites) that this one exists
+# to serve, and the pair mistakes a USER unit named `io` for the stdlib.
+#
+# The honest discriminator is ORIGIN: a system-library unit is one parsed from
+# `--system`. zc registers that root separately (systemid / srcid), every node
+# knows the file that parsed it (`Ast.fsnoForNode`), and the VFS keeps
+# `providerRoot`. Retiring both lists that way is its own piece of work.
 isStdlibUnitName: function {name: StringView} out bool is {
     if name == "system" then return true
     if name == "quadfloat" then return true
