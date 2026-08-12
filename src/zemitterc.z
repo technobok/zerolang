@@ -1192,6 +1192,8 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                         }
                     }
                     if key9.length > 0 then {
+                    kk9: key9.copy
+                    ctx.nativeKeys.set key: kk9 value: true
                         # a conversion path is <unit>.<type>.<type>: three segments whose last
                         # is an identifier, AND it carries a body. A fragment-backed row has
                         # three segments too -- io.File.close -- and must not make `close` read
@@ -1219,6 +1221,8 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                             } case none then null
                         }
                         if frag9.length > 0 then {
+                            fp9: key9.copy
+                            ctx.nativeFragPaths.set key: fp9 value: true
                             # the row's own halves, split here and nowhere else: the unit is the
                             # path's first segment, the demand is `demand=` or the last segment
                             du9: key9.copy
@@ -1333,6 +1337,39 @@ nativeIsConvOf: function {ctx: Ctx.view srcPath: StringView memb: StringView} ou
         } case none then null
     }
     return m9
+}
+
+# nativeIsFragBacked -- a fragment implements this path, so its C symbol is the
+# convention one. This replaces a five-name list of units: the question was never
+# which unit a native lives in, it is whether the runtime supplies its body, and
+# a user unit that ships a fragment answers yes on the same terms as io does.
+nativeIsFragBacked: function {ctx: Ctx.view path: StringView} out bool is {
+    out9: false
+    {
+        g9: ctx.nativeFragPaths.get key: path.asString
+        match (
+            g9
+        ) case some then {
+            out9 = g9
+        } case none then null
+    }
+    return out9
+}
+
+# nativeHasRow -- the table has a row for this path, whatever the row says. A
+# row with no body and no fragment still answers the only question asked here:
+# does the compiler claim to supply this native at all.
+nativeHasRow: function {ctx: Ctx.view path: StringView} out bool is {
+    out9: false
+    {
+        g9: ctx.nativeKeys.get key: path.asString
+        match (
+            g9
+        ) case some then {
+            out9 = g9
+        } case none then null
+    }
+    return out9
 }
 
 # nativeImplOf -- the C body natives.tbl gives for a qualified path, "" when
@@ -2265,6 +2302,12 @@ Ctx: class {
     # converting type declares), and if so what C does this pair emit. Asking
     # only the second would make a missing row read as "not a conversion" and
     # write the dotted path through to the C compiler.
+    # every row's path, whatever the row carries: the check at the declaration
+    # asks only whether one exists
+    nativeKeys: (MapRV String value: bool)
+    # the paths a FRAGMENT implements: a native whose C the runtime supplies
+    # under the `z_<unit>_<name>` convention, whoever declares it
+    nativeFragPaths: (MapRV String value: bool)
     nativeConvSrc: (MapRV String value: bool)
     nativeConvMemb: (MapRV String value: bool)
     # the fragment-backed rows, as the (unit, demand) PAIR each is reached by
@@ -17469,6 +17512,66 @@ literalSuffixBase: function {
     return "".string
 }
 
+# checkNativesResolve -- every `is native` declaration in the MAIN unit must
+# name a row in natives.tbl. `is native` says the compiler supplies the body, and
+# this is where that claim is checked: at the declaration, whether or not anyone
+# calls it. Without it an uncalled one is accepted in silence and a called one
+# is only found at the call, as an emitter gap rather than as the missing
+# implementation it is. The system units are checked whole by
+# natives-tbl-guard, which can read every declaration at once; a program can
+# only see its own.
+checkNativesResolve: function {
+    ast: Ast.view
+    ctx: Ctx
+    mainOpId: zast.nodeid
+    unitName: StringView
+} is {
+    bodyIds9: zast.unitBodyIdsAt :ast unitId: mainOpId
+    with biter9: bodyIds9.iterate do for bm9: biter9 loop {
+        bn9: ast.nodes.get i: (bm9 - 1).u64
+        if bn9.namedoperation then {
+            nm9: zast.nameTextAt :ast ref: bn9.name
+            op9: ast.nodes.get i: (bn9.operation - 1).u64
+            match (
+                op9
+            ) case functiondef then {
+                if op9.isNative then {
+                    pk9: "\{unitName}.\{nm9}"
+                    if (nativeHasRow :ctx path: pk9.stringview) == false then {
+                        (emitFail
+                            :ctx
+                            what: "no native implementation for '\{pk9}'"
+                            line: op9.lineno
+                        )
+                    }
+                }
+            } case objectdef then {
+                with aiter9: op9.asItems.iterate do for am9: aiter9 loop {
+                    amn9: ast.nodes.get i: (am9 - 1).u64
+                    if amn9.namedoperation then {
+                        mn9: zast.nameTextAt :ast ref: amn9.name
+                        mo9: ast.nodes.get i: (amn9.operation - 1).u64
+                        match (
+                            mo9
+                        ) case functiondef then {
+                            if mo9.isNative then {
+                                mk9: "\{unitName}.\{nm9}.\{mn9}"
+                                if (nativeHasRow :ctx path: mk9.stringview) == false then {
+                                    (emitFail
+                                        :ctx
+                                        what: "no native implementation for '\{mk9}'"
+                                        line: mo9.lineno
+                                    )
+                                }
+                            }
+                        } else null
+                    }
+                }
+            } else null
+        }
+    }
+}
+
 # fillMethodReturns -- record each main-unit type method's return
 # format name (TypeName.method -> i64/f64/...), so interpolation can
 # format auto-call results whose node carries only a FUNCTION stamp.
@@ -17923,11 +18026,12 @@ scanNeeds: function {
 }
 
 # record every method's return type for the program.
-fillMethodReturns: function {program: Node ctx: Ctx.view} is {
+fillMethodReturns: function {program: Node ctx: Ctx} is {
     match (
         program
     ) case program then {
         mainName: program.mainUnitName.stringview
+        unitName: mainName
         uCnt9c: program.ast.units.length
         uIdx9c: u64
         for uIdx9c < uCnt9c loop {
@@ -17946,6 +18050,12 @@ fillMethodReturns: function {program: Node ctx: Ctx.view} is {
                     :ctx
                     ast: program.ast
                     mainOpId: opId9
+                )
+                (checkNativesResolve
+                    ast: program.ast
+                    :ctx
+                    mainOpId: opId9
+                    :unitName
                 )
             }
         }
@@ -19460,6 +19570,8 @@ emitC: function {
         nativeTbl: (Map String value: String)
         nativeNeed: (Map String value: String)
         nativePtrArgs: (MapRV String value: bool)
+        nativeKeys: (MapRV String value: bool)
+        nativeFragPaths: (MapRV String value: bool)
         nativeConvSrc: (MapRV String value: bool)
         nativeConvMemb: (MapRV String value: bool)
         fragUnits: (List String)
@@ -25038,23 +25150,6 @@ osNeedsErrno: function {ctx: Ctx.view} out bool is {
     return false
 }
 
-# emitOsCall -- an arg-taking os.* native (env/setEnv/unsetEnv/setCwd/exit):
-# `z_os_<name>(args...)` in source order. "" for any non-os callee. (No-arg os
-# fns ride the emitExpr dotted leg.)
-# isNativeRuntimeUnit -- a unit whose `is native` FREE functions follow the
-# runtime convention: C symbol `z_<unit>_<name>`, fragment
-# `_Z_<UNIT>_<UPPER_SNAKE(name)>.inc`. system/core/collections natives use
-# bespoke legacy symbols (z_stringJoin, statement-special print/panic) and
-# stay outside; adding a new convention unit is one line here.
-isNativeRuntimeUnit: function {name: StringView} out bool is {
-    if name == "io" then return true
-    if name == "os" then return true
-    if name == "net" then return true
-    if name == "cli" then return true
-    if name == "tcc" then return true
-    return false
-}
-
 # lowerNativeArg -- lower one native-call argument from the DECLARED
 # parameter: StringView / StringLike-generic params take a by-value view
 # (String args project, interpolations hoist to a view); class and
@@ -25199,9 +25294,10 @@ emitNativeFreeFnCall: function {
     fidHint: u64
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length > 0 then {
-        if (isNativeRuntimeUnit name: bn.stringview) == false then return "".string
         calr9: ast.nodes.get i: (call.callable - 1).u64
         mn = dottedChildText :ast n: calr9
+        dp9: "\{bn}.\{mn}"
+        if (nativeIsFragBacked :ctx path: dp9.stringview) == false then return "".string
         un = bn
     } else {
         cn0: atomTextOf :ast n: (ast.nodes.get i: (call.callable - 1).u64)
@@ -25216,7 +25312,8 @@ emitNativeFreeFnCall: function {
         match (
             duo0
         ) case some then {
-            if (isNativeRuntimeUnit name: duo0.stringview) == false then return "".string
+            bp9: "\{duo0}.\{cn0}"
+            if (nativeIsFragBacked :ctx path: bp9.stringview) == false then return "".string
             un = duo0.copy
         } case none then {
             return "".string
