@@ -41,3 +41,4 @@ static z_@Result_null_IoError@_t z_@Conn@_flush(z_@Conn@_t* c) {
     result.data = NULL;
     return result;
 }
+

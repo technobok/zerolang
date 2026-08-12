@@ -9,3 +9,4 @@ static z_@TextReader@_t z_@TextReader@_create(z_@BufReader@_t* source) {
     return self;
 }
 
+

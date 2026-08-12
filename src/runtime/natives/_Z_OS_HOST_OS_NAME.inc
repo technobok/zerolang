@@ -15,3 +15,4 @@ static z_@String@_t z_os_hostOsName(void) {
     return z_@String@_new("other");
 #endif
 }
+

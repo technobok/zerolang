@@ -20,3 +20,4 @@ static z_@String@_t z_os_buildCompiler(void) {
     return z_@String@_new("cc");
 #endif
 }
+

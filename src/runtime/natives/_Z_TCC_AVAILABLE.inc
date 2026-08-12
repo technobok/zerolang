@@ -9,3 +9,4 @@ static bool z_tcc_available(z_@StringView@_t tccDir) {
     z_tcc_close(&a);
     return true;
 }
+

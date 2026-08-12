@@ -17,3 +17,4 @@ static void z_io_fill_filestat(z_@filestat@_t* fs, const struct stat* sb) {
     fs->nlink = (uint64_t)sb->st_nlink;
 }
 
+

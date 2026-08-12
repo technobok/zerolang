@@ -14,3 +14,4 @@ static z_@Result_null_IoError@_t z_@File@_close(z_@File@_t* p) {
     return z_io_wrap_null_Result(rc, e);
 }
 
+

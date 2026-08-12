@@ -10,3 +10,4 @@ static z_@String@_t z_os_hostArchName(void) {
     return z_@String@_new("other");
 #endif
 }
+

@@ -12,3 +12,4 @@ static z_@Result_u64_IoError@_t z_@TextWriter@_write(
     return z_@BufWriter@_write(self->sink, &view);
 }
 
+

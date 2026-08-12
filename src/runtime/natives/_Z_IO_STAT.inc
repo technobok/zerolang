@@ -26,3 +26,4 @@ static z_@Result_filestat_IoError@_t z_io_stat(z_@StringView@_t path) {
     return result;
 }
 
+

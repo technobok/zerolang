@@ -11,3 +11,4 @@ static z_@BufWriter@_t z_@BufWriter@_create(z_@Writer@_t sink, uint64_t cap) {
     return self;
 }
 
+

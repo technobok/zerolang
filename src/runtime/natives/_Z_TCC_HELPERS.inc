@@ -78,3 +78,4 @@ static void z_tcc_close(z_tcc_api_t* a) {
     if (a->handle) dlclose(a->handle);
     a->handle = NULL;
 }
+

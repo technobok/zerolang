@@ -17,3 +17,4 @@ static z_@Result_u64_IoError@_t z_@Conn@_read(
     buf->length += (uint64_t)n;
     return z_io_u64_ok((uint64_t)n);
 }
+

@@ -9,3 +9,4 @@ static z_@TextWriter@_t z_@TextWriter@_create(z_@BufWriter@_t* sink) {
     return self;
 }
 
+

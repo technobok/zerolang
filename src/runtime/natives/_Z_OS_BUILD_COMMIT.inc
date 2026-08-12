@@ -12,3 +12,4 @@ static z_@String@_t z_os_buildCommit(void);
 static z_@String@_t z_os_buildCommit(void) {
     return z_@String@_new(z_build_commit);
 }
+

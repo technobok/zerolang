@@ -10,3 +10,4 @@ static z_@String@_t z_os_buildDate(void);
 static z_@String@_t z_os_buildDate(void) {
     return z_@String@_new(z_build_date);
 }
+

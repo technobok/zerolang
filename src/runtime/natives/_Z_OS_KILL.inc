@@ -6,3 +6,4 @@ static void z_os_kill(int32_t pid) {
     if (pid <= 0) return;
     kill((pid_t)pid, SIGKILL);
 }
+

@@ -8,3 +8,4 @@ static int64_t z_os_monotonicMillis(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
 }
+

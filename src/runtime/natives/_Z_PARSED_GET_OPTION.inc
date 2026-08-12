@@ -20,3 +20,4 @@ static z_@Option_String@_t z_@Parsed@_option(const z_@Parsed@_t* self, const z_@
     out.data = box;
     return out;
 }
+

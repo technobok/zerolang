@@ -14,3 +14,4 @@ static z_@Result_u64_IoError@_t z_@Conn@_write(
     }
     return z_io_u64_ok(total);
 }
+

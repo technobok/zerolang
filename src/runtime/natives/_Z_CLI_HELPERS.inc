@@ -62,3 +62,4 @@ static z_@Result_Parsed_CliError@_t z_cli_wrap_err(z_@CliError@_t e) {
     return r;
 }
 
+

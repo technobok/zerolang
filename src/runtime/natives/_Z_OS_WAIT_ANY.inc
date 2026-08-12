@@ -18,3 +18,4 @@ static z_@procexit@_t z_os_waitAny(void) {
     }
     return r;
 }
+

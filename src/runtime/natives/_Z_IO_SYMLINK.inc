@@ -17,3 +17,4 @@ static z_@Result_null_IoError@_t z_io_symlink(
     return z_io_wrap_null_Result(rc, e);
 }
 
+
