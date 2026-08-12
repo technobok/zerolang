@@ -303,6 +303,18 @@ never reachable from #~"main" are never type-checked. This ensures the compiler
 only processes what is needed, and circular dependencies are detected when a
 name is encountered that is already on the resolution stack.
 
+The rule holds for the unit being compiled exactly as it does for its
+dependencies, which is why that unit must declare a #~"main" at all
+(#b:"E0039"): without a root there is nothing to demand from. What a type
+DECLARES is resolved either way -- its generic parameters, the interfaces it
+conforms to, and the namespaces and inline templates that scope it -- because
+those are properties of the declaration rather than of anything walking a body.
+
+Resolution is outside-in: a type resolves before its fields, its fields before
+its method signatures, and no method body is walked until that completes. A body
+walked ahead of its owner would bind #~"this" to no type at all, and every check
+that hangs off the receiver would quietly stop asking.
+
 #---: Monomorphization
 
 Generic types are instantiated through monomorphization. When a generic type
@@ -586,8 +598,9 @@ renames) and that every referenced #~"_Z_*" fragment is on disk.
 
 #_*"Bodied free functions" in these units are ordinary emitted
 zerolang (#~"io.removeTree" is the living example). They are
-demand-gated end to end: the type checker resolves and walks them in a
-final #~"checkBodies" pass -- after the main unit settles, so demand
+demand-gated end to end, as every unit's are -- what is particular to
+these units is only WHEN: the type checker resolves and walks them in a
+final #~"checkBodies" pass, after the main unit settles, so demand
 order cannot disturb the main unit's shadow and monomorph resolution --
 and only in programs whose demand loop referenced them; the emitter
 correspondingly skips undemanded bodies in #~"emitFnsIn" and the

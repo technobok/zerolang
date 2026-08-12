@@ -376,6 +376,16 @@ on demand as they are referenced. Types, functions, and definitions that are
 never reachable from <code>main</code> are never type-checked. This ensures the compiler
 only processes what is needed, and circular dependencies are detected when a
 name is encountered that is already on the resolution stack.</p>
+<p>The rule holds for the unit being compiled exactly as it does for its
+dependencies, which is why that unit must declare a <code>main</code> at all
+(<strong>E0039</strong>): without a root there is nothing to demand from. What a type
+DECLARES is resolved either way -- its generic parameters, the interfaces it
+conforms to, and the namespaces and inline templates that scope it -- because
+those are properties of the declaration rather than of anything walking a body.</p>
+<p>Resolution is outside-in: a type resolves before its fields, its fields before
+its method signatures, and no method body is walked until that completes. A body
+walked ahead of its owner would bind <code>this</code> to no type at all, and every check
+that hangs off the receiver would quietly stop asking.</p>
 <h3 id="monomorphization"><a href="#monomorphization">7.2. Monomorphization</a></h3>
 <p>Generic types are instantiated through monomorphization. When a generic type
 (e.g., <code>List(String)</code>) is used, the type checker creates a concrete copy
@@ -614,8 +624,9 @@ small exceptions list for the stream/statement specials and two
 renames) and that every referenced <code>_Z_*</code> fragment is on disk.</p>
 <p><em><strong>Bodied free functions</strong></em> in these units are ordinary emitted
 zerolang (<code>io.removeTree</code> is the living example). They are
-demand-gated end to end: the type checker resolves and walks them in a
-final <code>checkBodies</code> pass -- after the main unit settles, so demand
+demand-gated end to end, as every unit's are -- what is particular to
+these units is only WHEN: the type checker resolves and walks them in a
+final <code>checkBodies</code> pass, after the main unit settles, so demand
 order cannot disturb the main unit's shadow and monomorph resolution --
 and only in programs whose demand loop referenced them; the emitter
 correspondingly skips undemanded bodies in <code>emitFnsIn</code> and the
