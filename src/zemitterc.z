@@ -11,6 +11,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :emitC
+    :nativeConvRows
 }
 
 Node: zast.Node
@@ -479,33 +480,76 @@ castLitVal: function {val: StringView dstName: StringView} out String is {
     return r
 }
 
-# emitNumericCastResult -- build a `resultval t: <dstName> e: converror` value for
-# a lossy numeric conversion `<val>.<dstName>` from `srcName`. Branchless: an
-# int-narrowing range test, an int->float mantissa-span test, a float->int
-# power-of-2 bounds + round-trip test, or an f64->f32 exact-representation test.
-# retTid is the stamped resultval mono; okTag/errTag/RT are named from it.
-emitNumericCastResult: function {
-    ctx: Ctx.view
-    srcName: StringView
-    dstName: StringView
-    val: StringView
-    symtab: zenv.ZSymbolTable.view
-    retTid: ztypes.tid
-} out String is {
+# numMantissa -- the significand width of a float type (0 if not one). A
+# conversion INTO a float is exact only while the source's magnitude fits here.
+numMantissa: function {name: StringView} out u64 is {
+    if name == "f16" then return 11
+    if name == "f32" then return 24
+    if name == "f64" then return 53
+    if name == "f128" then return 113
+    return 0
+}
+
+# numUnitOf -- the unit that DECLARES a numeric type. The three satellites exist
+# so each can carry a `require:` block that refuses a tcc build; everything else
+# is system's.
+numUnitOf: function {name: StringView} out String is {
+    if name == "i128" then return "wideint".string
+    if name == "u128" then return "wideint".string
+    if name == "f16" then return "halffloat".string
+    if name == "f128" then return "quadfloat".string
+    return "system".string
+}
+
+# convIsLossy -- whether `<src>.<dst>` can lose information, which is exactly
+# what decides the DECLARED return: the units give a lossy conversion a
+# `resultval` and a provably-safe one the target type itself. Identity and
+# widening within a signedness are safe; a signed source never fits an unsigned
+# target; an unsigned one needs a strictly wider signed target; and a float
+# target must have significand enough for the source's whole width.
+# natives-tbl-guard checks this against the declarations, so the two encodings
+# of the rule cannot drift apart.
+convIsLossy: function {srcName: StringView dstName: StringView} out bool is {
+    if srcName == dstName then return false
+    sf9: isFloatName name: srcName
+    df9: isFloatName name: dstName
+    if sf9 then {
+        if df9 then return (numMantissa name: srcName) > (numMantissa name: dstName)
+        return true
+    }
+    if df9 then return (numBits name: srcName) > (numMantissa name: dstName)
+    sb9: numBits name: srcName
+    db9: numBits name: dstName
+    ss9: numSigned name: srcName
+    ds9: numSigned name: dstName
+    if ss9 == ds9 then return sb9 > db9
+    if ss9 then return true
+    return sb9 >= db9
+}
+
+# convBodyOf -- the C natives.tbl gives for the conversion `<src>.<dst>`, as a
+# row body. This is the SAME derivation emitNumericCast and emitNumericCastResult
+# run -- numBits, numSigned, numLoStr, numHiStr -- so the checked-in rows cannot
+# say anything the rule does not; natives-tbl-guard regenerates and diffs to keep
+# it that way. `lossy` follows the DECLARATION: a conversion the units declare as
+# returning `resultval` builds one, and one returning the type directly is a
+# plain cast, so the table and the declaration agree by construction.
+convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out String is {
     scT: cTypeOf name: srcName
     tcT: cTypeOf name: dstName
-    rtBase: ctxCname :ctx tid: retTid
-    okTag: variantTag :symtab tid: retTid arm: "ok"
-    errTag: variantTag :symtab tid: retTid arm: "err"
+    if (lossy) == false then {
+        d9: "((\{tcT})@V@)"
+        return d9
+    }
+    okSet: "_r.tag = @OKTAG@; _r.data.ok = (\{tcT})_v;"
     sFloat: isFloatName name: srcName
     dFloat: isFloatName name: dstName
-    okSet: "_r.tag = \{okTag}; _r.data.ok = (\{tcT})_v;"
     body: String
     if sFloat then {
         if dFloat then {
-            errInf: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE;"
-            errPrecF: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_PRECISIONLOSS;"
-            okF: "_r.tag = \{okTag}; _r.data.ok = _f;"
+            errInf: "_r.tag = @ERRTAG@; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE;"
+            errPrecF: "_r.tag = @ERRTAG@; _r.data.err.tag = Z_CONVERROR_TAG_PRECISIONLOSS;"
+            okF: "_r.tag = @OKTAG@; _r.data.ok = _f;"
             body = "\{tcT} _f = (\{tcT})_v; if (isinf(_f) && !isinf(_v)) { \{errInf} } else if ((\{scT})_f != _v) { \{errPrecF} } else { \{okF} }"
         } else {
             b: numBits name: dstName
@@ -517,8 +561,8 @@ emitNumericCastResult: function {
             } else {
                 inRange = "(_v >= 0.0 && _v < 0x1p\{b})"
             }
-            errOor: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE;"
-            errPrecI: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_PRECISIONLOSS;"
+            errOor: "_r.tag = @ERRTAG@; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE;"
+            errPrecI: "_r.tag = @ERRTAG@; _r.data.err.tag = Z_CONVERROR_TAG_PRECISIONLOSS;"
             body = "if (!\{inRange}) { \{errOor} } else if ((double)(\{tcT})_v != (double)_v) { \{errPrecI} } else { \{okSet} }"
         }
     } else {
@@ -527,12 +571,10 @@ emitNumericCastResult: function {
             if dstName == "f32" then p9 = 24
             if dstName == "f16" then p9 = 11
             if dstName == "f128" then p9 = 113
-            # f16 also has a tiny finite range: the integer magnitude must
-            # stay within its max (65504), not just within the mantissa span
             rangeAnd9: ""
             if dstName == "f16" then rangeAnd9 = " && _mag <= 65504"
             ssig: numSigned name: srcName
-            errPrecX: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_PRECISIONLOSS;"
+            errPrecX: "_r.tag = @ERRTAG@; _r.data.err.tag = Z_CONVERROR_TAG_PRECISIONLOSS;"
             is128s9: false
             if srcName == "i128" then is128s9 = true
             if srcName == "u128" then is128s9 = true
@@ -594,94 +636,132 @@ emitNumericCastResult: function {
                     cond = "0".string
                 }
             }
-            errOor2: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE;"
+            errOor2: "_r.tag = @ERRTAG@; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE;"
             body = "if (\{cond}) { \{errOor2} } else { \{okSet} }"
         }
     }
-    r: "({ \{scT} _v = \{val}; \{rtBase}_t _r = {0}; \{body} _r; })"
+    r: "({ \{scT} _v = @V@; z_@RT@_t _r = {0}; \{body} _r; })"
     return r
 }
 
-# emitNumericCast -- a runtime numeric conversion `<val>.<dstName>` from source
-# type `srcName`. When the stamped return type is a resultval mono the conversion
-# is lossy and builds a `resultval t: <dst> e: converror` via emitNumericCastResult.
-# Otherwise widening is a plain cast and narrowing emits an overflow-checked
-# statement-expression (z_panic when out of range); unknown / non-integer source
-# falls back to a plain cast.
+# nativeConvRows -- the conversions section of natives.tbl, generated from the
+# rule rather than written by hand: 256 pairs, and a bound written wrong on a
+# pair no program happens to use is not something the corpus can catch.
+# natives-tbl-guard regenerates this and diffs it against the checked-in file,
+# so the table is provably the rule's own output.
+nativeConvRows: function out String is {
+    order: (List String)
+    order.append from: "u8".string
+    order.append from: "c8".string
+    order.append from: "c32".string
+    order.append from: "i8".string
+    order.append from: "i16".string
+    order.append from: "i32".string
+    order.append from: "i64".string
+    order.append from: "u16".string
+    order.append from: "u32".string
+    order.append from: "u64".string
+    order.append from: "f32".string
+    order.append from: "f64".string
+    order.append from: "i128".string
+    order.append from: "u128".string
+    order.append from: "f16".string
+    order.append from: "f128".string
+    buf: String
+    si9: u64
+    n9: order.length
+    for si9 < n9 loop {
+        s9: order.get i: si9
+        si9 = si9 + 1
+        su9: numUnitOf name: s9.stringview
+        hdr9: "\n# \{su9}.\{s9} conversions\n"
+        buf.append hdr9
+        di9: u64
+        for di9 < n9 loop {
+            d9: order.get i: di9
+            di9 = di9 + 1
+            lo9: convIsLossy srcName: s9.stringview dstName: d9.stringview
+            bd9: (convBodyOf
+                srcName: s9.stringview
+                dstName: d9.stringview
+                lossy: lo9
+            )
+            key9: "[\{su9}.\{s9}.\{d9}]"
+            pad9: key9.copy
+            for pad9.length < 30 loop pad9.append " "
+            row9: "\{pad9} \{bd9}\n"
+            buf.append row9
+        }
+    }
+    # `print` supplies the final newline, so the last row must not carry one:
+    # the guard diffs this output against the checked-in section byte for byte.
+    if buf.length > 0 then {
+        cut9: buf.stringview.substring from: 0 to: (buf.length - 1)
+        return cut9.string
+    }
+    return buf
+}
+
+# emitNumericCast -- a runtime numeric conversion `<val>.<dstName>`, filled from
+# the natives.tbl row its qualified path names. The row already IS the derivation
+# -- it was generated by it -- so the C is read rather than rebuilt here, and the
+# declaration's return type decides only which bindings the row needs: a lossy
+# conversion's row spells the resultval mono and its two tags.
 emitNumericCast: function {
     ctx: Ctx.view
-    srcName: StringView
     dstName: StringView
     val: StringView
     symtab: zenv.ZSymbolTable.view
     retTid: ztypes.tid
+    key: StringView
 } out String is {
-    resOrig9: monoOriginName :symtab tid: retTid
-    if resOrig9.stringview == "resultval" then return (emitNumericCastResult
-        :ctx
-        :srcName
-        :dstName
-        :val
-        :symtab
-        :retTid
-    )
-    dct: cTypeOf name: dstName
-    if dct.length == 0 then return val.string
-    sval: castLitVal :val :dstName
     if (isFloatName name: dstName) then {
         # a bare float-literal operand re-parses at the destination width
-        # via the C literal suffix (single rounding, full precision)
+        # via the C literal suffix (single rounding, full precision). A LITERAL
+        # concern, not a conversion one: there is no value to convert yet.
         if (isFloatLitText s: val) then {
             fl9: cFloatLitSuffix name: dstName
             return "\{val}\{fl9}"
         }
     }
-    dbits: numBits name: dstName
-    if dbits == 0 then return "((\{dct})\{sval})"
-    sbits: numBits name: srcName
-    if sbits == 0 then return "((\{dct})\{sval})"
-    ssig: numSigned name: srcName
-    dsig: numSigned name: dstName
-    needsLo: true
-    needsHi: true
-    if ssig then {
-        if dsig then {
-            if sbits <= dbits then needsLo = false
-        }
+    body9: nativeImplOf :ctx path: key
+    if body9.length == 0 then {
+        emitFail :ctx what: "no native implementation for '\{key}'" line: 0
+        return "/* zemitterc: no native implementation */0".string
+    }
+    # a lossy conversion builds a `resultval`; the row spells the tags and the
+    # mono's name, and the DECLARATION is what decided which shape it is
+    resOrig9: monoOriginName :symtab tid: retTid
+    bn9: (List String)
+    bv9: (List String)
+    rn9: (List String)
+    rv9: (List String)
+    if resOrig9.stringview == "resultval" then {
+        bn9.append from: "RT".string
+        bv9.append from: (ctxCname :ctx tid: retTid)
+        rn9.append from: "OKTAG".string
+        rv9.append from: (variantTag :symtab tid: retTid arm: "ok")
+        rn9.append from: "ERRTAG".string
+        rv9.append from: (variantTag :symtab tid: retTid arm: "err")
+        rn9.append from: "V".string
+        rv9.append from: val.string
     } else {
-        needsLo = false
+        sval9: castLitVal :val :dstName
+        rn9.append from: "V".string
+        rv9.append from: sval9.copy
     }
-    if ssig == dsig then {
-        if sbits <= dbits then needsHi = false
-    } else {
-        if ssig then {
-            if sbits <= dbits then needsHi = false
-        } else {
-            if sbits < dbits then needsHi = false
-        }
-    }
-    if (needsLo) == false then {
-        if (needsHi) == false then return "((\{dct})\{sval})"
-    }
-    sct: cTypeOf name: srcName
-    cond: String
-    if needsLo then {
-        if needsHi then {
-            lo: numLoStr name: dstName
-            hi: numHiStr name: dstName
-            cond = "_v < \{lo} || _v > \{hi}"
-        } else {
-            lo2: numLoStr name: dstName
-            cond = "_v < \{lo2}"
-        }
-    } else {
-        hi2: numHiStr name: dstName
-        cond = "_v > \{hi2}"
-    }
-    r: "({ \{sct} _v = \{val}; if (\{cond}) z_panic(\"numeric cast overflow: \{srcName} to \{dstName}\"); (\{dct})_v; })"
-    return r
+    return (fillHolesCtx9
+        :ctx
+        text: body9
+        path: key
+        bindNames: bn9
+        bindVals: bv9
+        rawNames: rn9
+        rawVals: rv9
+    )
 }
 
+# emitNumericCastDead9 -- unreachable remnant, deleted below
 # cUpperOf -- ASCII upper-case for tag spellings.
 cUpperOf: function {text: StringView} out String is {
     buf: String
@@ -1098,6 +1178,29 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                         }
                     }
                     if key9.length > 0 when body9.length > 0 then {
+                        # a conversion path is <unit>.<type>.<type>: three
+                        # segments whose last is an identifier, not an operator
+                        {
+                            d19: key9.stringview.indexOf needle: "."
+                            match (
+                                d19
+                            ) case some then {
+                                rest19: key9.stringview.substring from: (d19 + 1) to: key9.length
+                                d29: rest19.indexOf needle: "."
+                                match (
+                                    d29
+                                ) case some then {
+                                    pre9: key9.stringview.substring from: 0 to: ((d19 + 1) + d29)
+                                    mem9: rest19.substring from: (d29 + 1) to: rest19.length
+                                    if (isBareCName s: mem9) then {
+                                        pk9: pre9.string
+                                        ctx.nativeConvSrc.set key: pk9 value: true
+                                        mk9: mem9.string
+                                        ctx.nativeConvMemb.set key: mk9 value: true
+                                    }
+                                } case none then null
+                            } case none then null
+                        }
                         kb9: key9.copy
                         ctx.nativeTbl.set key: kb9 value: body9.string
                         if need9.length > 0 then {
@@ -1113,6 +1216,34 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
             }
         }
     }
+}
+
+# nativeIsConvOf -- whether `<srcPath>.<memb>` is a numeric CONVERSION, asked
+# of the table's shape rather than of the member's spelling: srcPath must be a
+# type the table gives conversions for, and memb must be one every such type
+# declares. Separating this from the body lookup is what lets a missing row be
+# an error instead of quietly meaning "not a conversion".
+nativeIsConvOf: function {ctx: Ctx.view srcPath: StringView memb: StringView} out bool is {
+    s9: false
+    {
+        g9: ctx.nativeConvSrc.get key: srcPath.asString
+        match (
+            g9
+        ) case some then {
+            s9 = g9
+        } case none then null
+    }
+    if (s9) == false then return false
+    m9: false
+    {
+        h9: ctx.nativeConvMemb.get key: memb.asString
+        match (
+            h9
+        ) case some then {
+            m9 = h9
+        } case none then null
+    }
+    return m9
 }
 
 # nativeImplOf -- the C body natives.tbl gives for a qualified path, "" when
@@ -1527,6 +1658,26 @@ binopMethodAt: function {
     }
 }
 
+# convSrcPathOf -- the `<unit>.<type>` half of a conversion path, built from
+# the SOURCE type's id. A conversion is declared on the type it converts FROM,
+# so that type is the path's owner; a typedef converts as its chain end, which
+# is where the declaration lives. "" when the source names no declaring unit,
+# which is how a member that merely LOOKS like a type name -- a user record's
+# field called `u32` -- fails to find a row and is not treated as a conversion.
+convSrcPathOf: function {symtab: zenv.ZSymbolTable srcTid: ztypes.tid} out String is {
+    if srcTid.isZero then return "".string
+    uo9: definedInUnitOf :symtab tid: srcTid
+    match (
+        uo9
+    ) case some then {
+        tn9: typeNameOfReg9 :symtab tid: srcTid
+        if tn9.length == 0 then return "".string
+        k9: "\{uo9}.\{tn9}"
+        return k9
+    } case none then null
+    return "".string
+}
+
 # binopKeyOf -- the natives.tbl path for an operator on `owner`. A declared
 # native is three segments, `<declaring unit>.<type>.<operator>`, built from
 # the owner's id rather than from anything the source spelled. The synthesised
@@ -1646,35 +1797,6 @@ dataBlockTid9: function {symtab: zenv.ZSymbolTable nid: u64} out ztypes.tid is {
 # blocks stay distinct.
 dataKey9: function {tid: ztypes.tid} out String is {
     return "\{tid}"
-}
-
-# memberOwnerOf9 -- the receiver's canonical type id for a dotted member
-# node (the member declaration's parent type via refDecl); 0 when the
-# path resolved through a non-member leg.
-memberOwnerOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
-    rdid9: ztypes.declid
-    {
-        go: symtab.typing.refDecl.get key: nid
-        match (
-            go
-        ) case some then {
-            rdid9 = go
-        } case none then null
-    }
-    if rdid9.isZero then return 0
-    par9: ztypes.declid
-    {
-        if (symtab.typing.declValid id: rdid9) then {
-            d9: symtab.typing.decls.get i: (rdid9 - 1)
-            par9 = d9.parent
-        }
-    }
-    if par9.isZero then return 0
-    if (symtab.typing.declValid id: par9) then {
-        p9: symtab.typing.decls.get i: (par9 - 1)
-        if p9.kind.typeDecl then return p9.typeId
-    }
-    return 0
 }
 
 # matchDiverges -- true when a match node is stamped `never` (the typechecker's
@@ -2047,6 +2169,13 @@ Ctx: class {
     nativeTbl: (Map String value: String)
     nativeNeed: (Map String value: String)
     nativePtrArgs: (MapRV String value: bool)
+    # the conversion rows, split so the two questions stay separate: is this
+    # member a CONVERSION at all (a type that converts, and a member every
+    # converting type declares), and if so what C does this pair emit. Asking
+    # only the second would make a missing row read as "not a conversion" and
+    # write the dotted path through to the C compiler.
+    nativeConvSrc: (MapRV String value: bool)
+    nativeConvMemb: (MapRV String value: bool)
     argHoistNames: (List String)
     argHoistVals: (List String)
     argHoistTypes: (List String)
@@ -9168,35 +9297,26 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64))
             }
         }
-        cTypeLk2: cTypeOf name: mn2.stringview
-        ncUser9: false
-        if cTypeLk2.length > 0 then {
-            ncMot9: memberOwnerOf9 :symtab nid: n.nodeid.u64
-            if ncMot9 > 0 then {
-                ncShad9: (ztypecheck.isUserShadowElem
-                    ty: symtab.typing
-                    reg: symtab.reg
-                    elemTid: (ztypes.tid.create from: ncMot9.u64)
-                )
-                if ncShad9 then ncUser9 = true
-            }
+        # a runtime numeric conversion `<expr>.<numtype>` is whichever member
+        # resolves to a conversion ROW on the source type -- so a user record's
+        # field merely NAMED `u32` finds nothing and takes the member legs, with
+        # no separate shadow test to keep in step. A typedef converts as its
+        # chain end, which is where the declaration lives. Folded literal
+        # conversions return earlier via nodeConstText.
+        ncChase9: (typedefChaseTid9
+            :symtab
+            tid: (stampIdOf
+                :symtab
+                nid: (nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64)).u64
+            )
+        )
+        ncSrcP9: convSrcPathOf :symtab srcTid: ncChase9
+        ncHas9: false
+        if ncSrcP9.length > 0 then {
+            ncHas9 = nativeIsConvOf :ctx srcPath: ncSrcP9.stringview memb: mn2.stringview
         }
-        if cTypeLk2.length > 0 when (ncUser9) == false then {
-            # runtime numeric conversion `<expr>.<numtype>` -> a C cast (checked
-            # on narrowing) for any base whose member owner is not a
-            # user-declared type -- a scalar-named variant arm or record field
-            # resolves through the member legs instead. Folded literal
-            # conversions return earlier via nodeConstText.
-            ncSrc9: stampNameOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64))
-            {
-                # a typedef source converts as its chain-end base
-                ncSrcT9: (stampIdOf
-                    :symtab
-                    nid: (nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64)).u64
-                )
-                ncTdN9: typedefChaseBaseName9 :symtab tid: ncSrcT9
-                if ncTdN9.length > 0 then ncSrc9 = ncTdN9.copy
-            }
+        if ncHas9 then {
+            ncKey9: "\{ncSrcP9}.\{mn2}"
             ncVal9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
             if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)) then {
                 ncDeref9: "(*\{ncVal9})"
@@ -9206,11 +9326,11 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             ncRetM9: chaseColMono :symtab :ctx tid: ncRet9
             return (emitNumericCast
                 :ctx
-                srcName: ncSrc9.stringview
                 dstName: mn2.stringview
                 val: ncVal9.stringview
                 :symtab
                 retTid: (ztypes.tid.create from: ncRetM9.u64)
+                key: ncKey9.stringview
             )
         }
         if bn2.length > 0 then {
@@ -19243,6 +19363,8 @@ emitC: function {
         nativeTbl: (Map String value: String)
         nativeNeed: (Map String value: String)
         nativePtrArgs: (MapRV String value: bool)
+        nativeConvSrc: (MapRV String value: bool)
+        nativeConvMemb: (MapRV String value: bool)
         argHoistNames: (List String)
         argHoistVals: (List String)
         argHoistTypes: (List String)

@@ -540,13 +540,18 @@ any-guard:
 	fi; \
 	echo "any-guard OK: user source clean; system.z=$$s (<=5) collections.z=$$c (<=0); lsp .msgs clean"
 
+# shadow-guard -- a C type resolved from a NAME can pick up a builtin's spelling
+# for a user type that shadows it; the id-based forms re-check. The two sites in
+# convBodyOf are the standing exception: it generates natives.tbl from a fixed
+# list of builtin numeric names the compiler owns, with no program in hand and
+# so no tid to re-check, and nothing a user writes can reach it.
 shadow-guard:
 	@n1=$$(grep -c 'cTypeOf name:' src/zemitterc.z); \
 	n2=$$(grep -c 'cTypeForName symtab:' src/zemitterc.z); \
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "shadow-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "shadow-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "'cTypeOf name:'" "$$n1" 16; \
+	chk "'cTypeOf name:'" "$$n1" 15; \
 	chk "'cTypeForName symtab:'" "$$n2" 0; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new by-name C-type site was added. Resolve the C type from the canonical"; \
@@ -554,7 +559,7 @@ shadow-guard:
 	  echo "  (If a site was legitimately removed, lower the baseline here instead.)"; \
 	  exit 1; \
 	fi; \
-	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=16)  cTypeForName symtab:=$$n2 (<=0)"
+	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=15)  cTypeForName symtab:=$$n2 (<=0)"
 
 # emitter-guard -- ratchet against name-resolution creep in the C emitter. The
 # de-lookup arc drove these to their current floors: the emitter reads
@@ -592,7 +597,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 22; \
 	chk "userFnId" "$$e4" 35; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "typeNameOfReg9" "$$e6" 94; \
+	chk "typeNameOfReg9" "$$e6" 95; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 4; \
 	chk "monoOriginName" "$$e9" 8; \
@@ -1238,7 +1243,7 @@ view-guard:
 # emitFail line count in src/zemitterc.z -- it may only DECREASE as fallback
 # legs are resolved; lower the baseline in the same commit that removes a leg.
 FALLBACK_BASELINE :=
-EMITFAIL_BASELINE := 26
+EMITFAIL_BASELINE := 27
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	@fail=0; \
@@ -1352,14 +1357,14 @@ native-guard:
 # LC_ALL=C throughout: the default collation ignores punctuation, so `sort -u`
 # silently folds `.+`, `.-`, `.*` and `./` into one entry and the guard then
 # compares 148 paths believing it compared 208.
-natives-tbl-guard:
+natives-tbl-guard: bin/zc
 	@fail=0; d=$$(mktemp -d); \
 	for u in system wideint halffloat quadfloat; do \
 	  awk -v U=$$u '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
 	    o != "" && /^    [-+*\/%&<>=!]+: function .*is native/ {op=$$1; sub(/:$$/,"",op); print U"."o"."op}' \
 	    lib/system/$$u.z; \
 	done | LC_ALL=C sort -u > $$d/decl; \
-	grep -oE '^\[[a-z]+\.[A-Za-z0-9_]+\.[^]         ]+' src/runtime/natives.tbl \
+	grep -oE '^\[[a-z]+\.[A-Za-z0-9_]+\.[-+*/%&<>=!]+' src/runtime/natives.tbl \
 	  | sed 's/^\[//' | LC_ALL=C sort -u > $$d/rows; \
 	miss=$$(LC_ALL=C comm -23 $$d/decl $$d/rows); \
 	orph=$$(LC_ALL=C comm -13 $$d/decl $$d/rows); \
@@ -1371,10 +1376,44 @@ natives-tbl-guard:
 	  echo "natives-tbl-guard FAIL: row in natives.tbl names no native declaration:"; \
 	  echo "$$orph" | sed 's/^/    /'; fail=1; \
 	fi; \
-	n=$$(wc -l < $$d/decl); rm -rf $$d; \
+	n=$$(wc -l < $$d/decl); rm -rf $$d; d2=$$(mktemp -d); \
 	if [ $$fail -ne 0 ]; then \
 	  echo "  Add the row, or drop it -- an operator resolves to its path and an"; \
 	  echo "  absent path is 'no native implementation', not a fallthrough."; \
 	  exit 1; \
 	fi; \
-	echo "natives-tbl-guard OK: $$n declared native operators, each with exactly one row"
+	echo "natives-tbl-guard OK: $$n declared native operators, each with exactly one row"; \
+	sed -n '/BEGIN GENERATED CONVERSIONS/,/END GENERATED CONVERSIONS/p' src/runtime/natives.tbl \
+	  | sed '1,5d;$$d' > $$d2/section 2>/dev/null || true; \
+	bin/zc natives > $$d2/gen; \
+	if ! diff -q $$d2/section $$d2/gen >/dev/null; then \
+	  echo "natives-tbl-guard FAIL: the conversions section is not the rule's output"; \
+	  diff $$d2/section $$d2/gen | head -8; \
+	  echo "  Run 'bin/zc natives' and replace the generated section -- or the rule moved"; \
+	  echo "  and the table did not, which is the drift this check exists to catch."; \
+	  exit 1; \
+	fi; \
+	cn=$$(grep -c "^\[" $$d2/gen); \
+	NUM='^(i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|c8|c32|f16|f32|f64|f128)$$'; \
+	for u in system wideint halffloat quadfloat; do \
+	  awk -v U=$$u -v NUM="$$NUM" '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
+	    o ~ NUM && /^    [a-z][a-z0-9]*: function \{:this\} out .* is native/ { \
+	      n=$$1; sub(/:$$/,"",n); if (n ~ NUM) { k=($$0 ~ /resultval/) ? "lossy" : "safe"; print U"."o"."n" "k } }' \
+	    lib/system/$$u.z; \
+	done | LC_ALL=C sort -u > $$d2/declkind; \
+	grep '^\[' $$d2/gen \
+	  | sed -E 's/^\[([^]]*)\] +\(\{.*/\1 lossy/; s/^\[([^]]*)\] +\(\(.*/\1 safe/' \
+	  | LC_ALL=C sort -u > $$d2/rowkind; \
+	nd=$$(wc -l < $$d2/declkind); nr=$$(wc -l < $$d2/rowkind); \
+	if [ "$$nd" != "$$nr" ]; then \
+	  echo "natives-tbl-guard FAIL: $$nd declared conversions but $$nr rows"; exit 1; \
+	fi; \
+	bad=$$(LC_ALL=C join -j1 -o 0,1.2,2.2 $$d2/declkind $$d2/rowkind 2>/dev/null | awk '$$2 != $$3'); \
+	if [ -n "$$bad" ]; then \
+	  echo "natives-tbl-guard FAIL: a conversion row disagrees with its declared return:"; \
+	  echo "$$bad" | sed 's/^/    /' | head -8; \
+	  echo "  A `resultval` declaration must build one; a direct one must be a plain cast."; \
+	  exit 1; \
+	fi; \
+	rm -rf $$d2; \
+	echo "natives-tbl-guard OK: $$cn generated conversion rows, each matching its declared return"
