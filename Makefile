@@ -79,7 +79,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard test-tcc mode-parity readable-check perf-strict perf-elision
+.PHONY: natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard test-tcc mode-parity readable-check user-native-guard perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -133,7 +133,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc mode-parity ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -660,6 +660,36 @@ emitter-guard:
 # chain whose conditions all fold, where only the branch the emitter actually
 # emits decides.
 #
+# user-native-guard -- P1's acceptance. A unit OUTSIDE src/runtime, shipping its
+# own natives.tbl row and its own fragment, compiles AND LINKS AND RUNS. Before
+# the runtime pass read the table, fragment loading was per unit through seven
+# hardcoded emitters, so a unit outside them got nothing: this program emitted
+# z_mystery_conjure(7) correctly and then failed at link with an implicit
+# declaration. The runtime dir is BUILT here rather than committed -- src/runtime
+# plus the fixture's one row and one fragment -- so it cannot drift from the real
+# one, and the guard fails if the fragment stops loading.
+user-native-guard: bin/zc
+	@d=$$(mktemp -d); fail=0; \
+	mkdir -p $$d/rt; cp -r src/runtime/. $$d/rt/; \
+	cat tests/fixtures/user_native/mystery.tbl >> $$d/rt/natives.tbl; \
+	cp tests/fixtures/user_native/_Z_MYSTERY_CONJURE.inc $$d/rt/natives/; \
+	bin/zc mystery --src tests/fixtures/user_native --system lib/system \
+	  --runtime $$d/rt --emit-c $$d/mystery.c > $$d/emit.log 2>&1 \
+	  || { echo "user-native-guard FAIL: emit"; sed -n 1,5p $$d/emit.log; fail=1; }; \
+	if [ $$fail -eq 0 ]; then \
+	  $(CC) $(CFLAGS) -o $$d/mystery $$d/mystery.c -lm > $$d/cc.log 2>&1 \
+	    || { echo "user-native-guard FAIL: the unit's fragment did not load (link)"; \
+	         grep -m1 error $$d/cc.log; fail=1; }; \
+	fi; \
+	if [ $$fail -eq 0 ]; then \
+	  got=$$($$d/mystery); \
+	  if [ "$$got" != "42" ]; then \
+	    echo "user-native-guard FAIL: ran but printed '$$got', want 42"; fail=1; fi; \
+	fi; \
+	rm -rf $$d; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "user-native-guard OK: a unit outside src/runtime links and runs its own native"
+
 # case-guard: a program declaring `main` is an entry point, so some case list has to
 # compile it -- run_cases (build + compare a golden), smoke_cases (build, output not
 # compared) or dump_cases. A unit with NO main exists to be opened by another program and
