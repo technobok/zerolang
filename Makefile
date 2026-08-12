@@ -1306,21 +1306,10 @@ NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.poll
 # emitter loads by hand (argv globals first).
 CONVENTION_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.args
 
-# TABLE_TODO -- natives that do not yet resolve through natives.tbl. The io
-# stream methods come from `uses_<Type>` bundles and net's from its own
-# unconditional block, neither of which reads the table yet; os.args is a
-# hand-ordered bundle and collections.stringJoin a helper. This list is the
-# remaining work, and it is empty when the check at the declaration can go in.
-TABLE_TODO := \
-  collections.stringJoin io.BufReader.create io.BufReader.read \
-  io.BufWriter.create io.BufWriter.flush io.BufWriter.write \
-  io.TextReader.call io.TextReader.create io.TextReader.readLine \
-  io.TextWriter.create io.TextWriter.flush io.TextWriter.write \
-  io.TextWriter.writeLine io.print io.stderr \
-  io.stdin io.stdout net.Conn.close \
-  net.Conn.flush net.Conn.read net.Conn.write \
-  net.Listener.accept net.Listener.close net.connect \
-  net.listen net.pollReadable os.args
+# TABLE_TODO -- natives that do not yet resolve through natives.tbl. Empty: as
+# of the io/net wiring every `is native` declaration in lib/system has a row, so
+# the guard below is the static half of the check at the declaration.
+TABLE_TODO :=
 native-guard:
 	@fail=0; conv=""; \
 	for u in io os cli net tcc; do \

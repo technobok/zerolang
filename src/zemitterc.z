@@ -1281,11 +1281,15 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
     }
 }
 
-# fragsForDemand -- the fragments the row reached by this (unit, member) demand
-# needs, in order, comma separated; "" when no row claims the pair. The pair is
+# fragsForDemand -- the fragments the rows reached by this (unit, member) demand
+# need, in table order, comma separated; "" when no row claims the pair. SEVERAL
+# rows may share one demand -- a `uses_<Type>` bundle is exactly that, one need
+# standing for a type's whole method set -- so every match is collected, and the
+# order they load in is the order they are written in. The pair is
 # compared as a pair -- the two halves are never joined into one key, which is
 # what a demand key stopped being when it stopped having to be split apart.
 fragsForDemand: function {ctx: Ctx.view uname: StringView memb: StringView} out String is {
+    out9: String
     i9: u64
     n9: ctx.fragUnits.length
     for i9 < n9 loop {
@@ -1294,12 +1298,13 @@ fragsForDemand: function {ctx: Ctx.view uname: StringView memb: StringView} out 
             m9: ctx.fragMembs.get i: i9
             if m9.stringview == memb then {
                 f9: ctx.fragNames.get i: i9
-                return f9.copy
+                if out9.length > 0 then out9.append ","
+                out9.append f9
             }
         }
         i9 = i9 + 1
     }
-    return "".string
+    return out9
 }
 
 # nativeIsConvOf -- whether `<srcPath>.<memb>` is a numeric CONVERSION, asked
@@ -21550,18 +21555,34 @@ ioFragIfM: function {
     buf: String.borrow
 } is {
     if (needsHasM :ctx :uname :memb) then {
-        fl9: fragsForDemand :ctx :uname :memb
-        if fl9.length == 0 then {
-            emitFail :ctx what: "no native implementation for the '\{uname}.\{memb}' demand" line: 0
-            return
-        }
-        with fit9: (fl9.stringview.split sep: ",") do for fr9: fit9 loop {
-            if fr9.length > 0 then {
-                p9: nativePath :runtimeDir frag: fr9
-                f9: loadIoFragment :ast :symtab :ctx path: p9.stringview
-                buf.append f9
-                buf.append "\n"
-            }
+        emitFragsFor :ast :symtab :ctx :runtimeDir :uname :memb :buf
+    }
+}
+
+# emitFragsFor -- load every fragment the (unit, member) demand's rows name, in
+# table order. The demand check is the caller's: a per-member demand asks the
+# pair, while a unit whose runtime is all-or-nothing has already asked its own
+# flag by the time it gets here.
+emitFragsFor: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    runtimeDir: StringView
+    uname: StringView
+    memb: StringView
+    buf: String.borrow
+} is {
+    fl9: fragsForDemand :ctx :uname :memb
+    if fl9.length == 0 then {
+        emitFail :ctx what: "no native implementation for the '\{uname}.\{memb}' demand" line: 0
+        return
+    }
+    with fit9: (fl9.stringview.split sep: ",") do for fr9: fit9 loop {
+        if fr9.length > 0 then {
+            p9: nativePath :runtimeDir frag: fr9
+            f9: loadIoFragment :ast :symtab :ctx path: p9.stringview
+            buf.append f9
+            buf.append "\n"
         }
     }
 }
@@ -21900,7 +21921,9 @@ emitRuntimeSvIter: function {
     ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_split" frag: "_Z_SV_SPLITTER_CALL" :buf
     ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_lines" frag: "_Z_SV_LINES" :buf
     ioFragIf :ast :symtab :ctx :runtimeDir need: "sv_lines" frag: "_Z_SV_LINES_CALL" :buf
-    ioFragIf :ast :symtab :ctx :runtimeDir need: "coll_join" frag: "_Z_COLL_STRING_JOIN" :buf
+    if (needsHas :ctx name: "coll_join") then {
+        emitFragsFor :ast :symtab :ctx :runtimeDir uname: "collections" memb: "coll_join" :buf
+    }
 }
 
 # loadConventionFrags -- load the convention-named runtime fragment for
@@ -22054,27 +22077,12 @@ emitRuntimeIo: function {
         memb: "file_flush"
         :buf
     )
-    if (needsHasM :ctx uname: "io" memb: "uses_BufWriter") then {
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_BUFWRITER_CREATE" :buf
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_BUFWRITER_FLUSH" :buf
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_BUFWRITER_WRITE" :buf
-    }
-    if (needsHasM :ctx uname: "io" memb: "uses_BufReader") then {
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_BUFREADER_CREATE" :buf
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_BUFREADER_READ" :buf
-    }
-    if (needsHasM :ctx uname: "io" memb: "uses_TextWriter") then {
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTWRITER_CREATE" :buf
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTWRITER_WRITE" :buf
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTWRITER_WRITE_LINE" :buf
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTWRITER_FLUSH" :buf
-    }
-    if (needsHasM :ctx uname: "io" memb: "uses_TextReader") then {
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_IO_UTF8_VALIDATE" :buf
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTREADER_CREATE" :buf
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTREADER_READ_LINE" :buf
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_TEXTREADER_CALL" :buf
-    }
+    # a stream type's whole method set rides one demand; the rows name the
+    # fragments and the order they load in
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "uses_BufWriter" :buf
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "uses_BufReader" :buf
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "uses_TextWriter" :buf
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "io" memb: "uses_TextReader" :buf
 }
 
 # emitRuntimeCli -- the cli runtime bodies (need-gated, dependency-ordered),
@@ -22139,10 +22147,7 @@ emitRuntimeOs: function {
     buf: String.borrow
 } is {
     if (needsHas :ctx name: "os") == false then return
-    if (needsHasM :ctx uname: "os" memb: "args") then {
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_OS_ARGV_GLOBALS" :buf
-        ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_OS_ARGS" :buf
-    }
+    ioFragIfM :ast :symtab :ctx :runtimeDir uname: "os" memb: "args" :buf
     # env's fragment is renamed (GET_ENV); args is a bundle -- both above.
     # Every other os_<name> need is convention-loaded.
     ioFragIfM :ast :symtab :ctx :runtimeDir uname: "os" memb: "env" :buf
@@ -22176,14 +22181,10 @@ emitRuntimeNet: function {
     runtimeDir: StringView
     buf: String.borrow
 } is {
+    # net's runtime is all-or-nothing: the unit flag is the whole gate, so the
+    # rows are loaded directly rather than through a per-member demand
     if (needsHas :ctx name: "net") == false then return
-    ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_NET_LISTEN" :buf
-    ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_NET_ACCEPT" :buf
-    ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_NET_CONNECT" :buf
-    ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_NET_CONN_READ" :buf
-    ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_NET_CONN_WRITE" :buf
-    ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_NET_CONN_CLOSE" :buf
-    ioFrag :ast :symtab :ctx :runtimeDir frag: "_Z_NET_POLL" :buf
+    emitFragsFor :ast :symtab :ctx :runtimeDir uname: "net" memb: "uses_net" :buf
 }
 
 # maybePreEmitElem -- a user type (variant/record/class/union) used as a
