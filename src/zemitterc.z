@@ -4405,6 +4405,31 @@ hoistBorrowValArg: function {
     return vnmh
 }
 
+# hoistLvalue9 -- bind an expression to a temp so its ADDRESS can be taken. The
+# sv-native legs pass `&receiver`, and a receiver that is itself a call is not an
+# lvalue: C rejects `&f(x)`. This is hoistBorrowValArg's isBorrow leg generalised
+# to a type that carries no destructor at all -- a StringView owns nothing, so
+# the temp is bound and never freed. The caller decides addressability; a
+# compound literal already is one and must not come here (it would cost a temp
+# for nothing, and every program emitting one would move).
+hoistLvalue9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    av: StringView
+    tid: ztypes.tid
+} out String is {
+    vhn9: ctx.argHoistCtr
+    ctx.argHoistCtr = ctx.argHoistCtr + 1
+    vnm9: "_ah\{vhn9}"
+    vcty9: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
+    ctx.argHoistVals.append av.string
+    ctx.argHoistTypes.append vcty9.copy
+    ctx.argHoistDtors.append "".string
+    ctx.argHoistNames.append vnm9.copy
+    return vnm9
+}
+
 # svBinopOperand9 -- the `&view` form of one string operand of `+`. A plain
 # atom or a pooled literal addresses directly. An owned String that is not an
 # lvalue -- the inner `+` of a chain -- must HOIST first: svValueForm reads its
@@ -9460,6 +9485,39 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             bn2v9 = (atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)))
         }
         bn2: emitLocalAtomName :ctx name: bn2r.stringview vid: bn2a9V0
+        # a base with no atom NAME still has a stamped type. Every native leg
+        # below sits behind `bn2.length > 0`, so a projection (h.text.stringview)
+        # or a call (s.trim, (mk s: s)) skipped the lot and fell through to the
+        # user-method path, which renders the callee as the method's
+        # function-type id -- a symbol nothing defines. emitDottedCall already
+        # carries this leg for the CALL form; the READ form never got it.
+        if bn2.length == 0 then {
+            nbId9: nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64)
+            nbT9: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: nbId9)
+            # StringView only: svValueForm reads a String receiver's expression
+            # twice, once for .data and once for .size, and twice is a second
+            # evaluation when the expression is a call.
+            if nbT9 == ctx.svTid then {
+                nbX9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
+                if nbX9.length > 0 then {
+                    # `&` needs an lvalue. A compound literal is one; a call is
+                    # not, so it binds to a temp the statement flush declares.
+                    nbH9: isNonLvalueArg s: nbX9.stringview
+                    if nbX9.stringview.startsWith "((" then nbH9 = false
+                    if nbH9 then {
+                        nbTmp9: (hoistLvalue9
+                            :ast
+                            :symtab
+                            :ctx
+                            av: nbX9.stringview
+                            tid: (ztypes.tid.create from: nbT9.u64)
+                        )
+                        if nbTmp9.length > 0 then nbX9 = nbTmp9.copy
+                    }
+                    bn2 = nbX9.copy
+                }
+            }
+        }
         mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
         # a zero-parameter native read without parens auto-calls: the member's
         # DECLARATION says so, so io.stdout and os.pid take one leg and the
