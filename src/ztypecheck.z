@@ -230,6 +230,41 @@ stampGate: function {st: zenv.ZSymbolTable nid: u64 tid: ztypes.tid} is {
     ztyping.nodeTypeSet tbl: st.typing.nodeType :nid :tid
 }
 
+# stampBinopOp -- record which type DECLARES a binop's operator and which method
+# the operator resolved to, so emission asks the resolution rather than the
+# operator's spelling. Routed exactly as stampGate routes a type stamp: an
+# instance walk keys by (monoId, nodeid) and substitutes the instance's type
+# args, and a template walk's own generic-param answer is dropped because no
+# template body is emitted. A `method` of 0 is the truthful record for an
+# operator no declaration was found for -- a comparison that fell back to
+# structural equality -- and the owner still stands.
+stampBinopOp: function {
+    st: zenv.ZSymbolTable
+    nid: u64
+    owner: ztypes.tid
+    method: ztypes.tid
+} is {
+    if owner.isZero then return
+    if st.typing.curMonoStamp > 0 then {
+        mow9: owner
+        subo9: st.typing.monoParamSubst.get key: owner
+        match (
+            subo9
+        ) case some then {
+            mow9 = ztypes.tid.create from: (subo9)
+        } case none then null
+        mk9: (st.typing.curMonoStamp * 4294967296) + nid
+        st.typing.binopOwner.set key: mk9 value: mow9
+        st.typing.binopMethod.set key: mk9 value: method
+        return
+    }
+    if st.typing.suppressParamStamps then {
+        if (st.reg.typetypeOf typeId: owner) == ztypes.ztypetype.genericParam then return
+    }
+    st.typing.binopOwner.set key: nid value: owner
+    st.typing.binopMethod.set key: nid value: method
+}
+
 # record a diagnostic (with a note/hint) into the typing tables.
 addErrorH: function {
     st: zenv.ZSymbolTable
@@ -20142,6 +20177,13 @@ checkBinopMethodDispatch: function {
             }
         }
     }
+    bmid9: ztypes.tid
+    match (
+        opo
+    ) case some then {
+        bmid9 = ztypes.tid.create from: opo.u64
+    } case none then null
+    stampBinopOp :st nid: binop.nodeid.u64 owner: dt9 method: bmid9
     match (
         opo
     ) case some then {
