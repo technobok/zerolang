@@ -4960,14 +4960,14 @@ markerTargetId: function {
     ast: Ast.view
     op: Node.view
 } out optionval u64 is {
-    tnId9: atomNameId :ast n: op
-    if tnId9.isZero then return (optionval.none u64)
+    nameId9: atomNameId :ast n: op
+    if nameId9.isZero then return (optionval.none u64)
     rr: (resolvedByIds
         :ast
         :ty
         :reg
         unitId: (nameIdOf :ast name: unitName)
-        name: tnId9
+        name: nameId9
     )
     match (
         rr
@@ -8990,6 +8990,7 @@ resolveUnitBody: function {
     ast: Ast.view
     unitName: StringView
     unitdefId: zast.nodeid
+    rootOnly: bool
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
     {
@@ -9022,6 +9023,26 @@ resolveUnitBody: function {
             ) case namedoperation then {
                 defName: zast.nameTextAt :ast ref: bmNode9.name
                 eager: true
+                # the ROOT: demand starts at `main` and nothing else, so the
+                # target unit is driven the same way every dependency already is.
+                # so only a FUNCTION leaves the eager set. The other two
+                # members of it stay, like the unit's generic params and its
+                # conformer contexts above: a NAMESPACE or inline template is a
+                # scope declaration, not a body, and an INTERFACE is what a type
+                # declares itself to conform to -- a constraint facet's only
+                # reference may be the as-block marker naming it, and a nested
+                # namespace's template is reached through the scope or not at
+                # all. Both are properties of the DECLARATION.
+                if rootOnly when defName.stringview != "main" then {
+                    keepE9: false
+                    if (isUnitOp
+                        op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                    ) then keepE9 = true
+                    if (isInterfaceDefOp
+                        op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                    ) then keepE9 = true
+                    if (keepE9) == false then eager = false
+                }
                 if (isFunctionDefOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) == false then {
                     if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) == false then {
                         if (isInterfaceDefOp
@@ -9422,6 +9443,7 @@ registerAndResolveMain: function {
                         ast: program.ast
                         unitName: nm9.stringview
                         unitdefId: opId9
+                        rootOnly: (ty.eagerAll) == false
                     )
                 }
             }
@@ -10180,7 +10202,11 @@ scanDemandedDepClassBodies: function {
 
 # scanMainBodyCalls -- record call-target demands for every function body in the
 # main unit (the body walk reaches them; demand must precede the pass).
-scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry.view program: Node} is {
+scanMainBodyCalls: function {
+    reg: ztypes.ZTypeRegistry.view
+    program: Node
+    rootOnly9: bool
+} is {
     match (
         program
     ) case program then {
@@ -10208,6 +10234,7 @@ scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry.view program: Node} is {
                     ast: program.ast
                     scanUnit: unId9f
                     unitdefId: opId9
+                    rootOnly: rootOnly9
                 )
             }
         }
@@ -10220,12 +10247,20 @@ scanUnitCalls: function {
     ast: Ast.view
     scanUnit: zast.nameid
     unitdefId: zast.nodeid
+    rootOnly: bool
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
     for bmId9: bodyIds9.iterate loop {
         bm: ast.nodes.get i: (bmId9 - 1).u64
         if bm.namedoperation then {
-            scanDefCalls :ast :reg :scanUnit op: (ast.nodes.get i: (bm.operation - 1).u64)
+            scanIt9: true
+            if rootOnly then {
+                bnm9: zast.nameTextAt :ast ref: bm.name
+                if bnm9.stringview != "main" then scanIt9 = false
+            }
+            if scanIt9 then {
+                scanDefCalls :ast :reg :scanUnit op: (ast.nodes.get i: (bm.operation - 1).u64)
+            }
         }
     }
 }
@@ -26784,6 +26819,18 @@ checkUnitBodies: function {
             bm: ast.nodes.get i: (bmId9 - 1).u64
             if bm.namedoperation then {
                 defName: zast.nameTextAt :ast ref: bm.name
+                # the target unit's own definitions are walked because something
+                # DEMANDED them, exactly as a dependency's are. Walking every one
+                # regardless is what made the root the one unit in the program
+                # that was not demand-driven.
+                if (st.typing.eagerAll) == false then {
+                    if (defWasResolved
+                        ty: st.typing
+                        :ast
+                        defUnit: unitName
+                        nameId: bm.name
+                    ) == false then continue
+                }
                 isNs9: false
                 if (zast.unitOpKindIs
                     :ast
@@ -31647,7 +31694,7 @@ typecheck: function {
     indexUnitDefs ty: st.typing reg: st.reg :program
     registerAndResolveMain ty: st.typing reg: st.reg :program
     resolveMainUnitInstantiations ty: st.typing reg: st.reg :program
-    scanMainBodyCalls reg: st.reg :program
+    scanMainBodyCalls reg: st.reg :program rootOnly9: (st.typing.eagerAll) == false
     seedConstantSuffixDemands reg: st.reg :program
     demandAllDefs ty: st.typing reg: st.reg :program
     resolveDemandsByDescent ty: st.typing reg: st.reg :program
