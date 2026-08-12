@@ -20162,15 +20162,28 @@ checkBinopMethodDispatch: function {
     if ltLit9 then dt9 = materialiseLiteral :ast :st :unitName t: lt
     (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: dt9 nameId: opnId9)
     opo: st.typing.declChildOfId parentTypeId: dt9 nameId: opnId9
-    for opo.none while (typedefBaseOf
-        :ast
-        :st
-        :unitName
-        tid: (ztypes.tid.create from: dt9.u64)
-    ) > 0 loop {
-        dt9 = typedefBaseOf :ast :st :unitName tid: (ztypes.tid.create from: dt9.u64)
-        (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: dt9 nameId: opnId9)
-        opo = st.typing.declChildOfId parentTypeId: dt9 nameId: opnId9
+    # `!=` on a type that writes its own `==` is that `==` negated, and looking
+    # for it in the typedef BASE would answer with the base's raw comparison
+    # instead -- silently discarding the equality the author defined. The
+    # derived-inequality leg below owns this case, so the chase stops here and
+    # leaves it to it.
+    chase9: true
+    if opo.none when opnId9 == zast.wkOpNe then {
+        (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: dt9 nameId: zast.wkOpEq)
+        eqHere9: st.typing.declChildOfId parentTypeId: dt9 nameId: zast.wkOpEq
+        if eqHere9.some then chase9 = false
+    }
+    if chase9 then {
+        for opo.none while (typedefBaseOf
+            :ast
+            :st
+            :unitName
+            tid: (ztypes.tid.create from: dt9.u64)
+        ) > 0 loop {
+            dt9 = typedefBaseOf :ast :st :unitName tid: (ztypes.tid.create from: dt9.u64)
+            (forceMemberOf ty: st.typing reg: st.reg :ast parentTypeId: dt9 nameId: opnId9)
+            opo = st.typing.declChildOfId parentTypeId: dt9 nameId: opnId9
+        }
     }
     # a Box is a heap pointer around ONE valtype and declares no members of its
     # own, so its operators are the boxed element's
