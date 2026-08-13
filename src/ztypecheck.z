@@ -25719,23 +25719,80 @@ maybeWalkMethods: function {
     ) case some then {
         return
     } case none then null
-    if (unitName == st.typing.mainMemberUnit.stringview) == false then return
-    mk: (zast.poolFind pool: ast.names text: name).u64
-    io: st.typing.mainMemberIndex.get key: mk
-    idx: u64
-    match (
-        io
-    ) case some then {
-        idx = io
-    } case none then {
-        return
+    # The declaring node comes from the DECL, not from a positional index into
+    # one unit's body list. That index was keyed by bare name and indexed the
+    # target unit's members only, which is the whole of what the main-unit fence
+    # here used to guard -- consulting it from elsewhere would have walked
+    # whatever member happened to share the name. A Decl is keyed by (unit,
+    # name) and records the node that declared it, so any unit's definition can
+    # be walked at the point something demands it.
+    nmId9: zast.poolFind pool: ast.names text: name
+    if nmId9.isZero then return
+    dd9: (declOfUnitDefIds
+        ty: st.typing
+        unitId: (nameIdOf :ast name: unitName)
+        nameId: nmId9
+    )
+    if dd9.isZero then return
+    memId9: u32
+    {
+        if (st.typing.declValid id: dd9) then {
+            do9: st.typing.decls.get i: (dd9 - 1)
+            memId9 = do9.node
+        }
     }
+    if memId9 == 0 then return
+    # The mark means BODY WALKED, so it is never set for a definition this is
+    # not about to walk. Claiming one and declining is what made a free function
+    # -- and then a namespace -- vanish: the unit's own walk skipped it as done.
+    mopId9: zast.nodeid
+    {
+        mm2: ast.nodes.get i: (memId9 - 1).u64
+        if mm2.namedoperation then mopId9 = mm2.operation
+    }
+    if mopId9.isZero then return
+    isFn9: false
+    if (isFunctionDefWithBody o: (ast.nodes.get i: (mopId9 - 1).u64)) then isFn9 = true
+    canW9: isFn9
+    if (canW9) == false then {
+        if (objectdefHasMethodBodies
+            :ast
+            op: (ast.nodes.get i: (mopId9 - 1).u64)
+        ) then canW9 = true
+    }
+    if (canW9) == false then return
     mv: true
     st.typing.walkedMethodOwners.set key: nk value: mv
-    memId9: unitBody.get i: idx
     prevMono9: st.typing.curMonoStamp
     st.typing.curMonoStamp = 0
-    walkOwnerMethods :st :unitName :ast :unitBody :memId9 :name
+    # walkOwnerMethods only ever walked a TYPE's methods; a free function
+    # reaching it was marked and declined, and its unit's own free-function walk
+    # then skipped it as done -- a body emitted with nothing stamped.
+    if isFn9 then {
+        # a demand-time walk is its own scope, and checkFunctionBody SETS the
+        # ambient receiver without restoring it: a free function walked from
+        # inside a method's body would leave currentThisName cleared, and the
+        # rest of that method then reads `b.private` as external code. The type
+        # branch has bracketed these two since it was the only branch.
+        prevL9: st.typing.synthLabel.copy
+        prevT9: st.typing.currentThisName.copy
+        edw9: (ListVal u32)
+        qn9: "\{unitName}.\{name}"
+        (checkFunctionBody
+            :st
+            :unitName
+            defName: qn9.stringview
+            defn: (ast.nodes.get i: (mopId9 - 1).u64)
+            thisName: ""
+            :ast
+            :unitBody
+            depUnits: edw9
+        )
+        st.typing.synthLabel = prevL9
+        st.typing.currentThisName = prevT9
+    } else {
+        walkOwnerMethods :st :unitName :ast :unitBody :memId9 :name
+    }
     st.typing.curMonoStamp = prevMono9
 }
 
@@ -25962,6 +26019,35 @@ checkFunctionBody: function {
     match (
         defn
     ) case functiondef then {
+        # Claim this definition BEFORE the trigger runs. The trigger now walks
+        # a free function's body, and the body it would walk here is the one
+        # already being walked -- checkFunctionBody calls it with its OWN name.
+        # Claiming first turns the self-call into the signature scan it was
+        # always there for, and leaves the body walk to this frame.
+        {
+            sfId9: zast.poolFind pool: ast.names text: defName
+            if (sfId9.isZero) == false then {
+                sfk9: (ztypes.memberKey
+                    unitId: (nameIdOf :ast name: unitName)
+                    nameId: sfId9
+                )
+                sfHad9: (optBoolOr
+                    o: (st.typing.walkedMethodOwners.get key: sfk9)
+                    d: false
+                )
+                sfv9: true
+                st.typing.walkedMethodOwners.set key: sfk9 value: sfv9
+                if (sfHad9) == false then {
+                    (scanFnSig
+                        :st
+                        :unitName
+                        :ast
+                        :unitBody
+                        op: (ast.nodes.get i: (defn.nodeid - 1).u64)
+                    )
+                }
+            }
+        }
         maybeWalkMethods :st :unitName :ast :unitBody name: defName
         hasBody: defn.body > 0
         isGenDef: false
@@ -26830,6 +26916,19 @@ checkUnitBodies: function {
                         defUnit: unitName
                         nameId: bm.name
                     ) == false then continue
+                }
+                # and not again if a demand point already walked it. depWalkUnit
+                # has always asked this; the target unit never had to, because
+                # nothing else walked its bodies.
+                {
+                    wk2: (ztypes.memberKey
+                        unitId: (nameIdOf :ast name: unitName)
+                        nameId: bm.name
+                    )
+                    if (optBoolOr
+                        o: (st.typing.walkedMethodOwners.get key: wk2)
+                        d: false
+                    ) then continue
                 }
                 isNs9: false
                 if (zast.unitOpKindIs
