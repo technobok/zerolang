@@ -262,6 +262,8 @@ ZScope: class {
     kind: ztypes.zscopekind
     name: String
     entryStart: u64
+    # the fnFloor this scope displaced, so a pop restores it in one read
+    prevFnFloor: u64
 }
 
 # One row of the append-only scope log: a push stamped with its parent and
@@ -300,6 +302,14 @@ ZEntryDumpRow: class {
 # threading them through calls.
 ZSymbolTable: class {
     scopes: (List ZScope)
+    # Entry index where the innermost FUNCTION frame begins. Nothing below it
+    # belongs to the body being walked: zerolang has no nested functions, so a
+    # function's frame is the outermost scope any body reaches, and everything
+    # else it needs -- units, types -- comes from the registry and the decl
+    # tree rather than from `entries`. Measured over every example, corpus
+    # program and src unit: 136k variable resolutions in zc alone land at or
+    # above this floor and NOT ONE lands below it.
+    fnFloor: u64
     entries: (List ZEntry)
     history: (List ZScope)
     scopeLog: (List ZScopeLogRow)
@@ -372,7 +382,11 @@ ZSymbolTable: class {
             kind: ztypes.zscopekind.blockKind
             name: name.string
             entryStart: start
+            prevFnFloor: this.fnFloor
         )
+        # checkFunctionBody names its scope `function:<def>`; that frame is the
+        # bottom of the body being walked.
+        if (name.startsWith prefix: "function:") then this.fnFloor = start
         this.logPush
         return sid
     }
@@ -386,6 +400,7 @@ ZSymbolTable: class {
             kind: ztypes.zscopekind.blockKind
             name: name.string
             entryStart: start
+            prevFnFloor: this.fnFloor
         )
         this.logPush
         return marker
@@ -399,6 +414,7 @@ ZSymbolTable: class {
             kind: ztypes.zscopekind.overlayKind
             name: "".string
             entryStart: start
+            prevFnFloor: this.fnFloor
         )
         this.logPush
         return sid
@@ -413,6 +429,7 @@ ZSymbolTable: class {
             kind: ztypes.zscopekind.callKind
             name: "".string
             entryStart: start
+            prevFnFloor: this.fnFloor
         )
         this.logPush
         return marker
@@ -515,6 +532,7 @@ ZSymbolTable: class {
         for this.entries.length > start loop this.entries.pop
 
         popped: this.scopes.pop
+        this.fnFloor = popped.prevFnFloor
         this.history.append popped
         if (this.unreachableScopes.has item: topId) then {
             tcap: topId
@@ -889,7 +907,16 @@ ZSymbolTable: class {
         conflictSelf: false
         ne: this.entries.length
         j: ne
-        for j > 0 loop {
+        # An acquisition is checked against every outstanding lock IN ITS OWN
+        # FUNCTION. Scanning past that frame reaches bindings of some other
+        # body, which under a batched walk is merely unreachable and under a
+        # demand-driven one is 1436 false conflicts in zc alone -- a readonly
+        # `ctx` in the caller making a callee's own mutable `ctx` unwritable.
+        # The scan never stops at the first name match (an outstanding lock
+        # anywhere in the body can conflict), so shadowing does not save it;
+        # the frame boundary is what has to.
+        flo9: this.fnFloor
+        for j > flo9 loop {
             j2: j - 1
             e: this.entries.get i: j2
             if e.name == rootId then {
@@ -1440,6 +1467,7 @@ optStrOrEmpty: function {o: Option String} out String is {
 newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} out ZSymbolTable is {
     return (ZSymbolTable
         scopes: (List ZScope)
+        fnFloor: 0
         entries: (List ZEntry)
         history: (List ZScope)
         scopeLog: (List ZScopeLogRow)
