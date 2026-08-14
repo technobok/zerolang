@@ -6786,6 +6786,7 @@ resolveVariant: function {
     # value but which arm it is. Recorded for the backend at the end of the loop.
     allNullV9: true
     armCountV9: u64
+    firstArmV9: u64
     fiter: vnode.isItems.iterate
     for fmId9: fiter loop {
         fm: ast.nodes.get i: (fmId9 - 1).u64
@@ -6794,6 +6795,7 @@ resolveVariant: function {
         ) case namedoperation then {
             aname: zast.nameTextAt :ast ref: fm.name
             armCountV9 = armCountV9 + 1
+            if armCountV9 == 1 then firstArmV9 = fm.name.u64
             {
                 anV9: atomName :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
                 if anV9.stringview != "null" then allNullV9 = false
@@ -6876,9 +6878,19 @@ resolveVariant: function {
             childTypeId: tagId
         )
         # the shape, for whatever backend reads it: every arm written `null`,
-        # so the value is an ordinal and nothing needs a tagged struct.
+        # so the value is an ordinal and nothing needs a tagged struct -- and a
+        # discriminator whose values ARE those ordinals.
         if allNullV9 when armCountV9 > 0 then {
-            ty.ordinalVariant.set key: vid.u64 value: armCountV9
+            if (variantTagIsOrdinalPlain
+                :ast
+                :ty
+                :reg
+                :unitName
+                asItems: vnode.asItems
+            ) then {
+                ty.ordinalVariant.set key: vid.u64 value: armCountV9
+                ty.ordinalFirstArm.set key: vid.u64 value: firstArmV9
+            }
         }
     }
     aiter: vnode.asItems.iterate
@@ -6999,6 +7011,72 @@ resolveVariant: function {
 
 # dottedParentName -- the parent atom name of a `parent.child` dottedpath Node, ""
 # for anything else. Matching the Node param narrows it cleanly.
+# variantTagIsOrdinalPlain -- the discriminator's VALUES are the arm ordinals
+# 0, 1, 2 ... stored in a byte, which is what lets a backend treat the value as
+# the ordinal itself. True when the type declares no tag -- the spec's default
+# is u8, sequential from 0 -- or declares a numeric tag whose storage is u8.
+#
+# False for a `data`-sourced tag, whose constants are whatever the data block
+# says: `data { LOW: 0  HIGH: 10 }` has two arms and is NOT two ordinals. False
+# too for a wider declared numeric, where the author asked for that width. And
+# false when the tag base does not resolve, because an unverified shape is not
+# one to optimise on.
+#
+# Found by the `.tag` SUFFIX rather than the member's label: the spec makes the
+# label convention only ("commonly tag, but any name is valid").
+variantTagIsOrdinalPlain: function {
+    ast: Ast.view
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    asItems: (ListVal u32).view
+} out bool is {
+    result: true
+    with iter9: asItems.iterate do for amId9: iter9 loop {
+        am9: ast.nodes.get i: (amId9 - 1).u64
+        match (
+            am9
+        ) case namedoperation then {
+            op9: ast.nodes.get i: (am9.operation - 1).u64
+            isTagRef9: false
+            match (
+                op9
+            ) case dottedpath then {
+                cn9: atomName :ast n: (ast.nodes.get i: (op9.child - 1).u64)
+                if cn9.stringview == "tag" then isTagRef9 = true
+            } else null
+            if isTagRef9 then {
+                bn9: dottedParentName :ast n: op9
+                if bn9.length == 0 then {
+                    result = false
+                } else {
+                    rr9: (walkLookupTyperef
+                        :ast
+                        :ty
+                        :reg
+                        currentUnit: unitName
+                        base: bn9.stringview
+                    )
+                    match (
+                        rr9
+                    ) case some then {
+                        if (reg.typetypeOf typeId: (ztypes.tid.create from: rr9.u64)) == ztypes.ztypetype.dataType then {
+                            result = false
+                        } else {
+                            u8t9: builtinTidT :ast :ty :reg base: "u8"
+                            if u8t9.isZero then result = false
+                            if (u8t9.isZero) == false when rr9 != u8t9.u64 then result = false
+                        }
+                    } case none then {
+                        result = false
+                    }
+                }
+            }
+        } else null
+    }
+    return result
+}
+
 dottedParentName: function {ast: Ast.view n: Node.view} out String is {
     match (
         n
