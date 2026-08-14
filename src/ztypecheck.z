@@ -12761,7 +12761,6 @@ runUnitMonoWalks: function {
             }
             prevL: st.typing.synthLabel.copy
             prevT: st.typing.currentThisName.copy
-            ed8: (ListVal u32)
             (checkFunctionBody
                 :st
                 :unitName
@@ -12769,7 +12768,6 @@ runUnitMonoWalks: function {
                 defn: (st.typing.pendingUnitWalk.get i: i9).fn
                 thisName: ""
                 :ast
-                depUnits: ed8
             )
             st.typing.synthLabel = prevL
             st.typing.currentThisName = prevT
@@ -17359,6 +17357,9 @@ checkDotted: function {
             mo9
         ) case some then {
             result9: mo9
+            # `unit.member` resolved, so the definition it names is reachable
+            # from here: walk it where it is demanded, in whatever unit it lives.
+            walkDefinitionById :st :ast tid: (ztypes.tid.create from: mo9.u64)
             isFn9: false
             if (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo9.u64)) == ztypes.ztypetype.functionType then isFn9 = true
             if coerce when isFn9 then {
@@ -25776,13 +25777,30 @@ walkDeclaredDef: function {
         } case none then null
     }
     memId9: u32
+    inNs9: false
     {
         if (st.typing.declValid id: dd9) then {
             do9: st.typing.decls.get i: (dd9 - 1)
             memId9 = do9.node
+            # a definition inside a NAMESPACE needs that namespace's resolution
+            # context (nsOwnerTid / nsOwnerUnit / nsOwnerIsSubunit) to read its
+            # own siblings: `deep.mul` inside helper resolves against helper
+            # first. checkNamespaceBodies establishes that from its position, so
+            # a namespace member is left to that walk rather than walked
+            # half-configured.
+            pr9: do9.parent
+            if (pr9.isZero) == false then {
+                uro9: st.typing.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+                match (
+                    uro9
+                ) case some then {
+                    if (pr9 == uro9) == false then inNs9 = true
+                } case none then null
+            }
         }
     }
     if memId9 == 0 then return
+    if inNs9 then return
     # The mark means BODY WALKED, so it is never set for a definition this is
     # not about to walk. Claiming one and declining is what made a free function
     # -- and then a namespace -- vanish: the unit's own walk skipped it as done.
@@ -25817,7 +25835,6 @@ walkDeclaredDef: function {
         # branch has bracketed these two since it was the only branch.
         prevL9: st.typing.synthLabel.copy
         prevT9: st.typing.currentThisName.copy
-        edw9: (ListVal u32)
         qn9: "\{unitName}.\{name}"
         (checkFunctionBody
             :st
@@ -25826,7 +25843,6 @@ walkDeclaredDef: function {
             defn: (ast.nodes.get i: (mopId9 - 1).u64)
             thisName: ""
             :ast
-            depUnits: edw9
         )
         st.typing.synthLabel = prevL9
         st.typing.currentThisName = prevT9
@@ -25970,7 +25986,6 @@ checkMethodBodies: function {
                         memberId: im.name
                     )
                     qn: "\{typeName}.\{mname}"
-                    ed7: (ListVal u32)
                     (checkFunctionBody
                         :st
                         :unitName
@@ -25978,7 +25993,6 @@ checkMethodBodies: function {
                         defn: (ast.nodes.get i: (im.operation - 1).u64)
                         thisName: typeName
                         :ast
-                        depUnits: ed7
                     )
                 }
             } else null
@@ -26000,7 +26014,6 @@ checkMethodBodies: function {
                         memberId: am.name
                     )
                     qn2: "\{typeName}.\{mname2}"
-                    ed6: (ListVal u32)
                     (checkFunctionBody
                         :st
                         :unitName
@@ -26008,7 +26021,6 @@ checkMethodBodies: function {
                         defn: (ast.nodes.get i: (am.operation - 1).u64)
                         thisName: typeName
                         :ast
-                        depUnits: ed6
                     )
                 }
             } else null
@@ -26052,7 +26064,6 @@ checkFunctionBody: function {
     defn: Node.view
     thisName: StringView
     ast: Ast
-    depUnits: (ListVal u32).view
 } is {
     match (
         defn
@@ -26387,7 +26398,6 @@ checkFunctionBody: function {
             st.typing.synthLabel = lbl
             tnl: thisName.string
             st.typing.currentThisName = tnl
-            if depUnits.length > 0 then runDepUnitWalks :st :ast mainName: unitName :depUnits
             prevRet9: st.typing.currentReturnTypeId
             fitid9: (optU64Or o: rgot d: 0)
             crt9: ztypes.tid
@@ -26432,10 +26442,6 @@ checkFunctionBody: function {
     } else null
 }
 
-# runDepUnitWalks -- dependency-unit body walks: the reference
-# checks a demanded user unit's function bodies on first touch, inside the
-# using function's scope. Walks every resolved function-with-body member of
-# each non-system dependency unit, scoped function:{unit}.{fn}.
 # resolveDemandedStdDeps -- one resolve sweep over the runtime-backed dep
 # units (post-main): resolves whatever their bodied free fns' demands
 # recorded, mirroring the registerAndResolveMain demand driver.
@@ -26468,220 +26474,6 @@ resolveDemandedStdDeps: function {
     }
 }
 
-# walk each dependency unit's bodies in resolution order.
-runDepUnitWalks: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    mainName: StringView
-    depUnits: (ListVal u32).view
-} is {
-    diter: depUnits.iterate
-    for duId9: diter loop {
-        du: ast.nodes.get i: (duId9 - 1).u64
-        match (
-            du
-        ) case namedoperation then {
-            dn: zast.nameTextAt :ast ref: du.name
-            # the runtime-backed stdlib units are excluded here: their bodied
-            # free fns walk in checkBodies' final pass, AFTER the main unit
-            # settles (demand order must not disturb main's shadow/mono
-            # resolution)
-            isKnownD: false
-            if dn.stringview == mainName then isKnownD = true
-            if dn.stringview == "io" then isKnownD = true
-            if dn.stringview == "collections" then isKnownD = true
-            if dn.stringview == "system" then isKnownD = true
-            if dn.stringview == "core" then isKnownD = true
-            if dn.stringview == "os" then isKnownD = true
-            if dn.stringview == "cli" then isKnownD = true
-            if (isKnownD) == false then {
-                # Resolve this unit's OWN demanded top-level definitions before
-                # its bodies are walked. The demand set is keyed by bare name,
-                # so a main-unit definition of the same name shadows this
-                # unit's. A unit's internal references and any qualified
-                # `unit.member` reference are recorded per-unit by the body
-                # scan (recordUnitDemand) and un-shadow exactly the member
-                # they name -- so the shadow can apply here, and a name only
-                # MAIN demanded stays what it is: unresolved dead code.
-                (resolveDemandedUnitBody
-                    ty: st.typing
-                    reg: st.reg
-                    :ast
-                    unitName: dn.stringview
-                    shadowUnit: mainName
-                    unitdefId: du.operation
-                )
-                (depWalkUnit
-                    :st
-                    :ast
-                    depName: dn.stringview
-                    unitOpId: du.operation
-                )
-            }
-        } else null
-    }
-}
-
-# depWalkUnit -- walk one dependency unit's RESOLVED definitions: its free
-# function bodies, and the method bodies of its resolved types (two passes:
-# indices first, so the body list is free for the walk itself). A type's methods
-# are walked because the type resolved -- because something reached it -- which
-# is the same rule its signature already follows. Leaving them to the completion
-# sweep instead meant the demand walk resolved a type and never checked what its
-# methods do, so the sweep had to walk every method-owning type in the program
-# to cover the reached ones.
-depWalkUnit: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    depName: StringView
-    unitOpId: zast.nodeid
-} is {
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitOpId
-    {
-        if (hasGenericParam :ast items: bodyIds9) then return
-        emptyD: (ListVal u32)
-        idxs: (ListVal u64)
-        di0: u64
-        nsIdx9: (ListVal u64)
-        ownIdx9: (ListVal u64)
-        with biter: bodyIds9.iterate do for bmId9: biter loop {
-            bm: ast.nodes.get i: (bmId9 - 1).u64
-            match (
-                bm
-            ) case namedoperation then {
-                if (isFunctionDefWithBody o: (ast.nodes.get i: (bm.operation - 1).u64)) then {
-                    dv0: di0
-                    idxs.append dv0
-                }
-                {
-                    dOp0: ast.nodes.get i: (bm.operation - 1).u64
-                    if (objectdefHasMethodBodies :ast op: dOp0) then {
-                        if (objectdefIsGeneric :ast o: dOp0) == false then {
-                            ov0: di0
-                            ownIdx9.append ov0
-                        }
-                    }
-                }
-                isNs0: false
-                if (zast.unitOpKindIs
-                    :ast
-                    opId: bm.operation
-                    k: zast.unitkind.namespace
-                ) then isNs0 = true
-                if (zast.unitOpKindIs
-                    :ast
-                    opId: bm.operation
-                    k: zast.unitkind.subunit
-                ) then isNs0 = true
-                if isNs0 then {
-                    nv0: di0
-                    nsIdx9.append nv0
-                }
-            } else null
-            di0 = di0 + 1
-        }
-        ni9: u64
-        for ni9 < nsIdx9.length loop {
-            nidx9: nsIdx9.get i: ni9
-            ni9 = ni9 + 1
-            nm2Id9: bodyIds9.get i: nidx9
-            nm2: ast.nodes.get i: (nm2Id9 - 1).u64
-            if nm2.namedoperation then {
-                (checkNamespaceBodies
-                    :ast
-                    :st
-                    unitName: depName
-                    unitdefId: nm2.operation
-                    depUnits: emptyD
-                )
-            }
-        }
-        oi9: u64
-        for oi9 < ownIdx9.length loop {
-            oidx9: ownIdx9.get i: oi9
-            oi9 = oi9 + 1
-            om9Id9: bodyIds9.get i: oidx9
-            om9: ast.nodes.get i: (om9Id9 - 1).u64
-            match (
-                om9
-            ) case namedoperation then {
-                onm9: zast.nameTextAt :ast ref: om9.name
-                orgo9: (resolvedByIds
-                    :ast
-                    ty: st.typing
-                    reg: st.reg
-                    unitId: (nameIdOf :ast name: depName)
-                    name: om9.name
-                )
-                match (
-                    orgo9
-                ) case some then {
-                    owk9: (ztypes.memberKey
-                        unitId: (nameIdOf :ast name: depName)
-                        nameId: om9.name
-                    )
-                    owalked9: optBoolOr o: (st.typing.walkedMethodOwners.get key: owk9) d: false
-                    if (owalked9) == false then {
-                        ovv9: true
-                        st.typing.walkedMethodOwners.set key: owk9 value: ovv9
-                        (walkOwnerMethods
-                            :st
-                            unitName: depName
-                            :ast
-                            memId9: om9Id9
-                            name: onm9.stringview
-                        )
-                    }
-                } case none then null
-            } else null
-        }
-        wi: u64
-        for wi < idxs.length loop {
-            bidx: idxs.get i: wi
-            bm2Id9: bodyIds9.get i: bidx
-            bm2: ast.nodes.get i: (bm2Id9 - 1).u64
-            match (
-                bm2
-            ) case namedoperation then {
-                if (isFunctionDefWithBody o: (ast.nodes.get i: (bm2.operation - 1).u64)) then {
-                    fn: zast.nameTextAt :ast ref: bm2.name
-                    rgo: (resolvedByIds
-                        :ast
-                        ty: st.typing
-                        reg: st.reg
-                        unitId: (nameIdOf :ast name: depName)
-                        name: (zast.poolFind pool: ast.names text: fn.stringview)
-                    )
-                    match (
-                        rgo
-                    ) case some then {
-                        dwk9: (ztypes.memberKey
-                            unitId: (nameIdOf :ast name: depName)
-                            nameId: bm2.name
-                        )
-                        walked: optBoolOr o: (st.typing.walkedMethodOwners.get key: dwk9) d: false
-                        if (walked) == false then {
-                            wv: true
-                            st.typing.walkedMethodOwners.set key: dwk9 value: wv
-                            dq: "\{depName}.\{fn}"
-                            (checkFunctionBody
-                                :st
-                                unitName: depName
-                                defName: dq.stringview
-                                defn: (ast.nodes.get i: (bm2.operation - 1).u64)
-                                thisName: ""
-                                :ast
-                                depUnits: emptyD
-                            )
-                        }
-                    } case none then null
-                }
-            } else null
-            wi = wi + 1
-        }
-    }
-}
-
 # checkUnitBodies -- walk every function definition with a body in one unit.
 # walkUnitTemplateBodies9 -- body-walk a generic unit template's functions with
 # the generic param UNBOUND (no st.define of the arg), so a `match t` subject
@@ -26695,7 +26487,6 @@ walkUnitTemplateBodies9: function {
     unitdefId: zast.nodeid
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
-    ed9: (ListVal u32)
     bn9: bodyIds9.length
     bi9: u64
     for bi9 < bn9 loop {
@@ -26712,7 +26503,6 @@ walkUnitTemplateBodies9: function {
                     defn: (ast.nodes.get i: (bm9.operation - 1).u64)
                     thisName: ""
                     :ast
-                    depUnits: ed9
                 )
             }
         }
@@ -26794,7 +26584,6 @@ checkNamespaceBodies: function {
     st: zenv.ZSymbolTable
     unitName: StringView
     unitdefId: zast.nodeid
-    depUnits: (ListVal u32).view
 } is {
     prevTid9: st.typing.nsOwnerTid
     prevDecl9: st.typing.nsOwnerDeclId
@@ -26843,7 +26632,6 @@ checkNamespaceBodies: function {
                     :st
                     :unitName
                     unitdefId: bm.operation
-                    :depUnits
                 )
             } else {
                 defName9: zast.nameTextAt :ast ref: bm.name
@@ -26854,7 +26642,6 @@ checkNamespaceBodies: function {
                     defn: (ast.nodes.get i: (bm.operation - 1).u64)
                     thisName: ""
                     :ast
-                    :depUnits
                 )
             }
         }
@@ -26871,12 +26658,10 @@ checkUnitBodies: function {
     st: zenv.ZSymbolTable
     unitName: StringView
     unitdefId: zast.nodeid
-    depUnits: (ListVal u32).view
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
     st.typing.mainMemberUnit = unitName.string
     {
-        emptyDeps9: (ListVal u32)
         mi: u64
         with niter: bodyIds9.iterate do for nmId9: niter loop {
             nm: ast.nodes.get i: (nmId9 - 1).u64
@@ -26908,7 +26693,6 @@ checkUnitBodies: function {
                         defn: (ast.nodes.get i: (mm.operation - 1).u64)
                         thisName: ""
                         :ast
-                        :depUnits
                     )
                 }
             }
@@ -26979,7 +26763,6 @@ checkUnitBodies: function {
                         :st
                         :unitName
                         unitdefId: bm.operation
-                        depUnits: emptyDeps9
                     )
                 } else if defName.stringview != "main" then {
                     (checkFunctionBody
@@ -26989,7 +26772,6 @@ checkUnitBodies: function {
                         defn: (ast.nodes.get i: (bm.operation - 1).u64)
                         thisName: ""
                         :ast
-                        depUnits: emptyDeps9
                     )
                 }
             }
@@ -27036,19 +26818,11 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                 if mu.namedoperation then mOpId9 = mu.operation
             }
             if mOpId9 > 0 then {
-                du9: (ListVal u32)
-                duN9: program.ast.units.length
-                duI9: u64
-                for duI9 < duN9 loop {
-                    du9.append (program.ast.units.get i: duI9)
-                    duI9 = duI9 + 1
-                }
                 (checkUnitBodies
                     :st
                     unitName: mainName
                     unitdefId: mOpId9
                     ast: program.ast
-                    depUnits: du9
                 )
             }
         }
@@ -27098,38 +26872,6 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                     ast: program.ast
                 )
                 if st.reg.nextTypeId == beforeS9 then againS9 = false
-            }
-            wn9: program.ast.units.length
-            wi9: u64
-            for wi9 < wn9 loop {
-                wu9Id9: (zast.nodeid.create from: (program.ast.units.get i: wi9))
-                wi9 = wi9 + 1
-                wOpId9: zast.nodeid
-                wun9: String
-                {
-                    wu9: program.ast.nodes.get i: (wu9Id9 - 1).u64
-                    if wu9.namedoperation then {
-                        wun0: zast.poolTextAt pool: program.ast.names ref: wu9.name
-                        if (isStdlibUnitName name: wun0.stringview) then {
-                            wOpId9 = wu9.operation
-                            wun9 = wun0.copy
-                        }
-                    }
-                }
-                if wOpId9 > 0 when (unitHasDemandedBodiedFn
-                    ty: st.typing
-                    reg: st.reg
-                    ast: program.ast
-                    unitName: wun9.stringview
-                    unitdefId: wOpId9
-                ) then {
-                    (depWalkUnit
-                        :st
-                        ast: program.ast
-                        depName: wun9.stringview
-                        unitOpId: wOpId9
-                    )
-                }
             }
         }
         walkLateResolvedOwners :st ast: program.ast
@@ -27365,7 +27107,6 @@ stampOneFnMono: function {
     st.typing.curMonoFnTid = monoId
     prevL9: st.typing.synthLabel.copy
     prevT9: st.typing.currentThisName.copy
-    ed9: (ListVal u32)
     (checkFunctionBody
         :st
         :unitName
@@ -27373,7 +27114,6 @@ stampOneFnMono: function {
         defn: (ast.nodes.get i: (fnOpId - 1).u64)
         thisName: ""
         :ast
-        depUnits: ed9
     )
     st.typing.synthLabel = prevL9
     st.typing.currentThisName = prevT9
@@ -27508,7 +27248,6 @@ stampOneClassMono: function {
             st.typing.curMonoFnTid = ztypes.tid.create from: 0
         }
         q9: "\{monoNm9}.\{mnm9}"
-        ed9: (ListVal u32)
         (checkFunctionBody
             :st
             :unitName
@@ -27516,7 +27255,6 @@ stampOneClassMono: function {
             defn: (ast.nodes.get i: (mop9 - 1).u64)
             thisName: monoNm9.stringview
             :ast
-            depUnits: ed9
         )
     }
     st.typing.synthLabel = prevL9
@@ -27807,7 +27545,6 @@ stampOneUnitMono: function {
             } case none then {
                 st.typing.curMonoFnTid = ztypes.tid.create from: 0
             }
-            ed9: (ListVal u32)
             (checkFunctionBody
                 :st
                 :unitName
@@ -27815,7 +27552,6 @@ stampOneUnitMono: function {
                 defn: (ast.nodes.get i: (bm2.operation - 1).u64)
                 thisName: ""
                 :ast
-                depUnits: ed9
             )
         } else null
     }
