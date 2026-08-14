@@ -28507,23 +28507,71 @@ constArithInt: function {
 # constCompareInt / constCompareFloat -- the six comparisons, yielding a bool
 # value. Written twice rather than once over f64 because an i64 comparison must
 # not lose precision by routing through a float.
-constCompareInt: function {op: StringView a: i64 b: i64} out ztypes.cval is {
-    if op == "==" then return (ztypes.makeBoolConst (a == b))
-    if op == "!=" then return (ztypes.makeBoolConst (a != b))
-    if op == "<" then return (ztypes.makeBoolConst (a < b))
-    if op == "<=" then return (ztypes.makeBoolConst (a <= b))
-    if op == ">" then return (ztypes.makeBoolConst (a > b))
-    if op == ">=" then return (ztypes.makeBoolConst (a >= b))
+# boolConst9 -- the folded truth value `v` as a constant naming one of bool's
+# arms. bool is a variant like any other, so its constants are armKind ones:
+# `true` is the arm bool declares second and `false` the arm it declares first,
+# both read from what the checker recorded for the declaration rather than
+# spelled here. noConst when bool is not in the program, or when its arms were
+# not recorded -- an absent fold is a runtime branch, never a wrong one.
+boolConst9: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    v: bool
+} out ztypes.cval is {
+    bt9: builtinTidT :ast :ty :reg base: "bool"
+    if bt9.isZero then return ztypes.noConst
+    nm9: u64
+    if v then {
+        o9: ty.sumPairSecondArm.get key: bt9.u64
+        match (
+            o9
+        ) case some then {
+            nm9 = o9
+        } case none then null
+    } else {
+        o8: ty.sumPairFirstArm.get key: bt9.u64
+        match (
+            o8
+        ) case some then {
+            nm9 = o8
+        } case none then null
+    }
+    if nm9 == 0 then return ztypes.noConst
+    return (ztypes.makeArmConst armTid: bt9 armName: (zast.nameid.create from: nm9.u32.orPanic))
+}
+
+constCompareInt: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    op: StringView
+    a: i64
+    b: i64
+} out ztypes.cval is {
+    if op == "==" then return (boolConst9 :ast :ty :reg v: (a == b))
+    if op == "!=" then return (boolConst9 :ast :ty :reg v: (a != b))
+    if op == "<" then return (boolConst9 :ast :ty :reg v: (a < b))
+    if op == "<=" then return (boolConst9 :ast :ty :reg v: (a <= b))
+    if op == ">" then return (boolConst9 :ast :ty :reg v: (a > b))
+    if op == ">=" then return (boolConst9 :ast :ty :reg v: (a >= b))
     return ztypes.noConst
 }
 
-constCompareFloat: function {op: StringView a: f64 b: f64} out ztypes.cval is {
-    if op == "==" then return (ztypes.makeBoolConst (a == b))
-    if op == "!=" then return (ztypes.makeBoolConst (a != b))
-    if op == "<" then return (ztypes.makeBoolConst (a < b))
-    if op == "<=" then return (ztypes.makeBoolConst (a <= b))
-    if op == ">" then return (ztypes.makeBoolConst (a > b))
-    if op == ">=" then return (ztypes.makeBoolConst (a >= b))
+constCompareFloat: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    op: StringView
+    a: f64
+    b: f64
+} out ztypes.cval is {
+    if op == "==" then return (boolConst9 :ast :ty :reg v: (a == b))
+    if op == "!=" then return (boolConst9 :ast :ty :reg v: (a != b))
+    if op == "<" then return (boolConst9 :ast :ty :reg v: (a < b))
+    if op == "<=" then return (boolConst9 :ast :ty :reg v: (a <= b))
+    if op == ">" then return (boolConst9 :ast :ty :reg v: (a > b))
+    if op == ">=" then return (boolConst9 :ast :ty :reg v: (a >= b))
     return ztypes.noConst
 }
 
@@ -28785,10 +28833,15 @@ foldIfBranch: function {
                                     :unitName
                                     n: (ast.nodes.get i: (cond9.operation - 1).u64)
                                 )
-                                if cv9.kind.bvalKind then {
-                                    if (cv9.bval) == false then allTrue9 = false
+                                cs9: (ztyping.armSideOfName
+                                    :ty
+                                    typeId: cv9.armTid.u64
+                                    nameId: cv9.armName.u64
+                                )
+                                if cs9.falsy then {
+                                    allTrue9 = false
                                 } else {
-                                    undecided9 = true
+                                    if (cs9.truthy) == false then undecided9 = true
                                 }
                             }
                         } else null
@@ -28842,14 +28895,6 @@ constArmRead: function {
     if ptt9 == ztypes.ztypetype.variantType then isSum9 = true
     if ptt9 == ztypes.ztypetype.unionType then isSum9 = true
     if (isSum9) == false then return ztypes.noConst
-    # bool's arms are the language's bool VALUES, not tags a user compares:
-    # they fold to a plain bool so every reader of a folded CONDITION gets one
-    # without having to know that bool is a variant.
-    if typeName == "bool" then {
-        if armName == "true" then return (ztypes.makeBoolConst true)
-        if armName == "false" then return (ztypes.makeBoolConst false)
-        return ztypes.noConst
-    }
     return (ztypes.makeArmConst
         armTid: ptid9
         armName: (zast.poolFind pool: ast.names text: armName)
@@ -28863,11 +28908,6 @@ constValEq: function {ty: ztyping.ZTyping.view a: ztypes.cval b: ztypes.cval} ou
     if a.kind.ivalKind when b.kind.ivalKind then {
         r9: 0.0
         if a.ival == b.ival then r9 = 1.0
-        return (ffoldval has: true val: r9)
-    }
-    if a.kind.bvalKind when b.kind.bvalKind then {
-        r9: 0.0
-        if a.bval == b.bval then r9 = 1.0
         return (ffoldval has: true val: r9)
     }
     if a.kind.armKind when b.kind.armKind then {
@@ -29055,9 +29095,19 @@ constStringMethod: function {
         a9: (constStrArgAt :ast :ty :reg :unitName :args label: lbl9 idx: 0)
         if (a9.kind.svalKind) == false then return ztypes.noConst
         as9: constStringAt :ty id: a9.strId
-        if name == "startsWith" then return (ztypes.makeBoolConst (s9.startsWith prefix: as9))
-        if name == "endsWith" then return (ztypes.makeBoolConst (s9.endsWith suffix: as9))
-        return (ztypes.makeBoolConst (s9.contains needle: as9))
+        if name == "startsWith" then return (boolConst9
+            :ast
+            :ty
+            :reg
+            v: (s9.startsWith prefix: as9)
+        )
+        if name == "endsWith" then return (boolConst9
+            :ast
+            :ty
+            :reg
+            v: (s9.endsWith suffix: as9)
+        )
+        return (boolConst9 :ast :ty :reg v: (s9.contains needle: as9))
     }
     if name == "substring" then {
         f9: constStrArgAt :ast :ty :reg :unitName :args label: "from" idx: 0
@@ -29200,12 +29250,7 @@ evalConstNode: function {
             if pcv9.kind.armKind then {
                 cnid0: zast.poolFind pool: ast.names text: cn9.stringview
                 if cnid0.isZero then return ztypes.noConst
-                return (ztypes.makeBoolConst (pcv9.armName == cnid0))
-            }
-            if pcv9.kind.bvalKind then {
-                if cn9.stringview == "true" then return (ztypes.makeBoolConst pcv9.bval)
-                if cn9.stringview == "false" then return (ztypes.makeBoolConst ((pcv9.bval) == false))
-                return ztypes.noConst
+                return (boolConst9 :ast :ty :reg v: (pcv9.armName == cnid0))
             }
             if pcv9.kind.svalKind then {
                 return (constStringDotted
@@ -29235,11 +29280,7 @@ evalConstNode: function {
         if pv9.kind.armKind then {
             cnid9: zast.poolFind pool: ast.names text: cn9.stringview
             if cnid9.isZero then return ztypes.noConst
-            return (ztypes.makeBoolConst (pv9.armName == cnid9))
-        }
-        if pv9.kind.bvalKind then {
-            if cn9.stringview == "true" then return (ztypes.makeBoolConst pv9.bval)
-            if cn9.stringview == "false" then return (ztypes.makeBoolConst ((pv9.bval) == false))
+            return (boolConst9 :ast :ty :reg v: (pv9.armName == cnid9))
         }
         # a literal receiver (`"abcd".length`) or a qualified constant
         # (`quadfloat.LIB.length`): the parent is not a bare atom, so its value
@@ -29292,8 +29333,8 @@ evalConstNode: function {
         if lv9.kind.armKind when rv9.kind.armKind then {
             same9: false
             if lv9.armTid == rv9.armTid when lv9.armName == rv9.armName then same9 = true
-            if op9.stringview == "==" then return (ztypes.makeBoolConst same9)
-            if op9.stringview == "!=" then return (ztypes.makeBoolConst ((same9) == false))
+            if op9.stringview == "==" then return (boolConst9 :ast :ty :reg v: same9)
+            if op9.stringview == "!=" then return (boolConst9 :ast :ty :reg v: ((same9) == false))
             return ztypes.noConst
         }
         # two string constants compare by their interned TEXT. Only equality is
@@ -29303,8 +29344,8 @@ evalConstNode: function {
             ls9: constStringAt :ty id: lv9.strId
             rs9: constStringAt :ty id: rv9.strId
             eq9: ls9.stringview == rs9.stringview
-            if op9.stringview == "==" then return (ztypes.makeBoolConst eq9)
-            if op9.stringview == "!=" then return (ztypes.makeBoolConst ((eq9) == false))
+            if op9.stringview == "==" then return (boolConst9 :ast :ty :reg v: eq9)
+            if op9.stringview == "!=" then return (boolConst9 :ast :ty :reg v: ((eq9) == false))
             # `+` BUILDS, so the folded value is the joined text, interned like
             # any other. `A + B + C` folds left to right through this leg with
             # no runtime temporary at any step.
@@ -29314,14 +29355,9 @@ evalConstNode: function {
             }
             return ztypes.noConst
         }
-        if lv9.kind.bvalKind when rv9.kind.bvalKind then {
-            if op9.stringview == "==" then return (ztypes.makeBoolConst (lv9.bval == rv9.bval))
-            if op9.stringview == "!=" then return (ztypes.makeBoolConst (lv9.bval != rv9.bval))
-            return ztypes.noConst
-        }
         if lv9.kind.ivalKind when rv9.kind.ivalKind then {
             if (isComparisonOp name: op9.stringview) then {
-                return (constCompareInt op: op9.stringview a: lv9.ival b: rv9.ival)
+                return (constCompareInt :ast :ty :reg op: op9.stringview a: lv9.ival b: rv9.ival)
             }
             return (constArithInt
                 :ty
@@ -29337,7 +29373,7 @@ evalConstNode: function {
         rf9: constFloatOf v: rv9
         if lf9.has when rf9.has then {
             if (isComparisonOp name: op9.stringview) then {
-                return (constCompareFloat op: op9.stringview a: lf9.val b: rf9.val)
+                return (constCompareFloat :ast :ty :reg op: op9.stringview a: lf9.val b: rf9.val)
             }
             return (constArithFloat op: op9.stringview a: lf9.val b: rf9.val)
         }
@@ -29834,7 +29870,6 @@ constRegisterValueType: function {
     base9: ""
     if v.kind.ivalKind then base9 = "i64"
     if v.kind.fvalKind then base9 = "f64"
-    if v.kind.bvalKind then base9 = "bool"
     if v.kind.svalKind then base9 = "StringView"
     if base9.length == 0 then return
     # NON-MINTING on purpose. The registration exists for the benefit of a

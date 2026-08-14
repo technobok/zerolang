@@ -28,7 +28,6 @@ public: unit {
     :intFitsFloat
     :isFloatKind
     :makeArmConst
-    :makeBoolConst
     :makeFloatConst
     :makeIntConst
     :makeStrConst
@@ -138,16 +137,16 @@ zlockholderkind: variant {
     forKind: null
 } as { tag: u8.tag }
 
-# the payload kind of a compile-time constant. bool is its own kind rather
-# than an `armKind` over bool's type: every consumer of a folded CONDITION
-# wants a plain bool, and the emitter renders bool as a C bool, not as a
-# tagged struct. `armKind` is for user variants and unions.
+# the payload kind of a compile-time constant. A truth value is an `armKind`
+# over bool's type like any other sum constant: bool IS a variant, and a
+# constant that threw its arm identity away had to spell the arms back to
+# answer `.true` / `.false`, which is the one thing a folded value should
+# never need to do.
 zconstkind: variant {
     none: null
     ivalKind: null
     fvalKind: null
     svalKind: null
-    bvalKind: null
     armKind: null
 } as { tag: u8.tag }
 
@@ -368,8 +367,6 @@ zconstkindName: function {t: zconstkind} out String is {
         return "FVAL".string
     } case svalKind then {
         return "SVAL".string
-    } case bvalKind then {
-        return "BVAL".string
     } case armKind then {
         return "ARM".string
     }
@@ -530,7 +527,6 @@ cval: record {
     kind: zconstkind
     ival: i64
     fval: f64
-    bval: bool
     strId: u32
     armTid: tid
     armName: zast.nameid
@@ -1445,7 +1441,6 @@ noConst: function out cval is {
         kind: zconstkind.none
         ival: 0
         fval: 0.0
-        bval: false
         strId: 0
         armTid: (tid.create from: 0)
         armName: (zast.nameid.create from: 0)
@@ -1465,14 +1460,6 @@ makeFloatConst: function {v: f64} out cval is {
     c9: noConst
     c9.kind = zconstkind.fvalKind
     c9.fval = v
-    return c9
-}
-
-# a cval holding the bool value `v`.
-makeBoolConst: function {v: bool} out cval is {
-    c9: noConst
-    c9.kind = zconstkind.bvalKind
-    c9.bval = v
     return c9
 }
 
@@ -2004,7 +1991,6 @@ main: function is {
     print (zconstkindName zconstkind.ivalKind)
     print (zconstkindName zconstkind.fvalKind)
     print (zconstkindName zconstkind.svalKind)
-    print (zconstkindName zconstkind.bvalKind)
     print (zconstkindName zconstkind.armKind)
 
     print "=== carriers ==="
@@ -2037,8 +2023,6 @@ main: function is {
 
     k0: makeIntConst 1024.i64
     print "const kind=\{zconstkindName k0.kind} ival=\{k0.ival}"
-    k1: makeBoolConst true
-    print "const kind=\{zconstkindName k1.kind} bval=\{boolText k1.bval}"
     k2: makeStrConst 3.u32
     print "const kind=\{zconstkindName k2.kind} strId=\{k2.strId}"
     k3: (makeArmConst armTid: (tid.create from: 12) armName: (zast.nameid.create from: 5))
