@@ -402,16 +402,34 @@ ordinalVariantCType: function {
         ao9
     ) case some then {
         if ao9 == 2 then return "bool".string
-        return "".string
+        # every recorded ordinal has a u8 discriminator BY CONSTRUCTION: the
+        # checker only records one whose values are the arm ordinals, which is
+        # the spec's default (u8, sequential from 0) or an explicit u8
+        return "uint8_t".string
     } case none then {
         return "".string
     }
 }
 
-# isOrdinalPair -- the value IS its own discriminator, so there is no tag field
-# to read and no struct to compose. Replaces the `== "bool"` name tests.
-isOrdinalPair: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+# isOrdinalVariant -- the value IS its own discriminator: no tag field to read,
+# no struct to compose, and `==` rather than a comparator.
+isOrdinalVariant: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     return (ordinalVariantCType :symtab :tid).length > 0
+}
+
+# isOrdinalPair -- an ordinal with exactly TWO arms, which is a C `bool` and so
+# answers to truthiness: the second arm is the value, the first its negation.
+# Distinct from isOrdinalVariant, which is about there being no tag field --
+# every ordinal loses the field, only a pair gains `x` / `!x`.
+isOrdinalPair: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    ao9: symtab.typing.ordinalVariant.get key: tid.u64
+    match (
+        ao9
+    ) case some then {
+        return ao9 == 2
+    } case none then {
+        return false
+    }
 }
 
 # ordinalPairFalseArm -- the FIRST arm of an ordinal pair: ordinal 0, and so the
@@ -1946,7 +1964,7 @@ binopKeyOf: function {
     tt9: symtab.reg.typetypeOf typeId: owner
     # an ORDINAL PAIR is a C scalar, so it compares with `==` rather than
     # through the tagged-struct comparator it has no struct for
-    if (isOrdinalPair :symtab tid: owner) then {
+    if (isOrdinalVariant :symtab tid: owner) then {
         k0: "@scalar.\{op}"
         return k0
     }
@@ -3739,7 +3757,7 @@ svArgAddr: function {
         if (isIntName name: snm9.stringview) then return "".string
         if (isFloatName name: snm9.stringview) then return "".string
         # an ordinal pair is a C scalar, and passes like one
-        if (isOrdinalPair
+        if (isOrdinalVariant
             :symtab
             tid: (stampIdOf :symtab nid: n.nodeid.u64)
         ) then return "".string
@@ -3761,7 +3779,7 @@ svArgAddr: function {
         if (isIntName name: snl9.stringview) then return "".string
         if (isFloatName name: snl9.stringview) then return "".string
         # an ordinal pair is a C scalar, and passes like one
-        if (isOrdinalPair
+        if (isOrdinalVariant
             :symtab
             tid: (stampIdOf :symtab nid: n.nodeid.u64)
         ) then return "".string
@@ -9585,6 +9603,11 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 if (isPtrVid :ctx vid: (atomVid :symtab nid: rpn9)) then accP9 = "->".string
             }
             tgP9: variantTag :symtab tid: (ztypes.tid.create from: dap9.u64) arm: mnc0.stringview
+            # an ordinal IS its discriminator: compare the value, not a field
+            if (isOrdinalVariant
+                :symtab
+                tid: (ztypes.tid.create from: dap9.u64)
+            ) then return "((\{recvP9}) == \{tgP9})"
             eP9: "((\{recvP9})\{accP9}tag == \{tgP9})"
             return eP9
         }
@@ -9608,7 +9631,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 tid: (ztypes.tid.create from: tatE9.u64)
                 thisTid: ztypes.tid
             )
-            if (isOrdinalPair
+            if (isOrdinalVariant
                 :symtab
                 tid: (ztypes.tid.create from: dtr9.u64)
             ) then return "((\{castT9})(\{recvT9}))"
@@ -13540,7 +13563,9 @@ emitMatchStmt: function {
     mN: tmp.next
     l0: "\{ind}\{vc}_t _m\{mN} = \{sx};\n"
     buf.append l0
-    l1: "\{ind}switch (_m\{mN}.tag) {\n"
+    accM9: ".tag".string
+    if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: vtid.u64)) then accM9 = "".string
+    l1: "\{ind}switch (_m\{mN}\{accM9}) {\n"
     buf.append l1
     sname: atomTextDeep :ast n: (ast.nodes.get i: (m.subject - 1).u64)
     # the subject's variable: inside an arm the bound name IS the subject,
@@ -15102,7 +15127,7 @@ seedPosCore9: function {
 } is {
     dap9: dpArmPredicateOf9 :symtab :nid
     if dap9 == 0 then return
-    if (isOrdinalPair :symtab tid: (ztypes.tid.create from: dap9.u64)) then return
+    if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: dap9.u64)) then return
     subj9: atomTextOf :ast n: parent
     if subj9.length == 0 then return
     if (bodyReassigns9 :ast n: body name: subj9.stringview) then return
@@ -15152,7 +15177,7 @@ seedNegFromPred9: function {
     } case dottedpath then {
         dap9: dpArmPredicateOf9 :symtab nid: n.nodeid.u64
         if dap9 == 0 then return
-        if (isOrdinalPair :symtab tid: (ztypes.tid.create from: dap9.u64)) then return
+        if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: dap9.u64)) then return
         subj9: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
         if subj9.length == 0 then return
         snv9: atomVid :symtab nid: (atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64))
@@ -15573,7 +15598,7 @@ chainFactCore9: function {
 } is {
     dap9: dpArmPredicateOf9 :symtab :nid
     if dap9 == 0 then return
-    if (isOrdinalPair :symtab tid: (ztypes.tid.create from: dap9.u64)) then return
+    if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: dap9.u64)) then return
     subj9: atomTextOf :ast n: parent
     if subj9.length == 0 then return
     an9: childName.string
@@ -21727,21 +21752,21 @@ ioCanonCname: function {
 # after `z_` in a runtime fragment): a mono (Result_*/List_u8/...) via its spec
 # trie, else a named system type (IoError/File/filestat/Reader/...) by registry
 # name. "" when the type is not in the (demand-driven) registry for this program.
-ioCanonCnameUncached: function {
+ioCanonTidAny: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     canon: StringView
-} out String is {
+} out ztypes.tid is {
     st9: ioCanonTid :ast :symtab :canon
-    if st9 > 0 then return (ctxCname :ctx tid: (ztypes.tid.create from: st9.u64))
+    if st9 > 0 then return (ztypes.tid.create from: st9.u64)
     # a plain source-name stem (File, IoError, Reader): the system unit first,
     # then the registry scan below for the io/cli units it does not cover.
     mo: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg name: canon
     match (
         mo
     ) case some then {
-        return (ctxCname :ctx tid: (ztypes.tid.create from: mo.u64))
+        return (ztypes.tid.create from: mo.u64)
     } case none then null
     last: symtab.reg.nextTypeId
     found: ztypes.tid
@@ -21763,8 +21788,18 @@ ioCanonCnameUncached: function {
         }
         ti = ti + 1
     }
-    if found > 0 then return (ctxCname :ctx tid: (ztypes.tid.create from: found.u64))
-    return "".string
+    return found
+}
+
+ioCanonCnameUncached: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    canon: StringView
+} out String is {
+    t9: ioCanonTidAny :ast :symtab :ctx :canon
+    if t9.isZero then return "".string
+    return (ctxCname :ctx tid: (ztypes.tid.create from: t9.u64))
 }
 
 # loadIoFragment -- read an io/cli runtime `.inc` and fill the `z_@Name@`
@@ -21800,7 +21835,7 @@ loadIoFragment: function {
             # AND by the committed seed, and they need not agree.
             if (nv9.startsWith prefix: "TAG_") then {
                 tn9: nv9.substring from: 4 to: nv9.length
-                tt9: ioCanonTid :ast :symtab canon: tn9
+                tt9: ioCanonTidAny :ast :symtab :ctx canon: tn9
                 rwn9.append from: nv9.string
                 if (ordinalVariantCType
                     :symtab
@@ -26170,6 +26205,16 @@ emitOneVariant: function {
     }
     le: "} \{vc}_tag_t;\n"
     buf.append le
+    # An ORDINAL is its own discriminator. The struct would hold the tag and
+    # nothing else, so the type IS the tag's storage -- the enum stays for the
+    # constants, which are the arm ordinals. Comparison is `==` (binopKeyOf
+    # routes it to @scalar), so there is no comparator to emit either.
+    ovc9: ordinalVariantCType :symtab :tid
+    if ovc9.length > 0 then {
+        lo9: "typedef \{ovc9} \{vc}_t;\n"
+        buf.append lo9
+        return
+    }
     buf.append "typedef struct {\n"
     lf: "    \{vc}_tag_t tag;\n"
     buf.append lf

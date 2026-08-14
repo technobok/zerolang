@@ -5,7 +5,7 @@ static z_@Result_File_IoError@_t z_io_open(
     z_@Result_File_IoError@_t result = {0};
     int flags;
     mode_t perm = 0644;
-    switch (mode.tag) {
+    switch (mode@TAG_openmode@) {
         case Z_OPENMODE_TAG_READ:   flags = O_RDONLY; break;
         case Z_OPENMODE_TAG_WRITE:  flags = O_WRONLY | O_CREAT | O_TRUNC; break;
         case Z_OPENMODE_TAG_APPEND: flags = O_WRONLY | O_CREAT | O_APPEND; break;
