@@ -548,18 +548,27 @@ any-guard:
 shadow-guard:
 	@n1=$$(grep -c 'cTypeOf name:' src/zemitterc.z); \
 	n2=$$(grep -c 'cTypeForName symtab:' src/zemitterc.z); \
+	n3=$$(grep -c 'isStdlibUnitName' src/zemitterc.z); \
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "shadow-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "shadow-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "'cTypeOf name:'" "$$n1" 13; \
+	chk "'cTypeOf name:'" "$$n1" 10; \
 	chk "'cTypeForName symtab:'" "$$n2" 0; \
+	chk "'isStdlibUnitName'" "$$n3" 0; \
 	if [ "$$fail" = "1" ]; then \
-	  echo "  A new by-name C-type site was added. Resolve the C type from the canonical"; \
-	  echo "  type id via scalarCTypeFor / cTypeForNameTid / typeRefC, not cTypeOf(name)."; \
+	  echo "  A type's C type must come from its canonical id, never from its NAME, or a"; \
+	  echo "  user type shadowing a builtin scalar emits the C scalar instead of its struct."; \
+	  echo "  A site holding a tid asks scalarCTypeFor / cTypeForNameTid / typeRefC, all of"; \
+	  echo "  which route through scalarTidIsBuiltin -- the DECLARATION (`is native`), not a"; \
+	  echo "  list of unit names. Hence isStdlibUnitName is banned from this file outright."; \
+	  echo "  The cTypeOf sites that remain have no tid to ask: convBodyOf GENERATES the"; \
+	  echo "  natives.tbl conversion rows, two are scalar-NAME predicates rather than C-type"; \
+	  echo "  lookups, and the rest start from a typedef base or an AST name. If you have a"; \
+	  echo "  tid, you are not one of them."; \
 	  echo "  (If a site was legitimately removed, lower the baseline here instead.)"; \
 	  exit 1; \
 	fi; \
-	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=13)  cTypeForName symtab:=$$n2 (<=0)"
+	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=10)  cTypeForName symtab:=$$n2 (<=0)  isStdlibUnitName=$$n3 (<=0)"
 
 # emitter-guard -- ratchet against name-resolution creep in the C emitter. The
 # de-lookup arc drove these to their current floors: the emitter reads

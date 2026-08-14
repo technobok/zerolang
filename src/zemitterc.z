@@ -263,7 +263,19 @@ cnameById: function {tid: ztypes.tid} out String is {
     return "z_t\{tid}"
 }
 
-# cTypeOf -- the C spelling of a scalar type name ("" when not scalar).
+# cTypeOf -- the C spelling of a scalar type NAME ("" when not scalar). A NAME is
+# not an identity, so this is never the answer on its own: a caller holding a tid
+# must go through scalarCTypeFor, which asks the declaration whether the tid is
+# the builtin behind the name. shadow-guard holds the count down.
+#
+# It cannot be retired, and the callers that remain say why. The C spelling has
+# to be SOMEWHERE, and the one place it cannot live is the table it helps build:
+# convBodyOf reads it to GENERATE the natives.tbl conversion rows, so moving the
+# spelling into that table would have the generator reading its own output. The
+# rest have no declaration to ask -- two want a scalar-NAME predicate rather than
+# a C type, and the others start from a typedef base name or an AST type name,
+# with no tid in hand. A caller that still needs a name is a caller with no
+# declaration to ask; those are the ones left.
 cTypeOf: function {name: StringView} out String is {
     if name == "i8" then return "int8_t".string
     if name == "i16" then return "int16_t".string
@@ -354,14 +366,22 @@ isFloatLitText: function {s: StringView} out bool is {
 # carries no marker and is a shadow. `bool` is the nineteenth and cannot carry
 # the marker -- it is a variant with arms, and the grammar gives `is native`
 # only to a type with no is-block -- so its identity is asked by canonical id.
+#
+# A tid with no defining unit is a SHELL -- a fresh param/field child named
+# after the real type -- not a user type wearing the name. There is no
+# declaration there to shadow with, so it keeps the C scalar, which is what the
+# unit-name predicate this replaced did with an empty name and what typeRefC
+# has always said about shells. Asked of the declaration directly rather than
+# through its unit's name, which is the same question one step earlier.
 scalarTidIsBuiltin: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
     if (symtab.reg.isNativeOf tid: (ztypes.tid.create from: tid.u64)) then return true
-    if ctx.boolTid.isZero then return false
-    return tid == ctx.boolTid
+    if (ctx.boolTid.isZero) == false when tid == ctx.boolTid then return true
+    dc9: symtab.typing.declIdOfType typeId: (ztypes.tid.create from: tid.u64)
+    return dc9.isZero
 }
 
 # scalarCTypeFor -- the C scalar type for a builtin-named tid, BUT empty when the
@@ -9035,7 +9055,12 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         }
         if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.recordType then {
             btn: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: brid.u64)
-            cTypeLk1: cTypeOf name: btn.stringview
+            cTypeLk1: (scalarCTypeFor
+                :symtab
+                :ctx
+                name: btn.stringview
+                tid: (ztypes.tid.create from: brid.u64)
+            )
             if cTypeLk1.length > 0 then {
                 # a stamped implicit zero-create is the scalar's zero value;
                 # an unstamped scalar-name atom keeps the raw name text
@@ -11880,18 +11905,13 @@ emitStmt: function {
     } case assignment then {
         avn9: ast.nodes.get i: (n.value - 1).u64
         tn: stampNameOf :symtab nid: n.nodeid.u64
+        btid9: stampIdOf :symtab nid: n.nodeid.u64
+        # the NAME says scalar; the tid says whether it is the builtin one. A
+        # shadow keeps the name and loses the C scalar, so it emits its struct.
         ct: cTypeOf name: tn.stringview
-        if ct.length > 0 then {
-            btid9: stampIdOf :symtab nid: n.nodeid.u64
-            if btid9 > 0 then {
-                bDu9: definedInUnitOf :symtab tid: btid9
-                match (
-                    bDu9
-                ) case some then {
-                    if (ztypecheck.isStdlibUnitName name: bDu9.stringview) == false then {
-                        ct = typeRefC :ast :symtab :ctx tid: btid9 thisTid: ztypes.tid
-                    }
-                } case none then null
+        if ct.length > 0 when btid9 > 0 then {
+            if (scalarTidIsBuiltin :symtab :ctx tid: btid9) == false then {
+                ct = typeRefC :ast :symtab :ctx tid: btid9 thisTid: ztypes.tid
             }
         }
         if ct.length == 0 then {
@@ -17292,20 +17312,12 @@ typeRefC: function {
     thisTid: ztypes.tid
 } out String is {
     tn: typeNameOfReg9 :symtab :tid
-    ct: cTypeOf name: tn.stringview
-    if ct.length > 0 then {
-        # A user type shadowing a builtin scalar carries the scalar NAME but is
-        # defined in a USER unit -- emit its struct, not the C scalar. System
-        # scalars (declared in a stdlib unit) and shells (no declaration) keep the C type.
-        scDu9: definedInUnitOf :symtab :tid
-        scShadow9: false
-        match (
-            scDu9
-        ) case some then {
-            if (ztypecheck.isStdlibUnitName name: scDu9.stringview) == false then scShadow9 = true
-        } case none then null
-        if (scShadow9) == false then return ct
-    }
+    # A user type shadowing a builtin scalar carries the scalar NAME but not the
+    # `is native` declaration -- emit its struct, not the C scalar. scalarCTypeFor
+    # is that gate, and the sixteen scalars, `bool` and the shells all come back
+    # through it with their C type intact.
+    ct: scalarCTypeFor :symtab :ctx name: tn.stringview :tid
+    if ct.length > 0 then return ct
     # canonicalize shells: a param/field child may be a fresh shell id
     # named after the real type; this-typed params take the receiver.
     cid: tid
@@ -26575,7 +26587,12 @@ emitAsConsts: function {
                             )
                             if vtidA > 0 then {
                                 vtnA: typeNameOfReg9 :symtab tid: vtidA
-                                vtcA: cTypeOf name: vtnA.stringview
+                                vtcA: (scalarCTypeFor
+                                    :symtab
+                                    :ctx
+                                    name: vtnA.stringview
+                                    tid: vtidA
+                                )
                                 if vtcA.length > 0 then ctA = vtcA
                             }
                             qnA: "\{name}.\{albl}"
