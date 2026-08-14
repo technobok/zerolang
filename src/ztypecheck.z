@@ -6758,6 +6758,10 @@ resolveVariant: function {
         typetype: ztypes.ztypetype.variantType
     )
     vvid: vid
+    # `variant is native` on the TYPE: the runtime supplies the layout, so
+    # routing can ask the declaration rather than compare a name. Mirrors
+    # resolveRecord and resolveClass.
+    reg.setNative typeId: (ztypes.tid.create from: vid.u64) value: vnode.isNative
     pvExcl_vvid: (ListVal u64)
     pvGrants_vvid: (ListVal u64)
     scanVisibility :ty :ast onode: vnode excl: pvExcl_vvid grants: pvGrants_vvid
@@ -6785,6 +6789,25 @@ resolveVariant: function {
             fm
         ) case namedoperation then {
             aname: zast.nameTextAt :ast ref: fm.name
+            # The grammar lets a NATIVE variant keep its arms, because an arm is
+            # an ordinal rather than storage. A PAYLOAD arm IS storage, and the
+            # runtime owns a native type's layout, so it may not declare one --
+            # the "a fielded marker is refused by design" rule, applied where the
+            # grammar cannot apply it.
+            if vnode.isNative then {
+                apn9: atomName :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
+                if apn9.stringview != "null" then {
+                    (addResolveErrorH
+                        :ty
+                        nodeid: fm.nodeid
+                        lineno: fm.lineno
+                        colno: fm.colno
+                        e: zast.err.typeError
+                        msg: "a native variant's arms carry no payload -- the runtime owns the layout, so this arm may only be declared 'null'".string
+                        width: aname.length.u32.orPanic
+                    )
+                }
+            }
             if aname.stringview == "tag" then {
                 mt9: "'tag' is a reserved member name".string
                 (addResolveErrorH
