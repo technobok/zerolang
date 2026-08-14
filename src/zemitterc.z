@@ -413,8 +413,19 @@ ordinalVariantCType: function {
 
 # isOrdinalVariant -- the value IS its own discriminator: no tag field to read,
 # no struct to compose, and `==` rather than a comparator.
+#
+# Reads the record rather than asking ordinalVariantCType and measuring what it
+# says: this is a QUESTION, asked 11503 times in a self-compile, and building a
+# string to answer it allocated once per ask.
 isOrdinalVariant: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    return (ordinalVariantCType :symtab :tid).length > 0
+    ao9: symtab.typing.ordinalVariant.get key: tid.u64
+    match (
+        ao9
+    ) case some then {
+        return true
+    } case none then {
+        return false
+    }
 }
 
 # isOrdinalPair -- an ordinal with exactly TWO arms, which is a C `bool` and so
@@ -466,8 +477,9 @@ scalarCTypeFor: function {
     name: StringView
     tid: ztypes.tid
 } out String is {
-    ovc9: ordinalVariantCType :symtab tid: (ztypes.tid.create from: tid.u64)
-    if ovc9.length > 0 then return ovc9
+    if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: tid.u64)) then {
+        return (ordinalVariantCType :symtab tid: (ztypes.tid.create from: tid.u64))
+    }
     sc: cTypeOf :name
     if sc.length == 0 then return sc
     if (scalarTidIsBuiltin :symtab tid: (ztypes.tid.create from: tid.u64)) == false then {
@@ -856,7 +868,7 @@ emitNumericCast: function {
         # the error slot's assignment, spelled for whatever `converror` IS
         if (ctx.converrorTid.isZero) == false then {
             rn9.append from: "TAG_converror".string
-            if (ordinalVariantCType :symtab tid: ctx.converrorTid).length > 0 then {
+            if (isOrdinalVariant :symtab tid: ctx.converrorTid) then {
                 rv9.append from: "".string
             } else {
                 rv9.append from: ".tag".string
@@ -21837,10 +21849,7 @@ loadIoFragment: function {
                 tn9: nv9.substring from: 4 to: nv9.length
                 tt9: ioCanonTidAny :ast :symtab :ctx canon: tn9
                 rwn9.append from: nv9.string
-                if (ordinalVariantCType
-                    :symtab
-                    tid: (ztypes.tid.create from: tt9.u64)
-                ).length > 0 then {
+                if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: tt9.u64)) then {
                     rwv9.append from: "".string
                 } else {
                     rwv9.append from: ".tag".string
