@@ -777,6 +777,17 @@ emitNumericCast: function {
         rv9.append from: (variantTag :symtab tid: retTid arm: "ok")
         rn9.append from: "ERRTAG".string
         rv9.append from: (variantTag :symtab tid: retTid arm: "err")
+        # the error slot's assignment, spelled for whatever `converror` IS
+        if (ctx.converrorTid.isZero) == false then {
+            rn9.append from: "ERRSETOOR".string
+            (rv9.append
+                from: (convErrSetC :symtab errTid: ctx.converrorTid arm: "outOfRange")
+            )
+            rn9.append from: "ERRSETPREC".string
+            (rv9.append
+                from: (convErrSetC :symtab errTid: ctx.converrorTid arm: "precisionLoss")
+            )
+        }
         rn9.append from: "V".string
         rv9.append from: val.string
     } else {
@@ -2370,6 +2381,10 @@ Ctx: class {
     colGetFromCode: bool
     strTid: ztypes.tid
     svTid: ztypes.tid
+    # converror's canonical id. The numeric-conversion rule is ABOUT converror --
+    # natives.tbl's conversion rows name its arms -- so the emitter has to know
+    # which type that is to spell the error assignment for its representation.
+    converrorTid: ztypes.tid
     strOriginTid: ztypes.tid
     arrayOriginTid: ztypes.tid
     listOriginTid: ztypes.tid
@@ -17450,6 +17465,23 @@ armValueC: function {
     return avr9
 }
 
+# convErrSetC -- the C statement a conversion body uses to put a `converror`
+# arm into the result's error slot. The REPRESENTATION decides the form, and
+# the body must not: a tagged struct is written through its tag field, and a
+# type whose value IS its discriminator is assigned. natives.tbl spells the
+# hole; this fills it, so the table stays correct across a representation
+# change instead of pinning one.
+convErrSetC: function {
+    symtab: zenv.ZSymbolTable.view
+    errTid: ztypes.tid
+    arm: StringView
+} out String is {
+    av9: armValueC :symtab tid: errTid :arm
+    if av9.length > 0 then return "_r.data.err = \{av9};"
+    tg9: variantTag :symtab tid: errTid :arm
+    return "_r.data.err.tag = \{tg9};"
+}
+
 # armPayloadC -- an arm's payload C type ("" for null arms).
 armPayloadC: function {
     ast: Ast
@@ -19474,6 +19506,24 @@ emitC: function {
     ) case some then {
         svId = ztypes.tid.create from: (vgo)
     } case none then null
+    cerrId: ztypes.tid
+    cgo: (optionval.none u64)
+    match (
+        program
+    ) case program then {
+        cgo = (ztypecheck.resolvedByIds
+            ast: program.ast
+            ty: symtab.typing
+            reg: symtab.reg
+            unitId: sysId9
+            name: (zast.poolFind pool: program.ast.names text: "converror")
+        )
+    } else null
+    match (
+        cgo
+    ) case some then {
+        cerrId = ztypes.tid.create from: (cgo)
+    } case none then null
     cnames9: (List String)
     ctb9: ztypes.tid
     ctlast9: symtab.reg.nextTypeId
@@ -19788,6 +19838,7 @@ emitC: function {
         colGetFromCode: false
         strTid: (ztypes.tid.create from: strId.u64)
         svTid: (ztypes.tid.create from: svId.u64)
+        converrorTid: (ztypes.tid.create from: cerrId.u64)
         :strOriginTid
         :arrayOriginTid
         :listOriginTid
