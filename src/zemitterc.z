@@ -411,6 +411,59 @@ ordinalVariantCType: function {
     }
 }
 
+# tagStorageCType -- the C type a tagged type's DISCRIMINATOR is stored in, from
+# what the declaration asked for (`tag: u8.tag`, or the spec's u8 default). The
+# enum stays for the constants; it just stops being the storage, because a C
+# enum is `int` and spelling the field with it ignores the declaration -- a
+# `tag: u8.tag` was silently four bytes.
+#
+# "" when the type declares a `data`-sourced tag, whose constants set their own
+# width, or when nothing was recorded: the enum remains the storage there.
+tagStorageCType: function {
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+} out String is {
+    key9: tid.u64
+    # a MONO carries no declaration of its own: the template it was minted from
+    # is where the tag was declared, and the instance stores it the same way
+    {
+        go9: genericOriginOf9 :symtab :tid
+        if go9 > 0 then {
+            hasOwn9: false
+            {
+                o9: symtab.typing.variantTagBase.get key: tid.u64
+                match (
+                    o9
+                ) case some then {
+                    hasOwn9 = true
+                } case none then null
+            }
+            if (hasOwn9) == false then key9 = go9.u64
+        }
+    }
+    tb9: symtab.typing.variantTagBase.get key: key9
+    match (
+        tb9
+    ) case some then {
+        # 0 is a data-sourced tag: its constants set their own width, so the
+        # enum stays the storage
+        if tb9 == 0 then return "".string
+        # BIND the name: typeNameOfReg9 hands back an OWNED copy, and taking a
+        # view of it inline leaves the copy with no owner to free it.
+        tn9: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: tb9.u64)
+        # scalarCTypeFor, not cTypeOf: the tid is in hand, so a user type
+        # shadowing a numeric name must not pick up that numeric's C spelling
+        return (scalarCTypeFor
+            :symtab
+            name: tn9.stringview
+            tid: (ztypes.tid.create from: tb9.u64)
+        )
+    } case none then {
+        # nothing declared: the spec's default, u8
+        return "uint8_t".string
+    }
+}
+
 # isOrdinalVariant -- the value IS its own discriminator: no tag field to read,
 # no struct to compose, and `==` rather than a comparator.
 #
@@ -20856,8 +20909,14 @@ emitUnionMono: function {
     } else {
         buf.append "typedef struct {\n"
     }
-    lf: "    \{vc}_tag_t tag;\n"
-    buf.append lf
+    tsc9: tagStorageCType :symtab :tid
+    if tsc9.length == 0 then {
+        lfE9: "    \{vc}_tag_t tag;\n"
+        buf.append lfE9
+    } else {
+        lfD9: "    \{tsc9} tag;\n"
+        buf.append lfD9
+    }
     buf.append "    void* data;\n"
     if (isFwdDeclared :ctx :tid) then {
         buf.append "};\n"
@@ -21084,8 +21143,14 @@ emitOptionViewMono: function {
     l3: "} z_\{nm}_tag_t;\n"
     buf.append l3
     buf.append "typedef struct {\n"
-    l4: "    z_\{nm}_tag_t tag;\n"
-    buf.append l4
+    tscO9: tagStorageCType :symtab tid: monoId
+    if tscO9.length == 0 then {
+        l4: "    z_\{nm}_tag_t tag;\n"
+        buf.append l4
+    } else {
+        l4d: "    \{tscO9} tag;\n"
+        buf.append l4d
+    }
     buf.append "    void* data;\n"
     l5: "} z_\{nm}_t;\n"
     buf.append l5
@@ -26225,8 +26290,14 @@ emitOneVariant: function {
         return
     }
     buf.append "typedef struct {\n"
-    lf: "    \{vc}_tag_t tag;\n"
-    buf.append lf
+    tsc9: tagStorageCType :symtab :tid
+    if tsc9.length == 0 then {
+        lfE9: "    \{vc}_tag_t tag;\n"
+        buf.append lfE9
+    } else {
+        lfD9: "    \{tsc9} tag;\n"
+        buf.append lfD9
+    }
     haveP: false
     pj: u64
     for pj < an loop {

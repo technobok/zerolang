@@ -6858,6 +6858,17 @@ resolveVariant: function {
             nameId: zast.wkTag
             childTypeId: tagId
         )
+        # the discriminator's declared storage, so a backend can honour it
+        {
+            tbV9: (variantTagBaseTid
+                :ast
+                :ty
+                :reg
+                :unitName
+                asItems: vnode.asItems
+            )
+            if tbV9 != 18446744073709551615.u64 then ty.variantTagBase.set key: vid.u64 value: tbV9
+        }
         # the shape, for whatever backend reads it: every arm written `null`,
         # so the value is an ordinal and nothing needs a tagged struct -- and a
         # discriminator whose values ARE those ordinals.
@@ -7005,6 +7016,73 @@ resolveVariant: function {
 #
 # Found by the `.tag` SUFFIX rather than the member's label: the spec makes the
 # label convention only ("commonly tag, but any name is valid").
+# variantTagBaseTid -- the NUMERIC type a tagged type's discriminator is stored
+# in: the base of a declared `tag: X.tag`, or u8 when none is declared, which is
+# the spec's default (§tag: "If no tag is specified, the compiler uses u8 by
+# default with sequential values starting from 0"). 0 when the tag is
+# `data`-sourced -- its constants are whatever the data block says, so its width
+# is that block's business -- or when the base does not resolve.
+#
+# Recorded so a backend can honour what the declaration asked for. Emitting the
+# discriminator as a C `enum` ignores it: an enum is `int`, so `tag: u8.tag`
+# silently became four bytes.
+variantTagBaseTid: function {
+    ast: Ast.view
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    asItems: (ListVal u32).view
+} out u64 is {
+    # the "no entry" signal, distinct from 0 (a data-sourced tag, whose
+    # constants set their own width and whose enum must stay the storage)
+    notRecorded9: 18446744073709551615.u64
+    declared9: u64
+    sawTag9: false
+    with iter9: asItems.iterate do for amId9: iter9 loop {
+        am9: ast.nodes.get i: (amId9 - 1).u64
+        match (
+            am9
+        ) case namedoperation then {
+            op9: ast.nodes.get i: (am9.operation - 1).u64
+            isTagRef9: false
+            match (
+                op9
+            ) case dottedpath then {
+                cn9: atomName :ast n: (ast.nodes.get i: (op9.child - 1).u64)
+                if cn9.stringview == "tag" then isTagRef9 = true
+            } else null
+            if isTagRef9 then {
+                sawTag9 = true
+                bn9: dottedParentName :ast n: op9
+                if bn9.length > 0 then {
+                    rr9: (walkLookupTyperef
+                        :ast
+                        :ty
+                        :reg
+                        currentUnit: unitName
+                        base: bn9.stringview
+                    )
+                    match (
+                        rr9
+                    ) case some then {
+                        if (reg.typetypeOf typeId: (ztypes.tid.create from: rr9.u64)) == ztypes.ztypetype.dataType then {
+                            declared9 = 0
+                        } else {
+                            declared9 = rr9
+                        }
+                    } case none then null
+                }
+            }
+        } else null
+    }
+    # NOT RECORDED when nothing is declared: the spec's default is u8, and the
+    # backend can spell that without being told. Resolving u8's id here would be
+    # a demand made during resolution, which need not be satisfiable yet -- and
+    # when it was not, every tagged type silently fell back to the enum.
+    if (sawTag9) == false then return notRecorded9
+    return declared9
+}
+
 variantTagIsOrdinalPlain: function {
     ast: Ast.view
     ty: ztyping.ZTyping
@@ -7370,6 +7448,17 @@ resolveUnion: function {
         } else null
     }
     if (isgen) == false then {
+        # the discriminator's declared storage, so a backend can honour it
+        {
+            tbU9: (variantTagBaseTid
+                :ast
+                :ty
+                :reg
+                :unitName
+                asItems: vnode.asItems
+            )
+            if tbU9 != 18446744073709551615.u64 then ty.variantTagBase.set key: uid.u64 value: tbU9
+        }
         customTag: unionCustomTagId :ast :ty :reg :unitName :uid asItems: vnode.asItems
         tagId: u64
         match (
