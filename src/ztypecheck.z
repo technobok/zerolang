@@ -18658,6 +18658,23 @@ isComparisonOp: function {name: StringView} out bool is {
 # ArmPredFact -- one bare arm predicate recognized in an if condition: the
 # subject variable, the arm, the sum type, and whether the condition form
 # is negated (`(x.a) == false` / trailing `.false`).
+# stampTruthyCond -- record which arm a bare 2-arm-sum condition must NOT hold
+# for the condition to be true: the FALSY arm, the one the type declares first.
+# The emitter reads this rather than deriving it, because a generic mono's
+# record lives on the template it was minted from and reaching it needs the
+# registry mutably.
+stampTruthyCond: function {
+    st: zenv.ZSymbolTable
+    n: Node.view
+    tid: ztypes.tid
+} is {
+    fa9: ztyping.sumPairFalsyArmOf ty: st.typing reg: st.reg :tid
+    if fa9 == 0 then return
+    nid9: nodeId :n
+    if nid9.isZero then return
+    st.typing.truthyCondArm.set key: nid9.u64 value: fa9
+}
+
 ArmPredFact: class {
     subject: String
     armName: String
@@ -18985,12 +19002,23 @@ checkClause: function {
                 # resultval, an aggregate, a raw numeric) is a type error rather
                 # than invalid C. Bare arm predicates (`o.none`, `b.false`) type
                 # as bool already; a diverging never-typed condition is allowed.
+                # ... and so is any other 2-arm sum type: it has a falsy arm
+                # and a truthy one, which is all a condition needs. Which arm
+                # is which comes from the order the author wrote them.
                 if ctv9 > 0 when boolId > 0 when ctv9 != boolId then {
                     ctt9: st.reg.typetypeOf typeId: ctv9
-                    if ctt9 != ztypes.ztypetype.neverType then {
+                    isPair9: ztyping.isSumPair ty: st.typing reg: st.reg tid: ctv9
+                    if isPair9 then {
+                        (stampTruthyCond
+                            :st
+                            n: (ast.nodes.get i: (cond.operation - 1).u64)
+                            tid: ctv9
+                        )
+                    }
+                    if ctt9 != ztypes.ztypetype.neverType when (isPair9) == false then {
                         conode9: ast.nodes.get i: (cond.operation - 1).u64
                         ctnm9: typeNameOf :st tid: ctv9
-                        cmsg9: "condition must be bool, got '\{ctnm9}'"
+                        cmsg9: "condition must be bool or a 2-arm sum type, got '\{ctnm9}'"
                         (addError
                             :st
                             nodeid: (nodeId n: conode9)
@@ -20031,10 +20059,18 @@ checkFor: function {
                     } case none then null
                 }
                 fTt9: st.reg.typetypeOf typeId: vt
-                if fbId9 > 0 when vt != fbId9 when (fIter9) == false when fTt9 != ztypes.ztypetype.neverType then {
+                fPair9: ztyping.isSumPair ty: st.typing reg: st.reg tid: vt
+                if fPair9 when (fIter9) == false then {
+                    (stampTruthyCond
+                        :st
+                        n: (ast.nodes.get i: (cond.operation - 1).u64)
+                        tid: vt
+                    )
+                }
+                if fbId9 > 0 when vt != fbId9 when (fIter9) == false when fTt9 != ztypes.ztypetype.neverType when (fPair9) == false then {
                     fcn9: ast.nodes.get i: (cond.operation - 1).u64
                     fctn9: typeNameOf :st tid: vt
-                    fcmsg9: "loop condition must be bool, got '\{fctn9}'"
+                    fcmsg9: "loop condition must be bool or a 2-arm sum type, got '\{fctn9}'"
                     (addError
                         :st
                         nodeid: (nodeId n: fcn9)
@@ -20229,9 +20265,11 @@ checkFor: function {
         pbId9: builtinTidTc :ast :st base: "bool"
         if pbId9 > 0 when pcVt9 > 0 when pcVt9 != pbId9 then {
             pTt9: st.reg.typetypeOf typeId: pcVt9
-            if pTt9 != ztypes.ztypetype.neverType then {
+            pPair9: ztyping.isSumPair ty: st.typing reg: st.reg tid: pcVt9
+            if pPair9 then stampTruthyCond :st n: pcNd9 tid: pcVt9
+            if pTt9 != ztypes.ztypetype.neverType when (pPair9) == false then {
                 pctn9: typeNameOf :st tid: pcVt9
-                pcmsg9: "loop postcondition must be bool, got '\{pctn9}'"
+                pcmsg9: "loop postcondition must be bool or a 2-arm sum type, got '\{pctn9}'"
                 (addError
                     :st
                     nodeid: (nodeId n: pcNd9)

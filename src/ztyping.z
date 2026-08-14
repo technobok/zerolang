@@ -28,6 +28,8 @@ public: unit {
     :newTyping
     :armside
     :armSideOfName
+    :isSumPair
+    :sumPairFalsyArmOf
     :armSuffixSideOf
     :nodeTypeAt
     :nodeTypeSet
@@ -462,6 +464,12 @@ ZTyping: class {
     # for -- which segfaults a demand-driven compile.
     sumPairFirstArm: (MapVV u64 value: u64)
     sumPairSecondArm: (MapVV u64 value: u64)
+    # truthyCondArm -- for a condition node whose type is a 2-arm sum rather
+    # than a bool, the name id of that type's FALSY arm: the condition holds
+    # when the value does NOT hold this arm. Stamped by the checker because
+    # deciding it follows a generic MONO back to the template it was minted
+    # from, which needs the registry the emitter only ever holds read-only.
+    truthyCondArm: (MapVV u64 value: u64)
     # variantTagBase -- the NUMERIC type a tagged type's discriminator is stored
     # in, from its declaration (`tag: u8.tag`) or the spec's u8 default. Absent
     # for a data-sourced tag, whose constants set their own width.
@@ -1642,6 +1650,66 @@ armside: variant {
 # written first negates the predicate, the one written second passes it
 # through. `bool` is that type everywhere this shape occurs, and it writes
 # `false` before `true`, which is what a `== "true"` test used to encode.
+# sumPairKeyOf -- the tid whose 2-arm record answers for `tid`: itself when it
+# has one, else the template it was monomorphized from. A generic MONO carries
+# no record of its own -- resolveVariant and resolveUnion write one per
+# DECLARATION -- and a mono's arms are the template's, so the template's record
+# is the mono's answer. 0 when neither is a 2-arm sum.
+sumPairKeyOf: function {
+    ty: ZTyping.view
+    reg: ztypes.ZTypeRegistry
+    tid: ztypes.tid
+} out u64 is {
+    {
+        o9: ty.sumPairFirstArm.get key: tid.u64
+        match (
+            o9
+        ) case some then {
+            return tid.u64
+        } case none then null
+    }
+    go9: reg.genericOriginOf :tid
+    if go9.isZero then return 0
+    {
+        p9: ty.sumPairFirstArm.get key: go9.u64
+        match (
+            p9
+        ) case some then {
+            return go9.u64
+        } case none then null
+    }
+    return 0
+}
+
+# isSumPair -- is `tid` a 2-arm sum type? The question truthiness asks: such a
+# type has a falsy arm and a truthy one, so it answers as a condition.
+isSumPair: function {
+    ty: ZTyping.view
+    reg: ztypes.ZTypeRegistry
+    tid: ztypes.tid
+} out bool is {
+    return (sumPairKeyOf :ty :reg :tid) > 0
+}
+
+# sumPairFalsyArmOf -- the name id of `tid`'s FIRST arm, the falsy one by the
+# falsy-first convention. 0 when `tid` is not a 2-arm sum.
+sumPairFalsyArmOf: function {
+    ty: ZTyping.view
+    reg: ztypes.ZTypeRegistry
+    tid: ztypes.tid
+} out u64 is {
+    k9: sumPairKeyOf :ty :reg :tid
+    if k9 == 0 then return 0
+    o9: ty.sumPairFirstArm.get key: k9
+    match (
+        o9
+    ) case some then {
+        return o9
+    } case none then {
+        return 0
+    }
+}
+
 # armSideOfName -- which side of the 2-arm sum `tid` the name `nameId` is: the
 # arm written second is the truthy one, the arm written first the falsy one.
 # `none` when the name is neither, or when `tid` is not a 2-arm sum at all --
@@ -1831,6 +1899,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         ordinalVariant: (MapVV u64 value: u64)
         sumPairFirstArm: (MapVV u64 value: u64)
         sumPairSecondArm: (MapVV u64 value: u64)
+        truthyCondArm: (MapVV u64 value: u64)
         variantTagBase: (MapVV u64 value: u64)
         systemUnitTid: ztypes.tid
         systemUnitRoot: ztypes.declid

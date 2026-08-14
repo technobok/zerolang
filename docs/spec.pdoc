@@ -1156,7 +1156,9 @@ branch sees the payload through the bare name, and the #~"else" branch
 (and later #~"else if" clauses) see the arm excluded. See
 [#> to=type-narrowing: type narrowing].
 
-Each #~"when" condition must be an operation that results in a boolean. #~"when" is
+Each #~"when" condition must be an operation that results in a #~"bool" or
+in any other 2-arm sum type (see
+[#> to=truthiness: truthiness]). #~"when" is
 the default argument and the #~"when" keyword may be omitted for the first
 condition specified immediately after the #~"if".
 
@@ -1450,8 +1452,8 @@ fails at the offending instantiation — there is no arm to run.
 handle all looping variations:
 
 #ul:
-  #*: for/while/loop - boolean pre-condition
-  #*: for/loop/while - boolean post-condition
+  #*: for/while/loop - pre-condition
+  #*: for/loop/while - post-condition
   #*: for loop - loop forever
   [#*: 'foreach' style loop against an iterator, an iterable, or a
       function/method returning an option-shaped wrapper]
@@ -1460,13 +1462,14 @@ Arguments:
 
 #table cols="2 2 4":
   Argument  |Default |Value/Description
-  while     |Yes     |Boolean expression. Pre or post loop condition
+  while     |Yes     |Condition. Pre or post loop condition
   \[var\]:  |No      |'var' is bound to the some-payload of the iterator's per-iteration value
   loop      |No      |Block of code that may be executed 0 or more times
 
-Pre-conditions can be boolean expressions specified by the #~"while" keyword.
-This is the default argument and the argument name can be omitted if it is the
-first argument.
+Pre-conditions are specified by the #~"while" keyword. This is the default
+argument and the argument name can be omitted if it is the first argument. A
+condition is a #~"bool" or any other 2-arm sum type, as everywhere else -- see
+[#> to=truthiness: truthiness].
 
 A single binding (\[var\]: operation) can be specified before the loop. The
 binding RHS may be any of: an instance of an iterator type, an instance of an
@@ -1493,8 +1496,9 @@ A single #~"loop" clause may then follow. The body of this clause will be
 executed if all conditions succeed. The #~"loop" may contain a #~"continue" (early
 skip to next iteration) or #~"break" (terminate #~"for" clause). Or a #~"return".
 
-Postconditions can be boolean expressions specified by the #~"while" keyword
-after the #~"loop". They must succeed for the #~"for" to continue on a new loop.
+Postconditions are specified by the #~"while" keyword after the #~"loop", and
+take the same condition forms as a pre-condition. They must succeed for the
+#~"for" to continue on a new loop.
 
 Any combination of pre and post conditions and bindings may be specified on a
 single #~"for".
@@ -1737,13 +1741,52 @@ The convention has three benefits:
 
 #ul:
   #*: Zero-initialised memory naturally reads as the falsy variant.
-  [#*: Compiler comparisons (#~"if", #~"for" termination) can use
-      tag 0 directly without per-type lookup.]
+  [#*: A 2-arm sum type is usable directly as a condition -- see
+      #_~"Truthiness" below.]
   [#*: Visual reading is consistent: the early-exit / no-value case
       is at the top of the declaration.]
 
-User-defined sum types are encouraged but not required to follow this
-convention; the compiler does not enforce it on user code.
+The convention is not enforced, and cannot be: which arm means "absent"
+is a question about intent, not about shape. What the compiler does is
+take the declaration at its word. A 2-arm sum type written falsy-first
+reads as a condition and means what its author intended; one written the
+other way round reads as a condition too, and means the opposite. The
+order the arms are written in is the whole of the specification.
+
+#-----: Truthiness
+
+A condition -- the #~"when" argument of an #>"if", and the #~"while"
+pre- and post-conditions of a #>"for" -- may be a value of any 2-arm sum
+type, not only a #~"bool". The condition holds when the value does
+#_*"not" hold the arm the type declares FIRST:
+
+#code language=zerolang: """
+  mood: variant { sad: null  happy: null }
+
+  m: mood.happy
+  if m then print "cheerful"          # true: `happy` is not the first arm
+
+  # `optionval`, `Option`, `resultval` and `Result` all follow the
+  # convention, so each reads as its own success test
+  hit: table.get key: k
+  if hit then print "present"         # true when the arm is not `none`
+
+  narrowed: wide.u32
+  if narrowed then print "converted"  # true when the arm is not `err`
+  """
+
+#~"bool" is the stdlib instance of the shape --
+#~"variant { false: null  true: null }" -- so this is one rule rather
+than two: a boolean condition is a 2-arm sum condition whose falsy arm
+is spelled #~"false".
+
+A sum type with three or more arms has no single falsy arm to test
+against and is not a condition; nor is a numeric, a string or an
+aggregate. Both are type errors rather than invalid C.
+
+A bare 2-arm sum condition does not yet narrow its subject the way
+#~"if x.some" does; reach the payload with a #~"match" or an arm
+predicate.
 
 #-----: Non-owned union arms
 
@@ -5428,16 +5471,21 @@ A union is a reference type requiring heap allocation, which is pointless for a
 type that only carries a tag discriminator. Using `variant` makes the enum a
 stack-allocated value type with no allocation overhead.
 
-The built-in 'boolean' type is a system defined enumeration. The boolean values
-may be created directly by name or indirectly via the comparison or logical
-operators.
+The built-in #~"bool" type is an ordinary 2-arm variant declared in the
+system unit, falsy arm first. Its values may be created directly by name
+or indirectly via the comparison operators.
 
 #code language=zerolang: """
-  # boolean types are a system defined enumeration equivalent to:
-  boolean: variant { FALSE TRUE }
-  true: boolean.TRUE
-  false: boolean.FALSE
+  # lib/system/system.z, with its operator members elided
+  bool: variant { false: null  true: null }
+  # lib/system/core.z
+  false: bool.false
+  true: bool.true
   """
+
+Nothing in the compiler treats #~"bool" as a special case of the shape:
+its arms are looked up on the declaration like any other sum type's, and
+a 2-arm variant of the author's own reads the same way.
 
 #----: Using sum-type instances
 

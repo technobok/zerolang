@@ -1827,8 +1827,19 @@ ternaryClause: function {
                 k
             ) case namedoperation then {
                 cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (k.operation - 1).u64)
+                tw9: (truthyCondText9
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: (k.operation - 1).u64)
+                    raw: cv.stringview
+                )
                 if cond.length > 0 then cond.append " && "
-                cond.append cv
+                if tw9.length > 0 then {
+                    cond.append tw9
+                } else {
+                    cond.append cv
+                }
             } else null
         }
         vx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (c.statement - 1).u64)
@@ -12939,9 +12950,28 @@ emitStmt: function {
             pcond: String
             pkiter: n.postconditions.iterate
             for pk: pkiter loop {
-                pcv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (pk - 1).u64)
+                pkn9: ast.nodes.get i: (pk - 1).u64
+                # the checker stamps the OPERATION node, so unwrap the same way
+                pkop9: pk
+                match (
+                    pkn9
+                ) case namedoperation then {
+                    pkop9 = pkn9.operation
+                } else null
+                pcv: emitExpr :ast :symtab :ctx n: pkn9
+                tw8: (truthyCondText9
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: (pkop9 - 1).u64)
+                    raw: pcv.stringview
+                )
                 if pcond.length > 0 then pcond.append " && "
-                pcond.append pcv
+                if tw8.length > 0 then {
+                    pcond.append tw8
+                } else {
+                    pcond.append pcv
+                }
             }
             if pcond.length == 0 then pcond.append "0"
             emitContLabel :ctx id: lidDW ind: ind2d.stringview :buf
@@ -14975,8 +15005,19 @@ emitForCond: function {
         lbl: varCName :ctx vid: lblV7 name: lblR7.stringview
         if lblR7.length == 0 then {
             cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.operation - 1).u64)
+            tw7: (truthyCondText9
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: (n.operation - 1).u64)
+                raw: cv.stringview
+            )
             if cond.length > 0 then cond.append " && "
-            cond.append cv
+            if tw7.length > 0 then {
+                cond.append tw7
+            } else {
+                cond.append cv
+            }
         } else {
             onid: exprNodeId9 n: (ast.nodes.get i: (n.operation - 1).u64)
             tn: stampNameOf :symtab nid: onid
@@ -15328,6 +15369,46 @@ boolArmSideOf9: function {
     } else {
         return ztyping.armside.none
     }
+}
+
+# truthyCondText9 -- the C for a condition whose type is a 2-arm sum rather
+# than a bool: it holds when the value is NOT its falsy arm. "" when the
+# condition needs no wrapping at all -- a bool, and every other ordinal PAIR,
+# already IS its discriminator in C, so the emitted expression is the answer.
+#
+# Which arm is the falsy one comes off the checker's stamp, not from a lookup
+# here: a generic mono keeps its arm record on the template it was minted from.
+truthyCondText9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    n: Node.view
+    raw: StringView
+} out String is {
+    fa9: u64
+    {
+        fo9: symtab.typing.truthyCondArm.get key: (nodeIdOf9 :n)
+        match (
+            fo9
+        ) case some then {
+            fa9 = fo9
+        } case none then null
+    }
+    if fa9 == 0 then return "".string
+    tid9: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (nodeIdOf9 :n)
+    if tid9.isZero then return "".string
+    if (isOrdinalPair :symtab tid: tid9) then return "".string
+    an9: zast.nameTextCopy :ast ref: (zast.nameid.create from: fa9.u32.orPanic)
+    tg9: variantTag :symtab tid: tid9 arm: an9.stringview
+    if tg9.length == 0 then return "".string
+    acc9: ".".string
+    {
+        rn9: atomNodeId9 :n
+        if rn9 > 0 then {
+            if (isPtrVid :ctx vid: (atomVid :symtab nid: rn9)) then acc9 = "->".string
+        }
+    }
+    return "((\{raw})\{acc9}tag != \{tg9})"
 }
 
 # armSuffixSide9 -- the `.true` / `.false` suffix on a dotted arm predicate,
@@ -15821,8 +15902,19 @@ emitIfClause: function {
                 k
             ) case namedoperation then {
                 cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (k.operation - 1).u64)
+                tw9: (truthyCondText9
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: (k.operation - 1).u64)
+                    raw: cv.stringview
+                )
                 if cond.length > 0 then cond.append " && "
-                cond.append cv
+                if tw9.length > 0 then {
+                    cond.append tw9
+                } else {
+                    cond.append cv
+                }
             } else null
         }
         if isFirst then {
