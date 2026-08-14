@@ -27,15 +27,15 @@ static z_@resultval_i64_parseerror@_t z_@StringView@_parseI64(const z_@StringVie
     return out;
 empty:
     out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
-    out.data.err.tag = Z_PARSEERROR_TAG_EMPTY;
+    out.data.err@TAG_parseerror@ = Z_PARSEERROR_TAG_EMPTY;
     return out;
 invalid:
     out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
-    out.data.err.tag = Z_PARSEERROR_TAG_INVALIDDIGIT;
+    out.data.err@TAG_parseerror@ = Z_PARSEERROR_TAG_INVALIDDIGIT;
     return out;
 overflow:
     out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
-    out.data.err.tag = Z_PARSEERROR_TAG_OVERFLOW;
+    out.data.err@TAG_parseerror@ = Z_PARSEERROR_TAG_OVERFLOW;
     return out;
 }
 

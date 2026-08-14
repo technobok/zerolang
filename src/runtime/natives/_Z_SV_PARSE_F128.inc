@@ -3,7 +3,7 @@ static z_@resultval_f128_parseerror@_t z_@StringView@_parseF128(const z_@StringV
     z_@resultval_f128_parseerror@_t out = {0};
     if (self->size == 0) {
         out.tag = Z_RESULTVAL_F128_PARSEERROR_TAG_ERR;
-        out.data.err.tag = Z_PARSEERROR_TAG_EMPTY;
+        out.data.err@TAG_parseerror@ = Z_PARSEERROR_TAG_EMPTY;
         return out;
     }
     char buf[64];
@@ -19,12 +19,12 @@ static z_@resultval_f128_parseerror@_t z_@StringView@_parseF128(const z_@StringV
     if (p != buf) free(p);
     if (consumed == 0 || consumed != self->size) {
         out.tag = Z_RESULTVAL_F128_PARSEERROR_TAG_ERR;
-        out.data.err.tag = Z_PARSEERROR_TAG_INVALIDDIGIT;
+        out.data.err@TAG_parseerror@ = Z_PARSEERROR_TAG_INVALIDDIGIT;
         return out;
     }
     if (err == ERANGE) {
         out.tag = Z_RESULTVAL_F128_PARSEERROR_TAG_ERR;
-        out.data.err.tag = Z_PARSEERROR_TAG_OVERFLOW;
+        out.data.err@TAG_parseerror@ = Z_PARSEERROR_TAG_OVERFLOW;
         return out;
     }
     out.tag = Z_RESULTVAL_F128_PARSEERROR_TAG_OK;

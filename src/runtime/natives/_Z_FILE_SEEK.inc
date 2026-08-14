@@ -8,7 +8,7 @@ static z_@Result_u64_IoError@_t z_@File@_seek(
     z_@File@_t* f, int64_t off, z_@seekorigin@_t origin
 ) {
     int whence;
-    switch (origin.tag) {
+    switch (origin@TAG_seekorigin@) {
         case Z_SEEKORIGIN_TAG_START:   whence = SEEK_SET; break;
         case Z_SEEKORIGIN_TAG_CURRENT: whence = SEEK_CUR; break;
         case Z_SEEKORIGIN_TAG_END:     whence = SEEK_END; break;
