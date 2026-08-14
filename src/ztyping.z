@@ -27,6 +27,7 @@ public: unit {
     :ZTyping
     :newTyping
     :armside
+    :armSideOfName
     :armSuffixSideOf
     :nodeTypeAt
     :nodeTypeSet
@@ -1641,6 +1642,31 @@ armside: variant {
 # written first negates the predicate, the one written second passes it
 # through. `bool` is that type everywhere this shape occurs, and it writes
 # `false` before `true`, which is what a `== "true"` test used to encode.
+# armSideOfName -- which side of the 2-arm sum `tid` the name `nameId` is: the
+# arm written second is the truthy one, the arm written first the falsy one.
+# `none` when the name is neither, or when `tid` is not a 2-arm sum at all --
+# so an absent tid answers `none` rather than needing a guard at every caller.
+armSideOfName: function {ty: ZTyping.view typeId: u64 nameId: u64} out armside is {
+    if nameId == 0 then return armside.none
+    {
+        t9: ty.sumPairSecondArm.get key: typeId
+        match (
+            t9
+        ) case some then {
+            if t9 == nameId then return armside.truthy
+        } case none then null
+    }
+    {
+        f9: ty.sumPairFirstArm.get key: typeId
+        match (
+            f9
+        ) case some then {
+            if f9 == nameId then return armside.falsy
+        } case none then null
+    }
+    return armside.none
+}
+
 armSuffixSideOf: function {
     ty: ZTyping.view
     nid: u64
@@ -1667,23 +1693,7 @@ armSuffixSideOf: function {
     match (
         dps9
     ) case some then {
-        {
-            t9: ty.sumPairSecondArm.get key: dps9
-            match (
-                t9
-            ) case some then {
-                if t9 == childNameId then return armside.truthy
-            } case none then null
-        }
-        {
-            f9: ty.sumPairFirstArm.get key: dps9
-            match (
-                f9
-            ) case some then {
-                if f9 == childNameId then return armside.falsy
-            } case none then null
-        }
-        return armside.none
+        return (armSideOfName :ty typeId: dps9 nameId: childNameId)
     } case none then {
         return armside.none
     }
@@ -1691,7 +1701,7 @@ armSuffixSideOf: function {
 
 # nodeTypeAt -- the type id stamped on node `nid`; 0 when nothing is stamped
 # there (nodeTypeSet records neither a 0 node id nor a 0 type id).
-nodeTypeAt: function {tbl: (ListVal ztypes.tid) nid: u64} out ztypes.tid is {
+nodeTypeAt: function {tbl: (ListVal ztypes.tid).view nid: u64} out ztypes.tid is {
     if nid == 0 then return (ztypes.tid.create from: 0)
     i9: nid - 1
     if i9 >= tbl.length then return (ztypes.tid.create from: 0)

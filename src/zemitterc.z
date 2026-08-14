@@ -2193,7 +2193,7 @@ stmtDiverges9: function {
         if (matchDiverges :symtab nid: sid.u64) then return true
         if (matchDiverges :symtab nid: sn9.statementline.u64) then return true
         if (bareReturn9 :ast n: inn9) then return true
-        if (loopNeverExits9 :ast n: inn9) then return true
+        if (loopNeverExits9 :ast :symtab n: inn9) then return true
         return (ifDiverges :ast :symtab :ctx n: inn9)
     } else {
         return false
@@ -2220,12 +2220,13 @@ bareReturn9: function {ast: Ast.view n: Node.view} out bool is {
 # postcondition, or any break leaves a normal exit and the answer is false.
 loopNeverExits9: function {
     ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
     n: Node.view
 } out bool is {
     match (
         n
     ) case expression then {
-        return (loopNeverExits9 :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+        return (loopNeverExits9 :ast :symtab n: (ast.nodes.get i: (n.expression - 1).u64))
     } case forexpr then {
         if n.body.isZero then return false
         if n.postconditions.length > 0 then return false
@@ -2237,15 +2238,14 @@ loopNeverExits9: function {
         ) case namedoperation then {
             if c09.name.isZero then {
                 cop9: ast.nodes.get i: (c09.operation - 1).u64
-                # bind, never compare an unbound String temporary: it leaks
-                at9: atomTextDeep :ast n: cop9
-                if at9.stringview == "true" then alwaysT9 = true
+                if (boolArmSideOf9 :ast :symtab n: cop9).truthy then alwaysT9 = true
                 # `true` also arrives as the dotted tag bool.true
                 match (
                     cop9
                 ) case dottedpath then {
-                    ch9: atomTextOf :ast n: (ast.nodes.get i: (cop9.child - 1).u64)
-                    if ch9.stringview == "true" then alwaysT9 = true
+                    chn9: atomNameIdOf :ast n: (ast.nodes.get i: (cop9.child - 1).u64)
+                    chs9: armSideAtNode9 :symtab nid: cop9.nodeid.u64 nameId: chn9
+                    if chs9.truthy then alwaysT9 = true
                 } else null
             }
         } else null
@@ -15282,6 +15282,54 @@ seedNegFromPred9: function {
 # seedCondOp9 -- one if-condition operation, dispatched by form: bare
 # `x.a` (positive), `x.a.true` (positive inner), `x.a.false` (negated
 # inner), and the `(x.a) == true/false` comparisons.
+# bareAtomNameId9 -- the interned name id of an expression-unwrapped bare atom,
+# 0 for any other shape. The id twin of bareAtomText9.
+bareAtomNameId9: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    match (
+        n
+    ) case expression then {
+        return (bareAtomNameId9 :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case atomid then {
+        return n.name
+    } else {
+        return (zast.nameid.create from: 0)
+    }
+}
+
+# armSideAtNode9 -- which arm of ITS OWN stamped type the name `nameId` is, for
+# the value at node `nid`. `true` and `false` are arms of bool, so a `== true`
+# operand answers `truthy` and a `== false` one `falsy` -- from bool's arm
+# ORDER, which is the whole content of the spelling test. Asking the node's own
+# stamp rather than looking `bool` up by name costs nothing and is exact under
+# a user type that shadows bool.
+armSideAtNode9: function {
+    symtab: zenv.ZSymbolTable.view
+    nid: u64
+    nameId: zast.nameid
+} out ztyping.armside is {
+    if nameId.isZero then return ztyping.armside.none
+    st9: ztyping.nodeTypeAt tbl: symtab.typing.nodeType :nid
+    return (ztyping.armSideOfName ty: symtab.typing typeId: st9.u64 nameId: nameId.u64)
+}
+
+# boolArmSideOf9 -- armSideAtNode9 for a bare atom operand, through any
+# expression wrapper.
+boolArmSideOf9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: Node.view
+} out ztyping.armside is {
+    match (
+        n
+    ) case expression then {
+        return (boolArmSideOf9 :ast :symtab n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case atomid then {
+        return (armSideAtNode9 :symtab nid: n.nodeid.u64 nameId: n.name)
+    } else {
+        return ztyping.armside.none
+    }
+}
+
 # armSuffixSide9 -- the `.true` / `.false` suffix on a dotted arm predicate,
 # read by arm identity. See ztyping.armSuffixSideOf.
 armSuffixSide9: function {
@@ -15353,24 +15401,26 @@ seedCondOp9: function {
     } case binop then {
         opn9: bareAtomText9 :ast n: (ast.nodes.get i: (n.operator - 1).u64)
         if opn9.stringview == "==" then {
-            ln9: bareAtomText9 :ast n: (ast.nodes.get i: (n.lhs - 1).u64)
-            rn9: bareAtomText9 :ast n: (ast.nodes.get i: (n.rhs - 1).u64)
-            if rn9.stringview == "true" then {
+            # `== true` / `== false`: the operand names one of bool's arms,
+            # and which side it is comes from bool's arm ORDER.
+            lsd9: boolArmSideOf9 :ast :symtab n: (ast.nodes.get i: (n.lhs - 1).u64)
+            rsd9: boolArmSideOf9 :ast :symtab n: (ast.nodes.get i: (n.rhs - 1).u64)
+            if rsd9.truthy then {
                 bl9: ast.nodes.get i: (n.lhs - 1).u64
                 seedFromPred9 :ast :symtab :ctx n: bl9 :body :names :svids :vals :tids
                 return
             }
-            if rn9.stringview == "false" then {
+            if rsd9.falsy then {
                 bl29: ast.nodes.get i: (n.lhs - 1).u64
                 seedNegFromPred9 :ast :symtab :ctx n: bl29 :body :names :svids :vals :tids
                 return
             }
-            if ln9.stringview == "true" then {
+            if lsd9.truthy then {
                 br9: ast.nodes.get i: (n.rhs - 1).u64
                 seedFromPred9 :ast :symtab :ctx n: br9 :body :names :svids :vals :tids
                 return
             }
-            if ln9.stringview == "false" then {
+            if lsd9.falsy then {
                 br29: ast.nodes.get i: (n.rhs - 1).u64
                 seedNegFromPred9 :ast :symtab :ctx n: br29 :body :names :svids :vals :tids
             }
@@ -15568,9 +15618,11 @@ chainCondFact9: function {
     } case binop then {
         opn9: bareAtomText9 :ast n: (ast.nodes.get i: (n.operator - 1).u64)
         if opn9.stringview == "==" then {
-            ln9: bareAtomText9 :ast n: (ast.nodes.get i: (n.lhs - 1).u64)
-            rn9: bareAtomText9 :ast n: (ast.nodes.get i: (n.rhs - 1).u64)
-            if rn9.stringview == "true" then {
+            # `== true` / `== false`: the operand names one of bool's arms,
+            # and which side it is comes from bool's arm ORDER.
+            lsd9: boolArmSideOf9 :ast :symtab n: (ast.nodes.get i: (n.lhs - 1).u64)
+            rsd9: boolArmSideOf9 :ast :symtab n: (ast.nodes.get i: (n.rhs - 1).u64)
+            if rsd9.truthy then {
                 (chainInnerFact9
                     :ast
                     :symtab
@@ -15586,7 +15638,7 @@ chainCondFact9: function {
                 )
                 return
             }
-            if rn9.stringview == "false" then {
+            if rsd9.falsy then {
                 (chainInnerFact9
                     :ast
                     :symtab
@@ -15602,7 +15654,7 @@ chainCondFact9: function {
                 )
                 return
             }
-            if ln9.stringview == "true" then {
+            if lsd9.truthy then {
                 (chainInnerFact9
                     :ast
                     :symtab
@@ -15618,7 +15670,7 @@ chainCondFact9: function {
                 )
                 return
             }
-            if ln9.stringview == "false" then {
+            if lsd9.falsy then {
                 (chainInnerFact9
                     :ast
                     :symtab

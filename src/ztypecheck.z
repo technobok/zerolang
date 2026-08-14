@@ -18792,30 +18792,41 @@ predFactOf: function {
     } case binop then {
         opn9: bareAtomName :ast n: (ast.nodes.get i: (n.operator - 1).u64)
         if opn9.stringview == "==" then {
-            ln9: bareAtomName :ast n: (ast.nodes.get i: (n.lhs - 1).u64)
-            rn9: bareAtomName :ast n: (ast.nodes.get i: (n.rhs - 1).u64)
-            if rn9.stringview == "true" then return (predDottedFact
+            # `== true` / `== false`: the operand names one of bool's arms,
+            # and which side it is comes from bool's arm ORDER. boolId is the
+            # canonical id the clause check already resolved.
+            lsd9: (ztyping.armSideOfName
+                ty: st.typing
+                typeId: boolId
+                nameId: (bareAtomNameId :ast n: (ast.nodes.get i: (n.lhs - 1).u64)).u64
+            )
+            rsd9: (ztyping.armSideOfName
+                ty: st.typing
+                typeId: boolId
+                nameId: (bareAtomNameId :ast n: (ast.nodes.get i: (n.rhs - 1).u64)).u64
+            )
+            if rsd9.truthy then return (predDottedFact
                 :st
                 :ast
                 n: (ast.nodes.get i: (n.lhs - 1).u64)
                 :boolId
                 negated: false
             )
-            if rn9.stringview == "false" then return (predDottedFact
+            if rsd9.falsy then return (predDottedFact
                 :st
                 :ast
                 n: (ast.nodes.get i: (n.lhs - 1).u64)
                 :boolId
                 negated: true
             )
-            if ln9.stringview == "true" then return (predDottedFact
+            if lsd9.truthy then return (predDottedFact
                 :st
                 :ast
                 n: (ast.nodes.get i: (n.rhs - 1).u64)
                 :boolId
                 negated: false
             )
-            if ln9.stringview == "false" then return (predDottedFact
+            if lsd9.falsy then return (predDottedFact
                 :st
                 :ast
                 n: (ast.nodes.get i: (n.rhs - 1).u64)
@@ -20938,6 +20949,20 @@ taggedRecvIsValue: function {ast: Ast.view st: zenv.ZSymbolTable n: Node.view} o
 
 # bareAtomName -- the (expression-unwrapped) bare atom name of a value node,
 # or "" when the value is any other shape.
+# bareAtomNameId -- the interned name id of an expression-unwrapped bare atom,
+# 0 for any other shape. The id twin of bareAtomName.
+bareAtomNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    match (
+        n
+    ) case expression then {
+        return (bareAtomNameId :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case atomid then {
+        return n.name
+    } else {
+        return (zast.nameid.create from: 0)
+    }
+}
+
 bareAtomName: function {ast: Ast.view n: Node.view} out String is {
     match (
         n
