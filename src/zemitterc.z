@@ -15202,7 +15202,7 @@ seedFromPred9: function {
             :ast
             :symtab
             :ctx
-            nid: n.nodeid.u64
+            tid: (ztypes.tid.create from: (dpArmPredicateOf9 :symtab nid: n.nodeid.u64))
             parent: (ast.nodes.get i: (n.parent - 1).u64)
             childName: arm0.stringview
             :body
@@ -15214,12 +15214,13 @@ seedFromPred9: function {
     } else null
 }
 
-# seedPosCore9 -- the exploded positive-seed core (dotted node fields).
+# seedPosCore9 -- the positive-seed core: the subject named by `parent` is
+# known to hold `childName` of `tid`.
 seedPosCore9: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
-    nid: u64
+    tid: ztypes.tid
     parent: Node.view
     childName: StringView
     body: Node.view
@@ -15228,9 +15229,8 @@ seedPosCore9: function {
     vals: List String
     tids: ListVal u64
 } is {
-    dap9: dpArmPredicateOf9 :symtab :nid
-    if dap9 == 0 then return
-    if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: dap9.u64)) then return
+    if tid.isZero then return
+    if (isOrdinalVariant :symtab :tid) then return
     subj9: atomTextOf :ast n: parent
     if subj9.length == 0 then return
     if (bodyReassigns9 :ast n: body name: subj9.stringview) then return
@@ -15241,7 +15241,7 @@ seedPosCore9: function {
         :ast
         :symtab
         :ctx
-        tid: (ztypes.tid.create from: dap9.u64)
+        :tid
         arm: childName
         recv: recv9.stringview
         acc: acc9.stringview
@@ -15252,7 +15252,7 @@ seedPosCore9: function {
     vals.append alias9
     pt9: optU64Or9 o: (symtab.typing.declChildOf
         pool: ast.names
-        parentTypeId: (ztypes.tid.create from: dap9.u64)
+        parentTypeId: tid
         name: childName
     )
     tids.append pt9
@@ -15371,13 +15371,27 @@ boolArmSideOf9: function {
     }
 }
 
+# truthyCondArmOf9 -- the arm a bare 2-arm-sum condition at `nid` holds, 0 when
+# the node is not one.
+truthyCondArmOf9: function {symtab: zenv.ZSymbolTable.view nid: u64} out u64 is {
+    o9: symtab.typing.truthyCondArm.get key: nid
+    match (
+        o9
+    ) case some then {
+        return o9
+    } case none then {
+        return 0
+    }
+}
+
 # truthyCondText9 -- the C for a condition whose type is a 2-arm sum rather
-# than a bool: it holds when the value is NOT its falsy arm. "" when the
-# condition needs no wrapping at all -- a bool, and every other ordinal PAIR,
-# already IS its discriminator in C, so the emitted expression is the answer.
+# than a bool: it holds when the value holds the arm the checker stamped. ""
+# when the condition needs no wrapping at all -- a bool, and every other
+# ordinal PAIR, already IS its discriminator in C, so the emitted expression is
+# the answer.
 #
-# Which arm is the falsy one comes off the checker's stamp, not from a lookup
-# here: a generic mono keeps its arm record on the template it was minted from.
+# The arm comes off the stamp rather than a lookup here: a generic mono keeps
+# its arm record on the template it was minted from.
 truthyCondText9: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -15408,7 +15422,7 @@ truthyCondText9: function {
             if (isPtrVid :ctx vid: (atomVid :symtab nid: rn9)) then acc9 = "->".string
         }
     }
-    return "((\{raw})\{acc9}tag != \{tg9})"
+    return "((\{raw})\{acc9}tag == \{tg9})"
 }
 
 # armSuffixSide9 -- the `.true` / `.false` suffix on a dotted arm predicate,
@@ -15440,6 +15454,28 @@ seedCondOp9: function {
     vals: (List String).view
     tids: (ListVal u64).view
 } is {
+    # a bare 2-arm sum condition IS `x.<arm>` with the arm left implicit, so
+    # it seeds the alias that form seeds.
+    {
+        ta0: truthyCondArmOf9 :symtab nid: (nodeIdOf9 :n)
+        if ta0 > 0 then {
+            an0: zast.nameTextCopy :ast ref: (zast.nameid.create from: ta0.u32.orPanic)
+            (seedPosCore9
+                :ast
+                :symtab
+                :ctx
+                tid: (ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (nodeIdOf9 :n))
+                parent: n
+                childName: an0.stringview
+                :body
+                :names
+                :svids
+                :vals
+                :tids
+            )
+            return
+        }
+    }
     match (
         n
     ) case expression then {
@@ -15470,7 +15506,7 @@ seedCondOp9: function {
             :ast
             :symtab
             :ctx
-            nid: n.nodeid.u64
+            tid: (ztypes.tid.create from: (dpArmPredicateOf9 :symtab nid: n.nodeid.u64))
             parent: (ast.nodes.get i: (n.parent - 1).u64)
             childName: cn9.stringview
             :body
@@ -15633,6 +15669,29 @@ chainCondFact9: function {
     negs: (ListVal bool).view
     recvs: (List String).view
 } is {
+    # the bare form again -- same fact, recorded for the else emission
+    {
+        ta1: truthyCondArmOf9 :symtab nid: (nodeIdOf9 :n)
+        if ta1 > 0 then {
+            an1: zast.nameTextCopy :ast ref: (zast.nameid.create from: ta1.u32.orPanic)
+            (chainFactCore9
+                :ast
+                :symtab
+                :ctx
+                owner: (ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (nodeIdOf9 :n)).u64
+                parent: n
+                childName: an1.stringview
+                neg: false
+                :subjects
+                :svids
+                :arms
+                :tids
+                :negs
+                :recvs
+            )
+            return
+        }
+    }
     match (
         n
     ) case expression then {
@@ -15685,7 +15744,7 @@ chainCondFact9: function {
             :ast
             :symtab
             :ctx
-            nid: n.nodeid.u64
+            owner: (dpArmPredicateOf9 :symtab nid: n.nodeid.u64)
             parent: (ast.nodes.get i: (n.parent - 1).u64)
             childName: cn9.stringview
             neg: false
@@ -15795,7 +15854,7 @@ chainInnerFact9: function {
             :ast
             :symtab
             :ctx
-            nid: n.nodeid.u64
+            owner: (dpArmPredicateOf9 :symtab nid: n.nodeid.u64)
             parent: (ast.nodes.get i: (n.parent - 1).u64)
             childName: arm0.stringview
             :neg
@@ -15816,7 +15875,7 @@ chainFactCore9: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    nid: u64
+    owner: u64
     parent: Node.view
     childName: StringView
     neg: bool
@@ -15827,9 +15886,8 @@ chainFactCore9: function {
     negs: ListVal bool
     recvs: List String
 } is {
-    dap9: dpArmPredicateOf9 :symtab :nid
-    if dap9 == 0 then return
-    if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: dap9.u64)) then return
+    if owner == 0 then return
+    if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: owner.u64)) then return
     subj9: atomTextOf :ast n: parent
     if subj9.length == 0 then return
     an9: childName.string
@@ -15837,7 +15895,7 @@ chainFactCore9: function {
     subjects.append subj9
     svids.append (atomVid :symtab nid: (atomNodeId9 n: parent))
     arms.append an9
-    tids.append dap9
+    tids.append owner
     negs.append neg
     recvs.append rv9
 }

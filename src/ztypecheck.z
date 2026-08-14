@@ -18658,21 +18658,21 @@ isComparisonOp: function {name: StringView} out bool is {
 # ArmPredFact -- one bare arm predicate recognized in an if condition: the
 # subject variable, the arm, the sum type, and whether the condition form
 # is negated (`(x.a) == false` / trailing `.false`).
-# stampTruthyCond -- record which arm a bare 2-arm-sum condition must NOT hold
-# for the condition to be true: the FALSY arm, the one the type declares first.
-# The emitter reads this rather than deriving it, because a generic mono's
-# record lives on the template it was minted from and reaching it needs the
-# registry mutably.
+# stampTruthyCond -- record which arm a bare 2-arm-sum condition HOLDS when it
+# is true: the second one, the type's non-falsy arm. Every reader then treats
+# `if x` as `if x.<that arm>`. Stamped rather than derived, because a generic
+# mono's record lives on the template it was minted from and reaching it needs
+# the registry mutably.
 stampTruthyCond: function {
     st: zenv.ZSymbolTable
     n: Node.view
     tid: ztypes.tid
 } is {
-    fa9: ztyping.sumPairFalsyArmOf ty: st.typing reg: st.reg :tid
-    if fa9 == 0 then return
+    ta9: ztyping.sumPairTruthyArmOf ty: st.typing reg: st.reg :tid
+    if ta9 == 0 then return
     nid9: nodeId :n
     if nid9.isZero then return
-    st.typing.truthyCondArm.set key: nid9.u64 value: fa9
+    st.typing.truthyCondArm.set key: nid9.u64 value: ta9
 }
 
 ArmPredFact: class {
@@ -18762,12 +18762,45 @@ armSuffixSide: function {
     )
 }
 
+# truthyCondArmOf -- the arm a bare 2-arm-sum condition at `nid` holds, 0 when
+# the node is not one.
+truthyCondArmOf: function {st: zenv.ZSymbolTable.view nid: u64} out u64 is {
+    o9: st.typing.truthyCondArm.get key: nid
+    match (
+        o9
+    ) case some then {
+        return o9
+    } case none then {
+        return 0
+    }
+}
+
 predFactOf: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
     n: Node.view
     boolId: u64
 } out Option ArmPredFact is {
+    # A bare 2-arm sum as the condition IS an arm predicate with the arm left
+    # implicit, so it states the same fact `if x.<arm>` states and narrows both
+    # branches the same way: the then branch holds the arm, the else branch
+    # excludes it and collapses only when what remains carries a payload.
+    {
+        ta0: truthyCondArmOf :st nid: (nodeId :n).u64
+        if ta0 > 0 then {
+            sj0: bareAtomName :ast :n
+            ft0: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (nodeId :n).u64
+            if sj0.length > 0 when (ft0.isZero) == false then {
+                am0: zast.nameTextCopy :ast ref: (zast.nameid.create from: ta0.u32.orPanic)
+                return (Option.some (ArmPredFact
+                    subject: sj0
+                    armName: am0
+                    fullTid: ft0
+                    negated: false
+                ))
+            }
+        }
+    }
     match (
         n
     ) case expression then {

@@ -30,6 +30,7 @@ public: unit {
     :armSideOfName
     :isSumPair
     :sumPairFalsyArmOf
+    :sumPairTruthyArmOf
     :armSuffixSideOf
     :nodeTypeAt
     :nodeTypeSet
@@ -465,10 +466,14 @@ ZTyping: class {
     sumPairFirstArm: (MapVV u64 value: u64)
     sumPairSecondArm: (MapVV u64 value: u64)
     # truthyCondArm -- for a condition node whose type is a 2-arm sum rather
-    # than a bool, the name id of that type's FALSY arm: the condition holds
-    # when the value does NOT hold this arm. Stamped by the checker because
-    # deciding it follows a generic MONO back to the template it was minted
-    # from, which needs the registry the emitter only ever holds read-only.
+    # than a bool, the name id of the arm the condition HOLDS: the second one,
+    # since the first is falsy by the convention. `if x` is `if x.<that arm>`
+    # with the arm left implicit, and every reader treats it as exactly that --
+    # the lowering, the narrowing fact, and the branch aliases alike.
+    #
+    # Stamped by the checker rather than derived, because finding the arm
+    # follows a generic MONO back to the template it was minted from, and that
+    # needs the registry the emitter only ever holds read-only.
     truthyCondArm: (MapVV u64 value: u64)
     # variantTagBase -- the NUMERIC type a tagged type's discriminator is stored
     # in, from its declaration (`tag: u8.tag`) or the spec's u8 default. Absent
@@ -1701,6 +1706,25 @@ sumPairFalsyArmOf: function {
     k9: sumPairKeyOf :ty :reg :tid
     if k9 == 0 then return 0
     o9: ty.sumPairFirstArm.get key: k9
+    match (
+        o9
+    ) case some then {
+        return o9
+    } case none then {
+        return 0
+    }
+}
+
+# sumPairTruthyArmOf -- the name id of `tid`'s SECOND arm, the truthy one by
+# the falsy-first convention. 0 when `tid` is not a 2-arm sum.
+sumPairTruthyArmOf: function {
+    ty: ZTyping.view
+    reg: ztypes.ZTypeRegistry
+    tid: ztypes.tid
+} out u64 is {
+    k9: sumPairKeyOf :ty :reg :tid
+    if k9 == 0 then return 0
+    o9: ty.sumPairSecondArm.get key: k9
     match (
         o9
     ) case some then {
