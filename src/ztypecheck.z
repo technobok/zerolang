@@ -20158,12 +20158,32 @@ checkFor: function {
     piter: fornode.postconditions.iterate
     for pcId9: piter loop {
         pc: ast.nodes.get i: (pcId9 - 1).u64
+        pcOp9: pcId9
         match (
             pc
         ) case namedoperation then {
-            checkValue :st :unitName :ast node: (ast.nodes.get i: (pc.operation - 1).u64)
-        } else {
-            checkValue :st :unitName :ast node: pc
+            pcOp9 = pc.operation
+        } else null
+        pcNd9: ast.nodes.get i: (pcOp9 - 1).u64
+        pcVt9: checkValue :st :unitName :ast node: pcNd9
+        # A `for loop { ... } while <cond>` post-condition must be boolean, the
+        # same rule the pre-condition carries above: a non-bool value is a type
+        # error rather than the invalid C a struct in a `while` head emits.
+        pbId9: builtinTidTc :ast :st base: "bool"
+        if pbId9 > 0 when pcVt9 > 0 when pcVt9 != pbId9 then {
+            pTt9: st.reg.typetypeOf typeId: pcVt9
+            if pTt9 != ztypes.ztypetype.neverType then {
+                pctn9: typeNameOf :st tid: pcVt9
+                pcmsg9: "loop postcondition must be bool, got '\{pctn9}'"
+                (addError
+                    :st
+                    nodeid: (nodeId n: pcNd9)
+                    lineno: (nodeLine n: pcNd9)
+                    colno: (nodeCol n: pcNd9)
+                    e: zast.err.typeError
+                    msg: pcmsg9
+                )
+            }
         }
     }
     drainPendingBorrow :st
