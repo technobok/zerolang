@@ -18727,6 +18727,24 @@ predDottedFact: function {ast: Ast.view
 # predFactOf -- recognize an if-condition operation as an arm predicate:
 # bare `x.a`, trailing-bool `x.a.true` / `x.a.false`, or the comparison
 # `(x.a) == true` / `(x.a) == false`. none otherwise.
+# armSuffixSide -- the `.true` / `.false` suffix on a dotted arm predicate,
+# read by arm identity. See ztyping.armSuffixSideOf.
+armSuffixSide: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    nid: u64
+    parent: Node.view
+    child: Node.view
+} out ztyping.armside is {
+    cid9: atomNameId :ast n: child
+    return (ztyping.armSuffixSideOf
+        ty: st.typing
+        :nid
+        parentNid: (nodeId n: parent).u64
+        childNameId: cid9.u64
+    )
+}
+
 predFactOf: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -18739,14 +18757,23 @@ predFactOf: function {
         return (predFactOf :ast :st n: (ast.nodes.get i: (n.expression - 1).u64) :boolId)
     } case dottedpath then {
         cn9: atomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if cn9.stringview == "true" then return (predDottedFact
+        # `.true` / `.false` on a predicate: which side it is comes from the
+        # stamped type's arm ORDER, never from the spelling of the segment.
+        sd9: (armSuffixSide
+            :ast
+            :st
+            nid: n.nodeid.u64
+            parent: (ast.nodes.get i: (n.parent - 1).u64)
+            child: (ast.nodes.get i: (n.child - 1).u64)
+        )
+        if sd9.truthy then return (predDottedFact
             :ast
             :st
             n: (ast.nodes.get i: (n.parent - 1).u64)
             :boolId
             negated: false
         )
-        if cn9.stringview == "false" then return (predDottedFact
+        if sd9.falsy then return (predDottedFact
             :ast
             :st
             n: (ast.nodes.get i: (n.parent - 1).u64)

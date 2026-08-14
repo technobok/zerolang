@@ -15282,6 +15282,24 @@ seedNegFromPred9: function {
 # seedCondOp9 -- one if-condition operation, dispatched by form: bare
 # `x.a` (positive), `x.a.true` (positive inner), `x.a.false` (negated
 # inner), and the `(x.a) == true/false` comparisons.
+# armSuffixSide9 -- the `.true` / `.false` suffix on a dotted arm predicate,
+# read by arm identity. See ztyping.armSuffixSideOf.
+armSuffixSide9: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    nid: u64
+    parent: Node.view
+    child: Node.view
+} out ztyping.armside is {
+    cid9: atomNameIdOf :ast n: child
+    return (ztyping.armSuffixSideOf
+        ty: symtab.typing
+        :nid
+        parentNid: (nodeIdOf9 n: parent)
+        childNameId: cid9.u64
+    )
+}
+
 seedCondOp9: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -15300,12 +15318,21 @@ seedCondOp9: function {
         seedCondOp9 :ast :symtab :ctx n: iexC9 :body :names :svids :vals :tids
     } case dottedpath then {
         cn9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if cn9.stringview == "true" then {
+        # `.true` / `.false` on a predicate: which side it is comes from the
+        # stamped type's arm ORDER, never from the spelling of the segment.
+        sd9: (armSuffixSide9
+            :ast
+            :symtab
+            nid: n.nodeid.u64
+            parent: (ast.nodes.get i: (n.parent - 1).u64)
+            child: (ast.nodes.get i: (n.child - 1).u64)
+        )
+        if sd9.truthy then {
             dpp9: ast.nodes.get i: (n.parent - 1).u64
             seedFromPred9 :ast :symtab :ctx n: dpp9 :body :names :svids :vals :tids
             return
         }
-        if cn9.stringview == "false" then {
+        if sd9.falsy then {
             dpq9: ast.nodes.get i: (n.parent - 1).u64
             seedNegFromPred9 :ast :symtab :ctx n: dpq9 :body :names :svids :vals :tids
             return
@@ -15482,7 +15509,16 @@ chainCondFact9: function {
         chainCondFact9 :ast :symtab :ctx n: iexD9 :subjects :svids :arms :tids :negs :recvs
     } case dottedpath then {
         cn9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if cn9.stringview == "true" then {
+        # `.true` / `.false` on a predicate: which side it is comes from the
+        # stamped type's arm ORDER, never from the spelling of the segment.
+        sd9: (armSuffixSide9
+            :ast
+            :symtab
+            nid: n.nodeid.u64
+            parent: (ast.nodes.get i: (n.parent - 1).u64)
+            child: (ast.nodes.get i: (n.child - 1).u64)
+        )
+        if sd9.truthy then {
             (chainInnerFact9
                 :ast
                 :symtab
@@ -15498,7 +15534,7 @@ chainCondFact9: function {
             )
             return
         }
-        if cn9.stringview == "false" then {
+        if sd9.falsy then {
             (chainInnerFact9
                 :ast
                 :symtab

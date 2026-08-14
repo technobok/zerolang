@@ -26,6 +26,8 @@ public: unit {
     :declkindName
     :ZTyping
     :newTyping
+    :armside
+    :armSuffixSideOf
     :nodeTypeAt
     :nodeTypeSet
     :main
@@ -1619,6 +1621,71 @@ ZTyping: class {
             if row.parentTypeId == parentTypeId then return true
         }
         return false
+    }
+}
+
+# armside -- which side of a 2-arm sum a trailing predicate segment names.
+# `x.a.false` negates the predicate `x.a`, `x.a.true` passes it through, and
+# anything else is not that shape at all. Falsy arm first, as the convention
+# the record states the order for asks.
+armside: variant {
+    none: null
+    falsy: null
+    truthy: null
+}
+
+# armSuffixSideOf -- which side of a 2-arm sum the trailing segment of a dotted
+# ARM PREDICATE names, asked by arm IDENTITY rather than by spelling. `nid` is
+# the outer dotted node: the dpArmPredicate stamp on it names the type the
+# segment is an arm of, and that type's arm ORDER decides the side -- the arm
+# written first negates the predicate, the one written second passes it
+# through. `bool` is that type everywhere this shape occurs, and it writes
+# `false` before `true`, which is what a `== "true"` test used to encode.
+armSuffixSideOf: function {
+    ty: ZTyping.view
+    nid: u64
+    parentNid: u64
+    childNameId: u64
+} out armside is {
+    if childNameId == 0 then return armside.none
+    # The suffix reads a predicate's bool RESULT, so the receiver must itself
+    # be an arm predicate. `o.some` is a predicate in its own right -- its
+    # receiver is an ordinary value -- and falls through to the general path,
+    # even though its own stamped type is a 2-arm sum too and its child names
+    # that type's second arm.
+    parentIsPred9: false
+    {
+        pp9: ty.dpArmPredicate.get key: parentNid
+        match (
+            pp9
+        ) case some then {
+            parentIsPred9 = true
+        } case none then null
+    }
+    if (parentIsPred9) == false then return armside.none
+    dps9: ty.dpArmPredicate.get key: nid
+    match (
+        dps9
+    ) case some then {
+        {
+            t9: ty.sumPairSecondArm.get key: dps9
+            match (
+                t9
+            ) case some then {
+                if t9 == childNameId then return armside.truthy
+            } case none then null
+        }
+        {
+            f9: ty.sumPairFirstArm.get key: dps9
+            match (
+                f9
+            ) case some then {
+                if f9 == childNameId then return armside.falsy
+            } case none then null
+        }
+        return armside.none
+    } case none then {
+        return armside.none
     }
 }
 
