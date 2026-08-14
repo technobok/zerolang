@@ -363,9 +363,10 @@ isFloatLitText: function {s: StringView} out bool is {
 # it? The DECLARATION answers it. The sixteen scalars are `record is native` and
 # the two literal pseudo-types are minted by the registry itself, so the marker
 # covers eighteen of cTypeOf's nineteen names; a user's `i64: record { hi: 0 }`
-# carries no marker and is a shadow. `bool` is the nineteenth and cannot carry
-# the marker -- it is a variant with arms, and the grammar gives `is native`
-# only to a type with no is-block -- so its identity is asked by canonical id.
+# carries no marker and is a shadow. `bool` carries it too: the grammar gives
+# `is native`
+# only to a type with no is-block -- and `bool` is a native VARIANT, which keeps
+# its arms, so the marker covers all nineteen.
 #
 # A tid with no defining unit is a SHELL -- a fresh param/field child named
 # after the real type -- not a user type wearing the name. There is no
@@ -375,11 +376,9 @@ isFloatLitText: function {s: StringView} out bool is {
 # through its unit's name, which is the same question one step earlier.
 scalarTidIsBuiltin: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
     if (symtab.reg.isNativeOf tid: (ztypes.tid.create from: tid.u64)) then return true
-    if (ctx.boolTid.isZero) == false when tid == ctx.boolTid then return true
     dc9: symtab.typing.declIdOfType typeId: (ztypes.tid.create from: tid.u64)
     return dc9.isZero
 }
@@ -390,13 +389,12 @@ scalarTidIsBuiltin: function {
 # id, not the name" gate for the by-name C-type sites.
 scalarCTypeFor: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
     name: StringView
     tid: ztypes.tid
 } out String is {
     sc: cTypeOf :name
     if sc.length == 0 then return sc
-    if (scalarTidIsBuiltin :symtab :ctx tid: (ztypes.tid.create from: tid.u64)) == false then {
+    if (scalarTidIsBuiltin :symtab tid: (ztypes.tid.create from: tid.u64)) == false then {
         return "".string
     }
     return sc
@@ -1845,7 +1843,6 @@ convSrcPathOf: function {symtab: zenv.ZSymbolTable srcTid: ztypes.tid} out Strin
 # scalar gets instead.
 binopKeyOf: function {
     symtab: zenv.ZSymbolTable
-    ctx: Ctx.view
     owner: ztypes.tid
     isNative: bool
     op: StringView
@@ -1871,7 +1868,6 @@ binopKeyOf: function {
         if bn9.length > 0 then {
             sc9: (scalarCTypeFor
                 :symtab
-                :ctx
                 name: bn9.stringview
                 tid: (typedefChaseTid9 :symtab tid: owner)
             )
@@ -2374,7 +2370,6 @@ Ctx: class {
     colGetFromCode: bool
     strTid: ztypes.tid
     svTid: ztypes.tid
-    boolTid: ztypes.tid
     strOriginTid: ztypes.tid
     arrayOriginTid: ztypes.tid
     listOriginTid: ztypes.tid
@@ -6122,7 +6117,7 @@ emitInlineVariantCtor: function {
         e0: "((\{vc}_t){ .tag = \{tg}, .data.\{arm} = (\{av}) })"
         return e0
     } else {
-        av19: armValueC :symtab :ctx :tid :arm
+        av19: armValueC :symtab :tid :arm
         if av19.length > 0 then return av19
         e1: "((\{vc}_t){ .tag = \{tg} })"
         return e1
@@ -6470,7 +6465,6 @@ renderDefault: function {
             )
             avd9: (armValueC
                 :symtab
-                :ctx
                 tid: (ztypes.tid.create from: vtarget9.u64)
                 arm: arm.stringview
             )
@@ -7149,18 +7143,14 @@ argSlotList: function {
 # ULL, and a scalar typedef wants whatever its base wants (`nameid` -> u32 ->
 # U). The name-based half of this is literalSuffixBase's, which answers the
 # same question starting from a suffix NAME rather than from a type.
-constSuffixForTid: function {
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    tid: ztypes.tid
-} out String is {
+constSuffixForTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
     if tid.isZero then return "".string
     tn9: typeNameOfReg9 :symtab :tid
     if tn9.length == 0 then return "".string
     # scalarCTypeFor rather than cTypeOf: it re-checks the tid for a user
     # shadow, so a user type named `u32` cannot pick up u32's C suffix. The
     # name lookup it needs is the shape shadow-guard sanctions.
-    if (scalarCTypeFor :symtab :ctx name: tn9.stringview :tid).length > 0 then {
+    if (scalarCTypeFor :symtab name: tn9.stringview :tid).length > 0 then {
         return (numLitSuffix name: tn9.stringview)
     }
     # a scalar TYPEDEF chases to the builtin it spells, keyed by tid so the
@@ -7187,7 +7177,7 @@ cvalText: function {
     if v.kind.ivalKind then {
         iv: v.ival
         r9: "\{iv}"
-        r9.append (constSuffixForTid :symtab :ctx :tid)
+        r9.append (constSuffixForTid :symtab :tid)
         return r9
     }
     if v.kind.fvalKind then {
@@ -7201,7 +7191,7 @@ cvalText: function {
         # a variant that maps onto a scalar C type (bool) renders as that
         # scalar; anything else is the payload-less compound literal
         # emitInlineVariantCtor builds for the same arm written as a call
-        av9: armValueC :symtab :ctx tid: v.armTid arm: an9.stringview
+        av9: armValueC :symtab tid: v.armTid arm: an9.stringview
         if av9.length > 0 then return av9
         tg9: variantTag :symtab tid: v.armTid arm: an9.stringview
         if tg9.length == 0 then return "".string
@@ -8330,7 +8320,6 @@ emitCrossUnitTag: function {
         vc: ctxCname :ctx tid: (ztypes.tid.create from: vtid.u64)
         avx9: (armValueC
             :symtab
-            :ctx
             tid: (ztypes.tid.create from: vtid.u64)
             :arm
         )
@@ -9041,7 +9030,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                         ref: (zast.nameid.create from: atn9.u32.orPanic)
                     )
                     if arm9.length > 0 then {
-                        ava9: armValueC :symtab :ctx tid: brid arm: arm9.stringview
+                        ava9: armValueC :symtab tid: brid arm: arm9.stringview
                         if ava9.length > 0 then return ava9
                         atg9: variantTag :symtab tid: brid arm: arm9.stringview
                         if atg9.length > 0 then {
@@ -9057,7 +9046,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             btn: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: brid.u64)
             cTypeLk1: (scalarCTypeFor
                 :symtab
-                :ctx
                 name: btn.stringview
                 tid: (ztypes.tid.create from: brid.u64)
             )
@@ -9207,7 +9195,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             dzn9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
             dzc9: (scalarCTypeFor
                 :symtab
-                :ctx
                 name: dzn9.stringview
                 tid: (ztypes.tid.create from: izd9.u64)
             )
@@ -9462,7 +9449,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                         )
                         avh9: (armValueC
                             :symtab
-                            :ctx
                             tid: (ztypes.tid.create from: dtp9.u64)
                             arm: mnc0.stringview
                         )
@@ -9796,7 +9782,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     vc2: ctxCname :ctx tid: (ztypes.tid.create from: vtid2.u64)
                     av89: (armValueC
                         :symtab
-                        :ctx
                         tid: (ztypes.tid.create from: vtid2.u64)
                         arm: mn2.stringview
                     )
@@ -9967,7 +9952,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                         # native scalar/String creates have no C symbol: the
                         # zero value is the construction.
                         if bn2v9.isZero when bn2.stringview == fbtn9.stringview when mn2.stringview == "create" then {
-                            zsc9: scalarCTypeFor :symtab :ctx name: fbtn9.stringview tid: bstamp
+                            zsc9: scalarCTypeFor :symtab name: fbtn9.stringview tid: bstamp
                             if zsc9.length > 0 then {
                                 zse9: "((\{zsc9})0)"
                                 return zse9
@@ -10528,7 +10513,7 @@ emitBinop9: function {
             return u2
         }
     }
-    key9: binopKeyOf :symtab :ctx owner: owner9 isNative: isNat9 :op
+    key9: binopKeyOf :symtab owner: owner9 isNative: isNat9 :op
     body9: nativeImplOf :ctx path: key9.stringview
     if body9.length == 0 then {
         emitFail :ctx what: "no native implementation for '\{key9}'" line: binop.lineno
@@ -11910,7 +11895,7 @@ emitStmt: function {
         # shadow keeps the name and loses the C scalar, so it emits its struct.
         ct: cTypeOf name: tn.stringview
         if ct.length > 0 when btid9 > 0 then {
-            if (scalarTidIsBuiltin :symtab :ctx tid: btid9) == false then {
+            if (scalarTidIsBuiltin :symtab tid: btid9) == false then {
                 ct = typeRefC :ast :symtab :ctx tid: btid9 thisTid: ztypes.tid
             }
         }
@@ -13415,7 +13400,6 @@ emitMatchStmt: function {
         if (isUni) == false then {
             sct: (scalarCTypeFor
                 :symtab
-                :ctx
                 name: stn.stringview
                 tid: (ztypes.tid.create from: vtid.u64)
             )
@@ -14781,7 +14765,7 @@ emitForCond: function {
             onid: exprNodeId9 n: (ast.nodes.get i: (n.operation - 1).u64)
             tn: stampNameOf :symtab nid: onid
             ftid9: stampIdOf :symtab nid: onid
-            ct: scalarCTypeFor :symtab :ctx name: tn.stringview tid: ftid9
+            ct: scalarCTypeFor :symtab name: tn.stringview tid: ftid9
             iv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.operation - 1).u64)
             if ct.length > 0 then {
                 li: "\{ind}\{ct} \{lbl} = \{iv};\n"
@@ -16856,7 +16840,6 @@ fnSignature: function {
         } else if rbc.length > 0 then {
             if (scalarTidIsBuiltin
                 :symtab
-                :ctx
                 tid: (ztypes.tid.create from: rtid0.u64)
             ) == false then {
                 ret = (typeRefC
@@ -16886,7 +16869,6 @@ fnSignature: function {
                 if rc.length > 0 then {
                     if (scalarTidIsBuiltin
                         :symtab
-                        :ctx
                         tid: (ztypes.tid.create from: rto.u64)
                     ) == false then {
                         ret = (typeRefC
@@ -17316,7 +17298,7 @@ typeRefC: function {
     # `is native` declaration -- emit its struct, not the C scalar. scalarCTypeFor
     # is that gate, and the sixteen scalars, `bool` and the shells all come back
     # through it with their C type intact.
-    ct: scalarCTypeFor :symtab :ctx name: tn.stringview :tid
+    ct: scalarCTypeFor :symtab name: tn.stringview :tid
     if ct.length > 0 then return ct
     # canonicalize shells: a param/field child may be a fresh shell id
     # named after the real type; this-typed params take the receiver.
@@ -17457,12 +17439,11 @@ variantTag: function {
 # callers keep composing it, byte for byte.
 armValueC: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
     tid: ztypes.tid
     arm: StringView
 } out String is {
     avn9: typeNameOfReg9 :symtab :tid
-    avs9: scalarCTypeFor :symtab :ctx name: avn9.stringview :tid
+    avs9: scalarCTypeFor :symtab name: avn9.stringview :tid
     if avs9.length == 0 then return "".string
     avt9: variantTag :symtab :tid :arm
     avr9: "((\{avs9})\{avt9})"
@@ -19449,18 +19430,15 @@ emitC: function {
     buf.append "\n"
     strId: ztypes.tid
     svId: ztypes.tid
-    boolId: ztypes.tid
     sysId9: zast.nameid
     strNmId9: zast.nameid
     svNmId9: zast.nameid
-    boolNmId9: zast.nameid
     match (
         program
     ) case program then {
         sysId9 = zast.poolFind pool: program.ast.names text: "system"
         strNmId9 = zast.poolFind pool: program.ast.names text: "String"
         svNmId9 = zast.poolFind pool: program.ast.names text: "StringView"
-        boolNmId9 = zast.poolFind pool: program.ast.names text: "bool"
     } else null
     sgo: (optionval.none u64)
     match (
@@ -19495,27 +19473,6 @@ emitC: function {
         vgo
     ) case some then {
         svId = ztypes.tid.create from: (vgo)
-    } case none then null
-    # bool's canonical id, on the same terms as String's and StringView's: it is
-    # the one name cTypeOf knows that cannot carry `is native` (a variant with
-    # arms, and the grammar gives the marker only to a type with no is-block),
-    # so scalarTidIsBuiltin asks its identity instead of its declaration.
-    bgo: (optionval.none u64)
-    match (
-        program
-    ) case program then {
-        bgo = (ztypecheck.resolvedByIds
-            ast: program.ast
-            ty: symtab.typing
-            reg: symtab.reg
-            unitId: sysId9
-            name: boolNmId9
-        )
-    } else null
-    match (
-        bgo
-    ) case some then {
-        boolId = ztypes.tid.create from: (bgo)
     } case none then null
     cnames9: (List String)
     ctb9: ztypes.tid
@@ -19831,7 +19788,6 @@ emitC: function {
         colGetFromCode: false
         strTid: (ztypes.tid.create from: strId.u64)
         svTid: (ztypes.tid.create from: svId.u64)
-        boolTid: (ztypes.tid.create from: boolId.u64)
         :strOriginTid
         :arrayOriginTid
         :listOriginTid
@@ -20876,7 +20832,7 @@ keyHashKind: function {symtab: zenv.ZSymbolTable ctx: Ctx.view tid: ztypes.tid} 
     if isRv9 == false then isRv9 = tt == ztypes.ztypetype.variantType
     if isRv9 then {
         tn9: typeNameOfReg9 :symtab tid: ktid9
-        sc9: scalarCTypeFor :symtab :ctx name: tn9.stringview tid: ktid9
+        sc9: scalarCTypeFor :symtab name: tn9.stringview tid: ktid9
         if sc9.length > 0 then return 0
         return 3
     }
@@ -22750,7 +22706,7 @@ fnptrRetTypeC: function {
     rn: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: rtid.u64)
     if rtid == ctx.strTid then return "\{ctx.strC}_t"
     if rtid == ctx.svTid then return "\{ctx.svC}_t"
-    rc: scalarCTypeFor :symtab :ctx name: rn.stringview tid: (ztypes.tid.create from: rtid.u64)
+    rc: scalarCTypeFor :symtab name: rn.stringview tid: (ztypes.tid.create from: rtid.u64)
     if rc.length > 0 then return rc
     rr: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: rtid.u64) thisTid: ztypes.tid
     if rr.length > 0 then return rr
@@ -22790,7 +22746,7 @@ ensureFwdStruct: function {
     buf: String.borrow
 } is {
     nmS: typeNameOfReg9 :symtab :tid
-    cTypeLk5: scalarCTypeFor :symtab :ctx name: nmS.stringview :tid
+    cTypeLk5: scalarCTypeFor :symtab name: nmS.stringview :tid
     if cTypeLk5.length > 0 then return
     duo5: definedInUnitOf :symtab :tid
     match (
@@ -26091,7 +26047,7 @@ emitOneVariant: function {
                     # a typedef arm compares as its chain-end base
                     qcoC9: typedefChaseTid9 :symtab tid: (ztypes.tid.create from: qco.u64)
                     qtn: typeNameOfReg9 :symtab tid: qcoC9
-                    qsc: scalarCTypeFor :symtab :ctx name: qtn.stringview tid: qcoC9
+                    qsc: scalarCTypeFor :symtab name: qtn.stringview tid: qcoC9
                     if qsc.length == 0 then {
                         qrid: canonTypeId :ast :symtab :ctx tid: qcoC9 name: qtn.stringview
                         if qrid > 0 then {
@@ -26401,7 +26357,7 @@ emitOneRecord: function {
             if fk > 0 then eqx.append " && "
             fkiC9: typedefChaseTid9 :symtab tid: (ztypes.tid.create from: fki.u64)
             ftn: typeNameOfReg9 :symtab tid: fkiC9
-            fscalar: scalarCTypeFor :symtab :ctx name: ftn.stringview tid: fkiC9
+            fscalar: scalarCTypeFor :symtab name: ftn.stringview tid: fkiC9
             fdone: false
             if fscalar.length == 0 then {
                 frid: canonTypeId :ast :symtab :ctx tid: fkiC9 name: ftn.stringview
@@ -26589,7 +26545,6 @@ emitAsConsts: function {
                                 vtnA: typeNameOfReg9 :symtab tid: vtidA
                                 vtcA: (scalarCTypeFor
                                     :symtab
-                                    :ctx
                                     name: vtnA.stringview
                                     tid: vtidA
                                 )
