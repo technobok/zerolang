@@ -102951,7 +102951,9 @@ uint64_t z_t3302(z_t891_t* z_v15703, z_t67_t z_v15704, z_t474_t* z_v15705, z_t51
                                         case Z_OPTIONVAL_VID_TAG_SOME: {
                                             uint64_t z_v15726 = _m2.data.some;
                                             (void)z_v15726;
-                                            (void)(z_t3868(z_v15703, z_t2248(z_v15705, ((z_t67_t){ .data = z_v15723.data, .size = z_v15723.size })), ((z_t973_t){ .tag = Z_OPTIONVAL_ZSRCPOS_TAG_NONE })));
+                                            if (z_t3218(z_v15703, z_v15718)) {
+                                                (void)(z_t3868(z_v15703, z_t2248(z_v15705, ((z_t67_t){ .data = z_v15723.data, .size = z_v15723.size })), ((z_t973_t){ .tag = Z_OPTIONVAL_ZSRCPOS_TAG_NONE })));
+                                            }
                                             break;
                                         }
                                         case Z_OPTIONVAL_VID_TAG_NONE: {
