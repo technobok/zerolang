@@ -496,28 +496,28 @@ isOrdinalPair: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out boo
     }
 }
 
-# ordinalPairFalseArm -- the FIRST arm of an ordinal pair: ordinal 0, and so the
-# false side of the C `bool`. `bool` writes `false` first for exactly this
-# reason, and a user variant decides it the same way -- by the order it writes
-# its arms. Read from what the checker recorded, never walked: an arm walk is a
-# member walk, and forcing one during emission demands members the program
-# never asked for.
-ordinalPairFalseArm: function {
-    ast: Ast
+# ordinalPairFirstArmId -- the name-pool id of an ordinal pair's FIRST arm:
+# ordinal 0, and so the false side of the C `bool`. `bool` writes `false` first
+# for exactly this reason, and a user variant decides it the same way -- by the
+# order it writes its arms. 0 when `tid` is not an ordinal pair.
+#
+# An id rather than the text, because the callers ask an IDENTITY question --
+# is this arm the false one -- and rendering the name to answer it allocated a
+# String once per ask. Read from what the checker recorded, never walked: an
+# arm walk is a member walk, and forcing one during emission demands members
+# the program never asked for.
+ordinalPairFirstArmId: function {
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
-} out String is {
-    if (isOrdinalPair :symtab :tid) == false then return "".string
-    fa9: symtab.typing.ordinalFirstArm.get key: tid.u64
+} out u64 is {
+    if (isOrdinalPair :symtab :tid) == false then return 0
+    fa9: symtab.typing.sumPairFirstArm.get key: tid.u64
     match (
         fa9
     ) case some then {
-        if fa9 == 0 then return "".string
-        # COPY: nameTextAt hands back a borrowed view of the pool, which does
-        # not survive the return.
-        return (zast.nameTextCopy :ast ref: (zast.nameid.create from: fa9.u32.orPanic))
+        return fa9
     } case none then {
-        return "".string
+        return 0
     }
 }
 
@@ -9653,12 +9653,13 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         if dap9 > 0 then {
             recvP9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
             if (isOrdinalPair :symtab tid: (ztypes.tid.create from: dap9.u64)) then {
-                fa9: (ordinalPairFalseArm
-                    :ast
+                fa9: (ordinalPairFirstArmId
                     :symtab
                     tid: (ztypes.tid.create from: dap9.u64)
                 )
-                if mnc0.stringview == fa9.stringview then return "(!(\{recvP9}))"
+                # the arm NAME resolved through any alias, as an id
+                mid9: zast.poolFind pool: ast.names text: mnc0.stringview
+                if fa9 > 0 when mid9.u64 == fa9 then return "(!(\{recvP9}))"
                 return "(\{recvP9})"
             }
             accP9: ".".string
@@ -13817,7 +13818,7 @@ emitOrdinalPairMatch: function {
     tmp: TmpCtr.view
     buf: String.borrow
 } is {
-    falseArm9: ordinalPairFalseArm :ast :symtab :tid
+    falseArm9: ordinalPairFirstArmId :symtab :tid
     firstB9: true
     citer: m.clauses.iterate
     for cId9: citer loop {
@@ -13826,11 +13827,7 @@ emitOrdinalPairMatch: function {
             c
         ) case caseclause then {
             condB9: subj.string
-            if (zast.nameTextEq
-                :ast
-                ref: c.name
-                s: falseArm9.stringview
-            ) then condB9 = "!\{subj}"
+            if falseArm9 > 0 when c.name.u64 == falseArm9 then condB9 = "!\{subj}"
             kwB9: "if"
             if (firstB9) == false then kwB9 = "else if"
             firstB9 = false
