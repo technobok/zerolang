@@ -639,8 +639,8 @@ convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out S
     body: String
     if sFloat then {
         if dFloat then {
-            errInf: "_r.tag = @ERRTAG@; @ERRSETOOR@"
-            errPrecF: "_r.tag = @ERRTAG@; @ERRSETPREC@"
+            errInf: "_r.tag = @ERRTAG@; _r.data.err@TAG_converror@ = Z_CONVERROR_TAG_OUTOFRANGE;"
+            errPrecF: "_r.tag = @ERRTAG@; _r.data.err@TAG_converror@ = Z_CONVERROR_TAG_PRECISIONLOSS;"
             okF: "_r.tag = @OKTAG@; _r.data.ok = _f;"
             body = "\{tcT} _f = (\{tcT})_v; if (isinf(_f) && !isinf(_v)) { \{errInf} } else if ((\{scT})_f != _v) { \{errPrecF} } else { \{okF} }"
         } else {
@@ -653,8 +653,8 @@ convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out S
             } else {
                 inRange = "(_v >= 0.0 && _v < 0x1p\{b})"
             }
-            errOor: "_r.tag = @ERRTAG@; @ERRSETOOR@"
-            errPrecI: "_r.tag = @ERRTAG@; @ERRSETPREC@"
+            errOor: "_r.tag = @ERRTAG@; _r.data.err@TAG_converror@ = Z_CONVERROR_TAG_OUTOFRANGE;"
+            errPrecI: "_r.tag = @ERRTAG@; _r.data.err@TAG_converror@ = Z_CONVERROR_TAG_PRECISIONLOSS;"
             body = "if (!\{inRange}) { \{errOor} } else if ((double)(\{tcT})_v != (double)_v) { \{errPrecI} } else { \{okSet} }"
         }
     } else {
@@ -666,7 +666,7 @@ convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out S
             rangeAnd9: ""
             if dstName == "f16" then rangeAnd9 = " && _mag <= 65504"
             ssig: numSigned name: srcName
-            errPrecX: "_r.tag = @ERRTAG@; @ERRSETPREC@"
+            errPrecX: "_r.tag = @ERRTAG@; _r.data.err@TAG_converror@ = Z_CONVERROR_TAG_PRECISIONLOSS;"
             is128s9: false
             if srcName == "i128" then is128s9 = true
             if srcName == "u128" then is128s9 = true
@@ -728,7 +728,7 @@ convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out S
                     cond = "0".string
                 }
             }
-            errOor2: "_r.tag = @ERRTAG@; @ERRSETOOR@"
+            errOor2: "_r.tag = @ERRTAG@; _r.data.err@TAG_converror@ = Z_CONVERROR_TAG_OUTOFRANGE;"
             body = "if (\{cond}) { \{errOor2} } else { \{okSet} }"
         }
     }
@@ -837,15 +837,6 @@ emitNumericCast: function {
         rv9.append from: (variantTag :symtab tid: retTid arm: "err")
         # the error slot's assignment, spelled for whatever `converror` IS
         if (ctx.converrorTid.isZero) == false then {
-            rn9.append from: "ERRSETOOR".string
-            (rv9.append
-                from: (convErrSetC :symtab errTid: ctx.converrorTid arm: "outOfRange")
-            )
-            rn9.append from: "ERRSETPREC".string
-            (rv9.append
-                from: (convErrSetC :symtab errTid: ctx.converrorTid arm: "precisionLoss")
-            )
-            # and the general form the fragments use, so the rows may move to it
             rn9.append from: "TAG_converror".string
             if (ordinalVariantCType :symtab tid: ctx.converrorTid).length > 0 then {
                 rv9.append from: "".string
@@ -17582,23 +17573,6 @@ armValueC: function {
     avt9: variantTag :symtab :tid :arm
     avr9: "((\{avs9})\{avt9})"
     return avr9
-}
-
-# convErrSetC -- the C statement a conversion body uses to put a `converror`
-# arm into the result's error slot. The REPRESENTATION decides the form, and
-# the body must not: a tagged struct is written through its tag field, and a
-# type whose value IS its discriminator is assigned. natives.tbl spells the
-# hole; this fills it, so the table stays correct across a representation
-# change instead of pinning one.
-convErrSetC: function {
-    symtab: zenv.ZSymbolTable.view
-    errTid: ztypes.tid
-    arm: StringView
-} out String is {
-    av9: armValueC :symtab tid: errTid :arm
-    if av9.length > 0 then return "_r.data.err = \{av9};"
-    tg9: variantTag :symtab tid: errTid :arm
-    return "_r.data.err.tag = \{tg9};"
 }
 
 # armPayloadC -- an arm's payload C type ("" for null arms).
