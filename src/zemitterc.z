@@ -1052,6 +1052,24 @@ hasHole9: function {text: StringView} out bool is {
 # an emitted operand is an arbitrary C expression, not a type's name, so the
 # prefix rule would be a lie about it. Cnames are consulted first; a name in
 # neither list is fatal.
+# bindHas9 -- is `name` bound at all? Separate from its VALUE, because a hole
+# may legitimately fill with NOTHING: `@TAG_X@` is `.tag` while X is a tagged
+# struct and empty once X is unwrapped, and "" from bindLookup9 alone cannot be
+# told from a hole nobody bound.
+bindHas9: function {
+    name: StringView
+    bindNames: (List String).view
+    rawNames: (List String).view
+} out bool is {
+    with bit9: bindNames.iterate do for k9: bit9 loop {
+        if k9.stringview == name then return true
+    }
+    with rit9: rawNames.iterate do for rk9: rit9 loop {
+        if rk9.stringview == name then return true
+    }
+    return false
+}
+
 bindLookup9: function {
     name: StringView
     bindNames: (List String)
@@ -1145,7 +1163,7 @@ fillHoles: function {
                     endn9: (at9 + 1) + ho9
                     nm9: tv9.substring from: (at9 + 1) to: endn9
                     val9: bindLookup9 name: nm9 :bindNames :bindVals :rawNames :rawVals
-                    if val9.length > 0 then {
+                    if (bindHas9 name: nm9 :bindNames :rawNames) then {
                         buf.append val9
                     } else {
                         fh9: "fragment \{path}: hole @\{nm9}@ is bound to nothing"
@@ -21785,27 +21803,47 @@ loadIoFragment: function {
     ) case ok then {
         bn9: (List String)
         bv9: (List String)
+        rwn9: (List String)
+        rwv9: (List String)
         names9: holeNames9 text: rd.stringview
         ni9: u64
         nn9: names9.length
         for ni9 < nn9 loop {
             nm9: names9.get i: ni9
             nv9: nm9.stringview
-            bn9.append from: nv9.string
-            if nv9 == "StringView" then {
-                sv9: ctx.svC
-                bv9.append from: sv9.copy
-            } else if nv9 == "String" then {
-                st9: ctx.strC
-                bv9.append from: st9.copy
+            # `@TAG_<type>@` -- how to reach that type's discriminator. A tagged
+            # struct is reached through `.tag`; a type the backend has unwrapped
+            # IS its discriminator, and the hole fills with nothing. A fragment
+            # spelling this stays correct across a change to the representation,
+            # which matters because this file is read by the running compiler
+            # AND by the committed seed, and they need not agree.
+            if (nv9.startsWith prefix: "TAG_") then {
+                tn9: nv9.substring from: 4 to: nv9.length
+                tt9: ioCanonTid :ast :symtab canon: tn9
+                rwn9.append from: nv9.string
+                if (ordinalVariantCType
+                    :symtab
+                    tid: (ztypes.tid.create from: tt9.u64)
+                ).length > 0 then {
+                    rwv9.append from: "".string
+                } else {
+                    rwv9.append from: ".tag".string
+                }
             } else {
-                cc9: ioCanonCname :ast :symtab :ctx canon: nv9
-                bv9.append from: cc9
+                bn9.append from: nv9.string
+                if nv9 == "StringView" then {
+                    sv9: ctx.svC
+                    bv9.append from: sv9.copy
+                } else if nv9 == "String" then {
+                    st9: ctx.strC
+                    bv9.append from: st9.copy
+                } else {
+                    cc9: ioCanonCname :ast :symtab :ctx canon: nv9
+                    bv9.append from: cc9
+                }
             }
             ni9 = ni9 + 1
         }
-        rwn9: (List String)
-        rwv9: (List String)
         return (fillHolesCtx9
             :ctx
             text: rd
