@@ -1484,9 +1484,19 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                             } else {
                                 dm9 = dem9.copy
                             }
+                            tn9: String
+                            {
+                                uo9: dm9.stringview.stripPrefix p: "uses_"
+                                match (
+                                    uo9
+                                ) case some then {
+                                    tn9 = uo9.string
+                                } case none then null
+                            }
                             ctx.fragUnits.append from: du9
                             ctx.fragMembs.append from: dm9
                             ctx.fragNames.append from: frag9.copy
+                            ctx.fragTypeNames.append from: tn9
                         }
                         if body9.length > 0 then {
                             kb9: key9.copy
@@ -2531,6 +2541,15 @@ Ctx: class {
     fragUnits: (List String)
     fragMembs: (List String)
     fragNames: (List String)
+    # a row whose demand is `uses_<Type>` is reached by that TYPE being
+    # constructed rather than by a member being called. The name the table
+    # spells, and the id it resolves to once the registry is built; 0 on every
+    # member-demanded row, which is nearly all of them.
+    fragTypeNames: (List String)
+    fragTypeTids: (ListVal u64)
+    # the type ids those rows gate, and the ones the program actually built
+    demandGatedTids: (MapVV u64 value: bool)
+    usedTypeIds: (MapVV u64 value: bool)
     # the units the table orders, in that order. A unit with rows that is not
     # named here runs after those that are.
     unitOrder: (List String)
@@ -3522,6 +3541,40 @@ needsHasM: function {ctx: Ctx.view uname: StringView memb: StringView} out bool 
         i9 = i9 + 1
     }
     return false
+}
+
+# typeUseAdd -- record that the program constructed this type.
+typeUseAdd: function {ctx: Ctx tid: ztypes.tid} is {
+    ctx.usedTypeIds.set key: tid.u64 value: true
+}
+
+# typeIsUsed -- the program constructed this type, so the rows its
+# construction reaches have fired.
+typeIsUsed: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
+    o9: ctx.usedTypeIds.get key: tid
+    match (
+        o9
+    ) case some then {
+        return o9
+    } case none then {
+        return false
+    }
+}
+
+# typeDemandMet -- may this type's body be emitted? A type no fragment row
+# gates is unconditional; one that IS gated waits until it is constructed,
+# because its struct exists to be dereferenced by a fragment that is itself
+# demand-loaded. The gating set comes from natives.tbl, not from a list here.
+typeDemandMet: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
+    g9: ctx.demandGatedTids.get key: tid
+    match (
+        g9
+    ) case some then {
+        if (g9) == false then return true
+    } case none then {
+        return true
+    }
+    return (typeIsUsed :ctx :tid)
 }
 
 # true when `name` is a string-like type.
@@ -20235,6 +20288,10 @@ emitC: function {
         fragUnits: (List String)
         fragMembs: (List String)
         fragNames: (List String)
+        fragTypeNames: (List String)
+        fragTypeTids: (ListVal u64)
+        demandGatedTids: (MapVV u64 value: bool)
+        usedTypeIds: (MapVV u64 value: bool)
         unitOrder: (List String)
         argHoistNames: (List String)
         argHoistVals: (List String)
@@ -20301,6 +20358,7 @@ emitC: function {
     }
     loadNativeTbl :ctx :runtimeDir
     buildDefUnitIndex :symtab :ctx
+    bindFragTypeTids9 :symtab :ctx
     ctxBindMain :ctx name: ctx.realMain.stringview
     fillMethodReturns :program :ctx
     fillDataElems :program :symtab :ctx
@@ -22279,10 +22337,50 @@ cliClassIsComposite: function {
     return false
 }
 
+# bindFragTypeTids9 -- resolve each row's `uses_<Type>` demand to a type id.
+# Runs after buildDefUnitIndex so the defining unit is an id question too; a
+# name that resolves to nothing leaves 0, and the row keeps its member path.
+# The registry scan is the house pattern and runs once over the handful of
+# rows the table demand-types.
+bindFragTypeTids9: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    last9: symtab.reg.nextTypeId
+    i9: u64
+    n9: ctx.fragTypeNames.length
+    for i9 < n9 loop {
+        tn9: ctx.fragTypeNames.get i: i9
+        found9: ztypes.tid
+        if tn9.length > 0 then {
+            un9: ctx.fragUnits.get i: i9
+            uid9: unitIdOf9 :ctx name: un9.stringview
+            if uid9 > 0 then {
+                ti9: 1.u64
+                for ti9 < last9 loop {
+                    if found9.isZero then {
+                        if (regNameIs
+                            :symtab
+                            tid: (ztypes.tid.create from: ti9.u64)
+                            name: tn9.stringview
+                        ) then {
+                            du9: defUnitIdOf9 :ctx tid: (ztypes.tid.create from: ti9.u64)
+                            if du9 == uid9 then found9 = ztypes.tid.create from: ti9.u64
+                        }
+                    }
+                    ti9 = ti9 + 1
+                }
+            }
+        }
+        ctx.fragTypeTids.append found9.u64
+        if found9 > 0 then ctx.demandGatedTids.set key: found9.u64 value: true
+        i9 = i9 + 1
+    }
+}
+
 # rowFires9 -- true when ANY demand the row at `i` names was demanded for that
 # row's unit. `demand=a,b,c` means ANY OF: a helper several members share is one
 # row naming the members that reach it, so it loads once however many fired.
 rowFires9: function {ctx: Ctx.view i: u64} out bool is {
+    tt9: ctx.fragTypeTids.get :i
+    if tt9 > 0 then return (typeIsUsed :ctx tid: (ztypes.tid.create from: tt9.u64))
     u9: ctx.fragUnits.get :i
     d9: ctx.fragMembs.get :i
     fired9: false
@@ -22405,8 +22503,7 @@ emitIoFileConformance: function {
                     if cn9.stringview == "File" then {
                         okEmit9 = ioFileLive :ast :symtab :ctx
                     } else {
-                        umc9: "uses_\{cn9}"
-                        if (needsHasM :ctx uname: "io" memb: umc9.stringview) then okEmit9 = true
+                        okEmit9 = typeIsUsed :ctx tid: (ztypes.tid.create from: ti.u64)
                     }
                     if okEmit9 then {
                         (emitProtocolImplsForType
@@ -24146,9 +24243,7 @@ emitMonos: function {
     tsc: u64
     for tsc < wIoWrap9.length loop {
         scId9: wIoWrap9.get i: tsc
-        scn: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: scId9.u64)
-        umb9: "uses_\{scn}"
-        if (needsHasM :ctx uname: "io" memb: umb9.stringview) then {
+        if (typeDemandMet :ctx tid: (ztypes.tid.create from: scId9.u64)) then {
             emitOneRecord :ast :symtab :ctx tid: (ztypes.tid.create from: scId9.u64) :buf
         }
         tsc = tsc + 1
@@ -25280,8 +25375,7 @@ emitIoWrapperCreate: function {
         pi = pi + 1
     }
     wcn: ctxCname :ctx tid: (ztypes.tid.create from: wid.u64)
-    um9w: "uses_\{wn}"
-    needsAddM :ctx uname: "io" memb: um9w.stringview
+    typeUseAdd :ctx tid: (ztypes.tid.create from: wid.u64)
     return "\{wcn}_create(\{args})"
 }
 
