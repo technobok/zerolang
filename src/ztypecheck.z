@@ -8380,17 +8380,8 @@ declOfUnitDef: function {
     )
 }
 
-# declOfUnitDefId -- the same walk for a caller that already holds the
-# definition's name id: unit root, then the child edge. No key is built.
-# preIndexKey -- the (unit, def) id pair used while the Decl tree is still
-# being built. Not a lookup key in the tree sense: the tree does not exist yet.
-preIndexKey: function {ast: Ast.view defUnit: StringView nameId: zast.nameid} out u64 is {
-    return (((nameIdOf :ast name: defUnit).u64 * 4294967296) + nameId.u64)
-}
-
 # defWasResolved -- has this definition's body already been resolved? The mark
-# lives on its Decl; the pre-index pair covers the window before the unit root's
-# children exist (see ZTyping.preIndexDefined).
+# lives on its Decl, so a definition with no Decl of its own has not been.
 defWasResolved: function {
     ty: ztyping.ZTyping
     ast: Ast.view
@@ -8398,12 +8389,12 @@ defWasResolved: function {
     nameId: zast.nameid
 } out bool is {
     d9: declOfUnitDefId :ty :ast :defUnit :nameId
-    if d9 > 0 then {
-        if (ty.declIsDefined declId: d9) then return true
-    }
-    return (ty.preIndexDefined.has item: (preIndexKey :ast :defUnit :nameId))
+    if d9 > 0 then return (ty.declIsDefined declId: d9)
+    return false
 }
 
+# declOfUnitDefId -- the same walk for a caller that already holds the
+# definition's name id: unit root, then the child edge. No key is built.
 declOfUnitDefId: function {
     ty: ztyping.ZTyping
     ast: Ast.view
@@ -8987,13 +8978,6 @@ resolveDef: function {
     ty.declSetResolving declId: rdecl1 mark: false
     if (rdecl1.isZero) == false then {
         ty.declSetDefined declId: rdecl1
-    } else {
-        pk1: (preIndexKey
-            :ast
-            defUnit: unitName
-            nameId: (zast.poolFind pool: ast.names text: defName)
-        )
-        ty.preIndexDefined.add item: pk1
     }
 }
 
