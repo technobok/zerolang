@@ -8521,20 +8521,18 @@ aliasNamesType: function {
     return false
 }
 
-# subunitMemberTid9 -- `sub.member` where `sub` is a hidden subunit (or inline
-# unit) of the unit that owns `ownerDeclId`. A nested unit is deliberately not
-# in the file-unit name index -- two files may hold units of the same name --
-# so the Decl tree answers instead: find the child unit, resolve it, then read
-# the member off its own type id, which is where declareCanonicalType laid it.
-# 0 when the name is not a child unit, which is the caller's cue to try the
-# file-unit index.
-subunitMemberTid9: function {
+# subunitTidOf9 -- the type id of `unitName` when it names a hidden subunit
+# (or inline unit) of the unit that owns `ownerDeclId`, resolving it on first
+# ask. A nested unit is deliberately not in the file-unit name index -- two
+# files may hold units of the same name -- so the Decl tree finds it, and its
+# id is read off its unitdef node, where the resolver stamps it. 0 when the
+# name is not a child unit, which is the caller's cue to try the file index.
+subunitTidOf9: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     ast: Ast
     ownerDeclId: ztypes.declid
     unitName: zast.nameid
-    defName: zast.nameid
 } out ztypes.tid is {
     if ownerDeclId.isZero then return (ztypes.tid.create from: 0)
     sub9: ty.declFindChild parentDeclId: ownerDeclId nameId: unitName
@@ -8578,31 +8576,100 @@ subunitMemberTid9: function {
     }
     ownTxt9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: ownNm9)
     subTxt9: zast.poolTextAt pool: ast.names ref: unitName
-    (resolveNamespaceUnit
-        :ty
-        :reg
-        :ast
-        unitName: ownTxt9.stringview
-        defName: subTxt9.stringview
-        parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: ownNm9))
-        parentDeclId: ownerDeclId
-        unitOpId: subOp9
+    # A nested unit's own id is stamped on its unitdef node -- the same place
+    # checkNamespaceBodies reads it; the Decl carries the members, not the id.
+    # A stamp already there means a previous alias resolved this subunit, and
+    # resolving it AGAIN mints a second id, orphaning everything registered
+    # under the first.
+    unid9: unitdefNodeId :ast nId: subOp9
+    if unid9.isZero then return (ztypes.tid.create from: 0)
+    subTid9: (ztypes.tid.create
+        from: (ztyping.nodeTypeAt tbl: ty.nodeType nid: unid9.u64)
     )
-    # resolved here, so its bodies are owed the same walk the demand path owes
-    (ty.nsBodiesOwed.append
-        (ztyping.nsbody
-            unitName: (zast.nameid.create from: ownNm9)
-            unitOp: subOp9
+    if subTid9.isZero then {
+        (resolveNamespaceUnit
+            :ty
+            :reg
+            :ast
+            unitName: ownTxt9.stringview
+            defName: subTxt9.stringview
+            parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: ownNm9))
+            parentDeclId: ownerDeclId
+            unitOpId: subOp9
         )
-    )
-    # a nested unit's own id is stamped on its unitdef node -- the same place
-    # checkNamespaceBodies reads it; the Decl carries the members, not the id
-    subTid9: ztypes.tid
+        # resolved here, so its bodies are owed the same walk the demand path owes
+        (ty.nsBodiesOwed.append
+            (ztyping.nsbody
+                unitName: (zast.nameid.create from: ownNm9)
+                unitOp: subOp9
+            )
+        )
+        subTid9 = (ztypes.tid.create
+            from: (ztyping.nodeTypeAt tbl: ty.nodeType nid: unid9.u64)
+        )
+        # The eager constant pass recurses into a nested unit only when its
+        # node already carries a stamp, which this one did not have while that
+        # pass ran. Evaluate its constants here, where it does.
+        if (subTid9.isZero) == false then {
+            (resolveConstantDefsIn
+                :ty
+                :reg
+                :ast
+                unitName: ownTxt9.stringview
+                unitdefId: subOp9
+                ownerTid: subTid9
+                ownerDeclId: sub9
+            )
+        }
+    }
+    return subTid9
+}
+
+# subunitMemberTid9 -- `sub.member` where `sub` is a subunit of the unit that
+# owns `ownerDeclId`: the member resolves on demand like any other definition
+# and its id is read off its declaration, falling back to the unit type's
+# member index for members that are not Decls. `aliasName` is the name the
+# re-export gives it in the parent, which a re-exported CONSTANT's value is
+# registered under.
+subunitMemberTid9: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    ownerDeclId: ztypes.declid
+    unitName: zast.nameid
+    defName: zast.nameid
+    aliasName: zast.nameid
+} out ztypes.tid is {
+    subTid9: (subunitTidOf9 :ty :reg :ast :ownerDeclId :unitName)
+    if subTid9.isZero then return (ztypes.tid.create from: 0)
+    sub9: ty.declFindChild parentDeclId: ownerDeclId nameId: unitName
+    ownNm9: u32
     {
-        unid9: unitdefNodeId :ast nId: subOp9
-        if (unid9.isZero) == false then {
-            snt9: ztyping.nodeTypeAt tbl: ty.nodeType nid: unid9.u64
-            if snt9 > 0 then subTid9 = ztypes.tid.create from: snt9
+        if (ty.declValid id: ownerDeclId) then {
+            odo9: ty.decls.get i: (ownerDeclId - 1)
+            ownNm9 = odo9.name
+        }
+    }
+        # A re-exported CONSTANT carries its VALUE as well as its type: the two are
+    # separate channels, and the emitter reads the value off the unit the
+    # reference names -- the parent, not the subunit it came from.
+    if (subTid9.isZero) == false then {
+        memNm8: zast.poolTextAt pool: ast.names ref: defName
+        scv9: (constValueOfMemberTid
+            :ast
+            :ty
+            unitTid: subTid9
+            defName: memNm8.stringview
+        )
+        if (scv9.kind.none) == false then {
+            pUt9: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: ownNm9))
+            if (pUt9.isZero) == false then {
+                (ty.setMemberConst
+                    parentTypeId: pUt9
+                    nameId: aliasName
+                    value: scv9
+                )
+            }
         }
     }
     # the member is resolved on demand like any other definition: ask for the
@@ -8674,6 +8741,7 @@ resolveAliasKey: function {
         ownerDeclId: aParent9
         unitName: altK9.unitName
         defName: altK9.defName
+        aliasName: (ast.internString text: name)
     )
     if atid9.isZero then atid9 = (descendNamed
         :ty
@@ -29120,6 +29188,32 @@ evalConstNode: function {
                     }
                 } case none then null
             }
+            # A hidden SUBUNIT of this unit is the same shape one file down: it
+            # is not in the unit-name index either, and it resolves on demand,
+            # so it may have no id at all until asked for here.
+            {
+                sro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+                match (
+                    sro9
+                ) case some then {
+                    sst9: (subunitTidOf9
+                        :ty
+                        :reg
+                        :ast
+                        ownerDeclId: sro9
+                        unitName: (nameIdOf :ast name: pt9.stringview)
+                    )
+                    if (sst9.isZero) == false then {
+                        ssv9: (constValueOfMemberTid
+                            :ast
+                            :ty
+                            unitTid: sst9
+                            defName: cn9.stringview
+                        )
+                        if (ssv9.kind.none) == false then return ssv9
+                    }
+                } case none then null
+            }
             # A same-unit name can be a CONSTANT or a TYPE, and the two read
             # identically: `CC.tcc` asks whether the constant CC holds that arm,
             # `cckind.tcc` names an arm of the type. The constant is asked
@@ -29491,6 +29585,10 @@ resolveConstantDef: function {
                         isCtor9 = true
                         if ptt9 == ztypes.ztypetype.variantType then isCtor9 = false
                         if ptt9 == ztypes.ztypetype.unionType then isCtor9 = false
+                        # `sub.NAME` where the parent is a UNIT reads a member
+                        # of it, which is what every cross-unit re-export is;
+                        # only a TYPE parent makes the read a construction.
+                        if ptt9 == ztypes.ztypetype.unitType then isCtor9 = false
                     }
                 }
                 # ASK THE CONSTANT FIRST. `LEN: LIB.length` reads a member of
