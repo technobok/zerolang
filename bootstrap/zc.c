@@ -14319,1399 +14319,6 @@ static void z_t720_destroy(z_t720_t* proto) {
     proto->destroy = NULL;
 }
 
-/* Splitter / linesiter state. Classes are declared `is native`
-   with no user fields; the runtime supplies the real layout,
-   stack-allocated value type (48 bytes). Both iterators share
-   the same struct — linesiter leaves sep NULL. */
-typedef struct {
-    const char* src;
-    uint64_t    src_len;
-    const char* sep;
-    uint64_t    sep_len;
-    uint64_t    cursor;
-    bool        done;
-} z_t3481_t;
-
-typedef z_t3481_t z_t3483_t;
-
-
-static z_t3481_t z_t67_split(
-    const z_t67_t* self, const z_t67_t* sep);
-static z_t3481_t z_t67_split(
-    const z_t67_t* self, const z_t67_t* sep) {
-    z_t3481_t s;
-    s.src = self->data;
-    s.src_len = self->size;
-    s.sep = sep->data;
-    s.sep_len = sep->size;
-    s.cursor = 0;
-    s.done = (sep->size == 0);
-    return s;
-}
-
-
-static z_t3492_t z_t3481_call(z_t3481_t* s);
-static z_t3492_t z_t3481_call(z_t3481_t* s) {
-    z_t3492_t out = {0};
-    if (s->done) {
-        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
-        return out;
-    }
-    const char* start = s->src + s->cursor;
-    uint64_t remaining = s->src_len - s->cursor;
-    if (s->sep_len > remaining) {
-        /* no more separators possible — return the tail */
-        z_t67_t* boxed = (z_t67_t*)z_xmalloc(sizeof(z_t67_t));
-        boxed->data = start;
-        boxed->size = remaining;
-        s->cursor = s->src_len;
-        s->done = true;
-        out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
-        out.data = boxed;
-        return out;
-    }
-    uint64_t scan_end = remaining - s->sep_len;
-    for (uint64_t i = 0; i <= scan_end; i++) {
-        if (memcmp(start + i, s->sep, s->sep_len) == 0) {
-            z_t67_t* boxed = (z_t67_t*)z_xmalloc(sizeof(z_t67_t));
-            boxed->data = start;
-            boxed->size = i;
-            s->cursor += i + s->sep_len;
-            out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
-            out.data = boxed;
-            return out;
-        }
-    }
-    /* no separator in remaining — final fragment */
-    z_t67_t* boxed = (z_t67_t*)z_xmalloc(sizeof(z_t67_t));
-    boxed->data = start;
-    boxed->size = remaining;
-    s->cursor = s->src_len;
-    s->done = true;
-    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
-    out.data = boxed;
-    return out;
-}
-
-
-static z_t3483_t z_t67_lines(const z_t67_t* self);
-static z_t3483_t z_t67_lines(const z_t67_t* self) {
-    z_t3483_t s;
-    s.src = self->data;
-    s.src_len = self->size;
-    s.sep = NULL;
-    s.sep_len = 0;
-    s.cursor = 0;
-    s.done = (self->size == 0);
-    return s;
-}
-
-
-static z_t3492_t z_t3483_call(z_t3483_t* s);
-static z_t3492_t z_t3483_call(z_t3483_t* s) {
-    z_t3492_t out = {0};
-    if (s->done) {
-        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
-        return out;
-    }
-    const char* start = s->src + s->cursor;
-    uint64_t remaining = s->src_len - s->cursor;
-    uint64_t i = 0;
-    while (i < remaining && start[i] != '\n') i++;
-    uint64_t line_len = i;
-    if (line_len > 0 && start[line_len - 1] == '\r') line_len--;
-    z_t67_t* boxed = (z_t67_t*)z_xmalloc(sizeof(z_t67_t));
-    boxed->data = start;
-    boxed->size = line_len;
-    if (i == remaining) {
-        s->cursor = s->src_len;
-        s->done = true;
-    } else {
-        s->cursor += i + 1;
-        if (s->cursor >= s->src_len) s->done = true;
-    }
-    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
-    out.data = boxed;
-    return out;
-}
-
-
-/* string_join -- borrow `parts` (read-only) and return a new
-   owned string. `parts` is pointer-passed (Phase A default for
-   stack-reftype params); caller retains ownership. */
-static z_t46_t z_stringJoin(
-    z_t423_t* parts, z_t67_t sep);
-static z_t46_t z_stringJoin(
-    z_t423_t* parts, z_t67_t sep) {
-    z_t46_t out = {0};
-    uint64_t n = parts->length;
-    if (n == 0) {
-        out.capacity = 1;
-        out.data = (char*)z_xmalloc(1);
-        out.data[0] = '\0';
-        return out;
-    }
-    uint64_t total = sep.size * (n - 1);
-    for (uint64_t i = 0; i < n; i++) {
-        total += parts->data[i].size;
-    }
-    out.size = total;
-    out.capacity = total + 1;
-    out.data = (char*)z_xmalloc(out.capacity + 1);
-    uint64_t pos = 0;
-    for (uint64_t i = 0; i < n; i++) {
-        if (i > 0 && sep.size > 0) {
-            memcpy(out.data + pos, sep.data, sep.size);
-            pos += sep.size;
-        }
-        memcpy(out.data + pos, parts->data[i].data, parts->data[i].size);
-        pos += parts->data[i].size;
-    }
-    out.data[total] = '\0';
-    return out;
-}
-
-
-static bool z_t67_startsWith(const z_t67_t* self, const z_t67_t* prefix);
-static bool z_t67_startsWith(const z_t67_t* self, const z_t67_t* prefix) {
-    if (prefix->size > self->size) return false;
-    if (prefix->size == 0) return true;
-    return memcmp(self->data, prefix->data, prefix->size) == 0;
-}
-
-static bool z_t67_endsWith(const z_t67_t* self, const z_t67_t* suffix);
-static bool z_t67_endsWith(const z_t67_t* self, const z_t67_t* suffix) {
-    if (suffix->size > self->size) return false;
-    if (suffix->size == 0) return true;
-    return memcmp(self->data + (self->size - suffix->size),
-                  suffix->data, suffix->size) == 0;
-}
-
-static uint64_t z_t67_indexOf_raw(const z_t67_t* self, const z_t67_t* needle);
-static uint64_t z_t67_indexOf_raw(const z_t67_t* self, const z_t67_t* needle) {
-    if (needle->size == 0) return 0;
-    if (needle->size > self->size) return UINT64_MAX;
-    uint64_t last = self->size - needle->size;
-    for (uint64_t i = 0; i <= last; i++) {
-        if (memcmp(self->data + i, needle->data, needle->size) == 0) {
-            return i;
-        }
-    }
-    return UINT64_MAX;
-}
-
-
-static bool z_t67_contains(const z_t67_t* self, const z_t67_t* needle);
-static bool z_t67_contains(const z_t67_t* self, const z_t67_t* needle) {
-    return z_t67_indexOf_raw(self, needle) != UINT64_MAX;
-}
-
-static bool z_ascii_is_ws(unsigned char c);
-static bool z_ascii_is_ws(unsigned char c) {
-    return c == ' ' || c == '\t' || c == '\n'
-        || c == '\v' || c == '\f' || c == '\r';
-}
-
-static z_t67_t z_t67_substring(const z_t67_t* self, uint64_t from, uint64_t to);
-static z_t67_t z_t67_substring(const z_t67_t* self, uint64_t from, uint64_t to) {
-    if (from > self->size || to > self->size || from > to) z_panic("substring: bounds error");
-    return (z_t67_t){ .size = to - from, .data = self->data + from };
-}
-static uint64_t z_t67_hash(const z_t67_t* self);
-static uint64_t z_t67_hash(const z_t67_t* self) {
-    return z_siphash_stringview(*self);
-}
-static z_t67_t z_t67_trim(const z_t67_t* self);
-static z_t67_t z_t67_trim(const z_t67_t* self) {
-    const char* p = self->data;
-    const char* end = self->data + self->size;
-    while (p < end && z_ascii_is_ws((unsigned char)*p)) p++;
-    while (end > p && z_ascii_is_ws((unsigned char)end[-1])) end--;
-    z_t67_t out = { .size = (uint64_t)(end - p), .data = p };
-    return out;
-}
-
-static z_t46_t z_t67_replace_impl(
-    const z_t67_t* self, const z_t67_t* needle,
-    const z_t67_t* repl, bool once);
-static z_t46_t z_t67_replace_impl(
-    const z_t67_t* self, const z_t67_t* needle,
-    const z_t67_t* repl, bool once) {
-    /* empty needle: just copy self */
-    if (needle->size == 0) {
-        z_t46_t z = {0};
-        z.size = self->size;
-        z.capacity = self->size + 1;
-        z.data = (char*)z_xmalloc(z.capacity + 1);
-        memcpy(z.data, self->data, self->size);
-        z.data[self->size] = '\0';
-        return z;
-    }
-    /* pass 1: count matches so we can size the output once */
-    uint64_t matches = 0;
-    if (needle->size <= self->size) {
-        uint64_t last = self->size - needle->size;
-        uint64_t i = 0;
-        while (i <= last) {
-            if (memcmp(self->data + i, needle->data, needle->size) == 0) {
-                matches++;
-                i += needle->size;
-                if (once) break;
-            } else {
-                i++;
-            }
-        }
-    }
-    uint64_t delta_per =
-        (repl->size > needle->size)
-            ? (repl->size - needle->size)
-            : 0;
-    uint64_t shrink_per =
-        (needle->size > repl->size)
-            ? (needle->size - repl->size)
-            : 0;
-    uint64_t out_len = self->size + matches * delta_per - matches * shrink_per;
-    z_t46_t z = {0};
-    z.size = out_len;
-    z.capacity = out_len + 1;
-    z.data = (char*)z_xmalloc(z.capacity + 1);
-    /* pass 2: copy with replacement */
-    uint64_t src_i = 0, dst_i = 0, done_matches = 0;
-    while (src_i < self->size) {
-        bool can_match = (done_matches < matches)
-                      && (src_i + needle->size <= self->size)
-                      && (memcmp(self->data + src_i, needle->data, needle->size) == 0);
-        if (can_match) {
-            memcpy(z.data + dst_i, repl->data, repl->size);
-            dst_i += repl->size;
-            src_i += needle->size;
-            done_matches++;
-        } else {
-            z.data[dst_i++] = self->data[src_i++];
-        }
-    }
-    z.data[dst_i] = '\0';
-    return z;
-}
-
-static z_t46_t z_t67_replace(
-    const z_t67_t* self, const z_t67_t* needle,
-    const z_t67_t* replacement);
-static z_t46_t z_t67_replace(
-    const z_t67_t* self, const z_t67_t* needle,
-    const z_t67_t* replacement) {
-    return z_t67_replace_impl(self, needle, replacement, false);
-}
-
-static z_t46_t z_t67_concat(
-    const z_t67_t* self, const z_t67_t* other);
-static z_t46_t z_t67_concat(
-    const z_t67_t* self, const z_t67_t* other) {
-    z_t46_t z = {0};
-    uint64_t total = self->size + other->size;
-    z.size = total;
-    z.capacity = total + 1;
-    z.data = (char*)z_xmalloc(z.capacity + 1);
-    memcpy(z.data, self->data, self->size);
-    memcpy(z.data + self->size, other->data, other->size);
-    z.data[total] = '\0';
-    return z;
-}
-
-static z_t999_t z_t67_indexOf(const z_t67_t* self, const z_t67_t* needle);
-static z_t999_t z_t67_indexOf(const z_t67_t* self, const z_t67_t* needle) {
-    z_t999_t out = {0};
-    uint64_t r = z_t67_indexOf_raw(self, needle);
-    if (r == UINT64_MAX) {
-        out.tag = Z_OPTIONVAL_U64_TAG_NONE;
-        return out;
-    }
-    out.tag = Z_OPTIONVAL_U64_TAG_SOME;
-    out.data.some = r;
-    return out;
-}
-
-
-static z_t999_t z_t67_lastIndexOf(const z_t67_t* self, const z_t67_t* needle);
-static z_t999_t z_t67_lastIndexOf(const z_t67_t* self, const z_t67_t* needle) {
-    z_t999_t out = {0};
-    if (needle->size == 0) {
-        out.tag = Z_OPTIONVAL_U64_TAG_SOME;
-        out.data.some = self->size;
-        return out;
-    }
-    if (needle->size > self->size) {
-        out.tag = Z_OPTIONVAL_U64_TAG_NONE;
-        return out;
-    }
-    for (uint64_t i = self->size - needle->size + 1; i > 0; i--) {
-        uint64_t idx = i - 1;
-        if (memcmp(self->data + idx, needle->data, needle->size) == 0) {
-            out.tag = Z_OPTIONVAL_U64_TAG_SOME;
-            out.data.some = idx;
-            return out;
-        }
-    }
-    out.tag = Z_OPTIONVAL_U64_TAG_NONE;
-    return out;
-}
-
-
-static z_t1583_t z_t67_byteAt(const z_t67_t* self, uint64_t i);
-static z_t1583_t z_t67_byteAt(const z_t67_t* self, uint64_t i) {
-    z_t1583_t out = {0};
-    if (i >= self->size) {
-        out.tag = Z_OPTIONVAL_U8_TAG_NONE;
-        return out;
-    }
-    out.tag = Z_OPTIONVAL_U8_TAG_SOME;
-    out.data.some = (uint8_t)self->data[i];
-    return out;
-}
-
-
-static z_t3492_t z_t67_stripPrefix(
-    const z_t67_t* self, const z_t67_t* p);
-static z_t3492_t z_t67_stripPrefix(
-    const z_t67_t* self, const z_t67_t* p) {
-    z_t3492_t out = {0};
-    if (p->size > self->size
-        || (p->size > 0 && memcmp(self->data, p->data, p->size) != 0)) {
-        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
-        return out;
-    }
-    z_t67_t* boxed = (z_t67_t*)z_xmalloc(sizeof(z_t67_t));
-    boxed->data = self->data + p->size;
-    boxed->size = self->size - p->size;
-    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
-    out.data = boxed;
-    return out;
-}
-
-
-static z_t3923_t z_t67_parseI64(const z_t67_t* self);
-static z_t3923_t z_t67_parseI64(const z_t67_t* self) {
-    z_t3923_t out = {0};
-    uint64_t i = 0;
-    int neg = 0;
-    if (self->size == 0) goto empty;
-    if (self->data[i] == '+' || self->data[i] == '-') {
-        if (self->data[i] == '-') neg = 1;
-        i++;
-    }
-    if (i >= self->size) goto empty;
-    uint64_t acc = 0;
-    for (; i < self->size; i++) {
-        unsigned char c = (unsigned char)self->data[i];
-        if (c < '0' || c > '9') goto invalid;
-        uint64_t d = (uint64_t)(c - '0');
-        if (acc > (UINT64_MAX - d) / 10) goto overflow;
-        acc = acc * 10 + d;
-    }
-    /* range check: fits in i64 */
-    uint64_t bound = neg ? (uint64_t)1 << 63 : ((uint64_t)1 << 63) - 1;
-    if (acc > bound) goto overflow;
-    int64_t v = neg ? -(int64_t)acc : (int64_t)acc;
-    if (neg && acc == ((uint64_t)1 << 63)) v = INT64_MIN;
-    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_OK;
-    out.data.ok = v;
-    return out;
-empty:
-    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
-    out.data.err = Z_PARSEERROR_TAG_EMPTY;
-    return out;
-invalid:
-    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
-    out.data.err = Z_PARSEERROR_TAG_INVALIDDIGIT;
-    return out;
-overflow:
-    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
-    out.data.err = Z_PARSEERROR_TAG_OVERFLOW;
-    return out;
-}
-
-
-static z_t4048_t z_t67_parseU64(const z_t67_t* self);
-static z_t4048_t z_t67_parseU64(const z_t67_t* self) {
-    z_t4048_t out = {0};
-    if (self->size == 0) {
-        out.tag = Z_RESULTVAL_U64_PARSEERROR_TAG_ERR;
-        out.data.err = Z_PARSEERROR_TAG_EMPTY;
-        return out;
-    }
-    uint64_t acc = 0;
-    for (uint64_t i = 0; i < self->size; i++) {
-        unsigned char c = (unsigned char)self->data[i];
-        if (c < '0' || c > '9') {
-            out.tag = Z_RESULTVAL_U64_PARSEERROR_TAG_ERR;
-            out.data.err = Z_PARSEERROR_TAG_INVALIDDIGIT;
-            return out;
-        }
-        uint64_t d = (uint64_t)(c - '0');
-        if (acc > (UINT64_MAX - d) / 10) {
-            out.tag = Z_RESULTVAL_U64_PARSEERROR_TAG_ERR;
-            out.data.err = Z_PARSEERROR_TAG_OVERFLOW;
-            return out;
-        }
-        acc = acc * 10 + d;
-    }
-    out.tag = Z_RESULTVAL_U64_PARSEERROR_TAG_OK;
-    out.data.ok = acc;
-    return out;
-}
-
-
-static z_t3915_t z_t67_parseF64(const z_t67_t* self);
-static z_t3915_t z_t67_parseF64(const z_t67_t* self) {
-    z_t3915_t out = {0};
-    if (self->size == 0) {
-        out.tag = Z_RESULTVAL_F64_PARSEERROR_TAG_ERR;
-        out.data.err = Z_PARSEERROR_TAG_EMPTY;
-        return out;
-    }
-    /* copy into a NUL-terminated local buffer for strtod */
-    char buf[64];
-    char* p = (self->size < sizeof(buf)) ? buf
-            : (char*)z_xmalloc(self->size + 1);
-    memcpy(p, self->data, self->size);
-    p[self->size] = '\0';
-    char* end = NULL;
-    errno = 0;
-    double v = strtod(p, &end);
-    int err = errno;
-    uint64_t consumed = (uint64_t)(end - p);
-    if (p != buf) free(p);
-    if (consumed == 0) {
-        out.tag = Z_RESULTVAL_F64_PARSEERROR_TAG_ERR;
-        out.data.err = Z_PARSEERROR_TAG_INVALIDDIGIT;
-        return out;
-    }
-    if (consumed != self->size) {
-        out.tag = Z_RESULTVAL_F64_PARSEERROR_TAG_ERR;
-        out.data.err = Z_PARSEERROR_TAG_INVALIDDIGIT;
-        return out;
-    }
-    if (err == ERANGE) {
-        out.tag = Z_RESULTVAL_F64_PARSEERROR_TAG_ERR;
-        out.data.err = Z_PARSEERROR_TAG_OVERFLOW;
-        return out;
-    }
-    out.tag = Z_RESULTVAL_F64_PARSEERROR_TAG_OK;
-    out.data.ok = v;
-    return out;
-}
-
-
-static char* z_sv_to_cstr(z_t67_t v) {
-    char* buf = (char*)z_xmalloc(v.size + 1);
-    if (v.size > 0) memcpy(buf, v.data, v.size);
-    buf[v.size] = '\0';
-    return buf;
-}
-
-static z_t630_t z_io_errno_to_IoError(int e) {
-    z_t630_t r = {0};
-    r.data = NULL;
-    switch (e) {
-        case ENOENT:  r.tag = Z_IOERROR_TAG_NOTFOUND; break;
-        case EACCES:
-        case EPERM:   r.tag = Z_IOERROR_TAG_PERMISSIONDENIED; break;
-        case EINTR:   r.tag = Z_IOERROR_TAG_INTERRUPTED; break;
-        case EEXIST:  r.tag = Z_IOERROR_TAG_EXISTS; break;
-        case EISDIR:  r.tag = Z_IOERROR_TAG_ISDIR; break;
-        case ENOTDIR: r.tag = Z_IOERROR_TAG_NOTDIR; break;
-        case ENOSPC:  r.tag = Z_IOERROR_TAG_NOSPACE; break;
-        default:      r.tag = Z_IOERROR_TAG_OTHER; break;
-    }
-    return r;
-}
-
-
-/* shared helper: write all bytes; returns 0 ok, errno on failure. */
-static int z_io_write_all(int fd, const char* data, uint64_t size) {
-    uint64_t off = 0;
-    while (off < size) {
-        long n = write(fd, data + off, size - off);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return errno;
-        }
-        off += (uint64_t)n;
-    }
-    return 0;
-}
-
-/* shared helper: path + open flags -> write content -> close.
-   path and content are borrowed views; caller retains. */
-static z_t640_t z_io_write_common(
-    z_t67_t path, z_t67_t content, int flags
-) {
-    z_t640_t result = {0};
-    char* path_cstr = z_sv_to_cstr(path);
-    int fd = open(path_cstr, flags, 0644);
-    free(path_cstr);
-    if (fd < 0) {
-        int e = errno;
-        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
-        *boxed = z_io_errno_to_IoError(e);
-        result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;
-        result.data = boxed;
-        return result;
-    }
-    int werr = z_io_write_all(fd, content.data, content.size);
-    close(fd);
-    if (werr != 0) {
-        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
-        *boxed = z_io_errno_to_IoError(werr);
-        result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;
-        result.data = boxed;
-        return result;
-    }
-    result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
-    result.data = NULL;
-    return result;
-}
-
-
-static z_t693_t z_io_u64_ok(uint64_t v);
-static z_t693_t z_io_u64_ok(uint64_t v) {
-    z_t693_t result = {0};
-    uint64_t* boxed = (uint64_t*)z_xmalloc(sizeof(uint64_t));
-    *boxed = v;
-    result.tag = Z_RESULT_BOX_U64_IOERROR_TAG_OK;
-    result.data = boxed;
-    return result;
-}
-
-static z_t693_t z_io_u64_err(int saved_errno);
-static z_t693_t z_io_u64_err(int saved_errno) {
-    z_t693_t result = {0};
-    z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
-    *boxed = z_io_errno_to_IoError(saved_errno);
-    result.tag = Z_RESULT_BOX_U64_IOERROR_TAG_ERR;
-    result.data = boxed;
-    return result;
-}
-
-
-static z_t640_t z_io_wrap_null_Result(int rc, int saved_errno) {
-    z_t640_t result = {0};
-    if (rc == 0) {
-        result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
-        result.data = NULL;
-        return result;
-    }
-    z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
-    *boxed = z_io_errno_to_IoError(saved_errno);
-    result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;
-    result.data = boxed;
-    return result;
-}
-
-
-/* Populate fs from a struct stat. Shared by z_io_stat / z_io_lstat —
-   the only behavioral split between them lives in the syscall call
-   site (stat(2) follows symlinks, lstat(2) does not). */
-static void z_io_fill_filestat(z_t649_t* fs, const struct stat* sb);
-static void z_io_fill_filestat(z_t649_t* fs, const struct stat* sb) {
-    if (S_ISREG(sb->st_mode))       fs->kind = Z_FILEKIND_TAG_FILE;
-    else if (S_ISDIR(sb->st_mode))  fs->kind = Z_FILEKIND_TAG_DIR;
-    else if (S_ISLNK(sb->st_mode))  fs->kind = Z_FILEKIND_TAG_SYMLINK;
-    else                            fs->kind = Z_FILEKIND_TAG_OTHER;
-    fs->size = (uint64_t)sb->st_size;
-    fs->mtimeSeconds = (uint64_t)sb->st_mtime;
-    fs->atimeSeconds = (uint64_t)sb->st_atime;
-    fs->ctimeSeconds = (uint64_t)sb->st_ctime;
-    fs->mode = (uint32_t)sb->st_mode;
-    fs->device = (uint64_t)sb->st_dev;
-    fs->inode = (uint64_t)sb->st_ino;
-    fs->nlink = (uint64_t)sb->st_nlink;
-}
-
-
-static void z_io_eprintln(z_t67_t sv) {
-    fprintf(stderr, "%.*s\n", (int)sv.size, sv.data);
-}
-
-
-static bool z_io_exists(z_t67_t path) {
-    char* path_cstr = z_sv_to_cstr(path);
-    int r = access(path_cstr, F_OK);
-    free(path_cstr);
-    return r == 0;
-}
-
-
-static z_t866_t z_io_readText(z_t67_t path) {
-    /* path is a borrowed view; caller retains ownership */
-    z_t866_t result = {0};
-    char* path_cstr = z_sv_to_cstr(path);
-    int fd = open(path_cstr, O_RDONLY);
-    free(path_cstr);
-    if (fd < 0) {
-        int e = errno;
-        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
-        *boxed = z_io_errno_to_IoError(e);
-        result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
-        result.data = boxed;
-        return result;
-    }
-    z_t46_t content = z_t46_create((uint64_t)4096);
-    char buf[4096];
-    for (;;) {
-        long n = read(fd, buf, sizeof(buf));
-        if (n == 0) break;
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            int e = errno;
-            close(fd);
-            z_t46_free(&content);
-            z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
-            *boxed = z_io_errno_to_IoError(e);
-            result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
-            result.data = boxed;
-            return result;
-        }
-        z_t46_append(&content, buf, (uint64_t)n);
-    }
-    close(fd);
-    z_t46_t* boxed = (z_t46_t*)z_xmalloc(sizeof(z_t46_t));
-    *boxed = content;
-    result.tag = Z_RESULT_STRING_IOERROR_TAG_OK;
-    result.data = boxed;
-    return result;
-}
-
-
-static z_t640_t z_io_remove(z_t67_t path) {
-    char* path_cstr = z_sv_to_cstr(path);
-    /* try unlink first; if EISDIR, fall back to rmdir */
-    int rc = unlink(path_cstr);
-    int e = errno;
-    if (rc != 0 && e == EISDIR) {
-        rc = rmdir(path_cstr);
-        e = errno;
-    }
-    free(path_cstr);
-    return z_io_wrap_null_Result(rc, e);
-}
-
-
-/* stat(2) follows symlinks; the SYMLINK arm never fires here —
-   that arm is reached through z_io_lstat. Returns the filestat
-   value by value (not boxed); the compiler-generated result
-   destructor frees the ok payload's heap copy. */
-static z_t661_t z_io_stat(z_t67_t path);
-static z_t661_t z_io_stat(z_t67_t path) {
-    z_t661_t result = {0};
-    char* path_cstr = z_sv_to_cstr(path);
-    struct stat sb;
-    int rc = stat(path_cstr, &sb);
-    int e = errno;
-    free(path_cstr);
-    if (rc != 0) {
-        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
-        *boxed = z_io_errno_to_IoError(e);
-        result.tag = Z_RESULT_BOX_FILESTAT_IOERROR_TAG_ERR;
-        result.data = boxed;
-        return result;
-    }
-    z_t649_t fs = {0};
-    z_io_fill_filestat(&fs, &sb);
-    z_t649_t* boxed = (z_t649_t*)z_xmalloc(sizeof(z_t649_t));
-    *boxed = fs;
-    result.tag = Z_RESULT_BOX_FILESTAT_IOERROR_TAG_OK;
-    result.data = boxed;
-    return result;
-}
-
-
-static z_t640_t z_io_writeText(
-    z_t67_t path, z_t67_t content
-) {
-    return z_io_write_common(path, content, O_WRONLY | O_CREAT | O_TRUNC);
-}
-
-
-/* file.close — explicit close that surfaces delayed write errors.
-   Marks the file as closed so z_t664_destroy skips a second close. */
-static z_t640_t z_t664_close(z_t664_t* p);
-static z_t640_t z_t664_close(z_t664_t* p) {
-    z_t640_t result = {0};
-    if (!p || p->closed) {
-        result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
-        result.data = NULL;
-        return result;
-    }
-    int rc = close(p->fd);
-    int e = errno;
-    p->closed = true;
-    return z_io_wrap_null_Result(rc, e);
-}
-
-
-/* file.write — write all bytes from `src`. Loops on short writes;
-   retries on EINTR. Returns total bytes written on success.
-   `src` is a listview (layout: length, data*), matching byteview. */
-static z_t693_t z_t664_write(
-    z_t664_t* f, z_t679_t* src
-);
-static z_t693_t z_t664_write(
-    z_t664_t* f, z_t679_t* src
-) {
-    uint64_t total = 0;
-    while (total < src->length) {
-        long n = write(f->fd, src->data + total, src->length - total);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return z_io_u64_err(errno);
-        }
-        total += (uint64_t)n;
-    }
-    return z_io_u64_ok(total);
-}
-
-
-/* file.read — read up to `max` bytes, appending to `buf`.
-   Grows the list capacity as needed. Returns actual bytes read
-   (0 indicates EOF); retries on EINTR. The loop breaks out so the body
-   ends in its return -- c2mir miscompiles a struct return otherwise. */
-static z_t693_t z_t664_read(
-    z_t664_t* f, z_t668_t* buf, uint64_t max
-);
-static z_t693_t z_t664_read(
-    z_t664_t* f, z_t668_t* buf, uint64_t max
-) {
-    if (buf->capacity < buf->length + max) {
-        uint64_t newcap = buf->length + max;
-        buf->data = (uint8_t*)z_xrealloc(buf->data, newcap);
-        buf->capacity = newcap;
-    }
-    long n;
-    for (;;) {
-        n = read(f->fd, buf->data + buf->length, max);
-        if (n >= 0) break;
-        if (errno != EINTR) return z_io_u64_err(errno);
-    }
-    buf->length += (uint64_t)n;
-    return z_io_u64_ok((uint64_t)n);
-}
-
-
-/* file.seek — reposition the fd head. Maps seekorigin to the
-   matching POSIX whence constant. Returns the new absolute
-   position measured from the start of the file. */
-static z_t693_t z_t664_seek(
-    z_t664_t* f, int64_t off, z_t706_t origin
-);
-static z_t693_t z_t664_seek(
-    z_t664_t* f, int64_t off, z_t706_t origin
-) {
-    int whence;
-    switch (origin) {
-        case Z_SEEKORIGIN_TAG_START:   whence = SEEK_SET; break;
-        case Z_SEEKORIGIN_TAG_CURRENT: whence = SEEK_CUR; break;
-        case Z_SEEKORIGIN_TAG_END:     whence = SEEK_END; break;
-        default:                       whence = SEEK_SET; break;
-    }
-    off_t pos = lseek(f->fd, (off_t)off, whence);
-    if (pos < 0) return z_io_u64_err(errno);
-    return z_io_u64_ok((uint64_t)pos);
-}
-
-
-/* file.flush — no-op for raw file descriptors (POSIX write goes
-   directly to the kernel, no userspace buffer to drain). Exists
-   so file satisfies the `writer` protocol signature. */
-static z_t640_t z_t664_flush(z_t664_t* f);
-static z_t640_t z_t664_flush(z_t664_t* f) {
-    (void)f;
-    z_t640_t result = {0};
-    result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
-    result.data = NULL;
-    return result;
-}
-
-
-static z_t693_t z_t664_Reader_read_wrapper(void* _data, z_t668_t* into, uint64_t max) {
-    z_t664_t* _self = (z_t664_t*)_data;
-    return z_t664_read(_self, into, max);
-}
-
-static z_t665_vtable_t z_t664_Reader_vtable = {
-    .read = z_t664_Reader_read_wrapper,
-};
-
-static z_t665_t z_t664_Reader_create(z_t664_t* val) {
-    z_t665_t proto = {0};
-    proto.data = val;
-    proto.vtable = &z_t664_Reader_vtable;
-    proto.destroy = NULL;
-    return proto;
-}
-
-static void z_t664_Reader_owned_destroy(void* p) {
-    free(p);
-}
-
-static z_t665_t z_t664_Reader_create_owned(z_t664_t* val) {
-    z_t665_t proto = {0};
-    z_t664_t* boxed = (z_t664_t*)z_xmalloc(sizeof(z_t664_t));
-    *boxed = *val;
-    proto.data = boxed;
-    proto.vtable = &z_t664_Reader_vtable;
-    proto.destroy = z_t664_Reader_owned_destroy;
-    return proto;
-}
-
-static z_t693_t z_t664_Writer_write_wrapper(void* _data, z_t679_t* from) {
-    z_t664_t* _self = (z_t664_t*)_data;
-    return z_t664_write(_self, from);
-}
-
-static z_t640_t z_t664_Writer_flush_wrapper(void* _data) {
-    z_t664_t* _self = (z_t664_t*)_data;
-    return z_t664_flush(_self);
-}
-
-static z_t711_vtable_t z_t664_Writer_vtable = {
-    .write = z_t664_Writer_write_wrapper,
-    .flush = z_t664_Writer_flush_wrapper,
-};
-
-static z_t711_t z_t664_Writer_create(z_t664_t* val) {
-    z_t711_t proto = {0};
-    proto.data = val;
-    proto.vtable = &z_t664_Writer_vtable;
-    proto.destroy = NULL;
-    return proto;
-}
-
-static void z_t664_Writer_owned_destroy(void* p) {
-    free(p);
-}
-
-static z_t711_t z_t664_Writer_create_owned(z_t664_t* val) {
-    z_t711_t proto = {0};
-    z_t664_t* boxed = (z_t664_t*)z_xmalloc(sizeof(z_t664_t));
-    *boxed = *val;
-    proto.data = boxed;
-    proto.vtable = &z_t664_Writer_vtable;
-    proto.destroy = z_t664_Writer_owned_destroy;
-    return proto;
-}
-
-static z_t640_t z_t664_Closer_close_wrapper(void* _data) {
-    z_t664_t* _self = (z_t664_t*)_data;
-    return z_t664_close(_self);
-}
-
-static z_t716_vtable_t z_t664_Closer_vtable = {
-    .close = z_t664_Closer_close_wrapper,
-};
-
-static z_t716_t z_t664_Closer_create(z_t664_t* val) {
-    z_t716_t proto = {0};
-    proto.data = val;
-    proto.vtable = &z_t664_Closer_vtable;
-    proto.destroy = NULL;
-    return proto;
-}
-
-static void z_t664_Closer_owned_destroy(void* p) {
-    free(p);
-}
-
-static z_t716_t z_t664_Closer_create_owned(z_t664_t* val) {
-    z_t716_t proto = {0};
-    z_t664_t* boxed = (z_t664_t*)z_xmalloc(sizeof(z_t664_t));
-    *boxed = *val;
-    proto.data = boxed;
-    proto.vtable = &z_t664_Closer_vtable;
-    proto.destroy = z_t664_Closer_owned_destroy;
-    return proto;
-}
-
-static z_t693_t z_t664_Seeker_seek_wrapper(void* _data, int64_t to, uint8_t from) {
-    z_t664_t* _self = (z_t664_t*)_data;
-    return z_t664_seek(_self, to, from);
-}
-
-static z_t720_vtable_t z_t664_Seeker_vtable = {
-    .seek = z_t664_Seeker_seek_wrapper,
-};
-
-static z_t720_t z_t664_Seeker_create(z_t664_t* val) {
-    z_t720_t proto = {0};
-    proto.data = val;
-    proto.vtable = &z_t664_Seeker_vtable;
-    proto.destroy = NULL;
-    return proto;
-}
-
-static void z_t664_Seeker_owned_destroy(void* p) {
-    free(p);
-}
-
-static z_t720_t z_t664_Seeker_create_owned(z_t664_t* val) {
-    z_t720_t proto = {0};
-    z_t664_t* boxed = (z_t664_t*)z_xmalloc(sizeof(z_t664_t));
-    *boxed = *val;
-    proto.data = boxed;
-    proto.vtable = &z_t664_Seeker_vtable;
-    proto.destroy = z_t664_Seeker_owned_destroy;
-    return proto;
-}
-
-/* Process argc/argv captured by main() before z_main runs, so
-   os.args can expose them without threading them through every
-   call site. Only emitted when the program references os.args. */
-static int z_os_argc_g;
-static char** z_os_argv_g;
-
-
-/* os.args -- copy argv into a freshly-allocated list of strings.
-   The caller owns the outer list and every string inside; scope
-   exit runs the list destructor which frees each element. */
-static z_t423_t z_os_args(void);
-static z_t423_t z_os_args(void) {
-    uint64_t n = (uint64_t)(z_os_argc_g > 0 ? z_os_argc_g : 0);
-    z_t423_t out = {0};
-    out.length = n;
-    out.capacity = n;
-    if (n > 0) {
-        out.data = (z_t46_t*)z_xmalloc(n * sizeof(z_t46_t));
-        for (uint64_t i = 0; i < n; i++) {
-            out.data[i] = z_t46_new(z_os_argv_g[i]);
-        }
-    }
-    return out;
-}
-
-
-/* os.get_env -- look up the POSIX environment by name. Returns
-   option.some(string) on hit (copying the value so the caller
-   owns the heap buffer and libc's environ isn't aliased); returns
-   option.none on miss. `key` is a borrowed view; caller retains. */
-static z_t349_t z_os_env(z_t67_t key);
-static z_t349_t z_os_env(z_t67_t key) {
-    z_t349_t out = {0};
-    char* key_cstr = z_sv_to_cstr(key);
-    const char* v = getenv(key_cstr);
-    free(key_cstr);
-    if (v == NULL) {
-        out.tag = Z_OPTION_STRING_TAG_NONE;
-        return out;
-    }
-    z_t46_t* boxed = (z_t46_t*)z_xmalloc(sizeof(z_t46_t));
-    *boxed = z_t46_new(v);
-    out.tag = Z_OPTION_STRING_TAG_SOME;
-    out.data = boxed;
-    return out;
-}
-
-
-/* os.buildCommit -- the build stamp this binary carries, empty when the
-   build supplied none. Two routes set it: define ZC_BUILD_COMMIT for the C
-   compiler, or link a strong z_build_commit that overrides the weak default
-   below. The link route costs a relink rather than a recompile of this
-   translation unit, which is why the Makefile uses it. */
-#ifndef ZC_BUILD_COMMIT
-#define ZC_BUILD_COMMIT ""
-#endif
-__attribute__((weak)) const char z_build_commit[] = ZC_BUILD_COMMIT;
-
-static z_t46_t z_os_buildCommit(void);
-static z_t46_t z_os_buildCommit(void) {
-    return z_t46_new(z_build_commit);
-}
-
-/* os.buildCompiler -- name and version of the C compiler that compiled this
-   translation unit, read from its own predefined macros, so it needs nothing
-   from the build. clang defines __GNUC__ as well, so it is tested first. The
-   numeric macros are used rather than __VERSION__, which gcc and clang spell
-   differently ("15.2.0" vs "Ubuntu Clang 21.1.8 (6ubuntu1)"). */
-#define Z_BUILDCC_STR_(x) #x
-#define Z_BUILDCC_STR(x) Z_BUILDCC_STR_(x)
-
-static z_t46_t z_os_buildCompiler(void);
-static z_t46_t z_os_buildCompiler(void) {
-#if defined(__clang__)
-    return z_t46_new("clang " Z_BUILDCC_STR(__clang_major__) "."
-                        Z_BUILDCC_STR(__clang_minor__) "."
-                        Z_BUILDCC_STR(__clang_patchlevel__));
-#elif defined(__GNUC__)
-    return z_t46_new("gcc " Z_BUILDCC_STR(__GNUC__) "."
-                        Z_BUILDCC_STR(__GNUC_MINOR__) "."
-                        Z_BUILDCC_STR(__GNUC_PATCHLEVEL__));
-#else
-    return z_t46_new("cc");
-#endif
-}
-
-/* os.buildDate -- companion to os.buildCommit: the date the build stamped
-   in, empty when it stamped none. Set by defining ZC_BUILD_DATE for the C
-   compiler, or by linking a strong z_build_date. */
-#ifndef ZC_BUILD_DATE
-#define ZC_BUILD_DATE ""
-#endif
-__attribute__((weak)) const char z_build_date[] = ZC_BUILD_DATE;
-
-static z_t46_t z_os_buildDate(void);
-static z_t46_t z_os_buildDate(void) {
-    return z_t46_new(z_build_date);
-}
-
-/* os.exePath -- absolute path of the running executable. Linux
-   reads /proc/self/exe; macOS uses _NSGetExecutablePath. Copied
-   into a z_t46_t so ownership stays uniform with the other os
-   string natives. */
-#if defined(__APPLE__)
-#include <mach-o/dyld.h>
-#endif
-static z_t866_t z_os_exePath(void);
-static z_t866_t z_os_exePath(void) {
-    z_t866_t out = {0};
-    char buf[4096];
-#if defined(__APPLE__)
-    uint32_t bufsize = (uint32_t)sizeof(buf);
-    if (_NSGetExecutablePath(buf, &bufsize) != 0) {
-        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
-        z_t630_t e = {0};
-        e.tag = Z_IOERROR_TAG_OTHER;
-        *boxed = e;
-        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
-        out.data = boxed;
-        return out;
-    }
-#else
-    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (len < 0) {
-        int e = errno;
-        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
-        *boxed = z_io_errno_to_IoError(e);
-        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
-        out.data = boxed;
-        return out;
-    }
-    buf[len] = '\0';
-#endif
-    z_t46_t* boxed = (z_t46_t*)z_xmalloc(sizeof(z_t46_t));
-    *boxed = z_t46_new(buf);
-    out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;
-    out.data = boxed;
-    return out;
-}
-
-
-/* os.exit -- libc exit with the given status. Does not return;
-   in-scope zerolang destructors are skipped. */
-static void z_os_exit(int32_t code);
-static void z_os_exit(int32_t code) {
-    exit((int)code);
-}
-
-
-/* os.hostArchName -- the CPU family this translation unit was compiled for.
-   Companion to _Z_OS_HOST_OS_NAME; same reasoning for returning a name. */
-static z_t46_t z_os_hostArchName(void);
-static z_t46_t z_os_hostArchName(void) {
-#if defined(__x86_64__) || defined(_M_X64)
-    return z_t46_new("x86_64");
-#elif defined(__aarch64__) || defined(_M_ARM64)
-    return z_t46_new("aarch64");
-#else
-    return z_t46_new("other");
-#endif
-}
-
-/* os.hostOsName -- the OS family this translation unit was compiled for,
-   resolved by the C preprocessor. A NAME rather than a variant so the runtime
-   needs to know nothing about `platform`'s kinds: `zc` maps it to a
-   `platform.oskind` arm when it fills that unit in for the build it is
-   performing. Falls through to `other` on an unrecognised host. */
-static z_t46_t z_os_hostOsName(void);
-static z_t46_t z_os_hostOsName(void) {
-#if defined(__linux__)
-    return z_t46_new("linux");
-#elif defined(__APPLE__)
-    return z_t46_new("darwin");
-#elif defined(_WIN32)
-    return z_t46_new("windows");
-#else
-    return z_t46_new("other");
-#endif
-}
-
-/* os.monotonicMillis -- milliseconds on the monotonic clock. Only
-   differences are meaningful (the epoch is arbitrary, typically boot).
-   Infallible: CLOCK_MONOTONIC cannot fail on a supported platform. */
-#include <time.h>
-static int64_t z_os_monotonicMillis(void);
-static int64_t z_os_monotonicMillis(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
-}
-
-/* os.pid -- getpid. pid_t fits in int32_t on every supported
-   platform (Linux caps at 4_194_304 by default). */
-static int32_t z_os_pid(void);
-static int32_t z_os_pid(void) {
-    return (int32_t)getpid();
-}
-
-
-/* os.spawn -- fork/exec argv as a child. argv[0] is resolved via
-   PATH (execvp). stdout->outPath, stderr->errPath (each
-   O_WRONLY|O_CREAT|O_TRUNC); an empty out/err path inherits the
-   parent's fd, and empty out+err inherits stdin too (else stdin is
-   /dev/null). A non-empty cwd chdirs
-   the child. The redirection files are opened in the parent before
-   fork so the child's chdir cannot change their resolution. argv
-   element buffers are NUL-terminated (z_t46), borrowed directly;
-   only the three view paths need z_sv_to_cstr. Returns the child's
-   exit status; 127 on exec/setup failure; 124 if timeoutSecs > 0 and
-   the child outlived it (SIGKILLed). timeoutSecs <= 0 waits forever. */
-static void z_os_spawn_on_alarm(int sig) { (void)sig; }
-static int32_t z_os_spawn(
-    z_t423_t* argv, z_t67_t cwd, z_t67_t outPath,
-    z_t67_t errPath, int32_t timeoutSecs
-);
-static int32_t z_os_spawn(
-    z_t423_t* argv, z_t67_t cwd, z_t67_t outPath,
-    z_t67_t errPath, int32_t timeoutSecs
-) {
-    if (argv->length == 0) return 127;
-    char** c_argv = (char**)z_xmalloc((argv->length + 1) * sizeof(char*));
-    for (uint64_t i = 0; i < argv->length; i++) {
-        c_argv[i] = argv->data[i].data;
-    }
-    c_argv[argv->length] = NULL;
-    char* cwd_c = z_sv_to_cstr(cwd);
-    /* An empty outPath/errPath inherits the parent's fd 1/2 (skip the
-       open+dup2). When both are empty (the `zc run` case) inherit stdin
-       too; otherwise stdin is /dev/null. Non-empty callers unaffected. */
-    int inherit_out = (outPath.size == 0);
-    int inherit_err = (errPath.size == 0);
-    int inherit_in = (inherit_out && inherit_err);
-    char* out_c = inherit_out ? NULL : z_sv_to_cstr(outPath);
-    char* err_c = inherit_err ? NULL : z_sv_to_cstr(errPath);
-    int out_fd = inherit_out ? -1 : open(out_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    int err_fd = inherit_err ? -1 : open(err_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    int null_fd = inherit_in ? -1 : open("/dev/null", O_RDONLY);
-    int32_t status = 127;
-    int setup_ok = (inherit_out || out_fd >= 0) && (inherit_err || err_fd >= 0)
-                   && (inherit_in || null_fd >= 0);
-    if (setup_ok) {
-        pid_t pid = fork();
-        if (pid == 0) {
-            if (cwd.size > 0 && chdir(cwd_c) != 0) _exit(127);
-            if (!inherit_in) dup2(null_fd, 0);
-            if (!inherit_out) dup2(out_fd, 1);
-            if (!inherit_err) dup2(err_fd, 2);
-            if (null_fd >= 0) close(null_fd);
-            if (out_fd >= 0) close(out_fd);
-            if (err_fd >= 0) close(err_fd);
-            execvp(c_argv[0], c_argv);
-            _exit(127);
-        } else if (pid > 0) {
-            int wst = 0;
-            if (timeoutSecs > 0) {
-                struct sigaction sa, old_sa;
-                memset(&sa, 0, sizeof(sa));
-                sa.sa_handler = z_os_spawn_on_alarm;
-                sigemptyset(&sa.sa_mask);
-                sigaction(SIGALRM, &sa, &old_sa);
-                alarm((unsigned int)timeoutSecs);
-                pid_t r = waitpid(pid, &wst, 0);
-                int e = errno;
-                alarm(0);
-                sigaction(SIGALRM, &old_sa, NULL);
-                if (r == pid) {
-                    if (WIFEXITED(wst)) status = (int32_t)WEXITSTATUS(wst);
-                } else if (r < 0 && e == EINTR) {
-                    kill(pid, SIGKILL);
-                    waitpid(pid, &wst, 0);
-                    status = 124;
-                }
-            } else {
-                if (waitpid(pid, &wst, 0) == pid && WIFEXITED(wst)) {
-                    status = (int32_t)WEXITSTATUS(wst);
-                }
-            }
-        }
-    }
-    if (out_fd >= 0) close(out_fd);
-    if (err_fd >= 0) close(err_fd);
-    if (null_fd >= 0) close(null_fd);
-    free(cwd_c);
-    free(out_c);
-    free(err_c);
-    free(c_argv);
-    return status;
-}
-
-
-/* Shared by tcc.available and tcc.compileToExe: the libtcc entry points and
-   the dlopen that finds them.
-
-   libtcc is LOADED, never linked. That is a licence requirement, not a
-   preference -- tinycc is LGPL-2.1 inside a permissive tree -- and
-   `make static-tcc-guard` fails the build if any tcc symbol reaches a
-   binary. So the names below are strings, resolved at the point of use;
-   nothing here creates a link-time dependency, and a zc built without a
-   tcc beside it is a zc that reports 127 rather than one that fails to
-   start.
-
-   The library lives at <tccDir>/libtcc.so, the same directory that holds
-   the runtime payload tcc_set_lib_path needs. One directory, one answer. */
-#include <dlfcn.h>
-typedef struct TCCState z_tcc_State;
-typedef void z_tcc_ErrorFunc(void* opaque, const char* msg);
-
-typedef struct {
-    void* handle;
-    z_tcc_State* (*nw)(void);
-    void (*del)(z_tcc_State*);
-    void (*set_lib_path)(z_tcc_State*, const char*);
-    void (*set_error_func)(z_tcc_State*, void*, z_tcc_ErrorFunc*);
-    int (*set_options)(z_tcc_State*, const char*);
-    int (*set_output_type)(z_tcc_State*, int);
-    int (*add_file)(z_tcc_State*, const char*);
-    int (*add_library)(z_tcc_State*, const char*);
-    int (*output_file)(z_tcc_State*, const char*);
-} z_tcc_api_t;
-
-#define Z_TCC_OUTPUT_EXE 2
-
-/* diagnostics go to stderr verbatim, so a program reports the same text
-   whichever mode built it. */
-static void z_tcc_on_error(void* opaque, const char* msg) {
-    (void)opaque;
-    fprintf(stderr, "%s\n", msg);
-}
-
-static char* z_tcc_lib_path(z_t67_t tccDir) {
-    char* dir = z_sv_to_cstr(tccDir);
-    size_t n = strlen(dir);
-    char* p = (char*)z_xmalloc(n + sizeof("/libtcc.so"));
-    memcpy(p, dir, n);
-    memcpy(p + n, "/libtcc.so", sizeof("/libtcc.so"));
-    free(dir);
-    return p;
-}
-
-/* 1 when every entry point resolved. A partial load is a failed load: a
-   libtcc missing one of these is not one this code can drive. */
-static int z_tcc_open(z_tcc_api_t* a, z_t67_t tccDir) {
-    char* path = z_tcc_lib_path(tccDir);
-    memset(a, 0, sizeof(*a));
-    a->handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
-    free(path);
-    if (!a->handle) return 0;
-    *(void**)&a->nw = dlsym(a->handle, "tcc_new");
-    *(void**)&a->del = dlsym(a->handle, "tcc_delete");
-    *(void**)&a->set_lib_path = dlsym(a->handle, "tcc_set_lib_path");
-    *(void**)&a->set_error_func = dlsym(a->handle, "tcc_set_error_func");
-    *(void**)&a->set_options = dlsym(a->handle, "tcc_set_options");
-    *(void**)&a->set_output_type = dlsym(a->handle, "tcc_set_output_type");
-    *(void**)&a->add_file = dlsym(a->handle, "tcc_add_file");
-    *(void**)&a->add_library = dlsym(a->handle, "tcc_add_library");
-    *(void**)&a->output_file = dlsym(a->handle, "tcc_output_file");
-    if (a->nw && a->del && a->set_lib_path && a->set_error_func
-        && a->set_options && a->set_output_type && a->add_file
-        && a->add_library && a->output_file) {
-        return 1;
-    }
-    dlclose(a->handle);
-    a->handle = NULL;
-    return 0;
-}
-
-static void z_tcc_close(z_tcc_api_t* a) {
-    if (a->handle) dlclose(a->handle);
-    a->handle = NULL;
-}
-
-/* tcc.compileToExe -- compile `csrc` and link it to the executable `exe`,
-   in this process, through libtcc loaded from `tccDir`.
-
-   The result is a file on disk (TCC_OUTPUT_EXE), never a run in memory:
-   in-process buys the fast COMPILE, and the program still executes as its
-   own child, so exit codes, signals and the leak corpus are unaffected and
-   a crashing program cannot take zc down with it.
-
-   `tccDir` is also handed to tcc_set_lib_path -- tcc's runtime payload is
-   fixed when tcc is configured, so a relocated one cannot resolve even
-   stddef.h until it is told. `cflags` is parsed by tcc itself (the same
-   spelling as the command line); `libs` are the `-l` names the emitted C
-   declared, with -lm appended the way the spawned path appends it.
-
-   Returns 0 on success, 1 when tcc rejected the program or the link
-   failed, and 127 when libtcc could not be loaded -- the code os.spawn
-   already uses for "could not run the compiler", so the driver reports
-   both through one path rather than growing a second. */
-static int32_t z_tcc_compileToExe(
-    z_t67_t csrc, z_t67_t exe, z_t67_t tccDir,
-    bool release, z_t67_t cflags, z_t423_t* libs
-);
-static int32_t z_tcc_compileToExe(
-    z_t67_t csrc, z_t67_t exe, z_t67_t tccDir,
-    bool release, z_t67_t cflags, z_t423_t* libs
-) {
-    z_tcc_api_t a;
-    if (!z_tcc_open(&a, tccDir)) return 127;
-
-    z_tcc_State* s = a.nw();
-    if (!s) {
-        z_tcc_close(&a);
-        return 127;
-    }
-    a.set_error_func(s, NULL, z_tcc_on_error);
-
-    char* dir_c = z_sv_to_cstr(tccDir);
-    a.set_lib_path(s, dir_c);
-    free(dir_c);
-
-    int32_t rc = 0;
-    /* -g matches the spawned path's debug default; tcc has one optimisation
-       level, so --release changes nothing here beyond dropping -g. */
-    if (!release && a.set_options(s, "-g") == -1) rc = 1;
-
-    if (rc == 0 && cflags.size > 0) {
-        char* cf = z_sv_to_cstr(cflags);
-        if (a.set_options(s, cf) == -1) rc = 1;
-        free(cf);
-    }
-    if (rc == 0 && a.set_output_type(s, Z_TCC_OUTPUT_EXE) == -1) rc = 1;
-
-    if (rc == 0) {
-        char* src_c = z_sv_to_cstr(csrc);
-        if (a.add_file(s, src_c) == -1) rc = 1;
-        free(src_c);
-    }
-    if (rc == 0) {
-        for (uint64_t i = 0; i < libs->length; i++) {
-            if (a.add_library(s, libs->data[i].data) == -1) {
-                rc = 1;
-                break;
-            }
-        }
-    }
-    if (rc == 0 && a.add_library(s, "m") == -1) rc = 1;
-
-    if (rc == 0) {
-        char* exe_c = z_sv_to_cstr(exe);
-        if (a.output_file(s, exe_c) == -1) rc = 1;
-        free(exe_c);
-    }
-
-    a.del(s);
-    z_tcc_close(&a);
-    return rc;
-}
-
 typedef void (*z_t30_ft)(void);
 typedef struct z_t93_t z_t93_t;
 typedef z_t46_t (*z_t31_ft)(z_t32_t*, z_t98_t*, z_t474_t*, uint32_t);
@@ -27623,6 +26230,1399 @@ static void z_t891_destroy(z_t891_t* p) {
     z_t1269_destroy(&p->typing);
 }
 
+/* Splitter / linesiter state. Classes are declared `is native`
+   with no user fields; the runtime supplies the real layout,
+   stack-allocated value type (48 bytes). Both iterators share
+   the same struct — linesiter leaves sep NULL. */
+typedef struct {
+    const char* src;
+    uint64_t    src_len;
+    const char* sep;
+    uint64_t    sep_len;
+    uint64_t    cursor;
+    bool        done;
+} z_t3481_t;
+
+typedef z_t3481_t z_t3483_t;
+
+
+static z_t3481_t z_t67_split(
+    const z_t67_t* self, const z_t67_t* sep);
+static z_t3481_t z_t67_split(
+    const z_t67_t* self, const z_t67_t* sep) {
+    z_t3481_t s;
+    s.src = self->data;
+    s.src_len = self->size;
+    s.sep = sep->data;
+    s.sep_len = sep->size;
+    s.cursor = 0;
+    s.done = (sep->size == 0);
+    return s;
+}
+
+
+static z_t3492_t z_t3481_call(z_t3481_t* s);
+static z_t3492_t z_t3481_call(z_t3481_t* s) {
+    z_t3492_t out = {0};
+    if (s->done) {
+        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
+        return out;
+    }
+    const char* start = s->src + s->cursor;
+    uint64_t remaining = s->src_len - s->cursor;
+    if (s->sep_len > remaining) {
+        /* no more separators possible — return the tail */
+        z_t67_t* boxed = (z_t67_t*)z_xmalloc(sizeof(z_t67_t));
+        boxed->data = start;
+        boxed->size = remaining;
+        s->cursor = s->src_len;
+        s->done = true;
+        out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
+        out.data = boxed;
+        return out;
+    }
+    uint64_t scan_end = remaining - s->sep_len;
+    for (uint64_t i = 0; i <= scan_end; i++) {
+        if (memcmp(start + i, s->sep, s->sep_len) == 0) {
+            z_t67_t* boxed = (z_t67_t*)z_xmalloc(sizeof(z_t67_t));
+            boxed->data = start;
+            boxed->size = i;
+            s->cursor += i + s->sep_len;
+            out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
+            out.data = boxed;
+            return out;
+        }
+    }
+    /* no separator in remaining — final fragment */
+    z_t67_t* boxed = (z_t67_t*)z_xmalloc(sizeof(z_t67_t));
+    boxed->data = start;
+    boxed->size = remaining;
+    s->cursor = s->src_len;
+    s->done = true;
+    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
+    out.data = boxed;
+    return out;
+}
+
+
+static z_t3483_t z_t67_lines(const z_t67_t* self);
+static z_t3483_t z_t67_lines(const z_t67_t* self) {
+    z_t3483_t s;
+    s.src = self->data;
+    s.src_len = self->size;
+    s.sep = NULL;
+    s.sep_len = 0;
+    s.cursor = 0;
+    s.done = (self->size == 0);
+    return s;
+}
+
+
+static z_t3492_t z_t3483_call(z_t3483_t* s);
+static z_t3492_t z_t3483_call(z_t3483_t* s) {
+    z_t3492_t out = {0};
+    if (s->done) {
+        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
+        return out;
+    }
+    const char* start = s->src + s->cursor;
+    uint64_t remaining = s->src_len - s->cursor;
+    uint64_t i = 0;
+    while (i < remaining && start[i] != '\n') i++;
+    uint64_t line_len = i;
+    if (line_len > 0 && start[line_len - 1] == '\r') line_len--;
+    z_t67_t* boxed = (z_t67_t*)z_xmalloc(sizeof(z_t67_t));
+    boxed->data = start;
+    boxed->size = line_len;
+    if (i == remaining) {
+        s->cursor = s->src_len;
+        s->done = true;
+    } else {
+        s->cursor += i + 1;
+        if (s->cursor >= s->src_len) s->done = true;
+    }
+    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
+    out.data = boxed;
+    return out;
+}
+
+
+/* string_join -- borrow `parts` (read-only) and return a new
+   owned string. `parts` is pointer-passed (Phase A default for
+   stack-reftype params); caller retains ownership. */
+static z_t46_t z_stringJoin(
+    z_t423_t* parts, z_t67_t sep);
+static z_t46_t z_stringJoin(
+    z_t423_t* parts, z_t67_t sep) {
+    z_t46_t out = {0};
+    uint64_t n = parts->length;
+    if (n == 0) {
+        out.capacity = 1;
+        out.data = (char*)z_xmalloc(1);
+        out.data[0] = '\0';
+        return out;
+    }
+    uint64_t total = sep.size * (n - 1);
+    for (uint64_t i = 0; i < n; i++) {
+        total += parts->data[i].size;
+    }
+    out.size = total;
+    out.capacity = total + 1;
+    out.data = (char*)z_xmalloc(out.capacity + 1);
+    uint64_t pos = 0;
+    for (uint64_t i = 0; i < n; i++) {
+        if (i > 0 && sep.size > 0) {
+            memcpy(out.data + pos, sep.data, sep.size);
+            pos += sep.size;
+        }
+        memcpy(out.data + pos, parts->data[i].data, parts->data[i].size);
+        pos += parts->data[i].size;
+    }
+    out.data[total] = '\0';
+    return out;
+}
+
+
+static bool z_t67_startsWith(const z_t67_t* self, const z_t67_t* prefix);
+static bool z_t67_startsWith(const z_t67_t* self, const z_t67_t* prefix) {
+    if (prefix->size > self->size) return false;
+    if (prefix->size == 0) return true;
+    return memcmp(self->data, prefix->data, prefix->size) == 0;
+}
+
+static bool z_t67_endsWith(const z_t67_t* self, const z_t67_t* suffix);
+static bool z_t67_endsWith(const z_t67_t* self, const z_t67_t* suffix) {
+    if (suffix->size > self->size) return false;
+    if (suffix->size == 0) return true;
+    return memcmp(self->data + (self->size - suffix->size),
+                  suffix->data, suffix->size) == 0;
+}
+
+static uint64_t z_t67_indexOf_raw(const z_t67_t* self, const z_t67_t* needle);
+static uint64_t z_t67_indexOf_raw(const z_t67_t* self, const z_t67_t* needle) {
+    if (needle->size == 0) return 0;
+    if (needle->size > self->size) return UINT64_MAX;
+    uint64_t last = self->size - needle->size;
+    for (uint64_t i = 0; i <= last; i++) {
+        if (memcmp(self->data + i, needle->data, needle->size) == 0) {
+            return i;
+        }
+    }
+    return UINT64_MAX;
+}
+
+
+static bool z_t67_contains(const z_t67_t* self, const z_t67_t* needle);
+static bool z_t67_contains(const z_t67_t* self, const z_t67_t* needle) {
+    return z_t67_indexOf_raw(self, needle) != UINT64_MAX;
+}
+
+static bool z_ascii_is_ws(unsigned char c);
+static bool z_ascii_is_ws(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n'
+        || c == '\v' || c == '\f' || c == '\r';
+}
+
+static z_t67_t z_t67_substring(const z_t67_t* self, uint64_t from, uint64_t to);
+static z_t67_t z_t67_substring(const z_t67_t* self, uint64_t from, uint64_t to) {
+    if (from > self->size || to > self->size || from > to) z_panic("substring: bounds error");
+    return (z_t67_t){ .size = to - from, .data = self->data + from };
+}
+static uint64_t z_t67_hash(const z_t67_t* self);
+static uint64_t z_t67_hash(const z_t67_t* self) {
+    return z_siphash_stringview(*self);
+}
+static z_t67_t z_t67_trim(const z_t67_t* self);
+static z_t67_t z_t67_trim(const z_t67_t* self) {
+    const char* p = self->data;
+    const char* end = self->data + self->size;
+    while (p < end && z_ascii_is_ws((unsigned char)*p)) p++;
+    while (end > p && z_ascii_is_ws((unsigned char)end[-1])) end--;
+    z_t67_t out = { .size = (uint64_t)(end - p), .data = p };
+    return out;
+}
+
+static z_t46_t z_t67_replace_impl(
+    const z_t67_t* self, const z_t67_t* needle,
+    const z_t67_t* repl, bool once);
+static z_t46_t z_t67_replace_impl(
+    const z_t67_t* self, const z_t67_t* needle,
+    const z_t67_t* repl, bool once) {
+    /* empty needle: just copy self */
+    if (needle->size == 0) {
+        z_t46_t z = {0};
+        z.size = self->size;
+        z.capacity = self->size + 1;
+        z.data = (char*)z_xmalloc(z.capacity + 1);
+        memcpy(z.data, self->data, self->size);
+        z.data[self->size] = '\0';
+        return z;
+    }
+    /* pass 1: count matches so we can size the output once */
+    uint64_t matches = 0;
+    if (needle->size <= self->size) {
+        uint64_t last = self->size - needle->size;
+        uint64_t i = 0;
+        while (i <= last) {
+            if (memcmp(self->data + i, needle->data, needle->size) == 0) {
+                matches++;
+                i += needle->size;
+                if (once) break;
+            } else {
+                i++;
+            }
+        }
+    }
+    uint64_t delta_per =
+        (repl->size > needle->size)
+            ? (repl->size - needle->size)
+            : 0;
+    uint64_t shrink_per =
+        (needle->size > repl->size)
+            ? (needle->size - repl->size)
+            : 0;
+    uint64_t out_len = self->size + matches * delta_per - matches * shrink_per;
+    z_t46_t z = {0};
+    z.size = out_len;
+    z.capacity = out_len + 1;
+    z.data = (char*)z_xmalloc(z.capacity + 1);
+    /* pass 2: copy with replacement */
+    uint64_t src_i = 0, dst_i = 0, done_matches = 0;
+    while (src_i < self->size) {
+        bool can_match = (done_matches < matches)
+                      && (src_i + needle->size <= self->size)
+                      && (memcmp(self->data + src_i, needle->data, needle->size) == 0);
+        if (can_match) {
+            memcpy(z.data + dst_i, repl->data, repl->size);
+            dst_i += repl->size;
+            src_i += needle->size;
+            done_matches++;
+        } else {
+            z.data[dst_i++] = self->data[src_i++];
+        }
+    }
+    z.data[dst_i] = '\0';
+    return z;
+}
+
+static z_t46_t z_t67_replace(
+    const z_t67_t* self, const z_t67_t* needle,
+    const z_t67_t* replacement);
+static z_t46_t z_t67_replace(
+    const z_t67_t* self, const z_t67_t* needle,
+    const z_t67_t* replacement) {
+    return z_t67_replace_impl(self, needle, replacement, false);
+}
+
+static z_t46_t z_t67_concat(
+    const z_t67_t* self, const z_t67_t* other);
+static z_t46_t z_t67_concat(
+    const z_t67_t* self, const z_t67_t* other) {
+    z_t46_t z = {0};
+    uint64_t total = self->size + other->size;
+    z.size = total;
+    z.capacity = total + 1;
+    z.data = (char*)z_xmalloc(z.capacity + 1);
+    memcpy(z.data, self->data, self->size);
+    memcpy(z.data + self->size, other->data, other->size);
+    z.data[total] = '\0';
+    return z;
+}
+
+static z_t999_t z_t67_indexOf(const z_t67_t* self, const z_t67_t* needle);
+static z_t999_t z_t67_indexOf(const z_t67_t* self, const z_t67_t* needle) {
+    z_t999_t out = {0};
+    uint64_t r = z_t67_indexOf_raw(self, needle);
+    if (r == UINT64_MAX) {
+        out.tag = Z_OPTIONVAL_U64_TAG_NONE;
+        return out;
+    }
+    out.tag = Z_OPTIONVAL_U64_TAG_SOME;
+    out.data.some = r;
+    return out;
+}
+
+
+static z_t999_t z_t67_lastIndexOf(const z_t67_t* self, const z_t67_t* needle);
+static z_t999_t z_t67_lastIndexOf(const z_t67_t* self, const z_t67_t* needle) {
+    z_t999_t out = {0};
+    if (needle->size == 0) {
+        out.tag = Z_OPTIONVAL_U64_TAG_SOME;
+        out.data.some = self->size;
+        return out;
+    }
+    if (needle->size > self->size) {
+        out.tag = Z_OPTIONVAL_U64_TAG_NONE;
+        return out;
+    }
+    for (uint64_t i = self->size - needle->size + 1; i > 0; i--) {
+        uint64_t idx = i - 1;
+        if (memcmp(self->data + idx, needle->data, needle->size) == 0) {
+            out.tag = Z_OPTIONVAL_U64_TAG_SOME;
+            out.data.some = idx;
+            return out;
+        }
+    }
+    out.tag = Z_OPTIONVAL_U64_TAG_NONE;
+    return out;
+}
+
+
+static z_t1583_t z_t67_byteAt(const z_t67_t* self, uint64_t i);
+static z_t1583_t z_t67_byteAt(const z_t67_t* self, uint64_t i) {
+    z_t1583_t out = {0};
+    if (i >= self->size) {
+        out.tag = Z_OPTIONVAL_U8_TAG_NONE;
+        return out;
+    }
+    out.tag = Z_OPTIONVAL_U8_TAG_SOME;
+    out.data.some = (uint8_t)self->data[i];
+    return out;
+}
+
+
+static z_t3492_t z_t67_stripPrefix(
+    const z_t67_t* self, const z_t67_t* p);
+static z_t3492_t z_t67_stripPrefix(
+    const z_t67_t* self, const z_t67_t* p) {
+    z_t3492_t out = {0};
+    if (p->size > self->size
+        || (p->size > 0 && memcmp(self->data, p->data, p->size) != 0)) {
+        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
+        return out;
+    }
+    z_t67_t* boxed = (z_t67_t*)z_xmalloc(sizeof(z_t67_t));
+    boxed->data = self->data + p->size;
+    boxed->size = self->size - p->size;
+    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
+    out.data = boxed;
+    return out;
+}
+
+
+static z_t3923_t z_t67_parseI64(const z_t67_t* self);
+static z_t3923_t z_t67_parseI64(const z_t67_t* self) {
+    z_t3923_t out = {0};
+    uint64_t i = 0;
+    int neg = 0;
+    if (self->size == 0) goto empty;
+    if (self->data[i] == '+' || self->data[i] == '-') {
+        if (self->data[i] == '-') neg = 1;
+        i++;
+    }
+    if (i >= self->size) goto empty;
+    uint64_t acc = 0;
+    for (; i < self->size; i++) {
+        unsigned char c = (unsigned char)self->data[i];
+        if (c < '0' || c > '9') goto invalid;
+        uint64_t d = (uint64_t)(c - '0');
+        if (acc > (UINT64_MAX - d) / 10) goto overflow;
+        acc = acc * 10 + d;
+    }
+    /* range check: fits in i64 */
+    uint64_t bound = neg ? (uint64_t)1 << 63 : ((uint64_t)1 << 63) - 1;
+    if (acc > bound) goto overflow;
+    int64_t v = neg ? -(int64_t)acc : (int64_t)acc;
+    if (neg && acc == ((uint64_t)1 << 63)) v = INT64_MIN;
+    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_OK;
+    out.data.ok = v;
+    return out;
+empty:
+    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
+    out.data.err = Z_PARSEERROR_TAG_EMPTY;
+    return out;
+invalid:
+    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
+    out.data.err = Z_PARSEERROR_TAG_INVALIDDIGIT;
+    return out;
+overflow:
+    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
+    out.data.err = Z_PARSEERROR_TAG_OVERFLOW;
+    return out;
+}
+
+
+static z_t4048_t z_t67_parseU64(const z_t67_t* self);
+static z_t4048_t z_t67_parseU64(const z_t67_t* self) {
+    z_t4048_t out = {0};
+    if (self->size == 0) {
+        out.tag = Z_RESULTVAL_U64_PARSEERROR_TAG_ERR;
+        out.data.err = Z_PARSEERROR_TAG_EMPTY;
+        return out;
+    }
+    uint64_t acc = 0;
+    for (uint64_t i = 0; i < self->size; i++) {
+        unsigned char c = (unsigned char)self->data[i];
+        if (c < '0' || c > '9') {
+            out.tag = Z_RESULTVAL_U64_PARSEERROR_TAG_ERR;
+            out.data.err = Z_PARSEERROR_TAG_INVALIDDIGIT;
+            return out;
+        }
+        uint64_t d = (uint64_t)(c - '0');
+        if (acc > (UINT64_MAX - d) / 10) {
+            out.tag = Z_RESULTVAL_U64_PARSEERROR_TAG_ERR;
+            out.data.err = Z_PARSEERROR_TAG_OVERFLOW;
+            return out;
+        }
+        acc = acc * 10 + d;
+    }
+    out.tag = Z_RESULTVAL_U64_PARSEERROR_TAG_OK;
+    out.data.ok = acc;
+    return out;
+}
+
+
+static z_t3915_t z_t67_parseF64(const z_t67_t* self);
+static z_t3915_t z_t67_parseF64(const z_t67_t* self) {
+    z_t3915_t out = {0};
+    if (self->size == 0) {
+        out.tag = Z_RESULTVAL_F64_PARSEERROR_TAG_ERR;
+        out.data.err = Z_PARSEERROR_TAG_EMPTY;
+        return out;
+    }
+    /* copy into a NUL-terminated local buffer for strtod */
+    char buf[64];
+    char* p = (self->size < sizeof(buf)) ? buf
+            : (char*)z_xmalloc(self->size + 1);
+    memcpy(p, self->data, self->size);
+    p[self->size] = '\0';
+    char* end = NULL;
+    errno = 0;
+    double v = strtod(p, &end);
+    int err = errno;
+    uint64_t consumed = (uint64_t)(end - p);
+    if (p != buf) free(p);
+    if (consumed == 0) {
+        out.tag = Z_RESULTVAL_F64_PARSEERROR_TAG_ERR;
+        out.data.err = Z_PARSEERROR_TAG_INVALIDDIGIT;
+        return out;
+    }
+    if (consumed != self->size) {
+        out.tag = Z_RESULTVAL_F64_PARSEERROR_TAG_ERR;
+        out.data.err = Z_PARSEERROR_TAG_INVALIDDIGIT;
+        return out;
+    }
+    if (err == ERANGE) {
+        out.tag = Z_RESULTVAL_F64_PARSEERROR_TAG_ERR;
+        out.data.err = Z_PARSEERROR_TAG_OVERFLOW;
+        return out;
+    }
+    out.tag = Z_RESULTVAL_F64_PARSEERROR_TAG_OK;
+    out.data.ok = v;
+    return out;
+}
+
+
+static char* z_sv_to_cstr(z_t67_t v) {
+    char* buf = (char*)z_xmalloc(v.size + 1);
+    if (v.size > 0) memcpy(buf, v.data, v.size);
+    buf[v.size] = '\0';
+    return buf;
+}
+
+static z_t630_t z_io_errno_to_IoError(int e) {
+    z_t630_t r = {0};
+    r.data = NULL;
+    switch (e) {
+        case ENOENT:  r.tag = Z_IOERROR_TAG_NOTFOUND; break;
+        case EACCES:
+        case EPERM:   r.tag = Z_IOERROR_TAG_PERMISSIONDENIED; break;
+        case EINTR:   r.tag = Z_IOERROR_TAG_INTERRUPTED; break;
+        case EEXIST:  r.tag = Z_IOERROR_TAG_EXISTS; break;
+        case EISDIR:  r.tag = Z_IOERROR_TAG_ISDIR; break;
+        case ENOTDIR: r.tag = Z_IOERROR_TAG_NOTDIR; break;
+        case ENOSPC:  r.tag = Z_IOERROR_TAG_NOSPACE; break;
+        default:      r.tag = Z_IOERROR_TAG_OTHER; break;
+    }
+    return r;
+}
+
+
+/* shared helper: write all bytes; returns 0 ok, errno on failure. */
+static int z_io_write_all(int fd, const char* data, uint64_t size) {
+    uint64_t off = 0;
+    while (off < size) {
+        long n = write(fd, data + off, size - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return errno;
+        }
+        off += (uint64_t)n;
+    }
+    return 0;
+}
+
+/* shared helper: path + open flags -> write content -> close.
+   path and content are borrowed views; caller retains. */
+static z_t640_t z_io_write_common(
+    z_t67_t path, z_t67_t content, int flags
+) {
+    z_t640_t result = {0};
+    char* path_cstr = z_sv_to_cstr(path);
+    int fd = open(path_cstr, flags, 0644);
+    free(path_cstr);
+    if (fd < 0) {
+        int e = errno;
+        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
+        *boxed = z_io_errno_to_IoError(e);
+        result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;
+        result.data = boxed;
+        return result;
+    }
+    int werr = z_io_write_all(fd, content.data, content.size);
+    close(fd);
+    if (werr != 0) {
+        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
+        *boxed = z_io_errno_to_IoError(werr);
+        result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;
+        result.data = boxed;
+        return result;
+    }
+    result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
+    result.data = NULL;
+    return result;
+}
+
+
+static z_t693_t z_io_u64_ok(uint64_t v);
+static z_t693_t z_io_u64_ok(uint64_t v) {
+    z_t693_t result = {0};
+    uint64_t* boxed = (uint64_t*)z_xmalloc(sizeof(uint64_t));
+    *boxed = v;
+    result.tag = Z_RESULT_BOX_U64_IOERROR_TAG_OK;
+    result.data = boxed;
+    return result;
+}
+
+static z_t693_t z_io_u64_err(int saved_errno);
+static z_t693_t z_io_u64_err(int saved_errno) {
+    z_t693_t result = {0};
+    z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
+    *boxed = z_io_errno_to_IoError(saved_errno);
+    result.tag = Z_RESULT_BOX_U64_IOERROR_TAG_ERR;
+    result.data = boxed;
+    return result;
+}
+
+
+static z_t640_t z_io_wrap_null_Result(int rc, int saved_errno) {
+    z_t640_t result = {0};
+    if (rc == 0) {
+        result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
+        result.data = NULL;
+        return result;
+    }
+    z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
+    *boxed = z_io_errno_to_IoError(saved_errno);
+    result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;
+    result.data = boxed;
+    return result;
+}
+
+
+/* Populate fs from a struct stat. Shared by z_io_stat / z_io_lstat —
+   the only behavioral split between them lives in the syscall call
+   site (stat(2) follows symlinks, lstat(2) does not). */
+static void z_io_fill_filestat(z_t649_t* fs, const struct stat* sb);
+static void z_io_fill_filestat(z_t649_t* fs, const struct stat* sb) {
+    if (S_ISREG(sb->st_mode))       fs->kind = Z_FILEKIND_TAG_FILE;
+    else if (S_ISDIR(sb->st_mode))  fs->kind = Z_FILEKIND_TAG_DIR;
+    else if (S_ISLNK(sb->st_mode))  fs->kind = Z_FILEKIND_TAG_SYMLINK;
+    else                            fs->kind = Z_FILEKIND_TAG_OTHER;
+    fs->size = (uint64_t)sb->st_size;
+    fs->mtimeSeconds = (uint64_t)sb->st_mtime;
+    fs->atimeSeconds = (uint64_t)sb->st_atime;
+    fs->ctimeSeconds = (uint64_t)sb->st_ctime;
+    fs->mode = (uint32_t)sb->st_mode;
+    fs->device = (uint64_t)sb->st_dev;
+    fs->inode = (uint64_t)sb->st_ino;
+    fs->nlink = (uint64_t)sb->st_nlink;
+}
+
+
+static void z_io_eprintln(z_t67_t sv) {
+    fprintf(stderr, "%.*s\n", (int)sv.size, sv.data);
+}
+
+
+static bool z_io_exists(z_t67_t path) {
+    char* path_cstr = z_sv_to_cstr(path);
+    int r = access(path_cstr, F_OK);
+    free(path_cstr);
+    return r == 0;
+}
+
+
+static z_t866_t z_io_readText(z_t67_t path) {
+    /* path is a borrowed view; caller retains ownership */
+    z_t866_t result = {0};
+    char* path_cstr = z_sv_to_cstr(path);
+    int fd = open(path_cstr, O_RDONLY);
+    free(path_cstr);
+    if (fd < 0) {
+        int e = errno;
+        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
+        *boxed = z_io_errno_to_IoError(e);
+        result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+        result.data = boxed;
+        return result;
+    }
+    z_t46_t content = z_t46_create((uint64_t)4096);
+    char buf[4096];
+    for (;;) {
+        long n = read(fd, buf, sizeof(buf));
+        if (n == 0) break;
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            int e = errno;
+            close(fd);
+            z_t46_free(&content);
+            z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
+            *boxed = z_io_errno_to_IoError(e);
+            result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+            result.data = boxed;
+            return result;
+        }
+        z_t46_append(&content, buf, (uint64_t)n);
+    }
+    close(fd);
+    z_t46_t* boxed = (z_t46_t*)z_xmalloc(sizeof(z_t46_t));
+    *boxed = content;
+    result.tag = Z_RESULT_STRING_IOERROR_TAG_OK;
+    result.data = boxed;
+    return result;
+}
+
+
+static z_t640_t z_io_remove(z_t67_t path) {
+    char* path_cstr = z_sv_to_cstr(path);
+    /* try unlink first; if EISDIR, fall back to rmdir */
+    int rc = unlink(path_cstr);
+    int e = errno;
+    if (rc != 0 && e == EISDIR) {
+        rc = rmdir(path_cstr);
+        e = errno;
+    }
+    free(path_cstr);
+    return z_io_wrap_null_Result(rc, e);
+}
+
+
+/* stat(2) follows symlinks; the SYMLINK arm never fires here —
+   that arm is reached through z_io_lstat. Returns the filestat
+   value by value (not boxed); the compiler-generated result
+   destructor frees the ok payload's heap copy. */
+static z_t661_t z_io_stat(z_t67_t path);
+static z_t661_t z_io_stat(z_t67_t path) {
+    z_t661_t result = {0};
+    char* path_cstr = z_sv_to_cstr(path);
+    struct stat sb;
+    int rc = stat(path_cstr, &sb);
+    int e = errno;
+    free(path_cstr);
+    if (rc != 0) {
+        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
+        *boxed = z_io_errno_to_IoError(e);
+        result.tag = Z_RESULT_BOX_FILESTAT_IOERROR_TAG_ERR;
+        result.data = boxed;
+        return result;
+    }
+    z_t649_t fs = {0};
+    z_io_fill_filestat(&fs, &sb);
+    z_t649_t* boxed = (z_t649_t*)z_xmalloc(sizeof(z_t649_t));
+    *boxed = fs;
+    result.tag = Z_RESULT_BOX_FILESTAT_IOERROR_TAG_OK;
+    result.data = boxed;
+    return result;
+}
+
+
+static z_t640_t z_io_writeText(
+    z_t67_t path, z_t67_t content
+) {
+    return z_io_write_common(path, content, O_WRONLY | O_CREAT | O_TRUNC);
+}
+
+
+/* file.close — explicit close that surfaces delayed write errors.
+   Marks the file as closed so z_t664_destroy skips a second close. */
+static z_t640_t z_t664_close(z_t664_t* p);
+static z_t640_t z_t664_close(z_t664_t* p) {
+    z_t640_t result = {0};
+    if (!p || p->closed) {
+        result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
+        result.data = NULL;
+        return result;
+    }
+    int rc = close(p->fd);
+    int e = errno;
+    p->closed = true;
+    return z_io_wrap_null_Result(rc, e);
+}
+
+
+/* file.write — write all bytes from `src`. Loops on short writes;
+   retries on EINTR. Returns total bytes written on success.
+   `src` is a listview (layout: length, data*), matching byteview. */
+static z_t693_t z_t664_write(
+    z_t664_t* f, z_t679_t* src
+);
+static z_t693_t z_t664_write(
+    z_t664_t* f, z_t679_t* src
+) {
+    uint64_t total = 0;
+    while (total < src->length) {
+        long n = write(f->fd, src->data + total, src->length - total);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return z_io_u64_err(errno);
+        }
+        total += (uint64_t)n;
+    }
+    return z_io_u64_ok(total);
+}
+
+
+/* file.read — read up to `max` bytes, appending to `buf`.
+   Grows the list capacity as needed. Returns actual bytes read
+   (0 indicates EOF); retries on EINTR. The loop breaks out so the body
+   ends in its return -- c2mir miscompiles a struct return otherwise. */
+static z_t693_t z_t664_read(
+    z_t664_t* f, z_t668_t* buf, uint64_t max
+);
+static z_t693_t z_t664_read(
+    z_t664_t* f, z_t668_t* buf, uint64_t max
+) {
+    if (buf->capacity < buf->length + max) {
+        uint64_t newcap = buf->length + max;
+        buf->data = (uint8_t*)z_xrealloc(buf->data, newcap);
+        buf->capacity = newcap;
+    }
+    long n;
+    for (;;) {
+        n = read(f->fd, buf->data + buf->length, max);
+        if (n >= 0) break;
+        if (errno != EINTR) return z_io_u64_err(errno);
+    }
+    buf->length += (uint64_t)n;
+    return z_io_u64_ok((uint64_t)n);
+}
+
+
+/* file.seek — reposition the fd head. Maps seekorigin to the
+   matching POSIX whence constant. Returns the new absolute
+   position measured from the start of the file. */
+static z_t693_t z_t664_seek(
+    z_t664_t* f, int64_t off, z_t706_t origin
+);
+static z_t693_t z_t664_seek(
+    z_t664_t* f, int64_t off, z_t706_t origin
+) {
+    int whence;
+    switch (origin) {
+        case Z_SEEKORIGIN_TAG_START:   whence = SEEK_SET; break;
+        case Z_SEEKORIGIN_TAG_CURRENT: whence = SEEK_CUR; break;
+        case Z_SEEKORIGIN_TAG_END:     whence = SEEK_END; break;
+        default:                       whence = SEEK_SET; break;
+    }
+    off_t pos = lseek(f->fd, (off_t)off, whence);
+    if (pos < 0) return z_io_u64_err(errno);
+    return z_io_u64_ok((uint64_t)pos);
+}
+
+
+/* file.flush — no-op for raw file descriptors (POSIX write goes
+   directly to the kernel, no userspace buffer to drain). Exists
+   so file satisfies the `writer` protocol signature. */
+static z_t640_t z_t664_flush(z_t664_t* f);
+static z_t640_t z_t664_flush(z_t664_t* f) {
+    (void)f;
+    z_t640_t result = {0};
+    result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
+    result.data = NULL;
+    return result;
+}
+
+
+static z_t693_t z_t664_Reader_read_wrapper(void* _data, z_t668_t* into, uint64_t max) {
+    z_t664_t* _self = (z_t664_t*)_data;
+    return z_t664_read(_self, into, max);
+}
+
+static z_t665_vtable_t z_t664_Reader_vtable = {
+    .read = z_t664_Reader_read_wrapper,
+};
+
+static z_t665_t z_t664_Reader_create(z_t664_t* val) {
+    z_t665_t proto = {0};
+    proto.data = val;
+    proto.vtable = &z_t664_Reader_vtable;
+    proto.destroy = NULL;
+    return proto;
+}
+
+static void z_t664_Reader_owned_destroy(void* p) {
+    free(p);
+}
+
+static z_t665_t z_t664_Reader_create_owned(z_t664_t* val) {
+    z_t665_t proto = {0};
+    z_t664_t* boxed = (z_t664_t*)z_xmalloc(sizeof(z_t664_t));
+    *boxed = *val;
+    proto.data = boxed;
+    proto.vtable = &z_t664_Reader_vtable;
+    proto.destroy = z_t664_Reader_owned_destroy;
+    return proto;
+}
+
+static z_t693_t z_t664_Writer_write_wrapper(void* _data, z_t679_t* from) {
+    z_t664_t* _self = (z_t664_t*)_data;
+    return z_t664_write(_self, from);
+}
+
+static z_t640_t z_t664_Writer_flush_wrapper(void* _data) {
+    z_t664_t* _self = (z_t664_t*)_data;
+    return z_t664_flush(_self);
+}
+
+static z_t711_vtable_t z_t664_Writer_vtable = {
+    .write = z_t664_Writer_write_wrapper,
+    .flush = z_t664_Writer_flush_wrapper,
+};
+
+static z_t711_t z_t664_Writer_create(z_t664_t* val) {
+    z_t711_t proto = {0};
+    proto.data = val;
+    proto.vtable = &z_t664_Writer_vtable;
+    proto.destroy = NULL;
+    return proto;
+}
+
+static void z_t664_Writer_owned_destroy(void* p) {
+    free(p);
+}
+
+static z_t711_t z_t664_Writer_create_owned(z_t664_t* val) {
+    z_t711_t proto = {0};
+    z_t664_t* boxed = (z_t664_t*)z_xmalloc(sizeof(z_t664_t));
+    *boxed = *val;
+    proto.data = boxed;
+    proto.vtable = &z_t664_Writer_vtable;
+    proto.destroy = z_t664_Writer_owned_destroy;
+    return proto;
+}
+
+static z_t640_t z_t664_Closer_close_wrapper(void* _data) {
+    z_t664_t* _self = (z_t664_t*)_data;
+    return z_t664_close(_self);
+}
+
+static z_t716_vtable_t z_t664_Closer_vtable = {
+    .close = z_t664_Closer_close_wrapper,
+};
+
+static z_t716_t z_t664_Closer_create(z_t664_t* val) {
+    z_t716_t proto = {0};
+    proto.data = val;
+    proto.vtable = &z_t664_Closer_vtable;
+    proto.destroy = NULL;
+    return proto;
+}
+
+static void z_t664_Closer_owned_destroy(void* p) {
+    free(p);
+}
+
+static z_t716_t z_t664_Closer_create_owned(z_t664_t* val) {
+    z_t716_t proto = {0};
+    z_t664_t* boxed = (z_t664_t*)z_xmalloc(sizeof(z_t664_t));
+    *boxed = *val;
+    proto.data = boxed;
+    proto.vtable = &z_t664_Closer_vtable;
+    proto.destroy = z_t664_Closer_owned_destroy;
+    return proto;
+}
+
+static z_t693_t z_t664_Seeker_seek_wrapper(void* _data, int64_t to, uint8_t from) {
+    z_t664_t* _self = (z_t664_t*)_data;
+    return z_t664_seek(_self, to, from);
+}
+
+static z_t720_vtable_t z_t664_Seeker_vtable = {
+    .seek = z_t664_Seeker_seek_wrapper,
+};
+
+static z_t720_t z_t664_Seeker_create(z_t664_t* val) {
+    z_t720_t proto = {0};
+    proto.data = val;
+    proto.vtable = &z_t664_Seeker_vtable;
+    proto.destroy = NULL;
+    return proto;
+}
+
+static void z_t664_Seeker_owned_destroy(void* p) {
+    free(p);
+}
+
+static z_t720_t z_t664_Seeker_create_owned(z_t664_t* val) {
+    z_t720_t proto = {0};
+    z_t664_t* boxed = (z_t664_t*)z_xmalloc(sizeof(z_t664_t));
+    *boxed = *val;
+    proto.data = boxed;
+    proto.vtable = &z_t664_Seeker_vtable;
+    proto.destroy = z_t664_Seeker_owned_destroy;
+    return proto;
+}
+
+/* Process argc/argv captured by main() before z_main runs, so
+   os.args can expose them without threading them through every
+   call site. Only emitted when the program references os.args. */
+static int z_os_argc_g;
+static char** z_os_argv_g;
+
+
+/* os.args -- copy argv into a freshly-allocated list of strings.
+   The caller owns the outer list and every string inside; scope
+   exit runs the list destructor which frees each element. */
+static z_t423_t z_os_args(void);
+static z_t423_t z_os_args(void) {
+    uint64_t n = (uint64_t)(z_os_argc_g > 0 ? z_os_argc_g : 0);
+    z_t423_t out = {0};
+    out.length = n;
+    out.capacity = n;
+    if (n > 0) {
+        out.data = (z_t46_t*)z_xmalloc(n * sizeof(z_t46_t));
+        for (uint64_t i = 0; i < n; i++) {
+            out.data[i] = z_t46_new(z_os_argv_g[i]);
+        }
+    }
+    return out;
+}
+
+
+/* os.get_env -- look up the POSIX environment by name. Returns
+   option.some(string) on hit (copying the value so the caller
+   owns the heap buffer and libc's environ isn't aliased); returns
+   option.none on miss. `key` is a borrowed view; caller retains. */
+static z_t349_t z_os_env(z_t67_t key);
+static z_t349_t z_os_env(z_t67_t key) {
+    z_t349_t out = {0};
+    char* key_cstr = z_sv_to_cstr(key);
+    const char* v = getenv(key_cstr);
+    free(key_cstr);
+    if (v == NULL) {
+        out.tag = Z_OPTION_STRING_TAG_NONE;
+        return out;
+    }
+    z_t46_t* boxed = (z_t46_t*)z_xmalloc(sizeof(z_t46_t));
+    *boxed = z_t46_new(v);
+    out.tag = Z_OPTION_STRING_TAG_SOME;
+    out.data = boxed;
+    return out;
+}
+
+
+/* os.buildCommit -- the build stamp this binary carries, empty when the
+   build supplied none. Two routes set it: define ZC_BUILD_COMMIT for the C
+   compiler, or link a strong z_build_commit that overrides the weak default
+   below. The link route costs a relink rather than a recompile of this
+   translation unit, which is why the Makefile uses it. */
+#ifndef ZC_BUILD_COMMIT
+#define ZC_BUILD_COMMIT ""
+#endif
+__attribute__((weak)) const char z_build_commit[] = ZC_BUILD_COMMIT;
+
+static z_t46_t z_os_buildCommit(void);
+static z_t46_t z_os_buildCommit(void) {
+    return z_t46_new(z_build_commit);
+}
+
+/* os.buildCompiler -- name and version of the C compiler that compiled this
+   translation unit, read from its own predefined macros, so it needs nothing
+   from the build. clang defines __GNUC__ as well, so it is tested first. The
+   numeric macros are used rather than __VERSION__, which gcc and clang spell
+   differently ("15.2.0" vs "Ubuntu Clang 21.1.8 (6ubuntu1)"). */
+#define Z_BUILDCC_STR_(x) #x
+#define Z_BUILDCC_STR(x) Z_BUILDCC_STR_(x)
+
+static z_t46_t z_os_buildCompiler(void);
+static z_t46_t z_os_buildCompiler(void) {
+#if defined(__clang__)
+    return z_t46_new("clang " Z_BUILDCC_STR(__clang_major__) "."
+                        Z_BUILDCC_STR(__clang_minor__) "."
+                        Z_BUILDCC_STR(__clang_patchlevel__));
+#elif defined(__GNUC__)
+    return z_t46_new("gcc " Z_BUILDCC_STR(__GNUC__) "."
+                        Z_BUILDCC_STR(__GNUC_MINOR__) "."
+                        Z_BUILDCC_STR(__GNUC_PATCHLEVEL__));
+#else
+    return z_t46_new("cc");
+#endif
+}
+
+/* os.buildDate -- companion to os.buildCommit: the date the build stamped
+   in, empty when it stamped none. Set by defining ZC_BUILD_DATE for the C
+   compiler, or by linking a strong z_build_date. */
+#ifndef ZC_BUILD_DATE
+#define ZC_BUILD_DATE ""
+#endif
+__attribute__((weak)) const char z_build_date[] = ZC_BUILD_DATE;
+
+static z_t46_t z_os_buildDate(void);
+static z_t46_t z_os_buildDate(void) {
+    return z_t46_new(z_build_date);
+}
+
+/* os.exePath -- absolute path of the running executable. Linux
+   reads /proc/self/exe; macOS uses _NSGetExecutablePath. Copied
+   into a z_t46_t so ownership stays uniform with the other os
+   string natives. */
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+static z_t866_t z_os_exePath(void);
+static z_t866_t z_os_exePath(void) {
+    z_t866_t out = {0};
+    char buf[4096];
+#if defined(__APPLE__)
+    uint32_t bufsize = (uint32_t)sizeof(buf);
+    if (_NSGetExecutablePath(buf, &bufsize) != 0) {
+        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
+        z_t630_t e = {0};
+        e.tag = Z_IOERROR_TAG_OTHER;
+        *boxed = e;
+        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+        out.data = boxed;
+        return out;
+    }
+#else
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len < 0) {
+        int e = errno;
+        z_t630_t* boxed = (z_t630_t*)z_xmalloc(sizeof(z_t630_t));
+        *boxed = z_io_errno_to_IoError(e);
+        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+        out.data = boxed;
+        return out;
+    }
+    buf[len] = '\0';
+#endif
+    z_t46_t* boxed = (z_t46_t*)z_xmalloc(sizeof(z_t46_t));
+    *boxed = z_t46_new(buf);
+    out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;
+    out.data = boxed;
+    return out;
+}
+
+
+/* os.exit -- libc exit with the given status. Does not return;
+   in-scope zerolang destructors are skipped. */
+static void z_os_exit(int32_t code);
+static void z_os_exit(int32_t code) {
+    exit((int)code);
+}
+
+
+/* os.hostArchName -- the CPU family this translation unit was compiled for.
+   Companion to _Z_OS_HOST_OS_NAME; same reasoning for returning a name. */
+static z_t46_t z_os_hostArchName(void);
+static z_t46_t z_os_hostArchName(void) {
+#if defined(__x86_64__) || defined(_M_X64)
+    return z_t46_new("x86_64");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return z_t46_new("aarch64");
+#else
+    return z_t46_new("other");
+#endif
+}
+
+/* os.hostOsName -- the OS family this translation unit was compiled for,
+   resolved by the C preprocessor. A NAME rather than a variant so the runtime
+   needs to know nothing about `platform`'s kinds: `zc` maps it to a
+   `platform.oskind` arm when it fills that unit in for the build it is
+   performing. Falls through to `other` on an unrecognised host. */
+static z_t46_t z_os_hostOsName(void);
+static z_t46_t z_os_hostOsName(void) {
+#if defined(__linux__)
+    return z_t46_new("linux");
+#elif defined(__APPLE__)
+    return z_t46_new("darwin");
+#elif defined(_WIN32)
+    return z_t46_new("windows");
+#else
+    return z_t46_new("other");
+#endif
+}
+
+/* os.monotonicMillis -- milliseconds on the monotonic clock. Only
+   differences are meaningful (the epoch is arbitrary, typically boot).
+   Infallible: CLOCK_MONOTONIC cannot fail on a supported platform. */
+#include <time.h>
+static int64_t z_os_monotonicMillis(void);
+static int64_t z_os_monotonicMillis(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
+}
+
+/* os.pid -- getpid. pid_t fits in int32_t on every supported
+   platform (Linux caps at 4_194_304 by default). */
+static int32_t z_os_pid(void);
+static int32_t z_os_pid(void) {
+    return (int32_t)getpid();
+}
+
+
+/* os.spawn -- fork/exec argv as a child. argv[0] is resolved via
+   PATH (execvp). stdout->outPath, stderr->errPath (each
+   O_WRONLY|O_CREAT|O_TRUNC); an empty out/err path inherits the
+   parent's fd, and empty out+err inherits stdin too (else stdin is
+   /dev/null). A non-empty cwd chdirs
+   the child. The redirection files are opened in the parent before
+   fork so the child's chdir cannot change their resolution. argv
+   element buffers are NUL-terminated (z_t46), borrowed directly;
+   only the three view paths need z_sv_to_cstr. Returns the child's
+   exit status; 127 on exec/setup failure; 124 if timeoutSecs > 0 and
+   the child outlived it (SIGKILLed). timeoutSecs <= 0 waits forever. */
+static void z_os_spawn_on_alarm(int sig) { (void)sig; }
+static int32_t z_os_spawn(
+    z_t423_t* argv, z_t67_t cwd, z_t67_t outPath,
+    z_t67_t errPath, int32_t timeoutSecs
+);
+static int32_t z_os_spawn(
+    z_t423_t* argv, z_t67_t cwd, z_t67_t outPath,
+    z_t67_t errPath, int32_t timeoutSecs
+) {
+    if (argv->length == 0) return 127;
+    char** c_argv = (char**)z_xmalloc((argv->length + 1) * sizeof(char*));
+    for (uint64_t i = 0; i < argv->length; i++) {
+        c_argv[i] = argv->data[i].data;
+    }
+    c_argv[argv->length] = NULL;
+    char* cwd_c = z_sv_to_cstr(cwd);
+    /* An empty outPath/errPath inherits the parent's fd 1/2 (skip the
+       open+dup2). When both are empty (the `zc run` case) inherit stdin
+       too; otherwise stdin is /dev/null. Non-empty callers unaffected. */
+    int inherit_out = (outPath.size == 0);
+    int inherit_err = (errPath.size == 0);
+    int inherit_in = (inherit_out && inherit_err);
+    char* out_c = inherit_out ? NULL : z_sv_to_cstr(outPath);
+    char* err_c = inherit_err ? NULL : z_sv_to_cstr(errPath);
+    int out_fd = inherit_out ? -1 : open(out_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int err_fd = inherit_err ? -1 : open(err_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int null_fd = inherit_in ? -1 : open("/dev/null", O_RDONLY);
+    int32_t status = 127;
+    int setup_ok = (inherit_out || out_fd >= 0) && (inherit_err || err_fd >= 0)
+                   && (inherit_in || null_fd >= 0);
+    if (setup_ok) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            if (cwd.size > 0 && chdir(cwd_c) != 0) _exit(127);
+            if (!inherit_in) dup2(null_fd, 0);
+            if (!inherit_out) dup2(out_fd, 1);
+            if (!inherit_err) dup2(err_fd, 2);
+            if (null_fd >= 0) close(null_fd);
+            if (out_fd >= 0) close(out_fd);
+            if (err_fd >= 0) close(err_fd);
+            execvp(c_argv[0], c_argv);
+            _exit(127);
+        } else if (pid > 0) {
+            int wst = 0;
+            if (timeoutSecs > 0) {
+                struct sigaction sa, old_sa;
+                memset(&sa, 0, sizeof(sa));
+                sa.sa_handler = z_os_spawn_on_alarm;
+                sigemptyset(&sa.sa_mask);
+                sigaction(SIGALRM, &sa, &old_sa);
+                alarm((unsigned int)timeoutSecs);
+                pid_t r = waitpid(pid, &wst, 0);
+                int e = errno;
+                alarm(0);
+                sigaction(SIGALRM, &old_sa, NULL);
+                if (r == pid) {
+                    if (WIFEXITED(wst)) status = (int32_t)WEXITSTATUS(wst);
+                } else if (r < 0 && e == EINTR) {
+                    kill(pid, SIGKILL);
+                    waitpid(pid, &wst, 0);
+                    status = 124;
+                }
+            } else {
+                if (waitpid(pid, &wst, 0) == pid && WIFEXITED(wst)) {
+                    status = (int32_t)WEXITSTATUS(wst);
+                }
+            }
+        }
+    }
+    if (out_fd >= 0) close(out_fd);
+    if (err_fd >= 0) close(err_fd);
+    if (null_fd >= 0) close(null_fd);
+    free(cwd_c);
+    free(out_c);
+    free(err_c);
+    free(c_argv);
+    return status;
+}
+
+
+/* Shared by tcc.available and tcc.compileToExe: the libtcc entry points and
+   the dlopen that finds them.
+
+   libtcc is LOADED, never linked. That is a licence requirement, not a
+   preference -- tinycc is LGPL-2.1 inside a permissive tree -- and
+   `make static-tcc-guard` fails the build if any tcc symbol reaches a
+   binary. So the names below are strings, resolved at the point of use;
+   nothing here creates a link-time dependency, and a zc built without a
+   tcc beside it is a zc that reports 127 rather than one that fails to
+   start.
+
+   The library lives at <tccDir>/libtcc.so, the same directory that holds
+   the runtime payload tcc_set_lib_path needs. One directory, one answer. */
+#include <dlfcn.h>
+typedef struct TCCState z_tcc_State;
+typedef void z_tcc_ErrorFunc(void* opaque, const char* msg);
+
+typedef struct {
+    void* handle;
+    z_tcc_State* (*nw)(void);
+    void (*del)(z_tcc_State*);
+    void (*set_lib_path)(z_tcc_State*, const char*);
+    void (*set_error_func)(z_tcc_State*, void*, z_tcc_ErrorFunc*);
+    int (*set_options)(z_tcc_State*, const char*);
+    int (*set_output_type)(z_tcc_State*, int);
+    int (*add_file)(z_tcc_State*, const char*);
+    int (*add_library)(z_tcc_State*, const char*);
+    int (*output_file)(z_tcc_State*, const char*);
+} z_tcc_api_t;
+
+#define Z_TCC_OUTPUT_EXE 2
+
+/* diagnostics go to stderr verbatim, so a program reports the same text
+   whichever mode built it. */
+static void z_tcc_on_error(void* opaque, const char* msg) {
+    (void)opaque;
+    fprintf(stderr, "%s\n", msg);
+}
+
+static char* z_tcc_lib_path(z_t67_t tccDir) {
+    char* dir = z_sv_to_cstr(tccDir);
+    size_t n = strlen(dir);
+    char* p = (char*)z_xmalloc(n + sizeof("/libtcc.so"));
+    memcpy(p, dir, n);
+    memcpy(p + n, "/libtcc.so", sizeof("/libtcc.so"));
+    free(dir);
+    return p;
+}
+
+/* 1 when every entry point resolved. A partial load is a failed load: a
+   libtcc missing one of these is not one this code can drive. */
+static int z_tcc_open(z_tcc_api_t* a, z_t67_t tccDir) {
+    char* path = z_tcc_lib_path(tccDir);
+    memset(a, 0, sizeof(*a));
+    a->handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    free(path);
+    if (!a->handle) return 0;
+    *(void**)&a->nw = dlsym(a->handle, "tcc_new");
+    *(void**)&a->del = dlsym(a->handle, "tcc_delete");
+    *(void**)&a->set_lib_path = dlsym(a->handle, "tcc_set_lib_path");
+    *(void**)&a->set_error_func = dlsym(a->handle, "tcc_set_error_func");
+    *(void**)&a->set_options = dlsym(a->handle, "tcc_set_options");
+    *(void**)&a->set_output_type = dlsym(a->handle, "tcc_set_output_type");
+    *(void**)&a->add_file = dlsym(a->handle, "tcc_add_file");
+    *(void**)&a->add_library = dlsym(a->handle, "tcc_add_library");
+    *(void**)&a->output_file = dlsym(a->handle, "tcc_output_file");
+    if (a->nw && a->del && a->set_lib_path && a->set_error_func
+        && a->set_options && a->set_output_type && a->add_file
+        && a->add_library && a->output_file) {
+        return 1;
+    }
+    dlclose(a->handle);
+    a->handle = NULL;
+    return 0;
+}
+
+static void z_tcc_close(z_tcc_api_t* a) {
+    if (a->handle) dlclose(a->handle);
+    a->handle = NULL;
+}
+
+/* tcc.compileToExe -- compile `csrc` and link it to the executable `exe`,
+   in this process, through libtcc loaded from `tccDir`.
+
+   The result is a file on disk (TCC_OUTPUT_EXE), never a run in memory:
+   in-process buys the fast COMPILE, and the program still executes as its
+   own child, so exit codes, signals and the leak corpus are unaffected and
+   a crashing program cannot take zc down with it.
+
+   `tccDir` is also handed to tcc_set_lib_path -- tcc's runtime payload is
+   fixed when tcc is configured, so a relocated one cannot resolve even
+   stddef.h until it is told. `cflags` is parsed by tcc itself (the same
+   spelling as the command line); `libs` are the `-l` names the emitted C
+   declared, with -lm appended the way the spawned path appends it.
+
+   Returns 0 on success, 1 when tcc rejected the program or the link
+   failed, and 127 when libtcc could not be loaded -- the code os.spawn
+   already uses for "could not run the compiler", so the driver reports
+   both through one path rather than growing a second. */
+static int32_t z_tcc_compileToExe(
+    z_t67_t csrc, z_t67_t exe, z_t67_t tccDir,
+    bool release, z_t67_t cflags, z_t423_t* libs
+);
+static int32_t z_tcc_compileToExe(
+    z_t67_t csrc, z_t67_t exe, z_t67_t tccDir,
+    bool release, z_t67_t cflags, z_t423_t* libs
+) {
+    z_tcc_api_t a;
+    if (!z_tcc_open(&a, tccDir)) return 127;
+
+    z_tcc_State* s = a.nw();
+    if (!s) {
+        z_tcc_close(&a);
+        return 127;
+    }
+    a.set_error_func(s, NULL, z_tcc_on_error);
+
+    char* dir_c = z_sv_to_cstr(tccDir);
+    a.set_lib_path(s, dir_c);
+    free(dir_c);
+
+    int32_t rc = 0;
+    /* -g matches the spawned path's debug default; tcc has one optimisation
+       level, so --release changes nothing here beyond dropping -g. */
+    if (!release && a.set_options(s, "-g") == -1) rc = 1;
+
+    if (rc == 0 && cflags.size > 0) {
+        char* cf = z_sv_to_cstr(cflags);
+        if (a.set_options(s, cf) == -1) rc = 1;
+        free(cf);
+    }
+    if (rc == 0 && a.set_output_type(s, Z_TCC_OUTPUT_EXE) == -1) rc = 1;
+
+    if (rc == 0) {
+        char* src_c = z_sv_to_cstr(csrc);
+        if (a.add_file(s, src_c) == -1) rc = 1;
+        free(src_c);
+    }
+    if (rc == 0) {
+        for (uint64_t i = 0; i < libs->length; i++) {
+            if (a.add_library(s, libs->data[i].data) == -1) {
+                rc = 1;
+                break;
+            }
+        }
+    }
+    if (rc == 0 && a.add_library(s, "m") == -1) rc = 1;
+
+    if (rc == 0) {
+        char* exe_c = z_sv_to_cstr(exe);
+        if (a.output_file(s, exe_c) == -1) rc = 1;
+        free(exe_c);
+    }
+
+    a.del(s);
+    z_tcc_close(&a);
+    return rc;
+}
+
 static const uint8_t z_t2508[] = {0b0000, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b0000, 0b1100, 0b1100, 0b0000, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1101, 0b0000, 0b1100, 0b1101, 0b1101, 0b1101, 0b1101, 0b1100, 0b1100, 0b1101, 0b1101, 0b1100, 0b1101, 0b1100, 0b1101, 0b1111, 0b1111, 0b1111, 0b1111, 0b1111, 0b1111, 0b1111, 0b1111, 0b1111, 0b1111, 0b1100, 0b1100, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1100, 0b1001, 0b1100, 0b1101, 0b1101, 0b1100, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1101, 0b1100, 0b1101, 0b1100, 0b1101, 0b1100};
 
 z_t46_t z_t625(uint64_t z_v2798);
@@ -28083,7 +28083,7 @@ z_t46_t z_t2361(z_t1797_t* z_v21738, z_t67_t z_v21739, z_t67_t z_v21740, z_t891_
 z_t46_t z_t2362(z_t67_t z_v20433);
 z_t46_t z_t2035(z_t67_t z_v22925);
 z_t46_t z_t2695(z_t46_t* z_v29829, z_t67_t z_v29830, z_t67_t z_v29831);
-z_t423_t z_t2363(z_t67_t z_v31110);
+z_t423_t z_t2363(z_t67_t z_v31414);
 bool z_t2696(z_t67_t z_v19825);
 bool z_t2697(z_t67_t z_v19816, z_t423_t* z_v19817, z_t423_t* z_v19818);
 z_t46_t z_t2698(z_t67_t z_v19799, z_t423_t* z_v19800, z_t423_t* z_v19801, z_t423_t* z_v19802, z_t423_t* z_v19803);
@@ -28473,7 +28473,7 @@ void z_t2107(z_t474_t* z_v19931, z_t475_t z_v19932, z_t1097_t* z_v19933, z_t423_
 z_t46_t z_t890(z_t475_t z_v19580, z_t891_t* z_v19581, z_t67_t z_v19582, bool z_v19583, bool z_v19584, z_t423_t* z_v19585, z_t423_t* z_v19586);
 bool z_t1794(z_t475_t z_v29538);
 bool z_t1795(z_t474_t* z_v29550, uint32_t z_v29551);
-z_t46_t z_t2108(z_t67_t z_v31097, z_t67_t z_v31098);
+z_t46_t z_t2108(z_t67_t z_v31401, z_t67_t z_v31402);
 z_t46_t z_t2457(z_t1797_t* z_v24001, uint64_t z_v24002);
 z_t46_t z_t2458(z_t46_t* z_v29825, z_t67_t z_v29826, z_t67_t z_v29827);
 z_t46_t z_t2109(z_t891_t* z_v20983, uint64_t z_v20984);
@@ -28520,18 +28520,18 @@ uint64_t z_t2781(z_t474_t* z_v21973, z_t891_t* z_v21974, z_t67_t z_v21975);
 z_t46_t z_t2132(z_t474_t* z_v21957, z_t891_t* z_v21958, z_t1797_t* z_v21959, z_t67_t z_v21960);
 uint64_t z_t2474(z_t474_t* z_v21969, z_t891_t* z_v21970, z_t1797_t* z_v21971, z_t67_t z_v21972);
 z_t46_t z_t2133(z_t474_t* z_v21965, z_t891_t* z_v21966, z_t1797_t* z_v21967, z_t67_t z_v21968);
-z_t46_t z_t2134(z_t474_t* z_v31101, z_t891_t* z_v31102, z_t1797_t* z_v31103, z_t67_t z_v31104);
-uint64_t z_t2135(z_t891_t* z_v31057, z_t1797_t* z_v31058);
-bool z_t1902(z_t474_t* z_v31054, z_t891_t* z_v31055, z_t1797_t* z_v31056);
+z_t46_t z_t2134(z_t474_t* z_v31405, z_t891_t* z_v31406, z_t1797_t* z_v31407, z_t67_t z_v31408);
+uint64_t z_t2135(z_t891_t* z_v31361, z_t1797_t* z_v31362);
+bool z_t1902(z_t474_t* z_v31358, z_t891_t* z_v31359, z_t1797_t* z_v31360);
 uint64_t z_t2782(z_t891_t* z_v23804, z_t1797_t* z_v23805, z_t67_t z_v23806);
 bool z_t2136(z_t891_t* z_v21693, z_t1797_t* z_v21694, uint64_t z_v21695);
 bool z_t2137(z_t474_t* z_v29668, z_t891_t* z_v29669, z_t1797_t* z_v29670, uint64_t z_v29671);
-bool z_t2138(z_t1797_t* z_v31082, uint64_t z_v31083);
-void z_t1903(z_t474_t* z_v31073, z_t891_t* z_v31074, z_t1797_t* z_v31075, z_t67_t z_v31076, z_t67_t z_v31077, z_t46_t* z_v31078);
-void z_t1904(z_t474_t* z_v31306, z_t891_t* z_v31307, z_t1797_t* z_v31308, z_t67_t z_v31309, z_t46_t* z_v31310);
-void z_t1905(z_t474_t* z_v31091, z_t891_t* z_v31092, z_t1797_t* z_v31093, z_t67_t z_v31094, z_t67_t z_v31095, z_t46_t* z_v31096);
-void z_t1906(z_t474_t* z_v31159, z_t891_t* z_v31160, z_t1797_t* z_v31161, z_t46_t* z_v31162);
-void z_t1907(z_t474_t* z_v31291, z_t891_t* z_v31292, z_t1797_t* z_v31293, z_t46_t* z_v31294);
+bool z_t2138(z_t1797_t* z_v31386, uint64_t z_v31387);
+void z_t1903(z_t474_t* z_v31377, z_t891_t* z_v31378, z_t1797_t* z_v31379, z_t67_t z_v31380, z_t67_t z_v31381, z_t46_t* z_v31382);
+void z_t1904(z_t474_t* z_v31610, z_t891_t* z_v31611, z_t1797_t* z_v31612, z_t67_t z_v31613, z_t46_t* z_v31614);
+void z_t1905(z_t474_t* z_v31395, z_t891_t* z_v31396, z_t1797_t* z_v31397, z_t67_t z_v31398, z_t67_t z_v31399, z_t46_t* z_v31400);
+void z_t1906(z_t474_t* z_v31463, z_t891_t* z_v31464, z_t1797_t* z_v31465, z_t46_t* z_v31466);
+void z_t1907(z_t474_t* z_v31595, z_t891_t* z_v31596, z_t1797_t* z_v31597, z_t46_t* z_v31598);
 void z_t2139(z_t891_t* z_v29952, z_t1797_t* z_v29953, z_t46_t* z_v29954);
 void z_t2475(z_t891_t* z_v29976, z_t1797_t* z_v29977, z_t67_t z_v29978, z_t46_t* z_v29979);
 void z_t2140(z_t891_t* z_v29973, z_t1797_t* z_v29974, z_t46_t* z_v29975);
@@ -28544,22 +28544,22 @@ void z_t2476(z_t474_t* z_v29704, z_t891_t* z_v29705, z_t1797_t* z_v29706, uint64
 void z_t2145(z_t891_t* z_v29570, z_t1097_t* z_v29571);
 bool z_t2477(z_t474_t* z_v29696, z_t891_t* z_v29697, z_t1797_t* z_v29698, uint64_t z_v29699, z_t1097_t* z_v29700, z_t1097_t* z_v29701);
 bool z_t2146(z_t474_t* z_v29690, z_t891_t* z_v29691, z_t1797_t* z_v29692, uint64_t z_v29693, z_t1097_t* z_v29694);
-bool z_t2147(z_t1186_t* z_v31536, uint64_t z_v31537);
-bool z_t2148(z_t474_t* z_v31539, z_t891_t* z_v31540, z_t1797_t* z_v31541, uint64_t z_v31542, z_t1186_t* z_v31543, z_t1186_t* z_v31544);
-bool z_t2149(z_t474_t* z_v31579, z_t891_t* z_v31580, z_t1797_t* z_v31581, uint64_t z_v31582, z_t1186_t* z_v31583, z_t1186_t* z_v31584, z_t1097_t* z_v31585);
-void z_t2150(z_t474_t* z_v31487, z_t891_t* z_v31488, z_t1797_t* z_v31489, uint64_t z_v31490, z_t46_t* z_v31491);
-void z_t2151(z_t474_t* z_v31601, z_t891_t* z_v31602, z_t1797_t* z_v31603, z_t67_t z_v31604, uint64_t z_v31605, z_t46_t* z_v31606);
-void z_t2152(z_t474_t* z_v31503, z_t891_t* z_v31504, z_t1797_t* z_v31505, uint64_t z_v31506, z_t1097_t* z_v31507, z_t1097_t* z_v31508, uint64_t z_v31509);
+bool z_t2147(z_t1186_t* z_v31267, uint64_t z_v31268);
+bool z_t2148(z_t474_t* z_v31270, z_t891_t* z_v31271, z_t1797_t* z_v31272, uint64_t z_v31273, z_t1186_t* z_v31274, z_t1186_t* z_v31275);
+bool z_t2149(z_t474_t* z_v31310, z_t891_t* z_v31311, z_t1797_t* z_v31312, uint64_t z_v31313, z_t1186_t* z_v31314, z_t1186_t* z_v31315, z_t1097_t* z_v31316);
+void z_t2150(z_t474_t* z_v31218, z_t891_t* z_v31219, z_t1797_t* z_v31220, uint64_t z_v31221, z_t46_t* z_v31222);
+void z_t2151(z_t474_t* z_v31332, z_t891_t* z_v31333, z_t1797_t* z_v31334, z_t67_t z_v31335, uint64_t z_v31336, z_t46_t* z_v31337);
+void z_t2152(z_t474_t* z_v31234, z_t891_t* z_v31235, z_t1797_t* z_v31236, uint64_t z_v31237, z_t1097_t* z_v31238, z_t1097_t* z_v31239, uint64_t z_v31240);
 bool z_t2153(z_t474_t* z_v21078, z_t891_t* z_v21079, uint64_t z_v21080);
-bool z_t2154(z_t474_t* z_v31345, z_t891_t* z_v31346, uint64_t z_v31347);
-uint64_t z_t2478(z_t891_t* z_v31393, uint64_t z_v31394);
-z_t46_t z_t2479(z_t474_t* z_v31451, z_t891_t* z_v31452, z_t1797_t* z_v31453, uint64_t z_v31454);
-z_t46_t z_t2480(z_t474_t* z_v31433, z_t891_t* z_v31434, z_t1797_t* z_v31435, uint64_t z_v31436, z_t67_t z_v31437, uint64_t z_v31438);
-void z_t2481(z_t891_t* z_v31406, z_t1797_t* z_v31407, uint64_t z_v31408, z_t46_t* z_v31409);
-bool z_t2482(z_t474_t* z_v31381, z_t891_t* z_v31382, z_t1797_t* z_v31383, uint64_t z_v31384);
-void z_t2155(z_t474_t* z_v31351, z_t891_t* z_v31352, z_t1797_t* z_v31353, uint64_t z_v31354, z_t1097_t* z_v31355, z_t1024_t* z_v31356, z_t46_t* z_v31357);
-void z_t1908(z_t474_t* z_v31323, z_t891_t* z_v31324, z_t1797_t* z_v31325, z_t46_t* z_v31326);
-void z_t1909(z_t474_t* z_v31475, z_t891_t* z_v31476, z_t1797_t* z_v31477, z_t67_t z_v31478, z_t46_t* z_v31479);
+bool z_t2154(z_t474_t* z_v31076, z_t891_t* z_v31077, uint64_t z_v31078);
+uint64_t z_t2478(z_t891_t* z_v31124, uint64_t z_v31125);
+z_t46_t z_t2479(z_t474_t* z_v31182, z_t891_t* z_v31183, z_t1797_t* z_v31184, uint64_t z_v31185);
+z_t46_t z_t2480(z_t474_t* z_v31164, z_t891_t* z_v31165, z_t1797_t* z_v31166, uint64_t z_v31167, z_t67_t z_v31168, uint64_t z_v31169);
+void z_t2481(z_t891_t* z_v31137, z_t1797_t* z_v31138, uint64_t z_v31139, z_t46_t* z_v31140);
+bool z_t2482(z_t474_t* z_v31112, z_t891_t* z_v31113, z_t1797_t* z_v31114, uint64_t z_v31115);
+void z_t2155(z_t474_t* z_v31082, z_t891_t* z_v31083, z_t1797_t* z_v31084, uint64_t z_v31085, z_t1097_t* z_v31086, z_t1024_t* z_v31087, z_t46_t* z_v31088);
+void z_t1908(z_t474_t* z_v31054, z_t891_t* z_v31055, z_t1797_t* z_v31056, z_t46_t* z_v31057);
+void z_t1909(z_t474_t* z_v31206, z_t891_t* z_v31207, z_t1797_t* z_v31208, z_t67_t z_v31209, z_t46_t* z_v31210);
 void z_t1910(z_t474_t* z_v29563, z_t891_t* z_v29564, z_t1797_t* z_v29565, z_t67_t z_v29566, z_t46_t* z_v29567);
 void z_t1911(z_t475_t z_v31627, z_t891_t* z_v31628, z_t1797_t* z_v31629, z_t46_t* z_v31630);
 void z_t2156(z_t474_t* z_v31777, z_t891_t* z_v31778, z_t1797_t* z_v31779, z_t475_t z_v31780, bool z_v31781, z_t46_t* z_v31782);
@@ -28570,10 +28570,10 @@ z_t46_t z_t2160(z_t474_t* z_v30189, z_t891_t* z_v30190, z_t1797_t* z_v30191, uin
 void z_t2161(z_t891_t* z_v30240, uint64_t z_v30241, z_t1097_t* z_v30242);
 void z_t2162(z_t474_t* z_v30231, z_t891_t* z_v30232, z_t1797_t* z_v30233, uint64_t z_v30234, z_t46_t* z_v30235);
 void z_t1912(z_t474_t* z_v30121, z_t891_t* z_v30122, z_t1797_t* z_v30123, uint64_t z_v30124, z_t67_t z_v30125, z_t46_t* z_v30126);
-void z_t2163(z_t474_t* z_v31203, z_t891_t* z_v31204, z_t1797_t* z_v31205, uint64_t z_v31206, uint64_t z_v31207, z_t67_t z_v31208, z_t67_t z_v31209, z_t46_t* z_v31210);
+void z_t2163(z_t474_t* z_v31507, z_t891_t* z_v31508, z_t1797_t* z_v31509, uint64_t z_v31510, uint64_t z_v31511, z_t67_t z_v31512, z_t67_t z_v31513, z_t46_t* z_v31514);
 void z_t2483(z_t474_t* z_v32136, z_t891_t* z_v32137, z_t1797_t* z_v32138, uint64_t z_v32139, uint64_t z_v32140, z_t67_t z_v32141, z_t46_t* z_v32142);
 void z_t2164(z_t474_t* z_v32119, z_t891_t* z_v32120, z_t1797_t* z_v32121, uint64_t z_v32122, z_t46_t* z_v32123);
-void z_t1913(z_t474_t* z_v31183, z_t891_t* z_v31184, z_t1797_t* z_v31185, uint64_t z_v31186, z_t46_t* z_v31187);
+void z_t1913(z_t474_t* z_v31487, z_t891_t* z_v31488, z_t1797_t* z_v31489, uint64_t z_v31490, z_t46_t* z_v31491);
 z_t46_t z_t2165(z_t891_t* z_v22058, uint64_t z_v22059, uint64_t z_v22060);
 uint64_t z_t2784(z_t891_t* z_v23710, uint64_t z_v23711);
 z_t46_t z_t2785(z_t474_t* z_v23739, z_t891_t* z_v23740, z_t1797_t* z_v23741, z_t512_t* z_v23742, z_t67_t z_v23743);
@@ -40836,7 +40836,7 @@ z_t46_t z_t2361(z_t1797_t* z_v21738, z_t67_t z_v21739, z_t67_t z_v21740, z_t891_
 z_t46_t z_t2362(z_t67_t z_v20433);
 z_t46_t z_t2035(z_t67_t z_v22925);
 z_t46_t z_t2695(z_t46_t* z_v29829, z_t67_t z_v29830, z_t67_t z_v29831);
-z_t423_t z_t2363(z_t67_t z_v31110);
+z_t423_t z_t2363(z_t67_t z_v31414);
 bool z_t2696(z_t67_t z_v19825);
 bool z_t2697(z_t67_t z_v19816, z_t423_t* z_v19817, z_t423_t* z_v19818);
 z_t46_t z_t2698(z_t67_t z_v19799, z_t423_t* z_v19800, z_t423_t* z_v19801, z_t423_t* z_v19802, z_t423_t* z_v19803);
@@ -41226,7 +41226,7 @@ void z_t2107(z_t474_t* z_v19931, z_t475_t z_v19932, z_t1097_t* z_v19933, z_t423_
 z_t46_t z_t890(z_t475_t z_v19580, z_t891_t* z_v19581, z_t67_t z_v19582, bool z_v19583, bool z_v19584, z_t423_t* z_v19585, z_t423_t* z_v19586);
 bool z_t1794(z_t475_t z_v29538);
 bool z_t1795(z_t474_t* z_v29550, uint32_t z_v29551);
-z_t46_t z_t2108(z_t67_t z_v31097, z_t67_t z_v31098);
+z_t46_t z_t2108(z_t67_t z_v31401, z_t67_t z_v31402);
 z_t46_t z_t2457(z_t1797_t* z_v24001, uint64_t z_v24002);
 z_t46_t z_t2458(z_t46_t* z_v29825, z_t67_t z_v29826, z_t67_t z_v29827);
 z_t46_t z_t2109(z_t891_t* z_v20983, uint64_t z_v20984);
@@ -41273,18 +41273,18 @@ uint64_t z_t2781(z_t474_t* z_v21973, z_t891_t* z_v21974, z_t67_t z_v21975);
 z_t46_t z_t2132(z_t474_t* z_v21957, z_t891_t* z_v21958, z_t1797_t* z_v21959, z_t67_t z_v21960);
 uint64_t z_t2474(z_t474_t* z_v21969, z_t891_t* z_v21970, z_t1797_t* z_v21971, z_t67_t z_v21972);
 z_t46_t z_t2133(z_t474_t* z_v21965, z_t891_t* z_v21966, z_t1797_t* z_v21967, z_t67_t z_v21968);
-z_t46_t z_t2134(z_t474_t* z_v31101, z_t891_t* z_v31102, z_t1797_t* z_v31103, z_t67_t z_v31104);
-uint64_t z_t2135(z_t891_t* z_v31057, z_t1797_t* z_v31058);
-bool z_t1902(z_t474_t* z_v31054, z_t891_t* z_v31055, z_t1797_t* z_v31056);
+z_t46_t z_t2134(z_t474_t* z_v31405, z_t891_t* z_v31406, z_t1797_t* z_v31407, z_t67_t z_v31408);
+uint64_t z_t2135(z_t891_t* z_v31361, z_t1797_t* z_v31362);
+bool z_t1902(z_t474_t* z_v31358, z_t891_t* z_v31359, z_t1797_t* z_v31360);
 uint64_t z_t2782(z_t891_t* z_v23804, z_t1797_t* z_v23805, z_t67_t z_v23806);
 bool z_t2136(z_t891_t* z_v21693, z_t1797_t* z_v21694, uint64_t z_v21695);
 bool z_t2137(z_t474_t* z_v29668, z_t891_t* z_v29669, z_t1797_t* z_v29670, uint64_t z_v29671);
-bool z_t2138(z_t1797_t* z_v31082, uint64_t z_v31083);
-void z_t1903(z_t474_t* z_v31073, z_t891_t* z_v31074, z_t1797_t* z_v31075, z_t67_t z_v31076, z_t67_t z_v31077, z_t46_t* z_v31078);
-void z_t1904(z_t474_t* z_v31306, z_t891_t* z_v31307, z_t1797_t* z_v31308, z_t67_t z_v31309, z_t46_t* z_v31310);
-void z_t1905(z_t474_t* z_v31091, z_t891_t* z_v31092, z_t1797_t* z_v31093, z_t67_t z_v31094, z_t67_t z_v31095, z_t46_t* z_v31096);
-void z_t1906(z_t474_t* z_v31159, z_t891_t* z_v31160, z_t1797_t* z_v31161, z_t46_t* z_v31162);
-void z_t1907(z_t474_t* z_v31291, z_t891_t* z_v31292, z_t1797_t* z_v31293, z_t46_t* z_v31294);
+bool z_t2138(z_t1797_t* z_v31386, uint64_t z_v31387);
+void z_t1903(z_t474_t* z_v31377, z_t891_t* z_v31378, z_t1797_t* z_v31379, z_t67_t z_v31380, z_t67_t z_v31381, z_t46_t* z_v31382);
+void z_t1904(z_t474_t* z_v31610, z_t891_t* z_v31611, z_t1797_t* z_v31612, z_t67_t z_v31613, z_t46_t* z_v31614);
+void z_t1905(z_t474_t* z_v31395, z_t891_t* z_v31396, z_t1797_t* z_v31397, z_t67_t z_v31398, z_t67_t z_v31399, z_t46_t* z_v31400);
+void z_t1906(z_t474_t* z_v31463, z_t891_t* z_v31464, z_t1797_t* z_v31465, z_t46_t* z_v31466);
+void z_t1907(z_t474_t* z_v31595, z_t891_t* z_v31596, z_t1797_t* z_v31597, z_t46_t* z_v31598);
 void z_t2139(z_t891_t* z_v29952, z_t1797_t* z_v29953, z_t46_t* z_v29954);
 void z_t2475(z_t891_t* z_v29976, z_t1797_t* z_v29977, z_t67_t z_v29978, z_t46_t* z_v29979);
 void z_t2140(z_t891_t* z_v29973, z_t1797_t* z_v29974, z_t46_t* z_v29975);
@@ -41297,22 +41297,22 @@ void z_t2476(z_t474_t* z_v29704, z_t891_t* z_v29705, z_t1797_t* z_v29706, uint64
 void z_t2145(z_t891_t* z_v29570, z_t1097_t* z_v29571);
 bool z_t2477(z_t474_t* z_v29696, z_t891_t* z_v29697, z_t1797_t* z_v29698, uint64_t z_v29699, z_t1097_t* z_v29700, z_t1097_t* z_v29701);
 bool z_t2146(z_t474_t* z_v29690, z_t891_t* z_v29691, z_t1797_t* z_v29692, uint64_t z_v29693, z_t1097_t* z_v29694);
-bool z_t2147(z_t1186_t* z_v31536, uint64_t z_v31537);
-bool z_t2148(z_t474_t* z_v31539, z_t891_t* z_v31540, z_t1797_t* z_v31541, uint64_t z_v31542, z_t1186_t* z_v31543, z_t1186_t* z_v31544);
-bool z_t2149(z_t474_t* z_v31579, z_t891_t* z_v31580, z_t1797_t* z_v31581, uint64_t z_v31582, z_t1186_t* z_v31583, z_t1186_t* z_v31584, z_t1097_t* z_v31585);
-void z_t2150(z_t474_t* z_v31487, z_t891_t* z_v31488, z_t1797_t* z_v31489, uint64_t z_v31490, z_t46_t* z_v31491);
-void z_t2151(z_t474_t* z_v31601, z_t891_t* z_v31602, z_t1797_t* z_v31603, z_t67_t z_v31604, uint64_t z_v31605, z_t46_t* z_v31606);
-void z_t2152(z_t474_t* z_v31503, z_t891_t* z_v31504, z_t1797_t* z_v31505, uint64_t z_v31506, z_t1097_t* z_v31507, z_t1097_t* z_v31508, uint64_t z_v31509);
+bool z_t2147(z_t1186_t* z_v31267, uint64_t z_v31268);
+bool z_t2148(z_t474_t* z_v31270, z_t891_t* z_v31271, z_t1797_t* z_v31272, uint64_t z_v31273, z_t1186_t* z_v31274, z_t1186_t* z_v31275);
+bool z_t2149(z_t474_t* z_v31310, z_t891_t* z_v31311, z_t1797_t* z_v31312, uint64_t z_v31313, z_t1186_t* z_v31314, z_t1186_t* z_v31315, z_t1097_t* z_v31316);
+void z_t2150(z_t474_t* z_v31218, z_t891_t* z_v31219, z_t1797_t* z_v31220, uint64_t z_v31221, z_t46_t* z_v31222);
+void z_t2151(z_t474_t* z_v31332, z_t891_t* z_v31333, z_t1797_t* z_v31334, z_t67_t z_v31335, uint64_t z_v31336, z_t46_t* z_v31337);
+void z_t2152(z_t474_t* z_v31234, z_t891_t* z_v31235, z_t1797_t* z_v31236, uint64_t z_v31237, z_t1097_t* z_v31238, z_t1097_t* z_v31239, uint64_t z_v31240);
 bool z_t2153(z_t474_t* z_v21078, z_t891_t* z_v21079, uint64_t z_v21080);
-bool z_t2154(z_t474_t* z_v31345, z_t891_t* z_v31346, uint64_t z_v31347);
-uint64_t z_t2478(z_t891_t* z_v31393, uint64_t z_v31394);
-z_t46_t z_t2479(z_t474_t* z_v31451, z_t891_t* z_v31452, z_t1797_t* z_v31453, uint64_t z_v31454);
-z_t46_t z_t2480(z_t474_t* z_v31433, z_t891_t* z_v31434, z_t1797_t* z_v31435, uint64_t z_v31436, z_t67_t z_v31437, uint64_t z_v31438);
-void z_t2481(z_t891_t* z_v31406, z_t1797_t* z_v31407, uint64_t z_v31408, z_t46_t* z_v31409);
-bool z_t2482(z_t474_t* z_v31381, z_t891_t* z_v31382, z_t1797_t* z_v31383, uint64_t z_v31384);
-void z_t2155(z_t474_t* z_v31351, z_t891_t* z_v31352, z_t1797_t* z_v31353, uint64_t z_v31354, z_t1097_t* z_v31355, z_t1024_t* z_v31356, z_t46_t* z_v31357);
-void z_t1908(z_t474_t* z_v31323, z_t891_t* z_v31324, z_t1797_t* z_v31325, z_t46_t* z_v31326);
-void z_t1909(z_t474_t* z_v31475, z_t891_t* z_v31476, z_t1797_t* z_v31477, z_t67_t z_v31478, z_t46_t* z_v31479);
+bool z_t2154(z_t474_t* z_v31076, z_t891_t* z_v31077, uint64_t z_v31078);
+uint64_t z_t2478(z_t891_t* z_v31124, uint64_t z_v31125);
+z_t46_t z_t2479(z_t474_t* z_v31182, z_t891_t* z_v31183, z_t1797_t* z_v31184, uint64_t z_v31185);
+z_t46_t z_t2480(z_t474_t* z_v31164, z_t891_t* z_v31165, z_t1797_t* z_v31166, uint64_t z_v31167, z_t67_t z_v31168, uint64_t z_v31169);
+void z_t2481(z_t891_t* z_v31137, z_t1797_t* z_v31138, uint64_t z_v31139, z_t46_t* z_v31140);
+bool z_t2482(z_t474_t* z_v31112, z_t891_t* z_v31113, z_t1797_t* z_v31114, uint64_t z_v31115);
+void z_t2155(z_t474_t* z_v31082, z_t891_t* z_v31083, z_t1797_t* z_v31084, uint64_t z_v31085, z_t1097_t* z_v31086, z_t1024_t* z_v31087, z_t46_t* z_v31088);
+void z_t1908(z_t474_t* z_v31054, z_t891_t* z_v31055, z_t1797_t* z_v31056, z_t46_t* z_v31057);
+void z_t1909(z_t474_t* z_v31206, z_t891_t* z_v31207, z_t1797_t* z_v31208, z_t67_t z_v31209, z_t46_t* z_v31210);
 void z_t1910(z_t474_t* z_v29563, z_t891_t* z_v29564, z_t1797_t* z_v29565, z_t67_t z_v29566, z_t46_t* z_v29567);
 void z_t1911(z_t475_t z_v31627, z_t891_t* z_v31628, z_t1797_t* z_v31629, z_t46_t* z_v31630);
 void z_t2156(z_t474_t* z_v31777, z_t891_t* z_v31778, z_t1797_t* z_v31779, z_t475_t z_v31780, bool z_v31781, z_t46_t* z_v31782);
@@ -41323,10 +41323,10 @@ z_t46_t z_t2160(z_t474_t* z_v30189, z_t891_t* z_v30190, z_t1797_t* z_v30191, uin
 void z_t2161(z_t891_t* z_v30240, uint64_t z_v30241, z_t1097_t* z_v30242);
 void z_t2162(z_t474_t* z_v30231, z_t891_t* z_v30232, z_t1797_t* z_v30233, uint64_t z_v30234, z_t46_t* z_v30235);
 void z_t1912(z_t474_t* z_v30121, z_t891_t* z_v30122, z_t1797_t* z_v30123, uint64_t z_v30124, z_t67_t z_v30125, z_t46_t* z_v30126);
-void z_t2163(z_t474_t* z_v31203, z_t891_t* z_v31204, z_t1797_t* z_v31205, uint64_t z_v31206, uint64_t z_v31207, z_t67_t z_v31208, z_t67_t z_v31209, z_t46_t* z_v31210);
+void z_t2163(z_t474_t* z_v31507, z_t891_t* z_v31508, z_t1797_t* z_v31509, uint64_t z_v31510, uint64_t z_v31511, z_t67_t z_v31512, z_t67_t z_v31513, z_t46_t* z_v31514);
 void z_t2483(z_t474_t* z_v32136, z_t891_t* z_v32137, z_t1797_t* z_v32138, uint64_t z_v32139, uint64_t z_v32140, z_t67_t z_v32141, z_t46_t* z_v32142);
 void z_t2164(z_t474_t* z_v32119, z_t891_t* z_v32120, z_t1797_t* z_v32121, uint64_t z_v32122, z_t46_t* z_v32123);
-void z_t1913(z_t474_t* z_v31183, z_t891_t* z_v31184, z_t1797_t* z_v31185, uint64_t z_v31186, z_t46_t* z_v31187);
+void z_t1913(z_t474_t* z_v31487, z_t891_t* z_v31488, z_t1797_t* z_v31489, uint64_t z_v31490, z_t46_t* z_v31491);
 z_t46_t z_t2165(z_t891_t* z_v22058, uint64_t z_v22059, uint64_t z_v22060);
 uint64_t z_t2784(z_t891_t* z_v23710, uint64_t z_v23711);
 z_t46_t z_t2785(z_t474_t* z_v23739, z_t891_t* z_v23740, z_t1797_t* z_v23741, z_t512_t* z_v23742, z_t67_t z_v23743);
@@ -46761,28 +46761,28 @@ z_t46_t z_t2695(z_t46_t* z_v29829, z_t67_t z_v29830, z_t67_t z_v29831) {
     return z_v29832;
 }
 
-z_t423_t z_t2363(z_t67_t z_v31110) {
-    z_t423_t z_v31111 = z_t423_create((uint64_t)0);
-    uint64_t z_v31112 = ((uint64_t)0);
-    uint64_t z_v31113 = z_v31110.size;
-    while (z_v31112 < z_v31113) {
-        z_t67_t z_v31114 = z_t67_substring(&z_v31110, z_v31112, z_v31113);
-        z_t999_t z_v31115 = z_t67_indexOf(&z_v31114, &_zs616);
-        z_t999_t _m0 = z_v31115;
+z_t423_t z_t2363(z_t67_t z_v31414) {
+    z_t423_t z_v31415 = z_t423_create((uint64_t)0);
+    uint64_t z_v31416 = ((uint64_t)0);
+    uint64_t z_v31417 = z_v31414.size;
+    while (z_v31416 < z_v31417) {
+        z_t67_t z_v31418 = z_t67_substring(&z_v31414, z_v31416, z_v31417);
+        z_t999_t z_v31419 = z_t67_indexOf(&z_v31418, &_zs616);
+        z_t999_t _m0 = z_v31419;
         switch (_m0.tag) {
             case Z_OPTIONVAL_U64_TAG_SOME: {
-                uint64_t z_v31115 = _m0.data.some;
-                (void)z_v31115;
-                uint64_t z_v31116 = (z_v31112 + z_v31115);
-                bool z_v31117 = ((bool)Z_BOOL_TAG_FALSE);
-                z_t1583_t z_v31119 = z_t67_byteAt(&z_v31110, (z_v31116 + 1));
-                z_t1583_t _m1 = z_v31119;
+                uint64_t z_v31419 = _m0.data.some;
+                (void)z_v31419;
+                uint64_t z_v31420 = (z_v31416 + z_v31419);
+                bool z_v31421 = ((bool)Z_BOOL_TAG_FALSE);
+                z_t1583_t z_v31423 = z_t67_byteAt(&z_v31414, (z_v31420 + 1));
+                z_t1583_t _m1 = z_v31423;
                 switch (_m1.tag) {
                     case Z_OPTIONVAL_U8_TAG_SOME: {
-                        uint8_t z_v31119 = _m1.data.some;
-                        (void)z_v31119;
-                        if (z_v31119 == 64) {
-                            z_v31117 = ((bool)Z_BOOL_TAG_TRUE);
+                        uint8_t z_v31423 = _m1.data.some;
+                        (void)z_v31423;
+                        if (z_v31423 == 64) {
+                            z_v31421 = ((bool)Z_BOOL_TAG_TRUE);
                         }
                         break;
                     }
@@ -46791,52 +46791,52 @@ z_t423_t z_t2363(z_t67_t z_v31110) {
                     }
                     default: break;
                 }
-                if (z_v31117) {
-                    z_t67_t z_v31121 = z_t67_substring(&z_v31110, (z_v31116 + 2), z_v31113);
-                    z_t999_t z_v31122 = z_t67_indexOf(&z_v31121, &_zs617);
-                    z_t999_t _m2 = z_v31122;
+                if (z_v31421) {
+                    z_t67_t z_v31425 = z_t67_substring(&z_v31414, (z_v31420 + 2), z_v31417);
+                    z_t999_t z_v31426 = z_t67_indexOf(&z_v31425, &_zs617);
+                    z_t999_t _m2 = z_v31426;
                     switch (_m2.tag) {
                         case Z_OPTIONVAL_U64_TAG_SOME: {
-                            uint64_t z_v31122 = _m2.data.some;
-                            (void)z_v31122;
-                            z_v31112 = (((z_v31116 + 2) + z_v31122) + 2);
+                            uint64_t z_v31426 = _m2.data.some;
+                            (void)z_v31426;
+                            z_v31416 = (((z_v31420 + 2) + z_v31426) + 2);
                             break;
                         }
                         case Z_OPTIONVAL_U64_TAG_NONE: {
-                            z_v31112 = (z_v31116 + 2);
+                            z_v31416 = (z_v31420 + 2);
                             break;
                         }
                         default: break;
                     }
                 } else {
-                    z_t67_t z_v31124 = z_t67_substring(&z_v31110, (z_v31116 + 1), z_v31113);
-                    z_t999_t z_v31125 = z_t67_indexOf(&z_v31124, &_zs618);
-                    z_t999_t _m3 = z_v31125;
+                    z_t67_t z_v31428 = z_t67_substring(&z_v31414, (z_v31420 + 1), z_v31417);
+                    z_t999_t z_v31429 = z_t67_indexOf(&z_v31428, &_zs618);
+                    z_t999_t _m3 = z_v31429;
                     switch (_m3.tag) {
                         case Z_OPTIONVAL_U64_TAG_SOME: {
-                            uint64_t z_v31125 = _m3.data.some;
-                            (void)z_v31125;
-                            uint64_t z_v31126 = ((z_v31116 + 1) + z_v31125);
-                            z_t67_t z_v31128 = z_t67_substring(&z_v31110, (z_v31116 + 1), z_v31126);
-                            bool z_v31129 = ((bool)Z_BOOL_TAG_FALSE);
-                            uint64_t z_v31130 = ((uint64_t)0);
-                            uint64_t z_v31131 = z_v31111.length;
-                            while (z_v31130 < z_v31131) {
-                                z_t46_t* __borrow_z_v31132 = &(*z_t423_get(&z_v31111, z_v31130));
-                                /* alias: z_v31132 => (*__borrow_z_v31132) */
-                                if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31132).data, .size = (*__borrow_z_v31132).size }), z_v31128)) {
-                                    z_v31129 = ((bool)Z_BOOL_TAG_TRUE);
+                            uint64_t z_v31429 = _m3.data.some;
+                            (void)z_v31429;
+                            uint64_t z_v31430 = ((z_v31420 + 1) + z_v31429);
+                            z_t67_t z_v31432 = z_t67_substring(&z_v31414, (z_v31420 + 1), z_v31430);
+                            bool z_v31433 = ((bool)Z_BOOL_TAG_FALSE);
+                            uint64_t z_v31434 = ((uint64_t)0);
+                            uint64_t z_v31435 = z_v31415.length;
+                            while (z_v31434 < z_v31435) {
+                                z_t46_t* __borrow_z_v31436 = &(*z_t423_get(&z_v31415, z_v31434));
+                                /* alias: z_v31436 => (*__borrow_z_v31436) */
+                                if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31436).data, .size = (*__borrow_z_v31436).size }), z_v31432)) {
+                                    z_v31433 = ((bool)Z_BOOL_TAG_TRUE);
                                 }
-                                z_v31130 = (z_v31130 + 1);
+                                z_v31434 = (z_v31434 + 1);
                             }
-                            if (z_v31129 == ((bool)Z_BOOL_TAG_FALSE)) {
-                                (void)(z_t423_append(&z_v31111, z_t46_from_view(z_v31128)));
+                            if (z_v31433 == ((bool)Z_BOOL_TAG_FALSE)) {
+                                (void)(z_t423_append(&z_v31415, z_t46_from_view(z_v31432)));
                             }
-                            z_v31112 = (z_v31126 + 1);
+                            z_v31416 = (z_v31430 + 1);
                             break;
                         }
                         case Z_OPTIONVAL_U64_TAG_NONE: {
-                            z_v31112 = (z_v31116 + 1);
+                            z_v31416 = (z_v31420 + 1);
                             break;
                         }
                         default: break;
@@ -46845,13 +46845,13 @@ z_t423_t z_t2363(z_t67_t z_v31110) {
                 break;
             }
             case Z_OPTIONVAL_U64_TAG_NONE: {
-                z_v31112 = z_v31113;
+                z_v31416 = z_v31417;
                 break;
             }
             default: break;
         }
     }
-    return z_v31111;
+    return z_v31415;
 }
 
 bool z_t2696(z_t67_t z_v19825) {
@@ -74157,6 +74157,8 @@ z_t46_t z_t890(z_t475_t z_v19580, z_t891_t* z_v19581, z_t67_t z_v19582, bool z_v
         case Z_NODE_TAG_PROGRAM: {
             /* alias: program => (*(z_t564_t*)_m28.data) */
             (void)(z_t1910(&(*(z_t564_t*)_m28.data).ast, z_v19581, &z_v20116, z_v19582, &z_v29561));
+            (void)(z_t1908(&(*(z_t564_t*)_m28.data).ast, z_v19581, &z_v20116, &z_v29561));
+            (void)(z_t1909(&(*(z_t564_t*)_m28.data).ast, z_v19581, &z_v20116, z_v19582, &z_v29561));
             if (z_t1902(&(*(z_t564_t*)_m28.data).ast, z_v19581, &z_v20116)) {
                 (void)(z_t2049(&z_v20116, _zs1561, _zs1562));
                 (void)(z_t2049(&z_v20116, _zs1563, _zs1564));
@@ -74165,31 +74167,19 @@ z_t46_t z_t890(z_t475_t z_v19580, z_t891_t* z_v19581, z_t67_t z_v19582, bool z_v
                 (void)(z_t2049(&z_v20116, _zs1569, _zs1570));
                 (void)(z_t2049(&z_v20116, _zs1571, _zs1572));
             }
-            z_t439_t z_v31071 = z_t423_iterate(&z_v20116.unitOrder);
+            z_t439_t z_v31375 = z_t423_iterate(&z_v20116.unitOrder);
             while (1) {
-                z_t344_t _iter29 = z_t439_call(&z_v31071);
+                z_t344_t _iter29 = z_t439_call(&z_v31375);
                 if (_iter29.tag == Z_OPTIONVIEW_STRING_TAG_NONE) break;
-                z_t46_t* __borrow_z_v31072 = (z_t46_t*)_iter29.data;
-                /* alias: z_v31072 => (*__borrow_z_v31072) */
-                (void)(z_t1903(&(*(z_t564_t*)_m28.data).ast, z_v19581, &z_v20116, z_v19582, ((z_t67_t){ .data = (*__borrow_z_v31072).data, .size = (*__borrow_z_v31072).size }), &z_v29561));
-                if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31072).data, .size = (*__borrow_z_v31072).size }), _zs1573)) {
+                z_t46_t* __borrow_z_v31376 = (z_t46_t*)_iter29.data;
+                /* alias: z_v31376 => (*__borrow_z_v31376) */
+                (void)(z_t1903(&(*(z_t564_t*)_m28.data).ast, z_v19581, &z_v20116, z_v19582, ((z_t67_t){ .data = (*__borrow_z_v31376).data, .size = (*__borrow_z_v31376).size }), &z_v29561));
+                if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31376).data, .size = (*__borrow_z_v31376).size }), _zs1573)) {
                     (void)(z_t1906(&(*(z_t564_t*)_m28.data).ast, z_v19581, &z_v20116, &z_v29561));
                     (void)(z_t1907(&(*(z_t564_t*)_m28.data).ast, z_v19581, &z_v20116, &z_v29561));
                 }
             }
             (void)(z_t1904(&(*(z_t564_t*)_m28.data).ast, z_v19581, &z_v20116, z_v19582, &z_v29561));
-            break;
-        }
-        default: {
-            break;
-        }
-    }
-    z_t475_t _m30 = z_v19580;
-    switch (_m30.tag) {
-        case Z_NODE_TAG_PROGRAM: {
-            /* alias: program => (*(z_t564_t*)_m30.data) */
-            (void)(z_t1908(&(*(z_t564_t*)_m30.data).ast, z_v19581, &z_v20116, &z_v29561));
-            (void)(z_t1909(&(*(z_t564_t*)_m30.data).ast, z_v19581, &z_v20116, z_v19582, &z_v29561));
             break;
         }
         default: {
@@ -74203,10 +74193,10 @@ z_t46_t z_t890(z_t475_t z_v19580, z_t891_t* z_v19581, z_t67_t z_v19582, bool z_v
     while (z_v32237 < z_v32238) {
         uint64_t z_v32239 = z_t1097_get(&z_v20116.litIds, z_v32237);
         z_t1093_t z_v32240 = z_t1186_get(z_v20116.usedLits, z_v32239);
-        z_t1093_t _m31 = z_v32240;
-        switch (_m31.tag) {
+        z_t1093_t _m30 = z_v32240;
+        switch (_m30.tag) {
             case Z_OPTIONVAL_BOOL_TAG_SOME: {
-                bool z_v32240 = _m31.data.some;
+                bool z_v32240 = _m30.data.some;
                 (void)z_v32240;
                 z_t46_t* __borrow_z_v32241 = &(*z_t423_get(&z_v19873, z_v32237));
                 /* alias: z_v32241 => (*__borrow_z_v32241) */
@@ -74214,33 +74204,33 @@ z_t46_t z_t890(z_t475_t z_v19580, z_t891_t* z_v19581, z_t67_t z_v19582, bool z_v
                 z_t46_t z_v32243 = z_t2035(z_v32242);
                 uint64_t z_v32244 = z_v32242.size;
                 uint64_t z_v32245 = (z_v32237 + 1);
-                z_t46_t _s32 = z_t46_create((uint64_t)64);
-                z_t46_append(&_s32, "static const char _zs", sizeof("static const char _zs")-1);
-                char _b33[32]; int _b33_n = snprintf(_b33, 32, "%ld", (long)(int64_t)z_v32245);
-                z_t46_append(&_s32, _b33, (uint64_t)_b33_n);
-                z_t46_append(&_s32, "_d[] = ", sizeof("_d[] = ")-1);
-                z_t46_append(&_s32, "\"", sizeof("\"")-1);
-                z_t46_append(&_s32, z_v32243.data, z_v32243.size);
-                z_t46_append(&_s32, "\"", sizeof("\"")-1);
-                z_t46_append(&_s32, ";", sizeof(";")-1);
-                z_t46_append(&_s32, "\n", sizeof("\n")-1);
-                z_t46_t z_v32246 = _s32;
+                z_t46_t _s31 = z_t46_create((uint64_t)64);
+                z_t46_append(&_s31, "static const char _zs", sizeof("static const char _zs")-1);
+                char _b32[32]; int _b32_n = snprintf(_b32, 32, "%ld", (long)(int64_t)z_v32245);
+                z_t46_append(&_s31, _b32, (uint64_t)_b32_n);
+                z_t46_append(&_s31, "_d[] = ", sizeof("_d[] = ")-1);
+                z_t46_append(&_s31, "\"", sizeof("\"")-1);
+                z_t46_append(&_s31, z_v32243.data, z_v32243.size);
+                z_t46_append(&_s31, "\"", sizeof("\"")-1);
+                z_t46_append(&_s31, ";", sizeof(";")-1);
+                z_t46_append(&_s31, "\n", sizeof("\n")-1);
+                z_t46_t z_v32246 = _s31;
                 (void)(z_t46_append(&z_v32236, (z_v32246).data, (z_v32246).size));
-                z_t46_t _s35 = z_t46_create((uint64_t)115);
-                z_t46_append(&_s35, "static const ", sizeof("static const ")-1);
-                z_t46_append(&_s35, z_v20116.svC.data, z_v20116.svC.size);
-                z_t46_append(&_s35, "_t _zs", sizeof("_t _zs")-1);
+                z_t46_t _s34 = z_t46_create((uint64_t)115);
+                z_t46_append(&_s34, "static const ", sizeof("static const ")-1);
+                z_t46_append(&_s34, z_v20116.svC.data, z_v20116.svC.size);
+                z_t46_append(&_s34, "_t _zs", sizeof("_t _zs")-1);
+                char _b36[32]; int _b36_n = snprintf(_b36, 32, "%ld", (long)(int64_t)z_v32245);
+                z_t46_append(&_s34, _b36, (uint64_t)_b36_n);
+                z_t46_append(&_s34, " = { .data = _zs", sizeof(" = { .data = _zs")-1);
                 char _b37[32]; int _b37_n = snprintf(_b37, 32, "%ld", (long)(int64_t)z_v32245);
-                z_t46_append(&_s35, _b37, (uint64_t)_b37_n);
-                z_t46_append(&_s35, " = { .data = _zs", sizeof(" = { .data = _zs")-1);
-                char _b38[32]; int _b38_n = snprintf(_b38, 32, "%ld", (long)(int64_t)z_v32245);
-                z_t46_append(&_s35, _b38, (uint64_t)_b38_n);
-                z_t46_append(&_s35, "_d, .size = ", sizeof("_d, .size = ")-1);
-                char _b39[32]; int _b39_n = snprintf(_b39, 32, "%ld", (long)(int64_t)z_v32244);
-                z_t46_append(&_s35, _b39, (uint64_t)_b39_n);
-                z_t46_append(&_s35, " };", sizeof(" };")-1);
-                z_t46_append(&_s35, "\n", sizeof("\n")-1);
-                z_t46_t z_v32247 = _s35;
+                z_t46_append(&_s34, _b37, (uint64_t)_b37_n);
+                z_t46_append(&_s34, "_d, .size = ", sizeof("_d, .size = ")-1);
+                char _b38[32]; int _b38_n = snprintf(_b38, 32, "%ld", (long)(int64_t)z_v32244);
+                z_t46_append(&_s34, _b38, (uint64_t)_b38_n);
+                z_t46_append(&_s34, " };", sizeof(" };")-1);
+                z_t46_append(&_s34, "\n", sizeof("\n")-1);
+                z_t46_t z_v32247 = _s34;
                 (void)(z_t46_append(&z_v32236, (z_v32247).data, (z_v32247).size));
     z_t46_free(&z_v32247);
     z_t46_free(&z_v32246);
@@ -74263,44 +74253,44 @@ z_t46_t z_t890(z_t475_t z_v19580, z_t891_t* z_v19581, z_t67_t z_v19582, bool z_v
         z_t46_t z_v32252 = z_t2035(z_v32251);
         uint64_t z_v32253 = z_v32251.size;
         uint64_t z_v32254 = (z_v32248 + 1);
-        z_t46_t _s40 = z_t46_create((uint64_t)65);
-        z_t46_append(&_s40, "static const char _zcs", sizeof("static const char _zcs")-1);
-        char _b41[32]; int _b41_n = snprintf(_b41, 32, "%ld", (long)(int64_t)z_v32254);
-        z_t46_append(&_s40, _b41, (uint64_t)_b41_n);
-        z_t46_append(&_s40, "_d[] = ", sizeof("_d[] = ")-1);
-        z_t46_append(&_s40, "\"", sizeof("\"")-1);
-        z_t46_append(&_s40, z_v32252.data, z_v32252.size);
-        z_t46_append(&_s40, "\"", sizeof("\"")-1);
-        z_t46_append(&_s40, ";", sizeof(";")-1);
-        z_t46_append(&_s40, "\n", sizeof("\n")-1);
-        z_t46_t z_v32255 = _s40;
+        z_t46_t _s39 = z_t46_create((uint64_t)65);
+        z_t46_append(&_s39, "static const char _zcs", sizeof("static const char _zcs")-1);
+        char _b40[32]; int _b40_n = snprintf(_b40, 32, "%ld", (long)(int64_t)z_v32254);
+        z_t46_append(&_s39, _b40, (uint64_t)_b40_n);
+        z_t46_append(&_s39, "_d[] = ", sizeof("_d[] = ")-1);
+        z_t46_append(&_s39, "\"", sizeof("\"")-1);
+        z_t46_append(&_s39, z_v32252.data, z_v32252.size);
+        z_t46_append(&_s39, "\"", sizeof("\"")-1);
+        z_t46_append(&_s39, ";", sizeof(";")-1);
+        z_t46_append(&_s39, "\n", sizeof("\n")-1);
+        z_t46_t z_v32255 = _s39;
         (void)(z_t46_append(&z_v32236, (z_v32255).data, (z_v32255).size));
-        z_t46_t _s43 = z_t46_create((uint64_t)117);
-        z_t46_append(&_s43, "static const ", sizeof("static const ")-1);
-        z_t46_append(&_s43, z_v20116.svC.data, z_v20116.svC.size);
-        z_t46_append(&_s43, "_t _zcs", sizeof("_t _zcs")-1);
+        z_t46_t _s42 = z_t46_create((uint64_t)117);
+        z_t46_append(&_s42, "static const ", sizeof("static const ")-1);
+        z_t46_append(&_s42, z_v20116.svC.data, z_v20116.svC.size);
+        z_t46_append(&_s42, "_t _zcs", sizeof("_t _zcs")-1);
+        char _b44[32]; int _b44_n = snprintf(_b44, 32, "%ld", (long)(int64_t)z_v32254);
+        z_t46_append(&_s42, _b44, (uint64_t)_b44_n);
+        z_t46_append(&_s42, " = { .data = _zcs", sizeof(" = { .data = _zcs")-1);
         char _b45[32]; int _b45_n = snprintf(_b45, 32, "%ld", (long)(int64_t)z_v32254);
-        z_t46_append(&_s43, _b45, (uint64_t)_b45_n);
-        z_t46_append(&_s43, " = { .data = _zcs", sizeof(" = { .data = _zcs")-1);
-        char _b46[32]; int _b46_n = snprintf(_b46, 32, "%ld", (long)(int64_t)z_v32254);
-        z_t46_append(&_s43, _b46, (uint64_t)_b46_n);
-        z_t46_append(&_s43, "_d, .size = ", sizeof("_d, .size = ")-1);
-        char _b47[32]; int _b47_n = snprintf(_b47, 32, "%ld", (long)(int64_t)z_v32253);
-        z_t46_append(&_s43, _b47, (uint64_t)_b47_n);
-        z_t46_append(&_s43, " };", sizeof(" };")-1);
-        z_t46_append(&_s43, "\n", sizeof("\n")-1);
-        z_t46_t z_v32256 = _s43;
+        z_t46_append(&_s42, _b45, (uint64_t)_b45_n);
+        z_t46_append(&_s42, "_d, .size = ", sizeof("_d, .size = ")-1);
+        char _b46[32]; int _b46_n = snprintf(_b46, 32, "%ld", (long)(int64_t)z_v32253);
+        z_t46_append(&_s42, _b46, (uint64_t)_b46_n);
+        z_t46_append(&_s42, " };", sizeof(" };")-1);
+        z_t46_append(&_s42, "\n", sizeof("\n")-1);
+        z_t46_t z_v32256 = _s42;
         (void)(z_t46_append(&z_v32236, (z_v32256).data, (z_v32256).size));
         z_v32248 = (z_v32248 + 1);
     z_t46_free(&z_v32256);
     z_t46_free(&z_v32255);
     z_t46_free(&z_v32252);
     }
-    z_t475_t _m48 = z_v19580;
-    switch (_m48.tag) {
+    z_t475_t _m47 = z_v19580;
+    switch (_m47.tag) {
         case Z_NODE_TAG_PROGRAM: {
-            /* alias: program => (*(z_t564_t*)_m48.data) */
-            (void)(z_t1903(&(*(z_t564_t*)_m48.data).ast, z_v19581, &z_v20116, z_v19582, _zs1574, &z_v19587));
+            /* alias: program => (*(z_t564_t*)_m47.data) */
+            (void)(z_t1903(&(*(z_t564_t*)_m47.data).ast, z_v19581, &z_v20116, z_v19582, _zs1574, &z_v19587));
             break;
         }
         default: {
@@ -74323,9 +74313,9 @@ z_t46_t z_t890(z_t475_t z_v19580, z_t891_t* z_v19581, z_t67_t z_v19582, bool z_v
     (void)(z_t46_append(&z_v19587, (_zs1584).data, (_zs1584).size));
     z_t439_t z_v32259 = z_t423_iterate(&z_v20116.emitErrors);
     while (1) {
-        z_t344_t _iter49 = z_t439_call(&z_v32259);
-        if (_iter49.tag == Z_OPTIONVIEW_STRING_TAG_NONE) break;
-        z_t46_t* __borrow_z_v32260 = (z_t46_t*)_iter49.data;
+        z_t344_t _iter48 = z_t439_call(&z_v32259);
+        if (_iter48.tag == Z_OPTIONVIEW_STRING_TAG_NONE) break;
+        z_t46_t* __borrow_z_v32260 = (z_t46_t*)_iter48.data;
         /* alias: z_v32260 => (*__borrow_z_v32260) */
         (void)(z_t423_append(z_v19585, z_t46_copy(&(*__borrow_z_v32260))));
     }
@@ -74408,14 +74398,14 @@ bool z_t1795(z_t474_t* z_v29550, uint32_t z_v29551) {
     return _ret2;
 }
 
-z_t46_t z_t2108(z_t67_t z_v31097, z_t67_t z_v31098) {
+z_t46_t z_t2108(z_t67_t z_v31401, z_t67_t z_v31402) {
     z_t46_t _s0 = z_t46_create((uint64_t)45);
-    z_t46_append(&_s0, z_v31097.data, z_v31097.size);
+    z_t46_append(&_s0, z_v31401.data, z_v31401.size);
     z_t46_append(&_s0, "/natives/", sizeof("/natives/")-1);
-    z_t46_append(&_s0, z_v31098.data, z_v31098.size);
+    z_t46_append(&_s0, z_v31402.data, z_v31402.size);
     z_t46_append(&_s0, ".inc", sizeof(".inc")-1);
-    z_t46_t z_v31099 = _s0;
-    return z_v31099;
+    z_t46_t z_v31403 = _s0;
+    return z_v31403;
 }
 
 z_t46_t z_t2457(z_t1797_t* z_v24001, uint64_t z_v24002) {
@@ -77071,108 +77061,108 @@ z_t46_t z_t2133(z_t474_t* z_v21965, z_t891_t* z_v21966, z_t1797_t* z_v21967, z_t
     return z_t2026(z_v21967, ((uint64_t)z_v22042));
 }
 
-z_t46_t z_t2134(z_t474_t* z_v31101, z_t891_t* z_v31102, z_t1797_t* z_v31103, z_t67_t z_v31104) {
-    z_t866_t z_v31105 = z_io_readText(z_v31104);
-    z_t866_t _m0 = z_v31105;
+z_t46_t z_t2134(z_t474_t* z_v31405, z_t891_t* z_v31406, z_t1797_t* z_v31407, z_t67_t z_v31408) {
+    z_t866_t z_v31409 = z_io_readText(z_v31408);
+    z_t866_t _m0 = z_v31409;
     switch (_m0.tag) {
         case Z_RESULT_STRING_IOERROR_TAG_OK: {
             /* alias: rd => (*(z_t46_t*)_m0.data) */
-            z_t423_t z_v31106 = z_t423_create((uint64_t)0);
-            z_t423_t z_v31107 = z_t423_create((uint64_t)0);
-            z_t423_t z_v31108 = z_t423_create((uint64_t)0);
-            z_t423_t z_v31109 = z_t423_create((uint64_t)0);
-            z_t423_t z_v31135 = z_t2363(((z_t67_t){ .data = (*(z_t46_t*)_m0.data).data, .size = (*(z_t46_t*)_m0.data).size }));
-            uint64_t z_v31136 = ((uint64_t)0);
-            uint64_t z_v31137 = z_v31135.length;
-            while (z_v31136 < z_v31137) {
-                z_t46_t* __borrow_z_v31138 = &(*z_t423_get(&z_v31135, z_v31136));
-                /* alias: z_v31138 => (*__borrow_z_v31138) */
-                z_t67_t z_v31139 = (z_t67_t){ .data = (*__borrow_z_v31138).data, .size = (*__borrow_z_v31138).size };
-                if (z_t67_startsWith(&z_v31139, &_zs1875)) {
-                    z_t67_t z_v31141 = z_t67_substring(&z_v31139, 4, z_v31139.size);
-                    uint64_t z_v31142 = z_t2474(z_v31101, z_v31102, z_v31103, z_v31141);
-                    (void)(z_t423_append(&z_v31108, z_t46_from_view(z_v31139)));
-                    if (z_t2351(z_v31102, ((uint64_t)z_v31142))) {
-                        (void)(z_t423_append(&z_v31109, z_t46_from_view(_zs1876)));
+            z_t423_t z_v31410 = z_t423_create((uint64_t)0);
+            z_t423_t z_v31411 = z_t423_create((uint64_t)0);
+            z_t423_t z_v31412 = z_t423_create((uint64_t)0);
+            z_t423_t z_v31413 = z_t423_create((uint64_t)0);
+            z_t423_t z_v31439 = z_t2363(((z_t67_t){ .data = (*(z_t46_t*)_m0.data).data, .size = (*(z_t46_t*)_m0.data).size }));
+            uint64_t z_v31440 = ((uint64_t)0);
+            uint64_t z_v31441 = z_v31439.length;
+            while (z_v31440 < z_v31441) {
+                z_t46_t* __borrow_z_v31442 = &(*z_t423_get(&z_v31439, z_v31440));
+                /* alias: z_v31442 => (*__borrow_z_v31442) */
+                z_t67_t z_v31443 = (z_t67_t){ .data = (*__borrow_z_v31442).data, .size = (*__borrow_z_v31442).size };
+                if (z_t67_startsWith(&z_v31443, &_zs1875)) {
+                    z_t67_t z_v31445 = z_t67_substring(&z_v31443, 4, z_v31443.size);
+                    uint64_t z_v31446 = z_t2474(z_v31405, z_v31406, z_v31407, z_v31445);
+                    (void)(z_t423_append(&z_v31412, z_t46_from_view(z_v31443)));
+                    if (z_t2351(z_v31406, ((uint64_t)z_v31446))) {
+                        (void)(z_t423_append(&z_v31413, z_t46_from_view(_zs1876)));
                     } else {
-                        (void)(z_t423_append(&z_v31109, z_t46_from_view(_zs1877)));
+                        (void)(z_t423_append(&z_v31413, z_t46_from_view(_zs1877)));
                     }
                 } else {
-                    (void)(z_t423_append(&z_v31106, z_t46_from_view(z_v31139)));
-                    if (z_t67_eq(z_v31139, _zs1878)) {
-                        z_t46_t z_v31149 = z_v31103->svC;
-                        (void)(z_t423_append(&z_v31107, z_t46_copy(&z_v31149)));
+                    (void)(z_t423_append(&z_v31410, z_t46_from_view(z_v31443)));
+                    if (z_t67_eq(z_v31443, _zs1878)) {
+                        z_t46_t z_v31453 = z_v31407->svC;
+                        (void)(z_t423_append(&z_v31411, z_t46_copy(&z_v31453)));
                     } else {
-                        if (z_t67_eq(z_v31139, _zs1879)) {
-                            z_t46_t z_v31151 = z_v31103->strC;
-                            (void)(z_t423_append(&z_v31107, z_t46_copy(&z_v31151)));
+                        if (z_t67_eq(z_v31443, _zs1879)) {
+                            z_t46_t z_v31455 = z_v31407->strC;
+                            (void)(z_t423_append(&z_v31411, z_t46_copy(&z_v31455)));
                         } else {
-                            z_t46_t z_v31153 = z_t2132(z_v31101, z_v31102, z_v31103, z_v31139);
-                            (void)(z_t423_append(&z_v31107, z_v31153));
-                            z_v31153 = (z_t46_t){0};
-    z_t46_free(&z_v31153);
+                            z_t46_t z_v31457 = z_t2132(z_v31405, z_v31406, z_v31407, z_v31443);
+                            (void)(z_t423_append(&z_v31411, z_v31457));
+                            z_v31457 = (z_t46_t){0};
+    z_t46_free(&z_v31457);
                         }
                     }
                 }
-                z_v31136 = (z_v31136 + 1);
+                z_v31440 = (z_v31440 + 1);
             }
-            z_t46_t _ret1 = z_t2365(z_v31103, &(*(z_t46_t*)_m0.data), z_v31104, &z_v31106, &z_v31107, &z_v31108, &z_v31109);
-    z_t866_destroy(&z_v31105);
-    z_t423_destroy(&z_v31106);
-    z_t423_destroy(&z_v31107);
-    z_t423_destroy(&z_v31108);
-    z_t423_destroy(&z_v31109);
-    z_t423_destroy(&z_v31135);
+            z_t46_t _ret1 = z_t2365(z_v31407, &(*(z_t46_t*)_m0.data), z_v31408, &z_v31410, &z_v31411, &z_v31412, &z_v31413);
+    z_t866_destroy(&z_v31409);
+    z_t423_destroy(&z_v31410);
+    z_t423_destroy(&z_v31411);
+    z_t423_destroy(&z_v31412);
+    z_t423_destroy(&z_v31413);
+    z_t423_destroy(&z_v31439);
             return _ret1;
         }
         case Z_RESULT_STRING_IOERROR_TAG_ERR: {
             /* alias: rd => (*(z_t630_t*)_m0.data) */
             z_t46_t _ah563 = ({  z_t46_t _s0 = z_t46_create((uint64_t)36);
  z_t46_append(&_s0, "missing io fragment ", sizeof("missing io fragment ")-1);
- z_t46_append(&_s0, z_v31104.data, z_v31104.size);
+ z_t46_append(&_s0, z_v31408.data, z_v31408.size);
 _s0; });
-            (void)(z_t2038(z_v31103, &_ah563, 0));
+            (void)(z_t2038(z_v31407, &_ah563, 0));
             z_t46_t _s2 = z_t46_create((uint64_t)54);
             z_t46_append(&_s2, "/* zemitterc: missing io fragment ", sizeof("/* zemitterc: missing io fragment ")-1);
-            z_t46_append(&_s2, z_v31104.data, z_v31104.size);
+            z_t46_append(&_s2, z_v31408.data, z_v31408.size);
             z_t46_append(&_s2, " */", sizeof(" */")-1);
             z_t46_append(&_s2, "\n", sizeof("\n")-1);
-    z_t866_destroy(&z_v31105);
+    z_t866_destroy(&z_v31409);
     z_t46_free(&_ah563);
             return _s2;
         }
         default: z_unreachable();
     }
-    /* post-guard alias: rd => (*(z_t630_t*)z_v31105.data) */
+    /* post-guard alias: rd => (*(z_t630_t*)z_v31409.data) */
 }
 
-uint64_t z_t2135(z_t891_t* z_v31057, z_t1797_t* z_v31058) {
-    uint64_t z_v31059 = z_v31057->reg.nextTypeId;
-    uint64_t z_v31060 = ((uint64_t)1ULL);
-    while (z_v31060 < z_v31059) {
-        if (z_t3689(&z_v31057->reg, ((uint64_t)z_v31060)) == ((uint8_t)Z_ZTYPETYPE_TAG_CLASSTYPE)) {
-            if (z_t2450(z_v31057, ((uint64_t)z_v31060), _zs1880)) {
-                if (z_t2122(z_v31057, z_v31058, ((uint64_t)z_v31060))) {
-                    return z_v31060;
+uint64_t z_t2135(z_t891_t* z_v31361, z_t1797_t* z_v31362) {
+    uint64_t z_v31363 = z_v31361->reg.nextTypeId;
+    uint64_t z_v31364 = ((uint64_t)1ULL);
+    while (z_v31364 < z_v31363) {
+        if (z_t3689(&z_v31361->reg, ((uint64_t)z_v31364)) == ((uint8_t)Z_ZTYPETYPE_TAG_CLASSTYPE)) {
+            if (z_t2450(z_v31361, ((uint64_t)z_v31364), _zs1880)) {
+                if (z_t2122(z_v31361, z_v31362, ((uint64_t)z_v31364))) {
+                    return z_v31364;
                 }
             }
         }
-        z_v31060 = (z_v31060 + 1);
+        z_v31364 = (z_v31364 + 1);
     }
     return 0;
 }
 
-bool z_t1902(z_t474_t* z_v31054, z_t891_t* z_v31055, z_t1797_t* z_v31056) {
-    uint64_t z_v31067 = z_t2135(z_v31055, z_v31056);
-    if (z_v31067 == 0) {
+bool z_t1902(z_t474_t* z_v31358, z_t891_t* z_v31359, z_t1797_t* z_v31360) {
+    uint64_t z_v31371 = z_t2135(z_v31359, z_v31360);
+    if (z_v31371 == 0) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    uint64_t z_v31068 = z_t2043(z_v31054, z_v31055, _zs1881, _zs1882, _zs1883);
-    if (z_t3674(&z_v31068)) {
+    uint64_t z_v31372 = z_t2043(z_v31358, z_v31359, _zs1881, _zs1882, _zs1883);
+    if (z_t3674(&z_v31372)) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    uint64_t z_v31069 = z_t2043(z_v31054, z_v31055, _zs1884, _zs1885, _zs1886);
-    if (z_t3674(&z_v31069)) {
+    uint64_t z_v31373 = z_t2043(z_v31358, z_v31359, _zs1884, _zs1885, _zs1886);
+    if (z_t3674(&z_v31373)) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
     return ((bool)Z_BOOL_TAG_TRUE);
@@ -77249,237 +77239,237 @@ bool z_t2137(z_t474_t* z_v29668, z_t891_t* z_v29669, z_t1797_t* z_v29670, uint64
     return _ret3;
 }
 
-bool z_t2138(z_t1797_t* z_v31082, uint64_t z_v31083) {
-    z_t46_t* __borrow_z_v31084 = &(*z_t423_get(&z_v31082->fragUnits, z_v31083));
-    /* alias: z_v31084 => (*__borrow_z_v31084) */
-    z_t46_t* __borrow_z_v31085 = &(*z_t423_get(&z_v31082->fragMembs, z_v31083));
-    /* alias: z_v31085 => (*__borrow_z_v31085) */
-    bool z_v31086 = ((bool)Z_BOOL_TAG_FALSE);
-    z_t3481_t z_v31087 = z_t67_split(&((z_t67_t){ .data = (*__borrow_z_v31085).data, .size = (*__borrow_z_v31085).size }), &_zs1888);
+bool z_t2138(z_t1797_t* z_v31386, uint64_t z_v31387) {
+    z_t46_t* __borrow_z_v31388 = &(*z_t423_get(&z_v31386->fragUnits, z_v31387));
+    /* alias: z_v31388 => (*__borrow_z_v31388) */
+    z_t46_t* __borrow_z_v31389 = &(*z_t423_get(&z_v31386->fragMembs, z_v31387));
+    /* alias: z_v31389 => (*__borrow_z_v31389) */
+    bool z_v31390 = ((bool)Z_BOOL_TAG_FALSE);
+    z_t3481_t z_v31391 = z_t67_split(&((z_t67_t){ .data = (*__borrow_z_v31389).data, .size = (*__borrow_z_v31389).size }), &_zs1888);
     while (1) {
-        z_t3492_t _iter0 = z_t3481_call(&z_v31087);
+        z_t3492_t _iter0 = z_t3481_call(&z_v31391);
         if (_iter0.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t3492_destroy(&_iter0); break; }
         z_t67_t dm9 = *(z_t67_t*)_iter0.data;
         free(_iter0.data);
         if (dm9.size > 0) {
-            if (z_t2051(z_v31082, ((z_t67_t){ .data = (*__borrow_z_v31084).data, .size = (*__borrow_z_v31084).size }), dm9)) {
-                z_v31086 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_t2051(z_v31386, ((z_t67_t){ .data = (*__borrow_z_v31388).data, .size = (*__borrow_z_v31388).size }), dm9)) {
+                z_v31390 = ((bool)Z_BOOL_TAG_TRUE);
             }
         }
     }
-    return z_v31086;
+    return z_v31390;
 }
 
-void z_t1903(z_t474_t* z_v31073, z_t891_t* z_v31074, z_t1797_t* z_v31075, z_t67_t z_v31076, z_t67_t z_v31077, z_t46_t* z_v31078) {
-    uint64_t z_v31079 = ((uint64_t)0);
-    uint64_t z_v31080 = z_v31075->fragUnits.length;
-    while (z_v31079 < z_v31080) {
-        z_t46_t* __borrow_z_v31081 = &(*z_t423_get(&z_v31075->fragUnits, z_v31079));
-        /* alias: z_v31081 => (*__borrow_z_v31081) */
-        if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31081).data, .size = (*__borrow_z_v31081).size }), z_v31077)) {
-            if (z_t2138(z_v31075, z_v31079)) {
-                z_t46_t* __borrow_z_v31089 = &(*z_t423_get(&z_v31075->fragNames, z_v31079));
-                /* alias: z_v31089 => (*__borrow_z_v31089) */
-                z_t3481_t z_v31090 = z_t67_split(&((z_t67_t){ .data = (*__borrow_z_v31089).data, .size = (*__borrow_z_v31089).size }), &_zs1889);
+void z_t1903(z_t474_t* z_v31377, z_t891_t* z_v31378, z_t1797_t* z_v31379, z_t67_t z_v31380, z_t67_t z_v31381, z_t46_t* z_v31382) {
+    uint64_t z_v31383 = ((uint64_t)0);
+    uint64_t z_v31384 = z_v31379->fragUnits.length;
+    while (z_v31383 < z_v31384) {
+        z_t46_t* __borrow_z_v31385 = &(*z_t423_get(&z_v31379->fragUnits, z_v31383));
+        /* alias: z_v31385 => (*__borrow_z_v31385) */
+        if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31385).data, .size = (*__borrow_z_v31385).size }), z_v31381)) {
+            if (z_t2138(z_v31379, z_v31383)) {
+                z_t46_t* __borrow_z_v31393 = &(*z_t423_get(&z_v31379->fragNames, z_v31383));
+                /* alias: z_v31393 => (*__borrow_z_v31393) */
+                z_t3481_t z_v31394 = z_t67_split(&((z_t67_t){ .data = (*__borrow_z_v31393).data, .size = (*__borrow_z_v31393).size }), &_zs1889);
                 while (1) {
-                    z_t3492_t _iter0 = z_t3481_call(&z_v31090);
+                    z_t3492_t _iter0 = z_t3481_call(&z_v31394);
                     if (_iter0.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t3492_destroy(&_iter0); break; }
                     z_t67_t fr9 = *(z_t67_t*)_iter0.data;
                     free(_iter0.data);
                     if (fr9.size > 0) {
-                        (void)(z_t1905(z_v31073, z_v31074, z_v31075, z_v31076, fr9, z_v31078));
+                        (void)(z_t1905(z_v31377, z_v31378, z_v31379, z_v31380, fr9, z_v31382));
                     }
                 }
             }
         }
-        z_v31079 = (z_v31079 + 1);
+        z_v31383 = (z_v31383 + 1);
     }
 }
 
-void z_t1904(z_t474_t* z_v31306, z_t891_t* z_v31307, z_t1797_t* z_v31308, z_t67_t z_v31309, z_t46_t* z_v31310) {
-    z_t423_t z_v31311 = z_t423_create((uint64_t)0);
-    uint64_t z_v31312 = ((uint64_t)0);
-    uint64_t z_v31313 = z_v31308->fragUnits.length;
-    while (z_v31312 < z_v31313) {
-        z_t46_t* __borrow_z_v31314 = &(*z_t423_get(&z_v31308->fragUnits, z_v31312));
-        /* alias: z_v31314 => (*__borrow_z_v31314) */
-        bool z_v31315 = ((bool)Z_BOOL_TAG_FALSE);
-        if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31314).data, .size = (*__borrow_z_v31314).size }), _zs1890)) {
-            z_v31315 = ((bool)Z_BOOL_TAG_TRUE);
+void z_t1904(z_t474_t* z_v31610, z_t891_t* z_v31611, z_t1797_t* z_v31612, z_t67_t z_v31613, z_t46_t* z_v31614) {
+    z_t423_t z_v31615 = z_t423_create((uint64_t)0);
+    uint64_t z_v31616 = ((uint64_t)0);
+    uint64_t z_v31617 = z_v31612->fragUnits.length;
+    while (z_v31616 < z_v31617) {
+        z_t46_t* __borrow_z_v31618 = &(*z_t423_get(&z_v31612->fragUnits, z_v31616));
+        /* alias: z_v31618 => (*__borrow_z_v31618) */
+        bool z_v31619 = ((bool)Z_BOOL_TAG_FALSE);
+        if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31618).data, .size = (*__borrow_z_v31618).size }), _zs1890)) {
+            z_v31619 = ((bool)Z_BOOL_TAG_TRUE);
         }
-        z_t439_t z_v31316 = z_t423_iterate(&z_v31308->unitOrder);
+        z_t439_t z_v31620 = z_t423_iterate(&z_v31612->unitOrder);
         while (1) {
-            z_t344_t _iter0 = z_t439_call(&z_v31316);
+            z_t344_t _iter0 = z_t439_call(&z_v31620);
             if (_iter0.tag == Z_OPTIONVIEW_STRING_TAG_NONE) break;
-            z_t46_t* __borrow_z_v31317 = (z_t46_t*)_iter0.data;
-            /* alias: z_v31317 => (*__borrow_z_v31317) */
-            if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31317).data, .size = (*__borrow_z_v31317).size }), ((z_t67_t){ .data = (*__borrow_z_v31314).data, .size = (*__borrow_z_v31314).size }))) {
-                z_v31315 = ((bool)Z_BOOL_TAG_TRUE);
+            z_t46_t* __borrow_z_v31621 = (z_t46_t*)_iter0.data;
+            /* alias: z_v31621 => (*__borrow_z_v31621) */
+            if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31621).data, .size = (*__borrow_z_v31621).size }), ((z_t67_t){ .data = (*__borrow_z_v31618).data, .size = (*__borrow_z_v31618).size }))) {
+                z_v31619 = ((bool)Z_BOOL_TAG_TRUE);
             }
         }
-        z_t439_t z_v31318 = z_t423_iterate(&z_v31311);
+        z_t439_t z_v31622 = z_t423_iterate(&z_v31615);
         while (1) {
-            z_t344_t _iter1 = z_t439_call(&z_v31318);
+            z_t344_t _iter1 = z_t439_call(&z_v31622);
             if (_iter1.tag == Z_OPTIONVIEW_STRING_TAG_NONE) break;
-            z_t46_t* __borrow_z_v31319 = (z_t46_t*)_iter1.data;
-            /* alias: z_v31319 => (*__borrow_z_v31319) */
-            if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31319).data, .size = (*__borrow_z_v31319).size }), ((z_t67_t){ .data = (*__borrow_z_v31314).data, .size = (*__borrow_z_v31314).size }))) {
-                z_v31315 = ((bool)Z_BOOL_TAG_TRUE);
+            z_t46_t* __borrow_z_v31623 = (z_t46_t*)_iter1.data;
+            /* alias: z_v31623 => (*__borrow_z_v31623) */
+            if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31623).data, .size = (*__borrow_z_v31623).size }), ((z_t67_t){ .data = (*__borrow_z_v31618).data, .size = (*__borrow_z_v31618).size }))) {
+                z_v31619 = ((bool)Z_BOOL_TAG_TRUE);
             }
         }
-        if (z_v31315 == ((bool)Z_BOOL_TAG_FALSE)) {
-            (void)(z_t423_append(&z_v31311, z_t46_copy(&(*__borrow_z_v31314))));
-            (void)(z_t1903(z_v31306, z_v31307, z_v31308, z_v31309, ((z_t67_t){ .data = (*__borrow_z_v31314).data, .size = (*__borrow_z_v31314).size }), z_v31310));
+        if (z_v31619 == ((bool)Z_BOOL_TAG_FALSE)) {
+            (void)(z_t423_append(&z_v31615, z_t46_copy(&(*__borrow_z_v31618))));
+            (void)(z_t1903(z_v31610, z_v31611, z_v31612, z_v31613, ((z_t67_t){ .data = (*__borrow_z_v31618).data, .size = (*__borrow_z_v31618).size }), z_v31614));
         }
-        z_v31312 = (z_v31312 + 1);
+        z_v31616 = (z_v31616 + 1);
     }
-    z_t423_destroy(&z_v31311);
+    z_t423_destroy(&z_v31615);
 }
 
-void z_t1905(z_t474_t* z_v31091, z_t891_t* z_v31092, z_t1797_t* z_v31093, z_t67_t z_v31094, z_t67_t z_v31095, z_t46_t* z_v31096) {
-    z_t46_t z_v31100 = z_t2108(z_v31094, z_v31095);
-    z_t46_t z_v31156 = z_t2134(z_v31091, z_v31092, z_v31093, ((z_t67_t){ .data = z_v31100.data, .size = z_v31100.size }));
-    (void)(z_t46_append(z_v31096, (z_v31156).data, (z_v31156).size));
-    z_t46_free(&z_v31100);
-    z_t46_free(&z_v31156);
+void z_t1905(z_t474_t* z_v31395, z_t891_t* z_v31396, z_t1797_t* z_v31397, z_t67_t z_v31398, z_t67_t z_v31399, z_t46_t* z_v31400) {
+    z_t46_t z_v31404 = z_t2108(z_v31398, z_v31399);
+    z_t46_t z_v31460 = z_t2134(z_v31395, z_v31396, z_v31397, ((z_t67_t){ .data = z_v31404.data, .size = z_v31404.size }));
+    (void)(z_t46_append(z_v31400, (z_v31460).data, (z_v31460).size));
+    z_t46_free(&z_v31404);
+    z_t46_free(&z_v31460);
 }
 
-void z_t1906(z_t474_t* z_v31159, z_t891_t* z_v31160, z_t1797_t* z_v31161, z_t46_t* z_v31162) {
-    uint64_t z_v31163 = z_t2083(z_v31161, _zs1891);
-    uint64_t z_v31164 = z_t2083(z_v31161, _zs1892);
-    uint64_t z_v31165 = z_t2083(z_v31161, _zs1893);
-    uint64_t z_v31166 = z_v31160->reg.nextTypeId;
-    uint64_t z_v31167 = ((uint64_t)1ULL);
-    while (z_v31167 < z_v31166) {
-        if (z_t3689(&z_v31160->reg, ((uint64_t)z_v31167)) == ((uint8_t)Z_ZTYPETYPE_TAG_CLASSTYPE)) {
-            uint64_t z_v31172 = z_t2045(z_v31160, ((uint64_t)z_v31167));
-            if (z_t3674(&z_v31172)) {
-                uint64_t z_v31175 = z_t2084(z_v31161, ((uint64_t)z_v31167));
-                bool z_v31176 = ((bool)Z_BOOL_TAG_FALSE);
-                if (z_v31175 > 0) {
-                    if (z_v31175 == z_v31163) {
-                        z_v31176 = ((bool)Z_BOOL_TAG_TRUE);
+void z_t1906(z_t474_t* z_v31463, z_t891_t* z_v31464, z_t1797_t* z_v31465, z_t46_t* z_v31466) {
+    uint64_t z_v31467 = z_t2083(z_v31465, _zs1891);
+    uint64_t z_v31468 = z_t2083(z_v31465, _zs1892);
+    uint64_t z_v31469 = z_t2083(z_v31465, _zs1893);
+    uint64_t z_v31470 = z_v31464->reg.nextTypeId;
+    uint64_t z_v31471 = ((uint64_t)1ULL);
+    while (z_v31471 < z_v31470) {
+        if (z_t3689(&z_v31464->reg, ((uint64_t)z_v31471)) == ((uint8_t)Z_ZTYPETYPE_TAG_CLASSTYPE)) {
+            uint64_t z_v31476 = z_t2045(z_v31464, ((uint64_t)z_v31471));
+            if (z_t3674(&z_v31476)) {
+                uint64_t z_v31479 = z_t2084(z_v31465, ((uint64_t)z_v31471));
+                bool z_v31480 = ((bool)Z_BOOL_TAG_FALSE);
+                if (z_v31479 > 0) {
+                    if (z_v31479 == z_v31467) {
+                        z_v31480 = ((bool)Z_BOOL_TAG_TRUE);
                     }
-                    if (z_v31175 == z_v31164) {
-                        z_v31176 = ((bool)Z_BOOL_TAG_TRUE);
+                    if (z_v31479 == z_v31468) {
+                        z_v31480 = ((bool)Z_BOOL_TAG_TRUE);
                     }
-                    if (z_v31175 == z_v31165) {
-                        z_v31176 = ((bool)Z_BOOL_TAG_TRUE);
+                    if (z_v31479 == z_v31469) {
+                        z_v31480 = ((bool)Z_BOOL_TAG_TRUE);
                     }
                 }
-                if (z_v31176) {
-                    z_t46_t z_v31179 = z_t2085(z_v31160, ((uint64_t)z_v31167));
-                    bool z_v31180 = ((bool)Z_BOOL_TAG_FALSE);
-                    if (z_t67_eq(((z_t67_t){ .data = z_v31179.data, .size = z_v31179.size }), _zs1894)) {
-                        z_v31180 = z_t1902(z_v31159, z_v31160, z_v31161);
+                if (z_v31480) {
+                    z_t46_t z_v31483 = z_t2085(z_v31464, ((uint64_t)z_v31471));
+                    bool z_v31484 = ((bool)Z_BOOL_TAG_FALSE);
+                    if (z_t67_eq(((z_t67_t){ .data = z_v31483.data, .size = z_v31483.size }), _zs1894)) {
+                        z_v31484 = z_t1902(z_v31463, z_v31464, z_v31465);
                     } else {
                         z_t46_t _s0 = z_t46_create((uint64_t)21);
                         z_t46_append(&_s0, "uses_", sizeof("uses_")-1);
-                        z_t46_append(&_s0, z_v31179.data, z_v31179.size);
-                        z_t46_t z_v31181 = _s0;
-                        if (z_t2051(z_v31161, _zs1895, ((z_t67_t){ .data = z_v31181.data, .size = z_v31181.size }))) {
-                            z_v31180 = ((bool)Z_BOOL_TAG_TRUE);
+                        z_t46_append(&_s0, z_v31483.data, z_v31483.size);
+                        z_t46_t z_v31485 = _s0;
+                        if (z_t2051(z_v31465, _zs1895, ((z_t67_t){ .data = z_v31485.data, .size = z_v31485.size }))) {
+                            z_v31484 = ((bool)Z_BOOL_TAG_TRUE);
                         }
-    z_t46_free(&z_v31181);
+    z_t46_free(&z_v31485);
                     }
-                    if (z_v31180) {
-                        (void)(z_t1913(z_v31159, z_v31160, z_v31161, ((uint64_t)z_v31167), z_v31162));
+                    if (z_v31484) {
+                        (void)(z_t1913(z_v31463, z_v31464, z_v31465, ((uint64_t)z_v31471), z_v31466));
                     }
-    z_t46_free(&z_v31179);
+    z_t46_free(&z_v31483);
                 }
             }
         }
-        z_v31167 = (z_v31167 + 1);
+        z_v31471 = (z_v31471 + 1);
     }
 }
 
-void z_t1907(z_t474_t* z_v31291, z_t891_t* z_v31292, z_t1797_t* z_v31293, z_t46_t* z_v31294) {
-    bool z_v31295 = ((bool)Z_BOOL_TAG_FALSE);
-    if (z_t2051(z_v31293, _zs1896, _zs1897)) {
-        z_v31295 = ((bool)Z_BOOL_TAG_TRUE);
+void z_t1907(z_t474_t* z_v31595, z_t891_t* z_v31596, z_t1797_t* z_v31597, z_t46_t* z_v31598) {
+    bool z_v31599 = ((bool)Z_BOOL_TAG_FALSE);
+    if (z_t2051(z_v31597, _zs1896, _zs1897)) {
+        z_v31599 = ((bool)Z_BOOL_TAG_TRUE);
     }
-    if (z_t2051(z_v31293, _zs1898, _zs1899)) {
-        z_v31295 = ((bool)Z_BOOL_TAG_TRUE);
+    if (z_t2051(z_v31597, _zs1898, _zs1899)) {
+        z_v31599 = ((bool)Z_BOOL_TAG_TRUE);
     }
-    if (z_t2051(z_v31293, _zs1900, _zs1901)) {
-        z_v31295 = ((bool)Z_BOOL_TAG_TRUE);
+    if (z_t2051(z_v31597, _zs1900, _zs1901)) {
+        z_v31599 = ((bool)Z_BOOL_TAG_TRUE);
     }
-    if (z_v31295 == ((bool)Z_BOOL_TAG_FALSE)) {
+    if (z_v31599 == ((bool)Z_BOOL_TAG_FALSE)) {
         return;
     }
-    uint64_t z_v31296 = z_t2135(z_v31292, z_v31293);
-    if (z_v31296 == 0) {
+    uint64_t z_v31600 = z_t2135(z_v31596, z_v31597);
+    if (z_v31600 == 0) {
         return;
     }
-    z_t46_t z_v31299 = z_t2026(z_v31293, ((uint64_t)z_v31296));
-    z_t46_t z_v31300 = z_t2132(z_v31291, z_v31292, z_v31293, _zs1902);
-    z_t46_t z_v31301 = z_t2132(z_v31291, z_v31292, z_v31293, _zs1903);
-    if (z_t2051(z_v31293, _zs1904, _zs1905)) {
+    z_t46_t z_v31603 = z_t2026(z_v31597, ((uint64_t)z_v31600));
+    z_t46_t z_v31604 = z_t2132(z_v31595, z_v31596, z_v31597, _zs1902);
+    z_t46_t z_v31605 = z_t2132(z_v31595, z_v31596, z_v31597, _zs1903);
+    if (z_t2051(z_v31597, _zs1904, _zs1905)) {
         z_t46_t _s0 = z_t46_create((uint64_t)169);
         z_t46_append(&_s0, "static ", sizeof("static ")-1);
-        z_t46_append(&_s0, z_v31299.data, z_v31299.size);
+        z_t46_append(&_s0, z_v31603.data, z_v31603.size);
         z_t46_append(&_s0, "_t z_io_stdout_File = { 1, true };", sizeof("_t z_io_stdout_File = { 1, true };")-1);
         z_t46_append(&_s0, "\n", sizeof("\n")-1);
         z_t46_append(&_s0, "static ", sizeof("static ")-1);
-        z_t46_append(&_s0, z_v31300.data, z_v31300.size);
+        z_t46_append(&_s0, z_v31604.data, z_v31604.size);
         z_t46_append(&_s0, "_t z_io_stdout(void) {", sizeof("_t z_io_stdout(void) {")-1);
         z_t46_append(&_s0, "\n", sizeof("\n")-1);
         z_t46_append(&_s0, "    return ", sizeof("    return ")-1);
-        z_t46_append(&_s0, z_v31299.data, z_v31299.size);
+        z_t46_append(&_s0, z_v31603.data, z_v31603.size);
         z_t46_append(&_s0, "_Writer_create(&z_io_stdout_File);", sizeof("_Writer_create(&z_io_stdout_File);")-1);
         z_t46_append(&_s0, "\n", sizeof("\n")-1);
         z_t46_append(&_s0, "}", sizeof("}")-1);
         z_t46_append(&_s0, "\n", sizeof("\n")-1);
         z_t46_append(&_s0, "\n", sizeof("\n")-1);
-        z_t46_t z_v31302 = _s0;
-        (void)(z_t46_append(z_v31294, (z_v31302).data, (z_v31302).size));
-    z_t46_free(&z_v31302);
+        z_t46_t z_v31606 = _s0;
+        (void)(z_t46_append(z_v31598, (z_v31606).data, (z_v31606).size));
+    z_t46_free(&z_v31606);
     }
-    if (z_t2051(z_v31293, _zs1906, _zs1907)) {
+    if (z_t2051(z_v31597, _zs1906, _zs1907)) {
         z_t46_t _s4 = z_t46_create((uint64_t)169);
         z_t46_append(&_s4, "static ", sizeof("static ")-1);
-        z_t46_append(&_s4, z_v31299.data, z_v31299.size);
+        z_t46_append(&_s4, z_v31603.data, z_v31603.size);
         z_t46_append(&_s4, "_t z_io_stderr_File = { 2, true };", sizeof("_t z_io_stderr_File = { 2, true };")-1);
         z_t46_append(&_s4, "\n", sizeof("\n")-1);
         z_t46_append(&_s4, "static ", sizeof("static ")-1);
-        z_t46_append(&_s4, z_v31300.data, z_v31300.size);
+        z_t46_append(&_s4, z_v31604.data, z_v31604.size);
         z_t46_append(&_s4, "_t z_io_stderr(void) {", sizeof("_t z_io_stderr(void) {")-1);
         z_t46_append(&_s4, "\n", sizeof("\n")-1);
         z_t46_append(&_s4, "    return ", sizeof("    return ")-1);
-        z_t46_append(&_s4, z_v31299.data, z_v31299.size);
+        z_t46_append(&_s4, z_v31603.data, z_v31603.size);
         z_t46_append(&_s4, "_Writer_create(&z_io_stderr_File);", sizeof("_Writer_create(&z_io_stderr_File);")-1);
         z_t46_append(&_s4, "\n", sizeof("\n")-1);
         z_t46_append(&_s4, "}", sizeof("}")-1);
         z_t46_append(&_s4, "\n", sizeof("\n")-1);
         z_t46_append(&_s4, "\n", sizeof("\n")-1);
-        z_t46_t z_v31303 = _s4;
-        (void)(z_t46_append(z_v31294, (z_v31303).data, (z_v31303).size));
-    z_t46_free(&z_v31303);
+        z_t46_t z_v31607 = _s4;
+        (void)(z_t46_append(z_v31598, (z_v31607).data, (z_v31607).size));
+    z_t46_free(&z_v31607);
     }
-    if (z_t2051(z_v31293, _zs1908, _zs1909)) {
+    if (z_t2051(z_v31597, _zs1908, _zs1909)) {
         z_t46_t _s8 = z_t46_create((uint64_t)166);
         z_t46_append(&_s8, "static ", sizeof("static ")-1);
-        z_t46_append(&_s8, z_v31299.data, z_v31299.size);
+        z_t46_append(&_s8, z_v31603.data, z_v31603.size);
         z_t46_append(&_s8, "_t z_io_stdin_File = { 0, true };", sizeof("_t z_io_stdin_File = { 0, true };")-1);
         z_t46_append(&_s8, "\n", sizeof("\n")-1);
         z_t46_append(&_s8, "static ", sizeof("static ")-1);
-        z_t46_append(&_s8, z_v31301.data, z_v31301.size);
+        z_t46_append(&_s8, z_v31605.data, z_v31605.size);
         z_t46_append(&_s8, "_t z_io_stdin(void) {", sizeof("_t z_io_stdin(void) {")-1);
         z_t46_append(&_s8, "\n", sizeof("\n")-1);
         z_t46_append(&_s8, "    return ", sizeof("    return ")-1);
-        z_t46_append(&_s8, z_v31299.data, z_v31299.size);
+        z_t46_append(&_s8, z_v31603.data, z_v31603.size);
         z_t46_append(&_s8, "_Reader_create(&z_io_stdin_File);", sizeof("_Reader_create(&z_io_stdin_File);")-1);
         z_t46_append(&_s8, "\n", sizeof("\n")-1);
         z_t46_append(&_s8, "}", sizeof("}")-1);
         z_t46_append(&_s8, "\n", sizeof("\n")-1);
         z_t46_append(&_s8, "\n", sizeof("\n")-1);
-        z_t46_t z_v31304 = _s8;
-        (void)(z_t46_append(z_v31294, (z_v31304).data, (z_v31304).size));
-    z_t46_free(&z_v31304);
+        z_t46_t z_v31608 = _s8;
+        (void)(z_t46_append(z_v31598, (z_v31608).data, (z_v31608).size));
+    z_t46_free(&z_v31608);
     }
-    z_t46_free(&z_v31299);
-    z_t46_free(&z_v31300);
-    z_t46_free(&z_v31301);
+    z_t46_free(&z_v31603);
+    z_t46_free(&z_v31604);
+    z_t46_free(&z_v31605);
 }
 
 void z_t2139(z_t891_t* z_v29952, z_t1797_t* z_v29953, z_t46_t* z_v29954) {
@@ -78113,14 +78103,14 @@ bool z_t2146(z_t474_t* z_v29690, z_t891_t* z_v29691, z_t1797_t* z_v29692, uint64
     return _ret0;
 }
 
-bool z_t2147(z_t1186_t* z_v31536, uint64_t z_v31537) {
-    z_t1093_t z_v31538 = z_t1186_get(z_v31536, z_v31537);
-    z_t1093_t _m0 = z_v31538;
+bool z_t2147(z_t1186_t* z_v31267, uint64_t z_v31268) {
+    z_t1093_t z_v31269 = z_t1186_get(z_v31267, z_v31268);
+    z_t1093_t _m0 = z_v31269;
     switch (_m0.tag) {
         case Z_OPTIONVAL_BOOL_TAG_SOME: {
-            bool z_v31538 = _m0.data.some;
-            (void)z_v31538;
-            return z_v31538;
+            bool z_v31269 = _m0.data.some;
+            (void)z_v31269;
+            return z_v31269;
         }
         case Z_OPTIONVAL_BOOL_TAG_NONE: {
             return ((bool)Z_BOOL_TAG_FALSE);
@@ -78129,97 +78119,97 @@ bool z_t2147(z_t1186_t* z_v31536, uint64_t z_v31537) {
     }
 }
 
-bool z_t2148(z_t474_t* z_v31539, z_t891_t* z_v31540, z_t1797_t* z_v31541, uint64_t z_v31542, z_t1186_t* z_v31543, z_t1186_t* z_v31544) {
-    uint8_t z_v31545 = z_t3689(&z_v31540->reg, z_v31542);
-    if (z_v31545 == ((uint8_t)Z_ZTYPETYPE_TAG_UNIONTYPE)) {
+bool z_t2148(z_t474_t* z_v31270, z_t891_t* z_v31271, z_t1797_t* z_v31272, uint64_t z_v31273, z_t1186_t* z_v31274, z_t1186_t* z_v31275) {
+    uint8_t z_v31276 = z_t3689(&z_v31271->reg, z_v31273);
+    if (z_v31276 == ((uint8_t)Z_ZTYPETYPE_TAG_UNIONTYPE)) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    z_t423_t z_v31546 = z_t423_create((uint64_t)0);
-    z_t1097_t z_v31547 = z_t1097_create((uint64_t)0);
-    if (z_v31545 == ((uint8_t)Z_ZTYPETYPE_TAG_VARIANTTYPE)) {
-        z_t1097_t z_v31548 = z_t1097_create((uint64_t)0);
-        (void)(z_t2078(z_v31539, z_v31540, z_v31542, &z_v31546, &z_v31547, &z_v31548));
-    z_t1097_destroy(&z_v31548);
+    z_t423_t z_v31277 = z_t423_create((uint64_t)0);
+    z_t1097_t z_v31278 = z_t1097_create((uint64_t)0);
+    if (z_v31276 == ((uint8_t)Z_ZTYPETYPE_TAG_VARIANTTYPE)) {
+        z_t1097_t z_v31279 = z_t1097_create((uint64_t)0);
+        (void)(z_t2078(z_v31270, z_v31271, z_v31273, &z_v31277, &z_v31278, &z_v31279));
+    z_t1097_destroy(&z_v31279);
     } else {
-        if (z_v31545 == ((uint8_t)Z_ZTYPETYPE_TAG_FACETTYPE)) {
-            (void)(z_t2161(z_v31540, z_v31542, &z_v31547));
+        if (z_v31276 == ((uint8_t)Z_ZTYPETYPE_TAG_FACETTYPE)) {
+            (void)(z_t2161(z_v31271, z_v31273, &z_v31278));
         } else {
-            z_t1097_t z_v31549 = z_t1097_create((uint64_t)0);
-            (void)(z_t2082(z_v31539, z_v31540, z_v31542, &z_v31546, &z_v31547, &z_v31549));
-    z_t1097_destroy(&z_v31549);
+            z_t1097_t z_v31280 = z_t1097_create((uint64_t)0);
+            (void)(z_t2082(z_v31270, z_v31271, z_v31273, &z_v31277, &z_v31278, &z_v31280));
+    z_t1097_destroy(&z_v31280);
         }
     }
-    uint64_t z_v31550 = ((uint64_t)0);
-    uint64_t z_v31551 = z_v31547.length;
-    while (z_v31550 < z_v31551) {
-        uint64_t z_v31552 = z_t1097_get(&z_v31547, z_v31550);
-        uint64_t z_v31555 = z_t2075(z_v31540, z_v31541, ((uint64_t)z_v31552));
-        bool z_v31558 = z_t2136(z_v31540, z_v31541, ((uint64_t)z_v31552));
-        if (z_v31558 == ((bool)Z_BOOL_TAG_FALSE)) {
-            if (z_t2147(z_v31543, z_v31555)) {
-                if (z_t2147(z_v31544, z_v31555) == ((bool)Z_BOOL_TAG_FALSE)) {
+    uint64_t z_v31281 = ((uint64_t)0);
+    uint64_t z_v31282 = z_v31278.length;
+    while (z_v31281 < z_v31282) {
+        uint64_t z_v31283 = z_t1097_get(&z_v31278, z_v31281);
+        uint64_t z_v31286 = z_t2075(z_v31271, z_v31272, ((uint64_t)z_v31283));
+        bool z_v31289 = z_t2136(z_v31271, z_v31272, ((uint64_t)z_v31283));
+        if (z_v31289 == ((bool)Z_BOOL_TAG_FALSE)) {
+            if (z_t2147(z_v31274, z_v31286)) {
+                if (z_t2147(z_v31275, z_v31286) == ((bool)Z_BOOL_TAG_FALSE)) {
                     bool _ret0 = ((bool)Z_BOOL_TAG_TRUE);
-    z_t423_destroy(&z_v31546);
-    z_t1097_destroy(&z_v31547);
+    z_t423_destroy(&z_v31277);
+    z_t1097_destroy(&z_v31278);
                     return _ret0;
                 }
             }
         }
-        z_v31550 = (z_v31550 + 1);
+        z_v31281 = (z_v31281 + 1);
     }
     bool _ret1 = ((bool)Z_BOOL_TAG_FALSE);
-    z_t423_destroy(&z_v31546);
-    z_t1097_destroy(&z_v31547);
+    z_t423_destroy(&z_v31277);
+    z_t1097_destroy(&z_v31278);
     return _ret1;
 }
 
-bool z_t2149(z_t474_t* z_v31579, z_t891_t* z_v31580, z_t1797_t* z_v31581, uint64_t z_v31582, z_t1186_t* z_v31583, z_t1186_t* z_v31584, z_t1097_t* z_v31585) {
-    if (z_t1097_contains(z_v31585, z_v31582)) {
+bool z_t2149(z_t474_t* z_v31310, z_t891_t* z_v31311, z_t1797_t* z_v31312, uint64_t z_v31313, z_t1186_t* z_v31314, z_t1186_t* z_v31315, z_t1097_t* z_v31316) {
+    if (z_t1097_contains(z_v31316, z_v31313)) {
         return ((bool)Z_BOOL_TAG_TRUE);
     }
-    (void)(z_t1097_append(z_v31585, ((uint64_t)z_v31582)));
-    z_t1097_t z_v31587 = z_t1097_create((uint64_t)0);
-    (void)(z_t2476(z_v31579, z_v31580, z_v31581, z_v31582, &z_v31587));
-    uint64_t z_v31588 = ((uint64_t)0);
-    uint64_t z_v31589 = z_v31587.length;
-    while (z_v31588 < z_v31589) {
-        uint64_t z_v31590 = z_t1097_get(&z_v31587, z_v31588);
-        uint64_t z_v31593 = z_t2075(z_v31580, z_v31581, ((uint64_t)z_v31590));
-        if (z_t2147(z_v31583, z_v31593)) {
-            if (z_t2147(z_v31584, z_v31593) == ((bool)Z_BOOL_TAG_FALSE)) {
+    (void)(z_t1097_append(z_v31316, ((uint64_t)z_v31313)));
+    z_t1097_t z_v31318 = z_t1097_create((uint64_t)0);
+    (void)(z_t2476(z_v31310, z_v31311, z_v31312, z_v31313, &z_v31318));
+    uint64_t z_v31319 = ((uint64_t)0);
+    uint64_t z_v31320 = z_v31318.length;
+    while (z_v31319 < z_v31320) {
+        uint64_t z_v31321 = z_t1097_get(&z_v31318, z_v31319);
+        uint64_t z_v31324 = z_t2075(z_v31311, z_v31312, ((uint64_t)z_v31321));
+        if (z_t2147(z_v31314, z_v31324)) {
+            if (z_t2147(z_v31315, z_v31324) == ((bool)Z_BOOL_TAG_FALSE)) {
                 bool _ret0 = ((bool)Z_BOOL_TAG_FALSE);
-    z_t1097_destroy(&z_v31587);
+    z_t1097_destroy(&z_v31318);
                 return _ret0;
             }
         }
-        uint64_t z_v31596 = z_t2045(z_v31580, ((uint64_t)z_v31593));
-        if (z_v31596 > 0) {
-            if (z_t2149(z_v31579, z_v31580, z_v31581, ((uint64_t)z_v31593), z_v31583, z_v31584, z_v31585) == ((bool)Z_BOOL_TAG_FALSE)) {
+        uint64_t z_v31327 = z_t2045(z_v31311, ((uint64_t)z_v31324));
+        if (z_v31327 > 0) {
+            if (z_t2149(z_v31310, z_v31311, z_v31312, ((uint64_t)z_v31324), z_v31314, z_v31315, z_v31316) == ((bool)Z_BOOL_TAG_FALSE)) {
                 bool _ret1 = ((bool)Z_BOOL_TAG_FALSE);
-    z_t1097_destroy(&z_v31587);
+    z_t1097_destroy(&z_v31318);
                 return _ret1;
             }
         }
-        z_v31588 = (z_v31588 + 1);
+        z_v31319 = (z_v31319 + 1);
     }
     bool _ret2 = ((bool)Z_BOOL_TAG_TRUE);
-    z_t1097_destroy(&z_v31587);
+    z_t1097_destroy(&z_v31318);
     return _ret2;
 }
 
-void z_t2150(z_t474_t* z_v31487, z_t891_t* z_v31488, z_t1797_t* z_v31489, uint64_t z_v31490, z_t46_t* z_v31491) {
-    z_t46_t z_v31492 = z_t2085(z_v31488, z_v31490);
-    if (z_v31492.size == 0) {
-        z_t46_free(&z_v31492);
+void z_t2150(z_t474_t* z_v31218, z_t891_t* z_v31219, z_t1797_t* z_v31220, uint64_t z_v31221, z_t46_t* z_v31222) {
+    z_t46_t z_v31223 = z_t2085(z_v31219, z_v31221);
+    if (z_v31223.size == 0) {
+        z_t46_free(&z_v31223);
         return;
     }
-    z_t349_t z_v31493 = z_t2060(z_v31488, z_v31490);
-    z_t46_t z_v31494 = z_t46_copy(&z_v31489->mainName);
-    z_t349_t _m0 = z_v31493;
+    z_t349_t z_v31224 = z_t2060(z_v31219, z_v31221);
+    z_t46_t z_v31225 = z_t46_copy(&z_v31220->mainName);
+    z_t349_t _m0 = z_v31224;
     switch (_m0.tag) {
         case Z_OPTION_STRING_TAG_SOME: {
             /* alias: duo => (*(z_t46_t*)_m0.data) */
-            (void)(z_t1901(z_v31489, ((z_t67_t){ .data = (*(z_t46_t*)_m0.data).data, .size = (*(z_t46_t*)_m0.data).size })));
+            (void)(z_t1901(z_v31220, ((z_t67_t){ .data = (*(z_t46_t*)_m0.data).data, .size = (*(z_t46_t*)_m0.data).size })));
             break;
         }
         case Z_OPTION_STRING_TAG_NONE: {
@@ -78227,71 +78217,71 @@ void z_t2150(z_t474_t* z_v31487, z_t891_t* z_v31488, z_t1797_t* z_v31489, uint64
         }
         default: break;
     }
-    uint8_t z_v31496 = z_t3689(&z_v31488->reg, z_v31490);
-    if (z_v31496 == ((uint8_t)Z_ZTYPETYPE_TAG_VARIANTTYPE)) {
-        (void)(z_t1920(z_v31487, z_v31488, z_v31489, z_v31490, z_v31491));
+    uint8_t z_v31227 = z_t3689(&z_v31219->reg, z_v31221);
+    if (z_v31227 == ((uint8_t)Z_ZTYPETYPE_TAG_VARIANTTYPE)) {
+        (void)(z_t1920(z_v31218, z_v31219, z_v31220, z_v31221, z_v31222));
     }
-    if (z_v31496 == ((uint8_t)Z_ZTYPETYPE_TAG_RECORDTYPE)) {
-        (void)(z_t1923(z_v31487, z_v31488, z_v31489, z_v31490, z_v31491));
+    if (z_v31227 == ((uint8_t)Z_ZTYPETYPE_TAG_RECORDTYPE)) {
+        (void)(z_t1923(z_v31218, z_v31219, z_v31220, z_v31221, z_v31222));
     }
-    if (z_v31496 == ((uint8_t)Z_ZTYPETYPE_TAG_CLASSTYPE)) {
-        (void)(z_t1923(z_v31487, z_v31488, z_v31489, z_v31490, z_v31491));
+    if (z_v31227 == ((uint8_t)Z_ZTYPETYPE_TAG_CLASSTYPE)) {
+        (void)(z_t1923(z_v31218, z_v31219, z_v31220, z_v31221, z_v31222));
     }
-    if (z_v31496 == ((uint8_t)Z_ZTYPETYPE_TAG_UNIONTYPE)) {
-        (void)(z_t2123(z_v31487, z_v31488, z_v31489, z_v31490, z_v31491));
+    if (z_v31227 == ((uint8_t)Z_ZTYPETYPE_TAG_UNIONTYPE)) {
+        (void)(z_t2123(z_v31218, z_v31219, z_v31220, z_v31221, z_v31222));
     }
-    if (z_v31496 == ((uint8_t)Z_ZTYPETYPE_TAG_PROTOCOLTYPE)) {
-        (void)(z_t1912(z_v31487, z_v31488, z_v31489, z_v31490, ((z_t67_t){ .data = z_v31492.data, .size = z_v31492.size }), z_v31491));
+    if (z_v31227 == ((uint8_t)Z_ZTYPETYPE_TAG_PROTOCOLTYPE)) {
+        (void)(z_t1912(z_v31218, z_v31219, z_v31220, z_v31221, ((z_t67_t){ .data = z_v31223.data, .size = z_v31223.size }), z_v31222));
     }
-    if (z_v31496 == ((uint8_t)Z_ZTYPETYPE_TAG_FACETTYPE)) {
-        (void)(z_t2162(z_v31487, z_v31488, z_v31489, z_v31490, z_v31491));
+    if (z_v31227 == ((uint8_t)Z_ZTYPETYPE_TAG_FACETTYPE)) {
+        (void)(z_t2162(z_v31218, z_v31219, z_v31220, z_v31221, z_v31222));
     }
-    (void)(z_t1901(z_v31489, ((z_t67_t){ .data = z_v31494.data, .size = z_v31494.size })));
-    z_t46_free(&z_v31492);
-    z_t46_free(&z_v31494);
-    z_t349_destroy(&z_v31493);
+    (void)(z_t1901(z_v31220, ((z_t67_t){ .data = z_v31225.data, .size = z_v31225.size })));
+    z_t46_free(&z_v31223);
+    z_t46_free(&z_v31225);
+    z_t349_destroy(&z_v31224);
 }
 
-void z_t2151(z_t474_t* z_v31601, z_t891_t* z_v31602, z_t1797_t* z_v31603, z_t67_t z_v31604, uint64_t z_v31605, z_t46_t* z_v31606) {
-    if (z_t2046(z_v31602, z_v31605, z_v31603->optionvalOriginTid)) {
-        (void)(z_t1920(z_v31601, z_v31602, z_v31603, z_v31605, z_v31606));
+void z_t2151(z_t474_t* z_v31332, z_t891_t* z_v31333, z_t1797_t* z_v31334, z_t67_t z_v31335, uint64_t z_v31336, z_t46_t* z_v31337) {
+    if (z_t2046(z_v31333, z_v31336, z_v31334->optionvalOriginTid)) {
+        (void)(z_t1920(z_v31332, z_v31333, z_v31334, z_v31336, z_v31337));
         return;
     }
-    if (z_t2046(z_v31602, z_v31605, z_v31603->resultvalOriginTid)) {
-        (void)(z_t1920(z_v31601, z_v31602, z_v31603, z_v31605, z_v31606));
+    if (z_t2046(z_v31333, z_v31336, z_v31334->resultvalOriginTid)) {
+        (void)(z_t1920(z_v31332, z_v31333, z_v31334, z_v31336, z_v31337));
         return;
     }
-    if (z_t2072(z_v31602, z_v31603, z_v31605)) {
-        (void)(z_t2118(z_v31601, z_v31602, z_v31603, z_v31604, z_v31605, z_v31606));
+    if (z_t2072(z_v31333, z_v31334, z_v31336)) {
+        (void)(z_t2118(z_v31332, z_v31333, z_v31334, z_v31335, z_v31336, z_v31337));
         return;
     }
-    if (z_t2046(z_v31602, z_v31605, z_v31603->arrayOriginTid)) {
-        (void)(z_t2111(z_v31601, z_v31602, z_v31603, z_v31604, z_v31605, z_v31606));
+    if (z_t2046(z_v31333, z_v31336, z_v31334->arrayOriginTid)) {
+        (void)(z_t2111(z_v31332, z_v31333, z_v31334, z_v31335, z_v31336, z_v31337));
         return;
     }
-    if (z_t2069(z_v31602, z_v31603, z_v31605)) {
-        (void)(z_t2114(z_v31601, z_v31602, z_v31603, z_v31604, z_v31605, z_v31606));
+    if (z_t2069(z_v31333, z_v31334, z_v31336)) {
+        (void)(z_t2114(z_v31332, z_v31333, z_v31334, z_v31335, z_v31336, z_v31337));
         return;
     }
-    if (z_t2070(z_v31602, z_v31603, z_v31605)) {
-        (void)(z_t2129(z_v31601, z_v31602, z_v31603, z_v31604, z_v31605, z_v31606));
+    if (z_t2070(z_v31333, z_v31334, z_v31336)) {
+        (void)(z_t2129(z_v31332, z_v31333, z_v31334, z_v31335, z_v31336, z_v31337));
         return;
     }
-    if (z_t2071(z_v31602, z_v31603, z_v31605)) {
-        (void)(z_t2131(z_v31601, z_v31602, z_v31603, z_v31604, z_v31605, z_v31606));
+    if (z_t2071(z_v31333, z_v31334, z_v31336)) {
+        (void)(z_t2131(z_v31332, z_v31333, z_v31334, z_v31335, z_v31336, z_v31337));
         return;
     }
 }
 
-void z_t2152(z_t474_t* z_v31503, z_t891_t* z_v31504, z_t1797_t* z_v31505, uint64_t z_v31506, z_t1097_t* z_v31507, z_t1097_t* z_v31508, uint64_t z_v31509) {
-    uint64_t z_v31510 = ((uint64_t)0);
-    while (z_v31510 < z_v31509) {
-        if (z_t2046(z_v31504, z_v31510, z_v31506)) {
-            if (z_t2146(z_v31503, z_v31504, z_v31505, ((uint64_t)z_v31510), z_v31507)) {
-                (void)(z_t1097_append(z_v31508, ((uint64_t)z_v31510)));
+void z_t2152(z_t474_t* z_v31234, z_t891_t* z_v31235, z_t1797_t* z_v31236, uint64_t z_v31237, z_t1097_t* z_v31238, z_t1097_t* z_v31239, uint64_t z_v31240) {
+    uint64_t z_v31241 = ((uint64_t)0);
+    while (z_v31241 < z_v31240) {
+        if (z_t2046(z_v31235, z_v31241, z_v31237)) {
+            if (z_t2146(z_v31234, z_v31235, z_v31236, ((uint64_t)z_v31241), z_v31238)) {
+                (void)(z_t1097_append(z_v31239, ((uint64_t)z_v31241)));
             }
         }
-        z_v31510 = (z_v31510 + 1);
+        z_v31241 = (z_v31241 + 1);
     }
 }
 
@@ -78332,30 +78322,30 @@ bool z_t2153(z_t474_t* z_v21078, z_t891_t* z_v21079, uint64_t z_v21080) {
     }
 }
 
-bool z_t2154(z_t474_t* z_v31345, z_t891_t* z_v31346, uint64_t z_v31347) {
-    if (z_t2120(z_v31346, z_v31347)) {
+bool z_t2154(z_t474_t* z_v31076, z_t891_t* z_v31077, uint64_t z_v31078) {
+    if (z_t2120(z_v31077, z_v31078)) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    uint64_t z_v31348 = z_t2045(z_v31346, z_v31347);
-    if (z_v31348 > 0) {
+    uint64_t z_v31079 = z_t2045(z_v31077, z_v31078);
+    if (z_v31079 > 0) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    return z_t2153(z_v31345, z_v31346, ((uint64_t)z_v31347));
+    return z_t2153(z_v31076, z_v31077, ((uint64_t)z_v31078));
 }
 
-uint64_t z_t2478(z_t891_t* z_v31393, uint64_t z_v31394) {
-    return z_t3710(&z_v31393->reg, z_v31394);
+uint64_t z_t2478(z_t891_t* z_v31124, uint64_t z_v31125) {
+    return z_t3710(&z_v31124->reg, z_v31125);
 }
 
-z_t46_t z_t2479(z_t474_t* z_v31451, z_t891_t* z_v31452, z_t1797_t* z_v31453, uint64_t z_v31454) {
-    uint64_t z_v31455 = ((uint64_t)0);
-    z_t999_t z_v31456 = z_t1024_get(z_v31452->typing.funcReturnNode, z_v31454);
-    z_t999_t _m0 = z_v31456;
+z_t46_t z_t2479(z_t474_t* z_v31182, z_t891_t* z_v31183, z_t1797_t* z_v31184, uint64_t z_v31185) {
+    uint64_t z_v31186 = ((uint64_t)0);
+    z_t999_t z_v31187 = z_t1024_get(z_v31183->typing.funcReturnNode, z_v31185);
+    z_t999_t _m0 = z_v31187;
     switch (_m0.tag) {
         case Z_OPTIONVAL_U64_TAG_SOME: {
-            uint64_t z_v31456 = _m0.data.some;
-            (void)z_v31456;
-            z_v31455 = z_t2041(z_v31452, z_v31456);
+            uint64_t z_v31187 = _m0.data.some;
+            (void)z_v31187;
+            z_v31186 = z_t2041(z_v31183, z_v31187);
             break;
         }
         case Z_OPTIONVAL_U64_TAG_NONE: {
@@ -78363,85 +78353,85 @@ z_t46_t z_t2479(z_t474_t* z_v31451, z_t891_t* z_v31452, z_t1797_t* z_v31453, uin
         }
         default: break;
     }
-    if (z_t3674(&z_v31455)) {
-        z_v31455 = z_t2478(z_v31452, z_v31454);
+    if (z_t3674(&z_v31186)) {
+        z_v31186 = z_t2478(z_v31183, z_v31185);
     }
-    if (z_t3674(&z_v31455)) {
+    if (z_t3674(&z_v31186)) {
         return z_t46_from_view(_zs1917);
     }
-    z_t46_t z_v31459 = z_t2085(z_v31452, ((uint64_t)z_v31455));
-    if (z_t3672(&z_v31455, z_v31453->strTid)) {
+    z_t46_t z_v31190 = z_t2085(z_v31183, ((uint64_t)z_v31186));
+    if (z_t3672(&z_v31186, z_v31184->strTid)) {
         z_t46_t _s1 = z_t46_create((uint64_t)18);
-        z_t46_append(&_s1, z_v31453->strC.data, z_v31453->strC.size);
+        z_t46_append(&_s1, z_v31184->strC.data, z_v31184->strC.size);
         z_t46_append(&_s1, "_t", sizeof("_t")-1);
-        z_t46_free(&z_v31459);
+        z_t46_free(&z_v31190);
         return _s1;
     }
-    if (z_t3672(&z_v31455, z_v31453->svTid)) {
+    if (z_t3672(&z_v31186, z_v31184->svTid)) {
         z_t46_t _s3 = z_t46_create((uint64_t)18);
-        z_t46_append(&_s3, z_v31453->svC.data, z_v31453->svC.size);
+        z_t46_append(&_s3, z_v31184->svC.data, z_v31184->svC.size);
         z_t46_append(&_s3, "_t", sizeof("_t")-1);
-        z_t46_free(&z_v31459);
+        z_t46_free(&z_v31190);
         return _s3;
     }
-    z_t46_t z_v31463 = z_t2031(z_v31452, ((z_t67_t){ .data = z_v31459.data, .size = z_v31459.size }), ((uint64_t)z_v31455));
-    if (z_v31463.size > 0) {
-        z_t46_free(&z_v31459);
-        return z_v31463;
+    z_t46_t z_v31194 = z_t2031(z_v31183, ((z_t67_t){ .data = z_v31190.data, .size = z_v31190.size }), ((uint64_t)z_v31186));
+    if (z_v31194.size > 0) {
+        z_t46_free(&z_v31190);
+        return z_v31194;
     }
-    z_t46_t z_v31467 = z_t2077(z_v31451, z_v31452, z_v31453, ((uint64_t)z_v31455), ((uint64_t)0));
-    if (z_v31467.size > 0) {
-        z_t46_free(&z_v31459);
-        z_t46_free(&z_v31463);
-        return z_v31467;
+    z_t46_t z_v31198 = z_t2077(z_v31182, z_v31183, z_v31184, ((uint64_t)z_v31186), ((uint64_t)0));
+    if (z_v31198.size > 0) {
+        z_t46_free(&z_v31190);
+        z_t46_free(&z_v31194);
+        return z_v31198;
     }
     z_t46_t _ret5 = z_t46_from_view(_zs1918);
-    z_t46_free(&z_v31459);
-    z_t46_free(&z_v31463);
-    z_t46_free(&z_v31467);
+    z_t46_free(&z_v31190);
+    z_t46_free(&z_v31194);
+    z_t46_free(&z_v31198);
     return _ret5;
 }
 
-z_t46_t z_t2480(z_t474_t* z_v31433, z_t891_t* z_v31434, z_t1797_t* z_v31435, uint64_t z_v31436, z_t67_t z_v31437, uint64_t z_v31438) {
-    z_t46_t z_v31442 = z_t2077(z_v31433, z_v31434, z_v31435, ((uint64_t)z_v31438), ((uint64_t)0));
-    bool z_v31443 = z_t2447(z_v31433, z_v31434, z_v31435, z_v31436, z_v31437, z_v31438);
-    if (z_v31443) {
-        if (z_v31442.size > 0) {
+z_t46_t z_t2480(z_t474_t* z_v31164, z_t891_t* z_v31165, z_t1797_t* z_v31166, uint64_t z_v31167, z_t67_t z_v31168, uint64_t z_v31169) {
+    z_t46_t z_v31173 = z_t2077(z_v31164, z_v31165, z_v31166, ((uint64_t)z_v31169), ((uint64_t)0));
+    bool z_v31174 = z_t2447(z_v31164, z_v31165, z_v31166, z_v31167, z_v31168, z_v31169);
+    if (z_v31174) {
+        if (z_v31173.size > 0) {
             z_t46_t _s0 = z_t46_create((uint64_t)17);
-            z_t46_append(&_s0, z_v31442.data, z_v31442.size);
+            z_t46_append(&_s0, z_v31173.data, z_v31173.size);
             z_t46_append(&_s0, "*", sizeof("*")-1);
-            z_t46_t z_v31444 = _s0;
-            z_t46_free(&z_v31442);
-            z_v31442 = z_v31444;
-            z_v31444 = (z_t46_t){0};
-    z_t46_free(&z_v31444);
+            z_t46_t z_v31175 = _s0;
+            z_t46_free(&z_v31173);
+            z_v31173 = z_v31175;
+            z_v31175 = (z_t46_t){0};
+    z_t46_free(&z_v31175);
         }
     }
-    if (z_v31442.size == 0) {
+    if (z_v31173.size == 0) {
         z_t46_t _ret2 = z_t46_from_view(_zs1919);
-        z_t46_free(&z_v31442);
+        z_t46_free(&z_v31173);
         return _ret2;
     }
-    return z_v31442;
+    return z_v31173;
 }
 
-void z_t2481(z_t891_t* z_v31406, z_t1797_t* z_v31407, uint64_t z_v31408, z_t46_t* z_v31409) {
-    z_t46_t z_v31410 = z_t2085(z_v31406, z_v31408);
-    z_t46_t z_v31412 = z_t2031(z_v31406, ((z_t67_t){ .data = z_v31410.data, .size = z_v31410.size }), z_v31408);
-    if (z_v31412.size > 0) {
-        z_t46_free(&z_v31410);
-        z_t46_free(&z_v31412);
+void z_t2481(z_t891_t* z_v31137, z_t1797_t* z_v31138, uint64_t z_v31139, z_t46_t* z_v31140) {
+    z_t46_t z_v31141 = z_t2085(z_v31137, z_v31139);
+    z_t46_t z_v31143 = z_t2031(z_v31137, ((z_t67_t){ .data = z_v31141.data, .size = z_v31141.size }), z_v31139);
+    if (z_v31143.size > 0) {
+        z_t46_free(&z_v31141);
+        z_t46_free(&z_v31143);
         return;
     }
-    z_t349_t z_v31413 = z_t2060(z_v31406, z_v31408);
-    z_t349_t _m0 = z_v31413;
+    z_t349_t z_v31144 = z_t2060(z_v31137, z_v31139);
+    z_t349_t _m0 = z_v31144;
     switch (_m0.tag) {
         case Z_OPTION_STRING_TAG_SOME: {
             /* alias: duo5 => (*(z_t46_t*)_m0.data) */
             if (z_t2099(((z_t67_t){ .data = (*(z_t46_t*)_m0.data).data, .size = (*(z_t46_t*)_m0.data).size })) == ((bool)Z_BOOL_TAG_FALSE)) {
-                z_t46_free(&z_v31410);
-                z_t46_free(&z_v31412);
-    z_t349_destroy(&z_v31413);
+                z_t46_free(&z_v31141);
+                z_t46_free(&z_v31143);
+    z_t349_destroy(&z_v31144);
                 return;
             }
             break;
@@ -78451,105 +78441,105 @@ void z_t2481(z_t891_t* z_v31406, z_t1797_t* z_v31407, uint64_t z_v31408, z_t46_t
         }
         default: break;
     }
-    uint8_t z_v31415 = z_t3689(&z_v31406->reg, z_v31408);
-    bool z_v31416 = ((bool)Z_BOOL_TAG_FALSE);
-    if (z_v31415 == ((uint8_t)Z_ZTYPETYPE_TAG_RECORDTYPE)) {
-        z_v31416 = ((bool)Z_BOOL_TAG_TRUE);
+    uint8_t z_v31146 = z_t3689(&z_v31137->reg, z_v31139);
+    bool z_v31147 = ((bool)Z_BOOL_TAG_FALSE);
+    if (z_v31146 == ((uint8_t)Z_ZTYPETYPE_TAG_RECORDTYPE)) {
+        z_v31147 = ((bool)Z_BOOL_TAG_TRUE);
     }
-    if (z_v31415 == ((uint8_t)Z_ZTYPETYPE_TAG_CLASSTYPE)) {
-        z_v31416 = ((bool)Z_BOOL_TAG_TRUE);
+    if (z_v31146 == ((uint8_t)Z_ZTYPETYPE_TAG_CLASSTYPE)) {
+        z_v31147 = ((bool)Z_BOOL_TAG_TRUE);
     }
-    if (z_v31416) {
-        if (z_t2046(z_v31406, z_v31408, z_v31407->strOriginTid)) {
-            z_v31416 = ((bool)Z_BOOL_TAG_FALSE);
+    if (z_v31147) {
+        if (z_t2046(z_v31137, z_v31139, z_v31138->strOriginTid)) {
+            z_v31147 = ((bool)Z_BOOL_TAG_FALSE);
         }
-        if (z_t2046(z_v31406, z_v31408, z_v31407->arrayOriginTid)) {
-            z_v31416 = ((bool)Z_BOOL_TAG_FALSE);
+        if (z_t2046(z_v31137, z_v31139, z_v31138->arrayOriginTid)) {
+            z_v31147 = ((bool)Z_BOOL_TAG_FALSE);
         }
     }
-    if (z_v31416) {
-        z_t1093_t z_v31419 = z_t1186_get(z_v31407->fwdDeclaredTypes, z_v31408);
-        z_t1093_t _m1 = z_v31419;
+    if (z_v31147) {
+        z_t1093_t z_v31150 = z_t1186_get(z_v31138->fwdDeclaredTypes, z_v31139);
+        z_t1093_t _m1 = z_v31150;
         switch (_m1.tag) {
             case Z_OPTIONVAL_BOOL_TAG_SOME: {
-                bool z_v31419 = _m1.data.some;
-                (void)z_v31419;
+                bool z_v31150 = _m1.data.some;
+                (void)z_v31150;
                 break;
             }
             case Z_OPTIONVAL_BOOL_TAG_NONE: {
-                z_t46_t z_v31420 = z_t2026(z_v31407, z_v31408);
-                (void)(z_t1186_set(z_v31407->fwdDeclaredTypes, ((uint64_t)z_v31408), ((bool)Z_BOOL_TAG_TRUE)));
+                z_t46_t z_v31151 = z_t2026(z_v31138, z_v31139);
+                (void)(z_t1186_set(z_v31138->fwdDeclaredTypes, ((uint64_t)z_v31139), ((bool)Z_BOOL_TAG_TRUE)));
                 z_t46_t _s2 = z_t46_create((uint64_t)54);
                 z_t46_append(&_s2, "typedef struct ", sizeof("typedef struct ")-1);
-                z_t46_append(&_s2, z_v31420.data, z_v31420.size);
+                z_t46_append(&_s2, z_v31151.data, z_v31151.size);
                 z_t46_append(&_s2, "_t ", sizeof("_t ")-1);
-                z_t46_append(&_s2, z_v31420.data, z_v31420.size);
+                z_t46_append(&_s2, z_v31151.data, z_v31151.size);
                 z_t46_append(&_s2, "_t;", sizeof("_t;")-1);
                 z_t46_append(&_s2, "\n", sizeof("\n")-1);
-                z_t46_t z_v31422 = _s2;
-                (void)(z_t46_append(z_v31409, (z_v31422).data, (z_v31422).size));
-    z_t46_free(&z_v31422);
-    z_t46_free(&z_v31420);
+                z_t46_t z_v31153 = _s2;
+                (void)(z_t46_append(z_v31140, (z_v31153).data, (z_v31153).size));
+    z_t46_free(&z_v31153);
+    z_t46_free(&z_v31151);
                 break;
             }
             default: break;
         }
     }
-    z_t46_free(&z_v31410);
-    z_t46_free(&z_v31412);
-    z_t349_destroy(&z_v31413);
+    z_t46_free(&z_v31141);
+    z_t46_free(&z_v31143);
+    z_t349_destroy(&z_v31144);
 }
 
-bool z_t2482(z_t474_t* z_v31381, z_t891_t* z_v31382, z_t1797_t* z_v31383, uint64_t z_v31384) {
-    z_t46_t z_v31385 = z_t2085(z_v31382, z_v31384);
-    uint64_t z_v31386 = z_v31384;
-    uint64_t z_v31388 = z_t2389(z_v31381, z_v31382, z_v31383, z_v31384, ((z_t67_t){ .data = z_v31385.data, .size = z_v31385.size }));
-    if (z_v31388 > 0) {
-        z_v31386 = ((uint64_t)z_v31388);
+bool z_t2482(z_t474_t* z_v31112, z_t891_t* z_v31113, z_t1797_t* z_v31114, uint64_t z_v31115) {
+    z_t46_t z_v31116 = z_t2085(z_v31113, z_v31115);
+    uint64_t z_v31117 = z_v31115;
+    uint64_t z_v31119 = z_t2389(z_v31112, z_v31113, z_v31114, z_v31115, ((z_t67_t){ .data = z_v31116.data, .size = z_v31116.size }));
+    if (z_v31119 > 0) {
+        z_v31117 = ((uint64_t)z_v31119);
     }
-    uint8_t z_v31390 = z_t3689(&z_v31382->reg, z_v31386);
-    if (z_v31390 == ((uint8_t)Z_ZTYPETYPE_TAG_PROTOCOLTYPE)) {
+    uint8_t z_v31121 = z_t3689(&z_v31113->reg, z_v31117);
+    if (z_v31121 == ((uint8_t)Z_ZTYPETYPE_TAG_PROTOCOLTYPE)) {
         bool _ret0 = ((bool)Z_BOOL_TAG_TRUE);
-        z_t46_free(&z_v31385);
+        z_t46_free(&z_v31116);
         return _ret0;
     }
-    if (z_v31390 == ((uint8_t)Z_ZTYPETYPE_TAG_FACETTYPE)) {
+    if (z_v31121 == ((uint8_t)Z_ZTYPETYPE_TAG_FACETTYPE)) {
         bool _ret1 = ((bool)Z_BOOL_TAG_TRUE);
-        z_t46_free(&z_v31385);
+        z_t46_free(&z_v31116);
         return _ret1;
     }
-    if (z_v31390 == ((uint8_t)Z_ZTYPETYPE_TAG_UNIONTYPE)) {
+    if (z_v31121 == ((uint8_t)Z_ZTYPETYPE_TAG_UNIONTYPE)) {
         bool _ret2 = ((bool)Z_BOOL_TAG_TRUE);
-        z_t46_free(&z_v31385);
+        z_t46_free(&z_v31116);
         return _ret2;
     }
-    if (z_v31390 == ((uint8_t)Z_ZTYPETYPE_TAG_VARIANTTYPE)) {
+    if (z_v31121 == ((uint8_t)Z_ZTYPETYPE_TAG_VARIANTTYPE)) {
         bool _ret3 = ((bool)Z_BOOL_TAG_TRUE);
-        z_t46_free(&z_v31385);
+        z_t46_free(&z_v31116);
         return _ret3;
     }
     bool _ret4 = ((bool)Z_BOOL_TAG_FALSE);
-    z_t46_free(&z_v31385);
+    z_t46_free(&z_v31116);
     return _ret4;
 }
 
-void z_t2155(z_t474_t* z_v31351, z_t891_t* z_v31352, z_t1797_t* z_v31353, uint64_t z_v31354, z_t1097_t* z_v31355, z_t1024_t* z_v31356, z_t46_t* z_v31357) {
-    if (z_t1097_contains(z_v31355, z_v31354)) {
+void z_t2155(z_t474_t* z_v31082, z_t891_t* z_v31083, z_t1797_t* z_v31084, uint64_t z_v31085, z_t1097_t* z_v31086, z_t1024_t* z_v31087, z_t46_t* z_v31088) {
+    if (z_t1097_contains(z_v31086, z_v31085)) {
         return;
     }
-    (void)(z_t1097_append(z_v31355, ((uint64_t)z_v31354)));
-    z_t423_t z_v31359 = z_t423_create((uint64_t)0);
-    z_t1097_t z_v31360 = z_t1097_create((uint64_t)0);
-    z_t1097_t z_v31361 = z_t1097_create((uint64_t)0);
-    (void)(z_t2082(z_v31351, z_v31352, z_v31354, &z_v31359, &z_v31360, &z_v31361));
-    uint64_t z_v31362 = ((uint64_t)0);
-    z_t999_t z_v31363 = z_t1024_get(z_v31356, z_v31354);
-    z_t999_t _m0 = z_v31363;
+    (void)(z_t1097_append(z_v31086, ((uint64_t)z_v31085)));
+    z_t423_t z_v31090 = z_t423_create((uint64_t)0);
+    z_t1097_t z_v31091 = z_t1097_create((uint64_t)0);
+    z_t1097_t z_v31092 = z_t1097_create((uint64_t)0);
+    (void)(z_t2082(z_v31082, z_v31083, z_v31085, &z_v31090, &z_v31091, &z_v31092));
+    uint64_t z_v31093 = ((uint64_t)0);
+    z_t999_t z_v31094 = z_t1024_get(z_v31087, z_v31085);
+    z_t999_t _m0 = z_v31094;
     switch (_m0.tag) {
         case Z_OPTIONVAL_U64_TAG_SOME: {
-            uint64_t z_v31363 = _m0.data.some;
-            (void)z_v31363;
-            z_v31362 = z_v31363;
+            uint64_t z_v31094 = _m0.data.some;
+            (void)z_v31094;
+            z_v31093 = z_v31094;
             break;
         }
         case Z_OPTIONVAL_U64_TAG_NONE: {
@@ -78557,56 +78547,56 @@ void z_t2155(z_t474_t* z_v31351, z_t891_t* z_v31352, z_t1797_t* z_v31353, uint64
         }
         default: break;
     }
-    z_t46_t z_v31366 = z_t2085(z_v31352, ((uint64_t)z_v31362));
-    z_t1097_t z_v31367 = z_t1097_create((uint64_t)0);
-    uint64_t z_v31368 = ((uint64_t)0);
-    uint64_t z_v31369 = z_v31360.length;
-    while (z_v31368 < z_v31369) {
-        uint64_t z_v31370 = z_t1097_get(&z_v31360, z_v31368);
-        if (z_v31362 > 0) {
-            z_t46_t* __borrow_z_v31371 = &(*z_t423_get(&z_v31359, z_v31368));
-            /* alias: z_v31371 => (*__borrow_z_v31371) */
-            z_t46_t z_v31374 = z_t2085(z_v31352, ((uint64_t)z_v31370));
-            bool z_v31375 = ((bool)Z_BOOL_TAG_FALSE);
-            if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31371).data, .size = (*__borrow_z_v31371).size }), _zs1920)) {
-                z_v31375 = ((bool)Z_BOOL_TAG_TRUE);
+    z_t46_t z_v31097 = z_t2085(z_v31083, ((uint64_t)z_v31093));
+    z_t1097_t z_v31098 = z_t1097_create((uint64_t)0);
+    uint64_t z_v31099 = ((uint64_t)0);
+    uint64_t z_v31100 = z_v31091.length;
+    while (z_v31099 < z_v31100) {
+        uint64_t z_v31101 = z_t1097_get(&z_v31091, z_v31099);
+        if (z_v31093 > 0) {
+            z_t46_t* __borrow_z_v31102 = &(*z_t423_get(&z_v31090, z_v31099));
+            /* alias: z_v31102 => (*__borrow_z_v31102) */
+            z_t46_t z_v31105 = z_t2085(z_v31083, ((uint64_t)z_v31101));
+            bool z_v31106 = ((bool)Z_BOOL_TAG_FALSE);
+            if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31102).data, .size = (*__borrow_z_v31102).size }), _zs1920)) {
+                z_v31106 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_t67_eq(((z_t67_t){ .data = z_v31374.data, .size = z_v31374.size }), _zs1921)) {
-                z_v31375 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_t67_eq(((z_t67_t){ .data = z_v31105.data, .size = z_v31105.size }), _zs1921)) {
+                z_v31106 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_t67_eq(((z_t67_t){ .data = z_v31374.data, .size = z_v31374.size }), ((z_t67_t){ .data = z_v31366.data, .size = z_v31366.size }))) {
-                z_v31375 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_t67_eq(((z_t67_t){ .data = z_v31105.data, .size = z_v31105.size }), ((z_t67_t){ .data = z_v31097.data, .size = z_v31097.size }))) {
+                z_v31106 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_v31370 == z_v31362) {
-                z_v31375 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_v31101 == z_v31093) {
+                z_v31106 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_v31375) {
-                z_v31370 = z_v31362;
+            if (z_v31106) {
+                z_v31101 = z_v31093;
             }
-    z_t46_free(&z_v31374);
+    z_t46_free(&z_v31105);
         }
-        (void)(z_t1097_append(&z_v31367, ((uint64_t)z_v31370)));
-        z_v31368 = (z_v31368 + 1);
+        (void)(z_t1097_append(&z_v31098, ((uint64_t)z_v31101)));
+        z_v31099 = (z_v31099 + 1);
     }
-    bool z_v31377 = ((bool)Z_BOOL_TAG_FALSE);
-    uint64_t z_v31378 = ((uint64_t)0);
-    uint64_t z_v31379 = z_v31360.length;
-    while (z_v31378 < z_v31379) {
-        uint64_t z_v31380 = z_t1097_get(&z_v31367, z_v31378);
-        if (z_t2482(z_v31351, z_v31352, z_v31353, ((uint64_t)z_v31380))) {
-            z_v31377 = ((bool)Z_BOOL_TAG_TRUE);
+    bool z_v31108 = ((bool)Z_BOOL_TAG_FALSE);
+    uint64_t z_v31109 = ((uint64_t)0);
+    uint64_t z_v31110 = z_v31091.length;
+    while (z_v31109 < z_v31110) {
+        uint64_t z_v31111 = z_t1097_get(&z_v31098, z_v31109);
+        if (z_t2482(z_v31082, z_v31083, z_v31084, ((uint64_t)z_v31111))) {
+            z_v31108 = ((bool)Z_BOOL_TAG_TRUE);
         }
-        z_v31378 = (z_v31378 + 1);
+        z_v31109 = (z_v31109 + 1);
     }
-    uint64_t z_v31395 = z_t2478(z_v31352, z_v31354);
-    if (z_t3674(&z_v31395)) {
-        z_t999_t z_v31396 = z_t1024_get(z_v31352->typing.funcReturnNode, z_v31354);
-        z_t999_t _m1 = z_v31396;
+    uint64_t z_v31126 = z_t2478(z_v31083, z_v31085);
+    if (z_t3674(&z_v31126)) {
+        z_t999_t z_v31127 = z_t1024_get(z_v31083->typing.funcReturnNode, z_v31085);
+        z_t999_t _m1 = z_v31127;
         switch (_m1.tag) {
             case Z_OPTIONVAL_U64_TAG_SOME: {
-                uint64_t z_v31396 = _m1.data.some;
-                (void)z_v31396;
-                z_v31395 = z_t2041(z_v31352, z_v31396);
+                uint64_t z_v31127 = _m1.data.some;
+                (void)z_v31127;
+                z_v31126 = z_t2041(z_v31083, z_v31127);
                 break;
             }
             case Z_OPTIONVAL_U64_TAG_NONE: {
@@ -78615,148 +78605,148 @@ void z_t2155(z_t474_t* z_v31351, z_t891_t* z_v31352, z_t1797_t* z_v31353, uint64
             default: break;
         }
     }
-    if (z_v31395 > 0) {
-        if (z_t2482(z_v31351, z_v31352, z_v31353, ((uint64_t)z_v31395))) {
-            z_v31377 = ((bool)Z_BOOL_TAG_TRUE);
+    if (z_v31126 > 0) {
+        if (z_t2482(z_v31082, z_v31083, z_v31084, ((uint64_t)z_v31126))) {
+            z_v31108 = ((bool)Z_BOOL_TAG_TRUE);
         }
     }
-    if (z_v31377) {
-        z_t46_free(&z_v31366);
-    z_t423_destroy(&z_v31359);
-    z_t1097_destroy(&z_v31360);
-    z_t1097_destroy(&z_v31361);
-    z_t1097_destroy(&z_v31367);
+    if (z_v31108) {
+        z_t46_free(&z_v31097);
+    z_t423_destroy(&z_v31090);
+    z_t1097_destroy(&z_v31091);
+    z_t1097_destroy(&z_v31092);
+    z_t1097_destroy(&z_v31098);
         return;
     }
-    uint64_t z_v31399 = ((uint64_t)0);
-    uint64_t z_v31400 = z_v31360.length;
-    while (z_v31399 < z_v31400) {
-        uint64_t z_v31401 = z_t1097_get(&z_v31367, z_v31399);
-        if (z_t3689(&z_v31352->reg, ((uint64_t)z_v31401)) == ((uint8_t)Z_ZTYPETYPE_TAG_FUNCTIONTYPE)) {
-            (void)(z_t2155(z_v31351, z_v31352, z_v31353, ((uint64_t)z_v31401), z_v31355, z_v31356, z_v31357));
+    uint64_t z_v31130 = ((uint64_t)0);
+    uint64_t z_v31131 = z_v31091.length;
+    while (z_v31130 < z_v31131) {
+        uint64_t z_v31132 = z_t1097_get(&z_v31098, z_v31130);
+        if (z_t3689(&z_v31083->reg, ((uint64_t)z_v31132)) == ((uint8_t)Z_ZTYPETYPE_TAG_FUNCTIONTYPE)) {
+            (void)(z_t2155(z_v31082, z_v31083, z_v31084, ((uint64_t)z_v31132), z_v31086, z_v31087, z_v31088));
         }
-        (void)(z_t2481(z_v31352, z_v31353, ((uint64_t)z_v31401), z_v31357));
-        z_v31399 = (z_v31399 + 1);
+        (void)(z_t2481(z_v31083, z_v31084, ((uint64_t)z_v31132), z_v31088));
+        z_v31130 = (z_v31130 + 1);
     }
-    uint64_t z_v31425 = z_t2478(z_v31352, z_v31354);
-    if (z_v31425 > 0) {
-        (void)(z_t2481(z_v31352, z_v31353, ((uint64_t)z_v31425), z_v31357));
+    uint64_t z_v31156 = z_t2478(z_v31083, z_v31085);
+    if (z_v31156 > 0) {
+        (void)(z_t2481(z_v31083, z_v31084, ((uint64_t)z_v31156), z_v31088));
     }
-    z_t46_t z_v31428 = ((z_t46_t){0});
-    uint64_t z_v31429 = ((uint64_t)0);
-    uint64_t z_v31430 = z_v31359.length;
-    while (z_v31429 < z_v31430) {
-        z_t46_t* __borrow_z_v31431 = &(*z_t423_get(&z_v31359, z_v31429));
-        /* alias: z_v31431 => (*__borrow_z_v31431) */
-        uint64_t z_v31432 = z_t1097_get(&z_v31367, z_v31429);
-        z_t46_t z_v31450 = z_t2480(z_v31351, z_v31352, z_v31353, ((uint64_t)z_v31354), ((z_t67_t){ .data = (*__borrow_z_v31431).data, .size = (*__borrow_z_v31431).size }), ((uint64_t)z_v31432));
-        if (z_v31429 > 0) {
-            (void)(z_t46_append(&z_v31428, (_zs1922).data, (_zs1922).size));
+    z_t46_t z_v31159 = ((z_t46_t){0});
+    uint64_t z_v31160 = ((uint64_t)0);
+    uint64_t z_v31161 = z_v31090.length;
+    while (z_v31160 < z_v31161) {
+        z_t46_t* __borrow_z_v31162 = &(*z_t423_get(&z_v31090, z_v31160));
+        /* alias: z_v31162 => (*__borrow_z_v31162) */
+        uint64_t z_v31163 = z_t1097_get(&z_v31098, z_v31160);
+        z_t46_t z_v31181 = z_t2480(z_v31082, z_v31083, z_v31084, ((uint64_t)z_v31085), ((z_t67_t){ .data = (*__borrow_z_v31162).data, .size = (*__borrow_z_v31162).size }), ((uint64_t)z_v31163));
+        if (z_v31160 > 0) {
+            (void)(z_t46_append(&z_v31159, (_zs1922).data, (_zs1922).size));
         }
-        (void)(z_t46_append(&z_v31428, (z_v31450).data, (z_v31450).size));
-        z_v31429 = (z_v31429 + 1);
-    z_t46_free(&z_v31450);
+        (void)(z_t46_append(&z_v31159, (z_v31181).data, (z_v31181).size));
+        z_v31160 = (z_v31160 + 1);
+    z_t46_free(&z_v31181);
     }
-    if (z_v31430 == 0) {
-        (void)(z_t46_append(&z_v31428, (_zs1923).data, (_zs1923).size));
+    if (z_v31161 == 0) {
+        (void)(z_t46_append(&z_v31159, (_zs1923).data, (_zs1923).size));
     }
-    z_t46_t z_v31468 = z_t2479(z_v31351, z_v31352, z_v31353, z_v31354);
-    z_t46_t z_v31469 = z_t2026(z_v31353, z_v31354);
+    z_t46_t z_v31199 = z_t2479(z_v31082, z_v31083, z_v31084, z_v31085);
+    z_t46_t z_v31200 = z_t2026(z_v31084, z_v31085);
     z_t46_t _s2 = z_t46_create((uint64_t)67);
     z_t46_append(&_s2, "typedef ", sizeof("typedef ")-1);
-    z_t46_append(&_s2, z_v31468.data, z_v31468.size);
+    z_t46_append(&_s2, z_v31199.data, z_v31199.size);
     z_t46_append(&_s2, " (*", sizeof(" (*")-1);
-    z_t46_append(&_s2, z_v31469.data, z_v31469.size);
+    z_t46_append(&_s2, z_v31200.data, z_v31200.size);
     z_t46_append(&_s2, "_ft)(", sizeof("_ft)(")-1);
-    z_t46_append(&_s2, z_v31428.data, z_v31428.size);
+    z_t46_append(&_s2, z_v31159.data, z_v31159.size);
     z_t46_append(&_s2, ");", sizeof(");")-1);
     z_t46_append(&_s2, "\n", sizeof("\n")-1);
-    z_t46_t z_v31470 = _s2;
-    (void)(z_t46_append(z_v31357, (z_v31470).data, (z_v31470).size));
-    z_t46_free(&z_v31366);
-    z_t46_free(&z_v31428);
-    z_t46_free(&z_v31468);
-    z_t46_free(&z_v31469);
-    z_t46_free(&z_v31470);
-    z_t423_destroy(&z_v31359);
-    z_t1097_destroy(&z_v31360);
-    z_t1097_destroy(&z_v31361);
-    z_t1097_destroy(&z_v31367);
+    z_t46_t z_v31201 = _s2;
+    (void)(z_t46_append(z_v31088, (z_v31201).data, (z_v31201).size));
+    z_t46_free(&z_v31097);
+    z_t46_free(&z_v31159);
+    z_t46_free(&z_v31199);
+    z_t46_free(&z_v31200);
+    z_t46_free(&z_v31201);
+    z_t423_destroy(&z_v31090);
+    z_t1097_destroy(&z_v31091);
+    z_t1097_destroy(&z_v31092);
+    z_t1097_destroy(&z_v31098);
 }
 
-void z_t1908(z_t474_t* z_v31323, z_t891_t* z_v31324, z_t1797_t* z_v31325, z_t46_t* z_v31326) {
-    uint64_t z_v31327 = z_v31324->reg.nextTypeId;
-    z_t1097_t z_v31328 = z_t1097_create((uint64_t)0);
-    z_t1024_t* z_v31329 = z_t1024_create((uint64_t)0);
-    z_t1097_t z_v31330 = z_t1097_create((uint64_t)0);
-    z_t1097_t z_v31331 = z_t1097_create((uint64_t)0);
-    z_t1097_t z_v31332 = z_t1097_create((uint64_t)0);
-    (void)(z_t3798(&z_v31324->typing, z_v31324->reg.nextTypeId, &z_v31330, &z_v31331, &z_v31332));
-    uint64_t z_v31334 = ((uint64_t)0);
-    uint64_t z_v31335 = z_v31330.length;
-    while (z_v31334 < z_v31335) {
-        uint64_t z_v31336 = z_t1097_get(&z_v31330, z_v31334);
-        uint64_t z_v31337 = z_t1097_get(&z_v31332, z_v31334);
-        z_v31334 = (z_v31334 + 1);
-        if (z_t3689(&z_v31324->reg, ((uint64_t)z_v31337)) == ((uint8_t)Z_ZTYPETYPE_TAG_FUNCTIONTYPE)) {
-            uint8_t z_v31342 = z_t3689(&z_v31324->reg, ((uint64_t)z_v31336));
-            bool z_v31343 = ((bool)Z_BOOL_TAG_FALSE);
-            if (z_v31342 == ((uint8_t)Z_ZTYPETYPE_TAG_RECORDTYPE)) {
-                z_v31343 = ((bool)Z_BOOL_TAG_TRUE);
+void z_t1908(z_t474_t* z_v31054, z_t891_t* z_v31055, z_t1797_t* z_v31056, z_t46_t* z_v31057) {
+    uint64_t z_v31058 = z_v31055->reg.nextTypeId;
+    z_t1097_t z_v31059 = z_t1097_create((uint64_t)0);
+    z_t1024_t* z_v31060 = z_t1024_create((uint64_t)0);
+    z_t1097_t z_v31061 = z_t1097_create((uint64_t)0);
+    z_t1097_t z_v31062 = z_t1097_create((uint64_t)0);
+    z_t1097_t z_v31063 = z_t1097_create((uint64_t)0);
+    (void)(z_t3798(&z_v31055->typing, z_v31055->reg.nextTypeId, &z_v31061, &z_v31062, &z_v31063));
+    uint64_t z_v31065 = ((uint64_t)0);
+    uint64_t z_v31066 = z_v31061.length;
+    while (z_v31065 < z_v31066) {
+        uint64_t z_v31067 = z_t1097_get(&z_v31061, z_v31065);
+        uint64_t z_v31068 = z_t1097_get(&z_v31063, z_v31065);
+        z_v31065 = (z_v31065 + 1);
+        if (z_t3689(&z_v31055->reg, ((uint64_t)z_v31068)) == ((uint8_t)Z_ZTYPETYPE_TAG_FUNCTIONTYPE)) {
+            uint8_t z_v31073 = z_t3689(&z_v31055->reg, ((uint64_t)z_v31067));
+            bool z_v31074 = ((bool)Z_BOOL_TAG_FALSE);
+            if (z_v31073 == ((uint8_t)Z_ZTYPETYPE_TAG_RECORDTYPE)) {
+                z_v31074 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_v31342 == ((uint8_t)Z_ZTYPETYPE_TAG_CLASSTYPE)) {
-                z_v31343 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_v31073 == ((uint8_t)Z_ZTYPETYPE_TAG_CLASSTYPE)) {
+                z_v31074 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_v31342 == ((uint8_t)Z_ZTYPETYPE_TAG_UNIONTYPE)) {
-                z_v31343 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_v31073 == ((uint8_t)Z_ZTYPETYPE_TAG_UNIONTYPE)) {
+                z_v31074 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_v31342 == ((uint8_t)Z_ZTYPETYPE_TAG_VARIANTTYPE)) {
-                z_v31343 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_v31073 == ((uint8_t)Z_ZTYPETYPE_TAG_VARIANTTYPE)) {
+                z_v31074 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_v31342 == ((uint8_t)Z_ZTYPETYPE_TAG_PROTOCOLTYPE)) {
-                z_v31343 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_v31073 == ((uint8_t)Z_ZTYPETYPE_TAG_PROTOCOLTYPE)) {
+                z_v31074 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_v31342 == ((uint8_t)Z_ZTYPETYPE_TAG_FACETTYPE)) {
-                z_v31343 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_v31073 == ((uint8_t)Z_ZTYPETYPE_TAG_FACETTYPE)) {
+                z_v31074 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_v31343) {
-                (void)(z_t1024_set(z_v31329, z_v31337, z_v31336));
+            if (z_v31074) {
+                (void)(z_t1024_set(z_v31060, z_v31068, z_v31067));
             }
         }
     }
-    uint64_t z_v31344 = ((uint64_t)0);
-    while (z_v31344 < z_v31327) {
-        if (z_t3689(&z_v31324->reg, z_v31344) == ((uint8_t)Z_ZTYPETYPE_TAG_FUNCTIONTYPE)) {
-            if (z_t2154(z_v31323, z_v31324, z_v31344)) {
-                (void)(z_t2155(z_v31323, z_v31324, z_v31325, ((uint64_t)z_v31344), &z_v31328, z_v31329, z_v31326));
+    uint64_t z_v31075 = ((uint64_t)0);
+    while (z_v31075 < z_v31058) {
+        if (z_t3689(&z_v31055->reg, z_v31075) == ((uint8_t)Z_ZTYPETYPE_TAG_FUNCTIONTYPE)) {
+            if (z_t2154(z_v31054, z_v31055, z_v31075)) {
+                (void)(z_t2155(z_v31054, z_v31055, z_v31056, ((uint64_t)z_v31075), &z_v31059, z_v31060, z_v31057));
             }
         }
-        z_v31344 = (z_v31344 + 1);
+        z_v31075 = (z_v31075 + 1);
     }
-    z_t1097_destroy(&z_v31328);
-    z_t1024_destroy(z_v31329);
-    z_t1097_destroy(&z_v31330);
-    z_t1097_destroy(&z_v31331);
-    z_t1097_destroy(&z_v31332);
+    z_t1097_destroy(&z_v31059);
+    z_t1024_destroy(z_v31060);
+    z_t1097_destroy(&z_v31061);
+    z_t1097_destroy(&z_v31062);
+    z_t1097_destroy(&z_v31063);
 }
 
-void z_t1909(z_t474_t* z_v31475, z_t891_t* z_v31476, z_t1797_t* z_v31477, z_t67_t z_v31478, z_t46_t* z_v31479) {
-    uint64_t z_v31480 = z_v31476->reg.nextTypeId;
-    z_t1097_t z_v31481 = z_t1097_create((uint64_t)0);
-    (void)(z_t2145(z_v31476, &z_v31481));
-    uint64_t z_v31482 = ((uint64_t)0);
-    while (z_v31482 < z_v31480) {
-        if (z_t3689(&z_v31476->reg, z_v31482) == ((uint8_t)Z_ZTYPETYPE_TAG_PROTOCOLTYPE)) {
-            bool z_v31483 = z_t2120(z_v31476, z_v31482);
-            uint64_t z_v31484 = z_t2045(z_v31476, z_v31482);
-            if (z_t3674(&z_v31484) && (z_v31483 == ((bool)Z_BOOL_TAG_FALSE))) {
-                z_t349_t z_v31485 = z_t2060(z_v31476, z_v31482);
-                z_t349_t _m0 = z_v31485;
+void z_t1909(z_t474_t* z_v31206, z_t891_t* z_v31207, z_t1797_t* z_v31208, z_t67_t z_v31209, z_t46_t* z_v31210) {
+    uint64_t z_v31211 = z_v31207->reg.nextTypeId;
+    z_t1097_t z_v31212 = z_t1097_create((uint64_t)0);
+    (void)(z_t2145(z_v31207, &z_v31212));
+    uint64_t z_v31213 = ((uint64_t)0);
+    while (z_v31213 < z_v31211) {
+        if (z_t3689(&z_v31207->reg, z_v31213) == ((uint8_t)Z_ZTYPETYPE_TAG_PROTOCOLTYPE)) {
+            bool z_v31214 = z_t2120(z_v31207, z_v31213);
+            uint64_t z_v31215 = z_t2045(z_v31207, z_v31213);
+            if (z_t3674(&z_v31215) && (z_v31214 == ((bool)Z_BOOL_TAG_FALSE))) {
+                z_t349_t z_v31216 = z_t2060(z_v31207, z_v31213);
+                z_t349_t _m0 = z_v31216;
                 switch (_m0.tag) {
                     case Z_OPTION_STRING_TAG_SOME: {
                         /* alias: pduo => (*(z_t46_t*)_m0.data) */
                         if (z_t2099(((z_t67_t){ .data = (*(z_t46_t*)_m0.data).data, .size = (*(z_t46_t*)_m0.data).size }))) {
-                            (void)(z_t2150(z_v31475, z_v31476, z_v31477, ((uint64_t)z_v31482), z_v31479));
+                            (void)(z_t2150(z_v31206, z_v31207, z_v31208, ((uint64_t)z_v31213), z_v31210));
                         }
                         break;
                     }
@@ -78765,123 +78755,123 @@ void z_t1909(z_t474_t* z_v31475, z_t891_t* z_v31476, z_t1797_t* z_v31477, z_t67_
                     }
                     default: break;
                 }
-    z_t349_destroy(&z_v31485);
+    z_t349_destroy(&z_v31216);
             }
         }
-        z_v31482 = (z_v31482 + 1);
+        z_v31213 = (z_v31213 + 1);
     }
-    z_t1097_t z_v31502 = z_t1097_create((uint64_t)0);
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->optionvalOriginTid, &z_v31481, &z_v31502, z_v31480));
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->resultvalOriginTid, &z_v31481, &z_v31502, z_v31480));
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->listViewOriginTid, &z_v31481, &z_v31502, z_v31480));
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->listViewValOriginTid, &z_v31481, &z_v31502, z_v31480));
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->listOriginTid, &z_v31481, &z_v31502, z_v31480));
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->listValOriginTid, &z_v31481, &z_v31502, z_v31480));
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->setOriginTid, &z_v31481, &z_v31502, z_v31480));
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->setValOriginTid, &z_v31481, &z_v31502, z_v31480));
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->mapOriginTid, &z_v31481, &z_v31502, z_v31480));
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->mapRVOriginTid, &z_v31481, &z_v31502, z_v31480));
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->mapVROriginTid, &z_v31481, &z_v31502, z_v31480));
-    (void)(z_t2152(z_v31475, z_v31476, z_v31477, z_v31477->mapVVOriginTid, &z_v31481, &z_v31502, z_v31480));
-    z_t1186_t* z_v31527 = z_t1186_create((uint64_t)0);
-    uint64_t z_v31528 = ((uint64_t)0);
-    uint64_t z_v31529 = z_v31502.length;
-    while (z_v31528 < z_v31529) {
-        uint64_t z_v31530 = z_t1097_get(&z_v31502, z_v31528);
-        (void)(z_t1186_set(z_v31527, z_v31530, ((bool)Z_BOOL_TAG_TRUE)));
-        z_v31528 = (z_v31528 + 1);
+    z_t1097_t z_v31233 = z_t1097_create((uint64_t)0);
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->optionvalOriginTid, &z_v31212, &z_v31233, z_v31211));
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->resultvalOriginTid, &z_v31212, &z_v31233, z_v31211));
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->listViewOriginTid, &z_v31212, &z_v31233, z_v31211));
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->listViewValOriginTid, &z_v31212, &z_v31233, z_v31211));
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->listOriginTid, &z_v31212, &z_v31233, z_v31211));
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->listValOriginTid, &z_v31212, &z_v31233, z_v31211));
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->setOriginTid, &z_v31212, &z_v31233, z_v31211));
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->setValOriginTid, &z_v31212, &z_v31233, z_v31211));
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->mapOriginTid, &z_v31212, &z_v31233, z_v31211));
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->mapRVOriginTid, &z_v31212, &z_v31233, z_v31211));
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->mapVROriginTid, &z_v31212, &z_v31233, z_v31211));
+    (void)(z_t2152(z_v31206, z_v31207, z_v31208, z_v31208->mapVVOriginTid, &z_v31212, &z_v31233, z_v31211));
+    z_t1186_t* z_v31258 = z_t1186_create((uint64_t)0);
+    uint64_t z_v31259 = ((uint64_t)0);
+    uint64_t z_v31260 = z_v31233.length;
+    while (z_v31259 < z_v31260) {
+        uint64_t z_v31261 = z_t1097_get(&z_v31233, z_v31259);
+        (void)(z_t1186_set(z_v31258, z_v31261, ((bool)Z_BOOL_TAG_TRUE)));
+        z_v31259 = (z_v31259 + 1);
     }
-    z_t1186_t* z_v31531 = z_t1186_create((uint64_t)0);
-    bool z_v31532 = ((bool)Z_BOOL_TAG_TRUE);
-    while (z_v31532) {
-        z_v31532 = ((bool)Z_BOOL_TAG_FALSE);
-        uint64_t z_v31533 = ((uint64_t)0);
-        uint64_t z_v31534 = z_v31481.length;
-        while (z_v31533 < z_v31534) {
-            uint64_t z_v31535 = z_t1097_get(&z_v31481, z_v31533);
-            if (z_t2147(z_v31527, z_v31535) == ((bool)Z_BOOL_TAG_FALSE)) {
-                if (z_t2148(z_v31475, z_v31476, z_v31477, ((uint64_t)z_v31535), z_v31527, z_v31531)) {
-                    (void)(z_t1097_append(&z_v31502, ((uint64_t)z_v31535)));
-                    (void)(z_t1186_set(z_v31527, z_v31535, ((bool)Z_BOOL_TAG_TRUE)));
-                    z_v31532 = ((bool)Z_BOOL_TAG_TRUE);
+    z_t1186_t* z_v31262 = z_t1186_create((uint64_t)0);
+    bool z_v31263 = ((bool)Z_BOOL_TAG_TRUE);
+    while (z_v31263) {
+        z_v31263 = ((bool)Z_BOOL_TAG_FALSE);
+        uint64_t z_v31264 = ((uint64_t)0);
+        uint64_t z_v31265 = z_v31212.length;
+        while (z_v31264 < z_v31265) {
+            uint64_t z_v31266 = z_t1097_get(&z_v31212, z_v31264);
+            if (z_t2147(z_v31258, z_v31266) == ((bool)Z_BOOL_TAG_FALSE)) {
+                if (z_t2148(z_v31206, z_v31207, z_v31208, ((uint64_t)z_v31266), z_v31258, z_v31262)) {
+                    (void)(z_t1097_append(&z_v31233, ((uint64_t)z_v31266)));
+                    (void)(z_t1186_set(z_v31258, z_v31266, ((bool)Z_BOOL_TAG_TRUE)));
+                    z_v31263 = ((bool)Z_BOOL_TAG_TRUE);
                 }
             }
-            z_v31533 = (z_v31533 + 1);
+            z_v31264 = (z_v31264 + 1);
         }
     }
-    uint64_t z_v31562 = ((uint64_t)0);
-    uint64_t z_v31563 = z_v31481.length;
-    while (z_v31562 < z_v31563) {
-        uint64_t z_v31564 = z_t1097_get(&z_v31481, z_v31562);
-        if (z_t2147(z_v31527, z_v31564) == ((bool)Z_BOOL_TAG_FALSE)) {
-            (void)(z_t2150(z_v31475, z_v31476, z_v31477, z_v31564, z_v31479));
+    uint64_t z_v31293 = ((uint64_t)0);
+    uint64_t z_v31294 = z_v31212.length;
+    while (z_v31293 < z_v31294) {
+        uint64_t z_v31295 = z_t1097_get(&z_v31212, z_v31293);
+        if (z_t2147(z_v31258, z_v31295) == ((bool)Z_BOOL_TAG_FALSE)) {
+            (void)(z_t2150(z_v31206, z_v31207, z_v31208, z_v31295, z_v31210));
         }
-        z_v31562 = (z_v31562 + 1);
+        z_v31293 = (z_v31293 + 1);
     }
-    z_t1186_t* z_v31566 = z_t1186_create((uint64_t)0);
-    uint64_t z_v31567 = z_v31502.length;
-    uint64_t z_v31568 = ((uint64_t)0);
-    bool z_v31569 = ((bool)Z_BOOL_TAG_FALSE);
-    bool z_v31570 = ((bool)Z_BOOL_TAG_FALSE);
-    while (z_v31569 == ((bool)Z_BOOL_TAG_FALSE)) {
-        bool z_v31571 = ((bool)Z_BOOL_TAG_FALSE);
-        uint64_t z_v31572 = ((uint64_t)0);
-        uint64_t z_v31573 = z_v31502.length;
-        while (z_v31572 < z_v31573) {
-            uint64_t z_v31574 = z_t1097_get(&z_v31502, z_v31572);
-            if (z_t2147(z_v31566, z_v31574) == ((bool)Z_BOOL_TAG_FALSE)) {
-                uint64_t z_v31577 = z_t2045(z_v31476, ((uint64_t)z_v31574));
-                if (z_v31577 > 0) {
-                    z_t1097_t z_v31578 = z_t1097_create((uint64_t)0);
-                    if (z_t2149(z_v31475, z_v31476, z_v31477, ((uint64_t)z_v31574), z_v31527, z_v31566, &z_v31578)) {
-                        (void)(z_t2151(z_v31475, z_v31476, z_v31477, z_v31478, ((uint64_t)z_v31574), z_v31479));
-                        (void)(z_t1186_set(z_v31566, z_v31574, ((bool)Z_BOOL_TAG_TRUE)));
-                        z_v31568 = (z_v31568 + 1);
-                        z_v31571 = ((bool)Z_BOOL_TAG_TRUE);
+    z_t1186_t* z_v31297 = z_t1186_create((uint64_t)0);
+    uint64_t z_v31298 = z_v31233.length;
+    uint64_t z_v31299 = ((uint64_t)0);
+    bool z_v31300 = ((bool)Z_BOOL_TAG_FALSE);
+    bool z_v31301 = ((bool)Z_BOOL_TAG_FALSE);
+    while (z_v31300 == ((bool)Z_BOOL_TAG_FALSE)) {
+        bool z_v31302 = ((bool)Z_BOOL_TAG_FALSE);
+        uint64_t z_v31303 = ((uint64_t)0);
+        uint64_t z_v31304 = z_v31233.length;
+        while (z_v31303 < z_v31304) {
+            uint64_t z_v31305 = z_t1097_get(&z_v31233, z_v31303);
+            if (z_t2147(z_v31297, z_v31305) == ((bool)Z_BOOL_TAG_FALSE)) {
+                uint64_t z_v31308 = z_t2045(z_v31207, ((uint64_t)z_v31305));
+                if (z_v31308 > 0) {
+                    z_t1097_t z_v31309 = z_t1097_create((uint64_t)0);
+                    if (z_t2149(z_v31206, z_v31207, z_v31208, ((uint64_t)z_v31305), z_v31258, z_v31297, &z_v31309)) {
+                        (void)(z_t2151(z_v31206, z_v31207, z_v31208, z_v31209, ((uint64_t)z_v31305), z_v31210));
+                        (void)(z_t1186_set(z_v31297, z_v31305, ((bool)Z_BOOL_TAG_TRUE)));
+                        z_v31299 = (z_v31299 + 1);
+                        z_v31302 = ((bool)Z_BOOL_TAG_TRUE);
                     }
-    z_t1097_destroy(&z_v31578);
+    z_t1097_destroy(&z_v31309);
                 } else {
-                    if (z_t2148(z_v31475, z_v31476, z_v31477, ((uint64_t)z_v31574), z_v31527, z_v31566) == ((bool)Z_BOOL_TAG_FALSE)) {
-                        (void)(z_t2150(z_v31475, z_v31476, z_v31477, ((uint64_t)z_v31574), z_v31479));
-                        (void)(z_t1186_set(z_v31566, z_v31574, ((bool)Z_BOOL_TAG_TRUE)));
-                        z_v31568 = (z_v31568 + 1);
-                        z_v31571 = ((bool)Z_BOOL_TAG_TRUE);
+                    if (z_t2148(z_v31206, z_v31207, z_v31208, ((uint64_t)z_v31305), z_v31258, z_v31297) == ((bool)Z_BOOL_TAG_FALSE)) {
+                        (void)(z_t2150(z_v31206, z_v31207, z_v31208, ((uint64_t)z_v31305), z_v31210));
+                        (void)(z_t1186_set(z_v31297, z_v31305, ((bool)Z_BOOL_TAG_TRUE)));
+                        z_v31299 = (z_v31299 + 1);
+                        z_v31302 = ((bool)Z_BOOL_TAG_TRUE);
                     }
                 }
             }
-            z_v31572 = (z_v31572 + 1);
+            z_v31303 = (z_v31303 + 1);
         }
-        if (z_v31568 >= z_v31567) {
-            z_v31569 = ((bool)Z_BOOL_TAG_TRUE);
+        if (z_v31299 >= z_v31298) {
+            z_v31300 = ((bool)Z_BOOL_TAG_TRUE);
         } else {
-            if (z_v31571 == ((bool)Z_BOOL_TAG_FALSE)) {
-                z_v31569 = ((bool)Z_BOOL_TAG_TRUE);
-                z_v31570 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_v31302 == ((bool)Z_BOOL_TAG_FALSE)) {
+                z_v31300 = ((bool)Z_BOOL_TAG_TRUE);
+                z_v31301 = ((bool)Z_BOOL_TAG_TRUE);
             }
         }
     }
-    if (z_v31570) {
-        uint64_t z_v31616 = ((uint64_t)0);
-        uint64_t z_v31617 = z_v31502.length;
-        while (z_v31616 < z_v31617) {
-            uint64_t z_v31618 = z_t1097_get(&z_v31502, z_v31616);
-            if (z_t2147(z_v31566, z_v31618) == ((bool)Z_BOOL_TAG_FALSE)) {
-                uint64_t z_v31621 = z_t2045(z_v31476, ((uint64_t)z_v31618));
-                if (z_v31621 > 0) {
-                    (void)(z_t2151(z_v31475, z_v31476, z_v31477, z_v31478, ((uint64_t)z_v31618), z_v31479));
+    if (z_v31301) {
+        uint64_t z_v31347 = ((uint64_t)0);
+        uint64_t z_v31348 = z_v31233.length;
+        while (z_v31347 < z_v31348) {
+            uint64_t z_v31349 = z_t1097_get(&z_v31233, z_v31347);
+            if (z_t2147(z_v31297, z_v31349) == ((bool)Z_BOOL_TAG_FALSE)) {
+                uint64_t z_v31352 = z_t2045(z_v31207, ((uint64_t)z_v31349));
+                if (z_v31352 > 0) {
+                    (void)(z_t2151(z_v31206, z_v31207, z_v31208, z_v31209, ((uint64_t)z_v31349), z_v31210));
                 } else {
-                    (void)(z_t2150(z_v31475, z_v31476, z_v31477, ((uint64_t)z_v31618), z_v31479));
+                    (void)(z_t2150(z_v31206, z_v31207, z_v31208, ((uint64_t)z_v31349), z_v31210));
                 }
-                (void)(z_t1186_set(z_v31566, z_v31618, ((bool)Z_BOOL_TAG_TRUE)));
+                (void)(z_t1186_set(z_v31297, z_v31349, ((bool)Z_BOOL_TAG_TRUE)));
             }
-            z_v31616 = (z_v31616 + 1);
+            z_v31347 = (z_v31347 + 1);
         }
     }
-    z_t1097_destroy(&z_v31481);
-    z_t1097_destroy(&z_v31502);
-    z_t1186_destroy(z_v31527);
-    z_t1186_destroy(z_v31531);
-    z_t1186_destroy(z_v31566);
+    z_t1097_destroy(&z_v31212);
+    z_t1097_destroy(&z_v31233);
+    z_t1186_destroy(z_v31258);
+    z_t1186_destroy(z_v31262);
+    z_t1186_destroy(z_v31297);
 }
 
 void z_t1910(z_t474_t* z_v29563, z_t891_t* z_v29564, z_t1797_t* z_v29565, z_t67_t z_v29566, z_t46_t* z_v29567) {
@@ -79789,93 +79779,93 @@ void z_t1912(z_t474_t* z_v30121, z_t891_t* z_v30122, z_t1797_t* z_v30123, uint64
     z_t1097_destroy(&z_v30132);
 }
 
-void z_t2163(z_t474_t* z_v31203, z_t891_t* z_v31204, z_t1797_t* z_v31205, uint64_t z_v31206, uint64_t z_v31207, z_t67_t z_v31208, z_t67_t z_v31209, z_t46_t* z_v31210) {
-    uint64_t z_v31213 = z_t2045(z_v31204, ((uint64_t)z_v31206));
-    if (z_v31213 > 0) {
+void z_t2163(z_t474_t* z_v31507, z_t891_t* z_v31508, z_t1797_t* z_v31509, uint64_t z_v31510, uint64_t z_v31511, z_t67_t z_v31512, z_t67_t z_v31513, z_t46_t* z_v31514) {
+    uint64_t z_v31517 = z_t2045(z_v31508, ((uint64_t)z_v31510));
+    if (z_v31517 > 0) {
         return;
     }
-    z_t46_t z_v31216 = z_t2026(z_v31205, ((uint64_t)z_v31206));
+    z_t46_t z_v31520 = z_t2026(z_v31509, ((uint64_t)z_v31510));
     z_t46_t _s0 = z_t46_create((uint64_t)18);
-    z_t46_append(&_s0, z_v31216.data, z_v31216.size);
+    z_t46_append(&_s0, z_v31520.data, z_v31520.size);
     z_t46_append(&_s0, "_t", sizeof("_t")-1);
-    z_t46_t z_v31217 = _s0;
-    z_t46_t z_v31218 = z_t2026(z_v31205, z_v31207);
+    z_t46_t z_v31521 = _s0;
+    z_t46_t z_v31522 = z_t2026(z_v31509, z_v31511);
     z_t46_t _s2 = z_t46_create((uint64_t)18);
-    z_t46_append(&_s2, z_v31218.data, z_v31218.size);
+    z_t46_append(&_s2, z_v31522.data, z_v31522.size);
     z_t46_append(&_s2, "_t", sizeof("_t")-1);
-    z_t46_t z_v31219 = _s2;
+    z_t46_t z_v31523 = _s2;
     z_t46_t _s4 = z_t46_create((uint64_t)25);
-    z_t46_append(&_s4, z_v31218.data, z_v31218.size);
+    z_t46_append(&_s4, z_v31522.data, z_v31522.size);
     z_t46_append(&_s4, "_vtable_t", sizeof("_vtable_t")-1);
-    z_t46_t z_v31220 = _s4;
+    z_t46_t z_v31524 = _s4;
     z_t46_t _s6 = z_t46_create((uint64_t)33);
-    z_t46_append(&_s6, z_v31216.data, z_v31216.size);
+    z_t46_append(&_s6, z_v31520.data, z_v31520.size);
     z_t46_append(&_s6, "_", sizeof("_")-1);
-    z_t46_append(&_s6, z_v31209.data, z_v31209.size);
-    z_t46_t z_v31221 = _s6;
-    z_t423_t z_v31222 = z_t423_create((uint64_t)0);
-    z_t1097_t z_v31223 = z_t1097_create((uint64_t)0);
-    z_t1097_t z_v31224 = z_t1097_create((uint64_t)0);
-    (void)(z_t2158(z_v31203, z_v31204, z_v31207, &z_v31222, &z_v31223, &z_v31224));
-    uint64_t z_v31225 = ((uint64_t)0);
-    uint64_t z_v31226 = z_v31222.length;
-    while (z_v31225 < z_v31226) {
-        z_t46_t* __borrow_z_v31227 = &(*z_t423_get(&z_v31222, z_v31225));
-        /* alias: z_v31227 => (*__borrow_z_v31227) */
-        uint32_t z_v31229 = z_t1097_get(&z_v31224, z_v31225);
-        uint64_t z_v31230 = z_t1097_get(&z_v31223, z_v31225);
-        z_t46_t z_v31233 = z_t2159(z_v31203, z_v31204, z_v31205, ((uint64_t)z_v31230), z_v31207);
-        z_t46_t z_v31234 = z_t46_from_view(_zs1938);
-        z_t46_t z_v31235 = z_t46_from_view(_zs1939);
-        z_t423_t z_v31236 = z_t423_create((uint64_t)0);
-        z_t1097_t z_v31237 = z_t1097_create((uint64_t)0);
-        z_t1097_t z_v31238 = z_t1097_create((uint64_t)0);
-        (void)(z_t2082(z_v31203, z_v31204, ((uint64_t)z_v31230), &z_v31236, &z_v31237, &z_v31238));
-        uint64_t z_v31241 = ((uint64_t)0);
-        uint64_t z_v31242 = z_v31236.length;
-        while (z_v31241 < z_v31242) {
-            z_t46_t* __borrow_z_v31243 = &(*z_t423_get(&z_v31236, z_v31241));
-            /* alias: z_v31243 => (*__borrow_z_v31243) */
-            uint64_t z_v31244 = z_t1097_get(&z_v31237, z_v31241);
-            z_t46_t z_v31247 = z_t2085(z_v31204, ((uint64_t)z_v31244));
-            bool z_v31248 = ((bool)Z_BOOL_TAG_FALSE);
-            if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31243).data, .size = (*__borrow_z_v31243).size }), _zs1940)) {
-                z_v31248 = ((bool)Z_BOOL_TAG_TRUE);
+    z_t46_append(&_s6, z_v31513.data, z_v31513.size);
+    z_t46_t z_v31525 = _s6;
+    z_t423_t z_v31526 = z_t423_create((uint64_t)0);
+    z_t1097_t z_v31527 = z_t1097_create((uint64_t)0);
+    z_t1097_t z_v31528 = z_t1097_create((uint64_t)0);
+    (void)(z_t2158(z_v31507, z_v31508, z_v31511, &z_v31526, &z_v31527, &z_v31528));
+    uint64_t z_v31529 = ((uint64_t)0);
+    uint64_t z_v31530 = z_v31526.length;
+    while (z_v31529 < z_v31530) {
+        z_t46_t* __borrow_z_v31531 = &(*z_t423_get(&z_v31526, z_v31529));
+        /* alias: z_v31531 => (*__borrow_z_v31531) */
+        uint32_t z_v31533 = z_t1097_get(&z_v31528, z_v31529);
+        uint64_t z_v31534 = z_t1097_get(&z_v31527, z_v31529);
+        z_t46_t z_v31537 = z_t2159(z_v31507, z_v31508, z_v31509, ((uint64_t)z_v31534), z_v31511);
+        z_t46_t z_v31538 = z_t46_from_view(_zs1938);
+        z_t46_t z_v31539 = z_t46_from_view(_zs1939);
+        z_t423_t z_v31540 = z_t423_create((uint64_t)0);
+        z_t1097_t z_v31541 = z_t1097_create((uint64_t)0);
+        z_t1097_t z_v31542 = z_t1097_create((uint64_t)0);
+        (void)(z_t2082(z_v31507, z_v31508, ((uint64_t)z_v31534), &z_v31540, &z_v31541, &z_v31542));
+        uint64_t z_v31545 = ((uint64_t)0);
+        uint64_t z_v31546 = z_v31540.length;
+        while (z_v31545 < z_v31546) {
+            z_t46_t* __borrow_z_v31547 = &(*z_t423_get(&z_v31540, z_v31545));
+            /* alias: z_v31547 => (*__borrow_z_v31547) */
+            uint64_t z_v31548 = z_t1097_get(&z_v31541, z_v31545);
+            z_t46_t z_v31551 = z_t2085(z_v31508, ((uint64_t)z_v31548));
+            bool z_v31552 = ((bool)Z_BOOL_TAG_FALSE);
+            if (z_t67_eq(((z_t67_t){ .data = (*__borrow_z_v31547).data, .size = (*__borrow_z_v31547).size }), _zs1940)) {
+                z_v31552 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_t67_eq(((z_t67_t){ .data = z_v31247.data, .size = z_v31247.size }), _zs1941)) {
-                z_v31248 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_t67_eq(((z_t67_t){ .data = z_v31551.data, .size = z_v31551.size }), _zs1941)) {
+                z_v31552 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_t67_eq(((z_t67_t){ .data = z_v31247.data, .size = z_v31247.size }), z_v31208)) {
-                z_v31248 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_t67_eq(((z_t67_t){ .data = z_v31551.data, .size = z_v31551.size }), z_v31512)) {
+                z_v31552 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_v31244 == z_v31207) {
-                z_v31248 = ((bool)Z_BOOL_TAG_TRUE);
+            if (z_v31548 == z_v31511) {
+                z_v31552 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            uint32_t z_v31251 = z_t3711(&z_v31204->reg, ((uint64_t)z_v31230));
-            if (!z_t3635(&z_v31251, 0) && (z_t1097_get(&z_v31238, z_v31241) == ((uint64_t)z_v31251))) {
-                z_v31248 = ((bool)Z_BOOL_TAG_TRUE);
+            uint32_t z_v31555 = z_t3711(&z_v31508->reg, ((uint64_t)z_v31534));
+            if (!z_t3635(&z_v31555, 0) && (z_t1097_get(&z_v31542, z_v31545) == ((uint64_t)z_v31555))) {
+                z_v31552 = ((bool)Z_BOOL_TAG_TRUE);
             }
-            if (z_v31248 == ((bool)Z_BOOL_TAG_FALSE)) {
-                z_t46_t z_v31256 = z_t2160(z_v31203, z_v31204, z_v31205, ((uint64_t)z_v31244), ((uint64_t)z_v31207));
-                (void)(z_t46_append(&z_v31234, (_zs1942).data, (_zs1942).size));
-                (void)(z_t46_append(&z_v31234, (z_v31256).data, (z_v31256).size));
-                (void)(z_t46_append(&z_v31234, (_zs1943).data, (_zs1943).size));
-                (void)(z_t46_append(&z_v31234, ((*__borrow_z_v31243)).data, ((*__borrow_z_v31243)).size));
-                (void)(z_t46_append(&z_v31235, (_zs1944).data, (_zs1944).size));
-                (void)(z_t46_append(&z_v31235, ((*__borrow_z_v31243)).data, ((*__borrow_z_v31243)).size));
-    z_t46_free(&z_v31256);
+            if (z_v31552 == ((bool)Z_BOOL_TAG_FALSE)) {
+                z_t46_t z_v31560 = z_t2160(z_v31507, z_v31508, z_v31509, ((uint64_t)z_v31548), ((uint64_t)z_v31511));
+                (void)(z_t46_append(&z_v31538, (_zs1942).data, (_zs1942).size));
+                (void)(z_t46_append(&z_v31538, (z_v31560).data, (z_v31560).size));
+                (void)(z_t46_append(&z_v31538, (_zs1943).data, (_zs1943).size));
+                (void)(z_t46_append(&z_v31538, ((*__borrow_z_v31547)).data, ((*__borrow_z_v31547)).size));
+                (void)(z_t46_append(&z_v31539, (_zs1944).data, (_zs1944).size));
+                (void)(z_t46_append(&z_v31539, ((*__borrow_z_v31547)).data, ((*__borrow_z_v31547)).size));
+    z_t46_free(&z_v31560);
             }
-            z_v31241 = (z_v31241 + 1);
-    z_t46_free(&z_v31247);
+            z_v31545 = (z_v31545 + 1);
+    z_t46_free(&z_v31551);
         }
-        uint64_t z_v31257 = ((uint64_t)0);
-        z_t999_t z_v31258 = z_t3760(&z_v31204->typing, z_v31206, z_v31229);
-        z_t999_t _m9 = z_v31258;
+        uint64_t z_v31561 = ((uint64_t)0);
+        z_t999_t z_v31562 = z_t3760(&z_v31508->typing, z_v31510, z_v31533);
+        z_t999_t _m9 = z_v31562;
         switch (_m9.tag) {
             case Z_OPTIONVAL_U64_TAG_SOME: {
-                uint64_t z_v31258 = _m9.data.some;
-                (void)z_v31258;
-                z_v31257 = z_v31258;
+                uint64_t z_v31562 = _m9.data.some;
+                (void)z_v31562;
+                z_v31561 = z_v31562;
                 break;
             }
             case Z_OPTIONVAL_U64_TAG_NONE: {
@@ -79883,24 +79873,24 @@ void z_t2163(z_t474_t* z_v31203, z_t891_t* z_v31204, z_t1797_t* z_v31205, uint64
             }
             default: break;
         }
-        z_t46_t z_v31259 = ((z_t46_t){0});
-        bool z_v31260 = ((bool)Z_BOOL_TAG_FALSE);
-        z_t349_t z_v31263 = z_t2060(z_v31204, ((uint64_t)z_v31206));
-        z_t349_t _m10 = z_v31263;
+        z_t46_t z_v31563 = ((z_t46_t){0});
+        bool z_v31564 = ((bool)Z_BOOL_TAG_FALSE);
+        z_t349_t z_v31567 = z_t2060(z_v31508, ((uint64_t)z_v31510));
+        z_t349_t _m10 = z_v31567;
         switch (_m10.tag) {
             case Z_OPTION_STRING_TAG_SOME: {
                 /* alias: fduW9 => (*(z_t46_t*)_m10.data) */
                 if (z_t67_eq(((z_t67_t){ .data = (*(z_t46_t*)_m10.data).data, .size = (*(z_t46_t*)_m10.data).size }), _zs1945)) {
-                    z_v31260 = ((bool)Z_BOOL_TAG_TRUE);
+                    z_v31564 = ((bool)Z_BOOL_TAG_TRUE);
                 }
                 if (z_t67_eq(((z_t67_t){ .data = (*(z_t46_t*)_m10.data).data, .size = (*(z_t46_t*)_m10.data).size }), _zs1946)) {
-                    z_v31260 = ((bool)Z_BOOL_TAG_TRUE);
+                    z_v31564 = ((bool)Z_BOOL_TAG_TRUE);
                 }
                 if (z_t67_eq(((z_t67_t){ .data = (*(z_t46_t*)_m10.data).data, .size = (*(z_t46_t*)_m10.data).size }), _zs1947)) {
-                    z_v31260 = ((bool)Z_BOOL_TAG_TRUE);
+                    z_v31564 = ((bool)Z_BOOL_TAG_TRUE);
                 }
                 if (z_t67_eq(((z_t67_t){ .data = (*(z_t46_t*)_m10.data).data, .size = (*(z_t46_t*)_m10.data).size }), _zs1948)) {
-                    z_v31260 = ((bool)Z_BOOL_TAG_TRUE);
+                    z_v31564 = ((bool)Z_BOOL_TAG_TRUE);
                 }
                 break;
             }
@@ -79909,129 +79899,129 @@ void z_t2163(z_t474_t* z_v31203, z_t891_t* z_v31204, z_t1797_t* z_v31205, uint64
             }
             default: break;
         }
-        if (z_v31260) {
+        if (z_v31564) {
             z_t46_t _s11 = z_t46_create((uint64_t)33);
-            z_t46_append(&_s11, z_v31216.data, z_v31216.size);
+            z_t46_append(&_s11, z_v31520.data, z_v31520.size);
             z_t46_append(&_s11, "_", sizeof("_")-1);
-            z_t46_append(&_s11, (*__borrow_z_v31227).data, (*__borrow_z_v31227).size);
-            z_t46_free(&z_v31259);
-            z_v31259 = _s11;
+            z_t46_append(&_s11, (*__borrow_z_v31531).data, (*__borrow_z_v31531).size);
+            z_t46_free(&z_v31563);
+            z_v31563 = _s11;
         } else {
-            if (z_t2122(z_v31204, z_v31205, ((uint64_t)z_v31206))) {
+            if (z_t2122(z_v31508, z_v31509, ((uint64_t)z_v31510))) {
                 z_t46_t _s14 = z_t46_create((uint64_t)33);
-                z_t46_append(&_s14, z_v31216.data, z_v31216.size);
+                z_t46_append(&_s14, z_v31520.data, z_v31520.size);
                 z_t46_append(&_s14, "_", sizeof("_")-1);
-                z_t46_append(&_s14, (*__borrow_z_v31227).data, (*__borrow_z_v31227).size);
-                z_t46_free(&z_v31259);
-                z_v31259 = _s14;
+                z_t46_append(&_s14, (*__borrow_z_v31531).data, (*__borrow_z_v31531).size);
+                z_t46_free(&z_v31563);
+                z_v31563 = _s14;
             } else {
-                z_t46_t _rr17 = z_t2026(z_v31205, ((uint64_t)z_v31257));
-                z_t46_free(&z_v31259);
-                z_v31259 = _rr17;
+                z_t46_t _rr17 = z_t2026(z_v31509, ((uint64_t)z_v31561));
+                z_t46_free(&z_v31563);
+                z_v31563 = _rr17;
             }
         }
-        z_t46_t z_v31268 = z_t46_from_view(_zs1949);
-        if (z_t67_eq(((z_t67_t){ .data = z_v31233.data, .size = z_v31233.size }), _zs1950)) {
+        z_t46_t z_v31572 = z_t46_from_view(_zs1949);
+        if (z_t67_eq(((z_t67_t){ .data = z_v31537.data, .size = z_v31537.size }), _zs1950)) {
             z_t46_t _rr18 = z_t46_from_view(_zs1951);
-            z_t46_free(&z_v31268);
-            z_v31268 = _rr18;
+            z_t46_free(&z_v31572);
+            z_v31572 = _rr18;
         }
-        z_t46_t z_v31270 = z_t2104(((z_t67_t){ .data = (*__borrow_z_v31227).data, .size = (*__borrow_z_v31227).size }));
+        z_t46_t z_v31574 = z_t2104(((z_t67_t){ .data = (*__borrow_z_v31531).data, .size = (*__borrow_z_v31531).size }));
         z_t46_t _s19 = z_t46_create((uint64_t)86);
         z_t46_append(&_s19, "static ", sizeof("static ")-1);
-        z_t46_append(&_s19, z_v31233.data, z_v31233.size);
+        z_t46_append(&_s19, z_v31537.data, z_v31537.size);
         z_t46_append(&_s19, " ", sizeof(" ")-1);
-        z_t46_append(&_s19, z_v31221.data, z_v31221.size);
+        z_t46_append(&_s19, z_v31525.data, z_v31525.size);
         z_t46_append(&_s19, "_", sizeof("_")-1);
-        z_t46_append(&_s19, z_v31270.data, z_v31270.size);
+        z_t46_append(&_s19, z_v31574.data, z_v31574.size);
         z_t46_append(&_s19, "_wrapper(", sizeof("_wrapper(")-1);
-        z_t46_append(&_s19, z_v31234.data, z_v31234.size);
+        z_t46_append(&_s19, z_v31538.data, z_v31538.size);
         z_t46_append(&_s19, ") {", sizeof(") {")-1);
         z_t46_append(&_s19, "\n", sizeof("\n")-1);
-        z_t46_t z_v31271 = _s19;
-        (void)(z_t46_append(z_v31210, (z_v31271).data, (z_v31271).size));
+        z_t46_t z_v31575 = _s19;
+        (void)(z_t46_append(z_v31514, (z_v31575).data, (z_v31575).size));
         z_t46_t _s24 = z_t46_create((uint64_t)56);
         z_t46_append(&_s24, "    ", sizeof("    ")-1);
-        z_t46_append(&_s24, z_v31217.data, z_v31217.size);
+        z_t46_append(&_s24, z_v31521.data, z_v31521.size);
         z_t46_append(&_s24, "* _self = (", sizeof("* _self = (")-1);
-        z_t46_append(&_s24, z_v31217.data, z_v31217.size);
+        z_t46_append(&_s24, z_v31521.data, z_v31521.size);
         z_t46_append(&_s24, "*)_data;", sizeof("*)_data;")-1);
         z_t46_append(&_s24, "\n", sizeof("\n")-1);
-        z_t46_t z_v31272 = _s24;
-        (void)(z_t46_append(z_v31210, (z_v31272).data, (z_v31272).size));
+        z_t46_t z_v31576 = _s24;
+        (void)(z_t46_append(z_v31514, (z_v31576).data, (z_v31576).size));
         z_t46_t _s27 = z_t46_create((uint64_t)56);
         z_t46_append(&_s27, "    ", sizeof("    ")-1);
-        z_t46_append(&_s27, z_v31268.data, z_v31268.size);
-        z_t46_append(&_s27, z_v31259.data, z_v31259.size);
+        z_t46_append(&_s27, z_v31572.data, z_v31572.size);
+        z_t46_append(&_s27, z_v31563.data, z_v31563.size);
         z_t46_append(&_s27, "(", sizeof("(")-1);
-        z_t46_append(&_s27, z_v31235.data, z_v31235.size);
+        z_t46_append(&_s27, z_v31539.data, z_v31539.size);
         z_t46_append(&_s27, ");", sizeof(");")-1);
         z_t46_append(&_s27, "\n", sizeof("\n")-1);
-        z_t46_t z_v31273 = _s27;
-        (void)(z_t46_append(z_v31210, (z_v31273).data, (z_v31273).size));
-        (void)(z_t46_append(z_v31210, (_zs1952).data, (_zs1952).size));
-        z_v31225 = (z_v31225 + 1);
-    z_t349_destroy(&z_v31263);
-    z_t1097_destroy(&z_v31238);
-    z_t1097_destroy(&z_v31237);
-    z_t423_destroy(&z_v31236);
-    z_t46_free(&z_v31273);
-    z_t46_free(&z_v31272);
-    z_t46_free(&z_v31271);
-    z_t46_free(&z_v31270);
-    z_t46_free(&z_v31268);
-    z_t46_free(&z_v31259);
-    z_t46_free(&z_v31235);
-    z_t46_free(&z_v31234);
-    z_t46_free(&z_v31233);
+        z_t46_t z_v31577 = _s27;
+        (void)(z_t46_append(z_v31514, (z_v31577).data, (z_v31577).size));
+        (void)(z_t46_append(z_v31514, (_zs1952).data, (_zs1952).size));
+        z_v31529 = (z_v31529 + 1);
+    z_t349_destroy(&z_v31567);
+    z_t1097_destroy(&z_v31542);
+    z_t1097_destroy(&z_v31541);
+    z_t423_destroy(&z_v31540);
+    z_t46_free(&z_v31577);
+    z_t46_free(&z_v31576);
+    z_t46_free(&z_v31575);
+    z_t46_free(&z_v31574);
+    z_t46_free(&z_v31572);
+    z_t46_free(&z_v31563);
+    z_t46_free(&z_v31539);
+    z_t46_free(&z_v31538);
+    z_t46_free(&z_v31537);
     }
     z_t46_t _s31 = z_t46_create((uint64_t)52);
     z_t46_append(&_s31, "static ", sizeof("static ")-1);
-    z_t46_append(&_s31, z_v31220.data, z_v31220.size);
+    z_t46_append(&_s31, z_v31524.data, z_v31524.size);
     z_t46_append(&_s31, " ", sizeof(" ")-1);
-    z_t46_append(&_s31, z_v31221.data, z_v31221.size);
+    z_t46_append(&_s31, z_v31525.data, z_v31525.size);
     z_t46_append(&_s31, "_vtable = {", sizeof("_vtable = {")-1);
     z_t46_append(&_s31, "\n", sizeof("\n")-1);
-    z_t46_t z_v31274 = _s31;
-    (void)(z_t46_append(z_v31210, (z_v31274).data, (z_v31274).size));
-    uint64_t z_v31275 = ((uint64_t)0);
-    while (z_v31275 < z_v31226) {
-        z_t46_t* __borrow_z_v31276 = &(*z_t423_get(&z_v31222, z_v31275));
-        /* alias: z_v31276 => (*__borrow_z_v31276) */
-        z_t46_t z_v31278 = z_t2104(((z_t67_t){ .data = (*__borrow_z_v31276).data, .size = (*__borrow_z_v31276).size }));
+    z_t46_t z_v31578 = _s31;
+    (void)(z_t46_append(z_v31514, (z_v31578).data, (z_v31578).size));
+    uint64_t z_v31579 = ((uint64_t)0);
+    while (z_v31579 < z_v31530) {
+        z_t46_t* __borrow_z_v31580 = &(*z_t423_get(&z_v31526, z_v31579));
+        /* alias: z_v31580 => (*__borrow_z_v31580) */
+        z_t46_t z_v31582 = z_t2104(((z_t67_t){ .data = (*__borrow_z_v31580).data, .size = (*__borrow_z_v31580).size }));
         z_t46_t _s34 = z_t46_create((uint64_t)67);
         z_t46_append(&_s34, "    .", sizeof("    .")-1);
-        z_t46_append(&_s34, z_v31278.data, z_v31278.size);
+        z_t46_append(&_s34, z_v31582.data, z_v31582.size);
         z_t46_append(&_s34, " = ", sizeof(" = ")-1);
-        z_t46_append(&_s34, z_v31221.data, z_v31221.size);
+        z_t46_append(&_s34, z_v31525.data, z_v31525.size);
         z_t46_append(&_s34, "_", sizeof("_")-1);
-        z_t46_append(&_s34, z_v31278.data, z_v31278.size);
+        z_t46_append(&_s34, z_v31582.data, z_v31582.size);
         z_t46_append(&_s34, "_wrapper,", sizeof("_wrapper,")-1);
         z_t46_append(&_s34, "\n", sizeof("\n")-1);
-        z_t46_t z_v31279 = _s34;
-        (void)(z_t46_append(z_v31210, (z_v31279).data, (z_v31279).size));
-        z_v31275 = (z_v31275 + 1);
-    z_t46_free(&z_v31279);
-    z_t46_free(&z_v31278);
+        z_t46_t z_v31583 = _s34;
+        (void)(z_t46_append(z_v31514, (z_v31583).data, (z_v31583).size));
+        z_v31579 = (z_v31579 + 1);
+    z_t46_free(&z_v31583);
+    z_t46_free(&z_v31582);
     }
-    (void)(z_t46_append(z_v31210, (_zs1953).data, (_zs1953).size));
+    (void)(z_t46_append(z_v31514, (_zs1953).data, (_zs1953).size));
     z_t46_t _s38 = z_t46_create((uint64_t)221);
     z_t46_append(&_s38, "static ", sizeof("static ")-1);
-    z_t46_append(&_s38, z_v31219.data, z_v31219.size);
+    z_t46_append(&_s38, z_v31523.data, z_v31523.size);
     z_t46_append(&_s38, " ", sizeof(" ")-1);
-    z_t46_append(&_s38, z_v31221.data, z_v31221.size);
+    z_t46_append(&_s38, z_v31525.data, z_v31525.size);
     z_t46_append(&_s38, "_create(", sizeof("_create(")-1);
-    z_t46_append(&_s38, z_v31217.data, z_v31217.size);
+    z_t46_append(&_s38, z_v31521.data, z_v31521.size);
     z_t46_append(&_s38, "* val) {", sizeof("* val) {")-1);
     z_t46_append(&_s38, "\n", sizeof("\n")-1);
     z_t46_append(&_s38, "    ", sizeof("    ")-1);
-    z_t46_append(&_s38, z_v31219.data, z_v31219.size);
+    z_t46_append(&_s38, z_v31523.data, z_v31523.size);
     z_t46_append(&_s38, " proto = {0};", sizeof(" proto = {0};")-1);
     z_t46_append(&_s38, "\n", sizeof("\n")-1);
     z_t46_append(&_s38, "    proto.data = val;", sizeof("    proto.data = val;")-1);
     z_t46_append(&_s38, "\n", sizeof("\n")-1);
     z_t46_append(&_s38, "    proto.vtable = &", sizeof("    proto.vtable = &")-1);
-    z_t46_append(&_s38, z_v31221.data, z_v31221.size);
+    z_t46_append(&_s38, z_v31525.data, z_v31525.size);
     z_t46_append(&_s38, "_vtable;", sizeof("_vtable;")-1);
     z_t46_append(&_s38, "\n", sizeof("\n")-1);
     z_t46_append(&_s38, "    proto.destroy = NULL;", sizeof("    proto.destroy = NULL;")-1);
@@ -80041,47 +80031,47 @@ void z_t2163(z_t474_t* z_v31203, z_t891_t* z_v31204, z_t1797_t* z_v31205, uint64
     z_t46_append(&_s38, "}", sizeof("}")-1);
     z_t46_append(&_s38, "\n", sizeof("\n")-1);
     z_t46_append(&_s38, "\n", sizeof("\n")-1);
-    z_t46_t z_v31280 = _s38;
-    (void)(z_t46_append(z_v31210, (z_v31280).data, (z_v31280).size));
+    z_t46_t z_v31584 = _s38;
+    (void)(z_t46_append(z_v31514, (z_v31584).data, (z_v31584).size));
     z_t46_t _s44 = z_t46_create((uint64_t)54);
     z_t46_append(&_s44, "static void ", sizeof("static void ")-1);
-    z_t46_append(&_s44, z_v31221.data, z_v31221.size);
+    z_t46_append(&_s44, z_v31525.data, z_v31525.size);
     z_t46_append(&_s44, "_owned_destroy(void* p) {", sizeof("_owned_destroy(void* p) {")-1);
     z_t46_append(&_s44, "\n", sizeof("\n")-1);
-    z_t46_t z_v31281 = _s44;
-    (void)(z_t46_append(z_v31210, (z_v31281).data, (z_v31281).size));
-    if (z_t3691(&z_v31204->reg, z_v31206)) {
+    z_t46_t z_v31585 = _s44;
+    (void)(z_t46_append(z_v31514, (z_v31585).data, (z_v31585).size));
+    if (z_t3691(&z_v31508->reg, z_v31510)) {
         z_t46_t _s46 = z_t46_create((uint64_t)52);
         z_t46_append(&_s46, "    ", sizeof("    ")-1);
-        z_t46_append(&_s46, z_v31216.data, z_v31216.size);
+        z_t46_append(&_s46, z_v31520.data, z_v31520.size);
         z_t46_append(&_s46, "_destroy((", sizeof("_destroy((")-1);
-        z_t46_append(&_s46, z_v31217.data, z_v31217.size);
+        z_t46_append(&_s46, z_v31521.data, z_v31521.size);
         z_t46_append(&_s46, "*)p);", sizeof("*)p);")-1);
         z_t46_append(&_s46, "\n", sizeof("\n")-1);
-        z_t46_t z_v31282 = _s46;
-        (void)(z_t46_append(z_v31210, (z_v31282).data, (z_v31282).size));
-    z_t46_free(&z_v31282);
+        z_t46_t z_v31586 = _s46;
+        (void)(z_t46_append(z_v31514, (z_v31586).data, (z_v31586).size));
+    z_t46_free(&z_v31586);
     }
-    (void)(z_t46_append(z_v31210, (_zs1954).data, (_zs1954).size));
+    (void)(z_t46_append(z_v31514, (_zs1954).data, (_zs1954).size));
     z_t46_t _s49 = z_t46_create((uint64_t)360);
     z_t46_append(&_s49, "static ", sizeof("static ")-1);
-    z_t46_append(&_s49, z_v31219.data, z_v31219.size);
+    z_t46_append(&_s49, z_v31523.data, z_v31523.size);
     z_t46_append(&_s49, " ", sizeof(" ")-1);
-    z_t46_append(&_s49, z_v31221.data, z_v31221.size);
+    z_t46_append(&_s49, z_v31525.data, z_v31525.size);
     z_t46_append(&_s49, "_create_owned(", sizeof("_create_owned(")-1);
-    z_t46_append(&_s49, z_v31217.data, z_v31217.size);
+    z_t46_append(&_s49, z_v31521.data, z_v31521.size);
     z_t46_append(&_s49, "* val) {", sizeof("* val) {")-1);
     z_t46_append(&_s49, "\n", sizeof("\n")-1);
     z_t46_append(&_s49, "    ", sizeof("    ")-1);
-    z_t46_append(&_s49, z_v31219.data, z_v31219.size);
+    z_t46_append(&_s49, z_v31523.data, z_v31523.size);
     z_t46_append(&_s49, " proto = {0};", sizeof(" proto = {0};")-1);
     z_t46_append(&_s49, "\n", sizeof("\n")-1);
     z_t46_append(&_s49, "    ", sizeof("    ")-1);
-    z_t46_append(&_s49, z_v31217.data, z_v31217.size);
+    z_t46_append(&_s49, z_v31521.data, z_v31521.size);
     z_t46_append(&_s49, "* boxed = (", sizeof("* boxed = (")-1);
-    z_t46_append(&_s49, z_v31217.data, z_v31217.size);
+    z_t46_append(&_s49, z_v31521.data, z_v31521.size);
     z_t46_append(&_s49, "*)z_xmalloc(sizeof(", sizeof("*)z_xmalloc(sizeof(")-1);
-    z_t46_append(&_s49, z_v31217.data, z_v31217.size);
+    z_t46_append(&_s49, z_v31521.data, z_v31521.size);
     z_t46_append(&_s49, "));", sizeof("));")-1);
     z_t46_append(&_s49, "\n", sizeof("\n")-1);
     z_t46_append(&_s49, "    *boxed = *val;", sizeof("    *boxed = *val;")-1);
@@ -80089,11 +80079,11 @@ void z_t2163(z_t474_t* z_v31203, z_t891_t* z_v31204, z_t1797_t* z_v31205, uint64
     z_t46_append(&_s49, "    proto.data = boxed;", sizeof("    proto.data = boxed;")-1);
     z_t46_append(&_s49, "\n", sizeof("\n")-1);
     z_t46_append(&_s49, "    proto.vtable = &", sizeof("    proto.vtable = &")-1);
-    z_t46_append(&_s49, z_v31221.data, z_v31221.size);
+    z_t46_append(&_s49, z_v31525.data, z_v31525.size);
     z_t46_append(&_s49, "_vtable;", sizeof("_vtable;")-1);
     z_t46_append(&_s49, "\n", sizeof("\n")-1);
     z_t46_append(&_s49, "    proto.destroy = ", sizeof("    proto.destroy = ")-1);
-    z_t46_append(&_s49, z_v31221.data, z_v31221.size);
+    z_t46_append(&_s49, z_v31525.data, z_v31525.size);
     z_t46_append(&_s49, "_owned_destroy;", sizeof("_owned_destroy;")-1);
     z_t46_append(&_s49, "\n", sizeof("\n")-1);
     z_t46_append(&_s49, "    return proto;", sizeof("    return proto;")-1);
@@ -80101,21 +80091,21 @@ void z_t2163(z_t474_t* z_v31203, z_t891_t* z_v31204, z_t1797_t* z_v31205, uint64
     z_t46_append(&_s49, "}", sizeof("}")-1);
     z_t46_append(&_s49, "\n", sizeof("\n")-1);
     z_t46_append(&_s49, "\n", sizeof("\n")-1);
-    z_t46_t z_v31283 = _s49;
-    (void)(z_t46_append(z_v31210, (z_v31283).data, (z_v31283).size));
-    z_t46_free(&z_v31216);
-    z_t46_free(&z_v31217);
-    z_t46_free(&z_v31218);
-    z_t46_free(&z_v31219);
-    z_t46_free(&z_v31220);
-    z_t46_free(&z_v31221);
-    z_t46_free(&z_v31274);
-    z_t46_free(&z_v31280);
-    z_t46_free(&z_v31281);
-    z_t46_free(&z_v31283);
-    z_t423_destroy(&z_v31222);
-    z_t1097_destroy(&z_v31223);
-    z_t1097_destroy(&z_v31224);
+    z_t46_t z_v31587 = _s49;
+    (void)(z_t46_append(z_v31514, (z_v31587).data, (z_v31587).size));
+    z_t46_free(&z_v31520);
+    z_t46_free(&z_v31521);
+    z_t46_free(&z_v31522);
+    z_t46_free(&z_v31523);
+    z_t46_free(&z_v31524);
+    z_t46_free(&z_v31525);
+    z_t46_free(&z_v31578);
+    z_t46_free(&z_v31584);
+    z_t46_free(&z_v31585);
+    z_t46_free(&z_v31587);
+    z_t423_destroy(&z_v31526);
+    z_t1097_destroy(&z_v31527);
+    z_t1097_destroy(&z_v31528);
 }
 
 void z_t2483(z_t474_t* z_v32136, z_t891_t* z_v32137, z_t1797_t* z_v32138, uint64_t z_v32139, uint64_t z_v32140, z_t67_t z_v32141, z_t46_t* z_v32142) {
@@ -80409,35 +80399,35 @@ void z_t2164(z_t474_t* z_v32119, z_t891_t* z_v32120, z_t1797_t* z_v32121, uint64
     z_t423_destroy(&z_v32125);
 }
 
-void z_t1913(z_t474_t* z_v31183, z_t891_t* z_v31184, z_t1797_t* z_v31185, uint64_t z_v31186, z_t46_t* z_v31187) {
-    z_t1097_t z_v31188 = z_t1097_create((uint64_t)0);
-    z_t423_t z_v31189 = z_t423_create((uint64_t)0);
-    z_t1658_t z_v31190 = z_t1644_iterate(&z_v31184->typing.conformance);
+void z_t1913(z_t474_t* z_v31487, z_t891_t* z_v31488, z_t1797_t* z_v31489, uint64_t z_v31490, z_t46_t* z_v31491) {
+    z_t1097_t z_v31492 = z_t1097_create((uint64_t)0);
+    z_t423_t z_v31493 = z_t423_create((uint64_t)0);
+    z_t1658_t z_v31494 = z_t1644_iterate(&z_v31488->typing.conformance);
     while (1) {
-        z_t1660_t _iter0 = z_t1658_call(&z_v31190);
+        z_t1660_t _iter0 = z_t1658_call(&z_v31494);
         if (_iter0.tag == Z_OPTIONVIEW_ZCONFORMANCE_TAG_NONE) break;
-        z_t1642_t* __borrow_z_v31191 = (z_t1642_t*)_iter0.data;
-        /* alias: z_v31191 => (*__borrow_z_v31191) */
-        if ((*__borrow_z_v31191).implTypeId == z_v31186) {
-            (void)(z_t1097_append(&z_v31188, (*__borrow_z_v31191).specTypeId));
-            (void)(z_t423_append(&z_v31189, z_t46_copy(&(*__borrow_z_v31191).label)));
+        z_t1642_t* __borrow_z_v31495 = (z_t1642_t*)_iter0.data;
+        /* alias: z_v31495 => (*__borrow_z_v31495) */
+        if ((*__borrow_z_v31495).implTypeId == z_v31490) {
+            (void)(z_t1097_append(&z_v31492, (*__borrow_z_v31495).specTypeId));
+            (void)(z_t423_append(&z_v31493, z_t46_copy(&(*__borrow_z_v31495).label)));
         }
     }
-    uint64_t z_v31194 = ((uint64_t)0);
-    uint64_t z_v31195 = z_v31188.length;
-    while (z_v31194 < z_v31195) {
-        uint64_t z_v31196 = z_t1097_get(&z_v31188, z_v31194);
-        z_t46_t* __borrow_z_v31197 = &(*z_t423_get(&z_v31189, z_v31194));
-        /* alias: z_v31197 => (*__borrow_z_v31197) */
-        if (z_t3689(&z_v31184->reg, ((uint64_t)z_v31196)) == ((uint8_t)Z_ZTYPETYPE_TAG_PROTOCOLTYPE)) {
-            z_t46_t z_v31202 = z_t2085(z_v31184, ((uint64_t)z_v31196));
-            (void)(z_t2163(z_v31183, z_v31184, z_v31185, z_v31186, ((uint64_t)z_v31196), ((z_t67_t){ .data = z_v31202.data, .size = z_v31202.size }), ((z_t67_t){ .data = (*__borrow_z_v31197).data, .size = (*__borrow_z_v31197).size }), z_v31187));
-    z_t46_free(&z_v31202);
+    uint64_t z_v31498 = ((uint64_t)0);
+    uint64_t z_v31499 = z_v31492.length;
+    while (z_v31498 < z_v31499) {
+        uint64_t z_v31500 = z_t1097_get(&z_v31492, z_v31498);
+        z_t46_t* __borrow_z_v31501 = &(*z_t423_get(&z_v31493, z_v31498));
+        /* alias: z_v31501 => (*__borrow_z_v31501) */
+        if (z_t3689(&z_v31488->reg, ((uint64_t)z_v31500)) == ((uint8_t)Z_ZTYPETYPE_TAG_PROTOCOLTYPE)) {
+            z_t46_t z_v31506 = z_t2085(z_v31488, ((uint64_t)z_v31500));
+            (void)(z_t2163(z_v31487, z_v31488, z_v31489, z_v31490, ((uint64_t)z_v31500), ((z_t67_t){ .data = z_v31506.data, .size = z_v31506.size }), ((z_t67_t){ .data = (*__borrow_z_v31501).data, .size = (*__borrow_z_v31501).size }), z_v31491));
+    z_t46_free(&z_v31506);
         }
-        z_v31194 = (z_v31194 + 1);
+        z_v31498 = (z_v31498 + 1);
     }
-    z_t1097_destroy(&z_v31188);
-    z_t423_destroy(&z_v31189);
+    z_t1097_destroy(&z_v31492);
+    z_t423_destroy(&z_v31493);
 }
 
 z_t46_t z_t2165(z_t891_t* z_v22058, uint64_t z_v22059, uint64_t z_v22060) {
