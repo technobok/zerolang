@@ -97,6 +97,7 @@ LOC tracking starts at the 2026-07-23 row; earlier rows are "—" (not back-meas
 | 2026-08-10 | 29dd84f8 | **Three arcs, 93 commits `347a3bad`..`29dd84f8`, measured together because the middle two were never rowed: the tcc external backend (`2d48cdc7`..`30ebceb1`), compile-time values (`b112e3d6`..`9e67f615`), and C12 static string ops (`01ec23aa`..`29dd84f8`).** Span vs the 2026-08-07 row on LOC +3.6%: wall FLAT, phases FLAT (542 -> 561 total, parse 95 -> 91, typecheck 256 -> 256, emit 191 -> 201), peak RSS 122 -> 116MB, `make test` 16.7 -> 14.0s on MORE cases (1011 vs ~1006). **allocs +4.8% (7,959,463 -> 8,341,026) against LOC +3.6%, and bytes DOWN 8.9% (524 -> 477MB)** -- the span is allocation-flat-to-better per line, but the two middle arcs were not separately measured so none of it is attributable. **The only rigorous A/B here is C12's, both binaries on IDENTICAL input (HEAD's src), `perf stat -r 7` vs a `9e67f615` worktree binary at the same flags: instructions 6,546,954,470 -> 6,533,736,764 (-0.20%), cycles -0.33%, task-clock 574.2 -> 567.2ms, allocs +15,168 (+0.18%), bytes flat (-27,864).** So C12 is performance-neutral. **It did not start that way, and the miss is the lesson: the bare-atom value check pulled the constant evaluator for EVERY bare atom that resolved to a type**, to catch the one shape where a constant is mistaken for a type alias -- instructions +0.69%, outside the +-0.25% spread, while cycles and wall stayed flat and hid it. Moving the pull BEHIND the alias test (same semantics -- the constant still overrules it) recovered the whole 0.89%. **Allocations did not move either way**: the pull returned early with no allocation for a name that is not a constant, so this was pure CPU in `constUnitTid`/`poolFind`/`constDefNodeId` and the allocation column could never have caught it. Instructions did. `make perf-elision` still reports a **write-only pool of ZERO** -- worth checking here specifically, because C12 added a second literal pool (`_zcs`) and a new arg-hoist path for non-lvalue String operands of `+`. | 0.55s | 0.63s | 116MB / 113MB | 91 / 256 / 201 (total 561, medians of 7) | 8,341,026 | 477MB | 14.0s | 93,020 |
 | 2026-08-12 | e9cbb09f | **Two arcs, 76 commits `29dd84f8`..`ac6f307f`, measured together because the first was never rowed: the native table (`20b7b7d8`..`cca9d6b4`, 65 commits) and the generic runtime pass (`cca9d6b4`..`ac6f307f`, 11 commits).** Span vs the 2026-08-10 row on LOC +3.5%: **allocs +3.5% (8,341,026 -> 8,635,934) -- exactly proportional to input, so flat per line**; bytes 477 -> 510MB (+6.9%, the one column outpacing LOC and NOT attributed, since the native-table arc was not separately measured); wall 0.55 -> 0.56s, phases 561 -> 580 total, `make test` 14.0 -> 13.9s on more cases. **The rigorous A/B is the runtime-pass arc's, both binaries on IDENTICAL input (HEAD's `src`, `--emit-c /dev/null`), `perf stat -r 7`: instructions 6,667,576,785 -> 6,672,266,203 (+0.07%, spread +-0.02%), cycles -0.09% (+-0.45%), task-clock 595.9 -> 588.5ms (+-1.4%) -- CPU FLAT, the instruction rise real but pipeline-hidden. Allocs +11,510 (+0.13%) and bytes -12,786 (FLAT).** The pass trades seven hand-written emitters for one walk over 122 table rows per unit, so the block count carries a small structural cost while the bytes do not -- it copies no more, it just asks more often. **One avoidable site was found and fixed in the same measurement (`ac6f307f`): `stmtFormName9` copied the callee's pooled name to compare it against four literals, for every dotted call statement in the program -- -2,709 allocs on identical input.** `make perf-elision` read a write-only pool of **122, not zero** when this span was first measured; chased and CLOSED at `e9cbb09f` -- one write-only copy per fragment row in `loadNativeTbl`, plus a second copy the pool could not see (-225 allocs, -7,787 bytes, both counted in this row's columns). See the section below. | 0.57s | 0.66s | 119MB / 114MB | 101 / 270 / 205 (total 576, medians of 5) | 8,635,709 | 510MB | 13.8s | 96,257 |
 | 2026-08-15 | c335e552 | **Five arcs plus this measurement's own three fixes, 81 commits `e9cbb09f`..`c335e552`**: demand root + outside-in (`16cbd62e`..`0c9b47c5`), native base types (`04f8a1ff`..`522aea55`), truthiness is a shape (`4dae744b`..`100db88a`), stdlib is not special (`100db88a`..`e82f9a4f`), unified environment (`e82f9a4f`..`e56e4bf1`), then `9671b2c8`..`c335e552`. **Bytes churned had MORE THAN DOUBLED across the span -- 510 -> 1,129MB -- and no other column showed it.** Allocations were flat (8,635,709 -> 8,675,188, +0.5% against LOC +1.15%), wall and phases improved, `make test` and the corpus were green: the same block counts moved ~9x the bytes, and 98% of the excess was two functions. Cause, instrument and fix in the section below; **this row's columns are POST-fix**, and bytes now read 478MB, BELOW the 510MB this span started from. **Per-arc A/B, every binary on IDENTICAL input (HEAD's `src`, `--emit-c /dev/null`), gcc -O1 series binaries, `perf stat -r 7`** -- instruction spread +-0.01..0.03%, and two rounds of ONE binary differ by 0.007%, so a tenth of a percent is signal here: truthiness **+0.13%** instructions, native base types + stdlib **+0.17%**, **unified environment -1.52% (7,054,595,077 -> 6,947,673,171) -- deleting the demand set paid in CPU as well as in architecture**, the three fixes **-7.09% (-> 6,455,199,486)**. Span total **-8.22% instructions, -8.93% cycles, -7.69% task-clock, -57.8% bytes, -0.82% allocations**. `make perf-elision` reports a write-only pool of **ZERO**. **The mimalloc RSS column moved by ENVIRONMENT, not by code**: `e9cbb09f`'s own binary, rebuilt and re-measured here, reads **139MB** against the **119MB** recorded for it on 2026-08-12, while its glibc RSS re-measures at exactly the recorded 114MB. mimalloc retains ~20MB more on this machine now; HEAD's 138MB is 1MB BETTER than the previous row's commit measured beside it today. Read the mi column against 139, not against 119. | 0.52s | 0.64s | 138MB / 114MB | 94 / 239 / 198 (total 531, medians of 7) | 8,640,337 | 478MB | 13.9s | 97,366 |
+| 2026-08-16 | 500eb312 | **The composite-key sweep, 16 commits `c335e552`..`500eb312`: every `(a << 32) \| b` key in the compiler is gone** (written `* 4294967296`, since the language has no shift operator). Seven families: `preIndexDefined` DELETED as dead, `genericParamTid` and `protocolThisContext` moved onto the rows they describe (`ParamDesc.paramTid`, `Decl.conformerName`), and `callGenericBinding` / `genericArgTypeBy` / `memberConst`+`constEvalState` / the three mono-stamp tables / the alias-target return value given typed pair RECORDS (`callslot`, `genericslot`, `constslot`, `monostamp`, `deftarget`). `ztypes.memberKey` deleted with the last caller. **This is an architecture change measured as one, and the headline is that it is free: both binaries on IDENTICAL input (HEAD's `src`, `--emit-c /dev/null`), gcc -O1, `perf stat -r 7` -- instructions 6,473,863,458 -> 6,470,996,444 (-0.04%, spread +-0.02%), cycles +0.08%, task-clock +0.53%, allocations -208, bytes +456,292 (+0.10%, the `u32` per Decl the conformer mark added).** LOC +0.03%. **A record key is not slower than a packed u64 -- it is faster.** The mono-stamp family, the hot one (the emitter probes it per node inside a generic body), measured on its own: instructions -0.12%, cycles -0.40%, task-clock -1.56%, allocations flat. The multiply-and-add every probe paid and the divide-and-subtract every unpack paid cost more than hashing eight more bytes. **One family DID regress, and the cause is worth carrying: the alias-target record cost +0.90% instructions** (6,472,418,756 -> 6,519,940,768 across the same span, measured per stage on one input) **because `nameid.isZero` is a declared one-line method the compiler does not inline** -- five presence tests on the alias-resolution path each became a real call, `z_t3797_nameid_isZero(&altK9.unitName)`, where the packed key tested `altK9 > 0` with a compare. Reading the field directly (`.u32 > 0`) gave back 52.4M of the 58.4M. See the section below. `make perf-elision` reports a write-only pool of **ZERO**. | 0.52s | 0.64s | 139MB / 114MB | 88 / 241 / 198 (total 529, medians of 7) | 8,645,497 | 480MB | 13.6s | 97,393 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -168,6 +169,50 @@ every container realloc/memmove and move site -- interior pointers cannot
 survive; see the W0 census discussion), Node payload inlining (<1% of blocks).
 Checker gap noted: `capacity:` + a dotted cross-unit value type trips Map
 generic inference (callKind stays unsized).
+
+## A one-line method does not inline, and a hot predicate pays for it (2026-08-16 @ 500eb312)
+
+The composite-key sweep replaced packed `(a << 32) | b` keys with typed pair
+records. Six of the seven families were CPU-neutral or better. The seventh —
+the alias/re-export target, which stopped being a packed u64 and became a
+`deftarget` record of two `zast.nameid` fields — cost **+0.90% instructions**,
+measured per stage with every binary on one input:
+
+| after | instructions | vs previous |
+|---|---|---|
+| `c335e552` (packed keys) | 6,472,418,756 | — |
+| F1 + F2 + F5 | 6,466,223,780 | -0.10% |
+| F7 + F3b + F3a | 6,464,235,241 | -0.03% |
+| F4 (mono stamps) | 6,461,573,505 | -0.04% |
+| F6 (alias target) | 6,519,940,768 | **+0.90%** |
+| the predicate fix | 6,467,550,657 | **-0.80%** |
+
+**The record was not the cost. The predicate was.** `zast.nameid` declares
+
+```zerolang
+isZero: function {:this} out bool is { return this.u32 == 0 }
+```
+
+and the compiler does not inline it, so `if (target.unitName.isZero) == false`
+emits `z_t3797_nameid_isZero(&altK9.unitName)` — an address-of, a call, and a
+bool-tag compare — where the packed key it replaced tested `altK9 > 0`. Five of
+those sit on the alias-resolution path, which the resolver and the emitter both
+walk per reference.
+
+Reading the field directly (`.u32 > 0`) recovered 52.4M of the 58.4M. That is
+deliberate spelling: it reaches past the type's own predicate because the
+predicate is what costs.
+
+**The general lead: `isZero` is called all over the tree, and every call is a
+real call.** A compiler that inlined a one-line method whose body is a single
+expression would give this back everywhere and let the five sites read
+`.isZero` again. Not attempted here; sized by this row at ~0.8% of a
+self-compile for five sites alone.
+
+**Method note.** The regression was invisible in a flat profile — the touched
+functions are 0.44% of samples between them, and the cost was spread across
+their callers. What found it was measuring each stage of the arc on one input
+and reading the EMITTED C at the site that moved.
 
 ## The symbol table was rebuilt from the bottom (2026-08-15 @ c335e552)
 
