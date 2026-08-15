@@ -884,76 +884,6 @@ suggestSimilar: function {
     return "".string
 }
 
-# populatePreludeBody -- record one unit body's unit-rooted dotted aliases as
-# prelude entries (bare name -> defining unit). Type-rooted targets
-# (true: bool.true) are value re-exports, never asked of the index side.
-populatePreludeBody: function {
-    ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry.view
-    ast: Ast.view
-    unitopId: u32
-} is {
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitopId
-    with bit: bodyIds9.iterate do for bmId9: bit loop {
-        bm: ast.nodes.get i: (bmId9 - 1).u64
-        if bm.namedoperation then {
-            dn: zast.nameTextAt :ast ref: bm.name
-            atgt0: dottedDefTargetIds :ast n: (ast.nodes.get i: (bm.operation - 1).u64)
-            if atgt0 > 0 then {
-                pid0: atgt0 / 4294967296
-                if (reg.unitNameTid.has key: pid0) then {
-                    pk0: dn.copy
-                    ps0: (zast.poolTextCopy
-                        pool: ast.names
-                        ref: (zast.nameid.create from: pid0.u32.orPanic)
-                    )
-                    ty.preludeUnit.set key: pk0 value: ps0
-                }
-            }
-        }
-    }
-}
-
-# populatePrelude -- fill ty.preludeUnit from core's re-exports BEFORE any
-# demand resolution (lowerGenerators pre-resolves system types, whose defs
-# already ask definingUnitFor for prelude names).
-populatePrelude: function {
-    ty: ztyping.ZTyping.view
-    reg: ztypes.ZTypeRegistry.view
-    program: Node
-} is {
-    match (
-        program
-    ) case program then {
-        uCnt9a: program.ast.units.length
-        uIdx9a: u64
-        for uIdx9a < uCnt9a loop {
-            ruId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9a))
-            uIdx9a = uIdx9a + 1
-            opId9: zast.nodeid
-            {
-                ru: program.ast.nodes.get i: (ruId9 - 1).u64
-                if ru.namedoperation then {
-                    isCore9: (zast.poolTextEq
-                        pool: program.ast.names
-                        ref: ru.name
-                        s: "core"
-                    )
-                    if isCore9 then opId9 = ru.operation
-                }
-            }
-            if opId9 > 0 then {
-                (populatePreludeBody
-                    :ty
-                    :reg
-                    ast: program.ast
-                    unitopId: opId9
-                )
-            }
-        }
-    } else null
-}
-
 # indexUnitDefs -- pre-scan every unit's top-level definitions into a
 # (unit.name) -> typetype index BEFORE resolution, so a reference can declare the
 # ONE canonical record id (declare-before-bind) instead of an anonymous shell. No
@@ -1004,6 +934,14 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
             }
         }
         ty.defNodeIndexBuilt = true
+        {
+            cro9: ty.unitRootByName.get key: (nameIdOf ast: program.ast name: "core").u64
+            match (
+                cro9
+            ) case some then {
+                ty.coreUnitRoot = cro9
+            } case none then null
+        }
         # canonical pre-index mints that pended their root proxy
         px9: u64
         pxn9: ty.declProxyTids.length
@@ -1540,27 +1478,24 @@ defTypetypeOf: function {
 }
 
 # definingUnitFor -- the unit that defines `name` for a reference in
-# `currentUnit`: the current unit's own defs (declare-before-bind index),
-# else the prelude surface (core's unit-rooted re-exports, ty.preludeUnit).
-# "" when neither indexes it (generic params, this/numerics, forward refs
-# to a nonexistent type) -- the caller then mints a shell exactly as
-# before. Scope-shaped: the current unit shadows the prelude. The id-side
-# bare walk (walkLookupTyperef) keeps its own full root order for
-# internal/mangled queries.
+# `currentUnit`: the environment walk over the unit's own frame, then the
+# prelude, where a hit is a re-export and the defining unit is the one its
+# dotted value names. "" when neither frame indexes it (generic params,
+# this/numerics, forward refs to a nonexistent type) -- the caller then mints
+# a shell exactly as before.
 definingUnitFor: function {
     ty: ztyping.ZTyping.view
     ast: Ast.view
     currentUnit: StringView
     name: StringView
 } out String is {
-    if (declOfUnitDef :ty :ast defUnit: currentUnit :name) > 0 then return currentUnit.string
-    pgo0: ty.preludeUnit.get key: name.string
-    match (
-        pgo0
-    ) case some then {
-        return pgo0.copy
-    } case none then null
-    return "".string
+    fr9: unitFramesOf :ty :ast :currentUnit
+    hit9: lookupDefinition :ty frames: fr9 nameId: (zast.poolFind pool: ast.names text: name)
+    if hit9.declId.isZero then return "".string
+    if hit9.frame == fr9.unitRoot then return currentUnit.string
+    ru9: reexportUnitOf :ty :ast declId: hit9.declId
+    if ru9.isZero then return "".string
+    return (zast.poolTextCopy pool: ast.names ref: ru9)
 }
 
 # declareCanonicalType -- get-or-declare the ONE canonical id for `unit.name` as a
@@ -30872,6 +30807,91 @@ declSurfaceEnsure9: function {
     return (ztypes.declid.create from: 0)
 }
 
+# --- the environment walk for a bare definition name ---
+
+# zframes -- the definition frames a bare name is resolved against, innermost
+# first: the enclosing namespace (zero outside one), the current unit, then
+# the prelude (`core`). Each is a root DeclId whose children are the frame's
+# names, so first-match-wins is one declFindChild per frame; a zero frame is
+# skipped. Variables live in the symbol table's entries and are resolved
+# before any of these.
+zframes: record {
+    nsRoot: ztypes.declid
+    unitRoot: ztypes.declid
+    preludeRoot: ztypes.declid
+}
+
+# zdefhit -- a lookupDefinition hit: the child DeclId and the frame (its root
+# DeclId) it was found in. Both zero on a miss.
+zdefhit: record {
+    declId: ztypes.declid
+    frame: ztypes.declid
+}
+
+# unitFramesOf -- the frames for a reference written at the top level of
+# `currentUnit`: the unit's own root, then the prelude. No namespace frame.
+unitFramesOf: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    currentUnit: StringView
+} out zframes is {
+    ur9: ztypes.declid
+    uro9: ty.unitRootByName.get key: (nameIdOf :ast name: currentUnit).u64
+    match (
+        uro9
+    ) case some then {
+        ur9 = uro9
+    } case none then null
+    return (zframes nsRoot: ztypes.declid unitRoot: ur9 preludeRoot: ty.coreUnitRoot)
+}
+
+# lookupDefinition -- the environment walk for a definition NAME: the frames
+# innermost first, first match wins. A hit is the child's DeclId whatever
+# its resolution state (indexed only, mid-resolution, or resolved); a miss
+# is zero. A probe: it reads the index and mints nothing.
+lookupDefinition: function {
+    ty: ztyping.ZTyping.view
+    frames: zframes
+    nameId: zast.nameid
+} out zdefhit is {
+    if nameId.isZero then return (zdefhit declId: ztypes.declid frame: ztypes.declid)
+    if (frames.nsRoot.isZero) == false then {
+        h9: ty.declFindChild parentDeclId: frames.nsRoot :nameId
+        if (h9.isZero) == false then return (zdefhit declId: h9 frame: frames.nsRoot)
+    }
+    if (frames.unitRoot.isZero) == false then {
+        h8: ty.declFindChild parentDeclId: frames.unitRoot :nameId
+        if (h8.isZero) == false then return (zdefhit declId: h8 frame: frames.unitRoot)
+    }
+    if (frames.preludeRoot.isZero) == false then {
+        h7: ty.declFindChild parentDeclId: frames.preludeRoot :nameId
+        if (h7.isZero) == false then return (zdefhit declId: h7 frame: frames.preludeRoot)
+    }
+    return (zdefhit declId: ztypes.declid frame: ztypes.declid)
+}
+
+# reexportUnitOf -- for a prelude Decl whose value is a unit-rooted dotted
+# alias (`List: collections.ListRef`), the name id of the unit it names; the
+# zero id for a bare alias, a type-rooted value (`true: bool.true`), or a real
+# definition.
+reexportUnitOf: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out zast.nameid is {
+    if (ty.declValid id: declId) == false then return (zast.nameid.create from: 0)
+    do9: ty.decls.get i: (declId - 1)
+    nop9: ast.nodes.get i: (do9.node - 1).u64
+    if nop9.namedoperation then {
+        dk9: dottedDefTargetIds :ast n: (ast.nodes.get i: (nop9.operation - 1).u64)
+        if dk9 > 0 then {
+            pu9: dk9 / 4294967296
+            if (ty.unitRootByName.has key: pu9) then return (zast.nameid.create from: pu9.u32.orPanic)
+        }
+    }
+    return (zast.nameid.create from: 0)
+}
+
 # declProbeUnitChildId -- the Decl-tree unit-child probe: unit root (by
 # bare unit name in unitRootByName) -> direct child (by pool name id) ->
 # its minted type id. 0 when the unit is unknown, the name is not an
@@ -31845,7 +31865,6 @@ typecheck: function {
             typetype: ztypes.ztypetype.nullType
         )
     } else null
-    populatePrelude ty: st.typing reg: st.reg :program
     lowerGenerators ty: st.typing reg: st.reg :program
     indexUnitDefs ty: st.typing reg: st.reg :program
     registerAndResolveMain ty: st.typing reg: st.reg :program
