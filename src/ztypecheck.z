@@ -30587,15 +30587,6 @@ lowerGeneratorItems: function {
     }
 }
 
-# Resolve a bare type name to its id through the units-as-containers hierarchy,
-# over the bare-name visibility order (the current unit shadows the stdlib
-# units: system, collections, io, core, os, cli) -- the SOLE encoding of that
-# order. It serves internal/mangled queries (mono names, dotted member keys)
-# beyond the source-level prelude surface, so it keeps the full root list
-# where the index side (definingUnitFor) narrowed to current-unit + prelude.
-# walkUnitProbe9 -- one unit-scope probe of the typeref walk: none when the
-# unit is unknown or has no such child.
-
 # stampRefDecl -- record the declaration a reference node resolved to.
 stampRefDecl: function {ty: ztyping.ZTyping nid: u64 declId: ztypes.declid} is {
     if nid == 0 then return
@@ -30954,41 +30945,6 @@ monoOriginTidOf: function {reg: ztypes.ZTypeRegistry tid: ztypes.tid} out ztypes
     return (reg.genericOriginOf :tid)
 }
 
-walkUnitProbe9: function {
-    ast: Ast
-    ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry.view
-    uname: StringView
-    base: StringView
-} out optionval u64 is {
-    dt9: (declProbeUnitChildId
-        :ty
-        :reg
-        :ast
-        :uname
-        nameId: (zast.poolFind pool: ast.names text: base)
-    )
-    if dt9 > 0 then return (optionval.some dt9)
-    uido: reg.unitNameTid.get key: (nameIdOf :ast name: uname).u64
-    match (
-        uido
-    ) case some then {
-        co9: (ty.declChildOf
-            pool: ast.names
-            parentTypeId: (ztypes.tid.create from: uido.u64)
-            name: base
-        )
-        match (
-            co9
-        ) case some then {
-            return (optionval.some co9)
-        } case none then null
-        return (optionval.none u64)
-    } case none then {
-        return (optionval.none u64)
-    }
-}
-
 # resolve a dotted type reference `base` from `currentUnit` by walking
 # the name path; returns the referent's type id, or `none`. Two roots only:
 # the unit itself, then `core` -- the prelude every program opens, and the one
@@ -31025,6 +30981,45 @@ nsThenUnitLookup: function {
     return (walkLookupTyperef :ast :ty :reg :currentUnit :base)
 }
 
+# probeFrameTyperef -- one frame's answer for a type name: the Decl-tree
+# child's minted id (a not-yet-touched re-export minted through its alias),
+# else the unit type's member index, which also serves the pre-index window
+# (no root yet) and members that are not Decls (unit monos, namespace
+# bindings). 0 when the frame has no such name yet -- the caller moves to the
+# next frame.
+probeFrameTyperef: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    root: ztypes.declid
+    uname: StringView
+    nameId: zast.nameid
+} out u64 is {
+    if nameId.isZero then return 0
+    if (root.isZero) == false then {
+        dt9: declProbeUnitChildRoot :ty :reg :ast unitRoot: root :uname :nameId
+        if dt9 > 0 then return dt9
+    }
+    uido: reg.unitNameTid.get key: (nameIdOf :ast name: uname).u64
+    match (
+        uido
+    ) case some then {
+        co9: ty.declChildOfId parentTypeId: (ztypes.tid.create from: uido.u64) :nameId
+        match (
+            co9
+        ) case some then {
+            return co9
+        } case none then null
+    } case none then null
+    return 0
+}
+
+# walkLookupTyperef -- resolve a bare type name to its id: the environment
+# walk over the current unit's frame, then the prelude -- the current unit
+# shadows core, and every other unit is reached through core's re-exports or a
+# qualified path. It serves internal/mangled queries (mono names, dotted
+# member keys) beyond the source-level surface, so a frame answers from the
+# member index as well as the Decl tree (probeFrameTyperef).
 walkLookupTyperef: function {
     ast: Ast.view
     ty: ztyping.ZTyping.view
@@ -31032,22 +31027,16 @@ walkLookupTyperef: function {
     currentUnit: StringView
     base: StringView
 } out optionval u64 is {
-    r9: walkUnitProbe9 :ast :ty :reg uname: currentUnit :base
-    match (
-        r9
-    ) case some then {
-        return (optionval.some r9)
-    } case none then null
+    fr9: unitFramesOf :ty :ast :currentUnit
+    nid9: zast.poolFind pool: ast.names text: base
+    r9: probeFrameTyperef :ast :ty :reg root: fr9.unitRoot uname: currentUnit nameId: nid9
+    if r9 > 0 then return (optionval.some r9)
     # `Any` is not user-reachable through core: only its own unit (system.z,
     # or a user unit defining one) resolves it. The constraint-position gate
     # is checkAnyBounds.
     if base == "Any" then return (optionval.none u64)
-    r5: walkUnitProbe9 :ast :ty :reg uname: "core" :base
-    match (
-        r5
-    ) case some then {
-        return (optionval.some r5)
-    } case none then null
+    r5: probeFrameTyperef :ast :ty :reg root: fr9.preludeRoot uname: "core" nameId: nid9
+    if r5 > 0 then return (optionval.some r5)
     return (optionval.none u64)
 }
 
@@ -31223,32 +31212,6 @@ resolveSystemChild: function {
 # probe is a childOfId (no per-stage StringPool.find). The composed-key miss
 # path materialises the name text once via poolTextCopy (rare). ---
 
-# probe a unit for a member by name-id during resolution.
-walkUnitProbe9ById: function {
-    ast: Ast.view
-    ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry.view
-    uname: StringView
-    baseId: zast.nameid
-} out optionval u64 is {
-    dt9: declProbeUnitChildId :ty :reg :ast :uname nameId: (zast.nameid.create from: baseId.u32)
-    if dt9 > 0 then return (optionval.some dt9)
-    uido: reg.unitNameTid.get key: (nameIdOf :ast name: uname).u64
-    match (
-        uido
-    ) case some then {
-        co9: ty.declChildOfId parentTypeId: (ztypes.tid.create from: uido.u64) nameId: baseId
-        match (
-            co9
-        ) case some then {
-            return (optionval.some co9)
-        } case none then null
-        return (optionval.none u64)
-    } case none then {
-        return (optionval.none u64)
-    }
-}
-
 # id-keyed `walkLookupTyperef`: the base name is a StringPool name-id.
 walkLookupTyperefById: function {
     ast: Ast.view
@@ -31257,21 +31220,14 @@ walkLookupTyperefById: function {
     currentUnit: StringView
     baseId: zast.nameid
 } out optionval u64 is {
-    r9: walkUnitProbe9ById :ast :ty :reg uname: currentUnit :baseId
-    match (
-        r9
-    ) case some then {
-        return (optionval.some r9)
-    } case none then null
+    fr9: unitFramesOf :ty :ast :currentUnit
+    r9: probeFrameTyperef :ast :ty :reg root: fr9.unitRoot uname: currentUnit nameId: baseId
+    if r9 > 0 then return (optionval.some r9)
     # `Any` is not user-reachable through the stdlib fallbacks (see the
     # text-keyed twin above).
     if baseId == (zast.poolFind pool: ast.names text: "Any") then return (optionval.none u64)
-    r5: walkUnitProbe9ById :ast :ty :reg uname: "core" :baseId
-    match (
-        r5
-    ) case some then {
-        return (optionval.some r5)
-    } case none then null
+    r5: probeFrameTyperef :ast :ty :reg root: fr9.preludeRoot uname: "core" nameId: baseId
+    if r5 > 0 then return (optionval.some r5)
     return (optionval.none u64)
 }
 
