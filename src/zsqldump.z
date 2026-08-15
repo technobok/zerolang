@@ -175,7 +175,7 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS post_guard (node_id INTEGER PRIMARY KEY, name TEXT NOT NULL, type_id INTEGER NOT NULL, arm TEXT NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS arg_disposition (node_id INTEGER PRIMARY KEY, disposition INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS variable_origin (variable_id INTEGER PRIMARY KEY, is_param INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS call_generic_binding (key INTEGER PRIMARY KEY, type_id INTEGER NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS call_generic_binding (call_node INTEGER NOT NULL, param_name INTEGER NOT NULL, type_id INTEGER NOT NULL, PRIMARY KEY (call_node, param_name));\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS binop_operator (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, owner_type_id INTEGER NOT NULL, method_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
     return acc
 }
@@ -811,7 +811,7 @@ ZDumper: class {
             this.acc.append s: rowVo9
         }
         with cgit: typing.callGenericBinding.iterateItems do for cg: cgit loop {
-            rowCg9: "INSERT OR IGNORE INTO call_generic_binding VALUES (\{cg.key}, \{cg.value});\n"
+            rowCg9: "INSERT OR IGNORE INTO call_generic_binding VALUES (\{cg.key.call}, \{cg.key.param}, \{cg.value});\n"
             this.acc.append s: rowCg9
         }
         with boit: typing.binopOwner.iterateItems do for bo: boit loop {
@@ -1390,11 +1390,10 @@ ZDumper: class {
             program
         ) case program then {
             with cgit: st.typing.callGenericBinding.iterateItems do for cg: cgit loop {
-                nid9: cg.key / 4294967296
-                pnid9: (cg.key - (nid9 * 4294967296)).u32.orPanic
+                nid9: cg.key.call
                 hld9: (zast.poolTextAt
                     pool: program.ast.names
-                    ref: (zast.nameid.create from: pnid9.u32)
+                    ref: (zast.nameid.create from: cg.key.param.u32.orPanic)
                 )
                 tn9: canonTypeName reg: st.reg tid: (ztypes.tid.create from: cg.value)
                 hSql9: sqlStr s: hld9.stringview
