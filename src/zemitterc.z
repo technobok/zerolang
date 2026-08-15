@@ -21143,6 +21143,20 @@ ctxBindMain: function {ctx: Ctx name: StringView} is {
     ctx.mainUnitId = mid9
 }
 
+# typeHasNativeCreate -- the type's own `create` is declared native, so the
+# runtime supplies that symbol and the field-wise meta_create alias would
+# redeclare it with a different signature.
+typeHasNativeCreate: function {symtab: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
+    co9: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wkCreate
+    match (
+        co9
+    ) case some then {
+        return (symtab.reg.isNativeOf tid: (ztypes.tid.create from: co9))
+    } case none then {
+        return false
+    }
+}
+
 # definedInNonMain -- the type is defined in a non-main (system/io/...)
 # unit (a reachable library type to emit alongside the main closure).
 definedInNonMain: function {
@@ -22953,10 +22967,14 @@ monoElemIdsOf: function {
     }
 }
 
-# buildUserTypeList -- the file-unit (main + dep) struct types: RECORD / CLASS /
-# UNION / VARIANT that are not monos and not generic templates. A mono embedding
-# one of these by value must be emitted after it.
-buildUserTypeList: function {symtab: zenv.ZSymbolTable acc: ListVal u64} is {
+# buildUserTypeList -- every struct type whose C body this emitter writes:
+# RECORD / CLASS / UNION / VARIANT / FACET that is not a mono, not a generic
+# template, and whose layout the runtime does not own. A mono embedding one of
+# these by value must be emitted after it. Types a fragment row demand-gates
+# join only once the program constructs them, on the same terms the sweep's
+# own drain applies -- without that the list would emit an io wrapper class
+# into every program that merely imports io.
+buildUserTypeList: function {symtab: zenv.ZSymbolTable ctx: Ctx.view acc: ListVal u64} is {
     last: symtab.reg.nextTypeId
     t: ztypes.tid
     for t < last loop {
@@ -22975,7 +22993,13 @@ buildUserTypeList: function {symtab: zenv.ZSymbolTable acc: ListVal u64} is {
                 match (
                     duo
                 ) case some then {
-                    if (isEmittableFileUnit name: duo.stringview) then acc.append t.u64
+                    emOk9: (symtab.reg.isNativeOf
+                        tid: (ztypes.tid.create from: t.u64)
+                    ) == false
+                    if emOk9 when (typeDemandMet
+                        :ctx
+                        tid: (ztypes.tid.create from: t.u64)
+                    ) then acc.append t.u64
                 } case none then null
             }
         }
@@ -23617,7 +23641,7 @@ emitUserStructsOrdered: function {
 } is {
     last: symtab.reg.nextTypeId
     userList: (ListVal u64)
-    buildUserTypeList :symtab acc: userList
+    buildUserTypeList :symtab :ctx acc: userList
     # user PROTOCOLs upfront (fat pointer; no by-value user embedding)
     tp: ztypes.tid
     for tp < last loop {
@@ -23900,7 +23924,7 @@ emitMonos: function {
 } is {
     last: symtab.reg.nextTypeId
     userListM: (ListVal u64)
-    buildUserTypeList :symtab acc: userListM
+    buildUserTypeList :symtab :ctx acc: userListM
     emitMainFwdDecls :symtab :ctx :buf
     # one classification sweep over the registry fills the per-category
     # worklists; the category loops below emit in the original sequence.
@@ -23921,9 +23945,7 @@ emitMonos: function {
     wList9: (ListVal u64)
     wSet9: (ListVal u64)
     wMap9: (ListVal u64)
-    wCliComp9: (ListVal u64)
     wProto9: (ListVal u64)
-    wIoWrap9: (ListVal u64)
     wUgRec9: (ListVal u64)
     tcl9: ztypes.tid
     for tcl9 < last loop {
@@ -23954,14 +23976,12 @@ emitMonos: function {
         }
         if tt9 == ztypes.ztypetype.classType then {
             if isMono9 == false when gen9 == false then {
-                if inCli9 then {
-                    if (cliClassIsComposite :ast :symtab :ctx tid: tcl9) then {
-                        wCliComp9.append tv9
-                    } else {
-                        wCliLeaf9.append tv9
-                    }
-                }
-                if inIo9 then wIoWrap9.append tv9
+                if inCli9 when (cliClassIsComposite
+                    :ast
+                    :symtab
+                    :ctx
+                    tid: tcl9
+                ) == false then wCliLeaf9.append tv9
             }
         }
         if tt9 == ztypes.ztypetype.variantType then {
@@ -24212,15 +24232,6 @@ emitMonos: function {
         emitMapMono :ast :symtab :ctx :runtimeDir monoId: (ztypes.tid.create from: maId9.u64) :buf
         tmap = tmap + 1
     }
-    # reachable cli COMPOSITE classes (Spec/Parsed) -- after the List/Map monos
-    # they embed; both carry a forward declaration from emitMainFwdDecls, which
-    # the emitter reads off ctx.fwdDeclaredTypes like every other type.
-    tclc: u64
-    for tclc < wCliComp9.length loop {
-        clcId9: wCliComp9.get i: tclc
-        emitOneRecord :ast :symtab :ctx tid: (ztypes.tid.create from: clcId9.u64) :buf
-        tclc = tclc + 1
-    }
     # reachable system PROTOCOLs (Reader/Writer/Closer/Seeker) -- emitted after
     # the collection monos their vtable function-pointer signatures reference.
     tsp: u64
@@ -24236,17 +24247,6 @@ emitMonos: function {
             :buf
         )
         tsp = tsp + 1
-    }
-    # reachable io wrapper CLASSes (BufWriter/BufReader/TextWriter/TextReader) --
-    # after the protocols their .lock fields hold. File has its own emitter.
-    # The demand gate stays here (needs may accrue during emission).
-    tsc: u64
-    for tsc < wIoWrap9.length loop {
-        scId9: wIoWrap9.get i: tsc
-        if (typeDemandMet :ctx tid: (ztypes.tid.create from: scId9.u64)) then {
-            emitOneRecord :ast :symtab :ctx tid: (ztypes.tid.create from: scId9.u64) :buf
-        }
-        tsc = tsc + 1
     }
     # user generic class/record monos (e.g. Box<i64>): RECORD/CLASS monos whose
     # origin is a user generic type. The collection / array / str / option / box
@@ -26910,6 +26910,11 @@ emitOneRecord: function {
     fids: (ListVal u64)
     fidsNm: (ListVal u64)
     recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
+    # A FIELDLESS record/class is a synthesized carrier -- the registry's
+    # `literal_int` pseudo-type, a data block's `tag__{elem}` -- and an empty
+    # struct is not C. Same rule as the armless variant above, for the same
+    # reason: nothing can hold one, so emit nothing rather than invalid C.
+    if fnames.length == 0 then return
     preEmitEmbeddedTypes :ast :symtab :ctx ids: fids :buf
     rc: ctxCname :ctx :tid
     if (isFwdDeclared :ctx :tid) then {
@@ -26996,7 +27001,8 @@ emitOneRecord: function {
     buf.append l4
     buf.append "    return _this;\n"
     buf.append "}\n"
-    if (definedInNonMain :symtab :ctx :tid) == false then {
+    aliasOk9: (definedInNonMain :symtab :ctx :tid) == false
+    if aliasOk9 when (typeHasNativeCreate :symtab :tid) == false then {
         l5: "#define \{rc}_create \{rc}_meta_create\n"
         buf.append l5
     }
