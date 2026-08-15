@@ -24118,13 +24118,7 @@ emitMonos: function {
     tclc: u64
     for tclc < wCliComp9.length loop {
         clcId9: wCliComp9.get i: tclc
-        (emitCliCompositeClass
-            :ast
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: clcId9.u64)
-            :buf
-        )
+        emitOneRecord :ast :symtab :ctx tid: (ztypes.tid.create from: clcId9.u64) :buf
         tclc = tclc + 1
     }
     # reachable system PROTOCOLs (Reader/Writer/Closer/Seeker) -- emitted after
@@ -26959,115 +26953,6 @@ emitOneRecord: function {
     }
 }
 
-# emitCliCompositeClass -- a cli class holding collection fields (Spec/Parsed).
-# Lists embed by value; Maps/Sets are heap pointers. Parsed is forward-declared
-# (named tag) so the Result_Parsed_CliError destructor can reference it before
-# this body emits; Spec emits its own typedef inline. No `_create` alias (the
-# create is native / inline) and no `_eq` (a class).
-emitCliCompositeClass: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx.view
-    tid: ztypes.tid
-    buf: String.borrow
-} is {
-    fnames: (List String)
-    fids: (ListVal u64)
-    fidsNm: (ListVal u64)
-    recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
-    rc: ctxCname :ctx :tid
-    if (isFwdDeclared :ctx :tid) == false then {
-        lt: "typedef struct \{rc}_t \{rc}_t;\n"
-        buf.append lt
-    }
-    l0: "struct \{rc}_t {\n"
-    buf.append l0
-    fi: u64
-    fn0: fnames.length
-    for fi < fn0 loop {
-        fname: fnames.get i: fi
-        fid: fids.get i: fi
-        fct: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: fid.u64) thisTid: ztypes.tid
-        if fct.length == 0 then fct = "int64_t".string
-        if (isHeapPtrCollection
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: fid.u64)
-        ) then fct = "\{fct}*"
-        l1: "    \{fct} \{fname};\n"
-        buf.append l1
-        fi = fi + 1
-    }
-    buf.append "};\n"
-    params: String
-    inits: String
-    fj: u64
-    for fj < fn0 loop {
-        fname2: fnames.get i: fj
-        fid2: fids.get i: fj
-        fct2: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: fid2.u64) thisTid: ztypes.tid
-        if fct2.length == 0 then fct2 = "int64_t".string
-        if (isHeapPtrCollection
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: fid2.u64)
-        ) then fct2 = "\{fct2}*"
-        if fj > 0 then {
-            params.append ", "
-            inits.append ", "
-        }
-        params.append fct2
-        params.append " "
-        params.append fname2
-        inits.append fname2
-        fj = fj + 1
-    }
-    l3: "static \{rc}_t \{rc}_meta_create(\{params}) {\n"
-    buf.append l3
-    l4: "    \{rc}_t _this = { \{inits} };\n"
-    buf.append l4
-    buf.append "    return _this;\n"
-    buf.append "}\n"
-    if (definedInNonMain :symtab :ctx :tid) == false then {
-        ldf0: "#define \{rc}_create \{rc}_meta_create\n"
-        buf.append ldf0
-    }
-    d0: "static void \{rc}_destroy(\{rc}_t* p);\n"
-    buf.append d0
-    d1: "static void \{rc}_destroy(\{rc}_t* p) {\n"
-    buf.append d1
-    buf.append "    if (!p) return;\n"
-    dk: u64
-    for dk < fn0 loop {
-        dfn: fnames.get i: dk
-        dfi: fids.get i: dk
-        if dfi == ctx.strTid then {
-            ds: "    \{ctx.strC}_free(&p->\{dfn});\n"
-            buf.append ds
-        } else {
-            dcm: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: dfi.u64)
-            dneeds9: false
-            if (symtab.reg.hasDestructorName typeId: dcm) then dneeds9 = true
-            if (isHeapPtrCollection
-                :symtab
-                :ctx
-                tid: (ztypes.tid.create from: dfi.u64)
-            ) then dneeds9 = true
-            if dneeds9 then {
-                dcb: ctxCname :ctx tid: (ztypes.tid.create from: dcm.u64)
-                if (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: dfi.u64)) then {
-                    df: "    \{dcb}_destroy(p->\{dfn});\n"
-                    buf.append df
-                } else {
-                    df2: "    \{dcb}_destroy(&p->\{dfn});\n"
-                    buf.append df2
-                }
-            }
-        }
-        dk = dk + 1
-    }
-    buf.append "}\n\n"
-}
 
 # emitRecordMethods -- the record's as-block functions as free C
 # functions taking the record by value (params from the method type's
