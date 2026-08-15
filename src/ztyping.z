@@ -26,6 +26,7 @@ public: unit {
     :genericslot
     :constslot
     :monostamp
+    :nsbody
     :declkind
     :declkindName
     :ZTyping
@@ -172,6 +173,15 @@ monostamp: record {
     node: u64
 }
 
+# nsbody -- a namespace or hidden subunit whose member BODIES are owed a walk.
+# The demand path resolves its signatures where it finds it; the bodies are
+# walked at the top-level drain, because a body walk inside a resolver runs in
+# a grey window.
+nsbody: record {
+    unitName: zast.nameid
+    unitOp: zast.nodeid
+}
+
 # defaultval -- a member's default value, de-hacking the childDefault string
 # sentinels (`#function:`/`#variant:`). `literal` carries the default-expression
 # nodeid (re-emitted verbatim); `function`/`arm` carry the target DeclId; `none`
@@ -292,6 +302,11 @@ ZTyping: class {
     # monoParamSubst maps the CURRENT mono's generic-param tids to its args
     # (flat substitution at stamp time); live only during the instance walk.
     monoNodeType: (MapVV monostamp value: ztypes.tid)
+    # namespace / subunit bodies the demand path owes a walk, and the unit
+    # ops already walked -- a subunit of the MAIN unit is walked by the main
+    # tree walk and must not be walked twice.
+    nsBodiesOwed: (ListVal nsbody)
+    nsBodiesWalked: (SetVal u64)
     monoParamSubst: (MapVV ztypes.tid value: ztypes.tid)
     curMonoStamp: u64
     curMonoFnTid: ztypes.tid
@@ -2026,6 +2041,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingBorrowReadonly: false
         pendingBorrowOwned: false
             monoNodeType: (MapVV monostamp value: ztypes.tid)
+            nsBodiesOwed: (ListVal nsbody)
+            nsBodiesWalked: (SetVal u64)
         monoParamSubst: (MapVV ztypes.tid value: ztypes.tid)
         curMonoStamp: 0
         curMonoFnTid: ztypes.tid

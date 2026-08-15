@@ -9916,6 +9916,14 @@ resolveDemandedDecl: function {
             unitOpId: opId9
         )
         ty.declSetDefined :declId
+        # Signatures are resolved; the member bodies are owed a walk, which the
+        # top-level drain does.
+        (ty.nsBodiesOwed.append
+            (ztyping.nsbody
+                unitName: (zast.nameid.create from: puNm9)
+                unitOp: opId9
+            )
+        )
     } else if isTmpl9 then {
         (resolveInlineGenericUnit
             :ty
@@ -26623,6 +26631,10 @@ checkNamespaceBodies: function {
     unitName: StringView
     unitdefId: zast.nodeid
 } is {
+    # Once per unit op: the main tree walk and the demand drain can both reach
+    # the same namespace, and a second walk would re-report every diagnostic.
+    if (st.typing.nsBodiesWalked.has item: unitdefId.u64) then return
+    st.typing.nsBodiesWalked.add item: unitdefId.u64
     prevTid9: st.typing.nsOwnerTid
     prevDecl9: st.typing.nsOwnerDeclId
     prevUnit9: st.typing.nsOwnerUnit.copy
@@ -26863,6 +26875,7 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
         # (a type constructed only inside a late-resolved owner's method):
         # resolve them before the completion pass walks their owners
         resolveDemandedDefs ty: st.typing reg: st.reg ast: program.ast
+        walkOwedNamespaceBodies :st ast: program.ast
         walkLateResolvedOwners :st ast: program.ast
         stampUnitMonoTemplates :st :program
     } else null
@@ -26879,6 +26892,38 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
 # half, and it is retired: with the root demand-driven, a definition the program
 # cannot reach is not the compiler's to spend time on, and reporting on it is a
 # LINT concern. So the keep test is `resolved` alone -- the blanket keep for
+# walkOwedNamespaceBodies -- walk the member bodies of every namespace or
+# hidden subunit the demand path resolved. The main unit's own namespaces are
+# walked by checkUnitBodies; a DEPENDENCY's are reached only here, and without
+# this their bodies arrive at the emitter unstamped -- a loud E0500 where a
+# diagnostic belongs.
+#
+# Drained in rounds because a body can demand a deeper subunit: each round
+# resolves what the last one demanded, so a subunit of a subunit is walked by
+# the round after its parent, to any depth. Deterministic: demand order.
+walkOwedNamespaceBodies: function {st: zenv.ZSymbolTable ast: Ast} is {
+    for st.typing.nsBodiesOwed.length > 0 loop {
+        round9: (ListVal ztyping.nsbody)
+        for st.typing.nsBodiesOwed.length > 0 loop round9.append st.typing.nsBodiesOwed.pop
+        ri9: u64
+        rn9: round9.length
+        for ri9 < rn9 loop {
+            rec9: round9.get i: ri9
+            ri9 = ri9 + 1
+            un9: zast.poolTextAt pool: ast.names ref: rec9.unitName
+            (checkNamespaceBodies
+                :ast
+                :st
+                unitName: un9.stringview
+                unitdefId: rec9.unitOp
+            )
+        }
+        # a walked body demands definitions of its own; resolving them here is
+        # what puts the next depth on the list
+        resolveDemandedDefs ty: st.typing reg: st.reg :ast
+    }
+}
+
 # the target unit's own owners is gone, which is the whole of the dead-code job.
 #
 # Template owners are skipped: their bodies check per instantiation.
