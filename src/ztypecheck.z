@@ -6086,10 +6086,11 @@ requireLibraryText: function {
 unitWasReached: function {
     ty: ztyping.ZTyping
     ast: Ast
-    unitName: StringView
+    rootDecl: ztypes.declid
     unitOp: u32
 } out bool is {
     r9u: false
+    if rootDecl.isZero then return false
     bodyIds9u: zast.unitBodyIdsAt :ast unitId: unitOp
     with bit9u: bodyIds9u.iterate do for mId9u: bit9u loop {
         mn9u: ast.nodes.get i: (mId9u - 1).u64
@@ -6102,16 +6103,117 @@ unitWasReached: function {
                 k: zast.unitkind.requirement
             )
             if (isReq9u) == false then {
-                if (defWasResolved
-                    :ty
-                    :ast
-                    defUnit: unitName
-                    nameId: mn9u.name
-                ) then r9u = true
+                d9u: ty.declFindChild parentDeclId: rootDecl nameId: mn9u.name
+                if (d9u.isZero) == false then {
+                    if (ty.declIsDefined declId: d9u) then r9u = true
+                }
             }
         } else null
     }
     return r9u
+}
+
+# requnit -- a unit whose `require:` block a program may have to hear: every
+# file unit, and every hidden subunit inside one. A subunit states what IT
+# needs from the host toolchain, and a program that reaches it through its
+# parent's re-export must hear that as surely as one that names the unit.
+requnit: record {
+    nameId: zast.nameid
+    unitOp: zast.nodeid
+    rootDecl: ztypes.declid
+}
+
+# addNestedRequireUnits9 -- the subunits and namespaces inside one unit body,
+# to any depth. Deterministic: declaration order.
+addNestedRequireUnits9: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    into: (ListVal requnit)
+    rootDecl: ztypes.declid
+    unitOp: zast.nodeid
+} is {
+    if rootDecl.isZero then return
+    bodyIds9n: zast.unitBodyIdsAt :ast unitId: unitOp
+    with bit9n: bodyIds9n.iterate do for mId9n: bit9n loop {
+        mn9n: ast.nodes.get i: (mId9n - 1).u64
+        match (
+            mn9n
+        ) case namedoperation then {
+            isNs9n: false
+            if (zast.unitOpKindIs
+                :ast
+                opId: mn9n.operation
+                k: zast.unitkind.subunit
+            ) then isNs9n = true
+            if (zast.unitOpKindIs
+                :ast
+                opId: mn9n.operation
+                k: zast.unitkind.namespace
+            ) then isNs9n = true
+            if isNs9n then {
+                cd9n: ty.declFindChild parentDeclId: rootDecl nameId: mn9n.name
+                if (cd9n.isZero) == false then {
+                    (into.append
+                        (requnit
+                            nameId: mn9n.name
+                            unitOp: (zast.nodeid.create from: mn9n.operation)
+                            rootDecl: cd9n
+                        )
+                    )
+                    (addNestedRequireUnits9
+                        :ty
+                        :ast
+                        :into
+                        rootDecl: cd9n
+                        unitOp: (zast.nodeid.create from: mn9n.operation)
+                    )
+                }
+            }
+        } else null
+    }
+}
+
+# collectRequireUnits9 -- the file units and every nested unit inside them.
+collectRequireUnits9: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast
+} out (ListVal requnit) is {
+    out9c: (ListVal requnit)
+    uCnt9c: ast.units.length
+    uIdx9c: u64
+    for uIdx9c < uCnt9c loop {
+        uId9c: (zast.nodeid.create from: (ast.units.get i: uIdx9c))
+        uIdx9c = uIdx9c + 1
+        un9c: ast.nodes.get i: (uId9c - 1).u64
+        match (
+            un9c
+        ) case namedoperation then {
+            rd9c: ztypes.declid
+            ro9c: ty.unitRootByName.get key: un9c.name.u64
+            match (
+                ro9c
+            ) case some then {
+                rd9c = ztypes.declid.create from: ro9c
+            } case none then null
+            if (rd9c.isZero) == false then {
+                (out9c.append
+                    (requnit
+                        nameId: un9c.name
+                        unitOp: (zast.nodeid.create from: un9c.operation)
+                        rootDecl: rd9c
+                    )
+                )
+                (addNestedRequireUnits9
+                    :ty
+                    :ast
+                    into: out9c
+                    rootDecl: rd9c
+                    unitOp: (zast.nodeid.create from: un9c.operation)
+                )
+            }
+        } else null
+    }
+    return out9c
 }
 
 # requiredLibs -- the link libraries the program's reached units declare. A
@@ -6128,29 +6230,20 @@ requiredLibs: function {
     ) case program then {
         libNid9w: zast.poolFind pool: program.ast.names text: "library"
         if libNid9w.isZero then return libs9w
-        uCnt9w: program.ast.units.length
+        rus9w: collectRequireUnits9 :ty ast: program.ast
+        uCnt9w: rus9w.length
         uIdx9w: u64
         for uIdx9w < uCnt9w loop {
-            uId9w: (zast.nodeid.create from: (program.ast.units.get i: uIdx9w))
+            ru9w: rus9w.get i: uIdx9w
             uIdx9w = uIdx9w + 1
-            unm9w: String
-            uOp9w: u32
-            {
-                un9w: program.ast.nodes.get i: (uId9w - 1).u64
-                match (
-                    un9w
-                ) case namedoperation then {
-                    ut9w: zast.poolTextAt pool: program.ast.names ref: un9w.name
-                    unm9w = ut9w.copy
-                    uOp9w = un9w.operation
-                } else null
-            }
+            unm9w: (zast.poolTextAt pool: program.ast.names ref: ru9w.nameId).copy
+            uOp9w: ru9w.unitOp.u32
             if uOp9w > 0 then {
                 lib9x: String
                 reached9w: (unitWasReached
                     :ty
                     ast: program.ast
-                    unitName: unm9w.stringview
+                    rootDecl: ru9w.rootDecl
                     unitOp: uOp9w
                 )
                 # stage the block's operation id and evaluate AFTER the walk:
@@ -6210,35 +6303,15 @@ checkRequireBlocks: function {
         reqNid9q: zast.poolFind pool: program.ast.names text: "require"
         if reqNid9q.isZero then return
         libNid9q: zast.poolFind pool: program.ast.names text: "library"
-        uCnt9q: program.ast.units.length
+        rus9q: collectRequireUnits9 :ty ast: program.ast
+        uCnt9q: rus9q.length
         uIdx9q: u64
         for uIdx9q < uCnt9q loop {
-            uId9q: (zast.nodeid.create from: (program.ast.units.get i: uIdx9q))
+            ru9q: rus9q.get i: uIdx9q
             uIdx9q = uIdx9q + 1
-            unm9q: String
-            uOp9q: u32
-            {
-                un9q: program.ast.nodes.get i: (uId9q - 1).u64
-                match (
-                    un9q
-                ) case namedoperation then {
-                    ut9q: zast.poolTextAt pool: program.ast.names ref: un9q.name
-                    unm9q = ut9q.copy
-                    uOp9q = un9q.operation
-                } else null
-            }
-            udecl9q: ztypes.declid
-            if unm9q.length > 0 then {
-                ro9q: ty.unitRootByName.get key: (nameIdOf
-                    ast: program.ast
-                    name: unm9q.stringview
-                ).u64
-                match (
-                    ro9q
-                ) case some then {
-                    udecl9q = ztypes.declid.create from: ro9q
-                } case none then null
-            }
+            unm9q: (zast.poolTextAt pool: program.ast.names ref: ru9q.nameId).copy
+            uOp9q: ru9q.unitOp.u32
+            udecl9q: ru9q.rootDecl
             if (udecl9q.isZero) == false then {
                 rdecl9q: ty.declFindChild parentDeclId: udecl9q nameId: reqNid9q
                 if (rdecl9q.isZero) == false then {
@@ -6247,7 +6320,7 @@ checkRequireBlocks: function {
                         reach9q = (unitWasReached
                             :ty
                             ast: program.ast
-                            unitName: unm9q.stringview
+                            rootDecl: ru9q.rootDecl
                             unitOp: uOp9q
                         )
                     }
