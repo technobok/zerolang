@@ -22473,8 +22473,12 @@ emitIoStdStreams: function {
 # emitIoFileClass -- the io.File value rep: { int32_t fd; bool closed } + a
 # destructor that closes the fd once (RAII). Emitted only when File is reachable
 # (in the demand-driven registry). The generic record path can't produce the
-# close-fd destructor, so File gets this dedicated emitter.
-emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx.view buf: String.borrow} is {
+# close-fd destructor, so File gets this dedicated emitter. The type is marked
+# in ctx.emittedUserTypes so every other path skips it -- without that mark a
+# by-value use of File would emit a second struct carrying a generic destructor
+# that never closes the fd.
+emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
+    ioUid9: unitIdOf9 :ctx name: "io"
     last: symtab.reg.nextTypeId
     fid: ztypes.tid
     ti: 1.u64
@@ -22482,20 +22486,29 @@ emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx.view buf: String.b
         if fid.isZero then {
             if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ti.u64)) == ztypes.ztypetype.classType then {
                 if (regNameIs :symtab tid: (ztypes.tid.create from: ti.u64) name: "File") then {
-                    if (definedInNonMain
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: ti.u64)
-                    ) then fid = ztypes.tid.create from: ti.u64
+                    duId9: defUnitIdOf9 :ctx tid: (ztypes.tid.create from: ti.u64)
+                    if duId9 > 0 when duId9 == ioUid9 then fid = ztypes.tid.create from: ti.u64
                 }
             }
         }
         ti = ti + 1
     }
     if fid.isZero then return
+    ego9: ctx.emittedUserTypes.get key: fid
+    match (
+        ego9
+    ) case some then {
+        return
+    } case none then null
+    ctx.emittedUserTypes.set key: fid.u64 value: true
     fc: ctxCname :ctx tid: fid
-    l0: "typedef struct {\n    int32_t fd;\n    bool closed;\n} \{fc}_t;\n"
-    buf.append l0
+    if (isFwdDeclared :ctx tid: fid) then {
+        l0: "struct \{fc}_t {\n    int32_t fd;\n    bool closed;\n};\n"
+        buf.append l0
+    } else {
+        l0: "typedef struct {\n    int32_t fd;\n    bool closed;\n} \{fc}_t;\n"
+        buf.append l0
+    }
     l1: "static void \{fc}_destroy(\{fc}_t* p) {\n    if (!p) return;\n    if (p->closed) return;\n    close(p->fd);\n    p->closed = true;\n}\n\n"
     buf.append l1
 }
