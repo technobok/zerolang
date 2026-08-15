@@ -25,6 +25,7 @@ public: unit {
     :callslot
     :genericslot
     :constslot
+    :monostamp
     :declkind
     :declkindName
     :ZTyping
@@ -164,6 +165,13 @@ constslot: record {
     name: u64
 }
 
+# monostamp -- which node of which monomorphisation. One template node carries
+# a different answer per instance, so the instance id is part of the key.
+monostamp: record {
+    mono: u64
+    node: u64
+}
+
 # defaultval -- a member's default value, de-hacking the childDefault string
 # sentinels (`#function:`/`#variant:`). `literal` carries the default-expression
 # nodeid (re-emitted verbatim); `function`/`arm` carry the target DeclId; `none`
@@ -278,12 +286,12 @@ ZTyping: class {
     pendingBorrowOwned: bool
     # type names whose method bodies the walk has already visited (methods
     # body-check once, at the type's first body-walk reference).
-    # per-mono template stamps: (monoId << 32 | nodeid) -> tid, written by
-    # the post-sweep instance walk when curMonoStamp is set; the emitter's
-    # mono re-walks read these where the global table is param-suppressed.
+    # per-mono template stamps, written by the post-sweep instance walk when
+    # curMonoStamp is set; the emitter's mono re-walks read these where the
+    # global table is param-suppressed.
     # monoParamSubst maps the CURRENT mono's generic-param tids to its args
     # (flat substitution at stamp time); live only during the instance walk.
-    monoNodeType: (MapVV u64 value: ztypes.tid)
+    monoNodeType: (MapVV monostamp value: ztypes.tid)
     monoParamSubst: (MapVV ztypes.tid value: ztypes.tid)
     curMonoStamp: u64
     curMonoFnTid: ztypes.tid
@@ -378,13 +386,13 @@ ZTyping: class {
     binopOwner: (MapVV u64 value: ztypes.tid)
     binopMethod: (MapVV u64 value: ztypes.tid)
     # the same two facts from the per-instance walk, in their own tables
-    # because their key is a different thing: (monoId << 32 | nodeid), as
-    # monoNodeType keys a type stamp. One template node resolves to a
+    # because their key is a different thing -- a monostamp, as monoNodeType
+    # keys a type stamp, not a nodeid. One template node resolves to a
     # different operator per instantiation, so the answers cannot share a
     # slot -- and they cannot share a TABLE with the nodeid-keyed pair either,
     # or the key would mean one thing or the other depending on who wrote it.
-    monoBinopOwner: (MapVV u64 value: ztypes.tid)
-    monoBinopMethod: (MapVV u64 value: ztypes.tid)
+    monoBinopOwner: (MapVV monostamp value: ztypes.tid)
+    monoBinopMethod: (MapVV monostamp value: ztypes.tid)
 
     # per-node single-valued stamps, indexed by nodeid - 1 (node ids are
     # minted dense 1..N, so the stamp IS the slot); 0 means unstamped
@@ -2017,7 +2025,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingBorrowShared: false
         pendingBorrowReadonly: false
         pendingBorrowOwned: false
-            monoNodeType: (MapVV u64 value: ztypes.tid)
+            monoNodeType: (MapVV monostamp value: ztypes.tid)
         monoParamSubst: (MapVV ztypes.tid value: ztypes.tid)
         curMonoStamp: 0
         curMonoFnTid: ztypes.tid
@@ -2070,8 +2078,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         callGenericBinding: (MapVV callslot value: u64)
         binopOwner: (MapVV u64 value: ztypes.tid)
         binopMethod: (MapVV u64 value: ztypes.tid)
-        monoBinopOwner: (MapVV u64 value: ztypes.tid)
-        monoBinopMethod: (MapVV u64 value: ztypes.tid)
+        monoBinopOwner: (MapVV monostamp value: ztypes.tid)
+        monoBinopMethod: (MapVV monostamp value: ztypes.tid)
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
         nodeType: (ListVal ztypes.tid capacity: nodeEst + (nodeEst / 4))
