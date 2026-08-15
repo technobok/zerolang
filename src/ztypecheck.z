@@ -1017,8 +1017,7 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
     } else null
 }
 
-# indexUnitBody -- index one unit's top-level defs (mirrors resolveDemandedUnitBody's
-# unitdef.body walk).
+# indexUnitBody -- index one unit's top-level defs, in body order.
 indexUnitBody: function {
     ty: ztyping.ZTyping.view
     ast: Ast.view
@@ -3169,9 +3168,9 @@ recordReturnType: function {
 
 }
 
-# demandTyperefNames -- record demands for every name a type-expr
-# references (the head and, transitively, parameter-arg names), so the
-# demand walks resolve a signature's full closure. Creates no types.
+# demandTyperefNames -- demand every name a type-expr references (the head
+# and, transitively, parameter-arg names), so a signature's full closure
+# resolves. Creates no types.
 demandTyperefNames: function {
     ty: ztyping.ZTyping
     ast: Ast.view
@@ -3184,8 +3183,6 @@ demandTyperefNames: function {
     ) case atomid then {
         teN9: ast.names.texts.get i: (typeExpr.name - 1).u64
         if (isNumericLiteralName name: teN9.stringview) == false then {
-            reg.recordDemand name: teN9.stringview
-            reg.recordSeededDemand un: (nameIdOf :ast name: unitName) name: typeExpr.name
             (demandDefinition
                 :ty
                 frames: (unitFramesOf :ty :ast currentUnit: unitName)
@@ -3203,11 +3200,6 @@ demandTyperefNames: function {
     } case call then {
         hn: atomName :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64)
         if hn.length > 0 then {
-            reg.recordDemand name: hn.stringview
-            (reg.recordSeededDemand
-                un: (nameIdOf :ast name: unitName)
-                name: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
-            )
             (demandDefinition
                 :ty
                 frames: (unitFramesOf :ty :ast currentUnit: unitName)
@@ -3279,8 +3271,6 @@ resolveTyperefShell: function {
         typeExpr
     ) case atomid then {
         teR9: ast.names.texts.get i: (typeExpr.name - 1).u64
-        reg.recordDemand name: teR9.stringview
-        reg.recordSeededDemand un: (nameIdOf :ast name: unitName) name: typeExpr.name
         (demandDefinition
             :ty
             frames: (unitFramesOf :ty :ast currentUnit: unitName)
@@ -3327,11 +3317,6 @@ resolveTyperefShell: function {
         )
         if imid8 > 0 then return imid8
         suffix: atomName :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64)
-        reg.recordDemand name: suffix.stringview
-        (reg.recordSeededDemand
-            un: (nameIdOf :ast name: unitName)
-            name: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
-        )
         (demandDefinition
             :ty
             frames: (unitFramesOf :ty :ast currentUnit: unitName)
@@ -3368,11 +3353,6 @@ resolveTyperefShell: function {
             n: (ast.nodes.get i: (typeExpr.parent - 1).u64)
         )) then {
             cNm: atomName :ast n: (ast.nodes.get i: (typeExpr.child - 1).u64)
-            reg.recordDemand name: cNm.stringview
-            (reg.recordSeededDemand
-                un: (nameIdOf :ast name: unitName)
-                name: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.child - 1).u64))
-            )
             (demandUnitMember
                 :ty
                 unitNameId: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.parent - 1).u64))
@@ -3708,9 +3688,9 @@ isNativeValueView: function {name: StringView} out bool is {
     return false
 }
 
-# demandReturnType -- record cross-unit demand for a function's return-type base
-# name (`out (Result t: u64 e: IoError)` -> demand "Result"), so a type named only
-# in a return position is resolved. The Option is borrowed, never bound.
+# demandReturnType -- demand a function's return-type names (`out (Result t:
+# u64 e: IoError)` -> Result), so a type named only in a return position is
+# resolved.
 demandReturnType: function {
     ty: ztyping.ZTyping
     ast: Ast.view
@@ -7242,7 +7222,6 @@ unionCustomTagId: function {
                     } case none then {
                         # the tag base resolves later (demand order): record
                         # the demand and a pending fixup for the tag child.
-                        reg.recordDemand name: pn.stringview
                         (demandDefinition
                             :ty
                             frames: (unitFramesOf :ty :ast currentUnit: unitName)
@@ -8714,24 +8693,6 @@ ensureDefGenericParams: function {
     }
 }
 
-# isDeadDepMain -- `main` in a unit that is not the program's main unit. A
-# program has ONE entry point, and the emitter already refuses to emit any other
-# unit's `main`. The demand set is keyed by bare NAME, so the program's own
-# entry point satisfies every unit's, and several units here export `:main` from
-# their public interface besides -- they double as their own smoke harness. What
-# that resolves is dead code, whose body is then scanned for further demands and
-# walked, reporting the helpers it names as unknown references because nothing
-# else reaches them either.
-isDeadDepMain: function {
-    reg: ztypes.ZTypeRegistry.view
-    unitName: StringView
-    defName: StringView
-} out bool is {
-    if (defName == "main") == false then return false
-    mu9: reg.regMainUnit
-    return (unitName == mu9.stringview) == false
-}
-
 descendNamed: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
@@ -8741,7 +8702,6 @@ descendNamed: function {
 } out ztypes.tid is {
     if ty.defNodeIndexBuilt == false then return (ztypes.tid.create from: 0)
     if defUnit == "core" then return (ztypes.tid.create from: 0)
-    if (isDeadDepMain :reg unitName: defUnit defName: name) then return (ztypes.tid.create from: 0)
     ddec9: declOfUnitDef :ty :ast :defUnit :name
     tto9: (optionval.none ztypes.ztypetype)
     if ddec9 > 0 then tto9 = declDefTypetype :ty :ast declId: ddec9
@@ -8835,15 +8795,14 @@ resolveDef: function {
     defn: Node
 } is {
     rdecl0: declOfUnitDef :ty :ast defUnit: unitName name: defName
+    enterUnitOnce :ty :reg :ast :unitName
     # a definition's BODY reaches names its signature does not: a type
     # constructed, or a sibling function called, only inside it must be demanded
     # or it never resolves -- and the body walk then reports a perfectly valid
     # reference as unknown. It goes HERE because every resolver funnels through
-    # resolveDef: the demanded-unit walk, the descent, and the conformance pass,
-    # which resolves any definition carrying an as-block marker (zvfs
-    # FSProvider) and reached none of the per-caller copies of this. recordDemand
-    # is a set add, so a repeat visit costs a probe and cannot grow the registry,
-    # which is what the demand fixpoint measures progress by.
+    # resolveDef: the demand drain, the descent, and the conformance pass. The
+    # scan only queues declarations that are not yet pending, resolving or
+    # resolved, so a repeat visit costs a walk and queues nothing.
     scanDefCalls :ty :ast :reg scanUnit: (nameIdOf :ast name: unitName) op: defn
     ty.declSetResolving declId: rdecl0 mark: true
     # A containment edge is ONE hop: this def's own resolution starts a
@@ -8981,8 +8940,6 @@ resolveDef: function {
         if (reg.isUnitName nameId: apId9) then {
             acNm9: atomName :ast n: (ast.nodes.get i: (defn.child - 1).u64)
             acId9: atomNameId :ast n: (ast.nodes.get i: (defn.child - 1).u64)
-            reg.recordDemand name: acNm9.stringview
-            reg.recordSeededDemand un: (nameIdOf :ast name: unitName) name: acId9
             demandUnitMember :ty unitNameId: apId9 nameId: acId9
             # The alias target is read off the re-export Decl's node on demand
             # (reexportTargetIdsOf); resolution reuses the target's canonical id.
@@ -9364,13 +9321,11 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
     } else null
 }
 
-# demandAllUnitDefs -- demand every top-level definition of a unit. Used
-# when a stdlib unit is the MAIN unit (an editor opened it): its type
-# defs have no in-graph consumers, so nothing would demand them and
-# their signature typerefs would never stamp.
+# demandAllUnitDefs -- demand every top-level definition of a unit (the
+# eager mode: a definition nothing references is still resolved, so an error
+# inside it is reported).
 demandAllUnitDefs: function {
     ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry
     ast: Ast.view
     unitNameId: zast.nameid
     unitdefId: zast.nodeid
@@ -9379,8 +9334,6 @@ demandAllUnitDefs: function {
     with dit9: bodyIds9.iterate do for bm9Id9: dit9 loop {
         bm9: ast.nodes.get i: (bm9Id9 - 1).u64
         if bm9.namedoperation then {
-            dn9: zast.nameTextAt :ast ref: bm9.name
-            if dn9.length > 0 then reg.recordDemand name: dn9.stringview
             demandUnitMember :ty :unitNameId nameId: bm9.name
         }
     }
@@ -9388,12 +9341,8 @@ demandAllUnitDefs: function {
 
 # demandAllDefs -- demand every top-level definition of EVERY unit. Without
 # it a definition nothing references is never resolved, so an error inside
-# it is reported by nothing; the seeds cover system's names only.
-demandAllDefs: function {
-    ty: ztyping.ZTyping.view
-    reg: ztypes.ZTypeRegistry
-    program: Node
-} is {
+# it is reported by nothing.
+demandAllDefs: function {ty: ztyping.ZTyping program: Node} is {
     if (ty.eagerAll) == false then return
     match (
         program
@@ -9413,7 +9362,7 @@ demandAllDefs: function {
                 }
             }
             if duOp9 > 0 then {
-                demandAllUnitDefs :ty :reg ast: program.ast unitNameId: duNm9 unitdefId: duOp9
+                demandAllUnitDefs :ty ast: program.ast unitNameId: duNm9 unitdefId: duOp9
             }
         }
     } else null
@@ -9449,37 +9398,6 @@ noMainError: function {
         hint: eh9
     )
     ty.isError = true
-}
-
-# unitHasDemandedBodiedFn -- a unit carries a top-level bodied function the
-# program actually referenced (its composed key resolved during the demand
-# loop). Gates the runtime-backed units' post-main resolve+walk so programs
-# that never call a bodied stdlib fn stay untouched.
-unitHasDemandedBodiedFn: function {
-    ast: Ast.view
-    ty: ztyping.ZTyping.view
-    reg: ztypes.ZTypeRegistry.view
-    unitName: StringView
-    unitdefId: zast.nodeid
-} out bool is {
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
-    with bit9: bodyIds9.iterate do for bm9Id9: bit9 loop {
-        bm9: ast.nodes.get i: (bm9Id9 - 1).u64
-        if bm9.namedoperation then {
-            if (isFunctionDefWithBody o: (ast.nodes.get i: (bm9.operation - 1).u64)) then {
-                bn9: zast.nameTextAt :ast ref: bm9.name
-                ro9: (resolvedByIds
-                    :ast
-                    :ty
-                    :reg
-                    unitId: (nameIdOf :ast name: unitName)
-                    name: (zast.poolFind pool: ast.names text: bn9.stringview)
-                )
-                if ro9.some then return true
-            }
-        }
-    }
-    return false
 }
 
 # register and resolve the program's main unit.
@@ -9548,205 +9466,6 @@ registerAndResolveMain: function {
     } else null
 }
 
-# resolveDemandedUnitBody -- resolve the definitions of a non-main unit that a
-# main-unit signature referenced (reg.isDemanded) and that aren't resolved yet,
-# stamping them with that unit's name (mirrors the oracle's on-demand resolution).
-resolveDemandedUnitBody: function {
-    ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry
-    ast: Ast.view
-    unitName: StringView
-    shadowUnit: StringView
-    unitdefId: zast.nodeid
-} out bool is {
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
-    # the unit root's tid + Decl: the parent every top-level member hangs
-    # under, read once, exactly as resolveUnitBody reads the same pair.
-    dbPt9: ztypes.tid
-    dbPd9: ztypes.declid
-    {
-        duo9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            duo9
-        ) case some then {
-            dbPt9 = ztypes.tid.create from: duo9
-        } case none then null
-    }
-    {
-        dro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            dro9
-        ) case some then {
-            dbPd9 = dro9
-        } case none then null
-    }
-    # a demand on an EXPORTED name must reach the definition it renames:
-    # `perimeter: perimImpl` records the demand on `perimeter` while the member
-    # to resolve is `perimImpl`. indexDeclPublicEntries already built the
-    # pubDecl --exportedName--> targetDecl edges, so read that block once per
-    # unit -- as publicAliasInternalNames reads it -- and carry the demanded
-    # targets as DeclIds. An exported name never names a member.
-    dbPubT9: (SetVal u64)
-    {
-        dbPn9: publicNsOf :ty :reg tid: dbPt9
-        if (dbPn9.isZero) == false then {
-            dbEn9: (ListVal zast.nameid)
-            dbEd9: (ListVal ztypes.declid)
-            {
-                if (ty.declValid id: dbPn9) then {
-                    dbPo9: ty.decls.get i: (dbPn9 - 1)
-                    with dbCit9: dbPo9.children.iterate do for dbC9: dbCit9 loop {
-                        dbEn9.append from: dbC9.nameId
-                        dbEd9.append from: dbC9.declId
-                    }
-                }
-            }
-            dbEi9: u64
-            dbEc9: dbEn9.length
-            for dbEi9 < dbEc9 loop {
-                dbTd9: dbEd9.get i: dbEi9
-                dbEt9: zast.nameTextAt :ast ref: (dbEn9.get i: dbEi9)
-                dbEi9 = dbEi9 + 1
-                if (reg.isDemanded name: dbEt9.stringview) then dbPubT9.add item: dbTd9.u64
-            }
-        }
-    }
-    anyDemanded: false
-    {
-        biter: bodyIds9.iterate
-        for bm: biter loop {
-            bmNode9: ast.nodes.get i: (bm - 1).u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                dn: zast.nameTextAt :ast ref: bmNode9.name
-                dbDem9: reg.isDemanded name: dn.stringview
-                if (dbDem9) == false then {
-                    dbMd9: ty.declFindChild parentDeclId: dbPd9 nameId: bmNode9.name
-                    if (dbMd9.isZero) == false when (dbPubT9.has item: dbMd9.u64) then dbDem9 = true
-                }
-                # LAST, because the exported-name route above reaches a `main`
-                # too: these units list `:main` in their public block.
-                if (isDeadDepMain
-                    :reg
-                    :unitName
-                    defName: dn.stringview
-                ) then dbDem9 = false
-                if dbDem9 then {
-                    # A name the main unit defines shadows this unit's def --
-                    # unless the unit's own internals demand it (seeded io
-                    # names): the reference resolves those io-locally.
-                    shadowed: false
-                    if shadowUnit.length != 0 then {
-                        sgot: (resolvedByIds
-                            :ast
-                            :ty
-                            :reg
-                            unitId: (nameIdOf :ast name: shadowUnit)
-                            name: (zast.poolFind pool: ast.names text: dn.stringview)
-                        )
-                        match (
-                            sgot
-                        ) case some then {
-                            shadowed = true
-                        } case none then null
-                    }
-                    dnId9: nameIdOf :ast name: dn.stringview
-                    if shadowed when (reg.isSeededDemand
-                        un: (nameIdOf :ast name: unitName)
-                        name: dnId9
-                    ) then shadowed = false
-                    if shadowed when (reg.isSeededDemand
-                        un: (zast.nameid.create from: 0)
-                        name: dnId9
-                    ) then shadowed = false
-                    if (shadowed) == false then {
-                        anyDemanded = true
-                        if (defWasResolved
-                            :ty
-                            :ast
-                            defUnit: unitName
-                            nameId: bmNode9.name
-                        ) == false then {
-                            # dispatch by KIND, as resolveUnitBody and
-                            # resolveNamespaceUnit do. This path had one arm and
-                            # one call, so a namespace or a template in a
-                            # demand-resolved unit reached resolveDef, which
-                            # knows neither shape. Nothing could declare one
-                            # here while the eager pass covered every user unit;
-                            # retiring that list makes this the only path.
-                            dIsNs9: false
-                            if (zast.unitOpKindIs
-                                :ast
-                                opId: bmNode9.operation
-                                k: zast.unitkind.namespace
-                            ) then dIsNs9 = true
-                            if (zast.unitOpKindIs
-                                :ast
-                                opId: bmNode9.operation
-                                k: zast.unitkind.subunit
-                            ) then dIsNs9 = true
-                            dIsTmpl9: (zast.unitOpKindIs
-                                :ast
-                                opId: bmNode9.operation
-                                k: zast.unitkind.template
-                            )
-                            if dIsNs9 then {
-                                (resolveNamespaceUnit
-                                    :ty
-                                    :reg
-                                    :ast
-                                    :unitName
-                                    defName: dn.stringview
-                                    parentTid: dbPt9
-                                    parentDeclId: dbPd9
-                                    unitOpId: bmNode9.operation
-                                )
-                            } else if dIsTmpl9 then {
-                                (resolveInlineGenericUnit
-                                    :ty
-                                    :reg
-                                    :ast
-                                    :unitName
-                                    defName: dn.stringview
-                                    parentTid: dbPt9
-                                    parentDeclId: dbPd9
-                                    unitOpId: bmNode9.operation
-                                )
-                            } else {
-                                (resolveDef
-                                    :ty
-                                    :reg
-                                    :ast
-                                    :unitName
-                                    defName: dn.stringview
-                                    defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-                                )
-                            }
-                            # mark it done. resolveDef marks its own; the two
-                            # unit legs do not, and this walk runs to a fixpoint
-                            # -- a leg that re-resolves is not merely wasteful,
-                            # it never terminates.
-                            dAnyU9: dIsNs9
-                            if dIsTmpl9 then dAnyU9 = true
-                            if dAnyU9 then {
-                                dmd9: (ty.declFindChild
-                                    parentDeclId: dbPd9
-                                    nameId: bmNode9.name
-                                )
-                                if (dmd9.isZero) == false then {
-                                    ty.declSetDefined declId: dmd9
-                                }
-                            }
-                        }
-                    }
-                }
-            } else null
-        }
-    }
-    return anyDemanded
-}
-
 # isConformanceMarker -- true when an as-item operation is a bare type reference
 # (atomid / labelvalue), i.e. a conformance marker like `:Text` or `m: Reader`.
 isConformanceMarker: function {op: Node.view} out bool is {
@@ -9782,39 +9501,52 @@ declaresConformance: function {ast: Ast.view op: Node.view} out bool is {
     }
 }
 
-# resolveConformanceDefs -- resolve every not-yet-resolved unit def that declares a
-# conformance marker, mirroring the oracle's eager conformance pass. Only `str`
-# (`:Text`) qualifies in collections today; called when the unit was demanded at all.
-resolveConformanceDefs: function {
-    ty: ztyping.ZTyping.view
+# enterUnitOnce -- a dependency unit's one-time pass, the first time any of
+# its definitions resolves, whoever resolves it: demand the conformance
+# declarers reference-following cannot reach (zvfs FSProvider) and the return
+# / never the walk of its bodies uses. Not a property of the unit's NAME: a
+# conformer is as unreachable in a user dependency as it is in collections.
+# Queued, not resolved here: this runs inside whatever resolution reached the
+# unit first, and the drain resolves them at the top level.
+enterUnitOnce: function {
+    ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     ast: Ast.view
     unitName: StringView
-    unitdefId: zast.nodeid
 } is {
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
-    biter: bodyIds9.iterate
-    for bm: biter loop {
-        bmNode9: ast.nodes.get i: (bm - 1).u64
-        if bmNode9.namedoperation then {
-            if (declaresConformance
-                :ast
-                op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-            ) then {
-                dn: zast.nameTextAt :ast ref: bmNode9.name
-                if (defWasResolved :ty :ast defUnit: unitName nameId: bmNode9.name) == false then {
-                    (resolveDef
-                        :ty
-                        :reg
+    if unitName == "core" then return
+    uid9: nameIdOf :ast name: unitName
+    if uid9.isZero then return
+    if (ty.enteredUnits.has item: uid9.u64) then return
+    ty.enteredUnits.add item: uid9.u64
+    if uid9.u64 == reg.regMainUnitId then return
+    ro9: ty.unitRootByName.get key: uid9.u64
+    match (
+        ro9
+    ) case some then {
+        uop9: zast.nodeid
+        {
+            rdo9: ty.decls.get i: (ro9 - 1)
+            unop9: ast.nodes.get i: (rdo9.node.u64 - 1)
+            if unop9.namedoperation then uop9 = unop9.operation
+        }
+        if (uop9.isZero) == false then {
+            bodyIds9: zast.unitBodyIdsAt :ast unitId: uop9
+            with biter9: bodyIds9.iterate do for bm9: biter9 loop {
+                bmNode9: ast.nodes.get i: (bm9 - 1).u64
+                if bmNode9.namedoperation then {
+                    if (declaresConformance
                         :ast
-                        :unitName
-                        defName: dn.stringview
-                        defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                        op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                    ) then (demandDecl
+                        :ty
+                        declId: (ty.declFindChild parentDeclId: ro9 nameId: bmNode9.name)
                     )
                 }
             }
         }
-    }
+    } case none then null
+    demandReturnNever :ty :ast
 }
 
 # stampCtorDefaults -- a construction fills unprovided defaulted fields: the
@@ -10250,8 +9982,33 @@ unitTidOfName9: function {
 # resolveDemandedDefs -- resolve every demanded declaration, in discovery
 # order, including the ones each resolution demands in turn: a definition's
 # body is scanned once its own resolution completes, so a callee is never
-# resolved inside its caller's grey window. Runs at the top level only.
+# resolved inside its caller's grey window. A drain that is already running
+# resolves whatever a nested request queued, so the nested call returns.
 resolveDemandedDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry ast: Ast} is {
+    if ty.drainingDefs then return
+    if ty.pendingDefs.length == 0 then return
+    ty.drainingDefs = true
+    # a drain runs in a neutral resolution context: it may be requested from
+    # inside a body walk, whose namespace / template / containment state
+    # belongs to that body, not to the definitions resolved here
+    pNsT9: ty.nsOwnerTid
+    pNsD9: ty.nsOwnerDeclId
+    pNsN9: ty.nsOwnerName.copy
+    pNsU9: ty.nsOwnerUnit.copy
+    pNsS9: ty.nsOwnerIsSubunit
+    pCe9: ty.inContainmentEdge
+    pSup9: ty.suppressParamStamps
+    pMs9: ty.curMonoStamp
+    pMf9: ty.curMonoFnTid
+    ty.nsOwnerTid = ztypes.tid
+    ty.nsOwnerDeclId = ztypes.declid
+    ty.nsOwnerName = "".string
+    ty.nsOwnerUnit = "".string
+    ty.nsOwnerIsSubunit = false
+    ty.inContainmentEdge = false
+    ty.suppressParamStamps = false
+    ty.curMonoStamp = 0
+    ty.curMonoFnTid = ztypes.tid
     i9: u64
     for i9 < ty.pendingDefs.length loop {
         d9: ty.pendingDefs.get i: i9
@@ -10259,12 +10016,28 @@ resolveDemandedDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry ast
         resolveDemandedDecl :ty :reg :ast declId: d9
     }
     ty.pendingDefs = (ListVal ztypes.declid)
+    # after the post-demand stamp pass, a drain stamps what it recorded
+    if ty.typerefPassRan then {
+        stampPendingTyperefs :ty :reg :ast mainName: reg.regMainUnit.stringview
+    }
+    ty.nsOwnerTid = pNsT9
+    ty.nsOwnerDeclId = pNsD9
+    ty.nsOwnerName = pNsN9
+    ty.nsOwnerUnit = pNsU9
+    ty.nsOwnerIsSubunit = pNsS9
+    ty.inContainmentEdge = pCe9
+    ty.suppressParamStamps = pSup9
+    ty.curMonoStamp = pMs9
+    ty.curMonoFnTid = pMf9
+    ty.drainingDefs = false
 }
 
-# scanCallsInNode -- recursively record demands for the call targets in an
-# expression/statement subtree (the body-walk pre-pass): `return` pulls
-# return+never, any other bare-atom callable (e.g. `print`) is demanded by name
-# so the cross-unit pass resolves it before the walk runs.
+# scanCallsInNode -- the body-walk pre-pass: every name a subtree references
+# demands the definition the scanning unit's environment holds for it, so the
+# callee is resolved before the walk runs. A bare callable or atom walks the
+# unit's frames (unit, then prelude); a qualified unit.member goes straight to
+# that unit's member; `return` pulls return and never. A local variable or a
+# member finds no definition and demands nothing.
 scanCallsInNode: function {
     ty: ztyping.ZTyping
     ast: Ast.view
@@ -10291,23 +10064,14 @@ scanCallsInNode: function {
     } case call then {
         cn: atomName :ast n: (ast.nodes.get i: (node.callable - 1).u64)
         if cn.stringview == "return" then {
-            reg.recordDemand name: "return"
-            reg.recordDemand name: "never"
             scFr9: unitFramesOfId :ty unitNameId: scanUnit
             demandDefinition :ty frames: scFr9 nameId: zast.wkReturn
             demandDefinition :ty frames: scFr9 nameId: (zast.poolFind pool: ast.names text: "never")
         } else {
-            if cn.length > 0 then reg.recordDemand name: cn.stringview
             if cn.length > 0 then (demandDefinition
                 :ty
                 frames: (unitFramesOfId :ty unitNameId: scanUnit)
                 nameId: (atomNameId :ast n: (ast.nodes.get i: (node.callable - 1).u64))
-            )
-            # a bare callable in unit U's body is U's own internal demand:
-            # record it per-unit so U's def survives a main-unit shadow
-            if cn.length > 0 when (scanUnit.isZero) == false then (reg.recordUnitDemand
-                un: scanUnit
-                name: (atomNameId :ast n: (ast.nodes.get i: (node.callable - 1).u64))
             )
         }
         scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.callable - 1).u64)
@@ -10334,8 +10098,6 @@ scanCallsInNode: function {
         # data blocks); non-definition names never match a demanded def.
         scN9: ast.names.texts.get i: (node.name - 1).u64
         if (isNumericLiteralName name: scN9.stringview) == false then {
-            reg.recordDemand name: scN9.stringview
-            if (scanUnit.isZero) == false then reg.recordUnitDemand un: scanUnit name: node.name
             demandDefinition :ty frames: (unitFramesOfId :ty unitNameId: scanUnit) nameId: node.name
         }
     } case binop then {
@@ -10360,7 +10122,6 @@ scanCallsInNode: function {
         }
         scanBodyAt :ty :ast :reg :scanUnit bodyId: node.elseclause
     } case forexpr then {
-        reg.recordDemand name: "never"
         (demandDefinition
             :ty
             frames: (unitFramesOfId :ty unitNameId: scanUnit)
@@ -10396,11 +10157,9 @@ scanCallsInNode: function {
             } else null
         }
     } case doexpr then {
-        reg.recordDemand name: "never"
         doFr9: unitFramesOfId :ty unitNameId: scanUnit
         demandDefinition :ty frames: doFr9 nameId: (zast.poolFind pool: ast.names text: "never")
         if (blockHasBreak :ast n: (ast.nodes.get i: (node.statement - 1).u64)) then {
-            reg.recordDemand name: "optionval"
             (demandDefinition
                 :ty
                 frames: doFr9
@@ -10421,27 +10180,18 @@ scanCallsInNode: function {
     } case dottedpath then {
         bn: atomName :ast n: (ast.nodes.get i: (node.parent - 1).u64)
         if bn.length > 0 then {
-            reg.recordDemand name: bn.stringview
             (demandDefinition
                 :ty
                 frames: (unitFramesOfId :ty unitNameId: scanUnit)
                 nameId: (atomNameId :ast n: (ast.nodes.get i: (node.parent - 1).u64))
             )
-            # a unit-qualified member (io.stdout) demands the member name
-            # so the unit's demand walk resolves it
+            # a unit-qualified member (io.stdout) demands exactly that member
             isUnitQ: reg.isUnitName nameId: (atomNameId
                 :ast
                 n: (ast.nodes.get i: (node.parent - 1).u64)
             )
             if isUnitQ then {
                 mn0: atomName :ast n: (ast.nodes.get i: (node.child - 1).u64)
-                if mn0.length > 0 then reg.recordDemand name: mn0.stringview
-                # a qualified reference names its unit: un-shadow exactly that
-                # member, so `unit.member` resolves though main defines `member`
-                if mn0.length > 0 then (reg.recordUnitDemand
-                    un: (atomNameId :ast n: (ast.nodes.get i: (node.parent - 1).u64))
-                    name: (atomNameId :ast n: (ast.nodes.get i: (node.child - 1).u64))
-                )
                 if mn0.length > 0 then (demandUnitMember
                     :ty
                     unitNameId: (atomNameId :ast n: (ast.nodes.get i: (node.parent - 1).u64))
@@ -10542,43 +10292,6 @@ scanDefCalls: function {
     } else null
 }
 
-# scanDemandedDepClassBodies -- a dependency unit's DEMANDED class methods are
-# body-walked (depWalkUnit), so a type constructed only inside those methods
-# (e.g. zvfs ProviderTable.registerNull -> NullProvider) must be demanded here
-# or it never resolves and the construction stamps type 0. Mirrors scanDefCalls
-# over the reached (isDemanded) non-generic objectdef members; the cross-unit
-# demand fixpoint then resolves the newly-demanded types and depWalkUnit walks
-# them. The isDemanded gate matches the reference's reached-only closure.
-scanDemandedDepClassBodies: function {
-    ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry
-    ast: Ast.view
-    scanUnit: zast.nameid
-    unitdefId: zast.nodeid
-} is {
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
-    for bmId9: bodyIds9.iterate loop {
-        bm: ast.nodes.get i: (bmId9 - 1).u64
-        if bm.namedoperation then {
-            cn: zast.nameTextAt :ast ref: bm.name
-            if (reg.isDemanded name: cn.stringview) then {
-                hasm: objectdefHasMethodBodies :ast op: (ast.nodes.get i: (bm.operation - 1).u64)
-                if hasm when (objectdefIsGeneric
-                    :ast
-                    o: (ast.nodes.get i: (bm.operation - 1).u64)
-                ) then hasm = false
-                if hasm then (scanDefCalls
-                    :ty
-                    :ast
-                    :reg
-                    :scanUnit
-                    op: (ast.nodes.get i: (bm.operation - 1).u64)
-                )
-            }
-        }
-    }
-}
-
 # scanMainBodyCalls -- record call-target demands for every function body in the
 # main unit (the body walk reaches them; demand must precede the pass).
 scanMainBodyCalls: function {
@@ -10647,7 +10360,6 @@ scanUnitCalls: function {
     }
 }
 
-# seed the demand queue with the bodies that must be walked to resolve.
 # demandReturnNever -- the builtins a walked or synthesized body uses without
 # naming them in source: system's `return` and its `never` result.
 demandReturnNever: function {ty: ztyping.ZTyping ast: Ast.view} is {
@@ -10656,7 +10368,7 @@ demandReturnNever: function {ty: ztyping.ZTyping ast: Ast.view} is {
     demandUnitMember :ty unitNameId: sysId9 nameId: (zast.poolFind pool: ast.names text: "never")
 }
 
-seedBodyWalkDemands: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+seedBodyWalkDemands: function {ty: ztyping.ZTyping program: Node} is {
     match (
         program
     ) case program then {
@@ -10677,38 +10389,8 @@ seedBodyWalkDemands: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry pro
                 }
             } else null
         }
-        if found then {
-            reg.recordDemand name: "return"
-            reg.recordDemand name: "never"
-            demandReturnNever :ty ast: program.ast
-        }
+        if found then demandReturnNever :ty ast: program.ast
     } else null
-}
-
-# onFirstEntry -- run a unit's one-time demand machinery the first time the
-# descent worklist resolves a def in it: resolve the conformance declarers
-# reference-following cannot reach, and prime the unit's return / never demands
-# plus its class-body call scan. Which of those a unit needs is not a property
-# of its NAME -- a conformer is as unreachable in a user dependency as it is in
-# collections, and a demanded class body is as worth scanning in io -- so every
-# unit gets all three. The entered set is what keeps this once-per-unit, and it
-# has to: the demand fixpoint's progress test is whether the registry grew, and
-# resolveConformanceDefs mints.
-onFirstEntry: function {
-    ty: ztyping.ZTyping.view
-    reg: ztypes.ZTypeRegistry
-    ast: Ast.view
-    unitName: StringView
-    unitdefId: zast.nodeid
-    entered: Set String
-} is {
-    if (entered.has item: unitName.string) then return
-    entered.add item: unitName.string
-    resolveConformanceDefs :ty :reg :ast :unitName :unitdefId
-    reg.recordDemand name: "return"
-    reg.recordDemand name: "never"
-    demandReturnNever :ty :ast
-    scanDemandedDepClassBodies :ty :reg :ast :unitdefId scanUnit: (nameIdOf :ast name: unitName)
 }
 
 # seedConstantSuffixDemands -- a unit constant whose literal carries a type
@@ -10716,11 +10398,7 @@ onFirstEntry: function {
 # demand walk, so without this seed a typedef used nowhere else stays
 # undemanded, the constant registers no type, and every read of it reports an
 # unknown reference instead.
-seedConstantSuffixDemands: function {
-    ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry
-    program: Node
-} is {
+seedConstantSuffixDemands: function {ty: ztyping.ZTyping program: Node} is {
     match (
         program
     ) case program then {
@@ -10755,8 +10433,6 @@ seedConstantSuffixDemands: function {
                                 match (
                                     cS9
                                 ) case atomid then {
-                                    tnS9: zast.nameTextAt ast: program.ast ref: cS9.name
-                                    if tnS9.length > 0 then reg.recordDemand name: tnS9.stringview
                                     (demandDefinition
                                         :ty
                                         frames: (unitFramesOfId :ty unitNameId: uS9.name)
@@ -10772,104 +10448,20 @@ seedConstantSuffixDemands: function {
     } else null
 }
 
-# resolveDemandsByDescent -- the descent-era demand worklist. Seeds the body-walk
-# demands, then body-drains the main unit and every dependency unit
-# except core to a joint fixpoint; each resolved def's own references descend
-# inline (resolveAtomType -> descendNamed), so per-unit body order only decides
-# trigger order, not dependency order. The tail resolves core's bool
-# re-exports explicitly (descent skips core).
-resolveDemandsByDescent: function {
-    ty: ztyping.ZTyping.view
+# resolveDemands -- resolve everything the program has demanded so far, and
+# everything those resolutions demand in turn: the body-walk seeds first, then
+# the queue to exhaustion. Each unit's one-time conformance pass runs from the
+# drain the first time one of its definitions resolves.
+resolveDemands: function {
+    ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     program: Node
 } is {
-    seedBodyWalkDemands :ty :reg :program
-    entered9: (Set String)
-    mnOwn9: reg.regMainUnit
-    mainName9: mnOwn9.stringview
+    seedBodyWalkDemands :ty :program
     match (
         program
     ) case program then {
-        {
-            mdN9: program.ast.units.length
-            mdI9: u64
-            for mdI9 < mdN9 loop {
-                mu9Id9: (zast.nodeid.create from: (program.ast.units.get i: mdI9))
-                mdI9 = mdI9 + 1
-                mOpId9: zast.nodeid
-                {
-                    mu9: program.ast.nodes.get i: (mu9Id9 - 1).u64
-                    if mu9.namedoperation then {
-                        mnm9: zast.poolTextAt pool: program.ast.names ref: mu9.name
-                        if mnm9.stringview == mainName9 then mOpId9 = mu9.operation
-                    }
-                }
-                if mOpId9 > 0 then {
-                    againM9: true
-                    for againM9 loop {
-                        beforeM9: reg.nextTypeId
-                        resolveDemandedDefs :ty :reg ast: program.ast
-                        (resolveDemandedUnitBody
-                            :ty
-                            :reg
-                            ast: program.ast
-                            unitName: mainName9
-                            shadowUnit: ""
-                            unitdefId: mOpId9
-                        )
-                        if reg.nextTypeId == beforeM9 then againM9 = false
-                    }
-                }
-            }
-        }
-        againU9: true
-        for againU9 loop {
-            beforeU9: reg.nextTypeId
-            resolveDemandedDefs :ty :reg ast: program.ast
-            udN9: program.ast.units.length
-            udI9: u64
-            for udI9 < udN9 loop {
-                u9Id9: (zast.nodeid.create from: (program.ast.units.get i: udI9))
-                udI9 = udI9 + 1
-                uOpId9: zast.nodeid
-                un9: String
-                {
-                    u9: program.ast.nodes.get i: (u9Id9 - 1).u64
-                    if u9.namedoperation then {
-                        un0: zast.poolTextAt pool: program.ast.names ref: u9.name
-                        isDep0: true
-                        if un0.stringview == mainName9 then isDep0 = false
-                        if un0.stringview == "core" then isDep0 = false
-                        if isDep0 then {
-                            uOpId9 = u9.operation
-                            un9 = un0.copy
-                        }
-                    }
-                }
-                if uOpId9 > 0 then {
-                    resolveDemandedDefs :ty :reg ast: program.ast
-                    anyDem9: (resolveDemandedUnitBody
-                        :ty
-                        :reg
-                        ast: program.ast
-                        unitName: un9.stringview
-                        shadowUnit: mainName9
-                        unitdefId: uOpId9
-                    )
-                    if anyDem9 then {
-                        (onFirstEntry
-                            :ty
-                            :reg
-                            ast: program.ast
-                            unitName: un9.stringview
-                            unitdefId: uOpId9
-                            entered: entered9
-                        )
-                    }
-                }
-            }
-            if reg.nextTypeId == beforeU9 then againU9 = false
-        }
+        resolveDemandedDefs :ty :reg ast: program.ast
     } else null
 }
 
@@ -11786,8 +11378,6 @@ synthGeneratorIterClass: function {
             nameId: (zast.poolSet pool: ast.names text: dn.stringview)
         )
     }
-    reg.recordDemand name: "return"
-    reg.recordDemand name: "never"
     demandReturnNever :ty :ast
 }
 
@@ -11823,8 +11413,8 @@ resolveNamespaceUnit: function {
     if nameRef9.isZero then return
     udnid9: unitdefNodeId :ast nId: unitOpId
     if udnid9.isZero then return
-    # reg.newType has no dedup and resolveDemandsByDescent runs its unit loop
-    # to a fixpoint, so the node stamp is what makes a second visit a no-op.
+    # reg.newType has no dedup and a namespace can be demanded again after it
+    # resolved, so the node stamp is what makes a second visit a no-op.
     uid9: ztypes.tid
     {
         prev9: ztyping.nodeTypeAt tbl: ty.nodeType nid: udnid9.u64
@@ -11958,11 +11548,9 @@ resolveInlineGenericUnit: function {
     # A (unit, name) walk reaches only the first.
     nRef5: zast.poolFind pool: ast.names text: defName
     tdl5: ty.declFindChild :parentDeclId nameId: nRef5
-    # reg.newType has no dedup and the demand walk runs its unit loop to a
-    # FIXPOINT whose progress test is whether the registry GREW, so a second
-    # visit must mint nothing at all -- guarding after the mint is not a no-op,
-    # it is the engine of the non-termination. resolveNamespaceUnit carries the
-    # equivalent node-stamp guard for the same reason. The Decl below records
+    # reg.newType has no dedup and a template can be demanded again after it
+    # resolved, so a second visit must mint nothing at all. resolveNamespaceUnit
+    # carries the equivalent node-stamp guard. The Decl below records
     # the id this minted, so it is the durable "already done" mark.
     if (declTypeIdOf :ty declId: tdl5) > 0 then return
     {
@@ -12168,8 +11756,6 @@ createUnitMono: function {
             }
         }
         attachMonoUnitFuncs :ty :reg :ast :monoId :templateOpId
-        reg.recordDemand name: "return"
-        reg.recordDemand name: "never"
         demandReturnNever :ty :ast
     }
 }
@@ -13360,136 +12946,155 @@ stampTyperefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
     match (
         program
     ) case program then {
-        mainName: program.mainUnitName.stringview
-        pkeys9: (ListVal u64)
-        pvals9: (List String)
-        with it: ty.pendingTyperef.iterateItems do for e: it loop {
+        stampPendingTyperefs :ty :reg ast: program.ast mainName: program.mainUnitName.stringview
+        ty.typerefPassRan = true
+    } else null
+}
+
+# stampPendingTyperefs -- stamp the type-ref nodes recorded since the last
+# call (pendingTyperef is append-only and iterates in insertion order, so a
+# count is the cursor). The first call is the post-demand pass; a definition
+# resolved after it -- from a drain during the body walk -- records its
+# type-refs the same way, and the drain re-runs this over the new tail.
+stampPendingTyperefs: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    mainName: StringView
+} is {
+    pkeys9: (ListVal u64)
+    pvals9: (List String)
+    seen9: u64
+    with it: ty.pendingTyperef.iterateItems do for e: it loop {
+        seen9 = seen9 + 1
+        if seen9 > ty.typerefsStamped then {
             pk9: e.key
             pkeys9.append pk9
             pv9: e.value.copy
             pvals9.append pv9
         }
-        gpNames9: (Set String)
-        gpiN9: 1.u64
-        gpLast9: reg.nextTypeId
-        for gpiN9 < gpLast9 loop {
-            if (reg.typetypeOf typeId: (ztypes.tid.create from: gpiN9.u64)) == ztypes.ztypetype.genericParam then {
-                gnm9: reg.nameOf tid: (ztypes.tid.create from: gpiN9.u64)
-                if gnm9.length > 0 then gpNames9.add item: gnm9
-            }
-            gpiN9 = gpiN9 + 1
+    }
+    ty.typerefsStamped = seen9
+    gpNames9: (Set String)
+    gpiN9: 1.u64
+    gpLast9: reg.nextTypeId
+    for gpiN9 < gpLast9 loop {
+        if (reg.typetypeOf typeId: (ztypes.tid.create from: gpiN9.u64)) == ztypes.ztypetype.genericParam then {
+            gnm9: reg.nameOf tid: (ztypes.tid.create from: gpiN9.u64)
+            if gnm9.length > 0 then gpNames9.add item: gnm9
         }
-        pi9: u64
-        pcnt9: pkeys9.length
-        for pi9 < pcnt9 loop {
-            uk: pkeys9.get i: pi9
-            pval9: pvals9.get i: pi9
-            pi9 = pi9 + 1
-            originOwn9: String
-            {
-                uo: ty.pendingTyperefUnit.get key: uk
-                match (
-                    uo
-                ) case some then {
-                    if uo.length > 0 then originOwn9 = uo.copy
-                } case none then null
-            }
-            origin: mainName
-            if originOwn9.length > 0 then origin = originOwn9.stringview
-            skip0: false
-            {
-                sk0: ty.noStampNode.get key: uk
-                match (
-                    sk0
-                ) case some then {
-                    if sk0 then skip0 = true
-                } case none then null
-            }
-            if (skip0) == false then {
-                r: (walkLookupTyperef
-                    ast: program.ast
+        gpiN9 = gpiN9 + 1
+    }
+    pi9: u64
+    pcnt9: pkeys9.length
+    for pi9 < pcnt9 loop {
+        uk: pkeys9.get i: pi9
+        pval9: pvals9.get i: pi9
+        pi9 = pi9 + 1
+        originOwn9: String
+        {
+            uo: ty.pendingTyperefUnit.get key: uk
+            match (
+                uo
+            ) case some then {
+                if uo.length > 0 then originOwn9 = uo.copy
+            } case none then null
+        }
+        origin: mainName
+        if originOwn9.length > 0 then origin = originOwn9.stringview
+        skip0: false
+        {
+            sk0: ty.noStampNode.get key: uk
+            match (
+                sk0
+            ) case some then {
+                if sk0 then skip0 = true
+            } case none then null
+        }
+        if (skip0) == false then {
+            r: (walkLookupTyperef
+                :ast
+                :ty
+                :reg
+                currentUnit: origin
+                base: pval9.stringview
+            )
+            match (
+                r
+            ) case some then {
+                nid: uk
+                ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: (ztypes.tid.create from: r.u64)
+                # every resolved type reference records the declaration it
+                # names (refDecl), for go-to-definition (bare + dotted);
+                # codegen-inert -- a type-annotation atom is never emitted
+                # as an expression.
+                sfNmB9: zast.poolFind pool: ast.names text: pval9.stringview
+                sfB9: (declSurfaceOfName
+                    :ty
+                    :reg
+                    :ast
+                    currentUnit: origin
+                    nameId: sfNmB9
+                    tid: (ztypes.tid.create from: r.u64)
+                )
+                stampRefDecl :ty :nid declId: sfB9
+            } case none then {
+                # a signature typeref that resolves NOWHERE after every
+                # demand pass names a nonexistent type. Template param
+                # names are exempt: their pendings feed mono substitution
+                # and resolve per instantiation (a dead-signature typo
+                # that collides with some template's param name is the
+                # accepted blind spot).
+                if (gpNames9.has item: pval9.copy) then continue
+                urHit9: (nameClaimedByScope
+                    :ast
                     :ty
                     :reg
                     currentUnit: origin
-                    base: pval9.stringview
+                    name: pval9.stringview
                 )
-                match (
-                    r
-                ) case some then {
-                    nid: uk
-                    ztyping.nodeTypeSet tbl: ty.nodeType :nid tid: (ztypes.tid.create from: r.u64)
-                    # every resolved type reference records the declaration it
-                    # names (refDecl), for go-to-definition (bare + dotted);
-                    # codegen-inert -- a type-annotation atom is never emitted
-                    # as an expression.
-                    sfNmB9: zast.poolFind pool: program.ast.names text: pval9.stringview
-                    sfB9: (declSurfaceOfName
-                        :ty
-                        :reg
-                        ast: program.ast
-                        currentUnit: origin
-                        nameId: sfNmB9
-                        tid: (ztypes.tid.create from: r.u64)
-                    )
-                    stampRefDecl :ty :nid declId: sfB9
-                } case none then {
-                    # a signature typeref that resolves NOWHERE after every
-                    # demand pass names a nonexistent type. Template param
-                    # names are exempt: their pendings feed mono substitution
-                    # and resolve per instantiation (a dead-signature typo
-                    # that collides with some template's param name is the
-                    # accepted blind spot).
-                    if (gpNames9.has item: pval9.copy) then continue
-                    urHit9: (nameClaimedByScope
-                        ast: program.ast
-                        :ty
-                        :reg
-                        currentUnit: origin
-                        name: pval9.stringview
-                    )
-                    if urHit9 == false when pval9.stringview == "Any" then {
-                        # `Any` is not user-reachable through the closure:
-                        # only a scope claim (its own unit defining it)
-                        # resolves it, so an unclaimed `Any` reports.
-                        urHit9 = false
-                    } else if urHit9 == false then {
-                        # closure-wide: a bare name may resolve to a member
-                        # of ANY loaded unit (the demand resolvers search
-                        # the closure; the typeref walk does not)
-                        pvId9: nameIdOf ast: program.ast name: pval9.stringview
-                        with uit9: reg.unitNameTid.iterateItems do for ue9: uit9 loop {
-                            if urHit9 == false then {
-                                uro2: (resolvedByIds
-                                    ast: program.ast
-                                    :ty
-                                    :reg
-                                    unitId: (zast.nameid.create from: ue9.key.u32.orPanic)
-                                    name: pvId9
-                                )
-                                match (
-                                    uro2
-                                ) case some then {
-                                    urHit9 = true
-                                } case none then null
-                            }
+                if urHit9 == false when pval9.stringview == "Any" then {
+                    # `Any` is not user-reachable through the closure:
+                    # only a scope claim (its own unit defining it)
+                    # resolves it, so an unclaimed `Any` reports.
+                    urHit9 = false
+                } else if urHit9 == false then {
+                    # closure-wide: a bare name may resolve to a member
+                    # of ANY loaded unit (the demand resolvers search
+                    # the closure; the typeref walk does not)
+                    pvId9: nameIdOf :ast name: pval9.stringview
+                    with uit9: reg.unitNameTid.iterateItems do for ue9: uit9 loop {
+                        if urHit9 == false then {
+                            uro2: (resolvedByIds
+                                :ast
+                                :ty
+                                :reg
+                                unitId: (zast.nameid.create from: ue9.key.u32.orPanic)
+                                name: pvId9
+                            )
+                            match (
+                                uro2
+                            ) case some then {
+                                urHit9 = true
+                            } case none then null
                         }
                     }
-                    if urHit9 then continue
-                    un9: program.ast.nodes.get i: (uk - 1)
-                    um9: "Unknown type '\{pval9}'"
-                    (addResolveErrorH
-                        :ty
-                        nodeid: (nodeId n: un9)
-                        lineno: (nodeLine n: un9)
-                        colno: (nodeCol n: un9)
-                        e: zast.err.badReference
-                        msg: um9
-                        width: pval9.length.u32.orPanic
-                    )
                 }
+                if urHit9 then continue
+                un9: ast.nodes.get i: (uk - 1)
+                um9: "Unknown type '\{pval9}'"
+                (addResolveErrorH
+                    :ty
+                    nodeid: (nodeId n: un9)
+                    lineno: (nodeLine n: un9)
+                    colno: (nodeCol n: un9)
+                    e: zast.err.badReference
+                    msg: um9
+                    width: pval9.length.u32.orPanic
+                )
             }
         }
-    } else null
+    }
 }
 
 # ownershipOfParam -- a parameter's binding ownership from its path annotation:
@@ -19346,8 +18951,7 @@ materialiseLiteral: function {
     # a bare literal in a value context with no expected type IS `42.i64`: it
     # demands its own default scalar, the way the suffixed form and the
     # literal-NAME form (resolveNamedType) already do. Without this nothing
-    # demands i64 for `x: 42` -- the demand pass is name-driven and a literal
-    # names nothing.
+    # demands i64 for `x: 42` -- a literal names nothing.
     dn9: descendNamed ty: st.typing reg: st.reg :ast defUnit: "system" name: base
     if dn9 > 0 then return dn9
     return (ztypes.tid.create from: t)
@@ -26625,6 +26229,15 @@ checkFunctionBody: function {
     match (
         defn
     ) case functiondef then {
+        # a body is walked only once everything demanded so far has resolved:
+        # an owner or function resolved late (from a walk) queued what its
+        # bodies reference, and those must be resolved before those bodies are
+        # walked, exactly as the early ones were.
+        # a body is walked only once everything demanded so far has resolved:
+        # an owner or function resolved late (from a walk) queued what its
+        # bodies reference, and those must be resolved before those bodies are
+        # walked, exactly as the early ones were.
+        resolveDemandedDefs ty: st.typing reg: st.reg :ast
         # Claim this definition BEFORE the trigger runs. The trigger now walks
         # a free function's body, and the body it would walk here is the one
         # already being walked -- checkFunctionBody calls it with its OWN name.
@@ -26999,39 +26612,6 @@ checkFunctionBody: function {
     } else null
 }
 
-# resolveDemandedStdDeps -- one resolve sweep over the runtime-backed dep
-# units (post-main): resolves whatever their bodied free fns' demands
-# recorded, mirroring the registerAndResolveMain demand driver.
-resolveDemandedStdDeps: function {
-    ty: ztyping.ZTyping.view
-    reg: ztypes.ZTypeRegistry.view
-    ast: Ast.view
-} is {
-    n9: ast.units.length
-    i9: u64
-    for i9 < n9 loop {
-        u9Id9: (zast.nodeid.create from: (ast.units.get i: i9))
-        u9: ast.nodes.get i: (u9Id9 - 1).u64
-        i9 = i9 + 1
-        match (
-            u9
-        ) case namedoperation then {
-            un9: zast.nameTextAt :ast ref: u9.name
-            if (isStdlibUnitName name: un9.stringview) then {
-                resolveDemandedDefs :ty :reg :ast
-                (resolveDemandedUnitBody
-                    :ty
-                    :reg
-                    :ast
-                    unitName: un9.stringview
-                    shadowUnit: ""
-                    unitdefId: u9.operation
-                )
-            }
-        } else null
-    }
-}
-
 # checkUnitBodies -- walk every function definition with a body in one unit.
 # walkUnitTemplateBodies9 -- body-walk a generic unit template's functions with
 # the generic param UNBOUND (no st.define of the arg), so a `match t` subject
@@ -27384,57 +26964,10 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                 )
             }
         }
-        # runtime-backed dep units with bodied free fns: demand, resolve,
-        # and walk them AFTER the main unit completes, so main's name,
-        # shadow, and mono resolution are settled first
-        dn9: program.ast.units.length
-        di9: u64
-        hasStd9: false
-        for di9 < dn9 loop {
-            du9Id9: (zast.nodeid.create from: (program.ast.units.get i: di9))
-            di9 = di9 + 1
-            dOpId9: zast.nodeid
-            dun9: String
-            {
-                du9: program.ast.nodes.get i: (du9Id9 - 1).u64
-                if du9.namedoperation then {
-                    dun0: zast.poolTextAt pool: program.ast.names ref: du9.name
-                    if (isStdlibUnitName name: dun0.stringview) then {
-                        dOpId9 = du9.operation
-                        dun9 = dun0.copy
-                    }
-                }
-            }
-            if dOpId9 > 0 when (unitHasDemandedBodiedFn
-                ty: st.typing
-                reg: st.reg
-                ast: program.ast
-                unitName: dun9.stringview
-                unitdefId: dOpId9
-            ) then {
-                (demandAllUnitDefs
-                    ty: st.typing
-                    reg: st.reg
-                    ast: program.ast
-                    unitNameId: (nameIdOf ast: program.ast name: dun9.stringview)
-                    unitdefId: dOpId9
-                )
-                hasStd9 = true
-            }
-        }
-        if hasStd9 then {
-            againS9: true
-            for againS9 loop {
-                beforeS9: st.reg.nextTypeId
-                resolveDemandedDefs ty: st.typing reg: st.reg ast: program.ast
-                (resolveDemandedStdDeps
-                    ty: st.typing
-                    reg: st.reg
-                    ast: program.ast
-                )
-                if st.reg.nextTypeId == beforeS9 then againS9 = false
-            }
-        }
+        # a body walk can demand definitions the signatures never reached
+        # (a type constructed only inside a late-resolved owner's method):
+        # resolve them before the completion pass walks their owners
+        resolveDemandedDefs ty: st.typing reg: st.reg ast: program.ast
         walkLateResolvedOwners :st ast: program.ast
         stampUnitMonoTemplates :st :program
     } else null
@@ -27450,9 +26983,8 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
 # What it no longer does is check a type NOTHING reached. That was its other
 # half, and it is retired: with the root demand-driven, a definition the program
 # cannot reach is not the compiler's to spend time on, and reporting on it is a
-# LINT concern. So the keep test is `resolved or demanded` alone -- the blanket
-# keep for the target unit's own owners is gone, which is the whole of the
-# dead-code job.
+# LINT concern. So the keep test is `resolved` alone -- the blanket keep for
+# the target unit's own owners is gone, which is the whole of the dead-code job.
 #
 # Template owners are skipped: their bodies check per instantiation.
 # Deterministic: unit load order, declaration order.
@@ -27519,9 +27051,6 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable ast: Ast.view} is {
                             op: swop9
                         ) then {
                             swKeep9: st.typing.eagerAll
-                            if (swKeep9) == false then {
-                                swKeep9 = st.reg.isDemanded name: swmn9.stringview
-                            }
                             if (swKeep9) == false then {
                                 swRo9: (resolvedByIds
                                     :ast
@@ -30152,25 +29681,11 @@ constRegisterValueType: function {
     if v.kind.fvalKind then base9 = "f64"
     if v.kind.svalKind then base9 = "StringView"
     if base9.length == 0 then return
-    # NON-MINTING on purpose. The registration exists for the benefit of a
-    # READ, and a program that reads a string constant has already resolved
-    # StringView through the read itself. Demanding it here instead would make
-    # EVERY program resolve StringView for `platform.target` -- a
-    # compiler-seeded constant almost nothing reads -- which is the
-    # resolve-one-to-classify-one shape that dragged quadfloat into half the
-    # corpus once already.
-    bo9: (resolvedByIds
-        :ast
-        :ty
-        :reg
-        unitId: (nameIdOf :ast name: "system")
-        name: (zast.poolFind pool: ast.names text: base9)
-    )
-    match (
-        bo9
-    ) case some then {
-        ty.setMemberType parentTypeId: utid9 nameId: nid9 childTypeId: bo9
-    } case none then null
+    # the constant's type is a reference to a system type: it resolves on
+    # discovery, like every other reference, so the registration never depends
+    # on some other reference having resolved the type first
+    bo9: descendNamed :ty :reg :ast defUnit: "system" name: base9
+    if bo9 > 0 then ty.setMemberType parentTypeId: utid9 nameId: nid9 childTypeId: bo9.u64
 }
 
 # resolve a unit's compile-time constant definitions.
@@ -32226,9 +31741,9 @@ typecheck: function {
     registerAndResolveMain ty: st.typing reg: st.reg :program
     resolveMainUnitInstantiations ty: st.typing reg: st.reg :program
     scanMainBodyCalls ty: st.typing reg: st.reg :program rootOnly9: (st.typing.eagerAll) == false
-    seedConstantSuffixDemands ty: st.typing reg: st.reg :program
-    demandAllDefs ty: st.typing reg: st.reg :program
-    resolveDemandsByDescent ty: st.typing reg: st.reg :program
+    seedConstantSuffixDemands ty: st.typing :program
+    demandAllDefs ty: st.typing :program
+    resolveDemands ty: st.typing reg: st.reg :program
     match (
         program
     ) case program then {

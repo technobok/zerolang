@@ -716,9 +716,7 @@ ZTypeRegistry: class {
     literalIntTid: tid
     literalFloatTid: tid
     typeById: (List ZType)
-    crossUnitDemand: (Set String)
     unitNameTid: (MapVV u64 value: u64)
-    unitSeededDemand: (MapVV u64 value: bool)
     regMainUnit: String
     regMainUnitId: u64
     # generic-template metadata, keyed by the TEMPLATE's DeclId; the
@@ -1167,58 +1165,11 @@ ZTypeRegistry: class {
         got.thisParamNameId = nameId
     }
 
-    # recordDemand / isDemanded -- the names of cross-unit types a definition
-    # signature referenced; the typecheck demand pass resolves the ones that
-    # name a definition in a non-main unit (mirrors the oracle's on-demand
-    # `_resolve_typeref`). A side table, not part of the dumped type system.
+    # setMainUnit -- the program's main unit, by name and interned name id.
     setMainUnit: function {:this name: StringView nameId: zast.nameid} is {
         mn: name.string
         this.regMainUnit = mn
         this.regMainUnitId = nameId.u64
-    }
-
-    # keyed by memberKey (unit id high, name id low); unit id 0 is the
-    # unit-agnostic wildcard.
-    recordSeededDemand: function {:this un: zast.nameid name: zast.nameid} is {
-        sv: true
-        this.unitSeededDemand.set key: (memberKey unitId: un nameId: name) value: sv
-        # a non-main unit's internal demand also records unit-agnostically:
-        # any resolver in the demand chain may satisfy it despite a main-unit
-        # shadow (the reference resolves within the demanding unit's view).
-        if (un.u64 == this.regMainUnitId) == false then {
-            sv2: true
-            (this.unitSeededDemand.set
-                key: (memberKey unitId: (zast.nameid.create from: 0) nameId: name)
-                value: sv2
-            )
-        }
-    }
-
-    # recordUnitDemand -- a demand known to target one unit: a qualified
-    # `unit.member` reference, or a unit's own body naming a sibling
-    # definition. Keyed like the seeded channel, with no wildcard entry: it
-    # un-shadows exactly the unit it names and nothing else.
-    recordUnitDemand: function {:this un: zast.nameid name: zast.nameid} is {
-        v: true
-        this.unitSeededDemand.set key: (memberKey unitId: un nameId: name) value: v
-    }
-
-    isSeededDemand: function {:this un: zast.nameid name: zast.nameid} out bool is {
-        g: this.unitSeededDemand.get key: (memberKey unitId: un nameId: name)
-        match (
-            g
-        ) case some then {
-            return g
-        } case none then {
-            return false
-        }
-    }
-
-    recordDemand: function {:this name: StringView} is {
-        # probe by view first: most calls re-record an existing name, and the
-        # asString projection makes the membership test allocation-free
-        if (this.crossUnitDemand.has item: name.asString) then return
-        this.crossUnitDemand.add item: name.string
     }
 
     # setUnitName / isUnitName -- the program's unit names by interned name id,
@@ -1238,10 +1189,6 @@ ZTypeRegistry: class {
         } case none then {
             return false
         }
-    }
-
-    isDemanded: function {:this name: StringView} out bool is {
-        return (this.crossUnitDemand.has item: name.asString)
     }
 
     # addGenericParam / isGenericParamOf -- a template's generic-param
@@ -1394,9 +1341,7 @@ newRegistry: function {} out ZTypeRegistry is {
         literalIntTid: tid
         literalFloatTid: tid
         typeById: (List ZType capacity: 512)
-        crossUnitDemand: (Set String)
         unitNameTid: (MapVV u64 value: u64)
-        unitSeededDemand: (MapVV u64 value: bool)
         regMainUnit: "".string
         regMainUnitId: 0
         genericParams: (MapVR declid value: ParamList)
