@@ -24354,20 +24354,6 @@ emitDefMethods: function {
     } else null
 }
 
-# isProtocolDef9 -- an objectdef whose kind is PROTOCOL.
-isProtocolDef9: function {n: Node.view} out bool is {
-    match (
-        n
-    ) case objectdef then {
-        if n.kind == zast.nodetype.protocolDef then {
-            return true
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
-}
 
 # protoChildMethods -- a protocol's spec-method children (FUNCTION children,
 # excluding the synth create/borrow), names + ids in registration order.
@@ -26256,9 +26242,12 @@ emitProtocolCreateCall: function {
     return "".string
 }
 
-# emitRecordDefsIn -- three passes so cross-class references resolve: all structs
-# (+ variants + data blocks), then all method forward decls, then all method
-# bodies (a method may return/construct a class defined later in the unit).
+# emitRecordDefsIn -- three passes so cross-class references resolve: the
+# as-block constants and data blocks, then all method forward decls, then all
+# method bodies (a method may return/construct a class defined later in the
+# unit). Struct layout is NOT emitted here: emitUserStructsOrdered owns it, and
+# resolves the by-value ordering between user types and the monos that embed
+# them, which a per-unit walk in declaration order cannot.
 emitRecordDefsIn: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -26270,45 +26259,6 @@ emitRecordDefsIn: function {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: mainOpId
     {
         if phase == 1 then {
-        with biterU: bodyIds9.iterate do for buId9: biterU loop {
-            bu: ast.nodes.get i: (buId9 - 1).u64
-            match (
-                bu
-            ) case namedoperation then {
-                if (isUnionDef9 n: (ast.nodes.get i: (bu.operation - 1).u64)) then {
-                    nmu: zast.nameTextAt :ast ref: bu.name
-                    uidu: userFnId :ast :symtab :ctx name: nmu.stringview
-                    if uidu > 0 then (emitUnionMono
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: uidu
-                        :buf
-                    )
-                }
-            } else null
-        }
-        with biterP: bodyIds9.iterate do for bpId9: biterP loop {
-            bp: ast.nodes.get i: (bpId9 - 1).u64
-            match (
-                bp
-            ) case namedoperation then {
-                if (isProtocolDef9 n: (ast.nodes.get i: (bp.operation - 1).u64)) then {
-                    nmp: zast.nameTextAt :ast ref: bp.name
-                    pid7: userFnId :ast :symtab :ctx name: nmp.stringview
-                    if pid7 > 0 then {
-                        (emitOneProtocol
-                            :ast
-                            :symtab
-                            :ctx
-                            tid: (ztypes.tid.create from: pid7.u64)
-                            name: nmp.stringview
-                            :buf
-                        )
-                    }
-                }
-            } else null
-        }
         with biterA: bodyIds9.iterate do for bmId9: biterA loop {
             bm: ast.nodes.get i: (bmId9 - 1).u64
             match (
@@ -26318,7 +26268,6 @@ emitRecordDefsIn: function {
                     nm: zast.nameTextAt :ast ref: bm.name
                     rid: userFnId :ast :symtab :ctx name: nm.stringview
                     if rid > 0 when (isGenericType :symtab tid: rid) == false then {
-                        emitOneRecord :ast :symtab :ctx tid: rid :buf
                         (emitAsConsts
                             :ast
                             :symtab
@@ -26334,7 +26283,6 @@ emitRecordDefsIn: function {
                     nmc: zast.nameTextAt :ast ref: bm.name
                     cid9: userFnId :ast :symtab :ctx name: nmc.stringview
                     if cid9 > 0 when (isGenericType :symtab tid: cid9) == false then {
-                        emitOneRecord :ast :symtab :ctx tid: cid9 :buf
                         (emitAsConsts
                             :ast
                             :symtab
@@ -26345,17 +26293,6 @@ emitRecordDefsIn: function {
                             :buf
                         )
                     }
-                }
-                if (isVariantDef9 n: (ast.nodes.get i: (bm.operation - 1).u64)) then {
-                    nm5: zast.nameTextAt :ast ref: bm.name
-                    vid5: userFnId :ast :symtab :ctx name: nm5.stringview
-                    if vid5 > 0 then (emitOneVariant
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: vid5
-                        :buf
-                    )
                 }
                 nm6: zast.nameTextAt :ast ref: bm.name
                 (emitDataBlock
@@ -26520,36 +26457,6 @@ emitDataElem: function {
 dataElemBaseName: function {ast: Ast.view oId: zast.nodeid} out String is {
     if oId.isZero then return "".string
     return (atomTextDeep :ast n: (ast.nodes.get i: (oId - 1).u64))
-}
-
-# true when `n` is a variant definition.
-isVariantDef9: function {n: Node.view} out bool is {
-    match (
-        n
-    ) case objectdef then {
-        if n.kind == zast.nodetype.variantDef then {
-            return true
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
-}
-
-# true when `n` is a union definition.
-isUnionDef9: function {n: Node.view} out bool is {
-    match (
-        n
-    ) case objectdef then {
-        if n.kind == zast.nodetype.unionDef then {
-            return true
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
 }
 
 # armTagValueText9 -- the declared discriminator of the arm named `armNameId`

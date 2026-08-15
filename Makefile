@@ -604,7 +604,7 @@ emitter-guard:
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
 	chk "resolveTypeIdByName" "$$e3" 22; \
-	chk "userFnId" "$$e4" 35; \
+	chk "userFnId" "$$e4" 32; \
 	chk "childOwnershipText" "$$e5" 0; \
 	chk "typeNameOfReg9" "$$e6" 93; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
