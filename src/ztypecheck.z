@@ -37,6 +37,7 @@ public: unit {
     :paramIsThisReceiverId
     :regTypeNameOf
     :declOfTypeId
+    :declOfUnitDefIds
     :declMemberIsPrivate
     :publicAliasInternalNames
     :unitNameOfTid
@@ -25795,16 +25796,6 @@ maybeWalkMethods: function {
     ast: Ast.view
     name: StringView
 } is {
-    nk: (ztypes.memberKey
-        unitId: (nameIdOf :ast name: unitName)
-        nameId: (zast.poolFind pool: ast.names text: name)
-    )
-    got: st.typing.walkedMethodOwners.get key: nk
-    match (
-        got
-    ) case some then {
-        return
-    } case none then null
     # The declaring node comes from the DECL, not from a positional index into
     # one unit's body list. That index was keyed by bare name and indexed the
     # target unit's members only, which is the whole of what the main-unit fence
@@ -25820,6 +25811,7 @@ maybeWalkMethods: function {
         nameId: nmId9
     )
     if dd9.isZero then return
+    if (st.typing.declIsWalked declId: dd9) then return
     walkDeclaredDef :st :ast :unitName :name declId: dd9
 }
 
@@ -25869,18 +25861,7 @@ walkDeclaredDef: function {
     declId: ztypes.declid
 } is {
     dd9: declId
-    nk: (ztypes.memberKey
-        unitId: (nameIdOf :ast name: unitName)
-        nameId: (zast.poolFind pool: ast.names text: name)
-    )
-    {
-        got2: st.typing.walkedMethodOwners.get key: nk
-        match (
-            got2
-        ) case some then {
-            return
-        } case none then null
-    }
+    if (st.typing.declIsWalked declId: dd9) then return
     memId9: u32
     inNs9: false
     {
@@ -25925,8 +25906,7 @@ walkDeclaredDef: function {
         ) then canW9 = true
     }
     if (canW9) == false then return
-    mv: true
-    st.typing.walkedMethodOwners.set key: nk value: mv
+    st.typing.declSetWalked declId: dd9
     prevMono9: st.typing.curMonoStamp
     st.typing.curMonoStamp = 0
     # walkOwnerMethods only ever walked a TYPE's methods; a free function
@@ -26190,16 +26170,13 @@ checkFunctionBody: function {
         {
             sfId9: zast.poolFind pool: ast.names text: defName
             if (sfId9.isZero) == false then {
-                sfk9: (ztypes.memberKey
+                sfd9: (declOfUnitDefIds
+                    ty: st.typing
                     unitId: (nameIdOf :ast name: unitName)
                     nameId: sfId9
                 )
-                sfHad9: (optBoolOr
-                    o: (st.typing.walkedMethodOwners.get key: sfk9)
-                    d: false
-                )
-                sfv9: true
-                st.typing.walkedMethodOwners.set key: sfk9 value: sfv9
+                sfHad9: st.typing.declIsWalked declId: sfd9
+                st.typing.declSetWalked declId: sfd9
                 if (sfHad9) == false then {
                     (scanFnSig
                         :st
@@ -26818,16 +26795,11 @@ checkUnitBodies: function {
                 # and not again if a demand point already walked it. depWalkUnit
                 # has always asked this; the target unit never had to, because
                 # nothing else walked its bodies.
-                {
-                    wk2: (ztypes.memberKey
-                        unitId: (nameIdOf :ast name: unitName)
-                        nameId: bm.name
-                    )
-                    if (optBoolOr
-                        o: (st.typing.walkedMethodOwners.get key: wk2)
-                        d: false
-                    ) then continue
-                }
+                if (st.typing.declIsWalked declId: (declOfUnitDefIds
+                    ty: st.typing
+                    unitId: (nameIdOf :ast name: unitName)
+                    nameId: bm.name
+                )) then continue
                 isNs9: false
                 if (zast.unitOpKindIs
                     :ast
@@ -26954,19 +26926,12 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable ast: Ast.view} is {
                     swm9
                 ) case namedoperation then {
                     swmn9: zast.nameTextAt :ast ref: swm9.name
-                    swk9: (ztypes.memberKey
+                    swd9: (declOfUnitDefIds
+                        ty: st.typing
                         unitId: (nameIdOf :ast name: swun9.stringview)
                         nameId: swm9.name
                     )
-                    swWalked9: false
-                    {
-                        swg9: st.typing.walkedMethodOwners.get key: swk9
-                        match (
-                            swg9
-                        ) case some then {
-                            swWalked9 = true
-                        } case none then null
-                    }
+                    swWalked9: st.typing.declIsWalked declId: swd9
                     if swWalked9 == false then {
                         swop9: ast.nodes.get i: (swm9.operation - 1).u64
                         swDo9: false
@@ -27025,8 +26990,7 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable ast: Ast.view} is {
                             if swTid9 == 0 then swDo9 = false
                         }
                         if swDo9 when (objectdefHasMethodBodies :ast op: swop9) then {
-                            mvS9: true
-                            st.typing.walkedMethodOwners.set key: swk9 value: mvS9
+                            st.typing.declSetWalked declId: swd9
                             (walkOwnerMethods
                                 :st
                                 unitName: swun9.stringview

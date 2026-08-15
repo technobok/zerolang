@@ -182,6 +182,10 @@ Decl: class {
     # pending -- a reference found this definition and queued it for
     # resolution (the demand mark); cleared when its turn comes.
     pending: bool
+    # walked -- the definition's bodies have been (or are being) type-checked:
+    # a type's methods, or a free function's body. The walk is what stamps a
+    # body, so this is what the emitter asks before emitting one.
+    walked: bool
     # grantsPrivate -- the field's declared type was a `.private` friend handle
     # (syntactic; not derivable from typeId).
     grantsPrivate: bool
@@ -246,7 +250,6 @@ ZTyping: class {
     pendingBorrowOwned: bool
     # type names whose method bodies the walk has already visited (methods
     # body-check once, at the type's first body-walk reference).
-    walkedMethodOwners: (MapVV u64 value: bool)
     # per-mono template stamps: (monoId << 32 | nodeid) -> tid, written by
     # the post-sweep instance walk when curMonoStamp is set; the emitter's
     # mono re-walks read these where the global table is param-suppressed.
@@ -569,6 +572,7 @@ ZTyping: class {
             resolving: false
             defined: false
             pending: false
+            walked: false
             grantsPrivate: false
             fnptrField: false
             lockFieldDecl: 0
@@ -620,6 +624,19 @@ ZTyping: class {
         if (this.declValid id: declId) == false then return false
         do9: this.decls.get i: (declId - 1)
         return do9.pending
+    }
+
+    # declSetWalked / declIsWalked -- the body-walk mark.
+    declSetWalked: function {:this declId: ztypes.declid} is {
+        if (this.declValid id: declId) == false then return
+        do9: this.decls.getMut i: (declId - 1)
+        do9.walked = true
+    }
+
+    declIsWalked: function {t: this.view declId: ztypes.declid} out bool is {
+        if (t.declValid id: declId) == false then return false
+        do9: t.decls.get i: (declId - 1)
+        return do9.walked
     }
 
     # declSetType -- record the canonical type a declaration minted, and the
@@ -1969,8 +1986,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingBorrowShared: false
         pendingBorrowReadonly: false
         pendingBorrowOwned: false
-        walkedMethodOwners: (MapVV u64 value: bool)
-        monoNodeType: (MapVV u64 value: ztypes.tid)
+            monoNodeType: (MapVV u64 value: ztypes.tid)
         monoParamSubst: (MapVV ztypes.tid value: ztypes.tid)
         curMonoStamp: 0
         curMonoFnTid: ztypes.tid
