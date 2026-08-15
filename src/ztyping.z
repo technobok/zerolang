@@ -195,6 +195,11 @@ Decl: class {
     fnptrField: bool
     # lockFieldDecl -- on a TYPE decl, which member is the type's lock (0 = none).
     lockFieldDecl: u64
+    # conformerName -- on a protocol / facet decl, the name id of the first
+    # type in this unit whose as-block named it (0 = none). A spec's `this`
+    # binds to that type. On the DECLARATION, so the marker name is scoped by
+    # what declared it rather than by the unit it was written in.
+    conformerName: u32
     children: (ListVal declchild)
     # derived nameId -> declId accelerator over `children`, backfilled when
     # the namespace outgrows a linear scan (bucketScanMax); not dumped
@@ -296,12 +301,6 @@ ZTyping: class {
     # a typedef wrapper's base type id, resolved structurally at declaration
     # (a parameterized base rides the spec trie, a bare atom the unit ladder)
     typedefBaseTid: (MapVV ztypes.tid value: ztypes.tid)
-    # the conformer a protocol / facet's spec `this` binds to, keyed by
-    # ztypes.memberKey (declaring unit id high, marker name id low) and valued
-    # by the conformer's own name id. Keyed by the UNIT because a marker name
-    # is only unique within one: a facet in a dependency must not inherit
-    # another unit's conformer just because the names agree.
-    protocolThisContext: (MapVV u64 value: u64)
     mainDefIsReftype: (MapVV u64 value: bool)
     dpTaggedParent: (MapVV u64 value: ztypes.tid)
     dpArmPredicate: (MapVV u64 value: ztypes.tid)
@@ -570,6 +569,7 @@ ZTyping: class {
             grantsPrivate: false
             fnptrField: false
             lockFieldDecl: 0
+            conformerName: 0
             children: (ListVal declchild)
             byName: (MapVV u64 value: ztypes.declid)
         )
@@ -660,6 +660,20 @@ ZTyping: class {
         if (this.declValid id: declId) == false then return false
         do9: this.decls.get i: (declId - 1)
         return do9.defined
+    }
+
+    # First conformer wins, in body order: a later as-block naming the same
+    # marker does not displace the spec receiver already bound.
+    declSetConformer: function {:this declId: ztypes.declid nameId: u32} is {
+        if (this.declValid id: declId) == false then return
+        do9: this.decls.getMut i: (declId - 1)
+        if do9.conformerName == 0 then do9.conformerName = nameId
+    }
+
+    declConformerOf: function {:this declId: ztypes.declid} out u32 is {
+        if (this.declValid id: declId) == false then return 0
+        do9: this.decls.get i: (declId - 1)
+        return do9.conformerName
     }
 
     declSetType: function {:this declId: ztypes.declid typeId: ztypes.tid} is {
@@ -2003,7 +2017,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         suppressFnAutoCall: false
         typedefBaseName: (MapVR u64 value: String)
         typedefBaseTid: (MapVV ztypes.tid value: ztypes.tid)
-        protocolThisContext: (MapVV u64 value: u64)
         mainDefIsReftype: (MapVV u64 value: bool)
         dpTaggedParent: (MapVV u64 value: ztypes.tid)
         dpArmPredicate: (MapVV u64 value: ztypes.tid)
