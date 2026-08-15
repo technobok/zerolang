@@ -23,6 +23,7 @@ public: unit {
     :foldedbranch
     :declchild
     :callslot
+    :genericslot
     :declkind
     :declkindName
     :ZTyping
@@ -147,6 +148,12 @@ declchild: record {
 # container's byte hash to read.
 callslot: record {
     call: u64
+    param: u64
+}
+
+# genericslot -- which generic parameter of which parameterized type.
+genericslot: record {
+    owner: u64
     param: u64
 }
 
@@ -351,8 +358,8 @@ ZTyping: class {
     # per-call-argument disposition (take/lock/borrow); absent = valtype/none.
     # tooling-only; the emitter never reads it.
     argDisposition: (MapVV u64 value: ztypes.zparamownership)
-    # generic arg-type id, keyed by (parentTypeId << 32 | paramNameId)
-    genericArgTypeBy: (MapVV u64 value: u64)
+    # generic arg-type id, keyed by owning type and parameter name
+    genericArgTypeBy: (MapVV genericslot value: u64)
     # inferred concrete tid per call, keyed by call node and parameter name
     callGenericBinding: (MapVV callslot value: u64)
 
@@ -1679,12 +1686,12 @@ ZTyping: class {
                 position: pos
             )
         }
-        key9: (parentTypeId * 4294967296) + (pool.find s: paramName).u64
+        key9: (genericslot owner: parentTypeId.u64 param: (pool.find s: paramName).u64)
         this.genericArgTypeBy.set key: key9 value: argTypeId
     }
 
     genericArgOf: function {:this pool: zast.StringPool parentTypeId: ztypes.tid paramName: StringView} out optionval u64 is {
-        key9: (parentTypeId * 4294967296) + (pool.find s: paramName).u64
+        key9: (genericslot owner: parentTypeId.u64 param: (pool.find s: paramName).u64)
         r: this.genericArgTypeBy.get key: key9
         match (
             r
@@ -2052,7 +2059,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingUnitWalk: (List PendingUnitWalk)
         unitMonoWalksPending: (MapVV u64 value: bool)
         argDisposition: (MapVV u64 value: ztypes.zparamownership)
-        genericArgTypeBy: (MapVV u64 value: u64)
+        genericArgTypeBy: (MapVV genericslot value: u64)
         callGenericBinding: (MapVV callslot value: u64)
         binopOwner: (MapVV u64 value: ztypes.tid)
         binopMethod: (MapVV u64 value: ztypes.tid)
