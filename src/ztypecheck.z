@@ -30304,14 +30304,19 @@ lowerGenerators: function {
             uelId9: (zast.nodeid.create from: (program.ast.units.get i: ui))
             ui = ui + 1
             uOpId9: zast.nodeid
+            uNm9: zast.nameid
             {
                 uel: program.ast.nodes.get i: (uelId9 - 1).u64
-                if uel.namedoperation then uOpId9 = uel.operation
+                if uel.namedoperation then {
+                    uOpId9 = uel.operation
+                    uNm9 = uel.name
+                }
             }
             if uOpId9 > 0 then {
                 (lowerGeneratorsInUnit
                     :ty
                     ast: program.ast
+                    unitNameId: uNm9
                     unitdefId: uOpId9
                 )
             }
@@ -30326,6 +30331,7 @@ lowerGenerators: function {
 lowerGeneratorsInUnit: function {
     ty: ztyping.ZTyping
     ast: Ast
+    unitNameId: zast.nameid
     unitdefId: zast.nodeid
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
@@ -30469,11 +30475,14 @@ lowerGeneratorsInUnit: function {
             bodyIds9.append (zast.tableAdd :ast n: rc0)
         }
         # the synth members were staged on the working list; write the new
-        # tail back into the unit row, whose view is scoped to the write
+        # tail back into the unit row, whose view is scoped to the write,
+        # then index them: the def index was built before this pass ran
+        first9: u64
         {
             u9: ast.nodes.getMut i: (unitdefId - 1).u64
             if u9.unitdef then {
                 wi9: u9.body.length
+                first9 = wi9
                 wn9: bodyIds9.length
                 for wi9 < wn9 loop {
                     nid9: bodyIds9.get i: wi9
@@ -30482,6 +30491,28 @@ lowerGeneratorsInUnit: function {
                 }
             }
         }
+        uro9: ty.unitRootByName.get key: unitNameId.u64
+        match (
+            uro9
+        ) case some then {
+            ii9: first9
+            in9: bodyIds9.length
+            for ii9 < in9 loop {
+                nid9: bodyIds9.get i: ii9
+                ii9 = ii9 + 1
+                nop9: ast.nodes.get i: (nid9 - 1).u64
+                if nop9.namedoperation then {
+                    (indexDeclDef
+                        :ty
+                        :ast
+                        parentDeclId: uro9
+                        nameRef: nop9.name
+                        nopNodeId: nop9.nodeid
+                        opNodeId: nop9.operation
+                    )
+                }
+            }
+        } case none then null
     }
 }
 
@@ -31775,10 +31806,12 @@ typecheck: function {
         reg.setMainUnit name: program.mainUnitName.stringview nameId: muNid9
     } else null
     st: zenv.newSymbolTable :reg typing: ty
-    # Stage D: mint every unit's root + fill unitNameTid BEFORE any demand
-    # resolution (lowerGenerators pre-resolves system.Iterator/optionval when a
-    # generator is present), so childOf-at-mint always sees a populated unit root.
+    # every unit's root type and name, then the def index -- every top-level
+    # name of every unit, marked not yet typechecked -- BEFORE any resolution,
+    # so a reference always finds its declaration and never mints a shell for
+    # a name that has one. Generator lowering indexes what it synthesizes.
     registerUnitRoots ty: st.typing reg: st.reg :program
+    indexUnitDefs ty: st.typing reg: st.reg :program
     {
         sysId9: u32
         match (
@@ -31822,7 +31855,6 @@ typecheck: function {
         )
     } else null
     lowerGenerators ty: st.typing reg: st.reg :program
-    indexUnitDefs ty: st.typing reg: st.reg :program
     registerAndResolveMain ty: st.typing reg: st.reg :program
     resolveMainUnitInstantiations ty: st.typing reg: st.reg :program
     scanMainBodyCalls reg: st.reg :program rootOnly9: (st.typing.eagerAll) == false
