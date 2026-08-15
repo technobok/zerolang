@@ -24,6 +24,7 @@ public: unit {
     :declchild
     :callslot
     :genericslot
+    :constslot
     :declkind
     :declkindName
     :ZTyping
@@ -155,6 +156,12 @@ callslot: record {
 genericslot: record {
     owner: u64
     param: u64
+}
+
+# constslot -- which member of which type, for the compile-time value channel.
+constslot: record {
+    owner: u64
+    name: u64
 }
 
 # defaultval -- a member's default value, de-hacking the childDefault string
@@ -414,11 +421,11 @@ ZTyping: class {
     # dozen nodes out of a couple hundred thousand -- so a map, not the dense
     # ListVal nodeType uses.
     nodeConst: (MapVV u64 value: ztypes.cval)
-    memberConst: (MapVV u64 value: ztypes.cval)
+    memberConst: (MapVV constslot value: ztypes.cval)
     # evaluation state per memberConst key: 0 unvisited, 1 evaluating, 2 done.
     # Constants are not written in dependency order, so the evaluator pulls
     # rather than pushes and this is its cycle guard.
-    constEvalState: (MapVV u64 value: u8)
+    constEvalState: (MapVV constslot value: u8)
     # the svalKind payload pool; cval.strId indexes it 1-based (0 = none)
     constStrings: (List String)
     # ifexpr nodeid -> the clause the fold selected
@@ -1432,15 +1439,15 @@ ZTyping: class {
 
     # --- member constant values ---
 
-    # memberConstKey -- the (parent type, member name) packing memberConst and
-    # constEvalState share. One helper, so the remap in
-    # canonicalizeShellNodeStamps and every read site cannot drift apart.
+    # memberConstKey -- the (parent type, member name) pair memberConst and
+    # constEvalState share, so the two tables cannot drift apart on what a key
+    # means.
     memberConstKey: function {
         t: this.view
         parentTypeId: ztypes.tid
         nameId: zast.nameid
-    } out u64 is {
-        return (parentTypeId * 4294967296) + nameId.u64
+    } out constslot is {
+        return (constslot owner: parentTypeId.u64 name: nameId.u64)
     }
 
     # setMemberConst -- record the compile-time VALUE of member `nameId` on
@@ -2083,8 +2090,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         funcReturnNode: (MapVV u64 value: u64)
         defVariableId: (MapVV u64 value: ztypes.vid)
         nodeConst: (MapVV u64 value: ztypes.cval)
-        memberConst: (MapVV u64 value: ztypes.cval)
-        constEvalState: (MapVV u64 value: u8)
+        memberConst: (MapVV constslot value: ztypes.cval)
+        constEvalState: (MapVV constslot value: u8)
         constStrings: (List String)
         foldedBranch: (MapVV u64 value: foldedbranch)
         constFail: ztypes.noConstFail
