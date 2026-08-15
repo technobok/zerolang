@@ -21132,7 +21132,8 @@ emitUnionMono: function {
     for ai < an loop {
         aname: anames.get i: ai
         tg: variantTag :symtab :tid arm: aname.stringview
-        lt: "    \{tg},\n"
+        tv: armTagValueText9 :symtab :tid armNameId: (aidsNm.get i: ai)
+        lt: "    \{tg}\{tv},\n"
         buf.append lt
         ai = ai + 1
     }
@@ -26451,6 +26452,40 @@ isUnionDef9: function {n: Node.view} out bool is {
     }
 }
 
+# armTagValueText9 -- the declared discriminator of the arm named `armNameId`
+# on the tagged type `tid`, as a C enumerator initialiser (" = 10"), or "" when
+# the type's tag names no value for it.
+#
+# A `data`-sourced tag names its own values and the enum must carry them, or
+# the declaration means nothing past the front end. The tag the compiler
+# synthesizes when the author declares none names no values, so its enum keeps
+# C's own numbering -- which IS the arm ordinals, the thing every other part of
+# the backend already assumes.
+armTagValueText9: function {
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    armNameId: u64
+} out String is {
+    if armNameId == 0 then return "".string
+    dt9: u64
+    {
+        d0: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wkTag
+        match (
+            d0
+        ) case some then {
+            dt9 = d0
+        } case none then null
+    }
+    if dt9 == 0 then return "".string
+    c9: (symtab.typing.memberConstOf
+        parentTypeId: (ztypes.tid.create from: dt9.u64)
+        nameId: (zast.nameid.create from: armNameId.u32.orPanic)
+    )
+    if (c9.kind.ivalKind) == false then return "".string
+    iv9: c9.ival
+    return " = \{iv9}"
+}
+
 # checkTagStem -- a variant/union mono's tag ENUMERATORS are spelled from its
 # canonical name (`Z_RESULTVAL_U8_CONVERROR_TAG_ERR`) while the type itself is
 # spelled from its id, and deliberately so: hand-written runtime fragments name
@@ -26508,7 +26543,8 @@ emitOneVariant: function {
     for ai < an loop {
         aname: anames.get i: ai
         tg: variantTag :symtab :tid arm: aname.stringview
-        lt: "    \{tg},\n"
+        tv: armTagValueText9 :symtab :tid armNameId: (aidsNm.get i: ai)
+        lt: "    \{tg}\{tv},\n"
         buf.append lt
         ai = ai + 1
     }
