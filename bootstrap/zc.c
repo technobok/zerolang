@@ -59076,7 +59076,7 @@ _s0; });
                 }
                 if (z_v20459) {
                     z_t2523_t z_v20461 = z_t2340(&z_v20260->typing, z_v20259, z_v20444);
-                    if (z_t3797(&z_v20461.unitName) == ((bool)Z_BOOL_TAG_FALSE)) {
+                    if (((uint32_t)z_v20461.unitName) > 0) {
                         z_t32_t z_v20464 = z_t2016(&z_v20259->names, z_v20461.defName);
                         if (z_v20464.size > 0) {
                             z_t32_t z_v20466 = z_t2937(z_v20260, z_v20443, ((z_t55_t){ .data = z_v20464.data, .size = z_v20464.size }));
@@ -95513,7 +95513,7 @@ z_t2523_t z_t2340(z_t847_t* z_v5065, z_t492_t* z_v5066, uint64_t z_v5067) {
                 /* alias: nop9 => (*(z_t545_t*)z_v5073.data) */
                 z_t493_t z_v5075 = z_t596_get(&z_v5066->nodes, ((uint64_t)((*(z_t545_t*)z_v5073.data).operation - 1)));
                 z_t2523_t z_v5088 = z_t2521(z_v5066, z_v5075);
-                if (z_t3797(&z_v5088.unitName) == ((bool)Z_BOOL_TAG_FALSE)) {
+                if (((uint32_t)z_v5088.unitName) > 0) {
                     return z_v5088;
                 }
                 uint32_t z_v5093 = z_t2522(z_v5066, z_v5075);
@@ -95570,7 +95570,7 @@ bool z_t3455(z_t847_t* z_v17075, z_t642_t* z_v17076, z_t492_t* z_v17077, uint64_
                 /* alias: nnp9 => (*(z_t545_t*)z_v17082.data) */
                 z_t493_t z_v17084 = z_t596_get(&z_v17077->nodes, ((uint64_t)((*(z_t545_t*)z_v17082.data).operation - 1)));
                 z_t2523_t z_v17085 = z_t2521(z_v17077, z_v17084);
-                if (z_t3797(&z_v17085.unitName) == ((bool)Z_BOOL_TAG_FALSE)) {
+                if (((uint32_t)z_v17085.unitName) > 0) {
                     return z_t3889(z_v17076, z_v17085.unitName);
                 }
             }
@@ -95582,7 +95582,7 @@ bool z_t3455(z_t847_t* z_v17075, z_t642_t* z_v17076, z_t492_t* z_v17077, uint64_
 uint64_t z_t2712(z_t847_t* z_v5059, z_t642_t* z_v5060, z_t492_t* z_v5061, z_t55_t z_v5062, z_t55_t z_v5063) {
     uint64_t z_v5064 = z_t2307(z_v5059, z_v5061, z_v5062, z_v5063);
     z_t2523_t z_v5099 = z_t2340(z_v5059, z_v5061, z_v5064);
-    if (z_t3797(&z_v5099.unitName)) {
+    if (((uint32_t)z_v5099.unitName) == 0) {
         return 0;
     }
     if (z_t3905(z_v5059, z_v5064)) {
@@ -118407,7 +118407,7 @@ uint32_t z_t2999(z_t847_t* z_v6193, z_t492_t* z_v6194, uint64_t z_v6195) {
         /* alias: nop9 => (*(z_t545_t*)z_v6199.data) */
         z_t493_t _ah1378 = z_t596_get(&z_v6194->nodes, ((uint64_t)((*(z_t545_t*)z_v6199.data).operation - 1)));
         z_t2523_t z_v6202 = z_t2521(z_v6194, _ah1378);
-        if (z_t3797(&z_v6202.unitName) == ((bool)Z_BOOL_TAG_FALSE)) {
+        if (((uint32_t)z_v6202.unitName) > 0) {
             if (z_t1445_has(z_v6193->unitRootByName, ((uint64_t)z_v6202.unitName))) {
                 return z_v6202.unitName;
             }
@@ -118602,7 +118602,7 @@ z_t758_t z_t2024(z_t492_t* z_v5730, z_t847_t* z_v5731, z_t642_t* z_v5732, uint32
     }
     uint64_t z_v5749 = z_t2339(z_v5731, z_v5733, z_v5734);
     z_t2523_t z_v5750 = z_t2340(z_v5731, z_v5730, z_v5749);
-    if (z_t3797(&z_v5750.unitName) == ((bool)Z_BOOL_TAG_FALSE)) {
+    if (((uint32_t)z_v5750.unitName) > 0) {
         z_t758_t z_v5753 = z_t2338(z_v5731, z_v5732, z_v5750.unitName, z_v5750.defName);
         z_t758_t _m1 = z_v5753;
         switch (_m1.tag) {
