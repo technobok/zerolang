@@ -8521,6 +8521,122 @@ aliasNamesType: function {
     return false
 }
 
+# subunitMemberTid9 -- `sub.member` where `sub` is a hidden subunit (or inline
+# unit) of the unit that owns `ownerDeclId`. A nested unit is deliberately not
+# in the file-unit name index -- two files may hold units of the same name --
+# so the Decl tree answers instead: find the child unit, resolve it, then read
+# the member off its own type id, which is where declareCanonicalType laid it.
+# 0 when the name is not a child unit, which is the caller's cue to try the
+# file-unit index.
+subunitMemberTid9: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    ownerDeclId: ztypes.declid
+    unitName: zast.nameid
+    defName: zast.nameid
+} out ztypes.tid is {
+    if ownerDeclId.isZero then return (ztypes.tid.create from: 0)
+    sub9: ty.declFindChild parentDeclId: ownerDeclId nameId: unitName
+    if sub9.isZero then return (ztypes.tid.create from: 0)
+    subNode9: u64
+    {
+        if (ty.declValid id: sub9) then {
+            sdo9: ty.decls.get i: (sub9 - 1)
+            subNode9 = sdo9.node.u64
+        }
+    }
+    if subNode9 == 0 then return (ztypes.tid.create from: 0)
+    isU9: false
+    subOp9: zast.nodeid
+    {
+        snp9: ast.nodes.get i: (subNode9 - 1)
+        if snp9.namedoperation then {
+            if (zast.unitOpKindIs
+                :ast
+                opId: snp9.operation
+                k: zast.unitkind.subunit
+            ) then isU9 = true
+            if (zast.unitOpKindIs
+                :ast
+                opId: snp9.operation
+                k: zast.unitkind.namespace
+            ) then isU9 = true
+            if isU9 then subOp9 = snp9.operation
+        }
+    }
+    if (isU9) == false then return (ztypes.tid.create from: 0)
+    # The subunit may carry a defined mark without ever having been resolved AS
+    # a unit, so ask the namespace resolver directly rather than the demand
+    # dispatcher, which takes that mark as done.
+    ownNm9: u32
+    {
+        if (ty.declValid id: ownerDeclId) then {
+            odo9: ty.decls.get i: (ownerDeclId - 1)
+            ownNm9 = odo9.name
+        }
+    }
+    ownTxt9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: ownNm9)
+    subTxt9: zast.poolTextAt pool: ast.names ref: unitName
+    (resolveNamespaceUnit
+        :ty
+        :reg
+        :ast
+        unitName: ownTxt9.stringview
+        defName: subTxt9.stringview
+        parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: ownNm9))
+        parentDeclId: ownerDeclId
+        unitOpId: subOp9
+    )
+    # resolved here, so its bodies are owed the same walk the demand path owes
+    (ty.nsBodiesOwed.append
+        (ztyping.nsbody
+            unitName: (zast.nameid.create from: ownNm9)
+            unitOp: subOp9
+        )
+    )
+    # a nested unit's own id is stamped on its unitdef node -- the same place
+    # checkNamespaceBodies reads it; the Decl carries the members, not the id
+    subTid9: ztypes.tid
+    {
+        unid9: unitdefNodeId :ast nId: subOp9
+        if (unid9.isZero) == false then {
+            snt9: ztyping.nodeTypeAt tbl: ty.nodeType nid: unid9.u64
+            if snt9 > 0 then subTid9 = ztypes.tid.create from: snt9
+        }
+    }
+    # the member is resolved on demand like any other definition: ask for the
+    # one this alias names, then read the id off its declaration
+    mem9: ty.declFindChild parentDeclId: sub9 nameId: defName
+    if (mem9.isZero) == false then {
+        resolveDemandedDecl :ty :reg :ast declId: mem9
+        memTid9: ztypes.tid
+        {
+            if (ty.declValid id: mem9) then {
+                mdo9: ty.decls.get i: (mem9 - 1)
+                memTid9 = mdo9.typeId
+            }
+        }
+        if (memTid9.isZero) == false then return memTid9
+    }
+    subNm9: zast.poolTextAt pool: ast.names ref: unitName
+    memNm9: zast.poolTextAt pool: ast.names ref: defName
+    mo9: (unitMemberTypeOf
+        :ast
+        :ty
+        :reg
+        unitTid: subTid9
+        unitName: subNm9.stringview
+        member: memNm9.stringview
+    )
+    match (
+        mo9
+    ) case some then {
+        return (ztypes.tid.create from: mo9.u64)
+    } case none then null
+    return (ztypes.tid.create from: 0)
+}
+
 # resolveAliasKey -- single-minting for a unit-level re-export alias
 # (a reexportDecl in the Decl tree; target read off its def node): resolve the
 # TARGET's canonical id and reuse it -- the alias never mints its own
@@ -8541,8 +8657,31 @@ resolveAliasKey: function {
     if (ty.declIsResolving declId: adecl9) then return 0
     tu9: zast.poolTextAt pool: ast.names ref: altK9.unitName
     tn9: zast.poolTextAt pool: ast.names ref: altK9.defName
+    aParent9: ztypes.declid
+    {
+        if (ty.declValid id: adecl9) then {
+            ado9: ty.decls.get i: (adecl9 - 1)
+            aParent9 = ado9.parent
+        }
+    }
     ty.declSetResolving declId: adecl9 mark: true
-    atid9: descendNamed :ty :reg :ast defUnit: tu9.stringview name: tn9.stringview
+    # A subunit of THIS unit is the nearer scope, so it answers before the
+    # file-unit index -- the same order a name written inside a namespace takes.
+    atid9: (subunitMemberTid9
+        :ty
+        :reg
+        :ast
+        ownerDeclId: aParent9
+        unitName: altK9.unitName
+        defName: altK9.defName
+    )
+    if atid9.isZero then atid9 = (descendNamed
+        :ty
+        :reg
+        :ast
+        defUnit: tu9.stringview
+        name: tn9.stringview
+    )
     ty.declSetResolving declId: adecl9 mark: false
     typeRooted9: false
     if atid9.isZero then {
