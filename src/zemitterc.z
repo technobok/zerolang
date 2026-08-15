@@ -2550,6 +2550,8 @@ Ctx: class {
     # the type ids those rows gate, and the ones the program actually built
     demandGatedTids: (MapVV u64 value: bool)
     usedTypeIds: (MapVV u64 value: bool)
+    # conformance rows whose helper set is already in the buffer, by row index
+    emittedConformance: (MapVV u64 value: bool)
     # the units the table orders, in that order. A unit with rows that is not
     # named here runs after those that are.
     unitOrder: (List String)
@@ -3546,6 +3548,39 @@ needsHasM: function {ctx: Ctx.view uname: StringView memb: StringView} out bool 
 # typeUseAdd -- record that the program constructed this type.
 typeUseAdd: function {ctx: Ctx tid: ztypes.tid} is {
     ctx.usedTypeIds.set key: tid.u64 value: true
+}
+
+# typeStructEmitted9 -- this emitter wrote the type's struct, which is the
+# reachability signal the conformance helpers need: they forward to the impl's
+# methods, so emitting them for a type the program never reached names natives
+# that were never loaded.
+typeStructEmitted9: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
+    o9: ctx.emittedUserTypes.get key: tid
+    match (
+        o9
+    ) case some then {
+        return o9
+    } case none then {
+        return false
+    }
+}
+
+# conformanceRowMark9 / conformanceRowEmitted9 -- a conformance row is one
+# (impl, spec, label) triple and produces one set of wrappers, a vtable and the
+# two create helpers. Emitted once, keyed by the row's index in the table.
+conformanceRowMark9: function {ctx: Ctx row: u64} is {
+    ctx.emittedConformance.set key: row value: true
+}
+
+conformanceRowEmitted9: function {ctx: Ctx.view row: u64} out bool is {
+    o9: ctx.emittedConformance.get key: row
+    match (
+        o9
+    ) case some then {
+        return o9
+    } case none then {
+        return false
+    }
 }
 
 # typeIsUsed -- the program constructed this type, so the rows its
@@ -18256,10 +18291,7 @@ fillDataElems: function {program: Node symtab: zenv.ZSymbolTable.view ctx: Ctx.v
             opId9: zast.nodeid
             {
                 u: program.ast.nodes.get i: (uId9 - 1).u64
-                if u.namedoperation then {
-                    un: zast.poolTextAt pool: program.ast.names ref: u.name
-                    if (isEmittableFileUnit name: un.stringview) then opId9 = u.operation
-                }
+                if u.namedoperation then opId9 = u.operation
             }
             if opId9 > 0 then {
                 (fillDataElemsIn
@@ -18365,10 +18397,8 @@ fillNeeds: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx.view} is {
                 u: program.ast.nodes.get i: (uId9 - 1).u64
                 if u.namedoperation then {
                     un: zast.poolTextAt pool: program.ast.names ref: u.name
-                    if (isEmittableFileUnit name: un.stringview) then {
-                        opId9 = u.operation
-                        un9 = un.copy
-                    }
+                    opId9 = u.operation
+                    un9 = un.copy
                 }
             }
             if opId9 > 0 then {
@@ -20292,6 +20322,7 @@ emitC: function {
         fragTypeTids: (ListVal u64)
         demandGatedTids: (MapVV u64 value: bool)
         usedTypeIds: (MapVV u64 value: bool)
+        emittedConformance: (MapVV u64 value: bool)
         unitOrder: (List String)
         argHoistNames: (List String)
         argHoistVals: (List String)
@@ -24285,10 +24316,8 @@ emitRecordDefs: function {
                     u: program.ast.nodes.get i: (uId9 - 1).u64
                     if u.namedoperation then {
                         un: zast.poolTextAt pool: program.ast.names ref: u.name
-                        if (isEmittableFileUnit name: un.stringview) then {
-                            opId9 = u.operation
-                            un9 = un.copy
-                        }
+                        opId9 = u.operation
+                        un9 = un.copy
                     }
                 }
                 if opId9 > 0 then {
@@ -24974,20 +25003,29 @@ emitFacetImplsForType: function {
     buf: String.borrow
 } is {
     if (symtab.reg.typetypeOf typeId: implTid) != ztypes.ztypetype.recordType then return
+    if (typeStructEmitted9 :ctx tid: implTid) == false then return
     ftids: (ListVal u64)
     flabels: (List String)
+    frows9: (ListVal u64)
+    fri9: u64
     with citer: symtab.typing.conformance.iterate do for row: citer loop {
         if row.implTypeId == implTid then {
             ftids.append row.specTypeId
             flabels.append row.label.copy
+            frows9.append fri9
         }
+        fri9 = fri9 + 1
     }
     fi: u64
     fn: ftids.length
     for fi < fn loop {
         ftid: ftids.get i: fi
         flabel: flabels.get i: fi
-        if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ftid.u64)) == ztypes.ztypetype.facetType then {
+        fdone9: conformanceRowEmitted9 :ctx row: (frows9.get i: fi)
+        if (symtab.reg.typetypeOf
+            typeId: (ztypes.tid.create from: ftid.u64)
+        ) == ztypes.ztypetype.facetType when (fdone9) == false then {
+            conformanceRowMark9 :ctx row: (frows9.get i: fi)
             (emitFacetImpl
                 :ast
                 :symtab
@@ -25011,20 +25049,29 @@ emitProtocolImplsForType: function {
     implTid: ztypes.tid
     buf: String.borrow
 } is {
+    if (typeStructEmitted9 :ctx tid: implTid) == false then return
     ptids: (ListVal u64)
     plabels: (List String)
+    prows9: (ListVal u64)
+    pri9: u64
     with citer: symtab.typing.conformance.iterate do for row: citer loop {
         if row.implTypeId == implTid then {
             ptids.append row.specTypeId
             plabels.append row.label.copy
+            prows9.append pri9
         }
+        pri9 = pri9 + 1
     }
     pi: u64
     pn: ptids.length
     for pi < pn loop {
         ptid: ptids.get i: pi
         plabel: plabels.get i: pi
-        if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ptid.u64)) == ztypes.ztypetype.protocolType then {
+        pdone9: conformanceRowEmitted9 :ctx row: (prows9.get i: pi)
+        if (symtab.reg.typetypeOf
+            typeId: (ztypes.tid.create from: ptid.u64)
+        ) == ztypes.ztypetype.protocolType when (pdone9) == false then {
+            conformanceRowMark9 :ctx row: (prows9.get i: pi)
             pname: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: ptid.u64)
             (emitProtocolImpl
                 :ast
