@@ -1686,25 +1686,41 @@ sumPairKeyOf: function {
     return 0
 }
 
-# isSumPair -- is `tid` a 2-arm sum type? The question truthiness asks: such a
-# type has a falsy arm and a truthy one, so it answers as a condition.
-isSumPair: function {
-    ty: ZTyping.view
-    reg: ztypes.ZTypeRegistry
-    tid: ztypes.tid
-} out bool is {
-    return (sumPairKeyOf :ty :reg :tid) > 0
-}
-
-# sumPairFalsyArmOf -- the name id of `tid`'s FIRST arm, the falsy one by the
-# falsy-first convention. 0 when `tid` is not a 2-arm sum.
-sumPairFalsyArmOf: function {
+# sumPairZeroArm -- the arm of the 2-arm sum `tid` whose DISCRIMINATOR is 0.
+#
+# Falsy is a property of the discriminator's VALUE, not of where the arm was
+# written. The two coincide under the default tag -- u8, sequential from 0, so
+# the arm written first takes 0 -- which is exactly why writing the falsy arm
+# first is the least syntax that says this, and why every stdlib pair does.
+#
+# A `data`-sourced tag names its own values, and there the position says
+# nothing: the zero-valued arm may be written second, or no arm may carry 0 at
+# all. Such a pair is NOT treated as having a falsy arm -- the same stance
+# variantTagIsOrdinalPlain takes for the C-bool lowering, and for the same
+# reason: `data { LOW: 0  HIGH: 10 }` has two arms and is not two ordinals.
+# Reading those values here would claim more than the backend honours, since
+# the tag enum is emitted without them.
+#
+# 0 when `tid` is not a 2-arm sum, or when its tag is author-declared `data`.
+sumPairZeroArm: function {
     ty: ZTyping.view
     reg: ztypes.ZTypeRegistry
     tid: ztypes.tid
 } out u64 is {
     k9: sumPairKeyOf :ty :reg :tid
     if k9 == 0 then return 0
+    # variantTagBase records 0 for a DATA-sourced tag, a numeric base for a
+    # declared one, and nothing when none was declared. Only the data case
+    # detaches the value from the position: a declared numeric is still
+    # sequential from 0, so arm 0 still carries 0.
+    {
+        tb9: ty.variantTagBase.get key: k9
+        match (
+            tb9
+        ) case some then {
+            if tb9 == 0 then return 0
+        } case none then null
+    }
     o9: ty.sumPairFirstArm.get key: k9
     match (
         o9
@@ -1715,29 +1731,67 @@ sumPairFalsyArmOf: function {
     }
 }
 
-# sumPairTruthyArmOf -- the name id of `tid`'s SECOND arm, the truthy one by
-# the falsy-first convention. 0 when `tid` is not a 2-arm sum.
+# isSumPair -- is `tid` a 2-arm sum type with a falsy arm? The question
+# truthiness asks: such a type has a zero-discriminator arm and another one, so
+# it answers as a condition. A 2-arm type whose data tag gives neither arm 0 is
+# NOT one of these.
+isSumPair: function {
+    ty: ZTyping.view
+    reg: ztypes.ZTypeRegistry
+    tid: ztypes.tid
+} out bool is {
+    return (sumPairZeroArm :ty :reg :tid) > 0
+}
+
+# sumPairFalsyArmOf -- the name id of `tid`'s falsy arm: the one whose
+# discriminator is 0. 0 when `tid` has no such arm.
+sumPairFalsyArmOf: function {
+    ty: ZTyping.view
+    reg: ztypes.ZTypeRegistry
+    tid: ztypes.tid
+} out u64 is {
+    return (sumPairZeroArm :ty :reg :tid)
+}
+
+# sumPairTruthyArmOf -- the name id of `tid`'s truthy arm: the one that is NOT
+# the zero-discriminator arm. 0 when `tid` has no falsy arm to be the other of.
 sumPairTruthyArmOf: function {
     ty: ZTyping.view
     reg: ztypes.ZTypeRegistry
     tid: ztypes.tid
 } out u64 is {
+    z9: sumPairZeroArm :ty :reg :tid
+    if z9 == 0 then return 0
     k9: sumPairKeyOf :ty :reg :tid
-    if k9 == 0 then return 0
-    o9: ty.sumPairSecondArm.get key: k9
+    f9: u64
+    {
+        o9: ty.sumPairFirstArm.get key: k9
+        match (
+            o9
+        ) case some then {
+            f9 = o9
+        } case none then null
+    }
+    if f9 != z9 then return f9
+    o8: ty.sumPairSecondArm.get key: k9
     match (
-        o9
+        o8
     ) case some then {
-        return o9
+        return o8
     } case none then {
         return 0
     }
 }
 
-# armSideOfName -- which side of the 2-arm sum `tid` the name `nameId` is: the
-# arm written second is the truthy one, the arm written first the falsy one.
-# `none` when the name is neither, or when `tid` is not a 2-arm sum at all --
-# so an absent tid answers `none` rather than needing a guard at every caller.
+# armSideOfName -- which side of the 2-arm sum `typeId` the name `nameId` is BY
+# POSITION: the arm written second is the truthy one, the arm written first the
+# falsy one. `none` when the name is neither, or when `typeId` is not a 2-arm
+# sum -- so an absent tid answers `none` rather than needing a guard at every
+# caller.
+#
+# Positional on purpose: its callers ask about `bool`'s own arms, and bool
+# declares a plain numeric tag whose values ARE the positions. A type whose
+# `data` tag names its own values needs sumPairZeroArm, which reads them.
 armSideOfName: function {ty: ZTyping.view typeId: u64 nameId: u64} out armside is {
     if nameId == 0 then return armside.none
     {
