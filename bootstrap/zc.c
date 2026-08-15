@@ -59464,10 +59464,13 @@ _s0; });
                         return z_v21761;
                     }
                 }
-                uint64_t z_v21763 = z_t2426(z_v20257, z_v20258, z_v20259, ((z_t55_t){ .data = z_v21302.data, .size = z_v21302.size }));
+                uint64_t z_v21762 = ((uint64_t)0);
+                if (z_t3721(&z_v21285)) {
+                    z_v21762 = z_t2426(z_v20257, z_v20258, z_v20259, ((z_t55_t){ .data = z_v21281.data, .size = z_v21281.size }));
+                }
                 bool z_v21764 = ((bool)Z_BOOL_TAG_FALSE);
-                if (z_v21763 > 0) {
-                    uint8_t z_v21767 = z_t3726(&z_v20258->reg, ((uint64_t)z_v21763));
+                if (z_v21762 > 0) {
+                    uint8_t z_v21767 = z_t3726(&z_v20258->reg, ((uint64_t)z_v21762));
                     if (z_v21767 == ((uint8_t)Z_ZTYPETYPE_TAG_VARIANTTYPE)) {
                         z_v21764 = ((bool)Z_BOOL_TAG_TRUE);
                     }
@@ -59476,11 +59479,11 @@ _s0; });
                     }
                 }
                 if (z_v21764) {
-                    z_t32_t z_v21771 = z_t2433(z_v20257, z_v20258, z_v20259, ((uint64_t)z_v21763), ((z_t55_t){ .data = z_v21332.data, .size = z_v21332.size }));
+                    z_t32_t z_v21771 = z_t2433(z_v20257, z_v20258, z_v20259, ((uint64_t)z_v21762), ((z_t55_t){ .data = z_v21332.data, .size = z_v21332.size }));
                     if (z_v21771.size == 0) {
-                        z_t32_t z_v21775 = z_t2429(z_v20258, ((uint64_t)z_v21763), ((z_t55_t){ .data = z_v21332.data, .size = z_v21332.size }));
-                        z_t32_t z_v21778 = z_t2283(z_v20259, ((uint64_t)z_v21763));
-                        z_t32_t z_v21782 = z_t2813(z_v20258, ((uint64_t)z_v21763), ((z_t55_t){ .data = z_v21332.data, .size = z_v21332.size }));
+                        z_t32_t z_v21775 = z_t2429(z_v20258, ((uint64_t)z_v21762), ((z_t55_t){ .data = z_v21332.data, .size = z_v21332.size }));
+                        z_t32_t z_v21778 = z_t2283(z_v20259, ((uint64_t)z_v21762));
+                        z_t32_t z_v21782 = z_t2813(z_v20258, ((uint64_t)z_v21762), ((z_t55_t){ .data = z_v21332.data, .size = z_v21332.size }));
                         if (z_v21782.size > 0) {
                             z_t32_free(&z_v20366);
                             z_t32_free(&z_v20861);
