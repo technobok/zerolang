@@ -657,12 +657,13 @@ constraintdesc: record {
 }
 
 # ParamDesc / ParamList -- a template's generic parameters in declaration
-# order, each with the constraint classified at registration. The resolved
-# GENERIC_PARAM type id rides the ordinal-keyed genericParamTid map (set
-# during resolution). ParamDesc is a class because it holds a String.
+# order, each with the constraint classified at registration and the canonical
+# GENERIC_PARAM type id minted for it during resolution (0 until then).
+# ParamDesc is a class because it holds a String.
 ParamDesc: class {
     name: String
     constraint: constraintdesc
+    paramTid: tid
 }
 
 # a template's generic parameters in declaration order.
@@ -719,11 +720,8 @@ ZTypeRegistry: class {
     unitNameTid: (MapVV u64 value: u64)
     regMainUnit: String
     regMainUnitId: u64
-    # generic-template metadata, keyed by the TEMPLATE's DeclId; the
-    # per-(template, param-ordinal) GENERIC_PARAM tid rides a composite
-    # key (tdecl * 256 + ordinal)
+    # generic-template metadata, keyed by the TEMPLATE's DeclId
     genericParams: (MapVR declid value: ParamList)
-    genericParamTid: (MapVV u64 value: u64)
     # true when the last getOrMintSpec minted a fresh instance (checkGenericCall's wasNew)
     specWasFresh: bool
 } as {
@@ -1214,13 +1212,20 @@ ZTypeRegistry: class {
     }
 
     # one canonical GENERIC_PARAM type per (template, parameter): references
-    # inside the template's members resolve the parameter name to this id.
+    # inside the template's members resolve the parameter name to this id. It
+    # lives on the parameter's own row; 0 means not yet minted.
     genericParamTidOf: function {:this tdecl: declid paramName: StringView} out optionval u64 is {
         po9: this.paramOrdinalOf :tdecl :paramName
         match (
             po9
         ) case some then {
-            return (this.genericParamTid.get key: ((tdecl * 256) + po9))
+            plo: this.genericParams.get key: tdecl
+            match (
+                plo
+            ) case some then {
+                pt9: (plo.params.get i: po9).paramTid
+                if pt9 > 0 then return (optionval.some pt9.u64)
+            } case none then null
         } case none then null
         return (optionval.none u64)
     }
@@ -1230,8 +1235,14 @@ ZTypeRegistry: class {
         match (
             po9
         ) case some then {
-            v: tid
-            this.genericParamTid.set key: ((tdecl * 256) + po9) value: v
+            plo: this.genericParams.get key: tdecl
+            match (
+                plo
+            ) case some then {
+                v: tid
+                pdx: plo.params.getMut i: po9
+                pdx.paramTid = v
+            } case none then null
         } case none then null
     }
 
@@ -1255,6 +1266,7 @@ ZTypeRegistry: class {
                     plo.params.append (ParamDesc
                         name: paramName.string
                         constraint: (constraintdesc :kind :numericMax)
+                        paramTid: tid
                     )
                 }
             } case none then null
@@ -1264,6 +1276,7 @@ ZTypeRegistry: class {
             np.params.append (ParamDesc
                 name: paramName.string
                 constraint: (constraintdesc :kind :numericMax)
+                paramTid: tid
             )
             this.genericParams.set key: tdecl value: np
         }
@@ -1345,7 +1358,6 @@ newRegistry: function {} out ZTypeRegistry is {
         regMainUnit: "".string
         regMainUnitId: 0
         genericParams: (MapVR declid value: ParamList)
-        genericParamTid: (MapVV u64 value: u64)
         specWasFresh: false
     )
     # The reserved rows, minted here in a fixed order so every caller agrees
