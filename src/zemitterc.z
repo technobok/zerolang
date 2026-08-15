@@ -22279,20 +22279,6 @@ cliClassIsComposite: function {
     return false
 }
 
-# emitCliFwdDecls -- Parsed is the ok-arm payload of Result_Parsed_CliError,
-# whose destructor (emitted with the Option/Result monos) casts to and frees a
-# Parsed before Parsed's own body emits (late, after its collection monos). A
-# named-tag forward typedef + a destructor prototype satisfy that forward use.
-emitCliFwdDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view buf: String.borrow} is {
-    pid: cliClassTypeId :symtab :ctx name: "Parsed"
-    if pid == 0 then return
-    pc: ctxCname :ctx tid: (ztypes.tid.create from: pid.u64)
-    l0: "typedef struct \{pc}_t \{pc}_t;\n"
-    buf.append l0
-    l1: "static void \{pc}_destroy(\{pc}_t* p);\n"
-    buf.append l1
-}
-
 # rowFires9 -- true when ANY demand the row at `i` names was demanded for that
 # row's unit. `demand=a,b,c` means ANY OF: a helper several members share is one
 # row naming the members that reach it, so it loads once however many fired.
@@ -23815,7 +23801,6 @@ emitMonos: function {
     last: symtab.reg.nextTypeId
     userListM: (ListVal u64)
     buildUserTypeList :symtab acc: userListM
-    emitCliFwdDecls :symtab :ctx :buf
     emitMainFwdDecls :symtab :ctx :buf
     # one classification sweep over the registry fills the per-category
     # worklists; the category loops below emit in the original sequence.
@@ -23876,10 +23861,7 @@ emitMonos: function {
                         wCliLeaf9.append tv9
                     }
                 }
-                if inIo9 then {
-                    wnm9: typeNameOfReg9 :symtab tid: tcl9
-                    if wnm9.stringview != "File" then wIoWrap9.append tv9
-                }
+                if inIo9 then wIoWrap9.append tv9
             }
         }
         if tt9 == ztypes.ztypetype.variantType then {
@@ -24131,19 +24113,16 @@ emitMonos: function {
         tmap = tmap + 1
     }
     # reachable cli COMPOSITE classes (Spec/Parsed) -- after the List/Map monos
-    # they embed; Parsed was forward-declared above for the Result mono destroy.
+    # they embed; both carry a forward declaration from emitMainFwdDecls, which
+    # the emitter reads off ctx.fwdDeclaredTypes like every other type.
     tclc: u64
     for tclc < wCliComp9.length loop {
         clcId9: wCliComp9.get i: tclc
-        clcn: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: clcId9.u64)
-        fwd9: false
-        if clcn.stringview == "Parsed" then fwd9 = true
         (emitCliCompositeClass
             :ast
             :symtab
             :ctx
             tid: (ztypes.tid.create from: clcId9.u64)
-            fwdDeclared: fwd9
             :buf
         )
         tclc = tclc + 1
@@ -26990,7 +26969,6 @@ emitCliCompositeClass: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     tid: ztypes.tid
-    fwdDeclared: bool
     buf: String.borrow
 } is {
     fnames: (List String)
@@ -26998,7 +26976,7 @@ emitCliCompositeClass: function {
     fidsNm: (ListVal u64)
     recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
     rc: ctxCname :ctx :tid
-    if (fwdDeclared) == false then {
+    if (isFwdDeclared :ctx :tid) == false then {
         lt: "typedef struct \{rc}_t \{rc}_t;\n"
         buf.append lt
     }
