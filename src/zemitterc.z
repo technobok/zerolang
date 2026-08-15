@@ -22676,13 +22676,30 @@ isFwdDeclared: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     }
 }
 
-# emitMainFwdDecls -- forward-declare the main unit's RECORD + UNION types
-# (named-struct typedef + a destructor prototype) before the monos. The AST is
-# a self-referential Node union: Node_destroy + the Option/List monos + the
-# print functions reference Node and the arm *Data structs by pointer (or call
-# their destroys) ahead of the bodies, so without forward declarations they are
-# undeclared. Mirrors the reference's forward-decl block; the bodies then emit
-# as plain `struct X_t { ... };` via isFwdDeclared.
+# emitMainFwdDecls -- forward-declare every RECORD + UNION + CLASS type whose
+# body this emitter writes (named-struct typedef + a destructor prototype)
+# before the monos. The AST is a self-referential Node union: Node_destroy +
+# the Option/List monos + the print functions reference Node and the arm *Data
+# structs by pointer (or call their destroys) ahead of the bodies, so without
+# forward declarations they are undeclared. The bodies then emit as plain
+# `struct X_t { ... };` via isFwdDeclared.
+#
+# Which types those are is a question for the DECLARATION, not for the unit's
+# name. `is native` on a class or record means the RUNTIME owns the layout: the
+# sixteen scalars, String and StringView, and the sviter iterators all get their
+# C from a fragment, and a forward declaration of one is a conflicting typedef
+# -- LinesIter's fragment is `typedef z_Splitter_t z_LinesIter_t;`, an ALIAS
+# that no `typedef struct X_t X_t;` can ever be made compatible with. Everything
+# else this pass reaches is a struct the emitter writes, whichever unit declared
+# it, so io's File and cli's Spec are forward-declared on the same terms as a
+# user record -- and a USER type shadowing a builtin name carries no marker, so
+# it keeps its forward declaration and its own layout.
+#
+# The two synthesized `tag__{elem}` carriers reach this pass and are forward-
+# declared with it. Nothing names them in the C, so the declaration is dead but
+# valid; measured, no structural property separates them from a real type here
+# (their registry def is their own, not their unit root, which is what a
+# synthesized type otherwise looks like).
 emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
     last: symtab.reg.nextTypeId
     t: ztypes.tid
@@ -22704,7 +22721,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                 match (
                     duo
                 ) case some then {
-                    if (isEmittableFileUnit name: duo.stringview) then {
+                    if (symtab.reg.isNativeOf tid: (ztypes.tid.create from: t.u64)) == false then {
                         if (isTypedefType
                             :symtab
                             tid: (ztypes.tid.create from: t.u64)
