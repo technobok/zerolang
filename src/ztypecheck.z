@@ -1636,10 +1636,9 @@ declareCanonicalType: function {
     return id
 }
 
-# dottedDefTargetIds -- dottedDefTarget as a packed id pair: the parent
-# atom's name id in the high 32 bits, the child's in the low 32; 0 when the
-# definition is not a dotted alias.
-dottedDefTargetIds: function {ast: Ast.view n: Node.view} out u64 is {
+# dottedDefTargetIds -- dottedDefTarget as an id pair: the parent atom's name
+# id and the child's; an absent pair when the definition is not a dotted alias.
+dottedDefTargetIds: function {ast: Ast.view n: Node.view} out ztypes.deftarget is {
     match (
         n
     ) case expression then {
@@ -1647,11 +1646,11 @@ dottedDefTargetIds: function {ast: Ast.view n: Node.view} out u64 is {
     } case dottedpath then {
         pid9: atomNameId :ast n: (ast.nodes.get i: (n.parent - 1).u64)
         cid9: atomNameId :ast n: (ast.nodes.get i: (n.child - 1).u64)
-        if pid9.isZero then return 0
-        if cid9.isZero then return 0
-        return (ztypes.memberKey unitId: pid9 nameId: cid9)
+        if pid9.isZero then return ztypes.noDefTarget
+        if cid9.isZero then return ztypes.noDefTarget
+        return (ztypes.deftarget unitName: pid9 defName: cid9)
     } else {
-        return 0
+        return ztypes.noDefTarget
     }
 }
 
@@ -8440,10 +8439,14 @@ declDefTypetype: function {
     return (optionval.none ztypes.ztypetype)
 }
 
-# reexportTargetIdsOf -- reexportTargetOf as a packed id pair (root id
-# high, member id low); 0 when the Decl is absent or not a re-export.
-reexportTargetIdsOf: function {ty: ztyping.ZTyping ast: Ast.view declId: ztypes.declid} out u64 is {
-    if declId.isZero then return 0
+# reexportTargetIdsOf -- reexportTargetOf as an id pair (root id, member id);
+# an absent pair when the Decl is absent or not a re-export.
+reexportTargetIdsOf: function {
+    ty: ztyping.ZTyping
+    ast: Ast.view
+    declId: ztypes.declid
+} out ztypes.deftarget is {
+    if declId.isZero then return ztypes.noDefTarget
     if (ty.declValid id: declId) then {
         do9: ty.decls.get i: (declId - 1)
         if do9.kind.reexportDecl then {
@@ -8451,7 +8454,7 @@ reexportTargetIdsOf: function {ty: ztyping.ZTyping ast: Ast.view declId: ztypes.
             if nop9.namedoperation then {
                 vn9: ast.nodes.get i: (nop9.operation - 1).u64
                 dk9: dottedDefTargetIds :ast n: vn9
-                if dk9 > 0 then return dk9
+                if (dk9.unitName.isZero) == false then return dk9
                 # a BARE alias names a target in its OWN unit, so the missing
                 # segment is the enclosing unit's name -- the Decl's parent.
                 bid9: bareDefTargetNameId :ast n: vn9
@@ -8462,17 +8465,17 @@ reexportTargetIdsOf: function {ty: ztyping.ZTyping ast: Ast.view declId: ztypes.
                         puid9 = zast.nameid.create from: pdo9.name
                     }
                     if (puid9.isZero) == false then {
-                        return (ztypes.memberKey unitId: puid9 nameId: bid9)
+                        return (ztypes.deftarget unitName: puid9 defName: bid9)
                     }
                 }
             }
         }
     }
-    return 0
+    return ztypes.noDefTarget
 }
 
 # aliasIsBareForm -- the alias Decl's value is a BARE name (`Same: Holder`)
-# rather than a dotted one. The packed target pair cannot say: a bare alias
+# rather than a dotted one. The target pair cannot say: a bare alias
 # borrows its own unit for the missing segment, which a self-unit dotted alias
 # (`Alpha: thisunit.Beta`) spells explicitly.
 aliasIsBareForm: function {ty: ztyping.ZTyping ast: Ast.view declId: ztypes.declid} out bool is {
@@ -8511,11 +8514,8 @@ aliasNamesType: function {
             if nnp9.namedoperation then {
                 nvn9: ast.nodes.get i: (nnp9.operation - 1).u64
                 ntk9: dottedDefTargetIds :ast n: nvn9
-                if ntk9 > 0 then {
-                    ntu9: ntk9 / 4294967296
-                    return (reg.isUnitName
-                        nameId: (zast.nameid.create from: ntu9.u32.orPanic)
-                    )
+                if (ntk9.unitName.isZero) == false then {
+                    return (reg.isUnitName nameId: ntk9.unitName)
                 }
             }
         }
@@ -8539,12 +8539,10 @@ resolveAliasKey: function {
 } out u64 is {
     adecl9: declOfUnitDef :ty :ast :defUnit :name
     altK9: reexportTargetIdsOf :ty :ast declId: adecl9
-    if altK9 == 0 then return 0
+    if altK9.unitName.isZero then return 0
     if (ty.declIsResolving declId: adecl9) then return 0
-    atu9: altK9 / 4294967296
-    atn9: altK9 - (atu9 * 4294967296)
-    tu9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: atu9.u32.orPanic)
-    tn9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: atn9.u32.orPanic)
+    tu9: zast.poolTextAt pool: ast.names ref: altK9.unitName
+    tn9: zast.poolTextAt pool: ast.names ref: altK9.defName
     ty.declSetResolving declId: adecl9 mark: true
     atid9: descendNamed :ty :reg :ast defUnit: tu9.stringview name: tn9.stringview
     ty.declSetResolving declId: adecl9 mark: false
@@ -30680,9 +30678,8 @@ reexportUnitOf: function {
     nop9: ast.nodes.get i: (do9.node - 1).u64
     if nop9.namedoperation then {
         dk9: dottedDefTargetIds :ast n: (ast.nodes.get i: (nop9.operation - 1).u64)
-        if dk9 > 0 then {
-            pu9: dk9 / 4294967296
-            if (ty.unitRootByName.has key: pu9) then return (zast.nameid.create from: pu9.u32.orPanic)
+        if (dk9.unitName.isZero) == false then {
+            if (ty.unitRootByName.has key: dk9.unitName.u64) then return dk9.unitName
         }
     }
     return (zast.nameid.create from: 0)
@@ -30907,14 +30904,12 @@ resolvedByIds: function {
     } case none then null
     alDecl9: declOfUnitDefIds :ty :unitId nameId: name
     alTgt9: reexportTargetIdsOf :ty :ast declId: alDecl9
-    if alTgt9 > 0 then {
-        atu9: alTgt9 / 4294967296
-        atn9: alTgt9 - (atu9 * 4294967296)
+    if (alTgt9.unitName.isZero) == false then {
         tgo9: (childOfWalkIds
             :ty
             :reg
-            unitId: (zast.nameid.create from: atu9.u32.orPanic)
-            name: (zast.nameid.create from: atn9.u32.orPanic)
+            unitId: alTgt9.unitName
+            name: alTgt9.defName
         )
         match (
             tgo9
