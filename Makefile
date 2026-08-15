@@ -169,11 +169,17 @@ test-tcc: bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 # readable-check -- --readable-names is a debug affordance, so nothing else
 # exercises it; without this it would rot unnoticed. The two schemes differ
 # only in identifier spelling, so the built programs must behave identically.
+# Cases are `name:srcdir`. `shadow_unit_const` is here rather than in the
+# corpus alone because the scheme is what the case is about: readable names
+# spell a local by its SOURCE name, so a local shadowing another unit's
+# constant only diverges under this flag.
 readable-check: bin/zc
 	@mkdir -p $(BUILDDIR)/rn
-	@for n in hello vector records fibonacci typedefs; do \
-	  bin/zc $$n --src examples --system lib/system --emit-c $(BUILDDIR)/rn/$$n-id.c || exit 1; \
-	  bin/zc $$n --src examples --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/$$n-rn.c || exit 1; \
+	@for c in hello:examples vector:examples records:examples fibonacci:examples \
+	          typedefs:examples shadow_unit_const:tests/fixtures/emitc_corpus; do \
+	  n=$${c%%:*}; d=$$(echo $$c | sed 's/^[^:]*://'); \
+	  bin/zc $$n --src $$d --system lib/system --emit-c $(BUILDDIR)/rn/$$n-id.c || exit 1; \
+	  bin/zc $$n --src $$d --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/$$n-rn.c || exit 1; \
 	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-id $(BUILDDIR)/rn/$$n-id.c -lm || exit 1; \
 	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-rn $(BUILDDIR)/rn/$$n-rn.c -lm || exit 1; \
 	  $(BUILDDIR)/rn/$$n-id > $(BUILDDIR)/rn/$$n-id.out 2>&1; \
