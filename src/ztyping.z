@@ -1701,7 +1701,23 @@ sumPairKeyOf: function {
 # Reading those values here would claim more than the backend honours, since
 # the tag enum is emitted without them.
 #
-# 0 when `tid` is not a 2-arm sum, or when its tag is author-declared `data`.
+# 0 when `tid` is not a 2-arm sum, or when an author-declared `data` tag gives
+# its arms values other than 0 and 1.
+sumPairArmValueIs: function {
+    ty: ZTyping.view
+    dataTid: u64
+    armName: u64
+    want: i64
+} out bool is {
+    if armName == 0 then return false
+    c9: (ty.memberConstOf
+        parentTypeId: (ztypes.tid.create from: dataTid.u64)
+        nameId: (zast.nameid.create from: armName.u32.orPanic)
+    )
+    if c9.kind.ivalKind then return c9.ival == want
+    return false
+}
+
 sumPairZeroArm: function {
     ty: ZTyping.view
     reg: ztypes.ZTypeRegistry
@@ -1709,26 +1725,63 @@ sumPairZeroArm: function {
 } out u64 is {
     k9: sumPairKeyOf :ty :reg :tid
     if k9 == 0 then return 0
+    f9: u64
+    s9: u64
+    {
+        o9: ty.sumPairFirstArm.get key: k9
+        match (
+            o9
+        ) case some then {
+            f9 = o9
+        } case none then null
+    }
+    {
+        o8: ty.sumPairSecondArm.get key: k9
+        match (
+            o8
+        ) case some then {
+            s9 = o8
+        } case none then null
+    }
+    if f9 == 0 then return 0
+    if s9 == 0 then return 0
     # variantTagBase records 0 for a DATA-sourced tag, a numeric base for a
     # declared one, and nothing when none was declared. Only the data case
     # detaches the value from the position: a declared numeric is still
-    # sequential from 0, so arm 0 still carries 0.
+    # sequential from 0, so the arm written first carries 0.
+    isData9: false
     {
         tb9: ty.variantTagBase.get key: k9
         match (
             tb9
         ) case some then {
-            if tb9 == 0 then return 0
+            if tb9 == 0 then isData9 = true
         } case none then null
     }
-    o9: ty.sumPairFirstArm.get key: k9
-    match (
-        o9
-    ) case some then {
-        return o9
-    } case none then {
+    if (isData9) == false then return f9
+    # A data block names its own values, so the pair is boolean-like only when
+    # those values ARE a discriminator pair -- 0 and 1, in either written
+    # order. The arm carrying 0 is the falsy one wherever it stands. Any other
+    # set (`{ ON: 1  OFF: 2 }`, `{ HI: 5  LO: 0 }`) is an enumeration that
+    # happens to have two elements, not a truth value.
+    dt9: u64
+    {
+        d0: ty.declChildOfId parentTypeId: (ztypes.tid.create from: k9.u64) nameId: zast.wkTag
+        match (
+            d0
+        ) case some then {
+            dt9 = d0
+        } case none then null
+    }
+    if dt9 == 0 then return 0
+    if (sumPairArmValueIs :ty dataTid: dt9 armName: f9 want: 0) then {
+        if (sumPairArmValueIs :ty dataTid: dt9 armName: s9 want: 1) then return f9
         return 0
     }
+    if (sumPairArmValueIs :ty dataTid: dt9 armName: s9 want: 0) then {
+        if (sumPairArmValueIs :ty dataTid: dt9 armName: f9 want: 1) then return s9
+    }
+    return 0
 }
 
 # isSumPair -- is `tid` a 2-arm sum type with a falsy arm? The question
