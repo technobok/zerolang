@@ -371,11 +371,24 @@ types are compatible.</p>
 <p>A stack of nodes being typechecked is maintained as checking proceeds. This
 allows the type checker to catch circular dependencies.</p>
 <h3 id="demand-driven-resolution"><a href="#demand-driven-resolution">7.1. Demand-Driven Resolution</a></h3>
-<p>The type checker is demand-driven: it starts from <code>main</code> and resolves names
-on demand as they are referenced. Types, functions, and definitions that are
+<p>The type checker is demand-driven: it starts from <code>main</code> and resolves
+definitions as they are referenced. Types, functions, and definitions that are
 never reachable from <code>main</code> are never type-checked. This ensures the compiler
 only processes what is needed, and circular dependencies are detected when a
 name is encountered that is already on the resolution stack.</p>
+<p>There is one environment. Every unit's top-level names are indexed before any
+resolution (the declaration tree: each unit is a frame whose children are its
+definitions, each carrying its resolution state -- not yet touched, demanded,
+being resolved, resolved). A reference resolves by walking the frames from the
+inside out: the enclosing namespace, the current unit, then the prelude
+(<code>core</code>, whose members are re-exports); the first match wins, and a
+qualified <code>unit.member</code> names its unit directly and walks nothing. The
+declaration a reference finds is what it demands -- never a bare name -- so a
+name defined in two units can only ever reach the one the reference could see,
+and the standard library is resolved by exactly the same rule as any other unit.
+Demanded declarations are queued in discovery order and resolved from the top
+level, each one's body scanned for further references only once its own
+resolution completes.</p>
 <p>The rule holds for the unit being compiled exactly as it does for its
 dependencies, which is why that unit must declare a <code>main</code> at all
 (<strong>E0039</strong>): without a root there is nothing to demand from. What a type
@@ -624,11 +637,8 @@ small exceptions list for the stream/statement specials and two
 renames) and that every referenced <code>_Z_*</code> fragment is on disk.</p>
 <p><em><strong>Bodied free functions</strong></em> in these units are ordinary emitted
 zerolang (<code>io.removeTree</code> is the living example). They are
-demand-gated end to end, as every unit's are -- what is particular to
-these units is only WHEN: the type checker resolves and walks them in a
-final <code>checkBodies</code> pass, after the main unit settles, so demand
-order cannot disturb the main unit's shadow and monomorph resolution --
-and only in programs whose demand loop referenced them; the emitter
+demand-gated end to end, as every unit's are: resolved when a reference
+reaches them and walked with every other resolved body; the emitter
 correspondingly skips undemanded bodies in <code>emitFnsIn</code> and the
 literal pool, so an unused stdlib body cannot drag runtime fragments
 or unmaterialized monos into unrelated programs. Sibling

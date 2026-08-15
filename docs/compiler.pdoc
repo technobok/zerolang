@@ -297,11 +297,25 @@ allows the type checker to catch circular dependencies.
 
 #---: Demand-Driven Resolution
 
-The type checker is demand-driven: it starts from #~"main" and resolves names
-on demand as they are referenced. Types, functions, and definitions that are
+The type checker is demand-driven: it starts from #~"main" and resolves
+definitions as they are referenced. Types, functions, and definitions that are
 never reachable from #~"main" are never type-checked. This ensures the compiler
 only processes what is needed, and circular dependencies are detected when a
 name is encountered that is already on the resolution stack.
+
+There is one environment. Every unit's top-level names are indexed before any
+resolution (the declaration tree: each unit is a frame whose children are its
+definitions, each carrying its resolution state -- not yet touched, demanded,
+being resolved, resolved). A reference resolves by walking the frames from the
+inside out: the enclosing namespace, the current unit, then the prelude
+(#~"core", whose members are re-exports); the first match wins, and a
+qualified #~"unit.member" names its unit directly and walks nothing. The
+declaration a reference finds is what it demands -- never a bare name -- so a
+name defined in two units can only ever reach the one the reference could see,
+and the standard library is resolved by exactly the same rule as any other unit.
+Demanded declarations are queued in discovery order and resolved from the top
+level, each one's body scanned for further references only once its own
+resolution completes.
 
 The rule holds for the unit being compiled exactly as it does for its
 dependencies, which is why that unit must declare a #~"main" at all
@@ -598,11 +612,8 @@ renames) and that every referenced #~"_Z_*" fragment is on disk.
 
 #_*"Bodied free functions" in these units are ordinary emitted
 zerolang (#~"io.removeTree" is the living example). They are
-demand-gated end to end, as every unit's are -- what is particular to
-these units is only WHEN: the type checker resolves and walks them in a
-final #~"checkBodies" pass, after the main unit settles, so demand
-order cannot disturb the main unit's shadow and monomorph resolution --
-and only in programs whose demand loop referenced them; the emitter
+demand-gated end to end, as every unit's are: resolved when a reference
+reaches them and walked with every other resolved body; the emitter
 correspondingly skips undemanded bodies in #~"emitFnsIn" and the
 literal pool, so an unused stdlib body cannot drag runtime fragments
 or unmaterialized monos into unrelated programs. Sibling

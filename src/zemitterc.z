@@ -17715,10 +17715,11 @@ isCollectionOriginTid: function {ctx: Ctx.view originTid: ztypes.tid} out bool i
     return false
 }
 
-# cTypeForNameTid -- like cTypeForName, but a user type SHADOWING a scalar (its
-# tid is defined in a user unit) emits its struct (typeRefC), not the by-name C
-# scalar. For collection-mono VAL_T/KEY_T/ELEM_T where the element/key/value tid
-# is known. A non-shadow tid (system scalar or shell) keeps the by-name path.
+# cTypeForNameTid -- like cTypeForName, for a site that holds the tid: a
+# native scalar (the declaration's marker) or a shell spells by name, as
+# cTypeOf does; everything else -- a user type shadowing a scalar, a mono, a
+# stdlib class -- spells from its id. For collection-mono VAL_T/KEY_T/ELEM_T
+# where the element/key/value tid is known.
 cTypeForNameTid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -17726,19 +17727,8 @@ cTypeForNameTid: function {
     name: StringView
     tid: ztypes.tid
 } out String is {
-    ush8: (ztypecheck.isUserShadowElem
-        ty: symtab.typing
-        reg: symtab.reg
-        elemTid: (ztypes.tid.create from: tid.u64)
-    )
-    if ush8 then return (typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid)
-    # a mono is inherently canonical: its name would resolve back to this id,
-    # so spell it from the id and skip the name round-trip
-    if (originTidOf
-        :symtab
-        :tid
-    ) > 0 then return (typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid)
-    return (cTypeForName :ast :symtab :ctx :name)
+    if (scalarTidIsBuiltin :symtab :tid) then return (cTypeForName :ast :symtab :ctx :name)
+    return (typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid)
 }
 
 # cTypeForName -- the C type for a type NAME: scalar via cTypeOf, else
