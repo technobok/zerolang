@@ -1129,15 +1129,21 @@ ZSymbolTable: class {
     # of these over entry tables hundreds long -- the doubling chain was a
     # top-5 allocation site).
     releaseHeldLocks: function {:this holder: ztypes.zlockholder} is {
-        any9: false
+        # Entries below the first one this holder locked keep their places;
+        # the rebuild starts there.
+        first9: this.entries.length
+        idx9: u64
         with it9: this.entries.iterate do for e9: it9 loop {
             if e9.hasLock then {
-                if (holderEq a: e9.lockHolder b: holder) then any9 = true
+                if (holderEq a: e9.lockHolder b: holder) then {
+                    if idx9 < first9 then first9 = idx9
+                }
             }
+            idx9 = idx9 + 1
         }
-        if any9 == false then return
-        rev: (List ZEntry) capacity: this.entries.length
-        for this.entries.length > 0 loop rev.append this.entries.pop
+        if first9 >= this.entries.length then return
+        rev: (List ZEntry) capacity: (this.entries.length - first9)
+        for this.entries.length > first9 loop rev.append this.entries.pop
         for rev.length > 0 loop {
             e: rev.pop
             drop: false
