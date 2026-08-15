@@ -9426,37 +9426,6 @@ demandAllDefs: function {
     } else null
 }
 
-# nativeOnlyBodyError -- one diagnostic for a bodied function declared in a
-# native-only stdlib unit (its C would never be emitted; calls fail at link).
-nativeOnlyBodyError: function {
-    ty: ztyping.ZTyping
-    unitName: StringView
-    fnName: StringView
-    nodeid: zast.nodeid
-    lineno: u32
-    colno: u32
-} is {
-    unc9: unitName
-    fnc9: fnName
-    em9: "type method '\{fnc9}' in unit '\{unc9}' cannot carry a .z body: the type is runtime-backed"
-    en9: (
-        "the runtime-backed stdlib units' types are implemented by the C runtime; their methods are 'is native'"
-    ).string
-    eh9: "implement it as a native under src/runtime, or as a free function taking the value".string
-    ty.errors.append (zast.ErrorData
-        :nodeid
-        :lineno
-        :colno
-        width: fnName.length.u32.orPanic
-        err: zast.err.typeError
-        msg: em9
-        fsno: zvfs.fsno
-        note: en9
-        hint: eh9
-    )
-    ty.isError = true
-}
-
 # noMainError -- the target unit declares no `main`, so demand has no root.
 # Positioned on the unit's own definition: there is no node to point at, the
 # absence IS the error.
@@ -9487,88 +9456,6 @@ noMainError: function {
         hint: eh9
     )
     ty.isError = true
-}
-
-# nativeOnlyCheckOp -- one unit member: a bodied top-level function errors
-# directly; a type's is/as members are scanned for bodied methods.
-nativeOnlyCheckOp: function {
-    ast: Ast.view
-    ty: ztyping.ZTyping.view
-    unitName: StringView
-    defName: StringView
-    op: Node.view
-} is {
-    # a bodied FREE function here is ordinary emitted code (only the
-    # unit's TYPES are runtime-backed); nothing to reject at this level
-    match (
-        op
-    ) case objectdef then {
-        with iit9: op.isItems.iterate do for im9Id9: iit9 loop {
-            im9: ast.nodes.get i: (im9Id9 - 1).u64
-            match (
-                im9
-            ) case namedoperation then {
-                if (isFunctionDefWithBody o: (ast.nodes.get i: (im9.operation - 1).u64)) then {
-                    in9: zast.nameTextAt :ast ref: im9.name
-                    mn9: "\{defName}.\{in9}"
-                    (nativeOnlyBodyError
-                        :ty
-                        :unitName
-                        fnName: mn9.stringview
-                        nodeid: (nodeId n: (ast.nodes.get i: (im9.operation - 1).u64))
-                        lineno: (nodeLine n: (ast.nodes.get i: (im9.operation - 1).u64))
-                        colno: (nodeCol n: (ast.nodes.get i: (im9.operation - 1).u64))
-                    )
-                }
-            } else null
-        }
-        with ait9: op.asItems.iterate do for am9Id9: ait9 loop {
-            am9: ast.nodes.get i: (am9Id9 - 1).u64
-            match (
-                am9
-            ) case namedoperation then {
-                if (isFunctionDefWithBody o: (ast.nodes.get i: (am9.operation - 1).u64)) then {
-                    an9: zast.nameTextAt :ast ref: am9.name
-                    amn9: "\{defName}.\{an9}"
-                    (nativeOnlyBodyError
-                        :ty
-                        :unitName
-                        fnName: amn9.stringview
-                        nodeid: (nodeId n: (ast.nodes.get i: (am9.operation - 1).u64))
-                        lineno: (nodeLine n: (ast.nodes.get i: (am9.operation - 1).u64))
-                        colno: (nodeCol n: (ast.nodes.get i: (am9.operation - 1).u64))
-                    )
-                }
-            } else null
-        }
-    } else null
-}
-
-# checkNativeOnlyUnitBodies -- the runtime-backed stdlib units
-# (system/core/collections/io/os/cli) implement their TYPES in the C
-# runtime: a type method with a .z body there would never be emitted
-# (emitRecordDefs excludes those units), so reject it eagerly. Bodied
-# FREE functions are fine -- they emit like any cross-unit function.
-checkNativeOnlyUnitBodies: function {
-    ast: Ast.view
-    ty: ztyping.ZTyping.view
-    unitName: StringView
-    unitdefId: zast.nodeid
-} is {
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
-    with dit9: bodyIds9.iterate do for dm9Id9: dit9 loop {
-        dm9: ast.nodes.get i: (dm9Id9 - 1).u64
-        if dm9.namedoperation then {
-            dn9: zast.nameTextAt :ast ref: dm9.name
-            (nativeOnlyCheckOp
-                :ast
-                :ty
-                :unitName
-                defName: dn9.stringview
-                op: (ast.nodes.get i: (dm9.operation - 1).u64)
-            )
-        }
-    }
 }
 
 # unitHasDemandedBodiedFn -- a unit carries a top-level bodied function the
@@ -9652,14 +9539,6 @@ registerAndResolveMain: function {
                     unitName: nm9.stringview
                     unitdefId: opId9
                 )
-                if (isStdlibUnitName name: nm9.stringview) then {
-                    (checkNativeOnlyUnitBodies
-                        :ty
-                        ast: program.ast
-                        unitName: nm9.stringview
-                        unitdefId: opId9
-                    )
-                }
                 eager9: nm9.stringview == mainName
                 if eager9 then {
                     (resolveUnitBody
