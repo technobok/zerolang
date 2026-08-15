@@ -96,6 +96,7 @@ LOC tracking starts at the 2026-07-23 row; earlier rows are "—" (not back-meas
 | 2026-08-07 | 347a3bad | **The C compiler's clean-up pool goes to zero -- `fa1c51fe`..`347a3bad` (6 commits).** `Lexer.peek` handed back an owned `Token`, copying the token text 1,128,811 times per self-compile; **756,750 of those copies were never read**, which was the ENTIRE gcc-vs-clang allocation gap, at one call site (see the Toolchain findings section -- the mechanism recorded there was wrong, and it was never a tree-wide pool). 57 of the parser's 64 peek sites wanted only a token type or a source position. The Lexer now answers those without copying -- `peekType`, `peekPos` (a `tokpos` valtype: fsno, line, column, and the text's byte WIDTH, which is all `mkError` ever read from the text), `peekText` (a view) -- and `peek`/`currentCopy` are DELETED: no reader copies the buffered token at all. `mkErrorAt` builds an error node from a span, the fold family and the three definition parsers carry a lexer or a span instead of a Token, and the string-chunk loop moves its text out via `acceptAny` instead of copying then swapping. **The split is by LIFETIME**: a `tokpos` copies out, so seven rules still name their first token in a diagnostic raised long after the lexer advanced -- a view cannot serve there, which is why one view-shaped token would not have worked. Allocs 9,082,959 (measured at `c5099056`, the arc's start) -> 7,959,463 (**-1,123,496, -12.4%**), bytes 529MB -> 524MB, `String_copy` blocks 3,471,363 -> 2,347,100. **`make perf-elision` (new) reports a write-only pool of ZERO** -- a gcc build and a clang build of `bin/zc.c` now make the same number of allocations. **Speed, measured the only way that means anything here -- BOTH binaries on the SAME input** (this row's tree, `perf stat -r 7`): instructions 6,667,405,704 -> 6,498,566,959 (**-2.53%**, +-0.04%/+-0.01%), cycles -2.04%, task-clock 562.65 -> 551.30ms (-2.02%). The wall COLUMN reads 0.53s -> 0.55s across these two rows and that is **not** a regression: every row times the compiler on its own current source, and the source grew (89,382 -> 89,808, only part of it this arc). Peak RSS likewise -- on identical input both binaries bottom out at ~114MB. **Do not read the wall/RSS columns as an A/B when LOC moved.** | 0.55s | 0.60s | 122MB / 112MB | 95 / 256 / 191 (total 542) | 7,959,463 | 524MB | 16.7s | 89808 |
 | 2026-08-10 | 29dd84f8 | **Three arcs, 93 commits `347a3bad`..`29dd84f8`, measured together because the middle two were never rowed: the tcc external backend (`2d48cdc7`..`30ebceb1`), compile-time values (`b112e3d6`..`9e67f615`), and C12 static string ops (`01ec23aa`..`29dd84f8`).** Span vs the 2026-08-07 row on LOC +3.6%: wall FLAT, phases FLAT (542 -> 561 total, parse 95 -> 91, typecheck 256 -> 256, emit 191 -> 201), peak RSS 122 -> 116MB, `make test` 16.7 -> 14.0s on MORE cases (1011 vs ~1006). **allocs +4.8% (7,959,463 -> 8,341,026) against LOC +3.6%, and bytes DOWN 8.9% (524 -> 477MB)** -- the span is allocation-flat-to-better per line, but the two middle arcs were not separately measured so none of it is attributable. **The only rigorous A/B here is C12's, both binaries on IDENTICAL input (HEAD's src), `perf stat -r 7` vs a `9e67f615` worktree binary at the same flags: instructions 6,546,954,470 -> 6,533,736,764 (-0.20%), cycles -0.33%, task-clock 574.2 -> 567.2ms, allocs +15,168 (+0.18%), bytes flat (-27,864).** So C12 is performance-neutral. **It did not start that way, and the miss is the lesson: the bare-atom value check pulled the constant evaluator for EVERY bare atom that resolved to a type**, to catch the one shape where a constant is mistaken for a type alias -- instructions +0.69%, outside the +-0.25% spread, while cycles and wall stayed flat and hid it. Moving the pull BEHIND the alias test (same semantics -- the constant still overrules it) recovered the whole 0.89%. **Allocations did not move either way**: the pull returned early with no allocation for a name that is not a constant, so this was pure CPU in `constUnitTid`/`poolFind`/`constDefNodeId` and the allocation column could never have caught it. Instructions did. `make perf-elision` still reports a **write-only pool of ZERO** -- worth checking here specifically, because C12 added a second literal pool (`_zcs`) and a new arg-hoist path for non-lvalue String operands of `+`. | 0.55s | 0.63s | 116MB / 113MB | 91 / 256 / 201 (total 561, medians of 7) | 8,341,026 | 477MB | 14.0s | 93,020 |
 | 2026-08-12 | e9cbb09f | **Two arcs, 76 commits `29dd84f8`..`ac6f307f`, measured together because the first was never rowed: the native table (`20b7b7d8`..`cca9d6b4`, 65 commits) and the generic runtime pass (`cca9d6b4`..`ac6f307f`, 11 commits).** Span vs the 2026-08-10 row on LOC +3.5%: **allocs +3.5% (8,341,026 -> 8,635,934) -- exactly proportional to input, so flat per line**; bytes 477 -> 510MB (+6.9%, the one column outpacing LOC and NOT attributed, since the native-table arc was not separately measured); wall 0.55 -> 0.56s, phases 561 -> 580 total, `make test` 14.0 -> 13.9s on more cases. **The rigorous A/B is the runtime-pass arc's, both binaries on IDENTICAL input (HEAD's `src`, `--emit-c /dev/null`), `perf stat -r 7`: instructions 6,667,576,785 -> 6,672,266,203 (+0.07%, spread +-0.02%), cycles -0.09% (+-0.45%), task-clock 595.9 -> 588.5ms (+-1.4%) -- CPU FLAT, the instruction rise real but pipeline-hidden. Allocs +11,510 (+0.13%) and bytes -12,786 (FLAT).** The pass trades seven hand-written emitters for one walk over 122 table rows per unit, so the block count carries a small structural cost while the bytes do not -- it copies no more, it just asks more often. **One avoidable site was found and fixed in the same measurement (`ac6f307f`): `stmtFormName9` copied the callee's pooled name to compare it against four literals, for every dotted call statement in the program -- -2,709 allocs on identical input.** `make perf-elision` read a write-only pool of **122, not zero** when this span was first measured; chased and CLOSED at `e9cbb09f` -- one write-only copy per fragment row in `loadNativeTbl`, plus a second copy the pool could not see (-225 allocs, -7,787 bytes, both counted in this row's columns). See the section below. | 0.57s | 0.66s | 119MB / 114MB | 101 / 270 / 205 (total 576, medians of 5) | 8,635,709 | 510MB | 13.8s | 96,257 |
+| 2026-08-15 | c335e552 | **Five arcs plus this measurement's own three fixes, 81 commits `e9cbb09f`..`c335e552`**: demand root + outside-in (`16cbd62e`..`0c9b47c5`), native base types (`04f8a1ff`..`522aea55`), truthiness is a shape (`4dae744b`..`100db88a`), stdlib is not special (`100db88a`..`e82f9a4f`), unified environment (`e82f9a4f`..`e56e4bf1`), then `9671b2c8`..`c335e552`. **Bytes churned had MORE THAN DOUBLED across the span -- 510 -> 1,129MB -- and no other column showed it.** Allocations were flat (8,635,709 -> 8,675,188, +0.5% against LOC +1.15%), wall and phases improved, `make test` and the corpus were green: the same block counts moved ~9x the bytes, and 98% of the excess was two functions. Cause, instrument and fix in the section below; **this row's columns are POST-fix**, and bytes now read 478MB, BELOW the 510MB this span started from. **Per-arc A/B, every binary on IDENTICAL input (HEAD's `src`, `--emit-c /dev/null`), gcc -O1 series binaries, `perf stat -r 7`** -- instruction spread +-0.01..0.03%, and two rounds of ONE binary differ by 0.007%, so a tenth of a percent is signal here: truthiness **+0.13%** instructions, native base types + stdlib **+0.17%**, **unified environment -1.52% (7,054,595,077 -> 6,947,673,171) -- deleting the demand set paid in CPU as well as in architecture**, the three fixes **-7.09% (-> 6,455,199,486)**. Span total **-8.22% instructions, -8.93% cycles, -7.69% task-clock, -57.8% bytes, -0.82% allocations**. `make perf-elision` reports a write-only pool of **ZERO**. **The mimalloc RSS column moved by ENVIRONMENT, not by code**: `e9cbb09f`'s own binary, rebuilt and re-measured here, reads **139MB** against the **119MB** recorded for it on 2026-08-12, while its glibc RSS re-measures at exactly the recorded 114MB. mimalloc retains ~20MB more on this machine now; HEAD's 138MB is 1MB BETTER than the previous row's commit measured beside it today. Read the mi column against 139, not against 119. | 0.52s | 0.64s | 138MB / 114MB | 94 / 239 / 198 (total 531, medians of 7) | 8,640,337 | 478MB | 13.9s | 97,366 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -167,6 +168,62 @@ every container realloc/memmove and move site -- interior pointers cannot
 survive; see the W0 census discussion), Node payload inlining (<1% of blocks).
 Checker gap noted: `capacity:` + a dotted cross-unit value type trips Map
 generic inference (callKind stays unsized).
+
+## The symbol table was rebuilt from the bottom (2026-08-15 @ c335e552)
+
+Bytes churned went 510MB -> 1,129MB over the five arcs above while allocations
+stayed flat. Flat blocks and doubled bytes means the same operations moved
+bigger buffers, and DHAT named them in one profile pair (`e9cbb09f` vs
+`e56e4bf1`, both on HEAD's `src`, symbol names recovered by emitting the same
+tree twice — once `--readable-names`, once not — and mapping `z_t<id>` to name
+by line, since the two files are line-aligned):
+
+| frame | e9cbb09f | e56e4bf1 | delta |
+|---|---|---|---|
+| `ZSymbolTable_discardTakenInCurrentScope` | 18.9MB / 10,060 blk | 482.5MB / 36,391 blk | **+463.6MB** |
+| `ZSymbolTable_releaseHeldLocks` | 19.1MB / 5,001 blk | 160.9MB / 4,914 blk | **+141.8MB** |
+| everything else | | | flat |
+
+Two functions, **98% of a +619MB regression**. Both drained the WHOLE flat
+entry list into a reversed copy and appended it all back to drop a few rows.
+
+**What changed was the table, not the functions** — neither had been touched in
+the span. Instrumenting `entries.length` and `scopes.length` at the discard
+call, one self-compile each:
+
+| | e9cbb09f | e56e4bf1 |
+|---|---|---|
+| calls | 4,428 | 4,514 |
+| entries (mean / max) | **10.4** / 88 | **192.8** / 428 |
+| scopes (mean / max) | **5.5** / 21 | **40.0** / 98 |
+| entries in the CURRENT scope (mean) | 1.07 | 1.05 |
+
+Walking a definition where it is demanded nests body walks, so the scope stack
+is 7x deeper and the flat entry list 18x longer. The call count did not move;
+the cost per call did. That depth is the design working — the waste is that a
+rebuild was O(whole table) when the work is O(current scope): **the current
+scope holds a mean of ONE entry against the 192.8 each call rebuilt.** The
+waste was always there (89.7% at `e9cbb09f`); depth made it expensive.
+
+Three commits, each measured on one self-compile at the default hash:
+
+- `9671b2c8` `discardTakenInCurrentScope` drains from `currentScopeStart`, the
+  bound its own body already tests against: **1,129,437,607 -> 648,858,600 B**.
+- `7acd6886` `releaseHeldLocks` records the index of the first entry the holder
+  locked during the scan it already ran, and rebuilds from there instead of
+  from a bool: **-> 488,878,419 B**.
+- `c335e552` `removeEntryAt` rebuilds from the index it is given:
+  **-> 478,437,420 B**.
+
+Allocations moved -34,851 in total and the emitted C is unchanged (corpus gate
+green) — this is typecheck-internal bookkeeping. `setTakenLocation` still
+drains from the bottom; it indexes by absolute position and never allocated
+enough to appear in a profile.
+
+**The column that caught this was bytes churned, and only it.** Wall, phases,
+RSS, `make test` and the corpus were all fine or improving while the compiler
+moved an extra 619MB per self-compile. It is the one number in this table with
+no other guard behind it, which is the argument for keeping it.
 
 ## The write-only pool: how it left zero, and what put it back (2026-08-12 @ e9cbb09f)
 
