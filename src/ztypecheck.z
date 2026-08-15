@@ -3173,6 +3173,7 @@ recordReturnType: function {
 # references (the head and, transitively, parameter-arg names), so the
 # demand walks resolve a signature's full closure. Creates no types.
 demandTyperefNames: function {
+    ty: ztyping.ZTyping
     ast: Ast.view
     reg: ztypes.ZTypeRegistry
     unitName: StringView
@@ -3185,9 +3186,15 @@ demandTyperefNames: function {
         if (isNumericLiteralName name: teN9.stringview) == false then {
             reg.recordDemand name: teN9.stringview
             reg.recordSeededDemand un: (nameIdOf :ast name: unitName) name: typeExpr.name
+            (demandDefinition
+                :ty
+                frames: (unitFramesOf :ty :ast currentUnit: unitName)
+                nameId: typeExpr.name
+            )
         }
     } case expression then {
         (demandTyperefNames
+            :ty
             :ast
             :reg
             :unitName
@@ -3201,6 +3208,11 @@ demandTyperefNames: function {
                 un: (nameIdOf :ast name: unitName)
                 name: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
             )
+            (demandDefinition
+                :ty
+                frames: (unitFramesOf :ty :ast currentUnit: unitName)
+                nameId: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
+            )
         }
         aiter: typeExpr.arguments.iterate
         for argId9: aiter loop {
@@ -3209,6 +3221,7 @@ demandTyperefNames: function {
                 arg
             ) case namedoperation then {
                 (demandTyperefNames
+                    :ty
                     :ast
                     :reg
                     :unitName
@@ -3218,6 +3231,7 @@ demandTyperefNames: function {
         }
     } case dottedpath then {
         (demandTyperefNames
+            :ty
             :ast
             :reg
             :unitName
@@ -3267,6 +3281,11 @@ resolveTyperefShell: function {
         teR9: ast.names.texts.get i: (typeExpr.name - 1).u64
         reg.recordDemand name: teR9.stringview
         reg.recordSeededDemand un: (nameIdOf :ast name: unitName) name: typeExpr.name
+        (demandDefinition
+            :ty
+            frames: (unitFramesOf :ty :ast currentUnit: unitName)
+            nameId: typeExpr.name
+        )
         return (resolveAtomType
             :ty
             :reg
@@ -3313,6 +3332,11 @@ resolveTyperefShell: function {
             un: (nameIdOf :ast name: unitName)
             name: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
         )
+        (demandDefinition
+            :ty
+            frames: (unitFramesOf :ty :ast currentUnit: unitName)
+            nameId: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
+        )
         aiter: typeExpr.arguments.iterate
         for argId9: aiter loop {
             arg: ast.nodes.get i: (argId9 - 1).u64
@@ -3323,6 +3347,7 @@ resolveTyperefShell: function {
                 suffix.append "_"
                 suffix.append an
                 (demandTyperefNames
+                    :ty
                     :ast
                     :reg
                     :unitName
@@ -3347,6 +3372,11 @@ resolveTyperefShell: function {
             (reg.recordSeededDemand
                 un: (nameIdOf :ast name: unitName)
                 name: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.child - 1).u64))
+            )
+            (demandUnitMember
+                :ty
+                unitNameId: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.parent - 1).u64))
+                nameId: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.child - 1).u64))
             )
             did8: descendNamed :ty :reg :ast defUnit: pNm.stringview name: cNm.stringview
             if did8 > 0 then return did8
@@ -3682,6 +3712,7 @@ isNativeValueView: function {name: StringView} out bool is {
 # name (`out (Result t: u64 e: IoError)` -> demand "Result"), so a type named only
 # in a return position is resolved. The Option is borrowed, never bound.
 demandReturnType: function {
+    ty: ztyping.ZTyping
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     unitName: StringView
@@ -3689,7 +3720,7 @@ demandReturnType: function {
 } is {
     if oId.isZero then return
     o: ast.nodes.get i: (oId - 1).u64
-    demandTyperefNames :ast :reg :unitName typeExpr: o
+    demandTyperefNames :ty :ast :reg :unitName typeExpr: o
 
 }
 
@@ -4159,7 +4190,7 @@ resolveFunction: function {
             }
         } else null
     }
-    demandReturnType :ast :reg :unitName oId: fnode.returntype
+    demandReturnType :ty :ast :reg :unitName oId: fnode.returntype
     (recordReturnType
         :ty
         :reg
@@ -7212,6 +7243,11 @@ unionCustomTagId: function {
                         # the tag base resolves later (demand order): record
                         # the demand and a pending fixup for the tag child.
                         reg.recordDemand name: pn.stringview
+                        (demandDefinition
+                            :ty
+                            frames: (unitFramesOf :ty :ast currentUnit: unitName)
+                            nameId: (zast.poolFind pool: ast.names text: pn.stringview)
+                        )
                         uk: uid
                         pv: pn.copy
                         ty.pendingCustomTag.set key: uk value: pv
@@ -8808,7 +8844,7 @@ resolveDef: function {
     # FSProvider) and reached none of the per-caller copies of this. recordDemand
     # is a set add, so a repeat visit costs a probe and cannot grow the registry,
     # which is what the demand fixpoint measures progress by.
-    scanDefCalls :ast :reg scanUnit: (nameIdOf :ast name: unitName) op: defn
+    scanDefCalls :ty :ast :reg scanUnit: (nameIdOf :ast name: unitName) op: defn
     ty.declSetResolving declId: rdecl0 mark: true
     # A containment edge is ONE hop: this def's own resolution starts a
     # fresh context (its field/arm legs re-arm the flag), so an outer field
@@ -8947,6 +8983,7 @@ resolveDef: function {
             acId9: atomNameId :ast n: (ast.nodes.get i: (defn.child - 1).u64)
             reg.recordDemand name: acNm9.stringview
             reg.recordSeededDemand un: (nameIdOf :ast name: unitName) name: acId9
+            demandUnitMember :ty unitNameId: apId9 nameId: acId9
             # The alias target is read off the re-export Decl's node on demand
             # (reexportTargetIdsOf); resolution reuses the target's canonical id.
             if (ty.declIsResolving
@@ -9331,13 +9368,20 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
 # when a stdlib unit is the MAIN unit (an editor opened it): its type
 # defs have no in-graph consumers, so nothing would demand them and
 # their signature typerefs would never stamp.
-demandAllUnitDefs: function {reg: ztypes.ZTypeRegistry ast: Ast.view unitdefId: zast.nodeid} is {
+demandAllUnitDefs: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast.view
+    unitNameId: zast.nameid
+    unitdefId: zast.nodeid
+} is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
     with dit9: bodyIds9.iterate do for bm9Id9: dit9 loop {
         bm9: ast.nodes.get i: (bm9Id9 - 1).u64
         if bm9.namedoperation then {
             dn9: zast.nameTextAt :ast ref: bm9.name
             if dn9.length > 0 then reg.recordDemand name: dn9.stringview
+            demandUnitMember :ty :unitNameId nameId: bm9.name
         }
     }
 }
@@ -9360,12 +9404,16 @@ demandAllDefs: function {
             duId9: (zast.nodeid.create from: (program.ast.units.get i: duI9))
             duI9 = duI9 + 1
             duOp9: zast.nodeid
+            duNm9: zast.nameid
             {
                 dun9: program.ast.nodes.get i: (duId9 - 1).u64
-                if dun9.namedoperation then duOp9 = dun9.operation
+                if dun9.namedoperation then {
+                    duOp9 = dun9.operation
+                    duNm9 = dun9.name
+                }
             }
             if duOp9 > 0 then {
-                demandAllUnitDefs :reg ast: program.ast unitdefId: duOp9
+                demandAllUnitDefs :ty :reg ast: program.ast unitNameId: duNm9 unitdefId: duOp9
             }
         }
     } else null
@@ -10012,11 +10060,213 @@ unitHasObjectMethodBody: function {ast: Ast.view defId: u32} out bool is {
 # builtin, so the closure pulls `return` + its `out never` type. The .z resolver does
 # signatures only, so when the MAIN unit has any objectdef with a method-with-body,
 # demand `return` + `never` to match.
+# unitFramesOfId -- unitFramesOf for a caller holding the unit's name id.
+unitFramesOfId: function {ty: ztyping.ZTyping.view unitNameId: zast.nameid} out zframes is {
+    ur9: ztypes.declid
+    uro9: ty.unitRootByName.get key: unitNameId.u64
+    match (
+        uro9
+    ) case some then {
+        ur9 = uro9
+    } case none then null
+    return (zframes nsRoot: ztypes.declid unitRoot: ur9 preludeRoot: ty.coreUnitRoot)
+}
+
+# demandDecl -- a reference found this declaration: queue it for resolution
+# unless it is resolved, mid-resolution, already queued, or a prelude
+# re-export already followed to its target. The mark lives on the
+# declaration, so the walk that finds a definition also finds its state.
+demandDecl: function {ty: ztyping.ZTyping declId: ztypes.declid} is {
+    if (ty.declValid id: declId) == false then return
+    if (ty.declIsPending :declId) then return
+    if (ty.declIsResolving :declId) then return
+    if (ty.declIsDefined :declId) then return
+    {
+        do9: ty.decls.get i: (declId - 1)
+        if do9.parent == ty.coreUnitRoot when do9.typeId > 0 then return
+    }
+    ty.declSetPending :declId mark: true
+    ty.pendingDefs.append from: declId
+}
+
+# demandDefinition -- a bare name written in `frames` demands the definition
+# the environment walk finds for it, if any: a local variable, a member, or
+# an unknown name finds nothing and demands nothing.
+demandDefinition: function {ty: ztyping.ZTyping frames: zframes nameId: zast.nameid} is {
+    hit9: lookupDefinition :ty :frames :nameId
+    if (hit9.declId.isZero) == false then demandDecl :ty declId: hit9.declId
+}
+
+# demandUnitMember -- a qualified `unit.member` demands exactly that unit's
+# member; the chain is not walked. A name the unit does not define directly
+# may be an exported alias (`perimeter: perimImpl`), whose edge hangs under
+# the unit's public block.
+demandUnitMember: function {ty: ztyping.ZTyping unitNameId: zast.nameid nameId: zast.nameid} is {
+    ro9: ty.unitRootByName.get key: unitNameId.u64
+    match (
+        ro9
+    ) case some then {
+        d9: ty.declFindChild parentDeclId: ro9 :nameId
+        if (d9.isZero) == false then {
+            demandDecl :ty declId: d9
+            return
+        }
+        pub9: publicNsChildOf :ty root: ro9
+        if (pub9.isZero) == false then {
+            e9: ty.declFindChild parentDeclId: pub9 :nameId
+            if (e9.isZero) == false then demandDecl :ty declId: e9
+        }
+    } case none then null
+}
+
+# publicNsChildOf -- a unit root's `public:` block Decl, or zero. Read one
+# child slot at a time: a second decls probe cannot run under a live
+# children borrow.
+publicNsChildOf: function {ty: ztyping.ZTyping root: ztypes.declid} out ztypes.declid is {
+    kn9: ty.declChildSlots declId: root
+    ki9: u64
+    for ki9 < kn9 loop {
+        kd9: ztypes.declid
+        {
+            if (ty.declValid id: root) then {
+                do9: ty.decls.get i: (root - 1)
+                kd9 = (do9.children.get i: ki9).declId
+            }
+        }
+        ki9 = ki9 + 1
+        if (ty.declValid id: kd9) then {
+            ko9: ty.decls.get i: (kd9 - 1)
+            if ko9.kind.publicNs then return kd9
+        }
+    }
+    return (ztypes.declid.create from: 0)
+}
+
+# resolveDemandedDecl -- resolve one demanded declaration now, unless it is
+# already resolved or mid-resolution: a prelude re-export follows its alias
+# to the target; otherwise the dispatch is the unit sweeps' -- a namespace
+# or subunit through resolveNamespaceUnit, a template through
+# resolveInlineGenericUnit, every other definition through resolveDef.
+resolveDemandedDecl: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    declId: ztypes.declid
+} is {
+    ty.declSetPending :declId mark: false
+    if (ty.declValid id: declId) == false then return
+    if (ty.declIsResolving :declId) then return
+    if (ty.declIsDefined :declId) then return
+    dName9: u32
+    dParent9: ztypes.declid
+    dNode9: u64
+    dTid9: ztypes.tid
+    {
+        do9: ty.decls.get i: (declId - 1)
+        dName9 = do9.name
+        dParent9 = do9.parent
+        dNode9 = do9.node.u64
+        dTid9 = do9.typeId
+    }
+    if dParent9.isZero then return
+    if (ty.declValid id: dParent9) == false then return
+    puNm9: u32
+    {
+        pdo9: ty.decls.get i: (dParent9 - 1)
+        puNm9 = pdo9.name
+    }
+    unitName9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: puNm9)
+    defName9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: dName9)
+    if dParent9 == ty.coreUnitRoot then {
+        if dTid9.isZero then {
+            resolveAliasKey :ty :reg :ast defUnit: unitName9.stringview name: defName9.stringview
+        }
+        return
+    }
+    if dNode9 == 0 then return
+    opId9: zast.nodeid
+    {
+        nop9: ast.nodes.get i: (dNode9 - 1)
+        if nop9.namedoperation then opId9 = nop9.operation
+    }
+    if opId9.isZero then return
+    isNs9: false
+    if (zast.unitOpKindIs :ast opId: opId9 k: zast.unitkind.namespace) then isNs9 = true
+    if (zast.unitOpKindIs :ast opId: opId9 k: zast.unitkind.subunit) then isNs9 = true
+    isTmpl9: (zast.unitOpKindIs :ast opId: opId9 k: zast.unitkind.template)
+    if isNs9 then {
+        (resolveNamespaceUnit
+            :ty
+            :reg
+            :ast
+            unitName: unitName9.stringview
+            defName: defName9.stringview
+            parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: puNm9))
+            parentDeclId: dParent9
+            unitOpId: opId9
+        )
+        ty.declSetDefined :declId
+    } else if isTmpl9 then {
+        (resolveInlineGenericUnit
+            :ty
+            :reg
+            :ast
+            unitName: unitName9.stringview
+            defName: defName9.stringview
+            parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: puNm9))
+            parentDeclId: dParent9
+            unitOpId: opId9
+        )
+        ty.declSetDefined :declId
+    } else if (isUnitOp op: (ast.nodes.get i: (opId9 - 1).u64)) then {
+        return
+    } else {
+        (resolveDef
+            :ty
+            :reg
+            :ast
+            unitName: unitName9.stringview
+            defName: defName9.stringview
+            defn: (ast.nodes.get i: (opId9 - 1).u64)
+        )
+    }
+}
+
+# unitTidOfName9 -- the unit type a unit name stands for, as the sweeps read
+# it: the name-keyed unit table.
+unitTidOfName9: function {
+    reg: ztypes.ZTypeRegistry.view
+    unitNameId: zast.nameid
+} out ztypes.tid is {
+    uo9: reg.unitNameTid.get key: unitNameId.u64
+    match (
+        uo9
+    ) case some then {
+        return (ztypes.tid.create from: uo9.u64)
+    } case none then null
+    return (ztypes.tid.create from: 0)
+}
+
+# resolveDemandedDefs -- resolve every demanded declaration, in discovery
+# order, including the ones each resolution demands in turn: a definition's
+# body is scanned once its own resolution completes, so a callee is never
+# resolved inside its caller's grey window. Runs at the top level only.
+resolveDemandedDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry ast: Ast} is {
+    i9: u64
+    for i9 < ty.pendingDefs.length loop {
+        d9: ty.pendingDefs.get i: i9
+        i9 = i9 + 1
+        resolveDemandedDecl :ty :reg :ast declId: d9
+    }
+    ty.pendingDefs = (ListVal ztypes.declid)
+}
+
 # scanCallsInNode -- recursively record demands for the call targets in an
 # expression/statement subtree (the body-walk pre-pass): `return` pulls
 # return+never, any other bare-atom callable (e.g. `print`) is demanded by name
 # so the cross-unit pass resolves it before the walk runs.
 scanCallsInNode: function {
+    ty: ztyping.ZTyping
     ast: Ast.view
     reg: ztypes.ZTypeRegistry
     scanUnit: zast.nameid
@@ -10026,19 +10276,33 @@ scanCallsInNode: function {
         node
     ) case statement then {
         for stmId9: node.statements.iterate loop {
-            scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (stmId9 - 1).u64)
+            scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (stmId9 - 1).u64)
         }
     } case statementline then {
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.statementline - 1).u64)
+        (scanCallsInNode
+            :ty
+            :ast
+            :reg
+            :scanUnit
+            node: (ast.nodes.get i: (node.statementline - 1).u64)
+        )
     } case expression then {
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.expression - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.expression - 1).u64)
     } case call then {
         cn: atomName :ast n: (ast.nodes.get i: (node.callable - 1).u64)
         if cn.stringview == "return" then {
             reg.recordDemand name: "return"
             reg.recordDemand name: "never"
+            scFr9: unitFramesOfId :ty unitNameId: scanUnit
+            demandDefinition :ty frames: scFr9 nameId: zast.wkReturn
+            demandDefinition :ty frames: scFr9 nameId: (zast.poolFind pool: ast.names text: "never")
         } else {
             if cn.length > 0 then reg.recordDemand name: cn.stringview
+            if cn.length > 0 then (demandDefinition
+                :ty
+                frames: (unitFramesOfId :ty unitNameId: scanUnit)
+                nameId: (atomNameId :ast n: (ast.nodes.get i: (node.callable - 1).u64))
+            )
             # a bare callable in unit U's body is U's own internal demand:
             # record it per-unit so U's def survives a main-unit shadow
             if cn.length > 0 when (scanUnit.isZero) == false then (reg.recordUnitDemand
@@ -10046,18 +10310,24 @@ scanCallsInNode: function {
                 name: (atomNameId :ast n: (ast.nodes.get i: (node.callable - 1).u64))
             )
         }
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.callable - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.callable - 1).u64)
         for argId9: node.arguments.iterate loop {
             arg: ast.nodes.get i: (argId9 - 1).u64
             match (
                 arg
             ) case namedoperation then {
-                scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (arg.operation - 1).u64)
+                (scanCallsInNode
+                    :ty
+                    :ast
+                    :reg
+                    :scanUnit
+                    node: (ast.nodes.get i: (arg.operation - 1).u64)
+                )
             } else null
         }
     } case atomstring then {
         for spId9: node.stringparts.iterate loop {
-            scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (spId9 - 1).u64)
+            scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (spId9 - 1).u64)
         }
     } case atomid then {
         # bare body identifiers demand main-unit definitions (unit constants,
@@ -10066,15 +10336,16 @@ scanCallsInNode: function {
         if (isNumericLiteralName name: scN9.stringview) == false then {
             reg.recordDemand name: scN9.stringview
             if (scanUnit.isZero) == false then reg.recordUnitDemand un: scanUnit name: node.name
+            demandDefinition :ty frames: (unitFramesOfId :ty unitNameId: scanUnit) nameId: node.name
         }
     } case binop then {
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.lhs - 1).u64)
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.rhs - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.lhs - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.rhs - 1).u64)
     } case assignment then {
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.value - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.value - 1).u64)
     } case reassignment then {
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.topath - 1).u64)
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.value - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.topath - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.value - 1).u64)
     } case ifexpr then {
         # Deliberately branch-blind. This pass runs before resolveConstantDefs,
         # so no fold exists yet and a dead clause's names are demanded anyway.
@@ -10085,41 +10356,77 @@ scanCallsInNode: function {
         # the evaluator, which visits only the winning branch, and not by a
         # walk like this one, which sees every arm.
         for clId9: node.clauses.iterate loop {
-            scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (clId9 - 1).u64)
+            scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (clId9 - 1).u64)
         }
-        scanBodyAt :ast :reg :scanUnit bodyId: node.elseclause
+        scanBodyAt :ty :ast :reg :scanUnit bodyId: node.elseclause
     } case forexpr then {
         reg.recordDemand name: "never"
+        (demandDefinition
+            :ty
+            frames: (unitFramesOfId :ty unitNameId: scanUnit)
+            nameId: (zast.poolFind pool: ast.names text: "never")
+        )
         for fcId9: node.conditions.iterate loop {
             fc: ast.nodes.get i: (fcId9 - 1).u64
             match (
                 fc
             ) case namedoperation then {
-                scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (fc.operation - 1).u64)
+                (scanCallsInNode
+                    :ty
+                    :ast
+                    :reg
+                    :scanUnit
+                    node: (ast.nodes.get i: (fc.operation - 1).u64)
+                )
             } else null
         }
-        scanBodyAt :ast :reg :scanUnit bodyId: node.body
+        scanBodyAt :ty :ast :reg :scanUnit bodyId: node.body
         for fpId9: node.postconditions.iterate loop {
             fp: ast.nodes.get i: (fpId9 - 1).u64
             match (
                 fp
             ) case namedoperation then {
-                scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (fp.operation - 1).u64)
+                (scanCallsInNode
+                    :ty
+                    :ast
+                    :reg
+                    :scanUnit
+                    node: (ast.nodes.get i: (fp.operation - 1).u64)
+                )
             } else null
         }
     } case doexpr then {
         reg.recordDemand name: "never"
+        doFr9: unitFramesOfId :ty unitNameId: scanUnit
+        demandDefinition :ty frames: doFr9 nameId: (zast.poolFind pool: ast.names text: "never")
         if (blockHasBreak :ast n: (ast.nodes.get i: (node.statement - 1).u64)) then {
             reg.recordDemand name: "optionval"
+            (demandDefinition
+                :ty
+                frames: doFr9
+                nameId: (zast.poolFind pool: ast.names text: "optionval")
+            )
         }
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.statement - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.statement - 1).u64)
     } case withexpr then {
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.value - 1).u64)
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.body - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.value - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.body - 1).u64)
+    } case yieldexpr then {
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.expr - 1).u64)
+    } case swapstmt then {
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.lhs - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.rhs - 1).u64)
+    } case typeofexpr then {
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.source - 1).u64)
     } case dottedpath then {
         bn: atomName :ast n: (ast.nodes.get i: (node.parent - 1).u64)
         if bn.length > 0 then {
             reg.recordDemand name: bn.stringview
+            (demandDefinition
+                :ty
+                frames: (unitFramesOfId :ty unitNameId: scanUnit)
+                nameId: (atomNameId :ast n: (ast.nodes.get i: (node.parent - 1).u64))
+            )
             # a unit-qualified member (io.stdout) demands the member name
             # so the unit's demand walk resolves it
             isUnitQ: reg.isUnitName nameId: (atomNameId
@@ -10135,44 +10442,63 @@ scanCallsInNode: function {
                     un: (atomNameId :ast n: (ast.nodes.get i: (node.parent - 1).u64))
                     name: (atomNameId :ast n: (ast.nodes.get i: (node.child - 1).u64))
                 )
+                if mn0.length > 0 then (demandUnitMember
+                    :ty
+                    unitNameId: (atomNameId :ast n: (ast.nodes.get i: (node.parent - 1).u64))
+                    nameId: (atomNameId :ast n: (ast.nodes.get i: (node.child - 1).u64))
+                )
             }
         }
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.parent - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.parent - 1).u64)
     } case caseexpr then {
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.subject - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.subject - 1).u64)
         for clId9: node.clauses.iterate loop {
-            scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (clId9 - 1).u64)
+            scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (clId9 - 1).u64)
         }
-        scanBodyAt :ast :reg :scanUnit bodyId: node.elseclause
+        scanBodyAt :ty :ast :reg :scanUnit bodyId: node.elseclause
     } case caseclause then {
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.statement - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.statement - 1).u64)
     } case ifclause then {
         for cndId9: node.conditions.iterate loop {
             cnd: ast.nodes.get i: (cndId9 - 1).u64
             match (
                 cnd
             ) case namedoperation then {
-                scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (cnd.operation - 1).u64)
+                (scanCallsInNode
+                    :ty
+                    :ast
+                    :reg
+                    :scanUnit
+                    node: (ast.nodes.get i: (cnd.operation - 1).u64)
+                )
             } else null
         }
-        scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (node.statement - 1).u64)
+        scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.statement - 1).u64)
     } else null
 }
 
 # scanBodyAt -- scan a function body table id for call demands (0 = absent).
 scanBodyAt: function {
+    ty: ztyping.ZTyping
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     scanUnit: zast.nameid
     bodyId: zast.nodeid
 } is {
-    if bodyId > 0 then scanCallsInNode :ast :reg :scanUnit node: (ast.nodes.get i: (bodyId - 1).u64)
+    if bodyId > 0 then (scanCallsInNode
+        :ty
+        :ast
+        :reg
+        :scanUnit
+        node: (ast.nodes.get i: (bodyId - 1).u64)
+    )
 }
 
 # scanDefCalls -- scan a functiondef's body, or an objectdef's is/as method
 # bodies, for call demands. A type constructed only inside a method body must be
 # demanded here or it never resolves and the construction stamps type 0.
 scanDefCalls: function {
+    ty: ztyping.ZTyping
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     scanUnit: zast.nameid
@@ -10181,7 +10507,7 @@ scanDefCalls: function {
     match (
         op
     ) case functiondef then {
-        scanBodyAt :ast :reg :scanUnit bodyId: op.body
+        scanBodyAt :ty :ast :reg :scanUnit bodyId: op.body
     } case objectdef then {
         iiter: op.isItems.iterate
         for imId9: iiter loop {
@@ -10190,6 +10516,7 @@ scanDefCalls: function {
                 im
             ) case namedoperation then {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (im.operation - 1).u64)) then (scanDefCalls
+                    :ty
                     :ast
                     :reg
                     :scanUnit
@@ -10204,6 +10531,7 @@ scanDefCalls: function {
                 am
             ) case namedoperation then {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (am.operation - 1).u64)) then (scanDefCalls
+                    :ty
                     :ast
                     :reg
                     :scanUnit
@@ -10222,6 +10550,7 @@ scanDefCalls: function {
 # demand fixpoint then resolves the newly-demanded types and depWalkUnit walks
 # them. The isDemanded gate matches the reference's reached-only closure.
 scanDemandedDepClassBodies: function {
+    ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     ast: Ast.view
     scanUnit: zast.nameid
@@ -10239,6 +10568,7 @@ scanDemandedDepClassBodies: function {
                     o: (ast.nodes.get i: (bm.operation - 1).u64)
                 ) then hasm = false
                 if hasm then (scanDefCalls
+                    :ty
                     :ast
                     :reg
                     :scanUnit
@@ -10252,6 +10582,7 @@ scanDemandedDepClassBodies: function {
 # scanMainBodyCalls -- record call-target demands for every function body in the
 # main unit (the body walk reaches them; demand must precede the pass).
 scanMainBodyCalls: function {
+    ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     program: Node
     rootOnly9: bool
@@ -10279,6 +10610,7 @@ scanMainBodyCalls: function {
             }
             if eager9 when opId9 > 0 then {
                 (scanUnitCalls
+                    :ty
                     :reg
                     ast: program.ast
                     scanUnit: unId9f
@@ -10292,6 +10624,7 @@ scanMainBodyCalls: function {
 
 # scanUnitCalls -- scan each function definition's body in a unit for call demands.
 scanUnitCalls: function {
+    ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     ast: Ast.view
     scanUnit: zast.nameid
@@ -10308,14 +10641,22 @@ scanUnitCalls: function {
                 if bnm9.stringview != "main" then scanIt9 = false
             }
             if scanIt9 then {
-                scanDefCalls :ast :reg :scanUnit op: (ast.nodes.get i: (bm.operation - 1).u64)
+                scanDefCalls :ty :ast :reg :scanUnit op: (ast.nodes.get i: (bm.operation - 1).u64)
             }
         }
     }
 }
 
 # seed the demand queue with the bodies that must be walked to resolve.
-seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
+# demandReturnNever -- the builtins a walked or synthesized body uses without
+# naming them in source: system's `return` and its `never` result.
+demandReturnNever: function {ty: ztyping.ZTyping ast: Ast.view} is {
+    sysId9: nameIdOf :ast name: "system"
+    demandUnitMember :ty unitNameId: sysId9 nameId: zast.wkReturn
+    demandUnitMember :ty unitNameId: sysId9 nameId: (zast.poolFind pool: ast.names text: "never")
+}
+
+seedBodyWalkDemands: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
     ) case program then {
@@ -10339,6 +10680,7 @@ seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
         if found then {
             reg.recordDemand name: "return"
             reg.recordDemand name: "never"
+            demandReturnNever :ty ast: program.ast
         }
     } else null
 }
@@ -10365,7 +10707,8 @@ onFirstEntry: function {
     resolveConformanceDefs :ty :reg :ast :unitName :unitdefId
     reg.recordDemand name: "return"
     reg.recordDemand name: "never"
-    scanDemandedDepClassBodies :reg :ast :unitdefId scanUnit: (nameIdOf :ast name: unitName)
+    demandReturnNever :ty :ast
+    scanDemandedDepClassBodies :ty :reg :ast :unitdefId scanUnit: (nameIdOf :ast name: unitName)
 }
 
 # seedConstantSuffixDemands -- a unit constant whose literal carries a type
@@ -10374,6 +10717,7 @@ onFirstEntry: function {
 # undemanded, the constant registers no type, and every read of it reports an
 # unknown reference instead.
 seedConstantSuffixDemands: function {
+    ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     program: Node
 } is {
@@ -10413,6 +10757,11 @@ seedConstantSuffixDemands: function {
                                 ) case atomid then {
                                     tnS9: zast.nameTextAt ast: program.ast ref: cS9.name
                                     if tnS9.length > 0 then reg.recordDemand name: tnS9.stringview
+                                    (demandDefinition
+                                        :ty
+                                        frames: (unitFramesOfId :ty unitNameId: uS9.name)
+                                        nameId: cS9.name
+                                    )
                                 } else null
                             }
                         } else null
@@ -10434,7 +10783,7 @@ resolveDemandsByDescent: function {
     reg: ztypes.ZTypeRegistry
     program: Node
 } is {
-    seedBodyWalkDemands :reg :program
+    seedBodyWalkDemands :ty :reg :program
     entered9: (Set String)
     mnOwn9: reg.regMainUnit
     mainName9: mnOwn9.stringview
@@ -10459,6 +10808,7 @@ resolveDemandsByDescent: function {
                     againM9: true
                     for againM9 loop {
                         beforeM9: reg.nextTypeId
+                        resolveDemandedDefs :ty :reg ast: program.ast
                         (resolveDemandedUnitBody
                             :ty
                             :reg
@@ -10475,6 +10825,7 @@ resolveDemandsByDescent: function {
         againU9: true
         for againU9 loop {
             beforeU9: reg.nextTypeId
+            resolveDemandedDefs :ty :reg ast: program.ast
             udN9: program.ast.units.length
             udI9: u64
             for udI9 < udN9 loop {
@@ -10496,6 +10847,7 @@ resolveDemandsByDescent: function {
                     }
                 }
                 if uOpId9 > 0 then {
+                    resolveDemandedDefs :ty :reg ast: program.ast
                     anyDem9: (resolveDemandedUnitBody
                         :ty
                         :reg
@@ -11436,6 +11788,7 @@ synthGeneratorIterClass: function {
     }
     reg.recordDemand name: "return"
     reg.recordDemand name: "never"
+    demandReturnNever :ty :ast
 }
 
 # isUnitOp -- true when a binding's operation is an inline `unit as {...}` definition.
@@ -11817,6 +12170,7 @@ createUnitMono: function {
         attachMonoUnitFuncs :ty :reg :ast :monoId :templateOpId
         reg.recordDemand name: "return"
         reg.recordDemand name: "never"
+        demandReturnNever :ty :ast
     }
 }
 
@@ -26664,6 +27018,7 @@ resolveDemandedStdDeps: function {
         ) case namedoperation then {
             un9: zast.nameTextAt :ast ref: u9.name
             if (isStdlibUnitName name: un9.stringview) then {
+                resolveDemandedDefs :ty :reg :ast
                 (resolveDemandedUnitBody
                     :ty
                     :reg
@@ -27058,8 +27413,10 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                 unitdefId: dOpId9
             ) then {
                 (demandAllUnitDefs
+                    ty: st.typing
                     reg: st.reg
                     ast: program.ast
+                    unitNameId: (nameIdOf ast: program.ast name: dun9.stringview)
                     unitdefId: dOpId9
                 )
                 hasStd9 = true
@@ -27069,6 +27426,7 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
             againS9: true
             for againS9 loop {
                 beforeS9: st.reg.nextTypeId
+                resolveDemandedDefs ty: st.typing reg: st.reg ast: program.ast
                 (resolveDemandedStdDeps
                     ty: st.typing
                     reg: st.reg
@@ -31867,8 +32225,8 @@ typecheck: function {
     lowerGenerators ty: st.typing reg: st.reg :program
     registerAndResolveMain ty: st.typing reg: st.reg :program
     resolveMainUnitInstantiations ty: st.typing reg: st.reg :program
-    scanMainBodyCalls reg: st.reg :program rootOnly9: (st.typing.eagerAll) == false
-    seedConstantSuffixDemands reg: st.reg :program
+    scanMainBodyCalls ty: st.typing reg: st.reg :program rootOnly9: (st.typing.eagerAll) == false
+    seedConstantSuffixDemands ty: st.typing reg: st.reg :program
     demandAllDefs ty: st.typing reg: st.reg :program
     resolveDemandsByDescent ty: st.typing reg: st.reg :program
     match (

@@ -179,6 +179,9 @@ Decl: class {
     # definition also finds its state.
     resolving: bool
     defined: bool
+    # pending -- a reference found this definition and queued it for
+    # resolution (the demand mark); cleared when its turn comes.
+    pending: bool
     # grantsPrivate -- the field's declared type was a `.private` friend handle
     # (syntactic; not derivable from typeId).
     grantsPrivate: bool
@@ -512,6 +515,9 @@ ZTyping: class {
     unitRootByName: (MapVV u64 value: ztypes.declid)
     # reference nodeid -> resolved DeclId (stamped by resolution)
     refDecl: (MapVV u64 value: ztypes.declid)
+    # declarations a reference found and demanded, in discovery order,
+    # awaiting resolution (resolveDemandedDefs drains it)
+    pendingDefs: (ListVal ztypes.declid)
     # canonical mints that predate the def index (their unit root Decl
     # does not exist yet); drained into root-proxy links by indexUnitDefs
     declProxyTids: (ListVal ztypes.tid)
@@ -553,6 +559,7 @@ ZTyping: class {
             defaultVal: defaultval.none
             resolving: false
             defined: false
+            pending: false
             grantsPrivate: false
             fnptrField: false
             lockFieldDecl: 0
@@ -590,6 +597,20 @@ ZTyping: class {
                 }
             }
         }
+    }
+
+    # declSetPending / declIsPending -- the demand mark: a reference found
+    # the definition and queued it (ZTyping.pendingDefs) for resolution.
+    declSetPending: function {:this declId: ztypes.declid mark: bool} is {
+        if (this.declValid id: declId) == false then return
+        do9: this.decls.getMut i: (declId - 1)
+        do9.pending = mark
+    }
+
+    declIsPending: function {:this declId: ztypes.declid} out bool is {
+        if (this.declValid id: declId) == false then return false
+        do9: this.decls.get i: (declId - 1)
+        return do9.pending
     }
 
     # declSetType -- record the canonical type a declaration minted, and the
@@ -2045,6 +2066,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         declByTypeId: (MapVV u64 value: ztypes.declid)
         unitRootByName: (MapVV u64 value: ztypes.declid)
         refDecl: (MapVV u64 value: ztypes.declid)
+        pendingDefs: (ListVal ztypes.declid)
         declProxyTids: (ListVal ztypes.tid)
         declProxyUnits: (List String)
         pendParent: (ListVal u64)
