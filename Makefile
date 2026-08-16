@@ -79,7 +79,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard test-tcc mode-parity readable-check user-native-guard perf-strict perf-elision
+.PHONY: emit-set ident-set natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard test-tcc mode-parity readable-check user-native-guard perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -854,6 +854,45 @@ zlink-guard: bin/zc
 	  exit 1; \
 	fi; \
 	echo "zlink-guard OK: $$n programs declare a link library (baseline $(ZLINK_BASELINE))"
+
+# emit-set / ident-set -- the byte-identity oracle for compiler refactors.
+# `make emit-set OUT=dir [ZC=bin/zc]` emits every example, every corpus program
+# and the three drivers (zc, zl, zls) as C into OUT. `make ident-set A=dir B=dir`
+# normalises every renumbering id form (z_t{N}, _t{N}_ mid-symbol, Z_T{N}_,
+# _i{N}, _zs{N}, z_v{N}) in both trees and diffs them; what remains is a
+# semantic difference to explain, or a bug. A partial normaliser reports
+# phantom content changes -- widen it before concluding a diff is semantic.
+EMITSET_ZC ?= bin/zc
+emit-set:
+	@test -n "$(OUT)" || { echo "usage: make emit-set OUT=dir [ZC=bin/zc]"; exit 1; }; \
+	zc="$${ZC:-$(EMITSET_ZC)}"; mkdir -p "$(OUT)"; n=0; bad=""; \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	  b=$$(basename $$f .z); \
+	  grep -q '^main:' $$f || continue; \
+	  if $$zc emit $$f -o "$(OUT)/$$b.c" >"$(OUT)/$$b.log" 2>&1; then n=$$(($$n + 1)); rm -f "$(OUT)/$$b.log"; \
+	  else bad="$$bad $$b"; rm -f "$(OUT)/$$b.c"; fi; \
+	done; \
+	for d in zc zl zls; do \
+	  if $$zc $$d --src src --system lib/system $(ZCHASH) --emit-c "$(OUT)/$$d.c" >"$(OUT)/$$d.log" 2>&1; then n=$$(($$n + 1)); rm -f "$(OUT)/$$d.log"; \
+	  else bad="$$bad $$d"; fi; \
+	done; \
+	echo "emit-set: $$n programs emitted into $(OUT)"; \
+	if [ -n "$$bad" ]; then echo "emit-set: NOT emitted (see .log):$$bad"; fi
+
+ident-set:
+	@test -n "$(A)" && test -n "$(B)" || { echo "usage: make ident-set A=dir B=dir"; exit 1; }; \
+	na=$$(mktemp -d); nb=$$(mktemp -d); rep=$$(mktemp); \
+	norm() { sed -E -e 's/z_t[0-9]+/z_tN/g' -e 's/_t[0-9]+_/_tN_/g' -e 's/Z_T[0-9]+_/Z_TN_/g' \
+	  -e 's/_i[0-9]+\b/_iN/g' -e 's/_zs[0-9]+\b/_zsN/g' -e 's/z_v[0-9]+\b/z_vN/g' "$$1" > "$$2"; }; \
+	for f in "$(A)"/*.c; do b=$$(basename $$f); norm "$$f" "$$na/$$b"; done; \
+	for f in "$(B)"/*.c; do b=$$(basename $$f); norm "$$f" "$$nb/$$b"; done; \
+	raw=$$(diff -rq "$(A)" "$(B)" | grep -c '\.c' || true); \
+	if diff -rq "$$na" "$$nb" > "$$rep"; then \
+	  echo "ident-set OK: identical after normalisation ($$raw file(s) differ raw)"; rm -rf "$$na" "$$nb" "$$rep"; \
+	else \
+	  echo "ident-set: $$(grep -c . "$$rep") file(s) differ after normalisation ($$raw raw):"; \
+	  sed 's/^/  /' "$$rep" | head -60; rm -rf "$$na" "$$nb" "$$rep"; exit 1; \
+	fi
 
 # Lower the baseline as each folder gap is closed. Skipped when clang is absent -- clang is
 # not a build requirement.
