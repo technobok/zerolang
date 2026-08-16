@@ -37,6 +37,9 @@ public: unit {
     :paramIsThisReceiverId
     :regTypeNameOf
     :declOfTypeId
+    :declTypeIdOf
+    :declParentIdOf
+    :declDeclaresUnit
     :declOfUnitDefIds
     :declMemberIsPrivate
     :publicAliasInternalNames
@@ -1488,7 +1491,7 @@ definingUnitFor: function {
     name: StringView
 } out String is {
     fr9: unitFramesOf :ty :ast :currentUnit
-    hit9: lookupDefinition :ty frames: fr9 nameId: (zast.poolFind pool: ast.names text: name)
+    hit9: lookupDefinition :ty :ast frames: fr9 nameId: (zast.poolFind pool: ast.names text: name)
     if hit9.declId.isZero then return "".string
     if hit9.frame == fr9.unitRoot then return currentUnit.string
     ru9: reexportUnitOf :ty :ast declId: hit9.declId
@@ -3235,6 +3238,7 @@ demandTyperefNames: function {
         if (isNumericLiteralName name: teN9.stringview) == false then {
             (demandDefinition
                 :ty
+                :ast
                 frames: (unitFramesOf :ty :ast currentUnit: unitName)
                 nameId: typeExpr.name
             )
@@ -3252,6 +3256,7 @@ demandTyperefNames: function {
         if hn.length > 0 then {
             (demandDefinition
                 :ty
+                :ast
                 frames: (unitFramesOf :ty :ast currentUnit: unitName)
                 nameId: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
             )
@@ -3323,6 +3328,7 @@ resolveTyperefShell: function {
         teR9: ast.names.texts.get i: (typeExpr.name - 1).u64
         (demandDefinition
             :ty
+            :ast
             frames: (unitFramesOf :ty :ast currentUnit: unitName)
             nameId: typeExpr.name
         )
@@ -3369,6 +3375,7 @@ resolveTyperefShell: function {
         suffix: atomName :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64)
         (demandDefinition
             :ty
+            :ast
             frames: (unitFramesOf :ty :ast currentUnit: unitName)
             nameId: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
         )
@@ -7358,6 +7365,7 @@ unionCustomTagId: function {
                         # the demand and a pending fixup for the tag child.
                         (demandDefinition
                             :ty
+                            :ast
                             frames: (unitFramesOf :ty :ast currentUnit: unitName)
                             nameId: (zast.poolFind pool: ast.names text: pn.stringview)
                         )
@@ -10030,8 +10038,13 @@ demandDecl: function {ty: ztyping.ZTyping declId: ztypes.declid} is {
 # demandDefinition -- a bare name written in `frames` demands the definition
 # the environment walk finds for it, if any: a local variable, a member, or
 # an unknown name finds nothing and demands nothing.
-demandDefinition: function {ty: ztyping.ZTyping frames: zframes nameId: zast.nameid} is {
-    hit9: lookupDefinition :ty :frames :nameId
+demandDefinition: function {
+    ty: ztyping.ZTyping
+    ast: Ast.view
+    frames: zframes
+    nameId: zast.nameid
+} is {
+    hit9: lookupDefinition :ty :ast :frames :nameId
     if (hit9.declId.isZero) == false then demandDecl :ty declId: hit9.declId
 }
 
@@ -10330,11 +10343,17 @@ scanCallsInNode: function {
         cn: atomName :ast n: (ast.nodes.get i: (node.callable - 1).u64)
         if cn.stringview == "return" then {
             scFr9: unitFramesOfId :ty unitNameId: scanUnit
-            demandDefinition :ty frames: scFr9 nameId: zast.wkReturn
-            demandDefinition :ty frames: scFr9 nameId: (zast.poolFind pool: ast.names text: "never")
+            demandDefinition :ty :ast frames: scFr9 nameId: zast.wkReturn
+            (demandDefinition
+                :ty
+                :ast
+                frames: scFr9
+                nameId: (zast.poolFind pool: ast.names text: "never")
+            )
         } else {
             if cn.length > 0 then (demandDefinition
                 :ty
+                :ast
                 frames: (unitFramesOfId :ty unitNameId: scanUnit)
                 nameId: (atomNameId :ast n: (ast.nodes.get i: (node.callable - 1).u64))
             )
@@ -10363,7 +10382,12 @@ scanCallsInNode: function {
         # data blocks); non-definition names never match a demanded def.
         scN9: ast.names.texts.get i: (node.name - 1).u64
         if (isNumericLiteralName name: scN9.stringview) == false then {
-            demandDefinition :ty frames: (unitFramesOfId :ty unitNameId: scanUnit) nameId: node.name
+            (demandDefinition
+                :ty
+                :ast
+                frames: (unitFramesOfId :ty unitNameId: scanUnit)
+                nameId: node.name
+            )
         }
     } case binop then {
         scanCallsInNode :ty :ast :reg :scanUnit node: (ast.nodes.get i: (node.lhs - 1).u64)
@@ -10389,6 +10413,7 @@ scanCallsInNode: function {
     } case forexpr then {
         (demandDefinition
             :ty
+            :ast
             frames: (unitFramesOfId :ty unitNameId: scanUnit)
             nameId: (zast.poolFind pool: ast.names text: "never")
         )
@@ -10423,10 +10448,16 @@ scanCallsInNode: function {
         }
     } case doexpr then {
         doFr9: unitFramesOfId :ty unitNameId: scanUnit
-        demandDefinition :ty frames: doFr9 nameId: (zast.poolFind pool: ast.names text: "never")
+        (demandDefinition
+            :ty
+            :ast
+            frames: doFr9
+            nameId: (zast.poolFind pool: ast.names text: "never")
+        )
         if (blockHasBreak :ast n: (ast.nodes.get i: (node.statement - 1).u64)) then {
             (demandDefinition
                 :ty
+                :ast
                 frames: doFr9
                 nameId: (zast.poolFind pool: ast.names text: "optionval")
             )
@@ -10447,6 +10478,7 @@ scanCallsInNode: function {
         if bn.length > 0 then {
             (demandDefinition
                 :ty
+                :ast
                 frames: (unitFramesOfId :ty unitNameId: scanUnit)
                 nameId: (atomNameId :ast n: (ast.nodes.get i: (node.parent - 1).u64))
             )
@@ -28598,11 +28630,26 @@ constOwnerTidFor: function {
     defName: StringView
 } out u64 is {
     if ty.nsOwnerTid > 0 when unitName == ty.nsOwnerUnit.stringview then {
-        nd9: (ty.declFindChild
-            parentDeclId: ty.nsOwnerDeclId
-            nameId: (zast.poolFind pool: ast.names text: defName)
-        )
-        if (nd9.isZero) == false then return ty.nsOwnerTid.u64
+        # the nested frames, innermost outward: a constant written inside a
+        # unit is keyed on THAT unit, and on each unit enclosing it before the
+        # file unit. Asking only the innermost left a constant of an enclosing
+        # inline unit unreachable from a unit nested inside it.
+        dnm9: zast.poolFind pool: ast.names text: defName
+        cur9: ty.nsOwnerDeclId
+        hops9: u64
+        for cur9 > 0 while hops9 < 32 loop {
+            hops9 = hops9 + 1
+            nd9: ty.declFindChild parentDeclId: cur9 nameId: dnm9
+            if (nd9.isZero) == false then {
+                ct9: declTypeIdOf :ty declId: cur9
+                if (ct9.isZero) == false then return ct9.u64
+            }
+            nx9: declParentIdOf :ty declId: cur9
+            cur9 = ztypes.declid
+            if (nx9.isZero) == false then {
+                if (declDeclaresUnit :ty :ast declId: nx9) then cur9 = nx9
+            }
+        }
         # a hidden subunit does not fall through to its parent
         if ty.nsOwnerIsSubunit then return 0
     }
@@ -30946,6 +30993,29 @@ declSurfaceEnsure9: function {
 
 # --- the environment walk for a bare definition name ---
 
+# nsFrameFor -- the innermost NESTED unit frame for a resolution happening in
+# `currentUnit`, or zero. The unit being walked is ambient (ty.nsOwner*), and
+# callers spell `currentUnit` either as the FILE unit the walk was entered with
+# or as the nested unit's own name, so the ambient owner is accepted when any
+# unit on its own chain carries that name. lookupDefinition climbs from here,
+# so an owner one level too deep still reaches the right frame.
+nsFrameFor: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    currentUnit: StringView
+} out ztypes.declid is {
+    cur9: ty.nsOwnerDeclId
+    if cur9.isZero then return (ztypes.declid.create from: 0)
+    hops9: u64
+    for cur9 > 0 while hops9 < 32 loop {
+        hops9 = hops9 + 1
+        nm9: zast.poolTextAt pool: ast.names ref: (declNameIdOf :ty declId: cur9)
+        if nm9.stringview == currentUnit then return ty.nsOwnerDeclId
+        cur9 = declParentIdOf :ty declId: cur9
+    }
+    return (ztypes.declid.create from: 0)
+}
+
 # zframes -- the definition frames a bare name is resolved against, innermost
 # first: the enclosing namespace (zero outside one), the current unit, then
 # the prelude (`core`). Each is a root DeclId whose children are the frame's
@@ -30979,7 +31049,11 @@ unitFramesOf: function {
     ) case some then {
         ur9 = uro9
     } case none then null
-    return (zframes nsRoot: ztypes.declid unitRoot: ur9 preludeRoot: ty.coreUnitRoot)
+    return (zframes
+        nsRoot: (nsFrameFor :ty :ast :currentUnit)
+        unitRoot: ur9
+        preludeRoot: ty.coreUnitRoot
+    )
 }
 
 # lookupDefinition -- the environment walk for a definition NAME: the frames
@@ -30988,13 +31062,27 @@ unitFramesOf: function {
 # is zero. A probe: it reads the index and mints nothing.
 lookupDefinition: function {
     ty: ztyping.ZTyping.view
+    ast: Ast.view
     frames: zframes
     nameId: zast.nameid
 } out zdefhit is {
     if nameId.isZero then return (zdefhit declId: ztypes.declid frame: ztypes.declid)
-    if (frames.nsRoot.isZero) == false then {
-        h9: ty.declFindChild parentDeclId: frames.nsRoot :nameId
-        if (h9.isZero) == false then return (zdefhit declId: h9 frame: frames.nsRoot)
+    # The nested frames are a CHAIN, not a slot: a definition written inside a
+    # unit resolves against that unit, then against each unit enclosing it, and
+    # only then against the file unit. Reading one frame here left every unit
+    # between the innermost and the file unit invisible, so a unit nested two
+    # deep could not see the one that encloses it.
+    cur9: frames.nsRoot
+    hops9: u64
+    for cur9 > 0 while hops9 < 32 loop {
+        hops9 = hops9 + 1
+        h9: ty.declFindChild parentDeclId: cur9 :nameId
+        if (h9.isZero) == false then return (zdefhit declId: h9 frame: cur9)
+        nx9: declParentIdOf :ty declId: cur9
+        cur9 = ztypes.declid
+        if (nx9.isZero) == false then {
+            if (declDeclaresUnit :ty :ast declId: nx9) then cur9 = nx9
+        }
     }
     if (frames.unitRoot.isZero) == false then {
         h8: ty.declFindChild parentDeclId: frames.unitRoot :nameId
@@ -31171,6 +31259,20 @@ walkLookupTyperef: function {
 } out optionval u64 is {
     fr9: unitFramesOf :ty :ast :currentUnit
     nid9: zast.poolFind pool: ast.names text: base
+    # the nested frames first, innermost outward: the unit a name is written
+    # in, then each unit enclosing that one. Only then the file unit.
+    cur9: fr9.nsRoot
+    hops9: u64
+    for cur9 > 0 while hops9 < 32 loop {
+        hops9 = hops9 + 1
+        rn9: probeFrameTyperef :ast :ty :reg root: cur9 nameId: nid9
+        if rn9 > 0 then return (optionval.some rn9)
+        nx9: declParentIdOf :ty declId: cur9
+        cur9 = ztypes.declid
+        if (nx9.isZero) == false then {
+            if (declDeclaresUnit :ty :ast declId: nx9) then cur9 = nx9
+        }
+    }
     r9: probeFrameTyperef :ast :ty :reg root: fr9.unitRoot nameId: nid9
     if r9 > 0 then return (optionval.some r9)
     # `Any` is not user-reachable through core: only its own unit (system.z,

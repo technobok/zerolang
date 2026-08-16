@@ -9254,16 +9254,37 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         # a name written inside a namespace resolves against that namespace
         # first, then the file unit -- the chain spec.pdoc gives an inline unit
         if (ctx.nsTid.isZero) == false then {
-            nsca9: (memberConstTextOf9
-                :ast
-                :symtab
-                :ctx
-                unitTid: ctx.nsTid
-                nameId: n.name
-            )
-            if nsca9.length > 0 then return nsca9
-            nscs9: memberConstStrText9 :symtab :ctx unitTid: ctx.nsTid nameId: n.name
-            if nscs9.length > 0 then return nscs9
+            # the nested frames, innermost outward: the unit the name is
+            # written in, then each unit enclosing it. Asking only the
+            # innermost inlined nothing for a constant of an enclosing inline
+            # unit, and the bare source name reached the C.
+            nsCur9: ztypecheck.declOfTypeId reg: symtab.reg tid: ctx.nsTid
+            nsHop9: u64
+            for nsCur9 > 0 while nsHop9 < 32 loop {
+                nsHop9 = nsHop9 + 1
+                nsFt9: ztypecheck.declTypeIdOf ty: symtab.typing declId: nsCur9
+                if (nsFt9.isZero) == false then {
+                    nsca9: (memberConstTextOf9
+                        :ast
+                        :symtab
+                        :ctx
+                        unitTid: nsFt9
+                        nameId: n.name
+                    )
+                    if nsca9.length > 0 then return nsca9
+                    nscs9: memberConstStrText9 :symtab :ctx unitTid: nsFt9 nameId: n.name
+                    if nscs9.length > 0 then return nscs9
+                }
+                nsNx9: ztypecheck.declParentIdOf ty: symtab.typing declId: nsCur9
+                nsCur9 = ztypes.declid
+                if (nsNx9.isZero) == false then {
+                    if (ztypecheck.declDeclaresUnit
+                        ty: symtab.typing
+                        :ast
+                        declId: nsNx9
+                    ) then nsCur9 = nsNx9
+                }
+            }
             # a hidden subunit stops here: its parent's constants are not in
             # scope, so falling through to the file unit would inline a value
             # the typechecker refuses to name
@@ -18114,6 +18135,28 @@ pathUnitTidOf9: function {
         # unit may shadow a top-level name
         encl9: ctx.nsTid
         if encl9.isZero then encl9 = unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview
+        # the nested frames, innermost outward: a path base written inside a
+        # unit names that unit's children first, then those of each unit
+        # enclosing it -- which is how a sibling inline unit is reached.
+        pCur9: ztypecheck.declOfTypeId reg: symtab.reg tid: encl9
+        pHop9: u64
+        for pCur9 > 0 while pHop9 < 32 loop {
+            pHop9 = pHop9 + 1
+            pFt9: ztypecheck.declTypeIdOf ty: symtab.typing declId: pCur9
+            if (pFt9.isZero) == false then {
+                ph9: unitChildTidOf9 :symtab parentTid: pFt9 nameId: b9.name
+                if (ph9.isZero) == false then return ph9
+            }
+            pNx9: ztypecheck.declParentIdOf ty: symtab.typing declId: pCur9
+            pCur9 = ztypes.declid
+            if (pNx9.isZero) == false then {
+                if (ztypecheck.declDeclaresUnit
+                    ty: symtab.typing
+                    :ast
+                    declId: pNx9
+                ) then pCur9 = pNx9
+            }
+        }
         ht9: unitChildTidOf9 :symtab parentTid: encl9 nameId: b9.name
         if (ht9.isZero) == false then return ht9
         uo9: symtab.reg.unitNameTid.get key: b9.name.u64
