@@ -2334,6 +2334,45 @@ recordNodeName: function {ty: ztyping.ZTyping unitName: StringView name: StringV
 
 # recordResolvedName -- record (nid -> name) for post-demand resolution; the `this` and
 # `type` self-keywords record as the enclosing type (thisName).
+# stampNestedTyperef -- a qualified type reference into a NESTED unit
+# (`out sub.T`) names a member exactly as a cross-unit reference does, but it
+# cannot be recorded as a pending typeref: that carries a (unit NAME, member
+# name) pair, and a nested unit has no name-index entry to be found by. So it
+# resolves here and stamps the node itself. Recorded by nothing, such a
+# reference reached no resolver at all and its slot typed as null.
+stampNestedTyperef: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast.view
+    unitName: StringView
+    unitId: zast.nameid
+    memberId: zast.nameid
+    nid: zast.nodeid
+} is {
+    if unitId.isZero then return
+    if memberId.isZero then return
+    root9: ztypes.declid
+    {
+        ro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+        match (
+            ro9
+        ) case some then {
+            root9 = ro9
+        } case none then null
+    }
+    if root9.isZero then return
+    mt9: (nestedUnitMemberTid
+        :ty
+        :reg
+        :ast
+        ownerDeclId: root9
+        unitName: unitId
+        defName: memberId
+    )
+    if mt9.isZero then return
+    ztyping.nodeTypeSet tbl: ty.nodeType nid: nid.u64 tid: mt9
+}
+
 recordResolvedName: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -2884,6 +2923,16 @@ recordTyperef: function {
                 if cn.stringview == "typedef" then {
                     dpp9: ast.nodes.get i: (node.parent - 1).u64
                     recordTyperef :ty :reg :ast :unitName :thisName node: dpp9
+                } else {
+                    (stampNestedTyperef
+                        :ty
+                        :reg
+                        :ast
+                        :unitName
+                        unitId: (atomNameId :ast n: (ast.nodes.get i: (node.parent - 1).u64))
+                        memberId: (atomNameId :ast n: (ast.nodes.get i: (node.child - 1).u64))
+                        nid: node.nodeid
+                    )
                 }
             }
         }
@@ -3378,6 +3427,28 @@ resolveTyperefShell: function {
                     :thisName
                 )
             }
+            # A qualified ref into a NESTED unit names a MEMBER, the way a
+            # cross-unit ref does -- the leg above cannot see it because a
+            # nested unit is absent from the unit-name index. Peeling to the
+            # parent instead handed the slot the UNIT's own type.
+            nsRoot9: ztypes.declid
+            {
+                nsro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+                match (
+                    nsro9
+                ) case some then {
+                    nsRoot9 = nsro9
+                } case none then null
+            }
+            nsTid9: (nestedUnitMemberTid
+                :ty
+                :reg
+                :ast
+                ownerDeclId: nsRoot9
+                unitName: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.parent - 1).u64))
+                defName: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.child - 1).u64))
+            )
+            if (nsTid9.isZero) == false then return nsTid9.u64
             return (resolveTyperefShell
                 :ty
                 :reg
