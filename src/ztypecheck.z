@@ -10114,14 +10114,31 @@ resolveDemandedDecl: function {
     } else if (isUnitOp op: (ast.nodes.get i: (opId9 - 1).u64)) then {
         return
     } else {
-        (resolveDef
-            :ty
-            :reg
-            :ast
-            unitName: unitName9.stringview
-            defName: defName9.stringview
-            defn: (ast.nodes.get i: (opId9 - 1).u64)
-        )
+        # A re-export is a definition like any other, and resolving it means
+        # following its target -- which is what resolveAliasKey does, from the
+        # declaration. Without this a re-export of a re-export stops at the
+        # first hop: the second alias is demanded, resolveDef has no leg for a
+        # dotted target that names a NESTED unit, and the chain reads as a
+        # member the parent does not have.
+        isRx9: false
+        {
+            if (ty.declValid id: declId) then {
+                rdo9: ty.decls.get i: (declId - 1)
+                if rdo9.kind.reexportDecl then isRx9 = true
+            }
+        }
+        if isRx9 then {
+            resolveAliasKey :ty :reg :ast :declId
+        } else {
+            (resolveDef
+                :ty
+                :reg
+                :ast
+                unitName: unitName9.stringview
+                defName: defName9.stringview
+                defn: (ast.nodes.get i: (opId9 - 1).u64)
+            )
+        }
         # A unit-level CONSTANT is a definition like any other, and resolveDef
         # has no leg for the shapes one takes -- a bare literal, a suffixed
         # one, a constant expression. Its type and its value are registered
@@ -11639,27 +11656,43 @@ resolveNamespaceUnit: function {
                         unitOpId: bmNode9.operation
                     )
                 } else {
+                    md9: ty.declFindChild parentDeclId: declId9 nameId: bmNode9.name
+                    isRx9: false
+                    {
+                        if (ty.declValid id: md9) then {
+                            mdo9: ty.decls.get i: (md9 - 1)
+                            if mdo9.kind.reexportDecl then isRx9 = true
+                        }
+                    }
                     ty.nsOwnerTid = uid9
                     ty.nsOwnerDeclId = declId9
                     nsn9: mName9.copy
                     ty.nsOwnerName = nsn9
                     nsu9: unitName.string
                     ty.nsOwnerUnit = nsu9
-                    (resolveDef
-                        :ty
-                        :reg
-                        :ast
-                        :unitName
-                        defName: mName9.stringview
-                        defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-                    )
+                    # A re-export is resolved by following its target, which is
+                    # resolveAliasKey's job -- resolveDef has no leg for a
+                    # dotted target naming a NESTED unit, and marking the alias
+                    # DEFINED after it did nothing is what stopped a re-export
+                    # of a re-export at its first hop.
+                    if isRx9 then {
+                        resolveAliasKey :ty :reg :ast declId: md9
+                    } else {
+                        (resolveDef
+                            :ty
+                            :reg
+                            :ast
+                            :unitName
+                            defName: mName9.stringview
+                            defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                        )
+                    }
                     ty.nsOwnerTid = prevTid9
                     ty.nsOwnerDeclId = prevDecl9
                     pn9: prevName9.copy
                     ty.nsOwnerName = pn9
                     pu9: prevUnit9.copy
                     ty.nsOwnerUnit = pu9
-                    md9: ty.declFindChild parentDeclId: declId9 nameId: bmNode9.name
                     if (md9.isZero) == false then ty.declSetDefined declId: md9
                 }
             }
@@ -29120,31 +29153,38 @@ evalConstNode: function {
                     }
                 } case none then null
             }
-            # A hidden SUBUNIT of this unit is the same shape one file down: it
-            # is not in the unit-name index either, and it resolves on demand,
-            # so it may have no id at all until asked for here.
+            # A nested unit of the SCOPE being evaluated: not in the unit-name
+            # index either, and it resolves on demand, so it may have no id at
+            # all until asked for here. The scope is the enclosing namespace
+            # while its own members evaluate and the file unit otherwise --
+            # rooting this at the file unit alone stopped a re-export chain at
+            # its first hop, since a subunit's subunit is no child of the file.
             {
-                sro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-                match (
-                    sro9
-                ) case some then {
-                    sst9: (nestedUnitTidOf
-                        :ty
-                        :reg
+                sro9: ty.nsOwnerDeclId
+                if sro9.isZero then {
+                    fro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+                    match (
+                        fro9
+                    ) case some then {
+                        sro9 = fro9
+                    } case none then null
+                }
+                sst9: (nestedUnitTidOf
+                    :ty
+                    :reg
+                    :ast
+                    ownerDeclId: sro9
+                    unitName: (nameIdOf :ast name: pt9.stringview)
+                )
+                if (sst9.isZero) == false then {
+                    ssv9: (constValueOfMemberTid
                         :ast
-                        ownerDeclId: sro9
-                        unitName: (nameIdOf :ast name: pt9.stringview)
+                        :ty
+                        unitTid: sst9
+                        defName: cn9.stringview
                     )
-                    if (sst9.isZero) == false then {
-                        ssv9: (constValueOfMemberTid
-                            :ast
-                            :ty
-                            unitTid: sst9
-                            defName: cn9.stringview
-                        )
-                        if (ssv9.kind.none) == false then return ssv9
-                    }
-                } case none then null
+                    if (ssv9.kind.none) == false then return ssv9
+                }
             }
             # A same-unit name can be a CONSTANT or a TYPE, and the two read
             # identically: `CC.tcc` asks whether the constant CC holds that arm,
