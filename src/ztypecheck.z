@@ -1490,10 +1490,24 @@ definingUnitFor: function {
     currentUnit: StringView
     name: StringView
 } out String is {
-    fr9: unitFramesOf :ty :ast :currentUnit site: 1
-    hit9: lookupDefinition :ty :ast frames: fr9 nameId: (zast.poolFind pool: ast.names text: name)
+    cuId9: nameIdOf :ast name: currentUnit
+    hit9: (envLookup
+        :ty
+        :ast
+        frame: (frameFor :ty :ast unitNameId: cuId9)
+        nameId: (zast.poolFind pool: ast.names text: name)
+    )
     if hit9.declId.isZero then return "".string
-    if hit9.frame == fr9.unitRoot then return currentUnit.string
+    ur9: ztypes.declid
+    {
+        uro9: ty.unitRootByName.get key: cuId9.u64
+        match (
+            uro9
+        ) case some then {
+            ur9 = uro9
+        } case none then null
+    }
+    if hit9.frame == ur9 then return currentUnit.string
     ru9: reexportUnitOf :ty :ast declId: hit9.declId
     if ru9.isZero then return "".string
     return (zast.poolTextCopy pool: ast.names ref: ru9)
@@ -3267,7 +3281,7 @@ demandTyperefNames: function {
             (demandDefinition
                 :ty
                 :ast
-                frames: (unitFramesOf :ty :ast currentUnit: unitName site: 2)
+                frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
                 nameId: typeExpr.name
             )
         }
@@ -3285,7 +3299,7 @@ demandTyperefNames: function {
             (demandDefinition
                 :ty
                 :ast
-                frames: (unitFramesOf :ty :ast currentUnit: unitName site: 3)
+                frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
                 nameId: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
             )
         }
@@ -3357,7 +3371,7 @@ resolveTyperefShell: function {
         (demandDefinition
             :ty
             :ast
-            frames: (unitFramesOf :ty :ast currentUnit: unitName site: 4)
+            frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
             nameId: typeExpr.name
         )
         return (resolveAtomType
@@ -3404,7 +3418,7 @@ resolveTyperefShell: function {
         (demandDefinition
             :ty
             :ast
-            frames: (unitFramesOf :ty :ast currentUnit: unitName site: 5)
+            frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
             nameId: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
         )
         aiter: typeExpr.arguments.iterate
@@ -7461,7 +7475,7 @@ unionCustomTagId: function {
                         (demandDefinition
                             :ty
                             :ast
-                            frames: (unitFramesOf :ty :ast currentUnit: unitName site: 6)
+                            frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
                             nameId: (zast.poolFind pool: ast.names text: pn.stringview)
                         )
                         uk: uid
@@ -10152,43 +10166,6 @@ unitHasObjectMethodBody: function {ast: Ast.view defId: u32} out bool is {
     return false
 }
 
-# seedBodyWalkDemands -- the reference WALKS objectdef method bodies during
-# resolve-only-main (records/classes/facets/protocols), and those bodies use the `return`
-# builtin, so the closure pulls `return` + its `out never` type. The .z resolver does
-# signatures only, so when the MAIN unit has any objectdef with a method-with-body,
-# demand `return` + `never` to match.
-# unitFramesOfId -- unitFramesOf for a caller holding the unit's name id.
-unitFramesOfId: function {
-    ty: ztyping.ZTyping.view
-    ast: Ast.view
-    unitNameId: zast.nameid
-    site: u64
-} out zframes is {
-    ur9: ztypes.declid
-    uro9: ty.unitRootByName.get key: unitNameId.u64
-    match (
-        uro9
-    ) case some then {
-        ur9 = uro9
-    } case none then null
-    # the nested frame is the cursor's own unit when the cursor lies inside
-    # the unit named: a nested unit's member scans against its own frame first
-    ns9: ztypes.declid
-    if (frameIsWithin
-        :ty
-        frame: ty.curFrame
-        root: ur9
-    ) then ns9 = unitFrameOf :ty :ast declId: ty.curFrame
-    if ns9 == ur9 then ns9 = ztypes.declid
-    return (zframes
-        nsRoot: ns9
-        unitRoot: ur9
-        preludeRoot: ty.coreUnitRoot
-        :site
-        :unitNameId
-    )
-}
-
 # demandDecl -- a reference found this declaration: queue it for resolution
 # unless it is resolved, mid-resolution, already queued, or a prelude
 # re-export already followed to its target. The mark lives on the
@@ -10206,16 +10183,16 @@ demandDecl: function {ty: ztyping.ZTyping declId: ztypes.declid} is {
     ty.pendingDefs.append from: declId
 }
 
-# demandDefinition -- a bare name written in `frames` demands the definition
+# demandDefinition -- a bare name written in `frame` demands the definition
 # the environment walk finds for it, if any: a local variable, a member, or
 # an unknown name finds nothing and demands nothing.
 demandDefinition: function {
     ty: ztyping.ZTyping
     ast: Ast.view
-    frames: zframes
+    frame: ztypes.declid
     nameId: zast.nameid
 } is {
-    hit9: lookupDefinition :ty :ast :frames :nameId
+    hit9: envLookup :ty :ast :frame :nameId
     if (hit9.declId.isZero) == false then demandDecl :ty declId: hit9.declId
 }
 
@@ -10537,19 +10514,19 @@ scanCallsInNode: function {
     } case call then {
         cn: atomName :ast n: (ast.nodes.get i: (node.callable - 1).u64)
         if cn.stringview == "return" then {
-            scFr9: unitFramesOfId :ty :ast unitNameId: scanUnit site: 11
-            demandDefinition :ty :ast frames: scFr9 nameId: zast.wkReturn
+            scFr9: frameFor :ty :ast unitNameId: scanUnit
+            demandDefinition :ty :ast frame: scFr9 nameId: zast.wkReturn
             (demandDefinition
                 :ty
                 :ast
-                frames: scFr9
+                frame: scFr9
                 nameId: (zast.poolFind pool: ast.names text: "never")
             )
         } else {
             if cn.length > 0 then (demandDefinition
                 :ty
                 :ast
-                frames: (unitFramesOfId :ty :ast unitNameId: scanUnit site: 12)
+                frame: (frameFor :ty :ast unitNameId: scanUnit)
                 nameId: (atomNameId :ast n: (ast.nodes.get i: (node.callable - 1).u64))
             )
         }
@@ -10580,7 +10557,7 @@ scanCallsInNode: function {
             (demandDefinition
                 :ty
                 :ast
-                frames: (unitFramesOfId :ty :ast unitNameId: scanUnit site: 13)
+                frame: (frameFor :ty :ast unitNameId: scanUnit)
                 nameId: node.name
             )
         }
@@ -10609,7 +10586,7 @@ scanCallsInNode: function {
         (demandDefinition
             :ty
             :ast
-            frames: (unitFramesOfId :ty :ast unitNameId: scanUnit site: 14)
+            frame: (frameFor :ty :ast unitNameId: scanUnit)
             nameId: (zast.poolFind pool: ast.names text: "never")
         )
         for fcId9: node.conditions.iterate loop {
@@ -10642,18 +10619,18 @@ scanCallsInNode: function {
             } else null
         }
     } case doexpr then {
-        doFr9: unitFramesOfId :ty :ast unitNameId: scanUnit site: 15
+        doFr9: frameFor :ty :ast unitNameId: scanUnit
         (demandDefinition
             :ty
             :ast
-            frames: doFr9
+            frame: doFr9
             nameId: (zast.poolFind pool: ast.names text: "never")
         )
         if (blockHasBreak :ast n: (ast.nodes.get i: (node.statement - 1).u64)) then {
             (demandDefinition
                 :ty
                 :ast
-                frames: doFr9
+                frame: doFr9
                 nameId: (zast.poolFind pool: ast.names text: "optionval")
             )
         }
@@ -10674,7 +10651,7 @@ scanCallsInNode: function {
             (demandDefinition
                 :ty
                 :ast
-                frames: (unitFramesOfId :ty :ast unitNameId: scanUnit site: 16)
+                frame: (frameFor :ty :ast unitNameId: scanUnit)
                 nameId: (atomNameId :ast n: (ast.nodes.get i: (node.parent - 1).u64))
             )
             # a unit-qualified member (io.stdout) demands exactly that member
@@ -18838,7 +18815,7 @@ checkAtomid: function {
             setl: result
             stampGate :st nid: node.nodeid.u64 tid: setl
         } else {
-            fo: (nsThenUnitLookup
+            fo: (walkLookupTyperef
                 :ast
                 ty: st.typing
                 reg: st.reg
@@ -31493,30 +31470,40 @@ declSurfaceEnsure9: function {
 
 # --- the environment walk for a bare definition name ---
 
-# nsFrameFor -- the innermost NESTED unit frame for a resolution happening in
-# `currentUnit`, or zero. The unit being walked is ambient (ty.nsOwner*), and
-# callers spell `currentUnit` either as the FILE unit the walk was entered with
-# or as the nested unit's own name, so the ambient owner is accepted when any
-# unit on its own chain carries that name. lookupDefinition climbs from here,
-# so an owner one level too deep still reaches the right frame.
-nsFrameFor: function {
+# --- the environment ---
+
+# frameFor -- the frame a name written in unit `unitNameId` resolves from: the
+# cursor's own frame when the cursor lies inside that unit (a body, a nested
+# unit, a template), else the unit's root -- a caller naming another unit is
+# a qualified probe (`core`'s `i64` for a literal's default, from a unit that
+# shadows `i64`) and starts there. A name that is no unit root at all (a
+# nested unit's or template's own name, spelled as the walk's unit) is not a
+# probe: the cursor answers. 0 for no unit (a prelude-only probe).
+frameFor: function {
     ty: ztyping.ZTyping.view
     ast: Ast.view
-    currentUnit: StringView
+    unitNameId: zast.nameid
 } out ztypes.declid is {
-    cur9: ty.nsOwnerDeclId
-    if cur9.isZero then return (ztypes.declid.create from: 0)
-    hops9: u64
-    for cur9 > 0 while hops9 < 32 loop {
-        hops9 = hops9 + 1
-        nm9: zast.poolTextAt pool: ast.names ref: (declNameIdOf :ty declId: cur9)
-        if nm9.stringview == currentUnit then return ty.nsOwnerDeclId
-        cur9 = declParentIdOf :ty declId: cur9
+    if unitNameId.isZero then return (ztypes.declid.create from: 0)
+    ur9: ztypes.declid
+    {
+        uro9: ty.unitRootByName.get key: unitNameId.u64
+        match (
+            uro9
+        ) case some then {
+            ur9 = uro9
+        } case none then null
     }
-    return (ztypes.declid.create from: 0)
+    if ur9.isZero then {
+        # the empty name is the prelude-only probe (an interned id, not 0)
+        if (zast.poolTextAt pool: ast.names ref: unitNameId).length == 0 then return ur9
+        return (unitFrameOf :ty :ast declId: ty.curFrame)
+    }
+    if (frameIsWithin :ty frame: ty.curFrame root: ur9) then {
+        return (unitFrameOf :ty :ast declId: ty.curFrame)
+    }
+    return ur9
 }
-
-# --- the environment ---
 
 # unitFrameOf -- the nearest frame at or above `declId` that a bare-name walk
 # consults: a unit (file, inline, subunit, template) or a `public:` block. A
@@ -31626,257 +31613,11 @@ envLookup: function {
     return (zdefhit declId: ztypes.declid frame: ztypes.declid)
 }
 
-# frameVerifyMode -- 0: off; 1: print every disagreement and every lookup
-# made with no cursor to compare against (stderr; aggregate with sort|uniq);
-# 2: abort on the first disagreement. Scaffolding for the environment
-# migration: every name-derived start frame is compared with the frame the
-# cursor gives, and the two must agree before a caller may switch.
-frameVerifyMode: 2
-
-# frameVerifyDecl -- a definition walk found `nameId` as `oldDecl` (0: not
-# found) by the name-derived frames; compare with what the environment walk
-# from the cursor finds. A core re-export and the definition it names are the
-# same answer. `site` tags the caller.
-frameVerifyDecl: function {
-    ty: ztyping.ZTyping.view
-    ast: Ast.view
-    site: u64
-    unitNameId: zast.nameid
-    nameId: zast.nameid
-    oldDecl: ztypes.declid
-} is {
-    if frameVerifyMode == 0 then return
-    if unitNameId.isZero then return
-    cu9: zast.poolTextAt pool: ast.names ref: unitNameId
-    if cu9.length == 0 then return
-    if cu9.stringview == "core" then return
-    if ty.curFrame.isZero then {
-        if frameVerifyMode == 1 then {
-            nm8: zast.poolTextAt pool: ast.names ref: nameId
-            io.eprintln "frame-verify site \{site}: unset (unit '\{cu9}' name '\{nm8}')"
-        }
-        return
-    }
-    hit9: envLookup :ty :ast frame: ty.curFrame :nameId
-    if hit9.declId == oldDecl then return
-    if (frameVerifySameDef :ty :ast a: oldDecl b: hit9.declId) then return
-    frameVerifyFail :ty :ast :site :unitNameId :nameId :oldDecl newDecl: hit9.declId
-}
-
-# frameVerifyTid -- a type-position walk found `nameId` as `oldTid` (0: not
-# found); the environment walk finds a declaration, minted or not. Agree when
-# the declaration carries that id, when neither found anything, or when the
-# old walk missed a declaration that is not minted yet (a probe cannot see an
-# unminted definition, the environment can).
-frameVerifyTid: function {
-    ty: ztyping.ZTyping.view
-    ast: Ast.view
-    site: u64
-    unitNameId: zast.nameid
-    nameId: zast.nameid
-    oldTid: u64
-    oldDecl: ztypes.declid
-} is {
-    if frameVerifyMode == 0 then return
-    if unitNameId.isZero then return
-    cu9: zast.poolTextAt pool: ast.names ref: unitNameId
-    if cu9.length == 0 then return
-    if cu9.stringview == "core" then return
-    if ty.curFrame.isZero then {
-        if frameVerifyMode == 1 then {
-            nm8: zast.poolTextAt pool: ast.names ref: nameId
-            io.eprintln "frame-verify site \{site}: unset (unit '\{cu9}' name '\{nm8}')"
-        }
-        return
-    }
-    hit9: envLookup :ty :ast frame: ty.curFrame :nameId
-    if hit9.declId == oldDecl then return
-    newTid9: (declTypeIdOf :ty declId: hit9.declId).u64
-    if oldTid == 0 when hit9.declId.isZero then return
-    if oldTid == 0 when newTid9 == 0 then return
-    if oldTid > 0 when newTid9 == oldTid then return
-    if (frameVerifySameDef :ty :ast a: oldDecl b: hit9.declId) then return
-    if oldTid > 0 when (hit9.declId.isZero) == false when newTid9 == 0 then {
-        # the environment names a declaration the old walk reached through
-        # another frame's mint (a re-export); the ids cannot be compared yet
-        if frameVerifyMode == 1 then {
-            nm7: zast.poolTextAt pool: ast.names ref: nameId
-            io.eprintln "frame-verify site \{site}: unminted (unit '\{cu9}' name '\{nm7}' old tid \{oldTid} new decl \{hit9.declId})"
-        }
-        return
-    }
-    frameVerifyFail :ty :ast :site :unitNameId :nameId :oldDecl newDecl: hit9.declId
-}
-
-# frameVerifySameDef -- two declarations name the same definition: equal, or
-# one is core's re-export of the other's unit-level definition.
-frameVerifySameDef: function {
-    ty: ztyping.ZTyping.view
-    ast: Ast.view
-    a: ztypes.declid
-    b: ztypes.declid
-} out bool is {
-    if a == b then return true
-    if a.isZero then return false
-    if b.isZero then return false
-    an9: declNameIdOf :ty declId: a
-    bn9: declNameIdOf :ty declId: b
-    if an9 != bn9 then return false
-    if (frameVerifyReexports :ty :ast alias: a target: b) then return true
-    return (frameVerifyReexports :ty :ast alias: b target: a)
-}
-
-frameVerifyReexports: function {
-    ty: ztyping.ZTyping.view
-    ast: Ast.view
-    alias: ztypes.declid
-    target: ztypes.declid
-} out bool is {
-    ap9: declParentIdOf :ty declId: alias
-    if ap9 != ty.coreUnitRoot then return false
-    ru9: reexportUnitOf :ty :ast declId: alias
-    if ru9.isZero then return false
-    tp9: declParentIdOf :ty declId: target
-    tn9: declNameIdOf :ty declId: tp9
-    return ru9 == tn9
-}
-
-frameVerifyFail: function {
-    ty: ztyping.ZTyping.view
-    ast: Ast.view
-    site: u64
-    unitNameId: zast.nameid
-    nameId: zast.nameid
-    oldDecl: ztypes.declid
-    newDecl: ztypes.declid
-} is {
-    cu9: zast.poolTextAt pool: ast.names ref: unitNameId
-    nm9: zast.poolTextAt pool: ast.names ref: nameId
-    on9: "-".string
-    if (oldDecl.isZero) == false then on9 = (zast.poolTextCopy
-        pool: ast.names
-        ref: (declNameIdOf :ty declId: (declParentIdOf :ty declId: oldDecl))
-    )
-    nn9: "-".string
-    if (newDecl.isZero) == false then nn9 = (zast.poolTextCopy
-        pool: ast.names
-        ref: (declNameIdOf :ty declId: (declParentIdOf :ty declId: newDecl))
-    )
-    cn9: zast.poolTextCopy pool: ast.names ref: (declNameIdOf :ty declId: ty.curFrame)
-    msg9: "frame-verify site \{site}: DISAGREE unit '\{cu9}' name '\{nm9}' old \{oldDecl} (in \{on9}) new \{newDecl} (in \{nn9}) cursor \{ty.curFrame} (\{cn9})"
-    if frameVerifyMode == 2 then panic msg: msg9
-    io.eprintln msg9
-}
-
-# zframes -- the definition frames a bare name is resolved against, innermost
-# first: the enclosing namespace (zero outside one), the current unit, then
-# the prelude (`core`). Each is a root DeclId whose children are the frame's
-# names, so first-match-wins is one declFindChild per frame; a zero frame is
-# skipped. Variables live in the symbol table's entries and are resolved
-# before any of these.
-zframes: record {
-    nsRoot: ztypes.declid
-    unitRoot: ztypes.declid
-    preludeRoot: ztypes.declid
-    # verify scaffolding: the site tag of the caller and the unit name the
-    # frames were derived from
-    site: u64
-    unitNameId: zast.nameid
-}
-
-# zdefhit -- a lookupDefinition hit: the child DeclId and the frame (its root
+# zdefhit -- an envLookup hit: the child DeclId and the frame (its root
 # DeclId) it was found in. Both zero on a miss.
 zdefhit: record {
     declId: ztypes.declid
     frame: ztypes.declid
-}
-
-# unitFramesOf -- the frames for a reference written at the top level of
-# `currentUnit`: the unit's own root, then the prelude. No namespace frame.
-unitFramesOf: function {
-    ty: ztyping.ZTyping.view
-    ast: Ast.view
-    currentUnit: StringView
-    site: u64
-} out zframes is {
-    ur9: ztypes.declid
-    uro9: ty.unitRootByName.get key: (nameIdOf :ast name: currentUnit).u64
-    match (
-        uro9
-    ) case some then {
-        ur9 = uro9
-    } case none then null
-    return (zframes
-        nsRoot: (nsFrameFor :ty :ast :currentUnit)
-        unitRoot: ur9
-        preludeRoot: ty.coreUnitRoot
-        :site
-        unitNameId: (nameIdOf :ast name: currentUnit)
-    )
-}
-
-# lookupDefinition -- the environment walk for a definition NAME: the frames
-# innermost first, first match wins. A hit is the child's DeclId whatever
-# its resolution state (indexed only, mid-resolution, or resolved); a miss
-# is zero. A probe: it reads the index and mints nothing.
-lookupDefinition: function {
-    ty: ztyping.ZTyping.view
-    ast: Ast.view
-    frames: zframes
-    nameId: zast.nameid
-} out zdefhit is {
-    if nameId.isZero then return (zdefhit declId: ztypes.declid frame: ztypes.declid)
-    h9: lookupDefinitionOld :ty :ast :frames :nameId
-    # where the name-derived frames are blind, the environment answers (a
-    # template's own member, from inside the template's body)
-    if h9.declId.isZero when (ty.curFrame.isZero) == false then {
-        eh9: envLookup :ty :ast frame: ty.curFrame :nameId
-        if (eh9.declId.isZero) == false then return eh9
-    }
-    (frameVerifyDecl
-        :ty
-        :ast
-        site: frames.site
-        unitNameId: frames.unitNameId
-        :nameId
-        oldDecl: h9.declId
-    )
-    return h9
-}
-
-lookupDefinitionOld: function {
-    ty: ztyping.ZTyping.view
-    ast: Ast.view
-    frames: zframes
-    nameId: zast.nameid
-} out zdefhit is {
-    if nameId.isZero then return (zdefhit declId: ztypes.declid frame: ztypes.declid)
-    # The nested frames are a CHAIN, not a slot: a definition written inside a
-    # unit resolves against that unit, then against each unit enclosing it, and
-    # only then against the file unit. Reading one frame here left every unit
-    # between the innermost and the file unit invisible, so a unit nested two
-    # deep could not see the one that encloses it.
-    cur9: frames.nsRoot
-    hops9: u64
-    for cur9 > 0 while hops9 < 32 loop {
-        hops9 = hops9 + 1
-        h9: ty.declFindChild parentDeclId: cur9 :nameId
-        if (h9.isZero) == false then return (zdefhit declId: h9 frame: cur9)
-        nx9: declParentIdOf :ty declId: cur9
-        cur9 = ztypes.declid
-        if (nx9.isZero) == false then {
-            if (declDeclaresUnit :ty :ast declId: nx9) then cur9 = nx9
-        }
-    }
-    if (frames.unitRoot.isZero) == false then {
-        h8: ty.declFindChild parentDeclId: frames.unitRoot :nameId
-        if (h8.isZero) == false then return (zdefhit declId: h8 frame: frames.unitRoot)
-    }
-    if (frames.preludeRoot.isZero) == false then {
-        h7: ty.declFindChild parentDeclId: frames.preludeRoot :nameId
-        if (h7.isZero) == false then return (zdefhit declId: h7 frame: frames.preludeRoot)
-    }
-    return (zdefhit declId: ztypes.declid frame: ztypes.declid)
 }
 
 # reexportUnitOf -- for a prelude Decl whose value is a unit-rooted dotted
@@ -31960,45 +31701,6 @@ monoOriginTidOf: function {reg: ztypes.ZTypeRegistry tid: ztypes.tid} out ztypes
     return (reg.genericOriginOf :tid)
 }
 
-# resolve a dotted type reference `base` from `currentUnit` by walking
-# the name path; returns the referent's type id, or `none`. Two roots only:
-# the unit itself, then `core` -- the prelude every program opens, and the one
-# unit the resolver names. Every other unit, stdlib or not, is reached the same
-# way a user unit is: through core's re-exports or a qualified path.
-# nsThenUnitLookup -- a bare name written inside a namespace resolves against
-# that namespace first, then falls through to each enclosing unit, the file
-# unit and core -- the same outward walk for an inline unit and a hidden
-# subunit alike (units.pdoc: a subunit is private, not blind).
-nsThenUnitLookup: function {
-    ast: Ast.view
-    ty: ztyping.ZTyping.view
-    reg: ztypes.ZTypeRegistry.view
-    currentUnit: StringView
-    base: StringView
-} out optionval u64 is {
-    if ty.nsOwnerTid > 0 when currentUnit == ty.nsOwnerUnit.stringview then {
-        nid9: zast.poolFind pool: ast.names text: base
-        if (nid9.isZero) == false then {
-            no9: ty.declChildOfId parentTypeId: ty.nsOwnerTid nameId: nid9
-            match (
-                no9
-            ) case some then {
-                (frameVerifyTid
-                    :ty
-                    :ast
-                    site: 20
-                    unitNameId: (nameIdOf :ast name: currentUnit)
-                    nameId: nid9
-                    oldTid: no9
-                    oldDecl: (ty.declFindChild parentDeclId: ty.nsOwnerDeclId nameId: nid9)
-                )
-                return (optionval.some no9)
-            } case none then null
-        }
-    }
-    return (walkLookupTyperef :ast :ty :reg :currentUnit :base)
-}
-
 # probeFrameTyperef -- one frame's answer for a type name: the Decl-tree
 # child's minted id (a not-yet-touched re-export minted through its alias),
 # else the unit type's member index, which also serves the pre-index window
@@ -32032,9 +31734,11 @@ probeFrameTyperef: function {
 }
 
 # walkLookupTyperef -- resolve a bare type name to its id: the environment
-# walk over the current unit's frame, then the prelude -- the current unit
-# shadows core, and every other unit is reached through core's re-exports or a
-# qualified path. It serves internal/mangled queries (mono names, dotted
+# walk from the frame a name written in `currentUnit` resolves from (frameFor:
+# the cursor's frame when the cursor lies inside that unit, else the unit's
+# own root), each enclosing unit frame outward, then the prelude -- the
+# current unit shadows core, and every other unit is reached through core's
+# re-exports or a qualified path. It serves internal/mangled queries (dotted
 # member keys) beyond the source-level surface, so a frame answers from the
 # member index as well as the Decl tree (probeFrameTyperef).
 walkLookupTyperef: function {
@@ -32044,91 +31748,9 @@ walkLookupTyperef: function {
     currentUnit: StringView
     base: StringView
 } out optionval u64 is {
-    fr9: unitFramesOf :ty :ast :currentUnit site: 7
     nid9: zast.poolFind pool: ast.names text: base
-    # the environment first, when the cursor lies inside the unit named:
-    # the declaration its frame chain reaches, if minted. A caller naming
-    # another unit is a qualified probe (`core`'s `i64` for a literal's
-    # default, from inside a unit that shadows `i64`) and keeps the frames.
-    # The name-derived frames below answer otherwise -- cursor unset, or
-    # the chain's declaration not minted yet (a probe cannot mint; a core
-    # re-export minted through its alias is reached by the frames) -- and
-    # every hit of theirs is still verified against the environment.
-    if (frameIsWithin :ty frame: ty.curFrame root: fr9.unitRoot) then {
-        e0: envTypeIdOf :ty :ast nameId: nid9
-        if e0 > 0 then return (optionval.some e0)
-    }
-    # the nested frames first, innermost outward: the unit a name is written
-    # in, then each unit enclosing that one. Only then the file unit.
-    cur9: fr9.nsRoot
-    hops9: u64
-    for cur9 > 0 while hops9 < 32 loop {
-        hops9 = hops9 + 1
-        rn9: probeFrameTyperef :ast :ty :reg root: cur9 nameId: nid9
-        if rn9 > 0 then {
-            (frameVerifyTid
-                :ty
-                :ast
-                site: 7
-                unitNameId: fr9.unitNameId
-                nameId: nid9
-                oldTid: rn9
-                oldDecl: (ty.declFindChild parentDeclId: cur9 nameId: nid9)
-            )
-            return (optionval.some rn9)
-        }
-        nx9: declParentIdOf :ty declId: cur9
-        cur9 = ztypes.declid
-        if (nx9.isZero) == false then {
-            if (declDeclaresUnit :ty :ast declId: nx9) then cur9 = nx9
-        }
-    }
-    r9: probeFrameTyperef :ast :ty :reg root: fr9.unitRoot nameId: nid9
-    if r9 > 0 then {
-        (frameVerifyTid
-            :ty
-            :ast
-            site: 7
-            unitNameId: fr9.unitNameId
-            nameId: nid9
-            oldTid: r9
-            oldDecl: (ty.declFindChild parentDeclId: fr9.unitRoot nameId: nid9)
-        )
-        return (optionval.some r9)
-    }
-    # `Any` is not user-reachable through core: only its own unit (system.z,
-    # or a user unit defining one) resolves it. The constraint-position gate
-    # is checkAnyBounds.
-    if base == "Any" then return (optionval.none u64)
-    r5: probeFrameTyperef :ast :ty :reg root: fr9.preludeRoot nameId: nid9
-    if r5 > 0 then {
-        (frameVerifyTid
-            :ty
-            :ast
-            site: 7
-            unitNameId: fr9.unitNameId
-            nameId: nid9
-            oldTid: r5
-            oldDecl: (ty.declFindChild parentDeclId: fr9.preludeRoot nameId: nid9)
-        )
-        return (optionval.some r5)
-    }
-    # where the name-derived frames are blind, the environment answers: a
-    # definition the cursor's frame chain reaches -- a template's own member
-    # or generic parameter, from inside the template's body -- that no
-    # unit-name frame holds.
-    e9: envTypeIdOf :ty :ast nameId: nid9
-    if e9 > 0 then return (optionval.some e9)
-    (frameVerifyTid
-        :ty
-        :ast
-        site: 7
-        unitNameId: fr9.unitNameId
-        nameId: nid9
-        oldTid: 0
-        oldDecl: ztypes.declid
-    )
-    return (optionval.none u64)
+    if nid9.isZero then return (optionval.none u64)
+    return (walkLookupTyperefById :ast :ty :reg :currentUnit baseId: nid9)
 }
 
 # resolvedByIds / resolvedByIdsMember -- resolve a (unit, name[, member])
@@ -32301,7 +31923,8 @@ resolveSystemChild: function {
 # probe is a childOfId (no per-stage StringPool.find). The composed-key miss
 # path materialises the name text once via poolTextCopy (rare). ---
 
-# id-keyed `walkLookupTyperef`: the base name is a StringPool name-id.
+# walkLookupTyperefById -- walkLookupTyperef for a caller holding the base
+# name's pool id.
 walkLookupTyperefById: function {
     ast: Ast.view
     ty: ztyping.ZTyping.view
@@ -32309,20 +31932,27 @@ walkLookupTyperefById: function {
     currentUnit: StringView
     baseId: zast.nameid
 } out optionval u64 is {
-    fr9: unitFramesOf :ty :ast :currentUnit site: 8
-    if (frameIsWithin :ty frame: ty.curFrame root: fr9.unitRoot) then {
-        e0: envTypeIdOf :ty :ast nameId: baseId
-        if e0 > 0 then return (optionval.some e0)
+    if baseId.isZero then return (optionval.none u64)
+    cur9: frameFor :ty :ast unitNameId: (nameIdOf :ast name: currentUnit)
+    hops9: u64
+    for cur9 > 0 while hops9 < 64 loop {
+        hops9 = hops9 + 1
+        if cur9 == ty.coreUnitRoot then {
+            cur9 = ztypes.declid
+        } else {
+            r9: probeFrameTyperef :ast :ty :reg root: cur9 nameId: baseId
+            if r9 > 0 then return (optionval.some r9)
+            cur9 = unitFrameOf :ty :ast declId: (declParentIdOf :ty declId: cur9)
+        }
     }
-    r9: probeFrameTyperef :ast :ty :reg root: fr9.unitRoot nameId: baseId
-    if r9 > 0 then return (optionval.some r9)
-    # `Any` is not user-reachable through the stdlib fallbacks (see the
-    # text-keyed twin above).
-    if baseId == (zast.poolFind pool: ast.names text: "Any") then return (optionval.none u64)
-    r5: probeFrameTyperef :ast :ty :reg root: fr9.preludeRoot nameId: baseId
-    if r5 > 0 then return (optionval.some r5)
-    e9: envTypeIdOf :ty :ast nameId: baseId
-    if e9 > 0 then return (optionval.some e9)
+    # `Any` is not user-reachable through core: only its own unit (system.z,
+    # or a user unit defining one) resolves it. The constraint-position gate
+    # is checkAnyBounds.
+    if (zast.poolTextAt pool: ast.names ref: baseId) == "Any" then return (optionval.none u64)
+    if (ty.coreUnitRoot.isZero) == false then {
+        r5: probeFrameTyperef :ast :ty :reg root: ty.coreUnitRoot nameId: baseId
+        if r5 > 0 then return (optionval.some r5)
+    }
     return (optionval.none u64)
 }
 
