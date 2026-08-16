@@ -2353,7 +2353,6 @@ fieldHeadName: function {ast: Ast.view n: Node.view} out String is {
 # but a `type_children` row joins to the shell's name. Returns the shell's type id.
 recordNodeName: function {
     ty: ztyping.ZTyping
-    unitName: StringView
     name: StringView
     nid: u64
     frame: ztypes.declid
@@ -2361,8 +2360,6 @@ recordNodeName: function {
     if name.length != 0 then {
         kc: nid
         ty.pendingTyperef.set key: kc value: name.string
-        kc2: nid
-        ty.pendingTyperefUnit.set key: kc2 value: unitName.string
         kc3: nid
         ty.pendingTyperefFrame.set key: kc3 value: frame
     }
@@ -2420,16 +2417,16 @@ recordResolvedName: function {
     frame: ztypes.declid
 } is {
     if name == "this" then {
-        recordNodeName :ty :unitName name: thisName :nid :frame
+        recordNodeName :ty name: thisName :nid :frame
     } else {
         if name == "type" then {
-            recordNodeName :ty :unitName name: thisName :nid :frame
+            recordNodeName :ty name: thisName :nid :frame
         } else {
             if (isNumericLiteralName :name) then {
                 if name.contains "." then {
-                    recordNodeName :ty :unitName name: "f64" :nid :frame
+                    recordNodeName :ty name: "f64" :nid :frame
                 } else {
-                    recordNodeName :ty :unitName name: "i64" :nid :frame
+                    recordNodeName :ty name: "i64" :nid :frame
                 }
             } else {
                 # a template's own param name still RECORDS (the pending
@@ -2443,7 +2440,7 @@ recordResolvedName: function {
                 if gskip9 == false when ty.sigGenericDecl > 0 then {
                     if (reg.isGenericParamOf tdecl: ty.sigGenericDecl :name) then gskip9 = true
                 }
-                recordNodeName :ty :unitName :name :nid :frame
+                recordNodeName :ty :name :nid :frame
                 if gskip9 then {
                     nsg9: nid
                     nsv9: true
@@ -3216,7 +3213,6 @@ stampGenericParamRef: function {
 recordGenericMarkerReturn: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
-    unitName: StringView
     enclDecl: ztypes.declid
     ast: Ast.view oId: zast.nodeid
 } is {
@@ -3225,7 +3221,7 @@ recordGenericMarkerReturn: function {
     mpb3: markerPeeledBase :ast n: o
     if mpb3.length > 0 when (reg.isGenericParamOf tdecl: enclDecl name: mpb3.stringview) then {
         mnid3: nodeId n: o
-        recordNodeName :ty :unitName name: mpb3.stringview nid: mnid3.u64 frame: ty.curFrame
+        recordNodeName :ty name: mpb3.stringview nid: mnid3.u64 frame: ty.curFrame
         # the entry feeds mono-return substitution (the pending MAP is the
         # consumer); it names a template param, so it never name-resolves
         nsk3: mnid3.u64
@@ -3600,8 +3596,6 @@ resolveTyperefShellMarked: function {
             tnm9: regTypeNameOf :reg tid: (ztypes.tid.create from: rid9.u64)
             if tnm9.length > 0 then {
                 ty.pendingTyperef.set key: typeExpr.nodeid.u64 value: tnm9
-                tun9: unitName.string
-                ty.pendingTyperefUnit.set key: typeExpr.nodeid.u64 value: tun9
                 ty.pendingTyperefFrame.set key: typeExpr.nodeid.u64 value: ty.curFrame
             }
             return (ztypes.tid.create from: rid9)
@@ -4361,7 +4355,6 @@ resolveFunctionIn: function {
         :ty
         :reg
         :ast
-        :unitName
         enclDecl: enclDecl9
         oId: fnode.returntype
     )
@@ -9016,8 +9009,6 @@ resolveAliasKeyIn: function {
         if dnid9 > 0 then {
             ptn9: tu9.copy
             ty.pendingTyperef.set key: dnid9 value: ptn9
-            ptu9: aUnit9.copy
-            ty.pendingTyperefUnit.set key: dnid9 value: ptu9
             # the alias resolves in the frame it is written in
             ty.pendingTyperefFrame.set key: dnid9 value: aParent9
         }
@@ -13482,17 +13473,6 @@ stampPendingTyperefs: function {
         uk: pkeys9.get i: pi9
         pval9: pvals9.get i: pi9
         pi9 = pi9 + 1
-        originOwn9: String
-        {
-            uo: ty.pendingTyperefUnit.get key: uk
-            match (
-                uo
-            ) case some then {
-                if uo.length > 0 then originOwn9 = uo.copy
-            } case none then null
-        }
-        origin: mainName
-        if originOwn9.length > 0 then origin = originOwn9.stringview
         # the type-ref resolves in the frame it was written in
         prevFrame9: ty.curFrame
         ty.curFrame = ztypes.declid
@@ -13504,6 +13484,16 @@ stampPendingTyperefs: function {
                 ty.curFrame = fo9
             } case none then null
         }
+        # the frame's unit, as the label the surface / claim probes take
+        origin: mainName
+        originOwn9: String
+        {
+            our9: unitRootOfDecl :ty declId: ty.curFrame
+            if (our9.isZero) == false then {
+                originOwn9 = zast.poolTextCopy pool: ast.names ref: (declNameIdOf :ty declId: our9)
+            }
+        }
+        if originOwn9.length > 0 then origin = originOwn9.stringview
         skip0: false
         {
             sk0: ty.noStampNode.get key: uk
@@ -13514,12 +13504,12 @@ stampPendingTyperefs: function {
             } case none then null
         }
         if (skip0) == false then {
-            r: (walkLookupTyperef
+            r: (walkLookupTyperefFrom
                 :ast
                 :ty
                 :reg
-                currentUnit: origin
-                base: pval9.stringview
+                frame: ty.curFrame
+                baseId: (zast.poolFind pool: ast.names text: pval9.stringview)
             )
             match (
                 r
@@ -27179,7 +27169,7 @@ checkFunctionBodyIn: function {
 # the generic param UNBOUND (no st.define of the arg), so a `match t` subject
 # resolves to 0 and checkCase stamps it as a genericParam (against the bare unit
 # name) for the emitter to dissect. Mirrors checkUnitBodies' fn loop (index-based
-# so it never holds the iterator lock while passing unitBody), no mainMemberIndex.
+# so it never holds the iterator lock while passing unitBody).
 walkUnitTemplateBodies9: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -27376,19 +27366,7 @@ checkUnitBodies: function {
     unitdefId: zast.nodeid
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
-    st.typing.mainMemberUnit = unitName.string
     {
-        mi: u64
-        with niter: bodyIds9.iterate do for nmId9: niter loop {
-            nm: ast.nodes.get i: (nmId9 - 1).u64
-            match (
-                nm
-            ) case namedoperation then {
-                miv: mi
-                st.typing.mainMemberIndex.set key: nm.name.u64 value: miv
-            } else null
-            mi = mi + 1
-        }
         mn9: bodyIds9.length
         mi9: u64
         foundMain9: false
@@ -31860,7 +31838,26 @@ walkLookupTyperefById: function {
     baseId: zast.nameid
 } out optionval u64 is {
     if baseId.isZero then return (optionval.none u64)
-    cur9: frameFor :ty :ast unitNameId: (nameIdOf :ast name: currentUnit)
+    return (walkLookupTyperefFrom
+        :ast
+        :ty
+        :reg
+        frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: currentUnit))
+        :baseId
+    )
+}
+
+# walkLookupTyperefFrom -- the walk itself, from an explicit start frame (0:
+# the prelude alone): each enclosing unit frame outward, then core.
+walkLookupTyperefFrom: function {
+    ast: Ast.view
+    ty: ztyping.ZTyping.view
+    reg: ztypes.ZTypeRegistry.view
+    frame: ztypes.declid
+    baseId: zast.nameid
+} out optionval u64 is {
+    if baseId.isZero then return (optionval.none u64)
+    cur9: frame
     hops9: u64
     for cur9 > 0 while hops9 < 64 loop {
         hops9 = hops9 + 1
