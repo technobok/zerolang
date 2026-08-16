@@ -3631,7 +3631,11 @@ ewWalk: function {ast: Ast.view externs: (ListVal u32).view scope: ListVal u32 n
         node
     ) case error then null case placeholder then null case atomid then {
         ewEmit :ast :externs :scope nameId: node.name
-    } case labelvalue then null case stringchunk then null case binop then {
+    } case labelvalue then {
+        # `:name` is `name: name`: a reference to `name` (a `public:` block
+        # entry that lists a hidden subunit is what loads its file)
+        ewEmit :ast :externs :scope nameId: node.name
+    } case stringchunk then null case binop then {
         ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.lhs - 1).u64)
         ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.operator - 1).u64)
         ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.rhs - 1).u64)
@@ -3719,7 +3723,11 @@ ewWalk: function {ast: Ast.view externs: (ListVal u32).view scope: ListVal u32 n
         ewBindKnown :ast :scope text: "this"
         ewBindKnown :ast :scope text: "type"
         ewBindKnown :ast :scope text: "meta"
-        ewBindNameIds :ast :scope items: node.body
+        # a `public:` block's entries name the ENCLOSING unit's definitions
+        # (`:impl`, `perimeter: perimImpl`): binding the entry names first
+        # would hide the references they are, and a listed hidden subunit
+        # loads on the strength of that reference alone
+        if (node.kind.publicNs) == false then ewBindNameIds :ast :scope items: node.body
         ewWalkBodyIds :ast :externs :scope items: node.body
         ewTruncate :scope n: base
     } case program then null
