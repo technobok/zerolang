@@ -10453,7 +10453,6 @@ resolveDemandedDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry ast
     pNsD9: ty.nsOwnerDeclId
     pNsN9: ty.nsOwnerName.copy
     pNsU9: ty.nsOwnerUnit.copy
-    pNsS9: ty.nsOwnerIsSubunit
     pCf9: ty.curFrame
     pCe9: ty.inContainmentEdge
     pSup9: ty.suppressParamStamps
@@ -10463,7 +10462,6 @@ resolveDemandedDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry ast
     ty.nsOwnerDeclId = ztypes.declid
     ty.nsOwnerName = "".string
     ty.nsOwnerUnit = "".string
-    ty.nsOwnerIsSubunit = false
     ty.inContainmentEdge = false
     ty.suppressParamStamps = false
     ty.curMonoStamp = 0
@@ -10483,7 +10481,6 @@ resolveDemandedDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry ast
     ty.nsOwnerDeclId = pNsD9
     ty.nsOwnerName = pNsN9
     ty.nsOwnerUnit = pNsU9
-    ty.nsOwnerIsSubunit = pNsS9
     ty.curFrame = pCf9
     ty.inContainmentEdge = pCe9
     ty.suppressParamStamps = pSup9
@@ -18962,43 +18959,7 @@ checkAtomid: function {
                 )
                 stampRefDecl ty: st.typing nid: node.nodeid.u64 declId: sfF9
                 maybeWalkMethods :st :unitName :ast name: ndNm9.stringview
-            } case none then {
-                # A name a hidden subunit cannot reach but its PARENT defines:
-                # the parser resolved it (an unresolved name is promoted to the
-                # parent unit, which is the file-search rule), so nothing else
-                # will report it, and without this the reference reaches C as a
-                # bare identifier. Only the parent's own definitions are
-                # claimed here -- a name nothing defines is still the general
-                # unresolved case.
-                if st.typing.nsOwnerIsSubunit when unitName == st.typing.nsOwnerUnit.stringview then {
-                    po9: (walkLookupTyperef
-                        :ast
-                        ty: st.typing
-                        reg: st.reg
-                        currentUnit: unitName
-                        base: ndNm9.stringview
-                    )
-                    match (
-                        po9
-                    ) case some then {
-                        pnm9: typeNameOf :st tid: (ztypes.tid.create from: st.typing.nsOwnerTid.u64)
-                        pm9: "'\{ndNm9}' is defined in the parent unit '\{unitName}'"
-                        pn9: "an implementation subunit cannot refer to its parent".string
-                        ph9: "subunit '\{pnm9}' sees its own definitions, its own subunits, top-level units and core"
-                        (addErrorH
-                            :st
-                            nodeid: node.nodeid
-                            lineno: node.lineno
-                            colno: node.colno
-                            e: zast.err.badReference
-                            msg: pm9
-                            note: pn9
-                            hint: ph9
-                            width: ndNm9.length.u32.orPanic
-                        )
-                    } case none then null
-                }
-            }
+            } case none then null
         }
     }
     return result
@@ -26525,7 +26486,7 @@ walkDeclaredDefIn: function {
             do9: st.typing.decls.get i: (dd9 - 1)
             memId9 = do9.node
             # a definition inside a NAMESPACE needs that namespace's resolution
-            # context (nsOwnerTid / nsOwnerUnit / nsOwnerIsSubunit) to read its
+            # context (nsOwnerTid / nsOwnerUnit) to read its
             # own siblings: `deep.mul` inside helper resolves against helper
             # first. checkNamespaceBodies establishes that from its position, so
             # a namespace member is left to that walk rather than walked
@@ -27371,7 +27332,6 @@ checkNamespaceBodies: function {
     prevTid9: st.typing.nsOwnerTid
     prevDecl9: st.typing.nsOwnerDeclId
     prevUnit9: st.typing.nsOwnerUnit.copy
-    prevSub9: st.typing.nsOwnerIsSubunit
     prevFrame9: st.typing.curFrame
     {
         un9: unitdefNodeId :ast nId: unitdefId
@@ -27384,11 +27344,6 @@ checkNamespaceBodies: function {
                 st.typing.curFrame = st.typing.nsOwnerDeclId
                 nu9: unitName.string
                 st.typing.nsOwnerUnit = nu9
-                st.typing.nsOwnerIsSubunit = (zast.unitOpKindIs
-                    :ast
-                    opId: unitdefId
-                    k: zast.unitkind.subunit
-                )
             }
         }
     }
@@ -27428,7 +27383,6 @@ checkNamespaceBodies: function {
     st.typing.nsOwnerDeclId = prevDecl9
     pu9: prevUnit9.copy
     st.typing.nsOwnerUnit = pu9
-    st.typing.nsOwnerIsSubunit = prevSub9
     st.typing.curFrame = prevFrame9
 }
 
@@ -29091,8 +29045,6 @@ constOwnerTidFor: function {
                 if (declDeclaresUnit :ty :ast declId: nx9) then cur9 = nx9
             }
         }
-        # a hidden subunit does not fall through to its parent
-        if ty.nsOwnerIsSubunit then return 0
     }
     return (unitTidOfName9 :reg unitNameId: (nameIdOf :ast name: unitName)).u64
 }
@@ -31907,12 +31859,9 @@ monoOriginTidOf: function {reg: ztypes.ZTypeRegistry tid: ztypes.tid} out ztypes
 # unit the resolver names. Every other unit, stdlib or not, is reached the same
 # way a user unit is: through core's re-exports or a qualified path.
 # nsThenUnitLookup -- a bare name written inside a namespace resolves against
-# that namespace first. A hidden SUBUNIT stops there and falls through to core
-# alone: it is read only because its parent named it, so it may name its own
-# definitions, its own subunits, top-level units and core, but not its parent's
-# (units.pdoc: "modules can only refer to submodules further down the directory
-# tree"). An INLINE unit falls through to the enclosing unit, which is the
-# chain spec.pdoc gives it.
+# that namespace first, then falls through to each enclosing unit, the file
+# unit and core -- the same outward walk for an inline unit and a hidden
+# subunit alike (units.pdoc: a subunit is private, not blind).
 nsThenUnitLookup: function {
     ast: Ast.view
     ty: ztyping.ZTyping.view
@@ -31938,9 +31887,6 @@ nsThenUnitLookup: function {
                 )
                 return (optionval.some no9)
             } case none then null
-        }
-        if ty.nsOwnerIsSubunit then {
-            return (walkLookupTyperef :ast :ty :reg currentUnit: "core" :base)
         }
     }
     return (walkLookupTyperef :ast :ty :reg :currentUnit :base)
