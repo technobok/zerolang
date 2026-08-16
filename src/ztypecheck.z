@@ -12403,49 +12403,11 @@ fnReturnBaseNameOf: function {ast: Ast.view op: Node.view} out String is {
     }
 }
 
-# cloneUnitMethod -- deep-clone a template method functiondef with fresh synth
-# nodeids. The clone's rows never become reachable from the program roots, so
-# its body's stamps stay out of the dump; only its walk's scope/entry/variable
-# rows are visible.
-cloneUnitMethod: function {ast: Ast.view op: Node.view} out Option Node is {
-    match (
-        op
-    ) case functiondef then {
-        pm9: (MapRV String value: bool)
-        params9: (ListVal u32)
-        with piter: op.parameters.iterate do for ppId9: piter loop {
-            pp: ast.nodes.get i: (ppId9 - 1).u64
-            pc: zgenerator.clonePath :ast n: pp
-            params9.append (zast.tableAdd :ast n: pc)
-        }
-        rt9: (zgenerator.rewriteOptToThisAt
-            :ast
-            oId: op.returntype
-            promoted: pm9
-        )
-        body9: zgenerator.rewriteOptToThisAt :ast oId: op.body promoted: pm9
-        ln9: op.lineno
-        cn9: op.colno
-        fnew: (Node.functiondef (zast.FunctionData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln9
-            colno: cn9
-            returntype: (zast.nodeid.create from: rt9)
-            parameters: params9
-            body: (zast.nodeid.create from: body9)
-            isNative: false
-            asItems: (ListVal u32))
-        )
-        return (Option.some fnew)
-    } else {
-        return (Option.none Node)
-    }
-}
-
 # buildUnitMono -- unit-mono completion: substituted method
 # children ({mono}.{fn} FUNCTION types whose generic-param-named child types
-# and return are replaced by the instantiation arg) plus a cloned body per
-# method, stashed for the lazy first-use walk. One build per mono.
+# and return are replaced by the instantiation arg). Bodies are walked once,
+# per instance, over the template's AST (stampUnitMonoTemplates). One build
+# per mono.
 # registerMonoFnParams -- register a mono unit fn's generic-param-typed params
 # (a: t -> a: argId) on the mono FUNCTION type, sourced from the template fn's
 # AST. The template fn stays childless -- only the instance carries substituted
@@ -12490,7 +12452,6 @@ buildUnitMono: function {
     tmplUnitName: StringView
     tmplName: StringView
     monoId: ztypes.tid
-    monoName: StringView
     tplId: ztypes.tid
     subs: (MapRV String value: u64)
     templateOpId: zast.nodeid
@@ -12512,7 +12473,6 @@ buildUnitMono: function {
         :tmplUnitName
         :tmplName
         :monoId
-        :monoName
         :tplId
         :subs
         :templateOpId
@@ -12527,14 +12487,12 @@ buildUnitMonoIn: function {
     tmplUnitName: StringView
     tmplName: StringView
     monoId: ztypes.tid
-    monoName: StringView
     tplId: ztypes.tid
     subs: (MapRV String value: u64)
     templateOpId: zast.nodeid
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: templateOpId
     gpNames: (MapRV String value: bool)
-    gpFirst: String
     {
         with giter: bodyIds9.iterate do for gmId9: giter loop {
             gm: ast.nodes.get i: (gmId9 - 1).u64
@@ -12543,11 +12501,6 @@ buildUnitMonoIn: function {
             ) case namedoperation then {
                 if (isGenericParam :ast op: (ast.nodes.get i: (gm.operation - 1).u64)) then {
                     gn: zast.nameTextCopy :ast ref: gm.name
-                    if gpFirst.length == 0 then {
-                        gnv9: gn.stringview
-                        gpc9: gnv9.string
-                        gpFirst = gpc9
-                    }
                     gv: true
                     gpNames.set key: gn value: gv
                 }
@@ -12561,9 +12514,6 @@ buildUnitMonoIn: function {
             ) case namedoperation then {
                 if (isFunctionDefOp op: (ast.nodes.get i: (fmNode9.operation - 1).u64)) then {
                     fn: zast.nameTextAt :ast ref: fmNode9.name
-                    # still composite: PendingUnitWalk carries it as the lazy
-                    # body walk's defName, which is a label, not a type name
-                    qn: "\{monoName}.\{fn}"
                     srcId: u64
                     tfo: (ty.declChildOf
                         pool: ast.names
@@ -12734,29 +12684,6 @@ buildUnitMonoIn: function {
                         fnId: newFnId
                         :subs
                     )
-                    co9: (cloneUnitMethod
-                        :ast
-                            op: (ast.nodes.get i: (fmNode9.operation - 1).u64)
-                    )
-                    match (
-                        co9
-                    ) case some then {
-                        gpv9: gpFirst.stringview
-                        gpn9: gpv9.string
-                        mn9: monoName.string
-                        rec9: (ztyping.PendingUnitWalk
-                            :monoId
-                            monoName: mn9
-                            qualified: qn
-                            gpName: gpn9
-                            argId: 0
-                            fn: co9.take
-                        )
-                        ty.pendingUnitWalk.append rec9
-                        mk9: monoId
-                        pw9: true
-                        ty.unitMonoWalksPending.set key: mk9 value: pw9
-                    } case none then null
                 }
             } else null
         }
@@ -12771,7 +12698,6 @@ completeInlineReq: function {
     ast: Ast.view
     mainName: StringView
     monoId: ztypes.tid
-    monoName: StringView
     tmplName: StringView
     tplId: ztypes.tid
     subs: (MapRV String value: u64)
@@ -12795,7 +12721,6 @@ completeInlineReq: function {
                             tmplUnitName: mainName
                             :tmplName
                             :monoId
-                            :monoName
                             :tplId
                             :subs
                             templateOpId: bmNode9.operation
@@ -13120,7 +13045,6 @@ completeUnitInstantiations: function {
                         tmplUnitName: rtu
                         tmplName: rt
                         monoId: (ztypes.tid.create from: mid9.u64)
-                        monoName: rm
                         :tplId
                         :subs
                         templateOpId: (zast.nodeid.create from: rtop.u32.orPanic)
@@ -13180,7 +13104,6 @@ completeUnitInstantiations: function {
                                     tmplUnitName: un29.stringview
                                     tmplName: rt
                                     monoId: (ztypes.tid.create from: mid9.u64)
-                                    monoName: rm
                                     :tplId
                                     :subs
                                     templateOpId: uop29
@@ -13193,7 +13116,6 @@ completeUnitInstantiations: function {
                                     ast: program.ast
                                     mainName: ru
                                     monoId: (ztypes.tid.create from: mid9.u64)
-                                    monoName: rm
                                     tmplName: rt
                                     :tplId
                                     :subs
@@ -13221,88 +13143,6 @@ completeUnitInstantiations: function {
             }
         } case none then null
         i = i + 1
-    }
-}
-
-# runUnitMonoWalks -- first body-walk use of a generic-unit mono: walk each
-# stashed method clone under a unitgeneric scope. The generic param name
-# temporarily resolves to the arg type for the walk (param typerefs resolve
-# by name); clone scopes parent under the current (using) scope, matching
-# the reference's lazy clone-and-check.
-runUnitMonoWalks: function {
-    st: zenv.ZSymbolTable
-    unitName: StringView
-    ast: Ast
-    monoId: ztypes.tid
-} is {
-    pgo: st.typing.unitMonoWalksPending.get key: monoId
-    match (
-        pgo
-    ) case some then null case none then {
-        return
-    }
-    dk: monoId
-    st.typing.unitMonoWalksPending.remove key: dk
-    n9: st.typing.pendingUnitWalk.length
-    i9: u64
-    for i9 < n9 loop {
-        rmid: (st.typing.pendingUnitWalk.get i: i9).monoId
-        if rmid == monoId then {
-            rqual: String
-            rmn: String
-            {
-                rec: st.typing.pendingUnitWalk.get i: i9
-                rqual = rec.qualified.copy
-                rmn = rec.monoName.copy
-            }
-            sn: "unitgeneric:\{rmn}"
-            st.push name: sn.stringview
-            {
-                orgU9: ztypes.tid
-                {
-                    goU9: st.reg.genericOriginOf tid: monoId
-                    if goU9 > 0 then orgU9 = goU9
-                }
-                if orgU9 > 0 then {
-                    pnU9: st.reg.genericParamNamesOf tdecl: (declOfTypeId
-                        reg: st.reg
-                        tid: (ztypes.tid.create from: orgU9.u64)
-                    )
-                    pcU9: pnU9.length
-                    pjU9: u64
-                    for pjU9 < pcU9 loop {
-                        if (st.reg.genericArgIsValueAt specId: monoId ordinal: pjU9) == false then {
-                            avU9: st.reg.genericArgAt specId: monoId ordinal: pjU9
-                            if avU9 > 0 then {
-                                pnmU9: (pnU9.get i: pjU9)
-                                (st.define
-                                    nameId: (zast.poolSet pool: ast.names text: pnmU9.stringview)
-                                    ztypeId: (ztypes.tid.create from: avU9.u64)
-                                )
-                            }
-                        }
-                        pjU9 = pjU9 + 1
-                    }
-                }
-            }
-            prevL: st.typing.synthLabel.copy
-            prevT: st.typing.currentThisName.copy
-            tplDecl19Org: st.reg.genericOriginOf tid: monoId
-            tplDecl19: declOfTypeId reg: st.reg tid: tplDecl19Org
-            (checkFunctionBody
-                :st
-                :unitName
-                defName: rqual.stringview
-                defn: (st.typing.pendingUnitWalk.get i: i9).fn
-                thisName: ""
-                :ast
-                declId: tplDecl19
-            )
-            st.typing.synthLabel = prevL
-            st.typing.currentThisName = prevT
-            st.pop
-        }
-        i9 = i9 + 1
     }
 }
 
@@ -26610,18 +26450,6 @@ walkOwnerMethods: function {
             st.typing.synthLabel = prev
             st.typing.currentThisName = prevThis
         }
-        rgo9: (resolvedByIds
-            :ast
-            ty: st.typing
-            reg: st.reg
-            unitId: (nameIdOf :ast name: unitName)
-            name: (zast.poolFind pool: ast.names text: name)
-        )
-        match (
-            rgo9
-        ) case some then {
-            runUnitMonoWalks :st :unitName :ast monoId: (ztypes.tid.create from: rgo9.u64)
-        } case none then null
         st.typing.suppressFnAutoCall = mwSupFn9
         st.typing.suppressBareCtor = mwSup9
     } else null
