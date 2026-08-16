@@ -2797,7 +2797,6 @@ resolveMonoRefParts: function {
                 :ast
                 :ty
                 :reg
-                mainName: mainName9
                 monoId: mid9
                 templateId: (ztypes.tid.create from: tplId9.u64)
                 elemArg: firstA9
@@ -11118,7 +11117,6 @@ InstReq: class {
     # there.
     declUnit: String
     bind: String
-    mono: String
     tmpl: String
     # the template's own id, the unitdef node that declares it, and the unit
     # whose AST that node lives in -- all resolved at COLLECTION, through the
@@ -11135,6 +11133,10 @@ InstReq: class {
     argLabels: (List String)
     argNames: (List String)
     argAtomIds: (ListVal u64)
+    # every argument's operation node, whatever its shape: a bare atom names
+    # its type (argNames); a call-shaped argument -- itself a specialisation,
+    # `(Box t: i64)` -- has no name and resolves from this node
+    argNodeIds: (ListVal u64)
     exprId: u64
     callId: u64
     calId: u64
@@ -11199,6 +11201,7 @@ fillUnitArgs: function {ast: Ast.view r: InstReq op: Node.view} is {
                 r.argLabels.append lbl9
                 r.argNames.append anm9
                 r.argAtomIds.append aid9
+                r.argNodeIds.append a9.operation.u64
             } else null
         }
     } else null
@@ -11261,7 +11264,6 @@ collectMainInstantiations: function {
                         r9: (InstReq
                             declUnit: unitName.string
                             bind: bindn
-                            mono: "".string
                             tmpl: tn.copy
                             tmplTid: (declTypeIdOf :ty declId: tdecl9)
                             tmplDeclId: tdecl9
@@ -11271,20 +11273,12 @@ collectMainInstantiations: function {
                             argLabels: (List String)
                             argNames: (List String)
                             argAtomIds: (ListVal u64)
+                            argNodeIds: (ListVal u64)
                             exprId: 0
                             callId: 0
                             calId: 0
                         )
                         fillUnitArgs :ast r: r9 op: mop9
-                        mn9: tn.copy
-                        naC9: r9.argNames.length
-                        nai9: u64
-                        for nai9 < naC9 loop {
-                            mn9.append "_"
-                            mn9.append (r9.argNames.get i: nai9)
-                            nai9 = nai9 + 1
-                        }
-                        r9.mono = mn9
                         instFillIds :ast r: r9 op: mop9
                         reqs.append r9
                     }
@@ -12807,8 +12801,13 @@ completeUnitInstantiations: function {
         r: reqs.get :i
         rbv1: r.bind.stringview
         rb: rbv1
-        rmv1: r.mono.stringview
-        rm: rmv1
+        rmL1: String
+        match (
+            program
+        ) case program then {
+            rmL1 = instMonoLabel :ty :reg ast: program.ast :r
+        } else null
+        rm: rmL1.stringview
         rtv1: r.tmpl.stringview
         rt: rtv1
         ruv1: r.declUnit.stringview
@@ -12845,13 +12844,19 @@ completeUnitInstantiations: function {
                 match (
                     program
                 ) case program then {
-                    aoR9 = (walkLookupTyperef
-                        ast: program.ast
-                        :ty
-                        :reg
-                        currentUnit: ru
-                        base: anmR9.stringview
-                    )
+                    if anmR9.length > 0 then {
+                        aoR9 = (walkLookupTyperef
+                            ast: program.ast
+                            :ty
+                            :reg
+                            currentUnit: ru
+                            base: anmR9.stringview
+                        )
+                    } else {
+                        # a call-shaped argument: the specialisation it names
+                        atR9: instArgTypeOf :ty :reg ast: program.ast :r i: aiR9
+                        if atR9 > 0 then aoR9 = (optionval.some atR9)
+                    }
                 } else null
                 match (
                     aoR9
@@ -13171,6 +13176,85 @@ completeUnitInstantiations: function {
     }
 }
 
+# instArgTypeOf -- the type an instantiation argument names, resolved where
+# the instantiation is written: a bare atom by name, a call-shaped argument
+# (a specialisation of its own, `(Box t: i64)`) through the type-ref
+# resolver, which mints or finds it on the trie. 0 for a numeric value
+# argument or an unresolvable one.
+instArgTypeOf: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    r: InstReq
+    i: u64
+} out u64 is {
+    anm9: r.argNames.get :i
+    if (isNumericLiteralName name: anm9.stringview) then return 0
+    prevFrame9: ty.curFrame
+    if (r.scopeDeclId.isZero) == false then ty.curFrame = r.scopeDeclId
+    out9: u64
+    if anm9.length > 0 then {
+        ao9: (walkLookupTyperef
+            :ast
+            :ty
+            :reg
+            currentUnit: r.declUnit.stringview
+            base: anm9.stringview
+        )
+        match (
+            ao9
+        ) case some then {
+            out9 = ao9
+        } case none then null
+    } else {
+        nid9: r.argNodeIds.get :i
+        if nid9 > 0 then {
+            out9 = (resolveTyperefShell
+                :ty
+                :reg
+                :ast
+                unitName: r.declUnit.stringview
+                typeExpr: (ast.nodes.get i: (nid9 - 1))
+                thisName: ""
+            )
+        }
+    }
+    ty.curFrame = prevFrame9
+    return out9
+}
+
+# instMonoLabel -- the mono's label: the template's name and one component per
+# argument, a bare atom's own text or, for a call-shaped argument, the label of
+# the specialisation it names. The same request derives the same label in
+# every pass, which is what the two-pass mint relies on.
+instMonoLabel: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    r: InstReq
+} out String is {
+    mn9: r.tmpl.copy
+    na9: r.argNames.length
+    i9: u64
+    for i9 < na9 loop {
+        mn9.append "_"
+        an9: r.argNames.get i: i9
+        if an9.length > 0 then {
+            mn9.append an9
+        } else {
+            at9: instArgTypeOf :ty :reg :ast :r i: i9
+            if at9 > 0 then mn9.append (monoValName
+                :ast
+                :ty
+                :reg
+                tid: (ztypes.tid.create from: at9)
+            )
+        }
+        i9 = i9 + 1
+    }
+    return mn9
+}
+
 # resolveMainUnitInstantiations -- resolve generic-unit instantiation bindings
 # (intmath: (genmath t: i64)) into mono UNIT types. Two passes avoid nested
 # program.ast.units iteration: collect requests (separate fn), then create each mono.
@@ -13186,8 +13270,13 @@ resolveMainUnitInstantiations: function {
     i: u64
     for i < reqs.length loop {
         r: reqs.get :i
-        rmv0: r.mono.stringview
-        rm: rmv0
+        rmL0: String
+        match (
+            program
+        ) case program then {
+            rmL0 = instMonoLabel :ty :reg ast: program.ast :r
+        } else null
+        rm: rmL0.stringview
         rtv0: r.tmpl.stringview
         rt: rtv0
         ruv0: r.declUnit.stringview
@@ -14164,9 +14253,7 @@ mintMono: function {
         td9: declOfTypeId :reg tid: templateId
         if (td9.isZero) == false then ty.curFrame = td9
     }
-    ty.monoMintDepth = ty.monoMintDepth + 1
     mintMonoIn :ast :ty :reg :mainName :name :templateId :subs :idSubs :fallbackArg :monoTid
-    ty.monoMintDepth = ty.monoMintDepth - 1
     ty.curFrame = prevFrame9
 }
 
@@ -14182,6 +14269,11 @@ mintMonoIn: function {
     fallbackArg: u64
     monoTid: u64
 } is {
+    # the template's names -- a child's type, a constraint's type -- resolve
+    # in the TEMPLATE's unit (the cursor is at the template), not the
+    # instantiating unit's, which may shadow them
+    tplUnit9: unitNameOfTid :ty :reg tid: templateId
+    if tplUnit9.length == 0 then tplUnit9 = mainName.string
     tt: ztypes.ztypetype.recordType
     vto: (optionval.none bool)
     tplNative: false
@@ -14314,7 +14406,13 @@ mintMonoIn: function {
             chGen5 = reg.isGenericOf tid: (ztypes.tid.create from: chId.u64)
         }
         if fallbackArg > 0 when (ctn.stringview == "null") == false when target == chId when (chGen5) == false then {
-            cko: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: ctn.stringview
+            cko: (walkLookupTyperef
+                :ast
+                :ty
+                :reg
+                currentUnit: tplUnit9.stringview
+                base: ctn.stringview
+            )
             match (
                 cko
             ) case some then null case none then {
@@ -14470,7 +14568,7 @@ mintMonoIn: function {
                         :ast
                         :ty
                         :reg
-                        currentUnit: mainName
+                        currentUnit: tplUnit9.stringview
                         base: pcon9.stringview
                     )
                     match (
@@ -15341,7 +15439,6 @@ getOrMintSpec: function {
                 :ast
                 :ty
                 :reg
-                :mainName
                 monoId: (ztypes.tid.create from: mid8.u64)
                 :templateId
                 elemArg: elemC3
@@ -15384,7 +15481,6 @@ mintCollectionChildren: function {
     ast: Ast.view
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
-    mainName: StringView
     monoId: ztypes.tid
     templateId: ztypes.tid
     elemArg: u64
@@ -15398,9 +15494,7 @@ mintCollectionChildren: function {
         td9: declOfTypeId :reg tid: templateId
         if (td9.isZero) == false then ty.curFrame = td9
     }
-    ty.monoMintDepth = ty.monoMintDepth + 1
-    mintCollectionChildrenIn :ast :ty :reg :mainName :monoId :templateId :elemArg :valArg
-    ty.monoMintDepth = ty.monoMintDepth - 1
+    mintCollectionChildrenIn :ast :ty :reg :monoId :templateId :elemArg :valArg
     ty.curFrame = prevFrame9
 }
 
@@ -15408,7 +15502,6 @@ mintCollectionChildrenIn: function {
     ast: Ast.view
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
-    mainName: StringView
     monoId: ztypes.tid
     templateId: ztypes.tid
     elemArg: u64
@@ -15480,13 +15573,9 @@ mintCollectionChildrenIn: function {
     if templateId == listTid then isListTpl9 = true
     if templateId == listValTid then isListTpl9 = true
     if isListTpl9 then {
-        u64L: u64
-        uoL: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: "u64"
-        match (
-            uoL
-        ) case some then {
-            u64L = uoL
-        } case none then null
+        # system's u64, whichever unit instantiates the collection: a user
+        # unit may shadow the name
+        u64L: (builtinTidT :ast :ty :reg base: "u64").u64
         if u64L > 0 then {
             ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64L
             ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity childTypeId: u64L
@@ -15573,7 +15662,9 @@ mintCollectionChildrenIn: function {
         if (ty.declMemberCount ownerTid: monoId) > 0 then return
     }
     boolid: u64
-    bo9: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: "bool"
+    boolT9: builtinTidT :ast :ty :reg base: "bool"
+    bo9: (optionval.none u64)
+    if (boolT9.isZero) == false then bo9 = (optionval.some boolT9.u64)
     match (
         bo9
     ) case some then {
@@ -15610,8 +15701,7 @@ mintCollectionChildrenIn: function {
         ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
         ty.setMemberType parentTypeId: monoId nameId: zast.wkSize childTypeId: u64id
         tstId: mintCollectionMethod :ast :ty :reg :monoId m: "string"
-        sgo: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: "String"
-        sgid: optU64Or o: sgo d: 0
+        sgid: (builtinTidT :ast :ty :reg base: "String").u64
         if sgid > 0 then reg.setReturnType typeId: (ztypes.tid.create from: tstId.u64) value: sgid
         mintCollectionMethod :ast :ty :reg :monoId m: "create"
         teqId: mintCollectionMethod :ast :ty :reg :monoId m: "=="
@@ -16098,7 +16188,6 @@ genericTypeConstruction: function {
             :ast
             ty: st.typing
             reg: st.reg
-            mainName: unitName
             monoId: mid
             templateId: (ztypes.tid.create from: tplId.u64)
             elemArg: firstA
@@ -17782,7 +17871,6 @@ checkDotted: function {
                                 :ast
                                 ty: st.typing
                                 reg: st.reg
-                                mainName: unitName
                                 monoId: amid
                                 templateId: (ztypes.tid.create from: ato.u64)
                                 elemArg: elo
@@ -31615,16 +31703,6 @@ frameVerifyTid: function {
     if oldTid == 0 when newTid9 == 0 then return
     if oldTid > 0 when newTid9 == oldTid then return
     if (frameVerifySameDef :ty :ast a: oldDecl b: hit9.declId) then return
-    if ty.monoMintDepth > 0 then {
-        # a specialisation's member type-refs resolve by the instantiating
-        # unit's name today; the template's frame is the target once
-        # specialisations join the tree
-        if frameVerifyMode == 1 then {
-            nm6: zast.poolTextAt pool: ast.names ref: nameId
-            io.eprintln "frame-verify site \{site}: parked-mono (unit '\{cu9}' name '\{nm6}')"
-        }
-        return
-    }
     if oldTid > 0 when (hit9.declId.isZero) == false when newTid9 == 0 then {
         # the environment names a declaration the old walk reached through
         # another frame's mint (a re-export); the ids cannot be compared yet
@@ -31975,6 +32053,18 @@ walkLookupTyperef: function {
 } out optionval u64 is {
     fr9: unitFramesOf :ty :ast :currentUnit site: 7
     nid9: zast.poolFind pool: ast.names text: base
+    # the environment first, when the cursor lies inside the unit named:
+    # the declaration its frame chain reaches, if minted. A caller naming
+    # another unit is a qualified probe (`core`'s `i64` for a literal's
+    # default, from inside a unit that shadows `i64`) and keeps the frames.
+    # The name-derived frames below answer otherwise -- cursor unset, or
+    # the chain's declaration not minted yet (a probe cannot mint; a core
+    # re-export minted through its alias is reached by the frames) -- and
+    # every hit of theirs is still verified against the environment.
+    if (frameIsWithin :ty frame: ty.curFrame root: fr9.unitRoot) then {
+        e0: envTypeIdOf :ty :ast nameId: nid9
+        if e0 > 0 then return (optionval.some e0)
+    }
     # the nested frames first, innermost outward: the unit a name is written
     # in, then each unit enclosing that one. Only then the file unit.
     cur9: fr9.nsRoot
@@ -32227,6 +32317,10 @@ walkLookupTyperefById: function {
     baseId: zast.nameid
 } out optionval u64 is {
     fr9: unitFramesOf :ty :ast :currentUnit site: 8
+    if (frameIsWithin :ty frame: ty.curFrame root: fr9.unitRoot) then {
+        e0: envTypeIdOf :ty :ast nameId: baseId
+        if e0 > 0 then return (optionval.some e0)
+    }
     r9: probeFrameTyperef :ast :ty :reg root: fr9.unitRoot nameId: baseId
     if r9 > 0 then return (optionval.some r9)
     # `Any` is not user-reachable through the stdlib fallbacks (see the
