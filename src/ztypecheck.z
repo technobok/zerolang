@@ -1533,8 +1533,10 @@ declareCanonicalType: function {
     qowner9: u64
     # Inside a namespace unit, the enclosing type is a child of THAT unit, not
     # of the file unit -- the unit-name index only ever holds file units.
-    if (ownerNameId.isZero) == false when ty.nsOwnerTid > 0 then {
-        nso9: ty.declChildOfId parentTypeId: ty.nsOwnerTid nameId: ownerNameId
+    nsF9: nsFrameOf :ty :ast unitNameId: (nameIdOf :ast name: defUnit)
+    nsT9: declTypeIdOf :ty declId: nsF9
+    if (ownerNameId.isZero) == false when (nsT9.isZero) == false then {
+        nso9: ty.declChildOfId parentTypeId: nsT9 nameId: ownerNameId
         match (
             nso9
         ) case some then {
@@ -1564,8 +1566,11 @@ declareCanonicalType: function {
             } case none then null
         } case none then null
     }
-    if ownerNameId.isZero when ty.nsOwnerTid > 0 then {
-        if ty.nsOwnerName.stringview == name then qowner9 = ty.nsOwnerTid.u64
+    # a free definition that is a member of the namespace is declared under
+    # the namespace, not the file unit
+    if ownerNameId.isZero when (nsT9.isZero) == false then {
+        nsm9: ty.declFindChild parentDeclId: nsF9 nameId: (zast.poolFind pool: ast.names text: name)
+        if (nsm9.isZero) == false then qowner9 = nsT9.u64
     }
     if qowner9 > 0 then {
         exq: (ty.declChildOf
@@ -8648,20 +8653,20 @@ declOfUnitDefId: function {
     nameId: zast.nameid
 } out ztypes.declid is {
     if nameId.isZero then return (ztypes.declid.create from: 0)
-    # A definition is looked up in the scope it is WRITTEN in. A nested unit's
-    # member is a child of that unit, and only a top-level one is a child of
-    # the file unit root -- without this the two share a lookup, and resolving
-    # a subunit's member lands on the parent's definition of the same name.
-    if ty.nsOwnerDeclId > 0 when defUnit == ty.nsOwnerUnit.stringview then {
-        nd9: ty.declFindChild parentDeclId: ty.nsOwnerDeclId :nameId
+    # A definition is looked up in the scope it is WRITTEN in: the cursor's
+    # unit frame when it lies inside `defUnit` (a nested unit's member is a
+    # child of that unit), each enclosing unit frame outward, the unit's root
+    # -- and no further: this names a DEFINITION of the unit, not a
+    # reference, so the prelude is not consulted.
+    cur9: frameFor :ty :ast unitNameId: (nameIdOf :ast name: defUnit)
+    hops9: u64
+    for cur9 > 0 while hops9 < 64 loop {
+        hops9 = hops9 + 1
+        if cur9 == ty.coreUnitRoot then return (ztypes.declid.create from: 0)
+        nd9: ty.declFindChild parentDeclId: cur9 :nameId
         if (nd9.isZero) == false then return nd9
+        cur9 = unitFrameOf :ty :ast declId: (declParentIdOf :ty declId: cur9)
     }
-    ro9: ty.unitRootByName.get key: (nameIdOf :ast name: defUnit).u64
-    match (
-        ro9
-    ) case some then {
-        return (ty.declFindChild parentDeclId: ro9 :nameId)
-    } case none then null
     return (ztypes.declid.create from: 0)
 }
 
@@ -10440,21 +10445,14 @@ resolveDemandedDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry ast
     if ty.pendingDefs.length == 0 then return
     ty.drainingDefs = true
     # a drain runs in a neutral resolution context: it may be requested from
-    # inside a body walk, whose namespace / template / containment state
-    # belongs to that body, not to the definitions resolved here
-    pNsT9: ty.nsOwnerTid
-    pNsD9: ty.nsOwnerDeclId
-    pNsN9: ty.nsOwnerName.copy
-    pNsU9: ty.nsOwnerUnit.copy
+    # inside a body walk, whose template / containment state belongs to that
+    # body, not to the definitions resolved here (each of which sets the
+    # cursor from its own declaration)
     pCf9: ty.curFrame
     pCe9: ty.inContainmentEdge
     pSup9: ty.suppressParamStamps
     pMs9: ty.curMonoStamp
     pMf9: ty.curMonoFnTid
-    ty.nsOwnerTid = ztypes.tid
-    ty.nsOwnerDeclId = ztypes.declid
-    ty.nsOwnerName = "".string
-    ty.nsOwnerUnit = "".string
     ty.inContainmentEdge = false
     ty.suppressParamStamps = false
     ty.curMonoStamp = 0
@@ -10470,10 +10468,6 @@ resolveDemandedDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry ast
     if ty.typerefPassRan then {
         stampPendingTyperefs :ty :reg :ast mainName: reg.regMainUnit.stringview
     }
-    ty.nsOwnerTid = pNsT9
-    ty.nsOwnerDeclId = pNsD9
-    ty.nsOwnerName = pNsN9
-    ty.nsOwnerUnit = pNsU9
     ty.curFrame = pCf9
     ty.inContainmentEdge = pCe9
     ty.suppressParamStamps = pSup9
@@ -11863,10 +11857,6 @@ resolveNamespaceUnit: function {
             reg.setDef typeId: uid9 declId: declId9
         }
     }
-    prevTid9: ty.nsOwnerTid
-    prevDecl9: ty.nsOwnerDeclId
-    prevName9: ty.nsOwnerName.copy
-    prevUnit9: ty.nsOwnerUnit.copy
     # every member resolves in this unit's frame
     prevFrame9: ty.curFrame
     ty.curFrame = declId9
@@ -11891,17 +11881,8 @@ resolveNamespaceUnit: function {
                 isUnit9: isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
                 if isTmpl9 then {
                     # the template is a child of THIS namespace, not of the
-                    # file unit, and the mint funnel reaches an enclosing owner
-                    # only through ty.nsOwner* -- the same channel the
-                    # resolveDef leg below sets. Without it the template's
-                    # methods mint with no owner and their parameter Decls
-                    # never bind a type.
-                    ty.nsOwnerTid = uid9
-                    ty.nsOwnerDeclId = declId9
-                    tsn9: mName9.copy
-                    ty.nsOwnerName = tsn9
-                    tsu9: unitName.string
-                    ty.nsOwnerUnit = tsu9
+                    # file unit: the mint funnel reaches the enclosing owner
+                    # through the cursor, which is at this namespace
                     (resolveInlineGenericUnit
                         :ty
                         :reg
@@ -11912,12 +11893,6 @@ resolveNamespaceUnit: function {
                         parentDeclId: declId9
                         unitOpId: bmNode9.operation
                     )
-                    ty.nsOwnerTid = prevTid9
-                    ty.nsOwnerDeclId = prevDecl9
-                    tpn9: prevName9.copy
-                    ty.nsOwnerName = tpn9
-                    tpu9: prevUnit9.copy
-                    ty.nsOwnerUnit = tpu9
                 } else if isUnit9 then {
                     (resolveNamespaceUnit
                         :ty
@@ -11938,12 +11913,6 @@ resolveNamespaceUnit: function {
                             if mdo9.kind.reexportDecl then isRx9 = true
                         }
                     }
-                    ty.nsOwnerTid = uid9
-                    ty.nsOwnerDeclId = declId9
-                    nsn9: mName9.copy
-                    ty.nsOwnerName = nsn9
-                    nsu9: unitName.string
-                    ty.nsOwnerUnit = nsu9
                     # A re-export is resolved by following its target, which is
                     # resolveAliasKey's job -- resolveDef has no leg for a
                     # dotted target naming a NESTED unit, and marking the alias
@@ -11961,12 +11930,6 @@ resolveNamespaceUnit: function {
                             defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
                         )
                     }
-                    ty.nsOwnerTid = prevTid9
-                    ty.nsOwnerDeclId = prevDecl9
-                    pn9: prevName9.copy
-                    ty.nsOwnerName = pn9
-                    pu9: prevUnit9.copy
-                    ty.nsOwnerUnit = pu9
                     if (md9.isZero) == false then ty.declSetDefined declId: md9
                 }
             }
@@ -11982,7 +11945,6 @@ resolveNamespaceUnit: function {
         :ast
         :unitName
         unitdefId: unitOpId
-        ownerTid: uid9
         ownerDeclId: declId9
     )
     ty.curFrame = prevFrame9
@@ -13328,7 +13290,6 @@ resolveTemplateConstants: function {
         :reg
         unitName: fnm9.stringview
         unitdefId: top9
-        ownerTid: ttid9
         ownerDeclId: tmplDeclId
     )
 }
@@ -26523,12 +26484,10 @@ walkDeclaredDefIn: function {
         if (st.typing.declValid id: dd9) then {
             do9: st.typing.decls.get i: (dd9 - 1)
             memId9 = do9.node
-            # a definition inside a NAMESPACE needs that namespace's resolution
-            # context (nsOwnerTid / nsOwnerUnit) to read its
-            # own siblings: `deep.mul` inside helper resolves against helper
-            # first. checkNamespaceBodies establishes that from its position, so
-            # a namespace member is left to that walk rather than walked
-            # half-configured.
+            # a definition inside a NAMESPACE reads its own siblings from the
+            # namespace's frame: `deep.mul` inside helper resolves against
+            # helper first. checkNamespaceBodies walks it with the cursor at
+            # the namespace, so a namespace member is left to that walk.
             pr9: do9.parent
             if (pr9.isZero) == false then {
                 uro9: st.typing.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
@@ -27363,21 +27322,15 @@ checkNamespaceBodies: function {
     # the same namespace, and a second walk would re-report every diagnostic.
     if (st.typing.nsBodiesWalked.has item: unitdefId.u64) then return
     st.typing.nsBodiesWalked.add item: unitdefId.u64
-    prevTid9: st.typing.nsOwnerTid
-    prevDecl9: st.typing.nsOwnerDeclId
-    prevUnit9: st.typing.nsOwnerUnit.copy
     prevFrame9: st.typing.curFrame
+    nsDecl9: ztypes.declid
     {
         un9: unitdefNodeId :ast nId: unitdefId
         if (un9.isZero) == false then {
             nt9: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: un9.u64
             if nt9 > 0 then {
-                ntid9: ztypes.tid.create from: nt9
-                st.typing.nsOwnerTid = ntid9
-                st.typing.nsOwnerDeclId = declOfTypeId reg: st.reg tid: ntid9
-                st.typing.curFrame = st.typing.nsOwnerDeclId
-                nu9: unitName.string
-                st.typing.nsOwnerUnit = nu9
+                nsDecl9 = declOfTypeId reg: st.reg tid: (ztypes.tid.create from: nt9)
+                st.typing.curFrame = nsDecl9
             }
         }
     }
@@ -27406,17 +27359,13 @@ checkNamespaceBodies: function {
                     thisName: ""
                     :ast
                     declId: (st.typing.declFindChild
-                        parentDeclId: st.typing.nsOwnerDeclId
+                        parentDeclId: nsDecl9
                         nameId: bm.name
                     )
                 )
             }
         }
     }
-    st.typing.nsOwnerTid = prevTid9
-    st.typing.nsOwnerDeclId = prevDecl9
-    pu9: prevUnit9.copy
-    st.typing.nsOwnerUnit = pu9
     st.typing.curFrame = prevFrame9
 }
 
@@ -29058,26 +29007,24 @@ constOwnerTidFor: function {
     unitName: StringView
     defName: StringView
 } out u64 is {
-    if ty.nsOwnerTid > 0 when unitName == ty.nsOwnerUnit.stringview then {
-        # the nested frames, innermost outward: a constant written inside a
-        # unit is keyed on THAT unit, and on each unit enclosing it before the
-        # file unit. Asking only the innermost left a constant of an enclosing
-        # inline unit unreachable from a unit nested inside it.
-        dnm9: zast.poolFind pool: ast.names text: defName
-        cur9: ty.nsOwnerDeclId
-        hops9: u64
-        for cur9 > 0 while hops9 < 32 loop {
-            hops9 = hops9 + 1
+    # the frames innermost outward from the cursor: a constant written inside
+    # a unit is keyed on THAT unit, and on each unit enclosing it before the
+    # file unit. Asking only the innermost left a constant of an enclosing
+    # inline unit unreachable from a unit nested inside it.
+    dnm9: zast.poolFind pool: ast.names text: defName
+    cur9: frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName)
+    hops9: u64
+    for cur9 > 0 while hops9 < 32 loop {
+        hops9 = hops9 + 1
+        if cur9 == ty.coreUnitRoot then {
+            cur9 = ztypes.declid
+        } else {
             nd9: ty.declFindChild parentDeclId: cur9 nameId: dnm9
             if (nd9.isZero) == false then {
                 ct9: declTypeIdOf :ty declId: cur9
                 if (ct9.isZero) == false then return ct9.u64
             }
-            nx9: declParentIdOf :ty declId: cur9
-            cur9 = ztypes.declid
-            if (nx9.isZero) == false then {
-                if (declDeclaresUnit :ty :ast declId: nx9) then cur9 = nx9
-            }
+            cur9 = unitFrameOf :ty :ast declId: (declParentIdOf :ty declId: cur9)
         }
     }
     return (unitTidOfName9 :reg unitNameId: (nameIdOf :ast name: unitName)).u64
@@ -29092,14 +29039,7 @@ constDefNodeId: function {
     unitName: StringView
     defName: StringView
 } out u32 is {
-    dc9: ztypes.declid
-    if ty.nsOwnerDeclId > 0 when unitName == ty.nsOwnerUnit.stringview then {
-        dc9 = (ty.declFindChild
-            parentDeclId: ty.nsOwnerDeclId
-            nameId: (zast.poolFind pool: ast.names text: defName)
-        )
-    }
-    if dc9.isZero then dc9 = declOfUnitDef :ty :ast defUnit: unitName name: defName
+    dc9: declOfUnitDef :ty :ast defUnit: unitName name: defName
     if dc9.isZero then return 0
     if (ty.declValid id: dc9) == false then return 0
     do9: ty.decls.get i: (dc9 - 1)
@@ -29730,15 +29670,7 @@ evalConstNode: function {
             # rooting this at the file unit alone stopped a re-export chain at
             # its first hop, since a subunit's subunit is no child of the file.
             {
-                sro9: ty.nsOwnerDeclId
-                if sro9.isZero then {
-                    fro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-                    match (
-                        fro9
-                    ) case some then {
-                        sro9 = fro9
-                    } case none then null
-                }
+                sro9: frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName)
                 sst9: (nestedUnitTidOf
                     :ty
                     :reg
@@ -30236,15 +30168,7 @@ resolveConstantDef: function {
                     # TOP-LEVEL binding of this unit, so a template nested in a
                     # namespace, or named through another unit, read as a
                     # construction and was reported as a malformed constant.
-                    cscp9: ty.nsOwnerDeclId
-                    if cscp9.isZero then {
-                        cro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-                        match (
-                            cro9
-                        ) case some then {
-                            cscp9 = cro9
-                        } case none then null
-                    }
+                    cscp9: frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName)
                     csg9: (ListVal u64)
                     instCallablePath :ast op: ccn9 segs: csg9
                     cdc9: instTemplateDecl :ty scopeDeclId: cscp9 segs: csg9
@@ -30458,37 +30382,25 @@ resolveConstantDefsInUnit: function {
         :reg
         :unitName
         :unitdefId
-        ownerTid: ztypes.tid
         ownerDeclId: rd9
     )
 }
 
 # resolveConstantDefsIn -- the walk resolveConstantDefsInUnit drives, once for
-# the file unit and once for each namespace nested in it. `ownerTid` is 0 for
-# the file unit, whose constants key on the unit-name index as they always
-# have; for a namespace it is that namespace's type id, which is the only
-# thing the constant channel needs to hold a nested unit's members apart.
+# the file unit and once for each namespace or template nested in it, with
+# the cursor at `ownerDeclId`: a nested unit's constants key on that unit
+# (constOwnerTidFor walks the cursor's frames), the file unit's on the unit.
 resolveConstantDefsIn: function {
     ast: Ast.view
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     unitName: StringView
     unitdefId: zast.nodeid
-    ownerTid: ztypes.tid
     ownerDeclId: ztypes.declid
 } is {
     if (ty.nsConstsWalked.has item: unitdefId.u64) then return
     ty.nsConstsWalked.add item: unitdefId.u64
-    prevTid9: ty.nsOwnerTid
-    prevDecl9: ty.nsOwnerDeclId
-    prevUnit9: ty.nsOwnerUnit.copy
     prevFrame9: ty.curFrame
-    if (ownerTid.isZero) == false then {
-        ty.nsOwnerTid = ownerTid
-        ty.nsOwnerDeclId = ownerDeclId
-        nsu9: unitName.string
-        ty.nsOwnerUnit = nsu9
-    }
     if (ownerDeclId.isZero) == false then ty.curFrame = ownerDeclId
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
     {
@@ -30536,7 +30448,6 @@ resolveConstantDefsIn: function {
                             :reg
                             :unitName
                             unitdefId: bmNode9.operation
-                            ownerTid: ct9
                             ownerDeclId: (ty.declFindChild
                                 parentDeclId: ownerDeclId
                                 nameId: bmNode9.name
@@ -30563,10 +30474,6 @@ resolveConstantDefsIn: function {
             } else null
         }
     }
-    ty.nsOwnerTid = prevTid9
-    ty.nsOwnerDeclId = prevDecl9
-    pu9: prevUnit9.copy
-    ty.nsOwnerUnit = pu9
     ty.curFrame = prevFrame9
 }
 
@@ -31503,6 +31410,26 @@ frameFor: function {
         return (unitFrameOf :ty :ast declId: ty.curFrame)
     }
     return ur9
+}
+
+# nsFrameOf -- the NESTED unit frame a name written in unit `unitNameId`
+# resolves from -- frameFor's answer when it is not the unit's own root --
+# or 0 at the top level of the unit. The scope the members of a namespace or
+# template are declared in, as against the file unit.
+nsFrameOf: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    unitNameId: zast.nameid
+} out ztypes.declid is {
+    f9: frameFor :ty :ast :unitNameId
+    if f9.isZero then return f9
+    uro9: ty.unitRootByName.get key: unitNameId.u64
+    match (
+        uro9
+    ) case some then {
+        if uro9 == f9 then return (ztypes.declid.create from: 0)
+    } case none then null
+    return f9
 }
 
 # unitFrameOf -- the nearest frame at or above `declId` that a bare-name walk
