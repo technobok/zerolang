@@ -1741,10 +1741,8 @@ resolveNamedType: function {
     duo7: definingUnitFor :ty :ast currentUnit: unitName :name
     if duo7.length > 0 then {
         tto7: (optionval.none ztypes.ztypetype)
-        {
-            dd7: declOfUnitDef :ty :ast defUnit: duo7.stringview :name
-            if dd7 > 0 then tto7 = declDefTypetype :ty :ast declId: dd7
-        }
+        dd7: declOfUnitDef :ty :ast defUnit: duo7.stringview :name
+        if dd7 > 0 then tto7 = declDefTypetype :ty :ast declId: dd7
         match (
             tto7
         ) case some then {
@@ -1772,7 +1770,7 @@ resolveNamedType: function {
             ) case some then {
                 return ex7
             } case none then null
-            al7: resolveAliasKey :ty :reg :ast defUnit: duo7.stringview :name
+            al7: resolveAliasKey :ty :reg :ast declId: dd7
             if al7 > 0 then return al7
             return (reg.newType :name typetype: ztypes.ztypetype.recordType)
         }
@@ -8781,22 +8779,32 @@ resolveAliasKey: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     ast: Ast
-    defUnit: StringView
-    name: StringView
+    declId: ztypes.declid
 } out u64 is {
-    adecl9: declOfUnitDef :ty :ast :defUnit :name
+    adecl9: declId
     altK9: reexportTargetIdsOf :ty :ast declId: adecl9
     if altK9.unitName.u32 == 0 then return 0
     if (ty.declIsResolving declId: adecl9) then return 0
     tu9: zast.poolTextAt pool: ast.names ref: altK9.unitName
     tn9: zast.poolTextAt pool: ast.names ref: altK9.defName
     aParent9: ztypes.declid
+    aNameId9: zast.nameid
     {
         if (ty.declValid id: adecl9) then {
             ado9: ty.decls.get i: (adecl9 - 1)
             aParent9 = ado9.parent
+            aNameId9 = zast.nameid.create from: ado9.name
         }
     }
+    if aNameId9.isZero then return 0
+    aName9: zast.poolTextAt pool: ast.names ref: aNameId9
+    # the file unit the alias is written in, for the name walkers and the
+    # diagnostics -- the alias's OWN scope is aParent9, which is that unit's
+    # root for a top-level alias and the nested unit's Decl for a nested one
+    aUnit9: (zast.poolTextAt
+        pool: ast.names
+        ref: (declNameIdOf :ty declId: (unitRootOfDecl :ty declId: adecl9))
+    )
     ty.declSetResolving declId: adecl9 mark: true
     # A subunit of THIS unit is the nearer scope, so it answers before the
     # file-unit index -- the same order a name written inside a namespace takes.
@@ -8807,7 +8815,7 @@ resolveAliasKey: function {
         ownerDeclId: aParent9
         unitName: altK9.unitName
         defName: altK9.defName
-        aliasName: (ast.internString text: name)
+        aliasName: aNameId9
     )
     if atid9.isZero then atid9 = (descendNamed
         :ty
@@ -8822,13 +8830,20 @@ resolveAliasKey: function {
         # a type-rooted target (`true: bool.true`): the root names a tagged
         # type, the member one of its value arms -- the alias denotes a VALUE
         # of the root type, so the edge binds the ROOT's tid
-        rto9: walkLookupTyperef :ast :ty :reg currentUnit: defUnit base: tu9.stringview
+        rto9: walkLookupTyperef :ast :ty :reg currentUnit: aUnit9.stringview base: tu9.stringview
         if rto9.none then {
             # a tagged type declared in THIS file is invisible to the typeref
             # walk while resolution runs, so `READY: mode.ready` never reached
             # the arm test below. resolveAtomType is the current-unit-relative
             # resolver that sees it.
-            rtb9: resolveAtomType :ty :reg :ast unitName: defUnit nm: tu9.stringview thisName: ""
+            rtb9: (resolveAtomType
+                :ty
+                :reg
+                :ast
+                unitName: aUnit9.stringview
+                nm: tu9.stringview
+                thisName: ""
+            )
             if rtb9 > 0 then rto9 = optionval.some rtb9.u64
         }
         match (
@@ -8869,9 +8884,9 @@ resolveAliasKey: function {
             # the guard at the top of this function, which returns silently --
             # the caller then mints a forward shell and the C carries an
             # incomplete type. Report it the way the dotted leg does instead.
-            btd9: declOfUnitDef :ty :ast :defUnit name: tn9.stringview
+            btd9: ty.declFindChild parentDeclId: aParent9 nameId: altK9.defName
             if (ty.declIsResolving declId: btd9) then {
-                bcm9: "alias cycle: '\{defUnit}.\{name}' aliases '\{defUnit}.\{tn9}' which is still resolving"
+                bcm9: "alias cycle: '\{aUnit9}.\{aName9}' aliases '\{aUnit9}.\{tn9}' which is still resolving"
                 addResolveError :ty e: zast.err.typeError msg: bcm9
                 return 0
             }
@@ -8880,7 +8895,7 @@ resolveAliasKey: function {
                 :ty
                 :reg
                 :ast
-                unitName: defUnit
+                unitName: aUnit9.stringview
                 nm: tn9.stringview
                 thisName: ""
             )
@@ -8889,16 +8904,17 @@ resolveAliasKey: function {
         }
     }
     if atid9.isZero then return 0
-    cud9: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
-    match (
-        cud9
-    ) case some then {
+    # the alias is a member of the unit it is WRITTEN in, which is that unit's
+    # own id whether it is a file unit or a nested one -- both carry it on the
+    # Decl the alias hangs under.
+    ownTid9: declTypeIdOf :ty declId: aParent9
+    if (ownTid9.isZero) == false then {
         (ty.setMemberType
-            parentTypeId: (ztypes.tid.create from: cud9.u64)
-            nameId: (ast.internString text: name)
+            parentTypeId: ownTid9
+            nameId: aNameId9
             childTypeId: atid9
         )
-    } case none then null
+    }
     ty.declSetType declId: adecl9 typeId: atid9
     if typeRooted9 then {
         # the value alias's own dotted node resolves as a typeref to the
@@ -8914,7 +8930,7 @@ resolveAliasKey: function {
         if dnid9 > 0 then {
             ptn9: tu9.copy
             ty.pendingTyperef.set key: dnid9 value: ptn9
-            ptu9: defUnit.string
+            ptu9: aUnit9.copy
             ty.pendingTyperefUnit.set key: dnid9 value: ptu9
         }
     }
@@ -8982,7 +8998,7 @@ descendNamed: function {
         typetype: ttv9
     )
     if classified9 == false then {
-        alo9: resolveAliasKey :ty :reg :ast :defUnit :name
+        alo9: resolveAliasKey :ty :reg :ast declId: ddec9
         if alo9 > 0 then return (ztypes.tid.create from: alo9.u64)
     }
     ddecl9: declOfUnitDef :ty :ast :defUnit :name
@@ -10167,7 +10183,7 @@ resolveDemandedDecl: function {
     if dParent9 == ty.coreUnitRoot then {
         if wasDone9 then return
         if dTid9.isZero then {
-            resolveAliasKey :ty :reg :ast defUnit: unitName9.stringview name: defName9.stringview
+            resolveAliasKey :ty :reg :ast :declId
         }
         return
     }
@@ -10745,6 +10761,35 @@ callableUnitName: function {ast: Ast.view op: Node.view} out String is {
 
 
 # declParentIdOf -- a declaration's enclosing declaration (0 at a tree root).
+# declNameIdOf -- a declaration's own name id, or 0.
+declNameIdOf: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out zast.nameid is {
+    if (ty.declValid id: declId) == false then return zast.nameid
+    do9: ty.decls.get i: (declId - 1)
+    return (zast.nameid.create from: do9.name)
+}
+
+# unitRootOfDecl -- the top-level unit root a declaration sits under: the
+# parent chain to the parentless Decl. A definition of a NESTED unit answers
+# with the file unit that loaded it, which is the unit the name walkers and the
+# diagnostics are keyed on.
+unitRootOfDecl: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out ztypes.declid is {
+    cur9: declId
+    hops9: u64
+    for cur9 > 0 while hops9 < 32 loop {
+        hops9 = hops9 + 1
+        par9: ztypes.declid
+        {
+            if (ty.declValid id: cur9) then {
+                do9: ty.decls.get i: (cur9 - 1)
+                par9 = do9.parent
+            }
+        }
+        if par9.isZero then return cur9
+        cur9 = par9
+    }
+    return (ztypes.declid.create from: 0)
+}
+
 declParentIdOf: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out ztypes.declid is {
     r9: ztypes.declid
     if (ty.declValid id: declId) then {
@@ -30936,10 +30981,7 @@ declSurfaceEnsure9: function {
             if d9.kind.reexportDecl then isRx9 = true
         }
     }
-    if dtid9 == 0 when isRx9 then {
-        nm9: zast.poolTextAt pool: ast.names ref: nameId
-        dtid9 = resolveAliasKey :ty :reg :ast defUnit: uname name: nm9.stringview
-    }
+    if dtid9 == 0 when isRx9 then dtid9 = resolveAliasKey :ty :reg :ast :declId
     if dtid9 == want then return declId
     return (ztypes.declid.create from: 0)
 }
@@ -31077,8 +31119,7 @@ declProbeUnitChildRoot: function {
     if isRx9 then {
         # a re-export not yet resolved: mint once through the alias,
         # cache on the Decl (covers value re-exports like core.false)
-        nm9: zast.poolTextAt pool: ast.names ref: nameId
-        return (resolveAliasKey :ty :reg :ast defUnit: uname name: nm9.stringview)
+        return (resolveAliasKey :ty :reg :ast declId: cid9)
     }
     return 0
 }
