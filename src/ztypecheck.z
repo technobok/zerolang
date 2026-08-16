@@ -11939,13 +11939,20 @@ createUnitMono: function {
                 gtp9 = gtr9
             } case none then null
         }
+        monoNm9: zast.poolSet pool: ast.names text: monoName
         if (gtp9.isZero) == false then {
             reg.setDef typeId: monoId declId: gtp9
             mud9: ty.declCloneType templateDeclId: gtp9
-            if mud9 > 0 then ty.declSetType declId: mud9 typeId: monoId
+            if mud9 > 0 then {
+                ty.declSetType declId: mud9 typeId: monoId
+                # a mono IS a unit, so its clone roots a frame under the mono's
+                # own name and the frame walk reaches it the way it reaches any
+                # other unit. The name is mangled, so it cannot collide.
+                ty.unitRootByName.set key: monoNm9.u64 value: mud9
+            }
         }
         iur: monoId
-        reg.setUnitName nameId: (zast.poolSet pool: ast.names text: monoName) uid: iur
+        reg.setUnitName nameId: monoNm9 uid: iur
         ccu2: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
         match (
             ccu2
@@ -16924,12 +16931,11 @@ isSubunitMemberOf: function {
     return (zast.unitOpKindIs :ast opId: op9 k: zast.unitkind.subunit)
 }
 
-# unitMemberTypeOf -- the type a member of unit `unitTid` names. A FILE unit
-# answers through the unit-name index, which also follows re-exports, demands
-# the definition and falls back to core. A nested unit -- an inline `m: unit
-# { }` or a hidden subunit -- is deliberately not in that index (two units in
-# different files may share a name), so its members are read off its own type
-# id, where declareCanonicalType laid them.
+# unitMemberTypeOf -- the type a member of unit `unitTid` names: the frame that
+# unit roots, which follows a re-export and demands the definition, then its
+# member index. One answer for every unit -- a file unit, an inline
+# `m: unit { }` and a hidden subunit each root a frame off their own Decl, and
+# `unit.member` names a member of THAT unit, so the prelude is not consulted.
 unitMemberTypeOf: function {
     ast: Ast.view
     ty: ztyping.ZTyping.view
@@ -16938,19 +16944,24 @@ unitMemberTypeOf: function {
     unitName: StringView
     member: StringView
 } out optionval u64 is {
-    isFileU9: false
-    {
-        fuo9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            fuo9
-        ) case some then {
-            if fuo9 == unitTid.u64 then isFileU9 = true
-        } case none then null
-    }
-    if isFileU9 then return (walkLookupTyperef :ast :ty :reg currentUnit: unitName base: member)
     nid9: zast.poolFind pool: ast.names text: member
     if nid9.isZero then return (optionval.none u64)
-    return (ty.declChildOfId parentTypeId: unitTid nameId: nid9)
+    # a top-level unit and a generic mono root a frame under their own name; a
+    # nested unit is deliberately absent from that index -- two files may hold
+    # units of the same name -- so its root comes off its type id instead.
+    root9: ztypes.declid
+    {
+        uro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+        match (
+            uro9
+        ) case some then {
+            root9 = uro9
+        } case none then null
+    }
+    if root9.isZero then root9 = declOfTypeId :reg tid: unitTid
+    r9: probeFrameTyperef :ast :ty :reg root: root9 uname: unitName nameId: nid9
+    if r9 > 0 then return (optionval.some r9)
+    return (optionval.none u64)
 }
 
 checkDotted: function {
@@ -31147,20 +31158,20 @@ probeFrameTyperef: function {
     nameId: zast.nameid
 } out u64 is {
     if nameId.isZero then return 0
-    if (root.isZero) == false then {
-        dt9: declProbeUnitChildRoot :ty :reg :ast unitRoot: root :uname :nameId
-        if dt9 > 0 then return dt9
-    }
-    uido: reg.unitNameTid.get key: (nameIdOf :ast name: uname).u64
+    if root.isZero then return 0
+    dt9: declProbeUnitChildRoot :ty :reg :ast unitRoot: root :uname :nameId
+    if dt9 > 0 then return dt9
+    # the frame's own member index, keyed on the unit id its ROOT DECL
+    # carries. Every unit root has one -- a file unit's is stamped where the
+    # roots are indexed, a nested unit's where resolveNamespaceUnit mints it
+    # -- so the frame answers the same way whichever kind of unit it is.
+    rt9: declTypeIdOf :ty declId: root
+    if rt9.isZero then return 0
+    co9: ty.declChildOfId parentTypeId: rt9 :nameId
     match (
-        uido
+        co9
     ) case some then {
-        co9: ty.declChildOfId parentTypeId: (ztypes.tid.create from: uido.u64) :nameId
-        match (
-            co9
-        ) case some then {
-            return co9
-        } case none then null
+        return co9
     } case none then null
     return 0
 }
