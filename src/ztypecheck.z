@@ -8635,56 +8635,20 @@ subunitTidOf9: function {
         }
     }
     if (isU9) == false then return (ztypes.tid.create from: 0)
-    # The subunit may carry a defined mark without ever having been resolved AS
-    # a unit, so ask the namespace resolver directly rather than the demand
-    # dispatcher, which takes that mark as done.
-    ownNm9: u32
-    {
-        if (ty.declValid id: ownerDeclId) then {
-            odo9: ty.decls.get i: (ownerDeclId - 1)
-            ownNm9 = odo9.name
-        }
-    }
-    ownTxt9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: ownNm9)
-    subTxt9: zast.poolTextAt pool: ast.names ref: unitName
     # A nested unit's own id is stamped on its unitdef node -- the same place
     # checkNamespaceBodies reads it; the Decl carries the members, not the id.
-    # A stamp already there means a previous alias resolved this subunit, and
-    # resolving it AGAIN mints a second id, orphaning everything registered
-    # under the first.
+    # A stamp already there means the unit is built, and resolving it AGAIN
+    # mints a second id, orphaning everything registered under the first.
     unid9: unitdefNodeId :ast nId: subOp9
     if unid9.isZero then return (ztypes.tid.create from: 0)
     subTid9: (ztypes.tid.create
         from: (ztyping.nodeTypeAt tbl: ty.nodeType nid: unid9.u64)
     )
     if subTid9.isZero then {
-        (resolveNamespaceUnit
-            :ty
-            :reg
-            :ast
-            unitName: ownTxt9.stringview
-            defName: subTxt9.stringview
-            parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: ownNm9))
-            parentDeclId: ownerDeclId
-            unitOpId: subOp9
-        )
-        # resolved here, so its bodies are owed the same walk the demand path owes
-        (ty.nsBodiesOwed.append
-            (ztyping.nsbody
-                unitName: (zast.nameid.create from: ownNm9)
-                unitOp: subOp9
-            )
-        )
+        resolveDemandedDecl :ty :reg :ast declId: sub9
         subTid9 = (ztypes.tid.create
             from: (ztyping.nodeTypeAt tbl: ty.nodeType nid: unid9.u64)
         )
-        # The members just resolved recorded their signature type-refs the
-        # way every definition does, and a subunit materialises at whatever
-        # point an alias into it is first asked for -- which can be after the
-        # post-demand stamp pass. Stamp them here, as the demand drain stamps
-        # what it resolved: unstamped, a re-exported function's return type
-        # reads as nothing and its call sites reach the emitter bare.
-        stampPendingTyperefs :ty :reg :ast mainName: reg.regMainUnit.stringview
     }
     return subTid9
 }
@@ -10166,17 +10130,30 @@ resolveDemandedDecl: function {
     if (zast.unitOpKindIs :ast opId: opId9 k: zast.unitkind.subunit) then isNs9 = true
     isTmpl9: (zast.unitOpKindIs :ast opId: opId9 k: zast.unitkind.template)
     if isNs9 then {
-        if wasDone9 then return
-        (resolveNamespaceUnit
-            :ty
-            :reg
-            :ast
-            unitName: unitName9.stringview
-            defName: defName9.stringview
-            parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: puNm9))
-            parentDeclId: dParent9
-            unitOpId: opId9
-        )
+        # A unit is RESOLVED when its unitdef node carries an id; the DEFINED
+        # mark on its Decl answers a different question and can be laid by a
+        # path that never resolved it as a unit. So the mark does not gate this
+        # leg -- only the resolution itself is skipped when the unit is already
+        # built, and the debts below are owed however it got there.
+        alreadyU9: false
+        {
+            unid9: unitdefNodeId :ast nId: opId9
+            if (unid9.isZero) == false then {
+                if (ztyping.nodeTypeAt tbl: ty.nodeType nid: unid9.u64) > 0 then alreadyU9 = true
+            }
+        }
+        if (alreadyU9) == false then {
+            (resolveNamespaceUnit
+                :ty
+                :reg
+                :ast
+                unitName: unitName9.stringview
+                defName: defName9.stringview
+                parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: puNm9))
+                parentDeclId: dParent9
+                unitOpId: opId9
+            )
+        }
         ty.declSetDefined :declId
         # Signatures are resolved; the member bodies are owed a walk, which the
         # top-level drain does.
@@ -10186,6 +10163,13 @@ resolveDemandedDecl: function {
                 unitOp: opId9
             )
         )
+        # The members just resolved recorded their signature type-refs the way
+        # every definition does, and a unit materialises at whatever point
+        # something first asks for it -- which can be after the post-demand
+        # stamp pass. Stamp them here, as the drain stamps what it resolved:
+        # unstamped, a re-exported function's return type reads as nothing and
+        # its call sites reach the emitter bare.
+        stampPendingTyperefs :ty :reg :ast mainName: reg.regMainUnit.stringview
     } else if isTmpl9 then {
         if wasDone9 then return
         (resolveInlineGenericUnit
