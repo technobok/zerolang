@@ -1778,6 +1778,12 @@ resolveNamedType: function {
             return (reg.newType :name typetype: ztypes.ztypetype.recordType)
         }
     } else {
+        # the environment before a shell: a name no unit-name index places
+        # but the cursor's frame chain reaches -- a template's generic
+        # parameter in its own method signature (`v: t`), which is the
+        # canonical GENERIC_PARAM id, not a forward record of that name
+        e7: envTypeIdOf :ty :ast nameId: (zast.poolFind pool: ast.names text: name)
+        if e7 > 0 then return e7
         return (reg.newType :name typetype: ztypes.ztypetype.recordType)
     }
 }
@@ -10308,6 +10314,17 @@ resolveDemandedDeclIn: function {
     }
     unitName9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: puNm9)
     defName9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: dName9)
+    # a TEMPLATE's member: the template's own resolution minted every method
+    # (resolveInlineGenericUnit), and its constants resolve together, keyed on
+    # the template and evaluated in its frame -- the parent's NAME is no
+    # unit-index key, so neither leg below could place one.
+    if (declDeclaresTemplate :ty :ast declId: dParent9) then {
+        if dTid9.isZero then {
+            resolveTemplateConstants :ty :reg :ast tmplDeclId: dParent9
+        }
+        ty.declSetDefined :declId
+        return
+    }
     if dParent9 == ty.coreUnitRoot then {
         if dTid9.isZero then {
             resolveAliasKey :ty :reg :ast :declId
@@ -12095,6 +12112,14 @@ resolveInlineGenericUnitIn: function {
                             nid: gpnid.u64
                             tid: (ztypes.tid.create from: gtid5.u64)
                         )
+                        # the parameter's own declaration carries the
+                        # GENERIC_PARAM id, as a generic file unit's does: the
+                        # template's frame answers `t` with the parameter, not
+                        # with the constraint its definition names
+                        gpd5: ty.declFindChild parentDeclId: tdl5 nameId: gm.name
+                        if (gpd5.isZero) == false then {
+                            ty.declSetType declId: gpd5 typeId: (ztypes.tid.create from: gtid5.u64)
+                        }
                     }
                 } else null
             }
@@ -13208,8 +13233,82 @@ resolveMainUnitInstantiations: function {
             templateName: rt
             templateOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
         )
+        match (
+            program
+        ) case program then {
+            (scanTemplateBodyDemands
+                :ty
+                :reg
+                ast: program.ast
+                tmplDeclId: r.tmplDeclId
+                tmplUnit: r.tmplUnit.stringview
+                templateOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
+            )
+        } else null
         i = i + 1
     }
+}
+
+# resolveTemplateConstants -- a generic template's constant members resolve
+# once, keyed on the template's type id and evaluated in the template's frame
+# (the way a namespace's do under resolveConstantDefsIn); every instance of
+# the template shares them. Idempotent through nsConstsWalked.
+resolveTemplateConstants: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    ast: Ast.view
+    tmplDeclId: ztypes.declid
+} is {
+    ttid9: declTypeIdOf :ty declId: tmplDeclId
+    if ttid9.isZero then return
+    top9: zast.nodeid
+    {
+        do9: ty.decls.get i: (tmplDeclId - 1)
+        np9: ast.nodes.get i: (do9.node.u64 - 1)
+        if np9.namedoperation then top9 = np9.operation
+    }
+    if top9.isZero then return
+    fr9: unitRootOfDecl :ty declId: tmplDeclId
+    if fr9.isZero then return
+    fnm9: zast.poolTextAt pool: ast.names ref: (declNameIdOf :ty declId: fr9)
+    (resolveConstantDefsIn
+        :ast
+        :ty
+        :reg
+        unitName: fnm9.stringview
+        unitdefId: top9
+        ownerTid: ttid9
+        ownerDeclId: tmplDeclId
+    )
+}
+
+# scanTemplateBodyDemands -- a template's method bodies name definitions the
+# way any body does -- a sibling constant, a sibling function, a core type --
+# and they resolve in the TEMPLATE's frame, wherever the instantiation was
+# written. Demand them from that frame before any instance walk asks; the
+# instance walk itself does not scan. Once per template.
+scanTemplateBodyDemands: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    ast: Ast.view
+    tmplDeclId: ztypes.declid
+    tmplUnit: StringView
+    templateOpId: zast.nodeid
+} is {
+    if templateOpId.isZero then return
+    if (ty.templateBodiesScanned.has item: templateOpId.u64) then return
+    ty.templateBodiesScanned.add item: templateOpId.u64
+    prevFrame9: ty.curFrame
+    if (tmplDeclId.isZero) == false then ty.curFrame = tmplDeclId
+    (scanUnitCalls
+        :ty
+        :reg
+        :ast
+        scanUnit: (nameIdOf :ast name: tmplUnit)
+        unitdefId: templateOpId
+        rootOnly: false
+    )
+    ty.curFrame = prevFrame9
 }
 
 # typecheck -- entry point. Registers a UNIT type per unit and resolves the main
@@ -23468,6 +23567,37 @@ reportUnresolvedValue: function {
     )
 }
 
+# monoMemberOf -- inside a unit mono's instance walk (curMonoStamp), the mono's
+# own member for a bare callee that resolved to the TEMPLATE's method of that
+# name; any other id passes through unchanged.
+monoMemberOf: function {
+    st: zenv.ZSymbolTable
+    templateFnTid: ztypes.tid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    org9: st.reg.genericOriginOf tid: (ztypes.tid.create from: st.typing.curMonoStamp)
+    if org9.isZero then return templateFnTid
+    tm9: st.typing.declChildOfId parentTypeId: org9 :nameId
+    match (
+        tm9
+    ) case some then {
+        if tm9 != templateFnTid.u64 then return templateFnTid
+    } case none then {
+        return templateFnTid
+    }
+    mm9: (st.typing.declChildOfId
+        parentTypeId: (ztypes.tid.create from: st.typing.curMonoStamp)
+        :nameId
+    )
+    match (
+        mm9
+    ) case some then {
+        return (ztypes.tid.create from: mm9.u64)
+    } case none then {
+        return templateFnTid
+    }
+}
+
 # checkCall -- type a call. C1 handles the `return <value>` control-flow form:
 # stamp the callable atom with return's type, mark the call RETURN, walk the
 # return value, and resolve the call to `never`. Other call kinds land later.
@@ -24745,6 +24875,16 @@ checkCall: function {
         # name-keyed trigger could only ever find same-unit definitions: it
         # looked `cn` up in the unit being walked.
         if funcId > 0 then walkDefinitionById :st :ast tid: funcId
+        # inside a unit mono's instance walk, a bare callee naming a TEMPLATE
+        # member is the MONO's member: the same definition with the argument
+        # substitution applied to its parameters and return
+        if funcId > 0 when st.typing.curMonoStamp > 0 then {
+            funcId = (monoMemberOf
+                :st
+                templateFnTid: funcId
+                nameId: (nameIdOf :ast name: cn.stringview)
+            )
+        }
         isUser: false
         isGen: false
         isCtor: false
@@ -27024,7 +27164,7 @@ checkFunctionBodyIn: function {
 # name) for the emitter to dissect. Mirrors checkUnitBodies' fn loop (index-based
 # so it never holds the iterator lock while passing unitBody), no mainMemberIndex.
 walkUnitTemplateBodies9: function {
-    st: zenv.ZSymbolTable.view
+    st: zenv.ZSymbolTable
     ast: Ast.view
     unitName: StringView
     unitdefId: zast.nodeid
@@ -27049,6 +27189,13 @@ walkUnitTemplateBodies9: function {
             tdecl9 = tro9
         } case none then null
     }
+    # a template-time walk: the generic parameter resolves to its
+    # GENERIC_PARAM id in the template's frame, and stamps of that type stay
+    # out of the global table -- the emitter re-walks the shared AST per
+    # instance and reads the instance's stamps (the rule every template walk
+    # follows; the `match t` marker writes past it on purpose)
+    prevSup9: st.typing.suppressParamStamps
+    st.typing.suppressParamStamps = true
     bn9: bodyIds9.length
     bi9: u64
     for bi9 < bn9 loop {
@@ -27075,13 +27222,14 @@ walkUnitTemplateBodies9: function {
             }
         }
     }
+    st.typing.suppressParamStamps = prevSup9
 }
 
 # walkGenericUnitTemplates -- stamp `match t`/`match cap` in every generic unit
 # template (file-level units and inline `unit as {}` bindings) via an unbound
 # body walk. Runs after the main-unit body check. Unit op ids and
 # names are lifted out of node views before program.ast is passed on (lock-safe).
-walkGenericUnitTemplates: function {st: zenv.ZSymbolTable.view program: Node} is {
+walkGenericUnitTemplates: function {st: zenv.ZSymbolTable program: Node} is {
     match (
         program
     ) case program then {
@@ -30304,6 +30452,15 @@ resolveConstantDefsIn: function {
                     opId: bmNode9.operation
                     k: zast.unitkind.subunit
                 ) then isNs9 = true
+                # a generic template's constants are its own too, keyed on the
+                # template's id (the def-node stamp resolveInlineGenericUnit
+                # lays); a template nothing resolved yet has none to key on
+                # and is skipped, and its members' demand resolves them
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: bmNode9.operation
+                    k: zast.unitkind.template
+                ) then isNs9 = true
                 if isNs9 then {
                     ct9: ztypes.tid
                     {
@@ -30329,14 +30486,21 @@ resolveConstantDefsIn: function {
                         )
                     }
                 } else if defName.length > 0 then {
-                    (resolveConstantMember
+                    # a template's generic PARAMETER (`t: anyval.generic`,
+                    # `cap: u32.generic`) is a parameter, not a constant
+                    if (isGenericParam
                         :ast
-                        :ty
-                        :reg
-                        :unitName
-                        defName: defName.stringview
-                        defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-                    )
+                        op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                    ) == false then {
+                        (resolveConstantMember
+                            :ast
+                            :ty
+                            :reg
+                            :unitName
+                            defName: defName.stringview
+                            defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                        )
+                    }
                 }
             } else null
         }
@@ -31288,6 +31452,7 @@ unitFrameOf: function {
     for cur9 > 0 while hops9 < 64 loop {
         hops9 = hops9 + 1
         isU9: declDeclaresUnit :ty :ast declId: cur9
+        if (isU9) == false then isU9 = declDeclaresTemplate :ty :ast declId: cur9
         if (isU9) == false when (ty.declValid id: cur9) then {
             do9: ty.decls.get i: (cur9 - 1)
             if do9.kind.publicNs then isU9 = true
@@ -31296,6 +31461,43 @@ unitFrameOf: function {
         cur9 = declParentIdOf :ty declId: cur9
     }
     return (ztypes.declid.create from: 0)
+}
+
+# declDeclaresTemplate -- does this declaration declare a generic template
+# unit (`m: unit as { t: anyval.generic ... }`)? Read off the def node's
+# kind, like declDeclaresUnit; a template is a frame of its own -- its
+# members and generic parameters are its children -- that the unit
+# predicates deliberately exclude.
+declDeclaresTemplate: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out bool is {
+    if (ty.declValid id: declId) == false then return false
+    dn9: u64
+    {
+        do9: ty.decls.get i: (declId - 1)
+        dn9 = do9.node.u64
+    }
+    if dn9 == 0 then return false
+    np9: ast.nodes.get i: (dn9 - 1)
+    if (np9.namedoperation) == false then return false
+    return (zast.unitOpKindIs :ast opId: np9.operation k: zast.unitkind.template)
+}
+
+# envTypeIdOf -- the environment's answer for a bare name as a type id: the
+# declaration the cursor's frame chain reaches, when it is minted. 0 when the
+# cursor is unset, the name is unknown to the chain, or the declaration is
+# not resolved yet (a probe cannot mint; the demand scans see to that).
+envTypeIdOf: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    nameId: zast.nameid
+} out u64 is {
+    if ty.curFrame.isZero then return 0
+    eh9: envLookup :ty :ast frame: ty.curFrame :nameId
+    if eh9.declId.isZero then return 0
+    return (declTypeIdOf :ty declId: eh9.declId).u64
 }
 
 # frameIsWithin -- is `root` `frame` itself or one of its enclosing frames?
@@ -31554,6 +31756,12 @@ lookupDefinition: function {
 } out zdefhit is {
     if nameId.isZero then return (zdefhit declId: ztypes.declid frame: ztypes.declid)
     h9: lookupDefinitionOld :ty :ast :frames :nameId
+    # where the name-derived frames are blind, the environment answers (a
+    # template's own member, from inside the template's body)
+    if h9.declId.isZero when (ty.curFrame.isZero) == false then {
+        eh9: envLookup :ty :ast frame: ty.curFrame :nameId
+        if (eh9.declId.isZero) == false then return eh9
+    }
     (frameVerifyDecl
         :ty
         :ast
@@ -31822,6 +32030,12 @@ walkLookupTyperef: function {
         )
         return (optionval.some r5)
     }
+    # where the name-derived frames are blind, the environment answers: a
+    # definition the cursor's frame chain reaches -- a template's own member
+    # or generic parameter, from inside the template's body -- that no
+    # unit-name frame holds.
+    e9: envTypeIdOf :ty :ast nameId: nid9
+    if e9 > 0 then return (optionval.some e9)
     (frameVerifyTid
         :ty
         :ast
@@ -32020,6 +32234,8 @@ walkLookupTyperefById: function {
     if baseId == (zast.poolFind pool: ast.names text: "Any") then return (optionval.none u64)
     r5: probeFrameTyperef :ast :ty :reg root: fr9.preludeRoot nameId: baseId
     if r5 > 0 then return (optionval.some r5)
+    e9: envTypeIdOf :ty :ast nameId: baseId
+    if e9 > 0 then return (optionval.some e9)
     return (optionval.none u64)
 }
 
