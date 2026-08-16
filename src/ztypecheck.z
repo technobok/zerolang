@@ -12171,233 +12171,33 @@ resolveInlineGenericUnitIn: function {
     }
 }
 
-# createUnitMono -- create a mono UNIT (defined_in_unit=the instantiating unit) with
-# JOIN-only function-shell children from a template unit body, then seed return/never
-# demand. Dedups on the mono's resolved key.
+# createUnitMono -- mint a mono UNIT with JOIN-only function-shell children
+# from a template unit body, then seed return/never demand. Identity is the
+# caller's: the trie under the template, keyed on the resolved arguments
+# (unitMonoOnTrie / unitMonoJoinTrie). `monoName` is the mono's LABEL --
+# display only, registered nowhere.
 createUnitMono: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     ast: Ast
-    unitName: StringView
     monoName: StringView
-    templateName: StringView
+    tmplDeclId: ztypes.declid
+    tplTid: ztypes.tid
     templateOpId: zast.nodeid
-} is {
-    got: (resolvedByIds
-        :ast
-        :ty
-        :reg
-        unitId: (nameIdOf :ast name: unitName)
-        name: (nameIdOf :ast name: monoName)
-    )
-    exists: false
-    match (
-        got
-    ) case some then {
-        exists = true
-    } case none then null
-    if (exists) == false then {
-        monoId: reg.newType name: monoName typetype: ztypes.ztypetype.unitType
-        rid: monoId
-        gtp9: declOfUnitDef :ty :ast defUnit: unitName name: templateName
-        if gtp9.isZero then {
-            # a FILE-unit template instantiated cross-unit: attribute the
-            # mono to the INSTANTIATING unit's root (matching its home)
-            gtr9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-            match (
-                gtr9
-            ) case some then {
-                gtp9 = gtr9
-            } case none then null
-        }
-        monoNm9: zast.poolSet pool: ast.names text: monoName
-        if (gtp9.isZero) == false then {
-            reg.setDef typeId: monoId declId: gtp9
-            mud9: ty.declCloneType templateDeclId: gtp9
-            if mud9 > 0 then {
-                ty.declSetType declId: mud9 typeId: monoId
-                # a mono IS a unit, so its clone roots a frame under the mono's
-                # own name and the frame walk reaches it the way it reaches any
-                # other unit. The name is mangled, so it cannot collide.
-                ty.unitRootByName.set key: monoNm9.u64 value: mud9
-            }
-        }
-        iur: monoId
-        reg.setUnitName nameId: monoNm9 uid: iur
-        ccu2: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            ccu2
-        ) case some then {
-            # declare the mono's mangled name under the instantiating unit
-            # before edging it: it is not a source def, so nothing else
-            # declares it and childOf would have only the edge to read
-            mnid9: (ast.internString text: monoName)
-            (ty.declSynthMember
-                parentTypeId: (ztypes.tid.create from: ccu2.u64)
-                nameId: mnid9
-                kind: ztyping.declkind.typeDecl
-            )
-            (ty.setMemberType
-                parentTypeId: (ztypes.tid.create from: ccu2.u64)
-                nameId: mnid9
-                childTypeId: rid
-            )
-        } case none then null
-        # link the mono to its template (inline templates register under
-        # the main unit; file templates carry the per-unit UNIT type).
-        tplGot: (resolvedByIds
-            :ast
-            :ty
-            :reg
-            unitId: (nameIdOf :ast name: unitName)
-            name: (zast.poolFind pool: ast.names text: templateName)
-        )
-        match (
-            tplGot
-        ) case some then {
-            reg.setGenericOrigin typeId: monoId value: tplGot
-        } case none then {
-            tplK2: templateName
-            utGot: reg.unitNameTid.get key: (nameIdOf :ast name: tplK2).u64
-            match (
-                utGot
-            ) case some then {
-                reg.setGenericOrigin typeId: monoId value: utGot
-            } case none then {
-                # inline generic template: no childOf edge and not a unit
-                # root -- its id lives only in the def-node stamp
-                # laid by resolveInlineGenericUnit.
-                itnid: unitdefNodeId :ast nId: templateOpId
-                itso: ztyping.nodeTypeAt tbl: ty.nodeType nid: itnid.u64
-                if itso > 0 then {
-                    reg.setGenericOrigin typeId: monoId value: itso
-                }
-            }
-        }
-        attachMonoUnitFuncs :ty :reg :ast :monoId :templateOpId
-        demandReturnNever :ty :ast
-    }
-}
-
-# resolveInlineMono -- create the mono for an INLINE template: scan the main unit body
-# for the inline `unit as {...}` binding named templateName and build the mono from it.
-resolveInlineMono: function {
-    ast: Ast.view
-    ty: ztyping.ZTyping.view
-    reg: ztypes.ZTypeRegistry.view
-    unitName: StringView
-    monoName: StringView
-    templateName: StringView
-    mainOpId: zast.nodeid
-} is {
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: mainOpId
-    {
-        biter: bodyIds9.iterate
-        for bm: biter loop {
-            bmNode9: ast.nodes.get i: (bm - 1).u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                bn: zast.nameTextAt :ast ref: bmNode9.name
-                if bn.stringview == templateName then {
-                    if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
-                        (createUnitMono
-                            :ty
-                            :ast
-                            :reg
-                            :unitName
-                            :monoName
-                            :templateName
-                            templateOpId: bmNode9.operation
-                        )
-                    }
-                }
-            } else null
-        }
-    }
-}
-
-# resolveUnitMono -- create the mono UNIT for a generic-unit instantiation. The template
-# is either a FILE unit (in program.ast.units) or an INLINE unit in the main body
-# (unitName == the main unit name for these instantiations).
-resolveUnitMono: function {
-    ty: ztyping.ZTyping.view
-    reg: ztypes.ZTypeRegistry.view
-    program: Node
-    unitName: StringView
-    monoName: StringView
-    templateName: StringView
-    templateOpId: zast.nodeid
-} is {
-    # the request resolved its template at collection: mint straight from that
-    # node. The scans below are the pre-tid path -- they only ever reached a
-    # top-level binding of the instantiating unit, or a file unit of the
-    # template's name.
-    if (templateOpId.isZero) == false then {
-        match (
-            program
-        ) case program then {
-            (createUnitMono
-                :ty
-                ast: program.ast
-                :reg
-                :unitName
-                :monoName
-                :templateName
-                :templateOpId
-            )
-        } else null
-        return
-    }
-    match (
-        program
-    ) case program then {
-        # indexed walk, not an iterator: an iterator would pin
-        # `program.ast.units` shared across the loop, and the calls below
-        # lock `program.ast` exclusively (they intern mono names)
-        uN0: program.ast.units.length
-        uI0: u64
-        for uI0 < uN0 loop {
-            uop9: zast.nodeid
-            isTpl9: false
-            isInl9: false
-            {
-                uId9: (zast.nodeid.create from: (program.ast.units.get i: uI0))
-                u: program.ast.nodes.get i: (uId9 - 1).u64
-                match (
-                    u
-                ) case namedoperation then {
-                    un: zast.poolTextAt pool: program.ast.names ref: u.name
-                    uop9 = u.operation
-                    if un.stringview == templateName then isTpl9 = true
-                    if un.stringview == unitName then isInl9 = true
-                } else null
-            }
-            uI0 = uI0 + 1
-            if isTpl9 then {
-                (createUnitMono
-                    :ty
-                    ast: program.ast
-                    :reg
-                    :unitName
-                    :monoName
-                    :templateName
-                    templateOpId: uop9
-                )
-            }
-            if isInl9 then {
-                (resolveInlineMono
-                    :ty
-                    :reg
-                    ast: program.ast
-                    :unitName
-                    :monoName
-                    :templateName
-                    mainOpId: uop9
-                )
-            }
-        }
-    } else null
+} out ztypes.tid is {
+    monoId: reg.newType name: monoName typetype: ztypes.ztypetype.unitType
+    # the mono's declaration is the TEMPLATE's (its origin), and its members
+    # hang off a clone of it -- the request resolved the template's Decl at
+    # collection through the instantiation's own scope. Nothing registers the
+    # label: the mono is reached through the trie, or through the binding
+    # names the completion pass registers.
+    reg.setDef typeId: monoId declId: tmplDeclId
+    mud9: ty.declCloneType templateDeclId: tmplDeclId
+    if mud9 > 0 then ty.declSetType declId: mud9 typeId: monoId
+    if (tplTid.isZero) == false then reg.setGenericOrigin typeId: monoId value: tplTid
+    attachMonoUnitFuncs :ty :reg :ast :monoId :templateOpId
+    demandReturnNever :ty :ast
+    return monoId
 }
 
 # fnReturnBaseName -- the base type name of a function's return typeref
@@ -12801,13 +12601,6 @@ completeUnitInstantiations: function {
         r: reqs.get :i
         rbv1: r.bind.stringview
         rb: rbv1
-        rmL1: String
-        match (
-            program
-        ) case program then {
-            rmL1 = instMonoLabel :ty :reg ast: program.ast :r
-        } else null
-        rm: rmL1.stringview
         rtv1: r.tmpl.stringview
         rt: rtv1
         ruv1: r.declUnit.stringview
@@ -12874,21 +12667,30 @@ completeUnitInstantiations: function {
             aiR9 = aiR9 + 1
         }
         ty.curFrame = prevFrameR9
+        # the mono is the one on the trie under the template, keyed on the
+        # resolved arguments -- the identity the mint pass laid; the label is
+        # not consulted
         mgo: (optionval.none u64)
         rbId9: zast.nameid
         tnId9: u32
         match (
             program
         ) case program then {
-            mnUid9: nameIdOf ast: program.ast name: ru
-            rmNid9: nameIdOf ast: program.ast name: rm
-            mgo = (resolvedByIds
-                ast: program.ast
-                :ty
-                :reg
-                unitId: mnUid9
-                name: rmNid9
-            )
+            if (rtdecl.isZero) == false then {
+                keysC9: (ListVal u64)
+                isValC9: (ListVal bool)
+                if (instMonoKeys
+                    :ty
+                    :reg
+                    ast: program.ast
+                    :r
+                    tdecl: rtdecl
+                    keys: keysC9
+                    isVal: isValC9
+                ) then {
+                    mgo = unitMonoOnTrie :reg tplTid: (declTypeIdOf :ty declId: rtdecl) keys: keysC9
+                }
+            }
             rbId9 = zast.poolSet pool: program.ast.names text: rb
             tnId9 = nameIdOf ast: program.ast name: rt
         } else null
@@ -13020,45 +12822,6 @@ completeUnitInstantiations: function {
                     aiM9 = aiM9 + 1
                 }
             }
-            # JOIN THE ID TRIE. getOrMintSpec keys a record specialization on
-            # (templateId, ordered argument ids) through reg.getGenericChild /
-            # setGenericChild -- plain (parentId, key) -> tid maps on the type
-            # record, which never asked what kind of type the parent was. A unit
-            # tid parents a trie node exactly as a record tid does; only the
-            # instantiation's lack of a template ID kept unit monos out, and it
-            # has one now. Registered rather than minted through getOrMintSpec
-            # because the mono already exists: it is minted a pass earlier, so
-            # the demand walk between the passes can see its members.
-            if mkOk9 when tplId > 0 then {
-                curT9: tplId.u64
-                kiT9: u64
-                knT9: mkeys9.length
-                for kiT9 < knT9 loop {
-                    kT9: mkeys9.get i: kiT9
-                    lastT9: false
-                    if kiT9 + 1 == knT9 then lastT9 = true
-                    stepT9: u64
-                    nT9: reg.getGenericChild parentId: curT9 key: kT9
-                    match (
-                        nT9
-                    ) case some then {
-                        stepT9 = nT9
-                    } case none then {
-                        if lastT9 then {
-                            stepT9 = mid9
-                        } else {
-                            inmT9: "\{rt}__node"
-                            stepT9 = (reg.newType
-                                name: inmT9.stringview
-                                typetype: ztypes.ztypetype.genericParam
-                            )
-                        }
-                        reg.setGenericChild parentId: curT9 key: kT9 child: stepT9
-                    }
-                    curT9 = stepT9
-                    kiT9 = kiT9 + 1
-                }
-            }
             # the request resolved its template at COLLECTION: its id, the
             # node that declares it, and the unit whose AST holds that node.
             # One call covers both shapes the scans below split -- a file unit
@@ -13176,6 +12939,151 @@ completeUnitInstantiations: function {
     }
 }
 
+# demandInstArgs -- demand every definition an instantiation's arguments
+# name, from the scope the instantiation is written in (a bare type name, a
+# dotted one, a nested specialisation's parts), so the mint pass -- which runs
+# before the demand drain -- can key the mono on resolved arguments. The
+# caller drains.
+demandInstArgs: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    ast: Ast.view
+    r: InstReq
+} is {
+    prevFrame9: ty.curFrame
+    if (r.scopeDeclId.isZero) == false then ty.curFrame = r.scopeDeclId
+    su9: nameIdOf :ast name: r.declUnit.stringview
+    n9: r.argNodeIds.length
+    i9: u64
+    for i9 < n9 loop {
+        nid9: r.argNodeIds.get i: i9
+        if nid9 > 0 then {
+            scanCallsInNode :ty :ast :reg scanUnit: su9 node: (ast.nodes.get i: (nid9 - 1))
+        }
+        i9 = i9 + 1
+    }
+    ty.curFrame = prevFrame9
+}
+
+# instMonoKeys -- an instantiation's trie keys in the template's PARAMETER
+# order: the argument's type id, or its numeric value (isVal). False when a
+# parameter has no resolvable argument (its key stays 0).
+instMonoKeys: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    r: InstReq
+    tdecl: ztypes.declid
+    keys: (ListVal u64)
+    isVal: (ListVal bool)
+} out bool is {
+    ok9: true
+    pn9: reg.genericParamNamesOf :tdecl
+    if pn9.length == 0 then return false
+    pi9: u64
+    for pi9 < pn9.length loop {
+        pnm9: pn9.get i: pi9
+        pi9 = pi9 + 1
+        k9: u64
+        v9: false
+        found9: false
+        ai9: u64
+        for ai9 < r.argLabels.length loop {
+            lbl9: r.argLabels.get i: ai9
+            if lbl9.stringview == pnm9.stringview then {
+                an9: r.argNames.get i: ai9
+                if (isNumericLiteralName name: an9.stringview) then {
+                    pv9: parseDecimalU64 text: an9.stringview
+                    match (
+                        pv9
+                    ) case some then {
+                        # a value key may be 0 (`sized cap: 0`)
+                        k9 = pv9
+                        v9 = true
+                        found9 = true
+                    } case none then null
+                } else {
+                    k9 = instArgTypeOf :ty :reg :ast :r i: ai9
+                    if k9 > 0 then found9 = true
+                }
+            }
+            ai9 = ai9 + 1
+        }
+        if (found9) == false then ok9 = false
+        keys.append k9
+        isVal.append v9
+    }
+    return ok9
+}
+
+# unitMonoOnTrie -- the unit mono already minted for `keys` under the
+# template, walking one trie level per parameter; none when any level is
+# missing. A probe: it lays nothing.
+unitMonoOnTrie: function {
+    reg: ztypes.ZTypeRegistry
+    tplTid: ztypes.tid
+    keys: (ListVal u64).view
+} out optionval u64 is {
+    if tplTid.isZero then return (optionval.none u64)
+    cur9: tplTid.u64
+    i9: u64
+    for i9 < keys.length loop {
+        n9: reg.getGenericChild parentId: cur9 key: (keys.get i: i9)
+        match (
+            n9
+        ) case some then {
+            cur9 = n9
+        } case none then {
+            return (optionval.none u64)
+        }
+        i9 = i9 + 1
+    }
+    return (optionval.some cur9)
+}
+
+# unitMonoJoinTrie -- lay the mono's path under the template: one level per
+# parameter, keyed on the argument (a type id or a numeric value; the kinds
+# never share a level), interior nodes minted as `{template}__node`, the leaf
+# the mono. getOrMintSpec keys a record specialisation the same way; a unit
+# tid parents a trie node exactly as a record tid does.
+unitMonoJoinTrie: function {
+    reg: ztypes.ZTypeRegistry
+    tplTid: ztypes.tid
+    tplName: StringView
+    keys: (ListVal u64).view
+    monoId: ztypes.tid
+} is {
+    if tplTid.isZero then return
+    cur9: tplTid.u64
+    n9: keys.length
+    i9: u64
+    for i9 < n9 loop {
+        k9: keys.get i: i9
+        last9: false
+        if i9 + 1 == n9 then last9 = true
+        step9: u64
+        got9: reg.getGenericChild parentId: cur9 key: k9
+        match (
+            got9
+        ) case some then {
+            step9 = got9
+        } case none then {
+            if last9 then {
+                step9 = monoId.u64
+            } else {
+                inm9: "\{tplName}__node"
+                step9 = (reg.newType
+                    name: inm9.stringview
+                    typetype: ztypes.ztypetype.genericParam
+                )
+            }
+            reg.setGenericChild parentId: cur9 key: k9 child: step9
+        }
+        cur9 = step9
+        i9 = i9 + 1
+    }
+}
+
 # instArgTypeOf -- the type an instantiation argument names, resolved where
 # the instantiation is written: a bare atom by name, a call-shaped argument
 # (a specialisation of its own, `(Box t: i64)`) through the type-ref
@@ -13279,8 +13187,6 @@ resolveMainUnitInstantiations: function {
         rm: rmL0.stringview
         rtv0: r.tmpl.stringview
         rt: rtv0
-        ruv0: r.declUnit.stringview
-        ru0: ruv0
         # the template has to be RESOLVED before a mono is minted from it:
         # createUnitMono reads the template's id -- for an inline one, the stamp
         # resolveInlineGenericUnit lays on its def node -- to record the mono's
@@ -13313,28 +13219,107 @@ resolveMainUnitInstantiations: function {
                 } else null
             }
         }
-        (resolveUnitMono
-            :ty
-            :reg
-            :program
-            unitName: ru0
-            monoName: rm
-            templateName: rt
-            templateOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
-        )
-        match (
-            program
-        ) case program then {
-            (scanTemplateBodyDemands
-                :ty
-                :reg
-                ast: program.ast
-                tmplDeclId: r.tmplDeclId
-                tmplUnit: r.tmplUnit.stringview
-                templateOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
-            )
-        } else null
+        # a request without a template Decl is no instantiation (a unit-level
+        # constant CALL the collector also gathers); the template's Decl was
+        # found at collection through the instantiation's own scope
+        if (r.tmplDeclId.isZero) == false then {
+            match (
+                program
+            ) case program then {
+                mintUnitMonoOf :ty :reg ast: program.ast :r label: rm
+                (scanTemplateBodyDemands
+                    :ty
+                    :reg
+                    ast: program.ast
+                    tmplDeclId: r.tmplDeclId
+                    tmplUnit: r.tmplUnit.stringview
+                    templateOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
+                )
+            } else null
+        }
         i = i + 1
+    }
+}
+
+# mintUnitMonoOf -- one instantiation's mono: its arguments demanded and
+# drained (the mint pass precedes the drain), keyed in the template's
+# parameter order, found on the trie under the template or minted and
+# joined there. The label is display only. An argument nothing resolves is
+# reported here, where the request is -- it used to reach the emitter.
+mintUnitMonoOf: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    r: InstReq
+    label: StringView
+} is {
+    demandInstArgs :ty :reg :ast :r
+    resolveDemandedDefs :ty :reg :ast
+    tplTid9: declTypeIdOf :ty declId: r.tmplDeclId
+    keys9: (ListVal u64)
+    isVal9: (ListVal bool)
+    ok9: instMonoKeys :ty :reg :ast :r tdecl: r.tmplDeclId keys: keys9 isVal: isVal9
+    if (ok9) == false then {
+        reportUnresolvedInstArgs :ty :ast :r
+        return
+    }
+    got9: unitMonoOnTrie :reg tplTid: tplTid9 keys: keys9
+    match (
+        got9
+    ) case some then {
+        return
+    } case none then null
+    mono9: (createUnitMono
+        :ty
+        :reg
+        :ast
+        monoName: label
+        tmplDeclId: r.tmplDeclId
+        tplTid: tplTid9
+        templateOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
+    )
+    unitMonoJoinTrie :reg tplTid: tplTid9 tplName: r.tmpl.stringview keys: keys9 monoId: mono9
+}
+
+# reportUnresolvedInstArgs -- E0023 at every instantiation argument that names
+# nothing (a numeric value always resolves).
+reportUnresolvedInstArgs: function {ty: ztyping.ZTyping ast: Ast.view r: InstReq} is {
+    n9: r.argLabels.length
+    i9: u64
+    for i9 < n9 loop {
+        an9: r.argNames.get i: i9
+        nid9: r.argNodeIds.get i: i9
+        i9 = i9 + 1
+        if (isNumericLiteralName name: an9.stringview) then continue
+        if nid9 == 0 then continue
+        rt9: u64
+        {
+            prevFrame9: ty.curFrame
+            if (r.scopeDeclId.isZero) == false then ty.curFrame = r.scopeDeclId
+            if an9.length > 0 then {
+                eh9: (envLookup
+                    :ty
+                    :ast
+                    frame: ty.curFrame
+                    nameId: (nameIdOf :ast name: an9.stringview)
+                )
+                rt9 = (declTypeIdOf :ty declId: eh9.declId).u64
+            }
+            ty.curFrame = prevFrame9
+        }
+        if rt9 > 0 then continue
+        an8: an9.copy
+        if an8.length == 0 then an8 = "the argument".string
+        n8: ast.nodes.get i: (nid9 - 1)
+        (addResolveErrorH
+            :ty
+            nodeid: (nodeId n: n8)
+            lineno: (nodeLine n: n8)
+            colno: (nodeCol n: n8)
+            e: zast.err.badReference
+            msg: "Unknown reference '\{an8}'"
+            width: an8.length.u32.orPanic
+        )
     }
 }
 
@@ -15838,7 +15823,12 @@ inferGenericConstruction: function {
                     match (
                         ao
                     ) case some then {
-                        atn: typeNameOf :st tid: (ztypes.tid.create from: ao.u64)
+                        atn: (monoValName
+                            :ast
+                            ty: st.typing
+                            reg: st.reg
+                            tid: (ztypes.tid.create from: ao.u64)
+                        )
                         sfx.append s: "_"
                         sfx.append s: atn
                         pk2: pk.copy
@@ -17339,12 +17329,14 @@ unitMemberTypeOf: function {
 } out optionval u64 is {
     nid9: zast.poolFind pool: ast.names text: member
     if nid9.isZero then return (optionval.none u64)
-    # A top-level unit and a generic mono root a frame under their own name; a
-    # nested unit is deliberately absent from that index -- two files may hold
-    # units of the same name -- so its root comes off its type id instead.
-    # The name is only trusted when it produces THIS unit: a nested unit may
-    # share a name with a top-level one, and answering from the index alone
-    # probed the other unit's frame for the member.
+    # A top-level unit roots a frame under its own name; a nested unit is
+    # deliberately absent from that index -- two files may hold units of the
+    # same name -- so its root comes off its type id instead. The name is
+    # only trusted when it produces THIS unit: a nested unit may share a name
+    # with a top-level one, and answering from the index alone probed the
+    # other unit's frame for the member. A generic mono's own declaration
+    # (declIdOfType) carries its substituted members; declOfTypeId hops to
+    # the TEMPLATE's, whose members are the generic ones.
     root9: ztypes.declid
     {
         uro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
@@ -17355,6 +17347,7 @@ unitMemberTypeOf: function {
             if urt9 == unitTid then root9 = uro9
         } case none then null
     }
+    if root9.isZero then root9 = ty.declIdOfType typeId: unitTid
     if root9.isZero then root9 = declOfTypeId :reg tid: unitTid
     r9: probeFrameTyperef :ast :ty :reg root: root9 nameId: nid9
     if r9 > 0 then return (optionval.some r9)
@@ -25428,7 +25421,7 @@ checkGenericCall: function {
                 paramName: gv
                 argTid: (ztypes.tid.create from: ggot.u64)
             )
-            an4: typeNameOf :st tid: (ztypes.tid.create from: ggot.u64)
+            an4: monoValName :ast ty: st.typing reg: st.reg tid: (ztypes.tid.create from: ggot.u64)
             mname.append s: "_"
             mname.append s: an4
         } case none then {
@@ -32660,6 +32653,13 @@ canonicalizeShellChildren: function {ast: Ast.view st: zenv.ZSymbolTable mainNam
                 reg: st.reg
                 tid: (ztypes.tid.create from: cto9.u64)
             ) > 0 then ok9 = false
+        }
+        # a unit mono's members are its own substituted FUNCTIONS, minted per
+        # instance with no declaration of their own: not shells. Resolving them
+        # by name in the mono's defining unit -- the template's -- would rebind
+        # them to the template's methods.
+        if ok9 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: rpt9.u64)) == ztypes.ztypetype.unitType then {
+            if (st.reg.genericOriginOf tid: (ztypes.tid.create from: rpt9.u64)) > 0 then ok9 = false
         }
         if ok9 then {
             pu9: mainName.string
