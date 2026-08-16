@@ -8864,6 +8864,49 @@ nestedUnitMemberTid: function {
     return (declTypeIdOf :ty declId: mem9)
 }
 
+# aliasTargetMintedTid -- the canonical id an alias's target carries, or 0:
+# a nested unit's member of the alias's own scope, else the named file
+# unit's definition. The declaration's own field is set when its resolution
+# COMPLETES; the canonical id is declared before bind (declareCanonicalType,
+# idempotent), so a target mid-resolution -- a record whose members name the
+# alias again -- answers with the id it already declared. It resolves
+# nothing.
+aliasTargetMintedTid: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    declId: ztypes.declid
+    unitName: zast.nameid
+    defName: zast.nameid
+} out u64 is {
+    aParent9: declParentIdOf :ty :declId
+    tgt9: ztypes.declid
+    sub9: ty.declFindChild parentDeclId: aParent9 nameId: unitName
+    if (sub9.isZero) == false then tgt9 = ty.declFindChild parentDeclId: sub9 nameId: defName
+    if tgt9.isZero then tgt9 = declOfUnitDefIds :ty unitId: unitName nameId: defName
+    if tgt9.isZero then return 0
+    mt9: declTypeIdOf :ty declId: tgt9
+    if (mt9.isZero) == false then return mt9.u64
+    tto9: declDefTypetype :ty :ast declId: tgt9
+    match (
+        tto9
+    ) case some then {
+        tuT9: zast.poolTextAt pool: ast.names ref: unitName
+        tnT9: zast.poolTextAt pool: ast.names ref: defName
+        return (declareCanonicalType
+            :ast
+            :ty
+            :reg
+            defUnit: tuT9.stringview
+            ownerNameId: zast.nameid
+            name: tnT9.stringview
+            typetype: tto9
+        )
+    } case none then {
+        return 0
+    }
+}
+
 # resolveAliasKey -- single-minting for a unit-level re-export alias
 # (a reexportDecl in the Decl tree; target read off its def node): resolve the
 # TARGET's canonical id and reuse it -- the alias never mints its own
@@ -8894,7 +8937,21 @@ resolveAliasKeyIn: function {
     adecl9: declId
     altK9: reexportTargetIdsOf :ty :ast declId: adecl9
     if altK9.unitName.u32 == 0 then return 0
-    if (ty.declIsResolving declId: adecl9) then return 0
+    if (ty.declIsResolving declId: adecl9) then {
+        # re-entered while its target resolves: an alias is a forwarding
+        # edge, not a definition with a body. When the target's own id is
+        # already minted (a record's shell mints before its members, whose
+        # signatures may name the alias again), forward to it; only a target
+        # with no id yet is a true cycle.
+        return (aliasTargetMintedTid
+            :ty
+            :reg
+            :ast
+            declId: adecl9
+            unitName: altK9.unitName
+            defName: altK9.defName
+        )
+    }
     tu9: zast.poolTextAt pool: ast.names ref: altK9.unitName
     tn9: zast.poolTextAt pool: ast.names ref: altK9.defName
     aParent9: ztypes.declid
@@ -9149,6 +9206,12 @@ descendNamedIn: function {
             cycV9: false
             if ttv9 == ztypes.ztypetype.recordType then cycV9 = true
             if ttv9 == ztypes.ztypetype.variantType then cycV9 = true
+            # a NATIVE record (a scalar: `u8: record is native`) lays out
+            # nothing of its own and can hold nothing by value: reaching it
+            # grey through a containment edge (a conversion of another scalar
+            # returning `(resultval t: u8 ...)` while u8's own methods
+            # resolve) is a back-edge to a leaf, not a layout cycle
+            if cycV9 when (declDefIsNative :ty :ast declId: ddecl9) then cycV9 = false
             if cycV9 then {
                 cem9: "containment cycle: value type '\{defUnit}.\{name}' contains itself by value; box the field behind a class, union, or Option"
                 addResolveError :ty e: zast.err.typeError msg: cem9
@@ -31524,6 +31587,33 @@ unitFrameOf: function {
         cur9 = declParentIdOf :ty declId: cur9
     }
     return (ztypes.declid.create from: 0)
+}
+
+# declDefIsNative -- the definition this declaration records is a NATIVE
+# object (`record is native`, `class is native`): the runtime owns its
+# layout, so it holds nothing by value.
+declDefIsNative: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out bool is {
+    if (ty.declValid id: declId) == false then return false
+    dn9: u64
+    {
+        do9: ty.decls.get i: (declId - 1)
+        dn9 = do9.node.u64
+    }
+    if dn9 == 0 then return false
+    np9: ast.nodes.get i: (dn9 - 1)
+    if (np9.namedoperation) == false then return false
+    op9: ast.nodes.get i: (np9.operation - 1).u64
+    match (
+        op9
+    ) case objectdef then {
+        return op9.isNative
+    } else {
+        return false
+    }
 }
 
 # declDeclaresTemplate -- does this declaration declare a generic template
