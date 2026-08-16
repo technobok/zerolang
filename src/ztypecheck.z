@@ -38,6 +38,7 @@ public: unit {
     :regTypeNameOf
     :declOfTypeId
     :declTypeIdOf
+    :publicNsOf
     :declParentIdOf
     :declDeclaresUnit
     :declOfUnitDefIds
@@ -1121,10 +1122,12 @@ indexDeclDef: function {
                 kind: ztyping.declkind.unitDecl
                 node: nopNodeId
             )
+            npub9: ztypes.declid
+            npubOp9: u32
             with nbit9: op9.body.iterate do for nmId9: nbit9 loop {
                 nm9: ast.nodes.get i: (nmId9 - 1).u64
                 if nm9.namedoperation then {
-                    (indexDeclDef
+                    nd9: (indexDeclDef
                         :ty
                         :ast
                         parentDeclId: did0
@@ -1132,7 +1135,22 @@ indexDeclDef: function {
                         nopNodeId: nm9.nodeid
                         opNodeId: nm9.operation
                     )
+                    if (zast.unitOpKindIs :ast opId: nm9.operation k: zast.unitkind.publicNs) then {
+                        npub9 = nd9
+                        npubOp9 = nm9.operation
+                    }
                 }
+            }
+            # a nested unit's `public:` block fills its namespace after the
+            # body walk, as a file unit's does (entries name later siblings)
+            if (npub9.isZero) == false then {
+                (indexDeclPublicEntries
+                    :ty
+                    :ast
+                    ownerDeclId: did0
+                    pubDeclId: npub9
+                    pubOpId: npubOp9
+                )
             }
         }
     } case datablock then {
@@ -1383,10 +1401,14 @@ indexDeclAsMember: function {
     }
 }
 
-# indexDeclPublicEntries -- fill a publicNs Decl's namespace: one exposed
-# name -> sibling-declaration edge per `:member` / `alias: member` entry
-# (no fresh rows -- the exported namespace aliases the unit's own defs).
-# Runs after the unit's body walk so entries naming later siblings bind.
+# indexDeclPublicEntries -- fill a publicNs Decl's namespace. A `public:`
+# block is a unit body: an entry that REFERENCES a sibling of the enclosing
+# unit -- `:member`, or `alias: member` naming one -- becomes an exposed
+# name -> sibling-declaration edge (no fresh row); any other entry is a
+# DEFINITION of the block (a constant, a function, a type, an alias to a
+# name outside the unit) and is indexed under the block like a nested
+# unit's member. Runs after the unit's body walk so entries naming later
+# siblings bind.
 indexDeclPublicEntries: function {
     ty: ztyping.ZTyping
     ast: Ast.view
@@ -1403,13 +1425,28 @@ indexDeclPublicEntries: function {
             if m9.namedoperation then {
                 iref9: m9.name
                 mop9: ast.nodes.get i: (m9.operation - 1).u64
-                if mop9.atomid then iref9 = mop9.name
-                tgt9: ty.declFindChild parentDeclId: ownerDeclId nameId: iref9
+                isRef9: false
+                if mop9.labelvalue then isRef9 = true
+                if mop9.atomid then {
+                    iref9 = mop9.name
+                    isRef9 = true
+                }
+                tgt9: ztypes.declid
+                if isRef9 then tgt9 = ty.declFindChild parentDeclId: ownerDeclId nameId: iref9
                 if (tgt9.isZero) == false then {
                     ty.declAddChildEdge parentDeclId: pubDeclId nameId: m9.name childDeclId: tgt9
                     # the entry's value node (`:m` labelvalue / `alias: m`
                     # atom) is a navigable reference to the sibling def
                     stampRefDecl :ty nid: m9.operation.u64 declId: tgt9
+                } else if (mop9.labelvalue) == false then {
+                    (indexDeclDef
+                        :ty
+                        :ast
+                        parentDeclId: pubDeclId
+                        nameRef: m9.name
+                        nopNodeId: m9.nodeid
+                        opNodeId: m9.operation
+                    )
                 }
             }
         }
@@ -6008,6 +6045,9 @@ scanUnitVisibility: function {
                             match (
                                 ubop9
                             ) case labelvalue then null case atomid then {
+                                # `alias: member` renames a sibling; an atom
+                                # that names no sibling is a definition of the
+                                # block (`MAX: 10`), like any other shape
                                 if ubn9.name != ubop9.name then {
                                     aliasPubRef.append from: ubn9.name
                                     aliasIntRef.append from: ubop9.name
@@ -6015,17 +6055,7 @@ scanUnitVisibility: function {
                                     aliasCol.append from: ubn9.colno
                                     aliasNode.append from: ubn9.nodeid
                                 }
-                            } else {
-                                (addResolveErrorH
-                                    :ty
-                                    nodeid: ubn9.nodeid
-                                    lineno: ubn9.lineno
-                                    colno: ubn9.colno
-                                    e: zast.err.typeError
-                                    msg: "a public interface entry must be ':member' or 'alias: member'".string
-                                    width: 1
-                                )
-                            }
+                            } else null
                         } else null
                     }
                 } else null
@@ -6048,19 +6078,9 @@ scanUnitVisibility: function {
         pRefU9: aliasPubRef.get i: axU9
         iRefU9: aliasIntRef.get i: axU9
         okU9: true
-        if (memberIds.has item: iRefU9.u64) == false then {
-            iTxtU9: zast.nameTextAt :ast ref: (zast.nameid.create from: iRefU9.u32)
-            (addResolveErrorH
-                :ty
-                nodeid: (zast.nodeid.create from: (aliasNode.get i: axU9))
-                lineno: (aliasLine.get i: axU9)
-                colno: (aliasCol.get i: axU9)
-                e: zast.err.typeError
-                msg: "public interface exposes '\{iTxtU9}', which is not a definition of this unit"
-                width: 1
-            )
-            okU9 = false
-        }
+        # an atom naming no sibling is not a rename but a definition of the
+        # block, resolved in the block's frame like any alias
+        if (memberIds.has item: iRefU9.u64) == false then okU9 = false
         if okU9 when (memberIds.has item: pRefU9.u64) then {
             pTxtU9: zast.nameTextAt :ast ref: (zast.nameid.create from: pRefU9.u32)
             (addResolveErrorH
@@ -8661,6 +8681,13 @@ declOfUnitDefId: function {
         if cur9 == ty.coreUnitRoot then return (ztypes.declid.create from: 0)
         nd9: ty.declFindChild parentDeclId: cur9 :nameId
         if (nd9.isZero) == false then return nd9
+        # a definition the unit's `public:` block makes -- the block's
+        # contents are the unit's surface, spelled `unit.name` from outside
+        pb9: publicNsChildOf :ty root: cur9
+        if (pb9.isZero) == false then {
+            pd9: ty.declFindChild parentDeclId: pb9 :nameId
+            if (pd9.isZero) == false then return pd9
+        }
         cur9 = unitFrameOf :ty :ast declId: (declParentIdOf :ty declId: cur9)
     }
     return (ztypes.declid.create from: 0)
@@ -10212,7 +10239,17 @@ demandUnitMember: function {ty: ztyping.ZTyping unitNameId: zast.nameid nameId: 
         pub9: publicNsChildOf :ty root: ro9
         if (pub9.isZero) == false then {
             e9: ty.declFindChild parentDeclId: pub9 :nameId
-            if (e9.isZero) == false then demandDecl :ty declId: e9
+            if (e9.isZero) == false then {
+                # a definition the block itself makes resolves with the
+                # block, a nested unit (its constants key on the block's
+                # id); an edge names a sibling of the unit, demanded as such
+                ep9: declParentIdOf :ty declId: e9
+                if ep9 == pub9 then {
+                    demandDecl :ty declId: pub9
+                } else {
+                    demandDecl :ty declId: e9
+                }
+            }
         }
     } case none then null
 }
@@ -11900,6 +11937,11 @@ resolveNamespaceUnit: function {
                     )
                 } else {
                     md9: ty.declFindChild parentDeclId: declId9 nameId: bmNode9.name
+                    # a `public:` block's reference entry (`:x`, `alias: x`)
+                    # is an edge to a sibling of the enclosing unit, which
+                    # resolves as that unit's definition, not as a member here
+                    mdp9: declParentIdOf :ty declId: md9
+                    if (md9.isZero) == false when mdp9 != declId9 then continue
                     isRx9: false
                     {
                         if (ty.declValid id: md9) then {
@@ -13402,8 +13444,10 @@ nameClaimedByScope: function {
     name: StringView
 } out bool is {
     if (reg.unitNameTid.has key: (nameIdOf :ast :name).u64) then return true
-    ncr9: (resolvedByIds
-        :ast
+    # the current unit's own resolved members (its index), not its SURFACE:
+    # a definition its `public:` block makes is reachable qualified, never
+    # bare, and must not vouch for a bare name
+    ncr9: (childOfWalkIds
         :ty
         :reg
         unitId: (nameIdOf :ast name: currentUnit)
@@ -17282,6 +17326,12 @@ unitMemberTypeOf: function {
     if root9.isZero then root9 = declOfTypeId :reg tid: unitTid
     r9: probeFrameTyperef :ast :ty :reg root: root9 nameId: nid9
     if r9 > 0 then return (optionval.some r9)
+    # a definition the unit's `public:` block makes is on its surface
+    pb9: publicNsChildOf :ty root: root9
+    if (pb9.isZero) == false then {
+        r8: probeFrameTyperef :ast :ty :reg root: pb9 nameId: nid9
+        if r8 > 0 then return (optionval.some r8)
+    }
     return (optionval.none u64)
 }
 
@@ -26775,7 +26825,7 @@ checkFunctionBody: function {
     # instance walk) leaves the cursor as it found it.
     prevFrame9: st.typing.curFrame
     if (declId.isZero) == false then st.typing.curFrame = declId
-    checkFunctionBodyIn :st :unitName :defName :defn :thisName :ast
+    checkFunctionBodyIn :st :unitName :defName :defn :thisName :ast :declId
     st.typing.curFrame = prevFrame9
 }
 
@@ -26786,10 +26836,29 @@ checkFunctionBodyIn: function {
     defn: Node.view
     thisName: StringView
     ast: Ast
+    declId: ztypes.declid
 } is {
     match (
         defn
     ) case functiondef then {
+        # the function's own declaration, when the caller passed one whose
+        # type IS this function (a free function, a namespace member, a
+        # method), is its identity: a namespace member is not found by the
+        # unit's name, and without it the walk skipped its return-type
+        # checks. A mono instance walk passes the TEMPLATE's Decl -- its
+        # function is the mono's substituted child, found by label -- and
+        # keeps the name path.
+        fnDecl9: ztypes.declid
+        fnTid9: ztypes.tid
+        if st.typing.curMonoStamp == 0 then {
+            dt9: declTypeIdOf ty: st.typing :declId
+            if (dt9.isZero) == false then {
+                if (st.reg.typetypeOf typeId: dt9) == ztypes.ztypetype.functionType then {
+                    fnDecl9 = declId
+                    fnTid9 = dt9
+                }
+            }
+        }
         # a body is walked only once everything demanded so far has resolved:
         # an owner or function resolved late (from a walk) queued what its
         # bodies reference, and those must be resolved before those bodies are
@@ -26807,7 +26876,8 @@ checkFunctionBodyIn: function {
         {
             sfId9: zast.poolFind pool: ast.names text: defName
             if (sfId9.isZero) == false then {
-                sfd9: (declOfUnitDefIds
+                sfd9: fnDecl9
+                if sfd9.isZero then sfd9 = (declOfUnitDefIds
                     ty: st.typing
                     unitId: (nameIdOf :ast name: unitName)
                     nameId: sfId9
@@ -26853,7 +26923,8 @@ checkFunctionBodyIn: function {
             } case none then null
         }
         rgot: (optionval.none u64)
-        {
+        if (fnTid9.isZero) == false then rgot = (optionval.some fnTid9.u64)
+        if fnTid9.isZero then {
             rsd9: rest9.indexOf needle: "."
             match (
                 rsd9
@@ -30091,16 +30162,18 @@ resolveConstantDef: function {
                 match (
                     sfT9
                 ) case some then {
-                    sfU9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-                    match (
-                        sfU9
-                    ) case some then {
+                    # keyed on the constant's OWNER -- the namespace, block or
+                    # file unit it is written in -- as the value channel keys
+                    # it, not on the file unit by name (which leaked a nested
+                    # unit's constant into the file unit's index)
+                    sfU9: constOwnerTidFor :ast :ty :reg :unitName :defName
+                    if sfU9 > 0 then {
                         (ty.setMemberType
-                            parentTypeId: (ztypes.tid.create from: sfU9.u64)
+                            parentTypeId: (ztypes.tid.create from: sfU9)
                             nameId: (zast.poolFind pool: ast.names text: defName)
                             childTypeId: sfT9
                         )
-                    } case none then null
+                    }
                 } case none then null
             }
         }
@@ -30113,16 +30186,14 @@ resolveConstantDef: function {
             match (
                 tOpt
             ) case some then {
-                cu: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-                match (
-                    cu
-                ) case some then {
+                cu: constOwnerTidFor :ast :ty :reg :unitName :defName
+                if cu > 0 then {
                     (ty.setMemberType
-                        parentTypeId: (ztypes.tid.create from: cu.u64)
+                        parentTypeId: (ztypes.tid.create from: cu)
                         nameId: (zast.poolFind pool: ast.names text: defName)
                         childTypeId: tOpt
                     )
-                } case none then null
+                }
             } case none then null
         }
         # a NON-numeric bare name is the unit-level alias form (`Same: Holder`),
@@ -30415,6 +30486,11 @@ resolveConstantDefsIn: function {
                     opId: bmNode9.operation
                     k: zast.unitkind.template
                 ) then isNs9 = true
+                if (zast.unitOpKindIs
+                    :ast
+                    opId: bmNode9.operation
+                    k: zast.unitkind.publicNs
+                ) then isNs9 = true
                 if isNs9 then {
                     ct9: ztypes.tid
                     {
@@ -30440,8 +30516,16 @@ resolveConstantDefsIn: function {
                     }
                 } else if defName.length > 0 then {
                     # a template's generic PARAMETER (`t: anyval.generic`,
-                    # `cap: u32.generic`) is a parameter, not a constant
-                    if (isGenericParam
+                    # `cap: u32.generic`) is a parameter, not a constant; a
+                    # `public:` block's reference entry is an edge to a
+                    # sibling, whose own unit resolves it
+                    isEdge9: false
+                    {
+                        ed9: ty.declFindChild parentDeclId: ownerDeclId nameId: bmNode9.name
+                        edp9: declParentIdOf :ty declId: ed9
+                        if (ed9.isZero) == false when edp9 != ownerDeclId then isEdge9 = true
+                    }
+                    if (isEdge9) == false when (isGenericParam
                         :ast
                         op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
                     ) == false then {
@@ -31681,7 +31765,11 @@ declOfUnitDefIds: function {
     match (
         ro9
     ) case some then {
-        return (ty.declFindChild parentDeclId: ro9 :nameId)
+        d9: ty.declFindChild parentDeclId: ro9 :nameId
+        if (d9.isZero) == false then return d9
+        # a definition the unit's `public:` block makes is on its surface
+        pb9: publicNsChildOf :ty root: ro9
+        if (pb9.isZero) == false then return (ty.declFindChild parentDeclId: pb9 :nameId)
     } case none then null
     return (ztypes.declid.create from: 0)
 }
@@ -31725,6 +31813,26 @@ resolvedByIds: function {
         return (optionval.some wo9)
     } case none then null
     alDecl9: declOfUnitDefIds :ty :unitId nameId: name
+    # a definition the unit's `public:` block makes: on the unit's surface,
+    # so `unit.name` reaches it, but NOT laid on the unit's member index --
+    # that index also answers bare names written inside the unit, and the
+    # block's definitions are reached from there by `public.name` alone
+    {
+        alT9: declTypeIdOf :ty declId: alDecl9
+        alP9: declParentIdOf :ty declId: alDecl9
+        alRoot9: ztypes.declid
+        {
+            aro9: ty.unitRootByName.get key: unitId.u64
+            match (
+                aro9
+            ) case some then {
+                alRoot9 = aro9
+            } case none then null
+        }
+        if (alT9.isZero) == false when (alP9.isZero) == false when alP9 != alRoot9 then {
+            return (optionval.some alT9.u64)
+        }
+    }
     alTgt9: reexportTargetIdsOf :ty :ast declId: alDecl9
     if alTgt9.unitName.u32 > 0 then {
         tgo9: (childOfWalkIds

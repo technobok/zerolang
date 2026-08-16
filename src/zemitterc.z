@@ -18246,6 +18246,22 @@ unitConstTextOf: function {
             if mct8.length > 0 then return mct8
             mcs8: memberConstStrText9 :symtab :ctx unitTid: utd8 nameId: cn8
             if mcs8.length > 0 then return mcs8
+            # a constant the unit's `public:` block DEFINES is on the unit's
+            # surface, keyed on the block (a nested unit named `public`)
+            pbd8: ztypecheck.publicNsOf ty: symtab.typing reg: symtab.reg tid: utd8
+            pbt8: ztypecheck.declTypeIdOf ty: symtab.typing declId: pbd8
+            if (pbt8.isZero) == false then {
+                mcp8: (memberConstTextOf9
+                    :ast
+                    :symtab
+                    :ctx
+                    unitTid: pbt8
+                    nameId: cn8
+                )
+                if mcp8.length > 0 then return mcp8
+                mcq8: memberConstStrText9 :symtab :ctx unitTid: pbt8 nameId: cn8
+                if mcq8.length > 0 then return mcq8
+            }
         }
     }
     return "".string
@@ -19333,6 +19349,15 @@ emitFnsIn: function {
                 }
                 isNs9: false
                 if (zast.unitOpDeclaresUnit :ast opId: iuOpId9) then isNs9 = true
+                # a `public:` block that DEFINES no function of its own has
+                # nothing to emit here (its entries name the unit's siblings)
+                if isNs9 when (zast.unitOpKindIs
+                    :ast
+                    opId: iuOpId9
+                    k: zast.unitkind.publicNs
+                ) then {
+                    if (unitOpHasBodiedFn9 :ast opId: iuOpId9) == false then isNs9 = false
+                }
                 if isNs9 then {
                     nsTid9: ztypes.tid
                     {
@@ -19485,6 +19510,19 @@ emitFnsIn: function {
         }
         if declOnly then buf.append "\n"
     }
+}
+
+# unitOpHasBodiedFn9 -- does the unit body at `opId` define a function with a
+# body among its own entries?
+unitOpHasBodiedFn9: function {ast: Ast.view opId: u32} out bool is {
+    ids9: zast.unitBodyIdsAt :ast unitId: opId
+    with it9: ids9.iterate do for mId9: it9 loop {
+        m9: ast.nodes.get i: (mId9 - 1).u64
+        if m9.namedoperation then {
+            if (isFunctionDefWithBody9 n: (ast.nodes.get i: (m9.operation - 1).u64)) then return true
+        }
+    }
+    return false
 }
 
 # true when `n` is a function definition that has a body.
