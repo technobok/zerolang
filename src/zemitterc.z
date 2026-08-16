@@ -18085,21 +18085,18 @@ pathUnitTidOf9: function {
     ) case expression then {
         return (pathUnitTidOf9 :ast :symtab :ctx baseId: b9.expression)
     } case atomid then {
+        # the enclosing unit answers first -- a name written inside a namespace
+        # resolves against that namespace before anything wider, and a user
+        # unit may shadow a top-level name
+        encl9: ctx.nsTid
+        if encl9.isZero then encl9 = unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview
+        ht9: unitChildTidOf9 :symtab parentTid: encl9 nameId: b9.name
+        if (ht9.isZero) == false then return ht9
         uo9: symtab.reg.unitNameTid.get key: b9.name.u64
         match (
             uo9
         ) case some then {
             return (ztypes.tid.create from: uo9)
-        } case none then null
-        encl9: ctx.nsTid
-        if encl9.isZero then encl9 = unitTidOf9 :ast :symtab unitName: ctx.mainName.stringview
-        ho9: symtab.typing.declChildOfId parentTypeId: encl9 nameId: b9.name
-        match (
-            ho9
-        ) case some then {
-            if (symtab.reg.typetypeOf
-                typeId: (ztypes.tid.create from: ho9)
-            ) == ztypes.ztypetype.unitType then return (ztypes.tid.create from: ho9)
         } case none then null
         return ztypes.tid
     } case dottedpath then {
@@ -18110,19 +18107,29 @@ pathUnitTidOf9: function {
             ca9: ast.nodes.get i: (b9.child - 1).u64
             if ca9.atomid then cn9 = ca9.name
         }
-        if cn9.isZero then return ztypes.tid
-        co9: symtab.typing.declChildOfId parentTypeId: pt9 nameId: cn9
-        match (
-            co9
-        ) case some then {
-            if (symtab.reg.typetypeOf
-                typeId: (ztypes.tid.create from: co9)
-            ) == ztypes.ztypetype.unitType then return (ztypes.tid.create from: co9)
-        } case none then null
-        return ztypes.tid
+        return (unitChildTidOf9 :symtab parentTid: pt9 nameId: cn9)
     } else {
         return ztypes.tid
     }
+}
+
+# unitChildTidOf9 -- the id of a member of `parentTid` when that member is
+# itself a UNIT, else 0. Both legs of the path walk above ask exactly this, of
+# the enclosing unit and of the segment before them.
+unitChildTidOf9: function {
+    symtab: zenv.ZSymbolTable.view
+    parentTid: ztypes.tid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    if nameId.isZero then return ztypes.tid
+    co9: symtab.typing.declChildOfId parentTypeId: parentTid :nameId
+    match (
+        co9
+    ) case some then {
+        ct9: ztypes.tid.create from: co9.u64
+        if (symtab.reg.typetypeOf typeId: ct9) == ztypes.ztypetype.unitType then return ct9
+    } case none then null
+    return ztypes.tid
 }
 
 # unitConstTextOf -- the rendered C text of a `unit.CONST` dotted path, or ""
