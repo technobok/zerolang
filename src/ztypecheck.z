@@ -15760,10 +15760,10 @@ inferGenericConstruction: function {
     firstA: u64
     primaryName: firstGenericParamName reg: st.reg templateId: (ztypes.tid.create from: tplId.u64)
     # the value-arg walk below is a DRY RUN for type inference: bracket its
-    # ownership effects (take overlays, borrow locks) so the real ctor walk
-    # re-checks from a clean slate — an explicit `.take` arg otherwise
-    # collides with its own inference pass.
-    infMark9: st.entriesMark
+    # ownership effects (take overlays, borrow locks) in a frame that is
+    # discarded whole, so the real ctor walk re-checks from a clean slate --
+    # an explicit `.take` arg otherwise collides with its own inference pass.
+    st.pushDryRun
     argIdx: u64
     with aiter: call.arguments.iterate do for argId9: aiter loop {
         arg: ast.nodes.get i: (argId9 - 1).u64
@@ -15870,7 +15870,7 @@ inferGenericConstruction: function {
         } else null
         argIdx = argIdx + 1
     }
-    st.truncateEntries marker: infMark9
+    st.popDiscard
     paramsM: st.reg.genericParamNamesOf tdecl: tk
     firstMissing: String
     pmi: u64
@@ -23544,14 +23544,9 @@ unresolvedBareName: function {ast: Ast.view
     } case none then null
     # lookupVarId reads two in-scope names as absent: a binding that minted no
     # varId (a `meta.create` result) and a MOVED one (both `lookup` and
-    # `lookupVarId` refuse a taken entry). A declared name is in scope however
-    # it was consumed, so the scope entry itself is the authority here.
-    ubi9: st.effectiveIndex nameId: (nameIdOf :ast :name)
-    match (
-        ubi9
-    ) case some then {
-        return "".string
-    } case none then null
+    # `lookupVarId` refuse a taken local). A declared name is in scope however
+    # it was consumed, so the local's declaration itself is the authority.
+    if (st.isLocalName nameId: (nameIdOf :ast :name)) then return "".string
     if (nameClaimedByScope
         :ast
         ty: st.typing

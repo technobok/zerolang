@@ -53,8 +53,6 @@ public: unit {
     :zparamownership
     :zparamownershipInt
     :zparamownershipName
-    :zscopekind
-    :zscopekindName
     :zsrcpos
     :ztypetype
     :ztypetypeName
@@ -122,13 +120,6 @@ zparamownership: variant {
     viewMode: null
     holdMode: null
     takexMode: null
-} as { tag: u8.tag }
-
-# the kind of a lexical scope (unit / function / block / ...).
-zscopekind: variant {
-    blockKind: null
-    callKind: null
-    overlayKind: null
 } as { tag: u8.tag }
 
 # what is holding a lock -- a binding, a view, or an iterator.
@@ -329,19 +320,6 @@ zparamownershipInt: function {t: zparamownership} out u64 is {
         return 5
     } case takexMode then {
         return 6
-    }
-}
-
-# the printable name of a `zscopekind`.
-zscopekindName: function {t: zscopekind} out String is {
-    match (
-        t
-    ) case blockKind then {
-        return "BLOCK".string
-    } case callKind then {
-        return "CALL".string
-    } case overlayKind then {
-        return "OVERLAY".string
     }
 }
 
@@ -605,16 +583,21 @@ ZType: class {
     ownerTid: tid
 }
 
-# A single environment entry: a definition (introduces a name) or a
-# shadow/overlay (modifies an outer name's state). Overlay state is held
-# in flat, borrow-readable columns rather than nested reftype options: a
-# scope walk reads an entry through a borrowed list view, and a borrowed
-# `(Option reftype)` field's payload cannot be reached without moving it
-# out. `varId` some marks a runtime-variable binding; the lock columns are
-# live only when `hasLock`; `narrowedSubtype` is "" when not narrowed.
+# One overlay row of the body walk: a take, a narrowing, or a lock laid over
+# a local (`declId`, its declaration in the environment) while `frame` is
+# open; the row dies when the frame closes. Overlay state is held in flat,
+# borrow-readable columns rather than nested reftype options: a walk reads a
+# row through a borrowed list view, and a borrowed `(Option reftype)` field's
+# payload cannot be reached without moving it out. The lock columns are live
+# only when `hasLock`; `narrowedSubtype` is "" when not narrowed. `defSeq` is
+# how many locals the frame had defined when the row was laid, which is where
+# the row sits among them in the dump.
 ZEntry: class {
     entryId: u64
     name: u32
+    declId: declid
+    frame: declid
+    defSeq: u64
     ztypeId: tid
     isDefinition: bool
     varId: (optionval ztypes.vid)
@@ -811,6 +794,9 @@ ZTypeRegistry: class {
         return (ZEntry
             entryId: id
             name: nameId
+            declId: declid
+            frame: declid
+            defSeq: 0
             :ztypeId
             :isDefinition
             varId: (optionval.none ztypes.vid)
@@ -1935,11 +1921,6 @@ main: function is {
     print (zparamownershipName zparamownership.takeMode)
     print (zparamownershipName zparamownership.borrowMode)
     print (zparamownershipName zparamownership.takexMode)
-
-    print "=== zscopekind ==="
-    print (zscopekindName zscopekind.blockKind)
-    print (zscopekindName zscopekind.callKind)
-    print (zscopekindName zscopekind.overlayKind)
 
     print "=== zlockholderkind ==="
     print (zlockholderkindName zlockholderkind.varKind)

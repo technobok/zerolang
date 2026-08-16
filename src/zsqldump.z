@@ -117,6 +117,18 @@ optVidStr9: function {o: optionval ztypes.vid} out String is {
     }
 }
 
+# frameLabelOf -- a frame's dump label ("" when unlabelled: a call bracket).
+frameLabelOf: function {st: zenv.ZSymbolTable.view frame: ztypes.declid} out String is {
+    o: st.frameLabel.get key: frame.u64
+    match (
+        o
+    ) case some then {
+        return o.copy
+    } case none then {
+        return "".string
+    }
+}
+
 optIdStr: function {o: optionval u64} out String is {
     match (
         o
@@ -161,7 +173,7 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS typed_nodes (node_id INTEGER PRIMARY KEY, type_id INTEGER, is_const INTEGER, const_value TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS member_const (parent_type_id INTEGER NOT NULL, name_id INTEGER NOT NULL, value TEXT NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS scope (scope_id INTEGER PRIMARY KEY, parent_id INTEGER, kind TEXT NOT NULL, name TEXT NOT NULL, depth INTEGER NOT NULL, opened_at_seq INTEGER NOT NULL, closed_at_seq INTEGER, unreachable INTEGER NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS scope (scope_id INTEGER PRIMARY KEY, parent_id INTEGER, kind TEXT NOT NULL, name TEXT NOT NULL, depth INTEGER NOT NULL, unreachable INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS variable (variable_id INTEGER PRIMARY KEY, ztype_id INTEGER, ownership TEXT NOT NULL, is_private_access INTEGER NOT NULL, borrow_origin TEXT, synth_origin TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS entry (entry_id INTEGER PRIMARY KEY, scope_id INTEGER NOT NULL, position INTEGER NOT NULL, name TEXT NOT NULL, ztype_id INTEGER NOT NULL, is_definition INTEGER NOT NULL, variable_id INTEGER, original_ztype_id INTEGER, is_taken INTEGER NOT NULL, taken_at_line INTEGER, taken_at_col INTEGER, taken_at_file INTEGER);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS narrowed_subtype (entry_id INTEGER NOT NULL, name TEXT NOT NULL, type_id INTEGER, excluded INTEGER NOT NULL);\n"
@@ -866,26 +878,32 @@ ZDumper: class {
     }
 
     # appendSymbolTable -- scope / entry / variable rows from the body-walk
-    # symbol table. scope rows from the append-only scope log (depth = log
-    # index, mirroring the reference enumerate); entry rows from the pop-time
-    # snapshots; variable rows from the per-id side tables, deduped. Sibling
-    # fields are read directly (not via st methods) so the scope-log iterator's
-    # lock does not reject a whole-value method call on st. narrowed_subtype is
-    # emitted by a later slice (taken/narrowing entries).
+    # environment. scope rows are the walk's frames in the order they were
+    # opened (depth = that index); entry rows the locals and overlay rows
+    # snapshotted when each frame closed; variable rows the per-id side
+    # tables, deduped.
     appendSymbolTable: function {:this pool: zast.StringPool.view st: zenv.ZSymbolTable.view} is {
         seen: (SetVal u64)
         depth: u64
-        for row: st.scopeLog.iterate loop {
-            sidv: row.scopeId
-            parentSql: optIdStr o: row.parentId
-            rk: (ztypes.zscopekindName row.kind)
-            kindSql: sqlStr s: rk.stringview
-            nameSql: sqlStr s: row.name.stringview
-            closeSql: optIdStr o: (st.scopeClose.get key: sidv)
-            unreachNum: boolNum b: (st.unreachableDump.has item: sidv)
-            r: "INSERT OR IGNORE INTO scope VALUES (\{sidv}, \{parentSql}, \{kindSql}, \{nameSql}, \{depth}, \{row.openedAtSeq}, \{closeSql}, \{unreachNum});\n"
-            this.acc.append s: r
-            depth = depth + 1
+        nd9: st.typing.decls.length
+        di9: u64
+        for di9 < nd9 loop {
+            d9: ztypes.declid.create from: (di9 + 1)
+            di9 = di9 + 1
+            if (st.typing.declIsFrame declId: d9) when (st.frameHidden.has item: d9.u64) == false then {
+                lbl9: frameLabelOf :st frame: d9
+                kind9: "BLOCK"
+                if lbl9.length == 0 then kind9 = "CALL"
+                kindSql: sqlStr s: kind9
+                nameSql: sqlStr s: lbl9.stringview
+                pd9: st.typing.declParentOf declId: d9
+                parentSql: "NULL".string
+                if (st.typing.declIsFrame declId: pd9) then parentSql = "\{pd9}"
+                unreachNum: boolNum b: (st.unreachableFrames.has item: d9.u64)
+                r: "INSERT OR IGNORE INTO scope VALUES (\{d9}, \{parentSql}, \{kindSql}, \{nameSql}, \{depth}, \{unreachNum});\n"
+                this.acc.append s: r
+                depth = depth + 1
+            }
         }
         for e: st.entryDump.iterate loop {
             varSql: optVidStr9 o: e.varId
@@ -1275,36 +1293,40 @@ ZDumper: class {
         this.emitSection title: "member_const" :rows
     }
 
-    # appendSymbolTableCanon -- the body-walk symbol table (scope / entry /
-    # variable / narrowed_subtype), id-normalized: scope/entry/variable PK ids and
-    # the scope open/close seqs are dropped, foreign keys resolved to names (scope
-    # parent and entry owning-scope by scope name, entry/variable ztype via
-    # canonTypeName). No unit filter -- the table holds only the main unit's bodies.
+    # appendSymbolTableCanon -- the body-walk environment (scope / entry /
+    # variable / narrowed_subtype), id-normalized: frame and entry ids are
+    # dropped, a frame's parent named by its label, entry/variable ztype via
+    # canonTypeName. No unit filter -- the table holds only the main unit's
+    # bodies.
     appendSymbolTableCanon: function {:this pool: zast.StringPool.view st: zenv.ZSymbolTable} is {
         scopeName: (MapVR u64 value: String)
         scopeRows: (List String)
         depth: u64
-        for row: st.scopeLog.iterate loop {
-            scopeName.set key: row.scopeId value: row.name.copy
-            parentNameSql: "NULL".string
-            pidOpt: row.parentId
-            match (
-                pidOpt
-            ) case some then {
-                po: scopeName.get key: pidOpt
+        nd9: st.typing.decls.length
+        di9: u64
+        for di9 < nd9 loop {
+            d9: ztypes.declid.create from: (di9 + 1)
+            di9 = di9 + 1
+            if (st.typing.declIsFrame declId: d9) when (st.frameHidden.has item: d9.u64) == false then {
+                lbl9: frameLabelOf :st frame: d9
+                scopeName.set key: d9.u64 value: lbl9.copy
+                parentNameSql: "NULL".string
+                pd9: st.typing.declParentOf declId: d9
+                po: scopeName.get key: pd9.u64
                 match (
                     po
                 ) case some then {
                     parentNameSql = sqlStr s: po.stringview
                 } case none then null
-            } case none then null
-            rk: (ztypes.zscopekindName row.kind)
-            kindSql: sqlStr s: rk.stringview
-            nameSql: sqlStr s: row.name.stringview
-            unreachNum: boolNum b: (st.unreachableDump.has item: row.scopeId)
-            line: "\{parentNameSql} | \{kindSql} | \{nameSql} | \{depth} | \{unreachNum}"
-            scopeRows.append line
-            depth = depth + 1
+                kind9: "BLOCK"
+                if lbl9.length == 0 then kind9 = "CALL"
+                kindSql: sqlStr s: kind9
+                nameSql: sqlStr s: lbl9.stringview
+                unreachNum: boolNum b: (st.unreachableFrames.has item: d9.u64)
+                line: "\{parentNameSql} | \{kindSql} | \{nameSql} | \{depth} | \{unreachNum}"
+                scopeRows.append line
+                depth = depth + 1
+            }
         }
         this.emitSection title: "scope" rows: scopeRows
 

@@ -1,24 +1,23 @@
-# ZeroLang scoped symbol table for the type checker.
+# ZeroLang body-walk environment for the type checker.
 #
-# The representation is id-first and relational. Entries live in one flat
-# list -- `this.entries`, every live binding/overlay across all scopes in
-# push order -- rather than nested inside per-scope frames. A scope is
-# metadata plus the index where its entries begin (`entryStart`); a name
-# resolution is a single reverse walk (last-wins shadowing), and a pop
-# truncates the flat list back to the scope's boundary.
+# Frames and locals are declarations in the typing's Decl tree -- a frame is a
+# blockDecl under the frame or declaration enclosing it, a local a localDecl
+# under the frame it is written in -- so they persist and can be returned to.
+# The table holds the walk's state over them: the open frames (a stack of ids,
+# innermost last), the overlay rows the walk lays over locals (a take, a
+# narrowing, a lock), which die with the frame that laid them, the frames whose
+# remainder the walk found unreachable, and the rows snapshotted for the dump
+# when a frame closes.
 #
-# The flat shape is forced by the language's value semantics as much as
-# chosen for relational cleanliness: `this.entries` is reached through a
-# borrowed receiver, so `List.get` yields a COPY -- fine to read, but a
-# mutation written back with `List.set` frees heap fields the copy still
-# aliases. Every mutation therefore goes through `append` / `pop` on the
-# field list directly (which persist without copying); per-scope flags
-# that would need in-place edits (`unreachable`, a log row's close seq)
-# live in id-keyed side tables instead.
+# `this.entries` -- the overlay rows -- is reached through a borrowed
+# receiver, so `List.get` yields a COPY: fine to read, but a mutation written
+# back with `List.set` frees heap fields the copy still aliases. Every mutation
+# therefore goes through `append` / `pop` on the field list directly (which
+# persist without copying).
 #
-# An entry stores a u64 type id (never a live type); type metadata is read
-# through the owned registry (`this.reg`) and member declarations plus the
-# narrowing overlays through the typecheck-output container (`this.typing`).
+# A row stores a u64 type id (never a live type); type metadata is read
+# through the owned registry (`this.reg`) and declarations, member edges and
+# locals through the typecheck-output container (`this.typing`).
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
@@ -68,16 +67,6 @@ optTidText: function {o: optionval ztypes.tid} out String is {
         o
     ) case some then {
         return "\{o.u64}"
-    } case none then {
-        return "none".string
-    }
-}
-
-optU64Text: function {o: optionval u64} out String is {
-    match (
-        o
-    ) case some then {
-        return "\{o}"
     } case none then {
         return "none".string
     }
@@ -254,33 +243,9 @@ formatAliasConflict: function {
 
 # --- carriers ---
 
-# One scope frame's metadata. `entryStart` is the index into the symbol
-# table's flat entry list where this scope's entries begin; the scope owns
-# `entries[entryStart .. nextScopeStart)`.
-ZScope: class {
-    scopeId: u64
-    kind: ztypes.zscopekind
-    name: String
-    entryStart: u64
-    # the fnFloor this scope displaced, so a pop restores it in one read
-    prevFnFloor: u64
-}
-
-# One row of the append-only scope log: a push stamped with its parent and
-# open seq. The close seq lives in the symbol table's scopeClose map (a row
-# is an immutable record once appended). The SQL dump joins the two by
-# scopeId to recover the full open/close ordering.
-ZScopeLogRow: class {
-    scopeId: u64
-    parentId: (optionval u64)
-    kind: ztypes.zscopekind
-    name: String
-    openedAtSeq: u64
-}
-
-# A symbol-table entry snapshotted at scope pop (before the flat entry list
-# is truncated) so the SQL dump can reconstruct each scope's entries after
-# typecheck. `position` is the index within the owning scope's entry range.
+# A row of the dump's `entry` table: a local of a frame, or an overlay row
+# laid over one, snapshotted when the frame closed. `position` is the row's
+# place among the frame's locals and overlays in the order they were laid.
 ZEntryDumpRow: class {
     scopeId: u64
     position: u64
@@ -296,216 +261,100 @@ ZEntryDumpRow: class {
     excludedSubtypes: (List String)
 }
 
-# Scoped symbol table. Owns the id registry and the typecheck-output
-# container outright (a reftype class field is moved in at construction),
-# so every method reads metadata via `this.reg` / `this.typing` without
-# threading them through calls.
+# The body walk's environment. Frames and locals are declarations in the
+# typing's Decl tree -- a frame is a blockDecl whose parent is the frame or
+# declaration enclosing it, a local a localDecl under the frame it is written
+# in -- so they persist, and a walk that returns to a frame later finds what
+# was written there. What the table holds is the walk's STATE over them: the
+# open frames, innermost last (a stack of frame ids -- discipline, not
+# storage; the top is the typing's curFrame), the overlay rows the walk lays
+# over locals -- a take, a narrowing, a lock -- which die with the frame that
+# laid them, the frames whose walk found their remainder unreachable, and the
+# rows snapshotted for the dump when a frame closes.
+#
+# A local resolves by climbing the open frame chain from the top through each
+# enclosing frame; a frame's parent that is not a frame -- the function
+# declaration -- ends the climb, so two functions never see each other's
+# locals whatever order their bodies are walked in, and a body walked on
+# demand from inside another leaves that one's locals invisible. The overlay
+# rows are keyed by the local's declaration, so a row can only ever be read
+# through the local it was laid over. Owns the type registry and the typing
+# tables outright (moved in at construction), so every method reads metadata
+# via `this.reg` / `this.typing`.
 ZSymbolTable: class {
-    scopes: (List ZScope)
-    # Entry index where the innermost FUNCTION frame begins. Nothing below it
-    # belongs to the body being walked: zerolang has no nested functions, so a
-    # function's frame is the outermost scope any body reaches, and everything
-    # else it needs -- units, types -- comes from the registry and the decl
-    # tree rather than from `entries`. Measured over every example, corpus
-    # program and src unit: 136k variable resolutions in zc alone land at or
-    # above this floor and NOT ONE lands below it.
-    fnFloor: u64
+    frames: (ListVal ztypes.declid)
+    # per open frame: the overlay index where its rows begin, and how many
+    # locals it has defined so far (a row's defSeq)
+    frameStarts: (ListVal u64)
+    frameDefs: (ListVal u64)
     entries: (List ZEntry)
-    history: (List ZScope)
-    scopeLog: (List ZScopeLogRow)
-    scopeClose: (MapVV u64 value: u64)
-    unreachableScopes: (SetVal u64)
+    unreachableFrames: (SetVal u64)
+    # dump scaffolding: a frame's label ("function:x", "if_branch", ...), the
+    # frames a diagnostics-only template walk opened (kept out of the dump),
+    # and the rows snapshotted when a frame closed
+    frameLabel: (MapVR u64 value: String)
+    frameHidden: (SetVal u64)
     entryDump: (List ZEntryDumpRow)
-    unreachableDump: (SetVal u64)
-    seqCounter: u64
     reg: ztypes.ZTypeRegistry
     typing: ZTyping
 } as {
-    # --- scope log ---
+    # --- frames ---
 
-    # Append a log row for the freshly-pushed top scope. Parent is the
-    # previous top (the actual enclosing scope), or none for the root.
-    logPush: function {:this} is {
-        # A generic template body walk is diagnostics-only: its scopes and
-        # entries stay out of the dump (the emitter re-walks per instance).
-        if this.typing.suppressParamStamps then return
-        n: this.scopes.length
-        if n > 0 then {
-            topIdx: n - 1
-            top: this.scopes.get i: topIdx
-            sid: top.scopeId
-            tkind: top.kind
-            parentId: (optionval.none u64)
-            if n >= 2 then {
-                pIdx: n - 2
-                prev: this.scopes.get i: pIdx
-                parentId = (optionval.some prev.scopeId)
-            }
-            seq: this.seqCounter
-            this.scopeLog.append (ZScopeLogRow
-                scopeId: sid
-                :parentId
-                kind: tkind
-                name: top.name.copy
-                openedAtSeq: seq
-            )
-            this.seqCounter = this.seqCounter + 1
-        }
+    # The innermost open frame, or the zero id when none is open.
+    curFrame: function {:this} out ztypes.declid is {
+        n: this.frames.length
+        if n == 0 then return (ztypes.declid.create from: 0)
+        return (this.frames.get i: (n - 1))
     }
 
-    # Record the close seq for `scopeId` in the side table.
-    logPop: function {:this scopeId: u64} is {
-        sc: this.seqCounter
-        sk: scopeId
-        this.scopeClose.set key: sk value: sc
-        this.seqCounter = this.seqCounter + 1
+    # Open a frame under the typing's current frame -- the enclosing frame,
+    # or the declaration whose body this is -- and make it current.
+    pushFrame: function {:this label: StringView} out ztypes.declid is {
+        f: this.typing.declNewFrame parent: this.typing.curFrame node: 0
+        this.frames.append f
+        this.frameStarts.append this.entries.length
+        this.frameDefs.append 0
+        if label.length > 0 then this.frameLabel.set key: f.u64 value: label.string
+        if this.typing.suppressParamStamps then this.frameHidden.add item: f.u64
+        this.typing.curFrame = f
+        return f
     }
 
-    closeSeqOf: function {:this scopeId: u64} out optionval u64 is {
-        r: this.scopeClose.get key: scopeId
-        match (
-            r
-        ) case some then {
-            return (optionval.some r)
-        } case none then {
-            return (optionval.none u64)
-        }
-    }
-
-    # --- scope management ---
-
+    # push -- open a body frame (a function's, or a mono walk's) named for
+    # the dump.
     push: function {:this name: StringView} out u64 is {
-        sid: this.reg.allocScope
-        start: this.entries.length
-        this.scopes.append (ZScope
-            scopeId: sid
-            kind: ztypes.zscopekind.blockKind
-            name: name.string
-            entryStart: start
-            prevFnFloor: this.fnFloor
-        )
-        # checkFunctionBody names its scope `function:<def>`; that frame is the
-        # bottom of the body being walked.
-        if (name.startsWith prefix: "function:") then this.fnFloor = start
-        this.logPush
-        return sid
+        return (this.pushFrame label: name).u64
     }
 
+    # pushBlock / pushCall -- open a nested frame; the marker returned is the
+    # depth to pop back to.
     pushBlock: function {:this name: StringView} out u64 is {
-        marker: this.scopes.length
-        sid: this.reg.allocScope
-        start: this.entries.length
-        this.scopes.append (ZScope
-            scopeId: sid
-            kind: ztypes.zscopekind.blockKind
-            name: name.string
-            entryStart: start
-            prevFnFloor: this.fnFloor
-        )
-        this.logPush
+        marker: this.frames.length
+        this.pushFrame label: name
         return marker
-    }
-
-    pushOverlay: function {:this} out u64 is {
-        sid: this.reg.allocScope
-        start: this.entries.length
-        this.scopes.append (ZScope
-            scopeId: sid
-            kind: ztypes.zscopekind.overlayKind
-            name: "".string
-            entryStart: start
-            prevFnFloor: this.fnFloor
-        )
-        this.logPush
-        return sid
     }
 
     pushCall: function {:this} out u64 is {
-        marker: this.scopes.length
-        sid: this.reg.allocScope
-        start: this.entries.length
-        this.scopes.append (ZScope
-            scopeId: sid
-            kind: ztypes.zscopekind.callKind
-            name: "".string
-            entryStart: start
-            prevFnFloor: this.fnFloor
-        )
-        this.logPush
+        marker: this.frames.length
+        this.pushFrame label: ""
         return marker
     }
 
-    # First entry index owned by the top scope (entries length when empty).
-    currentScopeStart: function {:this} out u64 is {
-        n: this.scopes.length
-        if n == 0 then return 0
-        idx: n - 1
-        top: this.scopes.get i: idx
-        return top.entryStart
-    }
-
-    currentScopeId: function {:this} out optionval u64 is {
-        n: this.scopes.length
-        if n == 0 then return (optionval.none u64)
-        idx: n - 1
-        top: this.scopes.get i: idx
-        return (optionval.some top.scopeId)
-    }
-
-    # Pop the top scope. Its entries are truncated off the flat list; take
-    # overlays are merged into the parent so the error persists -- except
-    # when the taken name was DEFINED in the popped scope (no binding to
-    # persist against) or is already taken above.
+    # Close the innermost frame. Its overlay rows are dropped -- except a
+    # take of a local defined in an ENCLOSING frame, which the enclosing
+    # frame inherits so the error persists -- and the frame's locals and
+    # rows are snapshotted for the dump first. The typing's current frame
+    # returns to the frame's parent.
     pop: function {:this} out u64 is {
-        n: this.scopes.length
+        n: this.frames.length
         if n == 0 then return 0
         topIdx: n - 1
-        topId: (this.scopes.get i: topIdx).scopeId
-        start: (this.scopes.get i: topIdx).entryStart
+        top: this.frames.get i: topIdx
+        start: this.frameStarts.get i: topIdx
+        this.snapshotFrame frame: top :start
         endIdx: this.entries.length
-
-        # Snapshot this scope's entries before truncation so the SQL dump can
-        # reconstruct them after typecheck (the flat list is emptied on pop).
-        sp: start
-        for sp < endIdx loop {
-            if this.typing.suppressParamStamps then {
-                sp = endIdx
-            } else {
-            de: this.entries.get i: sp
-            exs: (List String)
-            with xit: de.excludedSubtypes.iterate do for xn: xit loop {
-                xnc: xn.copy
-                exs.append xnc
-            }
-            nsc: de.narrowedSubtype.copy
-            this.entryDump.append (ZEntryDumpRow
-                scopeId: topId
-                position: (sp - start)
-                entryId: de.entryId
-                name: de.name
-                ztypeId: (ztypes.tid.create from: de.ztypeId)
-                isDefinition: de.isDefinition
-                varId: de.varId
-                originalZtypeId: de.originalZtypeId
-                isTaken: de.isTaken
-                takenAt: de.takenAt
-                narrowedSubtype: nsc
-                excludedSubtypes: exs
-            )
-            }
-            sp = sp + 1
-        }
-
-        localDefs: (SetVal u32)
-        p: start
-        for p < endIdx loop {
-            e: this.entries.get i: p
-            if e.isDefinition then {
-                localDefs.add item: e.name
-            }
-            p = p + 1
-        }
-
+        # takes of enclosing frames' locals survive the close
+        mDecls: (ListVal ztypes.declid)
         mNames: (ListVal u32)
         mTypes: (ListVal u64)
         mLocs: (ListVal ztypes.zsrcpos)
@@ -517,9 +366,10 @@ ZSymbolTable: class {
                 match (
                     taOpt
                 ) case some then {
-                    nm: e.name
-                    if (localDefs.has item: nm) == false then {
+                    ef: this.typing.declParentOf declId: e.declId
+                    if ef != top then {
                         zt: e.ztypeId
+                        mDecls.append e.declId
                         mNames.append e.name
                         mTypes.append zt
                         mLocs.append taOpt
@@ -528,66 +378,63 @@ ZSymbolTable: class {
             }
             p2 = p2 + 1
         }
-
-        for this.entries.length > start loop this.entries.pop
-
-        popped: this.scopes.pop
-        this.fnFloor = popped.prevFnFloor
-        this.history.append popped
-        if (this.unreachableScopes.has item: topId) then {
-            tcap: topId
-            this.unreachableDump.add item: tcap
-        }
-        this.unreachableScopes.delete item: topId
-
-        mc: mNames.length
+        this.dropTail :start
+        this.frames.pop
+        this.frameStarts.pop
+        this.frameDefs.pop
+        this.typing.curFrame = this.typing.declParentOf declId: top
+        mc: mDecls.length
         mi: u64
         for mi < mc loop {
-            nm: mNames.get i: mi
-            zt: mTypes.get i: mi
-            already: this.isTakenName nameId: (zast.nameid.create from: nm.u32)
+            d: mDecls.get i: mi
+            already: this.isTakenDecl declId: d
             if already == false then {
                 te: (this.reg.newEntry
-                    nameId: (zast.nameid.create from: nm.u32)
-                    ztypeId: (ztypes.tid.create from: zt.u64)
+                    nameId: (zast.nameid.create from: (mNames.get i: mi).u32)
+                    ztypeId: (ztypes.tid.create from: (mTypes.get i: mi).u64)
                     isDefinition: false
                 )
                 te.isTaken = true
                 te.takenAt = (optionval.some (mLocs.get i: mi))
-                this.entries.append te
+                this.appendRow row: te declId: d
             }
             mi = mi + 1
         }
-
-        this.logPop scopeId: topId
-        return topId
+        return top.u64
     }
 
-    # entriesMark / truncateEntries -- bracket a DRY-RUN value walk (the
-    # generic-construction inference): ownership overlays and locks the
-    # walk appends discard, so the real ctor walk re-checks from a clean
-    # slate.
-    entriesMark: function {:this} out u64 is {
-        return this.entries.length
+    # pushDryRun -- open a frame for a dry run: its rows are discarded whole
+    # by popDiscard, and it stays out of the dump.
+    pushDryRun: function {:this} is {
+        f: this.pushFrame label: ""
+        this.frameHidden.add item: f.u64
     }
 
-    truncateEntries: function {:this marker: u64} is {
-        for this.entries.length > marker loop this.entries.pop
+    # popDiscard -- close the innermost frame and drop every row it laid,
+    # takes included: the frame was a dry run.
+    popDiscard: function {:this} is {
+        n: this.frames.length
+        if n == 0 then return
+        topIdx: n - 1
+        top: this.frames.get i: topIdx
+        start: this.frameStarts.get i: topIdx
+        this.dropTail :start
+        this.frames.pop
+        this.frameStarts.pop
+        this.frameDefs.pop
+        this.typing.curFrame = this.typing.declParentOf declId: top
     }
 
     popTo: function {:this marker: u64} is {
-        for this.scopes.length > marker loop this.pop
+        for this.frames.length > marker loop this.pop
     }
 
-    depth: function {:this} out u64 is {
-        return this.scopes.length
-    }
+    # --- locals ---
 
-    # --- entry insertion ---
-
+    # Define a body-level binding without a runtime variable (a loop
+    # variable's type binding, a generic parameter bound for a walk).
     define: function {:this nameId: zast.nameid ztypeId: ztypes.tid} is {
-        e: this.reg.newEntry :nameId :ztypeId isDefinition: true
-        this.entries.append e
+        this.defineLocal :nameId :ztypeId varId: ztypes.vid
     }
 
     # Define a runtime variable with ownership tracking. The C identifier is
@@ -600,186 +447,188 @@ ZSymbolTable: class {
         this.typing.variableBorrowOrigin.set key: var.variableId value: bo
         so: optStrOrEmpty o: var.synthOrigin
         this.typing.variableSynthOrigin.set key: var.variableId value: so
-        e: this.reg.newEntry :nameId ztypeId: var.ztypeId isDefinition: true
-        e.varId = (optionval.some var.variableId)
-        this.entries.append e
+        this.defineLocal :nameId ztypeId: var.ztypeId varId: var.variableId
+    }
+
+    defineLocal: function {:this nameId: zast.nameid ztypeId: ztypes.tid varId: ztypes.vid} is {
+        n: this.frames.length
+        if n == 0 then return
+        topIdx: n - 1
+        (this.typing.declNewLocal
+            name: nameId.u32
+            parent: (this.frames.get i: topIdx)
+            node: 0
+            typeId: ztypeId
+            :varId
+        )
+        this.frameDefs.set i: topIdx val: ((this.frameDefs.get i: topIdx) + 1)
     }
 
     # --- name resolution ---
 
-    # Index of the effective (most-recent) entry for `nameId`, or none.
-    effectiveIndex: function {:this nameId: zast.nameid} out optionval u64 is {
-        if nameId.isZero then return (optionval.none u64)
+    # findLocal -- the declaration `nameId` resolves to from the innermost
+    # open frame outward: each frame's own locals (the last defined wins),
+    # then the frame enclosing it, until the chain leaves the frames. Zero
+    # when no frame defines it.
+    findLocal: function {:this nameId: zast.nameid} out ztypes.declid is {
+        return (this.typing.declFindLocal frame: this.curFrame :nameId)
+    }
+
+    # isLocalName -- does an open frame define `nameId`, taken or not?
+    isLocalName: function {:this nameId: zast.nameid} out bool is {
+        d: this.findLocal :nameId
+        return d.isZero == false
+    }
+
+    # rowOf -- the newest overlay row laid over `declId`, or none.
+    rowOf: function {:this declId: ztypes.declid} out optionval u64 is {
+        if declId.isZero then return (optionval.none u64)
+        if (this.typing.declRowsOf :declId) == 0 then return (optionval.none u64)
         ne: this.entries.length
         j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
+        for j > 0 loop {
             j2: j - 1
             e: this.entries.get i: j2
-            if e.name == nameId then return (optionval.some j2)
+            if e.declId == declId then return (optionval.some j2)
             j = j - 1
         }
         return (optionval.none u64)
     }
 
-    # Resolve a name to its type id, or none (also none when taken).
-    lookup: function {:this nameId: zast.nameid} out optionval ztypes.tid is {
-        if nameId.isZero then return (optionval.none ztypes.tid)
-        ne: this.entries.length
-        j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
-            j2: j - 1
-            e: this.entries.get i: j2
-            if e.name == nameId then {
-                if e.isTaken then return (optionval.none ztypes.tid)
-                return (optionval.some e.ztypeId)
-            }
-            j = j - 1
+    # appendRow -- lay `row` over `declId` in the innermost frame.
+    appendRow: function {:this row: ZEntry.take declId: ztypes.declid} is {
+        r: row
+        r.declId = declId
+        n: this.frames.length
+        if n > 0 then {
+            r.frame = this.frames.get i: (n - 1)
+            r.defSeq = this.frameDefs.get i: (n - 1)
         }
-        return (optionval.none ztypes.tid)
+        this.typing.declRowsAdd :declId delta: 1
+        this.entries.append r
     }
 
-    # Declared type of `name`, ignoring narrowing overlays: the entry's
+    # dropTail -- drop the rows from `start` up, keeping the locals' counts.
+    dropTail: function {:this start: u64} is {
+        for this.entries.length > start loop {
+            e: this.entries.pop
+            this.typing.declRowsAdd declId: e.declId delta: -1
+        }
+    }
+
+    # Resolve a name to its type id, or none (also none when taken).
+    lookup: function {:this nameId: zast.nameid} out optionval ztypes.tid is {
+        d: this.findLocal :nameId
+        if d.isZero then return (optionval.none ztypes.tid)
+        ro: this.rowOf declId: d
+        match (
+            ro
+        ) case some then {
+            e: this.entries.get i: ro
+            if e.isTaken then return (optionval.none ztypes.tid)
+            return (optionval.some e.ztypeId)
+        } case none then null
+        return (optionval.some (this.typing.declLocalTypeOf declId: d))
+    }
+
+    # Declared type of `name`, ignoring narrowing overlays: the row's
     # original (pre-narrowing) type when set, else its current type. A
     # narrowed sum-type target accepts a fresh value of its whole declared
     # type, so a reassignment validates its RHS against this, not the
     # narrowed view.
     declaredTypeOf: function {:this nameId: zast.nameid} out optionval ztypes.tid is {
-        if nameId.isZero then return (optionval.none ztypes.tid)
-        ne: this.entries.length
-        j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
-            j2: j - 1
-            e: this.entries.get i: j2
-            if e.name == nameId then {
-                if e.isTaken then return (optionval.none ztypes.tid)
-                oz9: e.originalZtypeId
-                match (
-                    oz9
-                ) case some then {
-                    return (optionval.some oz9)
-                } case none then null
-                return (optionval.some e.ztypeId)
-            }
-            j = j - 1
-        }
-        return (optionval.none ztypes.tid)
+        d: this.findLocal :nameId
+        if d.isZero then return (optionval.none ztypes.tid)
+        ro: this.rowOf declId: d
+        match (
+            ro
+        ) case some then {
+            e: this.entries.get i: ro
+            if e.isTaken then return (optionval.none ztypes.tid)
+            oz9: e.originalZtypeId
+            match (
+                oz9
+            ) case some then {
+                return (optionval.some oz9)
+            } case none then null
+            return (optionval.some e.ztypeId)
+        } case none then null
+        return (optionval.some (this.typing.declLocalTypeOf declId: d))
     }
 
     # Variable id bound to `name`, skipping lock/narrow overlays; none if
     # taken or unbound.
     lookupVarId: function {:this nameId: zast.nameid} out optionval ztypes.vid is {
-        if nameId.isZero then return (optionval.none ztypes.vid)
-        ne: this.entries.length
-        j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
-            j2: j - 1
-            e: this.entries.get i: j2
-            if e.name == nameId then {
-                if e.isTaken then return (optionval.none ztypes.vid)
-                vidOpt: e.varId
-                match (
-                    vidOpt
-                ) case some then {
-                    return (optionval.some vidOpt)
-                } case none then null
-            }
-            j = j - 1
-        }
-        return (optionval.none ztypes.vid)
-    }
-
-    # Name id of the defining entry whose variable id is `vid`, or 0.
-    lookupVarNameById: function {:this vid: ztypes.vid} out u32 is {
-        ne: this.entries.length
-        j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
-            j2: j - 1
-            e: this.entries.get i: j2
-            if e.isDefinition then {
-                vidOpt: e.varId
-                match (
-                    vidOpt
-                ) case some then {
-                    if vidOpt == vid then return e.name
-                } case none then null
-            }
-            j = j - 1
-        }
-        return 0
+        d: this.findLocal :nameId
+        if d.isZero then return (optionval.none ztypes.vid)
+        if (this.isTakenDecl declId: d) then return (optionval.none ztypes.vid)
+        v: this.typing.declLocalVarOf declId: d
+        if v.isZero then return (optionval.none ztypes.vid)
+        return (optionval.some v)
     }
 
     # --- invalidation (take) ---
 
     invalidate: function {:this nameId: zast.nameid loc: optionval ztypes.zsrcpos} out bool is {
-        idxOpt: this.effectiveIndex :nameId
+        d: this.findLocal :nameId
+        if d.isZero then return false
+        zt: this.currentTypeOf declId: d
+        v: this.typing.declLocalVarOf declId: d
+        if (v.isZero) == false then this.typing.variableMoved.set key: v value: true
+        te: this.reg.newEntry :nameId ztypeId: zt isDefinition: false
+        te.isTaken = true
+        te.takenAt = loc
+        this.appendRow row: te declId: d
+        return true
+    }
+
+    # currentTypeOf -- the local's type as its newest row has it.
+    currentTypeOf: function {:this declId: ztypes.declid} out ztypes.tid is {
+        ro: this.rowOf :declId
         match (
-            idxOpt
+            ro
         ) case some then {
-            zt: (this.entries.get i: idxOpt).ztypeId
-            {
-                mvv9: (this.entries.get i: idxOpt).varId
-                match (
-                    mvv9
-                ) case some then {
-                    this.typing.variableMoved.set key: mvv9 value: true
-                } case none then null
-            }
-            te: this.reg.newEntry :nameId ztypeId: zt isDefinition: false
-            te.isTaken = true
-            te.takenAt = loc
-            this.entries.append te
-            return true
-        } case none then {
-            return false
-        }
+            return (this.entries.get i: ro).ztypeId
+        } case none then null
+        return (this.typing.declLocalTypeOf :declId)
+    }
+
+    isTakenDecl: function {:this declId: ztypes.declid} out bool is {
+        ro: this.rowOf :declId
+        match (
+            ro
+        ) case some then {
+            return (this.entries.get i: ro).isTaken
+        } case none then null
+        return false
     }
 
     getTakenLocation: function {:this nameId: zast.nameid} out optionval ztypes.zsrcpos is {
-        if nameId.isZero then return (optionval.none ztypes.zsrcpos)
-        ne: this.entries.length
-        j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
-            j2: j - 1
-            e: this.entries.get i: j2
-            if e.name == nameId then {
-                if e.isTaken then return e.takenAt
-                return (optionval.none ztypes.zsrcpos)
-            }
-            j = j - 1
-        }
+        d: this.findLocal :nameId
+        ro: this.rowOf declId: d
+        match (
+            ro
+        ) case some then {
+            e: this.entries.get i: ro
+            if e.isTaken then return e.takenAt
+        } case none then null
         return (optionval.none ztypes.zsrcpos)
     }
 
     isTakenName: function {:this nameId: zast.nameid} out bool is {
-        if nameId.isZero then return false
-        ne: this.entries.length
-        j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
-            j2: j - 1
-            e: this.entries.get i: j2
-            if e.name == nameId then return e.isTaken
-            j = j - 1
-        }
-        return false
+        return (this.isTakenDecl declId: (this.findLocal :nameId))
     }
 
-    # Index of the most-recent taken entry for `name`, or none.
+    # Index of the newest taken row for `name`, or none.
     takenIndex: function {:this nameId: zast.nameid} out optionval u64 is {
-        if nameId.isZero then return (optionval.none u64)
+        d: this.findLocal :nameId
+        if d.isZero then return (optionval.none u64)
         ne: this.entries.length
         j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
+        for j > 0 loop {
             j2: j - 1
             e: this.entries.get i: j2
-            if e.name == nameId then {
+            if e.declId == d then {
                 if e.isTaken then return (optionval.some j2)
             }
             j = j - 1
@@ -787,8 +636,8 @@ ZSymbolTable: class {
         return (optionval.none u64)
     }
 
-    # Rebuild the flat entry list from `dropIdx` up, omitting that slot;
-    # the entries below it keep their places.
+    # Rebuild the row list from `dropIdx` up, omitting that slot; the rows
+    # below it keep their places.
     removeEntryAt: function {:this dropIdx: u64} is {
         if dropIdx >= this.entries.length then return
         rev: (List ZEntry)
@@ -796,12 +645,16 @@ ZSymbolTable: class {
         pos: dropIdx
         for rev.length > 0 loop {
             e: rev.pop
-            if pos != dropIdx then this.entries.append e
+            if pos != dropIdx then {
+                this.entries.append e
+            } else {
+                this.typing.declRowsAdd declId: e.declId delta: -1
+            }
             pos = pos + 1
         }
     }
 
-    # Remove the innermost taken record for `name` (match/case restore).
+    # Remove the newest taken row for `name` (match/case restore).
     clearTaken: function {:this nameId: zast.nameid} is {
         kOpt: this.takenIndex :nameId
         match (
@@ -811,16 +664,22 @@ ZSymbolTable: class {
         } case none then null
     }
 
-    # Drop every taken overlay from the innermost scope (diverging arm).
-    # Only that scope's entries can be dropped, so only they are drained and
-    # rebuilt -- the frames below `start` are left where they are.
+    # Drop every taken row the innermost frame laid (diverging arm). Only
+    # that frame's rows can be dropped, so only they are drained and
+    # rebuilt -- the rows below its start are left where they are.
     discardTakenInCurrentScope: function {:this} is {
-        start: this.currentScopeStart
+        n: this.frames.length
+        if n == 0 then return
+        start: this.frameStarts.get i: (n - 1)
         rev: (List ZEntry)
         for this.entries.length > start loop rev.append this.entries.pop
         for rev.length > 0 loop {
             e: rev.pop
-            if e.isTaken == false then this.entries.append e
+            if e.isTaken == false then {
+                this.entries.append e
+            } else {
+                this.typing.declRowsAdd declId: e.declId delta: -1
+            }
         }
     }
 
@@ -846,12 +705,32 @@ ZSymbolTable: class {
 
     # --- lock holder formatting ---
 
+    # localNameOfVar -- the name of the open local bound to `vid`, or 0.
+    localNameOfVar: function {:this vid: ztypes.vid} out u32 is {
+        cur: this.curFrame
+        hops: u64
+        for cur > 0 while hops < 256 loop {
+            hops = hops + 1
+            if (this.typing.declIsFrame declId: cur) == false then return 0
+            kn: this.typing.declChildSlots declId: cur
+            ki: kn
+            for ki > 0 loop {
+                ki = ki - 1
+                kd: this.typing.declChildAt declId: cur index: ki
+                kv: this.typing.declLocalVarOf declId: kd
+                if kv == vid then return (this.typing.declNameOf declId: kd)
+            }
+            cur = this.typing.declParentOf declId: cur
+        }
+        return 0
+    }
+
     formatLockHolder: function {:this pool: zast.StringPool.view holder: ztypes.zlockholder} out String is {
         k: holder.kind
         match (
             k
         ) case varKind then {
-            nmId9: this.lookupVarNameById vid: (ztypes.vid.create from: holder.id)
+            nmId9: this.localNameOfVar vid: (ztypes.vid.create from: holder.id)
             if nmId9 == 0 then return "<var:\{holder.id}>"
             return (zast.poolTextCopy :pool ref: (zast.nameid.create from: nmId9.u32))
         } case callKind then {
@@ -888,24 +767,18 @@ ZSymbolTable: class {
         return "Cannot take \{reqKind} lock on '\{rootView}'\{reqDetail}: already has \{heldKind} lock\{heldDetail} held by '\{holderName}'"
     }
 
-    # --- lock operations ---
+    # --- locks ---
 
-    # Try to take a lock on `path`. Returns "" on success, else an error
-    # message. `path[0]` must resolve to a known variable. Every acquisition is
-    # checked against every outstanding lock: an acquisition's own prefixes are
-    # SHARED and an existing SHARED ancestor is intent-shared, so a prefix never
-    # blocks the leaf it was taken for, whatever holds it.
+    # Try to acquire a lock on `path` (segments; root is a variable name);
+    # returns "" on success or an error message.
     tryLock: function {:this pool: zast.StringPool.view path: (List String).view lockType: ztypes.zlockstate lockScope: ztypes.zlockscope holder: ztypes.zlockholder} out String is {
         if path.length == 0 then return "".string
         rootId: zast.poolFind :pool text: (path.get i: 0).stringview
-        varOpt: this.lookupVarId nameId: rootId
-        hasVar: false
-        match (
-            varOpt
-        ) case some then {
-            hasVar = true
-        } case none then null
-        if hasVar == false then return "".string
+        d: this.findLocal nameId: rootId
+        if d.isZero then return "".string
+        if (this.isTakenDecl declId: d) then return "".string
+        dv: this.typing.declLocalVarOf declId: d
+        if dv.isZero then return "".string
 
         idempotent: false
         conflictAt: u64
@@ -913,19 +786,14 @@ ZSymbolTable: class {
         conflictSelf: false
         ne: this.entries.length
         j: ne
-        # An acquisition is checked against every outstanding lock IN ITS OWN
-        # FUNCTION. Scanning past that frame reaches bindings of some other
-        # body, which under a batched walk is merely unreachable and under a
-        # demand-driven one is 1436 false conflicts in zc alone -- a readonly
-        # `ctx` in the caller making a callee's own mutable `ctx` unwritable.
-        # The scan never stops at the first name match (an outstanding lock
-        # anywhere in the body can conflict), so shadowing does not save it;
-        # the frame boundary is what has to.
-        flo9: this.fnFloor
-        for j > flo9 loop {
+        # An acquisition is checked against every outstanding lock on this
+        # local. The scan never stops at the first row (an outstanding lock
+        # anywhere in the body can conflict); rows over other locals -- a
+        # shadowed same-named binding, another body's -- are another local's.
+        for j > 0 loop {
             j2: j - 1
             e: this.entries.get i: j2
-            if e.name == rootId then {
+            if e.declId == d then {
                 if e.hasLock then {
                     conflict: (lockAcquireConflict
                         existingType: e.lockType
@@ -988,11 +856,12 @@ ZSymbolTable: class {
         if idempotent then return "".string
 
         le: this.reg.newEntry nameId: rootId ztypeId: ztypes.tid isDefinition: false
-        idxOpt: this.effectiveIndex nameId: rootId
+        le.ztypeId = this.typing.declLocalTypeOf declId: d
+        ro: this.rowOf declId: d
         match (
-            idxOpt
+            ro
         ) case some then {
-            cur: this.entries.get i: idxOpt
+            cur: this.entries.get i: ro
             le.ztypeId = cur.ztypeId
             le.narrowedSubtype = cur.narrowedSubtype.copy
             le.originalZtypeId = cur.originalZtypeId
@@ -1011,19 +880,19 @@ ZSymbolTable: class {
             le.lockPath.append seg.copy
             pli = pli + 1
         }
-        this.entries.append le
+        this.appendRow row: le declId: d
         return "".string
     }
 
     findLock: function {:this nameId: zast.nameid} out optionval ztypes.zlockstate is {
-        if nameId.isZero then return (optionval.none ztypes.zlockstate)
+        d: this.findLocal :nameId
+        if d.isZero then return (optionval.none ztypes.zlockstate)
         ne: this.entries.length
         j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
+        for j > 0 loop {
             j2: j - 1
             e: this.entries.get i: j2
-            if e.name == nameId then {
+            if e.declId == d then {
                 if e.hasLock then return (optionval.some e.lockType)
             }
             j = j - 1
@@ -1033,14 +902,14 @@ ZSymbolTable: class {
 
     # Holder of the innermost lock on `name` (for the .release-of-locked check).
     findLockHolder: function {:this nameId: zast.nameid} out optionval ztypes.zlockholder is {
-        if nameId.isZero then return (optionval.none ztypes.zlockholder)
+        d: this.findLocal :nameId
+        if d.isZero then return (optionval.none ztypes.zlockholder)
         ne: this.entries.length
         j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
+        for j > 0 loop {
             j2: j - 1
             e: this.entries.get i: j2
-            if e.name == nameId then {
+            if e.declId == d then {
                 if e.hasLock then return (optionval.some e.lockHolder)
             }
             j = j - 1
@@ -1052,14 +921,14 @@ ZSymbolTable: class {
     findExclusiveLock: function {:this pool: zast.StringPool.view path: (List String).view} out optionval ztypes.zlockholder is {
         if path.length == 0 then return (optionval.none ztypes.zlockholder)
         rootId: zast.poolFind :pool text: (path.get i: 0).stringview
-        if rootId.isZero then return (optionval.none ztypes.zlockholder)
+        d: this.findLocal nameId: rootId
+        if d.isZero then return (optionval.none ztypes.zlockholder)
         ne: this.entries.length
         j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
+        for j > 0 loop {
             j2: j - 1
             e: this.entries.get i: j2
-            if e.name == rootId then {
+            if e.declId == d then {
                 if e.hasLock then {
                     if e.lockType == ztypes.zlockstate.exclusive then {
                         ov: pathsOverlap a: e.lockPath b: path
@@ -1076,18 +945,18 @@ ZSymbolTable: class {
     # A write at or above any shared lock destroys what its holder reads. A
     # shared TARGET is a live read of its whole subtree, so a write below it is
     # blocked too; a shared INTENT is only bookkeeping toward a deeper lock,
-    # which is checked on its own entry.
+    # which is checked on its own row.
     findReadBlocker: function {:this pool: zast.StringPool.view path: (List String).view} out optionval ztypes.zlockholder is {
         if path.length == 0 then return (optionval.none ztypes.zlockholder)
         rootId: zast.poolFind :pool text: (path.get i: 0).stringview
-        if rootId.isZero then return (optionval.none ztypes.zlockholder)
+        d: this.findLocal nameId: rootId
+        if d.isZero then return (optionval.none ztypes.zlockholder)
         ne: this.entries.length
         j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
+        for j > 0 loop {
             j2: j - 1
             e: this.entries.get i: j2
-            if e.name == rootId then {
+            if e.declId == d then {
                 if e.hasLock when e.lockType == ztypes.zlockstate.shared then {
                     blocks9: false
                     if (isPrefix p: path whole: e.lockPath) then blocks9 = true
@@ -1106,14 +975,14 @@ ZSymbolTable: class {
     isPathLocked: function {:this pool: zast.StringPool.view path: (List String).view} out bool is {
         if path.length == 0 then return false
         rootId: zast.poolFind :pool text: (path.get i: 0).stringview
-        if rootId.isZero then return false
+        d: this.findLocal nameId: rootId
+        if d.isZero then return false
         ne: this.entries.length
         j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
+        for j > 0 loop {
             j2: j - 1
             e: this.entries.get i: j2
-            if e.name == rootId then {
+            if e.declId == d then {
                 if e.hasLock then {
                     ov: pathsOverlap a: e.lockPath b: path
                     if ov then return true
@@ -1125,13 +994,13 @@ ZSymbolTable: class {
     }
 
     # Release all locks held by `holder` (rebuild omitting them). Most
-    # calls release nothing (their locks died with an inner scope), so scan
-    # first and skip the rebuild when no entry names the holder; when it
-    # does run, the scratch list is sized once (a compile churns thousands
-    # of these over entry tables hundreds long -- the doubling chain was a
-    # top-5 allocation site).
+    # calls release nothing (their locks died with an inner frame), so scan
+    # first and skip the rebuild when no row names the holder; when it does
+    # run, the scratch list is sized once (a compile churns thousands of
+    # these over row tables hundreds long -- the doubling chain was a top-5
+    # allocation site).
     releaseHeldLocks: function {:this holder: ztypes.zlockholder} is {
-        # Entries below the first one this holder locked keep their places;
+        # Rows below the first one this holder locked keep their places;
         # the rebuild starts there.
         first9: this.entries.length
         idx9: u64
@@ -1152,27 +1021,26 @@ ZSymbolTable: class {
             if e.hasLock then {
                 if (holderEq a: e.lockHolder b: holder) then drop = true
             }
-            if (drop) == false then this.entries.append e
+            if (drop) == false then {
+                this.entries.append e
+            } else {
+                this.typing.declRowsAdd declId: e.declId delta: -1
+            }
         }
     }
 
     # --- narrowing ---
 
-    # Narrow `name` to a subtype. shadow=true (match-arm): the entry's type
+    # Narrow `name` to a subtype. shadow=true (match-arm): the row's type
     # id becomes the narrowed PAYLOAD type (null/missing payload keeps the
     # outer), and the outer is stashed in originalZtypeId for the emitter's
     # C-level unwrap. shadow=false (assignment): the type id stays the outer
     # union; only the subtype name is recorded.
     narrow: function {:this pool: zast.StringPool.view nameId: zast.nameid toTypeId: u64 subtypeName: StringView shadow: bool} is {
-        originalTypeId: toTypeId
-        idxOpt: this.effectiveIndex :nameId
-        match (
-            idxOpt
-        ) case some then {
-            cur: this.entries.get i: idxOpt
-            originalTypeId = cur.ztypeId
-        } case none then null
-
+        d: this.findLocal :nameId
+        if d.isZero then return
+        curT: this.currentTypeOf declId: d
+        originalTypeId: curT.u64
         entryZtype: originalTypeId
         hasSubtype: subtypeName.length > 0
         if shadow then {
@@ -1217,13 +1085,15 @@ ZSymbolTable: class {
         )
         e.narrowedSubtype = nsName
         e.originalZtypeId = origOpt
-        this.entries.append e
+        this.appendRow row: e declId: d
     }
 
     # Exclude `subtypeName` from `name`'s type. Collapses to a narrowing
-    # when one excludable subtype remains; marks the scope unreachable when
+    # when one excludable subtype remains; marks the frame unreachable when
     # none remain.
     exclude: function {:this pool: zast.StringPool.view nameId: zast.nameid subtypeName: StringView fullTypeId: u64} is {
+        d: this.findLocal :nameId
+        if d.isZero then return
         allSubs: (List String)
         (sumArmNames
             ty: this.typing
@@ -1269,17 +1139,17 @@ ZSymbolTable: class {
             for s: eit loop {
                 e.excludedSubtypes.add item: s.copy
             }
-            this.entries.append e
+            this.appendRow row: e declId: d
         }
     }
 
     # Copy the current exclusion set for `name` into `into`.
     collectExcluded: function {:this nameId: zast.nameid into: Set String} is {
-        idxOpt: this.effectiveIndex :nameId
+        ro: this.rowOf declId: (this.findLocal :nameId)
         match (
-            idxOpt
+            ro
         ) case some then {
-            e: this.entries.get i: idxOpt
+            e: this.entries.get i: ro
             it: e.excludedSubtypes.iterate
             for s: it loop {
                 into.add item: s.copy
@@ -1287,24 +1157,16 @@ ZSymbolTable: class {
         } case none then null
     }
 
+    # resetNarrowing -- lay a row that restores the local's declared type.
     resetNarrowing: function {:this nameId: zast.nameid} is {
-        ne: this.entries.length
-        j: ne
-        done: false
-        for j > 0 loop {
-            if done == false then {
-                j2: j - 1
-                if (this.entries.get i: j2).name == nameId then {
-                    if (this.entries.get i: j2).isDefinition then {
-                        zt: (this.entries.get i: j2).ztypeId
-                        re: this.reg.newEntry :nameId ztypeId: zt isDefinition: false
-                        this.entries.append re
-                        done = true
-                    }
-                }
-            }
-            j = j - 1
-        }
+        d: this.findLocal :nameId
+        if d.isZero then return
+        re: (this.reg.newEntry
+            :nameId
+            ztypeId: (this.typing.declLocalTypeOf declId: d)
+            isDefinition: false
+        )
+        this.appendRow row: re declId: d
     }
 
     isExcluded: function {:this nameId: zast.nameid subtypeName: StringView} out bool is {
@@ -1315,16 +1177,15 @@ ZSymbolTable: class {
     }
 
     # narrowedArmOf -- the recorded single-arm narrowing for `name` when
-    # its entry still wears the OUTER type `fullTypeId` (assignment narrowing
-    # or exclusion collapse). Shadow-narrowed entries
-    # (originalZtypeId set -- the name IS a payload) and un-narrowed
-    # entries yield "".
+    # its row still wears the OUTER type `fullTypeId` (assignment narrowing
+    # or exclusion collapse). Shadow-narrowed rows (originalZtypeId set --
+    # the name IS a payload) and un-narrowed locals yield "".
     narrowedArmOf: function {:this nameId: zast.nameid fullTypeId: u64} out String is {
-        idxOpt: this.effectiveIndex :nameId
+        ro: this.rowOf declId: (this.findLocal :nameId)
         match (
-            idxOpt
+            ro
         ) case some then {
-            e: this.entries.get i: idxOpt
+            e: this.entries.get i: ro
             isShadow9: false
             oz9: e.originalZtypeId
             match (
@@ -1340,15 +1201,15 @@ ZSymbolTable: class {
         }
     }
 
-    # isShadowNarrowed -- the current entry for `name` is a shadow
-    # narrowing (the bare name IS a payload; originalZtypeId records the
-    # outer sum type).
+    # isShadowNarrowed -- the current row for `name` is a shadow narrowing
+    # (the bare name IS a payload; originalZtypeId records the outer sum
+    # type).
     isShadowNarrowed: function {:this nameId: zast.nameid} out bool is {
-        idxOpt: this.effectiveIndex :nameId
+        ro: this.rowOf declId: (this.findLocal :nameId)
         match (
-            idxOpt
+            ro
         ) case some then {
-            e: this.entries.get i: idxOpt
+            e: this.entries.get i: ro
             oz9: e.originalZtypeId
             match (
                 oz9
@@ -1363,11 +1224,11 @@ ZSymbolTable: class {
     }
 
     getSubtypeName: function {:this nameId: zast.nameid} out String is {
-        idxOpt: this.effectiveIndex :nameId
+        ro: this.rowOf declId: (this.findLocal :nameId)
         match (
-            idxOpt
+            ro
         ) case some then {
-            e: this.entries.get i: idxOpt
+            e: this.entries.get i: ro
             return e.narrowedSubtype.copy
         } case none then {
             return "".string
@@ -1375,101 +1236,168 @@ ZSymbolTable: class {
     }
 
     markUnreachable: function {:this} is {
-        sidOpt: this.currentScopeId
-        match (
-            sidOpt
-        ) case some then {
-            this.unreachableScopes.add item: sidOpt
-        } case none then null
+        f: this.curFrame
+        if (f.isZero) == false then this.unreachableFrames.add item: f.u64
     }
 
     isUnreachable: function {:this} out bool is {
-        sidOpt: this.currentScopeId
-        match (
-            sidOpt
-        ) case some then {
-            return (this.unreachableScopes.has item: sidOpt)
-        } case none then {
-            return false
-        }
+        f: this.curFrame
+        if f.isZero then return false
+        return (this.unreachableFrames.has item: f.u64)
     }
 
     # --- utility ---
 
-    # All defined, non-taken names inner->outer (dedup), for did-you-mean.
-    # Walk scopes top->bottom; within a scope, entries in push order.
+    # All defined, non-taken names inner->outer (dedup), for did-you-mean:
+    # each open frame's locals in definition order, innermost frame first.
     allNames: function {:this} out ListVal u32 is {
         names: (ListVal u32)
         seen: (SetVal u32)
-        ns: this.scopes.length
-        si: ns
-        for si > 0 loop {
-            si2: si - 1
-            scope: this.scopes.get i: si2
-            start: scope.entryStart
-            endIdx: this.entries.length
-            if si2 + 1 < ns then {
-                nxt: this.scopes.get i: (si2 + 1)
-                endIdx = nxt.entryStart
-            }
-            p: start
-            for p < endIdx loop {
-                e: this.entries.get i: p
-                already: seen.has item: e.name
-                if already == false then {
-                    if e.isTaken == false then {
-                        names.append e.name
-                        seen.add item: e.name
+        cur: this.curFrame
+        hops: u64
+        for cur > 0 while hops < 256 loop {
+            hops = hops + 1
+            if (this.typing.declIsFrame declId: cur) == false then return names
+            kn: this.typing.declChildSlots declId: cur
+            ki: u64
+            for ki < kn loop {
+                kd: this.typing.declChildAt declId: cur index: ki
+                nm: this.typing.declNameOf declId: kd
+                ki = ki + 1
+                if (seen.has item: nm) == false then {
+                    if (this.isTakenDecl declId: kd) == false then {
+                        names.append nm
+                        seen.add item: nm
                     }
                 }
-                p = p + 1
             }
-            si = si - 1
+            cur = this.typing.declParentOf declId: cur
         }
         return names
     }
 
-    # Live (defined, not taken) variable names whose type needs a
-    # destructor -- owned resources to snapshot before if/match arms. Each
-    # name's liveness is decided by its most-recent entry (a full reverse
-    # walk), so a take overlay wins over an earlier definition.
-    getLiveOwnedVars: function {:this} out SetVal u32 is {
-        names: (SetVal u32)
-        taken: (SetVal u32)
+    # hasTakenRow -- has a take been laid over `declId` (whatever narrowing
+    # or lock rows were laid after it)?
+    hasTakenRow: function {:this declId: ztypes.declid} out bool is {
+        if declId.isZero then return false
+        if (this.typing.declRowsOf :declId) == 0 then return false
         ne: this.entries.length
         j: ne
-        flo9: this.fnFloor
-        for j > flo9 loop {
+        for j > 0 loop {
             j2: j - 1
             e: this.entries.get i: j2
-            seenHere: false
-            if (names.has item: e.name) then seenHere = true
-            if (taken.has item: e.name) then seenHere = true
-            if seenHere == false then {
-                if e.isTaken then {
-                    taken.add item: e.name
-                } else {
-                    hasVar: false
-                    vidOpt: e.varId
-                    match (
-                        vidOpt
-                    ) case some then {
-                        hasVar = true
-                    } case none then null
-                    if hasVar then {
-                        if (this.reg.hasDestructorName typeId: (ztypes.tid.create from: e.ztypeId)) then {
-                            names.add item: e.name
+            if e.declId == declId when e.isTaken then return true
+            j = j - 1
+        }
+        return false
+    }
+
+    # Live (defined, not taken) variable names whose declared type needs a
+    # destructor -- owned resources to snapshot before if/match arms. Each
+    # name's liveness is decided by its innermost binding, so a take of the
+    # binding in scope wins over an outer definition of the same name; a
+    # narrowing laid over the binding does not hide a take under it.
+    getLiveOwnedVars: function {:this} out SetVal u32 is {
+        names: (SetVal u32)
+        seen: (SetVal u32)
+        cur: this.curFrame
+        hops: u64
+        for cur > 0 while hops < 256 loop {
+            hops = hops + 1
+            if (this.typing.declIsFrame declId: cur) == false then return names
+            kn: this.typing.declChildSlots declId: cur
+            ki: kn
+            for ki > 0 loop {
+                ki = ki - 1
+                kd: this.typing.declChildAt declId: cur index: ki
+                nm: this.typing.declNameOf declId: kd
+                if (seen.has item: nm) == false then {
+                    seen.add item: nm
+                    # the take scan is the costly test: ask it last, of the
+                    # few locals that are owned resources at all
+                    v: this.typing.declLocalVarOf declId: kd
+                    if (v.isZero) == false then {
+                        dt: this.typing.declLocalTypeOf declId: kd
+                        if (this.reg.hasDestructorName typeId: dt) then {
+                            if (this.hasTakenRow declId: kd) == false then names.add item: nm
                         }
                     }
                 }
             }
-            j = j - 1
+            cur = this.typing.declParentOf declId: cur
         }
         return names
     }
+
+    # --- dump ---
+
+    # snapshotFrame -- the frame's locals and overlay rows, in the order they
+    # were laid, as dump rows. A generic template body walk is
+    # diagnostics-only: its frames stay out of the dump (the emitter re-walks
+    # per instance).
+    snapshotFrame: function {:this frame: ztypes.declid start: u64} is {
+        if this.typing.suppressParamStamps then return
+        kn: this.typing.declChildSlots declId: frame
+        endIdx: this.entries.length
+        pos: u64
+        ki: u64
+        ri: start
+        # rows laid before the (ki+1)-th local sit before it
+        for ki <= kn loop {
+            for ri < endIdx loop {
+                e: this.entries.get i: ri
+                if e.defSeq > ki then break
+                if e.frame == frame then {
+                    exs: (List String)
+                    with xit: e.excludedSubtypes.iterate do for xn: xit loop {
+                        xnc: xn.copy
+                        exs.append xnc
+                    }
+                    nsc: e.narrowedSubtype.copy
+                    this.entryDump.append (ZEntryDumpRow
+                        scopeId: frame.u64
+                        position: pos
+                        entryId: e.entryId
+                        name: e.name
+                        ztypeId: e.ztypeId
+                        isDefinition: false
+                        varId: (optionval.none ztypes.vid)
+                        originalZtypeId: e.originalZtypeId
+                        isTaken: e.isTaken
+                        takenAt: e.takenAt
+                        narrowedSubtype: nsc
+                        excludedSubtypes: exs
+                    )
+                    pos = pos + 1
+                }
+                ri = ri + 1
+            }
+            if ki < kn then {
+                kd: this.typing.declChildAt declId: frame index: ki
+                vidOpt: (optionval.none ztypes.vid)
+                v: this.typing.declLocalVarOf declId: kd
+                if (v.isZero) == false then vidOpt = (optionval.some v)
+                this.entryDump.append (ZEntryDumpRow
+                    scopeId: frame.u64
+                    position: pos
+                    entryId: kd.u64
+                    name: (this.typing.declNameOf declId: kd)
+                    ztypeId: (this.typing.declLocalTypeOf declId: kd)
+                    isDefinition: true
+                    varId: vidOpt
+                    originalZtypeId: (optionval.none ztypes.tid)
+                    isTaken: false
+                    takenAt: (optionval.none ztypes.zsrcpos)
+                    narrowedSubtype: "".string
+                    excludedSubtypes: (List String)
+                )
+                pos = pos + 1
+            }
+            ki = ki + 1
+        }
+    }
 }
 
-# An optional String as an owned String, "" when absent (the dump renders "" as NULL).
 optStrOrEmpty: function {o: Option String} out String is {
     match (
         o
@@ -1484,16 +1412,14 @@ optStrOrEmpty: function {o: Option String} out String is {
 # typing tables it will resolve against.
 newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} out ZSymbolTable is {
     return (ZSymbolTable
-        scopes: (List ZScope)
-        fnFloor: 0
+        frames: (ListVal ztypes.declid)
+        frameStarts: (ListVal u64)
+        frameDefs: (ListVal u64)
         entries: (List ZEntry)
-        history: (List ZScope)
-        scopeLog: (List ZScopeLogRow)
-        scopeClose: (MapVV u64 value: u64)
-        unreachableScopes: (SetVal u64)
+        unreachableFrames: (SetVal u64)
+        frameLabel: (MapVR u64 value: String)
+        frameHidden: (SetVal u64)
         entryDump: (List ZEntryDumpRow)
-        unreachableDump: (SetVal u64)
-        seqCounter: 0
         :reg
         :typing)
 }
@@ -1521,7 +1447,7 @@ main: function is {
 
     print "=== scopes ==="
     s0: st.push name: "func"
-    print "push func -> scopeId=\{s0} depth=\{st.depth}"
+    print "push func -> frame=\{s0} open=\{st.frames.length}"
 
     idX9: pool9.set s: "x"
     idY9: pool9.set s: "y"
@@ -1647,14 +1573,14 @@ main: function is {
     names: st.allNames
     dumpNames pool: pool9 :names
 
-    print "=== scope log + pop ==="
+    print "=== frames + pop ==="
     s1: st.push name: "inner"
-    print "push inner -> scopeId=\{s1} depth=\{st.depth}"
+    print "push inner -> frame=\{s1} open=\{st.frames.length}"
     st.pop
-    print "after pop depth=\{st.depth}"
+    print "after pop open=\{st.frames.length}"
     st.pop
-    print "after pop depth=\{st.depth}"
-    dumpScopeLog :st
+    print "after pop open=\{st.frames.length}"
+    dumpFrames :st
 }
 
 # smoke-test: an optional lock state rendered as text.
@@ -1695,14 +1621,31 @@ dumpNames: function {pool: zast.StringPool.view names: (ListVal u32).view} is {
     }
 }
 
-# smoke-test: print the scope enter/exit log.
-dumpScopeLog: function {st: ZSymbolTable} is {
-    n: st.scopeLog.length
+# smoke-test: print the frames the walk left behind and the dump rows.
+dumpFrames: function {st: ZSymbolTable} is {
+    n: st.typing.decls.length
     k: u64
     for k < n loop {
-        closed: st.closeSeqOf scopeId: (st.scopeLog.get i: k).scopeId
-        row: st.scopeLog.get i: k
-        print "  log scope=\{row.scopeId} parent=\{optU64Text row.parentId} kind=\{ztypes.zscopekindName row.kind} name=\{row.name} opened=\{row.openedAtSeq} closed=\{optU64Text closed}"
+        d: ztypes.declid.create from: (k + 1)
         k = k + 1
+        if (st.typing.declIsFrame declId: d) then {
+            lbl: copiedLabel :st frame: d
+            print "  frame=\{d} parent=\{st.typing.declParentOf declId: d} label=\{lbl} locals=\{st.typing.declChildSlots declId: d}"
+        }
+    }
+    with dit: st.entryDump.iterate do for row: dit loop {
+        print "  row scope=\{row.scopeId} pos=\{row.position} name=\{row.name} def=\{boolText row.isDefinition} taken=\{boolText row.isTaken}"
+    }
+}
+
+# smoke-test: a frame's dump label, "" when unlabelled.
+copiedLabel: function {st: ZSymbolTable frame: ztypes.declid} out String is {
+    o: st.frameLabel.get key: frame.u64
+    match (
+        o
+    ) case some then {
+        return o.copy
+    } case none then {
+        return "".string
     }
 }

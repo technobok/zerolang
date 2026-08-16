@@ -109,6 +109,12 @@ declkind: variant {
     armDecl: null
     reexportDecl: null
     publicNs: null
+    # a body frame: a function's body, or a block, arm, loop or call bracket
+    # inside one -- the environment frame the locals written there hang under
+    blockDecl: null
+    # a local variable or body-level binding (a parameter's body binding, a
+    # loop variable, a generic parameter bound for a walk)
+    localDecl: null
 } as { tag: u8.tag }
 
 # declkindName -- a declaration kind's dump/debug text.
@@ -137,6 +143,10 @@ declkindName: function {k: declkind} out String is {
         return "reexport".string
     } case publicNs then {
         return "publicns".string
+    } case blockDecl then {
+        return "block".string
+    } case localDecl then {
+        return "local".string
     }
 }
 
@@ -241,6 +251,13 @@ Decl: class {
     # binds to that type. On the DECLARATION, so the marker name is scoped by
     # what declared it rather than by the unit it was written in.
     conformerName: u32
+    # varId -- on a local declaration bound to a runtime variable, that
+    # variable's id (0 for a type-only binding and for every other kind)
+    varId: ztypes.vid
+    # rows -- on a local, how many overlay rows the body walk currently has
+    # laid over it (a take, a narrowing, a lock); the walk's row scan is
+    # skipped when there are none
+    rows: u64
     children: (ListVal declchild)
     # derived nameId -> declId accelerator over `children`, backfilled when
     # the namespace outgrows a linear scan (bucketScanMax); not dumped
@@ -633,6 +650,8 @@ ZTyping: class {
             fnptrField: false
             lockFieldDecl: 0
             conformerName: 0
+            varId: ztypes.vid
+            rows: 0
             children: (ListVal declchild)
             byName: (MapVV u64 value: ztypes.declid)
         )
@@ -643,6 +662,163 @@ ZTyping: class {
             childDeclId: id
         )
         return id
+    }
+
+    # declNewFrame -- a body frame under `parent` (a function declaration, or
+    # the enclosing frame). Unnamed: a frame is entered, never referred to.
+    declNewFrame: function {:this parent: ztypes.declid node: u32} out ztypes.declid is {
+        # parent-linked, but not edged into the parent's namespace: a frame is
+        # climbed out of, never looked up, and a function's children stay its
+        # parameters
+        id9: this.declNew name: 0 parent: ztypes.declid kind: declkind.blockDecl :node
+        if (this.declValid id: id9) then {
+            fo9: this.decls.getMut i: (id9 - 1)
+            fo9.parent = parent
+        }
+        return id9
+    }
+
+    # declNewLocal -- a local written in frame `parent`: its name, type and
+    # (for a runtime binding) variable id. Later locals of the same name in
+    # the same frame shadow earlier ones, which is what declFindChild's
+    # last-wins order gives.
+    declNewLocal: function {:this name: u32 parent: ztypes.declid node: u32 typeId: ztypes.tid varId: ztypes.vid} out ztypes.declid is {
+        id9: this.declNew :name :parent kind: declkind.localDecl :node
+        if (this.declValid id: id9) then {
+            lo9: this.decls.getMut i: (id9 - 1)
+            lo9.typeId = typeId
+            lo9.varId = varId
+        }
+        return id9
+    }
+
+    # declParentOf -- the enclosing declaration, 0 for a root or an invalid id.
+    declParentOf: function {t: this.view declId: ztypes.declid} out ztypes.declid is {
+        r9: ztypes.declid
+        if (t.declValid id: declId) then {
+            do9: t.decls.get i: (declId - 1)
+            r9 = do9.parent
+        }
+        return r9
+    }
+
+    # declIsFrame -- is `declId` a body frame?
+    declIsFrame: function {t: this.view declId: ztypes.declid} out bool is {
+        r9: false
+        if (t.declValid id: declId) then {
+            do9: t.decls.get i: (declId - 1)
+            if do9.kind.blockDecl then r9 = true
+        }
+        return r9
+    }
+
+    # declLocalTypeOf / declLocalVarOf -- a local's type and variable id.
+    declLocalTypeOf: function {t: this.view declId: ztypes.declid} out ztypes.tid is {
+        r9: ztypes.tid
+        if (t.declValid id: declId) then {
+            do9: t.decls.get i: (declId - 1)
+            r9 = do9.typeId
+        }
+        return r9
+    }
+
+    # declRowsOf / declRowsAdd -- the live overlay-row count of a local.
+    declRowsOf: function {t: this.view declId: ztypes.declid} out u64 is {
+        r9: u64
+        if (t.declValid id: declId) then {
+            do9: t.decls.get i: (declId - 1)
+            r9 = do9.rows
+        }
+        return r9
+    }
+
+    declRowsAdd: function {:this declId: ztypes.declid delta: i64} is {
+        if (this.declValid id: declId) then {
+            do9: this.decls.getMut i: (declId - 1)
+            if delta > 0 then {
+                do9.rows = do9.rows + 1
+            } else {
+                if do9.rows > 0 then do9.rows = do9.rows - 1
+            }
+        }
+    }
+
+    declLocalVarOf: function {t: this.view declId: ztypes.declid} out ztypes.vid is {
+        r9: ztypes.vid
+        if (t.declValid id: declId) then {
+            do9: t.decls.get i: (declId - 1)
+            r9 = do9.varId
+        }
+        return r9
+    }
+
+    # declFindLocal -- the local `nameId` resolves to from frame `frame`
+    # outward: each frame's own locals (the last defined wins), then the frame
+    # enclosing it, until the chain leaves the frames -- a frame's parent that
+    # is not a frame is the declaration whose body it is, and ends the walk.
+    # One row read per frame.
+    declFindLocal: function {
+        t: this.view
+        frame: ztypes.declid
+        nameId: zast.nameid
+    } out ztypes.declid is {
+        if nameId.isZero then return (ztypes.declid.create from: 0)
+        cur9: frame
+        hops9: u64
+        for cur9 > 0 while hops9 < 256 loop {
+            hops9 = hops9 + 1
+            if (t.declValid id: cur9) == false then return (ztypes.declid.create from: 0)
+            found9: ztypes.declid
+            next9: ztypes.declid
+            {
+                fo9: t.decls.get i: (cur9 - 1)
+                if (fo9.kind.blockDecl) == false then return (ztypes.declid.create from: 0)
+                if fo9.byName.length > 0 then {
+                    bo9: fo9.byName.get key: nameId.u64
+                    match (
+                        bo9
+                    ) case some then {
+                        found9 = bo9
+                    } case none then null
+                } else {
+                    # newest first: the last local of that name wins, and a
+                    # frame's own locals are few
+                    ci9: fo9.children.length
+                    for ci9 > 0 loop {
+                        ci9 = ci9 - 1
+                        c9: fo9.children.get i: ci9
+                        if c9.nameId == nameId then {
+                            found9 = c9.declId
+                            ci9 = 0
+                        }
+                    }
+                }
+                next9 = fo9.parent
+            }
+            if (found9.isZero) == false then return found9
+            cur9 = next9
+        }
+        return (ztypes.declid.create from: 0)
+    }
+
+    # declChildAt -- the child declaration in slot `index` of `declId`'s
+    # namespace (0 past the end); declNameOf -- a declaration's name id.
+    declChildAt: function {t: this.view declId: ztypes.declid index: u64} out ztypes.declid is {
+        r9: ztypes.declid
+        if (t.declValid id: declId) then {
+            do9: t.decls.get i: (declId - 1)
+            if index < do9.children.length then r9 = (do9.children.get i: index).declId
+        }
+        return r9
+    }
+
+    declNameOf: function {t: this.view declId: ztypes.declid} out u32 is {
+        r9: u32
+        if (t.declValid id: declId) then {
+            do9: t.decls.get i: (declId - 1)
+            r9 = do9.name
+        }
+        return r9
     }
 
     # declAddChildEdge -- append a name -> declaration edge to a parent's
