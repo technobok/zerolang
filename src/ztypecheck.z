@@ -8680,20 +8680,13 @@ subunitTidOf9: function {
         subTid9 = (ztypes.tid.create
             from: (ztyping.nodeTypeAt tbl: ty.nodeType nid: unid9.u64)
         )
-        # The eager constant pass recurses into a nested unit only when its
-        # node already carries a stamp, which this one did not have while that
-        # pass ran. Evaluate its constants here, where it does.
-        if (subTid9.isZero) == false then {
-            (resolveConstantDefsIn
-                :ty
-                :reg
-                :ast
-                unitName: ownTxt9.stringview
-                unitdefId: subOp9
-                ownerTid: subTid9
-                ownerDeclId: sub9
-            )
-        }
+        # The members just resolved recorded their signature type-refs the
+        # way every definition does, and a subunit materialises at whatever
+        # point an alias into it is first asked for -- which can be after the
+        # post-demand stamp pass. Stamp them here, as the demand drain stamps
+        # what it resolved: unstamped, a re-exported function's return type
+        # reads as nothing and its call sites reach the emitter bare.
+        stampPendingTyperefs :ty :reg :ast mainName: reg.regMainUnit.stringview
     }
     return subTid9
 }
@@ -10146,7 +10139,11 @@ resolveDemandedDecl: function {
     ty.declSetPending :declId mark: false
     if (ty.declValid id: declId) == false then return
     if (ty.declIsResolving :declId) then return
-    if (ty.declIsDefined :declId) then return
+    # A re-export alias is marked DEFINED by the walk that resolved the unit
+    # it names -- that walk types it, and carries no value. So a definition
+    # already resolved still reaches the constant channel below; only the
+    # resolution legs are skipped.
+    wasDone9: ty.declIsDefined :declId
     dName9: u32
     dParent9: ztypes.declid
     dNode9: u64
@@ -10168,6 +10165,7 @@ resolveDemandedDecl: function {
     unitName9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: puNm9)
     defName9: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: dName9)
     if dParent9 == ty.coreUnitRoot then {
+        if wasDone9 then return
         if dTid9.isZero then {
             resolveAliasKey :ty :reg :ast defUnit: unitName9.stringview name: defName9.stringview
         }
@@ -10185,6 +10183,7 @@ resolveDemandedDecl: function {
     if (zast.unitOpKindIs :ast opId: opId9 k: zast.unitkind.subunit) then isNs9 = true
     isTmpl9: (zast.unitOpKindIs :ast opId: opId9 k: zast.unitkind.template)
     if isNs9 then {
+        if wasDone9 then return
         (resolveNamespaceUnit
             :ty
             :reg
@@ -10205,6 +10204,7 @@ resolveDemandedDecl: function {
             )
         )
     } else if isTmpl9 then {
+        if wasDone9 then return
         (resolveInlineGenericUnit
             :ty
             :reg
@@ -10219,7 +10219,24 @@ resolveDemandedDecl: function {
     } else if (isUnitOp op: (ast.nodes.get i: (opId9 - 1).u64)) then {
         return
     } else {
-        (resolveDef
+        if (wasDone9) == false then {
+            (resolveDef
+                :ty
+                :reg
+                :ast
+                unitName: unitName9.stringview
+                defName: defName9.stringview
+                defn: (ast.nodes.get i: (opId9 - 1).u64)
+            )
+        }
+        # A unit-level CONSTANT is a definition like any other, and resolveDef
+        # has no leg for the shapes one takes -- a bare literal, a suffixed
+        # one, a constant expression. Its type and its value are registered
+        # here, where the reference that demanded it is asking. The eager tier
+        # walks every definition of every unit instead, so exactly one of the
+        # two speaks.
+        if ty.eagerAll then return
+        (resolveConstantMember
             :ty
             :reg
             :ast
@@ -10656,61 +10673,6 @@ seedBodyWalkDemands: function {ty: ztyping.ZTyping program: Node} is {
             } else null
         }
         if found then demandReturnNever :ty ast: program.ast
-    } else null
-}
-
-# seedConstantSuffixDemands -- a unit constant whose literal carries a type
-# suffix (`wkFirst: 1.nid`) demands that type. Constants resolve AFTER the
-# demand walk, so without this seed a typedef used nowhere else stays
-# undemanded, the constant registers no type, and every read of it reports an
-# unknown reference instead.
-seedConstantSuffixDemands: function {ty: ztyping.ZTyping program: Node} is {
-    match (
-        program
-    ) case program then {
-        uiterS9: program.ast.units.iterate
-        for uIdS9: uiterS9 loop {
-            uS9: program.ast.nodes.get i: (uIdS9 - 1).u64
-            match (
-                uS9
-            ) case namedoperation then {
-                bodyS9: zast.unitBodyIdsAt ast: program.ast unitId: uS9.operation
-                with bitS9: bodyS9.iterate do for mIdS9: bitS9 loop {
-                    mS9: program.ast.nodes.get i: (mIdS9 - 1).u64
-                    match (
-                        mS9
-                    ) case namedoperation then {
-                        vS9: program.ast.nodes.get i: (mS9.operation - 1).u64
-                        match (
-                            vS9
-                        ) case dottedpath then {
-                            litS9: false
-                            {
-                                pS9: program.ast.nodes.get i: (vS9.parent - 1).u64
-                                match (
-                                    pS9
-                                ) case atomid then {
-                                    lnS9: zast.nameTextAt ast: program.ast ref: pS9.name
-                                    if (isNumericLiteralName name: lnS9.stringview) then litS9 = true
-                                } else null
-                            }
-                            if litS9 then {
-                                cS9: program.ast.nodes.get i: (vS9.child - 1).u64
-                                match (
-                                    cS9
-                                ) case atomid then {
-                                    (demandDefinition
-                                        :ty
-                                        frames: (unitFramesOfId :ty unitNameId: uS9.name)
-                                        nameId: cS9.name
-                                    )
-                                } else null
-                            }
-                        } else null
-                    } else null
-                }
-            } else null
-        }
     } else null
 }
 
@@ -11792,6 +11754,19 @@ resolveNamespaceUnit: function {
             }
         } else null
     }
+    # A namespace's constants are members of IT, keyed on its own id, and the
+    # signature walk above is the moment they can be. Reached from every
+    # caller -- the demand path, an alias into a hidden subunit, the eager
+    # walk -- so no caller carries a constant step of its own.
+    (resolveConstantDefsIn
+        :ty
+        :reg
+        :ast
+        :unitName
+        unitdefId: unitOpId
+        ownerTid: uid9
+        ownerDeclId: declId9
+    )
 }
 
 # resolveInlineGenericUnit -- resolve an inline generic unit (mathops: unit as { t:
@@ -29693,7 +29668,16 @@ resolveConstantDef: function {
                 }
             }
             if (isNumericLiteralName name: sfLit9.stringview) then {
+                # `wkFirst: 1.nid` NAMES its type, so asking for the constant
+                # is asking for that type: descend for it rather than only
+                # looking it up, or a typedef nothing else references is
+                # unresolved at the moment the constant needs it and the
+                # value's own i64 registers in its place.
                 sfT9: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: sfTy9.stringview
+                if sfT9.none then {
+                    sfD9: descendNamed :ty :reg :ast defUnit: unitName name: sfTy9.stringview
+                    if sfD9 > 0 then sfT9 = optionval.some sfD9.u64
+                }
                 match (
                     sfT9
                 ) case some then {
@@ -29930,6 +29914,33 @@ constRegisterValueType: function {
     if bo9 > 0 then ty.setMemberType parentTypeId: utid9 nameId: nid9 childTypeId: bo9.u64
 }
 
+# resolveConstantMember -- one unit-level definition's constant channels, both
+# of them. The TYPE channel is shape-driven (`resolveConstantDef` registers the
+# literal, suffixed-literal and constant-expression forms and reports the ones
+# that are neither); the VALUE channel evaluates and memoises, and hands its
+# result back so a value-typed constant -- a string, a concatenation, an arm --
+# registers the type its value carries.
+#
+# Source order drives the visit but not the evaluation: each pull descends into
+# whatever it names and memoises, so a definition already reached as a
+# dependency is a no-op here and one written before its dependency still works.
+# That is what lets the same entry point serve the demand path and the eager
+# walk without the two drifting.
+resolveConstantMember: function {
+    ast: Ast.view
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry.view
+    unitName: StringView
+    defName: StringView
+    defn: Node
+} is {
+    constFailClear :ty
+    resolveConstantDef :ast :ty :reg :unitName :defName :defn
+    cvv9: constValueOfMember :ast :ty :reg :unitName :defName
+    constRegisterValueType :ast :ty :reg :unitName :defName v: cvv9
+    reportPendingConstFail :ty
+}
+
 # resolve a unit's compile-time constant definitions.
 resolveConstantDefsInUnit: function {
     ast: Ast.view
@@ -29972,6 +29983,8 @@ resolveConstantDefsIn: function {
     ownerTid: ztypes.tid
     ownerDeclId: ztypes.declid
 } is {
+    if (ty.nsConstsWalked.has item: unitdefId.u64) then return
+    ty.nsConstsWalked.add item: unitdefId.u64
     prevTid9: ty.nsOwnerTid
     prevDecl9: ty.nsOwnerDeclId
     prevUnit9: ty.nsOwnerUnit.copy
@@ -30026,8 +30039,7 @@ resolveConstantDefsIn: function {
                         )
                     }
                 } else if defName.length > 0 then {
-                    constFailClear :ty
-                    (resolveConstantDef
+                    (resolveConstantMember
                         :ast
                         :ty
                         :reg
@@ -30035,27 +30047,6 @@ resolveConstantDefsIn: function {
                         defName: defName.stringview
                         defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
                     )
-                    # The VALUE channel, beside the type channel above. Source
-                    # order drives the visit but not the evaluation: each pull
-                    # descends into whatever it names and memoises, so a
-                    # definition already reached as a dependency is a no-op
-                    # here and one written before its dependency still works.
-                    cvv9: (constValueOfMember
-                        :ast
-                        :ty
-                        :reg
-                        :unitName
-                        defName: defName.stringview
-                    )
-                    (constRegisterValueType
-                        :ast
-                        :ty
-                        :reg
-                        :unitName
-                        defName: defName.stringview
-                        v: cvv9
-                    )
-                    reportPendingConstFail :ty
                 }
             } else null
         }
@@ -30215,6 +30206,11 @@ resolveConstantDefs: function {
     reg: ztypes.ZTypeRegistry.view
     program: Node
 } is {
+    # the eager tier's answer to "what are this program's constants": every
+    # definition of every unit, so one nothing references is still checked.
+    # The lazy tier resolves a constant where it is demanded, in
+    # resolveDemandedDecl, and this walk does not run at all.
+    if (ty.eagerAll) == false then return
     match (
         program
     ) case program then {
@@ -31980,7 +31976,6 @@ typecheck: function {
     registerAndResolveMain ty: st.typing reg: st.reg :program
     resolveMainUnitInstantiations ty: st.typing reg: st.reg :program
     scanMainBodyCalls ty: st.typing reg: st.reg :program rootOnly9: (st.typing.eagerAll) == false
-    seedConstantSuffixDemands ty: st.typing :program
     demandAllDefs ty: st.typing :program
     resolveDemands ty: st.typing reg: st.reg :program
     match (
