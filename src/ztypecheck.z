@@ -8600,13 +8600,11 @@ aliasNamesType: function {
     return false
 }
 
-# subunitTidOf9 -- the type id of `unitName` when it names a hidden subunit
-# (or inline unit) of the unit that owns `ownerDeclId`, resolving it on first
-# ask. A nested unit is deliberately not in the file-unit name index -- two
-# files may hold units of the same name -- so the Decl tree finds it, and its
-# id is read off its unitdef node, where the resolver stamps it. 0 when the
-# name is not a child unit, which is the caller's cue to try the file index.
-subunitTidOf9: function {
+# nestedUnitTidOf -- the type id of the nested unit `unitName` names inside the
+# unit that owns `ownerDeclId`: descend one edge of the Decl tree, ask demand
+# for it, and read the id off its declaration. 0 when the name is not a child
+# unit, which is the caller's cue that the name means something else.
+nestedUnitTidOf: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     ast: Ast
@@ -8615,57 +8613,36 @@ subunitTidOf9: function {
 } out ztypes.tid is {
     if ownerDeclId.isZero then return (ztypes.tid.create from: 0)
     sub9: ty.declFindChild parentDeclId: ownerDeclId nameId: unitName
-    if sub9.isZero then return (ztypes.tid.create from: 0)
-    subNode9: u64
-    {
-        if (ty.declValid id: sub9) then {
-            sdo9: ty.decls.get i: (sub9 - 1)
-            subNode9 = sdo9.node.u64
-        }
-    }
-    if subNode9 == 0 then return (ztypes.tid.create from: 0)
-    isU9: false
-    subOp9: zast.nodeid
-    {
-        snp9: ast.nodes.get i: (subNode9 - 1)
-        if snp9.namedoperation then {
-            if (zast.unitOpKindIs
-                :ast
-                opId: snp9.operation
-                k: zast.unitkind.subunit
-            ) then isU9 = true
-            if (zast.unitOpKindIs
-                :ast
-                opId: snp9.operation
-                k: zast.unitkind.namespace
-            ) then isU9 = true
-            if isU9 then subOp9 = snp9.operation
-        }
-    }
-    if (isU9) == false then return (ztypes.tid.create from: 0)
-    # A nested unit's own id is stamped on its unitdef node -- the same place
-    # checkNamespaceBodies reads it; the Decl carries the members, not the id.
-    # A stamp already there means the unit is built, and resolving it AGAIN
-    # mints a second id, orphaning everything registered under the first.
-    unid9: unitdefNodeId :ast nId: subOp9
-    if unid9.isZero then return (ztypes.tid.create from: 0)
-    subTid9: (ztypes.tid.create
-        from: (ztyping.nodeTypeAt tbl: ty.nodeType nid: unid9.u64)
-    )
-    if subTid9.isZero then {
-        resolveDemandedDecl :ty :reg :ast declId: sub9
-        subTid9 = (ztypes.tid.create
-            from: (ztyping.nodeTypeAt tbl: ty.nodeType nid: unid9.u64)
-        )
-    }
-    return subTid9
+    if (declIsNestedUnit :ty :ast declId: sub9) == false then return (ztypes.tid.create from: 0)
+    resolveDemandedDecl :ty :reg :ast declId: sub9
+    return (declTypeIdOf :ty declId: sub9)
 }
 
-# subunitMemberTid9 -- `sub.member` where `sub` is a subunit of the unit that
-# owns `ownerDeclId`: the member resolves on demand like any other definition
-# and its id is read off its declaration, falling back to the unit type's
-# member index for members that are not Decls.
-subunitMemberTid9: function {
+# declIsNestedUnit -- does this declaration declare a unit nested in another:
+# a hidden subunit or an inline `m: unit { }`? Read off the def node's kind,
+# which the parser settled; nothing is resolved to answer.
+declIsNestedUnit: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out bool is {
+    if (ty.declValid id: declId) == false then return false
+    dn9: u64
+    {
+        do9: ty.decls.get i: (declId - 1)
+        dn9 = do9.node.u64
+    }
+    if dn9 == 0 then return false
+    np9: ast.nodes.get i: (dn9 - 1)
+    if (np9.namedoperation) == false then return false
+    if (zast.unitOpKindIs :ast opId: np9.operation k: zast.unitkind.subunit) then return true
+    return (zast.unitOpKindIs :ast opId: np9.operation k: zast.unitkind.namespace)
+}
+
+# nestedUnitMemberTid -- `sub.member` where `sub` is a nested unit of the unit
+# that owns `ownerDeclId`: two edges of the Decl tree, each resolved on demand
+# the way any definition is. 0 when either edge is missing.
+nestedUnitMemberTid: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     ast: Ast
@@ -8673,24 +8650,13 @@ subunitMemberTid9: function {
     unitName: zast.nameid
     defName: zast.nameid
 } out ztypes.tid is {
-    subTid9: (subunitTidOf9 :ty :reg :ast :ownerDeclId :unitName)
+    subTid9: nestedUnitTidOf :ty :reg :ast :ownerDeclId :unitName
     if subTid9.isZero then return (ztypes.tid.create from: 0)
     sub9: ty.declFindChild parentDeclId: ownerDeclId nameId: unitName
-    # the member is resolved on demand like any other definition: ask for the
-    # one this alias names, then read the id off its declaration
     mem9: ty.declFindChild parentDeclId: sub9 nameId: defName
-    if (mem9.isZero) == false then {
-        resolveDemandedDecl :ty :reg :ast declId: mem9
-        memTid9: ztypes.tid
-        {
-            if (ty.declValid id: mem9) then {
-                mdo9: ty.decls.get i: (mem9 - 1)
-                memTid9 = mdo9.typeId
-            }
-        }
-        if (memTid9.isZero) == false then return memTid9
-    }
-    return (ztypes.tid.create from: 0)
+    if mem9.isZero then return (ztypes.tid.create from: 0)
+    resolveDemandedDecl :ty :reg :ast declId: mem9
+    return (declTypeIdOf :ty declId: mem9)
 }
 
 # resolveAliasKey -- single-minting for a unit-level re-export alias
@@ -8733,7 +8699,7 @@ resolveAliasKey: function {
     ty.declSetResolving declId: adecl9 mark: true
     # A subunit of THIS unit is the nearer scope, so it answers before the
     # file-unit index -- the same order a name written inside a namespace takes.
-    atid9: (subunitMemberTid9
+    atid9: (nestedUnitMemberTid
         :ty
         :reg
         :ast
@@ -29220,7 +29186,7 @@ evalConstNode: function {
                 match (
                     sro9
                 ) case some then {
-                    sst9: (subunitTidOf9
+                    sst9: (nestedUnitTidOf
                         :ty
                         :reg
                         :ast
