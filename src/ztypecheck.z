@@ -1643,6 +1643,15 @@ declareCanonicalType: function {
         } case none then null
     }
     id: reg.newType :name ownerTid: qowner9 :typetype
+    # valtype-ness is a property of the definition's KIND -- a record or a
+    # variant is a valtype, a class or a union is not -- and is known here,
+    # at declaration; a reference that reaches the declared id before its
+    # definition resolves (a generic argument checked against `anyval`
+    # while the target of a re-export is mid-resolution) must not read an
+    # unset flag as "not a valtype". The definition's own resolution sets
+    # the same value again.
+    if typetype == ztypes.ztypetype.recordType then reg.setValtype typeId: id value: true
+    if typetype == ztypes.ztypetype.variantType then reg.setValtype typeId: id value: true
     if qowner9 > 0 then {
         (ty.setMemberType
             parentTypeId: (ztypes.tid.create from: qowner9.u64)
@@ -8893,7 +8902,11 @@ aliasTargetMintedTid: function {
     ) case some then {
         tuT9: zast.poolTextAt pool: ast.names ref: unitName
         tnT9: zast.poolTextAt pool: ast.names ref: defName
-        return (declareCanonicalType
+        # declared in the TARGET's frame -- its parent unit -- so the id is
+        # the one the target's own resolution declares (keyed on that unit)
+        prevFrame9: ty.curFrame
+        ty.curFrame = declParentIdOf :ty declId: tgt9
+        r9: (declareCanonicalType
             :ast
             :ty
             :reg
@@ -8902,6 +8915,8 @@ aliasTargetMintedTid: function {
             name: tnT9.stringview
             typetype: tto9
         )
+        ty.curFrame = prevFrame9
+        return r9
     } case none then {
         return 0
     }
