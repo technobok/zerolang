@@ -13598,6 +13598,22 @@ stampPendingTyperefs: function {
 } is {
     pkeys9: (ListVal u64)
     pvals9: (List String)
+    # entries an earlier pass deferred (their declaration was still
+    # unresolved) come first, then the entries recorded since the last pass
+    ri9: u64
+    rn9: ty.typerefRetry.length
+    for ri9 < rn9 loop {
+        rk9: ty.typerefRetry.get i: ri9
+        ri9 = ri9 + 1
+        rv9: ty.pendingTyperef.get key: rk9
+        match (
+            rv9
+        ) case some then {
+            pkeys9.append rk9
+            pvals9.append rv9.copy
+        } case none then null
+    }
+    ty.typerefRetry = (ListVal u64)
     seen9: u64
     with it: ty.pendingTyperef.iterateItems do for e: it loop {
         seen9 = seen9 + 1
@@ -13690,6 +13706,27 @@ stampPendingTyperefs: function {
                 # that collides with some template's param name is the
                 # accepted blind spot).
                 if (gpNames9.has item: pval9.copy) then {
+                    ty.curFrame = prevFrame9
+                    continue
+                }
+                # a name whose declaration the environment finds queued or
+                # mid-resolution is not unknown: this pass may run in the
+                # middle of a drain (a nested unit materialising stamps what
+                # it recorded) before the declaration has resolved. The
+                # reference stamps on a later pass, once it has.
+                dh9: (envLookup
+                    :ty
+                    :ast
+                    frame: ty.curFrame
+                    nameId: (nameIdOf :ast name: pval9.stringview)
+                )
+                dhWait9: false
+                if (dh9.declId.isZero) == false then {
+                    if (ty.declIsPending declId: dh9.declId) then dhWait9 = true
+                    if (ty.declIsResolving declId: dh9.declId) then dhWait9 = true
+                }
+                if dhWait9 then {
+                    ty.typerefRetry.append from: uk
                     ty.curFrame = prevFrame9
                     continue
                 }
