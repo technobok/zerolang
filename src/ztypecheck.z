@@ -6103,131 +6103,38 @@ scanUnitVisibility: function {
         axU9 = axU9 + 1
     }
 }
-
 # checkOneRequireBlock -- the schema for one `require:` block: it introduces a
 # unit, declares at least one requirement, and every entry is a key the
-# compiler consumes -- today only `library:`, whose value is a plain string
-# literal. A key nothing reads would be silently ignored, so it is rejected.
+# compiler consumes -- today only `library:`, whose value is a compile-time
+# string. A key nothing reads would be silently ignored, so it is rejected.
+# The block is read as what it is -- a nested unit -- through its Decl children
+# and the constant its resolution folded, never off the AST: an entry may be
+# computed from other definitions in the block, and only the ordinary
+# machinery resolves those in dependency order.
 checkOneRequireBlock: function {
     ty: ztyping.ZTyping
     ast: Ast
-    reg: ztypes.ZTypeRegistry
-    unitName: StringView
     declId: ztypes.declid
     libNid: zast.nameid
-    reached: bool
 } is {
     rnode9q: u32
+    isUnit9q: false
+    rtid9q: ztypes.tid
     {
         dr9q: ty.decls.get i: declId.u64
         rnode9q = dr9q.node
+        if dr9q.kind.unitDecl then isUnit9q = true
+        rtid9q = dr9q.typeId
     }
     if rnode9q == 0 then return
-    opId9q: u32
     rline9q: u32
     rcol9q: u32
     {
         rn9q: ast.nodes.get i: rnode9q.u64
-        match (
-            rn9q
-        ) case namedoperation then {
-            opId9q = rn9q.operation
-            rline9q = rn9q.lineno
-            rcol9q = rn9q.colno
-        } else null
+        rline9q = nodeLine n: rn9q
+        rcol9q = nodeCol n: rn9q
     }
-    if opId9q == 0 then return
-    on9q: ast.nodes.get i: opId9q.u64
-    match (
-        on9q
-    ) case unitdef then {
-        nmem9q: u64
-        with rit9q: on9q.body.iterate do for mId9q: rit9q loop {
-            nmem9q = nmem9q + 1
-            mn9q: ast.nodes.get i: mId9q.u64
-            match (
-                mn9q
-            ) case namedoperation then {
-                if mn9q.name == libNid then {
-                    # any expression the compiler can evaluate to a string,
-                    # not just a literal: the point of the block is to let a
-                    # unit decide what it needs from the toolchain it is being
-                    # built with, and deciding means an `if`.
-                    nerr9q: ty.errors.length
-                    constFailClear :ty
-                    lv9q: (evalConstNode
-                        :ast
-                        :ty
-                        :reg
-                        :unitName
-                        n: (ast.nodes.get i: mn9q.operation.u64)
-                    )
-                    cf9q: ty.constFail
-                    failed9q: (cf9q.kind.none) == false
-                    if reached then {
-                        reportPendingConstFail :ty
-                    } else {
-                        # a unit the program never reaches demands nothing OF
-                        # it. `library:` may legitimately evaluate to a reached
-                        # `error` under this toolchain -- quadfloat's does, for
-                        # every tcc build -- and that is a diagnostic for a
-                        # program that USES the unit. requiredLibs applies the
-                        # same rule to the VALUE; this applies it to the
-                        # failure, which is what keeps one unguarded unit from
-                        # rejecting every program in the tree.
-                        constFailClear :ty
-                    }
-                    if (lv9q.kind.svalKind) == false then {
-                        # a failed evaluation in an unreached unit said nothing
-                        # about this program, so nothing follows from it; one
-                        # that SUCCEEDED and produced a non-string is a schema
-                        # error whether the unit is reached or not.
-                        say9q: reached
-                        if (failed9q) == false then say9q = true
-                        # when the evaluation itself reported -- a reached
-                        # `error`, an interpolation -- it has already said what
-                        # is wrong, and "must evaluate to a string" on top of
-                        # that is noise. Compared against THIS call's count
-                        # rather than ty.isError, which any earlier error in
-                        # the program would have set.
-                        if say9q when ty.errors.length == nerr9q then {
-                            (addResolveErrorH
-                                :ty
-                                nodeid: mn9q.nodeid
-                                lineno: mn9q.lineno
-                                colno: mn9q.colno
-                                e: zast.err.requireBlock
-                                msg: "'library:' must evaluate to a string at compile time".string
-                                width: 7
-                            )
-                        }
-                    }
-                } else {
-                    kt9q: zast.nameTextAt :ast ref: mn9q.name
-                    (addResolveErrorH
-                        :ty
-                        nodeid: mn9q.nodeid
-                        lineno: mn9q.lineno
-                        colno: mn9q.colno
-                        e: zast.err.requireBlock
-                        msg: "unknown 'require:' entry '\{kt9q}' -- the compiler consumes only 'library:'"
-                        width: 1
-                    )
-                }
-            } else null
-        }
-        if nmem9q == 0 then {
-            (addResolveErrorH
-                :ty
-                nodeid: (zast.nodeid.create from: rnode9q)
-                lineno: rline9q
-                colno: rcol9q
-                e: zast.err.requireBlock
-                msg: "a 'require:' block must declare at least one requirement".string
-                width: 7
-            )
-        }
-    } else {
+    if (isUnit9q) == false then {
         (addResolveErrorH
             :ty
             nodeid: (zast.nodeid.create from: rnode9q)
@@ -6237,302 +6144,154 @@ checkOneRequireBlock: function {
             msg: "'require:' must introduce a unit definition, e.g. `require: unit { library: \"m\" }`".string
             width: 7
         )
+        return
+    }
+    nmem9q: ty.declChildSlots :declId
+    if nmem9q == 0 then {
+        (addResolveErrorH
+            :ty
+            nodeid: (zast.nodeid.create from: rnode9q)
+            lineno: rline9q
+            colno: rcol9q
+            e: zast.err.requireBlock
+            msg: "a 'require:' block must declare at least one requirement".string
+            width: 7
+        )
+        return
+    }
+    i9q: u64
+    for i9q < nmem9q loop {
+        c9q: ty.declChildAt :declId index: i9q
+        i9q = i9q + 1
+        if (c9q.isZero) == false then {
+            cnm9q: ty.declNameOf declId: c9q
+            cnode9q: u32
+            {
+                cd9q: ty.decls.get i: c9q.u64
+                cnode9q = cd9q.node
+            }
+            eline9q: rline9q
+            ecol9q: rcol9q
+            enid9q: (zast.nodeid.create from: rnode9q)
+            if cnode9q > 0 then {
+                cn9q: ast.nodes.get i: cnode9q.u64
+                eline9q = nodeLine n: cn9q
+                ecol9q = nodeCol n: cn9q
+                enid9q = nodeId n: cn9q
+            }
+            if cnm9q == libNid.u32 then {
+                # the value the block's own resolution folded. An entry the
+                # evaluator already reported on -- a reached `error`, an
+                # interpolation -- has said what is wrong, and "must evaluate
+                # to a string" on top of that is noise.
+                lv9q: ty.memberConstOf parentTypeId: rtid9q nameId: libNid
+                if (lv9q.kind.svalKind) == false when (ty.isError) == false then {
+                    (addResolveErrorH
+                        :ty
+                        nodeid: enid9q
+                        lineno: eline9q
+                        colno: ecol9q
+                        e: zast.err.requireBlock
+                        msg: "'library:' must evaluate to a string at compile time".string
+                        width: 7
+                    )
+                }
+            } else {
+                kt9q: (zast.poolTextAt
+                    pool: ast.names
+                    ref: (zast.nameid.create from: cnm9q)
+                )
+                (addResolveErrorH
+                    :ty
+                    nodeid: enid9q
+                    lineno: eline9q
+                    colno: ecol9q
+                    e: zast.err.requireBlock
+                    msg: "unknown 'require:' entry '\{kt9q}' -- the compiler consumes only 'library:'"
+                    width: 1
+                )
+            }
+        }
     }
 }
 
-# requireLibraryText -- the library a `require:` block names, or "" when it
-# names none. checkRequireBlocks has already rejected any other shape.
-requireLibraryText: function {
-    ast: Ast
-    ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry
-    unitName: StringView
-    opId: u32
+# requireLibraryOf9 -- the link library one demanded `require:` block names, ""
+# when it names none. A pure read of the constant its resolution folded.
+requireLibraryOf9: function {
+    ty: ztyping.ZTyping.view
+    declId: ztypes.declid
     libNid: zast.nameid
 } out String is {
     lib9w: String
-    if opId == 0 then return lib9w
-    mop9w: u32
+    rtid9w: ztypes.tid
     {
-        on9w: ast.nodes.get i: opId.u64
-        match (
-            on9w
-        ) case unitdef then {
-            with bit9w: on9w.body.iterate do for mId9w: bit9w loop {
-                mn9w: ast.nodes.get i: mId9w.u64
-                match (
-                    mn9w
-                ) case namedoperation then {
-                    if mn9w.name == libNid then mop9w = mn9w.operation
-                } else null
-            }
-        } else null
+        dr9w: ty.decls.get i: declId.u64
+        rtid9w = dr9w.typeId
     }
-    if mop9w == 0 then return lib9w
-    constFailClear :ty
-    v9w: (evalConstNode
-        :ast
-        :ty
-        :reg
-        :unitName
-        n: (ast.nodes.get i: mop9w.u64)
-    )
-    constFailClear :ty
+    if rtid9w.isZero then return lib9w
+    v9w: ty.memberConstOf parentTypeId: rtid9w nameId: libNid
     if v9w.kind.svalKind then lib9w = constStringAt :ty id: v9w.strId
     return lib9w
 }
 
-# unitWasReached -- did the program resolve a definition of `unitName` OTHER
-# than its own `require:` block? That is what makes a require: block a
-# requirement of the PROGRAM rather than a claim the unit makes about itself:
-# the block is a top-level definition like any other, so counting it would let
-# every unit light itself. Shared by the two readers of a require: block --
-# what it CONTRIBUTES (requiredLibs) and whether its failure is this program's
-# to hear (checkOneRequireBlock) -- because they must agree.
-unitWasReached: function {
-    ty: ztyping.ZTyping
-    ast: Ast
-    rootDecl: ztypes.declid
-    unitOp: u32
-} out bool is {
-    r9u: false
-    if rootDecl.isZero then return false
-    bodyIds9u: zast.unitBodyIdsAt :ast unitId: unitOp
-    with bit9u: bodyIds9u.iterate do for mId9u: bit9u loop {
-        mn9u: ast.nodes.get i: mId9u.u64
-        match (
-            mn9u
-        ) case namedoperation then {
-            isReq9u: (zast.unitOpKindIs
-                :ast
-                opId: mn9u.operation
-                k: zast.unitkind.requirement
-            )
-            if (isReq9u) == false then {
-                d9u: ty.declFindChild parentDeclId: rootDecl nameId: mn9u.name
-                if (d9u.isZero) == false then {
-                    if (ty.declIsDefined declId: d9u) then r9u = true
-                }
-            }
-        } else null
-    }
-    return r9u
-}
-
-# requnit -- a unit whose `require:` block a program may have to hear: every
-# file unit, and every hidden subunit inside one. A subunit states what IT
-# needs from the host toolchain, and a program that reaches it through its
-# parent's re-export must hear that as surely as one that names the unit.
-requnit: record {
-    nameId: zast.nameid
-    unitOp: zast.nodeid
-    rootDecl: ztypes.declid
-}
-
-# addNestedRequireUnits9 -- the subunits and namespaces inside one unit body,
-# to any depth. Deterministic: declaration order.
-addNestedRequireUnits9: function {
-    ty: ztyping.ZTyping.view
-    ast: Ast.view
-    into: (ListVal requnit)
-    rootDecl: ztypes.declid
-    unitOp: zast.nodeid
-} is {
-    if rootDecl.isZero then return
-    bodyIds9n: zast.unitBodyIdsAt :ast unitId: unitOp
-    with bit9n: bodyIds9n.iterate do for mId9n: bit9n loop {
-        mn9n: ast.nodes.get i: mId9n.u64
-        match (
-            mn9n
-        ) case namedoperation then {
-            if (zast.unitOpDeclaresUnit :ast opId: mn9n.operation) then {
-                cd9n: ty.declFindChild parentDeclId: rootDecl nameId: mn9n.name
-                if (cd9n.isZero) == false then {
-                    (into.append
-                        (requnit
-                            nameId: mn9n.name
-                            unitOp: (zast.nodeid.create from: mn9n.operation)
-                            rootDecl: cd9n
-                        )
-                    )
-                    (addNestedRequireUnits9
-                        :ty
-                        :ast
-                        :into
-                        rootDecl: cd9n
-                        unitOp: (zast.nodeid.create from: mn9n.operation)
-                    )
-                }
-            }
-        } else null
-    }
-}
-
-# collectRequireUnits9 -- the file units and every nested unit inside them.
-collectRequireUnits9: function {
-    ty: ztyping.ZTyping.view
-    ast: Ast
-} out (ListVal requnit) is {
-    out9c: (ListVal requnit)
-    uCnt9c: ast.units.length
-    uIdx9c: u64
-    for uIdx9c < uCnt9c loop {
-        uId9c: (zast.nodeid.create from: (ast.units.get i: uIdx9c))
-        uIdx9c = uIdx9c + 1
-        un9c: ast.nodes.get i: uId9c.u64
-        match (
-            un9c
-        ) case namedoperation then {
-            rd9c: ztypes.declid
-            ro9c: ty.unitRootByName.get key: un9c.name.u64
-            match (
-                ro9c
-            ) case some then {
-                rd9c = ztypes.declid.create from: ro9c
-            } case none then null
-            if (rd9c.isZero) == false then {
-                (out9c.append
-                    (requnit
-                        nameId: un9c.name
-                        unitOp: (zast.nodeid.create from: un9c.operation)
-                        rootDecl: rd9c
-                    )
-                )
-                (addNestedRequireUnits9
-                    :ty
-                    :ast
-                    into: out9c
-                    rootDecl: rd9c
-                    unitOp: (zast.nodeid.create from: un9c.operation)
-                )
-            }
-        } else null
-    }
-    return out9c
-}
-
 # requiredLibs -- the link libraries the program's reached units declare. A
-# `require:` block applies only when the program reaches its unit, which is
-# what makes the declaration a requirement rather than a link-everything list.
+# `require:` block applies only when the program reaches its unit, and
+# ZTyping.requireDemanded IS that set: a block is demanded by the first
+# declaration resolved from its unit and by nothing else, so it cannot light
+# its own unit.
 requiredLibs: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     program: Node
 } out List String is {
+    reg
     libs9w: (List String)
     match (
         program
     ) case program then {
         libNid9w: zast.poolFind pool: program.ast.names text: "library"
         if libNid9w.isZero then return libs9w
-        rus9w: collectRequireUnits9 :ty ast: program.ast
-        uCnt9w: rus9w.length
-        uIdx9w: u64
-        for uIdx9w < uCnt9w loop {
-            ru9w: rus9w.get i: uIdx9w
-            uIdx9w = uIdx9w + 1
-            unm9w: (zast.poolTextAt pool: program.ast.names ref: ru9w.nameId).copy
-            uOp9w: ru9w.unitOp.u32
-            if uOp9w > 0 then {
-                lib9x: String
-                reached9w: (unitWasReached
-                    :ty
-                    ast: program.ast
-                    rootDecl: ru9w.rootDecl
-                    unitOp: uOp9w
-                )
-                # stage the block's operation id and evaluate AFTER the walk:
-                # evaluating takes an exclusive lock on program.ast, which
-                # cannot run while this iteration holds a shared one
-                reqOp9x: u32
-                bodyIds9w: zast.unitBodyIdsAt ast: program.ast unitId: uOp9w
-                with bit9x: bodyIds9w.iterate do for mId9x: bit9x loop {
-                    mn9x: program.ast.nodes.get i: mId9x.u64
-                    match (
-                        mn9x
-                    ) case namedoperation then {
-                        if (zast.unitOpKindIs
-                            ast: program.ast
-                            opId: mn9x.operation
-                            k: zast.unitkind.requirement
-                        ) then reqOp9x = mn9x.operation
-                    } else null
+        with rit9w: ty.requireDemanded.iterate do for rq9w: rit9w loop {
+            lib9x: requireLibraryOf9 :ty declId: rq9w libNid: libNid9w
+            if lib9x.length > 0 then {
+                dup9w: false
+                with dit9w: libs9w.iterate do for e9w: dit9w loop {
+                    if e9w.stringview == lib9x.stringview then dup9w = true
                 }
-                if reqOp9x > 0 then {
-                    lib9x = (requireLibraryText
-                        ast: program.ast
-                        :ty
-                        :reg
-                        unitName: unm9w.stringview
-                        opId: reqOp9x
-                        libNid: libNid9w
-                    )
-                }
-                if reached9w when lib9x.length > 0 then {
-                    dup9w: false
-                    with dit9w: libs9w.iterate do for e9w: dit9w loop {
-                        if e9w.stringview == lib9x.stringview then dup9w = true
-                    }
-                    if (dup9w) == false then libs9w.append from: lib9x.copy
-                }
+                if (dup9w) == false then libs9w.append from: lib9x.copy
             }
         }
     } else null
     return libs9w
 }
 
-# checkRequireBlocks -- a unit's `require:` block states what the unit needs
-# from the host toolchain. The block is an ordinary nested subunit, so the
-# standard unit machinery indexes it and resolves nothing inside it; its schema
-# is layered on here. declFindChild reads the pre-resolution def index, so a
-# block in a unit the program never demands is still SCHEMA-checked -- but only
-# a program that reaches the unit hears its `library:` fail to evaluate.
+# checkRequireBlocks -- the schema check for every `require:` block the program
+# demanded. A block in a unit nothing reached is never resolved and so has no
+# claim to make about this program; the linter is what checks code a program
+# does not use.
 checkRequireBlocks: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     program: Node
 } is {
+    reg
     match (
         program
     ) case program then {
-        reqNid9q: zast.poolFind pool: program.ast.names text: "require"
-        if reqNid9q.isZero then return
         libNid9q: zast.poolFind pool: program.ast.names text: "library"
-        rus9q: collectRequireUnits9 :ty ast: program.ast
-        uCnt9q: rus9q.length
-        uIdx9q: u64
-        for uIdx9q < uCnt9q loop {
-            ru9q: rus9q.get i: uIdx9q
-            uIdx9q = uIdx9q + 1
-            unm9q: (zast.poolTextAt pool: program.ast.names ref: ru9q.nameId).copy
-            uOp9q: ru9q.unitOp.u32
-            udecl9q: ru9q.rootDecl
-            if (udecl9q.isZero) == false then {
-                rdecl9q: ty.declFindChild parentDeclId: udecl9q nameId: reqNid9q
-                if (rdecl9q.isZero) == false then {
-                    reach9q: false
-                    if uOp9q > 0 then {
-                        reach9q = (unitWasReached
-                            :ty
-                            ast: program.ast
-                            rootDecl: ru9q.rootDecl
-                            unitOp: uOp9q
-                        )
-                    }
-                    prevFrame9: ty.curFrame
-                    ty.curFrame = udecl9q
-                    (checkOneRequireBlock
-                        :ty
-                        ast: program.ast
-                        :reg
-                        unitName: unm9q.stringview
-                        declId: rdecl9q
-                        libNid: libNid9q
-                        reached: reach9q
-                    )
-                    ty.curFrame = prevFrame9
-                }
-            }
+        if libNid9q.isZero then return
+        rqs9q: (ListVal ztypes.declid)
+        with cit9q: ty.requireDemanded.iterate do for r9q: cit9q loop rqs9q.append from: r9q
+        with qit9q: rqs9q.iterate do for rq9q: qit9q loop {
+            prevFrame9: ty.curFrame
+            ty.curFrame = declParentIdOf :ty declId: rq9q
+            (checkOneRequireBlock
+                :ty
+                ast: program.ast
+                declId: rq9q
+                libNid: libNid9q
+            )
+            ty.curFrame = prevFrame9
         }
     } else null
 }
@@ -9277,6 +9036,13 @@ resolveDef: function {
     # asked for it. A definition the name index cannot place keeps the
     # caller's frame (a nested unit's member reached from its own unit walk).
     rdecl0: declOfUnitDef :ty :ast defUnit: unitName name: defName
+    # every resolver funnels through here, so this is where a unit's toolchain
+    # requirement is owed: before its first definition resolves.
+    {
+        ehd9: rdecl0
+        if ehd9.isZero then ehd9 = ty.curFrame
+        ensureUnitRequire :ty :reg :ast declId: ehd9
+    }
     prevFrame9: ty.curFrame
     if (rdecl0.isZero) == false then ty.curFrame = declParentIdOf :ty declId: rdecl0
     resolveDefIn :ty :reg :ast :unitName :defName :defn
@@ -10337,6 +10103,98 @@ publicNsChildOf: function {ty: ztyping.ZTyping root: ztypes.declid} out ztypes.d
     return (ty.declPublicNsOf owner: root)
 }
 
+# owningUnitDecl9 -- the unit a declaration is written in: the nearest
+# enclosing unit-kind Decl, or the declaration itself when it is one. Not the
+# file root -- a subunit owns its own `require:` block, and `wideint`'s is not
+# `system`'s.
+owningUnitDecl9: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out ztypes.declid is {
+    cur9: declId
+    for cur9 > 0 loop {
+        do9: ty.decls.get i: cur9.u64
+        if do9.kind.unitDecl then return cur9
+        cur9 = do9.parent
+    }
+    return (ztypes.declid.create from: 0)
+}
+
+# ensureUnitRequire -- a unit's `require:` block states what it needs from the
+# host toolchain, which makes it a precondition on using the unit: the FIRST
+# declaration demanded from a unit resolves the block first, through the
+# ordinary unit machinery, so a block with definitions of its own folds them in
+# dependency order. Marking before demanding is what stops the regress --
+# folding `library:` demands `platform.cc`, a declaration in `platform`, which
+# re-enters here.
+ensureUnitRequire: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    declId: ztypes.declid
+} is {
+    own9: owningUnitDecl9 :ty :declId
+    if own9.isZero then return
+    if (ty.requireSeen.has item: own9.u64) then return
+    ty.requireSeen.add item: own9.u64
+    rqn9: zast.poolFind pool: ast.names text: "require"
+    if rqn9.isZero then return
+    rq9: ty.declFindChild parentDeclId: own9 nameId: rqn9
+    if rq9.isZero then return
+    ty.requireDemanded.append from: rq9
+    # a block that is demanded is one this program reaches, so a reached
+    # `error` in it -- quadfloat's under tcc -- is this program's to hear, and
+    # hearing it HERE is the point of the block: at the moment the unit is
+    # first used, not after its C has been written. The ambient pending
+    # failure belongs to whatever resolution we interrupted; save it.
+    # the block guards on the toolchain, so the platform facts have to be in
+    # place before it folds -- earlier than the main pass seeds them. Once.
+    if (ty.platformSeeded) == false then {
+        ty.platformSeeded = true
+        seedPlatformConsts :ast :ty :reg
+    }
+    prevFail9: ty.constFail
+    constFailClear :ty
+    resolveDemandedDecl :ty :reg :ast declId: rq9
+    # the block resolved as the unit it is; now DEMAND the fold of each entry,
+    # which is what a general compile-time expression needs -- the eager
+    # namespace walk folds only the simple forms.
+    {
+        onm9: (zast.poolTextAt
+            pool: ast.names
+            ref: (zast.nameid.create from: (ty.declNameOf declId: own9))
+        )
+        rtid9: declTypeIdOf :ty declId: rq9
+        ecnt9: ty.declChildSlots declId: rq9
+        ei9: u64
+        for ei9 < ecnt9 loop {
+            ec9: ty.declChildAt declId: rq9 index: ei9
+            ei9 = ei9 + 1
+            if (ec9.isZero) == false then {
+                enm9: ty.declNameOf declId: ec9
+                enode9: u32
+                {
+                    ed9: ty.decls.get i: ec9.u64
+                    enode9 = ed9.node
+                }
+                etx9: (zast.poolTextAt
+                    pool: ast.names
+                    ref: (zast.nameid.create from: enm9)
+                )
+                (constValueOfMemberAt
+                    :ast
+                    :ty
+                    :reg
+                    unitName: onm9.stringview
+                    ownerTid: rtid9
+                    nameId: (zast.nameid.create from: enm9)
+                    defNodeId: enode9
+                    defName: etx9.stringview
+                )
+            }
+        }
+    }
+    reportPendingConstFail :ty
+    ty.constFail = prevFail9
+}
+
 # resolveDemandedDecl -- resolve one demanded declaration now, unless it is
 # already resolved or mid-resolution: a prelude re-export follows its alias
 # to the target; otherwise the dispatch is the unit sweeps' -- a namespace
@@ -10351,6 +10209,7 @@ resolveDemandedDecl: function {
     ty.declSetPending :declId mark: false
     if (ty.declIsResolving :declId) then return
     if (ty.declIsDefined :declId) then return
+    ensureUnitRequire :ty :reg :ast :declId
     # a demanded declaration resolves in the frame it is written in -- its
     # parent -- whatever frame the demand came from
     pf9: ty.curFrame
@@ -10464,6 +10323,31 @@ resolveDemandedDeclIn: function {
         )
         ty.declSetDefined :declId
     } else if (isUnitOp op: (ast.nodes.get i: opId9.u64)) then {
+        # an inline `unit { ... }` resolves as the namespace it is. The walk
+        # reaches one when it walks the enclosing unit; a DEMAND for one --
+        # a `require:` block owed before its unit's first definition -- has to
+        # reach the same door, or the members never resolve and their
+        # constants never fold.
+        alreadyI9: false
+        {
+            uni9: unitdefNodeId :ast nId: opId9
+            if (uni9.isZero) == false then {
+                if (ztyping.nodeTypeAt tbl: ty.nodeType nid: uni9.u64) > 0 then alreadyI9 = true
+            }
+        }
+        if (alreadyI9) == false then {
+            (resolveNamespaceUnit
+                :ty
+                :reg
+                :ast
+                unitName: unitName9.stringview
+                defName: defName9.stringview
+                parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: puNm9))
+                parentDeclId: dParent9
+                unitOpId: opId9
+            )
+        }
+        ty.declSetDefined :declId
         return
     } else {
         # A re-export is a definition like any other, and resolving it means
@@ -11935,24 +11819,11 @@ resolveNamespaceUnit: function {
         ) case namedoperation then {
             mName9: zast.nameTextCopy :ast ref: bmNode9.name
             if mName9.length > 0 then {
-                # a `require:` block is a toolchain directive, not a
-                # definition. Both things that consume it -- the schema check
-                # and requiredLibs -- read it straight off the AST, and
-                # unitWasReached already has to exclude it by hand. Resolving
-                # it minted a unit type no reference can name and folded its
-                # `library:` entry as a unit constant, which dragged
-                # platform's cckind into every compile: system's numeric
-                # subunits each carry one.
-                if (zast.unitOpKindIs
-                    :ast
-                    opId: bmNode9.operation
-                    k: zast.unitkind.requirement
-                ) then continue
                 # dispatch by KIND, as resolveUnitBody does. A unit body that
                 # declares a generic param parses as `template`, and only
                 # resolveInlineGenericUnit marks it generic, registers its
-                # params and stamps its def node. A `public:` block stays on
-                # resolveDef, which is what folds its members.
+                # params and stamps its def node. A `public:`/`require:` block
+                # stays on resolveDef, which is what folds its members.
                 isTmpl9: (zast.unitOpKindIs
                     :ast
                     opId: bmNode9.operation
@@ -29215,9 +29086,36 @@ constValueOfMember: function {
 } out ztypes.cval is {
     ut9: constOwnerTidFor :ast :ty :reg :unitName :defName
     if ut9 == 0 then return ztypes.noConst
-    utid9: ztypes.tid.create from: ut9.u64
     nid9: zast.poolFind pool: ast.names text: defName
     if nid9.isZero then return ztypes.noConst
+    return (constValueOfMemberAt
+        :ast
+        :ty
+        :reg
+        :unitName
+        ownerTid: (ztypes.tid.create from: ut9.u64)
+        nameId: nid9
+        defNodeId: (constDefNodeId :ast :ty :unitName :defName)
+        :defName
+    )
+}
+
+# constValueOfMemberAt -- the fold itself, addressed by ids. A member of a
+# NESTED unit has no (unitName, defName) pair that names it, so the two
+# name-keyed lookups above are the wrapper's and the evaluation is here.
+constValueOfMemberAt: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    ownerTid: ztypes.tid
+    nameId: zast.nameid
+    defNodeId: u32
+    defName: StringView
+} out ztypes.cval is {
+    utid9: ownerTid
+    nid9: nameId
+    if utid9.isZero then return ztypes.noConst
     k9: ty.memberConstKey parentTypeId: utid9 nameId: nid9
     st9: 0
     {
@@ -29229,7 +29127,7 @@ constValueOfMember: function {
         } case none then null
     }
     if st9 == 2 then return (ty.memberConstOf parentTypeId: utid9 nameId: nid9)
-    dnid9: constDefNodeId :ast :ty :unitName :defName
+    dnid9: defNodeId
     if dnid9 == 0 then return ztypes.noConst
     opid9: u32
     dline9: u32
