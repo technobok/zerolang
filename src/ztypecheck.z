@@ -19651,23 +19651,7 @@ checkAssignment: function {
     mvt: materialiseLiteral :ast :st :unitName t: vt
     vt = mvt
     if vt.isZero when st.typing.errors.length == errA0 then {
-        ubn0: unresolvedBareCallable :ast :st :unitName n: av9
-        if ubn0.length > 0 then {
-            um0: "Unknown reference '\{ubn0}'"
-            en0u: String
-            eh0u: String
-            (addErrorH
-                :st
-                nodeid: (nodeId n: av9)
-                lineno: (nodeLine n: av9)
-                colno: (nodeCol n: av9)
-                e: zast.err.badReference
-                msg: um0
-                note: en0u
-                hint: eh0u
-                width: ubn0.length.u32.orPanic
-            )
-        }
+        reportUnresolvedValue :st :unitName :ast vnode: av9
     }
     if vt > 0 when (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.nullType then {
         m1: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
@@ -23690,6 +23674,19 @@ dottedRootName: function {ast: Ast.view n: Node.view} out String is {
     }
 }
 
+# isDottedValue -- the node under any expression wrappers is a dotted path.
+isDottedValue: function {ast: Ast.view n: Node.view} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (isDottedValue :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case dottedpath then {
+        return true
+    } else {
+        return false
+    }
+}
+
 # report an unresolved bare callee (E0023).
 unresolvedBareCallable: function {ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -23752,7 +23749,7 @@ reportUnresolvedValue: function {
         # binding sites share that helper and reach bodies whose locals are
         # absent from the scope table, where the negative proof would reject
         # a real name (`lx.advance` in zlexer's Lexer).
-        if (zast.kindOf :ast id: (nodeId n: vnode)) == zast.astkind.dottedpath then {
+        if (isDottedValue :ast n: vnode) then {
             ubD9: dottedRootName :ast n: vnode
             ubU9 = unresolvedBareName :ast :st :unitName name: ubD9.stringview
         }
