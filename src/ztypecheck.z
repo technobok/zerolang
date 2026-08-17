@@ -914,18 +914,19 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                 }
             }
             if opId9 > 0 then {
+                # a file unit is a NAMED child of the program root, which is
+                # what makes declFindChild(programRoot, name) the unit-root
+                # lookup. Last-wins there matches the name index it replaces, so
+                # two files declaring the same unit name resolve as they did.
+                # The root carries no unit-frame bit, so no bare-name walk
+                # reaches these children -- unitFrameOf climbs through it.
                 udid9: (ty.declNew
                     name: unmRef9
-                    parent: ztypes.declid
+                    parent: ty.programRoot
                     kind: ztyping.declkind.unitDecl
                     node: ruId9
                 )
-                # parented AFTER the mint: a file unit hangs under the program
-                # root, but takes no name edge there -- a bare name must not
-                # reach a unit through the root
-                ty.declSetParent declId: udid9 parent: ty.programRoot
                 ty.declSetUnitFrame declId: udid9
-                ty.unitRootByName.set key: unmRef9.u64 value: udid9
                 utl9: reg.unitNameTid.get key: unmRef9.u64
                 match (
                     utl9
@@ -943,12 +944,11 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
         }
         ty.defNodeIndexBuilt = true
         {
-            cro9: ty.unitRootByName.get key: (nameIdOf ast: program.ast name: "core").u64
-            match (
-                cro9
-            ) case some then {
-                ty.coreUnitRoot = cro9
-            } case none then null
+            cro9: (ty.declFindChild
+                parentDeclId: ty.programRoot
+                nameId: (nameIdOf ast: program.ast name: "core")
+            )
+            if (cro9.isZero) == false then ty.coreUnitRoot = cro9
         }
         # canonical pre-index mints that pended their root proxy
         px9: u64
@@ -957,10 +957,11 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
             pxt9: ty.declProxyTids.get i: px9
             pxu9: (ty.declProxyUnits.get i: px9).copy
             px9 = px9 + 1
-            pxr9: ty.unitRootByName.get key: (nameIdOf ast: program.ast name: pxu9.stringview).u64
-            match (
-                pxr9
-            ) case some then {
+            pxr9: (ty.declFindChild
+                parentDeclId: ty.programRoot
+                nameId: (nameIdOf ast: program.ast name: pxu9.stringview)
+            )
+            if (pxr9.isZero) == false then {
                 stillp9: false
                 if (reg.defOf tid: (ztypes.tid.create from: pxt9.u64)).u64 == 0 then stillp9 = true
                 if stillp9 then {
@@ -998,7 +999,7 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                         }
                     }
                 }
-            } case none then null
+            }
         }
         # pre-index mints (lowerGenerators' system pre-resolves) predate
         # the def index; link any still-unlinked named system def now
@@ -1552,12 +1553,8 @@ definingUnitFor: function {
     if hit9.declId.isZero then return "".string
     ur9: ztypes.declid
     {
-        uro9: ty.unitRootByName.get key: cuId9.u64
-        match (
-            uro9
-        ) case some then {
-            ur9 = uro9
-        } case none then null
+        uro9: ty.declFindChild parentDeclId: ty.programRoot nameId: cuId9
+        if (uro9.isZero) == false then ur9 = uro9
     }
     if hit9.frame == ur9 then return currentUnit.string
     ru9: reexportUnitOf :ty :ast declId: hit9.declId
@@ -1704,12 +1701,10 @@ declareCanonicalType: function {
         # a canonically-declared name with no source Decl (a synthesized
         # type like tag__u8): attribute it to the unit's root Decl; a
         # pre-index mint pends until indexUnitDefs builds the roots
-        prx9: ty.unitRootByName.get key: (nameIdOf :ast name: defUnit).u64
-        match (
-            prx9
-        ) case some then {
+        prx9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: defUnit)
+        if (prx9.isZero) == false then {
             reg.setDef typeId: id declId: prx9
-        } case none then {
+        } else {
             pxt9: id
             ty.declProxyTids.append pxt9
             pxu9: defUnit.string
@@ -2150,10 +2145,8 @@ recordConformerContexts: function {
                 if cn.length == 0 then skipIt = true
                 if (isNumericLiteralName name: cn.stringview) then skipIt = true
                 if (skipIt) == false then {
-                    ro8: ty.unitRootByName.get key: unitId.u64
-                    match (
-                        ro8
-                    ) case some then {
+                    ro8: ty.declFindChild parentDeclId: ty.programRoot nameId: unitId
+                    if (ro8.isZero) == false then {
                         md9: (ty.declFindChild
                             parentDeclId: ro8
                             nameId: (zast.poolFind pool: ast.names text: cn.stringview)
@@ -2162,7 +2155,7 @@ recordConformerContexts: function {
                             declId: md9
                             nameId: dk0.u32.orPanic
                         )
-                    } case none then null
+                    }
                 }
             } else null
         }
@@ -2447,12 +2440,8 @@ stampNestedTyperef: function {
     if memberId.isZero then return
     root9: ztypes.declid
     {
-        ro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            ro9
-        ) case some then {
-            root9 = ro9
-        } case none then null
+        ro9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: unitName)
+        if (ro9.isZero) == false then root9 = ro9
     }
     if root9.isZero then return
     mt9: (nestedUnitMemberTid
@@ -2973,12 +2962,11 @@ recordTyperef: function {
             # The member resolves in the qualifier's frame, not the writer's.
             qfr9: ztypes.declid
             {
-                qro9: ty.unitRootByName.get key: (nameIdOf :ast name: pn.stringview).u64
-                match (
-                    qro9
-                ) case some then {
-                    qfr9 = qro9
-                } case none then null
+                qro9: (ty.declFindChild
+                    parentDeclId: ty.programRoot
+                    nameId: (nameIdOf :ast name: pn.stringview)
+                )
+                if (qro9.isZero) == false then qfr9 = qro9
             }
             (recordResolvedName
                 :ty
@@ -3540,12 +3528,11 @@ resolveTyperefShell: function {
             # parent instead handed the slot the UNIT's own type.
             nsRoot9: ztypes.declid
             {
-                nsro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-                match (
-                    nsro9
-                ) case some then {
-                    nsRoot9 = nsro9
-                } case none then null
+                nsro9: (ty.declFindChild
+                    parentDeclId: ty.programRoot
+                    nameId: (nameIdOf :ast name: unitName)
+                )
+                if (nsro9.isZero) == false then nsRoot9 = nsro9
             }
             nsTid9: (nestedUnitMemberTid
                 :ty
@@ -4117,12 +4104,8 @@ resolveFunctionIn: function {
     if thisName.length != 0 then {
         enclDecl9 = declOfUnitDef :ty :ast defUnit: unitName name: thisName
     } else {
-        ero9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            ero9
-        ) case some then {
-            enclDecl9 = ero9
-        } case none then null
+        ero9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: unitName)
+        if (ero9.isZero) == false then enclDecl9 = ero9
     }
     sgkPrev9: ty.sigGenericDecl
     if isgen then ty.sigGenericDecl = fnDecl9
@@ -4471,12 +4454,10 @@ resolveFunctionIn: function {
         # neither a free-fn Decl nor a member Decl (a synthesized function
         # like a generic-unit template's flattened method): attribute it
         # to the unit's root Decl
-        dfr9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            dfr9
-        ) case some then {
+        dfr9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: unitName)
+        if (dfr9.isZero) == false then {
             reg.setDef typeId: (ztypes.tid.create from: dfid.u64) declId: dfr9
-        } case none then null
+        }
     }
     ty.sigGenericDecl = sgkPrev9
     return rfid
@@ -9275,12 +9256,11 @@ registerUnitGenericParams: function {
     if (hasGenericParam :ast items: bodyIds9) then {
         urd0: ztypes.declid
         {
-            uro0: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-            match (
-                uro0
-            ) case some then {
-                urd0 = uro0
-            } case none then null
+            uro0: (ty.declFindChild
+                parentDeclId: ty.programRoot
+                nameId: (nameIdOf :ast name: unitName)
+            )
+            if (uro0.isZero) == false then urd0 = uro0
         }
         registerGenericParams :reg :ast tdecl: urd0 items: bodyIds9
         # Each generic-param name gets a canonical per-(unit,param)
@@ -9430,12 +9410,8 @@ resolveUnitBody: function {
         } case none then null
     }
     {
-        ro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            ro9
-        ) case some then {
-            ubPd9 = ro9
-        } case none then null
+        ro9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: unitName)
+        if (ro9.isZero) == false then ubPd9 = ro9
     }
     (resolveUnitMembers
         :ty
@@ -9696,10 +9672,8 @@ enterUnitOnce: function {
     if (ty.enteredUnits.has item: uid9.u64) then return
     ty.enteredUnits.add item: uid9.u64
     if uid9.u64 == reg.regMainUnitId then return
-    ro9: ty.unitRootByName.get key: uid9.u64
-    match (
-        ro9
-    ) case some then {
+    ro9: ty.declFindChild parentDeclId: ty.programRoot nameId: uid9
+    if (ro9.isZero) == false then {
         uop9: zast.nodeid
         {
             rdo9: ty.decls.get i: ro9.u64
@@ -9721,7 +9695,7 @@ enterUnitOnce: function {
                 }
             }
         }
-    } case none then null
+    }
     demandReturnNever :ty :ast
 }
 
@@ -9996,10 +9970,8 @@ demandDefinition: function {
 # may be an exported alias (`perimeter: perimImpl`), whose edge hangs under
 # the unit's public block.
 demandUnitMember: function {ty: ztyping.ZTyping unitNameId: zast.nameid nameId: zast.nameid} is {
-    ro9: ty.unitRootByName.get key: unitNameId.u64
-    match (
-        ro9
-    ) case some then {
+    ro9: ty.declFindChild parentDeclId: ty.programRoot nameId: unitNameId
+    if (ro9.isZero) == false then {
         d9: ty.declFindChild parentDeclId: ro9 :nameId
         if (d9.isZero) == false then {
             demandDecl :ty declId: d9
@@ -10020,7 +9992,7 @@ demandUnitMember: function {ty: ztyping.ZTyping unitNameId: zast.nameid nameId: 
                 }
             }
         }
-    } case none then null
+    }
 }
 
 # publicNsChildOf -- a unit root's `public:` block Decl, or zero. Read one
@@ -10883,12 +10855,8 @@ instTemplateDecl: function {
         }
     }
     if cur.isZero then {
-        ro9: ty.unitRootByName.get key: s0.u64
-        match (
-            ro9
-        ) case some then {
-            cur = ro9
-        } case none then null
+        ro9: ty.declFindChild parentDeclId: ty.programRoot nameId: s0
+        if (ro9.isZero) == false then cur = ro9
     }
     if cur.isZero then return cur
     si9: u64
@@ -11172,12 +11140,11 @@ scanMainForInstantiations: function {
                 un: zast.poolTextAt pool: program.ast.names ref: u.name
                 rd9: ztypes.declid
                 {
-                    ro9: ty.unitRootByName.get key: u.name.u64
-                    match (
-                        ro9
-                    ) case some then {
-                        rd9 = ro9
-                    } case none then null
+                    ro9: (ty.declFindChild
+                        parentDeclId: ty.programRoot
+                        nameId: (zast.nameid.create from: u.name)
+                    )
+                    if (ro9.isZero) == false then rd9 = ro9
                 }
                 (collectMainInstantiations
                     :ty
@@ -12644,15 +12611,11 @@ completeUnitInstantiations: function {
                 if tplDecl9.isZero then {
                     # a generic FILE unit used as the template: its params
                     # live on its root Decl
-                    tro9: ty.unitRootByName.get key: (nameIdOf
-                        ast: program.ast
-                        name: rt
-                    ).u64
-                    match (
-                        tro9
-                    ) case some then {
-                        tplDecl9 = tro9
-                    } case none then null
+                    tro9: (ty.declFindChild
+                        parentDeclId: ty.programRoot
+                        nameId: (nameIdOf ast: program.ast name: rt)
+                    )
+                    if (tro9.isZero) == false then tplDecl9 = tro9
                 }
             } else null
             match (
@@ -17266,13 +17229,11 @@ unitMemberTypeOf: function {
     # the TEMPLATE's, whose members are the generic ones.
     root9: ztypes.declid
     {
-        uro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            uro9
-        ) case some then {
+        uro9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: unitName)
+        if (uro9.isZero) == false then {
             urt9: declTypeIdOf :ty declId: uro9
             if urt9 == unitTid then root9 = uro9
-        } case none then null
+        }
     }
     if root9.isZero then root9 = ty.declIdOfType typeId: unitTid
     if root9.isZero then root9 = declOfTypeId :reg tid: unitTid
@@ -17974,13 +17935,14 @@ checkDotted: function {
             # record the resolved declaration so go-to-definition on a
             # unit-qualified `unit.member` can locate its defining unit.
             udD9: ztypes.declid
-            udR9: st.typing.unitRootByName.get key: (nameIdOf :ast name: un9.stringview).u64
-            match (
-                udR9
-            ) case some then {
+            udR9: (st.typing.declFindChild
+                parentDeclId: st.typing.programRoot
+                nameId: (nameIdOf :ast name: un9.stringview)
+            )
+            if (udR9.isZero) == false then {
                 cnRef9: zast.poolFind pool: ast.names text: cn.stringview
                 udD9 = st.typing.declFindChild parentDeclId: udR9 nameId: cnRef9
-            } case none then null
+            }
             if udD9.isZero then udD9 = (declOfTypeId
                 reg: st.reg
                 tid: (ztypes.tid.create from: mo9.u64)
@@ -25577,14 +25539,15 @@ checkCase: function {
                 }
             }
             if gdecl9.isZero then {
-                gur9: st.typing.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-                match (
-                    gur9
-                ) case some then {
+                gur9: (st.typing.declFindChild
+                    parentDeclId: st.typing.programRoot
+                    nameId: (nameIdOf :ast name: unitName)
+                )
+                if (gur9.isZero) == false then {
                     if (st.reg.isGenericParamOf tdecl: gur9 name: gsn9.stringview) then {
                         gdecl9 = gur9
                     }
-                } case none then null
+                }
             }
             if gdecl9.isZero when st.typing.curMonoStamp > 0 then {
                 # a mono-clone body walk: the subject's template is the
@@ -26482,12 +26445,13 @@ walkDeclaredDefIn: function {
         # the namespace, so a namespace member is left to that walk.
         pr9: do9.parent
         if (pr9.isZero) == false then {
-            uro9: st.typing.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-            match (
-                uro9
-            ) case some then {
+            uro9: (st.typing.declFindChild
+                parentDeclId: st.typing.programRoot
+                nameId: (nameIdOf :ast name: unitName)
+            )
+            if (uro9.isZero) == false then {
                 if (pr9 == uro9) == false then inNs9 = true
-            } case none then null
+            }
         }
     }
     if memId9 == 0 then return
@@ -27211,12 +27175,11 @@ walkUnitTemplateBodies9: function {
     }
     # a generic FILE unit is a root, named by `unitName`
     if tdecl9.isZero then {
-        tro9: st.typing.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            tro9
-        ) case some then {
-            tdecl9 = tro9
-        } case none then null
+        tro9: (st.typing.declFindChild
+            parentDeclId: st.typing.programRoot
+            nameId: (nameIdOf :ast name: unitName)
+        )
+        if (tro9.isZero) == false then tdecl9 = tro9
     }
     # a template-time walk: the generic parameter resolves to its
     # GENERIC_PARAM id in the template's frame, and stamps of that type stay
@@ -29316,12 +29279,12 @@ constArmRead: function {
     # its root), else the unit's root
     prevFrame9: ty.curFrame
     {
-        lro9: ty.unitRootByName.get key: (nameIdOf :ast name: lookupUnit).u64
-        match (
-            lro9
-        ) case some then {
-            if (frameIsWithin :ty frame: ty.curFrame root: lro9) == false then ty.curFrame = lro9
-        } case none then null
+        lro9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: lookupUnit)
+        if (lro9.isZero) == false then if (frameIsWithin
+            :ty
+            frame: ty.curFrame
+            root: lro9
+        ) == false then ty.curFrame = lro9
     }
     ptu9: (optU64Or
         o: (walkLookupTyperef :ast :ty :reg currentUnit: lookupUnit base: typeName)
@@ -30393,12 +30356,8 @@ resolveConstantDefsInUnit: function {
 } is {
     rd9: ztypes.declid
     {
-        ro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            ro9
-        ) case some then {
-            rd9 = ro9
-        } case none then null
+        ro9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: unitName)
+        if (ro9.isZero) == false then rd9 = ro9
     }
     (resolveConstantDefsIn
         :ast
@@ -30560,12 +30519,8 @@ seedPlatformConsts: function {
     # the seeds are platform's own definitions, so they resolve in its frame
     prevFrame9: ty.curFrame
     {
-        pro9: ty.unitRootByName.get key: (nameIdOf :ast name: "platform").u64
-        match (
-            pro9
-        ) case some then {
-            ty.curFrame = pro9
-        } case none then null
+        pro9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: "platform")
+        if (pro9.isZero) == false then ty.curFrame = pro9
     }
     # os/arch describe what the build is FOR: the --target triple decides when
     # one is given, and the host the compiler runs on otherwise. A cross --cc
@@ -31079,10 +31034,8 @@ lowerGeneratorsInUnit: function {
                 }
             }
         }
-        uro9: ty.unitRootByName.get key: unitNameId.u64
-        match (
-            uro9
-        ) case some then {
+        uro9: ty.declFindChild parentDeclId: ty.programRoot nameId: unitNameId
+        if (uro9.isZero) == false then {
             ii9: first9
             in9: bodyIds9.length
             for ii9 < in9 loop {
@@ -31100,7 +31053,7 @@ lowerGeneratorsInUnit: function {
                     )
                 }
             }
-        } case none then null
+        }
     }
 }
 
@@ -31358,22 +31311,18 @@ declSurfaceOfName: function {
     tid: ztypes.tid
 } out ztypes.declid is {
     if nameId > 0 then {
-        ro9: ty.unitRootByName.get key: (nameIdOf :ast name: currentUnit).u64
-        match (
-            ro9
-        ) case some then {
+        ro9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: currentUnit)
+        if (ro9.isZero) == false then {
             cd9: ty.declFindChild parentDeclId: ro9 :nameId
             sv9: declSurfaceEnsure9 :ty :reg :ast declId: cd9 want: tid
             if sv9 > 0 then return sv9
-        } case none then null
-        co9: ty.unitRootByName.get key: (nameIdOf :ast name: "core").u64
-        match (
-            co9
-        ) case some then {
+        }
+        co9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: "core")
+        if (co9.isZero) == false then {
             cd8: ty.declFindChild parentDeclId: co9 :nameId
             sv8: declSurfaceEnsure9 :ty :reg :ast declId: cd8 want: tid
             if sv8 > 0 then return sv8
-        } case none then null
+        }
     }
     return (declOfTypeId :reg :tid)
 }
@@ -31421,12 +31370,8 @@ frameFor: function {
     if unitNameId.isZero then return (ztypes.declid.create from: 0)
     ur9: ztypes.declid
     {
-        uro9: ty.unitRootByName.get key: unitNameId.u64
-        match (
-            uro9
-        ) case some then {
-            ur9 = uro9
-        } case none then null
+        uro9: ty.declFindChild parentDeclId: ty.programRoot nameId: unitNameId
+        if (uro9.isZero) == false then ur9 = uro9
     }
     if ur9.isZero then {
         # the empty name is the prelude-only probe (an interned id, not 0)
@@ -31452,12 +31397,10 @@ nsFrameOf: function {
 } out ztypes.declid is {
     f9: frameFor :ty :ast :unitNameId
     if f9.isZero then return f9
-    uro9: ty.unitRootByName.get key: unitNameId.u64
-    match (
-        uro9
-    ) case some then {
+    uro9: ty.declFindChild parentDeclId: ty.programRoot nameId: unitNameId
+    if (uro9.isZero) == false then {
         if uro9 == f9 then return (ztypes.declid.create from: 0)
-    } case none then null
+    }
     return f9
 }
 
@@ -31603,14 +31546,15 @@ reexportUnitOf: function {
     if nop9.namedoperation then {
         dk9: dottedDefTargetIds :ast n: (ast.nodes.get i: nop9.operation.u64)
         if dk9.unitName.u32 > 0 then {
-            if (ty.unitRootByName.has key: dk9.unitName.u64) then return dk9.unitName
+            dkr9: ty.declFindChild parentDeclId: ty.programRoot nameId: dk9.unitName
+            if (dkr9.isZero) == false then return dk9.unitName
         }
     }
     return (zast.nameid.create from: 0)
 }
 
-# declProbeUnitChildId -- the Decl-tree unit-child probe: unit root (by
-# bare unit name in unitRootByName) -> direct child (by pool name id) ->
+# declProbeUnitChildId -- the Decl-tree unit-child probe: unit root (the
+# program root's child of that name) -> direct child (by pool name id) ->
 # its minted type id. 0 when the unit is unknown, the name is not an
 # indexed child, or the child's type is not yet declared -- callers
 # then fall to the declare-on-demand miss path exactly as before.
@@ -31622,12 +31566,10 @@ declProbeUnitChildId: function {
     nameId: zast.nameid
 } out u64 is {
     if nameId.isZero then return 0
-    ro9: ty.unitRootByName.get key: (nameIdOf :ast name: uname).u64
-    match (
-        ro9
-    ) case some then {
+    ro9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: uname)
+    if (ro9.isZero) == false then {
         return (declProbeUnitChildRoot :ty :reg :ast unitRoot: ro9 :nameId)
-    } case none then null
+    }
     return 0
 }
 
@@ -31732,16 +31674,14 @@ declOfUnitDefIds: function {
     nameId: zast.nameid
 } out ztypes.declid is {
     if nameId.isZero then return (ztypes.declid.create from: 0)
-    ro9: ty.unitRootByName.get key: unitId.u64
-    match (
-        ro9
-    ) case some then {
+    ro9: ty.declFindChild parentDeclId: ty.programRoot nameId: unitId
+    if (ro9.isZero) == false then {
         d9: ty.declFindChild parentDeclId: ro9 :nameId
         if (d9.isZero) == false then return d9
         # a definition the unit's `public:` block makes is on its surface
         pb9: publicNsChildOf :ty root: ro9
         if (pb9.isZero) == false then return (ty.declFindChild parentDeclId: pb9 :nameId)
-    } case none then null
+    }
     return (ztypes.declid.create from: 0)
 }
 
@@ -31793,12 +31733,8 @@ resolvedByIds: function {
         alP9: declParentIdOf :ty declId: alDecl9
         alRoot9: ztypes.declid
         {
-            aro9: ty.unitRootByName.get key: unitId.u64
-            match (
-                aro9
-            ) case some then {
-                alRoot9 = aro9
-            } case none then null
+            aro9: ty.declFindChild parentDeclId: ty.programRoot nameId: unitId
+            if (aro9.isZero) == false then alRoot9 = aro9
         }
         if (alT9.isZero) == false when (alP9.isZero) == false when alP9 != alRoot9 then {
             return (optionval.some alT9.u64)
@@ -32548,12 +32484,11 @@ typecheck: function {
         ) case some then {
             st.typing.systemUnitTid = ztypes.tid.create from: sysUo9.u64
         } case none then null
-        sysRo9: st.typing.unitRootByName.get key: sysId9.u64
-        match (
-            sysRo9
-        ) case some then {
-            st.typing.systemUnitRoot = sysRo9
-        } case none then null
+        sysRo9: (st.typing.declFindChild
+            parentDeclId: st.typing.programRoot
+            nameId: (zast.nameid.create from: sysId9)
+        )
+        if (sysRo9.isZero) == false then st.typing.systemUnitRoot = sysRo9
     }
     match (
         program
@@ -32583,14 +32518,11 @@ typecheck: function {
     match (
         program
     ) case program then {
-        mro9: (st.typing.unitRootByName.get
-            key: (nameIdOf ast: program.ast name: program.mainUnitName.stringview).u64
+        mro9: (st.typing.declFindChild
+            parentDeclId: st.typing.programRoot
+            nameId: (nameIdOf ast: program.ast name: program.mainUnitName.stringview)
         )
-        match (
-            mro9
-        ) case some then {
-            st.typing.curFrame = mro9
-        } case none then null
+        if (mro9.isZero) == false then st.typing.curFrame = mro9
     } else null
     registerAndResolveMain ty: st.typing reg: st.reg :program
     resolveMainUnitInstantiations ty: st.typing reg: st.reg :program
