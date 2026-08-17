@@ -2526,7 +2526,7 @@ resolveDottedArgTid: function {
         pq9: atomName :ast n: (ast.nodes.get i: dp.parent.u64)
         cq9: atomName :ast n: (ast.nodes.get i: dp.child.u64)
         if pq9.length > 0 when cq9.length > 0 then {
-            if (reg.isUnitName nameId: (atomNameId
+            if (nameDenotesUnit :ty :reg nameId: (atomNameId
                 :ast
                 n: (ast.nodes.get i: dp.parent.u64)
             )) then {
@@ -3385,13 +3385,18 @@ demandTyperefNames: function {
 # arg's atomName is "" and the shell mints `Map_u64_` (empty value), a distinct id
 # from the constructed `Map_u64_zparamownership` -- the emitter's fieldMonoId
 # canonicalizes by name, so divergent names leave a field/create type mismatch.
-typeArgSuffixName: function {ast: Ast.view reg: ztypes.ZTypeRegistry op: Node.view} out String is {
+typeArgSuffixName: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry
+    op: Node.view
+} out String is {
     match (
         op
     ) case expression then {
-        return (typeArgSuffixName :ast :reg op: (ast.nodes.get i: op.expression.u64))
+        return (typeArgSuffixName :ty :ast :reg op: (ast.nodes.get i: op.expression.u64))
     } case dottedpath then {
-        if (reg.isUnitName nameId: (atomNameId
+        if (nameDenotesUnit :ty :reg nameId: (atomNameId
             :ast
             n: (ast.nodes.get i: op.parent.u64)
         )) then {
@@ -3474,7 +3479,7 @@ resolveTyperefShell: function {
             match (
                 arg
             ) case namedoperation then {
-                an: typeArgSuffixName :ast :reg op: (ast.nodes.get i: arg.operation.u64)
+                an: typeArgSuffixName :ty :ast :reg op: (ast.nodes.get i: arg.operation.u64)
                 suffix.append "_"
                 suffix.append an
                 (demandTyperefNames
@@ -3494,7 +3499,7 @@ resolveTyperefShell: function {
         # (Container.private.lock) or a variant/union subtype default where the arm
         # is the default value and the type is the parent (direction.north).
         pNm: atomName :ast n: (ast.nodes.get i: typeExpr.parent.u64)
-        if (reg.isUnitName nameId: (atomNameId
+        if (nameDenotesUnit :ty :reg nameId: (atomNameId
             :ast
             n: (ast.nodes.get i: typeExpr.parent.u64)
         )) then {
@@ -4311,7 +4316,7 @@ resolveFunctionIn: function {
                                     name: pname.stringview
                                     node: pm.operation
                                 )
-                            } else if (reg.isUnitName nameId: (nameIdOf
+                            } else if (nameDenotesUnit :ty :reg nameId: (nameIdOf
                                 :ast
                                 name: prn9.stringview
                             )) == false then {
@@ -6558,10 +6563,14 @@ resolveRecord: function {
                                 node: fm.operation
                             )
                         } else {
-                            if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) == false when (reg.isUnitName nameId: (nameIdOf
+                            if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) == false when (nameDenotesUnit
+                                :ty
+                                :reg
+                                nameId: (nameIdOf
                                 :ast
                                 name: rdnr.stringview
-                            )) == false then {
+                            )
+                            ) == false then {
                                 rArmNid9: zast.poolFind pool: ast.names text: dcn1.stringview
                                 rArmDecl9: ty.declMemberIdOf parentTypeId: cid nameId: rArmNid9
                                 (ty.setDefaultVariantArm
@@ -7939,10 +7948,14 @@ resolveClass: function {
                                 node: fm.operation
                             )
                         } else {
-                            if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) == false when (reg.isUnitName nameId: (nameIdOf
+                            if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) == false when (nameDenotesUnit
+                                :ty
+                                :reg
+                                nameId: (nameIdOf
                                 :ast
                                 name: rdnc.stringview
-                            )) == false then {
+                            )
+                            ) == false then {
                                 cArmNid9: zast.poolFind pool: ast.names text: dcn0.stringview
                                 cArmDecl9: ty.declMemberIdOf parentTypeId: cidf nameId: cArmNid9
                                 (ty.setDefaultVariantArm
@@ -8534,7 +8547,7 @@ aliasNamesType: function {
         if nnp9.namedoperation then {
             nvn9: ast.nodes.get i: nnp9.operation.u64
             ntk9: dottedDefTargetIds :ast n: nvn9
-            if ntk9.unitName.u32 > 0 then return (reg.isUnitName nameId: ntk9.unitName)
+            if ntk9.unitName.u32 > 0 then return (nameDenotesUnit :ty :reg nameId: ntk9.unitName)
         }
     }
     return false
@@ -9186,7 +9199,7 @@ resolveDefIn: function {
         # fallback (ztypecheck.py:1184).
         apNm9: atomName :ast n: (ast.nodes.get i: defn.parent.u64)
         apId9: atomNameId :ast n: (ast.nodes.get i: defn.parent.u64)
-        if (reg.isUnitName nameId: apId9) then {
+        if (nameDenotesUnit :ty :reg nameId: apId9) then {
             acNm9: atomName :ast n: (ast.nodes.get i: defn.child.u64)
             acId9: atomNameId :ast n: (ast.nodes.get i: defn.child.u64)
             demandUnitMember :ty unitNameId: apId9 nameId: acId9
@@ -10513,7 +10526,7 @@ scanCallsInNode: function {
                 nameId: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
             )
             # a unit-qualified member (io.stdout) demands exactly that member
-            isUnitQ: reg.isUnitName nameId: (atomNameId
+            isUnitQ: nameDenotesUnit :ty :reg nameId: (atomNameId
                 :ast
                 n: (ast.nodes.get i: node.parent.u64)
             )
@@ -12567,11 +12580,17 @@ completeUnitInstantiations: function {
             mid9: mgo
             br9: mid9
             reg.setUnitName nameId: rbId9 uid: br9
-            # A binding written inside a NAMESPACE is a member of that
-            # namespace -- `outer.intmath`. The unit-name index above is the
-            # file-unit channel; it is keyed on a bare name, so it cannot hold
-            # two namespaces' bindings apart, which is the whole reason a
-            # namespace's members live on its own type id.
+            # the binding's own Decl carries the instantiated unit's type
+            # WHEREVER the binding is written: that is what makes `intmath` a
+            # unit to a reader, without asking a bare-name index.
+            bDecl9: ty.declFindChild parentDeclId: rscope nameId: rbId9
+            if (bDecl9.isZero) == false then {
+                ty.declSetType declId: bDecl9 typeId: (ztypes.tid.create from: mid9.u64)
+            }
+            # A binding written inside a NAMESPACE is ALSO a member of that
+            # namespace -- `outer.intmath` -- and a qualified read finds it on
+            # the namespace's own type id. A top-level binding has no such
+            # owner: the file unit's members are not indexed that way.
             rsp9: declParentIdOf :ty declId: rscope
             if (declAtProgramTop :ty parentDeclId: rsp9) == false then {
                 sTid9: declTypeIdOf :ty declId: rscope
@@ -12581,10 +12600,6 @@ completeUnitInstantiations: function {
                         nameId: rbId9
                         childTypeId: mid9
                     )
-                }
-                bDecl9: ty.declFindChild parentDeclId: rscope nameId: rbId9
-                if (bDecl9.isZero) == false then {
-                    ty.declSetType declId: bDecl9 typeId: (ztypes.tid.create from: mid9.u64)
                 }
             }
             tplId: ztypes.tid
@@ -29616,7 +29631,7 @@ evalConstNode: function {
                 return (constLiteralValue name: pt9.stringview)
             }
             # `unit.CONST` reads a constant out of another unit.
-            if (reg.isUnitName nameId: (nameIdOf :ast name: pt9.stringview)) then {
+            if (nameDenotesUnit :ty :reg nameId: (nameIdOf :ast name: pt9.stringview)) then {
                 return (constValueOfMember
                     :ast
                     :ty
@@ -29741,7 +29756,11 @@ evalConstNode: function {
                 gpt9: zast.nameTextCopy :ast ref: gp9.name
                 gct9: zast.nameTextCopy :ast ref: gc9.name
                 if gpt9.length > 0 when gct9.length > 0 then {
-                    if (reg.isUnitName nameId: (nameIdOf :ast name: gpt9.stringview)) then {
+                    if (nameDenotesUnit
+                        :ty
+                        :reg
+                        nameId: (nameIdOf :ast name: gpt9.stringview)
+                    ) then {
                         qa9: (constArmRead
                             :ast
                             :ty
@@ -30013,7 +30032,11 @@ resolveConstantDef: function {
                 # reaches a SAME-UNIT type at this stage; the typeref walk
                 # answers for the resolvable ones.
                 isCtor9: false
-                if (reg.isUnitName nameId: (nameIdOf :ast name: sfLit9.stringview)) == false then {
+                if (nameDenotesUnit
+                    :ty
+                    :reg
+                    nameId: (nameIdOf :ast name: sfLit9.stringview)
+                ) == false then {
                     ptt9: ztypes.ztypetype.nullType
                     known9: false
                     {
@@ -30145,10 +30168,11 @@ resolveConstantDef: function {
             cbn9: atomName :ast n: ccn9
             if cbn9.length == 0 then cbn9 = dottedRootName :ast n: ccn9
             if cbn9.length > 0 then {
-                # a unit declared in THIS file is not in the registry yet, so
-                # the Decl tree answers where `isUnitName` cannot -- without it
-                # every `intmath: (mathops t: i64)` reads as a construction.
-                cbu9: reg.isUnitName nameId: (nameIdOf :ast name: cbn9.stringview)
+                # a unit declared in THIS file has no registry entry yet, and
+                # a generic-unit binding is no file unit at all: the Decl tree
+                # answers both -- without it every `intmath: (mathops t: i64)`
+                # reads as a construction.
+                cbu9: nameDenotesUnit :ty :reg nameId: (nameIdOf :ast name: cbn9.stringview)
                 if (cbu9) == false then {
                     # the same scope walk the instantiation collector uses --
                     # this namespace, each enclosing one, the unit root, then a
@@ -31557,6 +31581,34 @@ reexportUnitOf: function {
 # isUnitNameDecl -- does `nameId` name a FILE unit: a child of the program root
 # whose declared type is a unit? The Decl-tree answer to what the unit-name
 # index was asked.
+# nameDenotesUnit -- does `nameId` name a unit HERE: a FILE unit, or a
+# generic-unit BINDING in scope (`intmath: (mathops t: i64)`) whose Decl
+# carries the instantiated unit's type. The second leg is what a bare-name
+# index could not express -- two namespaces may each bind an `intmath` -- so
+# it resolves through the environment like any other name.
+nameDenotesUnit: function {
+    ty: ztyping.ZTyping.view
+    reg: ztypes.ZTypeRegistry.view
+    nameId: zast.nameid
+} out bool is {
+    if (isUnitNameDecl :ty :reg :nameId) then return true
+    h9: envLookup :ty frame: ty.curFrame :nameId
+    if h9.declId.isZero then return false
+    # only a BINDING of an instantiated unit, never a unit DECLARATION: a
+    # nested unit or subunit is in scope here but was never in the index this
+    # replaces, and reading one as a qualified root changes what a dotted path
+    # means (qualified_subunit_type, the re-export chains).
+    isUd9: false
+    {
+        hdo9: ty.decls.get i: h9.declId.u64
+        if hdo9.kind.unitDecl then isUd9 = true
+    }
+    if isUd9 then return false
+    bt9: declTypeIdOf :ty declId: h9.declId
+    if bt9.isZero then return false
+    return (reg.typetypeOf typeId: bt9) == ztypes.ztypetype.unitType
+}
+
 isUnitNameDecl: function {
     ty: ztyping.ZTyping.view
     reg: ztypes.ZTypeRegistry.view
