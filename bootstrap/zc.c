@@ -90039,9 +90039,7 @@ void z_t2465(z_t489_t* z_v12132, z_t844_t* z_v12133, uint32_t z_v12134, z_t52_t 
                                     uint64_t z_v12151 = _m3.data.some;
                                     (void)z_v12151;
                                     uint64_t z_v12155 = z_t3968(z_v12133, z_v12151, z_t1988(&z_v12132->names, ((z_t52_t){ .data = z_v12147.data, .size = z_v12147.size })));
-                                    if (z_t3875(&z_v12155) == ((bool)Z_BOOL_TAG_FALSE)) {
-                                        (void)(z_t3960(z_v12133, z_v12155, ({ z_t3668_t _rc = (({ uint64_t _v = z_v12139; z_t3668_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; })));
-                                    }
+                                    (void)(z_t3960(z_v12133, z_v12155, ({ z_t3668_t _rc = (({ uint64_t _v = z_v12139; z_t3668_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; })));
                                     break;
                                 }
                                 case Z_OPTIONVAL_DECLID_TAG_NONE: {
@@ -96385,9 +96383,7 @@ void z_t2652(z_t844_t* z_v6542, z_t639_t* z_v6543, z_t489_t* z_v6544, z_t52_t z_
     uint64_t z_v6548 = z_t2306(z_v6542, z_v6544, z_v6545, z_v6546);
     (void)(z_t2811(z_v6542, z_v6543, z_v6544, z_v6545));
     (void)(z_t2477(z_v6542, z_v6544, z_v6543, z_t1960(z_v6544, z_v6545), z_v6547));
-    if (z_t3875(&z_v6548) == ((bool)Z_BOOL_TAG_FALSE)) {
-        (void)(z_t3956(z_v6542, z_v6548, ((bool)Z_BOOL_TAG_TRUE)));
-    }
+    (void)(z_t3956(z_v6542, z_v6548, ((bool)Z_BOOL_TAG_TRUE)));
     bool z_v6779 = z_v6542->inContainmentEdge;
     z_v6542->inContainmentEdge = ((bool)Z_BOOL_TAG_FALSE);
     z_t490_t _m0 = z_v6547;
@@ -96555,8 +96551,8 @@ void z_t2652(z_t844_t* z_v6542, z_t639_t* z_v6543, z_t489_t* z_v6544, z_t52_t z_
     }
     z_v6542->inContainmentEdge = z_v6779;
     uint64_t z_v9699 = z_t2306(z_v6542, z_v6544, z_v6545, z_v6546);
+    (void)(z_t3956(z_v6542, z_v9699, ((bool)Z_BOOL_TAG_FALSE)));
     if (z_t3875(&z_v9699) == ((bool)Z_BOOL_TAG_FALSE)) {
-        (void)(z_t3956(z_v6542, z_v9699, ((bool)Z_BOOL_TAG_FALSE)));
         (void)(z_t3958(z_v6542, z_v9699));
     }
 }
