@@ -2221,12 +2221,12 @@ armSuffixSideOf: function {
 }
 
 # nodeTypeAt -- the type id stamped on node `nid`; 0 when nothing is stamped
-# there (nodeTypeSet records neither a 0 node id nor a 0 type id).
+# there (nodeTypeSet records neither a 0 node id nor a 0 type id). A node id
+# indexes the table directly; the length test is not an index adjustment but
+# the sparse tail -- the table grows only as far as the highest stamped id.
 nodeTypeAt: function {tbl: (ListVal ztypes.tid).view nid: u64} out ztypes.tid is {
-    if nid == 0 then return (ztypes.tid.create from: 0)
-    i9: nid - 1
-    if i9 >= tbl.length then return (ztypes.tid.create from: 0)
-    return (tbl.get i: i9)
+    if nid >= tbl.length then return (ztypes.tid.create from: 0)
+    return (tbl.get i: nid)
 }
 
 # nodeTypeSet -- stamp node `nid` with type id `tid`. Node id 0 means "no node"
@@ -2235,10 +2235,9 @@ nodeTypeAt: function {tbl: (ListVal ztypes.tid).view nid: u64} out ztypes.tid is
 nodeTypeSet: function {tbl: (ListVal ztypes.tid) nid: u64 tid: ztypes.tid} is {
     if nid == 0 then return
     if tid.isZero then return
-    i9: nid - 1
-    for tbl.length <= i9 loop tbl.append ztypes.tid
+    for tbl.length <= nid loop tbl.append ztypes.tid
     v9: tid
-    tbl.set i: i9 val: v9
+    tbl.set i: nid val: v9
 }
 
 # construct an empty ZTyping, pre-sizing its tables for roughly
@@ -2312,7 +2311,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         monoBinopMethod: (MapVV monostamp value: ztypes.tid)
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
-        nodeType: (ListVal ztypes.tid capacity: nodeEst + (nodeEst / 4))
+        nodeType: (ListVal ztypes.tid capacity: nodeEst + (nodeEst / 4) + 1)
         callKind: (MapVV u64 value: zast.callkind)
         atomVariableId: (MapVV u64 value: ztypes.vid capacity: nodeEst / 4)
         variableMutated: (MapVV ztypes.vid value: bool)
