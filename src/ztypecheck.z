@@ -9416,115 +9416,38 @@ resolveUnitBody: function {
     unitdefId: zast.nodeid
     rootOnly: bool
 } is {
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
+    # a FILE unit is the one unit whose owner is looked up by name: nothing
+    # holds its Decl the way an enclosing walk holds a nested unit's.
+    # registerUnitRoots and indexUnitDefs both ran already, so both are there.
+    ubPt9: ztypes.tid
+    ubPd9: ztypes.declid
     {
-        # the unit root's tid + Decl: the parent of every top-level member, and
-        # what both dispatch legs hang their own children under. Stable across
-        # the loop -- registerUnitRoots and indexUnitDefs both ran already.
-        ubPt9: ztypes.tid
-        ubPd9: ztypes.declid
-        {
-            uo9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-            match (
-                uo9
-            ) case some then {
-                ubPt9 = ztypes.tid.create from: uo9
-            } case none then null
-        }
-        {
-            ro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
-            match (
-                ro9
-            ) case some then {
-                ubPd9 = ro9
-            } case none then null
-        }
-        # every member resolves in the unit's own frame
-        prevFrame9: ty.curFrame
-        ty.curFrame = ubPd9
-        biter: bodyIds9.iterate
-        for bm: biter loop {
-            bmNode9: ast.nodes.get i: bm.u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                defName: zast.nameTextAt :ast ref: bmNode9.name
-                eager: true
-                # the ROOT: demand starts at `main` and nothing else, so the
-                # target unit is driven the same way every dependency already is.
-                # so only a FUNCTION leaves the eager set. The other two
-                # members of it stay, like the unit's generic params and its
-                # conformer contexts above: a NAMESPACE or inline template is a
-                # scope declaration, not a body, and an INTERFACE is what a type
-                # declares itself to conform to -- a constraint facet's only
-                # reference may be the as-block marker naming it, and a nested
-                # namespace's template is reached through the scope or not at
-                # all. Both are properties of the DECLARATION.
-                if rootOnly when defName.stringview != "main" then {
-                    keepE9: false
-                    if (isUnitOp
-                        op: (ast.nodes.get i: bmNode9.operation.u64)
-                    ) then keepE9 = true
-                    if (isInterfaceDefOp
-                        op: (ast.nodes.get i: bmNode9.operation.u64)
-                    ) then keepE9 = true
-                    if (keepE9) == false then eager = false
-                }
-                if (isFunctionDefOp op: (ast.nodes.get i: bmNode9.operation.u64)) == false then {
-                    if (isUnitOp op: (ast.nodes.get i: bmNode9.operation.u64)) == false then {
-                        if (isInterfaceDefOp
-                            op: (ast.nodes.get i: bmNode9.operation.u64)
-                        ) == false then eager = false
-                    }
-                }
-                if ty.eagerAll then eager = true
-                if eager then {
-                    if (zast.unitOpDeclaresUnit :ast opId: bmNode9.operation) then {
-                        (resolveNamespaceUnit
-                            :ty
-                            :reg
-                            :ast
-                            :unitName
-                            defName: defName.stringview
-                            parentTid: ubPt9
-                            parentDeclId: ubPd9
-                            unitOpId: bmNode9.operation
-                        )
-                    } else if (isUnitOp
-                        op: (ast.nodes.get i: bmNode9.operation.u64)
-                    ) then {
-                        (resolveInlineGenericUnit
-                            :ty
-                            :reg
-                            :ast
-                            :unitName
-                            defName: defName.stringview
-                            parentTid: ubPt9
-                            parentDeclId: ubPd9
-                            unitOpId: bmNode9.operation
-                        )
-                    } else {
-                        if (defWasResolved
-                            :ty
-                            :ast
-                            defUnit: unitName
-                            nameId: bmNode9.name
-                        ) == false then {
-                            (resolveDef
-                                :ty
-                                :reg
-                                :ast
-                                :unitName
-                                defName: defName.stringview
-                                defn: (ast.nodes.get i: bmNode9.operation.u64)
-                            )
-                        }
-                    }
-                }
-            } else null
-        }
-        ty.curFrame = prevFrame9
+        uo9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
+        match (
+            uo9
+        ) case some then {
+            ubPt9 = ztypes.tid.create from: uo9
+        } case none then null
     }
+    {
+        ro9: ty.unitRootByName.get key: (nameIdOf :ast name: unitName).u64
+        match (
+            ro9
+        ) case some then {
+            ubPd9 = ro9
+        } case none then null
+    }
+    (resolveUnitMembers
+        :ty
+        :reg
+        :ast
+        :unitName
+        ownerDeclId: ubPd9
+        ownerTid: ubPt9
+        unitOpId: unitdefId
+        speculative: true
+        :rootOnly
+    )
 }
 
 # typecheck -- entry point. Registers a UNIT type per unit (the `unit` table)
@@ -11783,6 +11706,140 @@ isUnitOp: function {op: Node.view} out bool is {
     }
 }
 
+# resolveUnitMembers -- resolve the definition signatures in ONE unit's body,
+# whatever kind of unit it is. A file unit, an inline `m: unit { }`, a hidden
+# subunit and a `public:` block differ only in who supplies the owner, so the
+# walk takes the owner's Decl and type id and never asks a name for them.
+#
+# `speculative` is the one fact the two entries differ on: a FILE unit's body is
+# walked before anything asks for it, a nested unit's because something demanded
+# the unit. Both of the file walk's peculiarities follow from it -- it resolves
+# only what a declaration needs (a function, a unit or an interface), and it does
+# not mark what it touched as DEFINED, having resolved it on nobody's behalf.
+# `rootOnly` narrows the eager set once more for the main unit, where demand
+# starts at `main` and everything else waits to be asked for.
+resolveUnitMembers: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    unitName: StringView
+    ownerDeclId: ztypes.declid
+    ownerTid: ztypes.tid
+    unitOpId: zast.nodeid
+    speculative: bool
+    rootOnly: bool
+} is {
+    # every member resolves in the unit's own frame
+    prevFrame9: ty.curFrame
+    ty.curFrame = ownerDeclId
+    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitOpId
+    with biter9: bodyIds9.iterate do for bm9: biter9 loop {
+        bmNode9: ast.nodes.get i: bm9.u64
+        match (
+            bmNode9
+        ) case namedoperation then {
+            mName9: zast.nameTextCopy :ast ref: bmNode9.name
+            if mName9.length > 0 then {
+                # dispatch by KIND. A unit body that declares a generic param
+                # parses as `template`, and only resolveInlineGenericUnit marks
+                # it generic, registers its params and stamps its def node.
+                isTmpl9: (zast.unitOpKindIs
+                    :ast
+                    opId: bmNode9.operation
+                    k: zast.unitkind.template
+                )
+                isUnit9: isUnitOp op: (ast.nodes.get i: bmNode9.operation.u64)
+                isIface9: (isInterfaceDefOp
+                    op: (ast.nodes.get i: bmNode9.operation.u64)
+                )
+                eager9: true
+                # a scope declaration (a unit, a template) and an INTERFACE are
+                # properties of the DECLARATION, not bodies: a constraint
+                # facet's only reference may be the as-block marker naming it,
+                # and a nested namespace's template is reached through the
+                # scope or not at all. Both stay whatever the restriction.
+                if speculative when (isUnit9) == false when (isIface9) == false then {
+                    if (isFunctionDefOp
+                        op: (ast.nodes.get i: bmNode9.operation.u64)
+                    ) == false then eager9 = false
+                }
+                if rootOnly when mName9.stringview != "main" then {
+                    if (isUnit9) == false when (isIface9) == false then eager9 = false
+                }
+                if ty.eagerAll then eager9 = true
+                if eager9 then {
+                    if isTmpl9 then {
+                        # the template is a child of THIS unit: the mint funnel
+                        # reaches the enclosing owner through the cursor
+                        (resolveInlineGenericUnit
+                            :ty
+                            :reg
+                            :ast
+                            :unitName
+                            defName: mName9.stringview
+                            parentTid: ownerTid
+                            parentDeclId: ownerDeclId
+                            unitOpId: bmNode9.operation
+                        )
+                    } else if isUnit9 then {
+                        (resolveNamespaceUnit
+                            :ty
+                            :reg
+                            :ast
+                            :unitName
+                            defName: mName9.stringview
+                            parentTid: ownerTid
+                            parentDeclId: ownerDeclId
+                            unitOpId: bmNode9.operation
+                        )
+                    } else {
+                        md9: ty.declFindChild parentDeclId: ownerDeclId nameId: bmNode9.name
+                        # a `public:` block's reference entry (`:x`, `alias: x`)
+                        # is an edge to a sibling of the enclosing unit, which
+                        # resolves as that unit's definition, not as a member here
+                        mdp9: declParentIdOf :ty declId: md9
+                        if (md9.isZero) == false when mdp9 != ownerDeclId then continue
+                        isRx9: false
+                        isDone9: false
+                        {
+                            mdo9: ty.decls.get i: md9.u64
+                            if mdo9.kind.reexportDecl then isRx9 = true
+                            if mdo9.defined then isDone9 = true
+                        }
+                        # A re-export whose target is a DOTTED path is resolved by
+                        # following it, which is resolveAliasKey's job -- resolveDef
+                        # has no leg for a dotted target naming a NESTED unit, and
+                        # marking the alias DEFINED after it did nothing is what
+                        # stopped a re-export of a re-export at its first hop. A bare
+                        # target (`ECHO: LIB`) names a sibling of this same unit and
+                        # is an ordinary definition: resolveDef is what FOLDS it, and
+                        # following it instead leaves the constant unfolded.
+                        if isRx9 when (isDottedValue
+                            :ast
+                            n: (ast.nodes.get i: bmNode9.operation.u64)
+                        ) then {
+                            resolveAliasKey :ty :reg :ast declId: md9
+                        } else if (isDone9) == false then {
+                            (resolveDef
+                                :ty
+                                :reg
+                                :ast
+                                :unitName
+                                defName: mName9.stringview
+                                defn: (ast.nodes.get i: bmNode9.operation.u64)
+                            )
+                        }
+                        if (md9.isZero) == false when (speculative) == false then {
+                            ty.declSetDefined declId: md9
+                        }
+                    }
+                }
+            }
+        } else null
+    }
+    ty.curFrame = prevFrame9
+}
+
 # resolveNamespaceUnit -- resolve a namespace unit: an inline `m: unit { }` or a
 # hidden subunit, which are the same node after parsing. Its members are
 # children of ITS type id, not of the enclosing unit's, so two namespaces may
@@ -11827,91 +11884,22 @@ resolveNamespaceUnit: function {
             reg.setDef typeId: uid9 declId: declId9
         }
     }
-    # every member resolves in this unit's frame
-    prevFrame9: ty.curFrame
-    ty.curFrame = declId9
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitOpId
-    with biter9: bodyIds9.iterate do for bm9: biter9 loop {
-        bmNode9: ast.nodes.get i: bm9.u64
-        match (
-            bmNode9
-        ) case namedoperation then {
-            mName9: zast.nameTextCopy :ast ref: bmNode9.name
-            if mName9.length > 0 then {
-                # dispatch by KIND, as resolveUnitBody does. A unit body that
-                # declares a generic param parses as `template`, and only
-                # resolveInlineGenericUnit marks it generic, registers its
-                # params and stamps its def node. A `public:`/`require:` block
-                # stays on resolveDef, which is what folds its members.
-                isTmpl9: (zast.unitOpKindIs
-                    :ast
-                    opId: bmNode9.operation
-                    k: zast.unitkind.template
-                )
-                isUnit9: isUnitOp op: (ast.nodes.get i: bmNode9.operation.u64)
-                if isTmpl9 then {
-                    # the template is a child of THIS namespace, not of the
-                    # file unit: the mint funnel reaches the enclosing owner
-                    # through the cursor, which is at this namespace
-                    (resolveInlineGenericUnit
-                        :ty
-                        :reg
-                        :ast
-                        :unitName
-                        defName: mName9.stringview
-                        parentTid: uid9
-                        parentDeclId: declId9
-                        unitOpId: bmNode9.operation
-                    )
-                } else if isUnit9 then {
-                    (resolveNamespaceUnit
-                        :ty
-                        :reg
-                        :ast
-                        :unitName
-                        defName: mName9.stringview
-                        parentTid: uid9
-                        parentDeclId: declId9
-                        unitOpId: bmNode9.operation
-                    )
-                } else {
-                    md9: ty.declFindChild parentDeclId: declId9 nameId: bmNode9.name
-                    # a `public:` block's reference entry (`:x`, `alias: x`)
-                    # is an edge to a sibling of the enclosing unit, which
-                    # resolves as that unit's definition, not as a member here
-                    mdp9: declParentIdOf :ty declId: md9
-                    if (md9.isZero) == false when mdp9 != declId9 then continue
-                    isRx9: false
-                    {
-                        mdo9: ty.decls.get i: md9.u64
-                        if mdo9.kind.reexportDecl then isRx9 = true
-                    }
-                    # A re-export is resolved by following its target, which is
-                    # resolveAliasKey's job -- resolveDef has no leg for a
-                    # dotted target naming a NESTED unit, and marking the alias
-                    # DEFINED after it did nothing is what stopped a re-export
-                    # of a re-export at its first hop.
-                    if isRx9 then {
-                        resolveAliasKey :ty :reg :ast declId: md9
-                    } else {
-                        (resolveDef
-                            :ty
-                            :reg
-                            :ast
-                            :unitName
-                            defName: mName9.stringview
-                            defn: (ast.nodes.get i: bmNode9.operation.u64)
-                        )
-                    }
-                    if (md9.isZero) == false then ty.declSetDefined declId: md9
-                }
-            }
-        } else null
-    }
+    (resolveUnitMembers
+        :ty
+        :reg
+        :ast
+        :unitName
+        ownerDeclId: declId9
+        ownerTid: uid9
+        :unitOpId
+        speculative: false
+        rootOnly: false
+    )
     # A namespace's constants are members of IT, keyed on its own id, and the
     # signature walk above is the moment they can be. Reached from every
     # caller -- the demand path, an alias into a hidden subunit, the eager
-    # walk -- so no caller carries a constant step of its own.
+    # walk -- so no caller carries a constant step of its own. It sets the
+    # cursor to the owner itself, so it needs none from here.
     (resolveConstantDefsIn
         :ty
         :reg
@@ -11920,7 +11908,6 @@ resolveNamespaceUnit: function {
         unitdefId: unitOpId
         ownerDeclId: declId9
     )
-    ty.curFrame = prevFrame9
 }
 
 # resolveInlineGenericUnit -- resolve an inline generic unit (mathops: unit as { t:
