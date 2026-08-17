@@ -8717,6 +8717,12 @@ resolveAliasKey: function {
     ty.curFrame = declParentIdOf :ty :declId
     r9: resolveAliasKeyIn :ty :reg :ast :declId
     ty.curFrame = prevFrame9
+    # an alias to a CONSTANT carries a VALUE as well as a type, and that value
+    # is a member of the unit the ALIAS is written in. Folded here rather than
+    # at a lookup because the Decl caches the type: the second reader finds an
+    # id and never asks again, so the value has to be materialised the once,
+    # where the alias itself resolves.
+    constFoldDecl :ast :ty :reg :declId
     return r9
 }
 
@@ -8948,6 +8954,16 @@ descendNamedIn: function {
     if ty.defNodeIndexBuilt == false then return (ztypes.tid.create from: 0)
     if defUnit == "core" then return (ztypes.tid.create from: 0)
     ddec9: declOfUnitDef :ty :ast :defUnit :name
+    # a CONSTANT declares itself when it is read: its type is the one its value
+    # carries, so a target that has not folded yet has nothing to answer with
+    if (ddec9.isZero) == false then {
+        dcC9: false
+        {
+            ddo9: ty.decls.get i: ddec9.u64
+            if ddo9.kind.constDecl when ddo9.typeId.isZero then dcC9 = true
+        }
+        if dcC9 then constFoldDecl :ast :ty :reg declId: ddec9
+    }
     tto9: (optionval.none ztypes.ztypetype)
     if ddec9 > 0 then tto9 = declDefTypetype :ty :ast declId: ddec9
     ttv9: ztypes.ztypetype.nullType
@@ -11879,19 +11895,10 @@ resolveNamespaceUnit: function {
         speculative: false
         rootOnly: false
     )
-    # A namespace's constants are members of IT, keyed on its own id, and the
-    # signature walk above is the moment they can be. Reached from every
-    # caller -- the demand path, an alias into a hidden subunit, the eager
-    # walk -- so no caller carries a constant step of its own. It sets the
-    # cursor to the owner itself, so it needs none from here.
-    (resolveConstantDefsIn
-        :ty
-        :reg
-        :ast
-        :unitName
-        unitdefId: unitOpId
-        ownerDeclId: declId9
-    )
+    # A namespace's constants are NOT folded here. Each one declares itself
+    # when something reads it (probeFrameTyperef's constant leg), the way every
+    # other definition of this unit waits to be demanded. Folding them up front
+    # was the last eager tier left inside the lazy one.
 }
 
 # resolveInlineGenericUnit -- resolve an inline generic unit (mathops: unit as { t:
@@ -29056,8 +29063,9 @@ constDefIsComputed: function {ast: Ast.view n: Node.view} out bool is {
 # entry to reach it through, but resolveNamespaceUnit has already evaluated its
 # members against this id, so the read is a pure lookup rather than a descent.
 constValueOfMemberTid: function {
-    ast: Ast.view
-    ty: ztyping.ZTyping.view
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
     unitTid: ztypes.tid
     defName: StringView
 } out ztypes.cval is {
@@ -29071,7 +29079,17 @@ constValueOfMemberTid: function {
     ) case some then {
         if sg9 == 2 then return (ty.memberConstOf parentTypeId: unitTid nameId: nid9)
     } case none then null
-    return ztypes.noConst
+    # not folded yet -- READING a constant is what folds it, so descend into
+    # the owner's declaration and fold there, then read back. Without this a
+    # constant that names another unit's constant sees a memo that nothing
+    # filled.
+    od9: ty.declIdOfType typeId: unitTid
+    if od9.isZero then od9 = declOfTypeId :reg tid: unitTid
+    if od9.isZero then return ztypes.noConst
+    cd9: ty.declFindChild parentDeclId: od9 nameId: nid9
+    if cd9.isZero then return ztypes.noConst
+    constFoldDecl :ast :ty :reg declId: cd9
+    return (ty.memberConstOf parentTypeId: unitTid nameId: nid9)
 }
 
 # constValueOfMember -- the compile-time value of `unitName.defName`, evaluated
@@ -29682,6 +29700,7 @@ evalConstNode: function {
                         nsv9: (constValueOfMemberTid
                             :ast
                             :ty
+                            :reg
                             unitTid: nst9
                             defName: cn9.stringview
                         )
@@ -29708,6 +29727,7 @@ evalConstNode: function {
                     ssv9: (constValueOfMemberTid
                         :ast
                         :ty
+                        :reg
                         unitTid: sst9
                         defName: cn9.stringview
                     )
@@ -30351,12 +30371,33 @@ constRegisterValueType: function {
     v: ztypes.cval
 } is {
     if v.kind.none then return
-    utid9: (declTypeIdOf
+    nid0: zast.poolFind pool: ast.names text: defName
+    if nid0.isZero then return
+    (constRegisterValueTypeAt
+        :ast
         :ty
-        declId: (constOwnerDeclFor :ast :ty :unitName :defName)
-)
+        :reg
+        ownerDecl: (constOwnerDeclFor :ast :ty :unitName :defName)
+        nameId: nid0
+        :v
+    )
+}
+
+# constRegisterValueTypeAt -- the registration itself, addressed by the owner's
+# declaration. A constant's type is the one its VALUE carries, so this is where
+# a constant becomes a member of its owner at all.
+constRegisterValueTypeAt: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ownerDecl: ztypes.declid
+    nameId: zast.nameid
+    v: ztypes.cval
+} is {
+    if v.kind.none then return
+    utid9: declTypeIdOf :ty declId: ownerDecl
     if utid9.isZero then return
-    nid9: zast.poolFind pool: ast.names text: defName
+    nid9: nameId
     if nid9.isZero then return
     {
         eo9: ty.declChildOfId parentTypeId: utid9 nameId: nid9
@@ -30381,6 +30422,55 @@ constRegisterValueType: function {
     # on some other reference having resolved the type first
     bo9: descendNamed :ty :reg :ast defUnit: "system" name: base9
     if bo9 > 0 then ty.setMemberType parentTypeId: utid9 nameId: nid9 childTypeId: bo9.u64
+}
+
+# constFoldDecl -- fold the constant `declId` declares and register the type its
+# value carries, addressed by the DECLARATION alone. This is the door a lookup
+# takes when it finds a constant that has not folded yet: a constant's TYPE
+# comes from its VALUE, so the fold is what declares it, exactly as an
+# unresolved re-export is declared by following its alias.
+constFoldDecl: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    declId: ztypes.declid
+} is {
+    if declId.isZero then return
+    own9: declParentIdOf :ty :declId
+    if own9.isZero then return
+    nm9: declNameIdOf :ty :declId
+    if nm9.isZero then return
+    dnode9: 0
+    {
+        do9: ty.decls.get i: declId.u64
+        dnode9 = do9.node
+    }
+    if dnode9 == 0 then return
+    # both names are COPIED: the fold takes an exclusive lock on ast.names,
+    # which a live view into the pool would hold open
+    unm9: declRootUnitName :ty :ast :declId
+    if unm9.length == 0 then return
+    nmt9: zast.poolTextCopy pool: ast.names ref: nm9
+    constFailClear :ty
+    v9: (constValueOfMemberAt
+        :ast
+        :ty
+        :reg
+        unitName: unm9.stringview
+        ownerDecl: own9
+        nameId: nm9
+        defNodeId: dnode9
+        defName: nmt9.stringview
+    )
+    (constRegisterValueTypeAt
+        :ast
+        :ty
+        :reg
+        ownerDecl: own9
+        nameId: nm9
+        v: v9
+    )
+    reportPendingConstFail :ty
 }
 
 # resolveConstantMember -- one unit-level definition's constant channels, both
@@ -31706,16 +31796,30 @@ declProbeUnitChildRoot: function {
     if cid9.isZero then return 0
     ctid9: u64
     isRx9: false
+    isC9: false
     {
         do9: ty.decls.get i: cid9.u64
         ctid9 = do9.typeId
         if do9.kind.reexportDecl then isRx9 = true
+        if do9.kind.constDecl then isC9 = true
     }
     if ctid9 > 0 then return ctid9
     if isRx9 then {
         # a re-export not yet resolved: mint once through the alias,
         # cache on the Decl (covers value re-exports like core.false)
         return (resolveAliasKey :ty :reg :ast declId: cid9)
+    }
+    if isC9 then {
+        constFoldDecl :ast :ty :reg declId: cid9
+        rt9: declTypeIdOf :ty declId: unitRoot
+        if (rt9.isZero) == false then {
+            co9: ty.declChildOfId parentTypeId: rt9 :nameId
+            match (
+                co9
+            ) case some then {
+                return co9
+            } case none then null
+        }
     }
     return 0
 }
