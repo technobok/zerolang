@@ -742,8 +742,9 @@ nodeid: record { val: u32.typedef } as {
     }
 }
 
-# StringPool -- deduplicating intern table for identifier text. ids are
-# 1-based (0 = absent); texts are never removed, so an id stays valid for
+# StringPool -- deduplicating intern table for identifier text. A pool id
+# indexes its row; row 0 is a sentinel holding the empty text, which is the
+# answer for an absent ref. Texts are never removed, so an id stays valid for
 # the pool's lifetime. The slot index is an open-addressed, linear-probed
 # power-of-two table keyed by the seeded StringView hash: ids follow
 # insertion order and are deterministic, but slot layout is process-local
@@ -754,11 +755,15 @@ StringPool: class {
     used: u64
 } as {
     create: function {} out this is {
-        return (meta.create
+        p9: (meta.create
             texts: (List String)
             slots: (ListVal u32)
             used: 0
         )
+        # the sentinel row an absent ref reads. It is deliberately given no
+        # slot, so interning "" still mints an id of its own.
+        p9.texts.append "".string
+        return p9
     }
 
     # reserve -- grow the slot table when empty or at 2/3 load.
@@ -782,13 +787,13 @@ StringPool: class {
             i = i + 1
         }
         mask: ncap - 1
-        k: u64
+        k: 1.u64
         for k < this.texts.length loop {
             t9: this.texts.get i: k
             hv: t9.stringview.hash
             idx: hv & mask
             for (ns.get i: idx) != 0 loop idx = (idx + 1) & mask
-            ns.set i: idx val: (k + 1).u32.orPanic
+            ns.set i: idx val: k.u32.orPanic
             k = k + 1
         }
         this.slots = ns
@@ -802,7 +807,7 @@ StringPool: class {
         for true loop {
             sid: t.slots.get i: idx
             if sid == 0 then return idx
-            t9: t.texts.get i: (sid - 1).u64
+            t9: t.texts.get i: sid.u64
             if t9.stringview == s then return idx
             idx = (idx + 1) & mask
         }
@@ -815,8 +820,8 @@ StringPool: class {
         si: this.probeSlot :s
         sid: this.slots.get i: si
         if sid > 0 then return (nameid.create from: sid.u32)
-        this.texts.append s.string
         nid: this.texts.length.u32.orPanic
+        this.texts.append s.string
         this.slots.set i: si val: nid
         this.used = this.used + 1
         return (nameid.create from: nid.u32)
@@ -829,8 +834,8 @@ StringPool: class {
         si: this.probeSlot s: s.stringview
         sid: this.slots.get i: si
         if sid > 0 then return (nameid.create from: sid.u32)
-        this.texts.append s
         nid: this.texts.length.u32.orPanic
+        this.texts.append s
         this.slots.set i: si val: nid
         this.used = this.used + 1
         return (nameid.create from: nid.u32)
@@ -846,18 +851,18 @@ StringPool: class {
 
     # get -- an owned copy of id's text; panics on an out-of-range id.
     get: function {t: this.view id: nameid} out String is {
-        t9: t.texts.get i: (id - 1).u64
+        t9: t.texts.get i: id.u64
         return t9.copy
     }
 
     # eq -- does id's text equal s? Zero-allocation compare; id 0 (absent)
-    # equals only the empty view.
+    # reads the sentinel, so it equals only the empty view.
     eq: function {:this id: nameid s: StringView} out bool is {
-        if id.isZero then return s.length == 0
-        t9: this.texts.get i: (id - 1).u64
+        t9: this.texts.get i: id.u64
         return t9.stringview == s
     }
 
+    # length -- the row count, sentinel included: ids run 1 .. length - 1.
     length: function {:this} out u64 is {
         return this.texts.length
     }
@@ -1502,7 +1507,6 @@ poolTextEq: function {pool: StringPool ref: nameid s: StringView} out bool is {
 # poolTextCopy -- an owned copy of an interned name's text ("" when the ref
 # is absent). Pool-taking counterpart of poolTextEq.
 poolTextCopy: function {pool: StringPool.view ref: nameid} out String is {
-    if ref.isZero then return "".string
     return (pool.get id: ref)
 }
 
@@ -1519,16 +1523,14 @@ nameTextCopy: function {ast: Ast ref: nameid} out String is {
 
 # poolTextAt -- a BORROWED view of an interned name's text: the binding
 # pins its source shared for its scope, so every read is allocation-free.
-# A zero ref reads the seeded empty entry (wkEmpty), matching poolTextCopy.
+# A zero ref reads the sentinel row, which holds the empty text.
 poolTextAt: function {pool: StringPool.view ref: nameid} out String.borrow is {
-    if ref.isZero then return (pool.texts.get i: (wkEmpty - 1).u64)
-    return (pool.texts.get i: (ref - 1).u64)
+    return (pool.texts.get i: ref.u64)
 }
 
 # nameTextAt -- carrier-taking counterpart of poolTextAt.
 nameTextAt: function {ast: Ast.view ref: nameid} out String.borrow is {
-    if ref.isZero then return (ast.names.texts.get i: (wkEmpty - 1).u64)
-    return (ast.names.texts.get i: (ref - 1).u64)
+    return (ast.names.texts.get i: ref.u64)
 }
 
 # Print one line per Node in the form
