@@ -10082,7 +10082,6 @@ ensureUnitRequire: function {
             pool: ast.names
             ref: (zast.nameid.create from: (ty.declNameOf declId: own9))
         )
-        rtid9: declTypeIdOf :ty declId: rq9
         ecnt9: ty.declChildSlots declId: rq9
         ei9: u64
         for ei9 < ecnt9 loop {
@@ -10104,7 +10103,7 @@ ensureUnitRequire: function {
                     :ty
                     :reg
                     unitName: onm9.stringview
-                    ownerTid: rtid9
+                    ownerDecl: rq9
                     nameId: (zast.nameid.create from: enm9)
                     defNodeId: enode9
                     defName: etx9.stringview
@@ -28999,17 +28998,18 @@ constArithFloat: function {op: StringView a: f64 b: f64} out ztypes.cval is {
     return ztypes.noConst
 }
 
-# constOwnerTidFor -- the type id a constant named `defName` is keyed on. A
-# name written inside a namespace resolves against that namespace first and
-# falls back to the file unit, which is the chain spec.pdoc describes for an
+# constOwnerDeclFor -- the DECLARATION a constant named `defName` is a member
+# of. A name written inside a namespace resolves against that namespace first
+# and falls back to the file unit, which is the chain spec.pdoc describes for an
 # inline unit. The TYPE and VALUE channels must agree about this, so both ask
-# here rather than each deciding for itself.
-constOwnerTidFor: function {
+# here rather than each deciding for itself -- and both facts the fold needs,
+# the owner's type id and the constant's own def node, come off this one answer.
+constOwnerDeclFor: function {
     ast: Ast.view
     ty: ztyping.ZTyping.view
     unitName: StringView
     defName: StringView
-} out u64 is {
+} out ztypes.declid is {
     # the frames innermost outward from the cursor: a constant written inside
     # a unit is keyed on THAT unit, and on each unit enclosing it before the
     # file unit. Asking only the innermost left a constant of an enclosing
@@ -29023,27 +29023,17 @@ constOwnerTidFor: function {
             nd9: ty.declFindChild parentDeclId: cur9 nameId: dnm9
             if (nd9.isZero) == false then {
                 ct9: declTypeIdOf :ty declId: cur9
-                if (ct9.isZero) == false then return ct9.u64
+                if (ct9.isZero) == false then return cur9
             }
             cur9 = unitFrameOf :ty declId: (declParentIdOf :ty declId: cur9)
         }
     }
-    return (unitTidOfName9 :ty unitNameId: (nameIdOf :ast name: unitName)).u64
-}
-
-# constDefNodeId -- the AST nodeid of the namedoperation declaring `defName` in
-# `unitName`, or 0. The Decl tree already records it, so the evaluator can
-# descend into a constant it has not reached yet without a second index.
-constDefNodeId: function {
-    ast: Ast
-    ty: ztyping.ZTyping.view
-    unitName: StringView
-    defName: StringView
-} out u32 is {
-    dc9: declOfUnitDef :ty :ast defUnit: unitName name: defName
-    if dc9.isZero then return 0
-    do9: ty.decls.get i: dc9.u64
-    return do9.node
+    # nothing in the chain declares it: the file unit owns it, which is where a
+    # constant reached before its own declaration was indexed is keyed
+    return (ty.declFindChild
+        parentDeclId: ty.programRoot
+        nameId: (nameIdOf :ast name: unitName)
+    )
 }
 
 # constDefIsComputed -- the definition COMPUTES a value from others, as against
@@ -29095,36 +29085,48 @@ constValueOfMember: function {
     unitName: StringView
     defName: StringView
 } out ztypes.cval is {
-    ut9: constOwnerTidFor :ast :ty :unitName :defName
-    if ut9 == 0 then return ztypes.noConst
+    od9: constOwnerDeclFor :ast :ty :unitName :defName
+    if od9.isZero then return ztypes.noConst
     nid9: zast.poolFind pool: ast.names text: defName
     if nid9.isZero then return ztypes.noConst
+    # the constant's own declaration is the owner's child of that name, so the
+    # def node comes off the same walk that found the owner
+    dnode9: 0
+    {
+        cd9: ty.declFindChild parentDeclId: od9 nameId: nid9
+        if (cd9.isZero) == false then {
+            cdo9: ty.decls.get i: cd9.u64
+            dnode9 = cdo9.node
+        }
+    }
     return (constValueOfMemberAt
         :ast
         :ty
         :reg
         :unitName
-        ownerTid: (ztypes.tid.create from: ut9.u64)
+        ownerDecl: od9
         nameId: nid9
-        defNodeId: (constDefNodeId :ast :ty :unitName :defName)
+        defNodeId: dnode9
         :defName
     )
 }
 
-# constValueOfMemberAt -- the fold itself, addressed by ids. A member of a
-# NESTED unit has no (unitName, defName) pair that names it, so the two
-# name-keyed lookups above are the wrapper's and the evaluation is here.
+# constValueOfMemberAt -- the fold itself, addressed by the OWNER's declaration.
+# A member of a NESTED unit has no (unitName, defName) pair that names it, so
+# the name-keyed lookup above is the wrapper's and the evaluation is here. The
+# owner arrives as a Decl rather than a type id because that is what the
+# evaluation frame is: deriving it back from the id was a reverse lookup.
 constValueOfMemberAt: function {
     ast: Ast
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     unitName: StringView
-    ownerTid: ztypes.tid
+    ownerDecl: ztypes.declid
     nameId: zast.nameid
     defNodeId: u32
     defName: StringView
 } out ztypes.cval is {
-    utid9: ownerTid
+    utid9: declTypeIdOf :ty declId: ownerDecl
     nid9: nameId
     if utid9.isZero then return ztypes.noConst
     k9: ty.memberConstKey parentTypeId: utid9 nameId: nid9
@@ -29174,12 +29176,10 @@ constValueOfMemberAt: function {
         return ztypes.noConst
     }
     ty.constEvalState.set key: k9 value: 1.u8
-    # the value is evaluated in the frame of the unit that owns the member
+    # the value is evaluated in the frame of the unit that owns the member --
+    # the owner itself, which the caller already holds
     prevFrame9: ty.curFrame
-    {
-        od9: declOfTypeId :reg tid: utid9
-        if (od9.isZero) == false then ty.curFrame = od9
-    }
+    ty.curFrame = ownerDecl
     v9: (evalConstNode :ast :ty :reg :unitName n: (ast.nodes.get i: opid9.u64))
     ty.curFrame = prevFrame9
     ty.constEvalState.set key: k9 value: 2.u8
@@ -30145,10 +30145,13 @@ resolveConstantDef: function {
                     # file unit it is written in -- as the value channel keys
                     # it, not on the file unit by name (which leaked a nested
                     # unit's constant into the file unit's index)
-                    sfU9: constOwnerTidFor :ast :ty :unitName :defName
-                    if sfU9 > 0 then {
+                    sfU9: (declTypeIdOf
+                        :ty
+                        declId: (constOwnerDeclFor :ast :ty :unitName :defName)
+)
+                    if (sfU9.isZero) == false then {
                         (ty.setMemberType
-                            parentTypeId: (ztypes.tid.create from: sfU9)
+                            parentTypeId: sfU9
                             nameId: (zast.poolFind pool: ast.names text: defName)
                             childTypeId: sfT9
                         )
@@ -30165,10 +30168,13 @@ resolveConstantDef: function {
             match (
                 tOpt
             ) case some then {
-                cu: constOwnerTidFor :ast :ty :unitName :defName
-                if cu > 0 then {
+                cu: (declTypeIdOf
+                    :ty
+                    declId: (constOwnerDeclFor :ast :ty :unitName :defName)
+)
+                if (cu.isZero) == false then {
                     (ty.setMemberType
-                        parentTypeId: (ztypes.tid.create from: cu)
+                        parentTypeId: cu
                         nameId: (zast.poolFind pool: ast.names text: defName)
                         childTypeId: tOpt
                     )
@@ -30345,9 +30351,11 @@ constRegisterValueType: function {
     v: ztypes.cval
 } is {
     if v.kind.none then return
-    ut9: constOwnerTidFor :ast :ty :unitName :defName
-    if ut9 == 0 then return
-    utid9: ztypes.tid.create from: ut9.u64
+    utid9: (declTypeIdOf
+        :ty
+        declId: (constOwnerDeclFor :ast :ty :unitName :defName)
+)
+    if utid9.isZero then return
     nid9: zast.poolFind pool: ast.names text: defName
     if nid9.isZero then return
     {
@@ -30428,7 +30436,7 @@ resolveConstantDefsInUnit: function {
 # resolveConstantDefsIn -- the walk resolveConstantDefsInUnit drives, once for
 # the file unit and once for each namespace or template nested in it, with
 # the cursor at `ownerDeclId`: a nested unit's constants key on that unit
-# (constOwnerTidFor walks the cursor's frames), the file unit's on the unit.
+# (constOwnerDeclFor walks the cursor's frames), the file unit's on the unit.
 resolveConstantDefsIn: function {
     ast: Ast.view
     ty: ztyping.ZTyping
