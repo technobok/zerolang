@@ -110,6 +110,9 @@ declkind: variant {
     # a local variable or body-level binding (a parameter's body binding, a
     # loop variable, a generic parameter bound for a walk)
     localDecl: null
+    # the program root: the one declaration every file unit hangs under, so a
+    # file unit is a declaration with a parent like any other
+    programDecl: null
 } as { tag: u8.tag }
 
 # declkindName -- a declaration kind's dump/debug text.
@@ -144,6 +147,8 @@ declkindName: function {k: declkind} out String is {
         return "block".string
     } case localDecl then {
         return "local".string
+    } case programDecl then {
+        return "program".string
     }
 }
 
@@ -548,6 +553,9 @@ ZTyping: class {
     # the prelude's root DeclId (`core`), the outermost frame of every bare
     # definition lookup, resolved once the def index exists
     coreUnitRoot: ztypes.declid
+    # the program root DeclId, minted beside the sentinel: every file unit
+    # carries it as its parent, so the declaration tree has one top
+    programRoot: ztypes.declid
     # the canonical `null` tid, seeded with the other system types: an
     # out-less method's auto-call resolves to null, and every reader of
     # that stamp already treats it as the no-value type
@@ -625,7 +633,8 @@ ZTyping: class {
     # --- declaration tree ---
 
     # declNew -- append one declaration row (its DeclId is the index it lands
-    # at) and link it into the parent's namespace; parent 0 = a tree root.
+    # at) and link it into the parent's namespace; parent 0 adds no edge --
+    # the program root, and any row that takes its parent from declSetParent.
     declNew: function {:this name: u32 parent: ztypes.declid kind: declkind node: u32} out ztypes.declid is {
         id: ztypes.declid.create from: this.decls.length
         this.decls.append (Decl
@@ -676,6 +685,15 @@ ZTyping: class {
         fo9.unitFrame = true
     }
 
+    # declSetParent -- link a declaration to its enclosing one after the mint.
+    # declNew edges a child into its parent's namespace, so a declaration that
+    # is parented but NOT looked up by name there takes the link directly
+    # (declNewFrame and declCloneType do the same).
+    declSetParent: function {:this declId: ztypes.declid parent: ztypes.declid} is {
+        po9: this.decls.getMut i: declId.u64
+        po9.parent = parent
+    }
+
     # declIsUnitFrame -- the frame bit (a `public:` block is one too).
     declIsUnitFrame: function {t: this.view declId: ztypes.declid} out bool is {
         do9: t.decls.get i: declId.u64
@@ -707,7 +725,8 @@ ZTyping: class {
         return id9
     }
 
-    # declParentOf -- the enclosing declaration, 0 for a root or an invalid id.
+    # declParentOf -- the enclosing declaration, 0 for the program root or an
+    # invalid id.
     declParentOf: function {t: this.view declId: ztypes.declid} out ztypes.declid is {
         r9: ztypes.declid
         do9: t.decls.get i: declId.u64
@@ -2249,6 +2268,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         systemUnitTid: ztypes.tid
         systemUnitRoot: ztypes.declid
         coreUnitRoot: ztypes.declid
+        programRoot: ztypes.declid
         nullTypeId: 0
         nativeLinkTargetsDone: false
         pendingTyperef: (MapVR u64 value: String)
@@ -2304,6 +2324,18 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
     )
     t9.nameIndexes.append (NameIndex byName: (MapVV u64 value: ztypes.declid))
     t9.constStrings.append "".string
+    # the program root, DeclId 1: the file units are parented to it, so every
+    # declaration but this one has a parent. Minted with parent 0, so it takes
+    # no name edge and lands in no namespace; it carries no unit-frame bit and
+    # no type id, which is what keeps it out of the bare-name walks --
+    # unitFrameOf climbs through it and probeFrameTyperef finds no member
+    # index on it.
+    t9.programRoot = (t9.declNew
+        name: 0
+        parent: ztypes.declid
+        kind: declkind.programDecl
+        node: 0
+    )
     return t9
 }
 

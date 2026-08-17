@@ -920,6 +920,10 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                     kind: ztyping.declkind.unitDecl
                     node: ruId9
                 )
+                # parented AFTER the mint: a file unit hangs under the program
+                # root, but takes no name edge there -- a bare name must not
+                # reach a unit through the root
+                ty.declSetParent declId: udid9 parent: ty.programRoot
                 ty.declSetUnitFrame declId: udid9
                 ty.unitRootByName.set key: unmRef9.u64 value: udid9
                 utl9: reg.unitNameTid.get key: unmRef9.u64
@@ -10235,7 +10239,7 @@ resolveDemandedDeclIn: function {
         dNode9 = do9.node.u64
         dTid9 = do9.typeId
     }
-    if dParent9.isZero then return
+    if (declAtProgramTop :ty parentDeclId: dParent9) then return
     puNm9: u32
     {
         pdo9: ty.decls.get i: dParent9.u64
@@ -10888,7 +10892,7 @@ callableUnitName: function {ast: Ast.view op: Node.view} out String is {
 }
 
 
-# declParentIdOf -- a declaration's enclosing declaration (0 at a tree root).
+# declParentIdOf -- a declaration's enclosing declaration (0 at the program root).
 # declNameIdOf -- a declaration's own name id, or 0.
 declNameIdOf: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out zast.nameid is {
     do9: ty.decls.get i: declId.u64
@@ -10896,9 +10900,9 @@ declNameIdOf: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out zast
 }
 
 # unitRootOfDecl -- the top-level unit root a declaration sits under: the
-# parent chain to the parentless Decl. A definition of a NESTED unit answers
-# with the file unit that loaded it, which is the unit the name walkers and the
-# diagnostics are keyed on.
+# parent chain to the program root's own child. A definition of a NESTED unit
+# answers with the file unit that loaded it, which is the unit the name walkers
+# and the diagnostics are keyed on.
 unitRootOfDecl: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out ztypes.declid is {
     cur9: declId
     for cur9 > 0 loop {
@@ -10907,7 +10911,7 @@ unitRootOfDecl: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out zt
             do9: ty.decls.get i: cur9.u64
             par9 = do9.parent
         }
-        if par9.isZero then return cur9
+        if (declAtProgramTop :ty parentDeclId: par9) then return cur9
         cur9 = par9
     }
     return (ztypes.declid.create from: 0)
@@ -10918,6 +10922,15 @@ declParentIdOf: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out zt
     do9: ty.decls.get i: declId.u64
     r9 = do9.parent
     return r9
+}
+
+# declAtProgramTop -- is this parent id the top of the declaration tree: no
+# parent at all, or the program root whose children are the file units? The
+# question every walk out of a file unit asks.
+declAtProgramTop: function {ty: ztyping.ZTyping.view parentDeclId: ztypes.declid} out bool is {
+    if parentDeclId.isZero then return true
+    if parentDeclId == ty.programRoot then return true
+    return false
 }
 
 # instTemplateDecl -- the DECLARATION an instantiation's callable path names,
@@ -11013,8 +11026,14 @@ declRootUnitName: function {
         nxt9: ztypes.declid
         do9: ty.decls.get i: cur.u64
         nxt9 = do9.parent
-        if nxt9.isZero then nm9 = do9.name
-        cur = nxt9
+        # the walk STOPS at the file unit: climbing on to the program root
+        # would overwrite the answer with the root's (absent) name
+        if (declAtProgramTop :ty parentDeclId: nxt9) then {
+            nm9 = do9.name
+            cur = ztypes.declid
+        } else {
+            cur = nxt9
+        }
     }
     if nm9 == 0 then return "".string
     return (zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: nm9.u32))
@@ -12598,7 +12617,8 @@ completeUnitInstantiations: function {
             # file-unit channel; it is keyed on a bare name, so it cannot hold
             # two namespaces' bindings apart, which is the whole reason a
             # namespace's members live on its own type id.
-            if (declParentIdOf :ty declId: rscope) > 0 then {
+            rsp9: declParentIdOf :ty declId: rscope
+            if (declAtProgramTop :ty parentDeclId: rsp9) == false then {
                 sTid9: declTypeIdOf :ty declId: rscope
                 if (sTid9.isZero) == false then {
                     (ty.setMemberType
@@ -13089,13 +13109,14 @@ resolveMainUnitInstantiations: function {
         # scope the instantiation was written in. resolveInlineGenericUnit
         # self-guards on that Decl's type id, so this is a no-op whenever
         # anything already resolved the template -- which today is always.
-        # A parentless Decl is a file unit of the template's name, not an
-        # inline template: registerUnitRoots has already minted it.
+        # A Decl parented straight to the program root is a file unit of the
+        # template's name, not an inline template: registerUnitRoots has
+        # already minted it.
         {
             tpd9: declParentIdOf :ty declId: r.tmplDeclId
             tuv9: r.tmplUnit.stringview
             tu9: tuv9
-            if (tpd9.isZero) == false when r.tmplOpId > 0 then {
+            if (declAtProgramTop :ty parentDeclId: tpd9) == false when r.tmplOpId > 0 then {
                 match (
                     program
                 ) case program then {
@@ -31249,10 +31270,10 @@ unitDeclOfTid: function {
             if do9.kind.unitDecl then isU9 = true
             selfT9 = do9.typeId
         }
-        if par9.isZero then {
-            # a FILE unit's own tid links to its own parentless root: the
-            # unit is not "defined in" a unit (inline units and root-
-            # proxied synths do report the enclosing unit)
+        if (declAtProgramTop :ty parentDeclId: par9) then {
+            # a FILE unit's own tid links to its own root under the program
+            # root: the unit is not "defined in" a unit (inline units and
+            # root-proxied synths do report the enclosing unit)
             if selfT9 == tid then return (ztypes.declid.create from: 0)
             if isU9 then return cur9
             return (ztypes.declid.create from: 0)
