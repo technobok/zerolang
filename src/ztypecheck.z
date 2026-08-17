@@ -32141,13 +32141,33 @@ walkLookupTyperefFrom: function {
     if baseId.isZero then return (optionval.none u64)
     cur9: frame
     hops9: u64
+    # the nearest frame that declares the name with a declaration still in
+    # flight (queued or mid-resolution): the nearest declaration wins
+    # whatever its state (envLookup's rule), so an outer frame may answer
+    # only with THAT declaration's own id -- core's re-export of it -- never
+    # with a different definition of the same name; otherwise the reference
+    # waits for the declaration to resolve
+    waitDecl9: ztypes.declid
     for cur9 > 0 while hops9 < 64 loop {
         hops9 = hops9 + 1
         if cur9 == ty.coreUnitRoot then {
             cur9 = ztypes.declid
         } else {
             r9: probeFrameTyperef :ast :ty :reg root: cur9 nameId: baseId
-            if r9 > 0 then return (optionval.some r9)
+            if r9 > 0 then {
+                if waitDecl9.isZero then return (optionval.some r9)
+                od9: declOfTypeId :reg tid: (ztypes.tid.create from: r9)
+                if od9 == waitDecl9 then return (optionval.some r9)
+                return (optionval.none u64)
+            }
+            if waitDecl9.isZero then {
+                here9: ty.declFindChild parentDeclId: cur9 nameId: baseId
+                if (here9.isZero) == false then {
+                    hd9: ty.decls.get i: (here9 - 1)
+                    if hd9.pending then waitDecl9 = here9
+                    if hd9.resolving then waitDecl9 = here9
+                }
+            }
             cur9 = unitFrameOf :ty :ast declId: (declParentIdOf :ty declId: cur9)
         }
     }
@@ -32157,7 +32177,11 @@ walkLookupTyperefFrom: function {
     if (zast.poolTextAt pool: ast.names ref: baseId) == "Any" then return (optionval.none u64)
     if (ty.coreUnitRoot.isZero) == false then {
         r5: probeFrameTyperef :ast :ty :reg root: ty.coreUnitRoot nameId: baseId
-        if r5 > 0 then return (optionval.some r5)
+        if r5 > 0 then {
+            if waitDecl9.isZero then return (optionval.some r5)
+            od5: declOfTypeId :reg tid: (ztypes.tid.create from: r5)
+            if od5 == waitDecl9 then return (optionval.some r5)
+        }
     }
     return (optionval.none u64)
 }
