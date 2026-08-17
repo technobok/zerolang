@@ -173,6 +173,30 @@ survive; see the W0 census discussion), Node payload inlining (<1% of blocks).
 Checker gap noted: `capacity:` + a dotted cross-unit value type trips Map
 generic inference (callKind stays unsized).
 
+## Sentinel row 0 in every id space (2026-08-17 @ 436e330e)
+
+Not a perf workstream, so no table row — the change is an index representation:
+a Decl / AST node / pool id / constString id now indexes its row directly, and
+the ~2,700 `- 1` adjustments, the 115 `declValid` calls and 19 chain hop
+counters are gone. Measured only to confirm it costs nothing.
+
+Protocol differs from the table above: **frozen input** (a copy of `src` +
+`lib/system` taken at `9ae2cb29`, so both binaries compile identical source)
+and the **-O2 driver**, not the -O1 series binary — this is an A/B of two
+binaries on one input, which is what `perf stat` resolves, not a row in the
+wall series.
+
+| | 9ae2cb29 | 436e330e |
+|---|---|---|
+| instructions (`-r 5`) | 4,261,181,086 | **4,215,596,496 (-1.07%)** |
+| cycles (`-r 5`, ±1.3%) | 1,886,934,992 | 1,857,197,671 (-1.58%) |
+| allocs (memcheck) | 8,529,948 | 8,529,758 |
+| bytes allocated | 461,804,661 | 461,796,213 |
+| peak RSS | 122,148 kB | 121,972 kB |
+
+The four extra sentinel rows cost nothing measurable; the deleted arithmetic
+and predicate calls pay for them about 45M instructions over.
+
 ## A one-line method inlines at -O2 but not at -O1 (2026-08-16 @ 500eb312)
 
 **Correction to the first version of this section**, which said "the compiler does not
