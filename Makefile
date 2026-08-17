@@ -87,10 +87,10 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 # ZLSCOPE -- what the zl *linter* checks: the tool + compiler sources and the relocated
 # front-end. The stdlib proper (io/os/collections/system/cli/core) is not linted (it carries
 # pre-existing first-arg-elision labels that were never enforced).
-ZLSCOPE := src/*.z lib/system/*.z
+ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z
 # FMTSCOPE -- what the zl *formatter* checks: fmt applies only whitespace/colon fixes (no
 # elide-label issue), so it covers the whole codebase, keeping every .z consistently formatted.
-FMTSCOPE := src/*.z lib/system/*.z examples/*.z
+FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z examples/*.z
 
 # all -- the default target: build the three tools (compiler, linter/formatter,
 # language server). `make check` / `make test` are the gates; `make build` compiles
@@ -116,7 +116,7 @@ style-lint: bin/zl
 # out/ztestrunner -- the self-hosted corpus runner (src/ztestrunner.z), built
 # on demand; test/ci run it with --jobs so per-case pipelines fan out (heavy
 # kinds -- differential, selfhost-asan, fixpoint -- stay serial inside it).
-$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z)
+$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c -lm
@@ -287,7 +287,7 @@ $(BUILDDIR)/zc-seed: bootstrap/zc.c
 # bin/zc -- the self-hosted compiler, bootstrapped by the seed. Persistent +
 # git-ignored; rebuilt when the compiler sources change. The dev bin/zc
 # self-locates to this repo (lib/system here; runtime falls back to src/runtime).
-bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(ZC_DEP)
+bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(ZC_DEP)
 	@mkdir -p bin
 	$(ZC) zc --src src --system lib/system $(ZCHASH) --emit-c bin/zc.c
 
@@ -306,7 +306,7 @@ zc: bin/zc
 # front-end via the compiler. A separate binary from zc so the compiler stays
 # lean; zl links the front-end + typecheck (for --full's suffix rule), but never
 # the emitter.
-out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) | bin/zc
+out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) | bin/zc
 	@mkdir -p out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
 
@@ -321,7 +321,7 @@ bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
 # lsp test kind in ztestrunner builds its own copy; this rule is the
 # editor-facing binary.
-out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) | bin/zc
+out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) | bin/zc
 	@mkdir -p out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
 
@@ -340,12 +340,12 @@ zls: bin/zls
 
 # Standalone dump binaries (the Python-free golden regeneration path; the
 # dumper logic lives in lib/system/zlexer.z and lib/system/zparser.z).
-out/zlexer: bin/zc $(wildcard lib/system/*.z)
+out/zlexer: bin/zc $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zlexer --src src --system lib/system --emit-c $(BUILDDIR)/zlexer.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c -lm
 
-out/zparser: bin/zc $(wildcard lib/system/*.z)
+out/zparser: bin/zc $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zparser --src src --system lib/system --emit-c $(BUILDDIR)/zparser.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c -lm
@@ -442,8 +442,8 @@ $(PERFBIN): bin/zc.c $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o
 
 perf: $(PERFBIN)
 	@echo "== zerolang line count (.z) =="
-	@lsrc=$$(cat src/*.z | wc -l); llib=$$(cat lib/system/*.z | wc -l); \
-	  printf "  src/*.z: %s    lib/system/*.z: %s    total: %s\n" "$$lsrc" "$$llib" "$$((lsrc + llib))"
+	@lsrc=$$(cat src/*.z | wc -l); llib=$$(cat lib/system/*.z lib/system/system/*.z | wc -l); \
+	  printf "  src/*.z: %s    lib/system/**/*.z: %s    total: %s\n" "$$lsrc" "$$llib" "$$((lsrc + llib))"
 	@echo "== self-compile wall best-of-5 (mimalloc; drop run 1) + peak RSS =="
 	@for i in 1 2 3 4 5; do /usr/bin/time -f "  %es  %MkB" $(PERFRUN) 2>&1 | tail -1; done
 	@echo "== phase split (parse / typecheck / emit) =="
@@ -1316,7 +1316,7 @@ view-guard:
 	@awk -v PH='$(VIEW_GUARD_PLACEHOLDER)' -v ALIAS='$(VIEW_GUARD_BACKS)' \
 	  -v INTERNAL='$(VIEW_GUARD_INTERNAL)' -v EMITTED='$(VIEW_GUARD_EMITTED)' \
 	  -v INLINE='$(VIEW_GUARD_INLINE)' \
-	  "$$VIEW_GUARD_AWK" lib/system/*.z src/zemitterc.z \
+	  "$$VIEW_GUARD_AWK" lib/system/*.z lib/system/system/*.z src/zemitterc.z \
 	  src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl
 
 # fallback-guard -- the emitter must never silently degrade: a construct it
@@ -1463,10 +1463,10 @@ native-guard:
 # compares 148 paths believing it compared 208.
 natives-tbl-guard: bin/zc
 	@fail=0; d=$$(mktemp -d); \
-	for u in system wideint halffloat quadfloat; do \
-	  awk -v U=$$u '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
+	for f in lib/system/system.z lib/system/system/*.z; do \
+	  awk -v U=system '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
 	    o != "" && /^    [-+*\/%&<>=!]+: function .*is native/ {op=$$1; sub(/:$$/,"",op); print U"."o"."op}' \
-	    lib/system/$$u.z; \
+	    $$f; \
 	done | LC_ALL=C sort -u > $$d/decl; \
 	grep -oE '^\[[a-z]+\.[A-Za-z0-9_]+\.[-+*/%&<>=!]+' src/runtime/natives.tbl \
 	  | sed 's/^\[//' | LC_ALL=C sort -u > $$d/rows; \
@@ -1499,11 +1499,11 @@ natives-tbl-guard: bin/zc
 	fi; \
 	cn=$$(grep -c "^\[" $$d2/gen); \
 	NUM='^(i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|c8|c32|f16|f32|f64|f128)$$'; \
-	for u in system wideint halffloat quadfloat; do \
-	  awk -v U=$$u -v NUM="$$NUM" '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
+	for f in lib/system/system.z lib/system/system/*.z; do \
+	  awk -v U=system -v NUM="$$NUM" '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
 	    o ~ NUM && /^    [a-z][a-z0-9]*: function \{:this\} out .* is native/ { \
 	      n=$$1; sub(/:$$/,"",n); if (n ~ NUM) { k=($$0 ~ /resultval/) ? "lossy" : "safe"; print U"."o"."n" "k } }' \
-	    lib/system/$$u.z; \
+	    $$f; \
 	done | LC_ALL=C sort -u > $$d2/declkind; \
 	grep '^\[' $$d2/gen \
 	  | sed -E 's/^\[([^]]*)\] +\(\{.*/\1 lossy/; s/^\[([^]]*)\] +\(\(.*/\1 safe/' \
@@ -1534,7 +1534,8 @@ natives-tbl-guard: bin/zc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "natives-tbl-guard OK: $$nf fragment-backed rows, every named fragment on disk"; \
 	d4=$$(mktemp -d); fail=0; \
-	for f in lib/system/*.z; do u=$$(basename $$f .z); \
+	for f in lib/system/*.z lib/system/*/*.z; do u=$$(basename $$f .z); \
+	  case $$f in lib/system/*/*) u=$$(basename $$(dirname $$f));; esac; \
 	  awk -v U=$$u '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class|facet|protocol)( |$$)/ {o=$$1; sub(/:$$/,"",o); pend=""; next} \
 	    /^[A-Za-z_][A-Za-z0-9_]*: function/ {o=""; n=$$1; sub(/:$$/,"",n); pend=U"."n} \
 	    o != "" && /^    [^ ]+: function/ {n=$$1; sub(/:$$/,"",n); pend=U"."o"."n} \
