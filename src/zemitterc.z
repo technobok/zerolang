@@ -3755,7 +3755,7 @@ stmtFormName9: function {
     fo9: (ztypecheck.resolvedByIds
         :ast
         ty: symtab.typing
-        reg: symtab.reg
+
         unitId: bid9
         name: (dottedChildNameIdOf :ast :n)
     )
@@ -7609,14 +7609,13 @@ unitTidOf9: function {
     symtab: zenv.ZSymbolTable.view
     unitName: StringView
 } out ztypes.tid is {
-    uo9: symtab.reg.unitNameTid.get key: (zast.poolFind pool: ast.names text: unitName).u64
-    match (
-        uo9
-    ) case some then {
-        return (ztypes.tid.create from: uo9)
-    } case none then {
-        return ztypes.tid
-    }
+    return (ztypecheck.declTypeIdOf
+        ty: symtab.typing
+        declId: (symtab.typing.declFindChild
+            parentDeclId: symtab.typing.programRoot
+            nameId: (zast.poolFind pool: ast.names text: unitName)
+        )
+    )
 }
 
 # emitMetaCreateCall -- `meta.create field: val ...`, the enclosing type's raw
@@ -8119,7 +8118,7 @@ dottedMemberTidOf9: function {
             go9: (ztypecheck.resolvedByIds
                 :ast
                 ty: symtab.typing
-                reg: symtab.reg
+
                 unitId: baseId9
                 name: childId9
             )
@@ -8345,7 +8344,7 @@ emitCrossUnitBareCreate: function {ctx: Ctx.view
     go9: (ztypecheck.resolvedByIds
         :ast
         ty: symtab.typing
-        reg: symtab.reg
+
         unitId: pbId9
         name: ptId9
     )
@@ -8394,7 +8393,7 @@ emitCrossUnitExplicitCreate: function {
     go: (ztypecheck.resolvedByIds
         :ast
         ty: symtab.typing
-        reg: symtab.reg
+
         unitId: obId9
         name: pcId9
     )
@@ -8507,7 +8506,7 @@ emitCrossUnitUnionCtor: function {
     go: (ztypecheck.resolvedByIds
         :ast
         ty: symtab.typing
-        reg: symtab.reg
+
         unitId: obId9
         name: pcId9
     )
@@ -8594,7 +8593,7 @@ emitCrossUnitTag: function {
     go: (ztypecheck.resolvedByIds
         :ast
         ty: symtab.typing
-        reg: symtab.reg
+
         unitId: unm9
         name: (zast.poolFind pool: ast.names text: ptype)
     )
@@ -9575,7 +9574,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             dpUfo9: (ztypecheck.resolvedByIds
                 :ast
                 ty: symtab.typing
-                reg: symtab.reg
+
                 unitId: dpUbId9
                 name: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
             )
@@ -13374,15 +13373,23 @@ emitStmt: function {
 }
 
 # ensureUnitCache -- build the emit-stable unit lists (tids for the id probe,
-# keys for the composed-key fallback) once per Ctx. unitNameTid is populated in
-# typecheck and never mutated during emit, so the snapshot stays valid; this
-# replaces the per-resolve List rebuild that iterated unitNameTid every call.
-ensureUnitCache: function {ctx: Ctx pool: zast.StringPool.view reg: ztypes.ZTypeRegistry} is {
+# keys for the composed-key fallback) once per Ctx. The program root's children
+# are settled in typecheck and never mutated during emit, so the snapshot stays
+# valid; this replaces the per-resolve List rebuild that walked them every call.
+ensureUnitCache: function {ctx: Ctx pool: zast.StringPool.view ty: ztyping.ZTyping.view} is {
     if ctx.unitCacheBuilt then return
-    with uit: reg.unitNameTid.iterateItems do for ue: uit loop {
-        ukc9: zast.poolTextCopy :pool ref: (zast.nameid.create from: ue.key.u32.orPanic)
-        ctx.unitKeysC.append ukc9
-        ctx.unitTidsC.append (ztypes.tid.create from: ue.value)
+    puds9: ztypecheck.programUnitDecls :ty
+    with uit: puds9.iterate do for ud9: uit loop {
+        ud8: ztypes.declid.create from: ud9
+        utd9: ztypecheck.declTypeIdOf :ty declId: ud8
+        if (utd9.isZero) == false then {
+            ukc9: (zast.poolTextCopy
+                :pool
+                ref: (ztypecheck.declNameIdOf :ty declId: ud8)
+            )
+            ctx.unitKeysC.append ukc9
+            ctx.unitTidsC.append utd9
+        }
     }
     ctx.unitCacheBuilt = true
 }
@@ -13438,7 +13445,7 @@ typeIdByNameStages9: function {
     # (no key composition); the composed-key resolvedByKey pass (which also
     # follows unit-level aliases) runs only when every direct probe missed.
     found2: u64
-    ensureUnitCache :ctx pool: ast.names reg: symtab.reg
+    ensureUnitCache :ctx pool: ast.names ty: symtab.typing
     uki9: u64
     ukn9: ctx.unitTidsC.length
     for uki9 < ukn9 loop {
@@ -13464,7 +13471,7 @@ typeIdByNameStages9: function {
                 r2: (ztypecheck.resolvedByIds
                     :ast
                     ty: symtab.typing
-                    reg: symtab.reg
+
                     unitId: (zast.poolFind pool: ast.names text: uk9.stringview)
                     name: nameId
                 )
@@ -18171,12 +18178,14 @@ pathUnitTidOf9: function {
         }
         ht9: unitChildTidOf9 :symtab parentTid: encl9 nameId: b9.name
         if (ht9.isZero) == false then return ht9
-        uo9: symtab.reg.unitNameTid.get key: b9.name.u64
-        match (
-            uo9
-        ) case some then {
-            return (ztypes.tid.create from: uo9)
-        } case none then null
+        uo9: (ztypecheck.declTypeIdOf
+            ty: symtab.typing
+            declId: (symtab.typing.declFindChild
+                parentDeclId: symtab.typing.programRoot
+                nameId: b9.name
+            )
+        )
+        if (uo9.isZero) == false then return (ztypes.tid.create from: uo9)
         return ztypes.tid
     } case dottedpath then {
         pt9: pathUnitTidOf9 :ast :symtab :ctx baseId: b9.parent
@@ -18278,18 +18287,14 @@ literalSuffixBase: function {
 } out String is {
     sc9: cTypeOf :name
     if sc9.length > 0 then return name.string
-    uo9: symtab.reg.unitNameTid.get key: (zast.poolFind
-        pool: ast.names
-        text: ctx.mainName.stringview
-    ).u64
-    ut9: ztypes.tid
-    match (
-        uo9
-    ) case some then {
-        ut9 = (ztypes.tid.create from: uo9)
-    } case none then {
-        return "".string
-    }
+    ut9: (ztypecheck.declTypeIdOf
+        ty: symtab.typing
+        declId: (symtab.typing.declFindChild
+            parentDeclId: symtab.typing.programRoot
+            nameId: (zast.poolFind pool: ast.names text: ctx.mainName.stringview)
+        )
+    )
+    if ut9.isZero then return "".string
     co9: (symtab.typing.declChildOfId
         parentTypeId: ut9
         nameId: (zast.poolFind pool: ast.names text: name)
@@ -18595,7 +18600,7 @@ scanNativeNeed9: function {
         fo9: (ztypecheck.resolvedByIds
             :ast
             ty: symtab.typing
-            reg: symtab.reg
+
             unitId: baseId
             name: membId
         )
@@ -19005,7 +19010,7 @@ stdFnUndemanded: function {
     ro9: (ztypecheck.resolvedByIds
         :ast
         ty: symtab.typing
-        reg: symtab.reg
+
         unitId: (zast.poolFind pool: ast.names text: unitName)
         name: (zast.poolFind pool: ast.names text: fnName)
     )
@@ -19068,12 +19073,14 @@ emitUnitMonoInstances: function {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: templateUnitOpId
     tplId9: u64
     tk9: templateName
-    tgo9: symtab.reg.unitNameTid.get key: (zast.poolFind pool: ast.names text: tk9).u64
-    match (
-        tgo9
-    ) case some then {
-        tplId9 = tgo9
-    } case none then null
+    tgo9: (ztypecheck.declTypeIdOf
+        ty: symtab.typing
+        declId: (symtab.typing.declFindChild
+            parentDeclId: symtab.typing.programRoot
+            nameId: (zast.poolFind pool: ast.names text: tk9)
+        )
+    )
+    if (tgo9.isZero) == false then tplId9 = tgo9
     if tplId9 == 0 then {
         sgo9: u64
         rid9: u32
@@ -20074,7 +20081,7 @@ emitC: function {
         sgo = (ztypecheck.resolvedByIds
             ast: program.ast
             ty: symtab.typing
-            reg: symtab.reg
+
             unitId: sysId9
             name: strNmId9
         )
@@ -20091,7 +20098,7 @@ emitC: function {
         vgo = (ztypecheck.resolvedByIds
             ast: program.ast
             ty: symtab.typing
-            reg: symtab.reg
+
             unitId: sysId9
             name: svNmId9
         )
@@ -20109,7 +20116,7 @@ emitC: function {
         cgo = (ztypecheck.resolvedByIds
             ast: program.ast
             ty: symtab.typing
-            reg: symtab.reg
+
             unitId: sysId9
             name: (zast.poolFind pool: program.ast.names text: "converror")
         )
@@ -25533,7 +25540,7 @@ nativeNoArgOf9: function {
     fo9: (ztypecheck.resolvedByIds
         :ast
         ty: symtab.typing
-        reg: symtab.reg
+
         unitId: baseId
         name: membId
     )
@@ -25790,7 +25797,7 @@ emitNativeFreeFnCall: function {
         fo9: (ztypecheck.resolvedByIds
             :ast
             ty: symtab.typing
-            reg: symtab.reg
+
             unitId: (zast.poolFind pool: ast.names text: un.stringview)
             name: (zast.poolFind pool: ast.names text: mn.stringview)
         )

@@ -43,6 +43,8 @@ public: unit {
     :declDeclaresUnit
     :declOfUnitDefIds
     :isUnitNameDecl
+    :programUnitDecls
+    :declNameIdOf
     :declMemberIsPrivate
     :publicAliasInternalNames
     :unitNameOfTid
@@ -928,12 +930,18 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                     node: ruId9
                 )
                 ty.declSetUnitFrame declId: udid9
-                utl9: reg.unitNameTid.get key: unmRef9.u64
+                # registerUnitRoots minted the unit's TYPE and keyed it on the
+                # unitdef node; the declaration binds to it here. Read by node,
+                # not by name: the name lookup would find this very Decl, whose
+                # type is what we are about to set.
+                utl9: (ty.unitTypesById.get
+                    key: (unitdefNodeId ast: program.ast nId: opId9).u64
+                )
                 match (
                     utl9
                 ) case some then {
-                    ty.declSetType declId: udid9 typeId: (ztypes.tid.create from: utl9.u64)
-                    reg.setDef typeId: (ztypes.tid.create from: utl9.u64) declId: udid9
+                    ty.declSetType declId: udid9 typeId: utl9
+                    reg.setDef typeId: utl9 declId: udid9
                 } case none then null
                 (indexUnitBody
                     :ty
@@ -1594,10 +1602,14 @@ declareCanonicalType: function {
         } case none then null
     }
     if (ownerNameId.isZero) == false when qowner9 == 0 then {
-        cudq: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
-        match (
-            cudq
-        ) case some then {
+        cudq: (declTypeIdOf
+            :ty
+            declId: (ty.declFindChild
+                parentDeclId: ty.programRoot
+                nameId: (nameIdOf :ast name: defUnit)
+            )
+        )
+        if (cudq.isZero) == false then {
             (forceMemberOf
                 :ty
                 :reg
@@ -1614,7 +1626,7 @@ declareCanonicalType: function {
             ) case some then {
                 qowner9 = bo9
             } case none then null
-        } case none then null
+        }
     }
     # a free definition that is a member of the namespace is declared under
     # the namespace, not the file unit
@@ -1635,10 +1647,14 @@ declareCanonicalType: function {
         } case none then null
     }
     if ownerNameId.isZero when qowner9 == 0 then {
-        cudm: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
-        match (
-            cudm
-        ) case some then {
+        cudm: (declTypeIdOf
+            :ty
+            declId: (ty.declFindChild
+                parentDeclId: ty.programRoot
+                nameId: (nameIdOf :ast name: defUnit)
+            )
+        )
+        if (cudm.isZero) == false then {
             exm: (ty.declChildOf
                 pool: ast.names
                 parentTypeId: (ztypes.tid.create from: cudm.u64)
@@ -1650,7 +1666,7 @@ declareCanonicalType: function {
                 linkDeclType :ty :reg :ast :defUnit :name tid: (ztypes.tid.create from: exm.u64)
                 return exm
             } case none then null
-        } case none then null
+        }
     }
     id: reg.newType :name ownerTid: qowner9 :typetype
     # valtype-ness is a property of the definition's KIND -- a record or a
@@ -1670,10 +1686,14 @@ declareCanonicalType: function {
         )
     } else {
         if ownerNameId.isZero then {
-            cud0: reg.unitNameTid.get key: (nameIdOf :ast name: defUnit).u64
-            match (
-                cud0
-            ) case some then {
+            cud0: (declTypeIdOf
+                :ty
+                declId: (ty.declFindChild
+                    parentDeclId: ty.programRoot
+                    nameId: (nameIdOf :ast name: defUnit)
+                )
+            )
+            if (cud0.isZero) == false then {
                 # declare the unit child before typing it. A synthesized name
                 # (a mangled `Tmpl_fn`, a `tag__u8`) has no source def for
                 # linkDeclType to find, so without this nothing declares it and
@@ -1692,7 +1712,7 @@ declareCanonicalType: function {
                     nameId: unid9
                     childTypeId: id
                 )
-            } case none then null
+            }
         }
     }
     if ownerNameId.isZero then linkDeclType :ty :reg :ast :defUnit :name tid: id
@@ -1840,7 +1860,6 @@ resolveNamedType: function {
             ex7: (resolvedByIds
                 :ast
                 :ty
-                :reg
                 unitId: (nameIdOf :ast name: duo7.stringview)
                 name: (zast.poolFind pool: ast.names text: name)
             )
@@ -2957,7 +2976,7 @@ recordTyperef: function {
         # NULL-defined typedef wrapper the dump filters out.
         cn: atomName :ast n: (ast.nodes.get i: node.child.u64)
         pn: atomName :ast n: (ast.nodes.get i: node.parent.u64)
-        if (reg.unitNameTid.has key: (nameIdOf :ast name: pn.stringview).u64) then {
+        if (nameDenotesUnit :ty :reg nameId: (nameIdOf :ast name: pn.stringview)) then {
             # cross-unit qualified type ref (zlexer.Token): record the MEMBER under
             # its DEFINING unit (the parent) so stampTyperefs bridges this node.
             # The member resolves in the qualifier's frame, not the writer's.
@@ -4919,7 +4938,7 @@ forceUnitDef: function {
     if nmId9.isZero then return 0
     uId9: nameIdOf :ast name: unitName
     {
-        got9: resolvedByIds :ast :ty :reg unitId: uId9 name: nmId9
+        got9: resolvedByIds :ast :ty unitId: uId9 name: nmId9
         match (
             got9
         ) case some then {
@@ -4948,7 +4967,7 @@ forceUnitDef: function {
         defName: dn9.stringview
         defn: (ast.nodes.get i: opId9.u64)
     )
-    ro9: resolvedByIds :ast :ty :reg unitId: uId9 name: nmId9
+    ro9: resolvedByIds :ast :ty unitId: uId9 name: nmId9
     match (
         ro9
     ) case some then {
@@ -5140,7 +5159,6 @@ markerTargetId: function {
     rr: (resolvedByIds
         :ast
         :ty
-        :reg
         unitId: (nameIdOf :ast name: unitName)
         name: nameId9
     )
@@ -6315,15 +6333,14 @@ applyUnitVisibility: function {
             if opIdV9 > 0 then {
                 utidV9: ztypes.tid
                 {
-                    uidoV9: reg.unitNameTid.get key: (nameIdOf
-                        ast: program.ast
-                        name: nmV9.stringview
-                    ).u64
-                    match (
-                        uidoV9
-                    ) case some then {
-                        utidV9 = ztypes.tid.create from: (uidoV9)
-                    } case none then null
+                    uidoV9: (declTypeIdOf
+                        :ty
+                        declId: (ty.declFindChild
+                            parentDeclId: ty.programRoot
+                            nameId: (nameIdOf ast: program.ast name: nmV9.stringview)
+                        )
+                    )
+                    if (uidoV9.isZero) == false then utidV9 = uidoV9
                 }
                 if utidV9 > 0 then {
                     (scanUnitVisibility
@@ -6494,7 +6511,6 @@ resolveRecord: function {
                     mrefR9: (resolvedByIdsMember
                         :ast
                         :ty
-                        :reg
                         unitId: (nameIdOf :ast name: unitName)
                         defId: (zast.poolFind pool: ast.names text: defName)
                         memberId: (zast.poolFind pool: ast.names text: ftnR9.stringview)
@@ -7159,8 +7175,8 @@ dottedParentName: function {ast: Ast.view n: Node.view} out String is {
 # dottedTyperefId -- the type id of a cross-unit qualified type ref `unit.Type`
 # (e.g. the `zvfs.ProviderBox` element of a `(List of: zvfs.ProviderBox)`),
 # resolved through the defining unit's scope. Bare-name visibility covers only
-# main+system, so a dep element misses there; this bridges via unitNameTid +
-# resolved. 0 when not a dotted ref or unresolved.
+# main+system, so a dep element misses there; this bridges via the unit probe
+# plus resolved. 0 when not a dotted ref or unresolved.
 dottedTyperefId: function {ast: Ast.view st: zenv.ZSymbolTable op: Node.view} out u64 is {
     match (
         op
@@ -7169,11 +7185,11 @@ dottedTyperefId: function {ast: Ast.view st: zenv.ZSymbolTable op: Node.view} ou
     } case dottedpath then {
         pnId9: atomNameId :ast n: (ast.nodes.get i: op.parent.u64)
         cnId9: atomNameId :ast n: (ast.nodes.get i: op.child.u64)
-        if (st.reg.unitNameTid.has key: pnId9.u64) then {
+        if (nameDenotesUnit ty: st.typing reg: st.reg nameId: pnId9) then {
             ro: (resolvedByIds
                 :ast
                 ty: st.typing
-                reg: st.reg
+
                 unitId: pnId9
                 name: cnId9
             )
@@ -7228,7 +7244,6 @@ unionCustomTagId: function {
                                 tgo: (resolvedByIds
                                     :ast
                                     :ty
-                                    :reg
                                     unitId: (nameIdOf :ast name: "system")
                                     name: (zast.poolFind pool: ast.names text: "tag")
                                 )
@@ -7638,7 +7653,6 @@ fieldTypeNeedsCleanup: function {
     rr: (resolvedByIds
         :ast
         :ty
-        :reg
         unitId: ku8
         name: (nameIdOf :ast :name)
     )
@@ -7826,7 +7840,6 @@ resolveClass: function {
                 mref: (resolvedByIdsMember
                     :ast
                     :ty
-                    :reg
                     unitId: (nameIdOf :ast name: unitName)
                     defId: (zast.poolFind pool: ast.names text: defName)
                     memberId: (zast.poolFind pool: ast.names text: ftn.stringview)
@@ -8349,7 +8362,6 @@ registerEmptyType: function {
     ex0: (resolvedByIds
         :ast
         :ty
-        :reg
         unitId: (nameIdOf :ast name: unitName)
         name: (zast.poolFind pool: ast.names text: name)
     )
@@ -9108,7 +9120,6 @@ resolveDefIn: function {
         exprid: (resolvedByIds
             :ast
             :ty
-            :reg
             unitId: (nameIdOf :ast name: unitName)
             name: (zast.poolFind pool: ast.names text: defName)
         )
@@ -9126,7 +9137,6 @@ resolveDefIn: function {
         dbrid: (resolvedByIds
             :ast
             :ty
-            :reg
             unitId: (nameIdOf :ast name: unitName)
             name: (zast.poolFind pool: ast.names text: defName)
         )
@@ -9178,7 +9188,6 @@ resolveDefIn: function {
         objrid: (resolvedByIds
             :ast
             :ty
-            :reg
             unitId: (nameIdOf :ast name: unitName)
             name: (zast.poolFind pool: ast.names text: defName)
         )
@@ -9212,7 +9221,7 @@ resolveDefIn: function {
                 addResolveError :ty e: zast.err.typeError msg: aem9
             }
             descendNamed :ty :reg :ast defUnit: apNm9.stringview name: acNm9.stringview
-            tgo9: resolvedByIds :ast :ty :reg unitId: apId9 name: acId9
+            tgo9: resolvedByIds :ast :ty unitId: apId9 name: acId9
             aid9: u64
             match (
                 tgo9
@@ -9416,12 +9425,16 @@ resolveUnitBody: function {
     ubPt9: ztypes.tid
     ubPd9: ztypes.declid
     {
-        uo9: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-        match (
-            uo9
-        ) case some then {
+        uo9: (declTypeIdOf
+            :ty
+            declId: (ty.declFindChild
+                parentDeclId: ty.programRoot
+                nameId: (nameIdOf :ast name: unitName)
+            )
+        )
+        if (uo9.isZero) == false then {
             ubPt9 = ztypes.tid.create from: uo9
-        } case none then null
+        }
     }
     {
         ro9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: unitName)
@@ -9446,14 +9459,15 @@ resolveUnitBody: function {
 # registerAndResolveMain -- register a UNIT type per unit, then resolve the main
 # unit's definition signatures. Iterates program.ast.units transiently so the demand
 # pass can re-iterate it without an overlapping exclusive lock.
-# registerUnitRoots -- Stage D: register a UNIT type + name for EVERY unit up
-# front, before lowerGenerators / indexUnitDefs / demand resolution, so
-# reg.unitNameTid is complete and childOf-at-mint (declareCanonicalType) always sees
-# a populated unit root. The main unit precedes its deps in unit order, so a
-# cross-unit qualified type ref (zlexer.Token) sees the dep as a unit; member
-# paths type their base as the UNIT type via this name-keyed side map -- never the
-# resolution chain, where a main unit sharing a type's name (str.z, panic.z) would
-# shadow it. Formerly registerAndResolveMain Pass 1.
+# registerUnitRoots -- Stage D: register a UNIT type for EVERY unit up front,
+# before lowerGenerators / indexUnitDefs / demand resolution, so childOf-at-mint
+# (declareCanonicalType) always sees a populated unit root. indexUnitDefs binds
+# each type to the unit's Decl, keyed on the unitdef NODE -- by then the name
+# would find that very Decl. The main unit precedes its deps in unit order, so a
+# cross-unit qualified type ref (zlexer.Token) sees the dep as a unit; a member
+# path types its base as the UNIT type through the program root's child of that
+# name -- never the resolution chain, where a main unit sharing a type's name
+# (str.z, panic.z) would shadow it. Formerly registerAndResolveMain Pass 1.
 registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
@@ -9477,11 +9491,6 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
                 uid: reg.newType name: nm9.stringview typetype: ztypes.ztypetype.unitType
                 opid: unitdefNodeId ast: program.ast nId: opId9
                 ty.unitTypesById.set key: opid.u64 value: uid
-                uid3: uid
-                (reg.setUnitName
-                    nameId: (zast.poolSet pool: program.ast.names text: nm9.stringview)
-                    uid: uid3
-                )
             }
         }
     } else null
@@ -9817,7 +9826,6 @@ fixupCustomTags: function {
                     tgo2: (resolvedByIds
                         :ast
                         :ty
-                        :reg
                         unitId: (nameIdOf :ast name: "system")
                         name: (zast.poolFind pool: ast.names text: "tag")
                     )
@@ -10202,7 +10210,7 @@ resolveDemandedDeclIn: function {
                 :ast
                 unitName: unitName9.stringview
                 defName: defName9.stringview
-                parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: puNm9))
+                parentTid: (unitTidOfName9 :ty unitNameId: (zast.nameid.create from: puNm9))
                 parentDeclId: dParent9
                 unitOpId: opId9
             )
@@ -10230,7 +10238,7 @@ resolveDemandedDeclIn: function {
             :ast
             unitName: unitName9.stringview
             defName: defName9.stringview
-            parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: puNm9))
+            parentTid: (unitTidOfName9 :ty unitNameId: (zast.nameid.create from: puNm9))
             parentDeclId: dParent9
             unitOpId: opId9
         )
@@ -10255,7 +10263,7 @@ resolveDemandedDeclIn: function {
                 :ast
                 unitName: unitName9.stringview
                 defName: defName9.stringview
-                parentTid: (unitTidOfName9 :reg unitNameId: (zast.nameid.create from: puNm9))
+                parentTid: (unitTidOfName9 :ty unitNameId: (zast.nameid.create from: puNm9))
                 parentDeclId: dParent9
                 unitOpId: opId9
             )
@@ -10305,17 +10313,13 @@ resolveDemandedDeclIn: function {
 }
 
 # unitTidOfName9 -- the unit type a unit name stands for, as the sweeps read
-# it: the name-keyed unit table.
+# it: the declared type of the program root's child of that name.
 unitTidOfName9: function {
-    reg: ztypes.ZTypeRegistry.view
+    ty: ztyping.ZTyping.view
     unitNameId: zast.nameid
 } out ztypes.tid is {
-    uo9: reg.unitNameTid.get key: unitNameId.u64
-    match (
-        uo9
-    ) case some then {
-        return (ztypes.tid.create from: uo9.u64)
-    } case none then null
+    uo9: declTypeIdOf :ty declId: (ty.declFindChild parentDeclId: ty.programRoot nameId: unitNameId)
+    if (uo9.isZero) == false then return (ztypes.tid.create from: uo9.u64)
     return (ztypes.tid.create from: 0)
 }
 
@@ -12578,8 +12582,6 @@ completeUnitInstantiations: function {
             mgo
         ) case some then {
             mid9: mgo
-            br9: mid9
-            reg.setUnitName nameId: rbId9 uid: br9
             # the binding's own Decl carries the instantiated unit's type
             # WHEREVER the binding is written: that is what makes `intmath` a
             # unit to a reader, without asking a bare-name index.
@@ -12613,7 +12615,6 @@ completeUnitInstantiations: function {
                 tgo = (resolvedByIds
                     ast: program.ast
                     :ty
-                    :reg
                     unitId: mnUid8
                     name: rtNid9
                 )
@@ -12639,12 +12640,16 @@ completeUnitInstantiations: function {
             ) case some then {
                 tplId = ztypes.tid.create from: tgo.u64
             } case none then {
-                ugo: reg.unitNameTid.get key: tnId9.u64
-                match (
-                    ugo
-                ) case some then {
+                ugo: (declTypeIdOf
+                    :ty
+                    declId: (ty.declFindChild
+                        parentDeclId: ty.programRoot
+                        nameId: (zast.nameid.create from: tnId9)
+                    )
+                )
+                if (ugo.isZero) == false then {
                     tplId = ztypes.tid.create from: ugo.u64
-                } case none then null
+                }
             }
             # neither probe reaches a template nested in a namespace or living
             # in another unit; the request resolved one at COLLECTION. Settled
@@ -13347,13 +13352,12 @@ nameClaimedByScope: function {
     currentUnit: StringView
     name: StringView
 } out bool is {
-    if (reg.unitNameTid.has key: (nameIdOf :ast :name).u64) then return true
+    if (nameDenotesUnit :ty :reg nameId: (nameIdOf :ast :name)) then return true
     # the current unit's own resolved members (its index), not its SURFACE:
     # a definition its `public:` block makes is reachable qualified, never
     # bare, and must not vouch for a bare name
     ncr9: (childOfWalkIds
         :ty
-        :reg
         unitId: (nameIdOf :ast name: currentUnit)
         name: (zast.poolFind pool: ast.names text: name)
     )
@@ -13547,13 +13551,16 @@ stampPendingTyperefs: function {
                     # of ANY loaded unit (the demand resolvers search
                     # the closure; the typeref walk does not)
                     pvId9: nameIdOf :ast name: pval9.stringview
-                    with uit9: reg.unitNameTid.iterateItems do for ue9: uit9 loop {
+                    puds9: programUnitDecls :ty
+                    with uit9: puds9.iterate do for ud9: uit9 loop {
                         if urHit9 == false then {
                             uro2: (resolvedByIds
                                 :ast
                                 :ty
-                                :reg
-                                unitId: (zast.nameid.create from: ue9.key.u32.orPanic)
+                                unitId: (declNameIdOf
+                                    :ty
+                                    declId: (ztypes.declid.create from: ud9)
+                                )
                                 name: pvId9
                             )
                             match (
@@ -17015,7 +17022,16 @@ canonicalChildBase: function {ast: Ast st: zenv.ZSymbolTable bt: u64 child: Stri
     if nm.length == 0 then return 0
     nmId9: nameIdOf :ast name: nm.stringview
     uks9: (ListVal u64)
-    with uit: st.reg.unitNameTid.iterateItems do for ue: uit loop uks9.append ue.key
+    {
+        puds9: programUnitDecls ty: st.typing
+        with uit: puds9.iterate do for ud9: uit loop {
+            unm9: (declNameIdOf
+                ty: st.typing
+                declId: (ztypes.declid.create from: ud9)
+            )
+            uks9.append unm9.u64
+        }
+    }
     cands9: (ListVal u64)
     uki9: u64
     ukn9: uks9.length
@@ -17024,7 +17040,7 @@ canonicalChildBase: function {ast: Ast st: zenv.ZSymbolTable bt: u64 child: Stri
         ro9: (resolvedByIds
             :ast
             ty: st.typing
-            reg: st.reg
+
             unitId: (zast.nameid.create from: uk9.u32.orPanic)
             name: nmId9
         )
@@ -17376,17 +17392,21 @@ checkDotted: function {
         # path (io.stdout): the side map types the base as the UNIT type.
         ubn: atomName :ast n: (ast.nodes.get i: dp.parent.u64)
         if ubn.length > 0 then {
-            ubo: st.reg.unitNameTid.get key: (nameIdOf :ast name: ubn.stringview).u64
-            match (
-                ubo
-            ) case some then {
+            ubo: (declTypeIdOf
+                ty: st.typing
+                declId: (st.typing.declFindChild
+                    parentDeclId: st.typing.programRoot
+                    nameId: (nameIdOf :ast name: ubn.stringview)
+                )
+            )
+            if (ubo.isZero) == false then {
                 bt = ztypes.tid.create from: ubo.u64
                 ubp: nodeId n: (ast.nodes.get i: dp.parent.u64)
                 if ubp > 0 then {
                     setub: ubo
                     stampGate :st nid: ubp.u64 tid: (ztypes.tid.create from: setub.u64)
                 }
-            } case none then null
+            }
         }
         if bt.isZero then return (ztypes.tid.create from: 0)
     }
@@ -21336,8 +21356,8 @@ methodReceiverRoot: function {ast: Ast.view n: Node.view} out String is {
 }
 
 # methodReceiverTuple -- the full dotted path of a method call's receiver
-# (everything before the method name): `st.reg.unitNameTid.get` -> [st, reg,
-# unitNameTid]. Empty when the callable is not a dotted path or the receiver
+# (everything before the method name): `st.typing.decls.get` -> [st, typing,
+# decls]. Empty when the callable is not a dotted path or the receiver
 # is not a plain path. Path-scoped locks need the full tuple so sibling
 # fields stay independent.
 methodReceiverTuple: function {ast: Ast.view n: Node.view dst: (List String).view} is {
@@ -26868,7 +26888,6 @@ checkFunctionBodyIn: function {
                 rgot = (resolvedByIdsMember
                     :ast
                     ty: st.typing
-                    reg: st.reg
                     unitId: fnUid9
                     defId: (nameIdOf :ast name: (rest9.substring from: 0 to: rsd9))
                     memberId: (nameIdOf
@@ -26880,7 +26899,7 @@ checkFunctionBodyIn: function {
                 rgot = (resolvedByIds
                     :ast
                     ty: st.typing
-                    reg: st.reg
+
                     unitId: fnUid9
                     name: (nameIdOf :ast name: rest9)
                 )
@@ -27632,7 +27651,7 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable ast: Ast.view} is {
                                 swRo9: (resolvedByIds
                                     :ast
                                     ty: st.typing
-                                    reg: st.reg
+
                                     unitId: (nameIdOf :ast name: swun9.stringview)
                                     name: swm9.name
                                 )
@@ -27816,7 +27835,7 @@ stampMonoTemplateClass: function {
         tro9: (resolvedByIds
             :ast
             ty: st.typing
-            reg: st.reg
+
             unitId: (nameIdOf :ast name: unitName)
             name: (zast.poolFind pool: ast.names text: clsName)
         )
@@ -28020,7 +28039,7 @@ stampUnitMonoMembers: function {
                 fro9: (resolvedByIds
                     ast: program.ast
                     ty: st.typing
-                    reg: st.reg
+
                     unitId: fuUid9
                     name: fnNmId9
                 )
@@ -28113,12 +28132,14 @@ stampMonoTemplateUnit: function {
     tplId9: u64
     {
         tk9: templateName
-        tgo9: st.reg.unitNameTid.get key: (nameIdOf :ast name: tk9).u64
-        match (
-            tgo9
-        ) case some then {
-            tplId9 = tgo9
-        } case none then null
+        tgo9: (declTypeIdOf
+            ty: st.typing
+            declId: (st.typing.declFindChild
+                parentDeclId: st.typing.programRoot
+                nameId: (nameIdOf :ast name: tk9)
+            )
+        )
+        if (tgo9.isZero) == false then tplId9 = tgo9
     }
     if tplId9 == 0 then {
         rid9: u32
@@ -28594,16 +28615,20 @@ resolveUnitIfDef: function {
                 nid: n.nodeid.u64
                 tid: (ztypes.tid.create from: t9.u64)
             )
-            cu9: reg.unitNameTid.get key: (nameIdOf :ast name: mainName).u64
-            match (
-                cu9
-            ) case some then {
+            cu9: (declTypeIdOf
+                :ty
+                declId: (ty.declFindChild
+                    parentDeclId: ty.programRoot
+                    nameId: (nameIdOf :ast name: mainName)
+                )
+            )
+            if (cu9.isZero) == false then {
                 (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: cu9.u64)
                     nameId: (zast.poolFind pool: ast.names text: defName)
                     childTypeId: t9
                 )
-            } case none then null
+            }
         }
     } else null
 }
@@ -28982,7 +29007,6 @@ constArithFloat: function {op: StringView a: f64 b: f64} out ztypes.cval is {
 constOwnerTidFor: function {
     ast: Ast.view
     ty: ztyping.ZTyping.view
-    reg: ztypes.ZTypeRegistry.view
     unitName: StringView
     defName: StringView
 } out u64 is {
@@ -29004,7 +29028,7 @@ constOwnerTidFor: function {
             cur9 = unitFrameOf :ty declId: (declParentIdOf :ty declId: cur9)
         }
     }
-    return (unitTidOfName9 :reg unitNameId: (nameIdOf :ast name: unitName)).u64
+    return (unitTidOfName9 :ty unitNameId: (nameIdOf :ast name: unitName)).u64
 }
 
 # constDefNodeId -- the AST nodeid of the namedoperation declaring `defName` in
@@ -29071,7 +29095,7 @@ constValueOfMember: function {
     unitName: StringView
     defName: StringView
 } out ztypes.cval is {
-    ut9: constOwnerTidFor :ast :ty :reg :unitName :defName
+    ut9: constOwnerTidFor :ast :ty :unitName :defName
     if ut9 == 0 then return ztypes.noConst
     nid9: zast.poolFind pool: ast.names text: defName
     if nid9.isZero then return ztypes.noConst
@@ -29647,7 +29671,6 @@ evalConstNode: function {
                 nso9: (resolvedByIds
                     :ast
                     :ty
-                    :reg
                     unitId: (nameIdOf :ast name: unitName)
                     name: (nameIdOf :ast name: pt9.stringview)
                 )
@@ -30122,7 +30145,7 @@ resolveConstantDef: function {
                     # file unit it is written in -- as the value channel keys
                     # it, not on the file unit by name (which leaked a nested
                     # unit's constant into the file unit's index)
-                    sfU9: constOwnerTidFor :ast :ty :reg :unitName :defName
+                    sfU9: constOwnerTidFor :ast :ty :unitName :defName
                     if sfU9 > 0 then {
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: sfU9)
@@ -30142,7 +30165,7 @@ resolveConstantDef: function {
             match (
                 tOpt
             ) case some then {
-                cu: constOwnerTidFor :ast :ty :reg :unitName :defName
+                cu: constOwnerTidFor :ast :ty :unitName :defName
                 if cu > 0 then {
                     (ty.setMemberType
                         parentTypeId: (ztypes.tid.create from: cu)
@@ -30262,29 +30285,37 @@ resolveConstantDef: function {
                 match (
                     mOpt
                 ) case some then {
-                    cu2: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-                    match (
-                        cu2
-                    ) case some then {
+                    cu2: (declTypeIdOf
+                        :ty
+                        declId: (ty.declFindChild
+                            parentDeclId: ty.programRoot
+                            nameId: (nameIdOf :ast name: unitName)
+                        )
+                    )
+                    if (cu2.isZero) == false then {
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: cu2.u64)
                             nameId: (zast.poolFind pool: ast.names text: defName)
                             childTypeId: mOpt
                         )
-                    } case none then null
+                    }
                 } case none then null
             } else {
                 if bt > 0 then {
-                    cu3: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-                    match (
-                        cu3
-                    ) case some then {
+                    cu3: (declTypeIdOf
+                        :ty
+                        declId: (ty.declFindChild
+                            parentDeclId: ty.programRoot
+                            nameId: (nameIdOf :ast name: unitName)
+                        )
+                    )
+                    if (cu3.isZero) == false then {
                         (ty.setMemberType
                             parentTypeId: (ztypes.tid.create from: cu3.u64)
                             nameId: (zast.poolFind pool: ast.names text: defName)
                             childTypeId: bt
                         )
-                    } case none then null
+                    }
                 }
             }
         }
@@ -30314,7 +30345,7 @@ constRegisterValueType: function {
     v: ztypes.cval
 } is {
     if v.kind.none then return
-    ut9: constOwnerTidFor :ast :ty :reg :unitName :defName
+    ut9: constOwnerTidFor :ast :ty :unitName :defName
     if ut9 == 0 then return
     utid9: ztypes.tid.create from: ut9.u64
     nid9: zast.poolFind pool: ast.names text: defName
@@ -30539,7 +30570,7 @@ seedPlatformConsts: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
 } is {
-    ptid9: unitTidOfName9 :reg unitNameId: (nameIdOf :ast name: "platform")
+    ptid9: unitTidOfName9 :ty unitNameId: (nameIdOf :ast name: "platform")
     if ptid9.isZero then return
     # the seeds are platform's own definitions, so they resolve in its frame
     prevFrame9: ty.curFrame
@@ -30862,7 +30893,7 @@ lowerGenerators: function {
         sysU9: nameIdOf ast: program.ast name: "system"
         sysI9: zast.poolFind pool: program.ast.names text: "Iterator"
         iterTid: (optU64Or
-            o: (resolvedByIds ast: program.ast :ty :reg unitId: sysU9 name: sysI9)
+            o: (resolvedByIds ast: program.ast :ty unitId: sysU9 name: sysI9)
             d: 0
         )
         if iterTid == 0 then return
@@ -31578,6 +31609,17 @@ reexportUnitOf: function {
     return (zast.nameid.create from: 0)
 }
 
+# programUnitDecls -- every FILE unit's Decl, in load order: the program root's
+# children. What a closure-wide sweep iterated the unit-name index for. Two
+# files declaring the same unit name appear twice, where the index held one --
+# a sweep asks each of them, which is the point.
+programUnitDecls: function {ty: ztyping.ZTyping.view} out (ListVal u64) is {
+    out9: (ListVal u64)
+    ro9: ty.decls.get i: ty.programRoot.u64
+    with cit9: ro9.children.iterate do for c9: cit9 loop out9.append c9.declId.u64
+    return out9
+}
+
 # isUnitNameDecl -- does `nameId` name a FILE unit: a child of the program root
 # whose declared type is a unit? The Decl-tree answer to what the unit-name
 # index was asked.
@@ -31759,19 +31801,16 @@ declOfUnitDefIds: function {
 # text lookup that interned it again -- all to reach exactly this.
 childOfWalkIds: function {
     ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry.view
     unitId: zast.nameid
     name: zast.nameid
 } out optionval u64 is {
-    ro9: reg.unitNameTid.get key: unitId.u64
-    match (
-        ro9
-    ) case some then {
+    ro9: declTypeIdOf :ty declId: (ty.declFindChild parentDeclId: ty.programRoot nameId: unitId)
+    if (ro9.isZero) == false then {
         return (ty.declChildOfId
             parentTypeId: (ztypes.tid.create from: ro9.u64)
             nameId: name
         )
-    } case none then null
+    }
     return (optionval.none u64)
 }
 
@@ -31781,11 +31820,10 @@ childOfWalkIds: function {
 resolvedByIds: function {
     ast: Ast.view
     ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry.view
     unitId: zast.nameid
     name: zast.nameid
 } out optionval u64 is {
-    wo9: childOfWalkIds :ty :reg :unitId :name
+    wo9: childOfWalkIds :ty :unitId :name
     match (
         wo9
     ) case some then {
@@ -31812,23 +31850,23 @@ resolvedByIds: function {
     if alTgt9.unitName.u32 > 0 then {
         tgo9: (childOfWalkIds
             :ty
-            :reg
             unitId: alTgt9.unitName
             name: alTgt9.defName
         )
         match (
             tgo9
         ) case some then {
-            uro9: reg.unitNameTid.get key: unitId.u64
-            match (
-                uro9
-            ) case some then {
+            uro9: (declTypeIdOf
+                :ty
+                declId: (ty.declFindChild parentDeclId: ty.programRoot nameId: unitId)
+            )
+            if (uro9.isZero) == false then {
                 if (name.isZero) == false then (ty.setMemberType
                     parentTypeId: (ztypes.tid.create from: uro9.u64)
                     nameId: name
                     childTypeId: tgo9
                 )
-            } case none then null
+            }
             return (optionval.some tgo9)
         } case none then null
     }
@@ -31841,12 +31879,11 @@ resolvedByIds: function {
 resolvedByIdsMember: function {
     ast: Ast.view
     ty: ztyping.ZTyping
-    reg: ztypes.ZTypeRegistry.view
     unitId: zast.nameid
     defId: zast.nameid
     memberId: zast.nameid
 } out optionval u64 is {
-    do9: resolvedByIds :ast :ty :reg :unitId name: defId
+    do9: resolvedByIds :ast :ty :unitId name: defId
     match (
         do9
     ) case some then {
@@ -31869,20 +31906,18 @@ resolveUnitChild: function {
     nId9: zast.poolFind pool: ast.names text: name
     dt9: declProbeUnitChildId :ty :reg :ast uname: unitName nameId: nId9
     if dt9 > 0 then return (optionval.some dt9)
-    ro: reg.unitNameTid.get key: uId9.u64
-    match (
-        ro
-    ) case some then {
+    ro: declTypeIdOf :ty declId: (ty.declFindChild parentDeclId: ty.programRoot nameId: uId9)
+    if (ro.isZero) == false then {
         co: ty.declChildOfId parentTypeId: (ztypes.tid.create from: ro.u64) nameId: nId9
         match (
             co
         ) case some then {
             return (optionval.some co)
         } case none then null
-    } case none then null
+    }
     # miss: the alias follow lays the unit->alias edge, so the next probe
     # resolves through childOf above
-    return (resolvedByIds :ast :ty :reg unitId: uId9 name: nId9)
+    return (resolvedByIds :ast :ty unitId: uId9 name: nId9)
 }
 
 # resolve member `name` of the system/stdlib unit to its type id, or `none`.
@@ -31906,7 +31941,6 @@ resolveSystemChild: function {
     return (resolvedByIds
         :ast
         :ty
-        :reg
         unitId: (nameIdOf :ast name: "system")
         name: nId9
     )
@@ -32001,21 +32035,24 @@ resolveUnitChildById: function {
 } out optionval u64 is {
     dt9: declProbeUnitChildId :ty :reg :ast uname: unitName :nameId
     if dt9 > 0 then return (optionval.some dt9)
-    ro: reg.unitNameTid.get key: (nameIdOf :ast name: unitName).u64
-    match (
-        ro
-    ) case some then {
+    ro: (declTypeIdOf
+        :ty
+        declId: (ty.declFindChild
+            parentDeclId: ty.programRoot
+            nameId: (nameIdOf :ast name: unitName)
+        )
+    )
+    if (ro.isZero) == false then {
         co: ty.declChildOfId parentTypeId: (ztypes.tid.create from: ro.u64) :nameId
         match (
             co
         ) case some then {
             return (optionval.some co)
         } case none then null
-    } case none then null
+    }
     return (resolvedByIds
         :ast
         :ty
-        :reg
         unitId: (nameIdOf :ast name: unitName)
         name: nameId
     )
@@ -32049,7 +32086,6 @@ resolveSystemChildById: function {
     return (resolvedByIds
         :ast
         :ty
-        :reg
         unitId: (nameIdOf :ast name: "system")
         name: nameId
     )
@@ -32546,12 +32582,16 @@ typecheck: function {
         ) case program then {
             sysId9 = nameIdOf ast: program.ast name: "system"
         } else null
-        sysUo9: st.reg.unitNameTid.get key: sysId9.u64
-        match (
-            sysUo9
-        ) case some then {
+        sysUo9: (declTypeIdOf
+            ty: st.typing
+            declId: (st.typing.declFindChild
+                parentDeclId: st.typing.programRoot
+                nameId: (zast.nameid.create from: sysId9)
+            )
+        )
+        if (sysUo9.isZero) == false then {
             st.typing.systemUnitTid = ztypes.tid.create from: sysUo9.u64
-        } case none then null
+        }
         sysRo9: (st.typing.declFindChild
             parentDeclId: st.typing.programRoot
             nameId: (zast.nameid.create from: sysId9)
