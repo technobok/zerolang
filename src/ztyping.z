@@ -91,6 +91,8 @@ SynthNode: class {
 # shares its target's type id; a publicNs holds the unit's exported
 # name -> declaration edges).
 declkind: variant {
+    # the sentinel row 0 of ZTyping.decls: no declaration
+    noneDecl: null
     unitDecl: null
     funcDecl: null
     typeDecl: null
@@ -114,7 +116,9 @@ declkind: variant {
 declkindName: function {k: declkind} out String is {
     match (
         k
-    ) case unitDecl then {
+    ) case noneDecl then {
+        return "none".string
+    } case unitDecl then {
         return "unit".string
     } case funcDecl then {
         return "function".string
@@ -256,9 +260,9 @@ Decl: class {
     # skipped when there are none
     rows: u64
     children: (ListVal declchild)
-    # slot (1-based) of this row's nameId -> declId accelerator in
-    # ZTyping.nameIndexes, backfilled when the namespace outgrows a linear
-    # scan of `children` (bucketScanMax); 0 for the many rows that never do.
+    # slot of this row's nameId -> declId accelerator in ZTyping.nameIndexes,
+    # backfilled when the namespace outgrows a linear scan of `children`
+    # (bucketScanMax); 0 for the many rows that never do.
     # A slot, not a map: a map is a heap object, and every row would own an
     # empty one
     nameIndex: u32
@@ -610,17 +614,10 @@ ZTyping: class {
 } as {
     # --- declaration tree ---
 
-    # declValid -- `id` addresses a real row. DeclIds are minted dense 1..N by
-    # declNew and never removed, so 0 (the "no declaration" sentinel) and any id
-    # past the end are the only misses.
-    declValid: function {t: this.view id: ztypes.declid} out bool is {
-        if id.isZero then return false
-        return id <= t.decls.length
-    }
-
-    # declNew -- append one declaration row (DeclId = new row count) and
-    # link it into the parent's namespace; parent 0 = a tree root.
+    # declNew -- append one declaration row (its DeclId is the index it lands
+    # at) and link it into the parent's namespace; parent 0 = a tree root.
     declNew: function {:this name: u32 parent: ztypes.declid kind: declkind node: u32} out ztypes.declid is {
+        id: ztypes.declid.create from: this.decls.length
         this.decls.append (Decl
             :name
             :parent
@@ -643,7 +640,6 @@ ZTyping: class {
             children: (ListVal declchild)
             nameIndex: 0
         )
-        id: ztypes.declid.create from: this.decls.length
         if (parent.isZero) == false then (this.declAddChildEdge
             parentDeclId: parent
             nameId: (zast.nameid.create from: name.u32)
@@ -666,16 +662,13 @@ ZTyping: class {
 
     # declSetUnitFrame -- mark a unit-kind row as a lookup frame.
     declSetUnitFrame: function {:this declId: ztypes.declid} is {
-        if (this.declValid id: declId) then {
-            fo9: this.decls.getMut i: (declId - 1)
-            fo9.unitFrame = true
-        }
+        fo9: this.decls.getMut i: declId.u64
+        fo9.unitFrame = true
     }
 
     # declIsUnitFrame -- the frame bit (a `public:` block is one too).
     declIsUnitFrame: function {t: this.view declId: ztypes.declid} out bool is {
-        if (t.declValid id: declId) == false then return false
-        do9: t.decls.get i: (declId - 1)
+        do9: t.decls.get i: declId.u64
         if do9.kind.publicNs then return true
         return do9.unitFrame
     }
@@ -687,10 +680,8 @@ ZTyping: class {
         # climbed out of, never looked up, and a function's children stay its
         # parameters
         id9: this.declNew name: 0 parent: ztypes.declid kind: declkind.blockDecl :node
-        if (this.declValid id: id9) then {
-            fo9: this.decls.getMut i: (id9 - 1)
-            fo9.parent = parent
-        }
+        fo9: this.decls.getMut i: id9.u64
+        fo9.parent = parent
         return id9
     }
 
@@ -700,71 +691,57 @@ ZTyping: class {
     # last-wins order gives.
     declNewLocal: function {:this name: u32 parent: ztypes.declid node: u32 typeId: ztypes.tid varId: ztypes.vid} out ztypes.declid is {
         id9: this.declNew :name :parent kind: declkind.localDecl :node
-        if (this.declValid id: id9) then {
-            lo9: this.decls.getMut i: (id9 - 1)
-            lo9.typeId = typeId
-            lo9.varId = varId
-        }
+        lo9: this.decls.getMut i: id9.u64
+        lo9.typeId = typeId
+        lo9.varId = varId
         return id9
     }
 
     # declParentOf -- the enclosing declaration, 0 for a root or an invalid id.
     declParentOf: function {t: this.view declId: ztypes.declid} out ztypes.declid is {
         r9: ztypes.declid
-        if (t.declValid id: declId) then {
-            do9: t.decls.get i: (declId - 1)
-            r9 = do9.parent
-        }
+        do9: t.decls.get i: declId.u64
+        r9 = do9.parent
         return r9
     }
 
     # declIsFrame -- is `declId` a body frame?
     declIsFrame: function {t: this.view declId: ztypes.declid} out bool is {
         r9: false
-        if (t.declValid id: declId) then {
-            do9: t.decls.get i: (declId - 1)
-            if do9.kind.blockDecl then r9 = true
-        }
+        do9: t.decls.get i: declId.u64
+        if do9.kind.blockDecl then r9 = true
         return r9
     }
 
     # declLocalTypeOf / declLocalVarOf -- a local's type and variable id.
     declLocalTypeOf: function {t: this.view declId: ztypes.declid} out ztypes.tid is {
         r9: ztypes.tid
-        if (t.declValid id: declId) then {
-            do9: t.decls.get i: (declId - 1)
-            r9 = do9.typeId
-        }
+        do9: t.decls.get i: declId.u64
+        r9 = do9.typeId
         return r9
     }
 
     # declRowsOf / declRowsAdd -- the live overlay-row count of a local.
     declRowsOf: function {t: this.view declId: ztypes.declid} out u64 is {
         r9: u64
-        if (t.declValid id: declId) then {
-            do9: t.decls.get i: (declId - 1)
-            r9 = do9.rows
-        }
+        do9: t.decls.get i: declId.u64
+        r9 = do9.rows
         return r9
     }
 
     declRowsAdd: function {:this declId: ztypes.declid delta: i64} is {
-        if (this.declValid id: declId) then {
-            do9: this.decls.getMut i: (declId - 1)
-            if delta > 0 then {
-                do9.rows = do9.rows + 1
-            } else {
-                if do9.rows > 0 then do9.rows = do9.rows - 1
-            }
+        do9: this.decls.getMut i: declId.u64
+        if delta > 0 then {
+            do9.rows = do9.rows + 1
+        } else {
+            if do9.rows > 0 then do9.rows = do9.rows - 1
         }
     }
 
     declLocalVarOf: function {t: this.view declId: ztypes.declid} out ztypes.vid is {
         r9: ztypes.vid
-        if (t.declValid id: declId) then {
-            do9: t.decls.get i: (declId - 1)
-            r9 = do9.varId
-        }
+        do9: t.decls.get i: declId.u64
+        r9 = do9.varId
         return r9
     }
 
@@ -783,11 +760,10 @@ ZTyping: class {
         hops9: u64
         for cur9 > 0 while hops9 < 256 loop {
             hops9 = hops9 + 1
-            if (t.declValid id: cur9) == false then return (ztypes.declid.create from: 0)
             found9: ztypes.declid
             next9: ztypes.declid
             {
-                fo9: t.decls.get i: (cur9 - 1)
+                fo9: t.decls.get i: cur9.u64
                 if (fo9.kind.blockDecl) == false then return (ztypes.declid.create from: 0)
                 if fo9.nameIndex > 0 then {
                     found9 = t.nameIndexLookup slot: fo9.nameIndex :nameId
@@ -816,19 +792,15 @@ ZTyping: class {
     # namespace (0 past the end); declNameOf -- a declaration's name id.
     declChildAt: function {t: this.view declId: ztypes.declid index: u64} out ztypes.declid is {
         r9: ztypes.declid
-        if (t.declValid id: declId) then {
-            do9: t.decls.get i: (declId - 1)
-            if index < do9.children.length then r9 = (do9.children.get i: index).declId
-        }
+        do9: t.decls.get i: declId.u64
+        if index < do9.children.length then r9 = (do9.children.get i: index).declId
         return r9
     }
 
     declNameOf: function {t: this.view declId: ztypes.declid} out u32 is {
         r9: u32
-        if (t.declValid id: declId) then {
-            do9: t.decls.get i: (declId - 1)
-            r9 = do9.name
-        }
+        do9: t.decls.get i: declId.u64
+        r9 = do9.name
         return r9
     }
 
@@ -836,26 +808,24 @@ ZTyping: class {
     # namespace (also used for public-interface entries, whose targets are
     # sibling declarations rather than fresh rows).
     declAddChildEdge: function {:this parentDeclId: ztypes.declid nameId: zast.nameid childDeclId: ztypes.declid} is {
-        if (this.declValid id: parentDeclId) then {
-            po9: this.decls.getMut i: (parentDeclId - 1)
-            po9.children.append (declchild :nameId declId: childDeclId)
-            # keep the name index in the WRITER: the first append past the
-            # scan threshold backfills it and later appends keep it filled.
-            # Backfilling in the reader instead would make every lookup a
-            # mutation, and a mutating
-            # lookup cannot run under a live children borrow.
-            if po9.children.length > bucketScanMax then {
-                if po9.nameIndex == 0 then {
-                    ix9: NameIndex byName: (MapVV u64 value: ztypes.declid)
-                    with cit7: po9.children.iterate do for c7: cit7 loop {
-                        ix9.byName.set key: c7.nameId.u64 value: c7.declId
-                    }
-                    this.nameIndexes.append ix9
-                    po9.nameIndex = this.nameIndexes.length.u32.orPanic
-                } else {
-                    ixm9: this.nameIndexes.getMut i: (po9.nameIndex - 1).u64
-                    ixm9.byName.set key: nameId.u64 value: childDeclId
+        po9: this.decls.getMut i: parentDeclId.u64
+        po9.children.append (declchild :nameId declId: childDeclId)
+        # keep the name index in the WRITER: the first append past the
+        # scan threshold backfills it and later appends keep it filled.
+        # Backfilling in the reader instead would make every lookup a
+        # mutation, and a mutating
+        # lookup cannot run under a live children borrow.
+        if po9.children.length > bucketScanMax then {
+            if po9.nameIndex == 0 then {
+                ix9: NameIndex byName: (MapVV u64 value: ztypes.declid)
+                with cit7: po9.children.iterate do for c7: cit7 loop {
+                    ix9.byName.set key: c7.nameId.u64 value: c7.declId
                 }
+                po9.nameIndex = this.nameIndexes.length.u32.orPanic
+                this.nameIndexes.append ix9
+            } else {
+                ixm9: this.nameIndexes.getMut i: po9.nameIndex.u64
+                ixm9.byName.set key: nameId.u64 value: childDeclId
             }
         }
     }
@@ -863,7 +833,7 @@ ZTyping: class {
     # nameIndexLookup -- the declId a wide namespace's name index holds for
     # `nameId`, or 0.
     nameIndexLookup: function {t: this.view slot: u32 nameId: zast.nameid} out ztypes.declid is {
-        ix9: t.nameIndexes.get i: (slot - 1).u64
+        ix9: t.nameIndexes.get i: slot.u64
         bo9: ix9.byName.get key: nameId.u64
         match (
             bo9
@@ -876,27 +846,23 @@ ZTyping: class {
     # declSetPending / declIsPending -- the demand mark: a reference found
     # the definition and queued it (ZTyping.pendingDefs) for resolution.
     declSetPending: function {:this declId: ztypes.declid mark: bool} is {
-        if (this.declValid id: declId) == false then return
-        do9: this.decls.getMut i: (declId - 1)
+        do9: this.decls.getMut i: declId.u64
         do9.pending = mark
     }
 
     declIsPending: function {:this declId: ztypes.declid} out bool is {
-        if (this.declValid id: declId) == false then return false
-        do9: this.decls.get i: (declId - 1)
+        do9: this.decls.get i: declId.u64
         return do9.pending
     }
 
     # declSetWalked / declIsWalked -- the body-walk mark.
     declSetWalked: function {:this declId: ztypes.declid} is {
-        if (this.declValid id: declId) == false then return
-        do9: this.decls.getMut i: (declId - 1)
+        do9: this.decls.getMut i: declId.u64
         do9.walked = true
     }
 
     declIsWalked: function {t: this.view declId: ztypes.declid} out bool is {
-        if (t.declValid id: declId) == false then return false
-        do9: t.decls.get i: (declId - 1)
+        do9: t.decls.get i: declId.u64
         return do9.walked
     }
 
@@ -905,50 +871,42 @@ ZTyping: class {
     # the type does not displace the defining one.
     # declSetResolving / declIsResolving -- the DFS grey mark.
     declSetResolving: function {:this declId: ztypes.declid mark: bool} is {
-        if (this.declValid id: declId) == false then return
-        do9: this.decls.getMut i: (declId - 1)
+        do9: this.decls.getMut i: declId.u64
         do9.resolving = mark
     }
 
     declIsResolving: function {:this declId: ztypes.declid} out bool is {
-        if (this.declValid id: declId) == false then return false
-        do9: this.decls.get i: (declId - 1)
+        do9: this.decls.get i: declId.u64
         return do9.resolving
     }
 
     # declSetDefined / declIsDefined -- the demand "done" mark.
     declSetDefined: function {:this declId: ztypes.declid} is {
-        if (this.declValid id: declId) == false then return
-        do9: this.decls.getMut i: (declId - 1)
+        do9: this.decls.getMut i: declId.u64
         do9.defined = true
     }
 
     declIsDefined: function {:this declId: ztypes.declid} out bool is {
-        if (this.declValid id: declId) == false then return false
-        do9: this.decls.get i: (declId - 1)
+        do9: this.decls.get i: declId.u64
         return do9.defined
     }
 
     # First conformer wins, in body order: a later as-block naming the same
     # marker does not displace the spec receiver already bound.
     declSetConformer: function {:this declId: ztypes.declid nameId: u32} is {
-        if (this.declValid id: declId) == false then return
-        do9: this.decls.getMut i: (declId - 1)
+        do9: this.decls.getMut i: declId.u64
         if do9.conformerName == 0 then do9.conformerName = nameId
     }
 
     declConformerOf: function {:this declId: ztypes.declid} out u32 is {
-        if (this.declValid id: declId) == false then return 0
-        do9: this.decls.get i: (declId - 1)
+        do9: this.decls.get i: declId.u64
         return do9.conformerName
     }
 
     declSetType: function {:this declId: ztypes.declid typeId: ztypes.tid} is {
         {
-            if (this.declValid id: declId) then {
-                do9: this.decls.getMut i: (declId - 1)
-                do9.typeId = typeId
-            }
+            do9: this.decls.getMut i: declId.u64
+            do9.typeId = typeId
         }
         if typeId > 0 then {
             seen9: false
@@ -1051,10 +1009,8 @@ ZTyping: class {
                     nameId: (zast.nameid.create from: nid9.u32.orPanic)
                 )
                 if (md9.isZero) == false then {
-                    if (this.declValid id: md9) then {
-                        do9: this.decls.getMut i: (md9 - 1)
-                        do9.typeId = ztypes.tid.create from: mtid9.u64
-                    }
+                    do9: this.decls.getMut i: md9.u64
+                    do9.typeId = ztypes.tid.create from: mtid9.u64
                 }
             }
         }
@@ -1069,14 +1025,12 @@ ZTyping: class {
         nameId: zast.nameid
     } out ztypes.declid is {
         found9: ztypes.declid
-        if (t.declValid id: parentDeclId) then {
-            po9: t.decls.get i: (parentDeclId - 1)
-            if po9.nameIndex > 0 then {
-                found9 = t.nameIndexLookup slot: po9.nameIndex :nameId
-            } else {
-                with cit9: po9.children.iterate do for c9: cit9 loop {
-                    if c9.nameId == nameId then found9 = c9.declId
-                }
+        po9: t.decls.get i: parentDeclId.u64
+        if po9.nameIndex > 0 then {
+            found9 = t.nameIndexLookup slot: po9.nameIndex :nameId
+        } else {
+            with cit9: po9.children.iterate do for c9: cit9 loop {
+                if c9.nameId == nameId then found9 = c9.declId
             }
         }
         return found9
@@ -1116,12 +1070,10 @@ ZTyping: class {
             isFn8: false
             node8: u32
             {
-                if (this.declValid id: od8) then {
-                    oo8: this.decls.get i: (od8 - 1)
-                    if oo8.kind.methodDecl then isFn8 = true
-                    if oo8.kind.funcDecl then isFn8 = true
-                    node8 = oo8.node
-                }
+                oo8: this.decls.get i: od8.u64
+                if oo8.kind.methodDecl then isFn8 = true
+                if oo8.kind.funcDecl then isFn8 = true
+                node8 = oo8.node
             }
             if isFn8 == false then {
                 this.declPendWrite :parentTypeId :nameId :typeId
@@ -1135,10 +1087,8 @@ ZTyping: class {
             )
         }
         {
-            if (this.declValid id: md8) then {
-                do8: this.decls.getMut i: (md8 - 1)
-                do8.typeId = typeId
-            }
+            do8: this.decls.getMut i: md8.u64
+            do8.typeId = typeId
         }
         # every member type names the declaration that minted it, whatever the
         # member's kind: a method's type IS the function it declares (its
@@ -1171,10 +1121,8 @@ ZTyping: class {
         if (md9.isZero) == false then {
             t9: u64
             {
-                if (t.declValid id: md9) then {
-                    mo9: t.decls.get i: (md9 - 1)
-                    t9 = mo9.typeId
-                }
+                mo9: t.decls.get i: md9.u64
+                t9 = mo9.typeId
             }
             if t9 == 0 then return (optionval.none u64)
             return (optionval.some t9)
@@ -1198,10 +1146,8 @@ ZTyping: class {
         if od9.isZero then return false
         lf9: u64
         {
-            if (this.declValid id: od9) then {
-                oo9: this.decls.get i: (od9 - 1)
-                lf9 = oo9.lockFieldDecl
-            }
+            oo9: this.decls.get i: od9.u64
+            lf9 = oo9.lockFieldDecl
         }
         if lf9 == 0 then return false
         return lf9 == (this.declFindChild parentDeclId: od9 :nameId)
@@ -1214,11 +1160,9 @@ ZTyping: class {
         if md9.isZero then return defaultval.none
         r9: defaultval.none
         {
-            if (this.declValid id: md9) then {
-                mo9: this.decls.get i: (md9 - 1)
-                dv9: mo9.defaultVal
-                r9 = dv9
-            }
+            mo9: this.decls.get i: md9.u64
+            dv9: mo9.defaultVal
+            r9 = dv9
         }
         return r9
     }
@@ -1229,10 +1173,8 @@ ZTyping: class {
         if md9.isZero then return false
         r9: false
         {
-            if (this.declValid id: md9) then {
-                mo9: this.decls.get i: (md9 - 1)
-                if mo9.defaultVal.none then r9 = false else r9 = true
-            }
+            mo9: this.decls.get i: md9.u64
+            if mo9.defaultVal.none then r9 = false else r9 = true
         }
         return r9
     }
@@ -1248,10 +1190,8 @@ ZTyping: class {
         if md9.isZero then return (optionval.none ztypes.zparamownership)
         r9: ztypes.zparamownership.noneMode
         {
-            if (this.declValid id: md9) then {
-                mo9: this.decls.get i: (md9 - 1)
-                r9 = mo9.ownership
-            }
+            mo9: this.decls.get i: md9.u64
+            r9 = mo9.ownership
         }
         if r9.noneMode then return (optionval.none ztypes.zparamownership)
         return (optionval.some r9)
@@ -1266,10 +1206,8 @@ ZTyping: class {
         if md9.isZero then return false
         r9: false
         {
-            if (this.declValid id: md9) then {
-                mo9: this.decls.get i: (md9 - 1)
-                r9 = mo9.grantsPrivate
-            }
+            mo9: this.decls.get i: md9.u64
+            r9 = mo9.grantsPrivate
         }
         return r9
     }
@@ -1281,11 +1219,9 @@ ZTyping: class {
         if md9.isZero then return false
         r9: false
         {
-            if (this.declValid id: md9) then {
-                mo9: this.decls.get i: (md9 - 1)
-                oc9: own
-                r9 = (ztypes.zparamownershipInt mo9.ownership) == (ztypes.zparamownershipInt oc9)
-            }
+            mo9: this.decls.get i: md9.u64
+            oc9: own
+            r9 = (ztypes.zparamownershipInt mo9.ownership) == (ztypes.zparamownershipInt oc9)
         }
         return r9
     }
@@ -1304,10 +1240,8 @@ ZTyping: class {
         if md9.isZero then return false
         r9: false
         {
-            if (this.declValid id: md9) then {
-                mo9: this.decls.get i: (md9 - 1)
-                r9 = mo9.fnptrField
-            }
+            mo9: this.decls.get i: md9.u64
+            r9 = mo9.fnptrField
         }
         return r9
     }
@@ -1334,11 +1268,9 @@ ZTyping: class {
         if od9.isZero then return false
         r9: false
         {
-            if (t.declValid id: md9) when (t.declValid id: od9) then {
-                mo9: t.decls.get i: (md9 - 1)
-                oo9: t.decls.get i: (od9 - 1)
-                if mo9.node == oo9.node then r9 = true
-            }
+            mo9: t.decls.get i: md9.u64
+            oo9: t.decls.get i: od9.u64
+            if mo9.node == oo9.node then r9 = true
         }
         return r9
     }
@@ -1352,12 +1284,10 @@ ZTyping: class {
         if md9.isZero then return false
         r9: false
         {
-            if (t.declValid id: md9) then {
-                mo9: t.decls.get i: (md9 - 1)
-                k9: mo9.kind
-                if k9.methodDecl then r9 = true
-                if k9.funcDecl then r9 = true
-            }
+            mo9: t.decls.get i: md9.u64
+            k9: mo9.kind
+            if k9.methodDecl then r9 = true
+            if k9.funcDecl then r9 = true
         }
         return r9
     }
@@ -1376,14 +1306,12 @@ ZTyping: class {
         tframe9: false
         kids9: (ListVal ztypes.declid)
         {
-            if (this.declValid id: templateDeclId) then {
-                to9: this.decls.get i: (templateDeclId - 1)
-                tname9 = to9.name
-                tnode9 = to9.node
-                tkind9 = to9.kind
-                tframe9 = to9.unitFrame
-                with cit9: to9.children.iterate do for c9: cit9 loop kids9.append c9.declId
-            }
+            to9: this.decls.get i: templateDeclId.u64
+            tname9 = to9.name
+            tnode9 = to9.node
+            tkind9 = to9.kind
+            tframe9 = to9.unitFrame
+            with cit9: to9.children.iterate do for c9: cit9 loop kids9.append c9.declId
         }
         if tname9 == 0 then return (ztypes.declid.create from: 0)
         # the clone keeps the template's kind: a monomorphisation of a generic
@@ -1392,10 +1320,8 @@ ZTyping: class {
         id9: this.declNew name: tname9 parent: ztypes.declid kind: tkind9 node: tnode9
         if tframe9 then this.declSetUnitFrame declId: id9
         {
-            if (this.declValid id: id9) then {
-                no9: this.decls.getMut i: (id9 - 1)
-                no9.parent = templateDeclId
-            }
+            no9: this.decls.getMut i: id9.u64
+            no9.parent = templateDeclId
         }
         ki9: u64
         kn9: kids9.length
@@ -1407,15 +1333,13 @@ ZTyping: class {
             ck9: declkind.fieldDecl
             isM9: false
             {
-                if (this.declValid id: kd9) then {
-                    ko9: this.decls.get i: (kd9 - 1)
-                    cn9 = ko9.name
-                    cnode9 = ko9.node
-                    ck9 = ko9.kind
-                    if ko9.kind.fieldDecl then isM9 = true
-                    if ko9.kind.methodDecl then isM9 = true
-                    if ko9.kind.armDecl then isM9 = true
-                }
+                ko9: this.decls.get i: kd9.u64
+                cn9 = ko9.name
+                cnode9 = ko9.node
+                ck9 = ko9.kind
+                if ko9.kind.fieldDecl then isM9 = true
+                if ko9.kind.methodDecl then isM9 = true
+                if ko9.kind.armDecl then isM9 = true
             }
             if isM9 then this.declNew name: cn9 parent: id9 kind: ck9 node: cnode9
         }
@@ -1433,10 +1357,8 @@ ZTyping: class {
         if (this.declFindChild parentDeclId: od9 :nameId) > 0 then return
         node9: u32
         {
-            if (this.declValid id: od9) then {
-                oo9: this.decls.get i: (od9 - 1)
-                node9 = oo9.node
-            }
+            oo9: this.decls.get i: od9.u64
+            node9 = oo9.node
         }
         kk9: kind
         this.declNew name: nameId parent: od9 kind: kk9 node: node9
@@ -1444,10 +1366,8 @@ ZTyping: class {
 
     # declChildSlots -- how many children a declaration's namespace holds.
     declChildSlots: function {:this declId: ztypes.declid} out u64 is {
-        if (this.declValid id: declId) then {
-            po9: this.decls.get i: (declId - 1)
-            return po9.children.length
-        }
+        po9: this.decls.get i: declId.u64
+        return po9.children.length
         return 0
     }
 
@@ -1477,27 +1397,23 @@ ZTyping: class {
             nid9: u64
             did9: ztypes.declid
             {
-                if (this.declValid id: od9) then {
-                    oo9: this.decls.get i: (od9 - 1)
-                    ce9: oo9.children.get i: i9
-                    nid9 = ce9.nameId.u64
-                    did9 = ce9.declId
-                }
+                oo9: this.decls.get i: od9.u64
+                ce9: oo9.children.get i: i9
+                nid9 = ce9.nameId.u64
+                did9 = ce9.declId
             }
             i9 = i9 + 1
             keep9: (membersOnly) == false
             mt9: u64
             {
-                if (this.declValid id: did9) then {
-                    ko9: this.decls.get i: (did9 - 1)
-                    if membersOnly then {
-                        if ko9.kind.fieldDecl then keep9 = true
-                        if ko9.kind.methodDecl then keep9 = true
-                        if ko9.kind.paramDecl then keep9 = true
-                        if ko9.kind.armDecl then keep9 = true
-                    }
-                    mt9 = ko9.typeId
+                ko9: this.decls.get i: did9.u64
+                if membersOnly then {
+                    if ko9.kind.fieldDecl then keep9 = true
+                    if ko9.kind.methodDecl then keep9 = true
+                    if ko9.kind.paramDecl then keep9 = true
+                    if ko9.kind.armDecl then keep9 = true
                 }
+                mt9 = ko9.typeId
             }
             if keep9 when mt9 > 0 then {
                 names.append nid9
@@ -1573,22 +1489,18 @@ ZTyping: class {
         for i9 < n9 loop {
             did9: ztypes.declid
             {
-                if (this.declValid id: od9) then {
-                    oo9: this.decls.get i: (od9 - 1)
-                    did9 = (oo9.children.get i: i9).declId
-                }
+                oo9: this.decls.get i: od9.u64
+                did9 = (oo9.children.get i: i9).declId
             }
             i9 = i9 + 1
             {
-                if (this.declValid id: did9) then {
-                    ko9: this.decls.get i: (did9 - 1)
-                    isMem9: false
-                    if ko9.kind.fieldDecl then isMem9 = true
-                    if ko9.kind.methodDecl then isMem9 = true
-                    if ko9.kind.paramDecl then isMem9 = true
-                    if ko9.kind.armDecl then isMem9 = true
-                    if isMem9 when ko9.typeId > 0 then c9 = c9 + 1
-                }
+                ko9: this.decls.get i: did9.u64
+                isMem9: false
+                if ko9.kind.fieldDecl then isMem9 = true
+                if ko9.kind.methodDecl then isMem9 = true
+                if ko9.kind.paramDecl then isMem9 = true
+                if ko9.kind.armDecl then isMem9 = true
+                if isMem9 when ko9.typeId > 0 then c9 = c9 + 1
             }
         }
         return c9
@@ -1608,19 +1520,15 @@ ZTyping: class {
             nid9: u64
             did9: ztypes.declid
             {
-                if (this.declValid id: od9) then {
-                    oo9: this.decls.get i: (od9 - 1)
-                    ce9: oo9.children.get i: i9
-                    nid9 = ce9.nameId.u64
-                    did9 = ce9.declId
-                }
+                oo9: this.decls.get i: od9.u64
+                ce9: oo9.children.get i: i9
+                nid9 = ce9.nameId.u64
+                did9 = ce9.declId
             }
             i9 = i9 + 1
             {
-                if (this.declValid id: did9) then {
-                    ko9: this.decls.get i: (did9 - 1)
-                    if ko9.typeId > 0 then r9 = nid9
-                }
+                ko9: this.decls.get i: did9.u64
+                if ko9.typeId > 0 then r9 = nid9
             }
         }
         return r9
@@ -1656,10 +1564,8 @@ ZTyping: class {
         if md9.u64 == 0 then return md9
         t9: u64
         {
-            if (this.declValid id: md9) then {
-                mo9: this.decls.get i: (md9 - 1)
-                t9 = mo9.typeId
-            }
+            mo9: this.decls.get i: md9.u64
+            t9 = mo9.typeId
         }
         if t9 == 0 then return (ztypes.declid.create from: 0)
         return md9
@@ -1742,10 +1648,8 @@ ZTyping: class {
     setChildGrantsPrivateId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} is {
         md8: this.declMemberIdOf :parentTypeId :nameId
         if (md8.isZero) == false then {
-            if (this.declValid id: md8) then {
-                do8: this.decls.getMut i: (md8 - 1)
-                do8.grantsPrivate = true
-            }
+            do8: this.decls.getMut i: md8.u64
+            do8.grantsPrivate = true
         }
     }
 
@@ -1774,10 +1678,8 @@ ZTyping: class {
             if (od8.isZero) == false then {
                 md8: this.declFindChild parentDeclId: od8 nameId: nid8
                 if (md8.isZero) == false then {
-                    if (this.declValid id: od8) then {
-                        do8: this.decls.getMut i: (od8 - 1)
-                        do8.lockFieldDecl = md8
-                    }
+                    do8: this.decls.getMut i: od8.u64
+                    do8.lockFieldDecl = md8
                 }
             }
         }
@@ -1788,10 +1690,8 @@ ZTyping: class {
         if nid8 > 0 then {
             md8: this.declMemberIdOf :parentTypeId nameId: nid8
             if (md8.isZero) == false then {
-                if (this.declValid id: md8) then {
-                    do8: this.decls.getMut i: (md8 - 1)
-                    do8.fnptrField = true
-                }
+                do8: this.decls.getMut i: md8.u64
+                do8.fnptrField = true
             }
         }
     }
@@ -1813,11 +1713,9 @@ ZTyping: class {
         if nid8.isZero then return
         md8: this.declMemberIdOf :parentTypeId nameId: nid8
         if md8.isZero then return
-        if (this.declValid id: md8) then {
-            do8: this.decls.getMut i: (md8 - 1)
-            dv8: value
-            do8.defaultVal = dv8
-        }
+        do8: this.decls.getMut i: md8.u64
+        dv8: value
+        do8.defaultVal = dv8
     }
 
     # setDefaultFunction -- a default naming a function; `targetDecl` is that
@@ -1860,10 +1758,8 @@ ZTyping: class {
         if tgt9.isZero then return "".string
         nm9: u32
         {
-            if (this.declValid id: tgt9) then {
-                to9: this.decls.get i: (tgt9 - 1)
-                nm9 = to9.name
-            }
+            to9: this.decls.get i: tgt9.u64
+            nm9 = to9.name
         }
         tx9: zast.poolTextAt :pool ref: (zast.nameid.create from: nm9.u32)
         if isArm9 then return "arm \{tx9}"
@@ -1877,11 +1773,9 @@ ZTyping: class {
         if nid8 > 0 then {
             md8: this.declMemberIdOf :parentTypeId nameId: nid8
             if (md8.isZero) == false then {
-                if (this.declValid id: md8) then {
-                    do8: this.decls.getMut i: (md8 - 1)
-                    oc8: ownership
-                    do8.ownership = oc8
-                }
+                do8: this.decls.getMut i: md8.u64
+                oc8: ownership
+                do8.ownership = oc8
             }
         }
     }
@@ -1890,11 +1784,9 @@ ZTyping: class {
     setChildOwnershipId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid ownership: ztypes.zparamownership} is {
         md8: this.declMemberIdOf :parentTypeId :nameId
         if (md8.isZero) == false then {
-            if (this.declValid id: md8) then {
-                do8: this.decls.getMut i: (md8 - 1)
-                oc8: ownership
-                do8.ownership = oc8
-            }
+            do8: this.decls.getMut i: md8.u64
+            oc8: ownership
+            do8.ownership = oc8
         }
     }
 
@@ -2243,7 +2135,7 @@ nodeTypeSet: function {tbl: (ListVal ztypes.tid) nid: u64 tid: ztypes.tid} is {
 # construct an empty ZTyping, pre-sizing its tables for roughly
 # `nodeEst` nodes.
 newTyping: function {nodeEst: 0.u64} out ZTyping is {
-    return (ZTyping
+    t9: (ZTyping
         synthNodes: (List SynthNode)
         nextTempId: 0
         synthLabel: "".string
@@ -2374,6 +2266,33 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         errors: (List zast.ErrorData)
         currentReturnTypeId: ztypes.tid
         isError: false)
+    # Row 0 of each table this object owns is a sentinel, so an id indexes its
+    # row with no arithmetic. The declaration sentinel answers "nothing" to
+    # every reader: no name, no parent, no type, no children, kind none.
+    t9.decls.append (Decl
+        name: 0
+        parent: ztypes.declid
+        kind: declkind.noneDecl
+        node: 0
+        typeId: ztypes.tid
+        ownership: ztypes.zparamownership.noneMode
+        defaultVal: defaultval.none
+        resolving: false
+        defined: false
+        pending: false
+        walked: false
+        grantsPrivate: false
+        unitFrame: false
+        fnptrField: false
+        lockFieldDecl: 0
+        conformerName: 0
+        varId: ztypes.vid
+        rows: 0
+        children: (ListVal declchild)
+        nameIndex: 0
+    )
+    t9.nameIndexes.append (NameIndex byName: (MapVV u64 value: ztypes.declid))
+    return t9
 }
 
 # a bool rendered as "true" or "false".
