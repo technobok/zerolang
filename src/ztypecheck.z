@@ -920,6 +920,7 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                     kind: ztyping.declkind.unitDecl
                     node: ruId9
                 )
+                ty.declSetUnitFrame declId: udid9
                 ty.unitRootByName.set key: unmRef9.u64 value: udid9
                 utl9: reg.unitNameTid.get key: unmRef9.u64
                 match (
@@ -1122,6 +1123,14 @@ indexDeclDef: function {
                 kind: ztyping.declkind.unitDecl
                 node: nopNodeId
             )
+            # a namespace, subunit or template is a lookup frame; a
+            # `require:` block is not (its schema check runs in its unit)
+            if (zast.unitOpDeclaresUnit :ast opId: opNodeId) then ty.declSetUnitFrame declId: did0
+            if (zast.unitOpKindIs
+                :ast
+                opId: opNodeId
+                k: zast.unitkind.template
+            ) then ty.declSetUnitFrame declId: did0
             npub9: ztypes.declid
             npubOp9: u32
             with nbit9: op9.body.iterate do for nmId9: nbit9 loop {
@@ -1533,7 +1542,6 @@ definingUnitFor: function {
     cuId9: nameIdOf :ast name: currentUnit
     hit9: (envLookup
         :ty
-        :ast
         frame: (frameFor :ty :ast unitNameId: cuId9)
         nameId: (zast.poolFind pool: ast.names text: name)
     )
@@ -1850,7 +1858,7 @@ resolveNamedType: function {
         # but the cursor's frame chain reaches -- a template's generic
         # parameter in its own method signature (`v: t`), which is the
         # canonical GENERIC_PARAM id, not a forward record of that name
-        e7: envTypeIdOf :ty :ast nameId: (zast.poolFind pool: ast.names text: name)
+        e7: envTypeIdOf :ty nameId: (zast.poolFind pool: ast.names text: name)
         if e7 > 0 then return e7
         return (reg.newType :name typetype: ztypes.ztypetype.recordType)
     }
@@ -3330,7 +3338,6 @@ demandTyperefNames: function {
         if (isNumericLiteralName name: teN9.stringview) == false then {
             (demandDefinition
                 :ty
-                :ast
                 frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
                 nameId: typeExpr.name
             )
@@ -3348,7 +3355,6 @@ demandTyperefNames: function {
         if hn.length > 0 then {
             (demandDefinition
                 :ty
-                :ast
                 frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
                 nameId: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
             )
@@ -3420,7 +3426,6 @@ resolveTyperefShell: function {
         teR9: ast.names.texts.get i: (typeExpr.name - 1).u64
         (demandDefinition
             :ty
-            :ast
             frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
             nameId: typeExpr.name
         )
@@ -3467,7 +3472,6 @@ resolveTyperefShell: function {
         suffix: atomName :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64)
         (demandDefinition
             :ty
-            :ast
             frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
             nameId: (atomNameId :ast n: (ast.nodes.get i: (typeExpr.callable - 1).u64))
         )
@@ -7504,7 +7508,6 @@ unionCustomTagId: function {
                         # the demand and a pending fixup for the tag child.
                         (demandDefinition
                             :ty
-                            :ast
                             frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
                             nameId: (zast.poolFind pool: ast.names text: pn.stringview)
                         )
@@ -8697,7 +8700,7 @@ declOfUnitDefId: function {
             pd9: ty.declFindChild parentDeclId: pb9 :nameId
             if (pd9.isZero) == false then return pd9
         }
-        cur9 = unitFrameOf :ty :ast declId: (declParentIdOf :ty declId: cur9)
+        cur9 = unitFrameOf :ty declId: (declParentIdOf :ty declId: cur9)
     }
     return (ztypes.declid.create from: 0)
 }
@@ -10319,11 +10322,10 @@ demandDecl: function {ty: ztyping.ZTyping declId: ztypes.declid} is {
 # an unknown name finds nothing and demands nothing.
 demandDefinition: function {
     ty: ztyping.ZTyping
-    ast: Ast.view
     frame: ztypes.declid
     nameId: zast.nameid
 } is {
-    hit9: envLookup :ty :ast :frame :nameId
+    hit9: envLookup :ty :frame :nameId
     if (hit9.declId.isZero) == false then demandDecl :ty declId: hit9.declId
 }
 
@@ -10363,23 +10365,7 @@ demandUnitMember: function {ty: ztyping.ZTyping unitNameId: zast.nameid nameId: 
 # child slot at a time: a second decls probe cannot run under a live
 # children borrow.
 publicNsChildOf: function {ty: ztyping.ZTyping root: ztypes.declid} out ztypes.declid is {
-    kn9: ty.declChildSlots declId: root
-    ki9: u64
-    for ki9 < kn9 loop {
-        kd9: ztypes.declid
-        {
-            if (ty.declValid id: root) then {
-                do9: ty.decls.get i: (root - 1)
-                kd9 = (do9.children.get i: ki9).declId
-            }
-        }
-        ki9 = ki9 + 1
-        if (ty.declValid id: kd9) then {
-            ko9: ty.decls.get i: (kd9 - 1)
-            if ko9.kind.publicNs then return kd9
-        }
-    }
-    return (ztypes.declid.create from: 0)
+    return (ty.declPublicNsOf owner: root)
 }
 
 # resolveDemandedDecl -- resolve one demanded declaration now, unless it is
@@ -10645,17 +10631,15 @@ scanCallsInNode: function {
         cn: atomName :ast n: (ast.nodes.get i: (node.callable - 1).u64)
         if cn.stringview == "return" then {
             scFr9: frameFor :ty :ast unitNameId: scanUnit
-            demandDefinition :ty :ast frame: scFr9 nameId: zast.wkReturn
+            demandDefinition :ty frame: scFr9 nameId: zast.wkReturn
             (demandDefinition
                 :ty
-                :ast
                 frame: scFr9
                 nameId: (zast.poolFind pool: ast.names text: "never")
             )
         } else {
             if cn.length > 0 then (demandDefinition
                 :ty
-                :ast
                 frame: (frameFor :ty :ast unitNameId: scanUnit)
                 nameId: (atomNameId :ast n: (ast.nodes.get i: (node.callable - 1).u64))
             )
@@ -10686,7 +10670,6 @@ scanCallsInNode: function {
         if (isNumericLiteralName name: scN9.stringview) == false then {
             (demandDefinition
                 :ty
-                :ast
                 frame: (frameFor :ty :ast unitNameId: scanUnit)
                 nameId: node.name
             )
@@ -10715,7 +10698,6 @@ scanCallsInNode: function {
     } case forexpr then {
         (demandDefinition
             :ty
-            :ast
             frame: (frameFor :ty :ast unitNameId: scanUnit)
             nameId: (zast.poolFind pool: ast.names text: "never")
         )
@@ -10752,14 +10734,12 @@ scanCallsInNode: function {
         doFr9: frameFor :ty :ast unitNameId: scanUnit
         (demandDefinition
             :ty
-            :ast
             frame: doFr9
             nameId: (zast.poolFind pool: ast.names text: "never")
         )
         if (blockHasBreak :ast n: (ast.nodes.get i: (node.statement - 1).u64)) then {
             (demandDefinition
                 :ty
-                :ast
                 frame: doFr9
                 nameId: (zast.poolFind pool: ast.names text: "optionval")
             )
@@ -10780,7 +10760,6 @@ scanCallsInNode: function {
         if bn.length > 0 then {
             (demandDefinition
                 :ty
-                :ast
                 frame: (frameFor :ty :ast unitNameId: scanUnit)
                 nameId: (atomNameId :ast n: (ast.nodes.get i: (node.parent - 1).u64))
             )
@@ -13379,7 +13358,6 @@ reportUnresolvedInstArgs: function {ty: ztyping.ZTyping ast: Ast.view r: InstReq
             if an9.length > 0 then {
                 eh9: (envLookup
                     :ty
-                    :ast
                     frame: ty.curFrame
                     nameId: (nameIdOf :ast name: an9.stringview)
                 )
@@ -13718,7 +13696,6 @@ stampPendingTyperefs: function {
                 # reference stamps on a later pass, once it has.
                 dh9: (envLookup
                     :ty
-                    :ast
                     frame: ty.curFrame
                     nameId: (nameIdOf :ast name: pval9.stringview)
                 )
@@ -29220,7 +29197,7 @@ constOwnerTidFor: function {
                 ct9: declTypeIdOf :ty declId: cur9
                 if (ct9.isZero) == false then return ct9.u64
             }
-            cur9 = unitFrameOf :ty :ast declId: (declParentIdOf :ty declId: cur9)
+            cur9 = unitFrameOf :ty declId: (declParentIdOf :ty declId: cur9)
         }
     }
     return (unitTidOfName9 :reg unitNameId: (nameIdOf :ast name: unitName)).u64
@@ -31613,11 +31590,13 @@ frameFor: function {
     if ur9.isZero then {
         # the empty name is the prelude-only probe (an interned id, not 0)
         if (zast.poolTextAt pool: ast.names ref: unitNameId).length == 0 then return ur9
-        return (unitFrameOf :ty :ast declId: ty.curFrame)
+        return (unitFrameOf :ty declId: ty.curFrame)
     }
-    if (frameIsWithin :ty frame: ty.curFrame root: ur9) then {
-        return (unitFrameOf :ty :ast declId: ty.curFrame)
-    }
+    # the cursor's nearest unit frame first: it lies within the unit's root
+    # exactly when the cursor does, and the climb from a unit frame to the
+    # root is a hop or two where the climb from a body frame is many
+    uf9: unitFrameOf :ty declId: ty.curFrame
+    if (frameIsWithin :ty frame: uf9 root: ur9) then return uf9
     return ur9
 }
 
@@ -31648,20 +31627,17 @@ nsFrameOf: function {
 # through it. 0 when `declId` is 0 or has no such ancestor.
 unitFrameOf: function {
     ty: ztyping.ZTyping.view
-    ast: Ast.view
     declId: ztypes.declid
 } out ztypes.declid is {
     cur9: declId
     hops9: u64
     for cur9 > 0 while hops9 < 64 loop {
         hops9 = hops9 + 1
-        isU9: declDeclaresUnit :ty :ast declId: cur9
-        if (isU9) == false then isU9 = declDeclaresTemplate :ty :ast declId: cur9
-        if (isU9) == false when (ty.declValid id: cur9) then {
-            do9: ty.decls.get i: (cur9 - 1)
-            if do9.kind.publicNs then isU9 = true
-        }
-        if isU9 then return cur9
+        if (ty.declValid id: cur9) == false then return (ztypes.declid.create from: 0)
+        # the row carries the answer (declSetUnitFrame, laid at index time):
+        # a body, a function, a local is not a unit frame, and no walk touches
+        # the node
+        if (ty.declIsUnitFrame declId: cur9) then return cur9
         cur9 = declParentIdOf :ty declId: cur9
     }
     return (ztypes.declid.create from: 0)
@@ -31722,11 +31698,10 @@ declDeclaresTemplate: function {
 # not resolved yet (a probe cannot mint; the demand scans see to that).
 envTypeIdOf: function {
     ty: ztyping.ZTyping.view
-    ast: Ast.view
     nameId: zast.nameid
 } out u64 is {
     if ty.curFrame.isZero then return 0
-    eh9: envLookup :ty :ast frame: ty.curFrame :nameId
+    eh9: envLookup :ty frame: ty.curFrame :nameId
     if eh9.declId.isZero then return 0
     return (declTypeIdOf :ty declId: eh9.declId).u64
 }
@@ -31755,19 +31730,18 @@ frameIsWithin: function {
 # nothing.
 envLookup: function {
     ty: ztyping.ZTyping.view
-    ast: Ast.view
     frame: ztypes.declid
     nameId: zast.nameid
 } out zdefhit is {
     if nameId.isZero then return (zdefhit declId: ztypes.declid frame: ztypes.declid)
-    cur9: unitFrameOf :ty :ast declId: frame
+    cur9: unitFrameOf :ty declId: frame
     hops9: u64
     for cur9 > 0 while hops9 < 64 loop {
         hops9 = hops9 + 1
         h9: ty.declFindChild parentDeclId: cur9 :nameId
         if (h9.isZero) == false then return (zdefhit declId: h9 frame: cur9)
         if cur9 == ty.coreUnitRoot then return (zdefhit declId: ztypes.declid frame: ztypes.declid)
-        cur9 = unitFrameOf :ty :ast declId: (declParentIdOf :ty declId: cur9)
+        cur9 = unitFrameOf :ty declId: (declParentIdOf :ty declId: cur9)
     }
     if (ty.coreUnitRoot.isZero) == false then {
         h8: ty.declFindChild parentDeclId: ty.coreUnitRoot :nameId
@@ -32168,7 +32142,7 @@ walkLookupTyperefFrom: function {
                     if hd9.resolving then waitDecl9 = here9
                 }
             }
-            cur9 = unitFrameOf :ty :ast declId: (declParentIdOf :ty declId: cur9)
+            cur9 = unitFrameOf :ty declId: (declParentIdOf :ty declId: cur9)
         }
     }
     # `Any` is not user-reachable through core: only its own unit (system.z,
@@ -32603,24 +32577,7 @@ publicNsOf: function {
     # typing side (declSetType), not the registry's def
     if od9.u64 == 0 then od9 = ty.declIdOfType typeId: tid
     if od9.u64 == 0 then return (ztypes.declid.create from: 0)
-    r9: ztypes.declid
-    kn9: ty.declChildSlots declId: od9
-    ki9: u64
-    for ki9 < kn9 loop {
-        kd9: ztypes.declid
-        {
-            if (ty.declValid id: od9) then {
-                do9: ty.decls.get i: (od9 - 1)
-                kd9 = (do9.children.get i: ki9).declId
-            }
-        }
-        ki9 = ki9 + 1
-        if (ty.declValid id: kd9) then {
-            ko9: ty.decls.get i: (kd9 - 1)
-            if ko9.kind.publicNs then r9 = kd9
-        }
-    }
-    return r9
+    return (ty.declPublicNsOf owner: od9)
 }
 
 # declMemberIsPrivate -- member `nameId` is private on the type/unit that minted

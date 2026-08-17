@@ -50,6 +50,12 @@ Node: zast.Node
 # map past this many children (no owned key, no hash below it).
 bucketScanMax: 16.u64
 
+# NameIndex -- a wide namespace's nameId -> declId accelerator (a slot in
+# ZTyping.nameIndexes, named by Decl.nameIndex).
+NameIndex: class {
+    byName: (MapVV u64 value: ztypes.declid)
+}
+
 # One edge of the generic-args table: a (parent, param-name) link. The
 # mutable arg-type id lives in genericArgTypeBy, keyed by a
 # (parentTypeId, paramNameId) composite.
@@ -227,6 +233,10 @@ Decl: class {
     # grantsPrivate -- the field's declared type was a `.private` friend handle
     # (syntactic; not derivable from typeId).
     grantsPrivate: bool
+    # a unit-kind row that is a lookup FRAME (a file unit, a namespace, a
+    # subunit, a template, and their clones -- not a `require:` block): the
+    # frame walks ask this bit, never the node
+    unitFrame: bool
     # fnptrField -- the member occupies a struct function-pointer slot: an
     # is-block function member of a record or class, or an as-block member of a
     # generic class. Where it was declared, not its kind, decides this.
@@ -246,9 +256,12 @@ Decl: class {
     # skipped when there are none
     rows: u64
     children: (ListVal declchild)
-    # derived nameId -> declId accelerator over `children`, backfilled when
-    # the namespace outgrows a linear scan (bucketScanMax); not dumped
-    byName: (MapVV u64 value: ztypes.declid)
+    # slot (1-based) of this row's nameId -> declId accelerator in
+    # ZTyping.nameIndexes, backfilled when the namespace outgrows a linear
+    # scan of `children` (bucketScanMax); 0 for the many rows that never do.
+    # A slot, not a map: a map is a heap object, and every row would own an
+    # empty one
+    nameIndex: u32
 }
 
 # the typing side-tables: every typecheck stamp keyed by AST node id
@@ -548,6 +561,8 @@ ZTyping: class {
     # every Decl row, indexed by DeclId - 1 (DeclIds are minted dense 1..N in
     # mint order and never removed, so the row IS the index)
     decls: (List Decl)
+    # the name indexes the wide namespaces own (Decl.nameIndex slots)
+    nameIndexes: (List NameIndex)
     # type id -> the declaration that minted it (first mint wins), so a member
     # setter reaches the owner's declaration without the type registry. A
     # monomorphisation is absent: it links to its template through the
@@ -555,6 +570,9 @@ ZTyping: class {
     declByTypeId: (MapVV u64 value: ztypes.declid)
     # bare unit name -> the unit's root DeclId (the root index)
     unitRootByName: (MapVV u64 value: ztypes.declid)
+    # the `public:` block Decl of each unit or type Decl that has one, by
+    # the owner's declid: a unit's surface is asked for per qualified lookup
+    publicNsByOwner: (MapVV u64 value: ztypes.declid)
     # reference nodeid -> resolved DeclId (stamped by resolution)
     refDecl: (MapVV u64 value: ztypes.declid)
     # declarations a reference found and demanded, in discovery order,
@@ -616,13 +634,14 @@ ZTyping: class {
             pending: false
             walked: false
             grantsPrivate: false
+            unitFrame: false
             fnptrField: false
             lockFieldDecl: 0
             conformerName: 0
             varId: ztypes.vid
             rows: 0
             children: (ListVal declchild)
-            byName: (MapVV u64 value: ztypes.declid)
+            nameIndex: 0
         )
         id: ztypes.declid.create from: this.decls.length
         if (parent.isZero) == false then (this.declAddChildEdge
@@ -630,7 +649,35 @@ ZTyping: class {
             nameId: (zast.nameid.create from: name.u32)
             childDeclId: id
         )
+        if kind.publicNs then this.publicNsByOwner.set key: parent.u64 value: id
         return id
+    }
+
+    # declPublicNsOf -- the `public:` block Decl under `owner`, or 0.
+    declPublicNsOf: function {t: this.view owner: ztypes.declid} out ztypes.declid is {
+        po9: t.publicNsByOwner.get key: owner.u64
+        match (
+            po9
+        ) case some then {
+            return po9
+        } case none then null
+        return (ztypes.declid.create from: 0)
+    }
+
+    # declSetUnitFrame -- mark a unit-kind row as a lookup frame.
+    declSetUnitFrame: function {:this declId: ztypes.declid} is {
+        if (this.declValid id: declId) then {
+            fo9: this.decls.getMut i: (declId - 1)
+            fo9.unitFrame = true
+        }
+    }
+
+    # declIsUnitFrame -- the frame bit (a `public:` block is one too).
+    declIsUnitFrame: function {t: this.view declId: ztypes.declid} out bool is {
+        if (t.declValid id: declId) == false then return false
+        do9: t.decls.get i: (declId - 1)
+        if do9.kind.publicNs then return true
+        return do9.unitFrame
     }
 
     # declNewFrame -- a body frame under `parent` (a function declaration, or
@@ -742,13 +789,8 @@ ZTyping: class {
             {
                 fo9: t.decls.get i: (cur9 - 1)
                 if (fo9.kind.blockDecl) == false then return (ztypes.declid.create from: 0)
-                if fo9.byName.length > 0 then {
-                    bo9: fo9.byName.get key: nameId.u64
-                    match (
-                        bo9
-                    ) case some then {
-                        found9 = bo9
-                    } case none then null
+                if fo9.nameIndex > 0 then {
+                    found9 = t.nameIndexLookup slot: fo9.nameIndex :nameId
                 } else {
                     # newest first: the last local of that name wins, and a
                     # frame's own locals are few
@@ -803,15 +845,32 @@ ZTyping: class {
             # mutation, and a mutating
             # lookup cannot run under a live children borrow.
             if po9.children.length > bucketScanMax then {
-                if po9.byName.length == 0 then {
+                if po9.nameIndex == 0 then {
+                    ix9: NameIndex byName: (MapVV u64 value: ztypes.declid)
                     with cit7: po9.children.iterate do for c7: cit7 loop {
-                        po9.byName.set key: c7.nameId.u64 value: c7.declId
+                        ix9.byName.set key: c7.nameId.u64 value: c7.declId
                     }
+                    this.nameIndexes.append ix9
+                    po9.nameIndex = this.nameIndexes.length.u32.orPanic
                 } else {
-                    po9.byName.set key: nameId.u64 value: childDeclId
+                    ixm9: this.nameIndexes.getMut i: (po9.nameIndex - 1).u64
+                    ixm9.byName.set key: nameId.u64 value: childDeclId
                 }
             }
         }
+    }
+
+    # nameIndexLookup -- the declId a wide namespace's name index holds for
+    # `nameId`, or 0.
+    nameIndexLookup: function {t: this.view slot: u32 nameId: zast.nameid} out ztypes.declid is {
+        ix9: t.nameIndexes.get i: (slot - 1).u64
+        bo9: ix9.byName.get key: nameId.u64
+        match (
+            bo9
+        ) case some then {
+            return bo9
+        } case none then null
+        return (ztypes.declid.create from: 0)
     }
 
     # declSetPending / declIsPending -- the demand mark: a reference found
@@ -1012,13 +1071,8 @@ ZTyping: class {
         found9: ztypes.declid
         if (t.declValid id: parentDeclId) then {
             po9: t.decls.get i: (parentDeclId - 1)
-            if po9.byName.length > 0 then {
-                bo9: po9.byName.get key: nameId.u64
-                match (
-                    bo9
-                ) case some then {
-                    found9 = bo9
-                } case none then null
+            if po9.nameIndex > 0 then {
+                found9 = t.nameIndexLookup slot: po9.nameIndex :nameId
             } else {
                 with cit9: po9.children.iterate do for c9: cit9 loop {
                     if c9.nameId == nameId then found9 = c9.declId
@@ -1319,6 +1373,7 @@ ZTyping: class {
         tname9: u32
         tnode9: u32
         tkind9: declkind.typeDecl
+        tframe9: false
         kids9: (ListVal ztypes.declid)
         {
             if (this.declValid id: templateDeclId) then {
@@ -1326,6 +1381,7 @@ ZTyping: class {
                 tname9 = to9.name
                 tnode9 = to9.node
                 tkind9 = to9.kind
+                tframe9 = to9.unitFrame
                 with cit9: to9.children.iterate do for c9: cit9 loop kids9.append c9.declId
             }
         }
@@ -1334,6 +1390,7 @@ ZTyping: class {
         # FUNCTION is a function, and only a function declaration may own its
         # parameter declarations.
         id9: this.declNew name: tname9 parent: ztypes.declid kind: tkind9 node: tnode9
+        if tframe9 then this.declSetUnitFrame declId: id9
         {
             if (this.declValid id: id9) then {
                 no9: this.decls.getMut i: (id9 - 1)
@@ -2299,8 +2356,10 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingTyperefFrame: (MapVV u64 value: ztypes.declid)
         unitTypesById: (MapVV u64 value: ztypes.tid)
         decls: (List Decl)
+        nameIndexes: (List NameIndex)
         declByTypeId: (MapVV u64 value: ztypes.declid)
         unitRootByName: (MapVV u64 value: ztypes.declid)
+        publicNsByOwner: (MapVV u64 value: ztypes.declid)
         refDecl: (MapVV u64 value: ztypes.declid)
         pendingDefs: (ListVal ztypes.declid)
         enteredUnits: (SetVal u64)
