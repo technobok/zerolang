@@ -300,11 +300,18 @@ ZSymbolTable: class {
 } as {
     # --- frames ---
 
-    # The innermost open frame, or the zero id when none is open.
+    # The innermost open frame that exists as a declaration, or the zero id
+    # when none is open. A block frame that has declared nothing yet has no
+    # row (pushBlock, pushCall): it is transparent to every lookup, so the
+    # nearest enclosing frame that does exist answers for it.
     curFrame: function {:this} out ztypes.declid is {
         n: this.frames.length
-        if n == 0 then return (ztypes.declid.create from: 0)
-        return (this.frames.get i: (n - 1))
+        for n > 0 loop {
+            n = n - 1
+            f: this.frames.get i: n
+            if (f.isZero) == false then return f
+        }
+        return (ztypes.declid.create from: 0)
     }
 
     # Open a frame under the typing's current frame -- the enclosing frame,
@@ -320,6 +327,38 @@ ZSymbolTable: class {
         return f
     }
 
+    # pushLazyFrame -- open a block frame whose row is minted only when it
+    # first declares something (materialiseTop): most blocks, arms, loops
+    # and call brackets never do, and a frame that holds nothing is
+    # invisible to every walk. The model dump wants every frame, so a dump
+    # (and a template walk, whose frames are hidden by id) opens it now.
+    pushLazyFrame: function {:this label: StringView} is {
+        if this.typing.dumpRows then {
+            this.pushFrame :label
+            return
+        }
+        if this.typing.suppressParamStamps then {
+            this.pushFrame :label
+            return
+        }
+        this.frames.append (ztypes.declid.create from: 0)
+        this.frameStarts.append this.entries.length
+        this.frameDefs.append 0
+    }
+
+    # materialiseTop -- give the innermost open frame its row, under the
+    # nearest enclosing frame that has one, and make it the typing's current
+    # frame. A no-op for a frame that already has a row.
+    materialiseTop: function {:this} is {
+        n: this.frames.length
+        if n == 0 then return
+        top: this.frames.get i: (n - 1)
+        if (top.isZero) == false then return
+        f: this.typing.declNewFrame parent: this.typing.curFrame node: 0
+        this.frames.set i: (n - 1) val: f
+        this.typing.curFrame = f
+    }
+
     # push -- open a body frame (a function's, or a mono walk's) named for
     # the dump.
     push: function {:this name: StringView} out u64 is {
@@ -330,13 +369,13 @@ ZSymbolTable: class {
     # depth to pop back to.
     pushBlock: function {:this name: StringView} out u64 is {
         marker: this.frames.length
-        this.pushFrame label: name
+        this.pushLazyFrame label: name
         return marker
     }
 
     pushCall: function {:this} out u64 is {
         marker: this.frames.length
-        this.pushFrame label: ""
+        this.pushLazyFrame label: ""
         return marker
     }
 
@@ -351,7 +390,7 @@ ZSymbolTable: class {
         topIdx: n - 1
         top: this.frames.get i: topIdx
         start: this.frameStarts.get i: topIdx
-        this.snapshotFrame frame: top :start
+        if (top.isZero) == false then this.snapshotFrame frame: top :start
         endIdx: this.entries.length
         # takes of enclosing frames' locals survive the close
         mDecls: (ListVal ztypes.declid)
@@ -382,7 +421,9 @@ ZSymbolTable: class {
         this.frames.pop
         this.frameStarts.pop
         this.frameDefs.pop
-        this.typing.curFrame = this.typing.declParentOf declId: top
+        # a frame that never got a row left the typing's current frame where
+        # it was: at the nearest enclosing frame that has one
+        if (top.isZero) == false then this.typing.curFrame = this.typing.declParentOf declId: top
         mc: mDecls.length
         mi: u64
         for mi < mc loop {
@@ -422,7 +463,7 @@ ZSymbolTable: class {
         this.frames.pop
         this.frameStarts.pop
         this.frameDefs.pop
-        this.typing.curFrame = this.typing.declParentOf declId: top
+        if (top.isZero) == false then this.typing.curFrame = this.typing.declParentOf declId: top
     }
 
     popTo: function {:this marker: u64} is {
@@ -453,6 +494,7 @@ ZSymbolTable: class {
     defineLocal: function {:this nameId: zast.nameid ztypeId: ztypes.tid varId: ztypes.vid} is {
         n: this.frames.length
         if n == 0 then return
+        this.materialiseTop
         topIdx: n - 1
         (this.typing.declNewLocal
             name: nameId.u32
@@ -1236,12 +1278,17 @@ ZSymbolTable: class {
     }
 
     markUnreachable: function {:this} is {
+        this.materialiseTop
         f: this.curFrame
         if (f.isZero) == false then this.unreachableFrames.add item: f.u64
     }
 
     isUnreachable: function {:this} out bool is {
-        f: this.curFrame
+        # the mark is the innermost open frame's own; one that has no row
+        # yet cannot carry it
+        n: this.frames.length
+        if n == 0 then return false
+        f: this.frames.get i: (n - 1)
         if f.isZero then return false
         return (this.unreachableFrames.has item: f.u64)
     }
