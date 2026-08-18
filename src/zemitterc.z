@@ -2500,7 +2500,6 @@ Ctx: class {
     # name-id -> resolved tid (misses cached as 0): the typed model is
     # frozen during emission, so resolution per name id is emit-stable
     resolveByNameC: (MapVV u64 value: u64)
-    unitIdCtr: u64
     mainUnitId: u64
     condDepth: u64
     emitErrors: (List String)
@@ -18145,8 +18144,9 @@ regNameIs: function {symtab: zenv.ZSymbolTable tid: ztypes.tid name: StringView}
     return (symtab.reg.nameIs :tid :name)
 }
 
-# unitIdOf9 -- the interned id for a unit name; 0 when never recorded as a
-# defining unit.
+# unitIdOf9 -- the DECLARATION of the unit with this name; 0 when no type is
+# defined in a unit of that name. A name reaches this only from a source
+# literal or a natives.tbl path -- identity itself travels as the declid.
 unitIdOf9: function {ctx: Ctx.view name: StringView} out u64 is {
     g9: ctx.unitIdByName.get key: name.asString
     match (
@@ -18158,7 +18158,7 @@ unitIdOf9: function {ctx: Ctx.view name: StringView} out u64 is {
     }
 }
 
-# defUnitIdOf9 -- the interned defining-unit id for tid (0 when none).
+# defUnitIdOf9 -- the DECLARATION of the unit that defines tid (0 when none).
 defUnitIdOf9: function {ctx: Ctx.view tid: ztypes.tid} out u64 is {
     g9: ctx.defUnitId.get key: tid
     match (
@@ -20375,7 +20375,6 @@ emitC: function {
         unitKeysC: (List String)
         unitCacheBuilt: false
         resolveByNameC: (MapVV u64 value: u64)
-        unitIdCtr: 0
         mainUnitId: 0
         condDepth: 0
         emitErrors: (List String)
@@ -21217,47 +21216,39 @@ isGenericType: function {symtab: zenv.ZSymbolTable tid: ztypes.tid} out bool is 
     return (symtab.reg.isGenericOf :tid)
 }
 
-# internUnitId9 -- the interned id for a unit name; minted on first sight.
-# Ids are >= 1, so 0 is the "no defining unit recorded" sentinel.
-internUnitId9: function {ctx: Ctx name: StringView} out u64 is {
-    {
-        g9: ctx.unitIdByName.get key: name.asString
-        match (
-            g9
-        ) case some then {
-            return g9
-        } case none then null
-    }
-    ctx.unitIdCtr = ctx.unitIdCtr + 1
-    nid9: ctx.unitIdCtr
-    k9: name.string
-    ctx.unitIdByName.set key: k9 value: nid9
-    return nid9
-}
 
-# buildDefUnitIndex -- snapshot tid -> interned defining-unit id once per
-# emission, derived off the Decl chain (immutable during emission);
-# zero-alloc id lookups then serve the hot definedInNonMain path.
+# buildDefUnitIndex -- snapshot tid -> defining-unit DECLARATION once per
+# emission (the Decl chain is immutable during emission); zero-alloc id
+# lookups then serve the hot definedInNonMain path. Interning a fresh integer
+# per unit NAME collapsed two units that share a spelling into one id.
 buildDefUnitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx} is {
     t9: u64
     n9: symtab.reg.nextTypeId
     for t9 < n9 loop {
-        dnm9: (ztypecheck.unitNameOfTid
+        udd9: (ztypecheck.unitDeclOfTid
             ty: symtab.typing
             reg: symtab.reg
             tid: (ztypes.tid.create from: t9.u64)
         )
-        if dnm9.length > 0 then {
-            uid9: internUnitId9 :ctx name: dnm9.stringview
-            ctx.defUnitId.set key: t9 value: uid9
+        if (udd9.isZero) == false then {
+            ctx.defUnitId.set key: t9 value: udd9.u64
+            # the name index is the DOOR for the four stdlib units the emitter
+            # names outright and for the unit names loadNativeTbl parses out of
+            # natives.tbl paths; the IDENTITY above is a declaration either way
+            dnm9: (ztypecheck.unitNameOfTid
+                ty: symtab.typing
+                reg: symtab.reg
+                tid: (ztypes.tid.create from: t9.u64)
+            )
+            if dnm9.length > 0 then ctx.unitIdByName.set key: dnm9 value: udd9.u64
         }
         t9 = t9 + 1
     }
 }
 
-# ctxBindMain -- rebind the emission main unit: mainName plus its interned
-# id. Every mainName assignment must route here so mainUnitId never goes
-# stale (definedInNonMain compares against it).
+# ctxBindMain -- rebind the emission main unit: mainName plus its unit
+# DECLARATION. Every mainName assignment must route here so mainUnitId never
+# goes stale (definedInNonMain compares against it).
 ctxBindMain: function {ctx: Ctx name: StringView} is {
     nm9: name.string
     ctx.mainName = nm9
