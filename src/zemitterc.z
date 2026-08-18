@@ -2596,6 +2596,7 @@ Ctx: class {
     idMapROriginTid: ztypes.tid
     idMapVOriginTid: ztypes.tid
     idSetOriginTid: ztypes.tid
+    idSetIterOriginTid: ztypes.tid
     mapEntryOriginTid: ztypes.tid
     listIterOriginTid: ztypes.tid
     listIterValOriginTid: ztypes.tid
@@ -10569,6 +10570,11 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     eidc9: "\{bn2}\{accB2}capacity"
                     return eidc9
                 }
+                if mn2.stringview == "iterate" then {
+                    idcb9: ctxCname :ctx tid: bstamp
+                    eidi9: "\{idcb9}_iterate(\{recvB2})"
+                    return eidi9
+                }
             }
             if (isSetOriginOf :symtab :ctx tid: bstamp) then {
                 if mn2.stringview == "length" then {
@@ -17933,6 +17939,7 @@ isCollectionOriginTid: function {ctx: Ctx.view originTid: ztypes.tid} out bool i
     if originTid == ctx.idMapROriginTid then return true
     if originTid == ctx.idMapVOriginTid then return true
     if originTid == ctx.idSetOriginTid then return true
+    if originTid == ctx.idSetIterOriginTid then return true
     if originTid == ctx.mapOriginTid then return true
     if originTid == ctx.mapRVOriginTid then return true
     if originTid == ctx.mapVROriginTid then return true
@@ -20337,6 +20344,7 @@ emitC: function {
     idMapROriginTid: ztypes.tid
     idMapVOriginTid: ztypes.tid
     idSetOriginTid: ztypes.tid
+    idSetIterOriginTid: ztypes.tid
     mapEntryOriginTid: ztypes.tid
     listIterOriginTid: ztypes.tid
     listIterValOriginTid: ztypes.tid
@@ -20404,6 +20412,11 @@ emitC: function {
             base: "IdMapV"
         )
         idSetOriginTid = ztypes.tid.create from: (builtinTid ast: program.ast :symtab base: "IdSet")
+        idSetIterOriginTid = ztypes.tid.create from: (builtinTid
+            ast: program.ast
+            :symtab
+            base: "IdSetIter"
+        )
         mapEntryOriginTid = ztypes.tid.create from: (builtinTid
             ast: program.ast
             :symtab
@@ -20644,6 +20657,7 @@ emitC: function {
         :idMapROriginTid
         :idMapVOriginTid
         :idSetOriginTid
+        :idSetIterOriginTid
         :mapEntryOriginTid
         :listIterOriginTid
         :listIterValOriginTid
@@ -22398,13 +22412,28 @@ emitIdSetMono: function {
         name: elemName.stringview
         tid: (ztypes.tid.create from: elemTid.u64)
     )
+    siId: monoMethodReturn :symtab :monoId nameId: zast.wkIterate
+    if siId == 0 then return
+    ovId: (monoMethodReturn
+        :symtab
+        monoId: (ztypes.tid.create from: siId.u64)
+        nameId: zast.wkCall
+    )
+    if ovId == 0 then return
+    ovName: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: ovId.u64)
+    ov: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: ovId.u64)
+    ovu: cUpperOf text: ovName.stringview
+    si: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: siId.u64)
     p: "\{runtimeDir}/z_IdSet.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringview
     if raw.length == 0 then return
     t1: applyTmpl text: raw key: "NAME" val: nm.stringview
     t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringview
     t3: applyTmpl text: t2 key: "ITEM_T" val: itemT.stringview
-    buf.append t3
+    t4: applyTmpl text: t3 key: "IDSETITER" val: si.stringview
+    t5: applyTmpl text: t4 key: "OPTIONVIEW" val: ov.stringview
+    t6: applyTmpl text: t5 key: "OPTIONVIEW_TAG" val: ovu.stringview
+    buf.append t6
     buf.append "\n"
 }
 

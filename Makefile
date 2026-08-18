@@ -596,7 +596,9 @@ shadow-guard:
 # declared type to pick its C literal suffix, through the same wrapper. 93 ->
 # 97 for the IdMap/IdSet mono emitters, which reach cTypeForNameTid for their
 # key, value and element types exactly as emitMapMono and emitSetMono do -- the
-# same sanctioned shape, in a new family rather than a new kind of lookup.
+# same sanctioned shape, in a new family rather than a new kind of lookup. 97 ->
+# 98 for emitIdSetMono's iterator leg, which names the OptionView its `call`
+# returns to build the tag macro, exactly as emitSetMono does.
 # The last two pin where C names are BUILT: the type checker composes none, and
 # the emitter spells the z_t{id} shape only inside its one composer, which the
 # per-program table in emitC calls once per type.
@@ -622,7 +624,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 22; \
 	chk "userFnId" "$$e4" 32; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "typeNameOfReg9" "$$e6" 97; \
+	chk "typeNameOfReg9" "$$e6" 98; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 4; \
 	chk "monoOriginName" "$$e9" 8; \
@@ -1013,7 +1015,8 @@ member-guard:
 VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:MapRR \
   z_MapIter.c.tmpl=@@NAME@@:MapRR,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
   z_Set.c.tmpl=@@NAME@@:SetRef,@@SETITER@@:SetIter \
-  z_IdMap.c.tmpl=@@NAME@@:IdMapR z_IdSet.c.tmpl=@@NAME@@:IdSet
+  z_IdMap.c.tmpl=@@NAME@@:IdMapR \
+  z_IdSet.c.tmpl=@@NAME@@:IdSet,@@IDSETITER@@:IdSetIter
 VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get getMut:ListRef.getMut,ListView.getMut \
   contains:ListRef.contains \
   listview:ListRef.listview sort:ListRef.sort iterate:ListRef.iterate \
