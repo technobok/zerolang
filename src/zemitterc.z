@@ -2493,7 +2493,11 @@ Ctx: class {
     readableNames: bool
     tailRetActive: bool
     defUnitId: (MapVV u64 value: u64)
-    unitIdByName: (MapRV String value: u64)
+    # the four stdlib units the emitter names outright, resolved once
+    ioUnitDecl: u64
+    osUnitDecl: u64
+    cliUnitDecl: u64
+    netUnitDecl: u64
     unitTidsC: (ListVal ztypes.tid)
     unitKeysC: (List String)
     unitCacheBuilt: bool
@@ -18144,18 +18148,22 @@ regNameIs: function {symtab: zenv.ZSymbolTable tid: ztypes.tid name: StringView}
     return (symtab.reg.nameIs :tid :name)
 }
 
-# unitIdOf9 -- the DECLARATION of the unit with this name; 0 when no type is
-# defined in a unit of that name. A name reaches this only from a source
-# literal or a natives.tbl path -- identity itself travels as the declid.
-unitIdOf9: function {ctx: Ctx.view name: StringView} out u64 is {
-    g9: ctx.unitIdByName.get key: name.asString
-    match (
-        g9
-    ) case some then {
-        return g9
-    } case none then {
-        return 0
-    }
+# unitDeclByName9 -- the file unit spelled `name`, asked of the ENVIRONMENT:
+# the program root's own children, which IS the list of units in scope. A name
+# reaches this only from a source literal, a unit segment loadNativeTbl parsed
+# out of a natives.tbl path, or the main-unit binding -- identity itself
+# travels as a declid. Answering from the declaration tree rather than a side
+# index means there is nothing to go stale and nothing silently overwritten
+# when two files declare the same unit name.
+unitDeclByName9: function {
+    symtab: zenv.ZSymbolTable.view
+    ast: Ast.view
+    name: StringView
+} out u64 is {
+    return (ztypecheck.unitDeclOfNameId
+        ty: symtab.typing
+        nameId: (zast.poolFind pool: ast.names text: name)
+    ).u64
 }
 
 # defUnitIdOf9 -- the DECLARATION of the unit that defines tid (0 when none).
@@ -19190,6 +19198,7 @@ emitFnsPass: function {
             uIdx9e = uIdx9e + 1
             opId9: zast.nodeid
             un9: String
+            un9Id: zast.nameid
             {
                 u: program.ast.nodes.get i: uId9.u64
                 if u.namedoperation then {
@@ -19197,12 +19206,18 @@ emitFnsPass: function {
                     if (isEmittableUnitFns name: un.stringview) then {
                         opId9 = u.operation
                         un9 = un.copy
+                        un9Id = u.name
                     }
                 }
             }
             if opId9 > 0 then {
                 sm: ctx.mainName.copy
-                ctxBindMain :ctx name: un9.stringview
+                smD9: ctx.mainUnitId
+                (ctxBindMain
+                    :ctx
+                    name: un9.stringview
+                    unitDecl: (ztypecheck.unitDeclOfNameId ty: symtab.typing nameId: un9Id).u64
+                )
                 isTpl9: isGenericTemplateUnitOp ast: program.ast opId: opId9
                 if isTpl9 then {
                     (emitUnitMonoInstances
@@ -19225,7 +19240,7 @@ emitFnsPass: function {
                         :buf
                     )
                 }
-                ctxBindMain :ctx name: sm.stringview
+                ctxBindMain :ctx name: sm.stringview unitDecl: smD9
             }
         }
     } else null
@@ -19884,6 +19899,7 @@ collectUnitLiterals: function {
             uIdx9f = uIdx9f + 1
             opId9: zast.nodeid
             un9: String
+            un9Id: zast.nameid
             {
                 u: program.ast.nodes.get i: uId9.u64
                 if u.namedoperation then {
@@ -19891,6 +19907,7 @@ collectUnitLiterals: function {
                     if (isEmittableUnitFns name: un.stringview) then {
                         opId9 = u.operation
                         un9 = un.copy
+                        un9Id = u.name
                     }
                 }
             }
@@ -20370,7 +20387,10 @@ emitC: function {
         constLits: (List String)
         tailRetActive: false
         defUnitId: (MapVV u64 value: u64)
-        unitIdByName: (MapRV String value: u64)
+        ioUnitDecl: 0
+        osUnitDecl: 0
+        cliUnitDecl: 0
+        netUnitDecl: 0
         unitTidsC: (ListVal ztypes.tid)
         unitKeysC: (List String)
         unitCacheBuilt: false
@@ -20486,9 +20506,18 @@ emitC: function {
         }
     }
     loadNativeTbl :ctx :runtimeDir
-    buildDefUnitIndex :symtab :ctx
-    bindFragTypeTids9 :symtab :ctx
-    ctxBindMain :ctx name: ctx.realMain.stringview
+    match (
+        program
+    ) case program then {
+        buildDefUnitIndex :symtab :ctx ast: program.ast
+        bindFragTypeTids9 :symtab :ctx ast: program.ast
+        rmn9: ctx.realMain.copy
+        (ctxBindMain
+            :ctx
+            name: rmn9.stringview
+            unitDecl: (unitDeclByName9 :symtab ast: program.ast name: rmn9.stringview)
+        )
+    } else null
     checkMainNatives :program :ctx
     fillDataElems :program :symtab :ctx
     fillNeeds :program :symtab :ctx
@@ -21221,7 +21250,7 @@ isGenericType: function {symtab: zenv.ZSymbolTable tid: ztypes.tid} out bool is 
 # emission (the Decl chain is immutable during emission); zero-alloc id
 # lookups then serve the hot definedInNonMain path. Interning a fresh integer
 # per unit NAME collapsed two units that share a spelling into one id.
-buildDefUnitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx} is {
+buildDefUnitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx ast: Ast.view} is {
     t9: u64
     n9: symtab.reg.nextTypeId
     for t9 < n9 loop {
@@ -21232,36 +21261,25 @@ buildDefUnitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx} is {
         )
         if (udd9.isZero) == false then {
             ctx.defUnitId.set key: t9 value: udd9.u64
-            # the name index is the DOOR for the four stdlib units the emitter
-            # names outright and for the unit names loadNativeTbl parses out of
-            # natives.tbl paths; the IDENTITY above is a declaration either way
-            dnm9: (ztypecheck.unitNameOfTid
-                ty: symtab.typing
-                reg: symtab.reg
-                tid: (ztypes.tid.create from: t9.u64)
-            )
-            if dnm9.length > 0 then ctx.unitIdByName.set key: dnm9 value: udd9.u64
         }
         t9 = t9 + 1
     }
+    ctx.ioUnitDecl = unitDeclByName9 :symtab :ast name: "io"
+    ctx.osUnitDecl = unitDeclByName9 :symtab :ast name: "os"
+    ctx.cliUnitDecl = unitDeclByName9 :symtab :ast name: "cli"
+    ctx.netUnitDecl = unitDeclByName9 :symtab :ast name: "net"
 }
 
 # ctxBindMain -- rebind the emission main unit: mainName plus its unit
-# DECLARATION. Every mainName assignment must route here so mainUnitId never
-# goes stale (definedInNonMain compares against it).
-ctxBindMain: function {ctx: Ctx name: StringView} is {
+# DECLARATION, which the CALLER supplies. Every caller already holds the unit
+# by id -- off the type it is emitting, off the unit node it is walking, or
+# saved from the bind it is restoring -- so nothing here asks which unit is
+# spelled a given way. Every mainName assignment must route through here so
+# mainUnitId never goes stale (definedInNonMain compares against it).
+ctxBindMain: function {ctx: Ctx name: StringView unitDecl: u64} is {
     nm9: name.string
     ctx.mainName = nm9
-    mid9: u64
-    {
-        g9: ctx.unitIdByName.get key: ctx.mainName
-        match (
-            g9
-        ) case some then {
-            mid9 = g9
-        } case none then null
-    }
-    ctx.mainUnitId = mid9
+    ctx.mainUnitId = unitDecl
 }
 
 # typeHasNativeCreate -- the type's own `create` is declared native, so the
@@ -22415,7 +22433,7 @@ ioFileLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view
 
 # cliClassTypeId -- the type id of a cli-unit CLASS named `name` (0 absent).
 cliClassTypeId: function {symtab: zenv.ZSymbolTable ctx: Ctx.view name: StringView} out u64 is {
-    cliUid9: unitIdOf9 :ctx name: "cli"
+    cliUid9: ctx.cliUnitDecl
     if cliUid9 == 0 then return 0
     last: symtab.reg.nextTypeId
     ti: 1.u64
@@ -22477,7 +22495,7 @@ cliClassIsComposite: function {
 # name that resolves to nothing leaves 0, and the row keeps its member path.
 # The registry scan is the house pattern and runs once over the handful of
 # rows the table demand-types.
-bindFragTypeTids9: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+bindFragTypeTids9: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.view} is {
     last9: symtab.reg.nextTypeId
     i9: u64
     n9: ctx.fragTypeNames.length
@@ -22486,7 +22504,7 @@ bindFragTypeTids9: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
         found9: ztypes.tid
         if tn9.length > 0 then {
             un9: ctx.fragUnits.get i: i9
-            uid9: unitIdOf9 :ctx name: un9.stringview
+            uid9: unitDeclByName9 :symtab :ast name: un9.stringview
             if uid9 > 0 then {
                 ti9: 1.u64
                 for ti9 < last9 loop {
@@ -22616,9 +22634,9 @@ emitIoFileConformance: function {
     ctx: Ctx.view
     buf: String.borrow
 } is {
-    ioUid9: unitIdOf9 :ctx name: "io"
-    osUid9: unitIdOf9 :ctx name: "os"
-    cliUid9: unitIdOf9 :ctx name: "cli"
+    ioUid9: ctx.ioUnitDecl
+    osUid9: ctx.osUnitDecl
+    cliUid9: ctx.cliUnitDecl
     last: symtab.reg.nextTypeId
     ti: 1.u64
     for ti < last loop {
@@ -22696,7 +22714,7 @@ emitIoStdStreams: function {
 # by-value use of File would emit a second struct carrying a generic destructor
 # that never closes the fd.
 emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
-    ioUid9: unitIdOf9 :ctx name: "io"
+    ioUid9: ctx.ioUnitDecl
     last: symtab.reg.nextTypeId
     fid: ztypes.tid
     ti: 1.u64
@@ -22742,7 +22760,7 @@ emitNetFdClass: function {
     name: StringView
     buf: String.borrow
 } is {
-    netUid9: unitIdOf9 :ctx name: "net"
+    netUid9: ctx.netUnitDecl
     last: symtab.reg.nextTypeId
     fid: ztypes.tid
     ti: 1.u64
@@ -22832,7 +22850,16 @@ maybePreEmitElem: function {
     if nm.length == 0 then return
     tt: symtab.reg.typetypeOf typeId: cid
     smPe: ctx.mainName.copy
-    ctxBindMain :ctx name: peUnit.stringview
+    smPeD9: ctx.mainUnitId
+    (ctxBindMain
+        :ctx
+        name: peUnit.stringview
+        unitDecl: (ztypecheck.unitDeclOfTid
+            ty: symtab.typing
+            reg: symtab.reg
+            tid: (ztypes.tid.create from: cid.u64)
+        ).u64
+    )
     if tt == ztypes.ztypetype.variantType then {
         emitOneVariant :ast :symtab :ctx tid: (ztypes.tid.create from: cid.u64) :buf
     }
@@ -22858,7 +22885,7 @@ maybePreEmitElem: function {
     if tt == ztypes.ztypetype.unionType then {
         emitUnionMono :ast :symtab :ctx tid: (ztypes.tid.create from: cid.u64) :buf
     }
-    ctxBindMain :ctx name: smPe.stringview
+    ctxBindMain :ctx name: smPe.stringview unitDecl: smPeD9
 }
 
 # preEmitEmbeddedTypes -- emit the main-unit user types a variant/record/class
@@ -23287,10 +23314,15 @@ emitUserTypeById: function {
     if nm.length == 0 then return
     duo: definedInUnitOf :symtab :tid
     sm: ctx.mainName.copy
+    smD9: ctx.mainUnitId
     match (
         duo
     ) case some then {
-        ctxBindMain :ctx name: duo.stringview
+        (ctxBindMain
+            :ctx
+            name: duo.stringview
+            unitDecl: (ztypecheck.unitDeclOfTid ty: symtab.typing reg: symtab.reg :tid).u64
+        )
     } case none then null
     tt: symtab.reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.variantType then (emitOneVariant
@@ -23327,7 +23359,7 @@ emitUserTypeById: function {
     if tt == ztypes.ztypetype.facetType then {
         emitOneFacet :ast :symtab :ctx :tid :buf
     }
-    ctxBindMain :ctx name: sm.stringview
+    ctxBindMain :ctx name: sm.stringview unitDecl: smD9
 }
 
 # emitMonoById -- emit one late collection/variant mono by id (dispatch on origin).
@@ -24402,17 +24434,24 @@ emitRecordDefs: function {
                 uIdx9h = uIdx9h + 1
                 opId9: zast.nodeid
                 un9: String
+                un9Id: zast.nameid
                 {
                     u: program.ast.nodes.get i: uId9.u64
                     if u.namedoperation then {
                         un: zast.poolTextAt pool: program.ast.names ref: u.name
                         opId9 = u.operation
                         un9 = un.copy
+                        un9Id = u.name
                     }
                 }
                 if opId9 > 0 then {
                     sm: ctx.mainName.copy
-                    ctxBindMain :ctx name: un9.stringview
+                    smD9: ctx.mainUnitId
+                    (ctxBindMain
+                        :ctx
+                        name: un9.stringview
+                        unitDecl: (ztypecheck.unitDeclOfNameId ty: symtab.typing nameId: un9Id).u64
+                    )
                     (emitRecordDefsIn
                         :symtab
                         :ctx
@@ -24421,7 +24460,7 @@ emitRecordDefs: function {
                         phase: ph
                         :buf
                     )
-                    ctxBindMain :ctx name: sm.stringview
+                    ctxBindMain :ctx name: sm.stringview unitDecl: smD9
                 }
             }
             ph = ph + 1
