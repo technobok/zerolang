@@ -2462,7 +2462,6 @@ Ctx: class {
     # other flat name was a member of `system` or of `collections`.
     needUnits: (List String)
     needMembs: (List String)
-    methodReturns: (Map String value: String)
     dataElems: (MapVR ztypes.tid value: String)
     dataConst: (MapVR dataconstkey value: String)
     dataSlot: (MapVR dataslotkey value: String)
@@ -11071,14 +11070,6 @@ numericFormatName: function {
     ctx: Ctx.view
     tn: StringView
 } out String is {
-    mrk: tn
-    mro: ctx.methodReturns.get key: mrk.asString
-    match (
-        mro
-    ) case some then {
-        mrv: mro.stringview
-        return (numericFormatName :ast :symtab :ctx tn: mrv)
-    } case none then null
     if (isIntName name: tn) then {
         r0: tn.string
         return r0
@@ -18368,6 +18359,40 @@ literalSuffixBase: function {
     return "".string
 }
 
+# checkMainNatives -- drive checkNativesResolve over the main unit. This rode
+# inside fillMethodReturns until that table turned out to be unreadable; the
+# CHECK was never part of the table's job and stays.
+checkMainNatives: function {program: Node ctx: Ctx} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        unitName: mainName
+        uCnt9c: program.ast.units.length
+        uIdx9c: u64
+        for uIdx9c < uCnt9c loop {
+            uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9c))
+            uIdx9c = uIdx9c + 1
+            opId9: zast.nodeid
+            {
+                u: program.ast.nodes.get i: uId9.u64
+                if u.namedoperation then {
+                    un: zast.poolTextAt pool: program.ast.names ref: u.name
+                    if un.stringview == mainName then opId9 = u.operation
+                }
+            }
+            if opId9 > 0 then {
+                (checkNativesResolve
+                    ast: program.ast
+                    :ctx
+                    mainOpId: opId9
+                    :unitName
+                )
+            }
+        }
+    } else null
+}
+
 # checkNativesResolve -- every `is native` declaration in the MAIN unit must
 # name a row in natives.tbl. `is native` says the compiler supplies the body, and
 # this is where that claim is checked: at the declaration, whether or not anyone
@@ -18428,9 +18453,6 @@ checkNativesResolve: function {
     }
 }
 
-# fillMethodReturns -- record each main-unit type method's return
-# format name (TypeName.method -> i64/f64/...), so interpolation can
-# format auto-call results whose node carries only a FUNCTION stamp.
 fillDataElems: function {program: Node symtab: zenv.ZSymbolTable.view ctx: Ctx.view} is {
     match (
         program
@@ -18914,96 +18936,6 @@ scanNeeds: function {
     } else null
 }
 
-# record every method's return type for the program.
-fillMethodReturns: function {program: Node ctx: Ctx} is {
-    match (
-        program
-    ) case program then {
-        mainName: program.mainUnitName.stringview
-        unitName: mainName
-        uCnt9c: program.ast.units.length
-        uIdx9c: u64
-        for uIdx9c < uCnt9c loop {
-            uId9: (zast.nodeid.create from: (program.ast.units.get i: uIdx9c))
-            uIdx9c = uIdx9c + 1
-            opId9: zast.nodeid
-            {
-                u: program.ast.nodes.get i: uId9.u64
-                if u.namedoperation then {
-                    un: zast.poolTextAt pool: program.ast.names ref: u.name
-                    if un.stringview == mainName then opId9 = u.operation
-                }
-            }
-            if opId9 > 0 then {
-                (fillMethodReturnsIn
-                    :ctx
-                    ast: program.ast
-                    mainOpId: opId9
-                )
-                (checkNativesResolve
-                    ast: program.ast
-                    :ctx
-                    mainOpId: opId9
-                    :unitName
-                )
-            }
-        }
-    } else null
-}
-
-# record a unit's method return types.
-fillMethodReturnsIn: function {
-    ctx: Ctx.view
-    ast: Ast.view
-    mainOpId: zast.nodeid
-} is {
-    bodyIds9: zast.unitBodyIdsAt :ast unitId: mainOpId
-    with biter: bodyIds9.iterate do for bm: biter loop {
-        bmNode9: ast.nodes.get i: bm.u64
-        if bmNode9.namedoperation then {
-            tnm: zast.nameTextAt :ast ref: bmNode9.name
-            (fillTypeMethodReturns
-                :ast
-                :ctx
-                typeName: tnm.stringview
-                op: (ast.nodes.get i: bmNode9.operation.u64)
-            )
-        }
-    }
-}
-
-# record one type's method return types.
-fillTypeMethodReturns: function {
-    ast: Ast.view
-    ctx: Ctx
-    typeName: StringView
-    op: Node.view
-} is {
-    match (
-        op
-    ) case objectdef then {
-        with aiter: op.asItems.iterate do for amId9: aiter loop {
-            am: ast.nodes.get i: amId9.u64
-            match (
-                am
-            ) case namedoperation then {
-                if (isFunctionDefWithBody9 n: (ast.nodes.get i: am.operation.u64)) then {
-                    mnm: zast.nameTextAt :ast ref: am.name
-                    rbn: (ztypecheck.fnReturnBaseNameOf
-                        :ast
-                        op: (ast.nodes.get i: am.operation.u64)
-                    )
-                    if rbn.length > 0 then {
-                        k9: "\{typeName}.\{mnm}"
-                        rbv: rbn.stringview
-                        v9: rbv.string
-                        ctx.methodReturns.set key: k9 value: v9
-                    }
-                }
-            } else null
-        }
-    } else null
-}
 
 # emitFns -- the main unit's function declarations then definitions
 # (two-phase index walk so the body list is free during emission).
@@ -20449,7 +20381,6 @@ emitC: function {
         emitErrors: (List String)
         needUnits: (List String)
         needMembs: (List String)
-        methodReturns: (Map String value: String)
         dataElems: (MapVR ztypes.tid value: String)
         dataConst: (MapVR dataconstkey value: String)
         dataSlot: (MapVR dataslotkey value: String)
@@ -20559,7 +20490,7 @@ emitC: function {
     buildDefUnitIndex :symtab :ctx
     bindFragTypeTids9 :symtab :ctx
     ctxBindMain :ctx name: ctx.realMain.stringview
-    fillMethodReturns :program :ctx
+    checkMainNatives :program :ctx
     fillDataElems :program :symtab :ctx
     fillNeeds :program :symtab :ctx
     nodeEstE9: u64
