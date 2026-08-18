@@ -1,0 +1,113 @@
+/* IdSet -- an append-only set of unsigned scalar ids.
+
+   z_IdMap.c.tmpl without the value column; see that file for why there is no
+   `alive` byte, no stored hash, no DELETED sentinel and no free(p), and for
+   the reasoning behind the index function and the small mode. */
+
+#define Z_@@MACRO@@_SMALL_MAX 16
+
+typedef struct z_@@NAME@@_t {
+    uint32_t length;
+    uint32_t capacity;
+    uint32_t* indices;
+    @@ITEM_T@@* items;
+} z_@@NAME@@_t;
+
+static uint64_t z_@@NAME@@_slot(@@ITEM_T@@ _item);
+static uint64_t z_@@NAME@@_slot(@@ITEM_T@@ _item) {
+    return (((uint64_t)_item) * 0x9E3779B97F4A7C15ULL) >> 32;
+}
+
+static uint32_t z_@@NAME@@_items_cap(uint32_t _capacity);
+static uint32_t z_@@NAME@@_items_cap(uint32_t _capacity) {
+    return (uint32_t)((((uint64_t)_capacity) * 2u) / 3u);
+}
+
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* p);
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* p) {
+    if (!p) return;
+    free(p->indices);
+    free(p->items);
+    /* NO free(p) -- the struct is on the stack */
+}
+
+static z_@@NAME@@_t z_@@NAME@@_create(uint64_t _capacity);
+static z_@@NAME@@_t z_@@NAME@@_create(uint64_t _capacity) {
+    z_@@NAME@@_t _this = {0};
+    if (_capacity > 0) {
+        uint32_t _p2 = 8;
+        while ((uint64_t)z_@@NAME@@_items_cap(_p2) < _capacity && _p2 < 0x40000000u) {
+            _p2 <<= 1;
+        }
+        _this.capacity = _p2;
+        _this.items = (@@ITEM_T@@*)z_xcalloc(z_@@NAME@@_items_cap(_p2), sizeof(@@ITEM_T@@));
+        if (_p2 > Z_@@MACRO@@_SMALL_MAX) {
+            _this.indices = (uint32_t*)z_xcalloc(_p2, sizeof(uint32_t));
+        }
+    }
+    return _this;
+}
+
+static void z_@@NAME@@_grow(z_@@NAME@@_t* _this);
+static void z_@@NAME@@_grow(z_@@NAME@@_t* _this) {
+    uint32_t _new_cap = _this->capacity == 0 ? 8 : _this->capacity * 2;
+    _this->items = (@@ITEM_T@@*)z_xrealloc(_this->items,
+        (size_t)z_@@NAME@@_items_cap(_new_cap) * sizeof(@@ITEM_T@@));
+    _this->capacity = _new_cap;
+    free(_this->indices);
+    _this->indices = NULL;
+    if (_new_cap > Z_@@MACRO@@_SMALL_MAX) {
+        _this->indices = (uint32_t*)z_xcalloc(_new_cap, sizeof(uint32_t));
+        for (uint32_t i = 0; i < _this->length; i++) {
+            uint64_t probe = z_@@NAME@@_slot(_this->items[i]) & (_new_cap - 1);
+            while (_this->indices[probe]) probe = (probe + 1) & (_new_cap - 1);
+            _this->indices[probe] = i + 1;
+        }
+    }
+}
+
+static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@ITEM_T@@ _item, uint64_t* _slot_out);
+static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@ITEM_T@@ _item, uint64_t* _slot_out) {
+    if (!_this->indices) {
+        for (uint32_t i = 0; i < _this->length; i++) {
+            if (_this->items[i] == _item) return (int64_t)i;
+        }
+        return -1;
+    }
+    uint64_t _mask = _this->capacity - 1;
+    uint64_t probe = z_@@NAME@@_slot(_item) & _mask;
+    for (uint32_t i = 0; i < _this->capacity; i++) {
+        uint32_t slot = _this->indices[probe];
+        if (slot == 0) {
+            if (_slot_out) *_slot_out = probe;
+            return -1;
+        }
+        if (_this->items[slot - 1] == _item) {
+            if (_slot_out) *_slot_out = probe;
+            return (int64_t)(slot - 1);
+        }
+        probe = (probe + 1) & _mask;
+    }
+    return -1;
+}
+
+/* 1 when the item was newly added, 0 when it was already present */
+static int z_@@NAME@@_add(z_@@NAME@@_t* _this, @@ITEM_T@@ _item);
+static int z_@@NAME@@_add(z_@@NAME@@_t* _this, @@ITEM_T@@ _item) {
+    uint64_t _slot = 0;
+    if (z_@@NAME@@_find(_this, _item, &_slot) >= 0) return 0;
+    if ((uint64_t)(_this->length + 1) * 3 >= (uint64_t)_this->capacity * 2) {
+        z_@@NAME@@_grow(_this);
+        z_@@NAME@@_find(_this, _item, &_slot);
+    }
+    uint32_t pos = _this->length;
+    _this->items[pos] = _item;
+    _this->length++;
+    if (_this->indices) _this->indices[_slot] = pos + 1;
+    return 1;
+}
+
+static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@ITEM_T@@ _item);
+static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@ITEM_T@@ _item) {
+    return z_@@NAME@@_find(_this, _item, NULL) >= 0;
+}

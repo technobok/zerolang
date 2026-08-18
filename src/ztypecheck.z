@@ -4004,6 +4004,11 @@ isBorrowReftypeCollection: function {name: StringView} out bool is {
     if name == "ListVal" then return true
     if name == "ListView" then return true
     if name == "ListViewVal" then return true
+    # the id-keyed containers are stack structs too -- a header plus two heap
+    # arrays, created BY VALUE -- so they take the same borrow default
+    if name == "IdMapR" then return true
+    if name == "IdMapV" then return true
+    if name == "IdSet" then return true
     return false
 }
 
@@ -7922,6 +7927,9 @@ resolveClass: function {
                         if defName == "MapRV" then famF3 = true
                         if defName == "MapVR" then famF3 = true
                         if defName == "MapVV" then famF3 = true
+                        if defName == "IdMapR" then famF3 = true
+                        if defName == "IdMapV" then famF3 = true
+                        if defName == "IdSet" then famF3 = true
                         if unitDecl == ty.collectionsUnitRoot when famF3 then {
                             prodSkipL: false
                             if fname.stringview == "create" then prodSkipL = true
@@ -14393,7 +14401,9 @@ mintMonoIn: function {
     # frees it; the emitter builds the cname). Collections own native heap;
     # Option/Result own a heap box. A user generic whose template already has a
     # destructor inherits one. Map/Set own native heap too (freed via a `&`-less
-    # heap-pointer destroy). Views (ListView/OptionView) own no heap -- excluded.
+    # heap-pointer destroy), and IdMap/IdSet own their two arrays but not their
+    # header, so they free like a List does. Views (ListView/OptionView) own no
+    # heap -- excluded.
     needsDtorM: false
     if templateId == (builtinTidT :ast :ty :reg base: "ListRef") then needsDtorM = true
     if templateId == (builtinTidT :ast :ty :reg base: "ListVal") then needsDtorM = true
@@ -14405,6 +14415,9 @@ mintMonoIn: function {
     if templateId == (builtinTidT :ast :ty :reg base: "MapVV") then needsDtorM = true
     if templateId == (builtinTidT :ast :ty :reg base: "SetRef") then needsDtorM = true
     if templateId == (builtinTidT :ast :ty :reg base: "SetVal") then needsDtorM = true
+    if templateId == (builtinTidT :ast :ty :reg base: "IdMapR") then needsDtorM = true
+    if templateId == (builtinTidT :ast :ty :reg base: "IdMapV") then needsDtorM = true
+    if templateId == (builtinTidT :ast :ty :reg base: "IdSet") then needsDtorM = true
     if needsDtorM then {
         mdnM: "\{name}_destroy"
         (reg.setDestructorName
@@ -14884,6 +14897,7 @@ constraintKindFor: function {text: StringView} out ztypes.constraintkind is {
     if text == "AnyRef" then return ztypes.constraintkind.refType
     if text == "valhashable" then return ztypes.constraintkind.valHashable
     if text == "RefHashable" then return ztypes.constraintkind.refHashable
+    if text == "idkey" then return ztypes.constraintkind.idKey
     # the pre-rename casings, mapped for the same reason as Any.valtype below
     if text == "AnyVal" then return ztypes.constraintkind.valType
     if text == "ValHashable" then return ztypes.constraintkind.valHashable
@@ -14926,6 +14940,7 @@ constraintTextOf: function {desc: ztypes.constraintdesc} out String is {
     if desc.kind == ztypes.constraintkind.refType then return "AnyRef".string
     if desc.kind == ztypes.constraintkind.valHashable then return "valhashable".string
     if desc.kind == ztypes.constraintkind.refHashable then return "RefHashable".string
+    if desc.kind == ztypes.constraintkind.idKey then return "idkey".string
     if desc.kind == ztypes.constraintkind.stringLike then return "StringLike".string
     if desc.kind == ztypes.constraintkind.any then return "Any".string
     if desc.kind == ztypes.constraintkind.numeric then {
@@ -15008,6 +15023,11 @@ checkConstraintSat: function {
         if (reg.isReftypeOf tid: argTid) then {
             ok9 = typeIsHashable :ast :ty :reg tid: (ztypes.tid.create from: argTid.u64)
         }
+    }
+    # an id key is not merely hashable: the container indexes on its BITS, so
+    # the bound admits only the scalars whose bits are an index
+    if ck9 == ztypes.constraintkind.idKey then {
+        ok9 = typeIsIdKey :ast :ty :reg tid: (ztypes.tid.create from: argTid.u64)
     }
     if ck9 == ztypes.constraintkind.stringLike then {
         okSL9: false
@@ -15147,6 +15167,36 @@ typeIsHashable: function {
         nameId: (zast.nameid.create from: zast.wkHash)
     ) == false then return false
     return (ty.declIsMethodId parentTypeId: htd9 nameId: (zast.nameid.create from: zast.wkOpEq))
+}
+
+# typeIsIdKey -- the type is one of the six unsigned scalars an IdMap / IdSet
+# may index on. Asked of the chain-end base, exactly as typeIsHashable is: an
+# id space is a typedef over an unsigned scalar (`declid` over u64, `nameid`
+# over u32) and collapses to that scalar in the emitted C, so what the wrapper
+# is called never enters the question. The six are listed on `system.idkey`;
+# this is the predicate that reads them, and the two must agree.
+typeIsIdKey: function {
+    ast: Ast.view
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    tid: ztypes.tid
+} out bool is {
+    if tid.isZero then return false
+    ktd9: tid
+    for true loop {
+        bo9: ty.typedefBaseTid.get key: ktd9
+        match (
+            bo9
+        ) case some then {
+            ktd9 = ztypes.tid.create from: (bo9)
+        } case none then break
+    }
+    if ktd9 == (builtinTidT :ast :ty :reg base: "u8") then return true
+    if ktd9 == (builtinTidT :ast :ty :reg base: "u16") then return true
+    if ktd9 == (builtinTidT :ast :ty :reg base: "u32") then return true
+    if ktd9 == (builtinTidT :ast :ty :reg base: "u64") then return true
+    if ktd9 == (builtinTidT :ast :ty :reg base: "c8") then return true
+    return ktd9 == (builtinTidT :ast :ty :reg base: "c32")
 }
 
 # heapOwningValtypeTid -- a RECORD/VARIANT that transitively owns heap
@@ -15605,6 +15655,9 @@ mintCollectionChildrenIn: function {
     mapRVTid: builtinTidT :ast :ty :reg base: "MapRV"
     mapVRTid: builtinTidT :ast :ty :reg base: "MapVR"
     mapVVTid: builtinTidT :ast :ty :reg base: "MapVV"
+    idMapRTid: builtinTidT :ast :ty :reg base: "IdMapR"
+    idMapVTid: builtinTidT :ast :ty :reg base: "IdMapV"
+    idSetTid: builtinTidT :ast :ty :reg base: "IdSet"
     mapEntryTid: builtinTidT :ast :ty :reg base: "MapEntry"
     strTid: builtinTidT :ast :ty :reg base: "str"
     arrayTid: builtinTidT :ast :ty :reg base: "array"
@@ -15647,6 +15700,9 @@ mintCollectionChildrenIn: function {
     if templateId == mapRVTid then isColl = true
     if templateId == mapVRTid then isColl = true
     if templateId == mapVVTid then isColl = true
+    if templateId == idMapRTid then isColl = true
+    if templateId == idMapVTid then isColl = true
+    if templateId == idSetTid then isColl = true
     if templateId == mapEntryTid then isColl = true
     if templateId == mapEntryRVTid then isColl = true
     if templateId == mapEntryVRTid then isColl = true
@@ -15727,6 +15783,23 @@ mintCollectionChildrenIn: function {
     if templateId == mapVRTid then isMapTpl9 = true
     if templateId == mapVVTid then isMapTpl9 = true
     if isMapTpl9 when valArg > 0 then {
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity childTypeId: u64id
+        return
+    }
+    # the id-keyed pair, for the same reason the Map forms are here: their
+    # real returns are declared and the clone pass heals them, so only the
+    # length/capacity counters need their canonical u64 stamped on the mono.
+    # IdSet has no value parameter, so it is tested on its own.
+    isIdMapTpl9: false
+    if templateId == idMapRTid then isIdMapTpl9 = true
+    if templateId == idMapVTid then isIdMapTpl9 = true
+    if isIdMapTpl9 when valArg > 0 then {
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
+        ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity childTypeId: u64id
+        return
+    }
+    if templateId == idSetTid then {
         ty.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
         ty.setMemberType parentTypeId: monoId nameId: zast.wkCapacity childTypeId: u64id
         return

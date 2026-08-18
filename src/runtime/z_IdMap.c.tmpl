@@ -1,0 +1,165 @@
+/* IdMap -- an append-only, id-keyed map.
+
+   Three differences from z_Map.c.tmpl, all of them consequences of "no
+   removal" and "the key is an unsigned scalar":
+
+     * No `alive` byte and no stored `hash`. Nothing is ever removed, so
+       `entries[0 .. length-1]` are ALL live -- the array is dense with no
+       holes. That collapses Map's `length` / `entries_len` pair into one
+       counter, which is simultaneously the live count, the used-slot count
+       and the next insertion index.
+     * `indices` is uint32_t holding `pos + 1`, with 0 for empty. There is no
+       DELETED sentinel, so `find` has no tombstone branch, `set` has no
+       first-deleted scan and `grow` has no compaction pass.
+     * The struct is returned BY VALUE and `destroy` does not free it: this is
+       a stack struct like z_List, not a heap object like z_Map. An empty one
+       costs no allocation at all.
+
+   `entries` is sized at capacity*2/3 -- the same 2/3 load factor the index
+   grows at -- so "entries is full" and "the index must grow" are one event,
+   and no separate entries_cap field is needed. The growth test itself carries
+   no division: cross-multiplied it is (length+1)*3 >= capacity*2. */
+
+/* Below this index size no `indices` array is allocated and `find` scans the
+   dense entries instead; `indices == NULL` is the discriminator, so the large
+   path pays no extra branch. Capacity 16 admits 10 entries, which covers ~90%
+   of the containers a self-compile creates. This file is read from disk at
+   emit time, so changing the constant needs no compiler rebuild. */
+#define Z_@@MACRO@@_SMALL_MAX 16
+
+typedef struct {
+    @@KEY_T@@ key;
+    @@VAL_T@@ value;
+} z_@@NAME@@_entry_t;
+
+typedef struct z_@@NAME@@_t {
+    uint32_t length;
+    uint32_t capacity;
+    uint32_t* indices;
+    z_@@NAME@@_entry_t* entries;
+} z_@@NAME@@_t;
+
+/* THE INDEX FUNCTION -- the one knob. Identity (`(uint64_t)_key`) is optimal
+   for a dense run of ids and pathological for a sparse subset of a wide id
+   space, where `& mask` folds unrelated groups onto each other: measured over
+   a self-compile it cost +77% probe steps and took the worst run from 74 to
+   749. The golden-ratio multiply costs one imul plus one shift and beat the
+   splitmix64 finalizer it replaces on both total steps and tail. The shift is
+   not optional: bit i of a product depends only on bits 0..i of the operands,
+   so a multiply's low bits -- exactly the ones `& (capacity-1)` reads -- are
+   barely mixed, while the high half carries every input bit. */
+static uint64_t z_@@NAME@@_slot(@@KEY_T@@ _key);
+static uint64_t z_@@NAME@@_slot(@@KEY_T@@ _key) {
+    return (((uint64_t)_key) * 0x9E3779B97F4A7C15ULL) >> 32;
+}
+
+/* how many entries an index of this size admits, at the 2/3 load factor */
+static uint32_t z_@@NAME@@_entries_cap(uint32_t _capacity);
+static uint32_t z_@@NAME@@_entries_cap(uint32_t _capacity) {
+    return (uint32_t)((((uint64_t)_capacity) * 2u) / 3u);
+}
+
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* p);
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* p) {
+    if (!p) return;
+@@DESTROY_ENTRIES@@    free(p->indices);
+    free(p->entries);
+    /* NO free(p) -- the struct is on the stack */
+}
+
+static z_@@NAME@@_t z_@@NAME@@_create(uint64_t _capacity);
+static z_@@NAME@@_t z_@@NAME@@_create(uint64_t _capacity) {
+    z_@@NAME@@_t _this = {0};
+    if (_capacity > 0) {
+        uint32_t _p2 = 8;
+        while ((uint64_t)z_@@NAME@@_entries_cap(_p2) < _capacity && _p2 < 0x40000000u) {
+            _p2 <<= 1;
+        }
+        _this.capacity = _p2;
+        _this.entries = (z_@@NAME@@_entry_t*)z_xcalloc(
+            z_@@NAME@@_entries_cap(_p2), sizeof(z_@@NAME@@_entry_t));
+        if (_p2 > Z_@@MACRO@@_SMALL_MAX) {
+            _this.indices = (uint32_t*)z_xcalloc(_p2, sizeof(uint32_t));
+        }
+    }
+    return _this;
+}
+
+/* Double the index and re-slot. `entries` is dense and stays in insertion
+   order, so there is nothing to compact -- only the sparse index is rebuilt,
+   and only once it is worth having. */
+static void z_@@NAME@@_grow(z_@@NAME@@_t* _this);
+static void z_@@NAME@@_grow(z_@@NAME@@_t* _this) {
+    uint32_t _new_cap = _this->capacity == 0 ? 8 : _this->capacity * 2;
+    _this->entries = (z_@@NAME@@_entry_t*)z_xrealloc(_this->entries,
+        (size_t)z_@@NAME@@_entries_cap(_new_cap) * sizeof(z_@@NAME@@_entry_t));
+    _this->capacity = _new_cap;
+    free(_this->indices);
+    _this->indices = NULL;
+    if (_new_cap > Z_@@MACRO@@_SMALL_MAX) {
+        _this->indices = (uint32_t*)z_xcalloc(_new_cap, sizeof(uint32_t));
+        for (uint32_t i = 0; i < _this->length; i++) {
+            uint64_t probe = z_@@NAME@@_slot(_this->entries[i].key) & (_new_cap - 1);
+            while (_this->indices[probe]) probe = (probe + 1) & (_new_cap - 1);
+            _this->indices[probe] = i + 1;
+        }
+    }
+}
+
+/* the entry index for `_key`, or -1. On a miss `_slot_out` (when given, and
+   when an index exists) receives the index slot the key belongs in. */
+static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@KEY_T@@ _key, uint64_t* _slot_out);
+static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@KEY_T@@ _key, uint64_t* _slot_out) {
+    if (!_this->indices) {
+        for (uint32_t i = 0; i < _this->length; i++) {
+            if (_this->entries[i].key == _key) return (int64_t)i;
+        }
+        return -1;
+    }
+    uint64_t _mask = _this->capacity - 1;
+    uint64_t probe = z_@@NAME@@_slot(_key) & _mask;
+    for (uint32_t i = 0; i < _this->capacity; i++) {
+        uint32_t slot = _this->indices[probe];
+        if (slot == 0) {
+            if (_slot_out) *_slot_out = probe;
+            return -1;
+        }
+        if (_this->entries[slot - 1].key == _key) {
+            if (_slot_out) *_slot_out = probe;
+            return (int64_t)(slot - 1);
+        }
+        probe = (probe + 1) & _mask;
+    }
+    return -1;
+}
+
+static void z_@@NAME@@_set(z_@@NAME@@_t* _this, @@KEY_T@@ _key, @@VAL_T@@ _val);
+static void z_@@NAME@@_set(z_@@NAME@@_t* _this, @@KEY_T@@ _key, @@VAL_T@@ _val) {
+    uint64_t _slot = 0;
+    int64_t existing = z_@@NAME@@_find(_this, _key, &_slot);
+    if (existing >= 0) {
+@@FREE_VAL_DUP@@        _this->entries[existing].value = _val;
+        return;
+    }
+    if ((uint64_t)(_this->length + 1) * 3 >= (uint64_t)_this->capacity * 2) {
+        z_@@NAME@@_grow(_this);
+        /* the index was rebuilt (or has just appeared): re-probe for the slot */
+        z_@@NAME@@_find(_this, _key, &_slot);
+    }
+    uint32_t pos = _this->length;
+    _this->entries[pos].key = _key;
+    _this->entries[pos].value = _val;
+    _this->length++;
+    if (_this->indices) _this->indices[_slot] = pos + 1;
+}
+
+static z_@@OPTIONVAL@@_t z_@@NAME@@_get(z_@@NAME@@_t* _this, @@KEY_T@@ _key);
+static z_@@OPTIONVAL@@_t z_@@NAME@@_get(z_@@NAME@@_t* _this, @@KEY_T@@ _key) {
+    int64_t idx = z_@@NAME@@_find(_this, _key, NULL);
+@@GET_BODY@@
+}
+
+static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@KEY_T@@ _key);
+static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@KEY_T@@ _key) {
+    return z_@@NAME@@_find(_this, _key, NULL) >= 0;
+}

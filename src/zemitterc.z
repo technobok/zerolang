@@ -2593,6 +2593,9 @@ Ctx: class {
     mapVVOriginTid: ztypes.tid
     setOriginTid: ztypes.tid
     setValOriginTid: ztypes.tid
+    idMapROriginTid: ztypes.tid
+    idMapVOriginTid: ztypes.tid
+    idSetOriginTid: ztypes.tid
     mapEntryOriginTid: ztypes.tid
     listIterOriginTid: ztypes.tid
     listIterValOriginTid: ztypes.tid
@@ -5655,6 +5658,7 @@ emitEmptyColCreate: function {ast: Ast.view
     if (isListOriginOf :symtab :ctx tid: mid9) then isCol9 = true
     if (isSetOriginOf :symtab :ctx tid: mid9) then isCol9 = true
     if (isMapOriginOf :symtab :ctx tid: mid9) then isCol9 = true
+    if (isIdCollectionOriginOf :symtab :ctx tid: mid9) then isCol9 = true
     if (isCol9) == false then return "".string
     cb9: ctxCname :ctx tid: mid9
     ccap9: listCapArg :ast :symtab :ctx n: (ast.nodes.get i: call.nodeid.u64)
@@ -5722,6 +5726,11 @@ emitCollectionMethodCall: function {
     if ov9 == "MapVR" then isMap9 = true
     if ov9 == "MapVV" then isMap9 = true
     if isMap9 then return (emitMapMethodCall :ast :symtab :ctx :call :mn :bn :bt)
+    isIdMap9: false
+    if ov9 == "IdMapR" then isIdMap9 = true
+    if ov9 == "IdMapV" then isIdMap9 = true
+    if isIdMap9 then return (emitIdMapMethodCall :ast :symtab :ctx :call :mn :bn :bt :bvid)
+    if ov9 == "IdSet" then return (emitIdSetMethodCall :ast :symtab :ctx :call :mn :bn :bt :bvid)
     return "".string
 }
 
@@ -5990,6 +5999,68 @@ emitMapMethodCall: function {
         }
         e9: "\{cb}_remove(\{bn}, \{vk})"
         return e9
+    }
+    return "".string
+}
+
+# emitIdMapMethodCall -- an arg-taking method on an IdMap-mono receiver. The
+# receiver is a STACK struct, as a List is, so it goes through colRecvRef and
+# arrives by address; a Map's receiver is already a pointer and does not. The
+# key is a scalar by construction of the `idkey` bound, so none of the Map
+# family's String-key detours apply here.
+emitIdMapMethodCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    call: zast.CallData.view
+    mn: String
+    bn: String
+    bt: ztypes.tid
+    bvid: ztypes.vid
+} out String is {
+    cb: ctxCname :ctx tid: (ztypes.tid.create from: bt.u64)
+    recvR9: colRecvRef :ctx bn: bn.stringview vid: bvid
+    if mn.stringview == "set" then {
+        vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        vv: colArg :ast :symtab :ctx :call label: "value" consumes: true
+        e0: "\{cb}_set(\{recvR9}, \{vk}, \{vv})"
+        return e0
+    }
+    if mn.stringview == "get" then {
+        vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        e1: "\{cb}_get(\{recvR9}, \{vk})"
+        return e1
+    }
+    if mn.stringview == "has" then {
+        vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        e2: "\{cb}_has(\{recvR9}, \{vk})"
+        return e2
+    }
+    return "".string
+}
+
+# emitIdSetMethodCall -- the IdSet half of the above.
+emitIdSetMethodCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    call: zast.CallData.view
+    mn: String
+    bn: String
+    bt: ztypes.tid
+    bvid: ztypes.vid
+} out String is {
+    cb: ctxCname :ctx tid: (ztypes.tid.create from: bt.u64)
+    recvR9: colRecvRef :ctx bn: bn.stringview vid: bvid
+    if mn.stringview == "add" then {
+        v: colArg :ast :symtab :ctx :call label: "item" consumes: false
+        e0: "\{cb}_add(\{recvR9}, \{v})"
+        return e0
+    }
+    if mn.stringview == "has" then {
+        v: colArg :ast :symtab :ctx :call label: "item" consumes: false
+        e1: "\{cb}_has(\{recvR9}, \{v})"
+        return e1
     }
     return "".string
 }
@@ -10484,6 +10555,19 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 if mn2.stringview == "length" then {
                     elv: "\{bn2}\{accB2}length"
                     return elv
+                }
+            }
+            # the id-keyed pair are STACK structs, so their counters are read
+            # through accB2 (`.` or `->`) exactly as a List's are, not through
+            # the unconditional `->` a heap Map uses
+            if (isIdCollectionOriginOf :symtab :ctx tid: bstamp) then {
+                if mn2.stringview == "length" then {
+                    eidl9: "\{bn2}\{accB2}length"
+                    return eidl9
+                }
+                if mn2.stringview == "capacity" then {
+                    eidc9: "\{bn2}\{accB2}capacity"
+                    return eidc9
                 }
             }
             if (isSetOriginOf :symtab :ctx tid: bstamp) then {
@@ -17296,6 +17380,7 @@ isListPtrParam: function {
         own: ztypes.zparamownership.takeMode
     ) then return false
     bt: chaseColMono :symtab :ctx :tid
+    if (isIdCollectionOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64)) then return true
     return (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64))
 }
 
@@ -17775,6 +17860,40 @@ isMapOriginOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztype
     return (originIsTid :symtab :tid originTid: ctx.mapVVOriginTid)
 }
 
+# isIdMapOriginOf -- the type is an IdMap of either value family. As with the
+# Map forms they differ in what they DECLARE (a reftype value hands back a
+# view, a valtype value copies out) and not in the C built from them.
+isIdMapOriginOf: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out bool is {
+    if (originIsTid :symtab :tid originTid: ctx.idMapROriginTid) then return true
+    return (originIsTid :symtab :tid originTid: ctx.idMapVOriginTid)
+}
+
+# isIdSetOriginOf -- the type is an IdSet. One form only: an id is a valtype,
+# so there is no reference/value split to make.
+isIdSetOriginOf: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out bool is {
+    return (originIsTid :symtab :tid originTid: ctx.idSetOriginTid)
+}
+
+# isIdCollectionOriginOf -- an IdMap or an IdSet. They share a struct shape
+# (stack header, two counters, two heap arrays), and every site that means
+# "is this one of the id-keyed containers" asks this rather than naming one.
+isIdCollectionOriginOf: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out bool is {
+    if (isIdMapOriginOf :symtab :ctx :tid) then return true
+    return (isIdSetOriginOf :symtab :ctx :tid)
+}
+
 # isListViewOriginOf -- the type is a List window of EITHER family. The two
 # templates differ in what `get` DECLARES (a valtype element copies out, a
 # reference element hands back a view) and not at all in the C built from them.
@@ -17811,6 +17930,9 @@ isCollectionOriginTid: function {ctx: Ctx.view originTid: ztypes.tid} out bool i
     if originTid == ctx.listViewValOriginTid then return true
     if originTid == ctx.setOriginTid then return true
     if originTid == ctx.setValOriginTid then return true
+    if originTid == ctx.idMapROriginTid then return true
+    if originTid == ctx.idMapVOriginTid then return true
+    if originTid == ctx.idSetOriginTid then return true
     if originTid == ctx.mapOriginTid then return true
     if originTid == ctx.mapRVOriginTid then return true
     if originTid == ctx.mapVROriginTid then return true
@@ -20212,6 +20334,9 @@ emitC: function {
     mapVVOriginTid: ztypes.tid
     setOriginTid: ztypes.tid
     setValOriginTid: ztypes.tid
+    idMapROriginTid: ztypes.tid
+    idMapVOriginTid: ztypes.tid
+    idSetOriginTid: ztypes.tid
     mapEntryOriginTid: ztypes.tid
     listIterOriginTid: ztypes.tid
     listIterValOriginTid: ztypes.tid
@@ -20268,6 +20393,17 @@ emitC: function {
             :symtab
             base: "SetVal"
         )
+        idMapROriginTid = ztypes.tid.create from: (builtinTid
+            ast: program.ast
+            :symtab
+            base: "IdMapR"
+        )
+        idMapVOriginTid = ztypes.tid.create from: (builtinTid
+            ast: program.ast
+            :symtab
+            base: "IdMapV"
+        )
+        idSetOriginTid = ztypes.tid.create from: (builtinTid ast: program.ast :symtab base: "IdSet")
         mapEntryOriginTid = ztypes.tid.create from: (builtinTid
             ast: program.ast
             :symtab
@@ -20505,6 +20641,9 @@ emitC: function {
         :mapVVOriginTid
         :setOriginTid
         :setValOriginTid
+        :idMapROriginTid
+        :idMapVOriginTid
+        :idSetOriginTid
         :mapEntryOriginTid
         :listIterOriginTid
         :listIterValOriginTid
@@ -22154,6 +22293,121 @@ emitMapMono: function {
     )
 }
 
+# idMapDestroyEntries -- the per-entry free loop for an IdMap. There is no
+# `alive` test and no key line: entries are dense (nothing is ever removed) and
+# an id key is a scalar that owns nothing.
+idMapDestroyEntries: function {valFree: StringView} out String is {
+    if valFree.length == 0 then return "".string
+    return "    for (uint32_t i = 0; i < p->length; i++) {\n        \{valFree}\n    }\n"
+}
+
+# emitIdMapMono -- substitute z_IdMap.c.tmpl for an IdMap instance. Far fewer
+# holes than emitMapMono: the bound guarantees a scalar key, so there is no
+# hash body to choose, no key-equality body (C `==` is it), and no key to free.
+emitIdMapMono: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    runtimeDir: StringView
+    monoId: ztypes.tid
+    buf: String.borrow
+} is {
+    nm: cbaseNoPrefix :ctx tid: monoId
+    mcr: cUpperOf text: nm.stringview
+    ovId: ztypes.tid
+    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkGet
+    match (
+        go
+    ) case some then {
+        ovId = symtab.reg.returnTypeOf tid: (ztypes.tid.create from: go.u64)
+    } case none then null
+    if ovId.isZero then return
+    ovName: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: ovId.u64)
+    ov: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: ovId.u64)
+    ovu: cUpperOf text: ovName.stringview
+    valTid: mapValType :symtab monoId: (ztypes.tid.create from: monoId.u64)
+    valName: typeNameOfReg9 :symtab tid: valTid
+    valT: cTypeForNameTid :ast :symtab :ctx name: valName.stringview tid: valTid
+    keyTid: mapKeyType :symtab :monoId
+    keyName: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: keyTid.u64)
+    keyT: (cTypeForNameTid
+        :ast
+        :symtab
+        :ctx
+        name: keyName.stringview
+        tid: (ztypes.tid.create from: keyTid.u64)
+    )
+    vfDestroy: (mapValFreeStmt :symtab :ctx :valTid slot: "p->entries[i].value")
+    vfDup: (mapValFreeStmt
+        :symtab
+        :ctx
+        :valTid
+        slot: "_this->entries[existing].value"
+    )
+    freeValDup: String
+    if vfDup.length > 0 then freeValDup = "        \{vfDup}\n"
+    destroyEntries: idMapDestroyEntries valFree: vfDestroy.stringview
+    getBody: String
+    if (originIsTid
+        :symtab
+        tid: (ztypes.tid.create from: ovId.u64)
+        originTid: ctx.optionvalOriginTid
+    ) then {
+        getBody = "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n    }\n    return _r;"
+    } else {
+        # same borrowed-pointer contract as Map.get: the OptionView pins the
+        # container with a SHARED lock and its destroy is a no-op, so nothing
+        # is copied out of the entry storage
+        getBody = "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data = &_this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
+    }
+    p: "\{runtimeDir}/z_IdMap.c.tmpl"
+    raw: readTemplateCached :ctx path: p.stringview
+    if raw.length == 0 then return
+    t1: applyTmpl text: raw key: "NAME" val: nm.stringview
+    t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringview
+    t3: applyTmpl text: t2 key: "KEY_T" val: keyT.stringview
+    t4: applyTmpl text: t3 key: "VAL_T" val: valT.stringview
+    t5: applyTmpl text: t4 key: "DESTROY_ENTRIES" val: destroyEntries.stringview
+    t6: applyTmpl text: t5 key: "FREE_VAL_DUP" val: freeValDup.stringview
+    t7: applyTmpl text: t6 key: "OPTIONVAL" val: ov.stringview
+    t8: applyTmpl text: t7 key: "OPTIONVAL_TAG" val: ovu.stringview
+    t9: applyTmpl text: t8 key: "GET_BODY" val: getBody.stringview
+    buf.append t9
+    buf.append "\n"
+}
+
+# emitIdSetMono -- substitute z_IdSet.c.tmpl for an IdSet instance. Three
+# holes: an id item is a scalar, so it has no hash body, no equality body and
+# no destructor.
+emitIdSetMono: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    runtimeDir: StringView
+    monoId: ztypes.tid
+    buf: String.borrow
+} is {
+    nm: cbaseNoPrefix :ctx tid: monoId
+    mcr: cUpperOf text: nm.stringview
+    elemTid: setElemType :symtab :monoId
+    elemName: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: elemTid.u64)
+    itemT: (cTypeForNameTid
+        :ast
+        :symtab
+        :ctx
+        name: elemName.stringview
+        tid: (ztypes.tid.create from: elemTid.u64)
+    )
+    p: "\{runtimeDir}/z_IdSet.c.tmpl"
+    raw: readTemplateCached :ctx path: p.stringview
+    if raw.length == 0 then return
+    t1: applyTmpl text: raw key: "NAME" val: nm.stringview
+    t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringview
+    t3: applyTmpl text: t2 key: "ITEM_T" val: itemT.stringview
+    buf.append t3
+    buf.append "\n"
+}
+
 # emitMonos -- emit every collection-mono instance in the registry (List
 # today; Map/Set/iterators land with their slices).
 # ioCanonTid -- the type id behind an io/cli runtime fragment's canonical stem,
@@ -23400,6 +23654,14 @@ emitMonoById: function {
         emitMapMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
     }
+    if (isIdSetOriginOf :symtab :ctx tid: monoId) then {
+        emitIdSetMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        return
+    }
+    if (isIdMapOriginOf :symtab :ctx tid: monoId) then {
+        emitIdMapMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        return
+    }
 }
 
 # emitUserStructsOrdered -- emit user struct defs and the collection monos that
@@ -23917,6 +24179,33 @@ emitUserStructsOrdered: function {
         :ast
         :symtab
         :ctx
+        originTid: ctx.idSetOriginTid
+        :userList
+        acc: lateGroup
+        :last
+    )
+    (collectLateMonosKind
+        :ast
+        :symtab
+        :ctx
+        originTid: ctx.idMapROriginTid
+        :userList
+        acc: lateGroup
+        :last
+    )
+    (collectLateMonosKind
+        :ast
+        :symtab
+        :ctx
+        originTid: ctx.idMapVOriginTid
+        :userList
+        acc: lateGroup
+        :last
+    )
+    (collectLateMonosKind
+        :ast
+        :symtab
+        :ctx
         originTid: ctx.mapVROriginTid
         :userList
         acc: lateGroup
@@ -24099,6 +24388,8 @@ emitMonos: function {
     wList9: (ListVal u64)
     wSet9: (ListVal u64)
     wMap9: (ListVal u64)
+    wIdSet9: (ListVal u64)
+    wIdMap9: (ListVal u64)
     wProto9: (ListVal u64)
     wUgRec9: (ListVal u64)
     tcl9: ztypes.tid
@@ -24211,6 +24502,14 @@ emitMonos: function {
             isColKind9 = true
             colDst9 = 5
         }
+        if (isIdSetOriginOf :symtab :ctx tid: tcl9) then {
+            isColKind9 = true
+            colDst9 = 6
+        }
+        if (isIdMapOriginOf :symtab :ctx tid: tcl9) then {
+            isColKind9 = true
+            colDst9 = 7
+        }
         if isColKind9 then {
             if (monoIsLate
                 :ast
@@ -24224,6 +24523,8 @@ emitMonos: function {
                 if colDst9 == 3 then wList9.append tv9
                 if colDst9 == 4 then wSet9.append tv9
                 if colDst9 == 5 then wMap9.append tv9
+                if colDst9 == 6 then wIdSet9.append tv9
+                if colDst9 == 7 then wIdMap9.append tv9
             }
         }
         if tt9 == ztypes.ztypetype.protocolType then {
@@ -24385,6 +24686,34 @@ emitMonos: function {
         maId9: wMap9.get i: tmap
         emitMapMono :ast :symtab :ctx :runtimeDir monoId: (ztypes.tid.create from: maId9.u64) :buf
         tmap = tmap + 1
+    }
+    # the id-keyed pair, after the hashed ones for the same reason: an IdMap's
+    # `get` returns an optionval / OptionView emitted above.
+    tidset9: u64
+    for tidset9 < wIdSet9.length loop {
+        isId9: wIdSet9.get i: tidset9
+        (emitIdSetMono
+            :ast
+            :symtab
+            :ctx
+            :runtimeDir
+            monoId: (ztypes.tid.create from: isId9.u64)
+            :buf
+        )
+        tidset9 = tidset9 + 1
+    }
+    tidmap9: u64
+    for tidmap9 < wIdMap9.length loop {
+        imId9: wIdMap9.get i: tidmap9
+        (emitIdMapMono
+            :ast
+            :symtab
+            :ctx
+            :runtimeDir
+            monoId: (ztypes.tid.create from: imId9.u64)
+            :buf
+        )
+        tidmap9 = tidmap9 + 1
     }
     # reachable system PROTOCOLs (Reader/Writer/Closer/Seeker) -- emitted after
     # the collection monos their vtable function-pointer signatures reference.

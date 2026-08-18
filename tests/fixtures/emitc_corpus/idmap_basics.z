@@ -1,0 +1,74 @@
+# IdMap / IdSet: the append-only, id-keyed containers. Covers both value
+# families, an id-typedef key, growth across the small-mode boundary (no
+# `indices` array below it) and the index rebuild past it, and a container
+# mutated through a function parameter -- a stack struct passes by pointer.
+rowid: record { val: u32.typedef }
+
+fill: function {m: (IdMapV u64 value: u64) n: u64} is {
+    i: u64
+    for i < n loop {
+        m.set key: (i * 7) value: (i + 1000)
+        i = i + 1
+    }
+}
+
+main: function is {
+    m: (IdMapV u64 value: u64)
+    fill :m n: 200
+    ok: u64
+    j: u64
+    for j < 200 loop {
+        g: m.get key: (j * 7)
+        match (
+            g
+        ) case some then {
+            if g == (j + 1000) then ok = ok + 1
+        } case none then null
+        j = j + 1
+    }
+    print "idmapv len=\{m.length} ok=\{ok} absent=\{m.has key: 999999}"
+
+    # overwrite in place: the entry count does not move
+    m.set key: 0 value: 5
+    o0: m.get key: 0
+    match (
+        o0
+    ) case some then {
+        print "overwrite -> \{o0} len=\{m.length}"
+    } case none then null
+
+    s: (IdSet u32)
+    k: u32
+    for k < 100 loop {
+        s.add item: (k * 3)
+        k = k + 1
+    }
+    dup: s.add item: 3
+    print "idset len=\{s.length} readd=\{dup} has33=\{s.has item: 33} has34=\{s.has item: 34}"
+
+    # an id space is a typedef over an unsigned scalar; the bound admits it
+    t: (IdMapV rowid value: u64)
+    t.set key: (rowid from: 42) value: 4242
+    tg: t.get key: (rowid from: 42)
+    match (
+        tg
+    ) case some then {
+        print "typedef key -> \{tg}"
+    } case none then null
+
+    # a REFERENCE value: get hands back a view into the entry storage
+    r: (IdMapR u64 value: String)
+    r.set key: 1 value: "one".string
+    r.set key: 2 value: "two".string
+    rg: r.get key: 2
+    match (
+        rg
+    ) case some then {
+        print "idmapr -> \{rg} len=\{r.length}"
+    } case none then null
+
+    # empty containers allocate nothing at all
+    e: (IdMapV u64 value: u64)
+    e2: (IdSet u64)
+    print "empty \{e.length} \{e2.length} \{e.has key: 1} \{e2.has item: 1}"
+}

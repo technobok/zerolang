@@ -364,6 +364,63 @@ MapEntryVV: class is native as {
     value: anyval.generic
 }
 
+# --- id-keyed containers ---------------------------------------------------
+#
+# IdMap and IdSet are the APPEND-ONLY, id-keyed siblings of Map and Set. Three
+# things follow from that contract and none of them is available to a Map:
+#
+#   * There is no `remove` and no `delete`. The whole table is freed at once,
+#     so an entry never dies alone -- which means no tombstone byte and no
+#     compaction pass, and `entries` is a dense insertion-ordered array with no
+#     holes in it.
+#   * The slot is the key's own low bits, not a hash of them, so no hash column
+#     is stored and none is computed on the probe. That is what the `idkey`
+#     bound is protecting: only an unsigned scalar has bits that ARE an index.
+#   * The struct lives on the stack like a List, not on the heap like a Map, so
+#     an empty one costs no allocation at all.
+#
+# Iteration and removal are what a Map has and these do not; if you need either
+# one, you want a Map.
+
+# an IdMap from an unsigned scalar id to a REFERENCE value.
+IdMapR: class {
+    get: function {:this key: key} out (OptionView value) is native
+    set: function {:this key: key value: value.take} is native
+    has: function {t: this.view key: key} out bool is native
+    length: function {t: this.view} out u64 is native
+    capacity: function {t: this.view} out u64 is native
+    create: function {capacity: 0.u64} out type is native
+} as {
+    key: idkey.generic
+    value: AnyRef.generic
+}
+
+# an IdMap from an unsigned scalar id to a VALUE-TYPE value. Nothing here is
+# taken, viewed or locked: the key is a scalar and the value is a copy.
+IdMapV: class {
+    get: function {:this key: key} out (optionval value) is native
+    set: function {:this key: key value: value} is native
+    has: function {t: this.view key: key} out bool is native
+    length: function {t: this.view} out u64 is native
+    capacity: function {t: this.view} out u64 is native
+    create: function {capacity: 0.u64} out type is native
+} as {
+    key: idkey.generic
+    value: anyval.generic
+}
+
+# a set of unique unsigned scalar ids. One form only: an id is a valtype, so
+# the reference/value split the Set family carries has nothing to divide here.
+IdSet: class {
+    add: function {:this item: of} out bool is native
+    has: function {t: this.view item: of} out bool is native
+    length: function {t: this.view} out u64 is native
+    capacity: function {t: this.view} out u64 is native
+    create: function {capacity: 0.u64} out type is native
+} as {
+    of: idkey.generic
+}
+
 # string_join -- concatenate every string in `parts` with `sep`
 # between each. Returns a fresh owned string. One allocation,
 # memcpy in sequence.

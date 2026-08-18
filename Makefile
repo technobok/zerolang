@@ -593,7 +593,10 @@ shadow-guard:
 # shadow-SAFE wrapper (it re-checks the tid for a user shadow) and it needs
 # the type's name, so the name lookup is the sanctioned shape here. 92 -> 93
 # for constSuffixForTid, which asks the same question of a unit constant's
-# declared type to pick its C literal suffix, through the same wrapper.
+# declared type to pick its C literal suffix, through the same wrapper. 93 ->
+# 97 for the IdMap/IdSet mono emitters, which reach cTypeForNameTid for their
+# key, value and element types exactly as emitMapMono and emitSetMono do -- the
+# same sanctioned shape, in a new family rather than a new kind of lookup.
 # The last two pin where C names are BUILT: the type checker composes none, and
 # the emitter spells the z_t{id} shape only inside its one composer, which the
 # per-program table in emitC calls once per type.
@@ -619,7 +622,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 22; \
 	chk "userFnId" "$$e4" 32; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "typeNameOfReg9" "$$e6" 93; \
+	chk "typeNameOfReg9" "$$e6" 97; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 4; \
 	chk "monoOriginName" "$$e9" 8; \
@@ -1009,7 +1012,8 @@ member-guard:
 
 VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:MapRR \
   z_MapIter.c.tmpl=@@NAME@@:MapRR,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
-  z_Set.c.tmpl=@@NAME@@:SetRef,@@SETITER@@:SetIter
+  z_Set.c.tmpl=@@NAME@@:SetRef,@@SETITER@@:SetIter \
+  z_IdMap.c.tmpl=@@NAME@@:IdMapR z_IdSet.c.tmpl=@@NAME@@:IdSet
 VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get getMut:ListRef.getMut,ListView.getMut \
   contains:ListRef.contains \
   listview:ListRef.listview sort:ListRef.sort iterate:ListRef.iterate \
@@ -1020,7 +1024,9 @@ VIEW_GUARD_BACKS := StringView.eq===,!= StringView.cmp=compare,<,<=,>,>=
 VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp \
   StringView.print StringView.indexOfRaw StringView.replaceImpl \
   ListRef.destroy ListRef.grow MapRR.destroy MapRR.grow MapRR.find \
-  SetRef.destroy SetRef.grow SetRef.find MapEntry.key MapEntry.value
+  SetRef.destroy SetRef.grow SetRef.find MapEntry.key MapEntry.value \
+  IdMapR.destroy IdMapR.grow IdMapR.find IdMapR.slot IdMapR.entries_cap \
+  IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap
 VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   StringView.asString:inline \
   ListVal.append:ListRef.append ListVal.insert:ListRef.insert \
@@ -1053,6 +1059,10 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   MapItemIterVV.call:MapItemIter.call \
   ListRef.length:inline ListRef.capacity:inline ListView.length:inline \
   MapRR.length:inline MapRR.capacity:inline SetRef.length:inline SetRef.capacity:inline \
+  IdMapV.get:IdMapR.get IdMapV.set:IdMapR.set IdMapV.has:IdMapR.has \
+  IdMapR.length:inline IdMapR.capacity:inline \
+  IdMapV.length:inline IdMapV.capacity:inline \
+  IdSet.length:inline IdSet.capacity:inline \
   String.length:inline String.capacity:inline String.stringview:inline \
   StringView.length:inline StringView.string:byvalue \
   String.contains:StringView.contains String.startsWith:StringView.startsWith \
