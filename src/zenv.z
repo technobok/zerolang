@@ -491,14 +491,34 @@ ZSymbolTable: class {
         this.defineLocal :nameId ztypeId: var.ztypeId varId: var.variableId
     }
 
+    # frameBindsHere -- does the INNERMOST open frame already bind `nameId`?
+    # Same-frame only: an OUTER frame binding the name is shadowing, which is
+    # legal and resolved by declFindLocal's outward walk. An unmaterialised
+    # frame has no locals yet, so it binds nothing.
+    frameBindsHere: function {:this nameId: zast.nameid} out bool is {
+        n: this.frames.length
+        if n == 0 then return false
+        fr9: this.frames.get i: (n - 1)
+        if fr9.isZero then return false
+        d9: this.typing.declFindChild parentDeclId: fr9 :nameId
+        return (d9.isZero) == false
+    }
+
     defineLocal: function {:this nameId: zast.nameid ztypeId: ztypes.tid varId: ztypes.vid} is {
         n: this.frames.length
         if n == 0 then return
         this.materialiseTop
         topIdx: n - 1
+        # one binding per name per frame: the namespace walks read a frame's
+        # children by name and stop at the first hit, so a second edge under
+        # the same name would be unreachable. The binding site reports the
+        # duplicate; this keeps the tree honest if one ever reaches here.
+        fr9: this.frames.get i: topIdx
+        ex9: this.typing.declFindChild parentDeclId: fr9 :nameId
+        if (ex9.isZero) == false then return
         (this.typing.declNewLocal
             name: nameId.u32
-            parent: (this.frames.get i: topIdx)
+            parent: fr9
             node: 0
             typeId: ztypeId
             :varId

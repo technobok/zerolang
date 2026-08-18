@@ -920,38 +920,40 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                 }
             }
             if opId9 > 0 then {
-                # a file unit is a NAMED child of the program root, which is
-                # what makes declFindChild(programRoot, name) the unit-root
-                # lookup. Last-wins there matches the name index it replaces, so
-                # two files declaring the same unit name resolve as they did.
-                # The root carries no unit-frame bit, so no bare-name walk
-                # reaches these children -- unitFrameOf climbs through it.
-                udid9: (ty.declNew
-                    name: unmRef9
-                    parent: ty.programRoot
-                    kind: ztyping.declkind.unitDecl
-                    node: ruId9
-                )
-                ty.declSetUnitFrame declId: udid9
                 # registerUnitRoots minted the unit's TYPE and keyed it on the
                 # unitdef node; the declaration binds to it here. Read by node,
                 # not by name: the name lookup would find this very Decl, whose
-                # type is what we are about to set.
+                # type is what we are about to set. A unit with no type there
+                # is a repeated unit name registerUnitRoots already rejected --
+                # it gets no declaration, so the program root keeps one child
+                # per name.
                 utl9: (ty.unitTypesById.get
                     key: (unitdefNodeId ast: program.ast nId: opId9).u64
                 )
                 match (
                     utl9
                 ) case some then {
+                    # a file unit is a NAMED child of the program root, which
+                    # is what makes declFindChild(programRoot, name) the
+                    # unit-root lookup. The root carries no unit-frame bit, so
+                    # no bare-name walk reaches these children -- unitFrameOf
+                    # climbs through it.
+                    udid9: (ty.declNew
+                        name: unmRef9
+                        parent: ty.programRoot
+                        kind: ztyping.declkind.unitDecl
+                        node: ruId9
+                    )
+                    ty.declSetUnitFrame declId: udid9
                     ty.declSetType declId: udid9 typeId: utl9
                     reg.setDef typeId: utl9 declId: udid9
+                    (indexUnitBody
+                        :ty
+                        ast: program.ast
+                        unitopId: opId9
+                        unitDeclId: udid9
+                    )
                 } case none then null
-                (indexUnitBody
-                    :ty
-                    ast: program.ast
-                    unitopId: opId9
-                    unitDeclId: udid9
-                )
             }
         }
         ty.defNodeIndexBuilt = true
@@ -9665,6 +9667,12 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
     match (
         program
     ) case program then {
+        # a unit name is one identity: the second file to claim it is
+        # rejected here, before any type is minted, so the program root
+        # holds one child per name and declFindChild there is unambiguous.
+        # Keyed by name-pool id -- the pool interns, so id equality is text
+        # equality and no spelling is compared.
+        seenUnits9: (SetVal u64)
         uCnt9c: program.ast.units.length
         uIdx9c: u64
         for uIdx9c < uCnt9c loop {
@@ -9672,18 +9680,40 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
             uIdx9c = uIdx9c + 1
             opId9: zast.nodeid
             nm9: String
+            nmRef9: u64
+            uNode9: zast.nodeid
+            uLine9: u32
+            uCol9: u32
             {
                 ru: program.ast.nodes.get i: ruId9.u64
                 if ru.namedoperation then {
                     nm: zast.poolTextAt pool: program.ast.names ref: ru.name
                     opId9 = ru.operation
                     nm9 = nm.copy
+                    nmRef9 = ru.name.u64
+                    uNode9 = ru.nodeid
+                    uLine9 = ru.lineno
+                    uCol9 = ru.colno
                 }
             }
             if opId9 > 0 then {
-                uid: reg.newType name: nm9.stringview typetype: ztypes.ztypetype.unitType
-                opid: unitdefNodeId ast: program.ast nId: opId9
-                ty.unitTypesById.set key: opid.u64 value: uid
+                if (seenUnits9.has item: nmRef9) then {
+                    dupm9: "duplicate unit '\{nm9}': a unit name is one identity, and another file already declares it"
+                    (addResolveErrorH
+                        :ty
+                        nodeid: uNode9
+                        lineno: uLine9
+                        colno: uCol9
+                        e: zast.err.duplicateDef
+                        msg: dupm9
+                        width: nm9.length.u32.orPanic
+                    )
+                } else {
+                    seenUnits9.add item: nmRef9
+                    uid: reg.newType name: nm9.stringview typetype: ztypes.ztypetype.unitType
+                    opid: unitdefNodeId ast: program.ast nId: opId9
+                    ty.unitTypesById.set key: opid.u64 value: uid
+                }
             }
         }
     } else null
@@ -19670,6 +19700,18 @@ checkAssignment: function {
         roRef9: false
         if own == ztypes.zownership.borrowed then roRef9 = st.typing.pendingBorrowReadonly
         st.typing.pendingBorrowReadonly = false
+        if (st.frameBindsHere nameId: asgn.name) then {
+            dnm9: zast.poolTextAt pool: ast.names ref: asgn.name
+            dlm9: "duplicate definition of '\{dnm9}': this block already binds that name -- rebinding it here is a redefinition, and only a NESTED block shadows"
+            (addError
+                :st
+                nodeid: asgn.nodeid
+                lineno: asgn.lineno
+                colno: asgn.colno
+                e: zast.err.duplicateDef
+                msg: dlm9
+            )
+        }
         st.defineVar nameId: asgn.name var: v
         vid2: vid
         st.typing.defVariableId.set key: asgn.nodeid.u64 value: vid2
@@ -31901,9 +31943,9 @@ reexportUnitOf: function {
 }
 
 # programUnitDecls -- every FILE unit's Decl, in load order: the program root's
-# children. What a closure-wide sweep iterated the unit-name index for. Two
-# files declaring the same unit name appear twice, where the index held one --
-# a sweep asks each of them, which is the point.
+# children. What a closure-wide sweep iterated the unit-name index for. One
+# child per unit name: registerUnitRoots rejects a repeated one, so the sweep
+# and the index it replaces see the same set.
 programUnitDecls: function {ty: ztyping.ZTyping.view} out (ListVal u64) is {
     out9: (ListVal u64)
     ro9: ty.decls.get i: ty.programRoot.u64

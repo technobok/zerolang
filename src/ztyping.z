@@ -723,9 +723,9 @@ ZTyping: class {
     }
 
     # declNewLocal -- a local written in frame `parent`: its name, type and
-    # (for a runtime binding) variable id. Later locals of the same name in
-    # the same frame shadow earlier ones, which is what declFindChild's
-    # last-wins order gives.
+    # (for a runtime binding) variable id. A frame binds each name once, so
+    # rebinding it in the same frame is a duplicate definition; a NESTED frame
+    # is what shadows an outer local.
     declNewLocal: function {:this name: u32 parent: ztypes.declid node: u32 typeId: ztypes.tid varId: ztypes.vid} out ztypes.declid is {
         id9: this.declNew :name :parent kind: declkind.localDecl :node
         lo9: this.decls.getMut i: id9.u64
@@ -784,10 +784,11 @@ ZTyping: class {
     }
 
     # declFindLocal -- the local `nameId` resolves to from frame `frame`
-    # outward: each frame's own locals (the last defined wins), then the frame
-    # enclosing it, until the chain leaves the frames -- a frame's parent that
-    # is not a frame is the declaration whose body it is, and ends the walk.
-    # One row read per frame.
+    # outward: each frame's own locals (a frame binds each name at most once),
+    # then the frame enclosing it, until the chain leaves the frames -- a
+    # frame's parent that is not a frame is the declaration whose body it is,
+    # and ends the walk. One row read per frame; a nested frame is what
+    # shadows an outer local.
     declFindLocal: function {
         t: this.view
         frame: ztypes.declid
@@ -804,8 +805,9 @@ ZTyping: class {
                 if fo9.nameIndex > 0 then {
                     found9 = t.nameIndexLookup slot: fo9.nameIndex :nameId
                 } else {
-                    # newest first: the last local of that name wins, and a
-                    # frame's own locals are few
+                    # newest first: a frame's own locals are few and the one
+                    # just defined is the likeliest hit; the name is bound at
+                    # most once here, so the first match is the only one
                     ci9: fo9.children.length
                     for ci9 > 0 loop {
                         ci9 = ci9 - 1
@@ -1052,9 +1054,11 @@ ZTyping: class {
         }
     }
 
-    # declFindChild -- the last child declaration named nameId under
-    # parentDeclId (0 when absent); last wins, matching the overwrite
-    # semantics of the string-keyed def tables.
+    # declFindChild -- the child declaration named nameId under parentDeclId
+    # (0 when absent). A namespace binds each name once -- the parser rejects
+    # a repeated definition in any one body, registerUnitRoots a repeated unit
+    # name, and the binding site a rebound local -- so the first match is the
+    # only one and the scan stops there.
     declFindChild: function {
         t: this.view
         parentDeclId: ztypes.declid
@@ -1065,8 +1069,15 @@ ZTyping: class {
         if po9.nameIndex > 0 then {
             found9 = t.nameIndexLookup slot: po9.nameIndex :nameId
         } else {
-            with cit9: po9.children.iterate do for c9: cit9 loop {
-                if c9.nameId == nameId then found9 = c9.declId
+            ci9: u64
+            cn9: po9.children.length
+            for ci9 < cn9 loop {
+                c9: po9.children.get i: ci9
+                ci9 = ci9 + 1
+                if c9.nameId == nameId then {
+                    found9 = c9.declId
+                    ci9 = cn9
+                }
             }
         }
         return found9
