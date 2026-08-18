@@ -2131,12 +2131,6 @@ dataBlockTid9: function {symtab: zenv.ZSymbolTable nid: u64} out ztypes.tid is {
     return (ztypes.tid.create from: t9)
 }
 
-# dataKey9 -- a data block's table key: its type id, so two units' same-named
-# blocks stay distinct.
-dataKey9: function {tid: ztypes.tid} out String is {
-    return "\{tid}"
-}
-
 # matchDiverges -- true when a match node is stamped `never` (the typechecker's
 # exhaustive + all-arms-diverge result), so its `default:` is provably unreachable.
 matchDiverges: function {symtab: zenv.ZSymbolTable nid: u64} out bool is {
@@ -2422,6 +2416,22 @@ originIsTid: function {
 
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
+# dataconstkey / dataslotkey -- which element of which data block. A data
+# element is reached two ways -- `primes.first` by LABEL and `primes.0` by
+# ORDINAL -- and a nameid and an ordinal are two id spaces, so they are two
+# TABLES rather than one string that could spell either. Both fields are
+# widened to u64 so the key has no padding for the container's byte hash to
+# read (the callslot / constslot shape).
+dataconstkey: record {
+    owner: u64
+    name: u64
+}
+
+dataslotkey: record {
+    owner: u64
+    slot: u64
+}
+
 Ctx: class {
     mainName: String
     # the namespace unit whose functions are being emitted, 0 while emitting
@@ -2453,8 +2463,9 @@ Ctx: class {
     needUnits: (List String)
     needMembs: (List String)
     methodReturns: (Map String value: String)
-    dataElems: (Map String value: String)
-    dataConst: (Map String value: String)
+    dataElems: (MapVR ztypes.tid value: String)
+    dataConst: (MapVR dataconstkey value: String)
+    dataSlot: (MapVR dataslotkey value: String)
     # the current class method body's pointer-receiver params, by variable id
     ptrVids: (ListVal ztypes.vid)
     # the enclosing function hands back a REFERENCE to a user reftype, so its
@@ -4316,7 +4327,7 @@ emitDataIndexCall: function {
         nid: (dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64))
     )
     if dtid9.isZero then return "".string
-    isData: ctx.dataElems.has key: (dataKey9 tid: (ztypes.tid.create from: dtid9.u64))
+    isData: ctx.dataElems.has key: (ztypes.tid.create from: dtid9.u64)
     if (isData) == false then return "".string
     if mn.stringview == "index" then {
         ax: "0".string
@@ -10528,7 +10539,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             if rtt == ztypes.ztypetype.dataType then {
                 baseIsData9 = true
             } else {
-                if (ctx.dataElems.has key: (dataKey9 tid: (ztypes.tid.create from: dbt9.u64))) then baseIsData9 = true
+                if (ctx.dataElems.has key: (ztypes.tid.create from: dbt9.u64)) then baseIsData9 = true
             }
             if baseIsData9 then {
                 if mn2.stringview == "array" then {
@@ -10559,15 +10570,36 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     ed0: "\{edSym9}_len"
                     return ed0
                 }
-                dck: "\{dbt9}.\{mn2}"
-                dco: ctx.dataConst.get key: dck
+                # `primes.0` reaches the element by ordinal, `primes.first`
+                # by label; ask the right table rather than spelling one key
+                # that could mean either
+                dcIdx9: mn2.stringview.parseU64
                 match (
-                    dco
-                ) case some then {
-                    dcv: dco.stringview
-                    dcc: dcv.string
-                    return dcc
-                } case none then null
+                    dcIdx9
+                ) case ok then {
+                    dso9: (ctx.dataSlot.get
+                        key: (dataslotkey owner: dbt9.u64 slot: dcIdx9)
+                    )
+                    match (
+                        dso9
+                    ) case some then {
+                        dsv9: dso9.stringview
+                        return dsv9.string
+                    } case none then null
+                } else {
+                    dno9: (ctx.dataConst.get
+                        key: (dataconstkey
+                            owner: dbt9.u64
+                            name: (zast.poolFind pool: ast.names text: mn2.stringview).u64
+                        )
+                    )
+                    match (
+                        dno9
+                    ) case some then {
+                        dnv9: dno9.stringview
+                        return dnv9.string
+                    } case none then null
+                }
             }
         }
         # `.stringview` on a String/StringView projects an inline view, not a
@@ -11087,7 +11119,7 @@ dataIndexElemName: function {
         mn: dottedChildText :ast n: (ast.nodes.get i: n.callable.u64)
         if mn.stringview == "index" then {
             dnid9: dottedBaseNodeId :ast n: (ast.nodes.get i: n.callable.u64)
-            dk: dataKey9 tid: (dataBlockTid9 :symtab nid: dnid9)
+            dk: dataBlockTid9 :symtab nid: dnid9
             go: ctx.dataElems.get key: dk
             match (
                 go
@@ -18463,7 +18495,7 @@ fillOneDataElem: function {
     } case datablock then {
         ebn: dataElemBaseName :ast oId: op.outType
         dtid9: stampIdOf :symtab nid: op.nodeid.u64
-        k9: dataKey9 tid: dtid9
+        k9: dtid9
         if ebn.length > 0 then {
             ebv9: ebn.stringview
             ev9: ebv9.string
@@ -18476,12 +18508,15 @@ fillOneDataElem: function {
         eiter9: op.elements.iterate
         for e9: eiter9 loop {
             vx9: emitDataElem :ast :symtab :ctx n: (ast.nodes.get i: e9.u64)
-            ik9: "\{dtid9}.\{idx9}"
+            ik9: (dataslotkey owner: dtid9.u64 slot: idx9)
             iv2: vx9.copy
-            ctx.dataConst.set key: ik9 value: iv2
+            ctx.dataSlot.set key: ik9 value: iv2
             elbl: dataElemLabel :ast n: (ast.nodes.get i: e9.u64)
             if elbl.length > 0 then {
-                lk9: "\{dtid9}.\{elbl}"
+                lk9: (dataconstkey
+                    owner: dtid9.u64
+                    name: (zast.poolFind pool: ast.names text: elbl.stringview).u64
+                )
                 lv9: vx9.copy
                 ctx.dataConst.set key: lk9 value: lv9
             }
@@ -20415,8 +20450,9 @@ emitC: function {
         needUnits: (List String)
         needMembs: (List String)
         methodReturns: (Map String value: String)
-        dataElems: (Map String value: String)
-        dataConst: (Map String value: String)
+        dataElems: (MapVR ztypes.tid value: String)
+        dataConst: (MapVR dataconstkey value: String)
+        dataSlot: (MapVR dataslotkey value: String)
         ptrVids: (ListVal ztypes.vid)
         refBorrowRet: false
         aliases: (List VidVal)
