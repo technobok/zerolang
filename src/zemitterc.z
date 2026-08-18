@@ -2597,6 +2597,10 @@ Ctx: class {
     idMapVOriginTid: ztypes.tid
     idSetOriginTid: ztypes.tid
     idSetIterOriginTid: ztypes.tid
+    idMapItemIterROriginTid: ztypes.tid
+    idMapItemIterVOriginTid: ztypes.tid
+    idMapEntryROriginTid: ztypes.tid
+    idMapEntryVOriginTid: ztypes.tid
     mapEntryOriginTid: ztypes.tid
     listIterOriginTid: ztypes.tid
     listIterValOriginTid: ztypes.tid
@@ -10575,6 +10579,11 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     eidi9: "\{idcb9}_iterate(\{recvB2})"
                     return eidi9
                 }
+                if mn2.stringview == "iterateItems" then {
+                    idcb8: ctxCname :ctx tid: bstamp
+                    eidii9: "\{idcb8}_iterateItems(\{recvB2})"
+                    return eidii9
+                }
             }
             if (isSetOriginOf :symtab :ctx tid: bstamp) then {
                 if mn2.stringview == "length" then {
@@ -10610,7 +10619,9 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     return emii
                 }
             }
-            if (isMapEntryOriginOf :symtab :ctx tid: bstamp) then {
+            isAnyEntry9: isMapEntryOriginOf :symtab :ctx tid: bstamp
+            if (isIdMapEntryOriginOf :symtab :ctx tid: bstamp) then isAnyEntry9 = true
+            if isAnyEntry9 then {
                 # a borrowed entry yielded by iterateItems: key/value project
                 # the entry struct's fields. The loop var binds a deref alias
                 # (`(*__borrow_e)`, a value), so access uses `.`; a genuine
@@ -11252,6 +11263,18 @@ interpBaseIsMapEntry: function {
             :symtab
             tid: bt
             originTid: (ztypes.tid.create from: meRV9.u64)
+        ) then return true
+        ideR9: builtinTid :ast :symtab base: "IdMapEntryR"
+        if (originIsTid
+            :symtab
+            tid: bt
+            originTid: (ztypes.tid.create from: ideR9.u64)
+        ) then return true
+        ideV9: builtinTid :ast :symtab base: "IdMapEntryV"
+        if (originIsTid
+            :symtab
+            tid: bt
+            originTid: (ztypes.tid.create from: ideV9.u64)
         ) then return true
         meVR9: builtinTid :ast :symtab base: "MapEntryVR"
         if (originIsTid
@@ -17925,6 +17948,17 @@ isMapEntryOriginOf: function {
     return (originIsTid :symtab :tid originTid: ctx.mapEntryVVOriginTid)
 }
 
+# isIdMapEntryOriginOf -- the borrowed entry projection of either IdMap form.
+# key/value project the same struct fields in both.
+isIdMapEntryOriginOf: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out bool is {
+    if (originIsTid :symtab :tid originTid: ctx.idMapEntryROriginTid) then return true
+    return (originIsTid :symtab :tid originTid: ctx.idMapEntryVOriginTid)
+}
+
 # isCollectionOriginTid -- originTid (a genericOriginId) is one of the
 # cached collection/iterator origin ids, i.e. a template that mints a C struct
 # type (List/ListView/Set/Map/MapEntry and the iterators).
@@ -17940,6 +17974,10 @@ isCollectionOriginTid: function {ctx: Ctx.view originTid: ztypes.tid} out bool i
     if originTid == ctx.idMapVOriginTid then return true
     if originTid == ctx.idSetOriginTid then return true
     if originTid == ctx.idSetIterOriginTid then return true
+    if originTid == ctx.idMapItemIterROriginTid then return true
+    if originTid == ctx.idMapItemIterVOriginTid then return true
+    if originTid == ctx.idMapEntryROriginTid then return true
+    if originTid == ctx.idMapEntryVOriginTid then return true
     if originTid == ctx.mapOriginTid then return true
     if originTid == ctx.mapRVOriginTid then return true
     if originTid == ctx.mapVROriginTid then return true
@@ -20345,6 +20383,10 @@ emitC: function {
     idMapVOriginTid: ztypes.tid
     idSetOriginTid: ztypes.tid
     idSetIterOriginTid: ztypes.tid
+    idMapItemIterROriginTid: ztypes.tid
+    idMapItemIterVOriginTid: ztypes.tid
+    idMapEntryROriginTid: ztypes.tid
+    idMapEntryVOriginTid: ztypes.tid
     mapEntryOriginTid: ztypes.tid
     listIterOriginTid: ztypes.tid
     listIterValOriginTid: ztypes.tid
@@ -20416,6 +20458,26 @@ emitC: function {
             ast: program.ast
             :symtab
             base: "IdSetIter"
+        )
+        idMapItemIterROriginTid = ztypes.tid.create from: (builtinTid
+            ast: program.ast
+            :symtab
+            base: "IdMapItemIterR"
+        )
+        idMapItemIterVOriginTid = ztypes.tid.create from: (builtinTid
+            ast: program.ast
+            :symtab
+            base: "IdMapItemIterV"
+        )
+        idMapEntryROriginTid = ztypes.tid.create from: (builtinTid
+            ast: program.ast
+            :symtab
+            base: "IdMapEntryR"
+        )
+        idMapEntryVOriginTid = ztypes.tid.create from: (builtinTid
+            ast: program.ast
+            :symtab
+            base: "IdMapEntryV"
         )
         mapEntryOriginTid = ztypes.tid.create from: (builtinTid
             ast: program.ast
@@ -20658,6 +20720,10 @@ emitC: function {
         :idMapVOriginTid
         :idSetOriginTid
         :idSetIterOriginTid
+        :idMapItemIterROriginTid
+        :idMapItemIterVOriginTid
+        :idMapEntryROriginTid
+        :idMapEntryVOriginTid
         :mapEntryOriginTid
         :listIterOriginTid
         :listIterValOriginTid
@@ -22387,6 +22453,71 @@ emitIdMapMono: function {
     t8: applyTmpl text: t7 key: "OPTIONVAL_TAG" val: ovu.stringview
     t9: applyTmpl text: t8 key: "GET_BODY" val: getBody.stringview
     buf.append t9
+    buf.append "\n"
+    (emitIdMapIters
+        :symtab
+        :ctx
+        :monoId
+        :runtimeDir
+        nm: nm.stringview
+        keyT: keyT.stringview
+        valT: valT.stringview
+        :buf
+    )
+}
+
+# emitIdMapIters -- the entry projection and the item iterator, from their own
+# template. Separate from z_IdMap.c.tmpl for the reason emitMapIters is separate
+# from z_Map.c.tmpl: a mono whose `iterateItems` never resolved must still emit
+# its container, so the part that needs the iterator types is the part that can
+# be skipped.
+emitIdMapIters: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    monoId: ztypes.tid
+    runtimeDir: StringView
+    nm: StringView
+    keyT: StringView
+    valT: StringView
+    buf: String.borrow
+} is {
+    miiId9: monoMethodReturn :symtab :monoId nameId: zast.wkIterateItems
+    if miiId9 == 0 then return
+    oveId9: (monoMethodReturn
+        :symtab
+        monoId: (ztypes.tid.create from: miiId9.u64)
+        nameId: zast.wkCall
+    )
+    if oveId9 == 0 then return
+    oveName9: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: oveId9.u64)
+    meId9: ztypes.tid
+    {
+        meo9: (symtab.typing.declChildOfId
+            parentTypeId: (ztypes.tid.create from: oveId9.u64)
+            nameId: zast.wkSome
+        )
+        match (
+            meo9
+        ) case some then {
+            meId9 = ztypes.tid.create from: (meo9)
+        } case none then null
+    }
+    if meId9.isZero then return
+    mii9: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: miiId9.u64)
+    me9: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: meId9.u64)
+    ove9: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: oveId9.u64)
+    oveu9: cUpperOf text: oveName9.stringview
+    pi9: "\{runtimeDir}/z_IdMapIter.c.tmpl"
+    rawi9: readTemplateCached :ctx path: pi9.stringview
+    if rawi9.length == 0 then return
+    j1: applyTmpl text: rawi9 key: "NAME" val: nm
+    j2: applyTmpl text: j1 key: "KEY_T" val: keyT
+    j3: applyTmpl text: j2 key: "VAL_T" val: valT
+    j4: applyTmpl text: j3 key: "IDMAPITEMITER" val: mii9.stringview
+    j5: applyTmpl text: j4 key: "IDMAPENTRY" val: me9.stringview
+    j6: applyTmpl text: j5 key: "OPTIONVIEW_ENTRY" val: ove9.stringview
+    j7: applyTmpl text: j6 key: "OPTIONVIEW_ENTRY_TAG" val: oveu9.stringview
+    buf.append j7
     buf.append "\n"
 }
 

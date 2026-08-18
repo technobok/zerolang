@@ -598,7 +598,8 @@ shadow-guard:
 # key, value and element types exactly as emitMapMono and emitSetMono do -- the
 # same sanctioned shape, in a new family rather than a new kind of lookup. 97 ->
 # 98 for emitIdSetMono's iterator leg, which names the OptionView its `call`
-# returns to build the tag macro, exactly as emitSetMono does.
+# returns to build the tag macro, exactly as emitSetMono does; 98 -> 99 for
+# emitIdMapIters, which does the same for the entry OptionView.
 # The last two pin where C names are BUILT: the type checker composes none, and
 # the emitter spells the z_t{id} shape only inside its one composer, which the
 # per-program table in emitC calls once per type.
@@ -624,7 +625,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 22; \
 	chk "userFnId" "$$e4" 32; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "typeNameOfReg9" "$$e6" 98; \
+	chk "typeNameOfReg9" "$$e6" 99; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 4; \
 	chk "monoOriginName" "$$e9" 8; \
@@ -1016,6 +1017,7 @@ VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:M
   z_MapIter.c.tmpl=@@NAME@@:MapRR,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
   z_Set.c.tmpl=@@NAME@@:SetRef,@@SETITER@@:SetIter \
   z_IdMap.c.tmpl=@@NAME@@:IdMapR \
+  z_IdMapIter.c.tmpl=@@NAME@@:IdMapR,@@IDMAPITEMITER@@:IdMapItemIterR,@@IDMAPENTRY@@:IdMapEntryR \
   z_IdSet.c.tmpl=@@NAME@@:IdSet,@@IDSETITER@@:IdSetIter
 VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get getMut:ListRef.getMut,ListView.getMut \
   contains:ListRef.contains \
@@ -1029,7 +1031,8 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   ListRef.destroy ListRef.grow MapRR.destroy MapRR.grow MapRR.find \
   SetRef.destroy SetRef.grow SetRef.find MapEntry.key MapEntry.value \
   IdMapR.destroy IdMapR.grow IdMapR.find IdMapR.slot IdMapR.entries_cap \
-  IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap
+  IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap \
+  IdMapEntryR.key IdMapEntryR.value
 VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   StringView.asString:inline \
   ListVal.append:ListRef.append ListVal.insert:ListRef.insert \
@@ -1066,6 +1069,8 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   IdMapR.length:inline IdMapR.capacity:inline \
   IdMapV.length:inline IdMapV.capacity:inline \
   IdSet.length:inline IdSet.capacity:inline \
+  IdMapV.iterateItems:IdMapR.iterateItems \
+  IdMapItemIterV.call:IdMapItemIterR.call \
   String.length:inline String.capacity:inline String.stringview:inline \
   StringView.length:inline StringView.string:byvalue \
   String.contains:StringView.contains String.startsWith:StringView.startsWith \
