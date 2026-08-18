@@ -1556,7 +1556,7 @@ definingUnitFor: function {
     cuId9: nameIdOf :ast name: currentUnit
     hit9: (envLookup
         :ty
-        frame: (frameFor :ty :ast unitNameId: cuId9)
+        frame: (frameFor :ty unitDecl: (unitDeclOfName :ty :ast name: currentUnit))
         nameId: (zast.poolFind pool: ast.names text: name)
     )
     if hit9.declId.isZero then return "".string
@@ -1591,7 +1591,7 @@ declareCanonicalType: function {
     qowner9: u64
     # Inside a namespace unit, the enclosing type is a child of THAT unit, not
     # of the file unit -- the unit-name index only ever holds file units.
-    nsF9: nsFrameOf :ty :ast unitNameId: (nameIdOf :ast name: defUnit)
+    nsF9: nsFrameOf :ty :ast name: defUnit
     nsT9: declTypeIdOf :ty declId: nsF9
     if (ownerNameId.isZero) == false when (nsT9.isZero) == false then {
         nso9: ty.declChildOfId parentTypeId: nsT9 nameId: ownerNameId
@@ -3350,7 +3350,7 @@ demandTyperefNames: function {
         if (isNumericLiteralName name: teN9.stringview) == false then {
             (demandDefinition
                 :ty
-                frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
+                frame: (frameFor :ty unitDecl: (unitDeclOfName :ty :ast name: unitName))
                 nameId: typeExpr.name
             )
         }
@@ -3367,7 +3367,7 @@ demandTyperefNames: function {
         if hn.length > 0 then {
             (demandDefinition
                 :ty
-                frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
+                frame: (frameFor :ty unitDecl: (unitDeclOfName :ty :ast name: unitName))
                 nameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.callable.u64))
             )
         }
@@ -3443,7 +3443,7 @@ resolveTyperefShell: function {
         teR9: ast.names.texts.get i: typeExpr.name.u64
         (demandDefinition
             :ty
-            frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
+            frame: (frameFor :ty unitDecl: (unitDeclOfName :ty :ast name: unitName))
             nameId: typeExpr.name
         )
         return (resolveAtomType
@@ -3489,7 +3489,7 @@ resolveTyperefShell: function {
         suffix: atomName :ast n: (ast.nodes.get i: typeExpr.callable.u64)
         (demandDefinition
             :ty
-            frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName))
+            frame: (frameFor :ty unitDecl: (unitDeclOfName :ty :ast name: unitName))
             nameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.callable.u64))
         )
         aiter: typeExpr.arguments.iterate
@@ -8446,7 +8446,7 @@ declOfUnitDefId: function {
     # child of that unit), each enclosing unit frame outward, the unit's root
     # -- and no further: this names a DEFINITION of the unit, not a
     # reference, so the prelude is not consulted.
-    cur9: frameFor :ty :ast unitNameId: (nameIdOf :ast name: defUnit)
+    cur9: frameFor :ty unitDecl: (unitDeclOfName :ty :ast name: defUnit)
     for cur9 > 0 loop {
         if cur9 == ty.coreUnitRoot then return (ztypes.declid.create from: 0)
         nd9: ty.declFindChild parentDeclId: cur9 :nameId
@@ -29005,7 +29005,7 @@ constOwnerDeclFor: function {
     # file unit. Asking only the innermost left a constant of an enclosing
     # inline unit unreachable from a unit nested inside it.
     dnm9: zast.poolFind pool: ast.names text: defName
-    cur9: frameFor :ty :ast unitNameId: (nameIdOf :ast name: unitName)
+    cur9: frameFor :ty unitDecl: (unitDeclOfName :ty :ast name: unitName)
     for cur9 > 0 loop {
         if cur9 == ty.coreUnitRoot then {
             cur9 = ztypes.declid
@@ -31492,49 +31492,57 @@ declSurfaceEnsure9: function {
 
 # --- the environment ---
 
-# frameFor -- the frame a name written in unit `unitNameId` resolves from: the
+# unitDeclOfName -- the Decl of the FILE unit a name denotes: the program
+# root's child of that name. THE ONE DOOR from a unit's name to its
+# declaration -- everything downstream compares and looks up by id, where two
+# units sharing a name are two answers rather than declFindChild's last-wins
+# coin flip. The empty name is the prelude-only probe and has no unit. A name
+# that is no file unit at all (a nested unit's or a template's own name,
+# spelled as the walk's unit) is not a probe: the cursor's own unit answers.
+unitDeclOfName: function {
+    ty: ztyping.ZTyping.view
+    ast: Ast.view
+    name: StringView
+} out ztypes.declid is {
+    if name.length == 0 then return (ztypes.declid.create from: 0)
+    nid9: zast.poolFind pool: ast.names text: name
+    if nid9.isZero then return (ztypes.declid.create from: 0)
+    r9: ty.declFindChild parentDeclId: ty.programRoot nameId: nid9
+    if r9.isZero then return (unitRootOfDecl :ty declId: ty.curFrame)
+    return r9
+}
+
+# frameFor -- the frame a name written in unit `unitDecl` resolves from: the
 # cursor's own frame when the cursor lies inside that unit (a body, a nested
 # unit, a template), else the unit's root -- a caller naming another unit is
 # a qualified probe (`core`'s `i64` for a literal's default, from a unit that
-# shadows `i64`) and starts there. A name that is no unit root at all (a
-# nested unit's or template's own name, spelled as the walk's unit) is not a
-# probe: the cursor answers. 0 for no unit (a prelude-only probe).
+# shadows `i64`) and starts there. 0 for no unit (a prelude-only probe).
 frameFor: function {
     ty: ztyping.ZTyping.view
-    ast: Ast.view
-    unitNameId: zast.nameid
+    unitDecl: ztypes.declid
 } out ztypes.declid is {
-    if unitNameId.isZero then return (ztypes.declid.create from: 0)
-    ur9: ztypes.declid
-    {
-        uro9: ty.declFindChild parentDeclId: ty.programRoot nameId: unitNameId
-        if (uro9.isZero) == false then ur9 = uro9
-    }
-    if ur9.isZero then {
-        # the empty name is the prelude-only probe (an interned id, not 0)
-        if (zast.poolTextAt pool: ast.names ref: unitNameId).length == 0 then return ur9
-        return (unitFrameOf :ty declId: ty.curFrame)
-    }
+    if unitDecl.isZero then return (ztypes.declid.create from: 0)
     # the cursor's nearest unit frame first: it lies within the unit's root
     # exactly when the cursor does, and the climb from a unit frame to the
     # root is a hop or two where the climb from a body frame is many
     uf9: unitFrameOf :ty declId: ty.curFrame
-    if (frameIsWithin :ty frame: uf9 root: ur9) then return uf9
-    return ur9
+    if (frameIsWithin :ty frame: uf9 root: unitDecl) then return uf9
+    return unitDecl
 }
 
-# nsFrameOf -- the NESTED unit frame a name written in unit `unitNameId`
+# nsFrameOf -- the NESTED unit frame a name written in unit `unitDecl`
 # resolves from -- frameFor's answer when it is not the unit's own root --
 # or 0 at the top level of the unit. The scope the members of a namespace or
 # template are declared in, as against the file unit.
 nsFrameOf: function {
     ty: ztyping.ZTyping.view
     ast: Ast.view
-    unitNameId: zast.nameid
+    name: StringView
 } out ztypes.declid is {
-    f9: frameFor :ty :ast :unitNameId
+    f9: frameFor :ty unitDecl: (unitDeclOfName :ty :ast :name)
     if f9.isZero then return f9
-    uro9: ty.declFindChild parentDeclId: ty.programRoot nameId: unitNameId
+    nid9: zast.poolFind pool: ast.names text: name
+    uro9: ty.declFindChild parentDeclId: ty.programRoot nameId: nid9
     if (uro9.isZero) == false then {
         if uro9 == f9 then return (ztypes.declid.create from: 0)
     }
@@ -32060,7 +32068,7 @@ walkLookupTyperefById: function {
         :ast
         :ty
         :reg
-        frame: (frameFor :ty :ast unitNameId: (nameIdOf :ast name: currentUnit))
+        frame: (frameFor :ty unitDecl: (unitDeclOfName :ty :ast name: currentUnit))
         :baseId
     )
 }
