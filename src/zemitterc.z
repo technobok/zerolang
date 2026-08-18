@@ -2498,6 +2498,10 @@ Ctx: class {
     osUnitDecl: u64
     cliUnitDecl: u64
     netUnitDecl: u64
+    # the three fixed (unit, class) hooks, resolved once through the unit
+    ioFileTid: u64
+    netListenerTid: u64
+    netConnTid: u64
     unitTidsC: (ListVal ztypes.tid)
     unitKeysC: (List String)
     unitCacheBuilt: bool
@@ -18148,6 +18152,29 @@ regNameIs: function {symtab: zenv.ZSymbolTable tid: ztypes.tid name: StringView}
     return (symtab.reg.nameIs :tid :name)
 }
 
+# unitClassTid9 -- the CLASS a unit declares under `nameId`, asked of THAT
+# unit's own declarations. Exactly one name is in scope inside a unit, so this
+# is a lookup and not a search: it replaces a sweep over every id in the
+# registry that text-compared each candidate and then asked which unit defined
+# it. 0 when the unit declares no such class.
+unitClassTid9: function {
+    symtab: zenv.ZSymbolTable.view
+    unitDecl: u64
+    nameId: zast.nameid
+} out ztypes.tid is {
+    z9: ztypes.tid
+    if unitDecl == 0 then return z9
+    d9: (symtab.typing.declFindChild
+        parentDeclId: (ztypes.declid.create from: unitDecl)
+        :nameId
+    )
+    if d9.isZero then return z9
+    t9: ztypecheck.declTypeIdOf ty: symtab.typing declId: d9
+    if t9.isZero then return z9
+    if (symtab.reg.typetypeOf typeId: t9) != ztypes.ztypetype.classType then return z9
+    return t9
+}
+
 # unitDeclByName9 -- the file unit spelled `name`, asked of the ENVIRONMENT:
 # the program root's own children, which IS the list of units in scope. A name
 # reaches this only from a source literal, a unit segment loadNativeTbl parsed
@@ -20391,6 +20418,9 @@ emitC: function {
         osUnitDecl: 0
         cliUnitDecl: 0
         netUnitDecl: 0
+        ioFileTid: 0
+        netListenerTid: 0
+        netConnTid: 0
         unitTidsC: (ListVal ztypes.tid)
         unitKeysC: (List String)
         unitCacheBuilt: false
@@ -21268,6 +21298,21 @@ buildDefUnitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx ast: Ast.view} i
     ctx.osUnitDecl = unitDeclByName9 :symtab :ast name: "os"
     ctx.cliUnitDecl = unitDeclByName9 :symtab :ast name: "cli"
     ctx.netUnitDecl = unitDeclByName9 :symtab :ast name: "net"
+    ctx.ioFileTid = (unitClassTid9
+        :symtab
+        unitDecl: ctx.ioUnitDecl
+        nameId: (zast.poolFind pool: ast.names text: "File")
+    ).u64
+    ctx.netListenerTid = (unitClassTid9
+        :symtab
+        unitDecl: ctx.netUnitDecl
+        nameId: (zast.poolFind pool: ast.names text: "Listener")
+    ).u64
+    ctx.netConnTid = (unitClassTid9
+        :symtab
+        unitDecl: ctx.netUnitDecl
+        nameId: (zast.poolFind pool: ast.names text: "Conn")
+    ).u64
 }
 
 # ctxBindMain -- rebind the emission main unit: mainName plus its unit
@@ -22432,23 +22477,12 @@ ioFileLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view
 }
 
 # cliClassTypeId -- the type id of a cli-unit CLASS named `name` (0 absent).
-cliClassTypeId: function {symtab: zenv.ZSymbolTable ctx: Ctx.view name: StringView} out u64 is {
-    cliUid9: ctx.cliUnitDecl
-    if cliUid9 == 0 then return 0
-    last: symtab.reg.nextTypeId
-    ti: 1.u64
-    for ti < last loop {
-        if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ti.u64)) == ztypes.ztypetype.classType then {
-            if (regNameIs :symtab tid: (ztypes.tid.create from: ti.u64) :name) then {
-                if (defUnitIdOf9
-                    :ctx
-                    tid: (ztypes.tid.create from: ti.u64)
-                ) == cliUid9 then return ti
-            }
-        }
-        ti = ti + 1
-    }
-    return 0
+cliClassTypeId: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    nameId: zast.nameid
+} out u64 is {
+    return (unitClassTid9 :symtab unitDecl: ctx.cliUnitDecl :nameId).u64
 }
 
 # isHeapPtrCollection -- a Map/Set mono is stored as a heap pointer (List is
@@ -22713,22 +22747,8 @@ emitIoStdStreams: function {
 # in ctx.emittedUserTypes so every other path skips it -- without that mark a
 # by-value use of File would emit a second struct carrying a generic destructor
 # that never closes the fd.
-emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
-    ioUid9: ctx.ioUnitDecl
-    last: symtab.reg.nextTypeId
-    fid: ztypes.tid
-    ti: 1.u64
-    for ti < last loop {
-        if fid.isZero then {
-            if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ti.u64)) == ztypes.ztypetype.classType then {
-                if (regNameIs :symtab tid: (ztypes.tid.create from: ti.u64) name: "File") then {
-                    duId9: defUnitIdOf9 :ctx tid: (ztypes.tid.create from: ti.u64)
-                    if duId9 > 0 when duId9 == ioUid9 then fid = ztypes.tid.create from: ti.u64
-                }
-            }
-        }
-        ti = ti + 1
-    }
+emitIoFileClass: function {ctx: Ctx buf: String.borrow} is {
+    fid: ztypes.tid.create from: ctx.ioFileTid
     if fid.isZero then return
     ego9: ctx.emittedUserTypes.get key: fid
     match (
@@ -22754,27 +22774,8 @@ emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow
 # fragments dereference the fields, so the body is pre-emitted here and the
 # type marked in ctx.emittedUserTypes so the ordered user-struct pass skips it
 # (that pass runs after the fragments -- too late).
-emitNetFdClass: function {
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    name: StringView
-    buf: String.borrow
-} is {
-    netUid9: ctx.netUnitDecl
-    last: symtab.reg.nextTypeId
-    fid: ztypes.tid
-    ti: 1.u64
-    for ti < last loop {
-        if fid.isZero then {
-            if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ti.u64)) == ztypes.ztypetype.classType then {
-                if (regNameIs :symtab tid: (ztypes.tid.create from: ti.u64) :name) then {
-                    duId9: defUnitIdOf9 :ctx tid: (ztypes.tid.create from: ti.u64)
-                    if duId9 > 0 when duId9 == netUid9 then fid = ztypes.tid.create from: ti.u64
-                }
-            }
-        }
-        ti = ti + 1
-    }
+emitNetFdClass: function {ctx: Ctx tid: u64 buf: String.borrow} is {
+    fid: ztypes.tid.create from: tid
     if fid.isZero then return
     ego9: ctx.emittedUserTypes.get key: fid
     match (
@@ -22796,10 +22797,10 @@ emitNetFdClass: function {
 }
 
 # emitNetClasses -- the net fd-holder value reps (Listener/Conn), need-gated.
-emitNetClasses: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view buf: String.borrow} is {
+emitNetClasses: function {ctx: Ctx.view buf: String.borrow} is {
     if (needsHasM :ctx uname: "net" memb: "@unit") == false then return
-    emitNetFdClass :symtab :ctx name: "Listener" :buf
-    emitNetFdClass :symtab :ctx name: "Conn" :buf
+    emitNetFdClass :ctx tid: ctx.netListenerTid :buf
+    emitNetFdClass :ctx tid: ctx.netConnTid :buf
 }
 
 # maybePreEmitElem -- a user type (variant/record/class/union) used as a
@@ -24276,8 +24277,8 @@ emitMonos: function {
         emitUnionMono :ast :symtab :ctx tid: (ztypes.tid.create from: iuId9.u64) :buf
         tsu = tsu + 1
     }
-    emitIoFileClass :symtab :ctx :buf
-    emitNetClasses :symtab :ctx :buf
+    emitIoFileClass :ctx :buf
+    emitNetClasses :ctx :buf
     # reachable cli LEAF classes (FlagDef/OptionDef/PositionalDef) -- pure-string
     # classes the List monos below embed; emitted before those monos.
     tclf: u64
@@ -25920,7 +25921,11 @@ emitCliSpecCreate: function {
 } out String is {
     cn: cliCreateClass :ast n: (ast.nodes.get i: call.callable.u64)
     if cn.length == 0 then return "".string
-    cid: cliClassTypeId :symtab :ctx name: cn.stringview
+    cid: (cliClassTypeId
+        :symtab
+        :ctx
+        nameId: (zast.poolFind pool: ast.names text: cn.stringview)
+    )
     if cid == 0 then return "".string
     cco: (symtab.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: cid.u64)
