@@ -22372,7 +22372,7 @@ emitIdMapMono: function {
         # same borrowed-pointer contract as Map.get: the OptionView pins the
         # container with a SHARED lock and its destroy is a no-op, so nothing
         # is copied out of the entry storage
-        getBody = "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data = &_this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
+        getBody = "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data = (void*)&_this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
     }
     p: "\{runtimeDir}/z_IdMap.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringview
@@ -23363,6 +23363,20 @@ monoElemIdsOf: function {
         return
     }
     if (isMapOriginOf :symtab :ctx tid: monoId) then {
+        monoMapKV :symtab :monoId :acc
+        return
+    }
+    # the id-keyed pair read their element types the same way their hashed
+    # siblings do. They need an arm of their own because, unlike a Map, they
+    # are STACK structs: an IdMap embedding a user type by value is a real
+    # ordering edge, and without this it looks like it embeds nothing and is
+    # emitted ahead of the optionval its `get` returns.
+    if (isIdSetOriginOf :symtab :ctx tid: monoId) then {
+        ideid9: setElemType :symtab :monoId
+        if ideid9 > 0 then acc.append ideid9
+        return
+    }
+    if (isIdMapOriginOf :symtab :ctx tid: monoId) then {
         monoMapKV :symtab :monoId :acc
         return
     }
