@@ -21,7 +21,6 @@ public: unit {
     :defaultval
     :foldedbranch
     :callslot
-    :genericslot
     :constslot
     :monostamp
     :nsbody
@@ -44,15 +43,6 @@ ZType: ztypes.ZType
 Node: zast.Node
 
 # --- relational row carriers ---
-
-# One edge of the generic-args table: a (parent, param-name) link. The
-# mutable arg-type id lives in genericArgTypeBy, keyed by a
-# (parentTypeId, paramNameId) composite.
-ZTypeGenericArg: class {
-    parentTypeId: ztypes.tid
-    paramName: String
-    position: u64
-}
 
 # The clause a constant fold selected for an `if`. `known` false means the
 # conditions did not all fold, so a runtime `if` must be emitted; `known` true
@@ -146,12 +136,6 @@ declkindName: function {k: declkind} out String is {
 # container's byte hash to read.
 callslot: record {
     call: u64
-    param: u64
-}
-
-# genericslot -- which generic parameter of which parameterized type.
-genericslot: record {
-    owner: u64
     param: u64
 }
 
@@ -337,9 +321,6 @@ ZTyping: class {
     # an unresolved 0 is never stored so later resolution can still fill it
     builtinTidMemo: (MapVV u64 value: ztypes.tid)
 
-    # one row per (generic parent, param name) link
-    typeGenericArg: (List ZTypeGenericArg)
-
     # true once any public-interface rename exists (skips alias lookups otherwise)
     renameSeen: bool
     # true once any member has been marked private (gates cross-unit checks)
@@ -392,8 +373,6 @@ ZTyping: class {
     # per-call-argument disposition (take/lock/borrow); absent = valtype/none.
     # tooling-only; the emitter never reads it.
     argDisposition: (MapVV u64 value: ztypes.zparamownership)
-    # generic arg-type id, keyed by owning type and parameter name
-    genericArgTypeBy: (MapVV genericslot value: u64)
     # inferred concrete tid per call, keyed by call node and parameter name
     callGenericBinding: (MapVV callslot value: u64)
 
@@ -1801,51 +1780,6 @@ ZTyping: class {
         }
     }
 
-    # --- generic args ---
-
-    hasGenericArgNamed: function {:this parentTypeId: ztypes.tid paramName: StringView} out bool is {
-        iter: this.typeGenericArg.iterate
-        for row: iter loop {
-            if row.parentTypeId == parentTypeId then {
-                if row.paramName.stringview == paramName then return true
-            }
-        }
-        return false
-    }
-
-    setGenericArg: function {:this pool: zast.StringPool parentTypeId: ztypes.tid paramName: StringView argTypeId: u64} is {
-        present: this.hasGenericArgNamed :parentTypeId :paramName
-        if present == false then {
-            pos: this.typeGenericArg.length
-            this.typeGenericArg.append (ZTypeGenericArg
-                :parentTypeId
-                paramName: paramName.string
-                position: pos
-            )
-        }
-        key9: (genericslot owner: parentTypeId.u64 param: (pool.find s: paramName).u64)
-        this.genericArgTypeBy.set key: key9 value: argTypeId
-    }
-
-    genericArgOf: function {:this pool: zast.StringPool parentTypeId: ztypes.tid paramName: StringView} out optionval u64 is {
-        key9: (genericslot owner: parentTypeId.u64 param: (pool.find s: paramName).u64)
-        r: this.genericArgTypeBy.get key: key9
-        match (
-            r
-        ) case some then {
-            return (optionval.some r)
-        } case none then {
-            return (optionval.none u64)
-        }
-    }
-
-    hasGenericArgs: function {:this parentTypeId: ztypes.tid} out bool is {
-        iter: this.typeGenericArg.iterate
-        for row: iter loop {
-            if row.parentTypeId == parentTypeId then return true
-        }
-        return false
-    }
 }
 
 # armside -- which side of a 2-arm sum a trailing predicate segment names.
@@ -2157,7 +2091,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         curMonoStamp: 0
         curMonoFnTid: ztypes.tid
         builtinTidMemo: (MapVV u64 value: ztypes.tid)
-        typeGenericArg: (List ZTypeGenericArg)
         renameSeen: false
         privacySeen: false
         asConstClone: (MapVV u64 value: bool)
@@ -2193,7 +2126,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         constructedTypes: (MapVV u64 value: bool)
         collectionChildrenBuilt: (MapVV u64 value: bool)
         argDisposition: (MapVV u64 value: ztypes.zparamownership)
-        genericArgTypeBy: (MapVV genericslot value: u64)
         callGenericBinding: (MapVV callslot value: u64)
         binopOwner: (MapVV u64 value: ztypes.tid)
         binopMethod: (MapVV u64 value: ztypes.tid)
@@ -2420,13 +2352,6 @@ main: function is {
     smokeOwn pool: pool9 :ty :pid name: "y"
     smokeOwn pool: pool9 :ty :pid name: "label"
 
-    print "=== generic args ==="
-    ty.setGenericArg pool: pool9 parentTypeId: lid paramName: "of" argTypeId: tInt
-    ty.setGenericArg pool: pool9 parentTypeId: lid paramName: "of" argTypeId: tStr
-    smokeGenericArg pool: pool9 :ty pid: lid name: "of"
-    print "hasGenericArgs List -> \{boolText (ty.hasGenericArgs parentTypeId: lid)}"
-    print "hasGenericArgs point -> \{boolText (ty.hasGenericArgs parentTypeId: pid)}"
-
     print "=== node stamps ==="
     stagedStr: tStr
     nodeTypeSet tbl: ty.nodeType nid: 100 tid: stagedStr
@@ -2513,12 +2438,6 @@ smokeDefault: function {pool: zast.StringPool.view ty: ZTyping pid: u64 name: St
 smokeOwn: function {pool: zast.StringPool.view ty: ZTyping pid: u64 name: StringView} is {
     o: ty.declOwnershipText :pool parentTypeId: (ztypes.tid.create from: pid.u64) :name
     print "ownership point.\{name} -> \{o}"
-}
-
-# smoke-test: print the generic-argument bound for `name` on `pid`.
-smokeGenericArg: function {pool: zast.StringPool.view ty: ZTyping pid: u64 name: StringView} is {
-    r: ty.genericArgOf :pool parentTypeId: (ztypes.tid.create from: pid.u64) paramName: name
-    print "genericArg List.\{name} -> \{optU64Text r}"
 }
 
 # smoke-test: print every declared member of parent type `parentTypeId`.
