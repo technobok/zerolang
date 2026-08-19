@@ -8898,6 +8898,237 @@ emitFnptrLocalCall: function {
 
 # emit a call used as a value (its result expression).
 
+# conformanceArgText -- a concrete class/record argument handed to a
+# protocol / facet parameter goes in as its conformance box: the impl's
+# `<cname>_<label>_create(&arg)`. "" when the parameter is no spec or the
+# argument no conforming concrete type.
+conformanceArgText: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    argOpNode: Node.view
+    av: StringView
+    avVid: ztypes.vid
+    protoTid: u64
+} out String is {
+    pptt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: protoTid.u64)
+    isProtoP: false
+    if pptt == ztypes.ztypetype.protocolType then isProtoP = true
+    if pptt == ztypes.ztypetype.facetType then isProtoP = true
+    if (isProtoP) == false then return "".string
+    aTid: stampIdOf :symtab nid: (interpPartNodeId n: argOpNode)
+    aTT: symtab.reg.typetypeOf typeId: aTid
+    aConc: false
+    if aTT == ztypes.ztypetype.classType then aConc = true
+    if aTT == ztypes.ztypetype.recordType then aConc = true
+    if (aConc) == false then return "".string
+    pLbl: conformanceLabelFor :symtab implTid: aTid :protoTid
+    if pLbl.length == 0 then return "".string
+    aIb: ctxCname :ctx tid: aTid
+    aRcv: "&\{av}"
+    if (isPtrVid :ctx vid: avVid) then aRcv = "\{av}"
+    return "\{aIb}_\{pLbl}_create(\{aRcv})"
+}
+
+# userFnParamByPointer -- a user function's parameter takes its argument by
+# pointer: the receiver (in both families), a marked valtype reference, an
+# unowned reftype, a borrowed String, a List.
+userFnParamByPointer: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    fid: ztypes.tid
+    pname: StringView
+    pid: u64
+    take: bool
+} out bool is {
+    # The receiver is a pointer in both families, so a value-typed one still
+    # needs `&`. Only this leg is added, not the whole definition-side
+    # predicate: a Map/Set argument is already a pointer here and must not
+    # be addressed again.
+    if (paramIsReceiverName :ast :symtab :fid :pname) then return true
+    if (markedValtypeRefParam :ast :symtab :fid :pname :pid) then return true
+    if take == false when (isReftypeParam
+        :ast
+        :symtab
+        :ctx
+        tid: (ztypes.tid.create from: pid.u64)
+    ) then return true
+    if (isBorrowStringParam
+        :ast
+        :symtab
+        :fid
+        :pname
+        pid: (ztypes.tid.create from: pid.u64)
+    ) then return true
+    return (isListPtrParam :ast :symtab :ctx :fid :pname tid: (ztypes.tid.create from: pid.u64))
+}
+
+# userFnArgText -- the C text of one argument of a user-function call, for
+# the parameter it binds: the interpolation / conformance projections, then
+# the by-reference or borrow hoist the parameter's mode asks for.
+userFnArgText: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    fid: ztypes.tid
+    pinId: u64
+    pinNm: StringView
+    argOpNode: Node.view
+} out String is {
+    iavb: (emitInterpArgForParam
+        :ast
+        :symtab
+        :ctx
+        n: argOpNode
+        :fid
+        pname: pinNm
+        pid: pinId
+    )
+    atomVarId: String
+    projd: false
+    if iavb.length > 0 then {
+        atomVarId = iavb
+        projd = true
+    } else {
+        atomVarId = emitExpr :ast :symtab :ctx n: argOpNode
+    }
+    avq: (atomVidIfPlain
+        :ast
+        :symtab
+        :ctx
+        n: argOpNode
+        text: atomVarId.stringview
+    )
+    ppid: pinId
+    {
+        spec: (conformanceArgText
+            :symtab
+            :ctx
+            :argOpNode
+            av: atomVarId.stringview
+            avVid: avq
+            protoTid: ppid
+        )
+        if spec.length > 0 then {
+            atomVarId = spec
+            projd = true
+        }
+    }
+    if projd then return atomVarId
+    # the parameter's mode: by pointer (addressed unless already one), or a
+    # borrow hoist of the value
+    pTake8: (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: fid
+        name: pinNm
+        own: ztypes.zparamownership.takeMode
+    )
+    isBorrowed: hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode
+    if (userFnParamByPointer :ast :symtab :ctx :fid pname: pinNm pid: pinId take: pTake8) then {
+        if (isPtrVid :ctx vid: avq) then return atomVarId
+        return (emitByrefArg
+            :ast
+            :symtab
+            :ctx
+            av: atomVarId.stringview
+            pid: (ztypes.tid.create from: pinId.u64)
+            isBorrow: isBorrowed
+        )
+    }
+    vbh8: (hoistBorrowValArg
+        :ast
+        :symtab
+        :ctx
+        av: atomVarId.stringview
+        pid: (ztypes.tid.create from: pinId.u64)
+        paramTake: pTake8
+        isBorrow: isBorrowed
+    )
+    if vbh8.length > 0 then return vbh8
+    return atomVarId
+}
+
+# emitUserFnCall -- a call of a user-declared function `fid` (a free function
+# or a static method reached by its own id): its C name applied to the
+# arguments in parameter order, defaults rendered for the omitted ones.
+emitUserFnCall: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    call: zast.CallData.view
+    fid: ztypes.tid
+} out String is {
+    fc: ctxCname :ctx tid: fid
+    fpNames: (List String)
+    fpIds: (ListVal u64)
+    fpIdsNm: (ListVal u64)
+    recFieldLists :ast :symtab tid: fid names: fpNames ids: fpIds nameIds: fpIdsNm
+    slots: argSlotList :ast :call :fpNames
+    valBySlot: (IdMapR u64 value: String)
+    ai8: u64
+    aiter: call.arguments.iterate
+    for aId: aiter loop {
+        a: ast.nodes.get i: aId.u64
+        match (
+            a
+        ) case namedoperation then {
+            argOpNode: ast.nodes.get i: a.operation.u64
+            slot9b: slots.get i: ai8
+            if slot9b < fpNames.length then {
+                valBySlot.set key: slot9b value: (userFnArgText
+                    :ast
+                    :symtab
+                    :ctx
+                    :fid
+                    pinId: (fpIds.get i: slot9b)
+                    pinNm: (fpNames.get i: slot9b).stringview
+                    :argOpNode
+                )
+            }
+            ai8 = ai8 + 1
+        } else null
+    }
+    args: String
+    emitted: u64
+    pp: u64
+    ppn: fpNames.length
+    for pp < ppn loop {
+        vo: valBySlot.get key: pp
+        match (
+            vo
+        ) case some then {
+            if emitted > 0 then args.append ", "
+            args.append vo
+            emitted = emitted + 1
+        } case none then {
+            pdpn9Id: fpIdsNm.get i: pp
+            if (symtab.typing.declHasDefaultId
+                parentTypeId: fid
+                nameId: (zast.nameid.create from: pdpn9Id.u32.orPanic)
+            ) then {
+                pddt: (symtab.typing.declDefaultOfId
+                    parentTypeId: fid
+                    nameId: (zast.nameid.create from: pdpn9Id.u32.orPanic)
+                )
+                pdpid: fpIds.get i: pp
+                pdrv: (renderDefault
+                    :ast
+                    :symtab
+                    :ctx
+                    dv: pddt
+                    targetTid: (ztypes.tid.create from: pdpid.u64)
+                )
+                if emitted > 0 then args.append ", "
+                args.append pdrv
+                emitted = emitted + 1
+            }
+        }
+        pp = pp + 1
+    }
+    e8: "\{fc}(\{args})"
+    return e8
+}
+
 emitCallValue: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
@@ -9010,6 +9241,19 @@ emitCallValue: function {
             } else {
                 rcu: emitCrossUnitFnCall :ast :symtab :ctx :call
                 if rcu.length > 0 then return rcu
+                # a bare call of a function declared in the unit at hand; a
+                # fn-typed LOCAL's atom carries its variable id and calls
+                # through the pointer instead
+                if rtid > 0 when (isGenericType :symtab tid: rtid) == false then {
+                    rcal: ast.nodes.get i: call.callable.u64
+                    if rcal.atomid when (symtab.typing.atomVariableId.has key: call.callable.u64) == false then {
+                        # inside a template instance's body the sibling is the
+                        # instance's own function, on the per-mono stamp
+                        mfid: monoStampIdOf :symtab :ctx nid: call.callable.u64
+                        if mfid.isZero then mfid = rtid
+                        return (emitUserFnCall :ast :symtab :ctx :call fid: mfid)
+                    }
+                }
             }
         }
         if rkind.armDecl then {
@@ -9134,268 +9378,54 @@ emitCallValue: function {
     if fpfc.length > 0 then return fpfc
     imc: emitInstanceMethodCall :ast :symtab :ctx :call
     if imc.length > 0 then return imc
-    if fid > 0 then {
-        fc: ctxCname :ctx tid: fid
-        fpNames: (List String)
-        fpIds: (ListVal u64)
-        fpIdsNm: (ListVal u64)
-        recFieldLists :ast :symtab tid: fid names: fpNames ids: fpIds nameIds: fpIdsNm
-        slots: argSlotList :ast :call :fpNames
-        valBySlot: (IdMapR u64 value: String)
-        ai8: u64
-        aiter: call.arguments.iterate
-        for aId: aiter loop {
-            a: ast.nodes.get i: aId.u64
+    if fid > 0 then return (emitUserFnCall :ast :symtab :ctx :call :fid)
+    if cn0.stringview == "stringJoin" then {
+        needsAddM :ctx uname: "collections" memb: "coll_join"
+        sjargs: String
+        sji: u64
+        with sjiter: call.arguments.iterate do for sja9Id: sjiter loop {
+            sja: ast.nodes.get i: sja9Id.u64
             match (
-                a
+                sja
             ) case namedoperation then {
-                argOpNode: ast.nodes.get i: a.operation.u64
-                slot9b: slots.get i: ai8
-                if slot9b < fpNames.length then {
-                    pinId: fpIds.get i: slot9b
-                    pinNm: fpNames.get i: slot9b
-                    iavb: (emitInterpArgForParam
-                        :ast
+                if sji > 0 then sjargs.append ", "
+                sjn: ast.nodes.get i: sja.operation.u64
+                sjv: emitExpr :ast :symtab :ctx n: sjn
+                sjq: atomVidIfPlain :ast :symtab :ctx n: sjn text: sjv.stringview
+                if sji == 0 when (isPtrVid :ctx vid: sjq) == false then sjargs.append "&"
+                sjIsStr: false
+                if sji > 0 then {
+                    sjat: (stampIdOf
                         :symtab
-                        :ctx
-                        n: (ast.nodes.get i: a.operation.u64)
-                        :fid
-                        pname: pinNm.stringview
-                        pid: pinId
+                        nid: (interpPartNodeId n: (ast.nodes.get i: sja.operation.u64))
                     )
-                    atomVarId: String
-                    projd: false
-                    if iavb.length > 0 then {
-                        atomVarId = iavb
-                        projd = true
-                    } else {
-                        aOpNode: ast.nodes.get i: a.operation.u64
-                        atomVarId = emitExpr :ast :symtab :ctx n: aOpNode
-                    }
-                    avq: (atomVidIfPlain
-                        :ast
-                        :symtab
-                        :ctx
-                        n: (ast.nodes.get i: a.operation.u64)
-                        text: atomVarId.stringview
-                    )
-                    pRaw: fpIds.get i: slot9b
-                    ppid: pRaw
-                    pptt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ppid.u64)
-                    isProtoP: false
-                    if pptt == ztypes.ztypetype.protocolType then isProtoP = true
-                    if pptt == ztypes.ztypetype.facetType then isProtoP = true
-                    if isProtoP then {
-                        aRaw: (stampIdOf
-                            :symtab
-                            nid: (interpPartNodeId n: (ast.nodes.get i: a.operation.u64))
-                        )
-                        aTid: aRaw
-                        aTT: symtab.reg.typetypeOf typeId: aTid
-                        aConc: false
-                        if aTT == ztypes.ztypetype.classType then aConc = true
-                        if aTT == ztypes.ztypetype.recordType then aConc = true
-                        if aConc then {
-                            pLbl: conformanceLabelFor :symtab implTid: aTid protoTid: ppid
-                            if pLbl.length > 0 then {
-                                aIb: ctxCname :ctx tid: aTid
-                                aRcv: "&\{atomVarId}"
-                                if (isPtrVid :ctx vid: avq) then aRcv = "\{atomVarId}"
-                                atomVarId = "\{aIb}_\{pLbl}_create(\{aRcv})"
-                                projd = true
-                            }
-                        }
-                    }
-                    byref8: false
-                    argRef8: String
-                    vbh8: String
-                    if (projd) == false then {
-                        fpid8: fpIds.get i: slot9b
-                        fpnO8: fpNames.get i: slot9b
-                        ptra8: false
-                        pTake8: (symtab.typing.declOwnershipIs
-                            pool: ast.names
-                            parentTypeId: fid
-                            name: fpnO8.stringview
-                            own: ztypes.zparamownership.takeMode
-                        )
-                        # The receiver is a pointer in both families, so a
-                        # value-typed one still needs `&`. Only this leg is
-                        # added, not the whole definition-side predicate: a
-                        # Map/Set argument is already a pointer here and must
-                        # not be addressed again.
-                        if (paramIsReceiverName
-                            :ast
-                            :symtab
-                            :fid
-                            pname: fpnO8.stringview
-                        ) then ptra8 = true
-                        if (markedValtypeRefParam
-                            :ast
-                            :symtab
-                            :fid
-                            pname: fpnO8.stringview
-                            pid: fpid8
-                        ) then ptra8 = true
-                        if pTake8 == false when (isReftypeParam
-                            :ast
-                            :symtab
-                            :ctx
-                            tid: (ztypes.tid.create from: fpid8.u64)
-                        ) then {
-                            ptra8 = true
-                        } else {
-                            if (isBorrowStringParam
-                                :ast
-                                :symtab
-                                :fid
-                                pname: fpnO8.stringview
-                                pid: (ztypes.tid.create from: fpid8.u64)
-                            ) then ptra8 = true
-                        }
-                        if (ptra8) == false then {
-                            if (isListPtrParam
-                                :ast
-                                :symtab
-                                :ctx
-                                :fid
-                                pname: fpnO8.stringview
-                                tid: (ztypes.tid.create from: fpid8.u64)
-                            ) then ptra8 = true
-                        }
-                        if ptra8 then {
-                            if (isPtrVid :ctx vid: avq) == false then {
-                                byref8 = true
-                                argRef8 = (emitByrefArg
-                                :ast
-                                :symtab
-                                :ctx
-                                av: atomVarId.stringview
-                                pid: (ztypes.tid.create from: fpid8.u64)
-                                isBorrow: (hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode)
-                            )
-                            }
-                        }
-                        if (ptra8) == false then {
-                            vbh8 = (hoistBorrowValArg
-                                :ast
-                                :symtab
-                                :ctx
-                                av: atomVarId.stringview
-                                pid: (ztypes.tid.create from: fpid8.u64)
-                                paramTake: pTake8
-                                isBorrow: (hoistExprIsBorrowRooted
-                                    :ast
-                                    :symtab
-                                    :ctx
-                                    n: argOpNode
-                                )
-                            )
-                        }
-                    }
-                    finalS: String
-                    if byref8 then {
-                        finalS = argRef8.copy
-                    } else {
-                        if vbh8.length > 0 then {
-                            finalS = vbh8.copy
-                        } else {
-                            finalS = atomVarId.copy
-                        }
-                    }
-                    valBySlot.set key: slot9b value: finalS
+                    if sjat == ctx.strTid then sjIsStr = true
                 }
-                ai8 = ai8 + 1
+                if sjIsStr then {
+                    sjsv: svValueForm :ctx expr: sjv.stringview isStr: true vid: sjq
+                    sjargs.append sjsv
+                } else {
+                    sjargs.append sjv
+                }
+                sji = sji + 1
             } else null
         }
-        args: String
-        emitted: u64
-        pp: u64
-        ppn: fpNames.length
-        for pp < ppn loop {
-            vo: valBySlot.get key: pp
-            match (
-                vo
-            ) case some then {
-                if emitted > 0 then args.append ", "
-                args.append vo
-                emitted = emitted + 1
-            } case none then {
-                pdpn9Id: fpIdsNm.get i: pp
-                if (symtab.typing.declHasDefaultId
-                    parentTypeId: fid
-                    nameId: (zast.nameid.create from: pdpn9Id.u32.orPanic)
-                ) then {
-                    pddt: (symtab.typing.declDefaultOfId
-                        parentTypeId: fid
-                        nameId: (zast.nameid.create from: pdpn9Id.u32.orPanic)
-                    )
-                    pdpid: fpIds.get i: pp
-                    pdrv: (renderDefault
-                        :ast
-                        :symtab
-                        :ctx
-                        dv: pddt
-                        targetTid: (ztypes.tid.create from: pdpid.u64)
-                    )
-                    if emitted > 0 then args.append ", "
-                    args.append pdrv
-                    emitted = emitted + 1
-                }
-            }
-            pp = pp + 1
-        }
-        e8: "\{fc}(\{args})"
-        return e8
-    } else {
-        if cn0.stringview == "stringJoin" then {
-            needsAddM :ctx uname: "collections" memb: "coll_join"
-            sjargs: String
-            sji: u64
-            with sjiter: call.arguments.iterate do for sja9Id: sjiter loop {
-                sja: ast.nodes.get i: sja9Id.u64
-                match (
-                    sja
-                ) case namedoperation then {
-                    if sji > 0 then sjargs.append ", "
-                    sjn: ast.nodes.get i: sja.operation.u64
-                    sjv: emitExpr :ast :symtab :ctx n: sjn
-                    sjq: atomVidIfPlain :ast :symtab :ctx n: sjn text: sjv.stringview
-                    if sji == 0 when (isPtrVid :ctx vid: sjq) == false then sjargs.append "&"
-                    sjIsStr: false
-                    if sji > 0 then {
-                        sjat: (stampIdOf
-                            :symtab
-                            nid: (interpPartNodeId n: (ast.nodes.get i: sja.operation.u64))
-                        )
-                        if sjat == ctx.strTid then sjIsStr = true
-                    }
-                    if sjIsStr then {
-                        sjsv: svValueForm :ctx expr: sjv.stringview isStr: true vid: sjq
-                        sjargs.append sjsv
-                    } else {
-                        sjargs.append sjv
-                    }
-                    sji = sji + 1
-                } else null
-            }
-            return "z_stringJoin(\{sjargs})"
-        }
-        cnV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: call.callable.u64))
-        fplc: (emitFnptrLocalCall
-            :ast
-            :symtab
-            :ctx
-            :call
-            :fid
-            cn0: cn0.stringview
-            cnVid: cnV
-        )
-        if fplc.length > 0 then return fplc
-        emitFail :ctx what: "unhandled callee \{cn0}" line: call.lineno
-        m8: "/* zemitterc: unhandled callee \{cn0} */0"
-        return m8
+        return "z_stringJoin(\{sjargs})"
     }
+    cnV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: call.callable.u64))
+    fplc: (emitFnptrLocalCall
+        :ast
+        :symtab
+        :ctx
+        :call
+        :fid
+        cn0: cn0.stringview
+        cnVid: cnV
+    )
+    if fplc.length > 0 then return fplc
+    emitFail :ctx what: "unhandled callee \{cn0}" line: call.lineno
+    m8: "/* zemitterc: unhandled callee \{cn0} */0"
+    return m8
 }
 # emitStringMethod -- a String value-context method call. String is a native
 # singleton whose struct + methods emit once under ctx.strC; dispatch by name so
