@@ -1926,6 +1926,20 @@ stampIdOf: function {symtab: zenv.ZSymbolTable nid: u64} out ztypes.tid is {
     return (ztypes.tid.create from: (ztyping.nodeTypeAt tbl: symtab.typing.nodeType :nid))
 }
 
+# stampIsStr / stampIsSv -- the type the checker stamped on `nid` IS String
+# / StringView. Thirteen sites read a stamp for no other reason than to ask
+# this, and each had to name the intermediate; the QUESTION is the thing worth
+# naming, not the tid it goes through.
+stampIsStr: function {symtab: zenv.ZSymbolTable ctx: Ctx.view nid: u64} out bool is {
+    tid: stampIdOf :symtab :nid
+    return tid == ctx.strTid
+}
+
+stampIsSv: function {symtab: zenv.ZSymbolTable ctx: Ctx.view nid: u64} out bool is {
+    tid: stampIdOf :symtab :nid
+    return tid == ctx.svTid
+}
+
 # monoStampIdOf -- the per-mono side stamp for a template node: the
 # checker's instance walk records (monoId << 32 | nodeid) -> tid; consulted
 # during mono re-walks (ctx.curThisTid) before any fallback resolution.
@@ -3935,8 +3949,7 @@ svArgAddr: function {
         # A String arg to a StringLike param projects to a by-value view.
         anV: atomVid :symtab nid: n.nodeid.u64
         anE: emitLocalAtomName :ctx name: an vid: anV
-        stampTid: stampIdOf :symtab nid: n.nodeid.u64
-        if stampTid == ctx.strTid then {
+        if (stampIsStr :symtab :ctx nid: n.nodeid.u64) then {
             svs: svValueForm :ctx expr: anE.stringview isStr: true vid: anV
             a2s: "&\{svs}"
             return a2s
@@ -3956,8 +3969,7 @@ svArgAddr: function {
         ) then return "".string
         anlV: atomVid :symtab nid: n.nodeid.u64
         anlE: emitLocalAtomName :ctx name: anl vid: anlV
-        stampTid: stampIdOf :symtab nid: n.nodeid.u64
-        if stampTid == ctx.strTid then {
+        if (stampIsStr :symtab :ctx nid: n.nodeid.u64) then {
             svl: svValueForm :ctx expr: anlE.stringview isStr: true vid: anlV
             a2ls: "&\{svl}"
             return a2ls
@@ -3968,8 +3980,11 @@ svArgAddr: function {
         dpm: atomTextOf :ast n: (ast.nodes.get i: n.child.u64)
         if dpm.stringview == "stringview" then {
             pe: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-            ptid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
-            pIsStr: ptid == ctx.strTid
+            pIsStr: (stampIsStr
+                :symtab
+                :ctx
+                nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
+            )
             pev: (atomVidIfPlain
                 :ast
                 :symtab
@@ -9860,8 +9875,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 se0: "\{ctx.strC}_from_view(_zs\{scl})"
                 return se0
             }
-            stampTid: stampIdOf :symtab nid: n.parent.u64
-            if stampTid == ctx.svTid then {
+            if (stampIsSv :symtab :ctx nid: n.parent.u64) then {
                 sbv0: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
                 se1: "\{ctx.strC}_from_view(\{sbv0})"
                 return se1
@@ -11843,8 +11857,7 @@ emitPrintArg: function {
                 if cst.length > 0 then anmE = cst.copy
             }
         }
-        stampTid: stampIdOf :symtab nid: n.nodeid.u64
-        if stampTid == ctx.strTid then {
+        if (stampIsStr :symtab :ctx nid: n.nodeid.u64) then {
             if (isPtrVid :ctx vid: anv) then {
                 lps: "\{ind}\{ctx.strC}_print(\{anmE});\n"
                 buf.append lps
@@ -11888,8 +11901,7 @@ emitPrintArg: function {
     } case call then {
         ce: emitCallValue :ast :symtab :ctx call: n
         flushArgHoists :ctx :ind :tmp :buf
-        stampTid: stampIdOf :symtab nid: n.nodeid.u64
-        if stampTid == ctx.svTid then {
+        if (stampIsSv :symtab :ctx nid: n.nodeid.u64) then {
             lpcv: "\{ind}\{ctx.svC}_print(\{ce});\n"
             buf.append lpcv
         } else {
@@ -11903,8 +11915,7 @@ emitPrintArg: function {
         }
     } else {
         eid: interpPartNodeId :n
-        stampTid: stampIdOf :symtab nid: eid
-        if stampTid == ctx.svTid then {
+        if (stampIsSv :symtab :ctx nid: eid) then {
             ev: emitExpr :ast :symtab :ctx :n
             flushArgHoists :ctx :ind :tmp :buf
             lpe: "\{ind}\{ctx.svC}_print(\{ev});\n"
@@ -12960,8 +12971,7 @@ emitStmt: function {
             rtChased = true
         }
         rdrop: false
-        retStampTid: stampIdOf :symtab nid: rtnid
-        if retStampTid == ctx.strTid then {
+        if (stampIsStr :symtab :ctx nid: rtnid) then {
             rdrop = true
         } else {
             if (symtab.reg.hasDestructorName typeId: rtsid) then rdrop = true
@@ -12969,8 +12979,7 @@ emitStmt: function {
         if rdrop then {
             if (isNonLvalueArg s: rv2.stringview) then {
                 rrt: "\{ctx.strC}_t"
-                retStampTidInner: stampIdOf :symtab nid: rtnid
-                if (retStampTidInner == ctx.strTid) == false then {
+                if (stampIsStr :symtab :ctx nid: rtnid) == false then {
                     rrt = typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
                     if (isHeapPtrCollection :symtab :ctx tid: rtsid) then rrt = "\{rrt}*"
                 }
@@ -12980,8 +12989,7 @@ emitStmt: function {
                 rv2 = "_rr\{rrn}"
             }
         }
-        retStampTidAlt: stampIdOf :symtab nid: rtnid
-        if retStampTidAlt == ctx.strTid then {
+        if (stampIsStr :symtab :ctx nid: rtnid) then {
             rdo: "\{ind}\{ctx.strC}_free(&\{nm2});\n"
             buf.append rdo
         } else {
@@ -13021,8 +13029,7 @@ emitStmt: function {
                 buf.append rftzh
             } else {
                 rfct: "\{ctx.strC}_t"
-                retStampTidAltInner: stampIdOf :symtab nid: rtnid
-                if (retStampTidAltInner == ctx.strTid) == false then {
+                if (stampIsStr :symtab :ctx nid: rtnid) == false then {
                     rfct = typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
                 }
                 rftz: "\{ind}\{rv2} = (\{rfct}){0};\n"
@@ -13064,8 +13071,7 @@ emitStmt: function {
                 buf.append zinvh
             } else {
                 zct: String
-                zeroStampTid: stampIdOf :symtab nid: znid
-                if zeroStampTid == ctx.strTid then {
+                if (stampIsStr :symtab :ctx nid: znid) then {
                     zct = "\{ctx.strC}_t"
                 } else {
                     if (symtab.reg.hasDestructorName typeId: zid) then {
@@ -26172,8 +26178,7 @@ lowerNativeArg: function {
             vid: (ztypes.vid.create from: 0)
         )
         av0: emitExpr :ast :symtab :ctx n: op
-        stampTid: stampIdOf :symtab nid: (interpPartNodeId n: op)
-        if stampTid == ctx.strTid then {
+        if (stampIsStr :symtab :ctx nid: (interpPartNodeId n: op)) then {
             hb: (hoistBorrowValArg
                 :ast
                 :symtab
