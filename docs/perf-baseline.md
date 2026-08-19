@@ -40,6 +40,44 @@ instructions, which resolves below 2% where wall does not. The wall column is
 not an A/B across rows: it times the compiler on its own current source, so it
 moves with LOC. See the 2026-08-07 row.
 
+### Why instructions is the axis and cycles is not
+
+`instructions` counts **work**, and for a deterministic program on a fixed
+input it is deterministic: the same binary retires the same count every run.
+The ±0.01–0.05% left over is the loader and ASLR, not the compiler. That is
+why a 0.2% instruction delta is readable.
+
+`cycles` counts **how long the core took to retire that work**, so with the
+instruction count pinned, every bit of cycle variance is IPC variance. It is
+not clock speed -- a halted core stops counting, so frequency scaling and
+thermal throttling move *wall* and leave cycles alone. What moves cycles on an
+otherwise identical run is anything that changes how often the core stalls:
+
+- **an SMT sibling.** Two threads on one physical core share the execution
+  ports, the L1 and the L2. A concurrent build, a valgrind run, or a test
+  suite landing on the sibling is the single largest effect and can cost tens
+  of percent.
+- **shared L3 and DRAM bandwidth.** A self-compile churns ~370MB; another
+  process evicting L3 raises the miss rate for identical code.
+- **core migration.** The scheduler moving the task across a CCX/CCD or NUMA
+  boundary abandons a warm cache mid-run.
+- **transparent hugepages.** Whether the kernel can back the heap with 2MB
+  pages depends on host memory fragmentation *at that moment*; without them a
+  370MB working set pays far more dTLB misses for exactly the same work.
+- **layout.** ASLR shifts code and heap per run, changing how hot loops align
+  against cache lines and branch-predictor entries.
+
+Measured here, three interleaved rounds of the SAME binary on the SAME input:
+**1,660M (±1.58%), 1,878M (±7.38%), 1,701M (±0.42%)** -- a 13% spread between
+rounds on identical work, while instructions held ±0.01%. A cycles delta below
+that spread is not a result.
+
+So: **judge on instructions.** Quote cycles only when both binaries' spreads
+are tight, the rounds were interleaved, and the machine was quiet -- and if a
+cycles delta contradicts the instruction delta, re-run interleaved before
+believing it. Allocations and bytes churned are unaffected by any of this:
+valgrind counts events, not time.
+
 ## Baseline table
 
 Machine: 24-core, gcc 15.2.0, glibc 2.43, Linux. Wall = best of 5.
@@ -1098,6 +1136,52 @@ declaration slice, 2,279,954 for the sets).
 
 **Nothing id-keyed is left on `Map`.** What remains is the 16 composite-key
 instantiations above and the String-keyed tables.
+
+## A write-only local is a dead allocation (2026-08-19, `8a47bbbb`)
+
+Three dead stores surfaced as `-Wunused-but-set-variable` on a fresh clone's
+build. Fixing them was tidy-up; the interesting part is why nothing in the
+toolchain had caught them, and what that answer was worth.
+
+**L013 (unused-local) could not see them.** `reportUnusedVars` built its
+used-set from every `atomVariableId` stamp, and a reassignment's *target* atom
+carries one exactly as a read does -- so a local that was only ever assigned
+counted as used. The rule fired only on a local never mentioned again at all.
+The fix collects the reassignment targets first and leaves them out, and only
+**bare** atom targets: reaching `a.b` to write it genuinely reads `a`.
+Filtering on the enclosing node being a reassignment does not work, and was
+tried -- the stamp sits on the AtomId child, not the statement.
+
+L014 (unused-parameter) and L020 read the same set, so one fix corrected all
+three. Checked against the shapes that must not warn: written-then-read, an
+accumulator on its own RHS, a write through a path, a write in both arms of an
+`if`, a parameter filled through a method call, and a parameter written
+through a field path -- the last because that mutation *is* visible to the
+caller.
+
+**It then found five more dead stores that gcc cannot see**, because
+`-Wunused-but-set-variable` reaches scalars and these were all owned `String`s:
+`ctorNm9` (in `emitCallValue`, with three `.copy` assignments on a per-call
+path), `meN9`, `sfxC3`, `unm9`, `bnm9`. Removing `sfxC3` took five more locals
+with it -- a cascade the fixed rule then caught itself.
+
+| | before | after | delta |
+|---|---|---|---|
+| allocations | 8,125,212 | 8,114,052 | **−11,160** |
+| bytes churned | 366,362,782 | 366,237,615 | −125,167 |
+| instructions | 3,820,026,364 | 3,819,325,362 | −701,002 (−0.018%) |
+
+Fixed input, spread ±0.01%; emitted C byte-identical on all 446 corpus
+programs. **The rule is linter-only -- `zsource.z` is compiled into `zl` and
+`zls`, and `bin/zc.c` contains no lint code at all -- but its findings were in
+`zemitterc` and `ztypecheck`, so the compiler does 11,160 fewer allocations
+for identical output.** The linter's own added AST walk is free: 2.50-2.55s
+before, 2.33-2.65s after over the same scope.
+
+The lesson worth keeping: **a warning class the C compiler cannot express is
+one the linter has to own.** An owned-String dead store allocates, copies and
+frees on every visit, and no amount of `-Werror` reaches it -- gcc sees a
+struct assignment doing real work.
 
 ## Row detail
 
