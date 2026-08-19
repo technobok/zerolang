@@ -31783,7 +31783,7 @@ static z_t29_t z_t3735(z_t385_t* z_v540, uint32_t z_v541) {
     z_t358_t _m2 = z_v553;
     switch (_m2.tag) {
         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-            /* alias: ro9 => (*(z_t29_t*)_m2.data) */
+            /* alias: ro => (*(z_t29_t*)_m2.data) */
             if ((*(z_t29_t*)_m2.data).size == 0) {
                 z_t29_t _ret3 = z_t29_from_view(_zs306);
                 z_t29_free(&z_v544);
@@ -34353,7 +34353,7 @@ static z_t29_t z_t4009(z_t864_t* z_v3596, uint32_t z_v3597) {
     z_t358_t _m0 = z_v3599;
     switch (_m0.tag) {
         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-            /* alias: r9 => (*(z_t29_t*)_m0.data) */
+            /* alias: r => (*(z_t29_t*)_m0.data) */
             z_t29_t _ret1 = z_t29_copy(&(*(z_t29_t*)_m0.data));
     z_t358_destroy(&z_v3599);
             return _ret1;
@@ -34461,7 +34461,7 @@ static z_t29_t z_t4019(z_t864_t* z_v3659, z_t663_t* z_v3660, uint64_t z_v3661, z
     z_t1397_t z_v3664 = z_t3984(z_v3659, z_v3661, z_v3663);
     z_t1397_t z_v3665 = z_v3664;
     if ((z_v3665).tag == Z_DEFAULTVAL_TAG_LITERAL) {
-        /* alias: dl9 => z_v3665.data.literal */
+        /* alias: dl => z_v3665.data.literal */
         z_t29_t _s0 = z_t29_create((uint64_t)29);
         z_t29_append(&_s0, "literal node ", sizeof("literal node ")-1);
         char _b1[32]; int _b1_n = snprintf(_b1, 32, "%ld", (long)(int64_t)z_v3665.data.literal);
@@ -34471,13 +34471,13 @@ static z_t29_t z_t4019(z_t864_t* z_v3659, z_t663_t* z_v3660, uint64_t z_v3661, z
     uint64_t z_v3666 = ((uint64_t)0);
     z_t1397_t z_v3667 = z_v3664;
     if ((z_v3667).tag == Z_DEFAULTVAL_TAG_FUNC) {
-        /* alias: df9 => z_v3667.data.func */
+        /* alias: df => z_v3667.data.func */
         z_v3666 = z_v3667.data.func;
     }
     bool z_v3668 = ((bool)Z_BOOL_TAG_FALSE);
     z_t1397_t z_v3669 = z_v3664;
     if ((z_v3669).tag == Z_DEFAULTVAL_TAG_ARM) {
-        /* alias: da9 => z_v3669.data.arm */
+        /* alias: da => z_v3669.data.arm */
         z_v3666 = z_v3669.data.arm;
         z_v3668 = ((bool)Z_BOOL_TAG_TRUE);
     }
@@ -40654,7 +40654,7 @@ static void z_t4253(z_t2179_t* z_v33346, z_t864_t* z_v33347) {
         z_t358_t _m22 = z_v33370;
         switch (_m22.tag) {
             case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                /* alias: pgao9 => (*(z_t29_t*)_m22.data) */
+                /* alias: pgao => (*(z_t29_t*)_m22.data) */
                 z_t29_t z_v33371 = z_t29_copy(&(*(z_t29_t*)_m22.data));
                 z_t29_free(&z_v33368);
                 z_v33368 = z_v33371;
@@ -43469,7 +43469,7 @@ z_t29_t z_t686(z_t539_t* z_v2770, z_t385_t* z_v2771, z_t537_t* z_v2772, uint32_t
         z_t1689_t _m4 = z_v2788;
         switch (_m4.tag) {
             case Z_OPTION_STRING_TAG_SOME: {
-                /* alias: lnOpt9 => (*(z_t29_t*)_m4.data) */
+                /* alias: lnOpt => (*(z_t29_t*)_m4.data) */
                 z_t29_t z_v2789 = (*(z_t29_t*)_m4.data);
                 (*(z_t29_t*)_m4.data) = (z_t29_t){0};
                 z_t29_t z_v2800 = z_t1883(z_v2770->lineno);
@@ -45529,119 +45529,119 @@ uint8_t z_t1834(z_t537_t* z_v1752, uint32_t z_v1753) {
     z_t538_t _m0 = z_v1755;
     switch (_m0.tag) {
         case Z_NODE_TAG_ERROR: {
-            /* alias: n9 => (*(z_t539_t*)_m0.data) */
+            /* alias: n => (*(z_t539_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_ERROR);
         }
         case Z_NODE_TAG_ATOMID: {
-            /* alias: n9 => (*(z_t550_t*)_m0.data) */
+            /* alias: n => (*(z_t550_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_ATOMID);
         }
         case Z_NODE_TAG_LABELVALUE: {
-            /* alias: n9 => (*(z_t556_t*)_m0.data) */
+            /* alias: n => (*(z_t556_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_LABELVALUE);
         }
         case Z_NODE_TAG_STRINGCHUNK: {
-            /* alias: n9 => (*(z_t558_t*)_m0.data) */
+            /* alias: n => (*(z_t558_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_STRINGCHUNK);
         }
         case Z_NODE_TAG_BINOP: {
-            /* alias: n9 => (*(z_t560_t*)_m0.data) */
+            /* alias: n => (*(z_t560_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_BINOP);
         }
         case Z_NODE_TAG_ATOMSTRING: {
-            /* alias: n9 => (*(z_t562_t*)_m0.data) */
+            /* alias: n => (*(z_t562_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_ATOMSTRING);
         }
         case Z_NODE_TAG_DOTTEDPATH: {
-            /* alias: n9 => (*(z_t586_t*)_m0.data) */
+            /* alias: n => (*(z_t586_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_DOTTEDPATH);
         }
         case Z_NODE_TAG_CALL: {
-            /* alias: n9 => (*(z_t588_t*)_m0.data) */
+            /* alias: n => (*(z_t588_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_CALL);
         }
         case Z_NODE_TAG_TYPEOFEXPR: {
-            /* alias: n9 => (*(z_t590_t*)_m0.data) */
+            /* alias: n => (*(z_t590_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_TYPEOFEXPR);
         }
         case Z_NODE_TAG_NAMEDOPERATION: {
-            /* alias: n9 => (*(z_t592_t*)_m0.data) */
+            /* alias: n => (*(z_t592_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_NAMEDOPERATION);
         }
         case Z_NODE_TAG_DATABLOCK: {
-            /* alias: n9 => (*(z_t594_t*)_m0.data) */
+            /* alias: n => (*(z_t594_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_DATABLOCK);
         }
         case Z_NODE_TAG_YIELDEXPR: {
-            /* alias: n9 => (*(z_t596_t*)_m0.data) */
+            /* alias: n => (*(z_t596_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_YIELDEXPR);
         }
         case Z_NODE_TAG_STATEMENT: {
-            /* alias: n9 => (*(z_t598_t*)_m0.data) */
+            /* alias: n => (*(z_t598_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_STATEMENT);
         }
         case Z_NODE_TAG_STATEMENTLINE: {
-            /* alias: n9 => (*(z_t600_t*)_m0.data) */
+            /* alias: n => (*(z_t600_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_STATEMENTLINE);
         }
         case Z_NODE_TAG_ASSIGNMENT: {
-            /* alias: n9 => (*(z_t602_t*)_m0.data) */
+            /* alias: n => (*(z_t602_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_ASSIGNMENT);
         }
         case Z_NODE_TAG_REASSIGNMENT: {
-            /* alias: n9 => (*(z_t604_t*)_m0.data) */
+            /* alias: n => (*(z_t604_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_REASSIGNMENT);
         }
         case Z_NODE_TAG_SWAPSTMT: {
-            /* alias: n9 => (*(z_t606_t*)_m0.data) */
+            /* alias: n => (*(z_t606_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_SWAPSTMT);
         }
         case Z_NODE_TAG_EXPRESSION: {
-            /* alias: n9 => (*(z_t608_t*)_m0.data) */
+            /* alias: n => (*(z_t608_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_EXPRESSION);
         }
         case Z_NODE_TAG_IFEXPR: {
-            /* alias: n9 => (*(z_t610_t*)_m0.data) */
+            /* alias: n => (*(z_t610_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_IFEXPR);
         }
         case Z_NODE_TAG_IFCLAUSE: {
-            /* alias: n9 => (*(z_t612_t*)_m0.data) */
+            /* alias: n => (*(z_t612_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_IFCLAUSE);
         }
         case Z_NODE_TAG_FOREXPR: {
-            /* alias: n9 => (*(z_t614_t*)_m0.data) */
+            /* alias: n => (*(z_t614_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_FOREXPR);
         }
         case Z_NODE_TAG_DOEXPR: {
-            /* alias: n9 => (*(z_t616_t*)_m0.data) */
+            /* alias: n => (*(z_t616_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_DOEXPR);
         }
         case Z_NODE_TAG_WITHEXPR: {
-            /* alias: n9 => (*(z_t618_t*)_m0.data) */
+            /* alias: n => (*(z_t618_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_WITHEXPR);
         }
         case Z_NODE_TAG_CASEEXPR: {
-            /* alias: n9 => (*(z_t620_t*)_m0.data) */
+            /* alias: n => (*(z_t620_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_CASEEXPR);
         }
         case Z_NODE_TAG_CASECLAUSE: {
-            /* alias: n9 => (*(z_t622_t*)_m0.data) */
+            /* alias: n => (*(z_t622_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_CASECLAUSE);
         }
         case Z_NODE_TAG_FUNCTIONDEF: {
-            /* alias: n9 => (*(z_t624_t*)_m0.data) */
+            /* alias: n => (*(z_t624_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_FUNCTIONDEF);
         }
         case Z_NODE_TAG_OBJECTDEF: {
-            /* alias: n9 => (*(z_t626_t*)_m0.data) */
+            /* alias: n => (*(z_t626_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_OBJECTDEF);
         }
         case Z_NODE_TAG_UNITDEF: {
-            /* alias: n9 => (*(z_t633_t*)_m0.data) */
+            /* alias: n => (*(z_t633_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_UNITDEF);
         }
         case Z_NODE_TAG_PROGRAM: {
-            /* alias: n9 => (*(z_t640_t*)_m0.data) */
+            /* alias: n => (*(z_t640_t*)_m0.data) */
             return ((uint8_t)Z_ASTKIND_TAG_PROGRAM);
         }
         case Z_NODE_TAG_PLACEHOLDER: {
@@ -45659,20 +45659,20 @@ bool z_t2231(z_t537_t* z_v1989, uint32_t z_v1990) {
     z_t538_t _m0 = z_v1992;
     switch (_m0.tag) {
         case Z_NODE_TAG_EXPRESSION: {
-            /* alias: n9 => (*(z_t608_t*)_m0.data) */
+            /* alias: n => (*(z_t608_t*)_m0.data) */
             return z_t2231(z_v1989, (*(z_t608_t*)_m0.data).expression);
         }
         case Z_NODE_TAG_CALL: {
-            /* alias: n9 => (*(z_t588_t*)_m0.data) */
+            /* alias: n => (*(z_t588_t*)_m0.data) */
             return z_t2231(z_v1989, (*(z_t588_t*)_m0.data).callable);
         }
         case Z_NODE_TAG_DOTTEDPATH: {
-            /* alias: n9 => (*(z_t586_t*)_m0.data) */
+            /* alias: n => (*(z_t586_t*)_m0.data) */
             z_t538_t z_v1996 = z_t643_get(&z_v1989->nodes, ((uint64_t)(*(z_t586_t*)_m0.data).child));
             z_t538_t _m1 = z_v1996;
             switch (_m1.tag) {
                 case Z_NODE_TAG_ATOMID: {
-                    /* alias: c9 => (*(z_t550_t*)_m1.data) */
+                    /* alias: c => (*(z_t550_t*)_m1.data) */
                     if (z_t2442(z_v1989, (*(z_t550_t*)_m1.data).name, _zs274)) {
                         return ((bool)Z_BOOL_TAG_TRUE);
                     }
@@ -45685,7 +45685,7 @@ bool z_t2231(z_t537_t* z_v1989, uint32_t z_v1990) {
                     return ((bool)Z_BOOL_TAG_FALSE);
                 }
                 case Z_NODE_TAG_LABELVALUE: {
-                    /* alias: c9 => (*(z_t556_t*)_m1.data) */
+                    /* alias: c => (*(z_t556_t*)_m1.data) */
                     if (z_t2442(z_v1989, (*(z_t556_t*)_m1.data).name, _zs277)) {
                         return ((bool)Z_BOOL_TAG_TRUE);
                     }
@@ -45717,7 +45717,7 @@ bool z_t1844(z_t537_t* z_v1982, z_t563_t* z_v1983) {
         z_t538_t _m0 = z_v1988;
         switch (_m0.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: hm9 => (*(z_t592_t*)_m0.data) */
+                /* alias: hm => (*(z_t592_t*)_m0.data) */
                 if (z_t2231(z_v1982, (*(z_t592_t*)_m0.data).operation)) {
                     return ((bool)Z_BOOL_TAG_TRUE);
                 }
@@ -45740,11 +45740,11 @@ bool z_t2448(z_t537_t* z_v4551, uint32_t z_v4552, uint8_t z_v4553) {
     z_t538_t _m0 = z_v4555;
     switch (_m0.tag) {
         case Z_NODE_TAG_EXPRESSION: {
-            /* alias: n9 => (*(z_t608_t*)_m0.data) */
+            /* alias: n => (*(z_t608_t*)_m0.data) */
             return z_t2448(z_v4551, (*(z_t608_t*)_m0.data).expression, z_v4553);
         }
         case Z_NODE_TAG_UNITDEF: {
-            /* alias: n9 => (*(z_t633_t*)_m0.data) */
+            /* alias: n => (*(z_t633_t*)_m0.data) */
             return (((uint8_t)((*(z_t633_t*)_m0.data).kind)) == ((uint8_t)(z_v4553)));
         }
         default: {
@@ -45767,7 +45767,7 @@ z_t563_t z_t2319(z_t537_t* z_v4470, uint32_t z_v4471) {
     z_t563_t z_v4472 = z_t563_create((uint64_t)0);
     z_t538_t z_v4474 = z_t643_get(&z_v4470->nodes, ((uint64_t)z_v4471));
     if ((z_v4474).tag == Z_NODE_TAG_UNITDEF) {
-        /* alias: u9 => (*(z_t633_t*)z_v4474.data) */
+        /* alias: u => (*(z_t633_t*)z_v4474.data) */
         z_t579_t z_v4475 = z_t563_iterate(&(*(z_t633_t*)z_v4474.data).body);
         while (1) {
             z_t581_t _iter0 = z_t579_call(&z_v4475);
@@ -46990,7 +46990,7 @@ uint64_t z_t2877(z_t537_t* z_v26750, z_t1485_t* z_v26751, z_t563_t* z_v26752, ui
         z_t538_t _m1 = z_v26757;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: pm9 => (*(z_t592_t*)_m1.data) */
+                /* alias: pm => (*(z_t592_t*)_m1.data) */
                 if (z_t3842(&(*(z_t592_t*)_m1.data).name, z_v26753) && ((*(z_t592_t*)_m1.data).operation > 0)) {
                     z_t538_t _ah2 = z_t643_get(&z_v26750->nodes, ((uint64_t)(*(z_t592_t*)_m1.data).operation));
                     uint64_t z_v26760 = z_t2773(_ah2);
@@ -48518,9 +48518,9 @@ void z_t2146(z_t1932_t* z_v20471, z_t52_t z_v20472) {
     while (1) {
         z_t3700_t _iter2 = z_t3691_call(&z_v20476);
         if (_iter2.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t3700_destroy(&_iter2); break; }
-        z_t52_t ln9 = *(z_t52_t*)_iter2.data;
+        z_t52_t ln = *(z_t52_t*)_iter2.data;
         free(_iter2.data);
-        z_t52_t z_v20477 = z_t52_trim(&ln9);
+        z_t52_t z_v20477 = z_t52_trim(&ln);
         if ((z_v20477.size > 0) && (z_t52_startsWith(&z_v20477, &_zs621) == ((bool)Z_BOOL_TAG_FALSE))) {
             if (z_t52_startsWith(&z_v20477, &_zs622)) {
                 z_t810_t z_v20478 = z_t52_indexOf(&z_v20477, &_zs623);
@@ -48542,22 +48542,22 @@ void z_t2146(z_t1932_t* z_v20471, z_t52_t z_v20472) {
                         while (1) {
                             z_t3700_t _iter4 = z_t3689_call(&z_v20490);
                             if (_iter4.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t3700_destroy(&_iter4); break; }
-                            z_t52_t f9 = *(z_t52_t*)_iter4.data;
+                            z_t52_t f = *(z_t52_t*)_iter4.data;
                             free(_iter4.data);
-                            if (f9.size > 0) {
+                            if (f.size > 0) {
                                 if (z_v20484.size == 0) {
-                                    z_t29_t _rr5 = z_t29_from_view(f9);
+                                    z_t29_t _rr5 = z_t29_from_view(f);
                                     z_t29_free(&z_v20484);
                                     z_v20484 = _rr5;
                                 } else {
-                                    if (z_t52_eq(f9, _zs625)) {
+                                    if (z_t52_eq(f, _zs625)) {
                                         z_v20489 = ((bool)Z_BOOL_TAG_TRUE);
                                     }
-                                    z_t3700_t z_v20491 = z_t52_stripPrefix(&f9, &_zs626);
+                                    z_t3700_t z_v20491 = z_t52_stripPrefix(&f, &_zs626);
                                     z_t3700_t _m6 = z_v20491;
                                     switch (_m6.tag) {
                                         case Z_OPTION_STRINGVIEW_TAG_SOME: {
-                                            /* alias: fo9 => (*(z_t52_t*)_m6.data) */
+                                            /* alias: fo => (*(z_t52_t*)_m6.data) */
                                             z_t29_t _rr7 = z_t29_from_view((*(z_t52_t*)_m6.data));
                                             z_t29_free(&z_v20486);
                                             z_v20486 = _rr7;
@@ -48568,11 +48568,11 @@ void z_t2146(z_t1932_t* z_v20471, z_t52_t z_v20472) {
                                         }
                                         default: break;
                                     }
-                                    z_t3700_t z_v20492 = z_t52_stripPrefix(&f9, &_zs627);
+                                    z_t3700_t z_v20492 = z_t52_stripPrefix(&f, &_zs627);
                                     z_t3700_t _m8 = z_v20492;
                                     switch (_m8.tag) {
                                         case Z_OPTION_STRINGVIEW_TAG_SOME: {
-                                            /* alias: do9 => (*(z_t52_t*)_m8.data) */
+                                            /* alias: demandText => (*(z_t52_t*)_m8.data) */
                                             z_t29_t _rr9 = z_t29_from_view((*(z_t52_t*)_m8.data));
                                             z_t29_free(&z_v20487);
                                             z_v20487 = _rr9;
@@ -48583,7 +48583,7 @@ void z_t2146(z_t1932_t* z_v20471, z_t52_t z_v20472) {
                                         }
                                         default: break;
                                     }
-                                    z_t3700_t z_v20493 = z_t52_stripPrefix(&f9, &_zs628);
+                                    z_t3700_t z_v20493 = z_t52_stripPrefix(&f, &_zs628);
                                     z_t3700_t _m10 = z_v20493;
                                     switch (_m10.tag) {
                                         case Z_OPTION_STRINGVIEW_TAG_SOME: {
@@ -48598,11 +48598,11 @@ void z_t2146(z_t1932_t* z_v20471, z_t52_t z_v20472) {
                                         }
                                         default: break;
                                     }
-                                    z_t3700_t z_v20494 = z_t52_stripPrefix(&f9, &_zs629);
+                                    z_t3700_t z_v20494 = z_t52_stripPrefix(&f, &_zs629);
                                     z_t3700_t _m12 = z_v20494;
                                     switch (_m12.tag) {
                                         case Z_OPTION_STRINGVIEW_TAG_SOME: {
-                                            /* alias: oo9 => (*(z_t52_t*)_m12.data) */
+                                            /* alias: oo => (*(z_t52_t*)_m12.data) */
                                             z_t29_t _rr13 = z_t29_from_view((*(z_t52_t*)_m12.data));
                                             z_t29_free(&z_v20488);
                                             z_v20488 = _rr13;
@@ -48625,10 +48625,10 @@ void z_t2146(z_t1932_t* z_v20471, z_t52_t z_v20472) {
                             while (1) {
                                 z_t3700_t _iter14 = z_t3689_call(&z_v20495);
                                 if (_iter14.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t3700_destroy(&_iter14); break; }
-                                z_t52_t ou9 = *(z_t52_t*)_iter14.data;
+                                z_t52_t ou = *(z_t52_t*)_iter14.data;
                                 free(_iter14.data);
-                                if (ou9.size > 0) {
-                                    (void)(z_t202_append(&z_v20471->unitOrder, z_t29_from_view(ou9)));
+                                if (ou.size > 0) {
+                                    (void)(z_t202_append(&z_v20471->unitOrder, z_t29_from_view(ou)));
                                 }
                             }
                             z_t29_t _rr15 = z_t29_from_view(_zs632);
@@ -48758,7 +48758,7 @@ void z_t2146(z_t1932_t* z_v20471, z_t52_t z_v20472) {
                                 z_t3700_t _m26 = z_v20525;
                                 switch (_m26.tag) {
                                     case Z_OPTION_STRINGVIEW_TAG_SOME: {
-                                        /* alias: uo9 => (*(z_t52_t*)_m26.data) */
+                                        /* alias: uo => (*(z_t52_t*)_m26.data) */
                                         z_t29_t _rr27 = z_t29_from_view((*(z_t52_t*)_m26.data));
                                         z_t29_free(&z_v20524);
                                         z_v20524 = _rr27;
@@ -48902,7 +48902,7 @@ z_t29_t z_t3084(z_t1932_t* z_v22126, z_t52_t z_v22127) {
     z_t358_t _m0 = z_v22130;
     switch (_m0.tag) {
         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-            /* alias: g9 => (*(z_t29_t*)_m0.data) */
+            /* alias: g => (*(z_t29_t*)_m0.data) */
             z_t29_t _rr1 = z_t29_copy(&(*(z_t29_t*)_m0.data));
             z_t29_free(&z_v22128);
             z_v22128 = _rr1;
@@ -48923,7 +48923,7 @@ z_t29_t z_t3094(z_t1932_t* z_v23096, z_t52_t z_v23097) {
     z_t358_t _m0 = z_v23100;
     switch (_m0.tag) {
         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-            /* alias: g9 => (*(z_t29_t*)_m0.data) */
+            /* alias: g => (*(z_t29_t*)_m0.data) */
             z_t29_t _rr1 = z_t29_copy(&(*(z_t29_t*)_m0.data));
             z_t29_free(&z_v23098);
             z_v23098 = _rr1;
@@ -49528,7 +49528,7 @@ z_t29_t z_t2920(z_t1485_t* z_v21894, uint64_t z_v21895) {
     z_t1689_t _m0 = z_v21896;
     switch (_m0.tag) {
         case Z_OPTION_STRING_TAG_SOME: {
-            /* alias: uo9 => (*(z_t29_t*)_m0.data) */
+            /* alias: uo => (*(z_t29_t*)_m0.data) */
             z_t29_t z_v21897 = z_t2392(z_v21894, z_v21895);
             if (z_v21897.size == 0) {
                 z_t29_t _ret1 = z_t29_from_view(_zs647);
@@ -49561,7 +49561,7 @@ z_t29_t z_t3093(z_t1485_t* z_v23069, uint64_t z_v23070, bool z_v23071, z_t52_t z
         z_t1689_t _m0 = z_v23073;
         switch (_m0.tag) {
             case Z_OPTION_STRING_TAG_SOME: {
-                /* alias: uo9 => (*(z_t29_t*)_m0.data) */
+                /* alias: uo => (*(z_t29_t*)_m0.data) */
                 z_t29_t z_v23074 = z_t2392(z_v23069, z_v23070);
                 z_t29_t _s1 = z_t29_create((uint64_t)50);
                 z_t29_append(&_s1, (*(z_t29_t*)_m0.data).data, (*(z_t29_t*)_m0.data).size);
@@ -49751,7 +49751,7 @@ bool z_t3057(z_t537_t* z_v27277, z_t1485_t* z_v27278, z_t1932_t* z_v27279, uint3
     z_t538_t _m0 = z_v27282;
     switch (_m0.tag) {
         case Z_NODE_TAG_STATEMENTLINE: {
-            /* alias: sn9 => (*(z_t600_t*)_m0.data) */
+            /* alias: sn => (*(z_t600_t*)_m0.data) */
             z_t538_t z_v27284 = z_t643_get(&z_v27277->nodes, ((uint64_t)(*(z_t600_t*)_m0.data).statementline));
             if (z_t3257(z_v27278, ((uint64_t)z_v27280))) {
                 return ((bool)Z_BOOL_TAG_TRUE);
@@ -49824,7 +49824,7 @@ bool z_t3259(z_t537_t* z_v27295, z_t1485_t* z_v27296, z_t538_t z_v27297) {
                         z_t538_t _m2 = z_v27304;
                         switch (_m2.tag) {
                             case Z_NODE_TAG_DOTTEDPATH: {
-                                /* alias: cop9 => (*(z_t586_t*)_m2.data) */
+                                /* alias: cop => (*(z_t586_t*)_m2.data) */
                                 z_t538_t _ah38 = z_t643_get(&z_v27295->nodes, ((uint64_t)(*(z_t586_t*)_m2.data).child));
                                 uint32_t z_v27322 = z_t2745(z_v27295, _ah38);
                                 uint8_t z_v27324 = z_t3380(z_v27296, ((uint64_t)(*(z_t586_t*)_m2.data).nodeid), z_v27322);
@@ -49886,7 +49886,7 @@ bool z_t3260(z_t537_t* z_v27327, z_t1485_t* z_v27328, z_t1932_t* z_v27329, z_t53
                 z_t538_t _m2 = z_v27340;
                 switch (_m2.tag) {
                     case Z_NODE_TAG_IFCLAUSE: {
-                        /* alias: cl9 => (*(z_t612_t*)_m2.data) */
+                        /* alias: cl => (*(z_t612_t*)_m2.data) */
                         if (z_t3818(&(*(z_t612_t*)_m2.data).statement)) {
                             return ((bool)Z_BOOL_TAG_FALSE);
                         }
@@ -51771,7 +51771,7 @@ z_t29_t z_t3110(z_t537_t* z_v24419, z_t1485_t* z_v24420, z_t1932_t* z_v24421, z_
             z_t538_t _m26 = z_v24482;
             switch (_m26.tag) {
                 case Z_NODE_TAG_NAMEDOPERATION: {
-                    /* alias: sa9 => (*(z_t592_t*)_m26.data) */
+                    /* alias: sa => (*(z_t592_t*)_m26.data) */
                     z_t538_t z_v24484 = z_t643_get(&z_v24419->nodes, ((uint64_t)(*(z_t592_t*)_m26.data).operation));
                     if (z_v24478.size == 0) {
                         z_t538_t _ah107 = z_t643_get(&z_v24419->nodes, ((uint64_t)(*(z_t592_t*)_m26.data).operation));
@@ -52764,7 +52764,7 @@ z_t29_t z_t3128(z_t537_t* z_v26032, z_t1485_t* z_v26033, z_t1932_t* z_v26034, z_
     z_t1689_t _m5 = z_v26063;
     switch (_m5.tag) {
         case Z_OPTION_STRING_TAG_SOME: {
-            /* alias: rdu9 => (*(z_t29_t*)_m5.data) */
+            /* alias: rdu => (*(z_t29_t*)_m5.data) */
             if (z_t52_eq(((z_t52_t){ .data = (*(z_t29_t*)_m5.data).data, .size = (*(z_t29_t*)_m5.data).size }), _zs810)) {
                 z_t29_t _ret6 = z_t29_from_view(_zs811);
                 z_t29_free(&z_v26038);
@@ -52967,7 +52967,7 @@ z_t29_t z_t3128(z_t537_t* z_v26032, z_t1485_t* z_v26033, z_t1932_t* z_v26034, z_
                                                 break;
                                             }
                                             case Z_OPTION_STRING_TAG_SOME: {
-                                                /* alias: hduo9 => (*(z_t29_t*)_m22.data) */
+                                                /* alias: hduo => (*(z_t29_t*)_m22.data) */
                                                 break;
                                             }
                                             default: break;
@@ -53662,7 +53662,7 @@ bool z_t2937(z_t52_t z_v22540) {
             }
             default: break;
         }
-        /* post-guard alias: bo9 => z_v22543.data.some */
+        /* post-guard alias: bo => z_v22543.data.some */
         z_v22541 = (z_v22541 + 1);
     }
     return ((bool)Z_BOOL_TAG_TRUE);
@@ -55079,7 +55079,7 @@ z_t29_t z_t3098(z_t537_t* z_v23221, z_t1485_t* z_v23222, z_t1932_t* z_v23223, z_
             z_t538_t _m2 = z_v23235;
             switch (_m2.tag) {
                 case Z_NODE_TAG_NAMEDOPERATION: {
-                    /* alias: aS9 => (*(z_t592_t*)_m2.data) */
+                    /* alias: aS => (*(z_t592_t*)_m2.data) */
                     z_t538_t _ah188 = z_t643_get(&z_v23221->nodes, ((uint64_t)(*(z_t592_t*)_m2.data).operation));
                     return z_t2772(z_v23221, z_v23222, z_v23223, _ah188);
                 }
@@ -55420,7 +55420,7 @@ z_t29_t z_t3125(z_t537_t* z_v25842, z_t1485_t* z_v25843, z_t1932_t* z_v25844, z_
                 z_t538_t _m7 = z_v25889;
                 switch (_m7.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: oa9 => (*(z_t592_t*)_m7.data) */
+                        /* alias: oa => (*(z_t592_t*)_m7.data) */
                         if (z_v25885 == ((bool)Z_BOOL_TAG_FALSE)) {
                             z_v25885 = ((bool)Z_BOOL_TAG_TRUE);
                             z_t538_t z_v25891 = z_t643_get(&z_v25842->nodes, ((uint64_t)(*(z_t592_t*)_m7.data).operation));
@@ -55695,7 +55695,7 @@ z_t29_t z_t3124(z_t537_t* z_v25789, z_t1485_t* z_v25790, z_t1932_t* z_v25791, z_
 z_t29_t z_t3080(z_t537_t* z_v21148, z_t1485_t* z_v21149, z_t1932_t* z_v21150, z_t1397_t z_v21151, uint64_t z_v21152) {
     z_t1397_t z_v21153 = z_v21151;
     if ((z_v21153).tag == Z_DEFAULTVAL_TAG_LITERAL) {
-        /* alias: dl9 => z_v21153.data.literal */
+        /* alias: dl => z_v21153.data.literal */
         if (z_v21153.data.literal == 0) {
             return z_t29_from_view(_zs992);
         }
@@ -55704,7 +55704,7 @@ z_t29_t z_t3080(z_t537_t* z_v21148, z_t1485_t* z_v21149, z_t1932_t* z_v21150, z_
     }
     z_t1397_t z_v21156 = z_v21151;
     if ((z_v21156).tag == Z_DEFAULTVAL_TAG_FUNC) {
-        /* alias: df9 => z_v21156.data.func */
+        /* alias: df => z_v21156.data.func */
         z_t29_t z_v21159 = z_t2392(z_v21149, ((uint64_t)z_v21152));
         uint64_t z_v21168 = z_t2765(z_v21148, z_v21149, z_v21150, ((uint64_t)z_v21152), ((z_t52_t){ .data = z_v21159.data, .size = z_v21159.size }));
         if (z_v21168 > 0) {
@@ -55718,7 +55718,7 @@ z_t29_t z_t3080(z_t537_t* z_v21148, z_t1485_t* z_v21149, z_t1932_t* z_v21150, z_
     }
     z_t1397_t z_v21173 = z_v21151;
     if ((z_v21173).tag == Z_DEFAULTVAL_TAG_ARM) {
-        /* alias: da9 => z_v21173.data.arm */
+        /* alias: da => z_v21173.data.arm */
         z_t29_t z_v21174 = ((z_t29_t){0});
         z_t1391_t* __borrow_z_v21176 = &(*z_t1423_get(&z_v21149->typing.decls, ((uint64_t)z_v21173.data.arm)));
         /* alias: z_v21176 => (*__borrow_z_v21176) */
@@ -56463,7 +56463,7 @@ z_t29_t z_t3263(z_t1485_t* z_v20729, uint64_t z_v20730) {
     z_t358_t _m2 = z_v20765;
     switch (_m2.tag) {
         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-            /* alias: bo9 => (*(z_t29_t*)_m2.data) */
+            /* alias: bo => (*(z_t29_t*)_m2.data) */
             z_t29_t z_v20766 = z_t29_copy(&(*(z_t29_t*)_m2.data));
             z_t29_t _ret3 = z_t2925(((z_t52_t){ .data = z_v20766.data, .size = z_v20766.size }));
             z_t29_free(&z_v20736);
@@ -57256,7 +57256,7 @@ uint64_t z_t3297(z_t537_t* z_v25361, z_t1485_t* z_v25362, z_t1932_t* z_v25363, u
     uint32_t z_v25386 = ((uint32_t)0);
     z_t538_t z_v25388 = z_t643_get(&z_v25361->nodes, ((uint64_t)z_v25364));
     if ((z_v25388).tag == Z_NODE_TAG_DOTTEDPATH) {
-        /* alias: cln9 => (*(z_t586_t*)z_v25388.data) */
+        /* alias: cln => (*(z_t586_t*)z_v25388.data) */
         z_v25386 = (*(z_t586_t*)z_v25388.data).parent;
     }
     uint64_t z_v25389 = z_t2901(z_v25361, z_v25362, z_v25363, z_v25386);
@@ -58939,7 +58939,7 @@ z_t29_t z_t2953(z_t537_t* z_v23214, z_t1485_t* z_v23215, z_t1932_t* z_v23216, z_
             z_t358_t _m20 = z_v26308;
             switch (_m20.tag) {
                 case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                    /* alias: vo9 => (*(z_t29_t*)_m20.data) */
+                    /* alias: vo => (*(z_t29_t*)_m20.data) */
                     if (z_v26305 > 0) {
                         (void)(z_t29_append(&z_v26304, (_zs1094).data, (_zs1094).size));
                     }
@@ -59026,7 +59026,7 @@ z_t29_t z_t2953(z_t537_t* z_v23214, z_t1485_t* z_v23215, z_t1932_t* z_v23216, z_
                 z_t538_t _m25 = z_v26325;
                 switch (_m25.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: sja9 => (*(z_t592_t*)_m25.data) */
+                        /* alias: sja => (*(z_t592_t*)_m25.data) */
                         if (z_v26321 > 0) {
                             (void)(z_t29_append(&z_v26320, (_zs1099).data, (_zs1099).size));
                         }
@@ -59568,7 +59568,7 @@ _s0; });
                         z_t358_t _m26 = z_v21236;
                         switch (_m26.tag) {
                             case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                                /* alias: ztb9 => (*(z_t29_t*)_m26.data) */
+                                /* alias: ztb => (*(z_t29_t*)_m26.data) */
                                 if (z_t52_eq(((z_t52_t){ .data = (*(z_t29_t*)_m26.data).data, .size = (*(z_t29_t*)_m26.data).size }), _zs1110)) {
                                     z_t29_t _ret27 = z_t2895(z_v20711);
                                     z_t29_free(&z_v20818);
@@ -59778,7 +59778,7 @@ _s0; });
                     z_t358_t _m47 = z_v21401;
                     switch (_m47.tag) {
                         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                            /* alias: dzb9 => (*(z_t29_t*)_m47.data) */
+                            /* alias: dzb => (*(z_t29_t*)_m47.data) */
                             if (z_t52_eq(((z_t52_t){ .data = (*(z_t29_t*)_m47.data).data, .size = (*(z_t29_t*)_m47.data).size }), _zs1114)) {
                                 z_t29_t _ret48 = z_t2895(z_v20711);
                                 z_t29_free(&z_v20818);
@@ -61205,7 +61205,7 @@ _s0; });
                     z_t1689_t _m170 = z_v22282;
                     switch (_m170.tag) {
                         case Z_OPTION_STRING_TAG_SOME: {
-                            /* alias: bduo9 => (*(z_t29_t*)_m170.data) */
+                            /* alias: bduo => (*(z_t29_t*)_m170.data) */
                             break;
                         }
                         case Z_OPTION_STRING_TAG_NONE: {
@@ -61298,7 +61298,7 @@ _s0; });
                     z_t1689_t _m173 = z_v22329;
                     switch (_m173.tag) {
                         case Z_OPTION_STRING_TAG_SOME: {
-                            /* alias: fduo9 => (*(z_t29_t*)_m173.data) */
+                            /* alias: fduo => (*(z_t29_t*)_m173.data) */
                             if (z_t52_eq(((z_t52_t){ .data = (*(z_t29_t*)_m173.data).data, .size = (*(z_t29_t*)_m173.data).size }), _zs1165)) {
                                 z_v22327 = ((bool)Z_BOOL_TAG_TRUE);
                             }
@@ -62773,7 +62773,7 @@ _s0; });
                             z_t358_t _m328 = z_v22653;
                             switch (_m328.tag) {
                                 case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                                    /* alias: dso9 => (*(z_t29_t*)_m328.data) */
+                                    /* alias: dso => (*(z_t29_t*)_m328.data) */
                                     z_t52_t z_v22654 = (z_t52_t){ .data = (*(z_t29_t*)_m328.data).data, .size = (*(z_t29_t*)_m328.data).size };
                                     z_t29_t _ret329 = z_t29_from_view(z_v22654);
                                     z_t29_free(&z_v20818);
@@ -62811,7 +62811,7 @@ _s0; });
                             z_t358_t _m330 = z_v22660;
                             switch (_m330.tag) {
                                 case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                                    /* alias: dno9 => (*(z_t29_t*)_m330.data) */
+                                    /* alias: dno => (*(z_t29_t*)_m330.data) */
                                     z_t52_t z_v22661 = (z_t52_t){ .data = (*(z_t29_t*)_m330.data).data, .size = (*(z_t29_t*)_m330.data).size };
                                     z_t29_t _ret331 = z_t29_from_view(z_v22661);
                                     z_t29_free(&z_v20818);
@@ -67553,7 +67553,7 @@ _s0; });
                     z_t538_t _m283 = z_v29671;
                     switch (_m283.tag) {
                         case Z_NODE_TAG_NAMEDOPERATION: {
-                            /* alias: pkn9 => (*(z_t592_t*)_m283.data) */
+                            /* alias: pkn => (*(z_t592_t*)_m283.data) */
                             z_v29672 = (*(z_t592_t*)_m283.data).operation;
                             break;
                         }
@@ -68226,7 +68226,7 @@ void z_t3366(z_t537_t* z_v28160, z_t1485_t* z_v28161, z_t1932_t* z_v28162, z_t62
             z_t538_t _m4 = z_v28190;
             switch (_m4.tag) {
                 case Z_NODE_TAG_CASECLAUSE: {
-                    /* alias: cnode9 => (*(z_t622_t*)_m4.data) */
+                    /* alias: cnode => (*(z_t622_t*)_m4.data) */
                     if (z_v28185 == 0) {
                         if (!z_t3842(&(*(z_t622_t*)_m4.data).name, 0)) {
                             z_t29_t z_v28193 = z_t1921(&z_v28160->names, (*(z_t622_t*)_m4.data).name);
@@ -68277,7 +68277,7 @@ void z_t3366(z_t537_t* z_v28160, z_t1485_t* z_v28161, z_t1932_t* z_v28162, z_t62
             z_t538_t _m8 = z_v28204;
             switch (_m8.tag) {
                 case Z_NODE_TAG_CASECLAUSE: {
-                    /* alias: cnode9 => (*(z_t622_t*)_m8.data) */
+                    /* alias: cnode => (*(z_t622_t*)_m8.data) */
                     if (z_v28185 == 0) {
                         if ((z_v28198 != 0) && (((uint32_t)(*(z_t622_t*)_m8.data).name) == z_v28198)) {
                             z_v28185 = (*(z_t622_t*)_m8.data).statement;
@@ -68374,7 +68374,7 @@ void z_t3242(z_t537_t* z_v28072, z_t1485_t* z_v28073, z_t1932_t* z_v28074, z_t62
     z_t538_t _m0 = z_v28220;
     switch (_m0.tag) {
         case Z_NODE_TAG_DOTTEDPATH: {
-            /* alias: dcn9 => (*(z_t586_t*)_m0.data) */
+            /* alias: dcn => (*(z_t586_t*)_m0.data) */
             z_t538_t _ah393 = z_t643_get(&z_v28072->nodes, ((uint64_t)z_v28218));
             z_t29_t z_v28223 = z_t2735(z_v28072, _ah393);
             z_t538_t _ah394 = z_t643_get(&z_v28072->nodes, ((uint64_t)z_v28218));
@@ -70489,9 +70489,9 @@ bool z_t3426(z_t52_t z_v28711, z_t52_t z_v28712) {
     while (1) {
         z_t3700_t _iter0 = z_t3689_call(&z_v28713);
         if (_iter0.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t3700_destroy(&_iter0); break; }
-        z_t52_t w9 = *(z_t52_t*)_iter0.data;
+        z_t52_t w = *(z_t52_t*)_iter0.data;
         free(_iter0.data);
-        if (z_t52_eq(w9, z_v28712)) {
+        if (z_t52_eq(w, z_v28712)) {
             return ((bool)Z_BOOL_TAG_TRUE);
         }
     }
@@ -70963,7 +70963,7 @@ void z_t3362(z_t537_t* z_v28570, z_t1485_t* z_v28571, z_t1932_t* z_v28572, z_t56
         z_t538_t _m1 = z_v28584;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: k9 => (*(z_t592_t*)_m1.data) */
+                /* alias: k => (*(z_t592_t*)_m1.data) */
                 z_t538_t _ah457 = z_t643_get(&z_v28570->nodes, ((uint64_t)(*(z_t592_t*)_m1.data).operation));
                 (void)(z_t3420(z_v28570, z_v28571, z_v28572, _ah457, z_v28580, z_v28575, z_v28576, z_v28577, z_v28578));
                 break;
@@ -70985,7 +70985,7 @@ void z_t3240(z_t537_t* z_v28815, z_t1485_t* z_v28816, z_t1932_t* z_v28817, z_t56
         z_t538_t _m1 = z_v28828;
         switch (_m1.tag) {
             case Z_NODE_TAG_IFCLAUSE: {
-                /* alias: c9 => (*(z_t612_t*)_m1.data) */
+                /* alias: c => (*(z_t612_t*)_m1.data) */
                 if ((*(z_t612_t*)_m1.data).conditions.length == 1) {
                     z_t202_t z_v28829 = z_t202_create((uint64_t)0);
                     z_t2016_t z_v28830 = z_t2016_create((uint64_t)0);
@@ -71002,7 +71002,7 @@ void z_t3240(z_t537_t* z_v28815, z_t1485_t* z_v28816, z_t1932_t* z_v28817, z_t56
                         z_t538_t _m3 = z_v28838;
                         switch (_m3.tag) {
                             case Z_NODE_TAG_NAMEDOPERATION: {
-                                /* alias: k9 => (*(z_t592_t*)_m3.data) */
+                                /* alias: k => (*(z_t592_t*)_m3.data) */
                                 z_t538_t _ah458 = z_t643_get(&z_v28815->nodes, ((uint64_t)(*(z_t592_t*)_m3.data).operation));
                                 (void)(z_t3363(z_v28815, z_v28816, z_v28817, _ah458, &z_v28829, &z_v28830, &z_v28831, &z_v28832, &z_v28833, &z_v28834));
                                 break;
@@ -71894,7 +71894,7 @@ uint64_t z_t3058(z_t537_t* z_v29834, z_t1485_t* z_v29835, z_t538_t z_v29836) {
             z_t358_t _m1 = z_v29842;
             switch (_m1.tag) {
                 case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                    /* alias: po9 => (*(z_t29_t*)_m1.data) */
+                    /* alias: po => (*(z_t29_t*)_m1.data) */
                     uint64_t _ret2 = ((uint64_t)(*(z_t610_t*)_m0.data).nodeid);
     z_t358_destroy(&z_v29842);
                     return _ret2;
@@ -71912,7 +71912,7 @@ uint64_t z_t3058(z_t537_t* z_v29834, z_t1485_t* z_v29835, z_t538_t z_v29836) {
             z_t358_t _m3 = z_v29844;
             switch (_m3.tag) {
                 case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                    /* alias: po9 => (*(z_t29_t*)_m3.data) */
+                    /* alias: po => (*(z_t29_t*)_m3.data) */
                     uint64_t _ret4 = ((uint64_t)(*(z_t620_t*)_m0.data).nodeid);
     z_t358_destroy(&z_v29844);
                     return _ret4;
@@ -71994,7 +71994,7 @@ void z_t2878(z_t537_t* z_v26861, z_t1485_t* z_v26862, z_t1932_t* z_v26863, z_t53
                     z_t358_t _m1 = z_v29847;
                     switch (_m1.tag) {
                         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                            /* alias: pgnO9 => (*(z_t29_t*)_m1.data) */
+                            /* alias: pgnO => (*(z_t29_t*)_m1.data) */
                             z_t29_t z_v29848 = z_t29_copy(&(*(z_t29_t*)_m1.data));
                             z_t29_free(&z_v29846);
                             z_v29846 = z_v29848;
@@ -72012,7 +72012,7 @@ void z_t2878(z_t537_t* z_v26861, z_t1485_t* z_v26862, z_t1932_t* z_v26863, z_t53
                     z_t358_t _m2 = z_v29850;
                     switch (_m2.tag) {
                         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                            /* alias: pgrO9 => (*(z_t29_t*)_m2.data) */
+                            /* alias: pgrO => (*(z_t29_t*)_m2.data) */
                             z_t29_t z_v29851 = z_t29_copy(&(*(z_t29_t*)_m2.data));
                             z_t29_free(&z_v29849);
                             z_v29849 = z_v29851;
@@ -72053,7 +72053,7 @@ void z_t2878(z_t537_t* z_v26861, z_t1485_t* z_v26862, z_t1932_t* z_v26863, z_t53
                     z_t358_t _m4 = z_v29859;
                     switch (_m4.tag) {
                         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                            /* alias: pgaO9 => (*(z_t29_t*)_m4.data) */
+                            /* alias: pgaO => (*(z_t29_t*)_m4.data) */
                             z_t29_t z_v29860 = z_t29_copy(&(*(z_t29_t*)_m4.data));
                             z_t29_free(&z_v29858);
                             z_v29858 = z_v29860;
@@ -72797,7 +72797,7 @@ uint64_t z_t2558(z_t1485_t* z_v21885, uint64_t z_v21886) {
             }
             default: break;
         }
-        /* post-guard alias: bo9 => z_v21888.data.some */
+        /* post-guard alias: bo => z_v21888.data.some */
     }
     __zbrk_191: ;
     return z_v21887;
@@ -72811,7 +72811,7 @@ z_t29_t z_t3097(z_t1485_t* z_v23079, uint64_t z_v23080) {
         z_t358_t _m0 = z_v23083;
         switch (_m0.tag) {
             case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                /* alias: bn9 => (*(z_t29_t*)_m0.data) */
+                /* alias: bn => (*(z_t29_t*)_m0.data) */
                 z_t29_t _rr1 = z_t29_copy(&(*(z_t29_t*)_m0.data));
                 z_t29_free(&z_v23082);
                 z_v23082 = _rr1;
@@ -72837,7 +72837,7 @@ z_t29_t z_t3097(z_t1485_t* z_v23079, uint64_t z_v23080) {
             }
             default: break;
         }
-        /* post-guard alias: bo9 => z_v23084.data.some */
+        /* post-guard alias: bo => z_v23084.data.some */
     z_t358_destroy(&z_v23083);
     }
     __zbrk_192: ;
@@ -73513,11 +73513,11 @@ uint64_t z_t2901(z_t537_t* z_v21344, z_t1485_t* z_v21345, z_t1932_t* z_v21346, u
     z_t538_t _m0 = z_v21349;
     switch (_m0.tag) {
         case Z_NODE_TAG_EXPRESSION: {
-            /* alias: b9 => (*(z_t608_t*)_m0.data) */
+            /* alias: b => (*(z_t608_t*)_m0.data) */
             return z_t2901(z_v21344, z_v21345, z_v21346, (*(z_t608_t*)_m0.data).expression);
         }
         case Z_NODE_TAG_ATOMID: {
-            /* alias: b9 => (*(z_t550_t*)_m0.data) */
+            /* alias: b => (*(z_t550_t*)_m0.data) */
             uint64_t z_v21351 = z_v21346->nsTid;
             if (z_t3882(&z_v21351)) {
                 z_v21351 = z_t2749(z_v21344, z_v21345, ((z_t52_t){ .data = z_v21346->mainName.data, .size = z_v21346->mainName.size }));
@@ -73550,7 +73550,7 @@ uint64_t z_t2901(z_t537_t* z_v21344, z_t1485_t* z_v21345, z_t1932_t* z_v21346, u
             return ((uint64_t)0);
         }
         case Z_NODE_TAG_DOTTEDPATH: {
-            /* alias: b9 => (*(z_t586_t*)_m0.data) */
+            /* alias: b => (*(z_t586_t*)_m0.data) */
             uint64_t z_v21376 = z_t2901(z_v21344, z_v21345, z_v21346, (*(z_t586_t*)_m0.data).parent);
             if (z_t3882(&z_v21376)) {
                 return ((uint64_t)0);
@@ -73558,7 +73558,7 @@ uint64_t z_t2901(z_t537_t* z_v21344, z_t1485_t* z_v21345, z_t1932_t* z_v21346, u
             uint32_t z_v21377 = ((uint32_t)0);
             z_t538_t z_v21379 = z_t643_get(&z_v21344->nodes, ((uint64_t)(*(z_t586_t*)_m0.data).child));
             if ((z_v21379).tag == Z_NODE_TAG_ATOMID) {
-                /* alias: ca9 => (*(z_t550_t*)z_v21379.data) */
+                /* alias: ca => (*(z_t550_t*)z_v21379.data) */
                 z_v21377 = (*(z_t550_t*)z_v21379.data).name;
             }
             return z_t2900(z_v21345, z_v21376, z_v21377);
@@ -73668,12 +73668,12 @@ z_t29_t z_t2924(z_t537_t* z_v22180, z_t1485_t* z_v22181, z_t1932_t* z_v22182, z_
         }
         default: break;
     }
-    /* post-guard alias: co9 => z_v22194.data.some */
+    /* post-guard alias: co => z_v22194.data.some */
     z_t358_t z_v22196 = z_t1015_get(&z_v22181->typing.typedefBaseName, z_v22195);
     z_t358_t _m4 = z_v22196;
     switch (_m4.tag) {
         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-            /* alias: bo9 => (*(z_t29_t*)_m4.data) */
+            /* alias: bo => (*(z_t29_t*)_m4.data) */
             z_t29_t z_v22197 = z_t29_copy(&(*(z_t29_t*)_m4.data));
             z_t29_t z_v22199 = z_t2212(((z_t52_t){ .data = z_v22197.data, .size = z_v22197.size }));
             if (z_v22199.size > 0) {
@@ -73739,7 +73739,7 @@ void z_t2355(z_t537_t* z_v20618, z_t1932_t* z_v20619, uint32_t z_v20620, z_t52_t
         uint32_t z_v20624 = *(uint32_t*)_iter0.data;
         z_t538_t z_v20626 = z_t643_get(&z_v20618->nodes, ((uint64_t)z_v20624));
         if ((z_v20626).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: bn9 => (*(z_t592_t*)z_v20626.data) */
+            /* alias: bn => (*(z_t592_t*)z_v20626.data) */
             z_t29_t z_v20628 = z_t2415(z_v20618, (*(z_t592_t*)z_v20626.data).name);
             z_t538_t z_v20630 = z_t643_get(&z_v20618->nodes, ((uint64_t)(*(z_t592_t*)z_v20626.data).operation));
             z_t538_t _m1 = z_v20630;
@@ -73774,13 +73774,13 @@ _s0; });
                         uint32_t z_v20641 = *(uint32_t*)_iter5.data;
                         z_t538_t z_v20643 = z_t643_get(&z_v20618->nodes, ((uint64_t)z_v20641));
                         if ((z_v20643).tag == Z_NODE_TAG_NAMEDOPERATION) {
-                            /* alias: amn9 => (*(z_t592_t*)z_v20643.data) */
+                            /* alias: amn => (*(z_t592_t*)z_v20643.data) */
                             z_t29_t z_v20645 = z_t2415(z_v20618, (*(z_t592_t*)z_v20643.data).name);
                             z_t538_t z_v20647 = z_t643_get(&z_v20618->nodes, ((uint64_t)(*(z_t592_t*)z_v20643.data).operation));
                             z_t538_t _m6 = z_v20647;
                             switch (_m6.tag) {
                                 case Z_NODE_TAG_FUNCTIONDEF: {
-                                    /* alias: mo9 => (*(z_t624_t*)_m6.data) */
+                                    /* alias: mo => (*(z_t624_t*)_m6.data) */
                                     if ((*(z_t624_t*)_m6.data).isNative) {
                                         z_t29_t _s7 = z_t29_create((uint64_t)50);
                                         z_t29_append(&_s7, z_v20621.data, z_v20621.size);
@@ -73856,7 +73856,7 @@ void z_t2356(z_t1485_t* z_v20663, z_t1932_t* z_v20664, z_t537_t* z_v20665, uint3
         uint32_t z_v20669 = *(uint32_t*)_iter0.data;
         z_t538_t z_v20671 = z_t643_get(&z_v20665->nodes, ((uint64_t)z_v20669));
         if ((z_v20671).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: bmNode9 => (*(z_t592_t*)z_v20671.data) */
+            /* alias: bmNode => (*(z_t592_t*)z_v20671.data) */
             z_t29_t z_v20673 = z_t2415(z_v20665, (*(z_t592_t*)z_v20671.data).name);
             z_t538_t _ah501 = z_t643_get(&z_v20665->nodes, ((uint64_t)(*(z_t592_t*)z_v20671.data).operation));
             (void)(z_t2528(z_v20665, z_v20663, z_v20664, ((z_t52_t){ .data = z_v20673.data, .size = z_v20673.size }), _ah501));
@@ -73982,7 +73982,7 @@ void z_t2357(z_t1485_t* z_v26413, z_t1932_t* z_v26414, z_t537_t* z_v26415, z_t52
         uint32_t z_v26420 = *(uint32_t*)_iter0.data;
         z_t538_t z_v26422 = z_t643_get(&z_v26415->nodes, ((uint64_t)z_v26420));
         if ((z_v26422).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: bmNode9 => (*(z_t592_t*)z_v26422.data) */
+            /* alias: bmNode => (*(z_t592_t*)z_v26422.data) */
             z_t29_t z_v26424 = z_t2415(z_v26415, (*(z_t592_t*)z_v26422.data).name);
             if (z_t2525(z_v26415, z_v26413, z_v26416, ((z_t52_t){ .data = z_v26424.data, .size = z_v26424.size }), ((uint64_t)0), ((bool)Z_BOOL_TAG_TRUE)) == ((bool)Z_BOOL_TAG_FALSE)) {
                 z_t538_t _ah505 = z_t643_get(&z_v26415->nodes, ((uint64_t)(*(z_t592_t*)z_v26422.data).operation));
@@ -74065,7 +74065,7 @@ void z_t2739(z_t537_t* z_v26468, z_t1485_t* z_v26469, z_t1932_t* z_v26470, z_t52
     z_t1689_t _m3 = z_v26495;
     switch (_m3.tag) {
         case Z_OPTION_STRING_TAG_SOME: {
-            /* alias: duo9 => (*(z_t29_t*)_m3.data) */
+            /* alias: duo => (*(z_t29_t*)_m3.data) */
             (void)(z_t2160(z_v26470, ((z_t52_t){ .data = (*(z_t29_t*)_m3.data).data, .size = (*(z_t29_t*)_m3.data).size }), _zs1420));
             (void)(z_t2160(z_v26470, ((z_t52_t){ .data = (*(z_t29_t*)_m3.data).data, .size = (*(z_t29_t*)_m3.data).size }), z_v26475));
             break;
@@ -74451,7 +74451,7 @@ bool z_t2530(z_t537_t* z_v26614, uint32_t z_v26615) {
         uint32_t z_v26618 = *(uint32_t*)_iter0.data;
         z_t538_t z_v26620 = z_t643_get(&z_v26614->nodes, ((uint64_t)z_v26618));
         if ((z_v26620).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: m9Node9 => (*(z_t592_t*)z_v26620.data) */
+            /* alias: m9Node => (*(z_t592_t*)z_v26620.data) */
             z_t538_t _ah542 = z_t643_get(&z_v26614->nodes, ((uint64_t)(*(z_t592_t*)z_v26620.data).operation));
             if (z_t2704(z_v26614, _ah542)) {
                 bool _ret1 = ((bool)Z_BOOL_TAG_TRUE);
@@ -74478,7 +74478,7 @@ void z_t2531(z_t537_t* z_v26625, z_t1485_t* z_v26626, z_t1932_t* z_v26627, z_t52
         uint32_t z_v26642 = ((uint32_t)0);
         z_t538_t z_v26644 = z_t643_get(&z_v26625->nodes, ((uint64_t)z_v26629));
         if ((z_v26644).tag == Z_NODE_TAG_UNITDEF) {
-            /* alias: tuo9 => (*(z_t633_t*)z_v26644.data) */
+            /* alias: tuo => (*(z_t633_t*)z_v26644.data) */
             z_v26642 = (*(z_t633_t*)z_v26644.data).nodeid;
         }
         if (z_v26642 > 0) {
@@ -74512,7 +74512,7 @@ void z_t2531(z_t537_t* z_v26625, z_t1485_t* z_v26626, z_t1932_t* z_v26627, z_t52
                 z_t538_t _m1 = z_v26657;
                 switch (_m1.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: fm9Node9 => (*(z_t592_t*)_m1.data) */
+                        /* alias: fm9Node => (*(z_t592_t*)_m1.data) */
                         z_t538_t _ah543 = z_t643_get(&z_v26625->nodes, ((uint64_t)(*(z_t592_t*)_m1.data).operation));
                         if (z_t2623(_ah543)) {
                             z_t29_t z_v26661 = z_t2415(z_v26625, (*(z_t592_t*)_m1.data).name);
@@ -74716,7 +74716,7 @@ void z_t2532(z_t537_t* z_v29908, z_t1485_t* z_v29909, z_t1932_t* z_v29910, uint3
         uint32_t z_v29917 = *(uint32_t*)_iter0.data;
         z_t538_t z_v29919 = z_t643_get(&z_v29908->nodes, ((uint64_t)z_v29917));
         if ((z_v29919).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: ium9 => (*(z_t592_t*)z_v29919.data) */
+            /* alias: ium => (*(z_t592_t*)z_v29919.data) */
             uint32_t z_v29920 = (*(z_t592_t*)z_v29919.data).operation;
             if (z_t2530(z_v29908, z_v29920)) {
                 z_t29_t z_v29922 = z_t2415(z_v29908, (*(z_t592_t*)z_v29919.data).name);
@@ -74913,7 +74913,7 @@ bool z_t2748(z_t537_t* z_v29926, uint32_t z_v29927) {
         uint32_t z_v29930 = *(uint32_t*)_iter0.data;
         z_t538_t z_v29932 = z_t643_get(&z_v29926->nodes, ((uint64_t)z_v29930));
         if ((z_v29932).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: m9 => (*(z_t592_t*)z_v29932.data) */
+            /* alias: m => (*(z_t592_t*)z_v29932.data) */
             z_t538_t _ah552 = z_t643_get(&z_v29926->nodes, ((uint64_t)(*(z_t592_t*)z_v29932.data).operation));
             if (z_t2623(_ah552)) {
                 bool _ret1 = ((bool)Z_BOOL_TAG_TRUE);
@@ -75365,7 +75365,7 @@ void z_t2349(z_t537_t* z_v20220, uint32_t z_v20221, z_t1485_t* z_v20222, z_t52_t
         uint32_t z_v20228 = *(uint32_t*)_iter0.data;
         z_t538_t z_v20230 = z_t643_get(&z_v20220->nodes, ((uint64_t)z_v20228));
         if ((z_v20230).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: bmNode9 => (*(z_t592_t*)z_v20230.data) */
+            /* alias: bmNode => (*(z_t592_t*)z_v20230.data) */
             z_t29_t z_v20232 = z_t2415(z_v20220, (*(z_t592_t*)z_v20230.data).name);
             bool z_v20261 = z_t2525(z_v20220, z_v20222, z_v20223, ((z_t52_t){ .data = z_v20232.data, .size = z_v20232.size }), ((uint64_t)0), ((bool)Z_BOOL_TAG_FALSE));
             if (z_v20261 == ((bool)Z_BOOL_TAG_FALSE)) {
@@ -75399,7 +75399,7 @@ void z_t2526(z_t537_t* z_v20262, z_t538_t z_v20263, z_t733_t* z_v20264, z_t202_t
                 z_t538_t _m2 = z_v20363;
                 switch (_m2.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: im9 => (*(z_t592_t*)_m2.data) */
+                        /* alias: im => (*(z_t592_t*)_m2.data) */
                         z_t538_t _ah556 = z_t643_get(&z_v20262->nodes, ((uint64_t)(*(z_t592_t*)_m2.data).operation));
                         (void)(z_t2526(z_v20262, _ah556, z_v20264, z_v20265));
                         break;
@@ -75441,7 +75441,7 @@ void z_t2526(z_t537_t* z_v20262, z_t538_t z_v20263, z_t733_t* z_v20264, z_t202_t
                 z_t538_t _m6 = z_v20375;
                 switch (_m6.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: ubn9 => (*(z_t592_t*)_m6.data) */
+                        /* alias: ubn => (*(z_t592_t*)_m6.data) */
                         z_t538_t _ah558 = z_t643_get(&z_v20262->nodes, ((uint64_t)(*(z_t592_t*)_m6.data).operation));
                         (void)(z_t2526(z_v20262, _ah558, z_v20264, z_v20265));
                         break;
@@ -76087,7 +76087,7 @@ bool z_t2359(z_t537_t* z_v30022, uint32_t z_v30023) {
         uint32_t z_v30026 = *(uint32_t*)_iter0.data;
         z_t538_t z_v30028 = z_t643_get(&z_v30022->nodes, ((uint64_t)z_v30026));
         if ((z_v30028).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: bmNode9 => (*(z_t592_t*)z_v30028.data) */
+            /* alias: bmNode => (*(z_t592_t*)z_v30028.data) */
             z_t29_t z_v30030 = z_t2415(z_v30022, (*(z_t592_t*)z_v30028.data).name);
             if (z_t52_eq(((z_t52_t){ .data = z_v30030.data, .size = z_v30030.size }), _zs1610)) {
                 bool _ret1 = ((bool)Z_BOOL_TAG_TRUE);
@@ -79024,7 +79024,7 @@ z_t29_t z_t2409(z_t537_t* z_v22332, z_t1485_t* z_v22333, z_t1932_t* z_v22334, z_
     z_t358_t _m0 = z_v22339;
     switch (_m0.tag) {
         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-            /* alias: h9 => (*(z_t29_t*)_m0.data) */
+            /* alias: h => (*(z_t29_t*)_m0.data) */
             z_v22336 = ((bool)Z_BOOL_TAG_TRUE);
             z_t29_t _rr1 = z_t29_copy(&(*(z_t29_t*)_m0.data));
             z_t29_free(&z_v22337);
@@ -79306,10 +79306,10 @@ bool z_t2404(z_t1932_t* z_v32047, uint64_t z_v32048) {
     while (1) {
         z_t3700_t _iter0 = z_t3689_call(&z_v32055);
         if (_iter0.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t3700_destroy(&_iter0); break; }
-        z_t52_t dm9 = *(z_t52_t*)_iter0.data;
+        z_t52_t dm = *(z_t52_t*)_iter0.data;
         free(_iter0.data);
-        if (dm9.size > 0) {
-            if (z_t2167(z_v32047, ((z_t52_t){ .data = (*__borrow_z_v32052).data, .size = (*__borrow_z_v32052).size }), dm9)) {
+        if (dm.size > 0) {
+            if (z_t2167(z_v32047, ((z_t52_t){ .data = (*__borrow_z_v32052).data, .size = (*__borrow_z_v32052).size }), dm)) {
                 z_v32054 = ((bool)Z_BOOL_TAG_TRUE);
             }
         }
@@ -79331,10 +79331,10 @@ void z_t2161(z_t537_t* z_v32038, z_t1485_t* z_v32039, z_t1932_t* z_v32040, z_t52
                 while (1) {
                     z_t3700_t _iter0 = z_t3689_call(&z_v32058);
                     if (_iter0.tag == Z_OPTION_STRINGVIEW_TAG_NONE) { z_t3700_destroy(&_iter0); break; }
-                    z_t52_t fr9 = *(z_t52_t*)_iter0.data;
+                    z_t52_t fr = *(z_t52_t*)_iter0.data;
                     free(_iter0.data);
-                    if (fr9.size > 0) {
-                        (void)(z_t2405(z_v32038, z_v32039, z_v32040, z_v32041, fr9, z_v32043));
+                    if (fr.size > 0) {
+                        (void)(z_t2405(z_v32038, z_v32039, z_v32040, z_v32041, fr, z_v32043));
                     }
                 }
             }
@@ -80282,7 +80282,7 @@ bool z_t2598(z_t537_t* z_v21441, z_t1485_t* z_v21442, uint64_t z_v21443) {
     z_t1689_t _m0 = z_v21451;
     switch (_m0.tag) {
         case Z_OPTION_STRING_TAG_SOME: {
-            /* alias: duo9 => (*(z_t29_t*)_m0.data) */
+            /* alias: duo => (*(z_t29_t*)_m0.data) */
             if (z_t2763(((z_t52_t){ .data = (*(z_t29_t*)_m0.data).data, .size = (*(z_t29_t*)_m0.data).size }))) {
                 bool _ret1 = ((bool)Z_BOOL_TAG_TRUE);
     z_t1689_destroy(&z_v21451);
@@ -80901,7 +80901,7 @@ void z_t2156(z_t537_t* z_v30035, z_t1485_t* z_v30036, z_t1932_t* z_v30037, z_t52
         z_t1689_t _m0 = z_v30147;
         switch (_m0.tag) {
             case Z_OPTION_STRING_TAG_SOME: {
-                /* alias: duo9 => (*(z_t29_t*)_m0.data) */
+                /* alias: duo => (*(z_t29_t*)_m0.data) */
                 if (z_t52_eq(((z_t52_t){ .data = (*(z_t29_t*)_m0.data).data, .size = (*(z_t29_t*)_m0.data).size }), _zs1980)) {
                     z_v30145 = ((bool)Z_BOOL_TAG_TRUE);
                 }
@@ -81362,7 +81362,7 @@ z_t29_t z_t2596(z_t537_t* z_v30649, z_t1485_t* z_v30650, z_t1932_t* z_v30651, ui
     z_t1689_t _m0 = z_v30657;
     switch (_m0.tag) {
         case Z_OPTION_STRING_TAG_SOME: {
-            /* alias: pidDu9 => (*(z_t29_t*)_m0.data) */
+            /* alias: pidDu => (*(z_t29_t*)_m0.data) */
             break;
         }
         case Z_OPTION_STRING_TAG_NONE: {
@@ -81831,7 +81831,7 @@ void z_t2614(z_t537_t* z_v32182, z_t1485_t* z_v32183, z_t1932_t* z_v32184, uint6
         z_t1689_t _m10 = z_v32242;
         switch (_m10.tag) {
             case Z_OPTION_STRING_TAG_SOME: {
-                /* alias: fduW9 => (*(z_t29_t*)_m10.data) */
+                /* alias: fduW => (*(z_t29_t*)_m10.data) */
                 if (z_t52_eq(((z_t52_t){ .data = (*(z_t29_t*)_m10.data).data, .size = (*(z_t29_t*)_m10.data).size }), _zs2000)) {
                     z_v32239 = ((bool)Z_BOOL_TAG_TRUE);
                 }
@@ -82151,7 +82151,7 @@ void z_t2775(z_t537_t* z_v32787, z_t1485_t* z_v32788, z_t1932_t* z_v32789, uint6
         z_t1689_t _m10 = z_v32842;
         switch (_m10.tag) {
             case Z_OPTION_STRING_TAG_SOME: {
-                /* alias: fduW9 => (*(z_t29_t*)_m10.data) */
+                /* alias: fduW => (*(z_t29_t*)_m10.data) */
                 if (z_t52_eq(((z_t52_t){ .data = (*(z_t29_t*)_m10.data).data, .size = (*(z_t29_t*)_m10.data).size }), _zs2016)) {
                     z_v32839 = ((bool)Z_BOOL_TAG_TRUE);
                 }
@@ -82436,7 +82436,7 @@ uint64_t z_t3279(z_t1485_t* z_v24123, uint64_t z_v24124) {
     z_t1689_t _m0 = z_v24127;
     switch (_m0.tag) {
         case Z_OPTION_STRING_TAG_SOME: {
-            /* alias: duo9 => (*(z_t29_t*)_m0.data) */
+            /* alias: duo => (*(z_t29_t*)_m0.data) */
             if (z_t52_eq(((z_t52_t){ .data = (*(z_t29_t*)_m0.data).data, .size = (*(z_t29_t*)_m0.data).size }), _zs2025)) {
                 z_v24128 = ((bool)Z_BOOL_TAG_TRUE);
             }
@@ -82474,7 +82474,7 @@ z_t29_t z_t3280(z_t537_t* z_v24152, z_t1485_t* z_v24153, z_t1932_t* z_v24154, z_
         z_t538_t _m1 = z_v24160;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: fa9 => (*(z_t592_t*)_m1.data) */
+                /* alias: fa => (*(z_t592_t*)_m1.data) */
                 z_t538_t z_v24162 = z_t643_get(&z_v24152->nodes, ((uint64_t)(*(z_t592_t*)_m1.data).operation));
                 z_t29_t z_v24164 = z_t2415(z_v24152, (*(z_t592_t*)_m1.data).name);
                 if (z_t52_eq(((z_t52_t){ .data = z_v24164.data, .size = z_v24164.size }), _zs2029)) {
@@ -82581,7 +82581,7 @@ z_t29_t z_t3104(z_t537_t* z_v24109, z_t1485_t* z_v24110, z_t1932_t* z_v24111, z_
     z_t1689_t _m5 = z_v24148;
     switch (_m5.tag) {
         case Z_OPTION_STRING_TAG_SOME: {
-            /* alias: fduo9 => (*(z_t29_t*)_m5.data) */
+            /* alias: fduo => (*(z_t29_t*)_m5.data) */
             if (z_t52_eq(((z_t52_t){ .data = (*(z_t29_t*)_m5.data).data, .size = (*(z_t29_t*)_m5.data).size }), _zs2040)) {
                 z_v24145 = ((bool)Z_BOOL_TAG_TRUE);
             }
@@ -83040,7 +83040,7 @@ z_t29_t z_t2918(z_t537_t* z_v21818, z_t1485_t* z_v21819, z_t52_t z_v21820, uint3
         }
         default: break;
     }
-    /* post-guard alias: fo9 => z_v21829.data.some */
+    /* post-guard alias: fo => z_v21829.data.some */
     if (z_t3897(&z_v21819->reg, z_v21830) != ((uint8_t)Z_ZTYPETYPE_TAG_FUNCTIONTYPE)) {
         return z_t29_from_view(_zs2078);
     }
@@ -83084,7 +83084,7 @@ z_t29_t z_t2918(z_t537_t* z_v21818, z_t1485_t* z_v21819, z_t52_t z_v21820, uint3
     z_t1689_t _m4 = z_v21841;
     switch (_m4.tag) {
         case Z_OPTION_STRING_TAG_SOME: {
-            /* alias: duo9 => (*(z_t29_t*)_m4.data) */
+            /* alias: duo => (*(z_t29_t*)_m4.data) */
             z_t29_t _ret5 = z_t29_copy(&(*(z_t29_t*)_m4.data));
     z_t202_destroy(&z_v21831);
     z_t733_destroy(&z_v21832);
@@ -83367,7 +83367,7 @@ z_t29_t z_t3103(z_t537_t* z_v23958, z_t1485_t* z_v23959, z_t1932_t* z_v23960, z_
             }
             default: break;
         }
-        /* post-guard alias: fo9 => z_v23997.data.some */
+        /* post-guard alias: fo => z_v23997.data.some */
     }
     if (z_t3897(&z_v23959->reg, z_v23987) != ((uint8_t)Z_ZTYPETYPE_TAG_FUNCTIONTYPE)) {
         z_t29_t _ret18 = z_t29_from_view(_zs2092);
@@ -83554,7 +83554,7 @@ z_t29_t z_t3106(z_t537_t* z_v24245, z_t1485_t* z_v24246, z_t1932_t* z_v24247, z_
     z_t538_t _m1 = z_v24257;
     switch (_m1.tag) {
         case Z_NODE_TAG_DOTTEDPATH: {
-            /* alias: cnDp9 => (*(z_t586_t*)_m1.data) */
+            /* alias: cnDp => (*(z_t586_t*)_m1.data) */
             z_v24255 = (*(z_t586_t*)_m1.data).parent;
             break;
         }
@@ -85717,7 +85717,7 @@ void z_t2774(z_t537_t* z_v32435, z_t1485_t* z_v32436, z_t1932_t* z_v32437, uint6
                 z_t538_t _m6 = z_v32718;
                 switch (_m6.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: im9 => (*(z_t592_t*)_m6.data) */
+                        /* alias: im => (*(z_t592_t*)_m6.data) */
                         z_t538_t _ah638 = z_t643_get(&z_v32435->nodes, ((uint64_t)(*(z_t592_t*)_m6.data).operation));
                         if (z_t2623(_ah638)) {
                             uint64_t z_v32721 = z_v32714;
@@ -85943,7 +85943,7 @@ bool z_t3135(z_t537_t* z_v32637, z_t1485_t* z_v32638, z_t1932_t* z_v32639, uint6
                 z_t538_t _m10 = z_v32693;
                 switch (_m10.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: pm9 => (*(z_t592_t*)_m10.data) */
+                        /* alias: pm => (*(z_t592_t*)_m10.data) */
                         z_t29_t z_v32695 = z_t2415(z_v32637, (*(z_t592_t*)_m10.data).name);
                         if (z_t52_eq(((z_t52_t){ .data = z_v32695.data, .size = z_v32695.size }), _zs2216)) {
                             z_v32689 = ((bool)Z_BOOL_TAG_TRUE);
@@ -89471,7 +89471,7 @@ void z_t2633(z_t864_t* z_v4495, z_t537_t* z_v4496, uint64_t z_v4497, uint32_t z_
     z_t538_t _m0 = z_v4500;
     switch (_m0.tag) {
         case Z_NODE_TAG_FUNCTIONDEF: {
-            /* alias: fn9 => (*(z_t624_t*)_m0.data) */
+            /* alias: fn => (*(z_t624_t*)_m0.data) */
             z_t579_t z_v4501 = z_t563_iterate(&(*(z_t624_t*)_m0.data).parameters);
             while (1) {
                 z_t581_t _iter1 = z_t579_call(&z_v4501);
@@ -89479,7 +89479,7 @@ void z_t2633(z_t864_t* z_v4495, z_t537_t* z_v4496, uint64_t z_v4497, uint32_t z_
                 uint32_t z_v4502 = *(uint32_t*)_iter1.data;
                 z_t538_t z_v4504 = z_t643_get(&z_v4496->nodes, ((uint64_t)z_v4502));
                 if ((z_v4504).tag == Z_NODE_TAG_NAMEDOPERATION) {
-                    /* alias: pn9 => (*(z_t592_t*)z_v4504.data) */
+                    /* alias: pn => (*(z_t592_t*)z_v4504.data) */
                     (void)(z_t3942(z_v4495, (*(z_t592_t*)z_v4504.data).name, z_v4497, ((uint8_t)Z_DECLKIND_TAG_PARAMDECL), (*(z_t592_t*)z_v4504.data).nodeid));
                 }
             }
@@ -89510,7 +89510,7 @@ void z_t2635(z_t864_t* z_v4610, z_t537_t* z_v4611, uint64_t z_v4612, uint32_t z_
     z_t538_t _m0 = z_v4618;
     switch (_m0.tag) {
         case Z_NODE_TAG_DATABLOCK: {
-            /* alias: dn9 => (*(z_t594_t*)_m0.data) */
+            /* alias: dn => (*(z_t594_t*)_m0.data) */
             uint64_t z_v4619 = ((uint64_t)0);
             z_t579_t z_v4620 = z_t563_iterate(&(*(z_t594_t*)_m0.data).elements);
             while (1) {
@@ -89519,7 +89519,7 @@ void z_t2635(z_t864_t* z_v4610, z_t537_t* z_v4611, uint64_t z_v4612, uint32_t z_
                 uint32_t z_v4621 = *(uint32_t*)_iter1.data;
                 z_t538_t z_v4623 = z_t643_get(&z_v4611->nodes, ((uint64_t)z_v4621));
                 if ((z_v4623).tag == Z_NODE_TAG_NAMEDOPERATION) {
-                    /* alias: en9 => (*(z_t592_t*)z_v4623.data) */
+                    /* alias: en => (*(z_t592_t*)z_v4623.data) */
                     (void)(z_t563_append(&z_v4614, (*(z_t592_t*)z_v4623.data).name));
                     (void)(z_t563_append(&z_v4615, (*(z_t592_t*)z_v4623.data).nodeid));
                     (void)(z_t733_append(&z_v4616, z_v4619));
@@ -89559,7 +89559,7 @@ void z_t2634(z_t864_t* z_v4528, z_t537_t* z_v4529, uint64_t z_v4530, uint32_t z_
     z_t538_t _m0 = z_v4533;
     switch (_m0.tag) {
         case Z_NODE_TAG_OBJECTDEF: {
-            /* alias: ob9 => (*(z_t626_t*)_m0.data) */
+            /* alias: ob => (*(z_t626_t*)_m0.data) */
             bool z_v4534 = ((bool)Z_BOOL_TAG_FALSE);
             if (((*(z_t626_t*)_m0.data).kind) == Z_NODETYPE_TAG_VARIANTDEF) {
                 z_v4534 = ((bool)Z_BOOL_TAG_TRUE);
@@ -89574,7 +89574,7 @@ void z_t2634(z_t864_t* z_v4528, z_t537_t* z_v4529, uint64_t z_v4530, uint32_t z_
                 uint32_t z_v4536 = *(uint32_t*)_iter1.data;
                 z_t538_t z_v4538 = z_t643_get(&z_v4529->nodes, ((uint64_t)z_v4536));
                 if ((z_v4538).tag == Z_NODE_TAG_NAMEDOPERATION) {
-                    /* alias: in9 => (*(z_t592_t*)z_v4538.data) */
+                    /* alias: itemNode => (*(z_t592_t*)z_v4538.data) */
                     if (z_v4534) {
                         (void)(z_t3942(z_v4528, (*(z_t592_t*)z_v4538.data).name, z_v4530, ((uint8_t)Z_DECLKIND_TAG_ARMDECL), (*(z_t592_t*)z_v4538.data).nodeid));
                     } else {
@@ -89638,7 +89638,7 @@ void z_t2449(z_t864_t* z_v4565, z_t537_t* z_v4566, uint64_t z_v4567, uint64_t z_
     z_t538_t _m0 = z_v4571;
     switch (_m0.tag) {
         case Z_NODE_TAG_UNITDEF: {
-            /* alias: pop9 => (*(z_t633_t*)_m0.data) */
+            /* alias: pop => (*(z_t633_t*)_m0.data) */
             z_t579_t z_v4572 = z_t563_iterate(&(*(z_t633_t*)_m0.data).body);
             while (1) {
                 z_t581_t _iter1 = z_t579_call(&z_v4572);
@@ -89651,11 +89651,11 @@ void z_t2449(z_t864_t* z_v4565, z_t537_t* z_v4566, uint64_t z_v4567, uint64_t z_
                     z_t538_t z_v4578 = z_t643_get(&z_v4566->nodes, ((uint64_t)(*(z_t592_t*)z_v4575.data).operation));
                     bool z_v4579 = ((bool)Z_BOOL_TAG_FALSE);
                     if ((z_v4578).tag == Z_NODE_TAG_LABELVALUE) {
-                        /* alias: mop9 => (*(z_t556_t*)z_v4578.data) */
+                        /* alias: mop => (*(z_t556_t*)z_v4578.data) */
                         z_v4579 = ((bool)Z_BOOL_TAG_TRUE);
                     }
                     if ((z_v4578).tag == Z_NODE_TAG_ATOMID) {
-                        /* alias: mop9 => (*(z_t550_t*)z_v4578.data) */
+                        /* alias: mop => (*(z_t550_t*)z_v4578.data) */
                         z_v4576 = (*(z_t550_t*)z_v4578.data).name;
                         z_v4579 = ((bool)Z_BOOL_TAG_TRUE);
                     }
@@ -90988,7 +90988,7 @@ uint64_t z_t2708(z_t864_t* z_v7232, z_t689_t* z_v7233, z_t537_t* z_v7234, uint64
         z_t538_t _m1 = z_v7250;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: arg9 => (*(z_t592_t*)_m1.data) */
+                /* alias: arg => (*(z_t592_t*)_m1.data) */
                 z_t538_t _ah727 = z_t643_get(&z_v7234->nodes, ((uint64_t)(*(z_t592_t*)_m1.data).operation));
                 z_t29_t z_v7253 = z_t2682(z_v7234, _ah727);
                 if (z_t2307(((z_t52_t){ .data = z_v7253.data, .size = z_v7253.size }))) {
@@ -92119,7 +92119,7 @@ bool z_t3322(z_t537_t* z_v8489, z_t624_t* z_v8490) {
             z_t538_t _m1 = z_v8495;
             switch (_m1.tag) {
                 case Z_NODE_TAG_NAMEDOPERATION: {
-                    /* alias: pm9 => (*(z_t592_t*)_m1.data) */
+                    /* alias: pm => (*(z_t592_t*)_m1.data) */
                     z_t538_t _ah774 = z_t643_get(&z_v8489->nodes, ((uint64_t)(*(z_t592_t*)_m1.data).operation));
                     z_t1086_t z_v8498 = z_t2855(z_v8489, _ah774);
                     z_t1086_t _m2 = z_v8498;
@@ -92598,7 +92598,7 @@ void z_t2785(z_t864_t* z_v10523, z_t689_t* z_v10524, z_t537_t* z_v10525, uint64_
     z_t538_t _m0 = z_v10593;
     switch (_m0.tag) {
         case Z_NODE_TAG_FUNCTIONDEF: {
-            /* alias: fnN9 => (*(z_t624_t*)_m0.data) */
+            /* alias: fnN => (*(z_t624_t*)_m0.data) */
             z_t579_t z_v10594 = z_t563_iterate(&(*(z_t624_t*)_m0.data).parameters);
             while (1) {
                 z_t581_t _iter1 = z_t579_call(&z_v10594);
@@ -92606,7 +92606,7 @@ void z_t2785(z_t864_t* z_v10523, z_t689_t* z_v10524, z_t537_t* z_v10525, uint64_
                 uint32_t z_v10595 = *(uint32_t*)_iter1.data;
                 z_t538_t z_v10597 = z_t643_get(&z_v10525->nodes, ((uint64_t)z_v10595));
                 if ((z_v10597).tag == Z_NODE_TAG_NAMEDOPERATION) {
-                    /* alias: pn9 => (*(z_t592_t*)z_v10597.data) */
+                    /* alias: pn => (*(z_t592_t*)z_v10597.data) */
                     z_t538_t _ah789 = z_t643_get(&z_v10525->nodes, ((uint64_t)(*(z_t592_t*)z_v10597.data).operation));
                     z_t29_t z_v10600 = z_t2962(z_v10525, _ah789);
                     if (z_t52_eq(((z_t52_t){ .data = z_v10600.data, .size = z_v10600.size }), _zs2721)) {
@@ -92664,7 +92664,7 @@ z_t810_t z_t2451(z_t864_t* z_v4808, z_t689_t* z_v4809, z_t537_t* z_v4810, uint64
     uint32_t z_v4823 = ((uint32_t)0);
     z_t538_t z_v4825 = z_t643_get(&z_v4810->nodes, ((uint64_t)z_v4815));
     if ((z_v4825).tag == Z_NODE_TAG_NAMEDOPERATION) {
-        /* alias: nn9 => (*(z_t592_t*)z_v4825.data) */
+        /* alias: nn => (*(z_t592_t*)z_v4825.data) */
         z_v4823 = (*(z_t592_t*)z_v4825.data).operation;
     }
     if (z_v4823 == 0) {
@@ -92731,7 +92731,7 @@ void z_t2961(z_t864_t* z_v10535, z_t689_t* z_v10536, z_t537_t* z_v10537, uint64_
         z_t538_t _m0 = z_v10544;
         switch (_m0.tag) {
             case Z_NODE_TAG_DOTTEDPATH: {
-                /* alias: pk9 => (*(z_t586_t*)_m0.data) */
+                /* alias: pk => (*(z_t586_t*)_m0.data) */
                 z_t538_t _ah792 = z_t643_get(&z_v10537->nodes, ((uint64_t)(*(z_t586_t*)_m0.data).child));
                 z_t29_t z_v10547 = z_t2682(z_v10537, _ah792);
                 if (z_t2989(((z_t52_t){ .data = z_v10547.data, .size = z_v10547.size }))) {
@@ -92781,7 +92781,7 @@ void z_t2961(z_t864_t* z_v10535, z_t689_t* z_v10536, z_t537_t* z_v10537, uint64_
     z_t358_t _m1 = z_v10570;
     switch (_m1.tag) {
         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-            /* alias: pv9 => (*(z_t29_t*)_m1.data) */
+            /* alias: pv => (*(z_t29_t*)_m1.data) */
             z_t29_t _rr2 = z_t29_copy(&(*(z_t29_t*)_m1.data));
             z_t29_free(&z_v10569);
             z_v10569 = _rr2;
@@ -92889,7 +92889,7 @@ uint64_t z_t2506(z_t864_t* z_v13333, z_t689_t* z_v13334, z_t537_t* z_v13335, uin
     uint32_t z_v13339 = ((uint32_t)0);
     z_t538_t z_v13341 = z_t643_get(&z_v13335->nodes, ((uint64_t)z_v13337));
     if ((z_v13341).tag == Z_NODE_TAG_NAMEDOPERATION) {
-        /* alias: mm9 => (*(z_t592_t*)z_v13341.data) */
+        /* alias: mm => (*(z_t592_t*)z_v13341.data) */
         z_v13338 = (*(z_t592_t*)z_v13341.data).name;
         z_v13339 = (*(z_t592_t*)z_v13341.data).operation;
     }
@@ -92916,7 +92916,7 @@ uint64_t z_t2506(z_t864_t* z_v13333, z_t689_t* z_v13334, z_t537_t* z_v13335, uin
     bool z_v13345 = ((bool)Z_BOOL_TAG_FALSE);
     z_t538_t z_v13347 = z_t643_get(&z_v13335->nodes, ((uint64_t)z_v13339));
     if ((z_v13347).tag == Z_NODE_TAG_OBJECTDEF) {
-        /* alias: oo9 => (*(z_t626_t*)z_v13347.data) */
+        /* alias: oo => (*(z_t626_t*)z_v13347.data) */
         z_v13345 = ((bool)Z_BOOL_TAG_TRUE);
     }
     if (z_v13345 == ((bool)Z_BOOL_TAG_FALSE)) {
@@ -93219,7 +93219,7 @@ bool z_t2990(z_t864_t* z_v8458, z_t689_t* z_v8459, z_t537_t* z_v8460, uint64_t z
                 z_t538_t _m2 = z_v8474;
                 switch (_m2.tag) {
                     case Z_NODE_TAG_FUNCTIONDEF: {
-                        /* alias: mop9 => (*(z_t624_t*)_m2.data) */
+                        /* alias: mop => (*(z_t624_t*)_m2.data) */
                         (void)(z_t3152(z_v8460, z_v8458, &(*(z_t624_t*)_m2.data), ((z_t52_t){ .data = z_v8472.data, .size = z_v8472.size })));
                         (void)(z_t3178(z_v8458, z_v8460, &(*(z_t624_t*)_m2.data), ((uint64_t)z_v8463), ((z_t52_t){ .data = z_v8472.data, .size = z_v8472.size })));
                         break;
@@ -93742,17 +93742,17 @@ void z_t2975(z_t864_t* z_v7014, z_t537_t* z_v7015, z_t626_t* z_v7016, z_t733_t* 
                                 z_t538_t _m4 = z_v7045;
                                 switch (_m4.tag) {
                                     case Z_NODE_TAG_NAMEDOPERATION: {
-                                        /* alias: bn9 => (*(z_t592_t*)_m4.data) */
+                                        /* alias: bn => (*(z_t592_t*)_m4.data) */
                                         (void)(z_t964_add(&z_v7019, ((uint64_t)(*(z_t592_t*)_m4.data).name)));
                                         z_t538_t z_v7048 = z_t643_get(&z_v7015->nodes, ((uint64_t)(*(z_t592_t*)_m4.data).operation));
                                         z_t538_t _m5 = z_v7048;
                                         switch (_m5.tag) {
                                             case Z_NODE_TAG_LABELVALUE: {
-                                                /* alias: bop9 => (*(z_t556_t*)_m5.data) */
+                                                /* alias: bop => (*(z_t556_t*)_m5.data) */
                                                 break;
                                             }
                                             case Z_NODE_TAG_ATOMID: {
-                                                /* alias: bop9 => (*(z_t550_t*)_m5.data) */
+                                                /* alias: bop => (*(z_t550_t*)_m5.data) */
                                                 if (!z_t3842(&(*(z_t592_t*)_m4.data).name, (*(z_t550_t*)_m5.data).name)) {
                                                     (void)(z_t563_append(&z_v7021, (*(z_t592_t*)_m4.data).name));
                                                     (void)(z_t563_append(&z_v7022, (*(z_t550_t*)_m5.data).name));
@@ -93799,7 +93799,7 @@ void z_t2975(z_t864_t* z_v7014, z_t537_t* z_v7015, z_t626_t* z_v7016, z_t733_t* 
         z_t538_t _m7 = z_v7062;
         switch (_m7.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: fm9 => (*(z_t592_t*)_m7.data) */
+                /* alias: fm => (*(z_t592_t*)_m7.data) */
                 (void)(z_t964_add(&z_v7020, ((uint64_t)(*(z_t592_t*)_m7.data).name)));
                 z_t538_t _ah822 = z_t643_get(&z_v7015->nodes, ((uint64_t)(*(z_t592_t*)_m7.data).operation));
                 if (z_t2859(z_v7015, _ah822)) {
@@ -93837,7 +93837,7 @@ void z_t2975(z_t864_t* z_v7014, z_t537_t* z_v7015, z_t626_t* z_v7016, z_t733_t* 
         z_t538_t _m9 = z_v7080;
         switch (_m9.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: am9 => (*(z_t592_t*)_m9.data) */
+                /* alias: am => (*(z_t592_t*)_m9.data) */
                 bool z_v7081 = ((bool)Z_BOOL_TAG_FALSE);
                 if (z_t2448(z_v7015, (*(z_t592_t*)_m9.data).operation, ((uint8_t)Z_UNITKIND_TAG_PUBLICNS))) {
                     z_v7081 = ((bool)Z_BOOL_TAG_TRUE);
@@ -93929,7 +93929,7 @@ void z_t2317(z_t864_t* z_v13088, z_t537_t* z_v13089, uint32_t z_v13090) {
         z_t538_t _m1 = z_v13104;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: um9 => (*(z_t592_t*)_m1.data) */
+                /* alias: um => (*(z_t592_t*)_m1.data) */
                 bool z_v13107 = z_t2448(z_v13089, (*(z_t592_t*)_m1.data).operation, ((uint8_t)Z_UNITKIND_TAG_PUBLICNS));
                 bool z_v13110 = z_t2448(z_v13089, (*(z_t592_t*)_m1.data).operation, ((uint8_t)Z_UNITKIND_TAG_PRIVATENS));
                 if (z_v13110) {
@@ -93942,7 +93942,7 @@ void z_t2317(z_t864_t* z_v13088, z_t537_t* z_v13089, uint32_t z_v13090) {
                     z_t538_t _m2 = z_v13117;
                     switch (_m2.tag) {
                         case Z_NODE_TAG_UNITDEF: {
-                            /* alias: uop9 => (*(z_t633_t*)_m2.data) */
+                            /* alias: uop => (*(z_t633_t*)_m2.data) */
                             z_v13099 = ((bool)Z_BOOL_TAG_TRUE);
                             z_t579_t z_v13118 = z_t563_iterate(&(*(z_t633_t*)_m2.data).body);
                             while (1) {
@@ -93953,17 +93953,17 @@ void z_t2317(z_t864_t* z_v13088, z_t537_t* z_v13089, uint32_t z_v13090) {
                                 z_t538_t _m4 = z_v13121;
                                 switch (_m4.tag) {
                                     case Z_NODE_TAG_NAMEDOPERATION: {
-                                        /* alias: ubn9 => (*(z_t592_t*)_m4.data) */
+                                        /* alias: ubn => (*(z_t592_t*)_m4.data) */
                                         (void)(z_t964_add(&z_v13091, ((uint64_t)(*(z_t592_t*)_m4.data).name)));
                                         z_t538_t z_v13124 = z_t643_get(&z_v13089->nodes, ((uint64_t)(*(z_t592_t*)_m4.data).operation));
                                         z_t538_t _m5 = z_v13124;
                                         switch (_m5.tag) {
                                             case Z_NODE_TAG_LABELVALUE: {
-                                                /* alias: ubop9 => (*(z_t556_t*)_m5.data) */
+                                                /* alias: ubop => (*(z_t556_t*)_m5.data) */
                                                 break;
                                             }
                                             case Z_NODE_TAG_ATOMID: {
-                                                /* alias: ubop9 => (*(z_t550_t*)_m5.data) */
+                                                /* alias: ubop => (*(z_t550_t*)_m5.data) */
                                                 if (!z_t3842(&(*(z_t592_t*)_m4.data).name, (*(z_t550_t*)_m5.data).name)) {
                                                     (void)(z_t563_append(&z_v13094, (*(z_t592_t*)_m4.data).name));
                                                     (void)(z_t563_append(&z_v13095, (*(z_t550_t*)_m5.data).name));
@@ -94242,7 +94242,7 @@ void z_t1903(z_t864_t* z_v13067, z_t689_t* z_v13068, z_t538_t z_v13069) {
                 z_t29_t z_v13075 = ((z_t29_t){0});
                 z_t538_t z_v13077 = z_t643_get(&(*(z_t640_t*)_m0.data).ast.nodes, ((uint64_t)z_v13073));
                 if ((z_v13077).tag == Z_NODE_TAG_NAMEDOPERATION) {
-                    /* alias: ruV9 => (*(z_t592_t*)z_v13077.data) */
+                    /* alias: ruV => (*(z_t592_t*)z_v13077.data) */
                     z_t29_t z_v13080 = z_t1921(&(*(z_t640_t*)_m0.data).ast.names, (*(z_t592_t*)z_v13077.data).name);
                     z_v13074 = (*(z_t592_t*)z_v13077.data).operation;
                     z_t29_t _rr1 = z_t29_copy(&z_v13080);
@@ -94273,7 +94273,7 @@ void z_t1903(z_t864_t* z_v13067, z_t689_t* z_v13068, z_t538_t z_v13069) {
                                     z_t538_t _m3 = z_v13177;
                                     switch (_m3.tag) {
                                         case Z_NODE_TAG_NAMEDOPERATION: {
-                                            /* alias: mn9 => (*(z_t592_t*)_m3.data) */
+                                            /* alias: mn => (*(z_t592_t*)_m3.data) */
                                             if (z_t3842(&(*(z_t592_t*)_m3.data).name, z_v13173) && (z_v13173 > 0)) {
                                                 z_v13168 = (*(z_t592_t*)_m3.data).nodeid;
                                                 z_v13169 = (*(z_t592_t*)_m3.data).lineno;
@@ -94741,7 +94741,7 @@ uint64_t z_t2995(z_t537_t* z_v8895, z_t864_t* z_v8896, z_t689_t* z_v8897, uint64
         z_t538_t _m1 = z_v8906;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: am9 => (*(z_t592_t*)_m1.data) */
+                /* alias: am => (*(z_t592_t*)_m1.data) */
                 z_t538_t z_v8908 = z_t643_get(&z_v8895->nodes, ((uint64_t)(*(z_t592_t*)_m1.data).operation));
                 bool z_v8909 = ((bool)Z_BOOL_TAG_FALSE);
                 z_t538_t _m2 = z_v8908;
@@ -94809,7 +94809,7 @@ bool z_t2996(z_t537_t* z_v8921, z_t864_t* z_v8922, z_t689_t* z_v8923, uint64_t z
         z_t538_t _m1 = z_v8930;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: am9 => (*(z_t592_t*)_m1.data) */
+                /* alias: am => (*(z_t592_t*)_m1.data) */
                 z_t538_t z_v8932 = z_t643_get(&z_v8921->nodes, ((uint64_t)(*(z_t592_t*)_m1.data).operation));
                 bool z_v8933 = ((bool)Z_BOOL_TAG_FALSE);
                 z_t538_t _m2 = z_v8932;
@@ -95062,7 +95062,7 @@ void z_t2798(z_t864_t* z_v9032, z_t689_t* z_v9033, z_t537_t* z_v9034, uint64_t z
                     z_t538_t _m2 = z_v9076;
                     switch (_m2.tag) {
                         case Z_NODE_TAG_EXPRESSION: {
-                            /* alias: awn9 => (*(z_t608_t*)_m2.data) */
+                            /* alias: awn => (*(z_t608_t*)_m2.data) */
                             z_v9073 = (*(z_t608_t*)_m2.data).expression;
                             z_v9074 = ((bool)Z_BOOL_TAG_TRUE);
                             break;
@@ -95076,7 +95076,7 @@ void z_t2798(z_t864_t* z_v9032, z_t689_t* z_v9033, z_t537_t* z_v9034, uint64_t z
                 z_t538_t _m3 = z_v9078;
                 switch (_m3.tag) {
                     case Z_NODE_TAG_CALL: {
-                        /* alias: acn9 => (*(z_t588_t*)_m3.data) */
+                        /* alias: acn => (*(z_t588_t*)_m3.data) */
                         z_t538_t _ah860 = z_t643_get(&z_v9034->nodes, ((uint64_t)(*(z_t588_t*)_m3.data).callable));
                         z_t29_t z_v9081 = z_t2682(z_v9034, _ah860);
                         if (z_t52_eq(((z_t52_t){ .data = z_v9081.data, .size = z_v9081.size }), _zs2793)) {
@@ -95099,7 +95099,7 @@ void z_t2798(z_t864_t* z_v9032, z_t689_t* z_v9033, z_t537_t* z_v9034, uint64_t z
                                     z_t538_t _m5 = z_v9092;
                                     switch (_m5.tag) {
                                         case Z_NODE_TAG_NAMEDOPERATION: {
-                                            /* alias: ba9 => (*(z_t592_t*)_m5.data) */
+                                            /* alias: ba => (*(z_t592_t*)_m5.data) */
                                             if (z_t3817(&z_v9072, (*(z_t592_t*)_m1.data).operation)) {
                                                 z_v9072 = (*(z_t592_t*)_m5.data).operation;
                                             }
@@ -96056,7 +96056,7 @@ z_t2844_t z_t2843(z_t864_t* z_v5520, z_t537_t* z_v5521, uint64_t z_v5522) {
     }
     z_t538_t z_v5528 = z_t643_get(&z_v5521->nodes, ((uint64_t)z_v5523));
     if ((z_v5528).tag == Z_NODE_TAG_NAMEDOPERATION) {
-        /* alias: nop9 => (*(z_t592_t*)z_v5528.data) */
+        /* alias: nop => (*(z_t592_t*)z_v5528.data) */
         z_t29_t z_v5532 = z_t1921(&z_v5521->names, ((uint32_t)z_v5524));
         z_t538_t _ah888 = z_t643_get(&z_v5521->nodes, ((uint64_t)(*(z_t592_t*)z_v5528.data).operation));
         return z_t3042(z_v5521, _ah888, ((z_t52_t){ .data = z_v5532.data, .size = z_v5532.size }));
@@ -96073,7 +96073,7 @@ z_t2516_t z_t2344(z_t864_t* z_v5330, z_t537_t* z_v5331, uint64_t z_v5332) {
     if (((*__borrow_z_v5336).kind) == Z_DECLKIND_TAG_REEXPORTDECL) {
         z_t538_t z_v5338 = z_t643_get(&z_v5331->nodes, ((uint64_t)(*__borrow_z_v5336).node));
         if ((z_v5338).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: nop9 => (*(z_t592_t*)z_v5338.data) */
+            /* alias: nop => (*(z_t592_t*)z_v5338.data) */
             z_t538_t z_v5340 = z_t643_get(&z_v5331->nodes, ((uint64_t)(*(z_t592_t*)z_v5338.data).operation));
             z_t2516_t z_v5353 = z_t2514(z_v5331, z_v5340);
             if (((uint32_t)z_v5353.unitName) > 0) {
@@ -96103,7 +96103,7 @@ bool z_t3023(z_t864_t* z_v5618, z_t537_t* z_v5619, uint64_t z_v5620) {
     if (((*__borrow_z_v5622).kind) == Z_DECLKIND_TAG_REEXPORTDECL) {
         z_t538_t z_v5624 = z_t643_get(&z_v5619->nodes, ((uint64_t)(*__borrow_z_v5622).node));
         if ((z_v5624).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: bnp9 => (*(z_t592_t*)z_v5624.data) */
+            /* alias: bnp => (*(z_t592_t*)z_v5624.data) */
             z_t538_t z_v5626 = z_t643_get(&z_v5619->nodes, ((uint64_t)(*(z_t592_t*)z_v5624.data).operation));
             uint32_t z_v5627 = z_t2515(z_v5619, z_v5626);
             return (z_t3843(&z_v5627) == ((bool)Z_BOOL_TAG_FALSE));
@@ -96124,7 +96124,7 @@ bool z_t3530(z_t864_t* z_v17505, z_t689_t* z_v17506, z_t537_t* z_v17507, uint64_
     if (((*__borrow_z_v17510).kind) == Z_DECLKIND_TAG_REEXPORTDECL) {
         z_t538_t z_v17512 = z_t643_get(&z_v17507->nodes, ((uint64_t)(*__borrow_z_v17510).node));
         if ((z_v17512).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: nnp9 => (*(z_t592_t*)z_v17512.data) */
+            /* alias: nnp => (*(z_t592_t*)z_v17512.data) */
             z_t538_t z_v17514 = z_t643_get(&z_v17507->nodes, ((uint64_t)(*(z_t592_t*)z_v17512.data).operation));
             z_t2516_t z_v17515 = z_t2514(z_v17507, z_v17514);
             if (((uint32_t)z_v17515.unitName) > 0) {
@@ -96159,7 +96159,7 @@ bool z_t2892(z_t864_t* z_v5405, z_t537_t* z_v5406, uint64_t z_v5407) {
     if (((z_v5411).tag == Z_NODE_TAG_NAMEDOPERATION) == ((bool)Z_BOOL_TAG_FALSE)) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    /* post-guard alias: np9 => (*(z_t592_t*)z_v5411.data) */
+    /* post-guard alias: np => (*(z_t592_t*)z_v5411.data) */
     return z_t2503(z_v5406, (*(z_t592_t*)z_v5411.data).operation);
 }
 
@@ -96398,12 +96398,12 @@ void z_t3025(z_t864_t* z_v10054, z_t689_t* z_v10055, z_t537_t* z_v10056, uint64_
     }
     z_t538_t z_v10061 = z_t643_get(&z_v10056->nodes, z_v10060);
     if ((z_v10061).tag == Z_NODE_TAG_NAMEDOPERATION) {
-        /* alias: bmG9 => (*(z_t592_t*)z_v10061.data) */
+        /* alias: bmG => (*(z_t592_t*)z_v10061.data) */
         z_t538_t z_v10063 = z_t643_get(&z_v10056->nodes, ((uint64_t)(*(z_t592_t*)z_v10061.data).operation));
         z_t538_t _m0 = z_v10063;
         switch (_m0.tag) {
             case Z_NODE_TAG_OBJECTDEF: {
-                /* alias: odG9 => (*(z_t626_t*)_m0.data) */
+                /* alias: odG => (*(z_t626_t*)_m0.data) */
                 if (z_t2466(z_v10056, &(*(z_t626_t*)_m0.data).asItems)) {
                     (void)(z_t2467(z_v10055, z_v10056, z_v10057, &(*(z_t626_t*)_m0.data).asItems));
                 }
@@ -96521,7 +96521,7 @@ uint64_t z_t2829(z_t864_t* z_v5146, z_t689_t* z_v5147, z_t537_t* z_v5148, uint64
     }
     z_t538_t z_v10083 = z_t643_get(&z_v5148->nodes, z_v10079);
     if ((z_v10083).tag == Z_NODE_TAG_NAMEDOPERATION) {
-        /* alias: bm9 => (*(z_t592_t*)z_v10083.data) */
+        /* alias: bm => (*(z_t592_t*)z_v10083.data) */
         z_t538_t _ah889 = z_t643_get(&z_v5148->nodes, ((uint64_t)(*(z_t592_t*)z_v10083.data).operation));
         (void)(z_t2455(z_v5146, z_v5147, z_v5148, z_v5149, z_v5150, _ah889));
     }
@@ -96950,7 +96950,7 @@ void z_t2295(z_t864_t* z_v12630, z_t537_t* z_v12631, uint32_t z_v12632, uint32_t
         uint32_t z_v12636 = *(uint32_t*)_iter0.data;
         z_t538_t z_v12638 = z_t643_get(&z_v12631->nodes, ((uint64_t)z_v12636));
         if ((z_v12638).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: bm9 => (*(z_t592_t*)z_v12638.data) */
+            /* alias: bm => (*(z_t592_t*)z_v12638.data) */
             (void)(z_t2481(z_v12630, z_v12632, (*(z_t592_t*)z_v12638.data).name));
         }
     }
@@ -96974,7 +96974,7 @@ void z_t1897(z_t864_t* z_v12620, z_t538_t z_v12621) {
                 uint32_t z_v12627 = ((uint32_t)0);
                 z_t538_t z_v12629 = z_t643_get(&(*(z_t640_t*)_m0.data).ast.nodes, ((uint64_t)z_v12625));
                 if ((z_v12629).tag == Z_NODE_TAG_NAMEDOPERATION) {
-                    /* alias: dun9 => (*(z_t592_t*)z_v12629.data) */
+                    /* alias: dun => (*(z_t592_t*)z_v12629.data) */
                     z_v12626 = (*(z_t592_t*)z_v12629.data).operation;
                     z_v12627 = (*(z_t592_t*)z_v12629.data).name;
                 }
@@ -97120,7 +97120,7 @@ void z_t2791(z_t864_t* z_v6429, z_t537_t* z_v6430, uint64_t z_v6431) {
         /* alias: z_v6437 => (*__borrow_z_v6437) */
         z_t538_t z_v6439 = z_t643_get(&z_v6430->nodes, ((uint64_t)(*__borrow_z_v6437).node));
         if ((z_v6439).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: unop9 => (*(z_t592_t*)z_v6439.data) */
+            /* alias: unop => (*(z_t592_t*)z_v6439.data) */
             z_v6435 = (*(z_t592_t*)z_v6439.data).operation;
         }
         if (z_t3818(&z_v6435) == ((bool)Z_BOOL_TAG_FALSE)) {
@@ -97132,7 +97132,7 @@ void z_t2791(z_t864_t* z_v6429, z_t537_t* z_v6430, uint64_t z_v6431) {
                 uint32_t z_v6442 = *(uint32_t*)_iter0.data;
                 z_t538_t z_v6444 = z_t643_get(&z_v6430->nodes, ((uint64_t)z_v6442));
                 if ((z_v6444).tag == Z_NODE_TAG_NAMEDOPERATION) {
-                    /* alias: bmNode9 => (*(z_t592_t*)z_v6444.data) */
+                    /* alias: bmNode => (*(z_t592_t*)z_v6444.data) */
                     z_t538_t _ah899 = z_t643_get(&z_v6430->nodes, ((uint64_t)(*(z_t592_t*)z_v6444.data).operation));
                     if (z_t2967(z_v6430, _ah899)) {
                         (void)(z_t2699(z_v6429, z_t3976(z_v6429, z_v6434, (*(z_t592_t*)z_v6444.data).name)));
@@ -97395,7 +97395,7 @@ bool z_t2482(z_t537_t* z_v12655, uint32_t z_v12656) {
         uint32_t z_v12659 = *(uint32_t*)_iter0.data;
         z_t538_t z_v12661 = z_t643_get(&z_v12655->nodes, ((uint64_t)z_v12659));
         if ((z_v12661).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: bmNode9 => (*(z_t592_t*)z_v12661.data) */
+            /* alias: bmNode => (*(z_t592_t*)z_v12661.data) */
             z_t538_t _ah906 = z_t643_get(&z_v12655->nodes, ((uint64_t)(*(z_t592_t*)z_v12661.data).operation));
             if (z_t2700(z_v12655, _ah906)) {
                 bool _ret1 = ((bool)Z_BOOL_TAG_TRUE);
@@ -97573,7 +97573,7 @@ void z_t2701(z_t864_t* z_v5771, z_t689_t* z_v5772, z_t537_t* z_v5773, uint64_t z
     uint32_t z_v6250 = ((uint32_t)0);
     z_t538_t z_v6251 = z_t643_get(&z_v5773->nodes, z_v5777);
     if ((z_v6251).tag == Z_NODE_TAG_NAMEDOPERATION) {
-        /* alias: nop9 => (*(z_t592_t*)z_v6251.data) */
+        /* alias: nop => (*(z_t592_t*)z_v6251.data) */
         z_v6250 = (*(z_t592_t*)z_v6251.data).operation;
     }
     if (z_t3818(&z_v6250)) {
@@ -98317,7 +98317,7 @@ uint32_t z_t2691(z_t864_t* z_v12331, z_t537_t* z_v12332, uint64_t z_v12333) {
     uint32_t z_v12338 = ((uint32_t)0);
     z_t538_t z_v12340 = z_t643_get(&z_v12332->nodes, ((uint64_t)z_v12335));
     if ((z_v12340).tag == Z_NODE_TAG_NAMEDOPERATION) {
-        /* alias: nop9 => (*(z_t592_t*)z_v12340.data) */
+        /* alias: nop => (*(z_t592_t*)z_v12340.data) */
         z_v12338 = (*(z_t592_t*)z_v12340.data).operation;
     }
     if (z_t3818(&z_v12338)) {
@@ -98424,7 +98424,7 @@ void z_t2692(z_t537_t* z_v12365, z_t2265_t* z_v12366, z_t538_t z_v12367) {
                 z_t538_t _m2 = z_v12373;
                 switch (_m2.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: a9 => (*(z_t592_t*)_m2.data) */
+                        /* alias: a => (*(z_t592_t*)_m2.data) */
                         z_t29_t z_v12375 = z_t2458(z_v12365, (*(z_t592_t*)_m2.data).name);
                         z_t538_t _ah963 = z_t643_get(&z_v12365->nodes, ((uint64_t)(*(z_t592_t*)_m2.data).operation));
                         z_t29_t z_v12378 = z_t2682(z_v12365, _ah963);
@@ -98467,7 +98467,7 @@ void z_t2473(z_t864_t* z_v12307, z_t537_t* z_v12308, z_t538_t z_v12309, uint64_t
                 z_t538_t _m2 = z_v12316;
                 switch (_m2.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: bmNode9 => (*(z_t592_t*)_m2.data) */
+                        /* alias: bmNode => (*(z_t592_t*)_m2.data) */
                         z_t538_t z_v12318 = z_t643_get(&z_v12308->nodes, ((uint64_t)(*(z_t592_t*)_m2.data).operation));
                         if (z_t2503(z_v12308, (*(z_t592_t*)_m2.data).operation)) {
                             (void)(z_t2473(z_v12307, z_v12308, z_v12318, z_v12310, z_t3976(z_v12307, z_v12311, (*(z_t592_t*)_m2.data).name), z_v12312));
@@ -98564,7 +98564,7 @@ void z_t2697(z_t864_t* z_v12532, z_t689_t* z_v12533, z_t537_t* z_v12534, uint64_
         z_t538_t _m1 = z_v12541;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: fmNode9 => (*(z_t592_t*)_m1.data) */
+                /* alias: fmNode => (*(z_t592_t*)_m1.data) */
                 z_t538_t _ah966 = z_t643_get(&z_v12534->nodes, ((uint64_t)(*(z_t592_t*)_m1.data).operation));
                 if (z_t2500(_ah966)) {
                     z_t29_t z_v12545 = z_t2415(z_v12534, (*(z_t592_t*)_m1.data).name);
@@ -99101,7 +99101,7 @@ void z_t2472(z_t864_t* z_v6278, z_t689_t* z_v6279, z_t537_t* z_v6280, uint64_t z
         z_t538_t _m1 = z_v6292;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: bmNode9 => (*(z_t592_t*)_m1.data) */
+                /* alias: bmNode => (*(z_t592_t*)_m1.data) */
                 z_t29_t z_v6294 = z_t2458(z_v6280, (*(z_t592_t*)_m1.data).name);
                 if (z_v6294.size > 0) {
                     bool z_v6297 = z_t2448(z_v6280, (*(z_t592_t*)_m1.data).operation, ((uint8_t)Z_UNITKIND_TAG_TEMPLATE));
@@ -99294,7 +99294,7 @@ void z_t2475(z_t864_t* z_v6321, z_t689_t* z_v6322, z_t537_t* z_v6323, uint64_t z
         z_t538_t _m4 = z_v6375;
         switch (_m4.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: bmNode9 => (*(z_t592_t*)_m4.data) */
+                /* alias: bmNode => (*(z_t592_t*)_m4.data) */
                 z_t29_t z_v6377 = z_t2415(z_v6323, (*(z_t592_t*)_m4.data).name);
                 z_t538_t _ah997 = z_t643_get(&z_v6323->nodes, ((uint64_t)(*(z_t592_t*)_m4.data).operation));
                 z_t810_t z_v6382 = z_t2638(z_v6321, z_v6322, z_v6323, z_v6324, z_t1887(z_v6323, z_v6325), ((z_t52_t){ .data = z_v6377.data, .size = z_v6377.size }), _zs2904, _ah997);
@@ -99457,7 +99457,7 @@ void z_t2490(z_t864_t* z_v12867, z_t689_t* z_v12868, z_t537_t* z_v12869, uint64_
         z_t538_t _m3 = z_v12890;
         switch (_m3.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: fmNode9 => (*(z_t592_t*)_m3.data) */
+                /* alias: fmNode => (*(z_t592_t*)_m3.data) */
                 z_t538_t _ah1000 = z_t643_get(&z_v12869->nodes, ((uint64_t)(*(z_t592_t*)_m3.data).operation));
                 if (z_t2500(_ah1000)) {
                     z_t29_t z_v12894 = z_t2415(z_v12869, (*(z_t592_t*)_m3.data).name);
@@ -99667,7 +99667,7 @@ void z_t2316(z_t864_t* z_v13032, z_t689_t* z_v13033, z_t537_t* z_v13034, uint64_
         z_t538_t _m1 = z_v13045;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: bmNode9 => (*(z_t592_t*)_m1.data) */
+                /* alias: bmNode => (*(z_t592_t*)_m1.data) */
                 z_t29_t z_v13047 = z_t2415(z_v13034, (*(z_t592_t*)_m1.data).name);
                 if (z_t52_eq(((z_t52_t){ .data = z_v13047.data, .size = z_v13047.size }), z_v13037)) {
                     z_t538_t _ah1004 = z_t643_get(&z_v13034->nodes, ((uint64_t)(*(z_t592_t*)_m1.data).operation));
@@ -99697,7 +99697,7 @@ uint64_t z_t2315(z_t864_t* z_v12992, z_t537_t* z_v12993, uint32_t z_v12994, z_t5
         z_t538_t _m1 = z_v13001;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: bmNode9 => (*(z_t592_t*)_m1.data) */
+                /* alias: bmNode => (*(z_t592_t*)_m1.data) */
                 z_t29_t z_v13003 = z_t2415(z_v12993, (*(z_t592_t*)_m1.data).name);
                 if (z_t52_eq(((z_t52_t){ .data = z_v13003.data, .size = z_v13003.size }), z_v12995)) {
                     z_t538_t _ah1005 = z_t643_get(&z_v12993->nodes, ((uint64_t)(*(z_t592_t*)_m1.data).operation));
@@ -100019,7 +100019,7 @@ void z_t1902(z_t864_t* z_v12762, z_t689_t* z_v12763, z_t538_t z_v12764) {
                                     z_t538_t _m14 = z_v13022;
                                     switch (_m14.tag) {
                                         case Z_NODE_TAG_NAMEDOPERATION: {
-                                            /* alias: u9 => (*(z_t592_t*)_m14.data) */
+                                            /* alias: u => (*(z_t592_t*)_m14.data) */
                                             z_t29_t _rr15 = z_t1879(&(*(z_t640_t*)_m13.data).ast.names, (*(z_t592_t*)_m14.data).name);
                                             z_t29_free(&z_v13019);
                                             z_v13019 = _rr15;
@@ -100433,7 +100433,7 @@ void z_t2828(z_t864_t* z_v5798, z_t689_t* z_v5799, z_t537_t* z_v5800, uint64_t z
     /* alias: z_v5805 => (*__borrow_z_v5805) */
     z_t538_t z_v5807 = z_t643_get(&z_v5800->nodes, ((uint64_t)(*__borrow_z_v5805).node));
     if ((z_v5807).tag == Z_NODE_TAG_NAMEDOPERATION) {
-        /* alias: np9 => (*(z_t592_t*)z_v5807.data) */
+        /* alias: np => (*(z_t592_t*)z_v5807.data) */
         z_v5803 = (*(z_t592_t*)z_v5807.data).operation;
     }
     if (z_t3818(&z_v5803)) {
@@ -100578,7 +100578,7 @@ void z_t2321(z_t864_t* z_v9621, z_t689_t* z_v9622, z_t537_t* z_v9623, uint64_t z
         z_t358_t _m0 = z_v9630;
         switch (_m0.tag) {
             case Z_OPTIONVIEW_STRING_TAG_SOME: {
-                /* alias: rv9 => (*(z_t29_t*)_m0.data) */
+                /* alias: rv => (*(z_t29_t*)_m0.data) */
                 (void)(z_t733_append(&z_v9625, z_v9629));
                 (void)(z_t202_append(&z_v9626, z_t29_copy(&(*(z_t29_t*)_m0.data))));
                 break;
@@ -102231,7 +102231,7 @@ bool z_t3191(z_t537_t* z_v7465, z_t864_t* z_v7466, z_t689_t* z_v7467, uint64_t z
             }
             default: break;
         }
-        /* post-guard alias: bo9 => z_v7470.data.some */
+        /* post-guard alias: bo => z_v7470.data.some */
     }
     __zbrk_559: ;
     if (z_t3992(z_v7466, z_v7469, 32U) == ((bool)Z_BOOL_TAG_FALSE)) {
@@ -102260,7 +102260,7 @@ bool z_t3193(z_t537_t* z_v7504, z_t864_t* z_v7505, z_t689_t* z_v7506, uint64_t z
             }
             default: break;
         }
-        /* post-guard alias: bo9 => z_v7509.data.some */
+        /* post-guard alias: bo => z_v7509.data.some */
     }
     __zbrk_560: ;
     if (z_t3880(&z_v7508, z_t2694(z_v7504, z_v7505, z_v7506, _zs3025))) {
@@ -104557,7 +104557,7 @@ void z_t3551(z_t537_t* z_v15215, z_t1485_t* z_v15216, z_t586_t* z_v15217, uint64
     z_t202_destroy(&z_v15220);
         return;
     }
-    /* post-guard alias: arv9 => z_v15240.data.some */
+    /* post-guard alias: arv => z_v15240.data.some */
     bool z_v15241 = z_v15219;
     if (z_v15220.length == 1) {
         (void)(z_t3511(z_v15216, z_v15215, &z_v15215->names, ((z_t52_t){ .data = (*z_t202_get(&z_v15220, 0)).data, .size = (*z_t202_get(&z_v15220, 0)).size }), ((uint64_t)z_v15217->nodeid), z_v15241, z_v15217->nodeid, z_v15217->lineno, z_v15217->colno));
@@ -104755,7 +104755,7 @@ uint64_t z_t3541(z_t537_t* z_v14450, z_t1485_t* z_v14451, uint64_t z_v14452, uin
             z_t3700_t _m1 = z_v14462;
             switch (_m1.tag) {
                 case Z_OPTION_STRINGVIEW_TAG_SOME: {
-                    /* alias: eno9 => (*(z_t52_t*)_m1.data) */
+                    /* alias: eno => (*(z_t52_t*)_m1.data) */
                     z_t52_t z_v14463 = (*(z_t52_t*)_m1.data);
                     z_t810_t z_v14466 = z_t2298(z_v14450, &z_v14451->typing, &z_v14451->reg, z_v14452, z_v14463);
                     z_t810_t _m2 = z_v14466;
@@ -104942,7 +104942,7 @@ bool z_t3544(z_t537_t* z_v14567, z_t864_t* z_v14568, z_t689_t* z_v14569, uint64_
     uint32_t z_v14579 = ((uint32_t)0);
     z_t538_t z_v14581 = z_t643_get(&z_v14567->nodes, ((uint64_t)z_v14576));
     if ((z_v14581).tag == Z_NODE_TAG_NAMEDOPERATION) {
-        /* alias: nn9 => (*(z_t592_t*)z_v14581.data) */
+        /* alias: nn => (*(z_t592_t*)z_v14581.data) */
         z_v14579 = (*(z_t592_t*)z_v14581.data).operation;
     }
     return z_t2448(z_v14567, z_v14579, ((uint8_t)Z_UNITKIND_TAG_SUBUNIT));
@@ -104987,7 +104987,7 @@ uint64_t z_t3486(z_t1485_t* z_v13999, uint64_t z_v14000, z_t537_t* z_v14001, z_t
     while (z_v14005 < 2) {
         z_t538_t z_v14007 = z_t643_get(&z_v14001->nodes, ((uint64_t)z_v14004));
         if ((z_v14007).tag == Z_NODE_TAG_EXPRESSION) {
-            /* alias: cbn9 => (*(z_t608_t*)z_v14007.data) */
+            /* alias: cbn => (*(z_t608_t*)z_v14007.data) */
             z_v14004 = (*(z_t608_t*)z_v14007.data).expression;
         }
         z_v14005 = (z_v14005 + 1);
@@ -107088,13 +107088,13 @@ uint64_t z_t3565(z_t1485_t* z_v18051, uint64_t z_v18052, z_t537_t* z_v18053, z_t
                 z_t538_t _m6 = z_v18092;
                 switch (_m6.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: cnd9 => (*(z_t592_t*)_m6.data) */
+                        /* alias: cnd => (*(z_t592_t*)_m6.data) */
                         z_t538_t _ah1131 = z_t643_get(&z_v18053->nodes, ((uint64_t)(*(z_t592_t*)_m6.data).operation));
                         z_t3621_t z_v18200 = z_t3620(z_v18053, z_v18051, _ah1131, z_v18056);
                         z_t3621_t _m7 = z_v18200;
                         switch (_m7.tag) {
                             case Z_OPTION_ARMPREDFACT_TAG_SOME: {
-                                /* alias: fo9 => (*(z_t3561_t*)_m7.data) */
+                                /* alias: fo => (*(z_t3561_t*)_m7.data) */
                                 (void)(z_t3566_append(z_v18055, (*(z_t3561_t*)_m7.data)));
                                 (*(z_t3561_t*)_m7.data) = (z_t3561_t){0};
                                 break;
@@ -107554,7 +107554,7 @@ void z_t3407(z_t1485_t* z_v18634, uint64_t z_v18635, z_t537_t* z_v18636, z_t604_
             }
             z_t996_t z_v18765 = z_t994_get(&z_v18634->typing.typeofShell, z_v18753);
             if ((z_v18765).tag == Z_OPTIONVAL_U32_TAG_SOME) {
-                /* alias: tsoR9 => z_v18765.data.some */
+                /* alias: tsoR => z_v18765.data.some */
                 z_v18759 = ((bool)Z_BOOL_TAG_TRUE);
             }
             if (z_v18759 == ((bool)Z_BOOL_TAG_FALSE)) {
@@ -108683,7 +108683,7 @@ uint64_t z_t3526(z_t1485_t* z_v17291, uint64_t z_v17292, z_t537_t* z_v17293, z_t
         (void)(z_t2255(&z_v17291->typing, &z_v17291->reg, z_v17293, z_v17303, 29U));
         z_t810_t z_v17312 = z_t3981(&z_v17291->typing, z_v17303, 29U);
         if ((z_v17312).tag == Z_OPTIONVAL_U64_TAG_SOME) {
-            /* alias: eqHere9 => z_v17312.data.some */
+            /* alias: eqHere => z_v17312.data.some */
             z_v17307 = ((bool)Z_BOOL_TAG_FALSE);
         }
     }
@@ -108856,7 +108856,7 @@ uint64_t z_t3526(z_t1485_t* z_v17291, uint64_t z_v17292, z_t537_t* z_v17293, z_t
                     (void)(z_t2255(&z_v17291->typing, &z_v17291->reg, z_v17293, z_v17303, 29U));
                     z_t810_t z_v17370 = z_t3981(&z_v17291->typing, z_v17303, 29U);
                     if ((z_v17370).tag == Z_OPTIONVAL_U64_TAG_SOME) {
-                        /* alias: eqEdge9 => z_v17370.data.some */
+                        /* alias: eqEdge => z_v17370.data.some */
                         uint64_t z_v17371 = z_t3498(z_v17293, z_v17291, _zs3257);
                         if (z_v17371 > 0) {
                             return z_v17371;
@@ -109021,11 +109021,11 @@ bool z_t3604(z_t537_t* z_v15700, z_t538_t z_v15701) {
             z_t538_t _m3 = z_v15707;
             switch (_m3.tag) {
                 case Z_NODE_TAG_ATOMID: {
-                    /* alias: opx9 => (*(z_t550_t*)_m3.data) */
+                    /* alias: opx => (*(z_t550_t*)_m3.data) */
                     return ((bool)Z_BOOL_TAG_TRUE);
                 }
                 case Z_NODE_TAG_LABELVALUE: {
-                    /* alias: opx9 => (*(z_t556_t*)_m3.data) */
+                    /* alias: opx => (*(z_t556_t*)_m3.data) */
                     return ((bool)Z_BOOL_TAG_TRUE);
                 }
                 default: {
@@ -109586,7 +109586,7 @@ z_t29_t z_t3493(z_t1485_t* z_v14286, z_t537_t* z_v14287, z_t202_t* z_v14288, uin
             }
             default: break;
         }
-        /* post-guard alias: co9 => z_v14308.data.some */
+        /* post-guard alias: co => z_v14308.data.some */
         z_v14296 = (z_v14296 + 1);
     }
     return z_t29_from_view(_zs3276);
@@ -109645,7 +109645,7 @@ bool z_t3457(z_t1485_t* z_v15839, z_t537_t* z_v15840, z_t202_t* z_v15841) {
             }
             default: break;
         }
-        /* post-guard alias: co9 => z_v15855.data.some */
+        /* post-guard alias: co => z_v15855.data.some */
         z_v15849 = (z_v15849 + 1);
     }
     return ((bool)Z_BOOL_TAG_FALSE);
@@ -109669,14 +109669,14 @@ bool z_t3458(z_t1485_t* z_v14283, z_t537_t* z_v14284, z_t202_t* z_v14285) {
         z_t29_free(&z_v14310);
         return _ret1;
     }
-    /* post-guard alias: rv9 => z_v14314.data.some */
+    /* post-guard alias: rv => z_v14314.data.some */
     z_t4086_t z_v14317 = z_t4085(z_v14283, z_t1887(z_v14284, ((z_t52_t){ .data = (*__borrow_z_v14311).data, .size = (*__borrow_z_v14311).size })));
     if ((z_v14317).tag == Z_OPTIONVAL_ZLOCKSTATE_TAG_NONE) {
         bool _ret2 = ((bool)Z_BOOL_TAG_FALSE);
         z_t29_free(&z_v14310);
         return _ret2;
     }
-    /* post-guard alias: lk9 => z_v14317.data.some */
+    /* post-guard alias: lk => z_v14317.data.some */
     if (z_v14317.data.some != ((bool)Z_ZLOCKSTATE_TAG_SHARED)) {
         bool _ret3 = ((bool)Z_BOOL_TAG_FALSE);
         z_t29_free(&z_v14310);
@@ -109688,7 +109688,7 @@ bool z_t3458(z_t1485_t* z_v14283, z_t537_t* z_v14284, z_t202_t* z_v14285) {
         z_t29_free(&z_v14310);
         return _ret4;
     }
-    /* post-guard alias: lh9 => z_v14320.data.some */
+    /* post-guard alias: lh => z_v14320.data.some */
     if (z_v14320.data.some.kind != ((uint8_t)Z_ZLOCKHOLDERKIND_TAG_VARKIND)) {
         bool _ret5 = ((bool)Z_BOOL_TAG_FALSE);
         z_t29_free(&z_v14310);
@@ -109725,13 +109725,13 @@ bool z_t3600(z_t1485_t* z_v18422, z_t537_t* z_v18423, z_t52_t z_v18424) {
     if ((z_v18426).tag == Z_OPTIONVAL_VID_TAG_NONE) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    /* post-guard alias: ivo9 => z_v18426.data.some */
+    /* post-guard alias: ivo => z_v18426.data.some */
     z_t29_t z_v18427 = ((z_t29_t){0});
     z_t358_t z_v18428 = z_t1015_get(&z_v18422->typing.variableBorrowOrigin, z_v18426.data.some);
     z_t358_t _m0 = z_v18428;
     switch (_m0.tag) {
         case Z_OPTIONVIEW_STRING_TAG_SOME: {
-            /* alias: oro9 => (*(z_t29_t*)_m0.data) */
+            /* alias: oro => (*(z_t29_t*)_m0.data) */
             z_t29_t _rr1 = z_t29_copy(&(*(z_t29_t*)_m0.data));
             z_t29_free(&z_v18427);
             z_v18427 = _rr1;
@@ -109756,7 +109756,7 @@ bool z_t3600(z_t1485_t* z_v18422, z_t537_t* z_v18423, z_t52_t z_v18424) {
     z_t358_destroy(&z_v18428);
         return _ret3;
     }
-    /* post-guard alias: clk9 => z_v18433.data.some */
+    /* post-guard alias: clk => z_v18433.data.some */
     if (z_v18433.data.some != ((bool)Z_ZLOCKSTATE_TAG_SHARED)) {
         bool _ret4 = ((bool)Z_BOOL_TAG_FALSE);
         z_t29_free(&z_v18427);
@@ -109770,7 +109770,7 @@ bool z_t3600(z_t1485_t* z_v18422, z_t537_t* z_v18423, z_t52_t z_v18424) {
     z_t358_destroy(&z_v18428);
         return _ret5;
     }
-    /* post-guard alias: clh9 => z_v18436.data.some */
+    /* post-guard alias: clh => z_v18436.data.some */
     if (z_v18436.data.some.kind != ((uint8_t)Z_ZLOCKHOLDERKIND_TAG_VARKIND)) {
         bool _ret6 = ((bool)Z_BOOL_TAG_FALSE);
         z_t29_free(&z_v18427);
@@ -109837,7 +109837,7 @@ void z_t3556(z_t1485_t* z_v17792, z_t537_t* z_v17793, uint32_t z_v17794, uint64_
     if ((z_v17804).tag == Z_OPTIONVAL_VID_TAG_NONE) {
         return;
     }
-    /* post-guard alias: svo9 => z_v17804.data.some */
+    /* post-guard alias: svo => z_v17804.data.some */
     z_t202_t z_v17805 = z_t202_create((uint64_t)0);
     (void)(z_t202_append(&z_v17805, z_t1879(&z_v17793->names, z_v17794)));
     z_t1497_t z_v17809 = z_t1497_create(((uint8_t)Z_ZLOCKHOLDERKIND_TAG_VARKIND), z_v17804.data.some);
@@ -109860,17 +109860,17 @@ bool z_t3454(z_t1485_t* z_v14339, z_t537_t* z_v14340, uint32_t z_v14341, uint32_
     if ((z_v14349).tag == Z_OPTIONVAL_VID_TAG_NONE) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    /* post-guard alias: pvo9 => z_v14349.data.some */
+    /* post-guard alias: pvo => z_v14349.data.some */
     z_t4086_t z_v14352 = z_t4085(z_v14339, ((uint32_t)z_v14346));
     if ((z_v14352).tag == Z_OPTIONVAL_ZLOCKSTATE_TAG_NONE) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    /* post-guard alias: plk9 => z_v14352.data.some */
+    /* post-guard alias: plk => z_v14352.data.some */
     z_t4091_t z_v14355 = z_t4090(z_v14339, ((uint32_t)z_v14346));
     if ((z_v14355).tag == Z_OPTIONVAL_ZLOCKHOLDER_TAG_NONE) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    /* post-guard alias: plh9 => z_v14355.data.some */
+    /* post-guard alias: plh => z_v14355.data.some */
     if (z_v14355.data.some.kind != ((uint8_t)Z_ZLOCKHOLDERKIND_TAG_VARKIND)) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
@@ -109967,11 +109967,11 @@ void z_t3463(z_t1485_t* z_v18658, z_t537_t* z_v18659, z_t538_t z_v18660, z_t52_t
     z_t202_destroy(&z_v18662);
         return;
     }
-    /* post-guard alias: wv9 => z_v18673.data.some */
+    /* post-guard alias: wv => z_v18673.data.some */
     z_t29_t z_v18674 = z_t2170(&z_v18662);
     z_t4091_t z_v18676 = z_t4095(z_v18658, &z_v18659->names, &z_v18662);
     if (((z_v18676).tag == Z_OPTIONVAL_ZLOCKHOLDER_TAG_NONE) == ((bool)Z_BOOL_TAG_FALSE)) {
-        /* alias: wh9 => z_v18676.data.some */
+        /* alias: wh => z_v18676.data.some */
         z_t29_t z_v18678 = z_t4080(z_v18658, &z_v18659->names, z_v18676.data.some);
         z_t29_t _s0 = z_t29_create((uint64_t)85);
         z_t29_append(&_s0, "Cannot ", sizeof("Cannot ")-1);
@@ -110009,7 +110009,7 @@ void z_t3463(z_t1485_t* z_v18658, z_t537_t* z_v18659, z_t538_t z_v18660, z_t52_t
     z_t202_destroy(&z_v18662);
         return;
     }
-    /* post-guard alias: rh9 => z_v18688.data.some */
+    /* post-guard alias: rh => z_v18688.data.some */
     z_t29_t z_v18690 = z_t4080(z_v18658, &z_v18659->names, z_v18688.data.some);
     z_t29_t z_v18691 = z_v18674;
     z_v18674 = (z_t29_t){0};
@@ -111467,7 +111467,7 @@ uint64_t z_t3523(z_t1485_t* z_v16913, uint64_t z_v16914, uint32_t z_v16915) {
         }
         default: break;
     }
-    /* post-guard alias: tm9 => z_v16919.data.some */
+    /* post-guard alias: tm => z_v16919.data.some */
     z_t810_t z_v16922 = z_t3981(&z_v16913->typing, z_v16913->typing.curMonoStamp, z_v16915);
     z_t810_t _m1 = z_v16922;
     switch (_m1.tag) {
@@ -111516,7 +111516,7 @@ uint64_t z_t3482(z_t1485_t* z_v13710, uint64_t z_v13711, z_t537_t* z_v13712, z_t
             z_t538_t _m2 = z_v13734;
             switch (_m2.tag) {
                 case Z_NODE_TAG_NAMEDOPERATION: {
-                    /* alias: lArg9 => (*(z_t592_t*)_m2.data) */
+                    /* alias: lArg => (*(z_t592_t*)_m2.data) */
                     if ((z_t3843(&(*(z_t592_t*)_m2.data).name) == ((bool)Z_BOOL_TAG_FALSE)) && (z_v13730 == ((bool)Z_BOOL_TAG_FALSE))) {
                         z_v13730 = ((bool)Z_BOOL_TAG_TRUE);
                         z_t29_t z_v13737 = z_t1921(&z_v13712->names, (*(z_t592_t*)_m2.data).name);
@@ -111787,7 +111787,7 @@ uint64_t z_t3482(z_t1485_t* z_v13710, uint64_t z_v13711, z_t537_t* z_v13712, z_t
                         z_t538_t _m26 = z_v16010;
                         switch (_m26.tag) {
                             case Z_NODE_TAG_NAMEDOPERATION: {
-                                /* alias: uwa9 => (*(z_t592_t*)_m26.data) */
+                                /* alias: uwa => (*(z_t592_t*)_m26.data) */
                                 z_t538_t _ah1240 = z_t643_get(&z_v13712->nodes, ((uint64_t)(*(z_t592_t*)_m26.data).operation));
                                 (void)(z_t3444(z_v13710, z_v13711, z_v13712, _ah1240));
                                 break;
@@ -113437,7 +113437,7 @@ uint64_t z_t3487(z_t1485_t* z_v17606, uint64_t z_v17607, z_t537_t* z_v17608, z_t
                 }
                 default: break;
             }
-            /* post-guard alias: dsv9 => z_v17701.data.some */
+            /* post-guard alias: dsv => z_v17701.data.some */
         }
     z_t29_free(&z_v17698);
     }
@@ -115096,7 +115096,7 @@ void z_t2328(z_t1485_t* z_v19523, z_t537_t* z_v19524, uint64_t z_v19525, uint32_
         z_v19538 = (z_v19538 + 1);
         z_t538_t z_v19541 = z_t643_get(&z_v19524->nodes, ((uint64_t)z_v19539));
         if ((z_v19541).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: bm9 => (*(z_t592_t*)z_v19541.data) */
+            /* alias: bm => (*(z_t592_t*)z_v19541.data) */
             z_t538_t _ah1317 = z_t643_get(&z_v19524->nodes, ((uint64_t)(*(z_t592_t*)z_v19541.data).operation));
             if (z_t2500(_ah1317)) {
                 z_t29_t z_v19545 = z_t2415(z_v19524, (*(z_t592_t*)z_v19541.data).name);
@@ -115127,7 +115127,7 @@ void z_t1907(z_t1485_t* z_v19510, z_t538_t z_v19511) {
                 z_t29_t z_v19517 = ((z_t29_t){0});
                 z_t538_t z_v19519 = z_t643_get(&(*(z_t640_t*)_m0.data).ast.nodes, ((uint64_t)z_v19515));
                 if ((z_v19519).tag == Z_NODE_TAG_NAMEDOPERATION) {
-                    /* alias: u9 => (*(z_t592_t*)z_v19519.data) */
+                    /* alias: u => (*(z_t592_t*)z_v19519.data) */
                     z_v19516 = (*(z_t592_t*)z_v19519.data).operation;
                     z_t29_t _rr1 = z_t1879(&(*(z_t640_t*)_m0.data).ast.names, (*(z_t592_t*)z_v19519.data).name);
                     z_t29_free(&z_v19517);
@@ -115147,7 +115147,7 @@ void z_t1907(z_t1485_t* z_v19510, z_t538_t z_v19511) {
                         bool z_v19562 = ((bool)Z_BOOL_TAG_FALSE);
                         z_t538_t z_v19564 = z_t643_get(&(*(z_t640_t*)_m0.data).ast.nodes, ((uint64_t)z_v19560));
                         if ((z_v19564).tag == Z_NODE_TAG_NAMEDOPERATION) {
-                            /* alias: bm9 => (*(z_t592_t*)z_v19564.data) */
+                            /* alias: bm => (*(z_t592_t*)z_v19564.data) */
                             z_t538_t _ah1319 = z_t643_get(&(*(z_t640_t*)_m0.data).ast.nodes, ((uint64_t)(*(z_t592_t*)z_v19564.data).operation));
                             if (z_t2329(_ah1319)) {
                                 z_v19562 = ((bool)Z_BOOL_TAG_TRUE);
@@ -115346,7 +115346,7 @@ void z_t2324(z_t1485_t* z_v19120, z_t537_t* z_v19121) {
         z_t538_t _m0 = z_v19127;
         switch (_m0.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: swu9 => (*(z_t592_t*)_m0.data) */
+                /* alias: swu => (*(z_t592_t*)_m0.data) */
                 z_t29_t z_v19129 = z_t2415(z_v19121, (*(z_t592_t*)_m0.data).name);
                 z_t563_t z_v19131 = z_t2319(z_v19121, (*(z_t592_t*)_m0.data).operation);
                 uint64_t z_v19132 = ((uint64_t)0);
@@ -115358,7 +115358,7 @@ void z_t2324(z_t1485_t* z_v19120, z_t537_t* z_v19121) {
                     z_t538_t _m1 = z_v19136;
                     switch (_m1.tag) {
                         case Z_NODE_TAG_NAMEDOPERATION: {
-                            /* alias: swm9 => (*(z_t592_t*)_m1.data) */
+                            /* alias: swm => (*(z_t592_t*)_m1.data) */
                             z_t29_t z_v19138 = z_t2415(z_v19121, (*(z_t592_t*)_m1.data).name);
                             uint64_t z_v19142 = z_t1923(&z_v19120->typing, z_t1887(z_v19121, ((z_t52_t){ .data = z_v19129.data, .size = z_v19129.size })));
                             uint64_t z_v19145 = z_t2343(&z_v19120->typing, z_v19142, (*(z_t592_t*)_m1.data).name);
@@ -115369,7 +115369,7 @@ void z_t2324(z_t1485_t* z_v19120, z_t537_t* z_v19121) {
                                 z_t538_t _m2 = z_v19148;
                                 switch (_m2.tag) {
                                     case Z_NODE_TAG_OBJECTDEF: {
-                                        /* alias: swop9 => (*(z_t626_t*)_m2.data) */
+                                        /* alias: swop => (*(z_t626_t*)_m2.data) */
                                         if (z_t2466(z_v19121, &(*(z_t626_t*)_m2.data).asItems) == ((bool)Z_BOOL_TAG_FALSE)) {
                                             z_v19149 = ((bool)Z_BOOL_TAG_TRUE);
                                         }
@@ -115536,7 +115536,7 @@ void z_t2729(z_t1485_t* z_v19371, z_t537_t* z_v19372, uint64_t z_v19373, z_t52_t
     bool z_v19376 = ((bool)Z_BOOL_TAG_FALSE);
     z_t538_t z_v19378 = z_t643_get(&z_v19372->nodes, ((uint64_t)z_v19375));
     if ((z_v19378).tag == Z_NODE_TAG_OBJECTDEF) {
-        /* alias: cop9 => (*(z_t626_t*)z_v19378.data) */
+        /* alias: cop => (*(z_t626_t*)z_v19378.data) */
         z_v19376 = ((bool)Z_BOOL_TAG_TRUE);
     }
     if (z_v19376 == ((bool)Z_BOOL_TAG_FALSE)) {
@@ -115602,7 +115602,7 @@ void z_t2871(z_t1485_t* z_v19397, z_t537_t* z_v19398, uint64_t z_v19399, uint32_
     z_t538_t _m3 = z_v19411;
     switch (_m3.tag) {
         case Z_NODE_TAG_OBJECTDEF: {
-            /* alias: cop9 => (*(z_t626_t*)_m3.data) */
+            /* alias: cop => (*(z_t626_t*)_m3.data) */
             z_t579_t z_v19412 = z_t563_iterate(&(*(z_t626_t*)_m3.data).isItems);
             while (1) {
                 z_t581_t _iter4 = z_t579_call(&z_v19412);
@@ -115612,7 +115612,7 @@ void z_t2871(z_t1485_t* z_v19397, z_t537_t* z_v19398, uint64_t z_v19399, uint32_
                 z_t538_t _m5 = z_v19415;
                 switch (_m5.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: im9 => (*(z_t592_t*)_m5.data) */
+                        /* alias: im => (*(z_t592_t*)_m5.data) */
                         z_t538_t _ah1327 = z_t643_get(&z_v19398->nodes, ((uint64_t)(*(z_t592_t*)_m5.data).operation));
                         if (z_t2623(_ah1327)) {
                             (void)(z_t202_append(&z_v19408, z_t2458(z_v19398, (*(z_t592_t*)_m5.data).name)));
@@ -115634,7 +115634,7 @@ void z_t2871(z_t1485_t* z_v19397, z_t537_t* z_v19398, uint64_t z_v19399, uint32_
                 z_t538_t _m7 = z_v19424;
                 switch (_m7.tag) {
                     case Z_NODE_TAG_NAMEDOPERATION: {
-                        /* alias: am9 => (*(z_t592_t*)_m7.data) */
+                        /* alias: am => (*(z_t592_t*)_m7.data) */
                         z_t538_t _ah1328 = z_t643_get(&z_v19398->nodes, ((uint64_t)(*(z_t592_t*)_m7.data).operation));
                         if (z_t2623(_ah1328)) {
                             (void)(z_t202_append(&z_v19408, z_t2458(z_v19398, (*(z_t592_t*)_m7.data).name)));
@@ -115728,7 +115728,7 @@ void z_t2509(z_t1485_t* z_v19285, z_t640_t* z_v19286, uint64_t z_v19287, uint32_
         z_t29_t z_v19299 = ((z_t29_t){0});
         z_t538_t z_v19301 = z_t643_get(&z_v19286->ast.nodes, ((uint64_t)z_v19293));
         if ((z_v19301).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: im9 => (*(z_t592_t*)z_v19301.data) */
+            /* alias: im => (*(z_t592_t*)z_v19301.data) */
             z_t538_t _ah1330 = z_t643_get(&z_v19286->ast.nodes, ((uint64_t)(*(z_t592_t*)z_v19301.data).operation));
             if (z_t2329(_ah1330)) {
                 z_v19294 = (*(z_t592_t*)z_v19301.data).operation;
@@ -115816,7 +115816,7 @@ void z_t2325(z_t1485_t* z_v19170, z_t640_t* z_v19171) {
         z_t29_t z_v19177 = ((z_t29_t){0});
         z_t538_t z_v19179 = z_t643_get(&z_v19171->ast.nodes, ((uint64_t)z_v19175));
         if ((z_v19179).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: u9 => (*(z_t592_t*)z_v19179.data) */
+            /* alias: u => (*(z_t592_t*)z_v19179.data) */
             z_t29_t _rr0 = z_t1879(&z_v19171->ast.names, (*(z_t592_t*)z_v19179.data).name);
             z_t29_free(&z_v19177);
             z_v19177 = _rr0;
@@ -115844,7 +115844,7 @@ void z_t2508(z_t1485_t* z_v19183, z_t537_t* z_v19184, uint64_t z_v19185, z_t52_t
         uint32_t z_v19195 = ((uint32_t)0);
         z_t538_t z_v19197 = z_t643_get(&z_v19184->nodes, ((uint64_t)z_v19187));
         if ((z_v19197).tag == Z_NODE_TAG_UNITDEF) {
-            /* alias: tuo9 => (*(z_t633_t*)z_v19197.data) */
+            /* alias: tuo => (*(z_t633_t*)z_v19197.data) */
             z_v19195 = (*(z_t633_t*)z_v19197.data).nodeid;
         }
         if (z_v19195 > 0) {
@@ -115899,7 +115899,7 @@ void z_t2727(z_t1485_t* z_v19209, z_t537_t* z_v19210, uint64_t z_v19211, uint32_
         z_t538_t _m4 = z_v19251;
         switch (_m4.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: bm9 => (*(z_t592_t*)_m4.data) */
+                /* alias: bm => (*(z_t592_t*)_m4.data) */
                 z_t538_t _ah1332 = z_t643_get(&z_v19210->nodes, ((uint64_t)(*(z_t592_t*)_m4.data).operation));
                 if (z_t2623(_ah1332)) {
                     uint64_t z_v19254 = z_v19247;
@@ -116208,7 +116208,7 @@ uint64_t z_t3190(z_t864_t* z_v6019, z_t689_t* z_v6020, z_t537_t* z_v6021, uint64
                 z_t538_t _m2 = z_v6028;
                 switch (_m2.tag) {
                     case Z_NODE_TAG_STATEMENTLINE: {
-                        /* alias: s9 => (*(z_t600_t*)_m2.data) */
+                        /* alias: s => (*(z_t600_t*)_m2.data) */
                         z_t538_t z_v6030 = z_t643_get(&z_v6021->nodes, ((uint64_t)(*(z_t600_t*)_m2.data).statementline));
                         uint64_t z_v6031 = z_t3034(z_v6021, z_v6019, z_v6020, z_v6022, z_v6030);
                         uint64_t z_v6032 = ((uint64_t)0);
@@ -116453,7 +116453,7 @@ z_t1220_t z_t2973(z_t52_t z_v5231) {
             }
             default: z_unreachable();
         }
-        /* post-guard alias: pf9 => z_v5236.data.err */
+        /* post-guard alias: pf => z_v5236.data.err */
     }
     z_t4127_t z_v5239 = z_t52_parseI64(&z_v5231);
     z_t4127_t _m1 = z_v5239;
@@ -116470,7 +116470,7 @@ z_t1220_t z_t2973(z_t52_t z_v5231) {
         }
         default: z_unreachable();
     }
-    /* post-guard alias: pi9 => z_v5239.data.err */
+    /* post-guard alias: pi => z_v5239.data.err */
 }
 
 uint32_t z_t2305(z_t864_t* z_v5210, z_t52_t z_v5211) {
@@ -116515,7 +116515,7 @@ z_t3324_t z_t3159(z_t1220_t z_v9909) {
             }
             default: z_unreachable();
         }
-        /* post-guard alias: cf9 => z_v9911.data.err */
+        /* post-guard alias: cf => z_v9911.data.err */
     }
     return z_t3324_create(((bool)Z_BOOL_TAG_FALSE), 0.0);
 }
@@ -116817,7 +116817,7 @@ z_t1220_t z_t2789(z_t537_t* z_v5173, z_t864_t* z_v5174, z_t689_t* z_v5175, uint6
     z_t538_t _m1 = z_v5192;
     switch (_m1.tag) {
         case Z_NODE_TAG_NAMEDOPERATION: {
-            /* alias: dn9 => (*(z_t592_t*)_m1.data) */
+            /* alias: dn => (*(z_t592_t*)_m1.data) */
             z_v5187 = (*(z_t592_t*)_m1.data).operation;
             z_v5188 = (*(z_t592_t*)_m1.data).lineno;
             z_v5189 = (*(z_t592_t*)_m1.data).colno;
@@ -116869,7 +116869,7 @@ z_t1220_t z_t3164(z_t537_t* z_v10020, z_t864_t* z_v10021, z_t689_t* z_v10022, ui
                 z_t538_t _m2 = z_v10029;
                 switch (_m2.tag) {
                     case Z_NODE_TAG_STATEMENTLINE: {
-                        /* alias: s9 => (*(z_t600_t*)_m2.data) */
+                        /* alias: s => (*(z_t600_t*)_m2.data) */
                         z_t538_t _ah1346 = z_t643_get(&z_v10020->nodes, ((uint64_t)(*(z_t600_t*)_m2.data).statementline));
                         z_v10025 = z_t2965(z_v10020, z_v10021, z_v10022, z_v10023, _ah1346);
                         break;
@@ -116901,7 +116901,7 @@ z_t1308_t z_t3163(z_t537_t* z_v5872, z_t864_t* z_v5873, z_t689_t* z_v5874, uint6
             z_t538_t _m1 = z_v5883;
             switch (_m1.tag) {
                 case Z_NODE_TAG_IFCLAUSE: {
-                    /* alias: clause9 => (*(z_t612_t*)_m1.data) */
+                    /* alias: clause => (*(z_t612_t*)_m1.data) */
                     bool z_v5884 = ((bool)Z_BOOL_TAG_TRUE);
                     bool z_v5885 = ((bool)Z_BOOL_TAG_FALSE);
                     z_t579_t z_v5886 = z_t563_iterate(&(*(z_t612_t*)_m1.data).conditions);
@@ -116913,7 +116913,7 @@ z_t1308_t z_t3163(z_t537_t* z_v5872, z_t864_t* z_v5873, z_t689_t* z_v5874, uint6
                         z_t538_t _m3 = z_v5889;
                         switch (_m3.tag) {
                             case Z_NODE_TAG_NAMEDOPERATION: {
-                                /* alias: cond9 => (*(z_t592_t*)_m3.data) */
+                                /* alias: cond => (*(z_t592_t*)_m3.data) */
                                 z_t29_t z_v5891 = z_t2415(z_v5872, (*(z_t592_t*)_m3.data).name);
                                 if ((z_v5891.size > 0) && !z_t52_eq(((z_t52_t){ .data = z_v5891.data, .size = z_v5891.size }), _zs3408)) {
                                     z_v5885 = ((bool)Z_BOOL_TAG_TRUE);
@@ -117050,7 +117050,7 @@ void z_t3553(z_t537_t* z_v17610, z_t864_t* z_v17611, z_t689_t* z_v17612, uint64_
             z_t538_t _m1 = z_v17624;
             switch (_m1.tag) {
                 case Z_NODE_TAG_CASECLAUSE: {
-                    /* alias: cl9 => (*(z_t622_t*)_m1.data) */
+                    /* alias: cl => (*(z_t622_t*)_m1.data) */
                     if (!z_t3842(&(*(z_t622_t*)_m1.data).name, 0)) {
                         z_v17618 = ((bool)Z_BOOL_TAG_FALSE);
                     } else {
@@ -117283,7 +117283,7 @@ z_t1220_t z_t2965(z_t537_t* z_v5221, z_t864_t* z_v5222, z_t689_t* z_v5223, uint6
             z_t29_t z_v5278 = ((z_t29_t){0});
             z_t538_t z_v5280 = z_t643_get(&z_v5221->nodes, ((uint64_t)(*(z_t586_t*)_m0.data).child));
             if ((z_v5280).tag == Z_NODE_TAG_ATOMID) {
-                /* alias: chn9 => (*(z_t550_t*)z_v5280.data) */
+                /* alias: chn => (*(z_t550_t*)z_v5280.data) */
                 z_t29_t _rr5 = z_t2458(z_v5221, (*(z_t550_t*)z_v5280.data).name);
                 z_t29_free(&z_v5278);
                 z_v5278 = _rr5;
@@ -117296,7 +117296,7 @@ z_t1220_t z_t2965(z_t537_t* z_v5221, z_t864_t* z_v5222, z_t689_t* z_v5223, uint6
             z_t538_t z_v5283 = z_t643_get(&z_v5221->nodes, ((uint64_t)(*(z_t586_t*)_m0.data).parent));
             z_t29_t z_v5284 = ((z_t29_t){0});
             if ((z_v5283).tag == Z_NODE_TAG_ATOMID) {
-                /* alias: pn9 => (*(z_t550_t*)z_v5283.data) */
+                /* alias: pn => (*(z_t550_t*)z_v5283.data) */
                 z_t29_t _rr7 = z_t2458(z_v5221, (*(z_t550_t*)z_v5283.data).name);
                 z_t29_free(&z_v5284);
                 z_v5284 = _rr7;
@@ -117392,12 +117392,12 @@ z_t1220_t z_t2965(z_t537_t* z_v5221, z_t864_t* z_v5222, z_t689_t* z_v5223, uint6
                 return _ret17;
             }
             if ((z_v5283).tag == Z_NODE_TAG_DOTTEDPATH) {
-                /* alias: pn9 => (*(z_t586_t*)z_v5283.data) */
+                /* alias: pn => (*(z_t586_t*)z_v5283.data) */
                 z_t538_t z_v9838 = z_t643_get(&z_v5221->nodes, ((uint64_t)(*(z_t586_t*)z_v5283.data).parent));
                 z_t538_t z_v9840 = z_t643_get(&z_v5221->nodes, ((uint64_t)(*(z_t586_t*)z_v5283.data).child));
                 if (((z_v9838).tag == Z_NODE_TAG_ATOMID) && ((z_v9840).tag == Z_NODE_TAG_ATOMID)) {
-                    /* alias: gp9 => (*(z_t550_t*)z_v9838.data) */
-                    /* alias: gc9 => (*(z_t550_t*)z_v9840.data) */
+                    /* alias: gp => (*(z_t550_t*)z_v9838.data) */
+                    /* alias: gc => (*(z_t550_t*)z_v9840.data) */
                     z_t29_t z_v9842 = z_t2458(z_v5221, (*(z_t550_t*)z_v9838.data).name);
                     z_t29_t z_v9844 = z_t2458(z_v5221, (*(z_t550_t*)z_v9840.data).name);
                     if ((z_v9842.size > 0) && (z_v9844.size > 0)) {
@@ -117521,7 +117521,7 @@ z_t1220_t z_t2965(z_t537_t* z_v5221, z_t864_t* z_v5222, z_t689_t* z_v5223, uint6
             /* alias: n => (*(z_t588_t*)_m0.data) */
             z_t538_t z_v9941 = z_t643_get(&z_v5221->nodes, ((uint64_t)(*(z_t588_t*)_m0.data).callable));
             if ((z_v9941).tag == Z_NODE_TAG_DOTTEDPATH) {
-                /* alias: cnode9 => (*(z_t586_t*)z_v9941.data) */
+                /* alias: cnode => (*(z_t586_t*)z_v9941.data) */
                 z_t538_t _ah1355 = z_t643_get(&z_v5221->nodes, ((uint64_t)(*(z_t586_t*)z_v9941.data).parent));
                 z_t1220_t z_v9944 = z_t2965(z_v5221, z_v5222, z_v5223, z_v5224, _ah1355);
                 if ((z_v9944.kind) == Z_ZCONSTKIND_TAG_SVALKIND) {
@@ -117627,14 +117627,14 @@ void z_t2830(z_t537_t* z_v5857, z_t864_t* z_v5858, z_t689_t* z_v5859, uint64_t z
             z_t29_t z_v6078 = ((z_t29_t){0});
             z_t538_t z_v6080 = z_t643_get(&z_v5857->nodes, ((uint64_t)(*(z_t586_t*)_m0.data).parent));
             if ((z_v6080).tag == Z_NODE_TAG_ATOMID) {
-                /* alias: sfB9 => (*(z_t550_t*)z_v6080.data) */
+                /* alias: sfB => (*(z_t550_t*)z_v6080.data) */
                 z_t29_t _rr1 = z_t2458(z_v5857, (*(z_t550_t*)z_v6080.data).name);
                 z_t29_free(&z_v6077);
                 z_v6077 = _rr1;
             }
             z_t538_t z_v6083 = z_t643_get(&z_v5857->nodes, ((uint64_t)(*(z_t586_t*)_m0.data).child));
             if ((z_v6083).tag == Z_NODE_TAG_ATOMID) {
-                /* alias: sfC9 => (*(z_t550_t*)z_v6083.data) */
+                /* alias: sfC => (*(z_t550_t*)z_v6083.data) */
                 z_t29_t _rr2 = z_t2458(z_v5857, (*(z_t550_t*)z_v6083.data).name);
                 z_t29_free(&z_v6078);
                 z_v6078 = _rr2;
@@ -117915,7 +117915,7 @@ void z_t3024(z_t537_t* z_v6232, z_t864_t* z_v6233, z_t689_t* z_v6234, uint64_t z
     }
     z_t810_t z_v6240 = z_t3981(z_v6233, z_v6238, z_v6239);
     if (((z_v6240).tag == Z_OPTIONVAL_U64_TAG_NONE) == ((bool)Z_BOOL_TAG_FALSE)) {
-        /* alias: eo9 => z_v6240.data.some */
+        /* alias: eo => z_v6240.data.some */
         return;
     }
     if ((z_v6237.kind) == Z_ZCONSTKIND_TAG_ARMKIND) {
@@ -118011,7 +118011,7 @@ void z_t2487(z_t537_t* z_v5809, z_t864_t* z_v5810, z_t689_t* z_v5811, uint64_t z
         z_t538_t _m1 = z_v5822;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: bmNode9 => (*(z_t592_t*)_m1.data) */
+                /* alias: bmNode => (*(z_t592_t*)_m1.data) */
                 z_t29_t z_v5824 = z_t2415(z_v5809, (*(z_t592_t*)_m1.data).name);
                 bool z_v5825 = ((bool)Z_BOOL_TAG_FALSE);
                 if (z_t2448(z_v5809, (*(z_t592_t*)_m1.data).operation, ((uint8_t)Z_UNITKIND_TAG_NAMESPACE))) {
@@ -118230,7 +118230,7 @@ bool z_t2257(z_t537_t* z_v10667, uint32_t z_v10668) {
         uint32_t z_v10671 = *(uint32_t*)_iter0.data;
         z_t538_t z_v10673 = z_t643_get(&z_v10667->nodes, ((uint64_t)z_v10671));
         if ((z_v10673).tag == Z_NODE_TAG_NAMEDOPERATION) {
-            /* alias: bmNode9 => (*(z_t592_t*)z_v10673.data) */
+            /* alias: bmNode => (*(z_t592_t*)z_v10673.data) */
             z_t538_t _ah1363 = z_t643_get(&z_v10667->nodes, ((uint64_t)(*(z_t592_t*)z_v10673.data).operation));
             if (z_t2452(z_v10667, _ah1363)) {
                 bool _ret1 = ((bool)Z_BOOL_TAG_TRUE);
@@ -118316,7 +118316,7 @@ void z_t2258(z_t864_t* z_v10771, z_t689_t* z_v10772, z_t537_t* z_v10773, uint64_
         z_t538_t _m1 = z_v10782;
         switch (_m1.tag) {
             case Z_NODE_TAG_NAMEDOPERATION: {
-                /* alias: bmNode9 => (*(z_t592_t*)_m1.data) */
+                /* alias: bmNode => (*(z_t592_t*)_m1.data) */
                 z_t29_t z_v10784 = z_t2415(z_v10773, (*(z_t592_t*)_m1.data).name);
                 bool z_v10785 = ((bool)Z_BOOL_TAG_FALSE);
                 if (z_t52_eq(((z_t52_t){ .data = z_v10784.data, .size = z_v10784.size }), z_v10776)) {
@@ -118584,7 +118584,7 @@ void z_t2260(z_t864_t* z_v10808, z_t537_t* z_v10809, uint32_t z_v10810, uint32_t
     uint64_t z_v12089 = ((uint64_t)0);
     z_t538_t z_v12091 = z_t643_getMut(&z_v10809->nodes, ((uint64_t)z_v10811));
     if ((z_v12091).tag == Z_NODE_TAG_UNITDEF) {
-        /* alias: u9 => (*(z_t633_t*)z_v12091.data) */
+        /* alias: u => (*(z_t633_t*)z_v12091.data) */
         uint64_t z_v12092 = (*(z_t633_t*)z_v12091.data).body.length;
         z_v12089 = z_v12092;
         uint64_t z_v12093 = z_v10812.length;
@@ -118603,7 +118603,7 @@ void z_t2260(z_t864_t* z_v10808, z_t537_t* z_v10809, uint32_t z_v10810, uint32_t
             z_v12097 = (z_v12097 + 1);
             z_t538_t z_v12101 = z_t643_get(&z_v10809->nodes, ((uint64_t)z_v12099));
             if ((z_v12101).tag == Z_NODE_TAG_NAMEDOPERATION) {
-                /* alias: nop9 => (*(z_t592_t*)z_v12101.data) */
+                /* alias: nop => (*(z_t592_t*)z_v12101.data) */
                 (void)(z_t2447(z_v10808, z_v10809, z_v12096, (*(z_t592_t*)z_v12101.data).name, (*(z_t592_t*)z_v12101.data).nodeid, (*(z_t592_t*)z_v12101.data).operation));
             }
         }
@@ -118975,7 +118975,7 @@ bool z_t3026(z_t864_t* z_v10067, z_t537_t* z_v10068, uint64_t z_v10069) {
     if (((z_v10073).tag == Z_NODE_TAG_NAMEDOPERATION) == ((bool)Z_BOOL_TAG_FALSE)) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    /* post-guard alias: np9 => (*(z_t592_t*)z_v10073.data) */
+    /* post-guard alias: np => (*(z_t592_t*)z_v10073.data) */
     z_t538_t z_v10075 = z_t643_get(&z_v10068->nodes, ((uint64_t)(*(z_t592_t*)z_v10073.data).operation));
     z_t538_t _m0 = z_v10075;
     switch (_m0.tag) {
@@ -119001,7 +119001,7 @@ bool z_t2827(z_t864_t* z_v5789, z_t537_t* z_v5790, uint64_t z_v5791) {
     if (((z_v5795).tag == Z_NODE_TAG_NAMEDOPERATION) == ((bool)Z_BOOL_TAG_FALSE)) {
         return ((bool)Z_BOOL_TAG_FALSE);
     }
-    /* post-guard alias: np9 => (*(z_t592_t*)z_v5795.data) */
+    /* post-guard alias: np => (*(z_t592_t*)z_v5795.data) */
     return z_t2448(z_v5790, (*(z_t592_t*)z_v5795.data).operation, ((uint8_t)Z_UNITKIND_TAG_TEMPLATE));
 }
 
@@ -119059,7 +119059,7 @@ uint32_t z_t2960(z_t864_t* z_v7309, z_t537_t* z_v7310, uint64_t z_v7311) {
     /* alias: z_v7313 => (*__borrow_z_v7313) */
     z_t538_t z_v7315 = z_t643_get(&z_v7310->nodes, ((uint64_t)(*__borrow_z_v7313).node));
     if ((z_v7315).tag == Z_NODE_TAG_NAMEDOPERATION) {
-        /* alias: nop9 => (*(z_t592_t*)z_v7315.data) */
+        /* alias: nop => (*(z_t592_t*)z_v7315.data) */
         z_t538_t _ah1375 = z_t643_get(&z_v7310->nodes, ((uint64_t)(*(z_t592_t*)z_v7315.data).operation));
         z_t2516_t z_v7318 = z_t2514(z_v7310, _ah1375);
         if (((uint32_t)z_v7318.unitName) > 0) {
@@ -120873,7 +120873,7 @@ z_t538_t z_t2674(z_t537_t* z_v11792, uint32_t z_v11793, uint32_t z_v11794, z_t53
     z_t2658_t _m0 = z_v11802;
     switch (_m0.tag) {
         case Z_OPTION_NODE_TAG_SOME: {
-            /* alias: vp9 => (*(z_t538_t*)_m0.data) */
+            /* alias: vp => (*(z_t538_t*)_m0.data) */
             z_t538_t z_v11804 = z_t2464(z_v11792, z_v11793, z_v11794, _zs3544, (*(z_t538_t*)_m0.data));
             (*(z_t538_t*)_m0.data) = (z_t538_t){0};
             (void)(z_t563_append(&z_v11800, z_t1810(z_v11792, z_v11804)));
@@ -122757,7 +122757,7 @@ z_t2462_t z_t2459(z_t537_t* z_v10887, z_t538_t z_v10888, z_t52_t z_v10889, z_t52
                             z_t2658_t _m5 = z_v11760;
                             switch (_m5.tag) {
                                 case Z_OPTION_NODE_TAG_SOME: {
-                                    /* alias: acc9 => (*(z_t538_t*)_m5.data) */
+                                    /* alias: acc => (*(z_t538_t*)_m5.data) */
                                     uint32_t z_v11761 = z_t2665((*(z_t538_t*)_m5.data));
                                     uint32_t z_v11762 = z_t2666((*(z_t538_t*)_m5.data));
                                     z_t538_t z_v11763 = z_t2667(z_v10887, (*(z_t538_t*)_m5.data));
@@ -122810,7 +122810,7 @@ z_t2462_t z_t2459(z_t537_t* z_v10887, z_t538_t z_v10888, z_t52_t z_v10889, z_t52
                                             z_t2658_t _m11 = z_v11785;
                                             switch (_m11.tag) {
                                                 case Z_OPTION_NODE_TAG_SOME: {
-                                                    /* alias: bg9 => (*(z_t538_t*)_m11.data) */
+                                                    /* alias: bg => (*(z_t538_t*)_m11.data) */
                                                     z_t538_t z_v11786 = z_t2673(z_v10887, z_v11761, z_v11762, _zs3557);
                                                     z_t538_t z_v11791 = ({ z_t538_t _u = {0}; _u.tag = Z_NODE_TAG_DOTTEDPATH; z_t586_t* _b = (z_t586_t*)z_xmalloc(sizeof(z_t586_t)); *_b = z_t586_create(z_t2649(z_v10887), z_v11761, z_v11762, z_t1810(z_v10887, (*(z_t538_t*)_m11.data)), z_t1810(z_v10887, z_v11786)); _u.data = _b; _u; });
                                                     (*(z_t538_t*)_m11.data) = (z_t538_t){0};
@@ -122917,7 +122917,7 @@ z_t2462_t z_t2459(z_t537_t* z_v10887, z_t538_t z_v10888, z_t52_t z_v10889, z_t52
                             z_t2658_t _m14 = z_v11958;
                             switch (_m14.tag) {
                                 case Z_OPTION_NODE_TAG_SOME: {
-                                    /* alias: rfg9 => (*(z_t538_t*)_m14.data) */
+                                    /* alias: rfg => (*(z_t538_t*)_m14.data) */
                                     z_t538_t z_v11960 = z_t2464(z_v10887, z_v11024, z_v11025, _zs3562, (*(z_t538_t*)_m14.data));
                                     (*(z_t538_t*)_m14.data) = (z_t538_t){0};
                                     if (z_v11759) {
@@ -123222,7 +123222,7 @@ uint32_t z_t2416(z_t537_t* z_v33229, uint32_t z_v33230) {
     uint32_t z_v33231 = ((uint32_t)0);
     z_t538_t z_v33233 = z_t643_get(&z_v33229->nodes, ((uint64_t)z_v33230));
     if ((z_v33233).tag == Z_NODE_TAG_UNITDEF) {
-        /* alias: n9 => (*(z_t633_t*)z_v33233.data) */
+        /* alias: n => (*(z_t633_t*)z_v33233.data) */
         z_v33231 = (*(z_t633_t*)z_v33233.data).nodeid;
     }
     return z_v33231;

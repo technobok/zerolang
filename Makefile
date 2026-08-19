@@ -1461,7 +1461,7 @@ native-guard:
 	done; \
 	known=$$({ grep -oE 'if canon == "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
 	    grep -oE 'mono: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
-	    grep -ohE 'bn9\.append from: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
+	    grep -ohE 'bn\.append from: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
 	  } | sed 's/.*"\(.*\)"/\1/'; \
 	  sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*):.*/\1/p' \
 	    lib/system/core.z lib/system/io.z lib/system/os.z lib/system/net.z \
