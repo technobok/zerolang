@@ -20,7 +20,6 @@ public: unit {
     :Decl
     :defaultval
     :foldedbranch
-    :declchild
     :callslot
     :genericslot
     :constslot
@@ -45,16 +44,6 @@ ZType: ztypes.ZType
 Node: zast.Node
 
 # --- relational row carriers ---
-
-# A declaration's name index switches from a linear child scan to the byName
-# map past this many children (no owned key, no hash below it).
-bucketScanMax: 16.u64
-
-# NameIndex -- a wide namespace's nameId -> declId accelerator (a slot in
-# ZTyping.nameIndexes, named by Decl.nameIndex).
-NameIndex: class {
-    byName: (IdMapV u64 value: ztypes.declid)
-}
 
 # One edge of the generic-args table: a (parent, param-name) link. The
 # mutable arg-type id lives in genericArgTypeBy, keyed by a
@@ -150,12 +139,6 @@ declkindName: function {k: declkind} out String is {
     } case programDecl then {
         return "program".string
     }
-}
-
-# one name -> child-declaration edge of a Decl's namespace.
-declchild: record {
-    nameId: zast.nameid
-    declId: ztypes.declid
 }
 
 # callslot -- which generic parameter of which call site. Two id spaces stay
@@ -264,13 +247,12 @@ Decl: class {
     # laid over it (a take, a narrowing, a lock); the walk's row scan is
     # skipped when there are none
     rows: u64
-    children: (ListVal declchild)
-    # slot of this row's nameId -> declId accelerator in ZTyping.nameIndexes,
-    # backfilled when the namespace outgrows a linear scan of `children`
-    # (bucketScanMax); 0 for the many rows that never do.
-    # A slot, not a map: a map is a heap object, and every row would own an
-    # empty one
-    nameIndex: u32
+    # the namespace this declaration owns: name id -> child declaration, in
+    # declaration order. One representation answers both questions a namespace
+    # is asked -- `children.get` is the lookup and the dense entries are the
+    # order -- because an IdMap indexes itself once it outgrows a scan and
+    # costs no allocation at all below that.
+    children: (IdMapV zast.nameid value: ztypes.declid)
 }
 
 # the typing side-tables: every typecheck stamp keyed by AST node id
@@ -584,8 +566,6 @@ ZTyping: class {
     # every Decl row, indexed by its DeclId: row 0 is the sentinel and ids are
     # minted dense in mint order and never removed, so the id IS the index
     decls: (List Decl)
-    # the name indexes the wide namespaces own (Decl.nameIndex slots)
-    nameIndexes: (List NameIndex)
     # type id -> the declaration that minted it (first mint wins), so a member
     # setter reaches the owner's declaration without the type registry. A
     # monomorphisation is absent: it links to its template through the
@@ -665,8 +645,7 @@ ZTyping: class {
             conformerName: 0
             varId: ztypes.vid
             rows: 0
-            children: (ListVal declchild)
-            nameIndex: 0
+            children: (IdMapV zast.nameid value: ztypes.declid)
         )
         if (parent.isZero) == false then (this.declAddChildEdge
             parentDeclId: parent
@@ -787,8 +766,8 @@ ZTyping: class {
     # outward: each frame's own locals (a frame binds each name at most once),
     # then the frame enclosing it, until the chain leaves the frames -- a
     # frame's parent that is not a frame is the declaration whose body it is,
-    # and ends the walk. One row read per frame; a nested frame is what
-    # shadows an outer local.
+    # and ends the walk. One row read and one probe per frame; a nested frame
+    # is what shadows an outer local.
     declFindLocal: function {
         t: this.view
         frame: ztypes.declid
@@ -802,22 +781,12 @@ ZTyping: class {
             {
                 fo9: t.decls.get i: cur9.u64
                 if (fo9.kind.blockDecl) == false then return (ztypes.declid.create from: 0)
-                if fo9.nameIndex > 0 then {
-                    found9 = t.nameIndexLookup slot: fo9.nameIndex :nameId
-                } else {
-                    # newest first: a frame's own locals are few and the one
-                    # just defined is the likeliest hit; the name is bound at
-                    # most once here, so the first match is the only one
-                    ci9: fo9.children.length
-                    for ci9 > 0 loop {
-                        ci9 = ci9 - 1
-                        c9: fo9.children.get i: ci9
-                        if c9.nameId == nameId then {
-                            found9 = c9.declId
-                            ci9 = 0
-                        }
-                    }
-                }
+                lo9: fo9.children.get key: nameId
+                match (
+                    lo9
+                ) case some then {
+                    found9 = lo9
+                } case none then null
                 next9 = fo9.parent
             }
             if (found9.isZero) == false then return found9
@@ -831,7 +800,12 @@ ZTyping: class {
     declChildAt: function {t: this.view declId: ztypes.declid index: u64} out ztypes.declid is {
         r9: ztypes.declid
         do9: t.decls.get i: declId.u64
-        if index < do9.children.length then r9 = (do9.children.get i: index).declId
+        co9: do9.children.valueAt i: index
+        match (
+            co9
+        ) case some then {
+            r9 = co9
+        } case none then null
         return r9
     }
 
@@ -842,43 +816,14 @@ ZTyping: class {
         return r9
     }
 
-    # declAddChildEdge -- append a name -> declaration edge to a parent's
+    # declAddChildEdge -- add a name -> declaration edge to a parent's
     # namespace (also used for public-interface entries, whose targets are
-    # sibling declarations rather than fresh rows).
+    # sibling declarations rather than fresh rows). A namespace binds each
+    # name once, so the edge is a keyed write and the order it lands in is
+    # the declaration order every walk reads back.
     declAddChildEdge: function {:this parentDeclId: ztypes.declid nameId: zast.nameid childDeclId: ztypes.declid} is {
         po9: this.decls.getMut i: parentDeclId.u64
-        po9.children.append (declchild :nameId declId: childDeclId)
-        # keep the name index in the WRITER: the first append past the
-        # scan threshold backfills it and later appends keep it filled.
-        # Backfilling in the reader instead would make every lookup a
-        # mutation, and a mutating
-        # lookup cannot run under a live children borrow.
-        if po9.children.length > bucketScanMax then {
-            if po9.nameIndex == 0 then {
-                ix9: NameIndex byName: (IdMapV u64 value: ztypes.declid)
-                with cit7: po9.children.iterate do for c7: cit7 loop {
-                    ix9.byName.set key: c7.nameId.u64 value: c7.declId
-                }
-                po9.nameIndex = this.nameIndexes.length.u32.orPanic
-                this.nameIndexes.append ix9
-            } else {
-                ixm9: this.nameIndexes.getMut i: po9.nameIndex.u64
-                ixm9.byName.set key: nameId.u64 value: childDeclId
-            }
-        }
-    }
-
-    # nameIndexLookup -- the declId a wide namespace's name index holds for
-    # `nameId`, or 0.
-    nameIndexLookup: function {t: this.view slot: u32 nameId: zast.nameid} out ztypes.declid is {
-        ix9: t.nameIndexes.get i: slot.u64
-        bo9: ix9.byName.get key: nameId.u64
-        match (
-            bo9
-        ) case some then {
-            return bo9
-        } case none then null
-        return (ztypes.declid.create from: 0)
+        po9.children.set key: nameId value: childDeclId
     }
 
     # declSetPending / declIsPending -- the demand mark: a reference found
@@ -1057,8 +1002,8 @@ ZTyping: class {
     # declFindChild -- the child declaration named nameId under parentDeclId
     # (0 when absent). A namespace binds each name once -- the parser rejects
     # a repeated definition in any one body, registerUnitRoots a repeated unit
-    # name, and the binding site a rebound local -- so the first match is the
-    # only one and the scan stops there.
+    # name, and the binding site a rebound local -- which is what lets the
+    # namespace be keyed by the name at all.
     declFindChild: function {
         t: this.view
         parentDeclId: ztypes.declid
@@ -1066,20 +1011,12 @@ ZTyping: class {
     } out ztypes.declid is {
         found9: ztypes.declid
         po9: t.decls.get i: parentDeclId.u64
-        if po9.nameIndex > 0 then {
-            found9 = t.nameIndexLookup slot: po9.nameIndex :nameId
-        } else {
-            ci9: u64
-            cn9: po9.children.length
-            for ci9 < cn9 loop {
-                c9: po9.children.get i: ci9
-                ci9 = ci9 + 1
-                if c9.nameId == nameId then {
-                    found9 = c9.declId
-                    ci9 = cn9
-                }
-            }
-        }
+        co9: po9.children.get key: nameId
+        match (
+            co9
+        ) case some then {
+            found9 = co9
+        } case none then null
         return found9
     }
 
@@ -1358,7 +1295,7 @@ ZTyping: class {
             tnode9 = to9.node
             tkind9 = to9.kind
             tframe9 = to9.unitFrame
-            with cit9: to9.children.iterate do for c9: cit9 loop kids9.append c9.declId
+            with cit9: to9.children.iterateItems do for c9: cit9 loop kids9.append c9.value
         }
         if tname9 == 0 then return (ztypes.declid.create from: 0)
         # the clone keeps the template's kind: a monomorphisation of a generic
@@ -1412,10 +1349,9 @@ ZTyping: class {
     }
 
     # declChildSlots -- how many children a declaration's namespace holds.
-    declChildSlots: function {:this declId: ztypes.declid} out u64 is {
-        po9: this.decls.get i: declId.u64
+    declChildSlots: function {t: this.view declId: ztypes.declid} out u64 is {
+        po9: t.decls.get i: declId.u64
         return po9.children.length
-        return 0
     }
 
     # declChildWalk -- the shared walk behind declMemberList and declChildRows:
@@ -1445,9 +1381,13 @@ ZTyping: class {
             did9: ztypes.declid
             {
                 oo9: this.decls.get i: od9.u64
-                ce9: oo9.children.get i: i9
-                nid9 = ce9.nameId.u64
-                did9 = ce9.declId
+                nid9 = (oo9.children.keyAt i: i9).u64
+                vo9: oo9.children.valueAt i: i9
+                match (
+                    vo9
+                ) case some then {
+                    did9 = vo9
+                } case none then null
             }
             i9 = i9 + 1
             keep9: (membersOnly) == false
@@ -1537,7 +1477,12 @@ ZTyping: class {
             did9: ztypes.declid
             {
                 oo9: this.decls.get i: od9.u64
-                did9 = (oo9.children.get i: i9).declId
+                vo9: oo9.children.valueAt i: i9
+                match (
+                    vo9
+                ) case some then {
+                    did9 = vo9
+                } case none then null
             }
             i9 = i9 + 1
             {
@@ -1568,9 +1513,13 @@ ZTyping: class {
             did9: ztypes.declid
             {
                 oo9: this.decls.get i: od9.u64
-                ce9: oo9.children.get i: i9
-                nid9 = ce9.nameId.u64
-                did9 = ce9.declId
+                nid9 = (oo9.children.keyAt i: i9).u64
+                vo9: oo9.children.valueAt i: i9
+                match (
+                    vo9
+                ) case some then {
+                    did9 = vo9
+                } case none then null
             }
             i9 = i9 + 1
             {
@@ -2299,7 +2248,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingTyperefFrame: (MapVV u64 value: ztypes.declid)
         unitTypesById: (MapVV u64 value: ztypes.tid)
         decls: (List Decl)
-        nameIndexes: (List NameIndex)
         declByTypeId: (MapVV u64 value: ztypes.declid)
         publicNsByOwner: (MapVV u64 value: ztypes.declid)
         refDecl: (MapVV u64 value: ztypes.declid)
@@ -2342,10 +2290,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         conformerName: 0
         varId: ztypes.vid
         rows: 0
-        children: (ListVal declchild)
-        nameIndex: 0
+        children: (IdMapV zast.nameid value: ztypes.declid)
     )
-    t9.nameIndexes.append (NameIndex byName: (IdMapV u64 value: ztypes.declid))
     t9.constStrings.append "".string
     # the program root, DeclId 1: the file units are parented to it, so every
     # declaration but this one has a parent. Minted with parent 0, so it takes

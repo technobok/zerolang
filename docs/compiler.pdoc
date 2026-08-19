@@ -749,18 +749,29 @@ post-mortem link back to the emitting site.
 
 #---: Collection Choice
 
-Compiler data structures follow a measured policy. Large id-keyed tables
-(node stamps, declarations, registries) are #~"Map u64" -- the emitted maps
-hash integers with one splitmix64 block and cache per-entry hashes, so id
-probes are cheap at any size. Small, per-instance state (the emitter's
-narrowing/alias lists, scan-sized child buckets) uses #b:"assoc-lists /
-linear row scans": at a handful of entries a StringView compare loop beats
-a map probe, which must allocate an owned key String and SipHash it.
-Structures that grow past a threshold switch representation at the
-crossing (a child bucket builds its byName index only past
-#~"bucketScanMax" rows). Hot String-keyed lookups are avoided outright:
-resolution goes through interned ids and two-argument (unit, name) probes
-rather than composed "unit.name" key strings.
+Compiler data structures follow a measured policy. Id-keyed tables (node
+stamps, declarations, registries) are #~"IdMap" / #~"IdSet": a stack struct
+that costs no allocation while empty, a dense insertion-ordered entry array
+with no tombstone and no stored hash, and a slot taken from the key's own
+bits. Nothing is ever removed from one, which is what buys all three. A
+#~"Map" is what remains for the keys an id space cannot express -- a String,
+or a composite record -- and it is the only container of the two that is a
+heap object.
+
+#b:"The representation crossing is inside the container, not in the code
+that uses it." An IdMap below its small-mode ceiling has no index array at
+all and #~"find" scans the dense entries; past it the index appears and the
+scan becomes a probe. So a declaration's namespace is one field that answers
+both questions asked of it -- #~"children.get" is the lookup and the same
+entries in order are the walk -- where it was once a list plus a lazily
+built by-name map, and every reader carried the crossing as a branch.
+
+Small, per-instance state that #_*"deletes" (the emitter's narrowing and
+alias lists) stays an #b:"assoc-list": at a handful of entries a linear row
+scan beats a probe, and an append-only container cannot serve it at all.
+Hot String-keyed lookups are avoided outright: resolution goes through
+interned ids and two-argument (unit, name) probes rather than composed
+"unit.name" key strings.
 
 #---: Stamp-Driven Emission
 
