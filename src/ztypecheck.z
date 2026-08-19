@@ -437,7 +437,7 @@ checkBareTypeValueAt: function {
     isVw: isViewFamilyTid :ast :st :tid
     tdb: ztypes.tid
     if (isVw) == false then {
-        tdb = typedefBaseOf :ast :st :unitDecl :tid
+        tdb = typedefBaseOf :st :tid
         if tdb > 0 when (isViewFamilyTid
             :ast
             :st
@@ -811,7 +811,7 @@ typesCompatible: function {
     }
     cur: a
     for cur > 0 loop {
-        nb: typedefBaseOf :ast :st :unitDecl tid: (ztypes.tid.create from: cur.u64)
+        nb: typedefBaseOf :st tid: (ztypes.tid.create from: cur.u64)
         if nb.isZero then {
             cur = ztypes.tid.create from: (0)
         } else {
@@ -17199,7 +17199,6 @@ metaCreateBaseId: function {ast: Ast.view n: Node.view} out optionval u32 is {
     return (optionval.none u32)
 }
 
-# typedefBaseOf -- a typedef type's base type id (the recorded base name,
 # copiedMapStr -- owned copy of a u64-keyed map entry ("" when absent):
 # confines the value view to this frame so the caller can immediately
 # re-lend the map's container (fnReturnTidOf-style view scoping).
@@ -17214,26 +17213,16 @@ copiedMapStr: function {m: (IdMapR u64 value: String) key: u64} out String is {
     }
 }
 
-# resolved at read time -- the resolver runs before the base's unit), or 0.
-typedefBaseOf: function {
-    ast: Ast.view
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    tid: ztypes.tid
-} out ztypes.tid is {
-    bn: copiedMapStr m: st.typing.typedefBaseName key: tid
-    if bn.length == 0 then return (ztypes.tid.create from: 0)
-    return (ztypes.tid.create from: (optU64Or
-        o: (walkLookupTyperef
-            :st
-            frame: st.curFrame
-            :ast
-
-            :unitDecl
-            base: bn.stringview
-        )
-        d: 0
-    ))
+# typedefBaseOf -- a typedef type's base TYPE: the template for a base that
+# is a generic instance (`Bytes: typedef (ListVal u8)` -> ListVal), else the
+# base itself; 0 when `tid` is not a typedef. typedefBaseTidOf is the
+# instance.
+typedefBaseOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    b: typedefBaseTidOf :st :tid
+    if b.isZero then return b
+    go: st.reg.genericOriginOf tid: b
+    if go > 0 then return (ztypes.tid.create from: go.u64)
+    return b
 }
 
 # typedefBaseTidOf -- a typedef type's base INSTANCE id, resolved structurally
@@ -18595,7 +18584,7 @@ checkDotted: function {
     ) case some then null case none then {
         tdd: typedefBaseTidOf :st tid: bt
         if tdd.isZero then {
-            tdd = typedefBaseOf :ast :st :unitDecl tid: bt
+            tdd = typedefBaseOf :st tid: bt
         }
         if tdd > 0 then bt = tdd
     }
@@ -21521,13 +21510,8 @@ checkBinopMethodDispatch: function {
         if eqHere.some then chase = false
     }
     if chase then {
-        for opo.none while (typedefBaseOf
-            :ast
-            :st
-            :unitDecl
-            tid: (ztypes.tid.create from: dt.u64)
-        ) > 0 loop {
-            dt = typedefBaseOf :ast :st :unitDecl tid: (ztypes.tid.create from: dt.u64)
+        for opo.none while (typedefBaseOf :st tid: (ztypes.tid.create from: dt.u64)) > 0 loop {
+            dt = typedefBaseOf :st tid: (ztypes.tid.create from: dt.u64)
             (forceMemberOf :st frame: st.curFrame :ast parentTypeId: dt nameId: opnId)
             opo = st.typing.declChildOfId parentTypeId: dt nameId: opnId
         }
@@ -21773,7 +21757,7 @@ checkBinop: function {
         :rt
         isCmp: (isComparisonOp name: opn.stringview)
     )
-    tdb2: typedefBaseOf :ast :st :unitDecl tid: result
+    tdb2: typedefBaseOf :st tid: result
     if tdb2 > 0 then result = tdb2
     if result > 0 when (st.reg.typetypeOf typeId: result) == ztypes.ztypetype.genericParam then {
         # Structural pass-through: the SAME parameter on both sides flows
@@ -24504,9 +24488,7 @@ checkCall: function {
                         tdo: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: tdcid.u64
                         isTd: false
                         if (typedefBaseOf
-                            :ast
                             :st
-                            :unitDecl
                             tid: (ztypes.tid.create from: tdo.u64)
                         ) > 0 then isTd = true
                         if (typedefBaseTidOf
@@ -25126,9 +25108,7 @@ checkCall: function {
                                                 # so the whole-value substitution
                                                 # applies to it.
                                                 tdB: (typedefBaseOf
-                                                    :ast
                                                     :st
-                                                    :unitDecl
                                                     tid: (ztypes.tid.create from: uparmid.u64)
                                                 )
                                                 upn: String
@@ -25457,7 +25437,7 @@ checkCall: function {
             }
         }
         tdb0: u64
-        if isCtor then tdb0 = typedefBaseOf :ast :st :unitDecl tid: funcId
+        if isCtor then tdb0 = typedefBaseOf :st tid: funcId
         if tdb0 > 0 then return (checkTypedefCreate
             :st
             :unitDecl
