@@ -814,10 +814,46 @@ behaviour-preserving evidence.
 | narrowing state as ids | −185,528 | −8.5 MB |
 | **total** | **−279,930** | **−53.4 MB** |
 
-### Still text, and still worth doing
+### The post-guard dead-alias set
 
-`ArmPredFact.subject` / `armName` and the `covered` / `required9` lists are
-`String`, so the boundary still converts text to id per call. Roughly 20,500
-`Set String` instances remain in function locals — `armNames9` (×2),
-`gpNames9`, `boundParams`, `seen`, `excl9`, `doneS9`, `pgDead9`. Every one of
-them holds names that are already interned.
+| | before | after |
+|---|---|---|
+| allocations | 8,174,339 | **8,159,064** (−15,275) |
+| bytes | 409,131,920 | **408,486,991** (−645 KB) |
+
+`pgDead9` marked which post-guard aliases a reassignment had ended, by name,
+while `pgVid9` sat beside it holding the variable id at the same index — and
+both `has` sites read that id two lines later anyway. Keyed by the vid, which
+is the stronger key: a variable id is minted by the compiler and unique by
+construction, where a name raises whether the string was interned at all.
+
+Net −2 source lines. A self-compile builds 15,314 of these; 93.7% of the
+`Set String` instances it creates die empty, so most of the win is the header
+an empty `IdSet` does not allocate.
+
+### Where this stops, and why
+
+After the migrations above a self-compile creates **26,638** Map/Set instances,
+down from 111,607. Two sites hold 96% of what is left, and only one of them
+should move.
+
+`subs` — the generic-argument substitution maps in `ztypecheck` — is 8,435
+instances. It stays on `Map`, and the reason is the test that made the
+narrowing migration worth doing in reverse: **its keys are not uniformly
+interned.** Some are AST labels, which are; others come from
+`firstGenericParamName` off the registry, which carries no guarantee of being
+in `ast.names`. `poolFind` answers 0 for a name that is absent, so two distinct
+uninterned names would compare EQUAL — a correctness hazard, not a cost. Making
+them interned means `poolSet` during typecheck, which grows the pool and
+renumbers ids. Against that: 93 references across the monomorphisation core.
+
+The rest are small — `seen` (1,141), `doneS9` (695), `armNames9` (40),
+`gpNames9` (19), and `boundParams`, which a self-compile never constructs at
+all. `ArmPredFact.subject` / `armName` and the `covered` / `required9` lists
+are still `String`, so the narrowing boundary converts text to id per call;
+that is a tidy-up, not a container win.
+
+The rule this arrived at, worth keeping: **an id key is only sound when the id
+is minted, not looked up.** A variable id or a name a node already carries is
+free and exact. A pool lookup on a string of uncertain provenance trades a
+copy for a silent collision.
