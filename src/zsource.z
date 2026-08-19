@@ -10,6 +10,8 @@ public: unit {
     :Analysis
     :analyzeFileTiered
     :analyzeSource
+    :lintopts
+    :defaultOpts
     :lineDiffEdits
     :renderDiff
     :sourceParses
@@ -20,7 +22,137 @@ public: unit {
 Node: zast.Node
 Ast: zast.Ast
 
+# lintopts -- which optional rules a lint run enables. One value threads from
+# the command line to every rule, so a new rule is a field here, not a
+# parameter added to every layer between them.
+lintopts: record {
+    full: bool
+    lineLength: u32
+    casing: bool
+    docs: bool
+    docParams: bool
+    docFields: bool
+    arch: bool
+}
+
+# defaultOpts -- the fast tier with every optional rule off.
+defaultOpts: function {} out lintopts is {
+    return (lintopts
+        full: false
+        lineLength: 0
+        casing: false
+        docs: false
+        docParams: false
+        docFields: false
+        arch: false
+    )
+}
+
 # ---- AST query helpers for the parse-tier rules ----
+
+# the line count above which A005 reports a function.
+longFunctionLines: 80.u32
+
+# unitOpOfName -- the unitdef node of the program's unit named `uname`, 0 when
+# no unit has that name.
+unitOpOfName: function {ast: Ast.view uname: StringView} out zast.nodeid is {
+    with it: ast.units.iterate do for uId: it loop {
+        u: ast.nodes.get i: uId.u64
+        match (
+            u
+        ) case namedoperation then {
+            un: zast.nameTextAt :ast ref: u.name
+            if un.stringview == uname then return u.operation
+        } else null
+    }
+    return zast.nodeid
+}
+
+# unitNamesIn -- the unit names of the `.z` files directly under `dir`.
+unitNamesIn: function {dir: StringView} out (List String) is {
+    names: (List String)
+    ents: io.listDir path: dir
+    match (
+        ents
+    ) case ok then {
+        with eit: ents.iterate do for e: eit loop {
+            ev: e.stringview
+            if (ev.endsWith suffix: ".z") then names.append from: (ev.substring
+                from: 0
+                to: (ev.length - 2)
+            ).string
+        }
+    } case err then null
+    return names
+}
+
+# unitDeclaresMain -- the unit body declares a top-level `main`.
+unitDeclaresMain: function {ast: Ast.view unitId: zast.nodeid} out bool is {
+    mainId: zast.poolFind pool: ast.names text: "main"
+    if mainId.isZero then return false
+    bodyIds: zast.unitBodyIdsAt :ast :unitId
+    with bit: bodyIds.iterate do for mId: bit loop {
+        m: ast.nodes.get i: mId.u64
+        match (
+            m
+        ) case namedoperation then {
+            if m.name == mainId then return true
+        } else null
+    }
+    return false
+}
+
+# plainLiteralText -- the text of a string literal with no interpolation
+# (one literal chunk), none for any other node.
+plainLiteralText: function {ast: Ast.view n: Node.view} out (Option String) is {
+    match (
+        n
+    ) case atomstring then {
+        if n.stringparts.length != 1 then return (Option.none String)
+        c: ast.nodes.get i: (n.stringparts.get i: 0).u64
+        match (
+            c
+        ) case stringchunk then {
+            return (Option.some c.text.copy)
+        } else {
+            return (Option.none String)
+        }
+    } else {
+        return (Option.none String)
+    }
+}
+
+# isComposedParts -- a string literal's parts shaped like a composed key: two
+# or more interpolation holes joined by a short separator with no space
+# (`"\{a}.\{b}"`, `"\{unit}_\{name}"`). A message with holes reads as prose
+# between them and is not one.
+isComposedParts: function {ast: Ast.view parts: (ListVal u32).view} out bool is {
+    holes: u64
+    sepSinceHole: false
+    composed: false
+    with it: parts.iterate do for pId: it loop {
+        part: ast.nodes.get i: pId.u64
+        match (
+            part
+        ) case stringchunk then {
+            if holes > 0 when (isKeySeparator s: part.text.stringview) then sepSinceHole = true
+        } else {
+            if holes > 0 when sepSinceHole then composed = true
+            holes = holes + 1
+            sepSinceHole = false
+        }
+    }
+    return composed
+}
+
+# isKeySeparator -- one or two bytes, none of them a space: what joins the
+# halves of a composed key.
+isKeySeparator: function {s: StringView} out bool is {
+    if s.length == 0 then return false
+    if s.length > 2 then return false
+    if (s.contains needle: " ") then return false
+    return true
+}
 
 # atomName -- the identifier name of an atomid node, else "".
 atomName: function {ast: Ast.view n: Node.view} out String is {
@@ -326,6 +458,7 @@ Analysis: class {
     fastToks: (List tokenize.Token)
     funcDepth: u64
     wrapGroups: (ListVal u64)
+    opts: lintopts
 } as {
     # parseErrorCount -- how many collected diagnostics are hard (ERROR) -- i.e.
     # parse errors. The fmt parse gate refuses any file with a non-zero count.
@@ -1150,6 +1283,10 @@ Analysis: class {
                 hint: n.hint.copy
             )
             this.diags.append d
+        } case binop then {
+            if this.opts.arch then {
+                this.checkLiteralCompare :ast opId: n.operator lhsId: n.lhs rhsId: n.rhs
+            }
         } case call then {
             if this.wrapWidth > 0 then {
                 this.tryWrapCall :ast arguments: n.arguments line: n.lineno col: n.colno
@@ -1161,6 +1298,13 @@ Analysis: class {
                 )
                 this.checkCollapseName :ast arguments: n.arguments
             }
+        } case atomstring then {
+            if this.opts.arch then (this.checkComposedKey
+                :ast
+                parts: n.stringparts
+                line: n.lineno
+                col: n.colno
+            )
         } case assignment then {
             if this.funcDepth > 0 then (this.tryBareZeroInit
                 :ast
@@ -1177,6 +1321,12 @@ Analysis: class {
             this.checkChainBodyBreak :ast clauses: n.clauses elseclauseId: n.elseclause
             this.checkNullArms :ast clauses: n.clauses elseclauseId: n.elseclause
         } case functiondef then {
+            if this.opts.arch then (this.checkLongFunction
+                :ast
+                bodyId: n.body
+                line: n.lineno
+                col: n.colno
+            )
             # the body is walked one function deeper; the signature is not
             if this.wrapWidth > 0 then (this.tryWrapParams
                 :ast
@@ -1196,6 +1346,77 @@ Analysis: class {
 
     walkIds: function {:this ast: Ast.view ids: (ListVal u32).view} is {
         with it: ids.iterate do for c: it loop this.walk :ast n: (ast.nodes.get i: c.u64)
+    }
+
+    # ---- architecture rules (zl lint --arch) ----
+
+    # checkLiteralCompare -- A001: `==` / `!=` against a string literal. The
+    # compiler compares by id -- a name id, a declaration, a type id -- and a
+    # literal here is a name the code resolves by spelling.
+    checkLiteralCompare: function {:this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid} is {
+        op: atomName :ast n: (ast.nodes.get i: opId.u64)
+        isCmp: op.stringview == "=="
+        if op.stringview == "!=" then isCmp = true
+        if (isCmp) == false then return
+        this.literalCompareSide :ast id: lhsId
+        this.literalCompareSide :ast id: rhsId
+    }
+
+    literalCompareSide: function {:this ast: Ast.view id: zast.nodeid} is {
+        n: ast.nodes.get i: id.u64
+        txt: plainLiteralText :ast :n
+        match (
+            txt
+        ) case some then {
+            p: zast.posOf :n
+            (this.info
+                code: "A001"
+                msg: "string literal `\{txt}` compared by spelling; compare an id (name id, declaration, type id)"
+                line: p.line
+                col: p.col
+                width: 1
+            )
+        } case none then null
+    }
+
+    # checkComposedKey -- A002: a string literal shaped like a composed key
+    # (holes joined by a separator) -- a spelling that stands in for a tree
+    # walk or a pair key.
+    checkComposedKey: function {:this ast: Ast.view parts: (ListVal u32).view line: u32 col: u32} is {
+        if (isComposedParts :ast :parts) == false then return
+        (this.info
+            code: "A002"
+            msg: "composed string key: key the table by ids (a pair record, or walk the tree)".string
+            :line
+            :col
+            width: 1
+        )
+    }
+
+    # checkLongFunction -- A005: a function whose body spans more than
+    # longFunctionLines source lines (measured to its last statement line).
+    checkLongFunction: function {:this ast: Ast.view bodyId: zast.nodeid line: u32 col: u32} is {
+        if bodyId.isZero then return
+        lastLine: line
+        b: ast.nodes.get i: bodyId.u64
+        match (
+            b
+        ) case statement then {
+            with it: b.statements.iterate do for sId: it loop {
+                sp: zast.posOf n: (ast.nodes.get i: sId.u64)
+                if sp.line > lastLine then lastLine = sp.line
+            }
+        } else null
+        span: (lastLine - line) + 1
+        if span > longFunctionLines then {
+            (this.info
+                code: "A005"
+                msg: "function spans \{span} lines; split it into named helpers"
+                :line
+                :col
+                width: 1
+            )
+        }
     }
 
     # walkCasing -- opt-in (L009): recurse to every type definition and check the member
@@ -2706,7 +2927,181 @@ Analysis: class {
             this.reportUnusedDefs :prog :uname :st
             this.reportUnusedVars :prog :uname :st
             this.reportViewableLocals :prog :uname :st
+            if this.opts.arch then (this.reportArch
+                :prog
+                :uname
+                :st
+                srcUnits: (unitNamesIn dir: srcdir)
+            )
         }
+    }
+
+    # reportArch -- the typecheck-tier architecture rules. A003: a `==` / `!=`
+    # in this unit against a literal that spells a unit or type name of the
+    # program -- routing by the name of a thing that has an id. A004: a record
+    # or class field no dotted read anywhere in the program reaches -- written
+    # (constructed, assigned) and never read. A004 runs only when this unit is
+    # a program root (declares `main`), because only then is the whole program
+    # here to be read from; it then covers the types of every unit under the
+    # project's --src (a library's surface is not dead for being unused by one
+    # program, and a native type's fields are the runtime's to read) and names
+    # the field's unit and line in the message, since the finding is about the
+    # program, not a line of this file. The read evidence is by name over the
+    # whole program: conservative, so a same-named field elsewhere hides a hit
+    # rather than inventing one.
+    reportArch: function {:this prog: Node uname: StringView st: zenv.ZSymbolTable srcUnits: (List String).view} is {
+        match (
+            prog
+        ) case program then {
+            ast9: prog.ast
+            mainOp: unitOpOfName ast: ast9 :uname
+            if mainOp.isZero then return
+            namedIds: (IdSet u64)
+            {
+                di: 1.u64
+                dn: st.typing.decls.length
+                for di < dn loop {
+                    d: st.typing.decls.get i: di
+                    isNamed: d.kind.unitDecl
+                    if d.kind.typeDecl then isNamed = true
+                    if isNamed then namedIds.add item: d.name.u64
+                    di = di + 1
+                }
+            }
+            this.archWalk ast: ast9 nId: mainOp :namedIds
+            if (unitDeclaresMain ast: ast9 unitId: mainOp) == false then return
+            # the dotted member reads of the whole program, by name; a
+            # reassignment's target path is a write, not a read
+            topaths: (IdSet u64)
+            readNames: (IdSet u64)
+            {
+                ni: 1.u64
+                nn: ast9.nodes.length
+                for ni < nn loop {
+                    nd: ast9.nodes.get i: ni
+                    match (
+                        nd
+                    ) case reassignment then {
+                        topaths.add item: nd.topath.u64
+                    } else null
+                    ni = ni + 1
+                }
+                nj: 1.u64
+                for nj < nn loop {
+                    nd2: ast9.nodes.get i: nj
+                    match (
+                        nd2
+                    ) case dottedpath then {
+                        if (topaths.has item: nj) == false then {
+                            cn: ast9.nodes.get i: nd2.child.u64
+                            match (
+                                cn
+                            ) case atomid then {
+                                readNames.add item: cn.name.u64
+                            } else null
+                        }
+                    } else null
+                    nj = nj + 1
+                }
+            }
+            with uit: ast9.units.iterate do for uId: uit loop {
+                u: ast9.nodes.get i: uId.u64
+                match (
+                    u
+                ) case namedoperation then {
+                    un: zast.poolTextCopy pool: ast9.names ref: u.name
+                    if (srcUnits.contains item: un) == false then continue
+                    bodyIds: zast.unitBodyIdsAt ast: ast9 unitId: u.operation
+                    with bit: bodyIds.iterate do for mId: bit loop {
+                        m: ast9.nodes.get i: mId.u64
+                        match (
+                            m
+                        ) case namedoperation then {
+                            tn: zast.poolTextCopy pool: ast9.names ref: m.name
+                            (this.archFields
+                                ast: ast9
+                                opId: m.operation
+                                :readNames
+                                unitName: un.stringview
+                                typeName: tn.stringview
+                            )
+                        } else null
+                    }
+                } else null
+            }
+        } else null
+    }
+
+    # archFields -- A004 over one record / class definition, reported against
+    # the root file (line 0) with the field's own unit and line in the text.
+    archFields: function {:this ast: Ast.view opId: zast.nodeid readNames: (IdSet u64).view unitName: StringView typeName: StringView} is {
+        n: ast.nodes.get i: opId.u64
+        match (
+            n
+        ) case objectdef then {
+            isData: n.kind.recordDef
+            if n.kind.classDef then isData = true
+            if isData == false then return
+            if n.isNative then return
+            with it: n.isItems.iterate do for mId: it loop {
+                m: ast.nodes.get i: mId.u64
+                match (
+                    m
+                ) case namedoperation then {
+                    mop: ast.nodes.get i: m.operation.u64
+                    if (mop.functiondef) == false when (readNames.has item: m.name.u64) == false then {
+                        fnm: zast.nameTextAt :ast ref: m.name
+                        (this.warn
+                            code: "A004"
+                            msg: "field `\{typeName}.\{fnm}` (\{unitName}.z:\{m.lineno}) is written and never read anywhere in the program"
+                            line: 0
+                            col: 0
+                            width: 0
+                        )
+                    }
+                } else null
+            }
+        } else null
+    }
+
+    # archWalk -- A003 at every literal compare of the unit's subtree.
+    archWalk: function {:this ast: Ast.view nId: zast.nodeid namedIds: (IdSet u64).view} is {
+        n: ast.nodes.get i: nId.u64
+        kids: zast.childIds :ast :n
+        match (
+            n
+        ) case binop then {
+            op: atomName :ast n: (ast.nodes.get i: n.operator.u64)
+            isCmp: op.stringview == "=="
+            if op.stringview == "!=" then isCmp = true
+            if isCmp then {
+                this.archNamedLiteral :ast id: n.lhs :namedIds
+                this.archNamedLiteral :ast id: n.rhs :namedIds
+            }
+        } else null
+        with kit: kids.iterate do for c: kit loop {
+            this.archWalk :ast nId: (zast.nodeid.create from: c) :namedIds
+        }
+    }
+
+    archNamedLiteral: function {:this ast: Ast.view id: zast.nodeid namedIds: (IdSet u64).view} is {
+        n: ast.nodes.get i: id.u64
+        txt: plainLiteralText :ast :n
+        match (
+            txt
+        ) case some then {
+            nid: ast.names.find s: txt.stringview
+            if (nid.isZero) == false when (namedIds.has item: nid.u64) then {
+                p: zast.posOf :n
+                (this.warn
+                    code: "A003"
+                    msg: "`\{txt}` names a unit or a type of the program; compare its declaration or type id, not its spelling"
+                    line: p.line
+                    col: p.col
+                    width: 1
+                )
+            }
+        } case none then null
     }
 
     # reportUnusedVars -- L014 (unused parameter) + L013 (unused local). A binding whose
@@ -4184,15 +4579,7 @@ renderDiff: function {
 # build the line table, and collect parse-error diagnostics.
 # analyzeSource -- the fast-tier analysis over IN-MEMORY source: the
 # read-then-analyze wrappers and zls's live editor buffers share it.
-analyzeSource: function {
-    source: String.take
-    path: String.take
-    lineLength: u32
-    casing: bool
-    docs: bool
-    docParams: bool
-    docFields: bool
-} out Analysis is {
+analyzeSource: function {source: String.take path: String.take opts: lintopts} out Analysis is {
     root: ast.parseSource source: source.copy
     lines: linesOf src: source.stringview
     a: (Analysis
@@ -4210,41 +4597,32 @@ analyzeSource: function {
         fastToks: (List tokenize.Token)
         funcDepth: 0
         wrapGroups: (ListVal u64)
+        :opts
     )
     a.runFastChecks n: root
     a.walkTypeCasingProgram prog: root
-    if casing then a.walkCasingProgram prog: root
-    anyDocs: docs
-    if docParams then anyDocs = true
-    if docFields then anyDocs = true
-    if anyDocs then a.walkDocsProgram prog: root :docs :docParams :docFields
-    a.checkLineLength width: lineLength
+    if opts.casing then a.walkCasingProgram prog: root
+    anyDocs: opts.docs
+    if opts.docParams then anyDocs = true
+    if opts.docFields then anyDocs = true
+    if anyDocs then (a.walkDocsProgram
+        prog: root
+        docs: opts.docs
+        docParams: opts.docParams
+        docFields: opts.docFields
+    )
+    a.checkLineLength width: opts.lineLength
     a.sortEditsInPlace
     return a
 }
 
 # read a file and run the fast-tier analysis; the returned Analysis records any I/O error.
-analyzeFile: function {
-    path: String.take
-    lineLength: u32
-    casing: bool
-    docs: bool
-    docParams: bool
-    docFields: bool
-} out Analysis is {
+analyzeFile: function {path: String.take opts: lintopts} out Analysis is {
     rd: io.readText :path
     match (
         rd
     ) case ok then {
-        return (analyzeSource
-            source: rd.take
-            path: path.copy
-            :lineLength
-            :casing
-            :docs
-            :docParams
-            :docFields
-        )
+        return (analyzeSource source: rd.take path: path.copy :opts)
     } case err then {
         a: (Analysis
             path: path.copy
@@ -4261,6 +4639,7 @@ analyzeFile: function {
             fastToks: (List tokenize.Token)
             funcDepth: 0
             wrapGroups: (ListVal u64)
+            :opts
         )
         d: (zdiag.errorDiag
             errv: zast.err.ioError
@@ -4284,10 +4663,7 @@ analyzeFileFull: function {
     path: String.take
     srcdir: StringView
     systemdir: StringView
-    lineLength: u32
-    docs: bool
-    docParams: bool
-    docFields: bool
+    opts: lintopts
 } out Analysis is {
     rd: io.readText :path
     match (
@@ -4310,16 +4686,22 @@ analyzeFileFull: function {
             fastToks: (List tokenize.Token)
             funcDepth: 0
             wrapGroups: (ListVal u64)
+            :opts
         )
         a.runFastChecks n: root
         a.walkTypeCasingProgram prog: root
-        anyDocs: docs
-        if docParams then anyDocs = true
-        if docFields then anyDocs = true
-        if anyDocs then a.walkDocsProgram prog: root :docs :docParams :docFields
+        anyDocs: opts.docs
+        if opts.docParams then anyDocs = true
+        if opts.docFields then anyDocs = true
+        if anyDocs then (a.walkDocsProgram
+            prog: root
+            docs: opts.docs
+            docParams: opts.docParams
+            docFields: opts.docFields
+        )
         un: unitNameOf path: a.path.stringview
         a.checkSuffix :srcdir :systemdir uname: un.stringview
-        a.checkLineLength width: lineLength
+        a.checkLineLength width: opts.lineLength
         a.sortEditsInPlace
         return a
     } case err then {
@@ -4338,6 +4720,7 @@ analyzeFileFull: function {
             fastToks: (List tokenize.Token)
             funcDepth: 0
             wrapGroups: (ListVal u64)
+            :opts
         )
         d: (zdiag.errorDiag
             errv: zast.err.ioError
@@ -4358,25 +4741,12 @@ analyzeFileFull: function {
 # the full (typecheck) tier under --full (which also needs the project src/system dirs).
 analyzeFileTiered: function {
     path: String.take
-    full: bool
     srcdir: StringView
     systemdir: StringView
-    lineLength: u32
-    casing: bool
-    docs: bool
-    docParams: bool
-    docFields: bool
+    opts: lintopts
 } out Analysis is {
-    if full then return (analyzeFileFull
-        :path
-        :srcdir
-        :systemdir
-        :lineLength
-        :docs
-        :docParams
-        :docFields
-    )
-    return (analyzeFile :path :lineLength :casing :docs :docParams :docFields)
+    if opts.full then return (analyzeFileFull :path :srcdir :systemdir :opts)
+    return (analyzeFile :path :opts)
 }
 
 # codepointLen -- number of Unicode codepoints in `s` (UTF-8 continuation bytes 0x80..0xBF are not
@@ -4417,6 +4787,7 @@ sourceParses: function {source: String.take} out bool is {
         fastToks: (List tokenize.Token)
         funcDepth: 0
         wrapGroups: (ListVal u64)
+        opts: defaultOpts
     )
     root: ast.parseSource :source
     a.walkProgram prog: root
@@ -4591,6 +4962,7 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
             fastToks: (List tokenize.Token)
             funcDepth: 0
             wrapGroups: (ListVal u64)
+            opts: defaultOpts
         )
         root: ast.parseSource source: rd.copy
         a.delimClose = buildDelimMap src: rd.stringview lineStart: a.lineStart srcLines: a.lines
