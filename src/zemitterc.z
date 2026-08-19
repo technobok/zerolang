@@ -23643,18 +23643,6 @@ monoIsLate: function {
     return (monoDependsOnUser :ast :symtab :ctx :monoId :userList :seen)
 }
 
-# idSetHas -- membership in a Map-u64-bool id set.
-idSetHas: function {s: (IdMapV u64 value: bool) id: u64} out bool is {
-    got: s.get key: id
-    match (
-        got
-    ) case some then {
-        return got
-    } case none then {
-        return false
-    }
-}
-
 # userDefnRefsUnemitted -- does the user type have a by-value field whose type is
 # in groupList but not yet in emittedList? Map/Set fields are heap pointers in the
 # port (fwd-decl suffices) so they impose no ordering edge; a UNION is boxed so it
@@ -23665,8 +23653,8 @@ userDefnRefsUnemitted: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     typeId: ztypes.tid
-    group: (IdMapV u64 value: bool)
-    emitted: (IdMapV u64 value: bool)
+    group: IdSet u64
+    emitted: IdSet u64
 } out bool is {
     tt: symtab.reg.typetypeOf :typeId
     if tt == ztypes.ztypetype.unionType then return false
@@ -23690,8 +23678,8 @@ userDefnRefsUnemitted: function {
         cfid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
         skip: isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
         if skip == false then {
-            if (idSetHas s: group id: cfid) then {
-                if (idSetHas s: emitted id: cfid) == false then return true
+            if (group.has item: cfid) then {
+                if (emitted.has item: cfid) == false then return true
             }
         }
         fi = fi + 1
@@ -23706,8 +23694,8 @@ monoLateDepsMet: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     monoId: ztypes.tid
-    group: (IdMapV u64 value: bool)
-    emitted: (IdMapV u64 value: bool)
+    group: IdSet u64
+    emitted: IdSet u64
     seen: ListVal u64
 } out bool is {
     if (seen.contains item: monoId) then return true
@@ -23719,8 +23707,8 @@ monoLateDepsMet: function {
     for ei < en loop {
         eid: elems.get i: ei
         ceid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: eid.u64)
-        if (idSetHas s: group id: ceid) then {
-            if (idSetHas s: emitted id: ceid) == false then return false
+        if (group.has item: ceid) then {
+            if (emitted.has item: ceid) == false then return false
         }
         emo: originTidOf :symtab tid: (ztypes.tid.create from: ceid.u64)
         if emo > 0 then {
@@ -24402,16 +24390,16 @@ emitUserStructsOrdered: function {
         :last
     )
     # membership id-set mirroring lateGroup (the list keeps emission order)
-    lateSet: (IdMapV u64 value: bool)
+    lateSet: (IdSet u64)
     li0: u64
     ln0: lateGroup.length
     for li0 < ln0 loop {
         lv0: lateGroup.get i: li0
-        lateSet.set key: lv0 value: true
+        lateSet.add item: lv0
         li0 = li0 + 1
     }
     # closure: a user struct embedding a late-group member by value is late too
-    emptySet: (IdMapV u64 value: bool)
+    emptySet: (IdSet u64)
     changed: true
     for changed loop {
         changed = false
@@ -24419,7 +24407,7 @@ emitUserStructsOrdered: function {
         un: userList.length
         for ui < un loop {
             uid: userList.get i: ui
-            if (idSetHas s: lateSet id: uid) == false then {
+            if (lateSet.has item: uid) == false then {
                 if (userDefnRefsUnemitted
                     :ast
                     :symtab
@@ -24429,7 +24417,7 @@ emitUserStructsOrdered: function {
                     emitted: emptySet
                 ) then {
                     lateGroup.append uid.u64
-                    lateSet.set key: uid value: true
+                    lateSet.add item: uid
                     changed = true
                 }
             }
@@ -24442,14 +24430,17 @@ emitUserStructsOrdered: function {
     n0: userList.length
     for e0 < n0 loop {
         uid0: userList.get i: e0
-        if (idSetHas
-            s: lateSet
-            id: uid0
-        ) == false then emitUserTypeById :ast :symtab :ctx tid: (ztypes.tid.create from: uid0) :buf
+        if (lateSet.has item: uid0) == false then (emitUserTypeById
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: uid0)
+            :buf
+        )
         e0 = e0 + 1
     }
     # fixpoint: emit late monos + late-user structs in dependency order
-    emittedSet: (IdMapV u64 value: bool)
+    emittedSet: (IdSet u64)
     totalPend: lateGroup.length
     emittedCount: u64
     done: false
@@ -24460,7 +24451,7 @@ emitUserStructsOrdered: function {
         pn: lateGroup.length
         for pi < pn loop {
             x: lateGroup.get i: pi
-            if (idSetHas s: emittedSet id: x) == false then {
+            if (emittedSet.has item: x) == false then {
                 xorigin: originTidOf :symtab tid: (ztypes.tid.create from: x.u64)
                 if xorigin > 0 then {
                     seen: (ListVal u64)
@@ -24481,7 +24472,7 @@ emitUserStructsOrdered: function {
                             monoId: (ztypes.tid.create from: x.u64)
                             :buf
                         )
-                        emittedSet.set key: x value: true
+                        emittedSet.add item: x
                         emittedCount = emittedCount + 1
                         progressed = true
                     }
@@ -24495,7 +24486,7 @@ emitUserStructsOrdered: function {
                         emitted: emittedSet
                     ) == false then {
                         emitUserTypeById :ast :symtab :ctx tid: (ztypes.tid.create from: x.u64) :buf
-                        emittedSet.set key: x value: true
+                        emittedSet.add item: x
                         emittedCount = emittedCount + 1
                         progressed = true
                     }
@@ -24517,7 +24508,7 @@ emitUserStructsOrdered: function {
         f1: lateGroup.length
         for f0 < f1 loop {
             x2: lateGroup.get i: f0
-            if (idSetHas s: emittedSet id: x2) == false then {
+            if (emittedSet.has item: x2) == false then {
                 xo2: originTidOf :symtab tid: (ztypes.tid.create from: x2.u64)
                 if xo2 > 0 then {
                     (emitMonoById
@@ -24531,7 +24522,7 @@ emitUserStructsOrdered: function {
                 } else {
                     emitUserTypeById :ast :symtab :ctx tid: (ztypes.tid.create from: x2.u64) :buf
                 }
-                emittedSet.set key: x2 value: true
+                emittedSet.add item: x2
             }
             f0 = f0 + 1
         }

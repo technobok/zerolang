@@ -369,7 +369,7 @@ ZTyping: class {
     pendingDefaultId: (IdMapV u64 value: u64)
     pendingDefaultName: (IdMapR u64 value: String)
     constructedTypes: (IdMapV u64 value: bool)
-    collectionChildrenBuilt: (IdMapV u64 value: bool)
+    collectionChildrenBuilt: (IdSet u64)
     # per-call-argument disposition (take/lock/borrow); absent = valtype/none.
     # tooling-only; the emitter never reads it.
     argDisposition: (IdMapV u64 value: ztypes.zparamownership)
@@ -402,10 +402,10 @@ ZTyping: class {
     # so it answers the same question the lock rules do rather than guessing at
     # it a second time. `atomVariableId` cannot serve: it stamps an assignment
     # TARGET like any other use, so a read and a write look identical there.
-    variableMutated: (IdMapV ztypes.vid value: bool)
+    variableMutated: (IdSet ztypes.vid)
     # vid -> the binding's value was MOVED out (ownership transfer recorded at
     # the symtab's invalidate choke point); a moved local is not viewable
-    variableMoved: (IdMapV ztypes.vid value: bool)
+    variableMoved: (IdSet ztypes.vid)
     # dotted-path nodeid -> the internal member name a public alias resolved to
     aliasInternalName: (IdMapR u64 value: String)
     implicitCreate: (IdMapV u64 value: u64)
@@ -914,16 +914,17 @@ ZTyping: class {
         parentTypeId: ztypes.tid
         nameId: zast.nameid
     } out u64 is {
-        r9: u64
         i9: u64
         n9: t.pendParent.length
         for i9 < n9 loop {
             hit9: (t.pendParent.get i: i9) == parentTypeId
             if hit9 then hit9 = (t.pendName.get i: i9) == nameId.u64
-            if hit9 then r9 = t.pendType.get i: i9
+            # declPendWrite keeps one entry per (parent, name), so the first
+            # match is the only one
+            if hit9 then return (t.pendType.get i: i9)
             i9 = i9 + 1
         }
-        return r9
+        return 0
     }
 
     # declPendCount -- how many pended pre-index writes `parentTypeId` holds.
@@ -2124,7 +2125,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingDefaultId: (IdMapV u64 value: u64)
         pendingDefaultName: (IdMapR u64 value: String)
         constructedTypes: (IdMapV u64 value: bool)
-        collectionChildrenBuilt: (IdMapV u64 value: bool)
+        collectionChildrenBuilt: (IdSet u64)
         argDisposition: (IdMapV u64 value: ztypes.zparamownership)
         callGenericBinding: (MapVV callslot value: u64)
         binopOwner: (IdMapV u64 value: ztypes.tid)
@@ -2136,8 +2137,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         nodeType: (ListVal ztypes.tid capacity: nodeEst + (nodeEst / 4) + 1)
         callKind: (IdMapV u64 value: zast.callkind)
         atomVariableId: (IdMapV u64 value: ztypes.vid capacity: nodeEst / 4)
-        variableMutated: (IdMapV ztypes.vid value: bool)
-        variableMoved: (IdMapV ztypes.vid value: bool)
+        variableMutated: (IdSet ztypes.vid)
+        variableMoved: (IdSet ztypes.vid)
         aliasInternalName: (IdMapR u64 value: String)
         implicitCreate: (IdMapV u64 value: u64)
         variableZtype: (IdMapV u64 value: u64)
