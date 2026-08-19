@@ -22,6 +22,23 @@ fill: function {m: (IdMapV u64 value: u64) n: u64} is {
     }
 }
 
+# `.copy` out of a BORROWED entry is an owned value. The entry is readonly --
+# iterateItems takes a `.view` receiver, so the element inherits a shared pin --
+# and a copy of a readonly reference is still owned, so it may be moved on.
+copyOut: function {m: (IdMapR u64 value: String) dst: (ListRef String)} is {
+    with cit: m.iterateItems do for ce: cit loop {
+        cv: ce.value.copy
+        dst.append from: cv
+    }
+}
+
+# and a field-resident IdMap is readable AND iterable through a readonly holder
+sumHolder: function {h: Holder.view} out u64 is {
+    t: u64
+    with hit: h.byName.iterateItems do for he: hit loop t = t + he.value
+    return t
+}
+
 main: function is {
     m: (IdMapV u64 value: u64)
     fill :m n: 200
@@ -126,6 +143,11 @@ main: function is {
         hi = hi + 1
     }
     print "holders=\{hs.length}"
+
+    owned: (ListRef String)
+    copyOut m: ents dst: owned
+    print "copied=\{owned.length} first=\{owned.get i: 0}"
+    print "viewsum=\{sumHolder h: (hs.get i: 0)}"
 
     # empty containers allocate nothing at all
     e: (IdMapV u64 value: u64)
