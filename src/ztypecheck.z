@@ -19271,8 +19271,8 @@ stampTruthyCond: function {
 }
 
 ArmPredFact: class {
-    subject: String
-    armName: String
+    subject: zast.nameid
+    armName: zast.nameid
     fullTid: ztypes.tid
     negated: bool
 }
@@ -19284,20 +19284,19 @@ predDottedCore: function {ast: Ast.view
     st: zenv.ZSymbolTable.view
     nid: u64
     parent: Node.view
-    childName: StringView
+    childName: zast.nameid
     boolId: u64
     negated: bool
 } out Option ArmPredFact is {
     ptid9: optTidOr o: (st.typing.dpArmPredicate.get key: nid) d: ztypes.tid
     if ptid9.isZero then return (Option.none ArmPredFact)
     if ptid9.u64 == boolId then return (Option.none ArmPredFact)
-    sn9: bareAtomName :ast n: parent
-    if sn9.length == 0 then return (Option.none ArmPredFact)
-    if childName.length == 0 then return (Option.none ArmPredFact)
-    an9: childName.string
+    sn9: bareAtomNameId :ast n: parent
+    if sn9.isZero then return (Option.none ArmPredFact)
+    if childName.isZero then return (Option.none ArmPredFact)
     return (Option.some (ArmPredFact
         subject: sn9
-        armName: an9
+        armName: childName
         fullTid: (ztypes.tid.create from: ptid9.u64)
         :negated
     ))
@@ -19321,13 +19320,12 @@ predDottedFact: function {ast: Ast.view
             :negated
         )
     } case dottedpath then {
-        cnc9: atomName :ast n: (ast.nodes.get i: n.child.u64)
         return (predDottedCore
             :ast
             :st
             nid: n.nodeid.u64
             parent: (ast.nodes.get i: n.parent.u64)
-            childName: cnc9.stringview
+            childName: (bareAtomNameId :ast n: (ast.nodes.get i: n.child.u64))
             :boolId
             :negated
         )
@@ -19383,13 +19381,12 @@ predFactOf: function {
     {
         ta0: truthyCondArmOf :st nid: (nodeId :n).u64
         if ta0 > 0 then {
-            sj0: bareAtomName :ast :n
+            sj0: bareAtomNameId :ast :n
             ft0: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (nodeId :n).u64
-            if sj0.length > 0 when (ft0.isZero) == false then {
-                am0: zast.nameTextCopy :ast ref: (zast.nameid.create from: ta0.u32.orPanic)
+            if (sj0.isZero) == false when (ft0.isZero) == false then {
                 return (Option.some (ArmPredFact
                     subject: sj0
-                    armName: am0
+                    armName: (zast.nameid.create from: ta0.u32.orPanic)
                     fullTid: ft0
                     negated: false
                 ))
@@ -19401,7 +19398,6 @@ predFactOf: function {
     ) case expression then {
         return (predFactOf :ast :st n: (ast.nodes.get i: n.expression.u64) :boolId)
     } case dottedpath then {
-        cn9: atomName :ast n: (ast.nodes.get i: n.child.u64)
         # `.true` / `.false` on a predicate: which side it is comes from the
         # stamped type's arm ORDER, never from the spelling of the segment.
         sd9: (armSuffixSide
@@ -19430,7 +19426,7 @@ predFactOf: function {
             :st
             nid: n.nodeid.u64
             parent: (ast.nodes.get i: n.parent.u64)
-            childName: cn9.stringview
+            childName: (bareAtomNameId :ast n: (ast.nodes.get i: n.child.u64))
             :boolId
             negated: false
         )
@@ -19490,8 +19486,13 @@ predFactOf: function {
 # the bare name becomes the payload, exactly as in a match arm. A null
 # payload keeps the outer type (nothing to read). Condition-derived
 # call sites only -- construction narrowing never routes through here.
-shadowCollapseIfSingle: function {ast: Ast st: zenv.ZSymbolTable name: StringView fullTid: u64} is {
-    arm9: st.narrowedArmOf nameId: (nameIdOf :ast :name) fullTypeId: fullTid
+shadowCollapseIfSingle: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    name: zast.nameid
+    fullTid: u64
+} is {
+    arm9: st.narrowedArmOf nameId: name fullTypeId: fullTid
     if arm9.isZero then return
     po9: (st.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: fullTid.u64)
@@ -19502,7 +19503,7 @@ shadowCollapseIfSingle: function {ast: Ast st: zenv.ZSymbolTable name: StringVie
     ) case some then {
         if (st.reg.typetypeOf typeId: (ztypes.tid.create from: po9.u64)) == ztypes.ztypetype.nullType then return
         (st.narrow
-            nameId: (nameIdOf :ast :name)
+            nameId: name
             toTypeId: po9
             subtypeName: arm9
             shadow: true
@@ -19512,7 +19513,7 @@ shadowCollapseIfSingle: function {ast: Ast st: zenv.ZSymbolTable name: StringVie
             :ast
             subject: name
             parentTid: fullTid
-            armName: (zast.poolTextAt pool: ast.names ref: arm9).stringview
+            armName: arm9
             payloadTid: (ztypes.tid.create from: po9.u64)
         )
     } case none then null
@@ -19529,36 +19530,35 @@ applyPredFact: function {ast: Ast st: zenv.ZSymbolTable f: ArmPredFact.view hold
     if holds when (f.negated) == false then doNarrow9 = true
     if (holds) == false when f.negated then doNarrow9 = true
     if doNarrow9 then {
-        po9: (st.typing.declChildOf
-            pool: ast.names
+        po9: (st.typing.declChildOfId
             parentTypeId: f.fullTid
-            name: f.armName.stringview
+            nameId: f.armName
         )
         match (
             po9
         ) case some then {
             (st.narrow
-                nameId: (nameIdOf :ast name: f.subject.stringview)
+                nameId: f.subject
                 toTypeId: po9
-                subtypeName: (nameIdOf :ast name: f.armName.stringview)
+                subtypeName: f.armName
                 shadow: true
             )
             (armPayloadReadonly
                 :st
                 :ast
-                subject: f.subject.stringview
+                subject: f.subject
                 parentTid: f.fullTid
-                armName: f.armName.stringview
+                armName: f.armName
                 payloadTid: (ztypes.tid.create from: po9.u64)
             )
         } case none then null
     } else {
         (st.exclude
-            nameId: (nameIdOf :ast name: f.subject.stringview)
-            subtypeName: (nameIdOf :ast name: f.armName.stringview)
+            nameId: f.subject
+            subtypeName: f.armName
             fullTypeId: f.fullTid
         )
-        shadowCollapseIfSingle :ast :st name: f.subject.stringview fullTid: f.fullTid
+        shadowCollapseIfSingle :ast :st name: f.subject fullTid: f.fullTid
     }
 }
 
@@ -19570,11 +19570,11 @@ postGuardRecord: function {
     ast: Ast
     st: zenv.ZSymbolTable
     stmtNid: u32
-    subject: StringView
+    subject: zast.nameid
     fullTid: ztypes.tid
 } is {
-    if (st.isShadowNarrowed nameId: (nameIdOf :ast name: subject)) == false then return
-    arm9: st.getSubtypeName nameId: (nameIdOf :ast name: subject)
+    if (st.isShadowNarrowed nameId: subject) == false then return
+    arm9: st.getSubtypeName nameId: subject
     if arm9.isZero then return
     po9: (st.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: fullTid.u64)
@@ -19584,11 +19584,14 @@ postGuardRecord: function {
         po9
     ) case some then {
         if (st.reg.typetypeOf typeId: (ztypes.tid.create from: po9.u64)) == ztypes.ztypetype.nullType then return
-        sn9: subject.string
+        # postGuardName and the mangled receiver are SPELLED into the emitted
+        # C, so the subject renders here; every other use of it is an id.
+        subjTx9: zast.poolTextCopy pool: ast.names ref: subject
+        sn9: subjTx9.copy
         st.typing.postGuardName.set key: stmtNid.u64 value: sn9
-        pgv9: optVidOr o: (st.lookupVarId nameId: (nameIdOf :ast name: subject))
+        pgv9: optVidOr o: (st.lookupVarId nameId: subject)
         st.typing.postGuardVarId.set key: stmtNid.u64 value: pgv9
-        rv9: ztypes.mangleVarName name: subject
+        rv9: ztypes.mangleVarName name: subjTx9.stringview
         st.typing.postGuardRecv.set key: stmtNid.u64 value: rv9
         st.typing.postGuardTid.set key: stmtNid.u64 value: fullTid
         av9: zast.poolTextCopy pool: ast.names ref: arm9
@@ -21101,8 +21104,8 @@ checkIf: function {
             mvf9: cfacts9.pop
             if dvgC9 then {
                 gf9: (ArmPredFact
-                    subject: mvf9.subject.copy
-                    armName: mvf9.armName.copy
+                    subject: mvf9.subject
+                    armName: mvf9.armName
                     fullTid: mvf9.fullTid
                     negated: mvf9.negated
                 )
@@ -21185,30 +21188,28 @@ checkIf: function {
     # clause if means its condition was TRUE. Apply that knowledge (the
     # exclusion collapse shadows to the payload where one arm remains) and
     # record it for the emitter's block aliasing.
-    pgSubj9: String
+    pgSubj9: zast.nameid
     pgTid9: u64
     pgApplied9: u64
     with gfit9: guardFacts9.iterate do for gf2: gfit9 loop {
         applyPredFact :ast :st f: gf2 holds: false
-        pgs9: gf2.subject.copy
-        pgSubj9 = pgs9
+        pgSubj9 = gf2.subject
         pgTid9 = gf2.fullTid
         pgApplied9 = pgApplied9 + 1
     }
     if elseDvg9 when ifnode.clauses.length == 1 when accFacts.length == 1 then {
         af0: accFacts.get i: 0
         applyPredFact :ast :st f: af0 holds: true
-        pga9: af0.subject.copy
-        pgSubj9 = pga9
+        pgSubj9 = af0.subject
         pgTid9 = af0.fullTid
         pgApplied9 = pgApplied9 + 1
     }
-    if pgApplied9 == 1 when pgSubj9.length > 0 then {
+    if pgApplied9 == 1 when (pgSubj9.isZero) == false then {
         (postGuardRecord
             :ast
             :st
             stmtNid: ifnode.nodeid
-            subject: pgSubj9.stringview
+            subject: pgSubj9
             fullTid: (ztypes.tid.create from: pgTid9.u64)
         )
     }
@@ -22269,18 +22270,18 @@ nameIsReadonly: function {st: zenv.ZSymbolTable.view ast: Ast.view name: StringV
 armPayloadReadonly: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    subject: StringView
+    subject: zast.nameid
     parentTid: u64
-    armName: StringView
+    armName: zast.nameid
     payloadTid: ztypes.tid
 } is {
-    if subject.length == 0 then return
+    if subject.isZero then return
     if parentTid == 0 then return
     if payloadTid.isZero then return
     if (typeIsReftype :st tid: (ztypes.tid.create from: payloadTid.u64)) == false then return
     ao9: (st.typing.declOwnershipOfId
         parentTypeId: (ztypes.tid.create from: parentTid.u64)
-        nameId: (nameIdOf :ast name: armName)
+        nameId: armName
     )
     apr9: false
     match (
@@ -22290,11 +22291,11 @@ armPayloadReadonly: function {
         if ao9 == ztypes.zparamownership.holdMode then apr9 = true
     } case none then null
     if (apr9) == false then return
-    svo9: st.lookupVarId nameId: (nameIdOf :ast name: subject)
+    svo9: st.lookupVarId nameId: subject
     if svo9.none then return
     spa9: (List String)
-    snm9: subject.string
-    spa9.append snm9
+    # the lock path is spelled, so the subject renders here and only here
+    spa9.append (zast.poolTextCopy pool: ast.names ref: subject)
     sho9: (ztypes.zlockholder
         kind: ztypes.zlockholderkind.varKind
         id: svo9
@@ -26137,9 +26138,9 @@ checkCase: function {
                     (armPayloadReadonly
                         :st
                         :ast
-                        subject: targetName.stringview
+                        subject: (nameIdOf :ast name: targetName.stringview)
                         parentTid: subjT
-                        armName: armName.stringview
+                        armName: (nameIdOf :ast name: armName.stringview)
                         payloadTid: (ztypes.tid.create from: armo9.u64)
                     )
                 } case none then null
@@ -26173,7 +26174,12 @@ checkCase: function {
                     fullTypeId: subjT
                 )
             }
-            shadowCollapseIfSingle :ast :st name: targetName.stringview fullTid: subjT
+            (shadowCollapseIfSingle
+                :ast
+                :st
+                name: (nameIdOf :ast name: targetName.stringview)
+                fullTid: subjT
+            )
         }
         walkBodyAt :st :unitDecl :ast bodyId: casenode.elseclause
         ecr9: ast.nodes.get i: casenode.elseclause.u64
@@ -26268,12 +26274,17 @@ checkCase: function {
             )
         }
         if diverging.length > 0 then {
-            shadowCollapseIfSingle :ast :st name: targetName.stringview fullTid: subjT
+            (shadowCollapseIfSingle
+                :ast
+                :st
+                name: (nameIdOf :ast name: targetName.stringview)
+                fullTid: subjT
+            )
             (postGuardRecord
                 :ast
                 :st
                 stmtNid: casenode.nodeid
-                subject: targetName.stringview
+                subject: (nameIdOf :ast name: targetName.stringview)
                 fullTid: subjT
             )
         }
