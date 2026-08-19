@@ -309,16 +309,30 @@ Parser: class {
     }
 
     mkError: function {:this tok: zlexer.Token.view code: zast.err msg: String.take} out Node is {
-        return (this.mkErrorAt
-            pos: (zlexer.tokpos
-                fsno: tok.fsno
-                lineno: tok.lineno
-                colno: tok.colno
-                width: tok.tokstr.length.u32.orPanic
-            )
-            :code
-            :msg
+        pos: (zlexer.tokpos
+            fsno: tok.fsno
+            lineno: tok.lineno
+            colno: tok.colno
+            width: tok.tokstr.length.u32.orPanic
         )
+        # an ERR token is the lexer's own diagnosis -- the characters form no
+        # token -- which is more precise than what the parser expected here;
+        # inside a string literal the same fact is an escape the literal rejects
+        if tok.toktype == zlexer.toktype.errTok then {
+            if code.badString then {
+                return (this.mkErrorAt
+                    :pos
+                    code: zast.err.badString
+                    msg: "unknown escape or character '\{tok.tokstr}' in string literal"
+                )
+            }
+            return (this.mkErrorAt
+                :pos
+                code: zast.err.badToken
+                msg: "unexpected characters '\{tok.tokstr}'"
+            )
+        }
+        return (this.mkErrorAt :pos :code :msg)
     }
 
     # Error node at a token span. The caller that only needs to report where
