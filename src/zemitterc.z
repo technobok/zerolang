@@ -1798,7 +1798,7 @@ litIndexOf: function {ctx: Ctx nid: u64} out u64 is {
     for i < n loop {
         v: ctx.litIds.get :i
         if v == nid then {
-            ctx.usedLits.set key: nid value: true
+            ctx.usedLits.add item: nid
             return i + 1
         }
         i = i + 1
@@ -2445,7 +2445,7 @@ Ctx: class {
     # type id -> C name base, composed once at emit start; "" for a hole
     cnames: (List String)
     litIds: (ListVal u64)
-    usedLits: (MapVV u64 value: bool)
+    usedLits: (IdSet u64)
     # the FOLDED-string pool, beside the AST-literal one. A folded value has no
     # literal to point at -- a concatenation and a selected branch were never
     # written anywhere -- so litIndexOf cannot serve it. Rendered `_zcsN` in the
@@ -2511,9 +2511,9 @@ Ctx: class {
     mainUnitId: u64
     condDepth: u64
     emitErrors: (List String)
-    emittedUserTypes: (MapVV u64 value: bool)
+    emittedUserTypes: (IdSet u64)
     tagStems: (MapRV String value: u64)
-    fwdDeclaredTypes: (MapVV u64 value: bool)
+    fwdDeclaredTypes: (IdSet u64)
     tmplCache: (Map String value: String)
     ioCanonC: (Map String value: String)
     # natives.tbl, read once at emit start: qualified path -> the C body, plus
@@ -2549,10 +2549,10 @@ Ctx: class {
     fragTypeNames: (List String)
     fragTypeTids: (ListVal u64)
     # the type ids those rows gate, and the ones the program actually built
-    demandGatedTids: (MapVV u64 value: bool)
-    usedTypeIds: (MapVV u64 value: bool)
+    demandGatedTids: (IdSet u64)
+    usedTypeIds: (IdSet u64)
     # conformance rows whose helper set is already in the buffer, by row index
-    emittedConformance: (MapVV u64 value: bool)
+    emittedConformance: (IdSet u64)
     # the units the table orders, in that order. A unit with rows that is not
     # named here runs after those that are.
     unitOrder: (List String)
@@ -3568,7 +3568,7 @@ needsHasM: function {ctx: Ctx.view uname: StringView memb: StringView} out bool 
 
 # typeUseAdd -- record that the program constructed this type.
 typeUseAdd: function {ctx: Ctx tid: ztypes.tid} is {
-    ctx.usedTypeIds.set key: tid.u64 value: true
+    ctx.usedTypeIds.add item: tid.u64
 }
 
 # typeStructEmitted9 -- this emitter wrote the type's struct, which is the
@@ -3576,45 +3576,24 @@ typeUseAdd: function {ctx: Ctx tid: ztypes.tid} is {
 # methods, so emitting them for a type the program never reached names natives
 # that were never loaded.
 typeStructEmitted9: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    o9: ctx.emittedUserTypes.get key: tid
-    match (
-        o9
-    ) case some then {
-        return o9
-    } case none then {
-        return false
-    }
+    return (ctx.emittedUserTypes.has item: tid)
 }
 
 # conformanceRowMark9 / conformanceRowEmitted9 -- a conformance row is one
 # (impl, spec, label) triple and produces one set of wrappers, a vtable and the
 # two create helpers. Emitted once, keyed by the row's index in the table.
 conformanceRowMark9: function {ctx: Ctx row: u64} is {
-    ctx.emittedConformance.set key: row value: true
+    ctx.emittedConformance.add item: row
 }
 
 conformanceRowEmitted9: function {ctx: Ctx.view row: u64} out bool is {
-    o9: ctx.emittedConformance.get key: row
-    match (
-        o9
-    ) case some then {
-        return o9
-    } case none then {
-        return false
-    }
+    return (ctx.emittedConformance.has item: row)
 }
 
 # typeIsUsed -- the program constructed this type, so the rows its
 # construction reaches have fired.
 typeIsUsed: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    o9: ctx.usedTypeIds.get key: tid
-    match (
-        o9
-    ) case some then {
-        return o9
-    } case none then {
-        return false
-    }
+    return (ctx.usedTypeIds.has item: tid)
 }
 
 # typeDemandMet -- may this type's body be emitted? A type no fragment row
@@ -3622,14 +3601,7 @@ typeIsUsed: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 # because its struct exists to be dereferenced by a fragment that is itself
 # demand-loaded. The gating set comes from natives.tbl, not from a list here.
 typeDemandMet: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    g9: ctx.demandGatedTids.get key: tid
-    match (
-        g9
-    ) case some then {
-        if (g9) == false then return true
-    } case none then {
-        return true
-    }
+    if (ctx.demandGatedTids.has item: tid) == false then return true
     return (typeIsUsed :ctx :tid)
 }
 
@@ -20641,7 +20613,7 @@ emitC: function {
         :svC
         cnames: cnames9
         :litIds
-        usedLits: (MapVV u64 value: bool)
+        usedLits: (IdSet u64)
         constLits: (List String)
         tailRetActive: false
         defUnitId: (MapVV u64 value: u64)
@@ -20682,9 +20654,9 @@ emitC: function {
         genPayC: "".string
         genHasValue: false
         curThisTid: ztypes.tid
-        emittedUserTypes: (MapVV u64 value: bool)
+        emittedUserTypes: (IdSet u64)
         tagStems: (MapRV String value: u64)
-        fwdDeclaredTypes: (MapVV u64 value: bool)
+        fwdDeclaredTypes: (IdSet u64)
         tmplCache: (Map String value: String)
         ioCanonC: (Map String value: String)
         nativeTbl: (Map String value: String)
@@ -20699,9 +20671,9 @@ emitC: function {
         fragNames: (List String)
         fragTypeNames: (List String)
         fragTypeTids: (ListVal u64)
-        demandGatedTids: (MapVV u64 value: bool)
-        usedTypeIds: (MapVV u64 value: bool)
-        emittedConformance: (MapVV u64 value: bool)
+        demandGatedTids: (IdSet u64)
+        usedTypeIds: (IdSet u64)
+        emittedConformance: (IdSet u64)
         unitOrder: (List String)
         argHoistNames: (List String)
         argHoistVals: (List String)
@@ -20861,10 +20833,7 @@ emitC: function {
     pn9: ctx.litIds.length
     for pi9 < pn9 loop {
         plid9: ctx.litIds.get i: pi9
-        puo9: ctx.usedLits.get key: plid9
-        match (
-            puo9
-        ) case some then {
+        if (ctx.usedLits.has item: plid9) then {
             pt9: litTexts.get i: pi9
             ptv9: pt9.stringview
             pesc9: cEscape text: ptv9
@@ -20874,7 +20843,7 @@ emitC: function {
             poolBuf.append pl19
             pl29: "static const \{ctx.svC}_t _zs\{pidx9} = { .data = _zs\{pidx9}_d, .size = \{pblen9} };\n"
             poolBuf.append pl29
-        } case none then null
+        }
         pi9 = pi9 + 1
     }
     # the folded-string pool, written after the literal one and into the same
@@ -21608,13 +21577,8 @@ emitUnionMono: function {
     tid: ztypes.tid
     buf: String.borrow
 } is {
-    egu9: ctx.emittedUserTypes.get key: tid
-    match (
-        egu9
-    ) case some then {
-        return
-    } case none then null
-    ctx.emittedUserTypes.set key: tid.u64 value: true
+    if (ctx.emittedUserTypes.has item: tid) then return
+    ctx.emittedUserTypes.add item: tid.u64
     anames: (List String)
     aids: (ListVal u64)
     aidsNm: (ListVal u64)
@@ -23035,7 +22999,7 @@ bindFragTypeTids9: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vi
             }
         }
         ctx.fragTypeTids.append found9.u64
-        if found9 > 0 then ctx.demandGatedTids.set key: found9.u64 value: true
+        if found9 > 0 then ctx.demandGatedTids.add item: found9.u64
         i9 = i9 + 1
     }
 }
@@ -23228,13 +23192,8 @@ emitIoStdStreams: function {
 emitIoFileClass: function {ctx: Ctx buf: String.borrow} is {
     fid: ztypes.tid.create from: ctx.ioFileTid
     if fid.isZero then return
-    ego9: ctx.emittedUserTypes.get key: fid
-    match (
-        ego9
-    ) case some then {
-        return
-    } case none then null
-    ctx.emittedUserTypes.set key: fid.u64 value: true
+    if (ctx.emittedUserTypes.has item: fid) then return
+    ctx.emittedUserTypes.add item: fid.u64
     fc: ctxCname :ctx tid: fid
     if (isFwdDeclared :ctx tid: fid) then {
         l0: "struct \{fc}_t {\n    int32_t fd;\n    bool closed;\n};\n"
@@ -23255,13 +23214,8 @@ emitIoFileClass: function {ctx: Ctx buf: String.borrow} is {
 emitNetFdClass: function {ctx: Ctx tid: u64 buf: String.borrow} is {
     fid: ztypes.tid.create from: tid
     if fid.isZero then return
-    ego9: ctx.emittedUserTypes.get key: fid
-    match (
-        ego9
-    ) case some then {
-        return
-    } case none then null
-    ctx.emittedUserTypes.set key: fid.u64 value: true
+    if (ctx.emittedUserTypes.has item: fid) then return
+    ctx.emittedUserTypes.add item: fid.u64
     fc: ctxCname :ctx tid: fid
     if (isFwdDeclared :ctx tid: fid) then {
         l0: "struct \{fc}_t {\n    int32_t fd;\n    bool closed;\n};\n"
@@ -23390,14 +23344,7 @@ preEmitEmbeddedTypes: function {
 # body must be emitted as a named `struct X_t { ... };` (the typedef is already
 # in the forward-decl block).
 isFwdDeclared: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    o: ctx.fwdDeclaredTypes.get key: tid
-    match (
-        o
-    ) case some then {
-        return o
-    } case none then {
-        return false
-    }
+    return (ctx.fwdDeclaredTypes.has item: tid)
 }
 
 # emitMainFwdDecls -- forward-declare every RECORD + UNION + CLASS type whose
@@ -23451,7 +23398,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                             tid: (ztypes.tid.create from: t.u64)
                         ) == false when (isBoxTid :symtab tid: t) == false then {
                             cn: ctxCname :ctx tid: (ztypes.tid.create from: t.u64)
-                            ctx.fwdDeclaredTypes.set key: t.u64 value: true
+                            ctx.fwdDeclaredTypes.add item: t.u64
                             l0: "typedef struct \{cn}_t \{cn}_t;\n"
                             buf.append l0
                             needDtor: isUnion
@@ -23491,7 +23438,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                 if (isBoxTid :symtab tid: (ztypes.tid.create from: t.u64)) then fwdM9 = false
                 if fwdM9 then {
                     cnX: ctxCname :ctx tid: (ztypes.tid.create from: t.u64)
-                    ctx.fwdDeclaredTypes.set key: t.u64 value: true
+                    ctx.fwdDeclaredTypes.add item: t.u64
                     lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
                     buf.append lx0
                     fwdDtor9: false
@@ -24066,12 +24013,9 @@ ensureFwdStruct: function {
         if (originIsTid :symtab :tid originTid: ctx.arrayOriginTid) then isStruct = false
     }
     if isStruct then {
-        o: ctx.fwdDeclaredTypes.get key: tid
-        match (
-            o
-        ) case some then null case none then {
+        if (ctx.fwdDeclaredTypes.has item: tid) == false then {
             cn: ctxCname :ctx :tid
-            ctx.fwdDeclaredTypes.set key: tid.u64 value: true
+            ctx.fwdDeclaredTypes.add item: tid.u64
             l0: "typedef struct \{cn}_t \{cn}_t;\n"
             buf.append l0
         }
@@ -25208,13 +25152,8 @@ emitOneFacet: function {
     tid: ztypes.tid
     buf: String.borrow
 } is {
-    egf9: ctx.emittedUserTypes.get key: tid
-    match (
-        egf9
-    ) case some then {
-        return
-    } case none then null
-    ctx.emittedUserTypes.set key: tid.u64 value: true
+    if (ctx.emittedUserTypes.has item: tid) then return
+    ctx.emittedUserTypes.add item: tid.u64
     pbase: ctxCname :ctx :tid
     impls9: (ListVal u64)
     facetImplTids :symtab :tid acc: impls9
@@ -25307,13 +25246,8 @@ emitOneProtocol: function {
     name: StringView
     buf: String.borrow
 } is {
-    egp9: ctx.emittedUserTypes.get key: tid
-    match (
-        egp9
-    ) case some then {
-        return
-    } case none then null
-    ctx.emittedUserTypes.set key: tid.u64 value: true
+    if (ctx.emittedUserTypes.has item: tid) then return
+    ctx.emittedUserTypes.add item: tid.u64
     pbase: ctxCname :ctx :tid
     mnames: (List String)
     mids: (ListVal u64)
@@ -27287,13 +27221,8 @@ emitOneVariant: function {
     tid: ztypes.tid
     buf: String.borrow
 } is {
-    egv9: ctx.emittedUserTypes.get key: tid
-    match (
-        egv9
-    ) case some then {
-        return
-    } case none then null
-    ctx.emittedUserTypes.set key: tid.u64 value: true
+    if (ctx.emittedUserTypes.has item: tid) then return
+    ctx.emittedUserTypes.add item: tid.u64
     anames: (List String)
     aids: (ListVal u64)
     aidsNm: (ListVal u64)
@@ -27567,13 +27496,8 @@ emitOneRecord: function {
     tid: ztypes.tid
     buf: String.borrow
 } is {
-    egr9: ctx.emittedUserTypes.get key: tid
-    match (
-        egr9
-    ) case some then {
-        return
-    } case none then null
-    ctx.emittedUserTypes.set key: tid.u64 value: true
+    if (ctx.emittedUserTypes.has item: tid) then return
+    ctx.emittedUserTypes.add item: tid.u64
     if (isTypedefType :symtab :tid) then return
     fnames: (List String)
     fids: (ListVal u64)
