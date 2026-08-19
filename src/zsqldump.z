@@ -151,7 +151,7 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS ast_nodes (node_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, token_id INTEGER, name TEXT, file_id INTEGER, start_line INTEGER, start_col INTEGER, synth_origin TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS unit (unit_id INTEGER PRIMARY KEY, name TEXT NOT NULL, is_main INTEGER NOT NULL, unit_type_id INTEGER);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, is_valtype INTEGER, is_generic INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, destructor_name TEXT, is_heap_allocated INTEGER, defined_in_unit TEXT);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, is_valtype INTEGER, is_generic INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, is_heap_allocated INTEGER, defined_in_unit TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS decl (decl_id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_decl_id INTEGER NOT NULL, kind TEXT NOT NULL, node_id INTEGER NOT NULL, type_id INTEGER NOT NULL, ownership INTEGER NOT NULL, is_fnptr_field INTEGER NOT NULL, grants_private INTEGER NOT NULL, lock_field_decl_id INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS decl_child (parent_decl_id INTEGER NOT NULL, name TEXT NOT NULL, child_decl_id INTEGER NOT NULL, position INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS ref_decl (node_id INTEGER PRIMARY KEY, decl_id INTEGER NOT NULL);\n"
@@ -501,13 +501,10 @@ ZDumper: class {
             valSql: optBoolSql o: zt.isValtype
             genSql: boolNum b: zt.isgeneric
             goSql: optTidStr o: zt.genericOriginId
-            dnid: zt.destructorNameId
-            ndSql: boolNum b: (dnid) != 0
-            dnTx: zast.poolTextAt :pool ref: dnid
-            dnSql: sqlStrOrNull s: dnTx.stringview present: (dnid) != 0
+            ndSql: boolNum b: zt.needsDestructor
             heapSql: boolNum b: zt.isHeapAllocated
             duSql: optStrSql o: (definedUnitOf :st :tid)
-            row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{valSql}, \{genSql}, \{goSql}, \{ndSql}, \{dnSql}, \{heapSql}, \{duSql});\n"
+            row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{valSql}, \{genSql}, \{goSql}, \{ndSql}, \{heapSql}, \{duSql});\n"
             this.acc.append s: row
             tid = tid.next
         }
@@ -1015,7 +1012,7 @@ ZDumper: class {
                 ttSql: sqlStr s: ttName.stringview
                 valSql: optBoolSql o: zt.isValtype
                 genSql: boolNum b: zt.isgeneric
-                ndSql: boolNum b: (zt.destructorNameId) != 0
+                ndSql: boolNum b: zt.needsDestructor
                 heapSql: boolNum b: zt.isHeapAllocated
                 line: "\{nameSql} | \{ttSql} | \{valSql} | \{genSql} | \{ndSql} | \{heapSql}"
                 rows.append line

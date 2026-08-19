@@ -5749,7 +5749,7 @@ attachMarkers: function {
                     nameId: mm.name
                     childTypeId: mtid
                 )
-                if (st.reg.hasDestructorName typeId: (ztypes.tid.create from: mtid.u64)) then needsDtor = true
+                if (st.reg.needsDestructor typeId: (ztypes.tid.create from: mtid.u64)) then needsDtor = true
                 (recordConformance
                     :st
                     :frame
@@ -7950,11 +7950,7 @@ resolveUnion: function {
         } else null
     }
     if (allNull) == false then {
-        dn: "\{defName}_destroy"
-        (st.reg.setDestructorName
-            typeId: (ztypes.tid.create from: uid.u64)
-            nameId: (zast.poolSet pool: ast.names text: dn.stringview)
-        )
+        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: uid.u64)
     }
     if pvExcl_uuid.length > 0 then st.typing.privacySeen = true
     applyGrantsPrivate :st parentId: uuid grants: pvGrants_uuid
@@ -7963,7 +7959,7 @@ resolveUnion: function {
 # fieldTypeNeedsCleanup -- true when a class field needs cleanup (so the holder keeps
 # a destructor): a `.lock` field (its borrow is released at scope exit), a native heap
 # type (String/List/Map/Set), or an in-unit type that itself HAS a destructor
-# (`st.reg.hasDestructorName`). A scalar field, or an owned class/union field whose type
+# (`st.reg.needsDestructor`). A scalar field, or an owned class/union field whose type
 # has no destructor, needs none. Name check for the natives is a scaffold-stage
 # approximation (system types carry no real id under resolve-only-main).
 fieldTypeNeedsCleanup: function {
@@ -8030,7 +8026,7 @@ fieldTypeNeedsCleanup: function {
     match (
         rr
     ) case some then {
-        return (st.reg.hasDestructorName typeId: (ztypes.tid.create from: rr.u64))
+        return (st.reg.needsDestructor typeId: (ztypes.tid.create from: rr.u64))
     } case none then {
         return false
     }
@@ -8518,11 +8514,7 @@ resolveClass: function {
     }
     if defName == "String" then needsDtor = true
     if needsDtor then {
-        dn: "\{defName}_destroy"
-        (st.reg.setDestructorName
-            typeId: (ztypes.tid.create from: cid.u64)
-            nameId: (zast.poolSet pool: ast.names text: dn.stringview)
-        )
+        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: cid.u64)
     }
     if pvExcl_ccid.length > 0 then st.typing.privacySeen = true
     applyGrantsPrivate :st parentId: ccid grants: pvGrants_ccid
@@ -8755,11 +8747,7 @@ resolveProtocol: function {
             childTypeId: borrowId
         )
     }
-    dn: "\{defName}_destroy"
-    (st.reg.setDestructorName
-        typeId: (ztypes.tid.create from: pid.u64)
-        nameId: (zast.poolSet pool: ast.names text: dn.stringview)
-    )
+    st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: pid.u64)
     if pvExcl_ppid.length > 0 then st.typing.privacySeen = true
     applyGrantsPrivate :st parentId: ppid grants: pvGrants_ppid
 }
@@ -12042,11 +12030,7 @@ synthGeneratorIterClass: function {
     st.typing.setMemberType parentTypeId: iterId nameId: zast.wkCreate childTypeId: createId
     st.typing.setMemberType parentTypeId: iterId nameId: zast.wkCall childTypeId: callId
     if needsDtor then {
-        dn: "\{iterName}_destroy"
-        (st.reg.setDestructorName
-            typeId: iterId
-            nameId: (zast.poolSet pool: ast.names text: dn.stringview)
-        )
+        st.reg.setNeedsDestructor typeId: iterId
     }
     demandReturnNever :st :ast
 }
@@ -14598,11 +14582,7 @@ mintMono: function {
     if templateId == (builtinTidT :st frame: rf :ast base: "IdMapV") then needsDtorM = true
     if templateId == (builtinTidT :st frame: rf :ast base: "IdSet") then needsDtorM = true
     if needsDtorM then {
-        mdnM: "\{name}_destroy"
-        (st.reg.setDestructorName
-            typeId: (ztypes.tid.create from: mid.u64)
-            nameId: (zast.poolSet pool: ast.names text: mdnM.stringview)
-        )
+        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: mid.u64)
     }
     # An elided leading type argument stages under the empty name; rebind it
     # to the template's primary generic parameter so the substituted children
@@ -14806,7 +14786,7 @@ mintMono: function {
                     name: chName.stringview
                 )
             } else {
-                if (st.reg.hasDestructorName typeId: (ztypes.tid.create from: target.u64)) then monoNeedsDtor = true
+                if (st.reg.needsDestructor typeId: (ztypes.tid.create from: target.u64)) then monoNeedsDtor = true
             }
         }
         ci = ci + 1
@@ -14815,12 +14795,8 @@ mintMono: function {
     # an auto-destructor, exactly like its non-generic counterpart (the
     # builtin-template list above cannot see through substitution; without
     # this, `class { val: t }` with t=String leaks its payload).
-    if tt == ztypes.ztypetype.classType when monoNeedsDtor when (st.reg.hasDestructorName typeId: (ztypes.tid.create from: mid.u64)) == false then {
-        mdnU: "\{name}_destroy"
-        (st.reg.setDestructorName
-            typeId: (ztypes.tid.create from: mid.u64)
-            nameId: (zast.poolSet pool: ast.names text: mdnU.stringview)
-        )
+    if tt == ztypes.ztypetype.classType when monoNeedsDtor when (st.reg.needsDestructor typeId: (ztypes.tid.create from: mid.u64)) == false then {
+        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: mid.u64)
     }
     # RECORD instances: numeric-param fields synthesize from their declared
     # constraint (size: u64.generic -> a u64 child) when no field references
@@ -15425,7 +15401,7 @@ heapOwningValtypeTid: function {
         if hctt != ztypes.ztypetype.functionType when hnB.stringview != "tag" then {
             if hctt == ztypes.ztypetype.classType then return true
             if hctt == ztypes.ztypetype.unionType then return true
-            if (st.reg.hasDestructorName typeId: (ztypes.tid.create from: hcto.u64)) then return true
+            if (st.reg.needsDestructor typeId: (ztypes.tid.create from: hcto.u64)) then return true
             if hctt == ztypes.ztypetype.recordType then {
                 if (heapOwningValtypeTid
                     :st
@@ -20089,7 +20065,7 @@ checkAssignment: function {
         if rn5.length > 0 when (roMv5) == false when (typeIsReftype
             :st
             tid: vt
-        ) when (st.reg.hasDestructorName typeId: vt) then {
+        ) when (st.reg.needsDestructor typeId: vt) then {
             vo5: st.lookupVarId nameId: (nameIdOf :ast name: rn5.stringview)
             match (
                 vo5
@@ -23837,11 +23813,7 @@ checkBoxConstruction: function {
     if mid.isZero then return (ztypes.tid.create from: 0)
     st.reg.setIsBox typeId: mid
     st.reg.setIsHeapAllocated typeId: mid
-    bdtor: "z_\{mname}_destroy"
-    (st.reg.setDestructorName
-        typeId: mid
-        nameId: (zast.poolSet pool: ast.names text: bdtor.stringview)
-    )
+    st.reg.setNeedsDestructor typeId: mid
     if (st.typing.declMemberCount ownerTid: mid) <= 0 then {
         crId: st.reg.newType name: "create" ownerTid: mid typetype: ztypes.ztypetype.functionType
         (st.typing.declSynthMember

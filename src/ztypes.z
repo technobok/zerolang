@@ -572,7 +572,7 @@ ZType: class {
     # parallel to genericArgs: true when the ordinal is a numeric VALUE
     # (a sized record's `to:`), false when it is a type id
     genericArgIsValue: (ListVal bool)
-    destructorNameId: zast.nameid
+    needsDestructor: bool
     isHeapAllocated: bool
     isBox: bool
     isNative: bool
@@ -688,7 +688,7 @@ holeType: function {} out ZType is {
     genericChildren: (IdMapV u64 value: tid)
     genericArgs: (ListVal u64)
     genericArgIsValue: (ListVal bool)
-    destructorNameId: zast.nameid
+    needsDestructor: false
     isHeapAllocated: false
     isBox: false
     isNative: false
@@ -768,7 +768,7 @@ ZTypeRegistry: class {
         genericChildren: (IdMapV u64 value: tid)
         genericArgs: (ListVal u64)
         genericArgIsValue: (ListVal bool)
-        destructorNameId: zast.nameid
+        needsDestructor: false
         isHeapAllocated: false
         isBox: false
         isNative: false
@@ -898,25 +898,20 @@ ZTypeRegistry: class {
         return got.isTagGenericOrigin
     }
 
-    hasDestructorName: function {:this typeId: tid} out bool is {
-        dn: this.destructorNameIdOf :typeId
-        return (dn.isZero) == false
-    }
-
-    # destructorNameIdOf -- the pool id of the destructor's name, or 0 when the
-    # type has none.
-    destructorNameIdOf: function {:this typeId: tid} out zast.nameid is {
-        if typeId >= this.typeById.length then return (zast.nameid.create from: 0)
-        got: this.typeById.get i: typeId
-        return got.destructorNameId
+    # needsDestructor -- the type owns resources its destructor releases; the
+    # emitter names and emits that destructor.
+    needsDestructor: function {t: this.view typeId: tid} out bool is {
+        if typeId >= t.typeById.length then return false
+        got: t.typeById.get i: typeId
+        return got.needsDestructor
     }
 
     # --- post-construction metadata stamps: mutate the stored ZType in
     # place through the by-id table. ---
-    setDestructorName: function {:this typeId: tid nameId: zast.nameid} is {
+    setNeedsDestructor: function {:this typeId: tid} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
-        got.destructorNameId = nameId
+        got.needsDestructor = true
     }
 
     setIsBox: function {:this typeId: tid} is {

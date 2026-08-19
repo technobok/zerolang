@@ -3283,7 +3283,7 @@ paramIsHold: function {
 # emitCallTakeInvalidations -- zero the source local of each ownership-moved arg
 # of a call so its scope-exit destructor is a no-op (the move transferred
 # ownership). An explicit `<atom>.take` uses takeStringSource; a bare owning-
-# reftype local moved into a TAKE param is an implicit move (the hasDestructorName
+# reftype local moved into a TAKE param is an implicit move (the needsDestructor
 # gate excludes borrow/lock views and scalars, which carry no destructor).
 isCtorOwnerCall: function {
     ast: Ast.view
@@ -3461,7 +3461,7 @@ emitCallTakeInvalidations: function {
                             iinvh: "\{ind}\{isrc} = NULL;\n"
                             buf.append iinvh
                         } else {
-                            if (symtab.reg.hasDestructorName typeId: istid) then {
+                            if (symtab.reg.needsDestructor typeId: istid) then {
                                 itc: typeRefC :ast :symtab :ctx tid: istid thisTid: ztypes.tid
                                 iinv: "\{ind}\{isrc} = (\{itc}){0};\n"
                                 buf.append iinv
@@ -4736,7 +4736,7 @@ hoistBorrowValArg: function {
         if vrr > 0 then vrid = ztypes.tid.create from: vrr.u64
     } case some then null
     isStrH: vrid == ctx.strTid
-    if (isStrH) == false when (symtab.reg.hasDestructorName typeId: vrid) == false then {
+    if (isStrH) == false when (symtab.reg.needsDestructor typeId: vrid) == false then {
         return "".string
     }
     vhn: ctx.argHoistCtr
@@ -5082,7 +5082,7 @@ emitInstanceMethodCall: function {
                                     )
                                     if hrr > 0 then hrid = hrr
                                 } case some then null
-                                if (symtab.reg.hasDestructorName typeId: (ztypes.tid.create from: hrid.u64)) then {
+                                if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: hrid.u64)) then {
                                     hcb: ctxCname :ctx tid: (ztypes.tid.create from: hrid.u64)
                                     hdt = "    \{hcb}_destroy(&\{nmH});\n"
                                 }
@@ -5920,7 +5920,7 @@ ownedReceiverHoist: function {
     if (isNonLvalueArg s: expr) == false then return "".string
     rtid: stampIdOf :symtab nid: (interpPartNodeId :n)
     if rtid.isZero then return "".string
-    if (symtab.reg.hasDestructorName typeId: rtid) == false then return "".string
+    if (symtab.reg.needsDestructor typeId: rtid) == false then return "".string
     if (bindingRhsIsBorrow :ast :symtab :ctx :n) then return "".string
     rct: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
     if rct.length == 0 then return "".string
@@ -7876,7 +7876,7 @@ emitByrefArg: function {
     if isBorrow then {} else if hrid == ctx.strTid then {
         hdt = "    \{ctx.strC}_free(&\{nmH});\n"
     } else {
-        if (symtab.reg.hasDestructorName typeId: hrid) then {
+        if (symtab.reg.needsDestructor typeId: hrid) then {
             hcb: ctxCname :ctx tid: (ztypes.tid.create from: hrid.u64)
             hdt = "    \{hcb}_destroy(&\{nmH});\n"
         }
@@ -9880,7 +9880,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                         cvval = false
                     } case none then null
                 }
-                if cvval when (symtab.reg.hasDestructorName typeId: cvp) == false then {
+                if cvval when (symtab.reg.needsDestructor typeId: cvp) == false then {
                     return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
                 }
             }
@@ -9910,7 +9910,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 if cvtt == ztypes.ztypetype.unionType then cvref = true
                 if cvtt == ztypes.ztypetype.protocolType then cvref = true
                 if cvstr then cvref = true
-                if (cvref) == false when (symtab.reg.hasDestructorName typeId: cvp) == false then {
+                if (cvref) == false when (symtab.reg.needsDestructor typeId: cvp) == false then {
                     return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
                 }
                 if cvstr then {
@@ -11397,7 +11397,7 @@ interpBaseIsOwnedStructField: function {
         # a user-generic mono owns its fields once it carries a destructor;
         # other monos (views, collections) keep the owned-call-result legs
         if bo > 0 then {
-            if (symtab.reg.hasDestructorName typeId: bt) == false then return false
+            if (symtab.reg.needsDestructor typeId: bt) == false then return false
         }
         btt: symtab.reg.typetypeOf typeId: bt
         isUC: false
@@ -12294,7 +12294,7 @@ emitDiscardedResult: function {
 } is {
     dctt: symtab.reg.typetypeOf typeId: rtid
     dcdrop: false
-    if (symtab.reg.hasDestructorName typeId: rtid) when isBorrow == false then {
+    if (symtab.reg.needsDestructor typeId: rtid) when isBorrow == false then {
         if rtid == ctx.strTid then dcdrop = true
         if dctt == ztypes.ztypetype.classType then dcdrop = true
         if dctt == ztypes.ztypetype.unionType then dcdrop = true
@@ -12573,7 +12573,7 @@ emitStmt: function {
                         tmp.frees.append nmcB
                         tmp.freeRaw.append nameVid
                     } else {
-                        if (symtab.reg.hasDestructorName typeId: ntO) then {
+                        if (symtab.reg.needsDestructor typeId: ntO) then {
                             ldcbB: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
                             ldfB: "    \{ldcbB}_destroy(&\{nm});\n"
                             ldfsB: ldfB.copy
@@ -12924,7 +12924,7 @@ emitStmt: function {
                         bzt: stampIdOf :symtab nid: (interpPartNodeId n: avn)
                         bzp: isHeapPtrCollection :symtab :ctx tid: bzt
                         bzo: bzp
-                        if (symtab.reg.hasDestructorName typeId: bzt) then bzo = true
+                        if (symtab.reg.needsDestructor typeId: bzt) then bzo = true
                         if bzo when (bindingRhsIsBorrow
                             :ast
                             :symtab
@@ -12957,7 +12957,7 @@ emitStmt: function {
             # an owned class/record local with heap fields is destroyed at scope
             # exit (String/collection locals returned earlier; take-aliases too).
             ltHasDtor: false
-            if (symtab.reg.hasDestructorName typeId: ltid) then ltHasDtor = true
+            if (symtab.reg.needsDestructor typeId: ltid) then ltHasDtor = true
             ltUorig: originTidOf :symtab tid: ltid
             if ltUorig > 0 when (symtab.reg.typetypeOf typeId: ltid) == ztypes.ztypetype.unionType then {
                 ltHasDtor = true
@@ -13013,7 +13013,7 @@ emitStmt: function {
         if (stampIsStr :symtab :ctx nid: rtnid) then {
             rdrop = true
         } else {
-            if (symtab.reg.hasDestructorName typeId: rtsid) then rdrop = true
+            if (symtab.reg.needsDestructor typeId: rtsid) then rdrop = true
         }
         if rdrop then {
             if (isNonLvalueArg s: rv2.stringview) then {
@@ -13032,7 +13032,7 @@ emitStmt: function {
             rdo: "\{ind}\{ctx.strC}_free(&\{nm2});\n"
             buf.append rdo
         } else {
-            if (symtab.reg.hasDestructorName typeId: rtsid) then {
+            if (symtab.reg.needsDestructor typeId: rtsid) then {
                 rdcb: ctxCname :ctx tid: rtsid
                 # the chased mono's registry cname is authoritative (the
                 # stamp name still says the typedef)
@@ -13113,7 +13113,7 @@ emitStmt: function {
                 if (stampIsStr :symtab :ctx nid: znid) then {
                     zct = "\{ctx.strC}_t"
                 } else {
-                    if (symtab.reg.hasDestructorName typeId: zid) then {
+                    if (symtab.reg.needsDestructor typeId: zid) then {
                         zct = typeRefC :ast :symtab :ctx tid: zid thisTid: ztypes.tid
                     }
                 }
@@ -13408,7 +13408,7 @@ emitStmt: function {
                     rdf: "\{ind}\{ctx.strC}_free(&\{rcvV});\n"
                     buf.append rdf
                 } else {
-                    if (symtab.reg.hasDestructorName typeId: rrid) then {
+                    if (symtab.reg.needsDestructor typeId: rrid) then {
                         rdcb: ctxCname :ctx tid: (ztypes.tid.create from: rrid.u64)
                         rdref: "&\{rcvV}"
                         if (isBoxTid
@@ -14712,7 +14712,7 @@ emitDoBindValue: function {
         } else {
             # an owned destructible block value is destroyed at scope exit
             # (the binding path returns before its own registration).
-            if (symtab.reg.hasDestructorName typeId: tid) then {
+            if (symtab.reg.needsDestructor typeId: tid) then {
                 pdcb: ctxCname :ctx :tid
                 pldf: "    \{pdcb}_destroy(&\{nm});\n"
                 pldfs: pldf.copy
@@ -15096,7 +15096,7 @@ emitObjIterFor: function {
             # captured params. Registered BEFORE the loop label so break /
             # continue inside the loop never free the live instance.
             if ownGit then {
-                if (symtab.reg.hasDestructorName typeId: itid) when (structDestroyNontrivial
+                if (symtab.reg.needsDestructor typeId: itid) when (structDestroyNontrivial
                     :ast
                     :symtab
                     :ctx
@@ -20030,7 +20030,7 @@ emitFnBody: function {
                     ) == false then {
                         pcm: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: ppid.u64)
                         puse: pcm
-                        if (symtab.reg.hasDestructorName typeId: pcm) == false then {
+                        if (symtab.reg.needsDestructor typeId: pcm) == false then {
                             prbn: (canonTypeId
                                 :ast
                                 :symtab
@@ -20040,7 +20040,7 @@ emitFnBody: function {
                             )
                             if prbn > 0 then puse = ztypes.tid.create from: prbn.u64
                         }
-                        if (symtab.reg.hasDestructorName typeId: puse) then {
+                        if (symtab.reg.needsDestructor typeId: puse) then {
                             pcb: ctxCname :ctx tid: (ztypes.tid.create from: puse.u64)
                             pdf: "    \{pcb}_destroy(&\{pmn});\n"
                             pdfs: pdf.copy
@@ -20590,7 +20590,7 @@ emitC: function {
     # site links (unused wrappers are fine: -Wno-unused-function)
     with sdit: symtab.typing.typedefBaseTid.iterateItems do for sde: sdit loop {
         if sde.value == strId then {
-            if (symtab.reg.hasDestructorName typeId: (ztypes.tid.create from: sde.key)) then {
+            if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: sde.key)) then {
                 sdc: listCname cnames: typeCnames tid: (ztypes.tid.create from: sde.key)
                 sdw: "static void \{sdc}_destroy(\{strC}_t* p) { \{strC}_free(p); }\n"
                 buf.append sdw
@@ -21124,7 +21124,7 @@ emitBoxMono: function {
         bfree: "    \{ctx.strC}_free(v);\n"
         buf.append bfree
     } else {
-        if (symtab.reg.hasDestructorName typeId: (ztypes.tid.create from: beid.u64)) then {
+        if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: beid.u64)) then {
             bicb: ctxCname :ctx tid: (ztypes.tid.create from: beid.u64)
             bidf: "    \{bicb}_destroy(v);\n"
             buf.append bidf
@@ -21163,7 +21163,7 @@ emitListMono: function {
             delems = "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ctx.strC}_free(&p->data[_di]);\n    }\n"
         } else {
             ecid: eid
-            if (symtab.reg.hasDestructorName typeId: ecid) == false then {
+            if (symtab.reg.needsDestructor typeId: ecid) == false then {
                 rbn: (canonTypeId
                     :ast
                     :symtab
@@ -21173,7 +21173,7 @@ emitListMono: function {
                 )
                 if rbn > 0 then ecid = ztypes.tid.create from: rbn.u64
             }
-            if (symtab.reg.hasDestructorName typeId: ecid) then {
+            if (symtab.reg.needsDestructor typeId: ecid) then {
                 ecb: ctxCname :ctx tid: (ztypes.tid.create from: ecid.u64)
                 delems = "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ecb}_destroy(&p->data[_di]);\n    }\n"
             }
@@ -21672,7 +21672,7 @@ payloadDestructor: function {
         # cnameOf (a fresh String) -- never bind the borrowed destructorName, which
         # would move out of the registry borrow (scope-exit free -> UAF).
         rid: co
-        if (symtab.reg.hasDestructorName typeId: (ztypes.tid.create from: co.u64)) == false then {
+        if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: co.u64)) == false then {
             rbn: (canonTypeId
                 :ast
                 :symtab
@@ -21682,7 +21682,7 @@ payloadDestructor: function {
             )
             if rbn > 0 then rid = rbn
         }
-        if (symtab.reg.hasDestructorName typeId: (ztypes.tid.create from: rid.u64)) then {
+        if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: rid.u64)) then {
             cb: ctxCname :ctx tid: (ztypes.tid.create from: rid.u64)
             return "\{cb}_destroy"
         }
@@ -22016,7 +22016,7 @@ mapValFreeStmt: function {
     if valTid > 0 then {
         vmid: chaseColMono :symtab :ctx tid: valTid
         needs: false
-        if (symtab.reg.hasDestructorName typeId: vmid) then needs = true
+        if (symtab.reg.needsDestructor typeId: vmid) then needs = true
         if (isHeapPtrCollection :symtab :ctx tid: valTid) then needs = true
         if needs then {
             vcb: ctxCname :ctx tid: (ztypes.tid.create from: vmid.u64)
@@ -23408,7 +23408,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                             l0: "typedef struct \{cn}_t \{cn}_t;\n"
                             buf.append l0
                             needDtor: isUnion
-                            if (symtab.reg.hasDestructorName typeId: t) then needDtor = true
+                            if (symtab.reg.needsDestructor typeId: t) then needDtor = true
                             if needDtor then {
                                 l1: "static void \{cn}_destroy(\{cn}_t* p);\n"
                                 buf.append l1
@@ -23419,7 +23419,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
             } else {
                 fwdM: false
                 if mo > 0 then {
-                    if (symtab.reg.hasDestructorName typeId: t) then fwdM = true
+                    if (symtab.reg.needsDestructor typeId: t) then fwdM = true
                     if (isListOriginOf
                         :symtab
                         :ctx
@@ -23448,7 +23448,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                     lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
                     buf.append lx0
                     fwdDtor: false
-                    if (symtab.reg.hasDestructorName typeId: t) then fwdDtor = true
+                    if (symtab.reg.needsDestructor typeId: t) then fwdDtor = true
                     if (isMapOriginOf
                         :symtab
                         :ctx
@@ -25463,7 +25463,7 @@ emitProtocolImpl: function {
     buf.append bc0
     od0: "static void \{wbase}_owned_destroy(void* p) {\n"
     buf.append od0
-    if (symtab.reg.hasDestructorName typeId: implTid) then {
+    if (symtab.reg.needsDestructor typeId: implTid) then {
         od1: "    \{implBase}_destroy((\{implCtype}*)p);\n"
         buf.append od1
     }
@@ -27380,7 +27380,7 @@ structDestroyNontrivial: function {
         ) == false then {
             if fid == ctx.strTid then return true
             fmid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
-            if (symtab.reg.hasDestructorName typeId: fmid) then return true
+            if (symtab.reg.needsDestructor typeId: fmid) then return true
             if (isHeapPtrCollection
                 :symtab
                 :ctx
@@ -27428,7 +27428,7 @@ emitStructDestructor: function {
             } else {
                 fmid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
                 fneeds: false
-                if (symtab.reg.hasDestructorName typeId: fmid) then fneeds = true
+                if (symtab.reg.needsDestructor typeId: fmid) then fneeds = true
                 if (isHeapPtrCollection
                     :symtab
                     :ctx
@@ -27630,7 +27630,7 @@ emitOneRecord: function {
     }
     buf.append "}\n\n"
     }
-    if (symtab.reg.hasDestructorName typeId: tid) then {
+    if (symtab.reg.needsDestructor typeId: tid) then {
         emitStructDestructor :ast :symtab :ctx :tid :fnames :fids :buf
     }
 }
