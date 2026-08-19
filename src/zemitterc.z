@@ -1,11 +1,8 @@
-# zemitterc -- the C emitter (Phase C port of src/zemitterc.py).
-#
-# C1: preamble, String/StringView runtime fragments, string-literal pool,
-# user-function emission, and a statement/expression walk covering the
-# scalar core (locals, binops, if/for-while, return, recursion) plus
-# print of plain and interpolated literals. Unhandled shapes emit marker
-# comments AND record an emitFail: zc reports every failure and exits
-# nonzero without writing output (no silent degradation).
+# zemitterc -- the C17 emitter. A typed-AST-to-C pass over the typechecker's
+# stamps: the runtime preamble and the fragments/templates under src/runtime
+# the program demands, the string-literal pool, then every reachable type and
+# function, in sections assembled at the end. Unhandled shapes record an
+# emitFail: zc reports every failure and exits nonzero without writing output.
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
@@ -63,8 +60,7 @@ tidOrZero: function {o: optionval ztypes.tid} out ztypes.tid is {
 }
 
 # cnameOf -- the id-based C name base for a type ("z_t{id}_{name}", dots
-# joined with underscores). Mirrors the reference's _assign_cname scheme;
-# ids differ between the two typecheckers by design.
+# joined with underscores).
 # opCnameOf -- a C-identifier spelling for an operator method name (a
 # typedef's shadowed `==`, a numeric `+`), "" for ordinary names.
 opCnameOf: function {name: StringView} out String is {
@@ -258,14 +254,13 @@ cnameById: function {tid: ztypes.tid} out String is {
 # must go through scalarCTypeFor, which asks the declaration whether the tid is
 # the builtin behind the name. shadow-guard holds the count down.
 #
-# It cannot be retired, and the callers that remain say why. The C spelling has
-# to be SOMEWHERE, and the one place it cannot live is the table it helps build:
+# The C spelling has to be SOMEWHERE, and the one place it cannot live is the
+# table it helps build:
 # convBodyOf reads it to GENERATE the natives.tbl conversion rows, so moving the
 # spelling into that table would have the generator reading its own output. The
 # rest have no declaration to ask -- two want a scalar-NAME predicate rather than
 # a C type, and the others start from a typedef base name or an AST type name,
-# with no tid in hand. A caller that still needs a name is a caller with no
-# declaration to ask; those are the ones left.
+# with no tid in hand.
 cTypeOf: function {name: StringView} out String is {
     if name == "i8" then return "int8_t".string
     if name == "i16" then return "int16_t".string
@@ -359,10 +354,9 @@ isFloatLitText: function {s: StringView} out bool is {
 #
 # A tid with no defining unit is a SHELL -- a fresh param/field child named
 # after the real type -- not a user type wearing the name. There is no
-# declaration there to shadow with, so it keeps the C scalar, which is what the
-# unit-name predicate this replaced did with an empty name and what typeRefC
-# has always said about shells. Asked of the declaration directly rather than
-# through its unit's name, which is the same question one step earlier.
+# declaration there to shadow with, so it keeps the C scalar, as typeRefC says
+# of shells. Asked of the declaration directly rather than through its unit's
+# name, which is the same question one step earlier.
 scalarTidIsBuiltin: function {
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
@@ -1533,9 +1527,9 @@ nativeIsConvOf: function {ctx: Ctx.view srcPath: StringView memb: StringView} ou
 }
 
 # nativeIsFragBacked -- a fragment implements this path, so its C symbol is the
-# convention one. This replaces a five-name list of units: the question was never
-# which unit a native lives in, it is whether the runtime supplies its body, and
-# a user unit that ships a fragment answers yes on the same terms as io does.
+# convention one. The question is never which unit a native lives in, it is
+# whether the runtime supplies its body, and a user unit that ships a fragment
+# answers yes on the same terms as io does.
 nativeIsFragBacked: function {ctx: Ctx.view path: StringView} out bool is {
     result: false
     {
@@ -2466,11 +2460,8 @@ Ctx: class {
     constLits: (List String)
     # every runtime demand, as the (unit, member) PAIRS they are: parallel
     # rows, never joined. Joining them would only have to be split apart again
-    # to name the fragment -- which is why the per-unit skip lists already carry
-    # the member half alone. A member of `@unit` is the unit ITSELF being
-    # demanded, which is what the flat vocabulary used to say with no unit at
-    # all: the bare name "io" was always the pair (io, the unit), and every
-    # other flat name was a member of `system` or of `collections`.
+    # to name the fragment. A member of `@unit` is the unit ITSELF being
+    # demanded.
     needUnits: (List String)
     needMembs: (List String)
     dataElems: (IdMapR ztypes.tid value: String)
@@ -3060,7 +3051,6 @@ isFieldTake: function {ast: Ast.view n: Node.view} out bool is {
 # return cleanup; its `.take` moved the payload out as a shallow struct copy sharing the
 # heap buffer, so the box must read {0} when the destructor walks it, else that buffer is
 # double-freed. Non-narrowed takes are kept live by refsLocal and are not touched here.
-# Mirrors the reference's implicit-take invalidation, flushed before scope cleanup.
 emitNarrowedTakeZero: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -5618,7 +5608,7 @@ allDigits: function {s: StringView} out bool is {
 
 # emitBoxCreate -- `Box from: x`: heap-alloc a cell for the element and store x.
 # Gated on the BOX_CREATE callKind stamp; hoists the alloc+store and returns the
-# pointer temp. Mirrors the reference _emit_box_create (valtype/String inner).
+# pointer temp.
 emitBoxCreate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -6186,8 +6176,8 @@ emitInterpArgExpr: function {
 # as PRIOR statements into buf (so a referenced local is read at THIS point) and
 # returns the owned-String temp name "_sN"; "" otherwise. Used where the build
 # must precede the statement -- a reassignment drop-old, so `s = "\{s}x"` reads
-# old s before the old value is freed (mirrors emitStringBindValue / the
-# reference's _temp.decls). emitInterpBuild does NOT register _sN for free, so the
+# old s before the old value is freed (as emitStringBindValue does).
+# emitInterpBuild does NOT register _sN for free, so the
 # assignment `nm2 = _sN` moves the storage into the lvalue with no double-free.
 emitInterpStmtValue: function {
     ast: Ast.view
@@ -7567,9 +7557,9 @@ argSlotList: function {
 # cvalText -- the C literal for a compile-time value the typechecker folded.
 # "" for a kind this emitter cannot render yet, which leaves the caller on its
 # ordinary path rather than emitting something wrong.
-# constSuffixForTid -- the C literal suffix a constant of type `tid` needs, so
-# a value renders the way the rendered TEXT used to: `u32` wants U, `u64` wants
-# ULL, and a scalar typedef wants whatever its base wants (`nameid` -> u32 ->
+# constSuffixForTid -- the C literal suffix a constant of type `tid` needs:
+# `u32` wants U, `u64` wants ULL, and a scalar typedef wants whatever its base
+# wants (`nameid` -> u32 ->
 # U). The name-based half of this is literalSuffixBase's, which answers the
 # same question starting from a suffix NAME rather than from a type.
 constSuffixForTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
@@ -10070,8 +10060,8 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         }
         mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
         # a zero-parameter native read without parens auto-calls: the member's
-        # DECLARATION says so, so io.stdout and os.pid take one leg and the
-        # sixteen os names and three io names no longer need listing
+        # DECLARATION says so, so io.stdout and os.pid take one leg and no
+        # name is listed
         nnu: (nativeNoArgOf
             :ast
             :symtab
@@ -11390,8 +11380,8 @@ interpBaseIsOwnedStructField: function {
         pnd: ast.nodes.get i: n.parent.u64
         bnid: atomNodeId n: pnd
         # A NESTED base (`b.it.name`) is itself a dotted path, not an atom, so
-        # the atom lookup answers 0 and the whole predicate used to bail. Its
-        # own stamp names the owner just as well. Without this the read falls
+        # the atom lookup answers 0; its own stamp names the owner just as
+        # well. Without this the read falls
         # through to the owned-call-result leg, which FREES the field's String
         # out from under its owner.
         if bnid == 0 then bnid = interpPartNodeId n: pnd
@@ -13594,7 +13584,7 @@ emitStmt: function {
 # ensureUnitCache -- build the emit-stable unit lists (tids for the id probe,
 # keys for the composed-key fallback) once per Ctx. The program root's children
 # are settled in typecheck and never mutated during emit, so the snapshot stays
-# valid; this replaces the per-resolve List rebuild that walked them every call.
+# valid.
 ensureUnitCache: function {ctx: Ctx pool: zast.StringPool.view ty: ztyping.ZTyping.view} is {
     if ctx.unitCacheBuilt then return
     puds: ztypecheck.programUnitDecls :ty
@@ -13711,10 +13701,8 @@ typeIdByNameStages: function {
 }
 
 # resolveTypeIdByName -- text entry point: intern-probe the name to a pool id
-# (a name not in the pool matches no interned member, so 0 resolves to 0,
-# preserving the old text behaviour) and resolve id-keyed. The per-stage
-# StringPool.find the old body paid once per stage collapses to this single
-# probe.
+# (a name not in the pool matches no interned member, so 0 resolves to 0) and
+# resolve id-keyed.
 resolveTypeIdByName: function {
     ast: Ast
     symtab: zenv.ZSymbolTable.view
@@ -17297,7 +17285,7 @@ isReftypeParam: function {
     tt: symtab.reg.typetypeOf typeId: cid
     # Only CLASS params pass by reference. A UNION is a small value-stable
     # {tag, void* data} struct passed BY VALUE (the data pointer is shared with
-    # the source; the borrow is tracked separately), matching the reference.
+    # the source; the borrow is tracked separately).
     if tt != ztypes.ztypetype.classType then return false
     monoLk4: originTidOf :symtab tid: cid
     if monoLk4 > 0 then {
@@ -18360,9 +18348,7 @@ regNameIs: function {symtab: zenv.ZSymbolTable tid: ztypes.tid name: StringView}
 
 # unitClassTid -- the CLASS a unit declares under `nameId`, asked of THAT
 # unit's own declarations. Exactly one name is in scope inside a unit, so this
-# is a lookup and not a search: it replaces a sweep over every id in the
-# registry that text-compared each candidate and then asked which unit defined
-# it. 0 when the unit declares no such class.
+# is a lookup and not a search. 0 when the unit declares no such class.
 unitClassTid: function {
     symtab: zenv.ZSymbolTable.view
     unitDecl: u64
@@ -18523,8 +18509,8 @@ unitConstTextOf: function {
     if cn8 > 0 then {
         utd8: pathUnitTidOf :ast :symtab :ctx baseId: n.parent
         if (utd8.isZero) == false then {
-            # the VALUE is the only source: the emitter no longer renders a
-            # constant to text ahead of time and then re-reads that text.
+            # the VALUE is the only source: a constant is never rendered to
+            # text ahead of time and re-read.
             mct8: (memberConstText
                 :ast
                 :symtab
@@ -21056,8 +21042,7 @@ emitArrayMono: function {
 }
 
 # capLenT -- the C length-field type for a str mono of the given capacity:
-# uint8/16/32 by capacity, keeping small str monos compact (mirrors the
-# reference's len-type selection).
+# uint8/16/32 by capacity, keeping small str monos compact.
 capLenT: function {cap: StringView} out String is {
     v: u64
     i: u64
@@ -21078,7 +21063,7 @@ capLenT: function {cap: StringView} out String is {
 
 # emitStrMono -- a str valtype mono (fixed-capacity inline string). Substitutes
 # z_str.c.tmpl (struct + create + .string + String_to_<name>). Read via
-# loadFragment so the template's hardcoded z_String becomes the port's strC.
+# loadFragment so the template's canonical z_String becomes ctx.strC.
 # Capacity is the trailing segment of the mono name (str_<cap>), prefix "str_"=4.
 emitStrMono: function {
     symtab: zenv.ZSymbolTable
@@ -21117,7 +21102,7 @@ emitStrMono: function {
 
 # emitBoxMono -- a builtin Box mono (heap pointer). No struct (the type is
 # <inner>*); emit only the destructor: free the inner (String/destructor) then
-# the cell. Mirrors the reference _emit_mono_box.
+# the cell.
 emitBoxMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -21780,7 +21765,7 @@ declaredKeyFnC: function {
 # record whose C type is a scalar, so it classifies 0 with the pointers --
 # scalarCTypeFor is the shadow-safe gate (a user type shadowing a scalar name
 # stays a struct). A heap-owning struct lands in 3 and fails to build at its
-# `_eq` until the typecheck rejection lands (Slice 3).
+# `_eq`; the typechecker does not yet reject it.
 keyHashKind: function {symtab: zenv.ZSymbolTable ctx: Ctx.view tid: ztypes.tid} out u64 is {
     ktid: typedefChaseTid :symtab :tid
     if ktid == ctx.strTid then return 1
@@ -22258,7 +22243,7 @@ emitMapMono: function {
             ebm: "\{dem}(&_a, \{rhsA})"
             keysEqBody = ebm
             # the mono is emitted before user method bodies, so declare the
-            # two it now calls
+            # two it calls
             fdm: "static uint64_t \{dhm}(\{keyT}*);\nstatic bool \{dem}(\{keyT}*, \{rhsT});\n"
             buf.append fdm
         }
@@ -22725,9 +22710,8 @@ ioCanonTid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view canon: String
             a2: (builtinTid :ast :symtab base: "IoError")
         )
     }
-    # the value-side monos the StringView natives return. A fragment naming one
-    # used to need its own loader, because the emitter had to know the stem to
-    # bind; stated here, the hole resolves like every other name in a fragment.
+    # the value-side monos the StringView natives return: stated here, the
+    # hole resolves like every other name in a fragment.
     if canon == "optionval_u64" then {
         return (specStemTid :ast :symtab base: "optionval" arg1: "u64" arg2: "")
     }
@@ -23619,8 +23603,7 @@ buildUserTypeList: function {symtab: zenv.ZSymbolTable ctx: Ctx.view acc: ListVa
 }
 
 # monoDependsOnUser -- does the mono's layout reference a user type, directly or
-# through a nested mono? Mirrors the reference _mono_depends_on_user; the seen
-# list breaks cycles through boxed monos.
+# through a nested mono? The seen list breaks cycles through boxed monos.
 monoDependsOnUser: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -23864,10 +23847,9 @@ emitMonoById: function {
 # embed them by value in dependency order, resolving the bidirectional
 # constraint: a user record embeds an early (system-element) mono, while a late
 # mono embeds a user type. Order: protocols -> early-user structs -> a fixpoint
-# interleaving late monos and late-user structs. Mirrors the reference emitter's
-# early/late split + fixpoint (zemitterc.py). The early collection monos and the
-# system scaffolding are already emitted by emitMonos; this owns user struct
-# layout (emitRecordDefsIn phase 1 no longer emits structs).
+# interleaving late monos and late-user structs. The early collection monos and
+# the system scaffolding are already emitted by emitMonos; this owns user struct
+# layout.
 # collectLateMonosKind -- append late monos of one origin to acc. Called in
 # kind-priority order so a mono returned by value by another (List.listview ->
 # ListView, Map.get -> optionval) is collected, and thus emitted, before it.
@@ -24937,7 +24919,7 @@ emitMonos: function {
 }
 
 # emitRecordDefs -- main-unit record structs + meta_create constructors
-# (scalar/record fields; the create alias mirrors the reference).
+# (scalar/record fields).
 emitRecordDefs: function {
     program: Node
     symtab: zenv.ZSymbolTable.view
@@ -26661,11 +26643,10 @@ emitUserIterCall: function {
                     ve: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: atomVarId.operation.u64)
                     # The resume value goes by REFERENCE when it is a reftype --
                     # the synthesised `.call` declares that parameter as a
-                    # pointer. This used to key on `isLockArg`, i.e. on the
-                    # argument's SPELLING, so a `borrow` parameter's bare-name
-                    # argument silently lost its `&` and gcc got a value where a
-                    # `T*` was declared. Ask the TYPE instead; a `.lock`-suffixed
-                    # argument reaches the same answer through argBaseAtom.
+                    # pointer. Decided by the TYPE, never by the argument's
+                    # spelling (a `borrow` parameter's bare-name argument needs
+                    # its `&` too); a `.lock`-suffixed argument reaches the same
+                    # answer through argBaseAtom.
                     vop: ast.nodes.get i: atomVarId.operation.u64
                     vbase: argBaseAtom :ast n: vop
                     vbnid: (argBaseNodeId :ast n: vop).u64
@@ -27100,7 +27081,7 @@ emitRecordDefsIn: function {
 
 # emitDataBlock -- `name: data { e0 e1 ... } out T`: a static const array
 # z_{name}[] plus z_{name}_len, with the element C type from out T (i64
-# default). The plain z_{name} cname matches the reference.
+# default).
 emitDataBlock: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -28009,8 +27990,8 @@ emitRecordMethods: function {
 }
 
 # nodeYieldCount -- the number of `yield` expressions in a subtree (yields do
-# not nest). Mirrors the typechecker's subtreeHasYield walk. Used to detect a
-# generator `call` body and size its resume-state switch.
+# not nest). Used to detect a generator `call` body and size its resume-state
+# switch.
 nodeYieldCount: function {ast: Ast.view n: Node.view} out u64 is {
     match (
         n

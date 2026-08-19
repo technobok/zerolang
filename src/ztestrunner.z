@@ -1,16 +1,19 @@
-# ztestrunner.z -- self-hosted golden-corpus test gate, replacing the
-# shell tests/run_corpus.sh. Three case kinds, each compared to a
-# committed golden, driven entirely by os.spawn (no shell, no Python):
-#   run    programs in run_cases.txt -> port emit -> gcc -> run; stdout
-#          must match run_golden/<n>.out and exit match <n>.exit (0 default).
-#   leak   every buildable example + emitc_corpus program -> ASan build,
-#          run under detect_leaks=1; no use-after-free/double-free and 0
-#          bytes leaked. KNOWN_LEAKY allowlists expected leakers (now empty).
-#   error  tests/fixtures/errors/<n>.z -> the compiler must exit non-zero
-#          and print error[Exxxx] lines matching errors/<n>.err (the
-#          volatile location/snippet lines are normalized away).
+# ztestrunner.z -- the self-hosted corpus test gate, driven entirely by
+# os.spawn. Case kinds, each compared to a committed golden under
+# tests/fixtures:
+#   run      run_cases.txt -> emit -> cc -> run; stdout matches
+#            run_golden/<n>.out, exit code matches <n>.exit (0 default)
+#   lsp      framed JSON-RPC transcripts replayed through zls
+#   leak     every buildable example + emitc_corpus program under ASan with
+#            detect_leaks=1: no use-after-free, no double free, 0 bytes leaked
+#   error    errors/<n>.z must fail with the error[Exxxx] lines of <n>.err
+#   dump     dump_cases.txt -> `zc dump --canon` matches dump_golden/<n>.canon
+#   lexer / parser / program goldens for every example
+#   vfs      zvfs script dispatch
+#   smoke    per-unit no-arg binaries against <unit>_z/smoke.expected
+#   --heavy adds the self-host ASan run and the byte-identity fixpoint.
 #
-# Usage: ztestrunner --zc <port-zc> --cc gcc --root <repo> [--report]
+# Usage: ztestrunner --zc <zc> --cc gcc --root <repo> [--jobs N] [--heavy] [--report]
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
@@ -85,7 +88,7 @@ isLeak: function {s: StringView} out bool is {
     return (s.contains needle: " byte")
 }
 
-# zcArgv -- the port-zc emit command argv. `ccFwd`, when non-empty, names the
+# zcArgv -- the zc emit command argv. `ccFwd`, when non-empty, names the
 # C compiler to zc ITSELF rather than only to the harness's compile step: the
 # `platform` unit folds on it during type checking, so a `require:` guard
 # decides differently with it than without. Empty by default, because passing

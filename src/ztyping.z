@@ -2,9 +2,9 @@
 #
 # The parser produces a frozen zast.Program; the type checker consumes it
 # and produces a ZTyping: every typecheck-derived datum the downstream
-# consumers (emitter, SQL dumper) read. This is the data module, separate
-# from the producer, mirroring the zast / zparser split. References ztypes.z
-# for ZType + the shared enums (a multi-unit reference, like zparser -> zast).
+# consumers (emitter, SQL dumper) read. It is the data module, kept apart
+# from the producer the way zast is kept apart from zparser, and it
+# references ztypes.z for ZType and the shared enums.
 #
 # Representation is id-first and relational: cross-type references are
 # stored as u64 type ids (resolved through the registry by the producer),
@@ -161,8 +161,7 @@ nsbody: record {
     unitOp: zast.nodeid
 }
 
-# defaultval -- a member's default value, de-hacking the childDefault string
-# sentinels (`#function:`/`#variant:`). `literal` carries the default-expression
+# defaultval -- a member's default value. `literal` carries the default-expression
 # nodeid (re-emitted verbatim); `function`/`arm` carry the target DeclId; `none`
 # means no default.
 defaultval: variant {
@@ -257,8 +256,6 @@ ZTyping: class {
     currentThisName: String
     lastLockParamRoot: String
 
-    # generic instantiations: refs recorded for the mono pass and
-    # the minted instances, deduped by mono name (template_arg1[_arg2...]).
     # a generic template's syntactic body divergence (its last statement is a
     # return), recorded at resolution for the clone-scope synthesis.
     fnBodyDiverges: (IdMapV u64 value: bool)
@@ -276,9 +273,8 @@ ZTyping: class {
     # the fn whose body is being walked declares a `.borrow` return: bare
     # field returns are its contract (the lock/borrow source outlives).
     currentReturnsBorrow: bool
-    # the borrow source path a just-coerced BORROW-returning auto-call reported
-    # (the reference's _pending_borrow_lock); consumed by the binding sites,
-    # drained at statement and call boundaries.
+    # the borrow source path a just-coerced BORROW-returning auto-call reported;
+    # consumed by the binding sites, drained at statement and call boundaries.
     pendingBorrowPath: (List String)
     # the pending borrow is a RETURNED borrow (a `.borrow`-marked return): a
     # read-view of the source, so the binding's leaf lock is SHARED (the
@@ -292,8 +288,6 @@ ZTyping: class {
     # destructor and may be moved. Without this the pin would demote it to a
     # borrow, which is what `borrow`/`view` mean and `takex` does not.
     pendingBorrowOwned: bool
-    # type names whose method bodies the walk has already visited (methods
-    # body-check once, at the type's first body-walk reference).
     # per-mono template stamps, written by the post-sweep instance walk when
     # curMonoStamp is set; the emitter's mono re-walks read these where the
     # global table is param-suppressed.
@@ -540,8 +534,7 @@ ZTyping: class {
     # time), so the post-demand stamp resolves it where it was written
     pendingTyperefFrame: (IdMapV u64 value: ztypes.declid)
     unitTypesById: (IdMapV u64 value: ztypes.tid)
-    # --- declaration tree (parallel to the string-keyed def tables
-    # above; readers migrate to Decls stage by stage) ---
+    # --- declaration tree ---
     # every Decl row, indexed by its DeclId: row 0 is the sentinel and ids are
     # minted dense in mint order and never removed, so the id IS the index
     decls: (List Decl)
@@ -1341,7 +1334,7 @@ ZTyping: class {
     # declaration of its own the pended pre-index writes answer instead.
     # The owner is re-read per index rather than staged into a row list: the
     # per-child probe is a `:this` call, which cannot run under a live children
-    # borrow, and a map probe is cheaper than the staging lists it replaces.
+    # borrow, and a map probe is cheaper than a staged row list.
     declChildWalk: function {
         :this
         ownerTid: ztypes.tid
@@ -1803,7 +1796,7 @@ armside: variant {
 # segment is an arm of, and that type's arm ORDER decides the side -- the arm
 # written first negates the predicate, the one written second passes it
 # through. `bool` is that type everywhere this shape occurs, and it writes
-# `false` before `true`, which is what a `== "true"` test used to encode.
+# `false` before `true`.
 # sumPairKeyOf -- the tid whose 2-arm record answers for `tid`: itself when it
 # has one, else the template it was monomorphized from. A generic MONO carries
 # no record of its own -- resolveVariant and resolveUnion write one per

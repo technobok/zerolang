@@ -103,11 +103,7 @@ DentryTable: class {
     }
 }
 
-# Open() result. Domain-specific non-generic union; the generic
-# (Result t: TextReader e: IoError) declared in a user protocol
-# is unprecedented in the tree and was deliberately sidestepped
-# in Promote to generic Result
-# if a later slice surfaces a real need.
+# Open() result: a domain-specific non-generic union.
 OpenResult: union {
     # `ok` carries the opened file's contents as String. May
     # become a TextReader once a Provider implementation needs
@@ -131,11 +127,8 @@ ZVfsProvider: protocol {
 # NullProvider -- the stateless default. walk always returns
 # NOTFOUND, open always errors, stat returns dir for the root
 # item / notfound elsewhere, path returns the static [NULL]
-# marker.py:558-613.
-#
-# `_unused: bool` is a placeholder field. Zero-field non-generic
-# classes are untested in the tree; the dummy keeps the shape
-# in known-good territory.
+# marker. `_unused: bool` is a placeholder field so the class is not
+# zero-field.
 NullProvider: class {
     _unused: bool
 } as {
@@ -200,8 +193,8 @@ ProviderTable: class {
     }
     # registerFS -- construct an FSProvider rooted at <rootpath>/<parentpath>,
     # validating that the joined path is actually a directory. Panics if it
-    # isn't (mirrors Python's IOError. Root node 0 carries
-    # `parentpath` literally, so all walked paths share that prefix.
+    # isn't. Root node 0 carries `parentpath` literally, so all walked paths
+    # share that prefix.
     registerFS: function {:this rootpath: String.take parentpath: String.take} out u32 is {
         full: joinPath parent: rootpath.stringview name: parentpath.stringview
         sr: io.stat full
@@ -247,8 +240,7 @@ StringNode: class {
 
 # StringProvider -- in-memory file store. `nodes` is the flat node
 # table (NodeID = list index); `children` maps "<parentid>:<name>"
-# to the child NodeID (zerolang has no tuple type, so the composite
-# key is encoded as a string).py:710-770.
+# to the child NodeID.
 StringProvider: class {
     nodes: (List StringNode)
     children: (MapRV String value: u32)
@@ -278,8 +270,7 @@ StringProvider: class {
         ) case some then {
             return r
         } case none then {
-            # mirror Python: append a NOTFOUND node, record the
-            # edge, return the new id.
+            # append a NOTFOUND node, record the edge, return the new id.
             childpath: "\{(this.nodes.get i: parent.u64).path}/\{name}"
             empty: String
             newid: this.appendNode fpath: childpath.take k: nodekind.notfound c: empty.take
@@ -372,10 +363,8 @@ FSNode: class {
 # `io.stat` on the joined rootpath/relpath; opens read the file via
 # `io.readText`. `pathtable` indexes nodes by NodeID (= list index);
 # `pathcache` maps the relative path back to its assigned NodeID so
-# repeat walks are O(1).py:616-707.
-#
-# addFile panics: FSProvider is read-only from the VFS view (Python
-# ref exposes no public addFile either; `_appendpath` is internal).
+# repeat walks are O(1). addFile panics: FSProvider is read-only from
+# the VFS view.
 FSProvider: class {
     rootpath: String
     pathtable: (List FSNode)
@@ -401,9 +390,7 @@ FSProvider: class {
             return cached
         } case none then {
             # Stat the full path on disk and translate filekind ->
-            # nodekind. Any io.stat error collapses to NOTFOUND --
-            # matches Python's `os.path.exists` false branch at
-            #.
+            # nodekind. Any io.stat error collapses to NOTFOUND.
             full: joinPath parent: this.rootpath.stringview name: rel.stringview
             k: nodekind.notfound
             sr: io.stat full
@@ -469,20 +456,9 @@ FSProvider: class {
 }
 
 # ZVfs -- the engine layer. Owns its own provider list (parallel to
-# `ProviderTable`, which the older provider-level verbs still use)
-# plus a dentry table, a per-id name side-table indexed by dentry id,
-# and a walk cache keyed by "<parentid>:<name>".
-#
-# Notes on the type:
-#   - `_file_names: Dict[DEntryID, str]` -> `(List of: String)`
-#     indexed by dentryid (entryids are dense u32). Map<u32, String>
-#     surfaces an emitter codegen bug at this slice's timestamp;
-#     List<String> is more idiomatic anyway and works today.
-#   - per-entry `cache: Dict[str, DEntryID]` -> ZVfs-level
-#     `walk_cache: Map<String, fsno>` keyed by composite
-#     "<parentid>:<name>" (same trick StringProvider.children uses).
-#   - cast(DEntryFile, entry) (4 sites) -> implicit narrowing inside
-#     `case file/directory/notfound then { ... }`.
+# `ProviderTable`, which the provider-level verbs use) plus a dentry
+# table, a per-id name side-table indexed by dentry id (entry ids are
+# dense u32), and a walk cache keyed by "<parentid>:<name>".
 ZVfs: class {
     providers: (List ProviderBox)
     providerRoot: (IdMapR u32 value: String)
@@ -665,8 +641,7 @@ ZVfs: class {
     # fileTable -- (file-id, bare-name) for every FILE dentry, filled
     # into parallel out-lists. Only `file` arms are included so that
     # directories and not-found entries (which also carry a name in
-    # file_names) are excluded -- matching the reference's files-only
-    # _file_names.py:302-304.
+    # file_names) are excluded.
     fileTable: function {:this outIds: ListVal fsno outPaths: List String} is {
         n: this.entrytable.entries.length
         i: u64
@@ -688,7 +663,7 @@ ZVfs: class {
     # from the join itself. If the chain hits a root arm we stop;
     # anything else (notfound, file, dir, mount) keeps going. Up to
     # 1024 ancestors before we bail (defensive cap; trees in
-    # practice stay shallow).py:464-495.
+    # practice stay shallow).
     path: function {:this dentryid: u32} out String is {
         # Collect names walking upward, then assemble in reverse.
         # Cap at 1024 ancestors (defensive; trees stay shallow).
@@ -745,7 +720,7 @@ ZVfs: class {
     # pathfromprovider -- ask the dentry's provider for its native
     # path representation. For mount arms returns "[UNION]" (no
     # underlying path); for root/notfound returns "[NULL]"/
-    # "[NOT FOUND]".py:497-511.
+    # "[NOT FOUND]".
     pathfromprovider: function {:this dentryid: fsno} out String is {
         e: this.entrytable.entries.get i: dentryid.u64
         match (
@@ -872,10 +847,8 @@ ZVfs: class {
 
     # getline -- open the file, collect its lines into a List<String>,
     # return the one at `lineno` as Option.some. Out-of-range index or
-    # open-failure returns Option.none.py:530-555.
-    # Whole-file read is intentional for the bootstrap port (VFS-mapped
-    # files are tiny); streaming readline awaits the io stdlib's
-    # TextReader.
+    # open-failure returns Option.none. Whole-file read: VFS-mapped files
+    # are small.
     getline: function {:this dentryid: u32 lineno: u64} out Option String is {
         r: this.open :dentryid
         match (
@@ -898,7 +871,7 @@ ZVfs: class {
     # bindRoot -- replace this.rootid with a fresh mount dentry over
     # the old root. INSTEAD overlays exclusively (no second arm); BEFORE
     # / AFTER preserve the old root as the union's second / first arm
-    # respectively.py:412-433 (the name=None bind path).
+    # respectively.
     bindRoot: function {:this newid: fsno kind: bindkind} out fsno is {
         old: this.rootid
         md: mountdata parentid: old first: fsno second: fsno has_second: false
@@ -922,8 +895,7 @@ ZVfs: class {
     # walked there. INSTEAD discards the old entry; BEFORE / AFTER
     # layer the new mount as the union's first / second arm
     # respectively. The walk_cache entry for `<parentid>:<name>` is
-    # overwritten so future walks route to the new mount (mirrors
-    # Python's `parent.cache[name] = newunionid`.
+    # overwritten so future walks route to the new mount.
     bind: function {:this parentid: fsno name: StringView newid: fsno kind: bindkind} out fsno is {
         old: this.walk parent: parentid :name
         zf: fsno
@@ -947,8 +919,7 @@ ZVfs: class {
 }
 
 
-# Print "<id>: <arm-name>" for a single entry. Used by the `dump`
-# verb; mirrors the lexer dumper's `ttname` pattern.
+# Print "<id>: <arm-name>" for a single entry. Used by the `dump` verb.
 printEntry: function {id: u32 e: dentry} is {
     match (
         e

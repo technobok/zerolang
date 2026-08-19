@@ -1,17 +1,11 @@
-# Type checker, ported from src/ztypecheck.py.
-#
-# Slice 4.5a: registers one UNIT type per unit (the `unit` table) and resolves
-# the MAIN unit's top-level FUNCTION definition signatures into the type
-# registry -- each function plus its parameter children, with referenced
-# parameter types registered as shallow named shells. Mirrors the reference
-# `resolve_only_main` capability (no body walk, no generics, no system-wide
-# resolution); the SQL `types` / `type_children` tables read the result,
-# filtered to the example's own unit. Data blocks, records, variants, classes,
-# generics and body checking arrive in later slices.
-#
-# The registry is created by the caller and threaded in (not stored on the
-# ZTyping container), mirroring the reference's module-level type table: the
-# SQL dumper reads it as a separate argument.
+# The type checker. Every unit's top-level names are indexed into the Decl
+# tree first; resolution then starts at the program's `main` and demands only
+# what a reference reaches -- a definition resolves in the frame it was written
+# in, a generic specialises through the arg-keyed trie under its template, and
+# a body is walked (types, ownership, locks, narrowing, constants) only once
+# its owner has resolved. Everything it decides is stamped into the ZTyping
+# the caller hands in, beside the type registry; the emitter and the SQL dump
+# read those and resolve nothing themselves.
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
@@ -362,8 +356,7 @@ addError: function {
 }
 
 # isBorrowedVar -- true when the variable id is bound BORROWED (a borrowed
-# parameter or a genuine borrowed local). Reliable now that pendingBorrowPath
-# no longer leaks a sub-expression's borrow into an owned binding.
+# parameter or a genuine borrowed local).
 isBorrowedVar: function {st: zenv.ZSymbolTable.view vid: ztypes.vid} out bool is {
     ow: st.typing.variableOwnership.get key: vid
     isB: false
@@ -723,9 +716,7 @@ isContainerReaderCall: function {
     }
     # BOTH List templates: they share one emitted `get`, so they share its
     # reason for being here -- a mutable interior pointer whose C refuses a
-    # const receiver. Added before the valtype-element migration because the
-    # SEED must know it: a migration that makes `src` uncompilable cannot then
-    # build the compiler that would accept it.
+    # const receiver.
     isListB: false
     if recvBaseTid == (builtinTidT
         :ast
@@ -1534,9 +1525,8 @@ indexDeclPublicEntries: function {
     } else null
 }
 
-# linkDeclType -- the Stage-1 bridge at the mint funnel: record the
-# canonical id on the indexed "unitDecl.name" Decl and the Decl on the
-# type. References that mint outside the def index (literal shells,
+# linkDeclType -- record the canonical id on the indexed Decl and the Decl on
+# the type, at the mint funnel. References that mint outside the def index (literal shells,
 # forward names) find no Decl and no-op.
 linkDeclType: function {
     ty: ztyping.ZTyping
@@ -2185,8 +2175,7 @@ fnBodyMentions: function {ast: Ast.view op: Node.view name: StringView} out bool
 
 # recordConformerContexts -- pre-record each as-block marker target's first
 # conforming type (body order) so a demand-resolved protocol binds its spec
-# receiver to the conformer (the reference resolves the protocol inside the
-# conformer's resolution, inheriting its `this` context).
+# receiver to the conformer, whatever order the two resolve in.
 recordConformerContexts: function {
     ast: Ast.view
     ty: ztyping.ZTyping
@@ -2406,10 +2395,8 @@ pathOwnership: function {ast: Ast.view n: Node.view} out optionval ztypes.zparam
         n
     ) case dottedpath then {
         cn: atomName :ast n: (ast.nodes.get i: n.child.u64)
-        # `.lock` is a retired SPELLING of `borrow`. The MODE is gone -- the grid
-        # has one non-owned-and-mutable concept, not two -- but the word still
-        # parses to it so existing sources keep their exact semantics instead of
-        # silently changing meaning.
+        # `.lock` is a second spelling of `borrow`: the grid has one
+        # non-owned-and-mutable concept, and both words parse to it.
         if cn.stringview == "lock" then return (optionval.some ztypes.zparamownership.borrowMode)
         if cn.stringview == "borrow" then return (optionval.some ztypes.zparamownership.borrowMode)
         if cn.stringview == "take" then return (optionval.some ztypes.zparamownership.takeMode)
@@ -3114,7 +3101,7 @@ recordTyperef: function {
         # `(optionval t: u32)`), but skip numeric-literal size args (the `16` in
         # `(str to: 16)`) -- they are const values, not type references. The pending
         # instantiation is recorded by the enclosing expression arm (the wrapper node
-        # carries the reference's instance stamp).
+        # carries the instance stamp).
         aiter: node.arguments.iterate
         for argId: aiter loop {
             arg: ast.nodes.get i: argId.u64
@@ -3155,7 +3142,7 @@ recordTyperef: function {
     } case dottedpath then {
         # Ownership/access strip marker (this.lock / StringView.borrow / Container.private):
         # record the dotted node with its peeled base AND recurse on the parent so the
-        # stripped inner atom is stamped too (the reference stamps both ppath + stripped).
+        # stripped inner atom is stamped too.
         # A `.typedef` marker only recurses -- the dotted node itself resolves to a
         # NULL-defined typedef wrapper the dump filters out.
         cn: atomName :ast n: (ast.nodes.get i: node.child.u64)
@@ -3777,10 +3764,8 @@ regTypeNameOf: function {reg: ztypes.ZTypeRegistry tid: ztypes.tid} out String i
     return (reg.nameOf :tid)
 }
 
-# typeofSourceType -- resolve a typeof field's SOURCE without a body walk
-# (the reference's resolution-time method walks run its placeholder swap
-# even in resolve-only mode; our sources are signature-resolvable): a bare
-# atom reads the owner's already-resolved field of that name (a generator
+# typeofSourceType -- resolve a typeof field's SOURCE without a body walk: a
+# bare atom reads the owner's already-resolved field of that name (a generator
 # parameter capture). 0 when the shape needs the body walk.
 typeofSourceType: function {ast: Ast.view
     ty: ztyping.ZTyping
@@ -3831,8 +3816,7 @@ typeofSourceType: function {ast: Ast.view
 # a generator-promoted local's field type is a `typeof <first-rhs>` node.
 # When the source resolves from signatures alone the field types directly
 # (and the typeof node stamps); otherwise the shell is marked and the
-# body's first `this.<field> =` write swaps it (the reference's
-# placeholder mechanism).
+# body's first `this.<field> =` write swaps it.
 resolveTyperefShellMarked: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
@@ -3879,8 +3863,8 @@ resolveTyperefShellMarked: function {
 # nameIsInUnitReftype -- true when a type name resolves to an in-unit reference type
 # (class or union). Drives the reftype-param BORROW default and class field cleanup.
 # Native heap params (String/List/Map) are pointer-typed already and get no BORROW
-# default (mirrors the reference's `not is_heap_allocated` guard), so they are NOT
-# matched here -- only user class/union types defined in this unit.
+# default, so they are NOT matched here -- only user class/union types defined in
+# this unit.
 nameIsInUnitReftype: function {
     ast: Ast.view
     ty: ztyping.ZTyping.view
@@ -4038,7 +4022,6 @@ paramTypeBaseName: function {ast: Ast.view op: Node.view} out String is {
 # non-heap-allocated reftype, which takes the reftype-param BORROW default: List and
 # ListView (stack struct + heap buffer). Set/Map monos are heap-allocated (no BORROW);
 # the native iterator views have no destructor (no BORROW); str/array are valtypes.
-# Mirrors the is_heap_allocated the reference stamps on collection monos.
 isBorrowReftypeCollection: function {name: StringView} out bool is {
     if name == "List" then return true
     if name == "ListRef" then return true
@@ -4055,9 +4038,9 @@ isBorrowReftypeCollection: function {name: StringView} out bool is {
 
 # isBorrowNativeReftype -- true for native heap-owning reftypes (currently String)
 # that take the BORROW default as an unannotated param. Keyed by name, like the
-# classifiers above: the oracle decides by metadata (a native CLASS that owns heap,
-# not is_heap_allocated), but native types resolve AFTER the main unit, so that
-# metadata is not yet populated when a param resolves.
+# classifiers above: native types resolve AFTER the main unit, so the metadata
+# that would answer (a native CLASS that owns heap) is not yet populated when a
+# param resolves.
 isBorrowNativeReftype: function {name: StringView} out bool is {
     if name == "String" then return true
     return false
@@ -5231,8 +5214,8 @@ functiondefIsNative: function {op: Node.view} out bool is {
 
 # isFunctionDefOp -- true when an is-block item's operation is a functiondef (a
 # method), false for a field type-ref. Gates generic-class method production without
-# resolving the function -- mirrors the oracle's isgeneric gate, which never builds a
-# method FUNCTION type for a generic class (so no spurious collections FUNCTION row).
+# resolving the function: a generic class never gets a method FUNCTION type of its
+# own, only its instances do.
 isFunctionDefOp: function {op: Node.view} out bool is {
     match (
         op
@@ -5269,7 +5252,7 @@ isInterfaceDefOp: function {op: Node.view} out bool is {
 # resolveSpecFn -- resolve one facet/protocol is-block spec method (a namedoperation
 # whose operation is a functiondef) into a qualified `{type}.{spec}` FUNCTION. Like
 # resolveMethodFn but drops the `:this` receiver: a facet/protocol `this` resolves to
-# nothing (the reference returns no type), so the spec keeps only its real params.
+# nothing, so the spec keeps only its real params.
 resolveSpecFn: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
@@ -5362,10 +5345,9 @@ markerTargetId: function {
 # `null`, the language's way of striking a compiler-provided member off a type.
 # asDeclaresMember -- the as-block declares `member` as a real definition (not
 # the `member: null` opt-out shell). The synthesised valtype defaults must
-# YIELD to it: `hasEqIs` is computed from the IS-block alone, so a record whose
-# `==` lives in its `as` block used to get a synthesised `==` minted on top of
-# the author's, and the emitter picked the synthesised one -- the author's
-# method compiled, linked, and was never called.
+# YIELD to it: `hasEqIs` is computed from the IS-block alone, so without this a
+# record whose `==` lives in its `as` block would get a synthesised `==` minted
+# on top of the author's, and the emitter would pick the synthesised one.
 asDeclaresMember: function {
     ast: Ast.view
     asItems: (ListVal u32).view
@@ -5527,8 +5509,8 @@ attachMethods: function {
 # destructor (a protocol), so a class holder keeps its own.
 # recordConformance -- record an impl-satisfies-spec conformance, but only when the
 # spec resolves to a FACET or PROTOCOL (a RECORD marker like a numeric's `tag: tag` is a
-# discriminator child, NOT a conformance). Mirrors _record_conformance (ztypecheck.py:3516);
-# the helper C names (vtable/create/destroy/wrapper) are emitter-set and stay empty here.
+# discriminator child, NOT a conformance). The helper C names (vtable/create/destroy/
+# wrapper) are the emitter's and stay empty here.
 recordConformance: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -7410,9 +7392,8 @@ unionCustomTagId: function {
                         if isdata then {
                             return (optionval.some rr)
                         } else {
-                            # the reference stamps only the main unit's
-                            # custom-tag items (system variants resolve
-                            # standalone, unstamped).
+                            # only the main unit's custom-tag items stamp
+                            # (system variants resolve standalone, unstamped).
                             if unitDecl == ty.mainUnitRoot then {
                                 tgo: (resolvedByIds
                                     :ast
@@ -8536,8 +8517,8 @@ resolveProtocol: function {
 }
 
 # registerEmptyType -- register a native bottom type (null -> NULL, never -> NEVER) as a
-# valtype with a single synth `create` child. The reference special-cases these: they are
-# `record is native` in source but carry a distinct typetype and only a create child.
+# valtype with a single synth `create` child: they are `record is native` in source but
+# carry a distinct typetype and only a create child.
 registerEmptyType: function {
     ast: Ast.view
     ty: ztyping.ZTyping
@@ -9424,8 +9405,7 @@ resolveDefIn: function {
         # A unit-level type alias (`Node: zast.Node`): resolve the cross-unit dotted
         # ref to a (shell) type id and register it under the unit's name, so bare-alias
         # return types and value uses resolve. Replicates resolveTyperefShell's
-        # cross-unit leg; mirrors the reference's _type_of_definition dotted-path
-        # fallback (ztypecheck.py:1184).
+        # cross-unit leg.
         apNm: atomName :ast n: (ast.nodes.get i: defn.parent.u64)
         apId: atomNameId :ast n: (ast.nodes.get i: defn.parent.u64)
         if (nameDenotesUnit :ty :reg nameId: apId) then {
@@ -9560,13 +9540,11 @@ registerUnitGenericParams: function {
 
 # recordUnitConformerContexts -- record, for each of this unit's definitions
 # that its own `main` names, the conformer its as-block markers bind their spec
-# `this` to. The reference binds a spec receiver only when the conformer's
-# resolution triggers the protocol's; a main body that never names the conformer
-# resolves the protocol context-free (e.g. through a function signature).
-# A property of the unit's own declarations, not of whether its body is walked
-# eagerly -- so it runs for every unit, at the point in unit order the eager
-# walk used to run it. A unit with no `main` of its own has nothing to record,
-# which today is every unit but one.
+# `this` to. A spec receiver binds only when the conformer's resolution triggers
+# the protocol's; a main body that never names the conformer resolves the
+# protocol context-free (e.g. through a function signature). A property of the
+# unit's own declarations, not of whether its body is walked eagerly -- so it
+# runs for every unit. A unit with no `main` of its own has nothing to record.
 recordUnitConformerContexts: function {
     ty: ztyping.ZTyping
     ast: Ast.view
@@ -9678,21 +9656,15 @@ resolveUnitBody: function {
     )
 }
 
-# typecheck -- entry point. Registers a UNIT type per unit (the `unit` table)
-# and resolves the main unit's definition signatures into the registry. The
-# registry is supplied by the caller and read by the SQL dumper.
-# registerAndResolveMain -- register a UNIT type per unit, then resolve the main
-# unit's definition signatures. Iterates program.ast.units transiently so the demand
-# pass can re-iterate it without an overlapping exclusive lock.
-# registerUnitRoots -- Stage D: register a UNIT type for EVERY unit up front,
-# before lowerGenerators / indexUnitDefs / demand resolution, so childOf-at-mint
+# registerUnitRoots -- register a UNIT type for EVERY unit up front, before
+# lowerGenerators / indexUnitDefs / demand resolution, so childOf-at-mint
 # (declareCanonicalType) always sees a populated unit root. indexUnitDefs binds
 # each type to the unit's Decl, keyed on the unitdef NODE -- by then the name
 # would find that very Decl. The main unit precedes its deps in unit order, so a
 # cross-unit qualified type ref (zlexer.Token) sees the dep as a unit; a member
 # path types its base as the UNIT type through the program root's child of that
 # name -- never the resolution chain, where a main unit sharing a type's name
-# (str.z, panic.z) would shadow it. Formerly registerAndResolveMain Pass 1.
+# (str.z, panic.z) would shadow it.
 registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
@@ -9908,8 +9880,7 @@ isConformanceMarker: function {op: Node.view} out bool is {
     }
 }
 
-# declaresConformance -- true when an objectdef declares conformance via an as-item
-# (the oracle eager-resolves such collections types on first touch of the unit).
+# declaresConformance -- true when an objectdef declares conformance via an as-item.
 declaresConformance: function {ast: Ast.view op: Node.view} out bool is {
     match (
         op
@@ -10551,7 +10522,7 @@ resolveDemandedDeclIn: function {
         # A unit-level CONSTANT is a definition like any other, and resolveDef
         # has no leg for the shapes one takes -- a bare literal, a suffixed
         # one, a constant expression. Its type and its value are registered
-        # here, where the reference that demanded it is asking. The eager tier
+        # here, where the demanding reference is asking. The eager tier
         # walks every definition of every unit instead, so exactly one of the
         # two speaks.
         if ty.eagerAll then return
@@ -11009,9 +10980,8 @@ instCallablePath: function {ast: Ast.view op: Node.view segs: (ListVal u64)} is 
 
 # callableInstPath -- the path of a binding whose value is a (possibly
 # expression-wrapped) call. Empty for anything else, which is what says a
-# binding is not an instantiation. Replaces reading a single atom name: a
-# dotted callable named another unit's template and yielded "" instead, so no
-# request was built at all -- silently, not as an error.
+# binding is not an instantiation. The whole path, not a single atom name: a
+# dotted callable names another unit's template.
 callableInstPath: function {ast: Ast.view op: Node.view segs: (ListVal u64)} is {
     match (
         op
@@ -11202,7 +11172,7 @@ InstReq: class {
 }
 
 # instFillIds -- record the instantiation's expression/call/callable/arg node
-# ids on the request (the reference stamps all four at binding resolution).
+# ids on the request; all four stamp at binding resolution.
 instFillIds: function {ast: Ast.view r: InstReq op: Node.view} is {
     match (
         op
@@ -11605,11 +11575,10 @@ addPromotedLocalsBlk: function {
     } else null
 }
 
-# synthGeneratorIterClass -- synthesize the `<fn>_iter` CLASS the oracle lowers a
-# generator to: a `state: i64` field, a `create` method (param `state: i64`), and a
-# `call` method (receiver `this`, BORROW). All defined_in_unit=the example; seed
-# return/never demand (the lowered methods have bodies). No-param / no-promoted-local
-# generators only (counter); captured params + promoted locals arrive later.
+# synthGeneratorIterClass -- synthesize the `<fn>_iter` CLASS a generator lowers
+# to: a `state: i64` field, a `create` method (param `state: i64`), and a `call`
+# method (receiver `this`, BORROW), all defined in the generator's unit; seeds the
+# return/never demand (the lowered methods have bodies).
 # addResumeInput -- for a bidirectional generator (`accepts: U` in the Iterator
 # return), add the `_resume_input: U` field to the iter class and a `value: U` param
 # (with the annotated ownership) to its `call` method.
@@ -12154,13 +12123,11 @@ resolveInlineGenericUnitIn: function {
         if (hasGenericParam :ast items: bodyIds) then {
             reg.setGeneric typeId: uid value: true
             registerGenericParams :reg :ast tdecl: tdl5 items: bodyIds
-            # mirror the reference's inline-template touch: the unit node and
-            # each bare generic-param def stamp, and the param name resolves so
-            # signature t-refs stamp. Unconditional -- createUnitMono falls back
-            # to this def-node stamp to find a template with no childOf edge, so
-            # laying it is a property of resolving the template, not of which
-            # walk got here. The guard this replaces asked ty.fullMainUnit,
-            # which the first eager unit sets and nothing ever clears.
+            # the unit node and each bare generic-param def stamp, and the
+            # param name resolves so signature t-refs stamp. Unconditional --
+            # createUnitMono falls back to this def-node stamp to find a template
+            # with no childOf edge, so laying it is a property of resolving the
+            # template, not of which walk got here.
             udnid: unitdefNodeId :ast nId: unitOpId
             ztyping.nodeTypeSet tbl: ty.nodeType nid: udnid.u64 tid: uid
             with gpiter: bodyIds.iterate do for gmId: gpiter loop {
@@ -12320,7 +12287,7 @@ fnReturnBaseNameOf: function {ast: Ast.view op: Node.view} out String is {
 # registerMonoFnParams -- register a mono unit fn's generic-param-typed params
 # (a: t -> a: argId) on the mono FUNCTION type, sourced from the template fn's
 # AST. The template fn stays childless -- only the instance carries substituted
-# param children, matching the reference (which carries them via the clone).
+# param children.
 registerMonoFnParams: function {
     ast: Ast.view
     ty: ztyping.ZTyping
@@ -12677,7 +12644,7 @@ inlineTemplateTid: function {
 # completeUnitInstantiations -- post-demand pass: with system types
 # resolved, finish each generic-unit instantiation (substituted children +
 # clone stash), register the binding name, and stamp the instantiation's
-# expression/call/callable/arg nodes (the reference stamps all four).
+# expression/call/callable/arg nodes.
 completeUnitInstantiations: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -13337,7 +13304,7 @@ resolveMainUnitInstantiations: function {
 # drained (the mint pass precedes the drain), keyed in the template's
 # parameter order, found on the trie under the template or minted and
 # joined there. The label is display only. An argument nothing resolves is
-# reported here, where the request is -- it used to reach the emitter.
+# reported here, where the request is.
 mintUnitMonoOf: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -13801,7 +13768,7 @@ stampPendingTyperefs: function {
 
 # ownershipOfParam -- a parameter's binding ownership from its path annotation:
 # an explicit .take binds OWNED, everything else (.borrow / .lock / default)
-# binds BORROWED (mirrors _check_function_body_inner's param-ownership mapping).
+# binds BORROWED.
 ownershipOfParam: function {o: optionval ztypes.zparamownership} out ztypes.zownership is {
     match (
         o
@@ -13842,7 +13809,7 @@ paramTypeId: function {ast: Ast.view
     # A parameter type carrying an ownership marker (ztypes.ZTypeRegistry.take)
     # resolves through its peeled base: the marker node is recorded under the
     # current unit and left unstamped, so read the inner cross-unit ref that
-    # stampTyperefs resolved. Mirrors the reference's _strip_path_ownership.
+    # stampTyperefs resolved.
     match (
         op
     ) case dottedpath then {
@@ -16403,7 +16370,7 @@ genericTypeConstruction: function {
         )
     }
     # Only a bare-atom callable restamps to the instance; a dotted callable
-    # (the .str conversion form) leaves the path unstamped like the reference.
+    # (the .str conversion form) leaves the path unstamped.
     gcb: bareAtomName :ast n: (ast.nodes.get i: call.callable.u64)
     gcal: nodeId n: (ast.nodes.get i: call.callable.u64)
     if gcal > 0 when gcb.length > 0 then {
@@ -20021,7 +19988,7 @@ checkAssignment: function {
 
 # checkReassignment -- `lhs = value`: resolve the target path and the value, then
 # reset any narrowing on a bare-name target (appends a non-definition overlay
-# entry, mirroring _check_reassignment_inner's reset_narrowing).
+# entry).
 checkReassignment: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -20348,7 +20315,7 @@ checkSwap: function {
 }
 
 # withValueOwnership -- the with-binding's ownership from the bound value's
-# syntactic shape, mirroring the reference's function-argument rules: a bare
+# syntactic shape, the same rules as a function argument: a bare
 # name bound to a runtime variable or a plain dotted path borrows; `.take`
 # transfers; calls, literals and constructions are fresh owned values.
 withValueOwnership: function {
@@ -20624,8 +20591,7 @@ checkFor: function {
         match (
             cond
         ) case namedoperation then {
-            # A bare 0-arg function returning an iterator class auto-invokes
-            # (the reference rewrites the condition to a synthetic call):
+            # A bare 0-arg function returning an iterator class auto-invokes:
             # its walk runs in a call scope and the atom keeps the FUNCTION
             # stamp rather than the auto-call's coerced return.
             facId: u64
@@ -20749,8 +20715,8 @@ checkFor: function {
             }
             if nm.length > 0 when vt > 0 then {
                 # A call-shaped iterator init probes its per-iteration call
-                # in an empty call scope (the reference's rewrite walks it
-                # once); gated on the value being an iterator wrapper.
+                # in an empty call scope; gated on the value being an iterator
+                # wrapper.
                 if (isCallNode :ast n: (ast.nodes.get i: cond.operation.u64)) then {
                     doProbe: false
                     pw: iterWrapperElem :ast :st :unitDecl wid: vt
@@ -21019,8 +20985,8 @@ checkFor: function {
 # them in `taken` for a single post-if invalidate. Without this a take in one arm
 # propagates (via popTo) into the sibling arm, which then sees the var as gone and
 # never stamps its type (e.g. an else-arm's `childpath.take` emitting `.take` on a
-# String). Mirrors the reference _check_if_inner per-arm restore; the port's take
-# is an overlay over a persisting entry, so clearTaken alone restores (no redefine).
+# String). A take is an overlay over a persisting entry, so clearTaken alone
+# restores (no redefine).
 restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: IdSet u32 taken: IdSet u32} is {
     liveAfter: st.getLiveOwnedVars
     for vn: liveBefore.iterate loop {
@@ -21576,9 +21542,9 @@ argIsTrivial: function {ast: Ast.view op: Node.view} out bool is {
 
 # hoistArg -- hoist a non-trivial call argument into a fresh `_tN` synth temp:
 # define the temp (OWNED, synth origin anf) in the open CALL scope and record
-# the synth Assignment / value-Expression / AtomId rows + their type stamps so
-# the dump matches the reference's hoisted tree. The parsed argument keeps its
-# own stamps; only the dump rows are synthesised (no AST mutation).
+# the synth Assignment / value-Expression / AtomId rows + their type stamps for
+# the dump. The parsed argument keeps its own stamps; only the dump rows are
+# synthesised (no AST mutation).
 # typeIsReftype -- a registered type whose isValtype flag is explicitly false
 # (classes, unions, protocols, heap natives like String). Unset or unregistered
 # ids are not reftypes.
@@ -22005,7 +21971,7 @@ takePendingBorrow: function {st: zenv.ZSymbolTable dst: List String} is {
 
 # installBorrowLocks -- SHARED on every path prefix, EXCLUSIVE on the leaf
 # (the symtab appends one lock overlay entry per acquisition, keyed by the
-# path root -- the oracle's non-definition rows). Holder = the binding var.
+# path root). Holder = the binding var.
 installBorrowLocks: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -23354,9 +23320,8 @@ walkCallArgsHoist: function {
                     # parameter locks it for the call. A `:name` shorthand
                     # argument is the same bare local read, so a take
                     # parameter consumes it identically; at lock/borrow
-                    # parameters the shorthand takes no lock (enforcing
-                    # those is a recorded follow-on, measured at 1,848
-                    # sites -- see docs/typechecker.pdoc).
+                    # parameters the shorthand takes no lock (see
+                    # docs/typechecker.pdoc, `:name` at the argument site).
                     bn: bareAtomName :ast n: (ast.nodes.get i: arg.operation.u64)
                     if bn.length == 0 when isTake then {
                         bn = atomName :ast n: (ast.nodes.get i: arg.operation.u64)
@@ -23703,7 +23668,7 @@ checkBoxConstruction: function {
 # walk (no auto-call coercion -- callable position wants the function itself);
 # the base is typed and stamped there. none = the callable is not a dotted
 # path; some 0 = dotted but unresolved (e.g. a data block's `.index`), which
-# leaves the call untyped with its arguments unwalked, like the reference.
+# leaves the call untyped with its arguments unwalked.
 callableDottedResult: function {
     st: zenv.ZSymbolTable.view
     unitDecl: ztypes.declid
@@ -24360,8 +24325,8 @@ checkCall: function {
                         recvImplicit: recvVal
                     )
                     checkMissingCallArgs :ast :st :call funcId: dro isCtor: false
-                    # The receiver locks for the call's duration too (after
-                    # the args, matching the oracle's entry order).
+                    # The receiver locks for the call's duration too, after
+                    # the args.
                     rro: methodReceiverRoot :ast n: (ast.nodes.get i: call.callable.u64)
                     if rro.length > 0 then {
                         rvo2: st.lookupVarId nameId: (nameIdOf :ast name: rro.stringview)
@@ -24375,7 +24340,7 @@ checkCall: function {
                                 # A receiver-bound method locks reftype
                                 # receivers; a this-less function member is a
                                 # callable field -- its receiver locks
-                                # unconditionally (mirrors _lock_receiver).
+                                # unconditionally.
                                 doLock: false
                                 rtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rvt2.u64)
                                 isFP: false
@@ -24517,8 +24482,7 @@ checkCall: function {
                         # while the binding stays OWNED. The source is the
                         # receiver when there is one; else `mlr`, the call's
                         # lock root, set for any non-owned argument -- which is
-                        # what lets a `borrow` parameter source the pin that
-                        # `.lock` used to provide on its own.
+                        # what lets a `borrow` parameter source the pin.
                         rtupX: (List String)
                         xq4X: ast.nodes.get i: call.callable.u64
                         methodReceiverTuple :ast n: xq4X dst: rtupX
@@ -25401,8 +25365,8 @@ checkCall: function {
                     gres: genericTypeConstruction :ast :st :unitDecl :call tplId: funcId
                     if gres > 0 then return gres
                     # field-bound value args: infer the instance and construct
-                    # through the standard ctor flow (mirrors the reference's
-                    # generic record/class construction).
+                    # through the standard ctor flow, as a generic record/class
+                    # construction does.
                     # an invalid type-argument list (unknown/duplicate already
                     # diagnosed) never drives field-bound inference; the
                     # single-diagnostic template resolution below stands
@@ -26720,23 +26684,19 @@ scanMemberSignatures: function {
 }
 
 # maybeWalkMethods -- the resolution-time method-walk trigger: the first time
-# a body walk resolves a main-unit definition's name, replay the reference
-# resolver's side effects at the current scope position -- scan the signature
-# typerefs (recursing per name), then body-check the type's methods. The
-# early mark stops re-entry (a method constructing its own type).
+# a body walk resolves a main-unit definition's name, scan the signature
+# typerefs (recursing per name) at the current scope position, then body-check
+# the type's methods. The early mark stops re-entry (a method constructing its
+# own type).
 maybeWalkMethods: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast.view
     name: StringView
 } is {
-    # The declaring node comes from the DECL, not from a positional index into
-    # one unit's body list. That index was keyed by bare name and indexed the
-    # target unit's members only, which is the whole of what the main-unit fence
-    # here used to guard -- consulting it from elsewhere would have walked
-    # whatever member happened to share the name. A Decl is keyed by (unit,
-    # name) and records the node that declared it, so any unit's definition can
-    # be walked at the point something demands it.
+    # The declaring node comes from the DECL, which is keyed by (unit, name)
+    # and records the node that declared it, so any unit's definition can be
+    # walked at the point something demands it.
     nmId: zast.poolFind pool: ast.names text: name
     if nmId.isZero then return
     dd: (declOfUnitDefIds
@@ -26783,8 +26743,6 @@ walkDefinitionById: function {
 }
 
 # walkDeclaredDef -- the shared core: mark the definition walked and walk it.
-# `unitBody` is gone from here; it was threaded to reach a positional index that
-# no longer exists.
 walkDeclaredDef: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -26996,7 +26954,7 @@ methodDeclOf: function {
 
 # checkMethodBodies -- body-check every method of one type definition (is- and
 # as-block functiondefs, declaration order). The scopes land under the walk's
-# current scope, mirroring the oracle's resolve-at-first-demand placement.
+# current scope, where the first demand placed them.
 checkMethodBodies: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -27185,13 +27143,9 @@ checkFunctionBodyIn: function {
         maybeWalkMethods :st :unitDecl :ast name: defName
         hasBody: defn.body > 0
         isGenDef: false
-        # the function's own tid, off the Decl the caller passed. A defName
-        # spelled `unit.name` or `Type.member` used to be split back apart here
-        # and re-resolved by ids -- measured over all 448 emit-set programs the
-        # split ran 89 times and produced a result 0 times, because the only
-        # callers that reach it are mono walks whose owner is a registry label
-        # (`mathops_i64`) that is never interned as a name. Every other caller
-        # passes the function's Decl, so fnTid already answers.
+        # the function's own tid, off the Decl the caller passed; a defName is
+        # display only (a mono walk's owner is a registry label such as
+        # `mathops_i64`, never an interned name).
         rgot: (optionval.none u64)
         if (fnTid.isZero) == false then rgot = (optionval.some fnTid.u64)
         match (
@@ -27460,7 +27414,7 @@ checkFunctionBodyIn: function {
             st.typing.currentReturnsBorrow = prevRb
             # Implicit-return coercion: a literal-typed last statement takes
             # the function's concrete return type, stamped on the statement
-            # line (the node the reference coerces by id).
+            # line.
             ftid: ztypes.tid
             ftid = ztypes.tid.create from: (optU64Or o: rgot d: ftid)
             if ftid > 0 then {
@@ -27861,11 +27815,9 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
 # unit, so its methods would be emitted with nothing stamped (E0500, "unhandled
 # binding type"). The walk is what stamps a body, so the completion pass is not
 # optional; it is the price of walking a unit once rather than to a fixpoint.
-#
-# What it no longer does is check a type NOTHING reached. That was its other
-# half, and it is retired: with the root demand-driven, a definition the program
-# cannot reach is not the compiler's to spend time on, and reporting on it is a
-# LINT concern. So the keep test is `resolved` alone -- the blanket keep for
+# A type NOTHING reached is not checked here: a definition the program cannot
+# reach is not the compiler's to spend time on, and reporting on it is a LINT
+# concern. So the keep test is `resolved` alone.
 # walkOwedNamespaceBodies -- walk the member bodies of every namespace or
 # hidden subunit the demand path resolved. The main unit's own namespaces are
 # walked by checkUnitBodies; a DEPENDENCY's are reached only here, and without
@@ -28601,8 +28553,7 @@ stampOneUnitMono: function {
 # foldLiteralStamps -- replace literal-typed node stamps with their concrete
 # defaults (i64 / f64) after the body walk: the unregistered pseudo ids and the
 # data blocks' registered literal_int/literal_float element shells. Symbol-table
-# entries keep their literal ids (the oracle's entry/variable rows read
-# literal_int there too).
+# entries keep their literal ids.
 foldLiteralStamps: function {st: zenv.ZSymbolTable program: Node.view} is {
     match (
         program
@@ -28974,8 +28925,8 @@ resolveUnitIfDef: function {
 
 # --- compile-time constant evaluation ---
 #
-# The value domain the emitter used to answer for itself. evalConstNode walks a
-# constant expression once and yields a cval; constValueOfMember pulls the value
+# evalConstNode walks a constant expression once and yields a cval;
+# constValueOfMember pulls the value
 # of a NAMED constant on demand and memoises it. On demand rather than in source
 # order because definitions are not written in dependency order and units are
 # not visited in dependency order: `B: A + 2` may precede `A: 1`, and a
@@ -30350,10 +30301,9 @@ reportUnitConstantRef: function {
 }
 
 # resolveConstantDef -- one definition: an (expression-wrapped) numeric-literal
-# atomid is a unit constant. Record resolved[unit.name] as the literal's concrete
-# default (i64 / f64, which materialiseLiteral demands). The definition's
-# own nodes stay unstamped: the oracle's stamps there carry its unregistered
-# literal pseudo-type (NULL in the dump), invisible to every projection.
+# atomid is a unit constant, recorded as the literal's concrete default (i64 /
+# f64, which materialiseLiteral demands). The definition's own nodes stay
+# unstamped.
 resolveConstantDef: function {
     ast: Ast
     ty: ztyping.ZTyping
@@ -30537,8 +30487,7 @@ resolveConstantDef: function {
         # a NON-numeric bare name is the unit-level alias form (`Same: Holder`),
         # which resolveDef registers -- it is not this pass's business.
     } else {
-        # A construction is not a literal. `origin: Point.create x: 0` used to
-        # register nothing and report nothing. The PARENTHESISED call is the
+        # A construction is not a literal. The PARENTHESISED call is the
         # generic-unit instantiation form (`intmath: (genmath t: i64)`) and
         # stays legal -- its callee names a UNIT, which is the test here; the
         # definition arms (functiondef, objectdef, unitdef, datablock) reach
@@ -31008,8 +30957,7 @@ seedPlatformConsts: function {
     # os/arch describe what the build is FOR: the --target triple decides when
     # one is given, and the host the compiler runs on otherwise. A cross --cc
     # used WITHOUT --target therefore leaves these describing the host, which
-    # the docs say plainly -- the preprocessor path they replaced could not be
-    # wrong that way, because it ran inside the C compiler doing the targeting.
+    # the docs say plainly.
     osn: os.hostOsName
     arn: os.hostArchName
     if ty.targetTriple.length > 0 then {
@@ -31102,9 +31050,9 @@ seedPlatformValue: function {
     ty.constEvalState.set key: (ty.memberConstKey parentTypeId: ptid nameId: nid) value: 2.u8
 }
 
-# resolveConstantDefs -- materialise every unit's constant definitions the way
-# the oracle resolves them on first name lookup, so a constant is a member of
-# the unit that declares it and `unit.NAME` resolves across units the way
+# resolveConstantDefs -- materialise every unit's constant definitions, so a
+# constant is a member of the unit that declares it and `unit.NAME` resolves
+# across units the way
 # `unit.fn` does. Runs post-demand so the numeric defaults are already resolved.
 resolveConstantDefs: function {
     ty: ztyping.ZTyping.view
@@ -31257,8 +31205,8 @@ resolveNamedDefsIn: function {
     }
 }
 
-# lowerGenerators -- the generator lowering pass (the reference's
-# _lower_generators): for each unit, rewrite every yield-function whose
+# lowerGenerators -- the generator lowering pass: for each unit, rewrite every
+# yield-function whose
 # declared return head resolves to the stdlib Iterator protocol into a
 # synth iterator class + a factory. Runs before main-unit resolution so
 # the rewritten definitions flow through the normal walk; the Iterator
@@ -31430,8 +31378,8 @@ lowerGeneratorsInUnit: function {
                     wfv: true
                     ty.generatorWrapper.set key: wfid.u64 value: wfv
                     # the create-param and field-path clones must not stamp:
-                    # the reference shares those nodes with the factory, so
-                    # each ref carries exactly one stamp.
+                    # those nodes are shared with the factory, and each ref
+                    # carries exactly one stamp.
                     nsi: u64
                     nsn: lowOpt.noStamp.length
                     for nsi < nsn loop {
@@ -32087,9 +32035,7 @@ reexportUnitOf: function {
 }
 
 # programUnitDecls -- every FILE unit's Decl, in load order: the program root's
-# children. What a closure-wide sweep iterated the unit-name index for. One
-# child per unit name: registerUnitRoots rejects a repeated one, so the sweep
-# and the index it replaces see the same set.
+# children, one per unit name (registerUnitRoots rejects a repeated one).
 programUnitDecls: function {ty: ztyping.ZTyping.view} out (ListVal u64) is {
     result: (ListVal u64)
     ro: ty.decls.get i: ty.programRoot.u64
@@ -32114,9 +32060,9 @@ nameDenotesUnit: function {
     h: envLookup :ty frame: ty.curFrame :nameId
     if h.declId.isZero then return false
     # only a BINDING of an instantiated unit, never a unit DECLARATION: a
-    # nested unit or subunit is in scope here but was never in the index this
-    # replaces, and reading one as a qualified root changes what a dotted path
-    # means (qualified_subunit_type, the re-export chains).
+    # nested unit or subunit is in scope here, and reading one as a qualified
+    # root changes what a dotted path means (qualified_subunit_type, the
+    # re-export chains).
     isUd: false
     {
         hdo: ty.decls.get i: h.declId.u64
@@ -32285,9 +32231,6 @@ declOfUnitDefIds: function {
 }
 
 # childOfWalkIds -- the two-segment walk with both segments already interned.
-# The string form's fast path composed a key, split it back with indexOf +
-# substring, re-interned the unit segment and handed the name segment to a
-# text lookup that interned it again -- all to reach exactly this.
 childOfWalkIds: function {
     ty: ztyping.ZTyping
     unitDecl: ztypes.declid
@@ -33026,6 +32969,9 @@ publicAliasInternalNames: function {
     return result
 }
 
+# typecheck -- the entry point: index every unit's declarations, resolve from
+# the program's `main` outward (or every definition under `eager`), walk the
+# bodies, and return the walk state whose `typing` and `reg` hold the result.
 typecheck: function {
     program: Node
     reg: ztypes.ZTypeRegistry.take

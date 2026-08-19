@@ -1,11 +1,7 @@
-# Type model for the zerolang type checker: the type descriptor
-# (ZType), scope/entry/variable/lock/conformance carriers, the id
-# registry, and the pure numeric-literal and name-mangling helpers.
-#
-# The binary built from this file is the ztypes-slice smoke harness:
-# it dumps every enum arm, a representative of each carrier, and the
-# pure-function battery, compared against tests/fixtures/ztypes_z/
-# smoke.expected.
+# Type model for the zerolang type checker: the type descriptor (ZType), the
+# variable / overlay-row / conformance carriers, the id registry, and the pure
+# numeric-literal and name-mangling helpers. `main` is the unit's smoke
+# harness, compared against tests/fixtures/ztypes_z/smoke.expected.
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
@@ -111,8 +107,7 @@ zlockscope: variant {
 # `.view` (not-owned and readonly -- the argument stays readable for the call),
 # `.hold` (owned and readonly -- moved in, then frozen), or `.takex` (an owned
 # result whose non-owned sources stay pinned for its life). `lock` parses as a
-# spelling of borrowMode; the retired lockMode keeps integer slot 2 unassigned
-# so dumps stay comparable.
+# spelling of borrowMode; integer slot 2 is unassigned so dumps stay comparable.
 zparamownership: variant {
     noneMode: null
     takeMode: null
@@ -177,8 +172,8 @@ constfail: record {
 }
 
 # Concrete numeric type a literal resolves to. Parsing accumulates in
-# u64; the 128-bit kinds carry the classification but true 128-bit
-# magnitudes are out of range for this slice.
+# u64; the 128-bit kinds carry the classification but a magnitude above
+# u64 is out of range.
 numkind: variant {
     i8Type: null
     i16Type: null
@@ -483,7 +478,7 @@ parsedval: record {
 }
 
 # Integer/float lower bound for a numeric type. `has` is false for the
-# kinds this slice does not range-check (128-bit and float).
+# kinds that are not range-checked (128-bit and float).
 NumRange: class {
     has: bool
     loText: String
@@ -491,9 +486,8 @@ NumRange: class {
 }
 
 # --- reference-type carriers ---
-# Cross-type references are stored as type ids (u64), resolved through
-# the registry by a later slice. Owned sub-objects (a variable, a lock)
-# are held by value via Option.
+# Cross-type references are stored as type ids, resolved through the
+# registry.
 
 # A compile-time constant value, as the evaluator passes it around.
 #
@@ -526,10 +520,10 @@ ZVariable: class {
     synthOrigin: (Option String)
 }
 
-# Result of parse_number: the resolved kind, the value (ival for
+# Result of parseNumber: the resolved kind, the value (ival for
 # integers, fval for floats), and an error message ("" when none).
-# Integer magnitudes accumulate in u64; true 128-bit literals are out
-# of range for this slice.
+# Integer magnitudes accumulate in u64; a literal above u64 is out of
+# range.
 ParsedNumber: class {
     kind: numkind
     isFloat: bool
@@ -548,10 +542,9 @@ ZConformance: class {
     conformanceId: u64
 }
 
-# The type descriptor. For functions, children carry parameters and
-# returnTypeId the result. For records/classes, children carry fields
-# and methods. Per-(parent, child) metadata lives in the type_child
-# table introduced with the symbol-table slice.
+# The type descriptor. A function's parameters, a record's or class's
+# fields and methods, are the type's declaration children (the Decl tree);
+# per-member metadata lives on the member's own Decl.
 ZType: class {
     typeId: tid
     name: String
@@ -616,12 +609,10 @@ ZEntry: class {
     takenAt: (optionval zsrcpos)
 }
 
-# --- registry: the home for the monotonic id counters shared across
-# all type-model entities. The by-id type/conformance tables live with
-# all type-model entities, plus the by-id type table (typeById): every
-# type id resolves to its ZType here. newType files each type and
-# returns its id; the symbol table / type checker read type metadata by
-# id. The by-id conformance table arrives with a later slice. ---
+# --- registry: the home for the monotonic id counters shared across all
+# type-model entities, plus the by-id type table (typeById): every type id
+# resolves to its ZType here. newType files each type and returns its id;
+# the type checker and the emitter read type metadata by id. ---
 
 # A generic parameter's declared constraint, classified once at registration
 # so the checks compare a tag rather than the text. numericMax carries the
@@ -1133,8 +1124,8 @@ ZTypeRegistry: class {
     # addGenericParam / isGenericParamOf -- a template's generic-param
     # names and constraints, keyed by the template's DeclId (tdecl). A
     # method param typed by its enclosing type's generic param is NOT a
-    # child (the oracle resolves a generic type's methods without the
-    # type's generic context, so the param type is unresolvable).
+    # child (a generic type's methods resolve without the type's generic
+    # context, so the param type is unresolvable there).
     # paramOrdinalOf -- a parameter's declaration ordinal, or none.
     paramOrdinalOf: function {:this tdecl: declid paramName: StringView} out optionval u64 is {
         plo: this.genericParams.get key: tdecl

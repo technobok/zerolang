@@ -1,7 +1,7 @@
-# Recursive-descent parser for zerolang, ported from src/zparser.py.
-# This slice covers atoms (identifiers, dotted paths, string literals)
-# and the operations/calls layer (binops and calls with positional and
-# named arguments).
+# Recursive-descent parser for zerolang: units and their definitions,
+# statements, expressions and string literals, built into the zast node
+# table. It loads the units a unit refers to (collectExterns over the parsed
+# body, then the VFS) but resolves nothing -- names are the type checker's.
 #
 # Public productions return (Option t: Node): none means "nothing here"
 # (the caller tries another production), some carrying an `error` arm
@@ -10,8 +10,7 @@
 # because a reftype payload cannot be moved back out of an Option to
 # build a parent node -- so an owned Node local is threaded through
 # construction and wrapped in an Option only at the boundary. Node ids
-# come from the parser's sequential counter, in parse order, mirroring
-# the Python reference.
+# come from the parser's sequential counter, in parse order.
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
@@ -25,10 +24,8 @@ public: unit {
 Node: zast.Node
 Ast: zast.Ast
 
-# StringChunk.chunkKind codes. Values match the Python toktype enum
-# (EOL=5, STRMID=21, STRCHR=22) so the eventual ast_nodes differential
-# lines up; the zerolang toktype variant''s auto-assigned tags differ, hence
-# the explicit mapping.
+# StringChunk.chunkKind codes (EOL=5, STRMID=21, STRCHR=22): the values the
+# ast_nodes dump carries, fixed apart from the toktype variant's own tags.
 chunkkind: data {
     eol: 5
     strmid: 21
@@ -62,8 +59,8 @@ isStrChunkTok: function {tt: zlexer.toktype} out bool is {
     }
 }
 
-# True if every byte of `sv` is a space or tab (matches the Python
-# _is_ws_only; not `trim`, which also strips \n \r \f \v).
+# True if every byte of `sv` is a space or tab (not `trim`, which also
+# strips \n \r \f \v).
 isWsOnlyView: function {sv: StringView} out bool is {
     n: sv.length
     i: u64
@@ -907,7 +904,7 @@ Parser: class {
     # Fold a reversed operand/operator stack (pop yields source order)
     # into a left-associative, flat-precedence binop chain. The stack
     # must be non-empty. The whole chain is positioned at its first
-    # operand, matching the reference.
+    # operand.
     foldStack: function {:this stack: (List Node).take lex: zlexer.Lexer.view} out Node is {
         acc: stack.pop
         sp: zast.posOf n: acc
@@ -1093,7 +1090,6 @@ Parser: class {
     # parenthesised `(List u8)` shape the type checker already resolves.
     # Named-argument generics (`Map u8 value: u32`) are calls, not operations,
     # so operationPaths stops at the label and they still need parentheses.
-    # Mirrors Python `_accept_typeref_operation`.
     parseTyperefOperation: function {:this lex: zlexer.Lexer} out Node is {
         paths: this.operationPaths :lex
         n: paths.length
@@ -1170,12 +1166,8 @@ Parser: class {
         }
     }
 
-    # parseExpression -> bare Node. The control-flow expression forms
-    # (if/for/match/data/with/block/yield) land in later slices and report
-    # a not-yet-implemented error for now; the operation form wraps the
-    # operation/call in an Expression node.
     # Wrap an operation/block node in an Expression carrier, positioned at
-    # its inner node (matches the Python _accept_expression).
+    # its inner node.
     wrapExpression: function {:this inner: Node.take} out Node is {
         ip: zast.posOf n: inner
         return (Node.expression (zast.ExpressionData
@@ -1682,8 +1674,8 @@ Parser: class {
     # lists and the optional body through recursion as `.take` params so
     # nothing owned is held across a loop body (E0200). `while` before the
     # body is a condition, after it a postcondition; `label op` is the
-    # at-most-one binding; `loop primary` is the body. `hasBody` mirrors
-    # Python's `if loop:` truthiness without inspecting the owned body.
+    # at-most-one binding; `loop primary` is the body. `hasBody` says
+    # whether a body was seen without inspecting the owned body.
     forClausesTail: function {:this lex: zlexer.Lexer conditions: (ListVal u32).take postconditions: (ListVal u32).take bodyId: zast.nodeid hasBody: bool bound: bool forLine: u32 forCol: u32} out Node is {
         tPos: lex.peekPos
         tt: lex.peekType
@@ -2324,9 +2316,9 @@ Parser: class {
         }
     }
 
-    # Tail of the function-definition clause loop (out/is/in; `as` lands
-    # in slice 2). Threads the owned accumulators through recursion so
-    # nothing is held across a loop body (E0200) -- mirrors forClausesTail.
+    # Tail of the function-definition clause loop (in/out/is/as/native).
+    # Threads the owned accumulators through recursion so nothing is held
+    # across a loop body (E0200), as forClausesTail does.
     # Each clause rejects a duplicate; an unmatched token terminates and
     # builds the functiondef.
     functionClausesTail: function {:this lex: zlexer.Lexer parameters: (ListVal u32).take asItems: (ListVal u32).take returntypeId: zast.nodeid bodyId: zast.nodeid gotIn: bool hasOut: bool hasIs: bool isNative: bool hasAs: bool startLine: u32 startCol: u32} out Node is {
@@ -3207,8 +3199,8 @@ Parser: class {
         }
     }
 
-    # Load and parse the unit file `<unitname>.z` under `parentid`, mirroring
-    # zparser.py:_accept_unitfile. On success appends namedoperation(name,
+    # Load and parse the unit file `<unitname>.z` under `parentid`. On
+    # success appends namedoperation(name,
     # unitdef) into `outBody`, this unit's top-level def names into `outNames`,
     # and its unresolved externs into `outExterns`; recursively loads any
     # subunit found in a same-named subdirectory (attaching them into this
@@ -3364,11 +3356,10 @@ Parser: class {
     }
 
     # Top-level entry: load the main unit and every transitively-referenced
-    # unit, returning a `program` Node (or an `error` arm). Mirrors
-    # zparser.py:parse. core is loaded first so its definitions suppress
-    # externs; the worklist is drained LIFO via List.pop (matching Python's
-    # dict popitem). Definitions/queue are parallel String/Node lists (no
-    # reftype-valued Map).
+    # unit, returning a `program` Node (or an `error` arm). core is loaded
+    # first so its definitions suppress externs; the worklist is drained
+    # LIFO via List.pop. Definitions/queue are parallel String/Node lists
+    # (no reftype-valued Map).
     parse: function {:this vfs: zvfs.ZVfs.view rootid: zvfs.fsno mainUnitName: String.view} out Node is {
         units: (ListVal u32)
         coreNames: (List String)
@@ -3470,10 +3461,10 @@ Parser: class {
 # ---------------------------------------------------------------------------
 # Extern (free-variable) walk.
 #
-# The ported parsers do not thread externs during parsing (the .z AST has
-# no extern field). Instead this single post-parse walk recovers the set
-# of referenced names not bound within a unit, mirroring zast.printNode's
-# arms and child order. Only valid, loadable unit names are kept
+# The parser does not thread externs during parsing (the AST has no extern
+# field). Instead this single post-parse walk recovers the set of
+# referenced names not bound within a unit, over the same arms and child
+# order as zast.printNode. Only valid, loadable unit names are kept
 # (operators, numbers, and dotted-member selectors never name a unit), so
 # the set drives which sibling units and subunits parse() loads.
 #

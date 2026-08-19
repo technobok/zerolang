@@ -48,8 +48,7 @@ endif
 # allocation, so mixing levels would make the wall column meaningless while
 # leaving the allocation column looking fine. A dedicated binary also means a
 # driver rebuild -- at another level, or by another compiler -- can never leak
-# into a measurement, which is the trap perf-strict used to guard against by
-# inspecting bin/zc. See "Toolchain findings" in docs/perf-baseline.md.
+# into a measurement. See "Toolchain findings" in docs/perf-baseline.md.
 PERFOPT  := -O1 -fno-strict-aliasing -fwrapv
 PERFCC   ?= gcc
 PERFBIN  := $(BUILDDIR)/zc-perf
@@ -522,13 +521,12 @@ perf-elision: bin/zc.c
 # head-gated assignment / fnSignature / typeRefC sites); a new by-name site grows
 # the count and fails. New type emission must go through the id-based helpers.
 # any-guard -- `Any` is the bound that says the family genuinely does not
-# matter. After the val/ref split no USER source may say it: a generic names
-# anyval or AnyRef. Two stdlib files keep counted residuals:
+# matter, and no USER source may say it: a generic names anyval or AnyRef. Two
+# stdlib files keep counted residuals:
 #   system.z (5) -- `return` and `typedef`, whose parameter is never consulted
 #     (probed: bounding them to anyval does not reject a reftype), plus
 #     `Iterator` and `OptionView`, which still span both families.
-#   collections.z (0) -- the P5 split is complete: every container template
-#     names the family it takes.
+#   collections.z (0) -- every container template names the family it takes.
 # Both are ratchets: they may only DECREASE. Enforced here rather than in the
 # typechecker because generic-param registration has no unit name in hand.
 any-guard:
@@ -591,26 +589,15 @@ shadow-guard:
 	fi; \
 	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=10)  cTypeForName symtab:=$$n2 (<=0)  isStdlibUnitName=$$n3/$$n4 (<=0)  demand set=$$n5 (<=0)"
 
-# emitter-guard -- ratchet against name-resolution creep in the C emitter. The
-# de-lookup arc drove these to their current floors: the emitter reads
-# typechecker stamps and canonical ids; every remaining by-name resolution is a
-# counted residual (template re-emission, probe-chain legs). A rising count
-# means a new name-resolved site -- resolve from stamps/ids instead, or lower
-# the baseline when a residual is legitimately removed. regNameOf went
-# 91 -> 92 for the arm-alias leg's scalar test: `scalarCTypeFor` is the
-# shadow-SAFE wrapper (it re-checks the tid for a user shadow) and it needs
-# the type's name, so the name lookup is the sanctioned shape here. 92 -> 93
-# for constSuffixForTid, which asks the same question of a unit constant's
-# declared type to pick its C literal suffix, through the same wrapper. 93 ->
-# 97 for the IdMap/IdSet mono emitters, which reach cTypeForNameTid for their
-# key, value and element types exactly as emitMapMono and emitSetMono do -- the
-# same sanctioned shape, in a new family rather than a new kind of lookup. 97 ->
-# 98 for emitIdSetMono's iterator leg, which names the OptionView its `call`
-# returns to build the tag macro, exactly as emitSetMono does; 98 -> 99 for
-# emitIdMapIters, which does the same for the entry OptionView; 99 -> 100 for
-# emitIdMapGetMut, which names getMut's OptionView return the same way.
-# The last two pin where C names are BUILT: the type checker composes none, and
-# the emitter spells the z_t{id} shape only inside its one composer, which the
+# emitter-guard -- ratchet against name-resolution creep in the C emitter: the
+# emitter reads typechecker stamps and canonical ids, and every remaining
+# by-name resolution is a counted residual (template re-emission, probe-chain
+# legs). A rising count means a new name-resolved site -- resolve from
+# stamps/ids instead, or lower the baseline when a residual is legitimately
+# removed. The sanctioned name lookups go through scalarCTypeFor /
+# cTypeForNameTid, which re-check the tid for a user shadow. The last two
+# counts pin where C names are BUILT: the type checker composes none, and the
+# emitter spells the z_t{id} shape only inside its one composer, which the
 # per-program table in emitC calls once per type.
 emitter-guard:
 	@e1=$$(grep -c 'ztypecheck.resolvedByKey' src/zemitterc.z); \
@@ -646,63 +633,23 @@ emitter-guard:
 	fi; \
 	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9"
 
-# deadcode-guard -- ratchet on emitted statements that no path can reach. clang's
+# deadcode-guard -- emitted statements that no path can reach. clang's
 # -Wunreachable-code family is the oracle; gcc accepts the flag but never warns.
 # Every example and corpus program is emitted and counted, so a new dead-code
 # shape anywhere raises the number, not just one in the dedicated fixture
-# (tests/fixtures/emitc_corpus/deadcode_shapes.z, which must stay at zero).
+# (tests/fixtures/emitc_corpus/deadcode_shapes.z). The baseline is ZERO and a
+# rise is a regression, not a number to bump. The two ways it happens: a site
+# appended a statement after a block that had already diverged (ask
+# blockDiverges in src/zemitterc.z about the block you just emitted -- never
+# read a flag left over from someone else's block), or a constant-condition
+# branch was emitted that docs/spec.pdoc promises not to emit (fold it; the
+# typechecker stamps the winning clause). Divergence is the typechecker's
+# `never` stamp and nothing else.
 #
-# A rise means an emitting site appended a statement after a block that had
-# already diverged. The fix is to ask blockDiverges (src/zemitterc.z) about the
-# block you just emitted and skip the append -- never to read a flag left over
-# from someone else's block, which conflates an inner `if c then { break }` with
-# its enclosing scope and drops a live cleanup.
-#
-# Every divergence case is closed: blockDiverges models a return (valued or
-# bare), a `never` stamp, an if/else chain whose every arm diverges, and a
-# `for true loop` with no break, and emitBodyNode stops emitting after any
-# statement that diverges.
-#
-# The folding gap that used to account for nine of the ten is closed. Branch
-# selection is the typechecker's: it folds bool, float, string and variant-tag
-# conditions as readily as integer ones, in value position as well as statement
-# position, and stamps the winning clause for the emitter to read. What remains
-# is the statements after a folded branch, which are a divergence question
-# rather than a folding one.
-#
-# Every divergence case is closed. Divergence is the typechecker's `never`
-# stamp and nothing else: checkCase stamps it on an exhaustive match whose every
-# arm -- else included -- diverges, and a panic or diverging call carries it
-# because it does not return. The emitter reads that stamp and does no
-# shape-matching of its own. It used to be wrong, not because the stamp is the
-# wrong idea but because checkCase left the else arm out of the all-diverge
-# test, so a match whose else completed still stamped `never`; an enclosing arm
-# then lost its C `break;` and the switch fell through
-# (tests/fixtures/emitc_corpus/match_arm_fallthrough.z: 1 instead of 9).
-#
-# The ten that remain are not conforming output. docs/spec.pdoc:5616 promises,
-# without qualification, that a constant-condition `if` does not emit its false
-# branch; the "bounded to integer literals" clause at :5652 bounds what the
-# `error` builtin can prove REACHABLE, which is a different question. So these
-# are gaps, not decisions:
-#
-# The baseline is ZERO: the emitter emits no statement that no path can reach,
-# across every example and corpus program. Keep it there. A rise is a real
-# regression, not a number to bump -- the two ways it happens are appending
-# after a block that has already diverged (ask blockDiverges about the block you
-# just emitted) and emitting a constant-condition branch that spec.pdoc:5616
-# promises not to emit (fold it, in whatever position it appears).
-# The other class -- a statement after something already diverged -- is closed:
-# both statement walks stop on a diverging statement, and ifDiverges models a
-# chain whose conditions all fold, where only the branch the emitter actually
-# emits decides.
-#
-# user-native-guard -- P1's acceptance. A unit OUTSIDE src/runtime, shipping its
-# own natives.tbl row and its own fragment, compiles AND LINKS AND RUNS. Before
-# the runtime pass read the table, fragment loading was per unit through seven
-# hardcoded emitters, so a unit outside them got nothing: this program emitted
-# z_mystery_conjure(7) correctly and then failed at link with an implicit
-# declaration. The runtime dir is BUILT here rather than committed -- src/runtime
+# user-native-guard -- a unit OUTSIDE src/runtime, shipping its own natives.tbl
+# row and its own fragment, compiles AND LINKS AND RUNS (a fragment a hardcoded
+# per-unit loader would miss emits its call correctly and fails at link with an
+# implicit declaration). The runtime dir is BUILT here rather than committed -- src/runtime
 # plus the fixture's one row and one fragment -- so it cannot drift from the real
 # one, and the guard fails if the fragment stops loading.
 user-native-guard: bin/zc
@@ -957,10 +904,7 @@ eager-guard: bin/zc
 	echo "eager-guard OK: examples + corpus clean under --eager"
 
 # member-guard -- ratchet against declaration-bypassing member special-cases in
-# the type checker. The single-source-of-truth arc removed the hardcoded member
-# shortcuts (the .string-on-String reject guard and the moMiss9 String->
-# StringView retry that let a String silently inherit StringView's read surface).
-# What remains are the sanctioned string-keyed markers: ownership (lock / borrow /
+# the type checker. The sanctioned string-keyed markers: ownership (lock / borrow /
 # take / hold / view / release), definition keywords (typedef / private / public / return /
 # error / panic / create / copy / tag / array / index), and the .stringview / .str
 # conversions. A rising count means a new hardcoded string-keyed member/marker

@@ -1,14 +1,10 @@
-# zgenerator.z -- generator-function lowering.
-#
-# Mirrors src/zgenerator.py: a generator is a function whose body contains
-# a yield and whose declared return type resolves to the stdlib Iterator
-# protocol (the caller decides that by resolved type id). Lowering turns it
-# into a synthesized iterator class -- `state` cursor plus captured fields,
+# zgenerator.z -- generator-function lowering. A generator is a function
+# whose body yields and whose declared return is the Iterator protocol (the
+# caller decides which). Lowering turns it into a synthesized iterator class
+# -- a `state` cursor plus the captured parameters and yield-crossing locals,
 # a `create` forwarding to meta.create, and a `call` method holding the
-# original body (yields stay intact; the state machine is the emitter's
-# job) -- and rebinds the original function to a factory returning the
-# class. Validation failures skip the lowering (the reference also reports
-# errors; this port gates only -- the differential corpus is all-valid).
+# original body with its yields intact (the state machine is the emitter's
+# job) -- and rebinds the original function to a factory returning the class.
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
@@ -1401,8 +1397,7 @@ isExprNode: function {n: Node.view} out bool is {
     }
 }
 
-# ensureExpr -- wrap in an Expression unless already one (the reference's
-# _wrap_as_expression).
+# ensureExpr -- wrap in an Expression unless already one.
 ensureExpr: function {
     ast: Ast.view
     line: u32
@@ -1806,8 +1801,7 @@ mkThisDotted: function {
 
 # cloneWithThisHead -- clone a type path replacing its `this` head atom
 # with the named receiver type (`this.private.lock` -> `Bag.private.lock`).
-# cloneWithThisHead -- the rewritten spine carries the supplied position
-# (the reference synthesizes the receiver rewrite at loc = func.start).
+# The rewritten spine carries the supplied position (the function's start).
 cloneWithThisHead: function {
     ast: Ast.view
     n: Node.view
@@ -1999,7 +1993,6 @@ cloneFactoryParam: function {
         nnm: n.name
         if (isThisPrivateLock :ast n: (ast.nodes.get i: n.operation.u64)) then {
             # the public this.lock replacement carries the function's start
-            # (the reference synthesizes it at loc = func.start)
             ta0: mkAtom :ast line: fnLine col: fnCol name: "this"
             la0: mkAtom :ast line: fnLine col: fnCol name: "borrow"
             nop2: (Node.dottedpath (zast.DottedPathData
@@ -2033,7 +2026,7 @@ cloneFactoryParam: function {
 
 # canLowerNow -- pre-surgery shape gate on the borrowed definition: a
 # parenthesized gives, a real body, and no receiver (`this`-headed)
-# parameter types (method generators land with the listiter slice).
+# parameter types (method generators are not lowered).
 canLowerNow: function {ast: Ast.view n: Node.view hasReceiver: bool} out bool is {
     match (
         n
@@ -2235,8 +2228,7 @@ lowerOne: function {
                 # bidirectional: the accepts path becomes the call's value
                 # parameter; the _resume_input field stores the most recent
                 # resumed value (take strips to an owned field, lock keeps,
-                # bare/borrow wraps in .lock -- the reference collapses the
-                # lock back to a value field for valtypes).
+                # bare/borrow wraps in .lock).
                 valueParam: (Option.none Node)
                 resumeField: (Option.none Node)
                 rfRootStamp: false
@@ -2328,8 +2320,8 @@ lowerOne: function {
                     # field paths staged owned: List.get is a borrow, the
                     # namedoperation stores owned -- clone out
                     pf3o: clonePath :ast n: pf3
-                    # receiver-lock fields stamp (the reference builds them
-                    # fresh); ordinary param fields share the factory's stamp
+                    # receiver-lock fields stamp fresh; ordinary param fields
+                    # share the factory's stamp
                     tf3: thisFlags.get i: fi3
                     nf3: mkNamedOp :ast :line :col name: f3v op: pf3o
                     if (tf3) == false then {
