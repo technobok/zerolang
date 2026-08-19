@@ -5,6 +5,7 @@ QUALWERR := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -
 CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
             -Werror=implicit-function-declaration -Werror=implicit-int \
             -Werror=int-conversion -Werror=incompatible-pointer-types \
+            -Werror=unused-but-set-variable \
             $(QUALWERR)
 
 # Parallel by default: make fans out independent targets and the corpus runner
@@ -133,7 +134,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc mode-parity ci-corpus
+ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -418,10 +419,17 @@ docs:
 	$(MAKE) -C docs
 	@echo "rendered docs/ -- commit the regenerated .html"
 
-# warn-check -- compile the emitted compiler C with every warning as an error.
-warn-check: bin/zc.c
+# warn-check -- compile every emitted C file with each warning as an error.
+# All FOUR, because they are not the same program: zl and zls carry units zc
+# does not, so a dead store reachable only from one of them shows up only
+# there -- and the committed SEED is what a fresh clone compiles first, so a
+# warning left in it greets every new checkout no matter how clean src/ is.
+warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c
+	$(CC) $(CFLAGS) $(OPTFLAGS) -Werror -c bootstrap/zc.c -o /dev/null
 	$(CC) $(CFLAGS) $(OPTFLAGS) -Werror -c bin/zc.c -o /dev/null
-	@echo "warn-check OK: zero compiler warnings"
+	$(CC) $(CFLAGS) $(OPTFLAGS) -Werror -c $(BUILDDIR)/zl.c -o /dev/null
+	$(CC) $(CFLAGS) $(OPTFLAGS) -Werror -c $(BUILDDIR)/zls.c -o /dev/null
+	@echo "warn-check OK: zero compiler warnings (seed + zc + zl + zls)"
 
 # perf -- self-compile performance snapshot for docs/perf-baseline.md, measured the
 # same way as the rows there (default hash, --emit-c /dev/null): the zerolang line
