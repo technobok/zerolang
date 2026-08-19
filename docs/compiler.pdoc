@@ -111,39 +111,24 @@ than duplicating it.
 
 #--: Parser
 
-The parser creates an abstract syntax tree (AST) based on the source units
-supplied. It begins with the 'core' system module and the user 'main' module
-and compiles each, following any unresolved references as they are found.
+The parser creates an abstract syntax tree (AST) from the source units
+supplied. It begins with the 'core' system unit and the user 'main' unit and
+parses each, loading further units as they are referred to.
 
-The Parser maintains an Environment stack for recording definitions at each
-scope. At the beginning of each new scope, a new frame is pushed onto the
-Environment. The Parser records each definition made as compilation proceeds.
-References to these definitions are recorded as they are found.
+The parser resolves no names. After a unit is parsed, one walk over its body
+(#~"collectExterns") collects the identifiers the unit refers to but does not
+bind -- biased to over-collect, since a spurious name simply fails to name a
+file -- and for each such name the VFS is asked for #~"<name>.z": first in the
+directory named after the current unit (an implementation subunit), then in
+the source tree and the system library. A unit found this way is parsed the
+same way, recursively, until the worklist is empty. Whether a name actually
+denotes a unit, a type, or a variable is the type checker's question, asked in
+the environment it builds from the finished AST; a #~"public:" block's entries
+count as references, so a listed hidden subunit loads on the strength of the
+listing alone.
 
-Since forward references within a unit are allowed, a list of undefined
-identifiers are also maintained in the Environment. After compiling the current
-unit, an attempt is then made to resolve these reference.
-
-Firstly, a check is made to see if there is a file with the same name as the
-reference in a subdirectory with the same name as the current source file (an
-implimentation subunit). If found, this unit file is then compiled following
-the same process as above, recursively.
-
-If a subunit is not found, the undefined reference is promoted to the next
-higher unit to see if it is defined there. This continues until the reference
-is promoted to top level 'global' unit. If still not found, the system 'core'
-unit is searched. And if not found there, a syntax error is returned.
-
-Only the first (left-most or only) reference in a dotted path is attempted to be found
-by the Parser. The goal is to ensure a complete AST that includes all referenced
-units is created.
-
-The Parser is not concerned with any typing information and does not ensure dot
-operators against the left-most reference will succeed. That task is given to
-the type checker.
-
-The Parser will return the first syntax error found immediately. It does not
-attempt to reset and continue compilation.
+The parser returns the first syntax error found immediately. It does not
+attempt to reset and continue.
 
 #--: Generator Desugaring
 
@@ -157,10 +142,8 @@ parameters captured. The lowering runs early in the typecheck pass,
 after unit types are registered and before bodies are checked, so the
 rest of the typechecker sees only ordinary class + function code.
 
-The trigger resolves the return type's #~"Iterator" head by #b:"type
-id" -- it must be the stdlib protocol, not merely a name match -- so a
-user type that shadows the name #~"Iterator" is not mistaken for a
-generator, and an aliased protocol name still is. Lowering rebinds the
+The trigger is syntactic: a body containing #~"yield" and a declared
+return whose head is spelled #~"Iterator". Lowering rebinds the
 original function to its factory and appends the synth class to the
 unit body; frozen AST nodes are never mutated.
 
@@ -274,17 +257,6 @@ The first reachable yield must be statement form -- the
 desugarer rejects expression-form first-yields, reflecting that
 the resume-input slot is undefined before the first
 #~".call value:" arrives.
-
-#---: Known gaps
-
-The for-loop relay pattern (#~"for x: (subgen ...) loop { yield x }")
-compiles today but stops after the first inner value, because the
-synthesised for-loop iterator is a C-stack local in #~".call" that
-doesn't survive yield-suspension. Closing the gap requires either a
-desugarer-side synthetic local for each yielding-for-loop iterable
-(so #~"crossingLocals" sees it and promotes it) or an emitter-side
-carve-out that promotes the for-loop iterator into a synth-class
-field.
 
 #--: Semantic Analyser (Type/Ownership/Lock checking)
 
@@ -431,7 +403,7 @@ to apply the prefix-overlap conflict rule. Two lock scopes exist:
   call-scoped locks are released. For non-owned parameters, the leaf
   lock transfers to the return value (installed as a borrow-scoped lock
   in the parent scope).]
-  [#*: #+ Borrow-scoped locks -- taken when #~".borrow", #~".borrow",
+  [#*: #+ Borrow-scoped locks -- taken when #~".borrow", #~".view",
   #~".stringview", #~".listview", a #~"with"-binding, or a
   #~".borrow"-param transfer creates a borrowed binding. SHARED entries
   are placed on each intermediate prefix and EXCLUSIVE on the leaf in
@@ -671,13 +643,12 @@ constants share their owner's id and only the label separates them.
 
 The hand-written runtime (#~"src/runtime/*.inc" / #~"*.c.tmpl" /
 #~"src/runtime/natives/") is authored with the #b:"canonical" type spelling
-#~"z_<Name>". Each fragment/template is read once per emit (cached by path
-in #~"Ctx.tmplCache") and rewritten with per-fragment #~"substituteAll"
-passes to the id-named cnames it references -- #~"z_StringView" before
-#~"z_String" (prefix order), plus each fragment's own canonical names
-(collection monos, #~"z_CpIter", parse-result monos). Pure-C helpers
-(#~"z_panic", #~"z_xmalloc", #~"z_siphash_*") have no canonical entry and
-are untouched.
+#~"z_@Name@": each #~"@Name@" is a hole. A fragment is read once per emit
+(cached by path in #~"Ctx.tmplCache") and #~"fillHoles" rewrites it in a
+single scan, binding every hole to the id-named cname the registry gives
+that canon (collection monos, #~"z_CpIter", parse-result monos included); a
+hole naming nothing the loader can resolve is fatal. Pure-C helpers
+(#~"z_panic", #~"z_xmalloc", #~"z_siphash_*") spell no hole and are untouched.
 
 #---: Type Emission
 
@@ -807,18 +778,6 @@ working #~"zc".
   [#*: #~"make bin/zc" builds the seed (#~"out/zc-seed"), then uses it to emit and compile the current #~"src/*.z" into #~"bin/zc", the live self-hosted compiler.]
   [#*: #~"make test-bootstrap" proves the loop converges: the seed builds a compiler, which rebuilds itself to a byte-identical fixpoint (#~"b2 == b3").]
   [#*: #~"make bump-seed" regenerates #~"bootstrap/zc.c" from a fresh #~"bin/zc" when the sources have drifted far enough that the seed lags.]
-
-#---: History: the Python reference
-
-The compiler was first written in Python (#~"compiler0/"), then ported
-unit-by-unit to #~"src/*.z" with the Python implementation as a differential
-oracle. Once the port self-hosted, the self-emitted C seed was committed and
-the Python reference was retired. It is preserved at the
-#~"python-stage0-final" git tag:
-
-#code: """
-  git checkout python-stage0-final -- compiler0
-"""
 
 #---: Building and testing
 

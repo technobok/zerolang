@@ -85,10 +85,11 @@ rationale.
 
 #--: Core Data Structures
 
-The typechecker is built around five core record types and one
-mutable container. Reading this section first makes
-#~"ztypecheck.z" considerably easier to follow, because nearly
-every function in it produces, mutates, or consults one of these.
+The typechecker is built around four core record types, the
+declaration tree, and one mutable output container. Reading this
+section first makes #~"ztypecheck.z" considerably easier to follow,
+because nearly every function in it produces, mutates, or consults one
+of these.
 
 
 #---: ZType -- the unified type descriptor
@@ -110,9 +111,10 @@ Key fields:
   [#*: #~"returnTypeId", #~"thisParamNameId":
     populated for function types]
   [#*: generic-state fields: #~"genericOriginId",
-    #~"isTagGenericOrigin", and the specialization-tree edges
-    #~"genericChildKeys" / #~"genericChildTids" with the ordered
-    argument ids in #~"genericArgs" / #~"genericArgIsValue"]
+    #~"isTagGenericOrigin", and the specialization trie
+    #~"genericChildren" (an #~"IdMap" keyed by the argument's type id,
+    or by the literal value at a numeric parameter level) with the
+    ordered argument ids in #~"genericArgs" / #~"genericArgIsValue"]
   [#*: layout / memory metadata: #~"destructorNameId",
     #~"isHeapAllocated", #~"isBox" (see
     #~"representation_of_types.pdoc")]
@@ -129,13 +131,9 @@ structural, held by the type's #~"publicNs" declaration subtree.
 
 A member's declaration must therefore exist #_*"before" any metadata
 write, which is why every synthesis site declares the member and then
-types it, in that order: #~"setMemberType" stamps the member's type onto
-its declaration, and a method's declaration is what claims its own
-function type, which every later parameter write reaches through. The
-setters count any write that finds no declaration
-(#~"ZTyping.dropOwn" and its siblings, reported by #~"q2SpikeVerify"
-under #~"ZC_Q2_SPIKE"); all of them are 0, and a non-zero one is a
-write that never landed.
+types it, in that order: #~"declSetMemberType" stamps the member's type
+onto its declaration, and a method's declaration is what claims its own
+function type, which every later parameter write reaches through.
 
 
 #---: ZVariable -- per-binding ownership carrier
@@ -145,9 +143,8 @@ state that is per-variable rather than per-type. A #~"ZVariable"
 is created only for #_*"named runtime bindings" -- function
 parameters, locals introduced by assignment, #~"with"-bindings,
 for-loop iterators, and synth temps -- and referenced from
-#~"ZEntry.varId". Expression-level results live on #~"ZExprResult",
-not here; type and function definitions leave #~"ZEntry.varId"
-unset.
+#~"ZEntry.varId" / #~"Decl.varId"; type and function definitions carry
+no variable.
 
 #ul:
   [#*: #~"variableId": monotonic id]
@@ -168,56 +165,31 @@ Keeping ownership off #~"ZType" lets the same type be bound in two
 scopes with different ownership, which is the common case.
 
 
-#---: ZEntry -- a scope binding
+#---: ZEntry -- an overlay row
 
-#~"ZEntry" (#~"src/ztypes.z") is the unit of scope state. Every
-piece of information the scope chain needs to track about a name
-lives on an #~"ZEntry":
+#~"ZEntry" (#~"src/ztypes.z") is one overlay row of the body walk: a
+take, a narrowing, or a lock laid over a local while the frame that laid
+it is open. A local itself is a #~"localDecl" in the declaration tree;
+the row points at it.
 
 #ul:
   [#*: #~"entryId": monotonic id]
-  [#*: #~"name", #~"ztypeId", #~"isDefinition"]
-  [#*: #~"varId": optional #~"ZVariable" id (absent for
-    type/function definitions and lock-only overlays)]
-  [#*: #~"hasLock", #~"lockType", #~"lockHolder",
-    #~"lockPath": lock state -- the lock kind, its holder, and the
-    addressable path tuple #~"(root, f1, f2, ...)"]
-  [#*: #~"narrowedSubtype", #~"narrowedSubtypeId",
-    #~"excludedSubtypes", #~"excludedSubtypeIds": type
-    narrowing for union / variant subjects in match arms, with
-    id parallels for the future hot path]
+  [#*: #~"name" (a pool id), #~"declId" (the local's declaration),
+    #~"frame" (the frame that laid the row), #~"defSeq" (its place among
+    the frame's locals, for the dump)]
+  [#*: #~"ztypeId", #~"isDefinition", #~"varId"]
+  [#*: #~"hasLock", #~"lockType", #~"lockScope", #~"lockHolder",
+    #~"lockPath": lock state -- the lock kind, whether it is on the leaf or
+    an intent on a prefix, its holder, and the addressable path tuple
+    #~"(root, f1, f2, ...)"]
+  [#*: #~"narrowedSubtype", #~"excludedSubtypes": type narrowing for
+    union / variant subjects in match arms, as arm name ids]
   [#*: #~"originalZtypeId": the un-narrowed type, so the
     emitter can generate the C-level unwrap]
   [#*: #~"isTaken", #~"takenAt": consumed-binding state]
 
-An entry is either a #_*"definition" (it introduces a name) or a
-#_*"shadow / overlay" (it adjusts state for a name defined in an
-outer scope). Definitions live in #~"BLOCK" scopes; shadows live
-in #~"OVERLAY" or #~"CALL" scopes and disappear automatically when
-their scope is popped. See #~"compiler.pdoc:Scope Environment" for
-the three scope kinds.
-
-
-#---: ZExprResult -- the result of checking an expression
-
-Most expression-level helpers return #~"ZExprResult"
-(#~"src/ztypes.z"), not a bare #~"ZType":
-
-#ul:
-  [#*: #~"ztypeId": the inferred type]
-  [#*: #~"borrowTarget": the addressable path tuple
-    #~"(root, f1, ...)" that this expression borrows from; the
-    enclosing #~"checkAssignment" / call-argument check
-    consumes it to install a borrow-scoped lock at the binding
-    site]
-  [#*: #~"privateAccess": propagated through
-    #~".private" projections]
-
-The #~"borrowTarget" mechanism keeps borrow-lock installation
-out of deep expression code: the leaf method that knows the source
-path stamps it onto the #~"ZExprResult", and the eventual binding
-site installs the lock. The flow is described under
-#~"ownership.pdoc:Borrow propagation".
+Rows live on #~"ZSymbolTable.entries" and die with their frame; the
+local's declaration persists, so the walk can return to it.
 
 
 #---: ZTyping -- the typecheck-output container
@@ -228,90 +200,64 @@ ECS-shaped: instead of decorating parsed AST nodes with extra
 columns, the typechecker writes into a set of per-#~"nodeid"
 component maps.
 
-Aggregate state:
+The declaration tree lives here: #~"decls" (every #~"Decl" row, id =
+index, row 0 the sentinel; see #~"src/ztyping.z"), #~"declByTypeId",
+#~"publicNsByOwner", #~"refDecl" (reference node -> resolved declaration),
+#~"pendingDefs" (the demand queue) and the unit-root anchors
+(#~"programRoot", #~"coreUnitRoot").
 
-#ul:
-  [#*: #~"errors", #~"isError": error accumulator]
-  [#*: #~"monoTypes", #~"monoFunctions": monomorphised
-    generic instantiations, each paired with its origin AST
-    definition]
-  [#*: #~"funcAliases", #~"clonedMethods", #~"resolved":
-    monomorphisation deduplication caches]
-  [#*: #~"unitTypesById": Unit-AST nodeid → resolved unit
-    ZType]
+Per-node stamps (each keyed by parsed-node #~"nodeid"): #~"nodeType"
+(dense) and #~"nodeConst" / #~"memberConst" (the compile-time value
+domain), #~"callKind", #~"atomVariableId", #~"implicitCreate", the
+dotted-path stamps (#~"dpTaggedParent", #~"dpArmPredicate",
+#~"dpTagRead"), the post-guard and branch-fold stamps
+(#~"postGuard*", #~"foldedBranch", #~"truthyCondArm"), the per-variable
+facts (#~"variableMutated", #~"variableMoved", #~"variableOrigin"), the
+2-arm-sum facts (#~"sumPairFirstArm" / #~"sumPairSecondArm"), and the
+per-instantiation mono stamps (#~"monoNodeType", #~"monoBinopOwner").
+The class comment in #~"src/ztyping.z" is the authoritative list. The
+container also carries the body walk's ambient state (the resolution
+cursor #~"curFrame", the pending-borrow slot, the suppress flags), the
+error accumulator (#~"errors", #~"isError"), the conformance rows and the
+build facts (#~"ccPath", #~"ccMode", #~"targetTriple").
 
-Component tables (each keyed by parsed-node #~"nodeid"):
-
-#ul:
-  [#*: #~"nodeType", #~"nodeConst": per-Node type
-    and compile-time constant]
-  [#*: #~"callKind", #~"callCallableTypeId",
-    #~"exprCallKind": call classification and control-kind
-    routing]
-  [#*: #~"doHasBreak", #~"caseSubjectTaken",
-    #~"forIterBindings": per-construct flags]
-  [#*: #~"ifTakenVars", #~"caseTakenVars": post-branch
-    ownership-cleanup lists]
-  [#*: #~"atomNarrowedSubtype", #~"atomOriginalZtype",
-    #~"atomChildId": per-AtomId narrowing stamps]
-  [#*: #~"dpParentTaggedType", #~"dpChildId": per-
-    DottedPath parent-type and child-id stamps]
-  [#*: #~"withOwnership", #~"withAliasOf",
-    #~"assignAliasOf": per-binding alias/ownership stamps]
-  [#*: #~"projectedArgs": per-NamedOperation protocol-projection
-    stamps]
-  [#*: #~"typeGenericArg": the flat generic-args table]
-
+The SQL dumper writes one row per component entry of the tables it
+projects (#~"src/zsqldump.z").
 The SQL dumper writes one row per component entry, so every table
 has a direct SQL representation.
 
 
-#---: ZSymbolTable and ZScope
+#---: ZSymbolTable -- the body walk's state
 
-#~"ZSymbolTable" (#~"src/zenv.z") is the scope stack the
-typechecker uses for #_*"all" variable state -- type, ownership,
-lock state, narrowing, taken state. There is no separate flow-
-typing structure: state changes are recorded as new entries in
-overlay scopes; scope pop is the only thing that undoes them.
+#~"ZSymbolTable" (#~"src/zenv.z") is the body walk's state over the
+declaration tree. A frame is a #~"blockDecl" under the frame or
+declaration enclosing it and a local is a #~"localDecl" under the frame
+it is written in, so both persist and can be returned to; the table holds
+what is transient: the stack of open frames (#~"frames", innermost last),
+the overlay rows laid over locals (#~"entries", see ZEntry above), the
+frames whose remainder proved unreachable, and the rows snapshotted for the
+dump when a frame closes. It owns the type registry and the typing tables
+outright, so every method reads metadata through #~"this.reg" /
+#~"this.typing".
 
-#ul:
-  [#*: #~"ZScope": a #~"kind" (#~"BLOCK", #~"CALL", or
-    #~"OVERLAY"), a #~"name", a monotonic #~"scopeId", and an
-    #~"entryStart" index into the table's flat entry list.
-    Entries are scanned linearly (typical scope has fewer than
-    ten); unreachable scopes are tracked in a side set]
-  [#*: #~"ZSymbolTable": a stack of #~"ZScope" frames over a flat
-    #~"entries" list, plus #~"history" (popped scopes, retained
-    for SQL dump) and #~"scopeLog" (append-only log of push/pop
-    events with parent ids and sequence numbers)]
-
-Three scope kinds (full description in
-#~"compiler.pdoc:Scope Environment"):
+A local resolves by climbing the open frame chain; a frame's parent that
+is not a frame -- the function declaration -- ends the climb, so two
+functions never see each other's locals whatever order their bodies are
+walked in. Key APIs:
 
 #ul:
-  [#*: #~"BLOCK" -- language constructs (function, do, for, if,
-    with, match arm). Can contain definitions.]
-  [#*: #~"CALL" -- pushed before processing call arguments, popped
-    after the call. Locks installed here vanish when the call
-    returns.]
-  [#*: #~"OVERLAY" -- shadow records for a variable defined in an
-    outer scope (new lock, narrowing, taken state).]
-
-Lock state is keyed on a path tuple #~"(root, f1, ..., fn)" stored
-on #~"ZEntry.lockPath". #~"ZEntry.name" always equals #~"path[0]" so the
-linear scan stays cheap; the full tuple is consulted only by the
-prefix-overlap rule. Key APIs (all on #~"ZSymbolTable"):
-
-#ul:
-  [#*: #~"lookup", #~"lookupVarId", #~"lookupVarNameById"
-    -- name → type / variable resolution]
+  [#*: #~"pushFrame" / #~"pushBlock" / #~"pushCall" / #~"pop" / #~"popTo"
+    -- open and close frames (a block frame that declares nothing mints no
+    row)]
+  [#*: #~"defineVar" / #~"define" / #~"lookup" / #~"lookupVarId"
+    -- local definition and name -> type / variable resolution]
   [#*: #~"tryLock" -- attempt to install a lock; returns the
-    installed lock or a conflict description. Multi-granularity
+    installed lock or a conflict description. The multi-granularity
     rule is in #~"lockAcquireConflict"]
   [#*: #~"findExclusiveLock", #~"isPathLocked" -- access-
     site enforcement (used by lock-escape checks)]
   [#*: #~"narrow", #~"exclude" -- install a narrowing or
-    exclusion overlay entry on the current scope]
+    exclusion overlay row in the current frame]
 
 The lock conflict logic lives in #~"zenv.z", not in
 #~"ztypecheck.z". The typechecker only chooses #_*"when" to
@@ -349,12 +295,12 @@ into the right region; read prose below for the semantics.
               #~"resolveInlineGenericUnit",
               #~"resolveData"]]
   [#tr: [#td: Name and typeref resolution]
-        [#td: #~"resolveTyperefShell", #~"lookupTyperef",
-              #~"checkDotted", #~"dottedParentName", and the
+        [#td: #~"envLookup", #~"walkLookupTyperef",
+              #~"resolveTyperefShell", #~"checkDotted",
+              #~"dottedParentName", and the
               #~"type" / #~"this" keyword resolvers]]
   [#tr: [#td: Monomorphisation]
-        [#td: #~"mintMono", #~"genericTypeKey",
-              #~"cloneUnitMethod",
+        [#td: #~"getOrMintSpec", #~"mintMono",
               #~"validateGenericTypeArgs"]]
   [#tr: [#td: Function body]
         [#td: #~"checkFunctionBody", #~"checkMethodBodies",
@@ -372,7 +318,7 @@ into the right region; read prose below for the semantics.
   [#tr: [#td: Dotted paths]
         [#td: #~"checkDotted" -- auto-call coercion gate;
               handles #~".take" / #~".release" / #~".borrow" /
-              #~".borrow" / #~".private"]]
+              #~".view" / #~".private"]]
   [#tr: [#td: Calls]
         [#td: #~"checkCall",
               #~"checkMissingCallArgs",
@@ -415,31 +361,28 @@ concrete #~"Node" arm; see #~"lib/system/zast.z".
 
 #--: Resolution Stack and Cycle Detection
 
-Resolution is keyed by #_*"definition nodeid", not by synthesized
-dotted-string names. Every definition is one AST node with one stable
-#~"nodeid", and that node is shared across every reference to it, so
-the same definition always resolves to the same cached type no matter
-which unit asks. A resolved cache maps #~"defn.nodeid -> ZType"; a grey #~"resolving"
-set of dotted names records the definitions currently being resolved,
-so a reference that reaches a name already in the set is a cycle
-back-edge and uses the forward-declared id. The flow is:
+Resolution is keyed by #_*"declaration", not by synthesized dotted-string
+names. Every definition is one Decl in the tree, found from a reference by
+walking the frames outward from the frame the reference was written in,
+and that Decl carries its own resolution state -- #~"pending" (demanded,
+queued), #~"resolving" (grey), #~"defined" (its type id is final),
+#~"walked" (its body checked). A reference that reaches a declaration
+already #~"resolving" is a cycle back-edge: a signature reference needs
+only the DECLARED id, so mutual references between signatures are legal,
+and a reference that needs the definition complete reports E0023 /
+E0100. The flow is:
 
 #ol:
-  [#*: Unit-name resolution looks the definition up in the unit's
-    member table, then checks the resolved cache keyed by
-    #~"defn.nodeid". Hit: return immediately.]
-  [#*: Cache miss: push a resolution frame for #~"defn.nodeid" onto
-    the stack and dispatch to the appropriate #~"resolve*" resolver
-    by #~"nodetype".]
-  [#*: If a nested resolution re-enters the same definition, the
-    resolver finds its #~"def_id" on the stack and reports a cycle
-    error.]
-  [#*: On success, the resolver pops the stack frame and writes
-    the final #~"ZType" into the resolved cache under #~"defn.nodeid".]
-
-The emitter and SQL dump read #~"ZTyping.resolved", a qualified-name
-#~"({unit}.{member} -> ZType)" projection of the nodeid cache built
-at the end of #~"typecheck".
+  [#*: A reference resolves to a Decl (#~"envLookup" for a bare name,
+    the qualified walk for #~"unit.member"). Defined: return its id.]
+  [#*: Not yet defined: mark it pending and queue it
+    (#~"pendingDefs"); #~"resolveDemandedDefs" drains the queue from the
+    top level, dispatching to the #~"resolve*" resolver by #~"nodetype"
+    in the declaration's own frame.]
+  [#*: A nested resolution that re-enters a #~"resolving" declaration
+    takes the declared id (or reports the cycle).]
+  [#*: On success the resolver marks the declaration #~"defined" and
+    links its type (#~"declSetType" / #~"ZType.def").]
 
 The #~"type" keyword (in receiver position) resolves to the type
 at the bottom of the resolving stack, so a method body can refer
@@ -450,32 +393,26 @@ similarly.
 #--: Type-name resolution and the canonical-id rule
 
 A bare type name (the #~"i64" in #~"x: i64", a conformance marker, a
-field or parameter type) resolves #_*"current-unit-relative", mirroring
-the module search path in #~"units.pdoc": the #_*"current unit" first,
-then the stdlib units (#~"system", #~"collections", #~"io", #~"core",
-#~"os", #~"cli"). First match wins, so a type defined in the current
-unit #_*"shadows" a same-named stdlib builtin. Two functions implement
-this:
+field or parameter type) resolves #_*"outward" from the frame it is
+written in: the enclosing namespace or template, the current unit, then
+the prelude (#~"core", whose members are re-exports of the system units).
+First match wins, so a type defined in the current unit #_*"shadows" a
+same-named stdlib builtin, and there is no list of stdlib unit names
+anywhere in the resolver. Two functions implement this:
 
 #ul:
-  [#*: #~"definingUnitFor(currentUnit, name)" -- the declare-before-bind
-    index (built upfront by #~"indexUnitDefs"): which unit defines
-    #~"name" for a reference in #~"currentUnit", current-unit first.
+  [#*: #~"envLookup(ty, frame, nameId)" -- the frame walk: which
+    declaration #~"nameId" denotes for a reference written in #~"frame".
     #~"resolveAtomType" routes a name atom through it, get-or-declaring
     the ONE canonical id via #~"declareCanonicalType".]
-  [#*: #~"lookupTyperef(mainName, base)" -- looks #~"base" up in the
-    #~"resolved" cache over the same precedence. Despite its parameter
-    name, #~"mainName" is the #_*"search-root unit": the #_*"current"
-    unit at most call sites, the program's main unit at a few. It is
-    not unconditionally main-rooted.]
+  [#*: #~"walkLookupTyperef(ast, ty, reg, unitDecl, base)" -- the same
+    walk for a type reference, answering a type id, with the declared id
+    for a declaration still resolving.]
 
 Cross-unit references are #_*"dotted" (#~"zast.Node", #~"io.File"),
 resolved by the named unit; bare names never reach across units except
-to the stdlib fallback. (The same-named-directory #_*"submodule" feature
-in #~"units.pdoc" -- a unit #~"foo.z" with a private #~"foo/" directory --
-is implemented in the parser's #~"loadUnit"; the current corpus and the
-self-hosted compiler use flat units + dotted references, so its bare-name
-resolution is not exercised end-to-end at typecheck.)
+through the prelude. A unit #~"foo.z" with a private #~"foo/" directory
+holds implementation subunits, loaded by the parser when referred to.
 
 #b:"The canonical-id rule." A definition resolves #_*"once", into one
 canonical type id keyed by its #~"defn.nodeid" (with #~"defined_in_unit"
@@ -491,10 +428,10 @@ bug class the #~"make shadow-guard" ratchet prevents from returning.
 
 #b:"Mono identity follows the same rule." A generic instance is identified by
 the specialization trie: each template holds its spec-tree edges in
-#~"genericChildKeys" / #~"genericChildTids", one level per
-parameter in definition order, keyed by the argument's type id -- or, for an
-integer-scalar-constrained parameter (#~"str to: 16"), by the literal VALUE
-itself (#~"genericArgIsValue" marks such ordinals). Ids cannot collide across
+#~"genericChildren", one level per parameter in definition order, keyed by
+the argument's type id -- or, for an integer-scalar-constrained parameter
+(#~"str to: 16"), by the literal VALUE itself (#~"genericArgIsValue" marks
+such ordinals). Ids cannot collide across
 same-named types, and the mono NAME (#~"Map_String_i64") remains only as the
 display / C-name stem; a user shadow of a builtin still appends its canonical
 id to that name (#~"monoValName": #~"optionval_i64_7") so generated wrapper
@@ -554,7 +491,7 @@ and the u64-keyed stamp tables keep their base type, and the id narrows
 that boundary.
 
 Residuals that stay bare by design, because the slot genuinely holds
-more than one space: #~"genericChildKeys", #~"genericArgs",
+more than one space: #~"genericChildren"'s key, #~"genericArgs",
 #~"genericArgAt"'s return (a tid OR a numeric generic value),
 #~"zlockholder.id" (a vid OR a node id), and the emitter's
 #~"interpPartNodeId", whose consumers ARE the u64-keyed stamp tables. #~"zvfs"
@@ -576,8 +513,7 @@ Lifetime") is enforced at the assignment and call sites:
 #ul:
   [#*: #~"checkAssignment" -- definition site. Records the
     new variable's ownership in a fresh #~"ZVariable", consumes
-    any #~"ZExprResult.borrowTarget" by installing a borrow
-    lock.]
+    the pending borrow by installing a borrow lock.]
   [#*: #~"checkReassignment" -- enforces that the LHS variable
     is currently #~"OWNED" and that the RHS provides the
     appropriate ownership; resets narrowing and re-runs lock
@@ -586,8 +522,8 @@ Lifetime") is enforced at the assignment and call sites:
   [#*: the argument-site #~".take" -- transfers ownership from
     the caller's binding into the callee's parameter.]
 
-Parameters default to #~".borrow"; #~".take" and #~".borrow" are
-the opt-in transfers. The annotations live on the parameter's own
+Parameters default to #~".borrow"; #~".take" and #~".view" are
+the opt-in annotations. The annotations live on the parameter's own
 #~"Decl", not on the parameter #~"ZType".
 
 #b:"The `:name` shorthand at the argument site." A #~":name"
@@ -598,17 +534,13 @@ the written-out #~"name: name" form does (the source is
 invalidated; a later use is E0200). At lock/borrow parameters the
 shorthand currently takes #_*"no" call-scoped lock -- the
 written-out form takes #~"EXCLUSIVE"/#~"SHARED" via
-#~"lockCallArg", the shorthand form skips it. Closing that gap is
-a measured, recorded follow-on: routing #~"labelvalue" through
-#~"lockCallArg" surfaces 1,934 E0200s at 1,848 unique sites in the
-compiler's own tree (1,239 readonly-into-mutable-borrow, 477
-shared-lock overlaps, 124 enclosing-call aliasing, 87
-same-reftype-twice, 6 exclusive overlaps), and converging them is
-per-callee dataflow work (widen read-only callees to #~".view",
-make genuinely-mutated caller bindings mutable, restructure
-iterator overlaps). Until that arc lands, a readonly binding
-passed via #~":name" to a mutable-borrow parameter is accepted
-without a diagnostic.
+#~"lockCallArg", the shorthand form skips it, so a readonly binding
+passed via #~":name" to a mutable-borrow parameter is accepted without
+a diagnostic. Routing the shorthand through #~"lockCallArg" is the fix;
+in the compiler's own tree it surfaces roughly 1,900 E0200s (readonly
+bindings into mutable-borrow parameters, shared-lock overlaps, aliasing
+through an enclosing call), each needing a per-callee #~".view" or a
+mutable caller binding before the shorthand can lock.
 
 
 #---: Lock checking
@@ -646,12 +578,12 @@ current call's identity.
 #---: Borrow correctness for parameters
 
 Deep methods that take a borrow into a return value record the
-source path on a pending-borrow slot, which
-#~"checkExpression" captures into #~"ZExprResult.borrowTarget"
-and clears so it cannot leak across statements (see
-#~"takePendingBorrow" / #~"drainPendingBorrow"). The binding site
-(#~"checkAssignment" or the call-argument check) then
-installs the borrow lock against the actual destination scope.
+source path on the pending-borrow slot (#~"ZTyping.pendingBorrowPath"
+and its flags); the binding site (#~"checkAssignment" or the
+call-argument check) consumes it with #~"takePendingBorrow" and
+installs the borrow lock against the actual destination frame, and
+#~"drainPendingBorrow" clears it at statement and call boundaries so
+it cannot leak across statements.
 The dedicated #~".take" / #~".borrow" / #~".view" / #~".hold" /
 #~".release" / #~".private" handling lives in #~"checkDotted".
 
@@ -682,17 +614,15 @@ clone.
     parameters); a hit returns the existing instance, a miss
     materializes one via #~"mintMono" and links it into the
     trie with its ordered #~"genericArgs".]
-  [#*: #~"cloneUnitMethod" -- per-function variant.
-    Clones the function AST, binds generic params, typechecks
-    the clone with the mono context in scope.]
+  [#*: the instance walk -- a mono's method bodies are re-walked over
+    the TEMPLATE's AST with the instance's arguments bound
+    (#~"monoParamSubst"), stamping per-instance types into
+    #~"monoNodeType"; nothing is cloned.]
   [#*: #~"validateGenericTypeArgs" -- enforces generic
     constraints on a candidate argument type.]
 
-Cloned nodes carry #~"synthOrigin" (the pass-name string) so the
-SQL dump can attribute them to monomorphisation
-rather than to the user. Node synthesis is described in
-#~"compiler.pdoc:Synthesis Toolkit"; the same machinery is used by
-per-call argument hoisting.
+Node synthesis (the hoist temps, the generator lowering) is described
+in #~"compiler.pdoc:Synthesis Toolkit".
 
 #~"is native" methods (the compiler-provided collection methods
 on #~"array", #~"List", #~"Map", #~"str", etc.) are #_*"not"
@@ -723,11 +653,8 @@ Assignment-based narrowing (e.g. #~"x: Result.ok 42") places a
 narrowing entry in the current scope at definition time;
 reassignment resets it.
 
-Both narrowing and exclusion carry id parallels
-(#~"narrowedSubtypeId", #~"excludedSubtypeIds") minted via
-#~"ZType.allocChild". String fields remain authoritative; the
-ids are the hot-path key prepared for future migration to the
-SQL-backed representation.
+Narrowing and exclusion are carried as arm name ids on the overlay
+row (#~"narrowedSubtype", #~"excludedSubtypes").
 
 
 #---: Auto-call coercion
@@ -772,14 +699,11 @@ use), and #~"suppressBareCtor" spans dotted-path #_*"base" walks so
 #~"Counter.create value: 99" does not construct its base atom.
 
 The runtime-backed stdlib units (system/core/collections/io/os/cli)
-are checked by #~"checkNativeOnlyUnitBodies" at resolve time: a type
-method with a #~".z" body there is E0100 (the type is implemented by
-the C runtime), while bodied #_*"free" functions are legal -- they are
-resolved and body-walked in #~"checkBodies"' final pass, after the
-main unit completes and only when the program's demand loop referenced
-them (#~"unitHasDemandedBodiedFn" gates;
-#~"resolveDemandedStdDeps" mirrors the demand driver's fixpoint).
-See the compiler doc's "Runtime-backed stdlib units".
+implement their type methods in the C runtime: a type method with a
+#~".z" body there is E0100, while bodied #_*"free" functions are legal --
+they are resolved and body-walked like any other unit's, only when the
+program's demand loop referenced them. See the compiler doc's
+"Runtime-backed stdlib units".
 
 
 #--: Error Reporting
@@ -810,16 +734,14 @@ Module boundaries the typechecker relies on:
 
 #ul:
   [#*: #~"src/ztypes.z" -- #~"ZType", #~"ZVariable",
-    #~"ZEntry", #~"ZExprResult", #~"ZTypeRegistry",
+    #~"ZEntry", #~"ZTypeRegistry",
     plus the #~"ztypetype" / #~"zownership" /
-    #~"zparamownership" / #~"zlockstate" / #~"zscopekind" /
-    #~"zsubtype" / #~"zcontrolkind" / #~"zbuiltinfunc" /
-    #~"zlockholderkind" / #~"zlockholder" enums, and the shared
-    mangler #~"mangleVarName"]
-  [#*: #~"src/ztyping.z" -- the #~"ZTyping" container, the
-    #~"Decl" tree and the #~"ZTypeGenericArg" flat-table rows]
-  [#*: #~"src/zenv.z" -- #~"ZSymbolTable", #~"ZScope",
-    #~"ZScopeLogRow", the lock-conflict logic
+    #~"zparamownership" / #~"zlockstate" / #~"zlockscope" /
+    #~"zcontrolkind" / #~"zlockholderkind" / #~"zlockholder" enums,
+    the numeric-literal parser and the shared mangler #~"mangleVarName"]
+  [#*: #~"src/ztyping.z" -- the #~"ZTyping" container and the
+    #~"Decl" tree]
+  [#*: #~"src/zenv.z" -- #~"ZSymbolTable", the lock-conflict logic
     (#~"lockAcquireConflict", #~"pathsOverlap"), narrowing
     / exclusion installers]
 
@@ -859,7 +781,7 @@ order:
     document is the structural companion to that one.]
   [#*: #~"ownership.pdoc" -- the full specification of
     ownership states, parameter annotations
-    (#~".take" / #~".borrow" / #~".borrow"), and per-call atomic
+    (#~".take" / #~".borrow" / #~".view"), and per-call atomic
     processing.]
   [#*: #~"representation_of_types.pdoc" -- type layout
     (#~"destructor_name", #~"is_heap_allocated",
