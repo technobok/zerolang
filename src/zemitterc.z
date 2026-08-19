@@ -9371,6 +9371,78 @@ emitLocalAtomName: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out
     return (varCName :ctx :vid :name)
 }
 
+# emitDataMember -- a data block's element read through `n`, whose base is the
+# block `dbt`: a label (`codes.ht`), an ordinal (`primes.0`), `.length`, or
+# `.array` (the whole block copied into an array temp). "" for any other member.
+emitDataMember: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.DottedPathData.view
+    dbt: ztypes.tid
+    mn2: String.view
+} out String is {
+    if mn2.stringview == "array" then {
+        daid0: stampIdOf :symtab nid: n.nodeid.u64
+        daid: chaseColMono :symtab :ctx tid: daid0
+        daCt: (typeRefC
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: daid.u64)
+            thisTid: ztypes.tid
+        )
+        daMn: regNameOf :symtab tid: (ztypes.tid.create from: daid.u64)
+        daEid: listElemType :symtab monoId: (ztypes.tid.create from: daid.u64)
+        daEln: regNameOf :symtab tid: (ztypes.tid.create from: daEid.u64)
+        daPfx: daEln.length + 7
+        daLen: monoElemName full: daMn prefixLen: daPfx
+        daN: ctx.argHoistCtr
+        ctx.argHoistCtr = ctx.argHoistCtr + 1
+        daNm: "_da\{daN}"
+        daSym: ctxCname :ctx tid: (ztypes.tid.create from: dbt.u64)
+        daRaw: "    \{daCt} \{daNm};\n    for (int64_t _i = 0; _i < \{daLen.stringview}; _i++) { \{daNm}.data[_i] = \{daSym}[_i]; }\n"
+        ctx.argHoistRaw.append daRaw
+        return daNm
+    }
+    if mn2.stringview == "length" then {
+        edSym: ctxCname :ctx tid: (ztypes.tid.create from: dbt.u64)
+        ed0: "\{edSym}_len"
+        return ed0
+    }
+    # `primes.0` reaches the element by ordinal, `primes.first`
+    # by label; ask the right table rather than spelling one key
+    # that could mean either
+    dcIdx: mn2.stringview.parseU64
+    match (
+        dcIdx
+    ) case ok then {
+        dso: (ctx.dataSlot.get
+            key: (dataslotkey owner: dbt.u64 slot: dcIdx)
+        )
+        match (
+            dso
+        ) case some then {
+            dsv: dso.stringview
+            return dsv.string
+        } case none then null
+    } else {
+        dno: (ctx.dataConst.get
+            key: (dataconstkey
+                owner: dbt.u64
+                name: (zast.poolFind pool: ast.names text: mn2.stringview).u64
+            )
+        )
+        match (
+            dno
+        ) case some then {
+            dnv: dno.stringview
+            return dnv.string
+        } case none then null
+    }
+    return "".string
+}
+
 # emitExpr -- the C expression text for a node (calls inline; the scalar
 # examples carry no order-sensitive multi-call arguments).
 emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} out String is {
@@ -10059,6 +10131,16 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             }
         }
         mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
+        # a data block's element read (`codes.ht`, `consts.codes.ht`, `primes.0`):
+        # the block is the base's stamped type, whatever shape the base takes;
+        # no base is emitted
+        dpbT: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
+        if dpbT > 0 then {
+            if (symtab.reg.typetypeOf typeId: dpbT) == ztypes.ztypetype.dataType then {
+                dres0: emitDataMember :ast :symtab :ctx :n dbt: dpbT :mn2
+                if dres0.length > 0 then return dres0
+            }
+        }
         # a zero-parameter native read without parens auto-calls: the member's
         # DECLARATION says so, so io.stdout and os.pid take one leg and no
         # name is listed
@@ -10680,75 +10762,13 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                     return eev
                 }
             }
-            baseIsData: false
             dbt: (dataBlockTid
                 :symtab
                 nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
             )
-            if rtt == ztypes.ztypetype.dataType then {
-                baseIsData = true
-            } else {
-                if (ctx.dataElems.has key: (ztypes.tid.create from: dbt.u64)) then baseIsData = true
-            }
-            if baseIsData then {
-                if mn2.stringview == "array" then {
-                    daid0: stampIdOf :symtab nid: n.nodeid.u64
-                    daid: chaseColMono :symtab :ctx tid: daid0
-                    daCt: (typeRefC
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: daid.u64)
-                        thisTid: ztypes.tid
-                    )
-                    daMn: regNameOf :symtab tid: (ztypes.tid.create from: daid.u64)
-                    daEid: listElemType :symtab monoId: (ztypes.tid.create from: daid.u64)
-                    daEln: regNameOf :symtab tid: (ztypes.tid.create from: daEid.u64)
-                    daPfx: daEln.length + 7
-                    daLen: monoElemName full: daMn prefixLen: daPfx
-                    daN: ctx.argHoistCtr
-                    ctx.argHoistCtr = ctx.argHoistCtr + 1
-                    daNm: "_da\{daN}"
-                    daSym: ctxCname :ctx tid: (ztypes.tid.create from: dbt.u64)
-                    daRaw: "    \{daCt} \{daNm};\n    for (int64_t _i = 0; _i < \{daLen.stringview}; _i++) { \{daNm}.data[_i] = \{daSym}[_i]; }\n"
-                    ctx.argHoistRaw.append daRaw
-                    return daNm
-                }
-                if mn2.stringview == "length" then {
-                    edSym: ctxCname :ctx tid: (ztypes.tid.create from: dbt.u64)
-                    ed0: "\{edSym}_len"
-                    return ed0
-                }
-                # `primes.0` reaches the element by ordinal, `primes.first`
-                # by label; ask the right table rather than spelling one key
-                # that could mean either
-                dcIdx: mn2.stringview.parseU64
-                match (
-                    dcIdx
-                ) case ok then {
-                    dso: (ctx.dataSlot.get
-                        key: (dataslotkey owner: dbt.u64 slot: dcIdx)
-                    )
-                    match (
-                        dso
-                    ) case some then {
-                        dsv: dso.stringview
-                        return dsv.string
-                    } case none then null
-                } else {
-                    dno: (ctx.dataConst.get
-                        key: (dataconstkey
-                            owner: dbt.u64
-                            name: (zast.poolFind pool: ast.names text: mn2.stringview).u64
-                        )
-                    )
-                    match (
-                        dno
-                    ) case some then {
-                        dnv: dno.stringview
-                        return dnv.string
-                    } case none then null
-                }
+            if (dbt.isZero) == false then {
+                dres: emitDataMember :ast :symtab :ctx :n :dbt :mn2
+                if dres.length > 0 then return dres
             }
         }
         # `.stringview` on a String/StringView projects an inline view, not a
