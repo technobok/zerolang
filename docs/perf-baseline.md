@@ -831,6 +831,15 @@ Net −2 source lines. A self-compile builds 15,314 of these; 93.7% of the
 `Set String` instances it creates die empty, so most of the win is the header
 an empty `IdSet` does not allocate.
 
+### The post-guard subject-seen set
+
+`doneS9`, the same shape again -- `chSubjectVids` parallel to `chSubjects`,
+the id read on the line after the membership test. −849 allocations, −41 KB,
+net −1 line. Small, and most of these are not empty; the part that does not
+show in the allocation column is the inner scan, which looked for other
+clauses on the same subject by comparing subject TEXT inside a nested loop
+over the same list, and now compares ids.
+
 ### Where this stops, and why
 
 After the migrations above a self-compile creates **26,638** Map/Set instances,
@@ -847,11 +856,26 @@ uninterned names would compare EQUAL — a correctness hazard, not a cost. Makin
 them interned means `poolSet` during typecheck, which grows the pool and
 renumbers ids. Against that: 93 references across the monomorphisation core.
 
-The rest are small — `seen` (1,141), `doneS9` (695), `armNames9` (40),
-`gpNames9` (19), and `boundParams`, which a self-compile never constructs at
-all. `ArmPredFact.subject` / `armName` and the `covered` / `required9` lists
-are still `String`, so the narrowing boundary converts text to id per call;
-that is a tidy-up, not a container win.
+The rest were measured rather than estimated, and each fails on one of the
+two tests:
+
+| candidate | instances | verdict |
+|---|---|---|
+| `subs` | 8,435 | keys not uniformly interned; 93 references |
+| `seen` (validateGenericTypeArgs) | 1,141 | key is sometimes a derived `primaryName`, so not interned |
+| `armNames9` (×2) | 46 | safe — arm names carry their id — but negligible |
+| `gpNames9` | 19 | keys are registry names, not pool names; negligible |
+| `boundParams` | 0 | a self-compile never constructs it |
+| `ArmPredFact` + `covered` / `required9` | 151 facts | safe, worth ~300 allocations |
+
+`ArmPredFact` is the interesting near-miss: one of its two constructors takes
+a name id it already holds and calls `nameTextCopy` on it, and the narrowing
+call sites then convert the text back with `nameIdOf`. That round trip is
+exactly the one worth −185,528 allocations elsewhere in this file — but at 151
+constructions per self-compile it is worth a few hundred, so it stays as a
+readability item rather than a performance one. **The shape being wrong is not
+the same as the shape being expensive; measure before assuming the first
+implies the second.**
 
 The rule this arrived at, worth keeping: **an id key is only sound when the id
 is minted, not looked up.** A variable id or a name a node already carries is
