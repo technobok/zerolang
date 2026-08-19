@@ -3904,6 +3904,29 @@ isSvArgNative: function {name: StringView} out bool is {
     return false
 }
 
+# svNativeCall -- `<svC>_<m>(&recv, args)` for an sv-native method. `&` needs an
+# LVALUE, and a receiver that is itself a CALL is not one: `a.trim.concat other: b`
+# emitted `&z_t_trim(...)` and gcc rejected it. Such a receiver goes inside a
+# statement expression that binds it first -- the same `({ ... })` shape the
+# union and interpolation legs already emit. A StringView owns nothing, so the
+# block only binds and reads the temp; a compound literal is already an lvalue
+# and is spelled directly.
+svNativeCall: function {
+    ctx: Ctx.view
+    m: StringView
+    recv: StringView
+    args: StringView
+} out String is {
+    addressable: (isNonLvalueArg s: recv) == false
+    if (recv.startsWith prefix: "((") then addressable = true
+    if addressable then {
+        direct: "\{ctx.svC}_\{m}(&\{recv}\{args})"
+        return direct
+    }
+    wrapped: "({ \{ctx.svC}_t _svr = \{recv}; \{ctx.svC}_\{m}(&_svr\{args}); })"
+    return wrapped
+}
+
 # svArgAddr -- the &-form of a StringView native argument (pooled
 # literal or local view); "" when unsupported.
 svArgAddr: function {
@@ -4077,18 +4100,24 @@ emitDottedCall: function {
         if fromA.length > 0 when toA.length > 0 then {
             recvp: String
             if btid == ctx.svTid then {
-                recvp = "&\{bn}"
+                recvp = bn.copy
             } else { if btIsStr then {
                 bfs: svValueForm :ctx expr: bn.stringview isStr: true vid: dcbV
-                recvp = "&\{bfs}"
+                recvp = bfs.copy
             } else {
                 sacc: ".".string
                 if (isPtrVid :ctx vid: dcbV) then sacc = "->".string
-                recvp = "&((\{ctx.svC}_t){ .data = \{bn}\{sacc}data, .size = \{bn}\{sacc}len })"
+                recvp = "((\{ctx.svC}_t){ .data = \{bn}\{sacc}data, .size = \{bn}\{sacc}len })"
             } }
             if recvp.length > 0 then {
                 needsAddM :ctx uname: "system" memb: "substring"
-                esb: "\{ctx.svC}_substring(\{recvp}, \{fromA}, \{toA})"
+                sargs: ", \{fromA}, \{toA}"
+                esb: (svNativeCall
+                    :ctx
+                    m: "substring"
+                    recv: recvp.stringview
+                    args: sargs.stringview
+                )
                 return esb
             }
         }
@@ -4241,10 +4270,22 @@ emitDottedCall: function {
                     }
                 } else null
             }
-            eb: "\{ctx.svC}_byteAt(&\{bn}, \{barg})"
+            bargs: ", \{barg}"
+            eb: (svNativeCall
+                :ctx
+                m: "byteAt"
+                recv: bn.stringview
+                args: bargs.stringview
+            )
             return eb
         }
-        ea: "\{ctx.svC}_\{mn}(&\{bn}, \{argx})"
+        aargs: ", \{argx}"
+        ea: (svNativeCall
+            :ctx
+            m: mn.stringview
+            recv: bn.stringview
+            args: aargs.stringview
+        )
         return ea
     }
     svRecvOk: false
@@ -4255,10 +4296,10 @@ emitDottedCall: function {
             needsAddM :ctx uname: "system" memb: mn.stringview
             # a String receiver projects to a view value, like the
             # substring/parse legs (a StringView receiver is one already)
-            recvS: "&\{bn}"
+            recvS: bn.copy
             if btIsStr then {
                 bfs2: svValueForm :ctx expr: bn.stringview isStr: true vid: dcbV
-                recvS = "&\{bfs2}"
+                recvS = bfs2.copy
             }
             args: String
             aiter: call.arguments.iterate
@@ -4311,7 +4352,12 @@ emitDottedCall: function {
                     }
                 } else null
             }
-            e1: "\{ctx.svC}_\{mn}(\{recvS}\{args})"
+            e1: (svNativeCall
+                :ctx
+                m: mn.stringview
+                recv: recvS.stringview
+                args: args.stringview
+            )
             return e1
         }
     }

@@ -1,0 +1,43 @@
+# The sv-native legs pass `&receiver`, and `&` needs an LVALUE. A receiver that
+# is itself a CALL is not one, so `a.trim.concat other: b` emitted
+# `z_sv_concat(&z_sv_trim(&a), &b)` and gcc rejected the whole program with
+# "lvalue required as unary '&' operand". Such a receiver now goes inside a
+# statement expression that binds it first.
+#
+# A receiver that is a BINDING, or a projection the emitter already spells as a
+# compound literal (`el.text.stringview`), is addressable and must stay spelled
+# directly -- a temp there would cost an allocation-free but pointless copy and
+# move every program that emits one.
+
+main: function is {
+    a: "  hello world  "
+    b: "lo"
+    # bound receiver: addressable, spelled directly
+    t: a.trim
+    print (t.concat other: b)
+    # call receiver, across every sv-native leg that addresses it
+    print (a.trim.concat other: b)
+    print (a.trim.substring from: 0 to: 5)
+    print a.trim.trimEnd
+    print "\{a.trim.length}"
+    print "\{a.trim.startsWith prefix: b}"
+    print "\{a.trim.contains needle: b}"
+    # these answer an optionval, so they are bound rather than printed -- the
+    # point is that the CALL emits, not what it returns
+    idx: (a.trim.indexOf needle: b)
+    at0: (a.trim.byteAt i: 0)
+    match (
+        idx
+    ) case some then {
+        print "indexOf found"
+    } case none then {
+        print "indexOf missing"
+    }
+    match (
+        at0
+    ) case some then {
+        print "byteAt ok"
+    } case none then {
+        print "byteAt none"
+    }
+}
