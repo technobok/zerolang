@@ -1009,21 +1009,13 @@ Analysis: class {
         }
     }
 
-    # walk -- traversal collecting embedded parse errors as diagnostics, recursing
-    # every child (all 29 arms, mirroring zast.printNodeCanonical).
-    # walkProgram / walkCasingProgram -- root entries: the table rides
-    # inside the program node.
+    # walkProgram -- root entry of the parse-tier rule visitor: the table
+    # rides inside the program node.
     walkProgram: function {:this prog: Node.view} is {
         match (
             prog
         ) case program then {
-            wpi: u64
-            wpn: prog.ast.units.length
-            for wpi < wpn loop {
-                wpid: (zast.nodeid.create from: (prog.ast.units.get i: wpi))
-                this.walkAt ast: prog.ast nId: wpid
-                wpi = wpi + 1
-            }
+            this.walkIds ast: prog.ast ids: prog.ast.units
         } else null
     }
 
@@ -1141,13 +1133,8 @@ Analysis: class {
         } else null
     }
 
-    # walkAt -- the id-taking entry: the row view is this frame's, so a
-    # caller can lend the table in the same call.
-    walkAt: function {:this ast: Ast.view nId: zast.nodeid} is {
-        n: ast.nodes.get i: nId.u64
-        this.walk :ast :n
-    }
-
+    # walk -- the parse-tier rule visitor: the arms a rule reads are spelled,
+    # then every child is visited through zast.childIds.
     walk: function {:this ast: Ast.view n: Node.view} is {
         match (
             n
@@ -1163,16 +1150,6 @@ Analysis: class {
                 hint: n.hint.copy
             )
             this.diags.append d
-        } case placeholder then null case atomid then null case labelvalue then null case stringchunk then null case binop then {
-            this.walk :ast n: (ast.nodes.get i: n.lhs.u64)
-            this.walk :ast n: (ast.nodes.get i: n.operator.u64)
-            this.walk :ast n: (ast.nodes.get i: n.rhs.u64)
-        } case atomstring then {
-            spit: n.stringparts.iterate
-            for part: spit loop this.walk :ast n: (ast.nodes.get i: part.u64)
-        } case dottedpath then {
-            this.walk :ast n: (ast.nodes.get i: n.parent.u64)
-            this.walk :ast n: (ast.nodes.get i: n.child.u64)
         } case call then {
             if this.wrapWidth > 0 then {
                 this.tryWrapCall :ast arguments: n.arguments line: n.lineno col: n.colno
@@ -1184,108 +1161,41 @@ Analysis: class {
                 )
                 this.checkCollapseName :ast arguments: n.arguments
             }
-            this.walk :ast n: (ast.nodes.get i: n.callable.u64)
-            ait: n.arguments.iterate
-            for arg: ait loop this.walk :ast n: (ast.nodes.get i: arg.u64)
-        } case typeofexpr then {
-            this.walk :ast n: (ast.nodes.get i: n.source.u64)
-        } case namedoperation then {
-            this.walk :ast n: (ast.nodes.get i: n.operation.u64)
-        } case datablock then {
-            elit: n.elements.iterate
-            for el: elit loop this.walk :ast n: (ast.nodes.get i: el.u64)
-            this.walkOptAt :ast oId: n.outType
-        } case yieldexpr then {
-            this.walk :ast n: (ast.nodes.get i: n.expr.u64)
-        } case statement then {
-            stit: n.statements.iterate
-            for stlnId: stit loop this.walk :ast n: (ast.nodes.get i: stlnId.u64)
-        } case statementline then {
-            this.walk :ast n: (ast.nodes.get i: n.statementline.u64)
         } case assignment then {
-            av: ast.nodes.get i: n.value.u64
-            if this.funcDepth > 0 then this.tryBareZeroInit :ast value: av
-            this.walk :ast n: av
-        } case reassignment then {
-            this.walk :ast n: (ast.nodes.get i: n.topath.u64)
-            this.walk :ast n: (ast.nodes.get i: n.value.u64)
-        } case swapstmt then {
-            this.walk :ast n: (ast.nodes.get i: n.lhs.u64)
-            this.walk :ast n: (ast.nodes.get i: n.rhs.u64)
-        } case expression then {
-            this.walk :ast n: (ast.nodes.get i: n.expression.u64)
+            if this.funcDepth > 0 then (this.tryBareZeroInit
+                :ast
+                value: (ast.nodes.get i: n.value.u64)
+            )
         } case ifexpr then {
             this.checkEmpty :ast elseclauseId: n.elseclause clauses: n.clauses
             this.checkBracesIf :ast clauses: n.clauses elseclauseId: n.elseclause ln: n.lineno
             this.checkChainBodyBreak :ast clauses: n.clauses elseclauseId: n.elseclause
-            clit: n.clauses.iterate
-            for cl: clit loop this.walk :ast n: (ast.nodes.get i: cl.u64)
-            this.walkOptAt :ast oId: n.elseclause
-        } case ifclause then {
-            coit: n.conditions.iterate
-            for co: coit loop this.walk :ast n: (ast.nodes.get i: co.u64)
-            this.walk :ast n: (ast.nodes.get i: n.statement.u64)
         } case forexpr then {
             this.checkBracesFor :ast bodyId: n.body
-            fcit: n.conditions.iterate
-            for fc: fcit loop this.walk :ast n: (ast.nodes.get i: fc.u64)
-            this.walkOptAt :ast oId: n.body
-            fpit: n.postconditions.iterate
-            for fp: fpit loop this.walk :ast n: (ast.nodes.get i: fp.u64)
-        } case doexpr then {
-            this.walk :ast n: (ast.nodes.get i: n.statement.u64)
-        } case withexpr then {
-            this.walk :ast n: (ast.nodes.get i: n.value.u64)
-            this.walk :ast n: (ast.nodes.get i: n.body.u64)
         } case caseexpr then {
             this.checkBracesMatch :ast clauses: n.clauses elseclauseId: n.elseclause ln: n.lineno
             this.checkChainBodyBreak :ast clauses: n.clauses elseclauseId: n.elseclause
             this.checkNullArms :ast clauses: n.clauses elseclauseId: n.elseclause
-            this.walk :ast n: (ast.nodes.get i: n.subject.u64)
-            ccit: n.clauses.iterate
-            for cc: ccit loop this.walk :ast n: (ast.nodes.get i: cc.u64)
-            this.walkOptAt :ast oId: n.elseclause
-        } case caseclause then {
-            this.walk :ast n: (ast.nodes.get i: n.matcharm.u64)
-            this.walk :ast n: (ast.nodes.get i: n.statement.u64)
         } case functiondef then {
+            # the body is walked one function deeper; the signature is not
             if this.wrapWidth > 0 then (this.tryWrapParams
                 :ast
                 parameters: n.parameters
                 line: n.lineno
             )
             this.walkOptAt :ast oId: n.returntype
-            pmit: n.parameters.iterate
-            for pmId: pmit loop {
-                pm: ast.nodes.get i: pmId.u64
-                this.walk :ast n: pm
-            }
+            this.walkIds :ast ids: n.parameters
             this.funcDepth = this.funcDepth + 1
             this.walkOptAt :ast oId: n.body
             this.funcDepth = this.funcDepth - 1
-            fait: n.asItems.iterate
-            for famId: fait loop {
-                fam: ast.nodes.get i: famId.u64
-                this.walk :ast n: fam
-            }
-        } case objectdef then {
-            isit: n.isItems.iterate
-            for oimId: isit loop {
-                oim: ast.nodes.get i: oimId.u64
-                this.walk :ast n: oim
-            }
-            asit: n.asItems.iterate
-            for oamId: asit loop {
-                oam: ast.nodes.get i: oamId.u64
-                this.walk :ast n: oam
-            }
-        } case unitdef then {
-            udit: n.body.iterate
-            for ubmId: udit loop this.walk :ast n: (ast.nodes.get i: ubmId.u64)
-        } case program then {
-            puit: n.ast.units.iterate
-            for pumId: puit loop this.walk :ast n: (ast.nodes.get i: pumId.u64)
-        }
+            this.walkIds :ast ids: n.asItems
+            return
+        } else null
+        this.walkIds :ast ids: (zast.childIds :ast :n)
+    }
+
+    walkIds: function {:this ast: Ast.view ids: (ListVal u32).view} is {
+        with it: ids.iterate do for c: it loop this.walk :ast n: (ast.nodes.get i: c.u64)
     }
 
     # walkCasing -- opt-in (L009): recurse to every type definition and check the member
@@ -2650,11 +2560,12 @@ Analysis: class {
     }
 
     # walkSuf -- preorder over the subtree running the typecheck-based suffix check, threading
-    # the enclosing function's return type for `return`s.
+    # the enclosing function's return type for `return`s. The arms a check reads are spelled;
+    # every child is visited through zast.childIds.
     walkSuf: function {:this ast: Ast.view n: Node.view uname: StringView st: zenv.ZSymbolTable.view funcretId: zast.nodeid} is {
         match (
             n
-        ) case error then null case placeholder then null case atomid then null case labelvalue then null case stringchunk then null case binop then {
+        ) case binop then {
             bl: ast.nodes.get i: n.lhs.u64
             br: ast.nodes.get i: n.rhs.u64
             bop: atomName :ast n: (ast.nodes.get i: n.operator.u64)
@@ -2665,17 +2576,6 @@ Analysis: class {
                 isCmp: (ztypecheck.isComparisonOp name: bop.stringview)
                 :st
             )
-            this.walkSuf :ast n: (ast.nodes.get i: n.lhs.u64) :uname :st :funcretId
-            this.walkSuf :ast n: (ast.nodes.get i: n.operator.u64) :uname :st :funcretId
-            this.walkSuf :ast n: (ast.nodes.get i: n.rhs.u64) :uname :st :funcretId
-        } case atomstring then {
-            iter: n.stringparts.iterate
-            for partId: iter loop {
-                this.walkSuf :ast n: (ast.nodes.get i: partId.u64) :uname :st :funcretId
-            }
-        } case dottedpath then {
-            this.walkSuf :ast n: (ast.nodes.get i: n.parent.u64) :uname :st :funcretId
-            this.walkSuf :ast n: (ast.nodes.get i: n.child.u64) :uname :st :funcretId
         } case call then {
             (this.sufCall :ast
                 callNid: n.nodeid
@@ -2690,142 +2590,24 @@ Analysis: class {
                 arguments: n.arguments
                 :st
             )
-            this.walkSuf :ast n: (ast.nodes.get i: n.callable.u64) :uname :st :funcretId
-            argiter: n.arguments.iterate
-            for arg: argiter loop {
-                argNode: ast.nodes.get i: arg.u64
-                this.walkSuf :ast n: argNode :uname :st :funcretId
-            }
-        } case typeofexpr then {
-            this.walkSuf :ast n: (ast.nodes.get i: n.source.u64) :uname :st :funcretId
-        } case namedoperation then {
-            this.walkSuf :ast n: (ast.nodes.get i: n.operation.u64) :uname :st :funcretId
-        } case datablock then {
-            eiter: n.elements.iterate
-            for elId: eiter loop {
-                this.walkSuf :ast n: (ast.nodes.get i: elId.u64) :uname :st :funcretId
-            }
-            this.walkSufOptAt :ast oId: n.outType :uname :st :funcretId
-        } case yieldexpr then {
-            this.walkSuf :ast n: (ast.nodes.get i: n.expr.u64) :uname :st :funcretId
-        } case statement then {
-            siter: n.statements.iterate
-            for slnId: siter loop {
-                this.walkSuf :ast n: (ast.nodes.get i: slnId.u64) :uname :st :funcretId
-            }
-        } case statementline then {
-            sln: ast.nodes.get i: n.statementline.u64
-            this.walkSuf :ast n: sln :uname :st :funcretId
-        } case assignment then {
-            this.walkSuf :ast n: (ast.nodes.get i: n.value.u64) :uname :st :funcretId
         } case reassignment then {
             tpn: ast.nodes.get i: n.topath.u64
             rvn: ast.nodes.get i: n.value.u64
             this.sufReassign :ast topath: tpn value: rvn :st
-            this.walkSuf :ast n: tpn :uname :st :funcretId
-            this.walkSuf :ast n: rvn :uname :st :funcretId
-        } case swapstmt then {
-            this.walkSuf :ast n: (ast.nodes.get i: n.lhs.u64) :uname :st :funcretId
-            this.walkSuf :ast n: (ast.nodes.get i: n.rhs.u64) :uname :st :funcretId
-        } case expression then {
-            this.walkSuf :ast n: (ast.nodes.get i: n.expression.u64) :uname :st :funcretId
-        } case ifexpr then {
-            clit: n.clauses.iterate
-            for clId: clit loop {
-                this.walkSuf :ast n: (ast.nodes.get i: clId.u64) :uname :st :funcretId
-            }
-            this.walkSufOptAt :ast oId: n.elseclause :uname :st :funcretId
-        } case ifclause then {
-            coit: n.conditions.iterate
-            for coId: coit loop {
-                this.walkSuf :ast n: (ast.nodes.get i: coId.u64) :uname :st :funcretId
-            }
-            this.walkSuf :ast n: (ast.nodes.get i: n.statement.u64) :uname :st :funcretId
-        } case forexpr then {
-            fcit: n.conditions.iterate
-            for fcId: fcit loop {
-                this.walkSuf :ast n: (ast.nodes.get i: fcId.u64) :uname :st :funcretId
-            }
-            this.walkSufOptAt :ast oId: n.body :uname :st :funcretId
-            fpit: n.postconditions.iterate
-            for fpId: fpit loop {
-                this.walkSuf :ast n: (ast.nodes.get i: fpId.u64) :uname :st :funcretId
-            }
-        } case doexpr then {
-            this.walkSuf :ast n: (ast.nodes.get i: n.statement.u64) :uname :st :funcretId
-        } case withexpr then {
-            this.walkSuf :ast n: (ast.nodes.get i: n.value.u64) :uname :st :funcretId
-            this.walkSuf :ast n: (ast.nodes.get i: n.body.u64) :uname :st :funcretId
-        } case caseexpr then {
-            this.walkSuf :ast n: (ast.nodes.get i: n.subject.u64) :uname :st :funcretId
-            ccit: n.clauses.iterate
-            for ccId: ccit loop {
-                this.walkSuf :ast n: (ast.nodes.get i: ccId.u64) :uname :st :funcretId
-            }
-            this.walkSufOptAt :ast oId: n.elseclause :uname :st :funcretId
-        } case caseclause then {
-            this.walkSuf :ast n: (ast.nodes.get i: n.matcharm.u64) :uname :st :funcretId
-            this.walkSuf :ast n: (ast.nodes.get i: n.statement.u64) :uname :st :funcretId
         } case functiondef then {
+            # the function's own return type is the funcret for everything below it
             this.walkSufRet :ast retId: n.returntype :uname :st
-            piter: n.parameters.iterate
-            for pmId: piter loop {
-                pm: ast.nodes.get i: pmId.u64
-                (this.walkSuf
-                    :ast
-                    n: pm
-                    :uname
-                    :st
-                    funcretId: n.returntype
-                )
-            }
-            (this.walkSufOptAt
-                :ast
-                oId: n.body
-                :uname
-                :st
-                funcretId: n.returntype
-            )
-            faiter: n.asItems.iterate
-            for famId: faiter loop {
-                fam: ast.nodes.get i: famId.u64
-                (this.walkSuf
-                    :ast
-                    n: fam
-                    :uname
-                    :st
-                    funcretId: n.returntype
-                )
-            }
-        } case objectdef then {
-            oiiter: n.isItems.iterate
-            for oimId: oiiter loop {
-                oim: ast.nodes.get i: oimId.u64
-                this.walkSuf :ast n: oim :uname :st :funcretId
-            }
-            oaiter: n.asItems.iterate
-            for oamId: oaiter loop {
-                oam: ast.nodes.get i: oamId.u64
-                this.walkSuf :ast n: oam :uname :st :funcretId
-            }
-        } case unitdef then {
-            ubiter: n.body.iterate
-            for ubmId: ubiter loop (this.walkSuf
-                :ast
-                n: (ast.nodes.get i: ubmId.u64)
-                :uname
-                :st
-                :funcretId
-            )
-        } case program then {
-            puiter: n.ast.units.iterate
-            for pumId: puiter loop (this.walkSuf
-                :ast
-                n: (ast.nodes.get i: pumId.u64)
-                :uname
-                :st
-                :funcretId
-            )
+            this.walkSufIds :ast ids: n.parameters :uname :st funcretId: n.returntype
+            this.walkSufOptAt :ast oId: n.body :uname :st funcretId: n.returntype
+            this.walkSufIds :ast ids: n.asItems :uname :st funcretId: n.returntype
+            return
+        } else null
+        this.walkSufIds :ast ids: (zast.childIds :ast :n) :uname :st :funcretId
+    }
+
+    walkSufIds: function {:this ast: Ast.view ids: (ListVal u32).view uname: StringView st: zenv.ZSymbolTable.view funcretId: zast.nodeid} is {
+        with it: ids.iterate do for c: it loop {
+            this.walkSuf :ast n: (ast.nodes.get i: c.u64) :uname :st :funcretId
         }
     }
 
@@ -3828,69 +3610,8 @@ nodeinfo: record {
 
 # nodeInfoOf -- the id and source position of any AST node.
 nodeInfoOf: function {n: Node.view} out nodeinfo is {
-    match (
-        n
-    ) case error then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case placeholder then {
-        return (nodeinfo id: 0 line: 0 col: 0)
-    } case atomid then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case labelvalue then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case stringchunk then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case binop then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case atomstring then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case dottedpath then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case call then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case typeofexpr then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case namedoperation then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case datablock then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case yieldexpr then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case statement then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case statementline then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case assignment then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case reassignment then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case swapstmt then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case expression then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case ifexpr then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case ifclause then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case forexpr then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case doexpr then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case withexpr then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case caseexpr then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case caseclause then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case functiondef then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case objectdef then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case unitdef then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case program then {
-        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    }
+    p: zast.posOf :n
+    return (nodeinfo id: (zast.nodeIdOf :n).u32 line: p.line col: p.col)
 }
 
 # bareZeroTypeName -- the bare-type replacement when a dotted child atom is a
