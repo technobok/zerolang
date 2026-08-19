@@ -1068,6 +1068,7 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   ListRef.length:inline ListRef.capacity:inline ListView.length:inline \
   MapRR.length:inline MapRR.capacity:inline SetRef.length:inline SetRef.capacity:inline \
   IdMapV.get:IdMapR.get IdMapV.set:IdMapR.set IdMapV.has:IdMapR.has \
+  IdMapV.keyAt:IdMapR.keyAt IdMapV.valueAt:IdMapR.valueAt \
   IdMapR.length:inline IdMapR.capacity:inline \
   IdMapV.length:inline IdMapV.capacity:inline \
   IdSet.length:inline IdSet.capacity:inline \
