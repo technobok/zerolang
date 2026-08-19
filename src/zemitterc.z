@@ -2348,7 +2348,10 @@ builtinTidInU: function {
         frame: ztypes.declid
         :ast
         st: symtab
-        unitDecl: (ztypecheck.unitDeclOfName frame: ztypes.declid st: symtab :ast name: unitName)
+        unitDecl: (ztypecheck.unitDeclOfName
+            st: symtab
+            nameId: (zast.poolFind pool: ast.names text: unitName)
+        )
         :base) d: 0
     )
 }
@@ -2510,7 +2513,7 @@ Ctx: class {
     # name-id -> resolved tid (misses cached as 0): the typed model is
     # frozen during emission, so resolution per name id is emit-stable
     resolveByNameC: (IdMapV u64 value: u64)
-    mainUnitId: u64
+    mainUnitId: ztypes.declid
     condDepth: u64
     emitErrors: (List String)
     emittedUserTypes: (IdSet u64)
@@ -2668,17 +2671,12 @@ userFnId: function {
     ctx: Ctx.view
     name: StringView
 } out ztypes.tid is {
-    uq0z: (ztypecheck.unitDeclOfName
-        frame: ztypes.declid
-        st: symtab
-        :ast
-        name: ctx.mainName.stringview
-    )
+    uq0z: ctx.mainUnitId
     go: (ztypecheck.resolveUnitChild
         :ast
         st: symtab
         unitDecl: uq0z
-        :name
+        nameId: (zast.poolFind pool: ast.names text: name)
 )
     match (
         go
@@ -2696,13 +2694,8 @@ userFnIdById: function {
     ctx: Ctx.view
     nameId: zast.nameid
 } out u64 is {
-    uq1z: (ztypecheck.unitDeclOfName
-        frame: ztypes.declid
-        st: symtab
-        :ast
-        name: ctx.mainName.stringview
-    )
-    go: (ztypecheck.resolveUnitChildById
+    uq1z: ctx.mainUnitId
+    go: (ztypecheck.resolveUnitChild
         :ast
         st: symtab
         unitDecl: uq1z
@@ -3736,17 +3729,12 @@ stmtFormName: function {
     # ... and a DECLARATION of that name here shadows the unit: name ids are
     # pooled program-wide, so the unit probe answers either way
     baseAtom: dottedBaseAtom :ast :n
-    uq2z: (ztypecheck.unitDeclOfName
-        frame: ztypes.declid
-        st: symtab
-        :ast
-        name: ctx.mainName.stringview
-    )
+    uq2z: ctx.mainUnitId
     sh: (ztypecheck.resolveUnitChild
         :ast
         st: symtab
         unitDecl: uq2z
-        name: baseAtom.stringview
+        nameId: (zast.poolFind pool: ast.names text: baseAtom.stringview)
 )
     match (
         sh
@@ -3754,7 +3742,7 @@ stmtFormName: function {
         shT: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: sh)
         if shT != ztypes.ztypetype.unitType then return "".string
     } case none then null
-    ud0x: ztypecheck.unitDeclOfNameId st: symtab nameId: bid
+    ud0x: ztypecheck.unitDeclOfName st: symtab nameId: bid
     fo: (ztypecheck.resolvedByIds
         :ast
         st: symtab
@@ -6486,10 +6474,11 @@ emitTypedefCreateCall: function {
     if bn.length == 0 then return "".string
     tid: userFnId :ast :symtab :ctx name: bn.stringview
     if tid.isZero then {
-        so: (ztypecheck.resolveSystemChild
+        so: (ztypecheck.resolveUnitChild
             :ast
             st: symtab
-            name: bn.stringview
+            unitDecl: symtab.typing.systemUnitRoot
+            nameId: (zast.poolFind pool: ast.names text: bn.stringview)
 )
         match (
             so
@@ -8260,7 +8249,7 @@ dottedMemberTidOf: function {
     if childId.isZero then return ztypes.tid
     if (baseId.isZero) == false then {
         if (ztypecheck.isUnitNameDecl st: symtab nameId: baseId) then {
-            ud1x: ztypecheck.unitDeclOfNameId st: symtab nameId: baseId
+            ud1x: ztypecheck.unitDeclOfName st: symtab nameId: baseId
             go: (ztypecheck.resolvedByIds
                 :ast
                 st: symtab
@@ -8484,7 +8473,7 @@ emitCrossUnitBareCreate: function {ctx: Ctx.view
         st: symtab
         nameId: pbId
 ) == false then return "".string
-    ud2x: ztypecheck.unitDeclOfNameId st: symtab nameId: pbId
+    ud2x: ztypecheck.unitDeclOfName st: symtab nameId: pbId
     go: (ztypecheck.resolvedByIds
         :ast
         st: symtab
@@ -8532,7 +8521,7 @@ emitCrossUnitExplicitCreate: function {
         st: symtab
         nameId: obId
 ) == false then return "".string
-    ud3x: ztypecheck.unitDeclOfNameId st: symtab nameId: obId
+    ud3x: ztypecheck.unitDeclOfName st: symtab nameId: obId
     go: (ztypecheck.resolvedByIds
         :ast
         st: symtab
@@ -8644,7 +8633,7 @@ emitCrossUnitUnionCtor: function {
     if ctorArmName.length == 0 then return "".string
     if ctorArmName.stringview == "create" then return "".string
     if ctorArmName.stringview == "borrow" then return "".string
-    ud4x: ztypecheck.unitDeclOfNameId st: symtab nameId: obId
+    ud4x: ztypecheck.unitDeclOfName st: symtab nameId: obId
     go: (ztypecheck.resolvedByIds
         :ast
         st: symtab
@@ -8736,7 +8725,7 @@ emitCrossUnitTag: function {
         st: symtab
         nameId: unm
 ) == false then return "".string
-    ud5x: ztypecheck.unitDeclOfNameId st: symtab nameId: unm
+    ud5x: ztypecheck.unitDeclOfName st: symtab nameId: unm
     go: (ztypecheck.resolvedByIds
         :ast
         st: symtab
@@ -9788,7 +9777,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         dpNsTid: ztypes.tid
         if (dpIsFile) == false then dpNsTid = pathUnitTidOf :ast :symtab :ctx baseId: n.parent
         if dpIsFile when (dpNsTid.isZero) then {
-            ud6x: ztypecheck.unitDeclOfNameId st: symtab nameId: dpUbId
+            ud6x: ztypecheck.unitDeclOfName st: symtab nameId: dpUbId
             dpUfo: (ztypecheck.resolvedByIds
                 :ast
                 st: symtab
@@ -13653,7 +13642,7 @@ typeIdByNameStages: function {
 } out u64 is {
     f: userFnIdById :ast :symtab :ctx :nameId
     if f > 0 then return f
-    mo: ztypecheck.resolveSystemChildById :ast st: symtab :nameId
+    mo: ztypecheck.resolveUnitChild :ast st: symtab unitDecl: symtab.typing.systemUnitRoot :nameId
     match (
         mo
     ) case some then {
@@ -13663,12 +13652,7 @@ typeIdByNameStages: function {
         frame: ztypes.declid
         :ast
         st: symtab
-        unitDecl: (ztypecheck.unitDeclOfName
-            frame: ztypes.declid
-            st: symtab
-            :ast
-            name: ctx.mainName.stringview
-        )
+        unitDecl: ctx.mainUnitId
         baseId: nameId
 ) d: 0
     if lr > 0 then return lr
@@ -13700,7 +13684,7 @@ typeIdByNameStages: function {
         for uki8 < ukn8 loop {
             if found == 0 then {
                 uk: ctx.unitKeysC.get i: uki8
-                ud7x: (ztypecheck.unitDeclOfNameId
+                ud7x: (ztypecheck.unitDeclOfName
                     st: symtab
                     nameId: (zast.poolFind pool: ast.names text: uk.stringview)
 )
@@ -15026,12 +15010,7 @@ emitObjIterFor: function {
         frame: ztypes.declid
                     :ast
                     st: symtab
-                    unitDecl: (ztypecheck.unitDeclOfName
-        frame: ztypes.declid
-                        st: symtab
-                        :ast
-                        name: ctx.mainName.stringview
-)
+                    unitDecl: ctx.mainUnitId
                     base: itn0.stringview
 )
                 match (
@@ -18080,12 +18059,7 @@ cTypeForName: function {
         frame: ztypes.declid
         :ast
         st: symtab
-        unitDecl: (ztypecheck.unitDeclOfName
-            frame: ztypes.declid
-            st: symtab
-            :ast
-            name: ctx.mainName.stringview
-        )
+        unitDecl: ctx.mainUnitId
         base: name
 )
     match (
@@ -18405,11 +18379,8 @@ unitDeclByName: function {
     symtab: zenv.ZSymbolTable.view
     ast: Ast.view
     name: StringView
-} out u64 is {
-    return (ztypecheck.unitDeclOfNameId
-        st: symtab
-        nameId: (zast.poolFind pool: ast.names text: name)
-).u64
+} out ztypes.declid is {
+    return (ztypecheck.unitDeclOfName st: symtab nameId: (zast.poolFind pool: ast.names text: name))
 }
 
 # defUnitIdOf -- the DECLARATION of the unit that defines tid (0 when none).
@@ -18428,7 +18399,7 @@ defUnitIdOf: function {ctx: Ctx.view tid: ztypes.tid} out u64 is {
 # name, not the C one: the C type comes from feeding it through
 # scalarCTypeFor / cTypeForNameTid.
 regNameOf: function {symtab: zenv.ZSymbolTable tid: ztypes.tid} out String is {
-    return (ztypecheck.regTypeNameOf st: symtab tid: (ztypes.tid.create from: tid.u64))
+    return (symtab.reg.nameOf tid: (ztypes.tid.create from: tid.u64))
 }
 
 # pathUnitTidOf -- the type id of the unit a dotted path's BASE names, or 0
@@ -18914,12 +18885,15 @@ scanNativeNeed: function {
         # a variant `io` with a `stdout` arm makes `io.stdout` an arm
         # construction, and the unit probe still answers because name ids are
         # pooled program-wide.
-        uq3z: ztypecheck.unitDeclOfName frame: ztypes.declid st: symtab :ast name: unitName
+        uq3z: (ztypecheck.unitDeclOfName
+            st: symtab
+            nameId: (zast.poolFind pool: ast.names text: unitName)
+        )
         sh: (ztypecheck.resolveUnitChild
             :ast
             st: symtab
             unitDecl: uq3z
-            name: base
+            nameId: (zast.poolFind pool: ast.names text: base)
 )
         match (
             sh
@@ -18927,7 +18901,7 @@ scanNativeNeed: function {
             shT: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: sh)
             if shT != ztypes.ztypetype.unitType then return
         } case none then null
-        ud8x: ztypecheck.unitDeclOfNameId st: symtab nameId: baseId
+        ud8x: ztypecheck.unitDeclOfName st: symtab nameId: baseId
         fo: (ztypecheck.resolvedByIds
             :ast
             st: symtab
@@ -18941,12 +18915,15 @@ scanNativeNeed: function {
         } case none then return
     } else {
         if memb.length == 0 then return
-        uq4z: ztypecheck.unitDeclOfName frame: ztypes.declid st: symtab :ast name: unitName
+        uq4z: (ztypecheck.unitDeclOfName
+            st: symtab
+            nameId: (zast.poolFind pool: ast.names text: unitName)
+        )
         go: (ztypecheck.resolveUnitChild
             :ast
             st: symtab
             unitDecl: uq4z
-            name: memb
+            nameId: (zast.poolFind pool: ast.names text: memb)
 )
         match (
             go
@@ -19238,7 +19215,7 @@ stdFnUndemanded: function {
             return true
         }
     }
-    ud9x: (ztypecheck.unitDeclOfNameId
+    ud9x: (ztypecheck.unitDeclOfName
         st: symtab
         nameId: (zast.poolFind pool: ast.names text: unitName)
 )
@@ -19262,7 +19239,7 @@ stdFnUndemanded: function {
     # walked in full and keeps no such mark.
     if (wantWalked) == false then return false
     if unitName == symtab.reg.regMainUnit.stringview then return false
-    ud10x: (ztypecheck.unitDeclOfNameId
+    ud10x: (ztypecheck.unitDeclOfName
         st: symtab
         nameId: (zast.poolFind pool: ast.names text: unitName)
 )
@@ -19448,7 +19425,7 @@ emitFnsPass: function {
                 (ctxBindMain
                     :ctx
                     name: unitNameText.stringview
-                    unitDecl: (ztypecheck.unitDeclOfNameId st: symtab nameId: un9Id).u64
+                    unitDecl: (ztypecheck.unitDeclOfName st: symtab nameId: un9Id)
                 )
                 isTpl: isGenericTemplateUnitOp ast: program.ast :opId
                 if isTpl then {
@@ -20308,7 +20285,7 @@ emitC: function {
     match (
         program
     ) case program then {
-        ud11x: ztypecheck.unitDeclOfNameId st: symtab nameId: sysId
+        ud11x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
         sgo = (ztypecheck.resolvedByIds
             ast: program.ast
             st: symtab
@@ -20325,7 +20302,7 @@ emitC: function {
     match (
         program
     ) case program then {
-        ud12x: ztypecheck.unitDeclOfNameId st: symtab nameId: sysId
+        ud12x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
         vgo = (ztypecheck.resolvedByIds
             ast: program.ast
             st: symtab
@@ -20343,7 +20320,7 @@ emitC: function {
     match (
         program
     ) case program then {
-        ud13x: ztypecheck.unitDeclOfNameId st: symtab nameId: sysId
+        ud13x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
         cgo = (ztypecheck.resolvedByIds
             ast: program.ast
             st: symtab
@@ -20656,7 +20633,7 @@ emitC: function {
         unitKeysC: (List String)
         unitCacheBuilt: false
         resolveByNameC: (IdMapV u64 value: u64)
-        mainUnitId: 0
+        mainUnitId: ztypes.declid
         condDepth: 0
         emitErrors: (List String)
         needUnits: (List String)
@@ -21555,7 +21532,7 @@ buildDefUnitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx ast: Ast.view} i
 # saved from the bind it is restoring -- so nothing here asks which unit is
 # spelled a given way. Every mainName assignment must route through here so
 # mainUnitId never goes stale (definedInNonMain compares against it).
-ctxBindMain: function {ctx: Ctx name: StringView unitDecl: u64} is {
+ctxBindMain: function {ctx: Ctx name: StringView unitDecl: ztypes.declid} is {
     nm: name.string
     ctx.mainName = nm
     ctx.mainUnitId = unitDecl
@@ -22798,7 +22775,12 @@ ioCanonTidAny: function {
     if st > 0 then return (ztypes.tid.create from: st.u64)
     # a plain source-name stem (File, IoError, Reader): the system unit first,
     # then the registry scan below for the io/cli units it does not cover.
-    mo: ztypecheck.resolveSystemChild :ast st: symtab name: canon
+    mo: (ztypecheck.resolveUnitChild
+        :ast
+        st: symtab
+        unitDecl: symtab.typing.systemUnitRoot
+        nameId: (zast.poolFind pool: ast.names text: canon)
+    )
     match (
         mo
     ) case some then {
@@ -23315,7 +23297,7 @@ maybePreEmitElem: function {
         unitDecl: (ztypecheck.unitDeclOfTid
             st: symtab
             tid: (ztypes.tid.create from: cid.u64)
-).u64
+)
     )
     if tt == ztypes.ztypetype.variantType then {
         emitOneVariant :ast :symtab :ctx tid: (ztypes.tid.create from: cid.u64) :buf
@@ -23772,7 +23754,7 @@ emitUserTypeById: function {
         (ctxBindMain
             :ctx
             name: duo.stringview
-            unitDecl: (ztypecheck.unitDeclOfTid st: symtab :tid).u64
+            unitDecl: (ztypecheck.unitDeclOfTid st: symtab :tid)
         )
     } case none then null
     tt: symtab.reg.typetypeOf typeId: tid
@@ -24973,7 +24955,7 @@ emitRecordDefs: function {
                     (ctxBindMain
                         :ctx
                         name: unitNameText.stringview
-                        unitDecl: (ztypecheck.unitDeclOfNameId st: symtab nameId: un9Id).u64
+                        unitDecl: (ztypecheck.unitDeclOfName st: symtab nameId: un9Id)
                     )
                     (emitRecordDefsIn
                         :symtab
@@ -26078,7 +26060,7 @@ nativeNoArgOf: function {
         st: symtab
         nameId: baseId
 ) == false then return "".string
-    ud14x: ztypecheck.unitDeclOfNameId st: symtab nameId: baseId
+    ud14x: ztypecheck.unitDeclOfName st: symtab nameId: baseId
     fo: (ztypecheck.resolvedByIds
         :ast
         st: symtab
@@ -26100,12 +26082,15 @@ nativeNoArgOf: function {
     pnm: (ListVal u64)
     recFieldLists :ast :symtab tid: calleeTid names: pn ids: pi nameIds: pnm
     if pn.length > 0 then return "".string
-    uq5z: ztypecheck.unitDeclOfName frame: ztypes.declid st: symtab :ast name: unitName
+    uq5z: (ztypecheck.unitDeclOfName
+        st: symtab
+        nameId: (zast.poolFind pool: ast.names text: unitName)
+    )
     sh: (ztypecheck.resolveUnitChild
         :ast
         st: symtab
         unitDecl: uq5z
-        name: base
+        nameId: (zast.poolFind pool: ast.names text: base)
 )
     match (
         sh
@@ -26334,7 +26319,7 @@ emitNativeFreeFnCall: function {
     if fidHint > 0 then {
         fid = ztypes.tid.create from: (fidHint)
     } else {
-        ud15x: (ztypecheck.unitDeclOfNameId
+        ud15x: (ztypecheck.unitDeclOfName
             st: symtab
             nameId: (zast.poolFind pool: ast.names text: un.stringview)
 )
@@ -26609,12 +26594,7 @@ emitUserIterCall: function {
         frame: ztypes.declid
             :ast
             st: symtab
-            unitDecl: (ztypecheck.unitDeclOfName
-        frame: ztypes.declid
-                st: symtab
-                :ast
-                name: ctx.mainName.stringview
-)
+            unitDecl: ctx.mainUnitId
             base: rtn.stringview
 )
         match (
