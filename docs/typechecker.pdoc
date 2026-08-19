@@ -138,28 +138,30 @@ function type, which every later parameter write reaches through.
 
 #---: ZVariable -- per-binding ownership carrier
 
-#~"ZVariable" (#~"src/ztypes.z") wraps a #~"ZType" with the
-state that is per-variable rather than per-type. A #~"ZVariable"
-is created only for #_*"named runtime bindings" -- function
-parameters, locals introduced by assignment, #~"with"-bindings,
-for-loop iterators, and synth temps -- and referenced from
-#~"ZEntry.varId" / #~"Decl.varId"; type and function definitions carry
-no variable.
+#~"ZVariable" (#~"src/ztypes.z") is one runtime variable: a row of
+the registry's #~"variableById", its vid the row index (row 0 is the
+sentinel). A variable is minted only for #_*"named runtime bindings"
+-- function parameters, locals introduced by assignment,
+#~"with"-bindings, for-loop iterators, and synth temps -- and referenced
+from #~"Decl.varId"; type and function definitions carry no variable.
+#~"newVariable" mints the row and returns the vid; the getters and
+setters on the registry (#~"variableTypeOf", #~"variableOwnershipOf",
+#~"setVariableBorrowOrigin", ...) are the only access.
 
 #ul:
-  [#*: #~"variableId": monotonic id]
   [#*: #~"ztypeId": the variable's resolved type]
   [#*: #~"ownership": #~"OWNED" or #~"BORROWED" (the
     2-state model described in #~"compiler.pdoc:Ownership and
     Lifetime")]
   [#*: #~"isPrivateAccess": carried through #~".private"
     typedef projections]
-  [#*: #~"borrowOrigin": escape-analysis sentinel naming
-    the function-local source this variable borrows from; none
-    for parameters]
+  [#*: #~"borrowOrigin": the name id of the root of the path this
+    variable borrows from; 0 for an owned variable and for parameters]
   [#*: #~"synthOrigin": pass-name string for variables
     synthesised by a compiler pass (e.g. #~"\"anf\"" for hoisted
     call temps); none for user-source variables]
+  [#*: #~"origin": how the variable came to be -- a parameter, a
+    local binding, or synthesised]
 
 Keeping ownership off #~"ZType" lets the same type be bound in two
 scopes with different ownership, which is the common case.
@@ -174,14 +176,14 @@ the row points at it.
 
 #ul:
   [#*: #~"entryId": monotonic id]
-  [#*: #~"name" (a pool id), #~"declId" (the local's declaration),
-    #~"frame" (the frame that laid the row), #~"defSeq" (its place among
-    the frame's locals, for the dump)]
-  [#*: #~"ztypeId", #~"isDefinition", #~"varId"]
+  [#*: #~"declId" (the local's declaration -- its name, type and
+    variable are read off it), #~"defSeq" (the row's place among the
+    frame's locals, for the dump)]
+  [#*: #~"ztypeId": the type the row presents (a narrowing changes it)]
   [#*: #~"hasLock", #~"lockType", #~"lockScope", #~"lockHolder",
     #~"lockPath": lock state -- the lock kind, whether it is on the leaf or
-    an intent on a prefix, its holder, and the addressable path tuple
-    #~"(root, f1, f2, ...)"]
+    an intent on a prefix, its holder, and the addressable path as name
+    ids #~"(root, f1, f2, ...)"]
   [#*: #~"narrowedSubtype", #~"excludedSubtypes": type narrowing for
     union / variant subjects in match arms, as arm name ids]
   [#*: #~"originalZtypeId": the un-narrowed type, so the
@@ -212,7 +214,7 @@ domain), #~"callKind", #~"atomVariableId", #~"implicitCreate", the
 dotted-path stamps (#~"dpTaggedParent", #~"dpArmPredicate",
 #~"dpTagRead"), the post-guard and branch-fold stamps
 (#~"postGuard*", #~"foldedBranch", #~"truthyCondArm"), the per-variable
-facts (#~"variableMutated", #~"variableMoved", #~"variableOrigin"), the
+facts (#~"variableMutated", #~"variableMoved"), the
 2-arm-sum facts (#~"sumPairFirstArm" / #~"sumPairSecondArm"), and the
 per-instantiation mono stamps (#~"monoNodeType", #~"monoBinopOwner").
 The class comment in #~"src/ztyping.z" is the authoritative list. The
@@ -233,7 +235,9 @@ has a direct SQL representation.
 declaration tree. A frame is a #~"blockDecl" under the frame or
 declaration enclosing it and a local is a #~"localDecl" under the frame
 it is written in, so both persist and can be returned to; the table holds
-what is transient: the stack of open frames (#~"frames", innermost last),
+what is transient: the stack of open frames (#~"open", innermost last,
+each an #~"openframe" with the frame's row, its parent, and where its
+overlay rows begin),
 the overlay rows laid over locals (#~"entries", see ZEntry above), the
 frames whose remainder proved unreachable, and the rows snapshotted for the
 dump when a frame closes. It owns the type registry and the typing tables

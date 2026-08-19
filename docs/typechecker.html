@@ -208,7 +208,7 @@ populated for function types</li>
     <code>genericChildren</code> (an <code>IdMap</code> keyed by the argument's type id,
     or by the literal value at a numeric parameter level) with the
     ordered argument ids in <code>genericArgs</code> / <code>genericArgIsValue</code></li>
-<li>layout / memory metadata: <code>destructorNameId</code>,
+<li>layout / memory metadata: <code>needsDestructor</code>,
     <code>isHeapAllocated</code>, <code>isBox</code> (see
     <code>representation_of_types.pdoc</code>)</li>
 <li><code>ownerTid</code>: the type owning this one as a member, or 0.
@@ -227,27 +227,29 @@ types it, in that order: <code>declSetMemberType</code> stamps the member's type
 onto its declaration, and a method's declaration is what claims its own
 function type, which every later parameter write reaches through.</p>
 <h3 id="zvariable-per-binding-ownership-carrier"><a href="#zvariable-per-binding-ownership-carrier">3.2. ZVariable -- per-binding ownership carrier</a></h3>
-<p><code>ZVariable</code> (<code>src/ztypes.z</code>) wraps a <code>ZType</code> with the
-state that is per-variable rather than per-type. A <code>ZVariable</code>
-is created only for <em><strong>named runtime bindings</strong></em> -- function
-parameters, locals introduced by assignment, <code>with</code>-bindings,
-for-loop iterators, and synth temps -- and referenced from
-<code>ZEntry.varId</code> / <code>Decl.varId</code>; type and function definitions carry
-no variable.</p>
+<p><code>ZVariable</code> (<code>src/ztypes.z</code>) is one runtime variable: a row of
+the registry's <code>variableById</code>, its vid the row index (row 0 is the
+sentinel). A variable is minted only for <em><strong>named runtime bindings</strong></em>
+-- function parameters, locals introduced by assignment,
+<code>with</code>-bindings, for-loop iterators, and synth temps -- and referenced
+from <code>Decl.varId</code>; type and function definitions carry no variable.
+<code>newVariable</code> mints the row and returns the vid; the getters and
+setters on the registry (<code>variableTypeOf</code>, <code>variableOwnershipOf</code>,
+<code>setVariableBorrowOrigin</code>, ...) are the only access.</p>
 <ul>
-<li><code>variableId</code>: monotonic id</li>
 <li><code>ztypeId</code>: the variable's resolved type</li>
 <li><code>ownership</code>: <code>OWNED</code> or <code>BORROWED</code> (the
 2-state model described in <code>compiler.pdoc:Ownership and
     Lifetime</code>)</li>
 <li><code>isPrivateAccess</code>: carried through <code>.private</code>
 typedef projections</li>
-<li><code>borrowOrigin</code>: escape-analysis sentinel naming
-the function-local source this variable borrows from; none
-for parameters</li>
+<li><code>borrowOrigin</code>: the name id of the root of the path this
+variable borrows from; 0 for an owned variable and for parameters</li>
 <li><code>synthOrigin</code>: pass-name string for variables
 synthesised by a compiler pass (e.g. <code>"anf"</code> for hoisted
 call temps); none for user-source variables</li>
+<li><code>origin</code>: how the variable came to be -- a parameter, a
+local binding, or synthesised</li>
 </ul>
 <p>Keeping ownership off <code>ZType</code> lets the same type be bound in two
 scopes with different ownership, which is the common case.</p>
@@ -258,14 +260,14 @@ it is open. A local itself is a <code>localDecl</code> in the declaration tree;
 the row points at it.</p>
 <ul>
 <li><code>entryId</code>: monotonic id</li>
-<li><code>name</code> (a pool id), <code>declId</code> (the local's declaration),
-<code>frame</code> (the frame that laid the row), <code>defSeq</code> (its place among
-the frame's locals, for the dump)</li>
-<li><code>ztypeId</code>, <code>isDefinition</code>, <code>varId</code></li>
+<li><code>declId</code> (the local's declaration -- its name, type and
+variable are read off it), <code>defSeq</code> (the row's place among the
+frame's locals, for the dump)</li>
+<li><code>ztypeId</code>: the type the row presents (a narrowing changes it)</li>
 <li><code>hasLock</code>, <code>lockType</code>, <code>lockScope</code>, <code>lockHolder</code>,
 <code>lockPath</code>: lock state -- the lock kind, whether it is on the leaf or
-an intent on a prefix, its holder, and the addressable path tuple
-<code>(root, f1, f2, ...)</code></li>
+an intent on a prefix, its holder, and the addressable path as name
+ids <code>(root, f1, f2, ...)</code></li>
 <li><code>narrowedSubtype</code>, <code>excludedSubtypes</code>: type narrowing for
 union / variant subjects in match arms, as arm name ids</li>
 <li><code>originalZtypeId</code>: the un-narrowed type, so the
@@ -291,7 +293,7 @@ domain), <code>callKind</code>, <code>atomVariableId</code>, <code>implicitCreat
 dotted-path stamps (<code>dpTaggedParent</code>, <code>dpArmPredicate</code>,
 <code>dpTagRead</code>), the post-guard and branch-fold stamps
 (<code>postGuard*</code>, <code>foldedBranch</code>, <code>truthyCondArm</code>), the per-variable
-facts (<code>variableMutated</code>, <code>variableMoved</code>, <code>variableOrigin</code>), the
+facts (<code>variableMutated</code>, <code>variableMoved</code>), the
 2-arm-sum facts (<code>sumPairFirstArm</code> / <code>sumPairSecondArm</code>), and the
 per-instantiation mono stamps (<code>monoNodeType</code>, <code>monoBinopOwner</code>).
 The class comment in <code>src/ztyping.z</code> is the authoritative list. The
@@ -308,7 +310,9 @@ has a direct SQL representation.</p>
 declaration tree. A frame is a <code>blockDecl</code> under the frame or
 declaration enclosing it and a local is a <code>localDecl</code> under the frame
 it is written in, so both persist and can be returned to; the table holds
-what is transient: the stack of open frames (<code>frames</code>, innermost last),
+what is transient: the stack of open frames (<code>open</code>, innermost last,
+each an <code>openframe</code> with the frame's row, its parent, and where its
+overlay rows begin),
 the overlay rows laid over locals (<code>entries</code>, see ZEntry above), the
 frames whose remainder proved unreachable, and the rows snapshotted for the
 dump when a frame closes. It owns the type registry and the typing tables
@@ -780,7 +784,7 @@ ownership states, parameter annotations
 (<code>.take</code> / <code>.borrow</code> / <code>.view</code>), and per-call atomic
 processing.</li>
 <li><code>representation_of_types.pdoc</code> -- type layout
-(<code>destructor_name</code>, <code>is_heap_allocated</code>,
+(<code>is_heap_allocated</code>,
 <code>needs_field_cleanup</code>, <code>is_box</code>) and the stack-vs-heap
 strategy.</li>
 </ul>
