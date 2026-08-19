@@ -236,6 +236,16 @@ formatAliasConflict: function {
 # A row of the dump's `entry` table: a local of a frame, or an overlay row
 # laid over one, snapshotted when the frame closed. `position` is the row's
 # place among the frame's locals and overlays in the order they were laid.
+# openframe -- one open frame of the body walk: its Decl row (0 while a lazy
+# frame has declared nothing), the frame it hangs under, the overlay index
+# where its rows begin, and how many locals it has defined (a row's defSeq).
+openframe: record {
+    id: ztypes.declid
+    parent: ztypes.declid
+    start: u64
+    defs: u64
+}
+
 ZEntryDumpRow: class {
     scopeId: u64
     position: u64
@@ -272,17 +282,13 @@ ZEntryDumpRow: class {
 # tables outright (moved in at construction), so every method reads metadata
 # via `this.reg` / `this.typing`.
 ZSymbolTable: class {
-    frames: (ListVal ztypes.declid)
+    # the open frames, innermost last
+    open: (ListVal openframe)
     # the innermost open frame that has a row -- the frame the walk resolves
     # from. A frame that has declared nothing yet has no row (pushBlock,
     # pushCall): it is transparent to every lookup, so the nearest enclosing
     # frame that does exist answers for it. 0 outside every walk.
     curFrame: ztypes.declid
-    # per open frame: the frame it hangs under, the overlay index where its
-    # rows begin, and how many locals it has defined so far (a row's defSeq)
-    frameParents: (ListVal ztypes.declid)
-    frameStarts: (ListVal u64)
-    frameDefs: (ListVal u64)
     entries: (List ZEntry)
     unreachableFrames: (IdSet u64)
     # dump scaffolding: a frame's label ("function:x", "if_branch", ...), the
@@ -299,10 +305,10 @@ ZSymbolTable: class {
     # innermostFrame -- the innermost open frame that has a row, or the zero
     # id when none is open.
     innermostFrame: function {:this} out ztypes.declid is {
-        n: this.frames.length
+        n: this.open.length
         for n > 0 loop {
             n = n - 1
-            f: this.frames.get i: n
+            f: (this.open.get i: n).id
             if (f.isZero) == false then return f
         }
         return (ztypes.declid.create from: 0)
@@ -312,10 +318,7 @@ ZSymbolTable: class {
     # whose body this is -- and make it current.
     pushFrame: function {:this label: StringView parent: ztypes.declid} out ztypes.declid is {
         f: this.typing.declNewFrame :parent node: 0
-        this.frames.append f
-        this.frameParents.append parent
-        this.frameStarts.append this.entries.length
-        this.frameDefs.append 0
+        this.open.append (openframe id: f :parent start: this.entries.length defs: 0)
         if label.length > 0 then this.frameLabel.set key: f.u64 value: label.string
         if this.typing.suppressParamStamps then this.frameHidden.add item: f.u64
         this.curFrame = f
@@ -337,23 +340,20 @@ ZSymbolTable: class {
             this.pushFrame :label :parent
             return
         }
-        this.frames.append (ztypes.declid.create from: 0)
-        this.frameParents.append parent
-        this.frameStarts.append this.entries.length
-        this.frameDefs.append 0
+        this.open.append (openframe id: ztypes.declid :parent start: this.entries.length defs: 0)
     }
 
     # materialiseTop -- give the innermost open frame its row, under the
     # frame it was opened in, and make it the typing's current frame. A
     # no-op for a frame that already has a row.
     materialiseTop: function {:this} is {
-        n: this.frames.length
+        n: this.open.length
         if n == 0 then return
-        top: this.frames.get i: (n - 1)
-        if (top.isZero) == false then return
-        f: this.typing.declNewFrame parent: (this.frameParents.get i: (n - 1)) node: 0
-        this.frames.set i: (n - 1) val: f
-        this.curFrame = f
+        top: this.open.get i: (n - 1)
+        if (top.id.isZero) == false then return
+        top.id = this.typing.declNewFrame parent: top.parent node: 0
+        this.open.set i: (n - 1) val: top
+        this.curFrame = top.id
     }
 
     # push -- open a body frame (a function's, or a mono walk's) under the
@@ -365,13 +365,13 @@ ZSymbolTable: class {
     # pushBlock / pushCall -- open a nested frame; the marker returned is the
     # depth to pop back to.
     pushBlock: function {:this name: StringView} out u64 is {
-        marker: this.frames.length
+        marker: this.open.length
         this.pushLazyFrame label: name
         return marker
     }
 
     pushCall: function {:this} out u64 is {
-        marker: this.frames.length
+        marker: this.open.length
         this.pushLazyFrame label: ""
         return marker
     }
@@ -382,16 +382,15 @@ ZSymbolTable: class {
     # rows are snapshotted for the dump first. The typing's current frame
     # returns to the frame's parent.
     pop: function {:this} out u64 is {
-        n: this.frames.length
+        n: this.open.length
         if n == 0 then return 0
-        topIdx: n - 1
-        top: this.frames.get i: topIdx
-        start: this.frameStarts.get i: topIdx
+        fr: this.open.get i: (n - 1)
+        top: fr.id
+        start: fr.start
         if (top.isZero) == false then this.snapshotFrame frame: top :start
         endIdx: this.entries.length
         # takes of enclosing frames' locals survive the close
         mDecls: (ListVal ztypes.declid)
-        mNames: (ListVal u32)
         mTypes: (ListVal u64)
         mLocs: (ListVal ztypes.zsrcpos)
         p2: start
@@ -406,7 +405,6 @@ ZSymbolTable: class {
                     if ef != top then {
                         zt: e.ztypeId
                         mDecls.append e.declId
-                        mNames.append e.name
                         mTypes.append zt
                         mLocs.append taOpt
                     }
@@ -415,10 +413,7 @@ ZSymbolTable: class {
             p2 = p2 + 1
         }
         this.dropTail :start
-        this.frames.pop
-        this.frameParents.pop
-        this.frameStarts.pop
-        this.frameDefs.pop
+        this.open.pop
         this.curFrame = this.innermostFrame
         mc: mDecls.length
         mi: u64
@@ -426,11 +421,7 @@ ZSymbolTable: class {
             d: mDecls.get i: mi
             already: this.isTakenDecl declId: d
             if already == false then {
-                te: (this.reg.newEntry
-                    nameId: (zast.nameid.create from: (mNames.get i: mi).u32)
-                    ztypeId: (ztypes.tid.create from: (mTypes.get i: mi).u64)
-                    isDefinition: false
-                )
+                te: this.reg.newEntry ztypeId: (ztypes.tid.create from: (mTypes.get i: mi).u64)
                 te.isTaken = true
                 te.takenAt = (optionval.some (mLocs.get i: mi))
                 this.appendRow row: te declId: d
@@ -450,19 +441,15 @@ ZSymbolTable: class {
     # popDiscard -- close the innermost frame and drop every row it laid,
     # takes included: the frame was a dry run.
     popDiscard: function {:this} is {
-        n: this.frames.length
+        n: this.open.length
         if n == 0 then return
-        start: this.frameStarts.get i: (n - 1)
-        this.dropTail :start
-        this.frames.pop
-        this.frameParents.pop
-        this.frameStarts.pop
-        this.frameDefs.pop
+        this.dropTail start: (this.open.get i: (n - 1)).start
+        this.open.pop
         this.curFrame = this.innermostFrame
     }
 
     popTo: function {:this marker: u64} is {
-        for this.frames.length > marker loop this.pop
+        for this.open.length > marker loop this.pop
     }
 
     # --- locals ---
@@ -484,34 +471,34 @@ ZSymbolTable: class {
     # legal and resolved by declFindLocal's outward walk. An unmaterialised
     # frame has no locals yet, so it binds nothing.
     frameBindsHere: function {:this nameId: zast.nameid} out bool is {
-        n: this.frames.length
+        n: this.open.length
         if n == 0 then return false
-        fr: this.frames.get i: (n - 1)
+        fr: (this.open.get i: (n - 1)).id
         if fr.isZero then return false
         d: this.typing.declFindChild parentDeclId: fr :nameId
         return (d.isZero) == false
     }
 
     defineLocal: function {:this nameId: zast.nameid ztypeId: ztypes.tid varId: ztypes.vid} is {
-        n: this.frames.length
+        n: this.open.length
         if n == 0 then return
         this.materialiseTop
-        topIdx: n - 1
+        top: this.open.get i: (n - 1)
         # one binding per name per frame: the namespace walks read a frame's
         # children by name and stop at the first hit, so a second edge under
         # the same name would be unreachable. The binding site reports the
         # duplicate; this keeps the tree honest if one ever reaches here.
-        fr: this.frames.get i: topIdx
-        ex: this.typing.declFindChild parentDeclId: fr :nameId
+        ex: this.typing.declFindChild parentDeclId: top.id :nameId
         if (ex.isZero) == false then return
         (this.typing.declNewLocal
             name: nameId.u32
-            parent: fr
+            parent: top.id
             node: 0
             typeId: ztypeId
             :varId
         )
-        this.frameDefs.set i: topIdx val: ((this.frameDefs.get i: topIdx) + 1)
+        top.defs = top.defs + 1
+        this.open.set i: (n - 1) val: top
     }
 
     # --- name resolution ---
@@ -549,11 +536,8 @@ ZSymbolTable: class {
     appendRow: function {:this row: ZEntry.take declId: ztypes.declid} is {
         r: row
         r.declId = declId
-        n: this.frames.length
-        if n > 0 then {
-            r.frame = this.frames.get i: (n - 1)
-            r.defSeq = this.frameDefs.get i: (n - 1)
-        }
+        n: this.open.length
+        if n > 0 then r.defSeq = (this.open.get i: (n - 1)).defs
         this.typing.declRowsAdd :declId delta: 1
         this.entries.append r
     }
@@ -625,7 +609,7 @@ ZSymbolTable: class {
         zt: this.currentTypeOf declId: d
         v: this.typing.declLocalVarOf declId: d
         if (v.isZero) == false then this.typing.variableMoved.add item: v
-        te: this.reg.newEntry :nameId ztypeId: zt isDefinition: false
+        te: this.reg.newEntry ztypeId: zt
         te.isTaken = true
         te.takenAt = loc
         this.appendRow row: te declId: d
@@ -718,9 +702,9 @@ ZSymbolTable: class {
     # that frame's rows can be dropped, so only they are drained and
     # rebuilt -- the rows below its start are left where they are.
     discardTakenInCurrentScope: function {:this} is {
-        n: this.frames.length
+        n: this.open.length
         if n == 0 then return
-        start: this.frameStarts.get i: (n - 1)
+        start: (this.open.get i: (n - 1)).start
         rev: (List ZEntry)
         for this.entries.length > start loop rev.append this.entries.pop
         for rev.length > 0 loop {
@@ -903,8 +887,7 @@ ZSymbolTable: class {
         }
         if idempotent then return "".string
 
-        le: this.reg.newEntry nameId: rootId ztypeId: ztypes.tid isDefinition: false
-        le.ztypeId = this.typing.declLocalTypeOf declId: d
+        le: this.reg.newEntry ztypeId: (this.typing.declLocalTypeOf declId: d)
         ro: this.rowOf declId: d
         match (
             ro
@@ -1122,11 +1105,7 @@ ZSymbolTable: class {
             origOpt = (optionval.some oc)
         }
 
-        e: (this.reg.newEntry
-            :nameId
-            ztypeId: (ztypes.tid.create from: entryZtype.u64)
-            isDefinition: false
-        )
+        e: this.reg.newEntry ztypeId: (ztypes.tid.create from: entryZtype.u64)
         e.narrowedSubtype = nsName
         e.originalZtypeId = origOpt
         this.appendRow row: e declId: d
@@ -1172,11 +1151,7 @@ ZSymbolTable: class {
                 sole: allSubs.get i: soleIx
                 narrowedSub = zast.nameid.create from: sole.u32.orPanic
             }
-            e: (this.reg.newEntry
-                :nameId
-                ztypeId: (ztypes.tid.create from: fullTypeId.u64)
-                isDefinition: false
-            )
+            e: this.reg.newEntry ztypeId: (ztypes.tid.create from: fullTypeId.u64)
             e.narrowedSubtype = narrowedSub
             with eit: newExcl.iterate do for s: eit loop {
                 e.excludedSubtypes.add item: s
@@ -1203,11 +1178,7 @@ ZSymbolTable: class {
     resetNarrowing: function {:this nameId: zast.nameid} is {
         d: this.findLocal :nameId
         if d.isZero then return
-        re: (this.reg.newEntry
-            :nameId
-            ztypeId: (this.typing.declLocalTypeOf declId: d)
-            isDefinition: false
-        )
+        re: this.reg.newEntry ztypeId: (this.typing.declLocalTypeOf declId: d)
         this.appendRow row: re declId: d
     }
 
@@ -1285,9 +1256,9 @@ ZSymbolTable: class {
     isUnreachable: function {:this} out bool is {
         # the mark is the innermost open frame's own; one that has no row
         # yet cannot carry it
-        n: this.frames.length
+        n: this.open.length
         if n == 0 then return false
-        f: this.frames.get i: (n - 1)
+        f: (this.open.get i: (n - 1)).id
         if f.isZero then return false
         return (this.unreachableFrames.has item: f.u64)
     }
@@ -1390,26 +1361,24 @@ ZSymbolTable: class {
             for ri < endIdx loop {
                 e: this.entries.get i: ri
                 if e.defSeq > ki then break
-                if e.frame == frame then {
-                    exs: (ListVal u32)
-                    with xit: e.excludedSubtypes.iterate do for xn: xit loop exs.append xn.u32
-                    nsc: e.narrowedSubtype
-                    this.entryDump.append (ZEntryDumpRow
-                        scopeId: frame.u64
-                        position: pos
-                        entryId: e.entryId
-                        name: e.name
-                        ztypeId: e.ztypeId
-                        isDefinition: false
-                        varId: (optionval.none ztypes.vid)
-                        originalZtypeId: e.originalZtypeId
-                        isTaken: e.isTaken
-                        takenAt: e.takenAt
-                        narrowedSubtype: nsc
-                        excludedSubtypes: exs
-                    )
-                    pos = pos + 1
-                }
+                exs: (ListVal u32)
+                with xit: e.excludedSubtypes.iterate do for xn: xit loop exs.append xn.u32
+                nsc: e.narrowedSubtype
+                this.entryDump.append (ZEntryDumpRow
+                    scopeId: frame.u64
+                    position: pos
+                    entryId: e.entryId
+                    name: (this.typing.declNameOf declId: e.declId)
+                    ztypeId: e.ztypeId
+                    isDefinition: false
+                    varId: (optionval.none ztypes.vid)
+                    originalZtypeId: e.originalZtypeId
+                    isTaken: e.isTaken
+                    takenAt: e.takenAt
+                    narrowedSubtype: nsc
+                    excludedSubtypes: exs
+                )
+                pos = pos + 1
                 ri = ri + 1
             }
             if ki < kn then {
@@ -1452,11 +1421,8 @@ optStrOrEmpty: function {o: Option String} out String is {
 # typing tables it will resolve against.
 newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} out ZSymbolTable is {
     return (ZSymbolTable
-        frames: (ListVal ztypes.declid)
+        open: (ListVal openframe)
         curFrame: ztypes.declid
-        frameParents: (ListVal ztypes.declid)
-        frameStarts: (ListVal u64)
-        frameDefs: (ListVal u64)
         entries: (List ZEntry)
         unreachableFrames: (IdSet u64)
         frameLabel: (IdMapR u64 value: String)
