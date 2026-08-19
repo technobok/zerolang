@@ -38,15 +38,15 @@ slurp: function {path: StringView} out String is {
 # places that would hand one to the compiler on its own. Mirrors the same
 # `^main: *function` test the Makefile's case-guard uses on the other side.
 declaresMain: function {path: StringView} out bool is {
-    c9: slurp :path
-    with it9: c9.stringview.lines do for ln9: it9 loop {
-        if (ln9.startsWith prefix: "main:") then {
+    c: slurp :path
+    with it: c.stringview.lines do for ln: it loop {
+        if (ln.startsWith prefix: "main:") then {
             # bound, not chained: `(a.substring ...).trimStart` emits broken C
             # (the native is called undeclared, and the emitter takes & of the
             # call's result). Pre-existing; the seed compiler does it too.
-            a9: ln9.substring from: 5 to: ln9.length
-            r9: a9.trimStart
-            if (r9.startsWith prefix: "function") then return true
+            a: ln.substring from: 5 to: ln.length
+            r: a.trimStart
+            if (r.startsWith prefix: "function") then return true
         }
     }
     return false
@@ -420,44 +420,44 @@ runJobs: function {
 # frameLsp -- wrap each non-empty line of a .msgs transcript in LSP
 # Content-Length framing (the bytes zls reads on its --replay input).
 frameLsp: function {src: StringView} out String is {
-    out9: String
+    result: String
     with it: src.lines do for ln: it loop {
         if ln.length > 0 then {
-            n9: ln.length
-            h9: "Content-Length: \{n9}"
-            out9.append h9
-            out9.appendByte b: 13
-            out9.appendByte b: 10
-            out9.appendByte b: 13
-            out9.appendByte b: 10
-            out9.append ln
+            n: ln.length
+            h: "Content-Length: \{n}"
+            result.append h
+            result.appendByte b: 13
+            result.appendByte b: 10
+            result.appendByte b: 13
+            result.appendByte b: 10
+            result.append ln
         }
     }
-    return out9
+    return result
 }
 
 # deframeLsp -- zls output back to one JSON body per line. The server
 # emits the exact form "Content-Length: N\r\n\r\n<body>"; anything
 # else surfaces as a literal marker line so the diff fails loudly.
 deframeLsp: function {raw: StringView} out String is {
-    out9: String
+    result: String
     pos: u64
     n: raw.length
     for pos < n loop {
         if pos + 16 > n then {
-            out9.append "<<deframe error: truncated header>>"
-            out9.appendByte b: 10
-            return out9
+            result.append "<<deframe error: truncated header>>"
+            result.appendByte b: 10
+            return result
         }
-        okHdr9: false
+        okHdr: false
         {
-            hd9: raw.substring from: pos to: pos + 16
-            if hd9 == "Content-Length: " then okHdr9 = true
+            hd: raw.substring from: pos to: pos + 16
+            if hd == "Content-Length: " then okHdr = true
         }
-        if okHdr9 == false then {
-            out9.append "<<deframe error: bad prefix>>"
-            out9.appendByte b: 10
-            return out9
+        if okHdr == false then {
+            result.append "<<deframe error: bad prefix>>"
+            result.appendByte b: 10
+            return result
         }
         clen: u64
         i: pos + 16
@@ -483,15 +483,15 @@ deframeLsp: function {raw: StringView} out String is {
             match (
                 bo2
             ) case some then {
-                out9.appendByte b: bo2
+                result.appendByte b: bo2
             } case none then null
             i = i + 1
             j = j + 1
         }
-        out9.appendByte b: 10
+        result.appendByte b: 10
         pos = i
     }
-    return out9
+    return result
 }
 
 # test-runner entry point: build the compiler, run the
@@ -576,20 +576,20 @@ main: function is {
     io.mkdirp path: d
     # sweep trees crashed prior runs left behind: the names are
     # pid-scoped, and a live owner still has /proc/<pid>
-    myPidS9: "\{mypid}"
-    stale9: io.listDir path: "/tmp"
+    myPidS: "\{mypid}"
+    stale: io.listDir path: "/tmp"
     match (
-        stale9
+        stale
     ) case ok then {
-        with sit9: stale9.iterate do for se9: sit9 loop {
-            sv9: se9.stringview
-            if sv9.startsWith "ztr_" then {
-                spid9: sv9.substring from: 4 to: sv9.length
-                if spid9 != myPidS9.stringview then {
-                    proc9: "/proc/\{spid9}"
-                    if (io.exists path: proc9) == false then {
-                        dead9: "/tmp/ztr_\{spid9}"
-                        io.removeTree path: dead9.stringview
+        with sit: stale.iterate do for se: sit loop {
+            sv: se.stringview
+            if sv.startsWith "ztr_" then {
+                spid: sv.substring from: 4 to: sv.length
+                if spid != myPidS.stringview then {
+                    proc: "/proc/\{spid}"
+                    if (io.exists path: proc) == false then {
+                        dead: "/tmp/ztr_\{spid}"
+                        io.removeTree path: dead.stringview
                     }
                 }
             }
@@ -727,107 +727,107 @@ main: function is {
     match (
         lspLs
     ) case ok then {
-        zlsC9: "\{d.stringview}/zls_bin.c"
-        zlsB9: "\{d.stringview}/zls_bin"
-        srcD9: "\{root.stringview}/src"
-        za9: (zcArgv
+        zlsC: "\{d.stringview}/zls_bin.c"
+        zlsB: "\{d.stringview}/zls_bin"
+        srcD: "\{root.stringview}/src"
+        za: (zcArgv
             zc: zc.stringview
             ccFwd: ccFwd.stringview
             name: "zls"
-            srcdir: srcD9.stringview
+            srcdir: srcD.stringview
             sys: sys.stringview
-            outc: zlsC9.stringview
+            outc: zlsC.stringview
         )
-        ec9: (os.spawn
-            argv: za9
+        ec: (os.spawn
+            argv: za
             cwd: ""
             outPath: "/dev/null"
             errPath: "/dev/null"
             timeoutSecs: 0
         )
-        built9: false
-        if ec9 != 0 then {
+        built: false
+        if ec != 0 then {
             print "FAIL(lsp) zls (zc)"
             fails = fails + 1
         } else {
-            ga9: (withZlink
+            ga: (withZlink
                 argv: (gccArgv
                     cc: cc.stringview
                     ccflags: ccflags.stringview
-                    bin: zlsB9.stringview
-                    csrc: zlsC9.stringview
+                    bin: zlsB.stringview
+                    csrc: zlsC.stringview
                     asan: false
                 )
-                csrc: zlsC9.stringview
+                csrc: zlsC.stringview
             )
-            bc9: (os.spawn
-                argv: ga9
+            bc: (os.spawn
+                argv: ga
                 cwd: ""
                 outPath: "/dev/null"
                 errPath: "/dev/null"
                 timeoutSecs: 0
             )
-            if bc9 != 0 then {
+            if bc != 0 then {
                 print "FAIL(lsp) zls (cc)"
                 fails = fails + 1
             } else {
-                built9 = true
+                built = true
             }
         }
-        if built9 then {
-            names9: (List String)
-            with lit: lspLs.iterate do for fn9: lit loop {
-                keep9: fn9.endsWith ".msgs"
-                if fn9.endsWith ".raw" then keep9 = true
-                if keep9 then names9.append fn9.copy
+        if built then {
+            names: (List String)
+            with lit: lspLs.iterate do for fn: lit loop {
+                keep: fn.endsWith ".msgs"
+                if fn.endsWith ".raw" then keep = true
+                if keep then names.append fn.copy
             }
-            names9.sort
-            with nit: names9.iterate do for cf9: nit loop {
-                cv9: cf9.stringview
-                isRaw9: cv9.endsWith ".raw"
-                ext9: 5.u64
-                if isRaw9 then ext9 = 4
-                nm9: cv9.substring from: 0 to: cv9.length - ext9
-                cp9: "\{lspCases.stringview}/\{cv9}"
-                caseC9: slurp path: cp9.stringview
-                input9: String
-                if isRaw9 then {
-                    input9 = caseC9.copy
+            names.sort
+            with nit: names.iterate do for cf: nit loop {
+                cv: cf.stringview
+                isRaw: cv.endsWith ".raw"
+                ext: 5.u64
+                if isRaw then ext = 4
+                nm: cv.substring from: 0 to: cv.length - ext
+                cp: "\{lspCases.stringview}/\{cv}"
+                caseC: slurp path: cp.stringview
+                input: String
+                if isRaw then {
+                    input = caseC.copy
                 } else {
-                    input9 = frameLsp src: caseC9.stringview
+                    input = frameLsp src: caseC.stringview
                 }
-                inP9: "\{d.stringview}/lsp_\{nm9}.in"
-                wri9: io.writeText path: inP9 content: input9
+                inP: "\{d.stringview}/lsp_\{nm}.in"
+                wri: io.writeText path: inP content: input
                 match (
-                    wri9
+                    wri
                 ) case ok then null case err then {
-                    print "FAIL(lsp) \{nm9} (write input)"
+                    print "FAIL(lsp) \{nm} (write input)"
                     fails = fails + 1
                 }
-                outP9: "\{d.stringview}/lsp_\{nm9}.raw"
-                ba9: (List String)
-                ba9.append zlsB9.copy
-                ba9.append "--replay".string
-                ba9.append inP9.copy
-                rc9: (os.spawn
-                    argv: ba9
+                outP: "\{d.stringview}/lsp_\{nm}.raw"
+                ba: (List String)
+                ba.append zlsB.copy
+                ba.append "--replay".string
+                ba.append inP.copy
+                rc: (os.spawn
+                    argv: ba
                     cwd: ""
-                    outPath: outP9.stringview
+                    outPath: outP.stringview
                     errPath: "/dev/null"
                     :timeoutSecs
                 )
-                goldP9: "\{lspGold.stringview}/\{nm9}.out"
-                if (io.exists path: goldP9) == false then {
+                goldP: "\{lspGold.stringview}/\{nm}.out"
+                if (io.exists path: goldP) == false then {
                     skip = skip + 1
                 } else {
-                    rawOut9: slurp path: outP9.stringview
-                    norm9: deframeLsp raw: rawOut9.stringview
-                    goldC9: slurp path: goldP9.stringview
-                    sameOut9: norm9.stringview == goldC9.stringview
-                    if sameOut9 when rc9 == 0 then {
+                    rawOut: slurp path: outP.stringview
+                    norm: deframeLsp raw: rawOut.stringview
+                    goldC: slurp path: goldP.stringview
+                    sameOut: norm.stringview == goldC.stringview
+                    if sameOut when rc == 0 then {
                         passN = passN + 1
                     } else {
-                        print "FAIL(lsp) \{nm9}"
+                        print "FAIL(lsp) \{nm}"
                         fails = fails + 1
                     }
                 }
@@ -855,8 +855,8 @@ main: function is {
                     sfx
                 ) case some then {
                     nm: sfx
-                    lpath9: "\{ld}/\{ent}"
-                    if (declaresMain path: lpath9.stringview) == false then {
+                    lpath: "\{ld}/\{ent}"
+                    if (declaresMain path: lpath.stringview) == false then {
                         li = li + 1
                         continue
                     }
