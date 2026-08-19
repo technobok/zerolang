@@ -77,16 +77,23 @@ all types in Zerolang.
   facet instance      |stack          |yes      |no                  |no                   |no
   box(T)              |heap (data)    |no       |yes (free data)     |n/a                  |no
   list(T) (both families) |stack (struct) |no    |yes (free data buf) |n/a                  |no
-  set / map (all forms) |stack (struct) |no     |yes (free tables)   |n/a                  |no
+  set / map (all forms) |heap (struct)  |no     |yes (free tables)   |n/a                  |no
+  idmap / idset         |stack (struct) |no      |yes (free arrays)   |n/a                  |no
   string              |stack (struct) |no       |yes (free data buf) |n/a                  |no
   listview(T) (both families) |stack   |no      |no                  |no                   |yes
   stringview          |stack          |no       |no                  |no                   |yes
 
 The container rows cover both element families: #~"ListRef" /
-#~"ListVal", #~"SetRef" / #~"SetVal", and the four #~"Map" forms share
-one C shape per kind -- the families differ in what the element slots
-hold (owned reftype pointers vs inline valtype values) and in the
-accessor/iterator surface, not in the container struct itself.
+#~"ListVal", #~"SetRef" / #~"SetVal", the four #~"Map" forms and the two
+#~"IdMap" forms share one C shape per kind -- the families differ in what
+the element slots hold (owned reftype pointers vs inline valtype values)
+and in the accessor/iterator surface, not in the container struct itself.
+
+#~"Map" and #~"Set" are the one heap-allocated container: #~"create"
+returns a pointer, so a map-typed field holds a pointer the owner
+destroys rather than storage the owner contains. #~"IdMap" / #~"IdSet"
+are stack structs like #~"List", which is what lets an empty one cost no
+allocation at all.
 
 Note: "enum" is not a separate type. Enums are variants or unions where every
 subtype is #~"null" -- the struct collapses to just a tag discriminator.
@@ -770,6 +777,167 @@ The listview holds a compile-time lock on the source list:
       of: AnyRef.generic
   }
   """
+
+
+#--: map(K,V) / set(T)
+
+#~"Map" (the four key/value families #~"MapRR" / #~"MapRV" / #~"MapVR" /
+#~"MapVV") and #~"Set" (#~"SetRef" / #~"SetVal") are compact dictionaries: a
+dense, insertion-ordered entry array plus a sparse index table of positions
+into it. Iteration order is therefore insertion order and is stable across
+runs regardless of the hash seed.
+
+They are the one #_*"heap-allocated" container: #~"create" returns a pointer.
+A map-typed field holds a pointer the owner destroys, not storage the owner
+contains -- which is why a map field can be read through a readonly receiver
+where a stack-struct container's cannot.
+
+#---: Memory Layout
+
+#code language=c: """
+  typedef struct {
+      uint8_t  alive;        /* 0 once removed: a tombstone */
+      uint64_t hash;         /* stored, so a probe compares before calling ==  */
+      K        key;
+      V        value;
+  } z_map_entry_t;
+
+  typedef struct z_map_t {
+      uint64_t capacity;     /* indices slots, a power of two */
+      uint64_t length;       /* LIVE entries */
+      uint64_t entries_len;  /* entries[] high-water mark: live + tombstones */
+      uint64_t entries_cap;  /* entries[] allocation */
+      int64_t* indices;      /* EMPTY(-1) / DELETED(-2) / entry position */
+      z_map_entry_t* entries;
+  } z_map_t;
+  """
+
+A set is the same shape without the #~"value" column. #~"length" and
+#~"entries_len" differ only because removal leaves a hole: #~"length" counts
+live entries, #~"entries_len" counts slots used.
+
+#---: Construction
+
+#~"create" returns a #~"z_map_t*". A capacity under 8 is rounded to zero and
+allocates #_*"neither" array; the header itself is always allocated.
+
+#---: Destructor
+
+Frees #~"indices", frees #~"entries" (running the element destructors for
+owning key/value families first), then frees the struct.
+
+#---: Growth Formula
+
+The index doubles when #~"(entries_len + 1) * 3 >= capacity * 2" -- a 2/3 load
+factor. Growth compacts: tombstones are dropped and the surviving entries are
+re-slotted, which is what reclaims them.
+
+#---: Probing
+
+#~"hash & (capacity - 1)", then linear. The stored hash is compared before the
+key so a full comparison runs only on a hash match. Integer keys hash through
+#~"z_hash_u64" (the splitmix64 finalizer); strings and byte-range keys through
+SipHash, or a faster non-cryptographic mixer under #~"--fast-hash".
+
+#---: Methods
+
+#~"get" / #~"set" / #~"has" / #~"remove" / #~"length" / #~"capacity" /
+#~"iterate" / #~"iterateItems" / #~"create". There is no #~"getMut": the slot
+a key occupies depends on a hash #_*"of that key", so writing through a
+mutable view would leave the entry in the wrong bucket.
+
+
+#--: idmap(K,V) / idset(T)
+
+#~"IdMap" (#~"IdMapR" / #~"IdMapV") and #~"IdSet" are the append-only,
+id-keyed siblings. The key is bound to an unsigned scalar by #~"idkey"
+(#~"u8" / #~"u16" / #~"u32" / #~"u64" / #~"c8" / #~"c32", and any typedef over
+one of them), and there is no #~"remove" and no #~"delete": the whole table is
+freed at once.
+
+Three properties follow from that contract, and none is available to a Map.
+Nothing is ever removed, so #~"entries[0 .. length-1]" are #_*"all" live and
+the array has no holes. The slot is computed from the key alone, so no hash
+column is stored. And the struct lives on the #_*"stack", like a #~"List", so
+an empty one costs no allocation at all.
+
+#---: Memory Layout
+
+#code language=c: """
+  typedef struct {
+      K key;
+      V value;
+  } z_idmap_entry_t;
+
+  typedef struct z_idmap_t {
+      uint32_t  length;      /* live entries; ALSO slots used, ALSO next index */
+      uint32_t  capacity;    /* indices slots, a power of two */
+      uint32_t* indices;     /* pos + 1, with 0 for empty; NULL in small mode */
+      z_idmap_entry_t* entries;
+  } z_idmap_t;
+  """
+
+24 bytes, the same as a #~"List". An id set is the same shape with a bare
+#~"items" array in place of #~"entries".
+
+One counter does three jobs -- live count, slots used, and the next insertion
+index -- because there are no holes to tell those numbers apart. #~"indices"
+is #~"uint32_t" holding #~"pos + 1" so that zero means empty; with no removal
+there is no #~"DELETED" sentinel to distinguish, which is what allows the
+narrower cell.
+
+#---: Small Mode
+
+Below an index size of 16 no #~"indices" array is allocated at all and lookup
+scans the dense entries instead. #~"indices == NULL" is the discriminator, so
+the indexed path pays no extra branch -- it replaces the #~"capacity == 0"
+early return a Map's #~"find" already had.
+
+#---: Construction
+
+#~"create" returns the struct #_*"by value". An empty one allocates nothing:
+no header, no index, no entries.
+
+#---: Destructor
+
+Frees #~"indices" and #~"entries" (running the value destructors for the
+reference family first) and does #_*"not" free the struct -- it is on the
+stack, exactly as #~"List" is.
+
+#---: Growth Formula
+
+#~"entries" is sized at #~"capacity * 2 / 3", which is also the index's load
+factor, so "entries is full" and "the index must grow" are one event and no
+separate #~"entries_cap" field is needed. The test carries no division:
+cross-multiplied it is #~"(length + 1) * 3 >= capacity * 2", the same growth
+point a Map reaches. Growth doubles the index and re-slots; there is nothing
+to compact, because #~"entries" never has holes.
+
+#---: Indexing
+
+#~"(key * 0x9E3779B97F4A7C15) >> 32", masked by #~"capacity - 1".
+
+Identity (#~"key & mask") was measured and rejected. It is optimal for a dense
+run of ids -- one table's worst probe fell from 74 to 1 -- but a table holding
+a #_*"sparse subset" of a wide id space folds unrelated groups onto each other,
+because the mask keeps only the low bits: over a self-compile identity cost
++77% probe steps and took the worst run from 74 to 749. The golden-ratio
+multiply-shift costs one #~"imul" plus one shift and beat the splitmix64
+finalizer it replaces on both total steps and tail. The shift is not optional:
+bit #~"i" of a product depends only on bits #~"0..i" of the operands, so a
+multiply's low bits -- exactly the ones the mask reads -- are barely mixed,
+while the high half carries every input bit.
+
+#---: Methods
+
+#~"get" / #~"set" / #~"has" / #~"length" / #~"capacity" / #~"create", plus
+#~"iterate" on a set and #~"iterateItems" on a map. #_*"No" #~"remove" and
+#_*"no" #~"delete" -- if you need either, you want a Map.
+
+#~"getMut" is absent today but, unlike on a Map, would be sound: the objection
+there is that a hashed slot depends on the key's hash, and here the slot
+depends on the key alone, which a mutable view of the #_*"value" does not
+touch.
 
 
 #--: string

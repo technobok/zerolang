@@ -674,3 +674,81 @@ What remains is what the source asks for: `float_widths` and `float_mod` are
 the only programs left emitting either type, and the 1,254 `__float128` in the
 count are three lines per program inside `#if __SIZEOF_FLOAT128__`, which a
 backend without `__float128` preprocesses away.
+
+
+## IdMap / IdSet — an append-only, id-keyed container
+
+**This arc's metrics are allocation count and bytes churned, not CPU.** The
+containers it replaces were already O(1); what they cost was a heap header per
+instance and 24 bytes of tombstone-and-hash overhead per entry. A flat wall
+column is the expected result, not a failure.
+
+`IdMap` / `IdSet` are `Map` / `Set` with the two things the compiler never uses
+removed. Nothing is ever removed from a keyed structure here — across ~99k
+lines there are exactly two map removals, both `String`-keyed — so the `alive`
+byte and the compaction it forces go, and with no tombstones `entries` is dense
+and `length` alone answers "how many", "where next" and "when to grow". The key
+is an unsigned scalar by construction, so the stored hash goes too, `indices`
+narrows from `int64_t` to `uint32_t` (`pos + 1`, `0` = empty), and the struct
+lives on the stack like a `List` rather than on the heap like a `Map`.
+
+Per entry, keyed `u64` → `declid`: 32 bytes becomes 16, a set element 24
+becomes 8, an index cell 8 becomes 4, and an empty container costs one
+allocation fewer than it has arrays.
+
+### What the migrations moved
+
+Each row is an adjacent A/B — the change stashed and unstashed on the same tree
+— because **`perf-strict` measures a SELF-compile, so it conflates "allocates
+more" with "has more source"**: this compiler allocates ~84.5 times per source
+line, so 547 added lines move the column by ~46,000 on their own. Hold the line
+count fixed, or measure a fixed input, or the number is about the diff's size.
+
+| migration | allocations | bytes |
+|---|---|---|
+| `SetVal u32` → `IdSet` (zenv/checkIf name sets) | −73,842 | −30.9 MB |
+| `MapVR u64→String` (5 emitter locals + 3 fields) | −16,965 | −3.2 MB |
+| `NameIndex.byName` + 2 ztyping fields | −136 | −8.5 MB |
+| six string-valued `Decl` side-tables | −79 | −2.0 MB |
+| generic-child edges (two lists → one map) | −3,380 | −0.3 MB |
+| **total** | **−94,402** | **−44.9 MB (−9.7%)** |
+
+The first row is 32,602 instances per self-compile, all short-lived locals, and
+more allocations vanish than there are instances: a `Set` cost up to three
+(header, indices, entries) where an `IdSet` below the small threshold costs one.
+The last row was forecast to move nothing — it was filed as a linear scan, a CPU
+shape — but two parallel lists became one map, and below the threshold that is
+two allocations becoming one.
+
+### Identity indexing was measured and rejected
+
+The design called for `key & mask` with no mixer at all. Over a self-compile,
+7,391,762 finds:
+
+| | splitmix64 (before) | identity `key & mask` | golden-ratio multiply |
+|---|---|---|---|
+| total probe steps | 12,928,227 | **22,850,966** | **12,661,979** |
+| finds ≥ 16 steps | 11,975 | **179,537** | **7,868** |
+| worst probe run | 73 | **1,241** | 100 |
+| arithmetic | 2 imul + 3 shift/xor | none | 1 imul + 1 shift |
+
+Identity *wins the head* — 5,368,390 one-step hits against 4,933,136, and 1.2M
+fewer steps in the ≤4 band — and loses 15× in the tail, where 2.43% of lookups
+produce the entire regression. Per mono, three tables account for all of it, the
+worst being `MapVV u64 → declid` at +7.4M steps: `& mask` keeps only the low
+bits, so a table holding a *sparse subset* of a wide id space folds unrelated
+groups onto each other. A dense run of ids is exactly as good as predicted —
+`MapVV u64 → zownership` went from a worst run of 73 to 1 — the aggregate is
+just dominated by the tables that are not dense.
+
+The shipped mixer beats the splitmix64 finalizer it replaces on both total steps
+(−2.1%) and tail (−34%) at about a third of the arithmetic. It does not recover
+identity's head win; a per-table choice would, and is unexplored.
+
+### Ceiling
+
+The remaining Map instances are `String`-keyed and stay: `Set String` alone is
+61,157 of the 111,607 Map/Set instances a self-compile creates, and 89.9% of
+those die empty. The composite-keyed tables stay too — a two-field record key
+cannot be an id, and packing two id spaces into one integer is a hack this
+compiler does not do.

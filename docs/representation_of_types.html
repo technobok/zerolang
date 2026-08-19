@@ -219,7 +219,7 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
-<li><a href="#string">string</a>
+<li><a href="#map-k-v-set-t">map(K,V) / set(T)</a>
 <ul>
 <li><a href="#memory-layout-10">Memory Layout</a>
 </li>
@@ -229,17 +229,51 @@ Table of Contents</div>
 </li>
 <li><a href="#growth-formula-2">Growth Formula</a>
 </li>
+<li><a href="#probing">Probing</a>
+</li>
+<li><a href="#methods-3">Methods</a>
+</li>
+</ul>
+</li>
+<li><a href="#idmap-k-v-idset-t">idmap(K,V) / idset(T)</a>
+<ul>
+<li><a href="#memory-layout-11">Memory Layout</a>
+</li>
+<li><a href="#small-mode">Small Mode</a>
+</li>
+<li><a href="#construction-6">Construction</a>
+</li>
+<li><a href="#destructor-7">Destructor</a>
+</li>
+<li><a href="#growth-formula-3">Growth Formula</a>
+</li>
+<li><a href="#indexing">Indexing</a>
+</li>
+<li><a href="#methods-4">Methods</a>
+</li>
+</ul>
+</li>
+<li><a href="#string">string</a>
+<ul>
+<li><a href="#memory-layout-12">Memory Layout</a>
+</li>
+<li><a href="#construction-7">Construction</a>
+</li>
+<li><a href="#destructor-8">Destructor</a>
+</li>
+<li><a href="#growth-formula-4">Growth Formula</a>
+</li>
 <li><a href="#runtime-functions">Runtime Functions</a>
 </li>
 </ul>
 </li>
 <li><a href="#stringview">stringview</a>
 <ul>
-<li><a href="#memory-layout-11">Memory Layout</a>
+<li><a href="#memory-layout-13">Memory Layout</a>
 </li>
 <li><a href="#ownership-4">Ownership</a>
 </li>
-<li><a href="#methods-3">Methods</a>
+<li><a href="#methods-5">Methods</a>
 </li>
 </ul>
 </li>
@@ -330,17 +364,23 @@ Born-borrowed is removed as a concept.</li>
 <tr><td>facet instance</td><td>stack</td><td>yes</td><td>no</td><td>no</td><td>no</td></tr>
 <tr><td>box(T)</td><td>heap (data)</td><td>no</td><td>yes (free data)</td><td>n/a</td><td>no</td></tr>
 <tr><td>list(T) (both families)</td><td>stack (struct)</td><td>no</td><td>yes (free data buf)</td><td>n/a</td><td>no</td></tr>
-<tr><td>set / map (all forms)</td><td>stack (struct)</td><td>no</td><td>yes (free tables)</td><td>n/a</td><td>no</td></tr>
+<tr><td>set / map (all forms)</td><td>heap (struct)</td><td>no</td><td>yes (free tables)</td><td>n/a</td><td>no</td></tr>
+<tr><td>idmap / idset</td><td>stack (struct)</td><td>no</td><td>yes (free arrays)</td><td>n/a</td><td>no</td></tr>
 <tr><td>string</td><td>stack (struct)</td><td>no</td><td>yes (free data buf)</td><td>n/a</td><td>no</td></tr>
 <tr><td>listview(T) (both families)</td><td>stack</td><td>no</td><td>no</td><td>no</td><td>yes</td></tr>
 <tr><td>stringview</td><td>stack</td><td>no</td><td>no</td><td>no</td><td>yes</td></tr>
 </tbody>
 </table>
 <p>The container rows cover both element families: <code>ListRef</code> /
-<code>ListVal</code>, <code>SetRef</code> / <code>SetVal</code>, and the four <code>Map</code> forms share
-one C shape per kind -- the families differ in what the element slots
-hold (owned reftype pointers vs inline valtype values) and in the
-accessor/iterator surface, not in the container struct itself.</p>
+<code>ListVal</code>, <code>SetRef</code> / <code>SetVal</code>, the four <code>Map</code> forms and the two
+<code>IdMap</code> forms share one C shape per kind -- the families differ in what
+the element slots hold (owned reftype pointers vs inline valtype values)
+and in the accessor/iterator surface, not in the container struct itself.</p>
+<p><code>Map</code> and <code>Set</code> are the one heap-allocated container: <code>create</code>
+returns a pointer, so a map-typed field holds a pointer the owner
+destroys rather than storage the owner contains. <code>IdMap</code> / <code>IdSet</code>
+are stack structs like <code>List</code>, which is what lets an empty one cost no
+allocation at all.</p>
 <p>Note: "enum" is not a separate type. Enums are variants or unions where every
 subtype is <code>null</code> -- the struct collapses to just a tag discriminator.</p>
 <h2 id="method-receiver"><a href="#method-receiver">3. Method Receiver (<code>this</code>)</a></h2>
@@ -786,10 +826,128 @@ print v.get i: 0.u64       # OK: read through view
 } as {
     of: AnyRef.generic
 }</code></pre>
-<h2 id="string"><a href="#string">13. string</a></h2>
+<h2 id="map-k-v-set-t"><a href="#map-k-v-set-t">13. map(K,V) / set(T)</a></h2>
+<p><code>Map</code> (the four key/value families <code>MapRR</code> / <code>MapRV</code> / <code>MapVR</code> /
+<code>MapVV</code>) and <code>Set</code> (<code>SetRef</code> / <code>SetVal</code>) are compact dictionaries: a
+dense, insertion-ordered entry array plus a sparse index table of positions
+into it. Iteration order is therefore insertion order and is stable across
+runs regardless of the hash seed.</p>
+<p>They are the one <em><strong>heap-allocated</strong></em> container: <code>create</code> returns a pointer.
+A map-typed field holds a pointer the owner destroys, not storage the owner
+contains -- which is why a map field can be read through a readonly receiver
+where a stack-struct container's cannot.</p>
+<h3 id="memory-layout-10"><a href="#memory-layout-10">13.1. Memory Layout</a></h3>
+<pre><code class="language-c">typedef struct {
+    uint8_t  alive;        /* 0 once removed: a tombstone */
+    uint64_t hash;         /* stored, so a probe compares before calling ==  */
+    K        key;
+    V        value;
+} z_map_entry_t;
+
+typedef struct z_map_t {
+    uint64_t capacity;     /* indices slots, a power of two */
+    uint64_t length;       /* LIVE entries */
+    uint64_t entries_len;  /* entries[] high-water mark: live + tombstones */
+    uint64_t entries_cap;  /* entries[] allocation */
+    int64_t* indices;      /* EMPTY(-1) / DELETED(-2) / entry position */
+    z_map_entry_t* entries;
+} z_map_t;</code></pre>
+<p>A set is the same shape without the <code>value</code> column. <code>length</code> and
+<code>entries_len</code> differ only because removal leaves a hole: <code>length</code> counts
+live entries, <code>entries_len</code> counts slots used.</p>
+<h3 id="construction-5"><a href="#construction-5">13.2. Construction</a></h3>
+<p><code>create</code> returns a <code>z_map_t*</code>. A capacity under 8 is rounded to zero and
+allocates <em><strong>neither</strong></em> array; the header itself is always allocated.</p>
+<h3 id="destructor-6"><a href="#destructor-6">13.3. Destructor</a></h3>
+<p>Frees <code>indices</code>, frees <code>entries</code> (running the element destructors for
+owning key/value families first), then frees the struct.</p>
+<h3 id="growth-formula-2"><a href="#growth-formula-2">13.4. Growth Formula</a></h3>
+<p>The index doubles when <code>(entries_len + 1) * 3 &gt;= capacity * 2</code> -- a 2/3 load
+factor. Growth compacts: tombstones are dropped and the surviving entries are
+re-slotted, which is what reclaims them.</p>
+<h3 id="probing"><a href="#probing">13.5. Probing</a></h3>
+<p><code>hash &amp; (capacity - 1)</code>, then linear. The stored hash is compared before the
+key so a full comparison runs only on a hash match. Integer keys hash through
+<code>z_hash_u64</code> (the splitmix64 finalizer); strings and byte-range keys through
+SipHash, or a faster non-cryptographic mixer under <code>--fast-hash</code>.</p>
+<h3 id="methods-3"><a href="#methods-3">13.6. Methods</a></h3>
+<p><code>get</code> / <code>set</code> / <code>has</code> / <code>remove</code> / <code>length</code> / <code>capacity</code> /
+<code>iterate</code> / <code>iterateItems</code> / <code>create</code>. There is no <code>getMut</code>: the slot
+a key occupies depends on a hash <em><strong>of that key</strong></em>, so writing through a
+mutable view would leave the entry in the wrong bucket.</p>
+<h2 id="idmap-k-v-idset-t"><a href="#idmap-k-v-idset-t">14. idmap(K,V) / idset(T)</a></h2>
+<p><code>IdMap</code> (<code>IdMapR</code> / <code>IdMapV</code>) and <code>IdSet</code> are the append-only,
+id-keyed siblings. The key is bound to an unsigned scalar by <code>idkey</code>
+(<code>u8</code> / <code>u16</code> / <code>u32</code> / <code>u64</code> / <code>c8</code> / <code>c32</code>, and any typedef over
+one of them), and there is no <code>remove</code> and no <code>delete</code>: the whole table is
+freed at once.</p>
+<p>Three properties follow from that contract, and none is available to a Map.
+Nothing is ever removed, so <code>entries[0 .. length-1]</code> are <em><strong>all</strong></em> live and
+the array has no holes. The slot is computed from the key alone, so no hash
+column is stored. And the struct lives on the <em><strong>stack</strong></em>, like a <code>List</code>, so
+an empty one costs no allocation at all.</p>
+<h3 id="memory-layout-11"><a href="#memory-layout-11">14.1. Memory Layout</a></h3>
+<pre><code class="language-c">typedef struct {
+    K key;
+    V value;
+} z_idmap_entry_t;
+
+typedef struct z_idmap_t {
+    uint32_t  length;      /* live entries; ALSO slots used, ALSO next index */
+    uint32_t  capacity;    /* indices slots, a power of two */
+    uint32_t* indices;     /* pos + 1, with 0 for empty; NULL in small mode */
+    z_idmap_entry_t* entries;
+} z_idmap_t;</code></pre>
+<p>24 bytes, the same as a <code>List</code>. An id set is the same shape with a bare
+<code>items</code> array in place of <code>entries</code>.</p>
+<p>One counter does three jobs -- live count, slots used, and the next insertion
+index -- because there are no holes to tell those numbers apart. <code>indices</code>
+is <code>uint32_t</code> holding <code>pos + 1</code> so that zero means empty; with no removal
+there is no <code>DELETED</code> sentinel to distinguish, which is what allows the
+narrower cell.</p>
+<h3 id="small-mode"><a href="#small-mode">14.2. Small Mode</a></h3>
+<p>Below an index size of 16 no <code>indices</code> array is allocated at all and lookup
+scans the dense entries instead. <code>indices == NULL</code> is the discriminator, so
+the indexed path pays no extra branch -- it replaces the <code>capacity == 0</code>
+early return a Map's <code>find</code> already had.</p>
+<h3 id="construction-6"><a href="#construction-6">14.3. Construction</a></h3>
+<p><code>create</code> returns the struct <em><strong>by value</strong></em>. An empty one allocates nothing:
+no header, no index, no entries.</p>
+<h3 id="destructor-7"><a href="#destructor-7">14.4. Destructor</a></h3>
+<p>Frees <code>indices</code> and <code>entries</code> (running the value destructors for the
+reference family first) and does <em><strong>not</strong></em> free the struct -- it is on the
+stack, exactly as <code>List</code> is.</p>
+<h3 id="growth-formula-3"><a href="#growth-formula-3">14.5. Growth Formula</a></h3>
+<p><code>entries</code> is sized at <code>capacity * 2 / 3</code>, which is also the index's load
+factor, so "entries is full" and "the index must grow" are one event and no
+separate <code>entries_cap</code> field is needed. The test carries no division:
+cross-multiplied it is <code>(length + 1) * 3 &gt;= capacity * 2</code>, the same growth
+point a Map reaches. Growth doubles the index and re-slots; there is nothing
+to compact, because <code>entries</code> never has holes.</p>
+<h3 id="indexing"><a href="#indexing">14.6. Indexing</a></h3>
+<p><code>(key * 0x9E3779B97F4A7C15) &gt;&gt; 32</code>, masked by <code>capacity - 1</code>.</p>
+<p>Identity (<code>key &amp; mask</code>) was measured and rejected. It is optimal for a dense
+run of ids -- one table's worst probe fell from 74 to 1 -- but a table holding
+a <em><strong>sparse subset</strong></em> of a wide id space folds unrelated groups onto each other,
+because the mask keeps only the low bits: over a self-compile identity cost
++77% probe steps and took the worst run from 74 to 749. The golden-ratio
+multiply-shift costs one <code>imul</code> plus one shift and beat the splitmix64
+finalizer it replaces on both total steps and tail. The shift is not optional:
+bit <code>i</code> of a product depends only on bits <code>0..i</code> of the operands, so a
+multiply's low bits -- exactly the ones the mask reads -- are barely mixed,
+while the high half carries every input bit.</p>
+<h3 id="methods-4"><a href="#methods-4">14.7. Methods</a></h3>
+<p><code>get</code> / <code>set</code> / <code>has</code> / <code>length</code> / <code>capacity</code> / <code>create</code>, plus
+<code>iterate</code> on a set and <code>iterateItems</code> on a map. <em><strong>No</strong></em> <code>remove</code> and
+<em><strong>no</strong></em> <code>delete</code> -- if you need either, you want a Map.</p>
+<p><code>getMut</code> is absent today but, unlike on a Map, would be sound: the objection
+there is that a hashed slot depends on the key's hash, and here the slot
+depends on the key alone, which a mutable view of the <em><strong>value</strong></em> does not
+touch.</p>
+<h2 id="string"><a href="#string">15. string</a></h2>
 <p><code>String</code> is a growable UTF-8 byte buffer. The struct lives on the stack; only
 the data buffer is heap-allocated.</p>
-<h3 id="memory-layout-10"><a href="#memory-layout-10">13.1. Memory Layout</a></h3>
+<h3 id="memory-layout-12"><a href="#memory-layout-12">15.1. Memory Layout</a></h3>
 <pre><code class="language-c">typedef struct {
     uint64_t size;          /* byte count of current content */
     char* data;             /* heap-allocated data buffer */
@@ -805,7 +963,7 @@ directly.</p>
 <p>The struct (24 bytes) is on the stack. The <code>data</code> pointer references a
 heap-allocated buffer. Strings are null-terminated (for C interop) but <code>size</code>
 tracks the actual content length.</p>
-<h3 id="construction-5"><a href="#construction-5">13.2. Construction</a></h3>
+<h3 id="construction-7"><a href="#construction-7">15.2. Construction</a></h3>
 <pre><code class="language-c">static z_string_t z_string_new(const char* s) {
     z_string_t str = {0};
     if (s) {
@@ -816,14 +974,14 @@ tracks the actual content length.</p>
     }
     return str;
 }</code></pre>
-<h3 id="destructor-6"><a href="#destructor-6">13.3. Destructor</a></h3>
+<h3 id="destructor-8"><a href="#destructor-8">15.3. Destructor</a></h3>
 <p>Frees the data buffer only:</p>
 <pre><code class="language-c">static void z_string_free(z_string_t* s) {
     if (s &amp;&amp; s-&gt;data) free(s-&gt;data);
 }</code></pre>
-<h3 id="growth-formula-2"><a href="#growth-formula-2">13.4. Growth Formula</a></h3>
+<h3 id="growth-formula-4"><a href="#growth-formula-4">15.4. Growth Formula</a></h3>
 <p>Unchanged: <code>new_cap = cap + (cap &gt;&gt; 1) + 16</code> (approximately 1.5x + 16).</p>
-<h3 id="runtime-functions"><a href="#runtime-functions">13.5. Runtime Functions</a></h3>
+<h3 id="runtime-functions"><a href="#runtime-functions">15.5. Runtime Functions</a></h3>
 <p>The string runtime functions and their signatures:</p>
 <table>
 <colgroup>
@@ -847,10 +1005,10 @@ tracks the actual content length.</p>
 <tr><td><code>z_string_print</code></td><td>Takes <code>z_string_t*</code></td></tr>
 </tbody>
 </table>
-<h2 id="stringview"><a href="#stringview">14. stringview</a></h2>
+<h2 id="stringview"><a href="#stringview">16. stringview</a></h2>
 <p><code>StringView</code> is a  class: a read-only view into a <code>String</code>, with
 single-owner semantics and a <code>.borrow</code> on the source string.</p>
-<h3 id="memory-layout-11"><a href="#memory-layout-11">14.1. Memory Layout</a></h3>
+<h3 id="memory-layout-13"><a href="#memory-layout-13">16.1. Memory Layout</a></h3>
 <pre><code class="language-c">typedef struct {
     uint64_t size;          /* byte count of the viewed region */
     const char* data;       /* pointer into string's data buffer */
@@ -858,20 +1016,20 @@ single-owner semantics and a <code>.borrow</code> on the source string.</p>
 <p>Field order: <code>size</code> first, <code>data</code> second. This matches the first two
 fields of <code>String</code> in order, name and type, enabling zero-cost casting from
 <code>z_string_t*</code> to <code>z_stringview_t*</code>.</p>
-<h3 id="ownership-4"><a href="#ownership-4">14.2. Ownership</a></h3>
+<h3 id="ownership-4"><a href="#ownership-4">16.2. Ownership</a></h3>
 <p>Stringview is a class (reftype): single ownership, cannot be copied. It holds a
 <code>.borrow</code> on the source string (when created from a string variable).
 Stringviews created from string literals point into static <code>.rodata</code> and do
 not lock anything (static data has infinite lifetime).</p>
 <p>Stringview has no destructor (no heap allocations).</p>
-<h3 id="methods-3"><a href="#methods-3">14.3. Methods</a></h3>
+<h3 id="methods-5"><a href="#methods-5">16.3. Methods</a></h3>
 <ul>
 <li><code>length() out u64</code> -- byte count</li>
 <li><code>String() out String</code> -- materialise a new owned string from the view</li>
 <li><code>==(rhs: StringView) out bool</code> -- content comparison</li>
 <li><code>!=(rhs: StringView) out bool</code> -- negated comparison</li>
 </ul>
-<h2 id="option-optionval-impact"><a href="#option-optionval-impact">15. option / optionval -- Impact</a></h2>
+<h2 id="option-optionval-impact"><a href="#option-optionval-impact">17. option / optionval -- Impact</a></h2>
 <p><code>Option</code> is a union with subtypes <code>{ none: null, some: T }</code> (falsy arm
 first). Under the new
 model, the <code>Option</code> struct (<code>{ tag, void* }</code>) moves to the stack but its
@@ -880,11 +1038,11 @@ subtype data is still heap-allocated (standard union behaviour).</p>
 pointer-typed payloads (box, protocol, etc.), <code>Option</code> is represented as a
 bare pointer with <code>NULL</code> sentinel, avoiding the tag + void* overhead entirely.</p>
 <h1 id="born-borrowed-analysis"><a href="#born-borrowed-analysis">Born-Borrowed Analysis</a></h1>
-<h2 id="removal-from-valtypes"><a href="#removal-from-valtypes">16. Removal from Valtypes</a></h2>
+<h2 id="removal-from-valtypes"><a href="#removal-from-valtypes">18. Removal from Valtypes</a></h2>
 <p>Born-borrowed is removed as a language concept. The non-owned field mechanism
 is now available only to reftypes (classes). Valtypes (records, variants)
 cannot hold locks.</p>
-<h3 id="rationale"><a href="#rationale">16.1. Rationale</a></h3>
+<h3 id="rationale"><a href="#rationale">18.1. Rationale</a></h3>
 <p>The original motivation for born-borrowed was to allow stack-allocated records
 to hold locked references to heap-allocated classes. Since records are
 valtypes (freely copyable), the born-borrowed flag was needed to prevent copies
@@ -895,7 +1053,7 @@ references (they had no identity or destructor).</p>
 non-owned fields has single-owner semantics that naturally prevent copies,
 without any special born-borrowed mechanism. The class can be moved
 (<code>.take</code>), which born-borrowed records could not do.</p>
-<h3 id="migration"><a href="#migration">16.2. Migration</a></h3>
+<h3 id="migration"><a href="#migration">18.2. Migration</a></h3>
 <p>Types that were born-borrowed records become classes:</p>
 <ul>
 <li><code>StringView</code>: becomes a class with <code>.borrow</code> on the source string.</li>
@@ -903,7 +1061,7 @@ without any special born-borrowed mechanism. The class can be moved
   container.</li>
 <li>Any record with non-owned fields: becomes a class.</li>
 </ul>
-<h3 id="critique"><a href="#critique">16.3. Critique</a></h3>
+<h3 id="critique"><a href="#critique">18.3. Critique</a></h3>
 <p>Removing born-borrowed from valtypes is a simplification but has trade-offs:</p>
 <ul>
 <li>Pro: Cleaner type system. Valtypes are always values -- freely
@@ -937,7 +1095,7 @@ This would require the compiler to recognise that <code>.rodata</code>-backed
 stringviews need no lock.</li>
 </ul>
 <h1 id="pros-cons-and-risks"><a href="#pros-cons-and-risks">Pros, Cons, and Risks</a></h1>
-<h2 id="pros"><a href="#pros">17. Pros</a></h2>
+<h2 id="pros"><a href="#pros">19. Pros</a></h2>
 <ul>
 <li>Simpler mental model. "Everything is on the stack. Only box and data
 buffers are on the heap." Easy to teach and reason about.</li>
@@ -953,7 +1111,7 @@ references with identity. No hybrid category.</li>
 <li>Predictable memory usage. Stack allocation makes memory usage more
 predictable and eliminates <code>malloc</code> failure risk for ordinary objects.</li>
 </ul>
-<h2 id="cons"><a href="#cons">18. Cons</a></h2>
+<h2 id="cons"><a href="#cons">20. Cons</a></h2>
 <ul>
 <li>Stack size. Large class structs consume stack space. For deeply
 recursive functions with large local classes, stack overflow is possible.
@@ -969,7 +1127,7 @@ valtypes (typically small).</li>
 nodes) must use <code>Box(self)</code> for the recursive field. Error message should
 be clear.</li>
 </ul>
-<h2 id="risks"><a href="#risks">19. Risks</a></h2>
+<h2 id="risks"><a href="#risks">21. Risks</a></h2>
 <ul>
 <li>Protocol interaction. Protocol wrappers that own their data
 heap-allocate a copy of the implementation.</li>
