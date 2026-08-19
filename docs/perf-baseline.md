@@ -745,10 +745,79 @@ The shipped mixer beats the splitmix64 finalizer it replaces on both total steps
 (−2.1%) and tail (−34%) at about a third of the arithmetic. It does not recover
 identity's head win; a per-table choice would, and is unexplored.
 
-### Ceiling
+### What was left, and what that assumption was worth
 
-The remaining Map instances are `String`-keyed and stay: `Set String` alone is
-61,157 of the 111,607 Map/Set instances a self-compile creates, and 89.9% of
-those die empty. The composite-keyed tables stay too — a two-field record key
-cannot be an id, and packing two id spaces into one integer is a hack this
-compiler does not do.
+The composite-keyed tables stay: a two-field record key cannot be an id, and
+packing two id spaces into one integer is a hack this compiler does not do.
+
+The `String`-keyed ones were written up here as the ceiling — `Set String`
+alone is 61,157 of the 111,607 Map/Set instances a self-compile creates, and
+89.9% die empty. **That was wrong, and expensively so.** See the follow-on row
+below: the largest of them was keyed by text only because the plumbing rendered
+ids to strings and back. Before calling a container unmigratable because its
+key is a `String`, check where that string came from.
+
+
+## IdMap follow-ons — getMut, and narrowing state as ids
+
+Two changes after the arc above was written up as complete. The second is the
+largest single win of the whole effort, and it came out of a container the row
+above had dismissed.
+
+### `IdMap.getMut`
+
+A Map has no mutable twin by design — its slot depends on a hash *of* the key,
+so writing through a view would strand the entry in the wrong bucket. An
+IdMap's slot depends on the key alone, so the objection does not apply.
+
+It earns its place on the value family only: `IdMapR.get` already hands back a
+pointer into the entry and writing through it works, but `IdMapV.get` returns
+an `optionval` — a copy — so updating a valtype value meant read, change,
+`set`. No measurable allocation effect; it removes a round trip.
+
+### Narrowing state carries name ids, not name text
+
+| | before | after |
+|---|---|---|
+| allocations | 8,359,867 | **8,174,339** (−185,528, −2.22%) |
+| bytes | 417,626,858 | **409,131,920** (−8.5 MB, −2.03%) |
+
+Net **+24 source lines**, so at this compiler's ~84.5 allocations per source
+line the effect is slightly larger than the measurement shows.
+
+`sumArmNames` read a sum type's arms out of `declMemberList` **as name-pool
+ids** and immediately rendered each one to an owned `String`; `exclude`
+collected them into a `Set String` and compared them as text; both callers
+already called `nameIdOf` to turn the *subject* back into an id on the same
+line they passed the arm name as a view. The ids existed at both ends and were
+discarded in the middle — the thing `CLAUDE.md` names directly: compare by id,
+not by name.
+
+**Most of the win is not the container.** `ZEntry.excludedSubtypes` is a field
+on every symbol-table row, so a self-compile builds 40,648 of them, but every
+entry one held was an *owned String*, re-copied on every row copy, every
+`collectExcluded` and every dump row. An `IdSet` of ids copies nothing: the id
+is the value. The `Set` header was the small part.
+
+`ZEntry.narrowedSubtype` is a `nameid` for the same reason (`0` where `""`
+was), `narrowedArmOf` and `getSubtypeName` return ids, and all three call sites
+fed them straight into a `declChildOf` **name** lookup that is now
+`declChildOfId`. The SQL dump resolves ids back to text — the one place text
+was ever wanted. The `zenv` smoke golden matched unchanged, which is the
+behaviour-preserving evidence.
+
+### Running total for the container work
+
+| | allocations | bytes |
+|---|---|---|
+| the five container migrations above | −94,402 | −44.9 MB |
+| narrowing state as ids | −185,528 | −8.5 MB |
+| **total** | **−279,930** | **−53.4 MB** |
+
+### Still text, and still worth doing
+
+`ArmPredFact.subject` / `armName` and the `covered` / `required9` lists are
+`String`, so the boundary still converts text to id per call. Roughly 20,500
+`Set String` instances remain in function locals — `armNames9` (×2),
+`gpNames9`, `boundParams`, `seen`, `excl9`, `doneS9`, `pgDead9`. Every one of
+them holds names that are already interned.
