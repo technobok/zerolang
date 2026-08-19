@@ -350,179 +350,49 @@ ZDumper: class {
         }
     }
 
-    # walkNode -- emit `node`'s row (labelled nameSql) and recurse: wrapper
-    # positions unwrap (walkUnwrapped), list positions (call arguments, data
-    # elements, for postconditions, if / case clauses, statements, string
-    # parts) keep their child ast.nodes.
+    # walkNode -- emit `node`'s row (labelled nameSql) and recurse. The
+    # name->node positions (if / for conditions, parameters, as-items, object
+    # members, unit body) unwrap their namedoperation wrapper, which gets no
+    # row; every other child is walked as it is. A program's units are walked
+    # by appendUnitDefAndBody under their own labels, not from here.
     walkNode: function {:this ast: Ast.view node: Node.view nameSql: StringView} is {
+        if node.placeholder then return
+        pos: zast.posOf n: node
+        nid: zast.nodeIdOf n: node
+        this.emit id: nid.u32 line: pos.line col: pos.col kind: (zast.armName n: node) :nameSql
         match (
             node
-        ) case error then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Error" :nameSql
-        } case placeholder then null case atomid then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "AtomId" :nameSql
-        } case labelvalue then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "LabelValue" :nameSql
-        } case stringchunk then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "StringChunk" :nameSql
-        } case binop then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "BinOp" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.lhs.u64) :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.operator.u64) :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.rhs.u64) :nameSql
-        } case atomstring then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "AtomString" :nameSql
-            spiter: node.stringparts.iterate
-            for sp: spiter loop {
-                this.walkNode :ast node: (ast.nodes.get i: sp.u64) :nameSql
-            }
-        } case dottedpath then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "DottedPath" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.parent.u64) :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.child.u64) :nameSql
-        } case call then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Call" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.callable.u64) :nameSql
-            aiter: node.arguments.iterate
-            for arg: aiter loop {
-                this.walkNode :ast node: (ast.nodes.get i: arg.u64) :nameSql
-            }
-        } case typeofexpr then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "TypeOfExpr" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.source.u64) :nameSql
-        } case namedoperation then {
-            (this.emit
-                id: node.nodeid
-                line: node.lineno
-                col: node.colno
-                kind: "NamedOperation"
-                :nameSql
-            )
-            this.walkNode :ast node: (ast.nodes.get i: node.operation.u64) :nameSql
-        } case datablock then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Data" :nameSql
-            eiter: node.elements.iterate
-            for el: eiter loop {
-                this.walkNode :ast node: (ast.nodes.get i: el.u64) :nameSql
-            }
-            this.walkOptAt :ast oId: node.outType :nameSql
-        } case yieldexpr then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Yield" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.expr.u64) :nameSql
-        } case statement then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Statement" :nameSql
-            sliter: node.statements.iterate
-            for lnId: sliter loop {
-                this.walkNode :ast node: (ast.nodes.get i: lnId.u64) :nameSql
-            }
-        } case statementline then {
-            (this.emit
-                id: node.nodeid
-                line: node.lineno
-                col: node.colno
-                kind: "StatementLine"
-                :nameSql
-            )
-            this.walkNode :ast node: (ast.nodes.get i: node.statementline.u64) :nameSql
-        } case assignment then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Assignment" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.value.u64) :nameSql
-        } case reassignment then {
-            (this.emit
-                id: node.nodeid
-                line: node.lineno
-                col: node.colno
-                kind: "Reassignment"
-                :nameSql
-            )
-            this.walkNode :ast node: (ast.nodes.get i: node.topath.u64) :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.value.u64) :nameSql
-        } case swapstmt then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Swap" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.lhs.u64) :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.rhs.u64) :nameSql
-        } case expression then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Expression" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.expression.u64) :nameSql
-        } case ifexpr then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "If" :nameSql
-            cliter: node.clauses.iterate
-            for cl: cliter loop {
-                this.walkNode :ast node: (ast.nodes.get i: cl.u64) :nameSql
-            }
-            this.walkOptAt :ast oId: node.elseclause :nameSql
-        } case ifclause then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "IfClause" :nameSql
-            coiter: node.conditions.iterate
-            for coId: coiter loop {
-                this.walkUnwrapped :ast wrapper: (ast.nodes.get i: coId.u64) :nameSql
-            }
+        ) case ifclause then {
+            this.walkUnwrappedIds :ast ids: node.conditions :nameSql
             this.walkNode :ast node: (ast.nodes.get i: node.statement.u64) :nameSql
         } case forexpr then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "For" :nameSql
-            fciter: node.conditions.iterate
-            for fc: fciter loop {
-                this.walkUnwrapped :ast wrapper: (ast.nodes.get i: fc.u64) :nameSql
-            }
+            this.walkUnwrappedIds :ast ids: node.conditions :nameSql
             this.walkOptAt :ast oId: node.body :nameSql
-            fpiter: node.postconditions.iterate
-            for fp: fpiter loop {
-                this.walkNode :ast node: (ast.nodes.get i: fp.u64) :nameSql
-            }
-        } case doexpr then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Do" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.statement.u64) :nameSql
-        } case withexpr then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "With" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.value.u64) :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.body.u64) :nameSql
-        } case caseexpr then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Case" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.subject.u64) :nameSql
-            cciter: node.clauses.iterate
-            for cc: cciter loop {
-                this.walkNode :ast node: (ast.nodes.get i: cc.u64) :nameSql
-            }
-            this.walkOptAt :ast oId: node.elseclause :nameSql
-        } case caseclause then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "CaseClause" :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.matcharm.u64) :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.statement.u64) :nameSql
+            this.walkIds :ast ids: node.postconditions :nameSql
         } case functiondef then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Function" :nameSql
             this.walkOptAt :ast oId: node.returntype :nameSql
-            piter: node.parameters.iterate
-            for pmId: piter loop {
-                pm: ast.nodes.get i: pmId.u64
-                this.walkUnwrapped :ast wrapper: pm :nameSql
-            }
+            this.walkUnwrappedIds :ast ids: node.parameters :nameSql
             this.walkOptAt :ast oId: node.body :nameSql
-            faiter: node.asItems.iterate
-            for amId: faiter loop {
-                am: ast.nodes.get i: amId.u64
-                this.walkUnwrapped :ast wrapper: am :nameSql
-            }
+            this.walkUnwrappedIds :ast ids: node.asItems :nameSql
         } case objectdef then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "ObjectDef" :nameSql
-            oiiter: node.isItems.iterate
-            for oiId: oiiter loop {
-                oi: ast.nodes.get i: oiId.u64
-                this.walkUnwrapped :ast wrapper: oi :nameSql
-            }
-            oaiter: node.asItems.iterate
-            for oaId: oaiter loop {
-                oa: ast.nodes.get i: oaId.u64
-                this.walkUnwrapped :ast wrapper: oa :nameSql
-            }
+            this.walkUnwrappedIds :ast ids: node.isItems :nameSql
+            this.walkUnwrappedIds :ast ids: node.asItems :nameSql
         } case unitdef then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Unit" :nameSql
-            ubiter: node.body.iterate
-            for ub: ubiter loop {
-                ubNode: ast.nodes.get i: ub.u64
-                this.walkUnwrapped :ast wrapper: ubNode :nameSql
-            }
-        } case program then {
-            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Program" :nameSql
+            this.walkUnwrappedIds :ast ids: node.body :nameSql
+        } case program then null else {
+            this.walkIds :ast ids: (zast.childIds :ast n: node) :nameSql
+        }
+    }
+
+    walkIds: function {:this ast: Ast.view ids: (ListVal u32).view nameSql: StringView} is {
+        with it: ids.iterate do for c: it loop {
+            this.walkNode :ast node: (ast.nodes.get i: c.u64) :nameSql
+        }
+    }
+
+    walkUnwrappedIds: function {:this ast: Ast.view ids: (ListVal u32).view nameSql: StringView} is {
+        with it: ids.iterate do for c: it loop {
+            this.walkUnwrapped :ast wrapper: (ast.nodes.get i: c.u64) :nameSql
         }
     }
 

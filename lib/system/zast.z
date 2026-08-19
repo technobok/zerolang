@@ -1,5 +1,5 @@
-# Parsed-AST surface for the zerolang compiler: the node-type tag
-# (nodetype), error codes (err), call classification (callkind), the Node
+# Parsed-AST surface for the zerolang compiler: the object-definition kind
+# (objectkind), error codes (err), call classification (callkind), the Node
 # union of all node kinds, and the id-linked node table (Ast) the parser
 # fills. `main` is the unit's smoke harness, compared against
 # tests/fixtures/zast_z/smoke.expected.
@@ -42,19 +42,22 @@ public: unit {
     :UnitData
     :WithData
     :YieldExprData
-    :astkind
     :callkind
     :callkindname
     :err
     :errCode
     :errorLine
     :explainText
-    :kindOf
+    :armName
+    :isErrorAt
+    :childIds
+    :childIdsAt
     :nameTextAt
     :nameTextCopy
     :nameTextEq
+    :nodeIdOf
     :nodepos
-    :nodetype
+    :objectkind
     :poolFind
     :poolSet
     :poolTextAt
@@ -110,10 +113,8 @@ public: unit {
     :main
 }
 
-# Error codes. Arm names are UPPERCASE to match the sibling
-# nodetype enum, whose tags must be (they name language keywords
-# like unit/function/class). Numeric E0xxx values aren't stored
-# here; the diagnostics layer assigns them based on arm position.
+# Error codes. Numeric E0xxx values are assigned by errCode, not by arm
+# position, so arms may be added anywhere.
 
 # parse/AST error variants; the diagnostics layer maps each arm to a code.
 err: variant {
@@ -164,43 +165,14 @@ err: variant {
     badToken: null
 } as { tag: u8.tag }
 
-# AST node-type marker. Uppercase arm names because many
-# (UNIT, FUNCTION, RECORD, CLASS, UNION, ...) are language
-# keywords and the lowercase spelling would not compile.
-nodetype: variant {
-    unitDef: null
-    functionDef: null
+# objectkind -- which of the six object definitions an objectdef is.
+objectkind: variant {
     protocolDef: null
     recordDef: null
     classDef: null
     unionDef: null
     variantDef: null
     facetDef: null
-    withExpr: null
-    expression: null
-    ifExpr: null
-    ifClause: null
-    forExpr: null
-    doExpr: null
-    caseExpr: null
-    caseClause: null
-    call: null
-    dataBlock: null
-    yieldExpr: null
-    namedOperation: null
-    statement: null
-    statementLine: null
-    assignment: null
-    reassignment: null
-    swapStmt: null
-    dottedPath: null
-    binOp: null
-    typeofExpr: null
-    atomId: null
-    labelValue: null
-    atomString: null
-    stringChunk: null
-    errorNode: null
 } as { tag: u8.tag }
 
 # Classification of a Call node, set by the type checker. The
@@ -289,40 +261,6 @@ Node: union {
     placeholder: null
 }
 
-# astkind -- flat tag mirror of the Node union arms, for id-based
-# dispatch over master-table rows.
-astkind: variant {
-    error: null
-    atomid: null
-    labelvalue: null
-    stringchunk: null
-    binop: null
-    atomstring: null
-    dottedpath: null
-    call: null
-    typeofexpr: null
-    namedoperation: null
-    datablock: null
-    yieldexpr: null
-    statement: null
-    statementline: null
-    assignment: null
-    reassignment: null
-    swapstmt: null
-    expression: null
-    ifexpr: null
-    ifclause: null
-    forexpr: null
-    doexpr: null
-    withexpr: null
-    caseexpr: null
-    caseclause: null
-    functiondef: null
-    objectdef: null
-    unitdef: null
-    program: null
-    placeholder: null
-} as { tag: u8.tag }
 
 # Per-arm Node payload carriers. Each carries a synthetic nodeid
 # plus source position (line + column). The carriers are classes
@@ -1110,14 +1048,14 @@ FunctionData: class {
 }
 
 # Unified type-definition payload. `kind` discriminates which kind of
-# object this is (one of nodetype RECORD/CLASS/UNION/VARIANT/
+# object this is (one of objectkind RECORD/CLASS/UNION/VARIANT/
 # PROTOCOL/FACET). `isItems` are the `is`-block members and `asItems`
 # the `as`-block members, each a namedoperation arm.
 ObjectDefData: class {
     nodeid: nodeid
     lineno: u32
     colno: u32
-    kind: nodetype
+    kind: objectkind
     isItems: (ListVal u32)
     asItems: (ListVal u32)
     isNative: bool
@@ -1241,15 +1179,11 @@ errname: function {e: err} out String is {
     }
 }
 
-# the printable name of a `nodetype`.
-nodetypename: function {nt: nodetype} out String is {
+# the printable name of an `objectkind`.
+objectkindname: function {k: objectkind} out String is {
     match (
-        nt
-    ) case unitDef then {
-        return "UNIT".string
-    } case functionDef then {
-        return "FUNCTION".string
-    } case protocolDef then {
+        k
+    ) case protocolDef then {
         return "PROTOCOL".string
     } case recordDef then {
         return "RECORD".string
@@ -1261,56 +1195,6 @@ nodetypename: function {nt: nodetype} out String is {
         return "VARIANT".string
     } case facetDef then {
         return "FACET".string
-    } case withExpr then {
-        return "WITH".string
-    } case expression then {
-        return "EXPRESSION".string
-    } case ifExpr then {
-        return "IF".string
-    } case ifClause then {
-        return "IFCLAUSE".string
-    } case forExpr then {
-        return "FOR".string
-    } case doExpr then {
-        return "DO".string
-    } case caseExpr then {
-        return "CASE".string
-    } case caseClause then {
-        return "CASECLAUSE".string
-    } case call then {
-        return "CALL".string
-    } case dataBlock then {
-        return "DATA".string
-    } case yieldExpr then {
-        return "YIELD".string
-    } case namedOperation then {
-        return "NAMEDOPERATION".string
-    } case statement then {
-        return "STATEMENT".string
-    } case statementLine then {
-        return "STATEMENTLINE".string
-    } case assignment then {
-        return "ASSIGNMENT".string
-    } case reassignment then {
-        return "REASSIGNMENT".string
-    } case swapStmt then {
-        return "SWAP".string
-    } case dottedPath then {
-        return "DOTTEDPATH".string
-    } case binOp then {
-        return "BINOP".string
-    } case typeofExpr then {
-        return "TYPEOFEXPR".string
-    } case atomId then {
-        return "ATOMID".string
-    } case labelValue then {
-        return "LABELVALUE".string
-    } case atomString then {
-        return "ATOMSTRING".string
-    } case stringChunk then {
-        return "STRINGCHUNK".string
-    } case errorNode then {
-        return "ERROR".string
     }
 }
 
@@ -1384,9 +1268,9 @@ printErr: function {e: err} is {
     print s
 }
 
-# print a `nodetype`'s name (debug-dump helper).
-printNodeType: function {nt: nodetype} is {
-    s: nodetypename nt
+# print an `objectkind`'s name (debug-dump helper).
+printObjectKind: function {k: objectkind} is {
+    s: objectkindname k
     print s
 }
 
@@ -1427,9 +1311,7 @@ nodepos: record {
     col: u32
 }
 
-# Position of any operand/operation node. Operand-position arms are
-# enumerated; statement, definition and clause arms never appear in
-# operand position and fall through to (0, 0).
+# Position of any node; (0, 0) for the placeholder.
 posOf: function {n: Node.view} out nodepos is {
     match (
         n
@@ -1483,7 +1365,15 @@ posOf: function {n: Node.view} out nodepos is {
         return (nodepos line: n.lineno col: n.colno)
     } case caseclause then {
         return (nodepos line: n.lineno col: n.colno)
-    } else {
+    } case functiondef then {
+        return (nodepos line: n.lineno col: n.colno)
+    } case objectdef then {
+        return (nodepos line: n.lineno col: n.colno)
+    } case unitdef then {
+        return (nodepos line: n.lineno col: n.colno)
+    } case program then {
+        return (nodepos line: n.lineno col: n.colno)
+    } case placeholder then {
         return (nodepos line: 0 col: 0)
     }
 }
@@ -1662,7 +1552,7 @@ printNode: function {ast: Ast.view n: Node.view} is {
         faiter: n.asItems.iterate
         for famId: faiter loop printNode :ast n: (ast.nodes.get i: famId.u64)
     } case objectdef then {
-        print "\{n.nodeid}: objectdef @\{n.lineno}:\{n.colno} kind=\{nodetypename n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
+        print "\{n.nodeid}: objectdef @\{n.lineno}:\{n.colno} kind=\{objectkindname n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
         oiiter: n.isItems.iterate
         for oimId: oiiter loop printNode :ast n: (ast.nodes.get i: oimId.u64)
         oaiter: n.asItems.iterate
@@ -1823,7 +1713,7 @@ printNodeCanonical: function {ast: Ast.view n: Node.view} is {
         faiter: n.asItems.iterate
         for famId: faiter loop printNodeCanonical :ast n: (ast.nodes.get i: famId.u64)
     } case objectdef then {
-        print "objectdef @\{n.lineno}:\{n.colno} kind=\{nodetypename n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
+        print "objectdef @\{n.lineno}:\{n.colno} kind=\{objectkindname n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
         oiiter: n.isItems.iterate
         for oimId: oiiter loop printNodeCanonical :ast n: (ast.nodes.get i: oimId.u64)
         oaiter: n.asItems.iterate
@@ -1907,40 +1797,13 @@ main: function is {
     printErr err.userError
     printErr err.compilerError
 
-    print "=== nodetype ==="
-    printNodeType nodetype.unitDef
-    printNodeType nodetype.functionDef
-    printNodeType nodetype.protocolDef
-    printNodeType nodetype.recordDef
-    printNodeType nodetype.classDef
-    printNodeType nodetype.unionDef
-    printNodeType nodetype.variantDef
-    printNodeType nodetype.facetDef
-    printNodeType nodetype.withExpr
-    printNodeType nodetype.expression
-    printNodeType nodetype.ifExpr
-    printNodeType nodetype.ifClause
-    printNodeType nodetype.forExpr
-    printNodeType nodetype.doExpr
-    printNodeType nodetype.caseExpr
-    printNodeType nodetype.caseClause
-    printNodeType nodetype.call
-    printNodeType nodetype.dataBlock
-    printNodeType nodetype.yieldExpr
-    printNodeType nodetype.namedOperation
-    printNodeType nodetype.statement
-    printNodeType nodetype.statementLine
-    printNodeType nodetype.assignment
-    printNodeType nodetype.reassignment
-    printNodeType nodetype.swapStmt
-    printNodeType nodetype.dottedPath
-    printNodeType nodetype.binOp
-    printNodeType nodetype.typeofExpr
-    printNodeType nodetype.atomId
-    printNodeType nodetype.labelValue
-    printNodeType nodetype.atomString
-    printNodeType nodetype.stringChunk
-    printNodeType nodetype.errorNode
+    print "=== objectkind ==="
+    printObjectKind objectkind.protocolDef
+    printObjectKind objectkind.recordDef
+    printObjectKind objectkind.classDef
+    printObjectKind objectkind.unionDef
+    printObjectKind objectkind.variantDef
+    printObjectKind objectkind.facetDef
 
     print "=== callkind ==="
     printCallKind callkind.unknown
@@ -2593,7 +2456,7 @@ main: function is {
         nodeid: 83.nodeid
         lineno: 40
         colno: 1
-        kind: nodetype.recordDef
+        kind: objectkind.recordDef
         isItems: objIsItems
         asItems: objAsItems
         isNative: false
@@ -2747,6 +2610,102 @@ tableSet: function {ast: Ast id: u32 child: Node.take} is {
     ast.nodes.set i: id.u64 val: child
 }
 
+# childIds -- the child node ids of `n`, in canonical order: the order every
+# walk and the dump visit them in. A walk that needs no per-arm semantics
+# recurses over this list; a walk that binds names or skips a child keeps its
+# own arm for that child and takes the rest from here. Absent optional
+# children (an if without else, a function without a body) are omitted, and a
+# program's children are the program's units.
+childIds: function {ast: Ast.view n: Node.view} out (ListVal u32) is {
+    acc: (ListVal u32)
+    match (
+        n
+    ) case binop then {
+        acc.append from: n.lhs.u32
+        acc.append from: n.operator.u32
+        acc.append from: n.rhs.u32
+    } case atomstring then {
+        appendIds :acc ids: n.stringparts
+    } case dottedpath then {
+        acc.append from: n.parent.u32
+        acc.append from: n.child.u32
+    } case call then {
+        acc.append from: n.callable.u32
+        appendIds :acc ids: n.arguments
+    } case typeofexpr then {
+        acc.append from: n.source.u32
+    } case namedoperation then {
+        acc.append from: n.operation.u32
+    } case datablock then {
+        appendIds :acc ids: n.elements
+        appendOptId :acc id: n.outType
+    } case yieldexpr then {
+        acc.append from: n.expr.u32
+    } case statement then {
+        appendIds :acc ids: n.statements
+    } case statementline then {
+        acc.append from: n.statementline.u32
+    } case assignment then {
+        acc.append from: n.value.u32
+    } case reassignment then {
+        acc.append from: n.topath.u32
+        acc.append from: n.value.u32
+    } case swapstmt then {
+        acc.append from: n.lhs.u32
+        acc.append from: n.rhs.u32
+    } case expression then {
+        acc.append from: n.expression.u32
+    } case ifexpr then {
+        appendIds :acc ids: n.clauses
+        appendOptId :acc id: n.elseclause
+    } case ifclause then {
+        appendIds :acc ids: n.conditions
+        acc.append from: n.statement.u32
+    } case forexpr then {
+        appendIds :acc ids: n.conditions
+        appendOptId :acc id: n.body
+        appendIds :acc ids: n.postconditions
+    } case doexpr then {
+        acc.append from: n.statement.u32
+    } case withexpr then {
+        acc.append from: n.value.u32
+        acc.append from: n.body.u32
+    } case caseexpr then {
+        acc.append from: n.subject.u32
+        appendIds :acc ids: n.clauses
+        appendOptId :acc id: n.elseclause
+    } case caseclause then {
+        acc.append from: n.matcharm.u32
+        acc.append from: n.statement.u32
+    } case functiondef then {
+        appendOptId :acc id: n.returntype
+        appendIds :acc ids: n.parameters
+        appendOptId :acc id: n.body
+        appendIds :acc ids: n.asItems
+    } case objectdef then {
+        appendIds :acc ids: n.isItems
+        appendIds :acc ids: n.asItems
+    } case unitdef then {
+        appendIds :acc ids: n.body
+    } case program then {
+        appendIds :acc ids: ast.units
+    } else null
+    return acc
+}
+
+# childIdsAt -- childIds of the node with id `id`.
+childIdsAt: function {ast: Ast.view id: u32} out (ListVal u32) is {
+    return (childIds :ast n: (ast.nodes.get i: id.u64))
+}
+
+appendIds: function {acc: ListVal u32 ids: (ListVal u32).view} is {
+    with it: ids.iterate do for i: it loop acc.append from: i
+}
+
+appendOptId: function {acc: ListVal u32 id: nodeid} is {
+    if (id.isZero) == false then acc.append from: id.u32
+}
+
 # nodeIdOf -- a node's own id (any arm).
 nodeIdOf: function {n: Node.view} out nodeid is {
     zn: nodeid
@@ -2828,71 +2787,77 @@ tableTake: function {ast: Ast id: u32} out Node is {
     return (ast.nodes.set i: id.u64 val: Node.placeholder)
 }
 
-# kindOf -- the node-kind tag of a table row.
-kindOf: function {ast: Ast.view id: u32} out astkind is {
+# isErrorAt -- the node with id `id` is an error arm.
+isErrorAt: function {ast: Ast.view id: u32} out bool is {
     n: ast.nodes.get i: id.u64
+    if n.error then return true
+    return false
+}
+
+# armName -- the name of `n`'s arm, as spelled in the Node union.
+armName: function {n: Node.view} out StringView is {
     match (
         n
     ) case error then {
-        return astkind.error
-    } case atomid then {
-        return astkind.atomid
-    } case labelvalue then {
-        return astkind.labelvalue
-    } case stringchunk then {
-        return astkind.stringchunk
-    } case binop then {
-        return astkind.binop
-    } case atomstring then {
-        return astkind.atomstring
-    } case dottedpath then {
-        return astkind.dottedpath
-    } case call then {
-        return astkind.call
-    } case typeofexpr then {
-        return astkind.typeofexpr
-    } case namedoperation then {
-        return astkind.namedoperation
-    } case datablock then {
-        return astkind.datablock
-    } case yieldexpr then {
-        return astkind.yieldexpr
-    } case statement then {
-        return astkind.statement
-    } case statementline then {
-        return astkind.statementline
-    } case assignment then {
-        return astkind.assignment
-    } case reassignment then {
-        return astkind.reassignment
-    } case swapstmt then {
-        return astkind.swapstmt
-    } case expression then {
-        return astkind.expression
-    } case ifexpr then {
-        return astkind.ifexpr
-    } case ifclause then {
-        return astkind.ifclause
-    } case forexpr then {
-        return astkind.forexpr
-    } case doexpr then {
-        return astkind.doexpr
-    } case withexpr then {
-        return astkind.withexpr
-    } case caseexpr then {
-        return astkind.caseexpr
-    } case caseclause then {
-        return astkind.caseclause
-    } case functiondef then {
-        return astkind.functiondef
-    } case objectdef then {
-        return astkind.objectdef
-    } case unitdef then {
-        return astkind.unitdef
-    } case program then {
-        return astkind.program
+        return "error"
     } case placeholder then {
-        return astkind.placeholder
+        return "placeholder"
+    } case atomid then {
+        return "atomid"
+    } case labelvalue then {
+        return "labelvalue"
+    } case stringchunk then {
+        return "stringchunk"
+    } case binop then {
+        return "binop"
+    } case atomstring then {
+        return "atomstring"
+    } case dottedpath then {
+        return "dottedpath"
+    } case call then {
+        return "call"
+    } case typeofexpr then {
+        return "typeofexpr"
+    } case namedoperation then {
+        return "namedoperation"
+    } case datablock then {
+        return "datablock"
+    } case yieldexpr then {
+        return "yieldexpr"
+    } case statement then {
+        return "statement"
+    } case statementline then {
+        return "statementline"
+    } case assignment then {
+        return "assignment"
+    } case reassignment then {
+        return "reassignment"
+    } case swapstmt then {
+        return "swapstmt"
+    } case expression then {
+        return "expression"
+    } case ifexpr then {
+        return "ifexpr"
+    } case ifclause then {
+        return "ifclause"
+    } case forexpr then {
+        return "forexpr"
+    } case doexpr then {
+        return "doexpr"
+    } case withexpr then {
+        return "withexpr"
+    } case caseexpr then {
+        return "caseexpr"
+    } case caseclause then {
+        return "caseclause"
+    } case functiondef then {
+        return "functiondef"
+    } case objectdef then {
+        return "objectdef"
+    } case unitdef then {
+        return "unitdef"
+    } case program then {
+        return "program"
     }
 }
 
