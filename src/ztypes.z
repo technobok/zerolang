@@ -566,8 +566,9 @@ ZType: class {
     # definition order -- argument type-id (or numeric value at a numeric
     # parameter level) -> the child specialization's type-id. Specs record
     # their ordered argument ids in genericArgs for backward substitution.
-    genericChildKeys: (ListVal u64)
-    genericChildTids: (ListVal tid)
+    # An IdMap rather than a pair of parallel lists: the key IS an id, an edge
+    # is only ever added, and an empty one allocates nothing.
+    genericChildren: (IdMapV u64 value: tid)
     genericArgs: (ListVal u64)
     # parallel to genericArgs: true when the ordinal is a numeric VALUE
     # (a sized record's `to:`), false when it is a type id
@@ -676,8 +677,7 @@ holeType: function {} out ZType is {
     isValtype: (optionval.none bool)
     genericOriginId: (optionval.none tid)
     isTagGenericOrigin: false
-    genericChildKeys: (ListVal u64)
-    genericChildTids: (ListVal tid)
+    genericChildren: (IdMapV u64 value: tid)
     genericArgs: (ListVal u64)
     genericArgIsValue: (ListVal bool)
     destructorNameId: zast.nameid
@@ -763,8 +763,7 @@ ZTypeRegistry: class {
         isValtype: (optionval.none bool)
         genericOriginId: (optionval.none tid)
         isTagGenericOrigin: false
-        genericChildKeys: (ListVal u64)
-        genericChildTids: (ListVal tid)
+        genericChildren: (IdMapV u64 value: tid)
         genericArgs: (ListVal u64)
         genericArgIsValue: (ListVal bool)
         destructorNameId: zast.nameid
@@ -912,36 +911,13 @@ ZTypeRegistry: class {
     setGenericChild: function {:this parentId: u64 key: u64 child: u64} is {
         if parentId >= this.typeById.length then return
         got: this.typeById.getMut i: parentId
-        idx: u64
-        gn: got.genericChildKeys.length
-        found: false
-        for idx < gn loop {
-            if found == false then {
-                if (got.genericChildKeys.get i: idx) == key then {
-                    got.genericChildTids.set i: idx val: (tid from: child)
-                    found = true
-                }
-            }
-            idx = idx + 1
-        }
-        if found == false then {
-            got.genericChildKeys.append key
-            got.genericChildTids.append (tid from: child)
-        }
+        got.genericChildren.set :key value: (tid from: child)
     }
 
     getGenericChild: function {:this parentId: u64 key: u64} out optionval tid is {
         if parentId >= this.typeById.length then return (optionval.none tid)
         got: this.typeById.get i: parentId
-        idx: u64
-        gn: got.genericChildKeys.length
-        for idx < gn loop {
-            if (got.genericChildKeys.get i: idx) == key then {
-                return (optionval.some (got.genericChildTids.get i: idx))
-            }
-            idx = idx + 1
-        }
-        return (optionval.none tid)
+        return (got.genericChildren.get :key)
     }
 
     appendGenericArg: function {:this specId: tid arg: u64} is {
