@@ -10558,22 +10558,10 @@ scanCallsInNode: function {
     reg: ztypes.ZTypeRegistry
     node: Node.view
 } is {
+    kids: zast.childIds :ast n: node
     match (
         node
-    ) case statement then {
-        for stmId: node.statements.iterate loop {
-            scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: stmId.u64)
-        }
-    } case statementline then {
-        (scanCallsInNode
-            :ty
-            :ast
-            :reg
-            node: (ast.nodes.get i: node.statementline.u64)
-        )
-    } case expression then {
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.expression.u64)
-    } case call then {
+    ) case call then {
         cn: atomName :ast n: (ast.nodes.get i: node.callable.u64)
         if cn.stringview == "return" then {
             scFr: unitFrameOf :ty declId: ty.curFrame
@@ -10590,24 +10578,7 @@ scanCallsInNode: function {
                 nameId: (atomNameId :ast n: (ast.nodes.get i: node.callable.u64))
             )
         }
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.callable.u64)
-        for argId: node.arguments.iterate loop {
-            arg: ast.nodes.get i: argId.u64
-            match (
-                arg
-            ) case namedoperation then {
-                (scanCallsInNode
-                    :ty
-                    :ast
-                    :reg
-                    node: (ast.nodes.get i: arg.operation.u64)
-                )
-            } else null
-        }
-    } case atomstring then {
-        for spId: node.stringparts.iterate loop {
-            scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: spId.u64)
-        }
+        scanCallsIn :ty :ast :reg ids: kids
     } case atomid then {
         # bare body identifiers demand main-unit definitions (unit constants,
         # data blocks); non-definition names never match a demanded def.
@@ -10620,13 +10591,9 @@ scanCallsInNode: function {
             )
         }
     } case binop then {
+        # the operator atom names a method, never a definition to demand
         scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.lhs.u64)
         scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.rhs.u64)
-    } case assignment then {
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.value.u64)
-    } case reassignment then {
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.topath.u64)
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.value.u64)
     } case ifexpr then {
         # Deliberately branch-blind. This pass runs before resolveConstantDefs,
         # so no fold exists yet and a dead clause's names are demanded anyway.
@@ -10646,33 +10613,7 @@ scanCallsInNode: function {
             frame: (unitFrameOf :ty declId: ty.curFrame)
             nameId: (zast.poolFind pool: ast.names text: "never")
         )
-        for fcId: node.conditions.iterate loop {
-            fc: ast.nodes.get i: fcId.u64
-            match (
-                fc
-            ) case namedoperation then {
-                (scanCallsInNode
-                    :ty
-                    :ast
-                    :reg
-                    node: (ast.nodes.get i: fc.operation.u64)
-                )
-            } else null
-        }
-        scanBodyAt :ty :ast :reg bodyId: node.body
-        for fpId: node.postconditions.iterate loop {
-            fp: ast.nodes.get i: fpId.u64
-            match (
-                fp
-            ) case namedoperation then {
-                (scanCallsInNode
-                    :ty
-                    :ast
-                    :reg
-                    node: (ast.nodes.get i: fp.operation.u64)
-                )
-            } else null
-        }
+        scanCallsIn :ty :ast :reg ids: kids
     } case doexpr then {
         doFr: unitFrameOf :ty declId: ty.curFrame
         (demandDefinition
@@ -10688,16 +10629,6 @@ scanCallsInNode: function {
             )
         }
         scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.statement.u64)
-    } case withexpr then {
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.value.u64)
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.body.u64)
-    } case yieldexpr then {
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.expr.u64)
-    } case swapstmt then {
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.lhs.u64)
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.rhs.u64)
-    } case typeofexpr then {
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.source.u64)
     } case dottedpath then {
         bn: atomName :ast n: (ast.nodes.get i: node.parent.u64)
         if bn.length > 0 then {
@@ -10720,31 +10651,25 @@ scanCallsInNode: function {
                 )
             }
         }
+        # the member selector is never a definition to demand
         scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.parent.u64)
-    } case caseexpr then {
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.subject.u64)
-        for clId: node.clauses.iterate loop {
-            scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: clId.u64)
-        }
-        scanBodyAt :ty :ast :reg bodyId: node.elseclause
     } case caseclause then {
+        # the arm pattern is never a definition to demand
         scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.statement.u64)
-    } case ifclause then {
-        for cndId: node.conditions.iterate loop {
-            cnd: ast.nodes.get i: cndId.u64
-            match (
-                cnd
-            ) case namedoperation then {
-                (scanCallsInNode
-                    :ty
-                    :ast
-                    :reg
-                    node: (ast.nodes.get i: cnd.operation.u64)
-                )
-            } else null
-        }
-        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: node.statement.u64)
-    } else null
+    } case functiondef then null case objectdef then null case unitdef then null case program then null case datablock then null case labelvalue then null else {
+        scanCallsIn :ty :ast :reg ids: kids
+    }
+}
+
+scanCallsIn: function {
+    ty: ztyping.ZTyping
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry
+    ids: (ListVal u32).view
+} is {
+    with it: ids.iterate do for c: it loop {
+        scanCallsInNode :ty :ast :reg node: (ast.nodes.get i: c.u64)
+    }
 }
 
 # scanBodyAt -- scan a function body table id for call demands (0 = absent).
