@@ -36,30 +36,28 @@ ZEntry: ztypes.ZEntry
 ZTyping: ztyping.ZTyping
 
 
+# A lock path is the dotted path of a value as name ids: the root local's
+# name, then each field read off it.
+
 # Two lock paths are equal iff same length and every segment matches.
-pathsEqual: function {a: (List String).view b: (List String).view} out bool is {
+pathsEqual: function {a: (ListVal zast.nameid).view b: (ListVal zast.nameid).view} out bool is {
     if a.length != b.length then return false
     n: a.length
     i: u64
     for i < n loop {
-        av: a.get :i
-        bv: b.get :i
-        if av.stringview != bv.stringview then return false
+        if (a.get :i) != (b.get :i) then return false
         i = i + 1
     }
     return true
 }
 
 # True iff `p` is a (non-strict) prefix of `whole`.
-isPrefix: function {p: (List String).view whole: (List String).view} out bool is {
+isPrefix: function {p: (ListVal zast.nameid).view whole: (ListVal zast.nameid).view} out bool is {
     pn: p.length
-    wn: whole.length
-    if pn > wn then return false
+    if pn > whole.length then return false
     i: u64
     for i < pn loop {
-        pv: p.get :i
-        wv: whole.get :i
-        if pv.stringview != wv.stringview then return false
+        if (p.get :i) != (whole.get :i) then return false
         i = i + 1
     }
     return true
@@ -67,16 +65,12 @@ isPrefix: function {p: (List String).view whole: (List String).view} out bool is
 
 # Two paths overlap iff one is a (non-strict) prefix of the other:
 # compare the shared leading run.
-pathsOverlap: function {a: (List String).view b: (List String).view} out bool is {
-    an: a.length
-    bn: b.length
-    n: an
-    if bn < an then n = bn
+pathsOverlap: function {a: (ListVal zast.nameid).view b: (ListVal zast.nameid).view} out bool is {
+    n: a.length
+    if b.length < n then n = b.length
     i: u64
     for i < n loop {
-        av: a.get :i
-        bv: b.get :i
-        if av.stringview != bv.stringview then return false
+        if (a.get :i) != (b.get :i) then return false
         i = i + 1
     }
     return true
@@ -100,9 +94,9 @@ holderEq: function {a: ztypes.zlockholder b: ztypes.zlockholder} out bool is {
 lockAcquireConflict: function {
     existingType: ztypes.zlockstate
     existingScope: ztypes.zlockscope
-    existingPath: (List String).view
+    existingPath: (ListVal zast.nameid).view
     reqType: ztypes.zlockstate
-    reqPath: (List String).view
+    reqPath: (ListVal zast.nameid).view
 } out bool is {
     eq: pathsEqual a: existingPath b: reqPath
     if eq then {
@@ -205,22 +199,30 @@ zlockstateNameLower: function {t: ztypes.zlockstate} out String is {
     }
 }
 
-# a path list rendered as a dotted "a.b.c" string.
-formatPath: function {path: (List String).view} out String is {
+# a path rendered as a dotted "a.b.c" string.
+formatPath: function {pool: zast.StringPool.view path: (ListVal zast.nameid).view} out String is {
     if path.length == 0 then return "<unknown>".string
-    return (stringJoin parts: path sep: ".")
+    r: String
+    i: u64
+    for i < path.length loop {
+        if i > 0 then r.append "."
+        r.append (zast.poolTextAt :pool ref: (path.get :i))
+        i = i + 1
+    }
+    return r
 }
 
 # Two locks taken while processing calls conflict: one reftype reached twice as
 # an argument or a receiver. A call identity is not user-visible, so the message
 # names the paths instead of the holder.
 formatAliasConflict: function {
-    reqPath: (List String).view
-    existingPath: (List String).view
+    pool: zast.StringPool.view
+    reqPath: (ListVal zast.nameid).view
+    existingPath: (ListVal zast.nameid).view
     sameCall: bool
 } out String is {
-    rp: formatPath reqPath
-    ep: formatPath existingPath
+    rp: formatPath :pool path: reqPath
+    ep: formatPath :pool path: existingPath
     if (pathsEqual a: reqPath b: existingPath) then {
         if sameCall then return "Cannot pass '\{rp}' twice in one call — a reftype may appear only once as an argument or as a receiver"
         return "Cannot pass '\{rp}': it is already passed to an enclosing call"
@@ -773,20 +775,19 @@ ZSymbolTable: class {
         panic msg: "unreachable lock holder kind"
     }
 
-    formatLockConflict: function {:this pool: zast.StringPool.view reqPath: (List String).view reqType: ztypes.zlockstate existingType: ztypes.zlockstate existingPath: (List String).view existingHolder: ztypes.zlockholder} out String is {
-        rootStr: reqPath.get i: 0
-        rootView: rootStr.stringview
+    formatLockConflict: function {:this pool: zast.StringPool.view reqPath: (ListVal zast.nameid).view reqType: ztypes.zlockstate existingType: ztypes.zlockstate existingPath: (ListVal zast.nameid).view existingHolder: ztypes.zlockholder} out String is {
+        rootView: zast.poolTextAt :pool ref: (reqPath.get i: 0)
         reqKind: zlockstateNameLower reqType
         heldKind: zlockstateNameLower existingType
         reqDetail: String
         if reqPath.length > 1 then {
-            rp: formatPath reqPath
+            rp: formatPath :pool path: reqPath
             reqDetail = " on '\{rp}'"
         }
         heldDetail: String
         same: pathsEqual a: existingPath b: reqPath
         if same == false then {
-            hp: formatPath existingPath
+            hp: formatPath :pool path: existingPath
             heldDetail = " on '\{hp}'"
         }
         holderName: this.formatLockHolder :pool holder: existingHolder
@@ -803,10 +804,9 @@ ZSymbolTable: class {
 
     # Try to acquire a lock on `path` (segments; root is a variable name);
     # returns "" on success or an error message.
-    tryLock: function {:this pool: zast.StringPool.view path: (List String).view lockType: ztypes.zlockstate lockScope: ztypes.zlockscope holder: ztypes.zlockholder} out String is {
+    tryLock: function {:this pool: zast.StringPool.view path: (ListVal zast.nameid).view lockType: ztypes.zlockstate lockScope: ztypes.zlockscope holder: ztypes.zlockholder} out String is {
         if path.length == 0 then return "".string
-        rootId: zast.poolFind :pool text: (path.get i: 0).stringview
-        d: this.findLocal nameId: rootId
+        d: this.findLocal nameId: (path.get i: 0)
         if d.isZero then return "".string
         if (this.isTakenDecl declId: d) then return "".string
         dv: this.typing.declLocalVarOf declId: d
@@ -857,20 +857,18 @@ ZSymbolTable: class {
         }
         if conflictFound then {
             cType: ztypes.zlockstate.exclusive
-            cPath: (List String)
+            cPath: (ListVal zast.nameid)
             cHolder: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: 0)
             {
                 ce: this.entries.get i: conflictAt
                 cType = ce.lockType
                 cHolder = ce.lockHolder
-                with cpit: ce.lockPath.iterate do for cseg: cpit loop {
-                    csc: cseg.copy
-                    cPath.append csc
-                }
+                with cpit: ce.lockPath.iterate do for cseg: cpit loop cPath.append cseg
             }
             ck: cHolder.kind
             if ck.callKind then {
                 return (formatAliasConflict
+                    :pool
                     reqPath: path
                     existingPath: cPath
                     sameCall: conflictSelf
@@ -905,12 +903,7 @@ ZSymbolTable: class {
         le.lockType = lockType
         le.lockScope = lockScope
         le.lockHolder = holder
-        pli: u64
-        for pli < path.length loop {
-            seg: path.get i: pli
-            le.lockPath.append seg.copy
-            pli = pli + 1
-        }
+        with lpit: path.iterate do for seg: lpit loop le.lockPath.append seg
         this.appendRow row: le declId: d
         return "".string
     }
@@ -949,10 +942,9 @@ ZSymbolTable: class {
     }
 
     # Holder of an EXCLUSIVE lock prefix-overlapping `path`, or none.
-    findExclusiveLock: function {:this pool: zast.StringPool.view path: (List String).view} out optionval ztypes.zlockholder is {
+    findExclusiveLock: function {:this path: (ListVal zast.nameid).view} out optionval ztypes.zlockholder is {
         if path.length == 0 then return (optionval.none ztypes.zlockholder)
-        rootId: zast.poolFind :pool text: (path.get i: 0).stringview
-        d: this.findLocal nameId: rootId
+        d: this.findLocal nameId: (path.get i: 0)
         if d.isZero then return (optionval.none ztypes.zlockholder)
         ne: this.entries.length
         j: ne
@@ -977,10 +969,9 @@ ZSymbolTable: class {
     # shared TARGET is a live read of its whole subtree, so a write below it is
     # blocked too; a shared INTENT is only bookkeeping toward a deeper lock,
     # which is checked on its own row.
-    findReadBlocker: function {:this pool: zast.StringPool.view path: (List String).view} out optionval ztypes.zlockholder is {
+    findReadBlocker: function {:this path: (ListVal zast.nameid).view} out optionval ztypes.zlockholder is {
         if path.length == 0 then return (optionval.none ztypes.zlockholder)
-        rootId: zast.poolFind :pool text: (path.get i: 0).stringview
-        d: this.findLocal nameId: rootId
+        d: this.findLocal nameId: (path.get i: 0)
         if d.isZero then return (optionval.none ztypes.zlockholder)
         ne: this.entries.length
         j: ne
@@ -1003,10 +994,9 @@ ZSymbolTable: class {
     }
 
     # Any lock (SHARED or EXCLUSIVE) prefix-overlapping `path`?
-    isPathLocked: function {:this pool: zast.StringPool.view path: (List String).view} out bool is {
+    isPathLocked: function {:this path: (ListVal zast.nameid).view} out bool is {
         if path.length == 0 then return false
-        rootId: zast.poolFind :pool text: (path.get i: 0).stringview
-        d: this.findLocal nameId: rootId
+        d: this.findLocal nameId: (path.get i: 0)
         if d.isZero then return false
         ne: this.entries.length
         j: ne
