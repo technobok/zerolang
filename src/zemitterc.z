@@ -37,7 +37,7 @@ TmpCtr: class {
     }
 }
 
-# u64OrZero -- an (optionval t: u64) to a plain u64 (0 when none).
+# vidOrZero -- an (optionval vid) to a plain vid (0 when none).
 vidOrZero: function {o: optionval ztypes.vid} out ztypes.vid is {
     match (
         o
@@ -59,16 +59,6 @@ tidOrZero: function {o: optionval ztypes.tid} out ztypes.tid is {
         return o
     } case none then {
         return (ztypes.tid.create from: 0)
-    }
-}
-
-u64OrZero: function {o: optionval u64} out u64 is {
-    match (
-        o
-    ) case some then {
-        return o
-    } case none then {
-        return 0
     }
 }
 
@@ -2360,12 +2350,12 @@ builtinTidInU: function {
     # every caller names the declared family form directly (ListRef, MapRR,
     # ...); the memoized builtinTidT is not usable here -- its memo write
     # needs an exclusive typing, and the emitter holds a view.
-    return (u64OrZero o: (ztypecheck.walkLookupTyperef
+    return (ztypecheck.optU64Or o: (ztypecheck.walkLookupTyperef
         :ast
         ty: symtab.typing
         reg: symtab.reg
         unitDecl: (ztypecheck.unitDeclOfName ty: symtab.typing :ast name: unitName)
-        :base)
+        :base) d: 0
     )
 }
 
@@ -2951,15 +2941,6 @@ takeSourceResolve: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out
     return (emitLocalAtomName :ctx :name :vid)
 }
 
-# isMoveMarker -- a value-position ownership-transfer marker. `.hold` is `.take`
-# plus a compile-time freeze, so the two are indistinguishable to the emitter:
-# both move the base value and leave the source to be zeroed.
-isMoveMarker: function {name: StringView} out bool is {
-    if name == "take" then return true
-    if name == "hold" then return true
-    return false
-}
-
 # takeAliasBase -- the base atom of a `<x>.take` over a user record/class (an
 # ownership-transfer alias: the binding reuses the source storage), else "".
 takeAliasBaseNid: function {ast: Ast.view symtab: zenv.ZSymbolTable n: Node.view} out u64 is {
@@ -2971,7 +2952,7 @@ takeAliasBaseNid: function {ast: Ast.view symtab: zenv.ZSymbolTable n: Node.view
         return (takeAliasBaseNid :ast :symtab n: (ast.nodes.get i: n.statementline.u64))
     } case dottedpath then {
         cn: atomTextOf :ast n: (ast.nodes.get i: n.child.u64)
-        if (isMoveMarker name: cn.stringview) == false then return 0
+        if (ztypecheck.isMoveMarker name: cn.stringview) == false then return 0
         bnid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
         bt: stampIdOf :symtab nid: bnid
         bo: originTidOf :symtab tid: bt
@@ -3013,7 +2994,7 @@ takeStringSource: function {
         return (takeStringSource :ast :symtab :ctx n: (ast.nodes.get i: n.statementline.u64))
     } case dottedpath then {
         cn: atomTextOf :ast n: (ast.nodes.get i: n.child.u64)
-        if (isMoveMarker name: cn.stringview) == false then return "".string
+        if (ztypecheck.isMoveMarker name: cn.stringview) == false then return "".string
         bnid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
         bid: stampIdOf :symtab nid: bnid
         isMv: false
@@ -3066,7 +3047,7 @@ isFieldTake: function {ast: Ast.view n: Node.view} out bool is {
         return (isFieldTake :ast n: (ast.nodes.get i: n.statementline.u64))
     } case dottedpath then {
         cn: atomTextOf :ast n: (ast.nodes.get i: n.child.u64)
-        if (isMoveMarker name: cn.stringview) == false then return false
+        if (ztypecheck.isMoveMarker name: cn.stringview) == false then return false
         return (isDottedAutoCall n: (ast.nodes.get i: n.parent.u64))
     } else {
         return false
@@ -3104,7 +3085,7 @@ emitNarrowedTakeZero: function {
         emitNarrowedTakeZero :ast :symtab :ctx n: sln :ind :buf
     } case dottedpath then {
         cn: atomTextOf :ast n: (ast.nodes.get i: n.child.u64)
-        if (isMoveMarker name: cn.stringview) then {
+        if (ztypecheck.isMoveMarker name: cn.stringview) then {
             bn: atomTextOf :ast n: (ast.nodes.get i: n.parent.u64)
             bn9v: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
             if (vvHas xs: ctx.narrowBox vid: bn9v) then {
@@ -3181,7 +3162,7 @@ moveMarkerBase: function {ast: Ast.view n: Node.view} out u64 is {
         return (moveMarkerBase :ast n: (ast.nodes.get i: n.expression.u64))
     } case dottedpath then {
         mbc: atomTextOf :ast n: (ast.nodes.get i: n.child.u64)
-        if (isMoveMarker name: mbc.stringview) == false then return 0
+        if (ztypecheck.isMoveMarker name: mbc.stringview) == false then return 0
         return n.parent.u64
     } else {
         return 0
@@ -5355,11 +5336,11 @@ callRhsIsBorrow: function {
     if ch.length == 0 then return false
     rid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
     rid = chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rid.u64)
-    mfid: u64OrZero o: (symtab.typing.declChildOf
+    mfid: ztypecheck.optU64Or o: (symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: rid
         name: ch.stringview
-    )
+    ) d: 0
     return (funcBorrowFlag :symtab tid: (ztypes.tid.create from: mfid.u64))
 }
 
@@ -5463,11 +5444,11 @@ refBorrowCalleeFid: function {
         if ch8.length == 0 then return 0
         rid8: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: n.callable.u64)
         rid8 = chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rid8.u64)
-        mf8: u64OrZero o: (symtab.typing.declChildOf
+        mf8: ztypecheck.optU64Or o: (symtab.typing.declChildOf
             pool: ast.names
             parentTypeId: rid8
             name: ch8.stringview
-        )
+        ) d: 0
         if (funcBorrowFlag :symtab tid: (ztypes.tid.create from: mf8.u64)) then return mf8
         return 0
     } case dottedpath then {
@@ -5513,7 +5494,7 @@ bindingRhsIsBorrow: function {
             # a field read off a narrowed subject is a shallow-copy borrow (it aliases
             # the subject's heap); an ownership builtin yields an owned value, and so
             # does a method auto-call (FUNCTION child) on the narrowed payload.
-            if (isMoveMarker name: ch.stringview) then return false
+            if (ztypecheck.isMoveMarker name: ch.stringview) then return false
             if ch.stringview == "copy" then return false
             if ch.stringview == "string" then return false
             ntO2: vtGet xs: ctx.narrowTid vid: bnmV
@@ -8837,8 +8818,8 @@ emitFnptrFieldCall: function {
         mnId: zast.poolFind pool: ast.names text: mn.stringview
         if mnId > 0 then {
             fnTid = (ztypes.tid.create
-                from: (u64OrZero
-                    o: (symtab.typing.declChildOfId parentTypeId: rtid nameId: mnId)
+                from: (ztypecheck.optU64Or
+                    o: (symtab.typing.declChildOfId parentTypeId: rtid nameId: mnId) d: 0
                 )
             )
         }
@@ -10117,7 +10098,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         # ownership MOVE: emit the base value. The statement-level emitter zeroes
         # the source after the call so its scope-exit free is a no-op (the callee
         # now owns the heap). A borrowed pointer-param class is not a move source.
-        if (isMoveMarker name: mn2.stringview) then {
+        if (ztypecheck.isMoveMarker name: mn2.stringview) then {
             tknid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
             if tknid == 0 then tknid = n.parent.u64
             tkt: stampIdOf :symtab nid: tknid
@@ -13670,13 +13651,13 @@ typeIdByNameStages: function {
     ) case some then {
         return mo
     } case none then null
-    lr: u64OrZero o: (ztypecheck.walkLookupTyperefById
+    lr: ztypecheck.optU64Or o: (ztypecheck.walkLookupTyperefById
         :ast
         ty: symtab.typing
         reg: symtab.reg
         unitDecl: (ztypecheck.unitDeclOfName ty: symtab.typing :ast name: ctx.mainName.stringview)
         baseId: nameId
-    )
+    ) d: 0
     if lr > 0 then return lr
     # cross-unit: the type may live in a dep unit (zlexer/zast/zvfs) outside
     # walkLookupTyperefById's search list. Pass 1 probes each unit scope by id
@@ -14142,12 +14123,12 @@ emitMatchStmt: function {
                     )
                     if aliasText.length > 0 then {
                         meV = aliasText.copy
-                        meT = ztypes.tid.create from: (u64OrZero
+                        meT = ztypes.tid.create from: (ztypecheck.optU64Or
                             o: (symtab.typing.declChildOf
                                 pool: ast.names
                                 parentTypeId: (ztypes.tid.create from: vtid.u64)
                                 name: armME.stringview
-                            )
+                            ) d: 0
                         )
                         meSeed = true
                     }
@@ -15194,10 +15175,10 @@ emitObjIterFor: function {
                 # are never double-freed).
                 payElemPfx: oovorig.length + 1
                 payElemName: monoElemName full: ovn prefixLen: payElemPfx
-                payElemTid: u64OrZero o: (symtab.typing.declChildOfId
+                payElemTid: ztypecheck.optU64Or o: (symtab.typing.declChildOfId
                     parentTypeId: ovid
                     nameId: zast.wkSome
-                )
+                ) d: 0
                 payScalarC: (cTypeForNameTid
                     :ast
                     :symtab
@@ -15660,11 +15641,11 @@ seedPositiveCore: function {
     names.append subj
     svids.append (atomVid :symtab nid: (atomNodeId n: parent))
     vals.append aliasText
-    pt: u64OrZero o: (symtab.typing.declChildOf
+    pt: ztypecheck.optU64Or o: (symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: tid
         name: childName
-    )
+    ) d: 0
     tids.append pt
 }
 
@@ -15721,11 +15702,11 @@ seedNegatedFromPredicate: function {
         names.append subj
         svids.append snv
         vals.append aliasText
-        pt: u64OrZero o: (symtab.typing.declChildOf
+        pt: ztypecheck.optU64Or o: (symtab.typing.declChildOf
             pool: ast.names
             parentTypeId: (ztypes.tid.create from: dap.u64)
             name: rem.stringview
-        )
+        ) d: 0
         tids.append pt
     } else null
 }
@@ -15805,24 +15786,6 @@ truthyCondText: function {
     return "((\{raw})\{accessOp}tag == \{tg})"
 }
 
-# armSuffixSide -- the `.true` / `.false` suffix on a dotted arm predicate,
-# read by arm identity. See ztyping.armSuffixSideOf.
-armSuffixSide: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    nid: u64
-    parent: Node.view
-    child: Node.view
-} out ztyping.armside is {
-    cid: atomNameIdOf :ast n: child
-    return (ztyping.armSuffixSideOf
-        ty: symtab.typing
-        :nid
-        parentNid: (interpPartNodeId n: parent)
-        childNameId: cid.u64
-    )
-}
-
 seedCondOp: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -15865,9 +15828,9 @@ seedCondOp: function {
         cn: atomTextOf :ast n: (ast.nodes.get i: n.child.u64)
         # `.true` / `.false` on a predicate: which side it is comes from the
         # stamped type's arm ORDER, never from the spelling of the segment.
-        sd: (armSuffixSide
+        sd: (ztypecheck.armSuffixSide
             :ast
-            :symtab
+            st: symtab
             nid: n.nodeid.u64
             parent: (ast.nodes.get i: n.parent.u64)
             child: (ast.nodes.get i: n.child.u64)
@@ -16104,9 +16067,9 @@ chainCondFact: function {
         cn: atomTextOf :ast n: (ast.nodes.get i: n.child.u64)
         # `.true` / `.false` on a predicate: which side it is comes from the
         # stamped type's arm ORDER, never from the spelling of the segment.
-        sd: (armSuffixSide
+        sd: (ztypecheck.armSuffixSide
             :ast
-            :symtab
+            st: symtab
             nid: n.nodeid.u64
             parent: (ast.nodes.get i: n.parent.u64)
             child: (ast.nodes.get i: n.child.u64)
@@ -16574,12 +16537,12 @@ emitElse: function {
                             sN.append gsv
                             sVid.append gv
                             vvSet xs: ctx.narrowBox vid: gv val: aliasText.stringview
-                            pt: (u64OrZero
+                            pt: (ztypecheck.optU64Or
                                 o: (symtab.typing.declChildOf
                                     pool: ast.names
                                     parentTypeId: (ztypes.tid.create from: gtid.u64)
                                     name: fArm.stringview
-                                )
+                                ) d: 0
                             )
                             vtSet xs: ctx.narrowTid vid: gv tid: (ztypes.tid.create from: pt.u64)
                             cmtS: "\{ind}    /* alias: \{gs} => \{aliasText} */\n"
@@ -17089,12 +17052,12 @@ emitBodyNode: function {
                             )
                             pgPrevT.append ptv
                             vvSet xs: ctx.narrowBox vid: pgrv val: aliasText.stringview
-                            pt: (u64OrZero
+                            pt: (ztypecheck.optU64Or
                                 o: (symtab.typing.declChildOf
                                     pool: ast.names
                                     parentTypeId: guardStampTid
                                     name: guardStampArm.stringview
-                                )
+                                ) d: 0
                             )
                             (vtSet
                                 xs: ctx.narrowTid
@@ -19232,15 +19195,6 @@ isEmittableFileUnit: function {name: StringView} out bool is {
     return true
 }
 
-# isEmittableUnitFns -- every file unit's bodied FREE functions emit,
-# including the runtime-backed stdlib units (their TYPES stay excluded
-# via isEmittableFileUnit; the per-member body filter in emitFnsIn keeps
-# native declarations and type members out).
-isEmittableUnitFns: function {name: StringView} out bool is {
-    if name.length == 0 then return false
-    return true
-}
-
 # stdFnUndemanded -- a bodied free fn the program never referenced: its def was
 # not resolved, so its body carries no stamps and emitting it renders the
 # signature as `z_t0(void)` over unbound parameter names. Skip it everywhere
@@ -19475,11 +19429,9 @@ emitFnsPass: function {
                 u: program.ast.nodes.get i: uId.u64
                 if u.namedoperation then {
                     un: zast.poolTextAt pool: program.ast.names ref: u.name
-                    if (isEmittableUnitFns name: un.stringview) then {
-                        opId = u.operation
-                        unitNameText = un.copy
-                        un9Id = u.name
-                    }
+                    opId = u.operation
+                    unitNameText = un.copy
+                    un9Id = u.name
                 }
             }
             if opId > 0 then {
@@ -20164,10 +20116,8 @@ collectUnitLiterals: function {
                 u: program.ast.nodes.get i: uId.u64
                 if u.namedoperation then {
                     un: zast.poolTextAt pool: program.ast.names ref: u.name
-                    if (isEmittableUnitFns name: un.stringview) then {
-                        opId = u.operation
-                        unitNameText = un.copy
-                    }
+                    opId = u.operation
+                    unitNameText = un.copy
                 }
             }
             if opId > 0 then {
@@ -26832,11 +26782,11 @@ emitProtocolDispatch: function {
         acc: acc.stringview
         isFacet: isFacetR
     )
-    mtid: u64OrZero o: (symtab.typing.declChildOf
+    mtid: ztypecheck.optU64Or o: (symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: rtid
         name: mn.stringview
-    )
+    ) d: 0
     mpNames: (List String)
     mpIds: (ListVal u64)
     mpIds9Nm: (ListVal u64)
