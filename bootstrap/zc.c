@@ -13244,12 +13244,12 @@ static z_t1088_t z_t1080_call(z_t1080_t* _it) {
     return _out;
 }
 
-static z_t1080_t z_t1071_iterateItems(z_t1071_t* _this);
-static z_t1080_t z_t1071_iterateItems(z_t1071_t* _this) {
+static z_t1080_t z_t1071_iterateItems(const z_t1071_t* _this);
+static z_t1080_t z_t1071_iterateItems(const z_t1071_t* _this) {
     z_t1080_t _it = {0};
-    /* a BORROW receiver, as Map's iterateItems takes: the entry it yields is
-       strong enough to `.copy` a value out of, which a `.view` element is not */
-    _it.m = _this;
+    /* the same const stop as `get` and z_Set's `iterate`: OptionView's payload
+       is a bare void*, so const cannot propagate into it */
+    _it.m = (z_t1071_t*)_this;
     _it.idx = 0;
     return _it;
 }
@@ -21305,12 +21305,12 @@ static z_t1554_t z_t1546_call(z_t1546_t* _it) {
     return _out;
 }
 
-static z_t1546_t z_t1537_iterateItems(z_t1537_t* _this);
-static z_t1546_t z_t1537_iterateItems(z_t1537_t* _this) {
+static z_t1546_t z_t1537_iterateItems(const z_t1537_t* _this);
+static z_t1546_t z_t1537_iterateItems(const z_t1537_t* _this) {
     z_t1546_t _it = {0};
-    /* a BORROW receiver, as Map's iterateItems takes: the entry it yields is
-       strong enough to `.copy` a value out of, which a `.view` element is not */
-    _it.m = _this;
+    /* the same const stop as `get` and z_Set's `iterate`: OptionView's payload
+       is a bare void*, so const cannot propagate into it */
+    _it.m = (z_t1537_t*)_this;
     _it.idx = 0;
     return _it;
 }
