@@ -25,6 +25,7 @@ public: unit {
     :ZSymbolTable
     :isExcludableKind
     :sumArmNames
+    :sumArmNameIds
     :newSymbolTable
     :formatPath
     :zlockstateNameLower
@@ -179,6 +180,32 @@ isExcludableKind: function {k: ztypes.ztypetype} out bool is {
 # a tag generic origin. The one definition of what a sum's arms are -- the
 # checker (sumSubtypeNames), the emitter (sumArmNames9) and the exclusion
 # narrowing below all route here, so they cannot disagree about the arm set.
+# sumArmNameIds -- the same arms as sumArmNames, left as name-pool ids. The
+# exclusion machinery compares arms, and an id compares without rendering the
+# text or owning a copy of it.
+sumArmNameIds: function {
+    ty: ZTyping
+    reg: ztypes.ZTypeRegistry
+    tid: ztypes.tid
+    ids: ListVal u64
+} is {
+    nms8: (ListVal u64)
+    tds8: (ListVal u64)
+    ty.declMemberList ownerTid: (ztypes.tid.create from: tid.u64) names: nms8 tids: tds8
+    i8: u64
+    n8: nms8.length
+    for i8 < n8 loop {
+        nid8: nms8.get i: i8
+        ctid8: tds8.get i: i8
+        i8 = i8 + 1
+        if (isExcludableKind k: (reg.typetypeOf typeId: (ztypes.tid.create from: ctid8.u64))) then {
+            if (reg.isTagGenericOriginOf typeId: (ztypes.tid.create from: ctid8.u64)) == false then {
+                ids.append nid8
+            }
+        }
+    }
+}
+
 sumArmNames: function {
     ty: ZTyping
     reg: ztypes.ZTypeRegistry
@@ -257,8 +284,8 @@ ZEntryDumpRow: class {
     originalZtypeId: (optionval ztypes.tid)
     isTaken: bool
     takenAt: (optionval ztypes.zsrcpos)
-    narrowedSubtype: String
-    excludedSubtypes: (List String)
+    narrowedSubtype: zast.nameid
+    excludedSubtypes: (ListVal u32)
 }
 
 # The body walk's environment. Frames and locals are declarations in the
@@ -923,11 +950,11 @@ ZSymbolTable: class {
         ) case some then {
             cur: this.entries.get i: ro
             le.ztypeId = cur.ztypeId
-            le.narrowedSubtype = cur.narrowedSubtype.copy
+            le.narrowedSubtype = cur.narrowedSubtype
             le.originalZtypeId = cur.originalZtypeId
             cit: cur.excludedSubtypes.iterate
             for s: cit loop {
-                le.excludedSubtypes.add item: s.copy
+                le.excludedSubtypes.add item: s
             }
         } case none then null
         le.hasLock = true
@@ -1096,20 +1123,19 @@ ZSymbolTable: class {
     # outer), and the outer is stashed in originalZtypeId for the emitter's
     # C-level unwrap. shadow=false (assignment): the type id stays the outer
     # union; only the subtype name is recorded.
-    narrow: function {:this pool: zast.StringPool.view nameId: zast.nameid toTypeId: u64 subtypeName: StringView shadow: bool} is {
+    narrow: function {:this nameId: zast.nameid toTypeId: u64 subtypeName: zast.nameid shadow: bool} is {
         d: this.findLocal :nameId
         if d.isZero then return
         curT: this.currentTypeOf declId: d
         originalTypeId: curT.u64
         entryZtype: originalTypeId
-        hasSubtype: subtypeName.length > 0
+        hasSubtype: (subtypeName.isZero) == false
         if shadow then {
             if hasSubtype then {
                 if toTypeId == originalTypeId then {
-                    payloadOpt: (this.typing.declChildOf
-                        :pool
+                    payloadOpt: (this.typing.declChildOfId
                         parentTypeId: (ztypes.tid.create from: originalTypeId.u64)
-                        name: subtypeName
+                        nameId: subtypeName
                     )
                     match (
                         payloadOpt
@@ -1127,11 +1153,8 @@ ZSymbolTable: class {
             }
         }
 
-        nsName: String
-        if hasSubtype then {
-            sn: subtypeName.string
-            nsName = sn
-        }
+        nsName: zast.nameid
+        if hasSubtype then nsName = subtypeName
         origOpt: (optionval.none ztypes.tid)
         if shadow then {
             oc: ztypes.tid.create from: originalTypeId.u64
@@ -1151,28 +1174,27 @@ ZSymbolTable: class {
     # Exclude `subtypeName` from `name`'s type. Collapses to a narrowing
     # when one excludable subtype remains; marks the frame unreachable when
     # none remain.
-    exclude: function {:this pool: zast.StringPool.view nameId: zast.nameid subtypeName: StringView fullTypeId: u64} is {
+    exclude: function {:this nameId: zast.nameid subtypeName: zast.nameid fullTypeId: u64} is {
         d: this.findLocal :nameId
         if d.isZero then return
-        allSubs: (List String)
-        (sumArmNames
+        allSubs: (ListVal u64)
+        (sumArmNameIds
             ty: this.typing
             reg: this.reg
-            :pool
             tid: (ztypes.tid.create from: fullTypeId.u64)
-            names: allSubs
+            ids: allSubs
         )
 
-        newExcl: (Set String)
+        newExcl: (IdSet zast.nameid)
         this.collectExcluded :nameId into: newExcl
-        newExcl.add item: subtypeName.string
+        newExcl.add item: subtypeName
 
         remainIdx: (ListVal u64)
         rn: allSubs.length
         ri: u64
         for ri < rn loop {
             nm: allSubs.get i: ri
-            isExcl: newExcl.has item: nm
+            isExcl: newExcl.has item: (zast.nameid.create from: nm.u32.orPanic)
             if isExcl == false then {
                 riv9: ri
                 remainIdx.append riv9
@@ -1183,28 +1205,27 @@ ZSymbolTable: class {
         if remainIdx.length == 0 then {
             this.markUnreachable
         } else {
-            narrowedSub: String
+            narrowedSub: zast.nameid
             if remainIdx.length == 1 then {
                 soleIx9: remainIdx.get i: 0
                 sole: allSubs.get i: soleIx9
-                narrowedSub = sole.copy
+                narrowedSub = zast.nameid.create from: sole.u32.orPanic
             }
             e: (this.reg.newEntry
                 :nameId
                 ztypeId: (ztypes.tid.create from: fullTypeId.u64)
                 isDefinition: false
             )
-            e.narrowedSubtype = narrowedSub.copy
-            eit: newExcl.iterate
-            for s: eit loop {
-                e.excludedSubtypes.add item: s.copy
+            e.narrowedSubtype = narrowedSub
+            with eit: newExcl.iterate do for s: eit loop {
+                e.excludedSubtypes.add item: s
             }
             this.appendRow row: e declId: d
         }
     }
 
     # Copy the current exclusion set for `name` into `into`.
-    collectExcluded: function {:this nameId: zast.nameid into: Set String} is {
+    collectExcluded: function {:this nameId: zast.nameid into: IdSet zast.nameid} is {
         ro: this.rowOf declId: (this.findLocal :nameId)
         match (
             ro
@@ -1212,7 +1233,7 @@ ZSymbolTable: class {
             e: this.entries.get i: ro
             it: e.excludedSubtypes.iterate
             for s: it loop {
-                into.add item: s.copy
+                into.add item: s
             }
         } case none then null
     }
@@ -1229,18 +1250,17 @@ ZSymbolTable: class {
         this.appendRow row: re declId: d
     }
 
-    isExcluded: function {:this nameId: zast.nameid subtypeName: StringView} out bool is {
-        tmp: (Set String)
+    isExcluded: function {:this nameId: zast.nameid subtypeName: zast.nameid} out bool is {
+        tmp: (IdSet zast.nameid)
         this.collectExcluded :nameId into: tmp
-        q: subtypeName
-        return (tmp.has item: q.asString)
+        return (tmp.has item: subtypeName)
     }
 
     # narrowedArmOf -- the recorded single-arm narrowing for `name` when
     # its row still wears the OUTER type `fullTypeId` (assignment narrowing
     # or exclusion collapse). Shadow-narrowed rows (originalZtypeId set --
     # the name IS a payload) and un-narrowed locals yield "".
-    narrowedArmOf: function {:this nameId: zast.nameid fullTypeId: u64} out String is {
+    narrowedArmOf: function {:this nameId: zast.nameid fullTypeId: u64} out zast.nameid is {
         ro: this.rowOf declId: (this.findLocal :nameId)
         match (
             ro
@@ -1253,11 +1273,11 @@ ZSymbolTable: class {
             ) case some then {
                 isShadow9 = true
             } case none then null
-            if isShadow9 then return "".string
-            if e.ztypeId != fullTypeId then return "".string
-            return e.narrowedSubtype.copy
+            if isShadow9 then return zast.nameid
+            if e.ztypeId != fullTypeId then return zast.nameid
+            return e.narrowedSubtype
         } case none then {
-            return "".string
+            return zast.nameid
         }
     }
 
@@ -1283,15 +1303,15 @@ ZSymbolTable: class {
         }
     }
 
-    getSubtypeName: function {:this nameId: zast.nameid} out String is {
+    getSubtypeName: function {:this nameId: zast.nameid} out zast.nameid is {
         ro: this.rowOf declId: (this.findLocal :nameId)
         match (
             ro
         ) case some then {
             e: this.entries.get i: ro
-            return e.narrowedSubtype.copy
+            return e.narrowedSubtype
         } case none then {
-            return "".string
+            return zast.nameid
         }
     }
 
@@ -1410,12 +1430,9 @@ ZSymbolTable: class {
                 e: this.entries.get i: ri
                 if e.defSeq > ki then break
                 if e.frame == frame then {
-                    exs: (List String)
-                    with xit: e.excludedSubtypes.iterate do for xn: xit loop {
-                        xnc: xn.copy
-                        exs.append xnc
-                    }
-                    nsc: e.narrowedSubtype.copy
+                    exs: (ListVal u32)
+                    with xit: e.excludedSubtypes.iterate do for xn: xit loop exs.append xn.u32
+                    nsc: e.narrowedSubtype
                     this.entryDump.append (ZEntryDumpRow
                         scopeId: frame.u64
                         position: pos
@@ -1450,8 +1467,8 @@ ZSymbolTable: class {
                     originalZtypeId: (optionval.none ztypes.tid)
                     isTaken: false
                     takenAt: (optionval.none ztypes.zsrcpos)
-                    narrowedSubtype: "".string
-                    excludedSubtypes: (List String)
+                    narrowedSubtype: zast.nameid
+                    excludedSubtypes: (ListVal u32)
                 )
                 pos = pos + 1
             }
@@ -1614,22 +1631,25 @@ main: function is {
     print "=== narrowing ==="
     vr: st.reg.newVariable ztypeId: tResult ownership: ztypes.zownership.owned
     st.defineVar nameId: idR9 var: vr
-    st.narrow pool: pool9 nameId: idR9 toTypeId: tResult subtypeName: "ok" shadow: true
+    armOk9: pool9.set s: "ok"
+    armNone9: pool9.set s: "none"
+    armErr9: pool9.set s: "err"
+    st.narrow nameId: idR9 toTypeId: tResult subtypeName: armOk9 shadow: true
     smokeLookup :st pool: pool9 name: "r"
-    print "subtype r -> \{st.getSubtypeName nameId: idR9}"
+    print "subtype r -> \{smokeSubtype pool: pool9 id: (st.getSubtypeName nameId: idR9)}"
     st.resetNarrowing nameId: idR9
-    print "after reset subtype r -> \{st.getSubtypeName nameId: idR9}"
+    print "after reset subtype r -> \{smokeSubtype pool: pool9 id: (st.getSubtypeName nameId: idR9)}"
     smokeLookup :st pool: pool9 name: "r"
 
     print "=== exclude ==="
-    st.exclude pool: pool9 nameId: idR9 subtypeName: "ok" fullTypeId: tResult
-    print "subtype r (excl ok) -> \{st.getSubtypeName nameId: idR9}"
-    print "isExcluded r.ok -> \{boolText (st.isExcluded nameId: idR9 subtypeName: "ok")}"
-    print "isExcluded r.err -> \{boolText (st.isExcluded nameId: idR9 subtypeName: "err")}"
-    st.exclude pool: pool9 nameId: idR9 subtypeName: "none" fullTypeId: tResult
-    print "subtype r (excl ok,none) -> \{st.getSubtypeName nameId: idR9}"
+    st.exclude nameId: idR9 subtypeName: armOk9 fullTypeId: tResult
+    print "subtype r (excl ok) -> \{smokeSubtype pool: pool9 id: (st.getSubtypeName nameId: idR9)}"
+    print "isExcluded r.ok -> \{boolText (st.isExcluded nameId: idR9 subtypeName: armOk9)}"
+    print "isExcluded r.err -> \{boolText (st.isExcluded nameId: idR9 subtypeName: armErr9)}"
+    st.exclude nameId: idR9 subtypeName: armNone9 fullTypeId: tResult
+    print "subtype r (excl ok,none) -> \{smokeSubtype pool: pool9 id: (st.getSubtypeName nameId: idR9)}"
     print "unreachable -> \{boolText st.isUnreachable}"
-    st.exclude pool: pool9 nameId: idR9 subtypeName: "err" fullTypeId: tResult
+    st.exclude nameId: idR9 subtypeName: armErr9 fullTypeId: tResult
     print "unreachable after excl all -> \{boolText st.isUnreachable}"
 
     print "=== all names ==="
@@ -1644,6 +1664,12 @@ main: function is {
     st.pop
     print "after pop open=\{st.frames.length}"
     dumpFrames :st
+}
+
+# smoke-test: a subtype name id rendered as text ("" for the zero id).
+smokeSubtype: function {pool: zast.StringPool.view id: zast.nameid} out String is {
+    if id.isZero then return "".string
+    return (zast.poolTextCopy :pool ref: id)
 }
 
 # smoke-test: an optional lock state rendered as text.

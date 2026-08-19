@@ -19492,21 +19492,19 @@ predFactOf: function {
 # call sites only -- construction narrowing never routes through here.
 shadowCollapseIfSingle: function {ast: Ast st: zenv.ZSymbolTable name: StringView fullTid: u64} is {
     arm9: st.narrowedArmOf nameId: (nameIdOf :ast :name) fullTypeId: fullTid
-    if arm9.length == 0 then return
-    po9: (st.typing.declChildOf
-        pool: ast.names
+    if arm9.isZero then return
+    po9: (st.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: fullTid.u64)
-        name: arm9.stringview
+        nameId: arm9
     )
     match (
         po9
     ) case some then {
         if (st.reg.typetypeOf typeId: (ztypes.tid.create from: po9.u64)) == ztypes.ztypetype.nullType then return
         (st.narrow
-            pool: ast.names
             nameId: (nameIdOf :ast :name)
             toTypeId: po9
-            subtypeName: arm9.stringview
+            subtypeName: arm9
             shadow: true
         )
         (armPayloadReadonly
@@ -19514,7 +19512,7 @@ shadowCollapseIfSingle: function {ast: Ast st: zenv.ZSymbolTable name: StringVie
             :ast
             subject: name
             parentTid: fullTid
-            armName: arm9.stringview
+            armName: (zast.poolTextAt pool: ast.names ref: arm9).stringview
             payloadTid: (ztypes.tid.create from: po9.u64)
         )
     } case none then null
@@ -19540,10 +19538,9 @@ applyPredFact: function {ast: Ast st: zenv.ZSymbolTable f: ArmPredFact.view hold
             po9
         ) case some then {
             (st.narrow
-                pool: ast.names
                 nameId: (nameIdOf :ast name: f.subject.stringview)
                 toTypeId: po9
-                subtypeName: f.armName.stringview
+                subtypeName: (nameIdOf :ast name: f.armName.stringview)
                 shadow: true
             )
             (armPayloadReadonly
@@ -19557,9 +19554,8 @@ applyPredFact: function {ast: Ast st: zenv.ZSymbolTable f: ArmPredFact.view hold
         } case none then null
     } else {
         (st.exclude
-            pool: ast.names
             nameId: (nameIdOf :ast name: f.subject.stringview)
-            subtypeName: f.armName.stringview
+            subtypeName: (nameIdOf :ast name: f.armName.stringview)
             fullTypeId: f.fullTid
         )
         shadowCollapseIfSingle :ast :st name: f.subject.stringview fullTid: f.fullTid
@@ -19579,11 +19575,10 @@ postGuardRecord: function {
 } is {
     if (st.isShadowNarrowed nameId: (nameIdOf :ast name: subject)) == false then return
     arm9: st.getSubtypeName nameId: (nameIdOf :ast name: subject)
-    if arm9.length == 0 then return
-    po9: (st.typing.declChildOf
-        pool: ast.names
+    if arm9.isZero then return
+    po9: (st.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: fullTid.u64)
-        name: arm9.stringview
+        nameId: arm9
     )
     match (
         po9
@@ -19596,7 +19591,7 @@ postGuardRecord: function {
         rv9: ztypes.mangleVarName name: subject
         st.typing.postGuardRecv.set key: stmtNid.u64 value: rv9
         st.typing.postGuardTid.set key: stmtNid.u64 value: fullTid
-        av9: arm9.copy
+        av9: zast.poolTextCopy pool: ast.names ref: arm9
         st.typing.postGuardArm.set key: stmtNid.u64 value: av9
     } case none then null
 }
@@ -19991,10 +19986,9 @@ checkAssignment: function {
         ucArm: unionCreateArmName :ast :st n: av9
         if ucArm.length > 0 then {
             (st.narrow
-                pool: ast.names
                 nameId: asgn.name
                 toTypeId: vt
-                subtypeName: ucArm.stringview
+                subtypeName: (nameIdOf :ast name: ucArm.stringview)
                 shadow: false
             )
         }
@@ -26135,10 +26129,9 @@ checkCase: function {
                     armo9
                 ) case some then {
                     (st.narrow
-                        pool: ast.names
                         nameId: (nameIdOf :ast name: targetName.stringview)
                         toTypeId: armo9
-                        subtypeName: armName.stringview
+                        subtypeName: (nameIdOf :ast name: armName.stringview)
                         shadow: true
                     )
                     (armPayloadReadonly
@@ -26175,9 +26168,8 @@ checkCase: function {
         if targetName.length > 0 when subjT > 0 then {
             with eiter: covered.iterate do for en2: eiter loop {
                 (st.exclude
-                    pool: ast.names
                     nameId: (nameIdOf :ast name: targetName.stringview)
-                    subtypeName: en2.stringview
+                    subtypeName: (nameIdOf :ast name: en2.stringview)
                     fullTypeId: subjT
                 )
             }
@@ -26210,13 +26202,15 @@ checkCase: function {
                     nameId: (nameIdOf :ast name: targetName.stringview)
                     fullTypeId: subjT
                 )
-                nsn9 = gsn9
+                if (gsn9.isZero) == false then {
+                    nsn9 = zast.poolTextCopy pool: ast.names ref: gsn9
+                }
             }
             if nsn9.length > 0 then {
                 nreq9: nsn9.copy
                 required9.append nreq9
             } else {
-                excl9: (Set String)
+                excl9: (IdSet zast.nameid)
                 if targetName.length > 0 then {
                     (st.collectExcluded
                         nameId: (nameIdOf :ast name: targetName.stringview)
@@ -26224,7 +26218,8 @@ checkCase: function {
                     )
                 }
                 with a0it9: arms2.iterate do for an0: a0it9 loop {
-                    if (excl9.has item: an0) == false then required9.append an0.copy
+                    anId9: nameIdOf :ast name: an0.stringview
+                    if (excl9.has item: anId9) == false then required9.append an0.copy
                 }
             }
             allCovered: true
@@ -26267,9 +26262,8 @@ checkCase: function {
     if targetName.length > 0 when subjT > 0 then {
         with diter: diverging.iterate do for dn2: diter loop {
             (st.exclude
-                pool: ast.names
                 nameId: (nameIdOf :ast name: targetName.stringview)
-                subtypeName: dn2.stringview
+                subtypeName: (nameIdOf :ast name: dn2.stringview)
                 fullTypeId: subjT
             )
         }
