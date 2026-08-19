@@ -885,71 +885,28 @@ crossWalk: function {ast: Ast gc: GenCross n: Node.view inYieldLoop: bool} is {
         for p0: piter loop {
             crossWalk :ast :gc n: (ast.nodes.get i: p0.u64) inYieldLoop: sub
         }
-    } case statement then {
-        siter: n.statements.iterate
-        for s0Id: siter loop {
-            crossWalk :ast :gc n: (ast.nodes.get i: s0Id.u64) :inYieldLoop
-        }
-    } case statementline then {
-        crossWalk :ast :gc n: (ast.nodes.get i: n.statementline.u64) :inYieldLoop
-    } case expression then {
-        crossWalk :ast :gc n: (ast.nodes.get i: n.expression.u64) :inYieldLoop
-    } case reassignment then {
-        crossWalk :ast :gc n: (ast.nodes.get i: n.topath.u64) :inYieldLoop
-        crossWalk :ast :gc n: (ast.nodes.get i: n.value.u64) :inYieldLoop
-    } case swapstmt then {
-        crossWalk :ast :gc n: (ast.nodes.get i: n.lhs.u64) :inYieldLoop
-        crossWalk :ast :gc n: (ast.nodes.get i: n.rhs.u64) :inYieldLoop
-    } case ifexpr then {
-        cliter: n.clauses.iterate
-        for cl0Id: cliter loop {
-            crossWalk :ast :gc n: (ast.nodes.get i: cl0Id.u64) :inYieldLoop
-        }
-        if n.elseclause > 0 then {
-            ec: ast.nodes.get i: n.elseclause.u64
-            crossWalk :ast :gc n: ec :inYieldLoop
-        }
-    } case ifclause then {
-        coiter: n.conditions.iterate
-        for c0Id: coiter loop {
-            crossWalk :ast :gc n: (ast.nodes.get i: c0Id.u64) :inYieldLoop
-        }
-        crossWalk :ast :gc n: (ast.nodes.get i: n.statement.u64) :inYieldLoop
-    } case doexpr then {
-        crossWalk :ast :gc n: (ast.nodes.get i: n.statement.u64) :inYieldLoop
-    } case withexpr then {
-        crossWalk :ast :gc n: (ast.nodes.get i: n.value.u64) :inYieldLoop
-        crossWalk :ast :gc n: (ast.nodes.get i: n.body.u64) :inYieldLoop
-    } case caseexpr then {
-        crossWalk :ast :gc n: (ast.nodes.get i: n.subject.u64) :inYieldLoop
-        mliter: n.clauses.iterate
-        for m0: mliter loop {
-            crossWalk :ast :gc n: (ast.nodes.get i: m0.u64) :inYieldLoop
-        }
-        if n.elseclause > 0 then {
-            ecw: ast.nodes.get i: n.elseclause.u64
-            crossWalk :ast :gc n: ecw :inYieldLoop
-        }
     } case caseclause then {
+        # the arm pattern is not a use of a local
         crossWalk :ast :gc n: (ast.nodes.get i: n.statement.u64) :inYieldLoop
     } case call then {
-        cciter: n.arguments.iterate
-        for cc0: cciter loop {
-            crossWalk :ast :gc n: (ast.nodes.get i: cc0.u64) :inYieldLoop
-        }
-    } case namedoperation then {
-        crossWalk :ast :gc n: (ast.nodes.get i: n.operation.u64) :inYieldLoop
+        # the callee name is not a use of a local
+        crossWalkIds :ast :gc ids: n.arguments :inYieldLoop
     } case binop then {
+        # the operator atom is not a use of a local
         crossWalk :ast :gc n: (ast.nodes.get i: n.lhs.u64) :inYieldLoop
         crossWalk :ast :gc n: (ast.nodes.get i: n.rhs.u64) :inYieldLoop
     } case dottedpath then {
+        # a member selector is not a use of a local
         crossWalk :ast :gc n: (ast.nodes.get i: n.parent.u64) :inYieldLoop
-    } case atomstring then {
-        apiter: n.stringparts.iterate
-        for ap0: apiter loop {
-            crossWalk :ast :gc n: (ast.nodes.get i: ap0.u64) :inYieldLoop
-        }
-    } else null
+    } else {
+        crossWalkIds :ast :gc ids: (zast.childIds :ast :n) :inYieldLoop
+    }
+}
+
+crossWalkIds: function {ast: Ast gc: GenCross ids: (ListVal u32).view inYieldLoop: bool} is {
+    with it: ids.iterate do for c: it loop {
+        crossWalk :ast :gc n: (ast.nodes.get i: c.u64) :inYieldLoop
+    }
 }
 
 # crossWalk over an optional node.
@@ -1098,8 +1055,7 @@ cloneInner: function {ast: Ast.view n: Node.view} out Node is {
 # `_iterN`). Without this, the iterable would be a C-stack local that
 # does not survive a suspension; the synthetic local is visible to the
 # crossing analysis (the yielding-loop rule promotes it) and to the
-# typeof field machinery. Recurses into for bodies only, mirroring the
-# reference.
+# typeof field machinery. Recurses into for bodies only.
 promoteIterables: function {ast: Ast.view ctr: NameCtr n: Node.view} out Node is {
     match (
         n
