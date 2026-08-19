@@ -4094,10 +4094,10 @@ fnHasLockParam: function {ast: Ast.view fnode: zast.FunctionData.view} out bool 
     return found9
 }
 
-# typeHasNonOwnedField9 -- the type declares at least one field the instance does
+# typeHasNonOwnedField -- the type declares at least one field the instance does
 # NOT own: a `borrow`/`view` slot, i.e. a reference into something else. Such an
 # instance is only sound while whatever it points at outlives it.
-typeHasNonOwnedField9: function {ty: ztyping.ZTyping tid: ztypes.tid} out bool is {
+typeHasNonOwnedField: function {ty: ztyping.ZTyping tid: ztypes.tid} out bool is {
     if tid.isZero then return false
     fn9: (ListVal u64)
     ft9: (ListVal u64)
@@ -4118,9 +4118,9 @@ typeHasNonOwnedField9: function {ty: ztyping.ZTyping tid: ztypes.tid} out bool i
     return found9
 }
 
-# returnNamesThis9 -- the return type is the enclosing type itself (`out this`,
+# returnNamesThis -- the return type is the enclosing type itself (`out this`,
 # with or without a marker), which is what a constructor writes.
-returnNamesThis9: function {ast: Ast.view oId: zast.nodeid} out bool is {
+returnNamesThis: function {ast: Ast.view oId: zast.nodeid} out bool is {
     if oId.isZero then return false
     rn9: rootNameOf :ast n: (ast.nodes.get i: oId.u64)
     return rn9.stringview == "this"
@@ -4140,11 +4140,11 @@ checkTakexHonesty: function {
     defName: StringView
 } is {
     if thisTid.isZero then return
-    if (returnNamesThis9 :ast oId: fnode.returntype) == false then return
+    if (returnNamesThis :ast oId: fnode.returntype) == false then return
     # a reference return is a different contract, checked by checkBorrowReturnLock
     if (returnHasBorrowMarker :ast oId: fnode.returntype) then return
     if (returnHasTakexMarker :ast oId: fnode.returntype) then return
-    if (typeHasNonOwnedField9 :ty tid: (ztypes.tid.create from: thisTid.u64)) == false then return
+    if (typeHasNonOwnedField :ty tid: (ztypes.tid.create from: thisTid.u64)) == false then return
     (addResolveErrorH
         :ty
         nodeid: fnode.nodeid
@@ -6367,9 +6367,9 @@ checkOneRequireBlock: function {
     }
 }
 
-# requireLibraryOf9 -- the link library one demanded `require:` block names, ""
+# requireLibraryOf -- the link library one demanded `require:` block names, ""
 # when it names none. A pure read of the constant its resolution folded.
-requireLibraryOf9: function {
+requireLibraryOf: function {
     ty: ztyping.ZTyping.view
     declId: ztypes.declid
     libNid: zast.nameid
@@ -6404,7 +6404,7 @@ requiredLibs: function {
         libNid9w: zast.poolFind pool: program.ast.names text: "library"
         if libNid9w.isZero then return libs9w
         with rit9w: ty.requireDemanded.iterate do for rq9w: rit9w loop {
-            lib9x: requireLibraryOf9 :ty declId: rq9w libNid: libNid9w
+            lib9x: requireLibraryOf :ty declId: rq9w libNid: libNid9w
             if lib9x.length > 0 then {
                 dup9w: false
                 with dit9w: libs9w.iterate do for e9w: dit9w loop {
@@ -10248,11 +10248,11 @@ publicNsChildOf: function {ty: ztyping.ZTyping root: ztypes.declid} out ztypes.d
     return (ty.declPublicNsOf owner: root)
 }
 
-# owningUnitDecl9 -- the unit a declaration is written in: the nearest
+# owningUnitDecl -- the unit a declaration is written in: the nearest
 # enclosing unit-kind Decl, or the declaration itself when it is one. Not the
 # file root -- a subunit owns its own `require:` block, and `wideint`'s is not
 # `system`'s.
-owningUnitDecl9: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out ztypes.declid is {
+owningUnitDecl: function {ty: ztyping.ZTyping.view declId: ztypes.declid} out ztypes.declid is {
     cur9: declId
     for cur9 > 0 loop {
         do9: ty.decls.get i: cur9.u64
@@ -10275,7 +10275,7 @@ ensureUnitRequire: function {
     ast: Ast
     declId: ztypes.declid
 } is {
-    own9: owningUnitDecl9 :ty :declId
+    own9: owningUnitDecl :ty :declId
     if own9.isZero then return
     if (ty.requireSeen.has item: own9.u64) then return
     ty.requireSeen.add item: own9.u64
@@ -11200,11 +11200,11 @@ instFillCallable: function {r: InstReq op: Node.view} is {
 }
 
 # the atom id of an instantiation-call argument.
-instArgAtomId9: function {ast: Ast.view op: Node.view} out u64 is {
+instArgAtomId: function {ast: Ast.view op: Node.view} out u64 is {
     match (
         op
     ) case expression then {
-        return (instArgAtomId9 :ast op: (ast.nodes.get i: op.expression.u64))
+        return (instArgAtomId :ast op: (ast.nodes.get i: op.expression.u64))
     } case atomid then {
         return op.nodeid.u64
     } else {
@@ -11229,7 +11229,7 @@ fillUnitArgs: function {ast: Ast.view r: InstReq op: Node.view} is {
             ) case namedoperation then {
                 lbl9: zast.nameTextCopy :ast ref: a9.name
                 anm9: atomName :ast n: (ast.nodes.get i: a9.operation.u64)
-                aid9: instArgAtomId9 :ast op: (ast.nodes.get i: a9.operation.u64)
+                aid9: instArgAtomId :ast op: (ast.nodes.get i: a9.operation.u64)
                 r.argLabels.append lbl9
                 r.argNames.append anm9
                 r.argAtomIds.append aid9
@@ -27452,12 +27452,12 @@ checkFunctionBodyIn: function {
 }
 
 # checkUnitBodies -- walk every function definition with a body in one unit.
-# walkUnitTemplateBodies9 -- body-walk a generic unit template's functions with
+# walkUnitTemplateBodies -- body-walk a generic unit template's functions with
 # the generic param UNBOUND (no st.define of the arg), so a `match t` subject
 # resolves to 0 and checkCase stamps it as a genericParam (against the bare unit
 # name) for the emitter to dissect. Mirrors checkUnitBodies' fn loop (index-based
 # so it never holds the iterator lock while passing unitBody).
-walkUnitTemplateBodies9: function {
+walkUnitTemplateBodies: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     unitDecl: ztypes.declid
@@ -27539,7 +27539,7 @@ walkGenericUnitTemplates: function {st: zenv.ZSymbolTable program: Node} is {
             }
             if uop9 > 0 then {
                 if (unitDefIsGeneric ast: program.ast oId: uop9) then {
-                    (walkUnitTemplateBodies9
+                    (walkUnitTemplateBodies
                         :st
                         ast: program.ast
                         unitDecl: (unitDeclOfName
@@ -27572,7 +27572,7 @@ walkGenericUnitTemplates: function {st: zenv.ZSymbolTable program: Node} is {
                         # it is written in -- its own name is no file unit, and
                         # naming it only ever meant "whatever frame the cursor
                         # is in", which is this unit
-                        (walkUnitTemplateBodies9
+                        (walkUnitTemplateBodies
                             :st
                             ast: program.ast
                             unitDecl: (unitDeclOfName
@@ -29229,13 +29229,13 @@ constArithInt: function {
 # constCompareInt / constCompareFloat -- the six comparisons, yielding a bool
 # value. Written twice rather than once over f64 because an i64 comparison must
 # not lose precision by routing through a float.
-# boolConst9 -- the folded truth value `v` as a constant naming one of bool's
+# boolConst -- the folded truth value `v` as a constant naming one of bool's
 # arms. bool is a variant like any other, so its constants are armKind ones:
 # `true` is the arm bool declares second and `false` the arm it declares first,
 # both read from what the checker recorded for the declaration rather than
 # spelled here. noConst when bool is not in the program, or when its arms were
 # not recorded -- an absent fold is a runtime branch, never a wrong one.
-boolConst9: function {
+boolConst: function {
     ast: Ast
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -29271,12 +29271,12 @@ constCompareInt: function {
     a: i64
     b: i64
 } out ztypes.cval is {
-    if op == "==" then return (boolConst9 :ast :ty :reg v: (a == b))
-    if op == "!=" then return (boolConst9 :ast :ty :reg v: (a != b))
-    if op == "<" then return (boolConst9 :ast :ty :reg v: (a < b))
-    if op == "<=" then return (boolConst9 :ast :ty :reg v: (a <= b))
-    if op == ">" then return (boolConst9 :ast :ty :reg v: (a > b))
-    if op == ">=" then return (boolConst9 :ast :ty :reg v: (a >= b))
+    if op == "==" then return (boolConst :ast :ty :reg v: (a == b))
+    if op == "!=" then return (boolConst :ast :ty :reg v: (a != b))
+    if op == "<" then return (boolConst :ast :ty :reg v: (a < b))
+    if op == "<=" then return (boolConst :ast :ty :reg v: (a <= b))
+    if op == ">" then return (boolConst :ast :ty :reg v: (a > b))
+    if op == ">=" then return (boolConst :ast :ty :reg v: (a >= b))
     return ztypes.noConst
 }
 
@@ -29288,12 +29288,12 @@ constCompareFloat: function {
     a: f64
     b: f64
 } out ztypes.cval is {
-    if op == "==" then return (boolConst9 :ast :ty :reg v: (a == b))
-    if op == "!=" then return (boolConst9 :ast :ty :reg v: (a != b))
-    if op == "<" then return (boolConst9 :ast :ty :reg v: (a < b))
-    if op == "<=" then return (boolConst9 :ast :ty :reg v: (a <= b))
-    if op == ">" then return (boolConst9 :ast :ty :reg v: (a > b))
-    if op == ">=" then return (boolConst9 :ast :ty :reg v: (a >= b))
+    if op == "==" then return (boolConst :ast :ty :reg v: (a == b))
+    if op == "!=" then return (boolConst :ast :ty :reg v: (a != b))
+    if op == "<" then return (boolConst :ast :ty :reg v: (a < b))
+    if op == "<=" then return (boolConst :ast :ty :reg v: (a <= b))
+    if op == ">" then return (boolConst :ast :ty :reg v: (a > b))
+    if op == ">=" then return (boolConst :ast :ty :reg v: (a >= b))
     return ztypes.noConst
 }
 
@@ -29860,19 +29860,19 @@ constStringMethod: function {
         a9: (constStrArgAt :ast :ty :reg :unitDecl :args label: lbl9 idx: 0)
         if (a9.kind.svalKind) == false then return ztypes.noConst
         as9: constStringAt :ty id: a9.strId
-        if name == "startsWith" then return (boolConst9
+        if name == "startsWith" then return (boolConst
             :ast
             :ty
             :reg
             v: (s9.startsWith prefix: as9)
         )
-        if name == "endsWith" then return (boolConst9
+        if name == "endsWith" then return (boolConst
             :ast
             :ty
             :reg
             v: (s9.endsWith suffix: as9)
         )
-        return (boolConst9 :ast :ty :reg v: (s9.contains needle: as9))
+        return (boolConst :ast :ty :reg v: (s9.contains needle: as9))
     }
     if name == "substring" then {
         f9: constStrArgAt :ast :ty :reg :unitDecl :args label: "from" idx: 0
@@ -30041,7 +30041,7 @@ evalConstNode: function {
             if pcv9.kind.armKind then {
                 cnid0: zast.poolFind pool: ast.names text: cn9.stringview
                 if cnid0.isZero then return ztypes.noConst
-                return (boolConst9 :ast :ty :reg v: (pcv9.armName == cnid0))
+                return (boolConst :ast :ty :reg v: (pcv9.armName == cnid0))
             }
             if pcv9.kind.svalKind then {
                 return (constStringDotted
@@ -30071,7 +30071,7 @@ evalConstNode: function {
         if pv9.kind.armKind then {
             cnid9: zast.poolFind pool: ast.names text: cn9.stringview
             if cnid9.isZero then return ztypes.noConst
-            return (boolConst9 :ast :ty :reg v: (pv9.armName == cnid9))
+            return (boolConst :ast :ty :reg v: (pv9.armName == cnid9))
         }
         # a literal receiver (`"abcd".length`) or a qualified constant
         # (`quadfloat.LIB.length`): the parent is not a bare atom, so its value
@@ -30128,8 +30128,8 @@ evalConstNode: function {
         if lv9.kind.armKind when rv9.kind.armKind then {
             same9: false
             if lv9.armTid == rv9.armTid when lv9.armName == rv9.armName then same9 = true
-            if op9.stringview == "==" then return (boolConst9 :ast :ty :reg v: same9)
-            if op9.stringview == "!=" then return (boolConst9 :ast :ty :reg v: ((same9) == false))
+            if op9.stringview == "==" then return (boolConst :ast :ty :reg v: same9)
+            if op9.stringview == "!=" then return (boolConst :ast :ty :reg v: ((same9) == false))
             return ztypes.noConst
         }
         # two string constants compare by their interned TEXT. Only equality is
@@ -30139,8 +30139,8 @@ evalConstNode: function {
             ls9: constStringAt :ty id: lv9.strId
             rs9: constStringAt :ty id: rv9.strId
             eq9: ls9.stringview == rs9.stringview
-            if op9.stringview == "==" then return (boolConst9 :ast :ty :reg v: eq9)
-            if op9.stringview == "!=" then return (boolConst9 :ast :ty :reg v: ((eq9) == false))
+            if op9.stringview == "==" then return (boolConst :ast :ty :reg v: eq9)
+            if op9.stringview == "!=" then return (boolConst :ast :ty :reg v: ((eq9) == false))
             # `+` BUILDS, so the folded value is the joined text, interned like
             # any other. `A + B + C` folds left to right through this leg with
             # no runtime temporary at any step.
@@ -31765,24 +31765,24 @@ declSurfaceOfName: function {
         ro9: unitDecl
         if (ro9.isZero) == false then {
             cd9: ty.declFindChild parentDeclId: ro9 :nameId
-            sv9: declSurfaceEnsure9 :ty :reg :ast declId: cd9 want: tid
+            sv9: declSurfaceEnsure :ty :reg :ast declId: cd9 want: tid
             if sv9 > 0 then return sv9
         }
         co9: ty.declFindChild parentDeclId: ty.programRoot nameId: (nameIdOf :ast name: "core")
         if (co9.isZero) == false then {
             cd8: ty.declFindChild parentDeclId: co9 :nameId
-            sv8: declSurfaceEnsure9 :ty :reg :ast declId: cd8 want: tid
+            sv8: declSurfaceEnsure :ty :reg :ast declId: cd8 want: tid
             if sv8 > 0 then return sv8
         }
     }
     return (declOfTypeId :reg :tid)
 }
 
-# declSurfaceEnsure9 -- accept a candidate surface Decl only when its
+# declSurfaceEnsure -- accept a candidate surface Decl only when its
 # minted type id equals the reference's resolved tid, resolving a
 # not-yet-touched re-export on the spot -- a stamped surface must serve
 # both navigation (its node) and tid consumers like the emitter.
-declSurfaceEnsure9: function {
+declSurfaceEnsure: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry.view
     ast: Ast

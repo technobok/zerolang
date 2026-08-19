@@ -596,7 +596,7 @@ shadow-guard:
 # typechecker stamps and canonical ids; every remaining by-name resolution is a
 # counted residual (template re-emission, probe-chain legs). A rising count
 # means a new name-resolved site -- resolve from stamps/ids instead, or lower
-# the baseline when a residual is legitimately removed. typeNameOfReg9 went
+# the baseline when a residual is legitimately removed. regNameOf went
 # 91 -> 92 for the arm-alias leg's scalar test: `scalarCTypeFor` is the
 # shadow-SAFE wrapper (it re-checks the tid for a user shadow) and it needs
 # the type's name, so the name lookup is the sanctioned shape here. 92 -> 93
@@ -618,7 +618,7 @@ emitter-guard:
 	e3=$$(grep -c 'resolveTypeIdByName' src/zemitterc.z); \
 	e4=$$(grep -c 'userFnId' src/zemitterc.z); \
 	e5=$$(grep -c 'childOwnershipText' src/zemitterc.z); \
-	e6=$$(grep -c 'typeNameOfReg9' src/zemitterc.z); \
+	e6=$$(grep -c 'regNameOf' src/zemitterc.z); \
 	e7=$$(grep -c 'ztypes.mangleVarName' src/zemitterc.z); \
 	e8=$$(grep -cF 'io.readText' src/zemitterc.z); \
 	e9=$$(grep -c 'monoOriginName' src/zemitterc.z); \
@@ -634,7 +634,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 22; \
 	chk "userFnId" "$$e4" 32; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "typeNameOfReg9" "$$e6" 100; \
+	chk "regNameOf" "$$e6" 98; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 4; \
 	chk "monoOriginName" "$$e9" 8; \

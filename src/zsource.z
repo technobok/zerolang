@@ -2933,12 +2933,12 @@ Analysis: class {
     # main unit's function defs (precise name/position; the receiver is exempt). Locals are the
     # assignment bindings in this file. The opt-out is to `touch` the variable: write its name on
     # its own line (it lowers to `(void)(x);`), which stamps a use.
-    # isBuiltinCarrierTid9 -- String, StringView or a container. `isReftypeOf`
+    # isBuiltinCarrierTid -- String, StringView or a container. `isReftypeOf`
     # says true for all of them, and `isNativeOf` splits them rather than naming
     # them: String and StringView are declared `class is native`, the containers
     # are plain classes. Compare against the builtin ids the way
     # isContainerReaderCall does.
-    isBuiltinCarrierTid9: function {
+    isBuiltinCarrierTid: function {
         :this
         ast: Ast
         st: zenv.ZSymbolTable
@@ -3035,7 +3035,7 @@ Analysis: class {
         } case none then null
         if vt9 == 0 then return
         if (st.reg.isReftypeOf tid: (ztypes.tid.create from: vt9.u64)) == false then return
-        if (this.isBuiltinCarrierTid9 :ast :st tid: (ztypes.tid.create from: vt9.u64)) then return
+        if (this.isBuiltinCarrierTid :ast :st tid: (ztypes.tid.create from: vt9.u64)) then return
         ftid9: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: fnOp.u64
         if ftid9.isZero then return
         own9: (st.typing.declOwnershipOfId
@@ -3264,16 +3264,16 @@ Analysis: class {
         } else null
     }
 
-    # owningConvKind9 -- the RHS is an OWNING String conversion: `.string` on a
+    # owningConvKind -- the RHS is an OWNING String conversion: `.string` on a
     # StringView base, `.copy` on a String base, or a nameTextCopy/poolTextCopy
     # call. Returns the spelling for the message, "" otherwise.
-    # srcIsFieldRead9 -- the conversion's source is a FIELD read (`ctx.mainName`)
+    # srcIsFieldRead -- the conversion's source is a FIELD read (`ctx.mainName`)
     # rather than a local, a call, or a method chain. A field holds its bytes only
     # until something rebinds it, and any call in the local's live range may do
     # exactly that -- the save/restore idiom around a rebinding setter frees the
     # old String, so an alias of the field would dangle. The owned copy is
     # load-bearing there, and L022 leaves it alone.
-    srcIsFieldRead9: function {
+    srcIsFieldRead: function {
         :this
         ast: Ast.view
         st: zenv.ZSymbolTable
@@ -3282,7 +3282,7 @@ Analysis: class {
         match (
             n
         ) case expression then {
-            return (this.srcIsFieldRead9 :ast :st n: (ast.nodes.get i: n.expression.u64))
+            return (this.srcIsFieldRead :ast :st n: (ast.nodes.get i: n.expression.u64))
         } case dottedpath then {
             fcn9: atomName :ast n: (ast.nodes.get i: n.child.u64)
             if fcn9.length == 0 then return false
@@ -3310,7 +3310,7 @@ Analysis: class {
         }
     }
 
-    owningConvKind9: function {
+    owningConvKind: function {
         :this
         ast: Ast.view
         st: zenv.ZSymbolTable
@@ -3321,13 +3321,13 @@ Analysis: class {
         match (
             rn9
         ) case expression then {
-            return (this.owningConvKind9 :ast :st rhsId: rn9.expression)
+            return (this.owningConvKind :ast :st rhsId: rn9.expression)
         } case dottedpath then {
             chn9: ast.nodes.get i: rn9.child.u64
             cn9: atomName :ast n: chn9
             if cn9.length == 0 then return "".string
             pnn9: ast.nodes.get i: rn9.parent.u64
-            if (this.srcIsFieldRead9 :ast :st n: pnn9) then return "".string
+            if (this.srcIsFieldRead :ast :st n: pnn9) then return "".string
             pin9: nodeInfoOf n: pnn9
             bt9: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: pin9.id.u64
             if bt9.isZero then return "".string
@@ -3365,10 +3365,10 @@ Analysis: class {
         }
     }
 
-    # convSourceRootVid9 -- the variable id at the ROOT of an owning conversion's
+    # convSourceRootVid -- the variable id at the ROOT of an owning conversion's
     # source path (`ctx.mainName.copy` -> `ctx`), or the zero vid when the source
     # is not rooted at a name.
-    convSourceRootVid9: function {
+    convSourceRootVid: function {
         :this
         ast: Ast.view
         st: zenv.ZSymbolTable
@@ -3380,11 +3380,11 @@ Analysis: class {
         match (
             rn9
         ) case expression then {
-            return (this.convSourceRootVid9 :ast :st rhsId: rn9.expression)
+            return (this.convSourceRootVid :ast :st rhsId: rn9.expression)
         } case dottedpath then {
-            return (this.convSourceRootVid9 :ast :st rhsId: rn9.parent)
+            return (this.convSourceRootVid :ast :st rhsId: rn9.parent)
         } case call then {
-            return (this.convSourceRootVid9 :ast :st rhsId: rn9.callable)
+            return (this.convSourceRootVid :ast :st rhsId: rn9.callable)
         } case atomid then {
             avo9: st.typing.atomVariableId.get key: rn9.nodeid.u64
             match (
@@ -3454,7 +3454,7 @@ Analysis: class {
                             match (
                                 nodeL9
                             ) case assignment then {
-                                kind9: this.owningConvKind9 ast: prog.ast :st rhsId: nodeL9.value
+                                kind9: this.owningConvKind ast: prog.ast :st rhsId: nodeL9.value
                                 # a view is only equivalent while the SOURCE holds
                                 # the same bytes: a root that is written -- directly,
                                 # or by a callee taking it as a mutable borrow --
@@ -3463,7 +3463,7 @@ Analysis: class {
                                 # and a loop whose tail reassigns the source).
                                 srcMut9: false
                                 {
-                                    rvid9: (this.convSourceRootVid9
+                                    rvid9: (this.convSourceRootVid
                                         ast: prog.ast
                                         :st
                                         rhsId: nodeL9.value
