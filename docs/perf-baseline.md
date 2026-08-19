@@ -1030,7 +1030,34 @@ container, which an outstanding iterator borrow forbids for the whole loop.
 Implementing them by counting through `iterateItems` instead would turn the
 ordered walks over a unit root's ~1,400 children into O(n²).
 
-Still `Map`, and still right: `subs` (keys not uniformly interned), the
-five emitter assoc-lists (14 `remove` call sites), the composite-key families,
-and the `pend*` triple, whose key is a (parent, name) pair and whose own
-comment says it holds a handful of entries.
+### What is still on `Map`, and which part of that is unfinished
+
+Two groups, and only one of them is a decision.
+
+**Staying on `Map`, by design:** `subs` (keys not uniformly interned), the five
+emitter assoc-lists (14 `remove` call sites), the `pend*` triple (a
+(parent, name) key, a handful of entries), and the 16 composite-key
+instantiations — `monostamp`, `callslot`, `constslot`, `dataconstkey`,
+`dataslotkey` — whose keys are two-field records and so cannot be an `idkey`.
+
+**Not finished:** the sweep above converted the four literal type spellings it
+matched, not the family. **95 id-keyed instantiations are still `MapVV` /
+`MapVR`** and all of them are migratable:
+
+| shape | instantiations | goes to |
+|---|---|---|
+| `MapVV u64 -> bool` | 40 | `IdSet` where set-shaped (5 fields), else `IdMapV` (18) |
+| `MapVV u64 -> tid` | 16 | `IdMapV` |
+| `MapVV tid -> tid` | 12 | `IdMapV` |
+| `MapVV u64 -> vid`, `vid -> bool` | 10 | `IdMapV` / `IdSet` |
+| `MapVR u32 / tid -> String` | 5 | `IdMapR` |
+| `u64 -> u32 / callkind / zownership / zparamownership / cval / foldedbranch` | 12 | `IdMapV` |
+
+That is most of `ztyping`'s stamp tables. Given what the finished 65 measured
+(−1.63% instructions, −14.7 MB), this remainder is the larger half of the win
+and is the obvious next slice.
+
+Two smaller items fall out of it: `zemitterc.idSetHas` is a hand-rolled
+`Map u64 -> bool` membership helper whose own name says what it wants to be,
+and `declPendMemberType` scans the whole `pend*` triple without returning on
+the hit, although `declPendWrite` guarantees at most one entry per key.
