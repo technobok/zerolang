@@ -522,6 +522,7 @@ Runner: class {
     dumpcases: String
     dumpgold: String
     srcDir: String
+    unitDir: String
     passN: u64
     leakclean: u64
     xleak: u64
@@ -545,6 +546,7 @@ runArchCases: function {r: Runner} is {
     srcs: (List String)
     archUnitFiles root: r.root.stringview sub: "src" into: srcs
     archUnitFiles root: r.root.stringview sub: "lib/system" into: srcs
+    archUnitFiles root: r.root.stringview sub: "tests/unit" into: srcs
     srcs.sort
     pool: (List PoolJob)
     with sit: srcs.iterate do for f: sit loop {
@@ -1196,6 +1198,37 @@ runDumpCases: function {r: Runner} is {
     }
 }
 
+# lexGoldenCase -- run the token dump over `src` and compare with `gold`
+# (skipped when no golden exists).
+lexGoldenCase: function {
+    r: Runner
+    dumpBin: StringView
+    src: StringView
+    gold: StringView
+    name: StringView
+} is {
+    if (io.exists path: gold) == false then return
+    ltoks: "\{r.tmp.stringview}/D_\{name}.tokens"
+    la: (List String)
+    la.append from: dumpBin.string
+    la.append from: src.string
+    (os.spawn
+        argv: la
+        cwd: ""
+        outPath: ltoks.stringview
+        errPath: "/dev/null"
+        timeoutSecs: r.timeoutSecs
+    )
+    gL: slurp path: gold
+    oL: slurp path: ltoks.stringview
+    if oL.stringview == gL.stringview then {
+        r.passN = r.passN + 1
+    } else {
+        print "FAIL(lexer) \{name}"
+        r.fails = r.fails + 1
+    }
+}
+
 # runDifferentialCases -- the DIFFERENTIAL (lexer / parser / program goldens) kind.
 runDifferentialCases: function {r: Runner} is {
     # ---------------- DIFFERENTIAL (lexer / parser / program goldens) ----------------
@@ -1213,8 +1246,8 @@ runDifferentialCases: function {r: Runner} is {
     zlxE: (zcArgv
         zc: r.zc.stringview
         ccFwd: r.ccFwd.stringview
-        name: "zlexer"
-        srcdir: r.srcDir.stringview
+        name: "zlexer_dump"
+        srcdir: r.unitDir.stringview
         sys: r.sys.stringview
         outc: zlxC.stringview
     )
@@ -1246,8 +1279,8 @@ runDifferentialCases: function {r: Runner} is {
     zpsE: (zcArgv
         zc: r.zc.stringview
         ccFwd: r.ccFwd.stringview
-        name: "zparser"
-        srcdir: r.srcDir.stringview
+        name: "zparser_dump"
+        srcdir: r.unitDir.stringview
         sys: r.sys.stringview
         outc: zpsC.stringview
     )
@@ -1298,28 +1331,14 @@ runDifferentialCases: function {r: Runner} is {
                 dnm: dsfx
                 exPath: "\{r.examplesDir}/\{dnm}.z"
                 if lexOk then {
-                    ltoks: "\{r.tmp}/D_\{dnm}.tokens"
-                    la: (List String)
-                    la.append from: zlxB.copy
-                    la.append from: exPath.copy
-                    (os.spawn
-                        argv: la
-                        cwd: ""
-                        outPath: ltoks.stringview
-                        errPath: "/dev/null"
-                        timeoutSecs: r.timeoutSecs
-                    )
                     lgold: "\{lexgold}/\{dnm}.tokens"
-                    if (io.exists path: lgold) then {
-                        gL: slurp path: lgold.stringview
-                        oL: slurp path: ltoks.stringview
-                        if oL.stringview == gL.stringview then {
-                            r.passN = r.passN + 1
-                        } else {
-                            print "FAIL(lexer) \{dnm}"
-                            r.fails = r.fails + 1
-                        }
-                    }
+                    (lexGoldenCase
+                        :r
+                        dumpBin: zlxB.stringview
+                        src: exPath.stringview
+                        gold: lgold.stringview
+                        name: dnm
+                    )
                 }
                 if parseOk then {
                     past: "\{r.tmp}/D_\{dnm}.ast"
@@ -1349,6 +1368,32 @@ runDifferentialCases: function {r: Runner} is {
             ddi = ddi + 1
         }
     } case err then null
+    # the lexer's edge-case fixtures, whose goldens sit beside them
+    if lexOk then {
+        edgeDir: "\{r.root.stringview}/tests/fixtures/zlexer_z"
+        edr: io.listDir path: edgeDir.stringview
+        match (
+            edr
+        ) case ok then {
+            with eit: edr.iterate do for ent: eit loop {
+                esfx: ent.stringview.stripSuffix s: ".z"
+                match (
+                    esfx
+                ) case some then {
+                    enm: esfx
+                    esrc: "\{edgeDir}/\{enm}.z"
+                    egold: "\{edgeDir}/\{enm}.tokens"
+                    (lexGoldenCase
+                        :r
+                        dumpBin: zlxB.stringview
+                        src: esrc.stringview
+                        gold: egold.stringview
+                        name: enm
+                    )
+                } case none then null
+            }
+        } case err then null
+    }
     if parseOk then {
         pr: io.listDir path: proggold
         match (
@@ -1406,8 +1451,8 @@ runVfsCases: function {r: Runner} is {
     zvfE: (zcArgv
         zc: r.zc.stringview
         ccFwd: r.ccFwd.stringview
-        name: "zvfs"
-        srcdir: r.srcDir.stringview
+        name: "zvfs_script"
+        srcdir: r.unitDir.stringview
         sys: r.sys.stringview
         outc: zvfC.stringview
     )
@@ -1925,6 +1970,7 @@ main: function is {
         dumpcases: dumpcases.take
         dumpgold: dumpgold.take
         srcDir: "\{r0}/src"
+        unitDir: "\{r0}/tests/unit"
         passN: 0
         leakclean: 0
         xleak: 0

@@ -1,0 +1,534 @@
+# zvfs_script -- the VFS script harness: `zvfs_script <file.script>` reads
+# one verb per line (entry / dump / provider / walk / stat / path / addfile /
+# open / vfs ...) and prints what each answers, for the
+# tests/fixtures/zvfs_ops goldens.
+
+public: unit {
+    :main
+}
+
+dentry: zvfs.dentry
+dirdata: zvfs.dirdata
+filedata: zvfs.filedata
+mountdata: zvfs.mountdata
+notfounddata: zvfs.notfounddata
+DentryTable: zvfs.DentryTable
+ProviderTable: zvfs.ProviderTable
+ProviderBox: zvfs.ProviderBox
+ZVfs: zvfs.ZVfs
+OpenResult: zvfs.OpenResult
+NullProvider: zvfs.NullProvider
+StringProvider: zvfs.StringProvider
+fsno: zvfs.fsno
+bindkind: zvfs.bindkind
+
+# Print "<id>: <arm-name>" for a single entry. Used by the `dump` verb.
+printEntry: function {id: u32 e: dentry} is {
+    match (
+        e
+    ) case root then {
+        print "\{id}: root"
+    } case notfound then {
+        print "\{id}: notfound"
+    } case file then {
+        print "\{id}: file"
+    } case directory then {
+        print "\{id}: directory"
+    } case mount then {
+        print "\{id}: mount"
+    }
+}
+
+
+# Tokenize a line into owned strings, skipping empty pieces that
+# .split sep: " " yields between consecutive spaces. The piece.string
+# projection allocates a fresh per-iteration String which is then
+# taken into buf via append. Both halves of this -- the take inside
+# the loop body and the freshness of `piece` per iteration -- are
+# valid only after the typecheck-pop and emitter-call-site fixes
+# landed in commits e93ad0f + 1e02c93.
+tokenizeLine: function {line: StringView} out List String is {
+    buf: (List String)
+    with it: (line.split sep: " ") do for piece: it loop {
+        if piece.length > 0 then buf.append piece.string
+    }
+    return buf
+}
+
+# Parse the i-th token as u32 via the stdlib's parseU64. Errors
+# surface as panics — PR-2 fixtures are hand-curated, the err path
+# is unreachable in practice.
+parseU32at: function {tokens: (List String).view i: u64} out u32 is {
+    s: tokens.get :i
+    sv: s.stringview
+    r: sv.parseU64
+    match (
+        r
+    ) case ok then {
+        return r.u32.orPanic
+    } case err then {
+        panic "bad numeric token"
+    }
+}
+
+# Verb: entry <arm> [args...]. Constructs the named dentry arm with
+# the given args, appends to the table, prints the assigned id.
+dispatchEntry: function {tokens: (List String).view table: DentryTable} is {
+    n: tokens.length
+    if n < 2 then panic "entry verb expects an arm name"
+    arm_str: tokens.get i: 1
+    arm: arm_str.stringview
+    if arm == "root" then {
+        if n != 2 then panic "entry root takes no args"
+        idx: table.append entry: dentry.root
+        print "\{idx.u64}"
+        return
+    }
+    if arm == "notfound" then {
+        if n != 5 then panic "entry notfound expects 3 args"
+        pid: fsno.create from: (parseU32at :tokens i: 2)
+        prv: parseU32at :tokens i: 3
+        nid: parseU32at :tokens i: 4
+        e: dentry.notfound (notfounddata parentid: pid providerid: prv nodeid: nid)
+        idx: table.append entry: e
+        print "\{idx.u64}"
+        return
+    }
+    if arm == "file" then {
+        if n != 5 then panic "entry file expects 3 args"
+        pid: fsno.create from: (parseU32at :tokens i: 2)
+        prv: parseU32at :tokens i: 3
+        nid: parseU32at :tokens i: 4
+        e: dentry.file (filedata parentid: pid providerid: prv nodeid: nid)
+        idx: table.append entry: e
+        print "\{idx.u64}"
+        return
+    }
+    if arm == "directory" then {
+        if n != 5 then panic "entry directory expects 3 args"
+        pid: fsno.create from: (parseU32at :tokens i: 2)
+        prv: parseU32at :tokens i: 3
+        nid: parseU32at :tokens i: 4
+        e: dentry.directory (dirdata parentid: pid providerid: prv nodeid: nid)
+        idx: table.append entry: e
+        print "\{idx.u64}"
+        return
+    }
+    if arm == "mount" then {
+        if n != 6 then panic "entry mount expects 4 args"
+        pid: fsno.create from: (parseU32at :tokens i: 2)
+        first: fsno.create from: (parseU32at :tokens i: 3)
+        second: fsno.create from: (parseU32at :tokens i: 4)
+        hassec_str: tokens.get i: 5
+        hassec_sv: hassec_str.stringview
+        hassec: false
+        if hassec_sv == "true" then hassec = true
+        e: dentry.mount (mountdata parentid: pid :first :second has_second: hassec)
+        idx: table.append entry: e
+        print "\{idx.u64}"
+        return
+    }
+    panic "unknown entry arm"
+}
+
+# Verb: dump <id>. Looks up the entry at that id and prints
+# "<id>: <arm-name>".
+dispatchDump: function {tokens: (List String).view table: DentryTable} is {
+    n: tokens.length
+    if n != 2 then panic "dump expects 1 arg"
+    id: parseU32at :tokens i: 1
+    e: table.entries.get i: id.u64
+    printEntry :id :e
+}
+
+# Verb: provider <kind>. Constructs a provider of the named
+# kind (`null` / `string` / `fs`), registers it in the provider
+# table, prints the assigned id.
+dispatchProvider: function {tokens: (List String).view providers: ProviderTable} is {
+    n: tokens.length
+    if n < 2 then panic "provider verb expects a kind name"
+    kind_str: tokens.get i: 1
+    kind: kind_str.stringview
+    if kind == "null" then {
+        if n != 2 then panic "provider null takes no args"
+        idx: providers.registerNull
+        print "\{idx.u64}"
+        return
+    }
+    if kind == "string" then {
+        if n != 2 then panic "provider string takes no args"
+        idx: providers.registerString
+        print "\{idx.u64}"
+        return
+    }
+    if kind == "fs" then {
+        if n != 4 then panic "provider fs expects 2 args (rootpath parentpath)"
+        rp_str: tokens.get i: 2
+        pp_str: tokens.get i: 3
+        rp: rp_str.copy
+        pp: pp_str.copy
+        idx: providers.registerFS rootpath: rp.take parentpath: pp.take
+        print "\{idx.u64}"
+        return
+    }
+    panic "unknown provider kind"
+}
+
+# Verb: walk <providerid> <name> <parentid>. Looks up provider,
+# calls its walk method, prints the returned NodeID.
+dispatchWalk: function {tokens: (List String).view providers: ProviderTable} is {
+    n: tokens.length
+    if n != 4 then panic "walk expects 3 args"
+    pid: parseU32at :tokens i: 1
+    name_str: tokens.get i: 2
+    name_sv: name_str.stringview
+    parent: parseU32at :tokens i: 3
+    box: providers.providers.getMut i: pid.u64
+    nid: box.p.walk name: name_sv :parent
+    print "\{nid}"
+}
+
+# Verb: stat <providerid> <itemid>. Looks up provider, calls stat,
+# prints the arm name (dir / file / notfound).
+dispatchStat: function {tokens: (List String).view providers: ProviderTable} is {
+    n: tokens.length
+    if n != 3 then panic "stat expects 2 args"
+    pid: parseU32at :tokens i: 1
+    item: parseU32at :tokens i: 2
+    box: providers.providers.get i: pid.u64
+    k: box.p.stat :item
+    match (
+        k
+    ) case dir then {
+        print "dir"
+    } case file then {
+        print "file"
+    } case notfound then {
+        print "notfound"
+    }
+}
+
+# Verb: path <providerid> <itemid>. Looks up provider, calls path,
+# prints the returned String.
+dispatchPath: function {tokens: (List String).view providers: ProviderTable} is {
+    n: tokens.length
+    if n != 3 then panic "path expects 2 args"
+    pid: parseU32at :tokens i: 1
+    item: parseU32at :tokens i: 2
+    box: providers.providers.get i: pid.u64
+    s: box.p.path :item
+    print s
+}
+
+# Verb: addFile <providerid> <path> <content>. Calls provider.addFile.
+# Path may include "/" for tree-building (StringProvider only).
+# NullProvider panics on addFile.
+dispatchAddFile: function {tokens: (List String).view providers: ProviderTable} is {
+    n: tokens.length
+    if n != 4 then panic "addFile expects 3 args"
+    pid: parseU32at :tokens i: 1
+    fpath_str: tokens.get i: 2
+    content_str: tokens.get i: 3
+    box: providers.providers.getMut i: pid.u64
+    # `.copy` to materialise a fresh owned String -- `tokens.get`
+    # returns a borrowed view aliasing the list's heap buffer, so a
+    # `.take` straight from there would alias-then-free the list's
+    # entry. addFile takes ownership of fresh Strings.
+    fpath: fpath_str.copy
+    content: content_str.copy
+    box.p.addFile fpath: fpath.take content: content.take
+}
+
+# printOpenResult -- format an OpenResult as one line on stdout:
+#   "ok: <content>"    for the ok arm (content interpolated)
+#   "err: <arm-name>"  for the err arm (13 IoError arms enumerated)
+# Used by both the provider-level `dispatchOpen` and the engine-level
+# `vfs open` subverb in dispatchVfs. Consumes `r`.
+printOpenResult: function {r: OpenResult.take} is {
+    match (
+        r
+    ) case ok then {
+        print "ok: \{r}"
+    } case err then {
+        match (
+            r
+        ) case notfound then {
+            print "err: notfound"
+        } case permissiondenied then {
+            print "err: permissiondenied"
+        } case interrupted then {
+            print "err: interrupted"
+        } case invalidpath then {
+            print "err: invalidpath"
+        } case eof then {
+            print "err: eof"
+        } case badencoding then {
+            print "err: badencoding"
+        } case exists then {
+            print "err: exists"
+        } case isdir then {
+            print "err: isdir"
+        } case notdir then {
+            print "err: notdir"
+        } case nospace then {
+            print "err: nospace"
+        } case other then {
+            print "err: other"
+        }
+    }
+}
+
+# Verb: open <providerid> <itemid>. Calls provider.open and prints
+# either "ok: <content>" or "err: <ioerror-tag>".
+dispatchOpen: function {tokens: (List String).view providers: ProviderTable} is {
+    n: tokens.length
+    if n != 3 then panic "open expects 2 args"
+    pid: parseU32at :tokens i: 1
+    item: parseU32at :tokens i: 2
+    box: providers.providers.get i: pid.u64
+    r: box.p.open :item
+    printOpenResult r: r.take
+}
+
+# Verb: vfs <subverb> [args...]. Subverbs:
+#   register null
+#   register string
+#   register fs <rootpath> <parentpath>
+#   walk <parentid> <name>
+#   stat <dentryid>
+#   path <dentryid>
+#   pathfromprovider <dentryid>
+#   open <dentryid>
+#   getline <fileid> <lineno>
+#   bind <name> <providerid>
+# Each prints one line: the returned id, the arm name, or the
+# path string.
+dispatchVfs: function {tokens: (List String).view vfs: ZVfs} is {
+    n: tokens.length
+    if n < 2 then panic "vfs verb expects a subverb"
+    sub_str: tokens.get i: 1
+    sub: sub_str.stringview
+    if sub == "register" then {
+        if n < 3 then panic "vfs register expects a kind"
+        kind_str: tokens.get i: 2
+        kind: kind_str.stringview
+        if kind == "null" then {
+            if n != 3 then panic "vfs register null takes no args"
+            did: vfs.registerNull
+            print "\{did.u64}"
+            return
+        }
+        if kind == "string" then {
+            if n != 3 then panic "vfs register string takes no args"
+            did: vfs.registerString
+            print "\{did.u64}"
+            return
+        }
+        if kind == "fs" then {
+            if n != 5 then panic "vfs register fs expects 2 args (rootpath parentpath)"
+            rp_str: tokens.get i: 3
+            pp_str: tokens.get i: 4
+            rp: rp_str.copy
+            pp: pp_str.copy
+            did: vfs.registerFS rootpath: rp.take parentpath: pp.take
+            print "\{did.u64}"
+            return
+        }
+        panic "vfs register: unknown kind"
+    }
+    if sub == "walk" then {
+        if n != 4 then panic "vfs walk expects 2 args (parentid name)"
+        pid: fsno.create from: (parseU32at :tokens i: 2)
+        name_str: tokens.get i: 3
+        name_sv: name_str.stringview
+        did: vfs.walk parent: pid name: name_sv
+        print "\{did.u64}"
+        return
+    }
+    if sub == "stat" then {
+        if n != 3 then panic "vfs stat expects 1 arg (dentryid)"
+        did: parseU32at :tokens i: 2
+        k: vfs.arm dentryid: did
+        match (
+            k
+        ) case dir then {
+            print "dir"
+        } case file then {
+            print "file"
+        } case notfound then {
+            print "notfound"
+        }
+        return
+    }
+    if sub == "path" then {
+        if n != 3 then panic "vfs path expects 1 arg (dentryid)"
+        did: parseU32at :tokens i: 2
+        s: vfs.path dentryid: did
+        print s
+        return
+    }
+    if sub == "pathfromprovider" then {
+        if n != 3 then panic "vfs pathfromprovider expects 1 arg (dentryid)"
+        did: fsno.create from: (parseU32at :tokens i: 2)
+        s: vfs.pathfromprovider dentryid: did
+        print s
+        return
+    }
+    if sub == "open" then {
+        if n != 3 then panic "vfs open expects 1 arg (dentryid)"
+        did: parseU32at :tokens i: 2
+        r: vfs.open dentryid: did
+        printOpenResult r: r.take
+        return
+    }
+    if sub == "getline" then {
+        if n != 4 then panic "vfs getline expects 2 args (dentryid lineno)"
+        did: parseU32at :tokens i: 2
+        ln_u32: parseU32at :tokens i: 3
+        ln: ln_u32.u64
+        opt: vfs.getline dentryid: did lineno: ln
+        match (
+            opt
+        ) case some then {
+            print "some: \{opt}"
+        } case none then {
+            print "none"
+        }
+        return
+    }
+    if sub == "bindroot" then {
+        if n != 4 then panic "vfs bindroot expects 2 args (newid kind)"
+        newid: fsno.create from: (parseU32at :tokens i: 2)
+        kind_str: tokens.get i: 3
+        kind_sv: kind_str.stringview
+        kind: bindkind.instead
+        if kind_sv == "instead" then {
+            kind = bindkind.instead
+        } else if kind_sv == "before" then {
+            kind = bindkind.before
+        } else if kind_sv == "after" then {
+            kind = bindkind.after
+        } else {
+            panic "vfs bindroot: unknown kind (instead/before/after)"
+        }
+        did: vfs.bindRoot :newid :kind
+        print "\{did.u64}"
+        return
+    }
+    if sub == "bind" then {
+        if n != 6 then panic "vfs bind expects 4 args (parentid name newid kind)"
+        pid: fsno.create from: (parseU32at :tokens i: 2)
+        name_str: tokens.get i: 3
+        name_sv: name_str.stringview
+        newid: fsno.create from: (parseU32at :tokens i: 4)
+        kind_str: tokens.get i: 5
+        kind_sv: kind_str.stringview
+        kind: bindkind.instead
+        if kind_sv == "instead" then {
+            kind = bindkind.instead
+        } else if kind_sv == "before" then {
+            kind = bindkind.before
+        } else if kind_sv == "after" then {
+            kind = bindkind.after
+        } else {
+            panic "vfs bind: unknown kind (instead/before/after)"
+        }
+        did: vfs.bind parentid: pid name: name_sv :newid :kind
+        print "\{did.u64}"
+        return
+    }
+    panic "vfs: unknown subverb"
+}
+
+# run one line of a VFS test script against the given tables.
+dispatchLine: function {line: StringView table: DentryTable providers: ProviderTable vfs: ZVfs} is {
+    tokens: tokenizeLine :line
+    if tokens.length == 0 then return
+    verb_str: tokens.get i: 0
+    verb: verb_str.stringview
+    if verb == "entry" then {
+        dispatchEntry :tokens :table
+        return
+    }
+    if verb == "dump" then {
+        dispatchDump :tokens :table
+        return
+    }
+    if verb == "provider" then {
+        dispatchProvider :tokens :providers
+        return
+    }
+    if verb == "walk" then {
+        dispatchWalk :tokens :providers
+        return
+    }
+    if verb == "stat" then {
+        dispatchStat :tokens :providers
+        return
+    }
+    if verb == "path" then {
+        dispatchPath :tokens :providers
+        return
+    }
+    if verb == "addFile" then {
+        dispatchAddFile :tokens :providers
+        return
+    }
+    if verb == "open" then {
+        dispatchOpen :tokens :providers
+        return
+    }
+    if verb == "vfs" then {
+        dispatchVfs :tokens :vfs
+        return
+    }
+    panic "unknown verb"
+}
+
+# run a whole VFS test script.
+runScript: function {text: String table: DentryTable providers: ProviderTable vfs: ZVfs} is {
+    sv: text.stringview
+    with li: sv.lines do for line: li loop {
+        trimmed: line.trim
+        if trimmed.length != 0 then {
+            fb_opt: trimmed.byteAt 0
+            match (
+                fb_opt
+            ) case some then {
+                if fb_opt != 35 then {
+                    dispatchLine line: trimmed :table :providers :vfs
+                }
+            } case none then null
+        }
+    }
+}
+
+# standalone entry point for the zvfs test-script runner.
+main: function is {
+    argv: os.args
+    if argv.length < 2 then {
+        io.eprintln "usage: zvfs <script.script>"
+        os.exit code: 2
+    }
+    path: argv.get i: 1
+    r: io.readText :path
+    match (
+        r
+    ) case ok then {
+        table: DentryTable entries: (ListVal dentry)
+        providers: ProviderTable providers: (List ProviderBox)
+        vtable: DentryTable entries: (ListVal dentry)
+        vfs: (ZVfs
+            providers: (List ProviderBox)
+            providerRoot: (IdMapR u32 value: String)
+            entrytable: vtable
+            file_names: (List String)
+            walk_cache: (MapRV String value: fsno)
+            rootid: fsno
+        )
+        runScript text: r.take :table :providers :vfs
+    } case err then {
+        io.eprintln "zvfs: could not read script file"
+        os.exit code: 1
+    }
+}

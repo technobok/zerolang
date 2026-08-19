@@ -1,0 +1,864 @@
+# zast_smoke -- the zast smoke harness: constructs one instance of every
+# node arm and every enum arm and prints a deterministic dump. Compared
+# against tests/fixtures/zast_smoke_z/smoke.expected.
+
+public: unit {
+    :main
+}
+
+# One-arg wrappers that look up the arm name and print it: a bare nested
+# function call cannot be passed directly to `print` (its StringLike
+# constraint).
+printErr: function {e: zast.err} is {
+    s: zast.errname e
+    print s
+}
+
+printObjectKind: function {k: zast.objectkind} is {
+    s: zast.objectkindname k
+    print s
+}
+
+printCallKind: function {ck: zast.callkind} is {
+    s: zast.callkindname ck
+    print s
+}
+
+# smokeNameRef -- intern a hand-built smoke node's name.
+smokeNameRef: function {ast: zast.Ast text: StringView} out zast.nameid is {
+    return (ast.names.set s: text)
+}
+
+# standalone entry point for the zast canonical-dump test.
+main: function is {
+    # smoke master table: pre-filled placeholder slots on top of the
+    # sentinel row, so hand-numbered nodes (max id 92) can intern
+    # namedoperation children
+    ast: zast.Ast.create
+    npf: u32
+    for npf < 92 loop {
+        ast.nodes.append from: zast.Node.placeholder
+        npf = npf + 1
+    }
+    print "=== err ==="
+    printErr zast.err.fileNotFound
+    printErr zast.err.duplicateDef
+    printErr zast.err.badUnitName
+    printErr zast.err.badUnit
+    printErr zast.err.badFunction
+    printErr zast.err.ioError
+    printErr zast.err.expectedDef
+    printErr zast.err.expectedExp
+    printErr zast.err.expectedOp
+    printErr zast.err.expectedTypeDef
+    printErr zast.err.expectedStatement
+    printErr zast.err.badArgument
+    printErr zast.err.badArgumentBlock
+    printErr zast.err.badExpression
+    printErr zast.err.badOperation
+    printErr zast.err.badString
+    printErr zast.err.badPath
+    printErr zast.err.badReference
+    printErr zast.err.badCall
+    printErr zast.err.badParameter
+    printErr zast.err.badParameterBlock
+    printErr zast.err.badObjectBlock
+    printErr zast.err.badItem
+    printErr zast.err.badThen
+    printErr zast.err.badElse
+    printErr zast.err.badCase
+    printErr zast.err.badFor
+    printErr zast.err.badData
+    printErr zast.err.badStatement
+    printErr zast.err.typeError
+    printErr zast.err.refNotFound
+    printErr zast.err.ownerError
+    printErr zast.err.callError
+    printErr zast.err.genericError
+    printErr zast.err.constError
+    printErr zast.err.userError
+    printErr zast.err.compilerError
+
+    print "=== objectkind ==="
+    printObjectKind zast.objectkind.protocolDef
+    printObjectKind zast.objectkind.recordDef
+    printObjectKind zast.objectkind.classDef
+    printObjectKind zast.objectkind.unionDef
+    printObjectKind zast.objectkind.variantDef
+    printObjectKind zast.objectkind.facetDef
+
+    print "=== callkind ==="
+    printCallKind zast.callkind.unknown
+    printCallKind zast.callkind.regular
+    printCallKind zast.callkind.returnCall
+    printCallKind zast.callkind.recordCreate
+    printCallKind zast.callkind.classCreate
+    printCallKind zast.callkind.unionCreate
+    printCallKind zast.callkind.protocolCreate
+    printCallKind zast.callkind.protocolBorrow
+    printCallKind zast.callkind.facetCreate
+    printCallKind zast.callkind.facetBorrow
+    printCallKind zast.callkind.typedefCreate
+    printCallKind zast.callkind.typedefBorrow
+    printCallKind zast.callkind.callable
+    printCallKind zast.callkind.boxCreate
+    printCallKind zast.callkind.breakCall
+    printCallKind zast.callkind.continueCall
+    printCallKind zast.callkind.errorCall
+    printCallKind zast.callkind.panicCall
+
+    print "=== Node ==="
+    n1: zast.Node.error (zast.ErrorData
+        nodeid: (zast.nodeid.create from: 1)
+        lineno: 10
+        colno: 5
+        width: 8
+        err: zast.err.badUnit
+        msg: "bad unit".string
+        fsno: zvfs.fsno
+        note: "".string
+        hint: "".string
+    )
+    zast.printNode :ast n: n1
+    n2: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 2)
+        lineno: 11
+        colno: 3
+        name: (smokeNameRef :ast text: "myvar")
+    )
+    zast.printNode :ast n: n2
+    n3: zast.Node.labelvalue (zast.LabelValueData
+        nodeid: (zast.nodeid.create from: 3)
+        lineno: 12
+        colno: 7
+        name: (smokeNameRef :ast text: "x")
+    )
+    zast.printNode :ast n: n3
+    n4: zast.Node.stringchunk (zast.StringChunkData
+        nodeid: (zast.nodeid.create from: 4)
+        lineno: 13
+        colno: 9
+        text: "hello".string
+        chunkKind: 0
+    )
+    zast.printNode :ast n: n4
+
+    # Recursive: an atomstring containing two child nodes (list of zast.Node).
+    parts: (ListVal u32)
+    parts.append (zast.tableAdd :ast n: (zast.Node.stringchunk (zast.StringChunkData
+        nodeid: (zast.nodeid.create from: 5)
+        lineno: 14
+        colno: 1
+        text: "hello ".string
+        chunkKind: 0)
+    ))
+    parts.append (zast.tableAdd
+        :ast
+        n: (zast.Node.atomid (zast.AtomIdData
+            nodeid: (zast.nodeid.create from: 6)
+            lineno: 14
+            colno: 8
+            name: (smokeNameRef :ast text: "name")
+        ))
+    )
+    n5: zast.Node.atomstring (zast.AtomStringData
+        nodeid: (zast.nodeid.create from: 7)
+        lineno: 14
+        colno: 1
+        stringparts: parts
+    )
+    zast.printNode :ast n: n5
+
+    # Recursive: a binop "x + y" with three zast.Node children stored
+    # by value on the carrier class.
+    lhs: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 8)
+        lineno: 15
+        colno: 1
+        name: (smokeNameRef :ast text: "x")
+    )
+    op: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 9)
+        lineno: 15
+        colno: 3
+        name: (smokeNameRef :ast text: "+")
+    )
+    rhs: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 10)
+        lineno: 15
+        colno: 5
+        name: (smokeNameRef :ast text: "y")
+    )
+    n6: zast.Node.binop (zast.BinOpData
+        nodeid: (zast.nodeid.create from: 11)
+        lineno: 15
+        colno: 3
+        lhs: (zast.tableAdd :ast n: lhs)
+        operator: (zast.tableAdd :ast n: op)
+        rhs: (zast.tableAdd :ast n: rhs)
+    )
+    zast.printNode :ast n: n6
+
+    # dottedpath "a.b": parent and child are atomid zast.Node children.
+    dpp: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 12)
+        lineno: 16
+        colno: 1
+        name: (smokeNameRef :ast text: "a")
+    )
+    dpc: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 13)
+        lineno: 16
+        colno: 3
+        name: (smokeNameRef :ast text: "b")
+    )
+    n7: zast.Node.dottedpath (zast.DottedPathData
+        nodeid: (zast.nodeid.create from: 14)
+        lineno: 16
+        colno: 2
+        parent: (zast.tableAdd :ast n: dpp)
+        child: (zast.tableAdd :ast n: dpc)
+    )
+    zast.printNode :ast n: n7
+
+    # call "f arg": callable atomid + one-element argument list.
+    callee: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 15)
+        lineno: 17
+        colno: 1
+        name: (smokeNameRef :ast text: "f")
+    )
+    args: (ListVal u32)
+    args.append (zast.tableAdd
+        :ast
+        n: (zast.Node.atomid (zast.AtomIdData
+            nodeid: (zast.nodeid.create from: 16)
+            lineno: 17
+            colno: 3
+            name: (smokeNameRef :ast text: "arg")
+        ))
+    )
+    n8: zast.Node.call (zast.CallData
+        nodeid: (zast.nodeid.create from: 17)
+        lineno: 17
+        colno: 1
+        callable: (zast.tableAdd :ast n: callee)
+        arguments: args
+    )
+    zast.printNode :ast n: n8
+
+    # typeofexpr over a single source operation.
+    tsrc: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 18)
+        lineno: 18
+        colno: 1
+        name: (smokeNameRef :ast text: "x")
+    )
+    n: zast.Node.typeofexpr (zast.TypeOfExprData
+        nodeid: (zast.nodeid.create from: 19)
+        lineno: 18
+        colno: 1
+        source: (zast.tableAdd :ast n: tsrc)
+    )
+    zast.printNode :ast :n
+
+    # namedoperation "label: x" — a labelled argument value.
+    noval: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 20)
+        lineno: 19
+        colno: 8
+        name: (smokeNameRef :ast text: "x")
+    )
+    noname: smokeNameRef :ast text: "label"
+    n10: zast.Node.namedoperation (zast.NamedOperationData
+        nodeid: (zast.nodeid.create from: 21)
+        lineno: 19
+        colno: 1
+        name: (zast.nameid.create from: noname.u32)
+        operation: (zast.tableAdd :ast n: noval)
+    )
+    zast.printNode :ast n: n10
+
+    # namedoperation with no label (positional argument).
+    noval2: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 22)
+        lineno: 20
+        colno: 1
+        name: (smokeNameRef :ast text: "y")
+    )
+    n11: zast.Node.namedoperation (zast.NamedOperationData
+        nodeid: (zast.nodeid.create from: 23)
+        lineno: 20
+        colno: 1
+        name: zast.nameid
+        operation: (zast.tableAdd :ast n: noval2)
+    )
+    zast.printNode :ast n: n11
+
+    # datablock "data { a b } out T" — two element nodes plus an out type.
+    elems: (ListVal u32)
+    elems.append (zast.tableAdd
+        :ast
+        n: (zast.Node.atomid (zast.AtomIdData
+            nodeid: (zast.nodeid.create from: 24)
+            lineno: 21
+            colno: 8
+            name: (smokeNameRef :ast text: "a")
+        ))
+    )
+    elems.append (zast.tableAdd
+        :ast
+        n: (zast.Node.atomid (zast.AtomIdData
+            nodeid: (zast.nodeid.create from: 25)
+            lineno: 21
+            colno: 10
+            name: (smokeNameRef :ast text: "b")
+        ))
+    )
+    douttype: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 26)
+        lineno: 21
+        colno: 18
+        name: (smokeNameRef :ast text: "T")
+    )
+    n12: zast.Node.datablock (zast.DataBlockData
+        nodeid: (zast.nodeid.create from: 27)
+        lineno: 21
+        colno: 1
+        elements: elems
+        outType: (zast.tableAdd :ast n: douttype)
+    )
+    zast.printNode :ast n: n12
+
+    # datablock with no out annotation.
+    elems2: (ListVal u32)
+    elems2.append (zast.tableAdd
+        :ast
+        n: (zast.Node.atomid (zast.AtomIdData
+            nodeid: (zast.nodeid.create from: 28)
+            lineno: 22
+            colno: 8
+            name: (smokeNameRef :ast text: "c")
+        ))
+    )
+    n13: zast.Node.datablock (zast.DataBlockData
+        nodeid: (zast.nodeid.create from: 29)
+        lineno: 22
+        colno: 1
+        elements: elems2
+        outType: (zast.nodeid.create from: 0)
+    )
+    zast.printNode :ast n: n13
+
+    # yieldexpr "yield x" — a generator suspension point.
+    yval: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 30)
+        lineno: 23
+        colno: 7
+        name: (smokeNameRef :ast text: "x")
+    )
+    n14: zast.Node.yieldexpr (zast.YieldExprData
+        nodeid: (zast.nodeid.create from: 31)
+        lineno: 23
+        colno: 1
+        expr: (zast.tableAdd :ast n: yval)
+    )
+    zast.printNode :ast n: n14
+
+    # expression wrapping an atomid operation.
+    exprop: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 32)
+        lineno: 24
+        colno: 4
+        name: (smokeNameRef :ast text: "y")
+    )
+    n15: zast.Node.expression (zast.ExpressionData
+        nodeid: (zast.nodeid.create from: 33)
+        lineno: 24
+        colno: 4
+        expression: (zast.tableAdd :ast n: exprop)
+    )
+    zast.printNode :ast n: n15
+
+    # assignment "x: y" — bind x to the expression node above (rebuilt).
+    asgexprop: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 34)
+        lineno: 25
+        colno: 4
+        name: (smokeNameRef :ast text: "y")
+    )
+    asgval: zast.Node.expression (zast.ExpressionData
+        nodeid: (zast.nodeid.create from: 35)
+        lineno: 25
+        colno: 4
+        expression: (zast.tableAdd :ast n: asgexprop)
+    )
+    n16: zast.Node.assignment (zast.AssignmentData
+        nodeid: (zast.nodeid.create from: 36)
+        lineno: 25
+        colno: 1
+        name: (smokeNameRef :ast text: "x")
+        value: (zast.tableAdd :ast n: asgval)
+    )
+    zast.printNode :ast n: n16
+
+    # reassignment "a.b = z" — target dotted path, expression value.
+    raparent: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 37)
+        lineno: 26
+        colno: 1
+        name: (smokeNameRef :ast text: "a")
+    )
+    rachild: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 38)
+        lineno: 26
+        colno: 3
+        name: (smokeNameRef :ast text: "b")
+    )
+    rapath: zast.Node.dottedpath (zast.DottedPathData
+        nodeid: (zast.nodeid.create from: 39)
+        lineno: 26
+        colno: 2
+        parent: (zast.tableAdd :ast n: raparent)
+        child: (zast.tableAdd :ast n: rachild)
+    )
+    raexprop: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 40)
+        lineno: 26
+        colno: 7
+        name: (smokeNameRef :ast text: "z")
+    )
+    raval: zast.Node.expression (zast.ExpressionData
+        nodeid: (zast.nodeid.create from: 41)
+        lineno: 26
+        colno: 7
+        expression: (zast.tableAdd :ast n: raexprop)
+    )
+    n17: zast.Node.reassignment (zast.ReassignmentData
+        nodeid: (zast.nodeid.create from: 42)
+        lineno: 26
+        colno: 1
+        topath: (zast.tableAdd :ast n: rapath)
+        value: (zast.tableAdd :ast n: raval)
+    )
+    zast.printNode :ast n: n17
+
+    # swapstmt "swap p q" — two owned paths.
+    swlhs: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 43)
+        lineno: 27
+        colno: 6
+        name: (smokeNameRef :ast text: "p")
+    )
+    swrhs: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 44)
+        lineno: 27
+        colno: 8
+        name: (smokeNameRef :ast text: "q")
+    )
+    n18: zast.Node.swapstmt (zast.SwapStmtData
+        nodeid: (zast.nodeid.create from: 45)
+        lineno: 27
+        colno: 1
+        lhs: (zast.tableAdd :ast n: swlhs)
+        rhs: (zast.tableAdd :ast n: swrhs)
+    )
+    zast.printNode :ast n: n18
+
+    # statementline wrapping a standalone assignment.
+    slexprop: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 46)
+        lineno: 28
+        colno: 4
+        name: (smokeNameRef :ast text: "m")
+    )
+    slval: zast.Node.expression (zast.ExpressionData
+        nodeid: (zast.nodeid.create from: 47)
+        lineno: 28
+        colno: 4
+        expression: (zast.tableAdd :ast n: slexprop)
+    )
+    slasg: zast.Node.assignment (zast.AssignmentData
+        nodeid: (zast.nodeid.create from: 48)
+        lineno: 28
+        colno: 1
+        name: (smokeNameRef :ast text: "k")
+        value: (zast.tableAdd :ast n: slval)
+    )
+    stmtLineNode: zast.Node.statementline (zast.StatementLineData
+        nodeid: (zast.nodeid.create from: 49)
+        lineno: 28
+        colno: 1
+        statementline: (zast.tableAdd :ast n: slasg)
+    )
+    zast.printNode :ast n: stmtLineNode
+
+    # statement block holding two statementlines (exercises the list iterator).
+    lines: (ListVal u32)
+    l1op: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 50)
+        lineno: 29
+        colno: 8
+        name: (smokeNameRef :ast text: "u")
+    )
+    l1val: zast.Node.expression (zast.ExpressionData
+        nodeid: (zast.nodeid.create from: 51)
+        lineno: 29
+        colno: 8
+        expression: (zast.tableAdd :ast n: l1op)
+    )
+    l1asg: zast.Node.assignment (zast.AssignmentData
+        nodeid: (zast.nodeid.create from: 52)
+        lineno: 29
+        colno: 5
+        name: (smokeNameRef :ast text: "t")
+        value: (zast.tableAdd :ast n: l1val)
+    )
+    lines.append (zast.tableAdd :ast n: (zast.Node.statementline (zast.StatementLineData
+        nodeid: (zast.nodeid.create from: 53)
+        lineno: 29
+        colno: 5
+        statementline: (zast.tableAdd :ast n: l1asg))
+    ))
+    l2op: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 54)
+        lineno: 30
+        colno: 5
+        name: (smokeNameRef :ast text: "v")
+    )
+    l2expr: zast.Node.expression (zast.ExpressionData
+        nodeid: (zast.nodeid.create from: 55)
+        lineno: 30
+        colno: 5
+        expression: (zast.tableAdd :ast n: l2op)
+    )
+    lines.append (zast.tableAdd :ast n: (zast.Node.statementline (zast.StatementLineData
+        nodeid: (zast.nodeid.create from: 56)
+        lineno: 30
+        colno: 5
+        statementline: (zast.tableAdd :ast n: l2expr))
+    ))
+    n20: zast.Node.statement (zast.StatementData
+        nodeid: (zast.nodeid.create from: 57)
+        lineno: 29
+        colno: 1
+        statements: lines
+    )
+    zast.printNode :ast n: n20
+
+    # --- control flow (PR-C) ---
+
+    # ifexpr: one ifclause (positional condition + empty body) + else.
+    ifCondOp: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 58)
+        lineno: 31
+        colno: 4
+        name: (smokeNameRef :ast text: "cond")
+    )
+    ifCond: zast.Node.namedoperation (zast.NamedOperationData
+        nodeid: (zast.nodeid.create from: 59)
+        lineno: 31
+        colno: 4
+        name: zast.nameid
+        operation: (zast.tableAdd :ast n: ifCondOp)
+    )
+    ifConds: (ListVal u32)
+    ifConds.append (zast.tableAdd :ast n: ifCond)
+    ifStmtItems: (ListVal u32)
+    ifStmt: zast.Node.statement (zast.StatementData
+        nodeid: (zast.nodeid.create from: 60)
+        lineno: 31
+        colno: 12
+        statements: ifStmtItems
+    )
+    ifClauseNode: zast.Node.ifclause (zast.IfClauseData
+        nodeid: (zast.nodeid.create from: 61)
+        lineno: 31
+        colno: 1
+        conditions: ifConds
+        statement: (zast.tableAdd :ast n: ifStmt)
+    )
+    ifClauses: (ListVal u32)
+    ifClauses.append (zast.tableAdd :ast n: ifClauseNode)
+    elseItems: (ListVal u32)
+    elseStmt: zast.Node.statement (zast.StatementData
+        nodeid: (zast.nodeid.create from: 62)
+        lineno: 32
+        colno: 5
+        statements: elseItems
+    )
+    n21: zast.Node.ifexpr (zast.IfData
+        nodeid: (zast.nodeid.create from: 63)
+        lineno: 31
+        colno: 1
+        clauses: ifClauses
+        elseclause: (zast.tableAdd :ast n: elseStmt)
+    )
+    zast.printNode :ast n: n21
+
+    # forexpr: one binding + one positional while-condition, body, one postcondition.
+    forBindOp: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 64)
+        lineno: 33
+        colno: 8
+        name: (smokeNameRef :ast text: "items")
+    )
+    forBind: zast.Node.namedoperation (zast.NamedOperationData
+        nodeid: (zast.nodeid.create from: 65)
+        lineno: 33
+        colno: 5
+        name: (smokeNameRef :ast text: "i")
+        operation: (zast.tableAdd :ast n: forBindOp)
+    )
+    forWhileOp: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 66)
+        lineno: 33
+        colno: 16
+        name: (smokeNameRef :ast text: "more")
+    )
+    forWhile: zast.Node.namedoperation (zast.NamedOperationData
+        nodeid: (zast.nodeid.create from: 67)
+        lineno: 33
+        colno: 16
+        name: zast.nameid
+        operation: (zast.tableAdd :ast n: forWhileOp)
+    )
+    forConds: (ListVal u32)
+    forConds.append (zast.tableAdd :ast n: forBind)
+    forConds.append (zast.tableAdd :ast n: forWhile)
+    forBodyItems: (ListVal u32)
+    forBody: zast.Node.statement (zast.StatementData
+        nodeid: (zast.nodeid.create from: 68)
+        lineno: 33
+        colno: 24
+        statements: forBodyItems
+    )
+    forPostOp: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 69)
+        lineno: 33
+        colno: 30
+        name: (smokeNameRef :ast text: "go")
+    )
+    forPost: (ListVal u32)
+    forPost.append (zast.tableAdd :ast n: forPostOp)
+    n22: zast.Node.forexpr (zast.ForData
+        nodeid: (zast.nodeid.create from: 70)
+        lineno: 33
+        colno: 1
+        conditions: forConds
+        body: (zast.tableAdd :ast n: forBody)
+        postconditions: forPost
+    )
+    zast.printNode :ast n: n22
+
+    # doexpr: an empty statement block.
+    doItems: (ListVal u32)
+    doStmt: zast.Node.statement (zast.StatementData
+        nodeid: (zast.nodeid.create from: 71)
+        lineno: 34
+        colno: 4
+        statements: doItems
+    )
+    n23: zast.Node.doexpr (zast.DoData
+        nodeid: (zast.nodeid.create from: 72)
+        lineno: 34
+        colno: 1
+        statement: (zast.tableAdd :ast n: doStmt)
+    )
+    zast.printNode :ast n: n23
+
+    # withexpr "with w: v do e".
+    withVal: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 73)
+        lineno: 35
+        colno: 9
+        name: (smokeNameRef :ast text: "v")
+    )
+    withBody: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 74)
+        lineno: 35
+        colno: 14
+        name: (smokeNameRef :ast text: "e")
+    )
+    n24: zast.Node.withexpr (zast.WithData
+        nodeid: (zast.nodeid.create from: 75)
+        lineno: 35
+        colno: 1
+        name: (smokeNameRef :ast text: "w")
+        value: (zast.tableAdd :ast n: withVal)
+        body: (zast.tableAdd :ast n: withBody)
+    )
+    zast.printNode :ast n: n24
+
+    # caseexpr: subject + one caseclause (matcharm atomid), no else.
+    caseSubject: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 76)
+        lineno: 36
+        colno: 6
+        name: (smokeNameRef :ast text: "opt")
+    )
+    caseMatch: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 77)
+        lineno: 37
+        colno: 6
+        name: (smokeNameRef :ast text: "some")
+    )
+    caseStmtItems: (ListVal u32)
+    caseStmt: zast.Node.statement (zast.StatementData
+        nodeid: (zast.nodeid.create from: 78)
+        lineno: 37
+        colno: 16
+        statements: caseStmtItems
+    )
+    caseClauseNode: zast.Node.caseclause (zast.CaseClauseData
+        nodeid: (zast.nodeid.create from: 79)
+        lineno: 37
+        colno: 1
+        name: (smokeNameRef :ast text: "c")
+        matcharm: (zast.tableAdd :ast n: caseMatch)
+        statement: (zast.tableAdd :ast n: caseStmt)
+    )
+    caseClauses: (ListVal u32)
+    caseClauses.append (zast.tableAdd :ast n: caseClauseNode)
+    n25: zast.Node.caseexpr (zast.CaseData
+        nodeid: (zast.nodeid.create from: 80)
+        lineno: 36
+        colno: 1
+        subject: (zast.tableAdd :ast n: caseSubject)
+        clauses: caseClauses
+        elseclause: (zast.nodeid.create from: 0)
+    )
+    zast.printNode :ast n: n25
+
+    # --- definitions / containers (PR-D) ---
+
+    # objectdef: a record with one field (isItems entry), no as-members.
+    objFieldType: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 81)
+        lineno: 40
+        colno: 11
+        name: (smokeNameRef :ast text: "i64")
+    )
+    objField: zast.Node.namedoperation (zast.NamedOperationData
+        nodeid: (zast.nodeid.create from: 82)
+        lineno: 40
+        colno: 5
+        name: (smokeNameRef :ast text: "x")
+        operation: (zast.tableAdd :ast n: objFieldType)
+    )
+    objIsItems: (ListVal u32)
+    objIsItems.append (zast.tableAdd :ast n: objField)
+    objAsItems: (ListVal u32)
+    n26: zast.Node.objectdef (zast.ObjectDefData
+        nodeid: (zast.nodeid.create from: 83)
+        lineno: 40
+        colno: 1
+        kind: zast.objectkind.recordDef
+        isItems: objIsItems
+        asItems: objAsItems
+        isNative: false
+    )
+    zast.printNode :ast n: n26
+
+    # functiondef "greet: function {x: i64} out i64 is { ... }" -> nested
+    # in a unit, in a program; only the program is printed (recurses).
+    fnRet: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 84)
+        lineno: 41
+        colno: 30
+        name: (smokeNameRef :ast text: "i64")
+    )
+    fnParamType: zast.Node.atomid (zast.AtomIdData
+        nodeid: (zast.nodeid.create from: 85)
+        lineno: 41
+        colno: 21
+        name: (smokeNameRef :ast text: "i64")
+    )
+    fnParam: zast.Node.namedoperation (zast.NamedOperationData
+        nodeid: (zast.nodeid.create from: 86)
+        lineno: 41
+        colno: 18
+        name: (smokeNameRef :ast text: "x")
+        operation: (zast.tableAdd :ast n: fnParamType)
+    )
+    fnParams: (ListVal u32)
+    fnParams.append (zast.tableAdd :ast n: fnParam)
+    fnBodyItems: (ListVal u32)
+    fnBody: zast.Node.statement (zast.StatementData
+        nodeid: (zast.nodeid.create from: 87)
+        lineno: 41
+        colno: 40
+        statements: fnBodyItems
+    )
+    fnAsItems: (ListVal u32)
+    fnDef: zast.Node.functiondef (zast.FunctionData
+        nodeid: (zast.nodeid.create from: 88)
+        lineno: 41
+        colno: 1
+        returntype: (zast.tableAdd :ast n: fnRet)
+        parameters: fnParams
+        body: (zast.tableAdd :ast n: fnBody)
+        isNative: false
+        asItems: fnAsItems
+    )
+
+    unitMember: zast.Node.namedoperation (zast.NamedOperationData
+        nodeid: (zast.nodeid.create from: 89)
+        lineno: 41
+        colno: 1
+        name: (smokeNameRef :ast text: "greet")
+        operation: (zast.tableAdd :ast n: fnDef)
+    )
+    unitBody: (ListVal u32)
+    unitBody.append (zast.tableAdd :ast n: unitMember)
+    unitDef: zast.Node.unitdef (zast.UnitData
+        nodeid: (zast.nodeid.create from: 90)
+        lineno: 39
+        colno: 1
+        kind: zast.unitkind.namespace
+        body: unitBody
+    )
+
+    progUnit: zast.Node.namedoperation (zast.NamedOperationData
+        nodeid: (zast.nodeid.create from: 91)
+        lineno: 39
+        colno: 1
+        name: (smokeNameRef :ast text: "main")
+        operation: (zast.tableAdd :ast n: unitDef)
+    )
+    progUnits: (ListVal u32)
+    progUnits.append (zast.tableAdd :ast n: progUnit)
+    progUnits swap ast.units
+    n27: zast.Node.program (zast.ProgramData
+        nodeid: (zast.nodeid.create from: 92)
+        lineno: 39
+        colno: 1
+        mainUnitName: "main".string
+        ast: zast.Ast.create
+    )
+    zast.printNode :ast n: n27
+
+    sp: zast.StringPool
+    spa: sp.set s: "alpha"
+    spb: sp.set s: "beta"
+    spa2: sp.set s: "alpha"
+    print "pool alpha=\{spa} beta=\{spb} alphaAgain=\{spa2} len=\{sp.length}"
+    spo: "gamma".string
+    spg: sp.setOwned s: spo
+    spg2: sp.setOwned s: "alpha".string
+    spt: sp.get id: spg
+    print "pool gamma=\{spg} alphaOwned=\{spg2} text=\{spt}"
+    if (sp.eq id: spa s: "alpha") then print "pool eq alpha ok"
+    if (sp.eq id: spa s: "beta") == false then print "pool neq beta ok"
+    if (sp.eq id: zast.nameid s: "") then print "pool eq absent ok"
+    spi: u64
+    for spi < 20 loop {
+        spn: "k\{spi}"
+        sp.setOwned s: spn
+        spi = spi + 1
+    }
+    spk3: sp.set s: "k3"
+    k1Text: sp.get id: (sp.set s: "k19")
+    print "pool grown len=\{sp.length} k3=\{spk3} k19=\{k1Text}"
+}
+

@@ -1,0 +1,235 @@
+# zparser_dump -- the parser's dump tool and smoke harness. Three modes: no
+# argument -> the inline smoke (parse each snippet, dump its node tree), for
+# tests/fixtures/zparser_dump_z/smoke.expected; a single `.z` path -> parse
+# that file's unit body and dump the canonical (id-stripped) AST (the parser
+# goldens); `--program <dir> <mainunit>` -> load the whole program over a
+# filesystem VFS rooted at <dir> and dump the canonical Program (the program
+# goldens).
+
+public: unit {
+    :main
+}
+
+# Smoke harness: parse each inline snippet and dump the resulting node
+# tree via zast.printNode. Atom snippets drive acceptPath; operation
+# and call snippets drive acceptOperationOrCall (the named-argument
+# entry).
+runPath: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: zparser.Parser.create
+    tk: zlexer.Tokenizer.create source: src fsno: zvfs.fsno
+    lx: zlexer.Lexer.create lexer: tk
+    r: p.acceptPath lex: lx
+    match r case some then {
+        zast.printNode ast: p.ast n: r
+    } case none then {
+        print "<no atom>"
+    }
+}
+
+# parse `src` as one operation and dump it (parser test helper).
+runOp: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: zparser.Parser.create
+    tk: zlexer.Tokenizer.create source: src fsno: zvfs.fsno
+    lx: zlexer.Lexer.create lexer: tk
+    paths: p.operationPaths lex: lx
+    r: p.acceptOperationOrCall :paths lex: lx
+    match r case some then {
+        zast.printNode ast: p.ast n: r
+    } case none then {
+        print "<none>"
+    }
+}
+
+# parse `src` as one expression and dump it (parser test helper).
+runExpr: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: zparser.Parser.create
+    tk: zlexer.Tokenizer.create source: src fsno: zvfs.fsno
+    lx: zlexer.Lexer.create lexer: tk
+    r: p.acceptExpression lex: lx
+    match r case some then {
+        zast.printNode ast: p.ast n: r
+    } case none then {
+        print "<none>"
+    }
+}
+
+# Like runExpr but simulates being inside a function body (depth 1) so a
+# yield-expression parses to a yieldexpr rather than the depth-0 error.
+runYieldBody: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: zparser.Parser.create
+    p.functionBodyDepth = 1
+    tk: zlexer.Tokenizer.create source: src fsno: zvfs.fsno
+    lx: zlexer.Lexer.create lexer: tk
+    r: p.acceptExpression lex: lx
+    match r case some then {
+        zast.printNode ast: p.ast n: r
+    } case none then {
+        print "<none>"
+    }
+}
+
+# Drive acceptFunctionDefinition over an inline snippet and dump the
+# resulting node tree.
+runFunc: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: zparser.Parser.create
+    tk: zlexer.Tokenizer.create source: src fsno: zvfs.fsno
+    lx: zlexer.Lexer.create lexer: tk
+    r: p.acceptFunctionDefinition lex: lx
+    match r case some then {
+        zast.printNode ast: p.ast n: r
+    } case none then {
+        print "<none>"
+    }
+}
+
+# Drive the type-definition dispatcher over an inline snippet and dump
+# the resulting node tree (units, methods, operation definitions).
+runDef: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: zparser.Parser.create
+    tk: zlexer.Tokenizer.create source: src fsno: zvfs.fsno
+    lx: zlexer.Lexer.create lexer: tk
+    r: p.acceptTypeDefinition lex: lx unitKind: zast.unitkind.namespace
+    zast.printNode ast: p.ast n: r
+}
+
+# Inline smoke harness: parse each snippet and dump its node tree.
+# Driven from main when no file argument is given.
+runSmoke: function is {
+    runPath label: "foo" src: "foo".string
+    runPath label: "a.b.c" src: "a.b.c".string
+    runPath label: "string" src: "\"hello\"".string
+    runOp label: "f x" src: "f x".string
+    runOp label: "f x y" src: "f x y".string
+    runOp label: "f label: x" src: "f label: x".string
+    runOp label: "f x label: y" src: "f x label: y".string
+    runOp label: "a + b" src: "a + b".string
+    runOp label: "a + b + c" src: "a + b + c".string
+    runOp label: "f a + b" src: "f a + b".string
+    runOp label: "a.b x" src: "a.b x".string
+    runOp label: "a.b + c" src: "a.b + c".string
+    runPath label: "(a)" src: "(a)".string
+    runPath label: "(a + b)" src: "(a + b)".string
+    runPath label: "(f x)" src: "(f x)".string
+    runExpr label: "block1" src: "{ a }".string
+    runExpr label: "block2" src: "{ a; b }".string
+    runExpr label: "blockbind" src: "{ x: a + b }".string
+    runExpr label: "if1" src: "if c then x".string
+    runExpr label: "if2" src: "if c then { a } else { b }".string
+    runExpr label: "if3" src: "if a when b then x else y".string
+    runExpr label: "match1" src: "match x case a then b".string
+    runExpr label: "match2" src: "match on x case a then { p } else { q }".string
+    runExpr label: "match3" src: "match x case a then p case b then q".string
+    runExpr label: "for1" src: "for ready loop a".string
+    runExpr label: "for2" src: "for i: items while more loop { a }".string
+    runExpr label: "for3" src: "for while c loop a while d".string
+    runExpr label: "with1" src: "with x: v do e".string
+    runExpr label: "with2" src: "with y: a + b do { c }".string
+    runExpr label: "data1" src: "data { :lo a b }".string
+    runExpr label: "data2" src: "data { x: 1 y: 2 } out u8".string
+    runExpr label: "data3" src: "data { x: 1 x: 2 }".string
+    runYieldBody label: "yield1" src: "yield x".string
+    runExpr label: "yield2" src: "yield x".string
+    runExpr label: "reassign1" src: "a = b".string
+    runExpr label: "reassign2" src: "p.x = a + b".string
+    runExpr label: "swap1" src: "a swap b".string
+    runExpr label: "rsblock" src: "{ a = b }".string
+    runFunc label: "func1" src: "function { x: i64 }".string
+    runFunc label: "func2" src: "function { :T }".string
+    runFunc label: "func3" src: "function out i64 is { x }".string
+    runFunc label: "func4" src: "function is native".string
+    runFunc label: "func5" src: "function { x: i64 } out i64 is { x }".string
+    runFunc label: "func6" src: "function { x: i64 x: i64 }".string
+    runFunc label: "func7" src: "function { x: t } as { t: i64 }".string
+    runFunc label: "func8" src: "function as { :a :b }".string
+    runFunc label: "func9" src: "function as { }".string
+    runFunc label: "func10" src: "function as { r: record { x: i64 } }".string
+    runFunc label: "func11" src: "function as { a: i64 } as { b: i64 }".string
+    runDef label: "unit1" src: "unit { x: 5 y: 6 }".string
+    runDef label: "unit2" src: "unit { inner: unit { a: 1 } }".string
+    runDef label: "unit3" src: "unit { greet: function { x: i64 } out i64 is { x } }".string
+    runDef label: "unit4" src: "unit { }".string
+    runDef label: "unit5" src: "unit { a: 1 a: 2 }".string
+    runDef label: "defop" src: "a + b".string
+    runDef label: "record1" src: "record { x: i64 y: i64 }".string
+    runDef label: "record2" src: "record { x: i64 } as { m: measurable }".string
+    runDef label: "class1" src: "class is native".string
+    runDef label: "class2" src: "class native".string
+    runDef label: "variant1" src: "variant { red: 0 green: 1 }".string
+    runDef label: "union1" src: "union { a: i64 b: i64 }".string
+    runDef label: "protocol1" src: "protocol { foo: function {:this} out i64 }".string
+    runDef label: "facet1" src: "facet { measure: function {:this b: i64} out i64 }".string
+    runDef label: "reorder1" src: "class as { t: i64 } is { x: i64 }".string
+    runDef label: "generic1" src: "class { v: t } as { t: i64 }".string
+    runDef label: "err1" src: "record as { x: i64 }".string
+    runDef label: "defif" src: "if c then x".string
+    runDef label: "defmatch" src: "match x case a then b".string
+    runDef label: "defdata" src: "data { x: 1 } out u8".string
+    runPath label: "interp" src: "\"a\\{x}b\"".string
+}
+
+main: function is {
+    # Three modes: no argument -> inline smoke harness; a single `.z` path
+    # -> parse that file's unit body and dump the canonical (id-stripped)
+    # AST (the per-file parser differential, mirrors zlexer.z); `--program
+    # <dir> <mainunit>` -> load the whole program over a filesystem VFS
+    # rooted at <dir> and dump the canonical Program (the multi-unit
+    # differential).
+    argv: os.args
+    n: argv.length
+    if n < 2 then {
+        runSmoke
+    } else {
+        a1: argv.get i: 1
+        isProg: a1.stringview == "--program"
+        if isProg then {
+            if n < 4 then {
+                io.eprintln "usage: zparser --program <dir> <mainunit>"
+                os.exit code: 2
+            }
+            dir: argv.get i: 2
+            mainName: argv.get i: 3
+            vfs: (zvfs.ZVfs
+                providers: (List zvfs.ProviderBox)
+                providerRoot: (IdMapR u32 value: String)
+                entrytable: (zvfs.DentryTable entries: (ListVal zvfs.dentry))
+                file_names: (List String)
+                walk_cache: (MapRV String value: zvfs.fsno)
+                rootid: zvfs.fsno
+            )
+            rootid: vfs.registerFS rootpath: dir.copy parentpath: "".string
+            vfs.rootid = rootid
+            p: zparser.Parser.create
+            prog: p.parse :vfs :rootid mainUnitName: mainName
+            zast.printProgramCanonicalRoot prog
+        } else {
+            path: argv.get i: 1
+            r: io.readText :path
+            match (
+                r
+            ) case ok then {
+                p: zparser.Parser.create
+                tk: zlexer.Tokenizer.create source: r.take fsno: zvfs.fsno
+                lx: zlexer.Lexer.create lexer: tk
+                firstPos: lx.peekPos
+                body: p.acceptUnitBody lex: lx
+                root: zast.Node.unitdef (zast.UnitData
+                    nodeid: p.nextId
+                    lineno: firstPos.lineno
+                    colno: firstPos.colno
+                    kind: zast.unitkind.namespace
+                    :body
+                )
+                zast.printNodeCanonical ast: p.ast n: root
+            } case err then {
+                io.eprintln "zparser: could not read source file"
+                os.exit code: 1
+            }
+        }
+    }
+}

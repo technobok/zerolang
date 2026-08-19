@@ -87,7 +87,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 # ZLSCOPE -- what the zl *linter* checks: the tool + compiler sources and the relocated
 # front-end. The stdlib proper (io/os/collections/system/cli/core) is not linted (it carries
 # pre-existing first-arg-elision labels that were never enforced).
-ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z
+ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z tests/unit/*.z
 # FMTSCOPE -- what the zl *formatter* checks: fmt applies only whitespace/colon fixes (no
 # elide-label issue), so it covers the whole codebase, keeping every .z consistently formatted.
 FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z examples/*.z
@@ -338,25 +338,29 @@ zl: bin/zl
 # zls -- convenience alias for bin/zls.
 zls: bin/zls
 
-# Standalone dump binaries (the Python-free golden regeneration path; the
-# dumper logic lives in lib/system/zlexer.z and lib/system/zparser.z).
-out/zlexer: bin/zc $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
+# The dump tools behind the goldens: tests/unit/zlexer_dump.z and
+# tests/unit/zparser_dump.z, programs over the front-end units.
+out/zlexer: bin/zc tests/unit/zlexer_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
 	@mkdir -p $(BUILDDIR)
-	bin/zc zlexer --src src --system lib/system --emit-c $(BUILDDIR)/zlexer.c
+	bin/zc zlexer_dump --src tests/unit --system lib/system --emit-c $(BUILDDIR)/zlexer.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c -lm
 
-out/zparser: bin/zc $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
+out/zparser: bin/zc tests/unit/zparser_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
 	@mkdir -p $(BUILDDIR)
-	bin/zc zparser --src src --system lib/system --emit-c $(BUILDDIR)/zparser.c
+	bin/zc zparser_dump --src tests/unit --system lib/system --emit-c $(BUILDDIR)/zparser.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c -lm
 
-# Regenerate the lexer / parser / whole-program goldens from the .z dump
-# binaries (no Python). Always review the resulting diff before committing.
+# Regenerate the lexer / parser / whole-program goldens from the dump tools.
+# Always review the resulting diff before committing.
 regen-goldens: out/zlexer out/zparser
 	@for f in examples/*.z; do \
 		name=$$(basename $$f .z); \
 		$(BUILDDIR)/zlexer $$f > tests/fixtures/lexer_golden/$$name.tokens; \
 		$(BUILDDIR)/zparser $$f > tests/fixtures/parser_golden/$$name.ast; \
+	done
+	@for f in tests/fixtures/zlexer_z/*.z; do \
+		name=$$(basename $$f .z); \
+		$(BUILDDIR)/zlexer $$f > tests/fixtures/zlexer_z/$$name.tokens; \
 	done
 	@for d in tests/fixtures/parser_program/*.tree; do \
 		name=$$(basename $$d .tree); \
