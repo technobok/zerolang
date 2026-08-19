@@ -114,11 +114,11 @@ relPathOf: function {path: StringView srcDir: StringView} out String is {
 # join when it exists on disk, else the systemDir join when that does,
 # else the srcDir join (unsaved new files).
 absRelPath: function {rel0: StringView srcDir: StringView systemDir: StringView} out String is {
-    sj9: zcheck.joinPath a: srcDir b: rel0
-    if (io.exists path: sj9) then return sj9
-    yj9: zcheck.joinPath a: systemDir b: rel0
-    if (io.exists path: yj9) then return yj9
-    return sj9
+    sj: zcheck.joinPath a: srcDir b: rel0
+    if (io.exists path: sj) then return sj
+    yj: zcheck.joinPath a: systemDir b: rel0
+    if (io.exists path: yj) then return yj
+    return sj
 }
 
 # ---- position encoding ----------------------------------------------
@@ -149,19 +149,19 @@ encodedCol: function {lineText: StringView cpCol1: u32 utf32: bool} out u32 is {
 
 # ---- transport i/o -------------------------------------------------
 
-# transportRead -- fill `into9` with up to 64 KiB from the active transport;
+# transportRead -- fill `into` with up to 64 KiB from the active transport;
 # each arm dispatches the concrete Reader (stdio's fd 0, the replay File, or
 # the tcp Conn). Matching the bare `tp` param narrows the arm.
-transportRead: function {tp: Transport into9: Bytes} out (Result (Box u64) e: IoError) is {
+transportRead: function {tp: Transport into: Bytes} out (Result (Box u64) e: IoError) is {
     match (
         tp
     ) case tcp then {
-        return (tp.read into: into9 max: 65536)
+        return (tp.read :into max: 65536)
     } case replay then {
-        return (tp.read into: into9 max: 65536)
+        return (tp.read :into max: 65536)
     } case stdio then {
         r: io.stdin
-        return (r.read into: into9 max: 65536)
+        return (r.read :into max: 65536)
     }
 }
 
@@ -345,7 +345,7 @@ Server: class {
             fresh: Bytes
             this.inbuf = fresh
             this.inpos = 0
-            rr: transportRead tp: this.transport into9: this.inbuf
+            rr: transportRead tp: this.transport into: this.inbuf
             match (
                 rr
             ) case ok then {
@@ -367,15 +367,15 @@ Server: class {
                 bo
             ) case some then {
                 if bo == 10 then {
-                    n9: line.length
-                    if n9 > 0 then {
-                        lv9: line.stringview
-                        lb9: lv9.byteAt i: n9 - 1
+                    n: line.length
+                    if n > 0 then {
+                        lv: line.stringview
+                        lb: lv.byteAt i: n - 1
                         match (
-                            lb9
+                            lb
                         ) case some then {
-                            if lb9 == 13 then {
-                                s2: (lv9.substring from: 0 to: n9 - 1).string
+                            if lb == 13 then {
+                                s2: (lv.substring from: 0 to: n - 1).string
                                 return (Option.some s2)
                             }
                         } case none then null
@@ -417,8 +417,8 @@ Server: class {
             ) case some then {
                 if lo.length == 0 then break
                 lv: lo.stringview
-                c9: parseContentLength line: lv
-                if c9 > 0 then clen = c9
+                c: parseContentLength line: lv
+                if c > 0 then clen = c
             } case none then {
                 return (Option.none String)
             }
@@ -487,15 +487,15 @@ Server: class {
             pth: "params/capabilities/general/positionEncodings/\{i}"
             f: json.at v: msg path: pth.stringview
             k: f.kind
-            done9: false
+            done: false
             match (
                 k
             ) case text then {
                 if f.s.stringview == "utf-32" then this.encUtf32 = true
             } else {
-                done9 = true
+                done = true
             }
-            if done9 then break
+            if done then break
             i = i + 1
         }
         # workspace discovery: CLI flags > initializationOptions > rootUri
@@ -547,22 +547,22 @@ Server: class {
         caps.set key: "textDocumentSync".string value: (Value.intval 1)
         caps.set key: "definitionProvider".string value: (Value.boolean true)
         caps.set key: "hoverProvider".string value: (Value.boolean true)
-        comp9: newObj
-        ctc9: newArr
-        ctc9.items.append (Value.text ".".string)
-        ctc9.items.append (Value.text " ".string)
-        comp9.set key: "triggerCharacters".string value: (Value.array ctc9)
-        caps.set key: "completionProvider".string value: (Value.object comp9)
-        sig9: newObj
-        stc9: newArr
-        stc9.items.append (Value.text ":".string)
-        stc9.items.append (Value.text " ".string)
-        sig9.set key: "triggerCharacters".string value: (Value.array stc9)
-        rtc9: newArr
-        rtc9.items.append (Value.text ":".string)
-        rtc9.items.append (Value.text " ".string)
-        sig9.set key: "retriggerCharacters".string value: (Value.array rtc9)
-        caps.set key: "signatureHelpProvider".string value: (Value.object sig9)
+        comp: newObj
+        ctc: newArr
+        ctc.items.append (Value.text ".".string)
+        ctc.items.append (Value.text " ".string)
+        comp.set key: "triggerCharacters".string value: (Value.array ctc)
+        caps.set key: "completionProvider".string value: (Value.object comp)
+        sig: newObj
+        stc: newArr
+        stc.items.append (Value.text ":".string)
+        stc.items.append (Value.text " ".string)
+        sig.set key: "triggerCharacters".string value: (Value.array stc)
+        rtc: newArr
+        rtc.items.append (Value.text ":".string)
+        rtc.items.append (Value.text " ".string)
+        sig.set key: "retriggerCharacters".string value: (Value.array rtc)
+        caps.set key: "signatureHelpProvider".string value: (Value.object sig)
         caps.set key: "documentFormattingProvider".string value: (Value.boolean true)
         caps.set key: "referencesProvider".string value: (Value.boolean true)
         caps.set key: "documentSymbolProvider".string value: (Value.boolean true)
@@ -605,8 +605,8 @@ Server: class {
                     rel = relPathOf path: pth.stringview srcDir: this.systemDir.stringview
                 }
                 d: (Document uri: uo.copy path: pth relpath: rel text: to.copy version: ver)
-                key9: uo.copy
-                this.docs.set key: key9 value: d
+                key: uo.copy
+                this.docs.set :key value: d
                 this.syncDoc uri: uo.stringview
             } case none then null
         } case none then null
@@ -623,7 +623,7 @@ Server: class {
                 to
             ) case some then {
                 rem: this.docs.remove key: uo
-                changed9: false
+                changed: false
                 match (
                     rem
                 ) case some then {
@@ -634,11 +634,11 @@ Server: class {
                     ) case some then {
                         d.version = vo
                     } case none then null
-                    key9: uo.copy
-                    this.docs.set key: key9 value: d
-                    changed9 = true
+                    key: uo.copy
+                    this.docs.set :key value: d
+                    changed = true
                 } case none then null
-                if changed9 then this.syncDoc uri: uo.stringview
+                if changed then this.syncDoc uri: uo.stringview
             } case none then null
         } case none then null
     }
@@ -653,14 +653,14 @@ Server: class {
                 rem
             ) case some then null case none then null
             # clear this uri's diagnostics
-            empty9: newArr
-            p9: newObj
-            p9.set key: "uri".string value: (Value.text uo.copy)
-            p9.set key: "diagnostics".string value: (Value.array empty9)
-            pv9: (Value.object p9)
+            empty: newArr
+            p: newObj
+            p.set key: "uri".string value: (Value.text uo.copy)
+            p.set key: "diagnostics".string value: (Value.array empty)
+            pv: (Value.object p)
             (sendNotification
                 method: "textDocument/publishDiagnostics"
-                params: pv9
+                params: pv
                 tp: this.transport
             )
         } case none then null
@@ -688,15 +688,15 @@ Server: class {
     # are copied out first: recomputeFor locks `this`, which would conflict
     # with a live iterator over this.dirty.
     flushDirty: function {:this} is {
-        uris9: (List String)
-        with it: this.dirty.iterateItems do for e: it loop uris9.append e.key.copy
+        uris: (List String)
+        with it: this.dirty.iterateItems do for e: it loop uris.append e.key.copy
         fresh: (MapRV String value: bool)
         this.dirty = fresh
-        ui9: u64
-        for ui9 < uris9.length loop {
-            u9: uris9.get i: ui9
-            this.recomputeFor uri: u9.stringview
-            ui9 = ui9 + 1
+        ui: u64
+        for ui < uris.length loop {
+            u: uris.get i: ui
+            this.recomputeFor uri: u.stringview
+            ui = ui + 1
         }
     }
 
@@ -704,11 +704,11 @@ Server: class {
     # unreadable for `millis`. A buffered burst reports not-quiet at once.
     inputQuiet: function {:this millis: i32} out bool is {
         if this.inpos < this.inbuf.length then return false
-        pr9: net.pollReadable fd: (transportFd tp: this.transport) timeoutMillis: millis
+        pr: net.pollReadable fd: (transportFd tp: this.transport) timeoutMillis: millis
         match (
-            pr9
+            pr
         ) case ok then {
-            if pr9 then return false
+            if pr then return false
             return true
         } case err then {
             return true
@@ -720,14 +720,14 @@ Server: class {
         ov: (Map String value: String)
         with dit: this.docs.iterateItems do for e: dit loop {
             if e.value.relpath.length > 0 then {
-                k9: e.value.relpath.copy
-                v9: e.value.text.copy
-                ov.set key: k9 value: v9
+                k: e.value.relpath.copy
+                v: e.value.text.copy
+                ov.set key: k value: v
             }
         }
         mu: String
         mp: String
-        found9: false
+        found: false
         {
             dgo: this.docs.get key: uri.asString
             match (
@@ -735,10 +735,10 @@ Server: class {
             ) case some then {
                 mu = zsource.unitNameOf path: dgo.path.stringview
                 mp = dgo.path.copy
-                found9 = true
+                found = true
             } case none then null
         }
-        if found9 == false then return
+        if found == false then return
         r: (zcheck.check
             srcdir: this.srcDir.stringview
             systemdir: this.systemDir.stringview
@@ -750,8 +750,8 @@ Server: class {
         zcheck.diagsOf :r :rows :msgs
         this.publishAll :r :rows :msgs mainUnit: mu.stringview mainPath: mp.stringview
         if r.parseOk then {
-            ku9: uri.string
-            this.snapshots.set key: ku9 value: r
+            ku: uri.string
+            this.snapshots.set key: ku value: r
         }
     }
 
@@ -793,11 +793,11 @@ Server: class {
                     row: rows.get i: ri
                     m: msgs.get i: ri
                     lineText: String
-                    lt9: r.vfs.getline dentryid: row.fsno lineno: (row.lineno - 1).u64
+                    lt: r.vfs.getline dentryid: row.fsno lineno: (row.lineno - 1).u64
                     match (
-                        lt9
+                        lt
                     ) case some then {
-                        lineText = lt9.copy
+                        lineText = lt.copy
                     } case none then null
                     dv: (diagValue
                         :row
@@ -822,13 +822,13 @@ Server: class {
             } else {
                 lintInto :arr text: e.value.text.copy relpath: drel.stringview utf32: this.encUtf32
             }
-            p9: newObj
-            p9.set key: "uri".string value: (Value.text durl)
-            p9.set key: "diagnostics".string value: (Value.array arr)
-            pv9: (Value.object p9)
+            p: newObj
+            p.set key: "uri".string value: (Value.text durl)
+            p.set key: "diagnostics".string value: (Value.array arr)
+            pv: (Value.object p)
             (sendNotification
                 method: "textDocument/publishDiagnostics"
-                params: pv9
+                params: pv
                 tp: this.transport
             )
         }
@@ -839,13 +839,13 @@ Server: class {
     handleFormatting: function {:this msg: Value.view} is {
         idv: idValueOf :msg
         uo: json.textAt v: msg path: "params/textDocument/uri"
-        answered9: false
+        answered: false
         match (
             uo
         ) case some then {
             dtext: String
             drel: String
-            found9: false
+            found: false
             {
                 dgo: this.docs.get key: uo
                 match (
@@ -853,16 +853,16 @@ Server: class {
                 ) case some then {
                     dtext = dgo.text.copy
                     drel = dgo.relpath.copy
-                    found9 = true
+                    found = true
                 } case none then null
             }
-            if found9 then {
+            if found then {
                 res: formatAnswer text: dtext.stringview relpath: drel.stringview
                 sendResult id: idv result: res tp: this.transport
-                answered9 = true
+                answered = true
             }
         } case none then null
-        if answered9 == false then sendResult id: idv result: Value.nul tp: this.transport
+        if answered == false then sendResult id: idv result: Value.nul tp: this.transport
     }
 
     # ---- navigation requests ----
@@ -887,14 +887,14 @@ Server: class {
         ) case some then {
             ch0 = co
         } case none then null
-        answered9: false
+        answered: false
         match (
             uo
         ) case some then {
             if line0 >= 0 when ch0 >= 0 then {
                 dtext: String
                 drel: String
-                found9: false
+                found: false
                 {
                     dgo: this.docs.get key: uo
                     match (
@@ -902,22 +902,22 @@ Server: class {
                     ) case some then {
                         dtext = dgo.text.copy
                         drel = dgo.relpath.copy
-                        found9 = true
+                        found = true
                     } case none then null
                 }
-                if found9 then {
+                if found then {
                     sno: this.snapshots.get key: uo
                     match (
                         sno
                     ) case some then {
                         res: Value.nul
-                        trigCh9: String
+                        trigCh: String
                         {
-                            tco9: json.textAt v: msg path: "params/context/triggerCharacter"
+                            tco: json.textAt v: msg path: "params/context/triggerCharacter"
                             match (
-                                tco9
+                                tco
                             ) case some then {
-                                trigCh9 = tco9.copy
+                                trigCh = tco.copy
                             } case none then null
                         }
                         if mode == 4 then {
@@ -929,7 +929,7 @@ Server: class {
                                 :line0
                                 ch: ch0
                                 utf32: this.encUtf32
-                                trig: trigCh9.stringview
+                                trig: trigCh.stringview
                             )
                         } else if mode == 5 then {
                             res = (signatureHelpAnswer
@@ -956,25 +956,25 @@ Server: class {
                             )
                         }
                         sendResult id: idv result: res tp: this.transport
-                        answered9 = true
+                        answered = true
                     } case none then null
                 }
             }
         } case none then null
-        if answered9 == false then sendResult id: idv result: Value.nul tp: this.transport
+        if answered == false then sendResult id: idv result: Value.nul tp: this.transport
     }
 
     handleDocSymbol: function {:this msg: Value.view} is {
         if this.debounce when this.hasDirty then this.flushDirty
         idv: idValueOf :msg
         uo: json.textAt v: msg path: "params/textDocument/uri"
-        answered9: false
+        answered: false
         match (
             uo
         ) case some then {
             mu: String
             dtext: String
-            found9: false
+            found: false
             {
                 dgo: this.docs.get key: uo
                 match (
@@ -982,10 +982,10 @@ Server: class {
                 ) case some then {
                     mu = zsource.unitNameOf path: dgo.path.stringview
                     dtext = dgo.text.copy
-                    found9 = true
+                    found = true
                 } case none then null
             }
-            if found9 then {
+            if found then {
                 sno: this.snapshots.get key: uo
                 match (
                     sno
@@ -997,11 +997,11 @@ Server: class {
                         utf32: this.encUtf32
                     )
                     sendResult id: idv result: res tp: this.transport
-                    answered9 = true
+                    answered = true
                 } case none then null
             }
         } case none then null
-        if answered9 == false then sendResult id: idv result: Value.nul tp: this.transport
+        if answered == false then sendResult id: idv result: Value.nul tp: this.transport
     }
 }
 
@@ -1015,27 +1015,27 @@ diagValue: function {
     line0: u32
     if row.lineno > 0 then line0 = row.lineno - 1
     c0: encodedCol :lineText cpCol1: row.colno :utf32
-    w9: row.width
-    if w9 == 0 then w9 = 1
-    c1: encodedCol :lineText cpCol1: row.colno + w9 :utf32
+    w: row.width
+    if w == 0 then w = 1
+    c1: encodedCol :lineText cpCol1: row.colno + w :utf32
     if c1 <= c0 then c1 = c0 + 1
-    st9: newObj
-    st9.set key: "line".string value: (Value.intval line0.i64)
-    st9.set key: "character".string value: (Value.intval c0.i64)
-    en9: newObj
-    en9.set key: "line".string value: (Value.intval line0.i64)
-    en9.set key: "character".string value: (Value.intval c1.i64)
-    rg9: newObj
-    rg9.set key: "start".string value: (Value.object st9)
-    rg9.set key: "end".string value: (Value.object en9)
-    code9: codeOf n: row.code
-    d9: newObj
-    d9.set key: "range".string value: (Value.object rg9)
-    d9.set key: "severity".string value: (Value.intval 1)
-    d9.set key: "code".string value: (Value.text code9)
-    d9.set key: "source".string value: (Value.text "zc".string)
-    d9.set key: "message".string value: (Value.text msg.string)
-    return (Value.object d9)
+    st: newObj
+    st.set key: "line".string value: (Value.intval line0.i64)
+    st.set key: "character".string value: (Value.intval c0.i64)
+    en: newObj
+    en.set key: "line".string value: (Value.intval line0.i64)
+    en.set key: "character".string value: (Value.intval c1.i64)
+    rg: newObj
+    rg.set key: "start".string value: (Value.object st)
+    rg.set key: "end".string value: (Value.object en)
+    code: codeOf n: row.code
+    d: newObj
+    d.set key: "range".string value: (Value.object rg)
+    d.set key: "severity".string value: (Value.intval 1)
+    d.set key: "code".string value: (Value.text code)
+    d.set key: "source".string value: (Value.text "zc".string)
+    d.set key: "message".string value: (Value.text msg.string)
+    return (Value.object d)
 }
 
 # codeOf -- "E" + zero-padded-4 error code.
@@ -1085,15 +1085,15 @@ Spans: class {
 } as {
     note: function {:this id: u32 line: u32 col: u32} is {
         if id > 0 then {
-            v9: (line.u64 * 1048576) + col.u64
-            this.pos.set key: id.u64 value: v9
-            if v9 > this.lastPos then this.lastPos = v9
+            v: (line.u64 * 1048576) + col.u64
+            this.pos.set key: id.u64 value: v
+            if v > this.lastPos then this.lastPos = v
         }
     }
 
     addRow: function {:this id: u32 line: u32 col: u32 name: StringView kind: u8} is {
-        w9: name.count
-        this.rows.append (spanrow nodeid: id :line colLo: col colHi: col + w9.u32.orPanic :kind)
+        w: name.count
+        this.rows.append (spanrow nodeid: id :line colLo: col colHi: col + w.u32.orPanic :kind)
         this.names.append name.string
     }
 
@@ -1101,41 +1101,41 @@ Spans: class {
         match (
             c
         ) case atomid then {
-            cAr9: zast.nameTextAt :ast ref: c.name
-            this.addRow id: dpid line: c.lineno col: c.colno name: cAr9.stringview kind: 2
+            cAr: zast.nameTextAt :ast ref: c.name
+            this.addRow id: dpid line: c.lineno col: c.colno name: cAr.stringview kind: 2
         } else null
     }
 
     # innerRangeOfKind -- the innermost recorded range of `kind` whose
     # [startPos, endPos + slack] contains `curPos` (line*1048576+col), or 0.
     innerRangeOfKind: function {t: this.view curPos: u64 kind: u8 slack: u64} out u32 is {
-        best9: u32
-        bestStart9: u64
-        ri9: u64
-        for ri9 < t.ranges.length loop {
-            rr9: t.ranges.get i: ri9
-            hit9: rr9.kind == kind
-            if rr9.startPos > curPos then hit9 = false
-            if curPos > (rr9.endPos + slack) then hit9 = false
-            if hit9 then {
-                take9: false
-                if best9 == 0 then take9 = true
-                if rr9.startPos > bestStart9 then take9 = true
-                if take9 then {
-                    best9 = rr9.nodeid
-                    bestStart9 = rr9.startPos
+        best: u32
+        bestStart: u64
+        ri: u64
+        for ri < t.ranges.length loop {
+            rr: t.ranges.get i: ri
+            hit: rr.kind == kind
+            if rr.startPos > curPos then hit = false
+            if curPos > (rr.endPos + slack) then hit = false
+            if hit then {
+                shouldTake: false
+                if best == 0 then shouldTake = true
+                if rr.startPos > bestStart then shouldTake = true
+                if shouldTake then {
+                    best = rr.nodeid
+                    bestStart = rr.startPos
                 }
             }
-            ri9 = ri9 + 1
+            ri = ri + 1
         }
-        return best9
+        return best
     }
 
     # walkOptAt -- the id-taking entry (0 = absent).
     walkOptAt: function {:this ast: Ast.view oId: zast.nodeid} is {
         if oId.isZero then return
-        o9: ast.nodes.get i: oId.u64
-        this.walk :ast n: o9
+        o: ast.nodes.get i: oId.u64
+        this.walk :ast n: o
     }
 
     # walkProgram -- root entry: notes the program node, then walks each
@@ -1145,12 +1145,12 @@ Spans: class {
             prog
         ) case program then {
             this.note id: prog.nodeid line: prog.lineno col: prog.colno
-            wpi9: u64
-            wpn9: prog.ast.units.length
-            for wpi9 < wpn9 loop {
-                wpid9: (zast.nodeid.create from: (prog.ast.units.get i: wpi9))
-                this.walkAt ast: prog.ast nId: wpid9
-                wpi9 = wpi9 + 1
+            wpi: u64
+            wpn: prog.ast.units.length
+            for wpi < wpn loop {
+                wpid: (zast.nodeid.create from: (prog.ast.units.get i: wpi))
+                this.walkAt ast: prog.ast nId: wpid
+                wpi = wpi + 1
             }
         } else null
     }
@@ -1158,8 +1158,8 @@ Spans: class {
     # walkAt -- the id-taking entry: the row view is this frame's, so a
     # caller can lend the table in the same call.
     walkAt: function {:this ast: Ast.view nId: zast.nodeid} is {
-        n9: ast.nodes.get i: nId.u64
-        this.walk :ast n: n9
+        n: ast.nodes.get i: nId.u64
+        this.walk :ast :n
     }
 
     walk: function {:this ast: Ast n: zast.Node.view} is {
@@ -1169,12 +1169,12 @@ Spans: class {
             this.note id: n.nodeid line: n.lineno col: n.colno
         } case placeholder then null case atomid then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            nAr9: zast.nameTextAt :ast ref: n.name
-            this.addRow id: n.nodeid line: n.lineno col: n.colno name: nAr9.stringview kind: 1
+            nAr: zast.nameTextAt :ast ref: n.name
+            this.addRow id: n.nodeid line: n.lineno col: n.colno name: nAr.stringview kind: 1
         } case labelvalue then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            nLb9: zast.nameTextAt :ast ref: n.name
-            this.addRow id: n.nodeid line: n.lineno col: n.colno name: nLb9.stringview kind: 1
+            nLb: zast.nameTextAt :ast ref: n.name
+            this.addRow id: n.nodeid line: n.lineno col: n.colno name: nLb.stringview kind: 1
         } case stringchunk then {
             this.note id: n.nodeid line: n.lineno col: n.colno
         } case binop then {
@@ -1184,23 +1184,23 @@ Spans: class {
             this.walk :ast n: (ast.nodes.get i: n.rhs.u64)
         } case atomstring then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            spit9: n.stringparts.iterate
-            for sp9: spit9 loop this.walk :ast n: (ast.nodes.get i: sp9.u64)
+            spit: n.stringparts.iterate
+            for sp: spit loop this.walk :ast n: (ast.nodes.get i: sp.u64)
         } case dottedpath then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             this.walk :ast n: (ast.nodes.get i: n.parent.u64)
             this.memberRow :ast dpid: n.nodeid c: (ast.nodes.get i: n.child.u64)
         } case call then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            csp9: (n.lineno.u64 * 1048576) + n.colno.u64
+            csp: (n.lineno.u64 * 1048576) + n.colno.u64
             this.walk :ast n: (ast.nodes.get i: n.callable.u64)
-            ait9: n.arguments.iterate
-            for a9: ait9 loop {
-                this.walk :ast n: (ast.nodes.get i: a9.u64)
+            ait: n.arguments.iterate
+            for a: ait loop {
+                this.walk :ast n: (ast.nodes.get i: a.u64)
             }
             this.ranges.append (rangerow
                 nodeid: n.nodeid
-                startPos: csp9
+                startPos: csp
                 endPos: this.lastPos
                 kind: 4
             )
@@ -1212,23 +1212,23 @@ Spans: class {
             this.walk :ast n: (ast.nodes.get i: n.operation.u64)
         } case datablock then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            eit9: n.elements.iterate
-            for e9: eit9 loop this.walk :ast n: (ast.nodes.get i: e9.u64)
+            eit: n.elements.iterate
+            for e: eit loop this.walk :ast n: (ast.nodes.get i: e.u64)
             this.walkOptAt :ast oId: n.outType
         } case yieldexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             this.walk :ast n: (ast.nodes.get i: n.expr.u64)
         } case statement then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            sit9: n.statements.iterate
-            for s9Id9: sit9 loop this.walk :ast n: (ast.nodes.get i: s9Id9.u64)
+            sit: n.statements.iterate
+            for s9Id: sit loop this.walk :ast n: (ast.nodes.get i: s9Id.u64)
         } case statementline then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             this.walk :ast n: (ast.nodes.get i: n.statementline.u64)
         } case assignment then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            anmL9: zast.poolTextAt pool: ast.names ref: n.name
-            this.addRow id: n.nodeid line: n.lineno col: n.colno name: anmL9.stringview kind: 3
+            anmL: zast.poolTextAt pool: ast.names ref: n.name
+            this.addRow id: n.nodeid line: n.lineno col: n.colno name: anmL.stringview kind: 3
             this.walk :ast n: (ast.nodes.get i: n.value.u64)
         } case reassignment then {
             this.note id: n.nodeid line: n.lineno col: n.colno
@@ -1243,21 +1243,21 @@ Spans: class {
             this.walk :ast n: (ast.nodes.get i: n.expression.u64)
         } case ifexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            cit9: n.clauses.iterate
-            for c9Id9: cit9 loop this.walk :ast n: (ast.nodes.get i: c9Id9.u64)
+            cit: n.clauses.iterate
+            for c9Id: cit loop this.walk :ast n: (ast.nodes.get i: c9Id.u64)
             this.walkOptAt :ast oId: n.elseclause
         } case ifclause then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            coit9: n.conditions.iterate
-            for co9Id9: coit9 loop this.walk :ast n: (ast.nodes.get i: co9Id9.u64)
+            coit: n.conditions.iterate
+            for co9Id: coit loop this.walk :ast n: (ast.nodes.get i: co9Id.u64)
             this.walk :ast n: (ast.nodes.get i: n.statement.u64)
         } case forexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            fct9: n.conditions.iterate
-            for fc9Id9: fct9 loop this.walk :ast n: (ast.nodes.get i: fc9Id9.u64)
+            fct: n.conditions.iterate
+            for fc9Id: fct loop this.walk :ast n: (ast.nodes.get i: fc9Id.u64)
             this.walkOptAt :ast oId: n.body
-            fpt9: n.postconditions.iterate
-            for fp9Id9: fpt9 loop this.walk :ast n: (ast.nodes.get i: fp9Id9.u64)
+            fpt: n.postconditions.iterate
+            for fp9Id: fpt loop this.walk :ast n: (ast.nodes.get i: fp9Id.u64)
         } case doexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             this.walk :ast n: (ast.nodes.get i: n.statement.u64)
@@ -1267,14 +1267,14 @@ Spans: class {
             this.walk :ast n: (ast.nodes.get i: n.body.u64)
         } case caseexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            xsp9: (n.lineno.u64 * 1048576) + n.colno.u64
+            xsp: (n.lineno.u64 * 1048576) + n.colno.u64
             this.walk :ast n: (ast.nodes.get i: n.subject.u64)
-            cct9: n.clauses.iterate
-            for cc9Id9: cct9 loop this.walk :ast n: (ast.nodes.get i: cc9Id9.u64)
+            cct: n.clauses.iterate
+            for cc9Id: cct loop this.walk :ast n: (ast.nodes.get i: cc9Id.u64)
             this.walkOptAt :ast oId: n.elseclause
             this.ranges.append (rangerow
                 nodeid: n.nodeid
-                startPos: xsp9
+                startPos: xsp
                 endPos: this.lastPos
                 kind: 5
             )
@@ -1285,37 +1285,37 @@ Spans: class {
         } case functiondef then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             this.walkOptAt :ast oId: n.returntype
-            pit9: n.parameters.iterate
-            for pm9Id9: pit9 loop {
-                pm9: ast.nodes.get i: pm9Id9.u64
-                this.walk :ast n: pm9
+            pit: n.parameters.iterate
+            for pm9Id: pit loop {
+                pm: ast.nodes.get i: pm9Id.u64
+                this.walk :ast n: pm
             }
             this.walkOptAt :ast oId: n.body
-            fat9: n.asItems.iterate
-            for fa9Id9: fat9 loop {
-                fa9: ast.nodes.get i: fa9Id9.u64
-                this.walk :ast n: fa9
+            fat: n.asItems.iterate
+            for fa9Id: fat loop {
+                fa: ast.nodes.get i: fa9Id.u64
+                this.walk :ast n: fa
             }
         } case objectdef then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            oit9: n.isItems.iterate
-            for oi9Id9: oit9 loop {
-                oi9: ast.nodes.get i: oi9Id9.u64
-                this.walk :ast n: oi9
+            oit: n.isItems.iterate
+            for oi9Id: oit loop {
+                oi: ast.nodes.get i: oi9Id.u64
+                this.walk :ast n: oi
             }
-            oat9: n.asItems.iterate
-            for oa9Id9: oat9 loop {
-                oa9: ast.nodes.get i: oa9Id9.u64
-                this.walk :ast n: oa9
+            oat: n.asItems.iterate
+            for oa9Id: oat loop {
+                oa: ast.nodes.get i: oa9Id.u64
+                this.walk :ast n: oa
             }
         } case unitdef then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            ubt9: n.body.iterate
-            for ub9Id9: ubt9 loop this.walk :ast n: (ast.nodes.get i: ub9Id9.u64)
+            ubt: n.body.iterate
+            for ub9Id: ubt loop this.walk :ast n: (ast.nodes.get i: ub9Id.u64)
         } case program then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            uit9: n.ast.units.iterate
-            for u9Id9x: uit9 loop this.walk :ast n: (ast.nodes.get i: u9Id9x.u64)
+            uit: n.ast.units.iterate
+            for u9Id9x: uit loop this.walk :ast n: (ast.nodes.get i: u9Id9x.u64)
         }
     }
 }
@@ -1371,11 +1371,11 @@ cpColOf: function {lineText: StringView ch: i64 utf32: bool} out u32 is {
 pathMatches: function {pv: StringView rel: StringView srcDir: StringView} out bool is {
     if rel.length == 0 then return false
     if pv == rel then return true
-    fs9: zcheck.joinPath a: srcDir b: rel
-    if pv == fs9.stringview then return true
-    ov9: "/".string
-    ov9.append rel
-    if pv == ov9.stringview then return true
+    fs: zcheck.joinPath a: srcDir b: rel
+    if pv == fs.stringview then return true
+    ov: "/".string
+    ov.append rel
+    if pv == ov.stringview then return true
     return false
 }
 
@@ -1386,11 +1386,11 @@ useVarId: function {o: (Option zenv.ZSymbolTable) nid: u64} out ztypes.vid is {
     match (
         o
     ) case some then {
-        g9: o.typing.atomVariableId.get key: nid
+        g: o.typing.atomVariableId.get key: nid
         match (
-            g9
+            g
         ) case some then {
-            return g9
+            return g
         } case none then {
             return (ztypes.vid.create from: 0)
         }
@@ -1410,11 +1410,11 @@ refDeclOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out ztypes.declid i
     match (
         o
     ) case some then {
-        g9: o.typing.refDecl.get key: nid
+        g: o.typing.refDecl.get key: nid
         match (
-            g9
+            g
         ) case some then {
-            return g9
+            return g
         } case none then {
             return (ztypes.declid.create from: 0)
         }
@@ -1429,8 +1429,8 @@ declNodeOf: function {o: (Option zenv.ZSymbolTable) declId: ztypes.declid} out u
     match (
         o
     ) case some then {
-        g9: o.typing.decls.get i: declId.u64
-        return g9.node.u64
+        g: o.typing.decls.get i: declId.u64
+        return g.node.u64
         return 0
     } case none then {
         return 0
@@ -1443,8 +1443,8 @@ declTypeIdOf: function {o: (Option zenv.ZSymbolTable) declId: ztypes.declid} out
     match (
         o
     ) case some then {
-        g9: o.typing.decls.get i: declId.u64
-        return g9.typeId
+        g: o.typing.decls.get i: declId.u64
+        return g.typeId
         return 0
     } case none then {
         return 0
@@ -1454,21 +1454,21 @@ declTypeIdOf: function {o: (Option zenv.ZSymbolTable) declId: ztypes.declid} out
 # the owner type id of the member referenced at node `nid` (the member
 # declaration's parent type via refDecl), or 0.
 memberOwnerOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
-    rd9: refDeclOf :o :nid
-    if rd9.isZero then return 0
-    par9: ztypes.declid
+    rd: refDeclOf :o :nid
+    if rd.isZero then return 0
+    par: ztypes.declid
     match (
         o
     ) case some then {
-        d9: o.typing.decls.get i: rd9.u64
-        par9 = d9.parent
+        d: o.typing.decls.get i: rd.u64
+        par = d.parent
     } case none then null
-    if par9.isZero then return (ztypes.declid.create from: 0)
+    if par.isZero then return (ztypes.declid.create from: 0)
     match (
         o
     ) case some then {
-        p9: o.typing.decls.get i: par9.u64
-        if p9.kind.typeDecl then return p9.typeId
+        p: o.typing.decls.get i: par.u64
+        if p.kind.typeDecl then return p.typeId
         return 0
         return 0
     } case none then {
@@ -1481,11 +1481,11 @@ defVarIdOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out ztypes.vid is 
     match (
         o
     ) case some then {
-        g9: o.typing.defVariableId.get key: nid
+        g: o.typing.defVariableId.get key: nid
         match (
-            g9
+            g
         ) case some then {
-            return g9
+            return g
         } case none then {
             return (ztypes.vid.create from: 0)
         }
@@ -1526,30 +1526,30 @@ varDefNode: function {o: (Option zenv.ZSymbolTable) vid: ztypes.vid} out u64 is 
 # keys the unit test on its ORIGIN's declaring unit while displaying the full
 # instance name (e.g. "List u64" stays bare -- List is declared in collections).
 displayTypeNameSt: function {st: zenv.ZSymbolTable tid: ztypes.tid} out String is {
-    disp9: ztypecheck.typeNameOf :st tid: (ztypes.tid.create from: tid.u64)
-    if disp9.length == 0 then return disp9
-    base9: tid
+    disp: ztypecheck.typeNameOf :st tid: (ztypes.tid.create from: tid.u64)
+    if disp.length == 0 then return disp
+    base: tid
     {
-        go9: st.reg.genericOriginOf tid: (ztypes.tid.create from: tid.u64)
-        if go9 > 0 then base9 = go9
+        go: st.reg.genericOriginOf tid: (ztypes.tid.create from: tid.u64)
+        if go > 0 then base = go
     }
-    bname9: String
+    bname: String
     {
-        name9v: st.reg.nameOf tid: (ztypes.tid.create from: base9.u64)
-            bname9 = name9v
+        name9v: st.reg.nameOf tid: (ztypes.tid.create from: base.u64)
+            bname = name9v
     }
-    if bname9.length == 0 then return disp9
-    unit9: (ztypecheck.unitNameOfTid
+    if bname.length == 0 then return disp
+    unitName: (ztypecheck.unitNameOfTid
         ty: st.typing
         reg: st.reg
-        tid: (ztypes.tid.create from: base9.u64)
+        tid: (ztypes.tid.create from: base.u64)
     )
-    if unit9.length == 0 then return disp9
-    uv9: unit9.stringview
-    if uv9 == "system" then return disp9
-    if uv9 == "core" then return disp9
-    if uv9 == "collections" then return disp9
-    return "\{uv9}.\{disp9.stringview}"
+    if unitName.length == 0 then return disp
+    uv: unitName.stringview
+    if uv == "system" then return disp
+    if uv == "core" then return disp
+    if uv == "collections" then return disp
+    return "\{uv}.\{disp.stringview}"
 }
 
 # the hover display name of type `tid` (unit-qualified outside core/system).
@@ -1566,41 +1566,41 @@ displayTypeNameOfOpt: function {o: (Option zenv.ZSymbolTable) tid: ztypes.tid} o
 # typeKindTextOpt -- a type definition's kind word ("class", "variant", ...)
 # for hover, or "" when tid is 0 or names something other than a type def.
 typeKindTextOpt: function {o: (Option zenv.ZSymbolTable) tid: ztypes.tid} out String is {
-    result9: String
-    if tid.isZero then return result9
+    result: String
+    if tid.isZero then return result
     match (
         o
     ) case some then {
-        tt9: o.reg.typetypeOf typeId: (ztypes.tid.create from: tid.u64)
+        tt: o.reg.typetypeOf typeId: (ztypes.tid.create from: tid.u64)
         match (
-            tt9
+            tt
         ) case classType then {
-            result9 = "class".string
+            result = "class".string
         } case recordType then {
-            result9 = "record".string
+            result = "record".string
         } case variantType then {
-            result9 = "variant".string
+            result = "variant".string
         } case unionType then {
-            result9 = "union".string
+            result = "union".string
         } case facetType then {
-            result9 = "facet".string
+            result = "facet".string
         } case protocolType then {
-            result9 = "protocol".string
+            result = "protocol".string
         } else null
     } case none then null
-    return result9
+    return result
 }
 
 # declNameText -- the name a declaration was declared under, or "".
 declNameText: function {ast: Ast st: zenv.ZSymbolTable declId: ztypes.declid} out String is {
     if declId.isZero then return "".string
-    nm9: u32
+    nm: u32
     {
-        do9: st.typing.decls.get i: declId.u64
-        nm9 = do9.name
+        decl: st.typing.decls.get i: declId.u64
+        nm = decl.name
     }
-    if nm9 == 0 then return "".string
-    return (zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: nm9.u32))
+    if nm == 0 then return "".string
+    return (zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: nm.u32))
 }
 
 # defaultDisplay -- a defaulted param's recorded default rendered with its
@@ -1614,48 +1614,48 @@ defaultDisplay: function {
     typeName: StringView
 } out String is {
     {
-        df9: dv
-        if df9.func then return (declNameText :ast :st declId: df9)
+        df: dv
+        if df.func then return (declNameText :ast :st declId: df)
     }
     {
-        da9: dv
-        if da9.arm then {
-            arm9: declNameText :ast :st declId: da9
-            if arm9.length == 0 then return "".string
-            r9: typeName.string
-            r9.appendByte b: 46
-            r9.append arm9
-            return r9
+        da: dv
+        if da.arm then {
+            arm: declNameText :ast :st declId: da
+            if arm.length == 0 then return "".string
+            r: typeName.string
+            r.appendByte b: 46
+            r.append arm
+            return r
         }
     }
-    dtextOwn9: String
+    dtextOwn: String
     {
-        dl9: dv
-        if dl9.literal then {
-            if dl9 == 0 then return "".string
-            dtextOwn9 = ztypecheck.rootNameOf :ast n: (ast.nodes.get i: dl9.u64)
+        dl: dv
+        if dl.literal then {
+            if dl == 0 then return "".string
+            dtextOwn = ztypecheck.rootNameOf :ast n: (ast.nodes.get i: dl.u64)
         }
     }
-    dtext: dtextOwn9.stringview
+    dtext: dtextOwn.stringview
     if dtext.length == 0 then return "".string
-    isFloat9: false
-    if typeName == "f64" then isFloat9 = true
-    if typeName == "f32" then isFloat9 = true
-    if typeName == "f16" then isFloat9 = true
-    if typeName == "f128" then isFloat9 = true
-    rr9: String
-    if isFloat9 then {
-        rr9.appendByte b: 40
-        rr9.append dtext
-        rr9.appendByte b: 41
-        rr9.appendByte b: 46
-        rr9.append typeName
+    isFloat: false
+    if typeName == "f64" then isFloat = true
+    if typeName == "f32" then isFloat = true
+    if typeName == "f16" then isFloat = true
+    if typeName == "f128" then isFloat = true
+    rr: String
+    if isFloat then {
+        rr.appendByte b: 40
+        rr.append dtext
+        rr.appendByte b: 41
+        rr.appendByte b: 46
+        rr.append typeName
     } else {
-        rr9.append dtext
-        rr9.appendByte b: 46
-        rr9.append typeName
+        rr.append dtext
+        rr.appendByte b: 46
+        rr.append typeName
     }
-    return rr9
+    return rr
 }
 
 # paramDocs -- map of parameter name -> its trailing `#` doc comment, read from
@@ -1669,114 +1669,114 @@ paramDocs: function {
     vfs: zvfs.ZVfs.view
     tid: ztypes.tid
 } out (Map String value: String) is {
-    result9: (Map String value: String)
-    defNid9: defNodeInfo :o :prog :tid member: ""
-    if defNid9 == 0 then return result9
-    fnNid9: u32
+    result: (Map String value: String)
+    defNid: defNodeInfo :o :prog :tid member: ""
+    if defNid == 0 then return result
+    fnNid: u32
     {
         match (
             prog
         ) case program then {
-            wn9: prog.ast.nodes.get i: defNid9.u64
+            wn: prog.ast.nodes.get i: defNid.u64
             match (
-                wn9
+                wn
             ) case namedoperation then {
-                fnNid9 = wn9.operation
+                fnNid = wn.operation
             } else null
         } else null
     }
-    if fnNid9 == 0 then return result9
-    fsno9: zvfs.fsno
+    if fnNid == 0 then return result
+    fsno: zvfs.fsno
     {
         match (
             prog
         ) case program then {
-            fsno9 = prog.ast.fsnoForNode nodeid: fnNid9
+            fsno = prog.ast.fsnoForNode nodeid: fnNid
         } else null
     }
-    if fsno9.u64 == 0 then return result9
-    paramIds9: (ListVal u32)
+    if fsno.u64 == 0 then return result
+    paramIds: (ListVal u32)
     {
         match (
             prog
         ) case program then {
-            fd9: prog.ast.nodes.get i: fnNid9.u64
+            fd: prog.ast.nodes.get i: fnNid.u64
             match (
-                fd9
+                fd
             ) case functiondef then {
-                with pit9: fd9.parameters.iterate do for pid9: pit9 loop paramIds9.append pid9
+                with pit: fd.parameters.iterate do for pid: pit loop paramIds.append pid
             } else null
         } else null
     }
-    pnms9: (List String)
-    plns9: (ListVal u32)
-    pk9: u64
-    for pk9 < paramIds9.length loop {
-        pid9: paramIds9.get i: pk9
-        nameRef9: u32
-        ln9: u32
+    pnms: (List String)
+    plns: (ListVal u32)
+    pk: u64
+    for pk < paramIds.length loop {
+        pid: paramIds.get i: pk
+        nameRef: u32
+        ln: u32
         {
             match (
                 prog
             ) case program then {
-                pnode9: prog.ast.nodes.get i: pid9.u64
+                pnode: prog.ast.nodes.get i: pid.u64
                 match (
-                    pnode9
+                    pnode
                 ) case namedoperation then {
-                    nameRef9 = pnode9.name
-                    ln9 = pnode9.lineno
+                    nameRef = pnode.name
+                    ln = pnode.lineno
                 } else null
             } else null
         }
-        if nameRef9 > 0 then {
+        if nameRef > 0 then {
             match (
                 prog
             ) case program then {
-                nm9: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: nameRef9.u32)
-                pnms9.append nm9
-                plns9.append ln9
+                nm: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: nameRef.u32)
+                pnms.append nm
+                plns.append ln
             } else null
         }
-        pk9 = pk9 + 1
+        pk = pk + 1
     }
-    ci9: u64
-    cn9: pnms9.length
-    for ci9 < cn9 loop {
-        lastOnLine9: true
-        nxt9: ci9 + 1
-        if nxt9 < cn9 then {
-            thisLn9: plns9.get i: ci9
-            nextLn9: plns9.get i: nxt9
-            if nextLn9 == thisLn9 then lastOnLine9 = false
+    ci: u64
+    cn: pnms.length
+    for ci < cn loop {
+        lastOnLine: true
+        nxt: ci + 1
+        if nxt < cn then {
+            thisLn: plns.get i: ci
+            nextLn: plns.get i: nxt
+            if nextLn == thisLn then lastOnLine = false
         }
-        if lastOnLine9 then {
-            curLn9: plns9.get i: ci9
-            tcm9: trailingDocOf :vfs fsno: fsno9 line1: curLn9
-            if tcm9.length > 0 then {
-                kk9: (pnms9.get i: ci9).copy
-                result9.set key: kk9 value: tcm9
+        if lastOnLine then {
+            curLn: plns.get i: ci
+            tcm: trailingDocOf :vfs :fsno line1: curLn
+            if tcm.length > 0 then {
+                kk: (pnms.get i: ci).copy
+                result.set key: kk value: tcm
             }
         }
-        ci9 = ci9 + 1
+        ci = ci + 1
     }
-    return result9
+    return result
 }
 
 # paramStartsLine -- true when the source line `line1` (1-based) of file `fsno`,
 # leading whitespace removed, begins with `name` -- the parameter starts its own
 # line rather than sharing the function-head line with the name.
 paramStartsLine: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32 name: StringView} out bool is {
-    result9: false
-    if line1 == 0 then return result9
-    lg9: vfs.getline dentryid: fsno lineno: (line1 - 1).u64
+    result: false
+    if line1 == 0 then return result
+    lg: vfs.getline dentryid: fsno lineno: (line1 - 1).u64
     match (
-        lg9
+        lg
     ) case some then {
-        lv9: lg9.stringview
-        tl9: lv9.trimStart
-        if tl9.startsWith name then result9 = true
+        lv: lg.stringview
+        tl: lv.trimStart
+        if tl.startsWith name then result = true
     } case none then null
-    return result9
+    return result
 }
 
 # paramLeadDocs -- map of parameter name -> the contiguous `#` doc block on the
@@ -1790,104 +1790,104 @@ paramLeadDocs: function {
     vfs: zvfs.ZVfs.view
     tid: ztypes.tid
 } out (Map String value: String) is {
-    result9: (Map String value: String)
-    defNid9: defNodeInfo :o :prog :tid member: ""
-    if defNid9 == 0 then return result9
-    fnNid9: u32
+    result: (Map String value: String)
+    defNid: defNodeInfo :o :prog :tid member: ""
+    if defNid == 0 then return result
+    fnNid: u32
     {
         match (
             prog
         ) case program then {
-            wn9: prog.ast.nodes.get i: defNid9.u64
+            wn: prog.ast.nodes.get i: defNid.u64
             match (
-                wn9
+                wn
             ) case namedoperation then {
-                fnNid9 = wn9.operation
+                fnNid = wn.operation
             } else null
         } else null
     }
-    if fnNid9 == 0 then return result9
-    fsno9: zvfs.fsno
+    if fnNid == 0 then return result
+    fsno: zvfs.fsno
     {
         match (
             prog
         ) case program then {
-            fsno9 = prog.ast.fsnoForNode nodeid: fnNid9
+            fsno = prog.ast.fsnoForNode nodeid: fnNid
         } else null
     }
-    if fsno9.u64 == 0 then return result9
-    paramIds9: (ListVal u32)
+    if fsno.u64 == 0 then return result
+    paramIds: (ListVal u32)
     {
         match (
             prog
         ) case program then {
-            fd9: prog.ast.nodes.get i: fnNid9.u64
+            fd: prog.ast.nodes.get i: fnNid.u64
             match (
-                fd9
+                fd
             ) case functiondef then {
-                with pit9: fd9.parameters.iterate do for pid9: pit9 loop paramIds9.append pid9
+                with pit: fd.parameters.iterate do for pid: pit loop paramIds.append pid
             } else null
         } else null
     }
-    pnms9: (List String)
-    plns9: (ListVal u32)
-    pk9: u64
-    for pk9 < paramIds9.length loop {
-        pid9: paramIds9.get i: pk9
-        nameRef9: u32
-        ln9: u32
+    pnms: (List String)
+    plns: (ListVal u32)
+    pk: u64
+    for pk < paramIds.length loop {
+        pid: paramIds.get i: pk
+        nameRef: u32
+        ln: u32
         {
             match (
                 prog
             ) case program then {
-                pnode9: prog.ast.nodes.get i: pid9.u64
+                pnode: prog.ast.nodes.get i: pid.u64
                 match (
-                    pnode9
+                    pnode
                 ) case namedoperation then {
-                    nameRef9 = pnode9.name
-                    ln9 = pnode9.lineno
+                    nameRef = pnode.name
+                    ln = pnode.lineno
                 } else null
             } else null
         }
-        if nameRef9 > 0 then {
+        if nameRef > 0 then {
             match (
                 prog
             ) case program then {
-                nm9: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: nameRef9.u32)
-                pnms9.append nm9
-                plns9.append ln9
+                nm: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: nameRef.u32)
+                pnms.append nm
+                plns.append ln
             } else null
         }
-        pk9 = pk9 + 1
+        pk = pk + 1
     }
-    ci9: u64
-    cn9: pnms9.length
-    for ci9 < cn9 loop {
-        firstOnLine9: true
-        if ci9 > 0 then {
-            thisLn9: plns9.get i: ci9
-            prevLn9: plns9.get i: (ci9 - 1)
-            if prevLn9 == thisLn9 then firstOnLine9 = false
+    ci: u64
+    cn: pnms.length
+    for ci < cn loop {
+        firstOnLine: true
+        if ci > 0 then {
+            thisLn: plns.get i: ci
+            prevLn: plns.get i: (ci - 1)
+            if prevLn == thisLn then firstOnLine = false
         }
-        if firstOnLine9 then {
-            curLn9: plns9.get i: ci9
-            startsOwn9: (paramStartsLine
+        if firstOnLine then {
+            curLn: plns.get i: ci
+            startsOwn: (paramStartsLine
                 :vfs
-                fsno: fsno9
-                line1: curLn9
-                name: (pnms9.get i: ci9).stringview
+                :fsno
+                line1: curLn
+                name: (pnms.get i: ci).stringview
             )
-            if startsOwn9 then {
-                blk9: docBlockAboveOf :vfs fsno: fsno9 line1: curLn9
-                if blk9.length > 0 then {
-                    kk9: (pnms9.get i: ci9).copy
-                    result9.set key: kk9 value: blk9
+            if startsOwn then {
+                blk: docBlockAboveOf :vfs :fsno line1: curLn
+                if blk.length > 0 then {
+                    kk: (pnms.get i: ci).copy
+                    result.set key: kk value: blk
                 }
             }
         }
-        ci9 = ci9 + 1
+        ci = ci + 1
     }
-    return result9
+    return result
 }
 
 # fnSigTextOpt -- a function type's readable signature "name: function {p:
@@ -1899,172 +1899,172 @@ fnSigTextOpt: function {
     tid: ztypes.tid
     name: StringView
 } out String is {
-    docs9: paramDocs :o :prog :vfs :tid
-    leads9: paramLeadDocs :o :prog :vfs :tid
+    docs: paramDocs :o :prog :vfs :tid
+    leads: paramLeadDocs :o :prog :vfs :tid
     match (
         o
     ) case some then {
-        isFn9: false
-        if (o.reg.typetypeOf typeId: (ztypes.tid.create from: tid.u64)) == ztypes.ztypetype.functionType then isFn9 = true
-        if (isFn9) == false then return "".string
+        isFn: false
+        if (o.reg.typetypeOf typeId: (ztypes.tid.create from: tid.u64)) == ztypes.ztypetype.functionType then isFn = true
+        if (isFn) == false then return "".string
         # the declared parameters, skipping the receiver; type names resolve
         # afterwards (typeNameOf takes an exclusive lock on `o`)
-        pnames9: (List String)
-        ptids9: (ListVal u64)
-        pnids9: (ListVal u64)
+        pnames: (List String)
+        ptids: (ListVal u64)
+        pnids: (ListVal u64)
         match (
             prog
         ) case program then {
-            userParams :prog :o :tid names: pnames9 tids: ptids9 nameIds: pnids9
+            userParams :prog :o :tid names: pnames tids: ptids nameIds: pnids
         } else null
         # render each param display string once the member list is collected:
         # resolving a member declaration locks `o` exclusively. A defaulted
         # param shows its value; else its type + ownership.
-        pdisp9: (List String)
-        pi9: u64
-        for pi9 < pnames9.length loop {
-            pt9: ptids9.get i: pi9
-            dv9: (o.typing.declDefaultOfId
+        pdisp: (List String)
+        pi: u64
+        for pi < pnames.length loop {
+            pt: ptids.get i: pi
+            dv: (o.typing.declDefaultOfId
                 parentTypeId: (ztypes.tid.create from: tid.u64)
-                nameId: (zast.nameid.create from: (pnids9.get i: pi9).u32.orPanic)
+                nameId: (zast.nameid.create from: (pnids.get i: pi).u32.orPanic)
             )
-            hasDef9: (dv9.none) == false
-            ptn9: displayTypeNameSt st: o tid: (ztypes.tid.create from: pt9.u64)
-            ps9: (pnames9.get i: pi9).copy
-            ps9.append ": "
-            if hasDef9 then {
-                dd9: String
+            hasDef: (dv.none) == false
+            ptn: displayTypeNameSt st: o tid: (ztypes.tid.create from: pt.u64)
+            ps: (pnames.get i: pi).copy
+            ps.append ": "
+            if hasDef then {
+                dd: String
                 match (
                     prog
                 ) case program then {
-                    dd9 = (defaultDisplay
+                    dd = (defaultDisplay
                         ast: prog.ast
                         st: o
-                        dv: dv9
-                        typeName: ptn9.stringview
+                        :dv
+                        typeName: ptn.stringview
                     )
                 } else null
-                if dd9.length > 0 then {
-                    ps9.append dd9
+                if dd.length > 0 then {
+                    ps.append dd
                 } else {
-                    ps9.append ptn9
+                    ps.append ptn
                 }
             } else {
-                ps9.append ptn9
-                oo9: (o.typing.declOwnershipOfId
+                ps.append ptn
+                oo: (o.typing.declOwnershipOfId
                     parentTypeId: (ztypes.tid.create from: tid.u64)
-                    nameId: (zast.nameid.create from: (pnids9.get i: pi9).u32.orPanic)
+                    nameId: (zast.nameid.create from: (pnids.get i: pi).u32.orPanic)
                 )
                 match (
-                    oo9
+                    oo
                 ) case some then {
-                    if oo9 == ztypes.zparamownership.takeMode then ps9.append ".take"
-                    if oo9 == ztypes.zparamownership.borrowMode then ps9.append ".borrow"
-                    if oo9 == ztypes.zparamownership.viewMode then ps9.append ".view"
-                    if oo9 == ztypes.zparamownership.holdMode then ps9.append ".hold"
-                    if oo9 == ztypes.zparamownership.takexMode then ps9.append ".takex"
+                    if oo == ztypes.zparamownership.takeMode then ps.append ".take"
+                    if oo == ztypes.zparamownership.borrowMode then ps.append ".borrow"
+                    if oo == ztypes.zparamownership.viewMode then ps.append ".view"
+                    if oo == ztypes.zparamownership.holdMode then ps.append ".hold"
+                    if oo == ztypes.zparamownership.takexMode then ps.append ".takex"
                 } case none then null
             }
-            pdisp9.append ps9
-            pi9 = pi9 + 1
+            pdisp.append ps
+            pi = pi + 1
         }
-        rets9: String
-        rr9: ztypecheck.methodReturnOf st: o mid: (ztypes.tid.create from: tid.u64)
-        rtid9: ztypecheck.optTidOr o: rr9 d: ztypes.tid
-        if rtid9 > 0 then {
-            rtn9: displayTypeNameSt st: o tid: rtid9
-            rets9.append " out "
-            rets9.append rtn9
-            rb9: o.typing.funcReturnsBorrow.get key: tid
+        rets: String
+        rr: ztypecheck.methodReturnOf st: o mid: (ztypes.tid.create from: tid.u64)
+        rtid: ztypecheck.optTidOr o: rr d: ztypes.tid
+        if rtid > 0 then {
+            rtn: displayTypeNameSt st: o tid: rtid
+            rets.append " out "
+            rets.append rtn
+            rb: o.typing.funcReturnsBorrow.get key: tid
             match (
-                rb9
+                rb
             ) case some then {
-                if rb9 then rets9.append ".borrow"
+                if rb then rets.append ".borrow"
             } case none then null
         }
         # one line, or param-per-line (zl fmt >100-col style) when too long.
-        pdocs9: (List String)
-        pleads9: (List String)
-        hasDocs9: false
-        pdi9: u64
-        for pdi9 < pnames9.length loop {
-            pdc9: String
-            plc9: String
+        pdocs: (List String)
+        pleads: (List String)
+        hasDocs: false
+        pdi: u64
+        for pdi < pnames.length loop {
+            pdc: String
+            plc: String
             {
-                pn0: pnames9.get i: pdi9
-                dgot9: docs9.get key: pn0
+                pn0: pnames.get i: pdi
+                dgot: docs.get key: pn0
                 match (
-                    dgot9
+                    dgot
                 ) case some then {
-                    pdc9 = dgot9.copy
+                    pdc = dgot.copy
                 } case none then null
-                lgot9: leads9.get key: pn0
+                lgot: leads.get key: pn0
                 match (
-                    lgot9
+                    lgot
                 ) case some then {
-                    plc9 = lgot9.copy
+                    plc = lgot.copy
                 } case none then null
             }
-            if pdc9.length > 0 then hasDocs9 = true
-            if plc9.length > 0 then hasDocs9 = true
-            pdocs9.append pdc9
-            pleads9.append plc9
-            pdi9 = pdi9 + 1
+            if pdc.length > 0 then hasDocs = true
+            if plc.length > 0 then hasDocs = true
+            pdocs.append pdc
+            pleads.append plc
+            pdi = pdi + 1
         }
-        one9: name.string
-        one9.append ": function"
-        if pdisp9.length > 0 then {
-            one9.append " {"
-            oi9: u64
-            for oi9 < pdisp9.length loop {
-                if oi9 > 0 then one9.append " "
-                one9.append (pdisp9.get i: oi9)
-                oi9 = oi9 + 1
+        one: name.string
+        one.append ": function"
+        if pdisp.length > 0 then {
+            one.append " {"
+            oi: u64
+            for oi < pdisp.length loop {
+                if oi > 0 then one.append " "
+                one.append (pdisp.get i: oi)
+                oi = oi + 1
             }
-            one9.append "}"
+            one.append "}"
         }
-        one9.append rets9
-        if one9.length <= 100 when hasDocs9 == false then return one9
-        if pdisp9.length == 0 then return one9
-        wrap9: name.string
-        wrap9.append ": function {"
-        wi9: u64
-        for wi9 < pdisp9.length loop {
-            wlb9: pleads9.get i: wi9
-            if wlb9.length > 0 then {
-                wlv9: wlb9.stringview
-                wrap9.appendByte b: 10
-                wrap9.append "    # "
-                wbj9: u64
-                for wbj9 < wlv9.length loop {
-                    wcb9: wlv9.byteAt i: wbj9
+        one.append rets
+        if one.length <= 100 when hasDocs == false then return one
+        if pdisp.length == 0 then return one
+        wrap: name.string
+        wrap.append ": function {"
+        wi: u64
+        for wi < pdisp.length loop {
+            wlb: pleads.get i: wi
+            if wlb.length > 0 then {
+                wlv: wlb.stringview
+                wrap.appendByte b: 10
+                wrap.append "    # "
+                wbj: u64
+                for wbj < wlv.length loop {
+                    wcb: wlv.byteAt i: wbj
                     match (
-                        wcb9
+                        wcb
                     ) case some then {
-                        if wcb9 == 10 then {
-                            wrap9.appendByte b: 10
-                            wrap9.append "    # "
+                        if wcb == 10 then {
+                            wrap.appendByte b: 10
+                            wrap.append "    # "
                         } else {
-                            wrap9.appendByte b: wcb9
+                            wrap.appendByte b: wcb
                         }
                     } case none then null
-                    wbj9 = wbj9 + 1
+                    wbj = wbj + 1
                 }
             }
-            wrap9.appendByte b: 10
-            wrap9.append "    "
-            wrap9.append (pdisp9.get i: wi9)
-            wpdc9: pdocs9.get i: wi9
-            if wpdc9.length > 0 then {
-                wrap9.append "  # "
-                wrap9.append wpdc9
+            wrap.appendByte b: 10
+            wrap.append "    "
+            wrap.append (pdisp.get i: wi)
+            wpdc: pdocs.get i: wi
+            if wpdc.length > 0 then {
+                wrap.append "  # "
+                wrap.append wpdc
             }
-            wi9 = wi9 + 1
+            wi = wi + 1
         }
-        wrap9.appendByte b: 10
-        wrap9.append "}"
-        wrap9.append rets9
-        return wrap9
+        wrap.appendByte b: 10
+        wrap.append "}"
+        wrap.append rets
+        return wrap
     } case none then {
         return "".string
     }
@@ -2079,95 +2079,95 @@ fnParamDisplays: function {
     o: (Option zenv.ZSymbolTable)
     tid: ztypes.tid
 } out (List String) is {
-    out9: (List String)
+    result: (List String)
     match (
         o
     ) case some then {
-        pnames9: (List String)
-        ptids9: (ListVal u64)
-        pnids9: (ListVal u64)
+        pnames: (List String)
+        ptids: (ListVal u64)
+        pnids: (ListVal u64)
         match (
             prog
         ) case program then {
-            userParams :prog :o :tid names: pnames9 tids: ptids9 nameIds: pnids9
+            userParams :prog :o :tid names: pnames tids: ptids nameIds: pnids
         } else null
-        pi9: u64
-        for pi9 < pnames9.length loop {
-            pt9: ptids9.get i: pi9
-            dv9: (o.typing.declDefaultOfId
+        pi: u64
+        for pi < pnames.length loop {
+            pt: ptids.get i: pi
+            dv: (o.typing.declDefaultOfId
                 parentTypeId: (ztypes.tid.create from: tid.u64)
-                nameId: (zast.nameid.create from: (pnids9.get i: pi9).u32.orPanic)
+                nameId: (zast.nameid.create from: (pnids.get i: pi).u32.orPanic)
             )
-            hasDef9: (dv9.none) == false
-            ptn9: displayTypeNameSt st: o tid: (ztypes.tid.create from: pt9.u64)
-            ps9: (pnames9.get i: pi9).copy
-            ps9.append ": "
-            if hasDef9 then {
-                dd9: String
+            hasDef: (dv.none) == false
+            ptn: displayTypeNameSt st: o tid: (ztypes.tid.create from: pt.u64)
+            ps: (pnames.get i: pi).copy
+            ps.append ": "
+            if hasDef then {
+                dd: String
                 match (
                     prog
                 ) case program then {
-                    dd9 = (defaultDisplay
+                    dd = (defaultDisplay
                         ast: prog.ast
                         st: o
-                        dv: dv9
-                        typeName: ptn9.stringview
+                        :dv
+                        typeName: ptn.stringview
                     )
                 } else null
-                if dd9.length > 0 then {
-                    ps9.append dd9
+                if dd.length > 0 then {
+                    ps.append dd
                 } else {
-                    ps9.append ptn9
+                    ps.append ptn
                 }
             } else {
-                ps9.append ptn9
-                oo9: (o.typing.declOwnershipOfId
+                ps.append ptn
+                oo: (o.typing.declOwnershipOfId
                     parentTypeId: (ztypes.tid.create from: tid.u64)
-                    nameId: (zast.nameid.create from: (pnids9.get i: pi9).u32.orPanic)
+                    nameId: (zast.nameid.create from: (pnids.get i: pi).u32.orPanic)
                 )
                 match (
-                    oo9
+                    oo
                 ) case some then {
-                    if oo9 == ztypes.zparamownership.takeMode then ps9.append ".take"
-                    if oo9 == ztypes.zparamownership.borrowMode then ps9.append ".borrow"
-                    if oo9 == ztypes.zparamownership.viewMode then ps9.append ".view"
-                    if oo9 == ztypes.zparamownership.holdMode then ps9.append ".hold"
-                    if oo9 == ztypes.zparamownership.takexMode then ps9.append ".takex"
+                    if oo == ztypes.zparamownership.takeMode then ps.append ".take"
+                    if oo == ztypes.zparamownership.borrowMode then ps.append ".borrow"
+                    if oo == ztypes.zparamownership.viewMode then ps.append ".view"
+                    if oo == ztypes.zparamownership.holdMode then ps.append ".hold"
+                    if oo == ztypes.zparamownership.takexMode then ps.append ".takex"
                 } case none then null
             }
-            out9.append ps9
-            pi9 = pi9 + 1
+            result.append ps
+            pi = pi + 1
         }
     } case none then null
-    return out9
+    return result
 }
 
 # hoverMarkdown -- a hover result: `code` rendered as a fenced ```zerolang
 # block (highlighted like source), then an optional doc block as markdown
 # prose. `code` may be multi-line (a hand-wrapped signature).
 hoverMarkdown: function {code: StringView doc: StringView} out Value is {
-    v9: String
-    v9.appendByte b: 96
-    v9.appendByte b: 96
-    v9.appendByte b: 96
-    v9.append "zerolang"
-    v9.appendByte b: 10
-    v9.append code
-    v9.appendByte b: 10
-    v9.appendByte b: 96
-    v9.appendByte b: 96
-    v9.appendByte b: 96
+    v: String
+    v.appendByte b: 96
+    v.appendByte b: 96
+    v.appendByte b: 96
+    v.append "zerolang"
+    v.appendByte b: 10
+    v.append code
+    v.appendByte b: 10
+    v.appendByte b: 96
+    v.appendByte b: 96
+    v.appendByte b: 96
     if doc.length > 0 then {
-        v9.appendByte b: 10
-        v9.appendByte b: 10
-        v9.append doc
+        v.appendByte b: 10
+        v.appendByte b: 10
+        v.append doc
     }
-    mk9: newObj
-    mk9.set key: "kind".string value: (Value.text "markdown".string)
-    mk9.set key: "value".string value: (Value.text v9)
-    ho9: newObj
-    ho9.set key: "contents".string value: (Value.object mk9)
-    return (Value.object ho9)
+    mk: newObj
+    mk.set key: "kind".string value: (Value.text "markdown".string)
+    mk.set key: "value".string value: (Value.text v)
+    ho: newObj
+    ho.set key: "contents".string value: (Value.object mk)
+    return (Value.object ho)
 }
 
 # ---- def-node navigation (unit/body indexes into the program AST) ----
@@ -2180,26 +2180,26 @@ defNodeInfo: function {
     tid: ztypes.tid
     member: StringView
 } out u64 is {
-    did9: ztypes.declid
+    did: ztypes.declid
     match (
         o
     ) case some then {
-        did9 = ztypecheck.declOfTypeId reg: o.reg tid: (ztypes.tid.create from: tid.u64)
+        did = ztypecheck.declOfTypeId reg: o.reg tid: (ztypes.tid.create from: tid.u64)
     } case none then null
-    if did9.isZero then return 0
-    if member.length == 0 then return (declNodeOf :o declId: did9)
+    if did.isZero then return 0
+    if member.length == 0 then return (declNodeOf :o declId: did)
     match (
         prog
     ) case program then {
-        mnid9: zast.poolFind pool: prog.ast.names text: member
-        if mnid9.isZero then return 0
-        mdid9: ztypes.declid
+        mnid: zast.poolFind pool: prog.ast.names text: member
+        if mnid.isZero then return 0
+        mdid: ztypes.declid
         match (
             o
         ) case some then {
-            mdid9 = o.typing.declFindChild parentDeclId: did9 nameId: mnid9
+            mdid = o.typing.declFindChild parentDeclId: did nameId: mnid
         } case none then null
-        return (declNodeOf :o declId: mdid9)
+        return (declNodeOf :o declId: mdid)
     } else null
     return 0
 }
@@ -2217,56 +2217,56 @@ locationValue: function {
     docText: StringView
     utf32: bool
 } out Value is {
-    pg9: sp.pos.get key: nid
+    pg: sp.pos.get key: nid
     match (
-        pg9
+        pg
     ) case some then {
-        line9: (pg9 / 1048576).u32.orPanic
-        col9: (pg9 % 1048576).u32.orPanic
-        if line9 == 0 then return Value.nul
-        fs9: zcheck.fsnoFor r: snap nodeid: nid.u32.orPanic
-        if fs9.u64 == 0 then return Value.nul
-        pp9: snap.vfs.pathfromprovider dentryid: fs9
-        own9: pathMatches pv: pp9.stringview rel: docRel :srcDir
-        uri9: String
-        lineText9: String
-        if own9 then {
-            uri9 = docUri.string
-            lineText9 = docLine text: docText lineno: line9
+        line: (pg / 1048576).u32.orPanic
+        col: (pg % 1048576).u32.orPanic
+        if line == 0 then return Value.nul
+        fs: zcheck.fsnoFor r: snap nodeid: nid.u32.orPanic
+        if fs.u64 == 0 then return Value.nul
+        pp: snap.vfs.pathfromprovider dentryid: fs
+        own: pathMatches pv: pp.stringview rel: docRel :srcDir
+        uri: String
+        lineText: String
+        if own then {
+            uri = docUri.string
+            lineText = docLine text: docText lineno: line
         } else {
-            absp9: snap.vfs.pathfromproviderNative dentryid: fs9
-            if absp9.length == 0 then {
+            absp: snap.vfs.pathfromproviderNative dentryid: fs
+            if absp.length == 0 then {
                 st0: u64
-                if pp9.startsWith "/" then st0 = 1
-                rel0: pp9.substring from: st0 to: pp9.length
-                absp9 = absRelPath :rel0 :srcDir :systemDir
+                if pp.startsWith "/" then st0 = 1
+                rel0: pp.substring from: st0 to: pp.length
+                absp = absRelPath :rel0 :srcDir :systemDir
             }
-            uri9 = pathToUri path: absp9.stringview
-            lg9: snap.vfs.getline dentryid: fs9 lineno: (line9 - 1).u64
+            uri = pathToUri path: absp.stringview
+            lg: snap.vfs.getline dentryid: fs lineno: (line - 1).u64
             match (
-                lg9
+                lg
             ) case some then {
-                lineText9 = lg9.copy
+                lineText = lg.copy
             } case none then null
         }
-        w9: width
-        if w9 == 0 then w9 = 1
-        c0: encodedCol lineText: lineText9.stringview cpCol1: col9 :utf32
-        c1: encodedCol lineText: lineText9.stringview cpCol1: col9 + w9 :utf32
+        w: width
+        if w == 0 then w = 1
+        c0: encodedCol lineText: lineText.stringview cpCol1: col :utf32
+        c1: encodedCol lineText: lineText.stringview cpCol1: col + w :utf32
         if c1 <= c0 then c1 = c0 + 1
-        st9: newObj
-        st9.set key: "line".string value: (Value.intval (line9 - 1).i64)
-        st9.set key: "character".string value: (Value.intval c0.i64)
-        en9: newObj
-        en9.set key: "line".string value: (Value.intval (line9 - 1).i64)
-        en9.set key: "character".string value: (Value.intval c1.i64)
-        rg9: newObj
-        rg9.set key: "start".string value: (Value.object st9)
-        rg9.set key: "end".string value: (Value.object en9)
-        lo9: newObj
-        lo9.set key: "uri".string value: (Value.text uri9)
-        lo9.set key: "range".string value: (Value.object rg9)
-        return (Value.object lo9)
+        st: newObj
+        st.set key: "line".string value: (Value.intval (line - 1).i64)
+        st.set key: "character".string value: (Value.intval c0.i64)
+        en: newObj
+        en.set key: "line".string value: (Value.intval (line - 1).i64)
+        en.set key: "character".string value: (Value.intval c1.i64)
+        rg: newObj
+        rg.set key: "start".string value: (Value.object st)
+        rg.set key: "end".string value: (Value.object en)
+        lo: newObj
+        lo.set key: "uri".string value: (Value.text uri)
+        lo.set key: "range".string value: (Value.object rg)
+        return (Value.object lo)
     } case none then {
         return Value.nul
     }
@@ -2303,39 +2303,39 @@ defNodeOf: function {
 # file `fsno`, the `#` and surrounding space stripped; "" when there is none.
 # Surfaces a field's or parameter's inline doc in hover.
 trailingDocOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String is {
-    result9: String
-    if line1 == 0 then return result9
-    lg9: vfs.getline dentryid: fsno lineno: (line1 - 1).u64
+    result: String
+    if line1 == 0 then return result
+    lg: vfs.getline dentryid: fsno lineno: (line1 - 1).u64
     match (
-        lg9
+        lg
     ) case some then {
-        lv9: lg9.stringview
-        n9: lv9.length
-        inStr9: false
-        hashAt9: u64
-        found9: false
-        i9: u64
-        for i9 < n9 loop {
-            b9: lv9.byteAt i: i9
+        lv: lg.stringview
+        n: lv.length
+        inStr: false
+        hashAt: u64
+        found: false
+        i: u64
+        for i < n loop {
+            b: lv.byteAt :i
             match (
-                b9
+                b
             ) case some then {
-                if b9 == 34 then inStr9 = (inStr9 == false)
-                if b9 == 35 when inStr9 == false when found9 == false then {
-                    hashAt9 = i9
-                    found9 = true
+                if b == 34 then inStr = (inStr == false)
+                if b == 35 when inStr == false when found == false then {
+                    hashAt = i
+                    found = true
                 }
             } case none then null
-            if found9 then break
-            i9 = i9 + 1
+            if found then break
+            i = i + 1
         }
-        if found9 then {
-            after9: lv9.substring from: (hashAt9 + 1) to: n9
-            trimmed9: after9.trim
-            result9 = trimmed9.string
+        if found then {
+            after: lv.substring from: (hashAt + 1) to: n
+            trimmed: after.trim
+            result = trimmed.string
         }
     } case none then null
-    return result9
+    return result
 }
 
 # docBlockAboveOf -- the contiguous `#` comment block immediately above `line1`
@@ -2343,168 +2343,168 @@ trailingDocOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String i
 # top-to-bottom by newlines; "" when there is none. Reads through the vfs.
 docBlockAboveOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String is {
     if line1 <= 1 then return "".string
-    acc9: (List String)
-    k9: line1
-    for k9 > 1 loop {
-        k9 = k9 - 1
-        lg9: vfs.getline dentryid: fsno lineno: (k9 - 1).u64
-        stop9: false
+    acc: (List String)
+    k: line1
+    for k > 1 loop {
+        k = k - 1
+        lg: vfs.getline dentryid: fsno lineno: (k - 1).u64
+        stop: false
         match (
-            lg9
+            lg
         ) case some then {
-            lv9: lg9.stringview
-            tl9: lv9.trimStart
-            if tl9.startsWith "#" then {
-                st9: 1.u64
-                sb9: tl9.byteAt i: 1
+            lv: lg.stringview
+            tl: lv.trimStart
+            if tl.startsWith "#" then {
+                st: 1.u64
+                sb: tl.byteAt i: 1
                 match (
-                    sb9
+                    sb
                 ) case some then {
-                    if sb9 == 32 then st9 = 2
+                    if sb == 32 then st = 2
                 } case none then null
-                ds9: tl9.substring from: st9 to: tl9.length
-                acc9.append ds9.string
+                ds: tl.substring from: st to: tl.length
+                acc.append ds.string
             } else {
-                stop9 = true
+                stop = true
             }
         } case none then {
-            stop9 = true
+            stop = true
         }
-        if stop9 then break
+        if stop then break
     }
-    out9: String
-    ai9: acc9.length
-    for ai9 > 0 loop {
-        ai9 = ai9 - 1
-        if out9.length > 0 then out9.appendByte b: 10
-        dl9: acc9.get i: ai9
-        out9.append dl9
+    result: String
+    ai: acc.length
+    for ai > 0 loop {
+        ai = ai - 1
+        if result.length > 0 then result.appendByte b: 10
+        dl: acc.get i: ai
+        result.append dl
     }
-    return out9
+    return result
 }
 
 # docCommentForNode -- the contiguous `#` comment block immediately above the
 # definition at `defLine` (1-based) in file `fsno`; "" when there is none.
 # Reads through the vfs, so a definition in another unit works too.
 docCommentForNode: function {snap: zcheck.CheckResult fsno: zvfs.fsno defLine: u32} out String is {
-    r9: docBlockAboveOf vfs: snap.vfs :fsno line1: defLine
-    return r9
+    r: docBlockAboveOf vfs: snap.vfs :fsno line1: defLine
+    return r
 }
 
 # unitFsnoByName -- the vfs dentry id of the file for the unit named
 # `name`, or 0 when no such unit file exists.
 unitFsnoByName: function {snap: zcheck.CheckResult name: StringView} out zvfs.fsno is {
-    ids9: (ListVal zvfs.fsno)
-    paths9: (List String)
-    snap.vfs.fileTable outIds: ids9 outPaths: paths9
-    result9: zvfs.fsno
-    i9: u64
-    n9: ids9.length
-    for i9 < n9 loop {
-        pth9: paths9.get i: i9
-        un9: zsource.unitNameOf path: pth9.stringview
-        if un9.stringview == name then result9 = ids9.get i: i9
-        i9 = i9 + 1
+    ids: (ListVal zvfs.fsno)
+    paths: (List String)
+    snap.vfs.fileTable outIds: ids outPaths: paths
+    result: zvfs.fsno
+    i: u64
+    n: ids.length
+    for i < n loop {
+        pth: paths.get :i
+        un: zsource.unitNameOf path: pth.stringview
+        if un.stringview == name then result = ids.get :i
+        i = i + 1
     }
-    return result9
+    return result
 }
 
 # unitGenericParamsOf -- a unitdef's generic parameters rendered " {T U}"
 # (its `T: base.generic` body declarations); "" when it has none.
 unitGenericParamsOf: function {ast: Ast.view udId: u32} out String is {
     ud: ast.nodes.get i: udId.u64
-    out9: String
+    result: String
     match (
         ud
     ) case unitdef then {
-        bit9: ud.body.iterate
-        for gm9Id: bit9 loop {
-            gm9: ast.nodes.get i: gm9Id.u64
+        bit: ud.body.iterate
+        for gm9Id: bit loop {
+            gm: ast.nodes.get i: gm9Id.u64
             match (
-                gm9
+                gm
             ) case namedoperation then {
                 if (ztypecheck.isBareGenericParam
                     :ast
-                    op: (ast.nodes.get i: gm9.operation.u64)
+                    op: (ast.nodes.get i: gm.operation.u64)
                 ) then {
-                    gpn9: zast.nameTextAt :ast ref: gm9.name
-                    if out9.length == 0 then out9.append " {"
-                    if out9.length > 2 then out9.append " "
-                    out9.append gpn9
+                    gpn: zast.nameTextAt :ast ref: gm.name
+                    if result.length == 0 then result.append " {"
+                    if result.length > 2 then result.append " "
+                    result.append gpn
                 }
             } else null
         }
     } else null
-    if out9.length > 0 then out9.append "}"
-    return out9
+    if result.length > 0 then result.append "}"
+    return result
 }
 
 # unitGenericSuffix -- the " {T U}" suffix for a generic unit named `name`.
 unitGenericSuffix: function {prog: zast.Node name: StringView} out String is {
-    out9: String
+    result: String
     match (
         prog
     ) case program then {
         uCnt9a: prog.ast.units.length
         uIdx9a: u64
         for uIdx9a < uCnt9a loop {
-            u9Id9: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9a))
+            u9Id: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9a))
             uIdx9a = uIdx9a + 1
-            opId9: zast.nodeid
+            opId: zast.nodeid
             {
-                u9: prog.ast.nodes.get i: u9Id9.u64
-                if u9.namedoperation then {
-                    lb9: zast.poolTextAt pool: prog.ast.names ref: u9.name
-                    if lb9.stringview == name then opId9 = u9.operation
+                u: prog.ast.nodes.get i: u9Id.u64
+                if u.namedoperation then {
+                    lb: zast.poolTextAt pool: prog.ast.names ref: u.name
+                    if lb.stringview == name then opId = u.operation
                 }
             }
-            if opId9 > 0 then {
-                gs9: (unitGenericParamsOf
+            if opId > 0 then {
+                gs: (unitGenericParamsOf
                     ast: prog.ast
-                    udId: opId9
+                    udId: opId
                 )
-                if gs9.length > 0 then out9 = gs9
+                if gs.length > 0 then result = gs
             }
         }
     } else null
-    return out9
+    return result
 }
 
 # unitDocComment -- a unit file's godoc-style header: the contiguous `#`
 # comment lines from the top of the file, up to the first blank line or
 # first definition. "" when the file has no header comment.
 unitDocComment: function {snap: zcheck.CheckResult fsno: zvfs.fsno} out String is {
-    out9: String
-    k9: u64
+    result: String
+    k: u64
     for true loop {
-        lg9: snap.vfs.getline dentryid: fsno lineno: k9
-        stop9: false
+        lg: snap.vfs.getline dentryid: fsno lineno: k
+        stop: false
         match (
-            lg9
+            lg
         ) case some then {
-            lv9: lg9.stringview
-            tl9: lv9.trimStart
-            if tl9.startsWith "#" then {
-                st9: 1.u64
-                sb9: tl9.byteAt i: 1
+            lv: lg.stringview
+            tl: lv.trimStart
+            if tl.startsWith "#" then {
+                st: 1.u64
+                sb: tl.byteAt i: 1
                 match (
-                    sb9
+                    sb
                 ) case some then {
-                    if sb9 == 32 then st9 = 2
+                    if sb == 32 then st = 2
                 } case none then null
-                ds9: tl9.substring from: st9 to: tl9.length
-                if out9.length > 0 then out9.appendByte b: 10
-                out9.append ds9
+                ds: tl.substring from: st to: tl.length
+                if result.length > 0 then result.appendByte b: 10
+                result.append ds
             } else {
-                stop9 = true
+                stop = true
             }
         } case none then {
-            stop9 = true
+            stop = true
         }
-        if stop9 then break
-        k9 = k9 + 1
+        if stop then break
+        k = k + 1
     }
-    return out9
+    return result
 }
 
 # locationAtFileTop -- an LSP Location at line 0 of file `fsno` (a unit
@@ -2518,34 +2518,34 @@ locationAtFileTop: function {
     systemDir: StringView
 } out Value is {
     if fsno.u64 == 0 then return Value.nul
-    pp9: snap.vfs.pathfromprovider dentryid: fsno
-    own9: pathMatches pv: pp9.stringview rel: docRel :srcDir
-    uri9: String
-    if own9 then {
-        uri9 = docUri.string
+    pp: snap.vfs.pathfromprovider dentryid: fsno
+    own: pathMatches pv: pp.stringview rel: docRel :srcDir
+    uri: String
+    if own then {
+        uri = docUri.string
     } else {
-        absp9: snap.vfs.pathfromproviderNative dentryid: fsno
-        if absp9.length == 0 then {
+        absp: snap.vfs.pathfromproviderNative dentryid: fsno
+        if absp.length == 0 then {
             st0: u64
-            if pp9.startsWith "/" then st0 = 1
-            rel0: pp9.substring from: st0 to: pp9.length
-            absp9 = absRelPath :rel0 :srcDir :systemDir
+            if pp.startsWith "/" then st0 = 1
+            rel0: pp.substring from: st0 to: pp.length
+            absp = absRelPath :rel0 :srcDir :systemDir
         }
-        uri9 = pathToUri path: absp9.stringview
+        uri = pathToUri path: absp.stringview
     }
-    st9: newObj
-    st9.set key: "line".string value: (Value.intval 0.i64)
-    st9.set key: "character".string value: (Value.intval 0.i64)
-    en9: newObj
-    en9.set key: "line".string value: (Value.intval 0.i64)
-    en9.set key: "character".string value: (Value.intval 0.i64)
-    rg9: newObj
-    rg9.set key: "start".string value: (Value.object st9)
-    rg9.set key: "end".string value: (Value.object en9)
-    lo9: newObj
-    lo9.set key: "uri".string value: (Value.text uri9)
-    lo9.set key: "range".string value: (Value.object rg9)
-    return (Value.object lo9)
+    st: newObj
+    st.set key: "line".string value: (Value.intval 0.i64)
+    st.set key: "character".string value: (Value.intval 0.i64)
+    en: newObj
+    en.set key: "line".string value: (Value.intval 0.i64)
+    en.set key: "character".string value: (Value.intval 0.i64)
+    rg: newObj
+    rg.set key: "start".string value: (Value.object st)
+    rg.set key: "end".string value: (Value.object en)
+    lo: newObj
+    lo.set key: "uri".string value: (Value.text uri)
+    lo.set key: "range".string value: (Value.object rg)
+    return (Value.object lo)
 }
 
 # dispositionNote -- a call argument's disposition (from the argDisposition
@@ -2554,14 +2554,14 @@ dispositionNote: function {o: (Option zenv.ZSymbolTable) nid: u64} out String is
     match (
         o
     ) case some then {
-        d9: o.typing.argDisposition.get key: nid
+        d: o.typing.argDisposition.get key: nid
         match (
-            d9
+            d
         ) case some then {
-            if d9 == ztypes.zparamownership.takeMode then {
+            if d == ztypes.zparamownership.takeMode then {
                 return "Moved into the call (a taking parameter).".string
             }
-            if d9 == ztypes.zparamownership.borrowMode then {
+            if d == ztypes.zparamownership.borrowMode then {
                 return "Borrowed for the duration of the call.".string
             }
         } case none then null
@@ -2580,34 +2580,34 @@ inferredGenericLines: function {
     match (
         o
     ) case some then {
-        holders9: (List String)
-        tids9: (ListVal u64)
+        holders: (List String)
+        tids: (ListVal u64)
         match (
             prog
         ) case program then {
-            with git9: o.typing.callGenericBinding.iterateItems do for e9: git9 loop {
-                if e9.key.call == callId then {
-                    hv9: (zast.poolTextCopy
+            with git: o.typing.callGenericBinding.iterateItems do for e: git loop {
+                if e.key.call == callId then {
+                    hv: (zast.poolTextCopy
                         pool: prog.ast.names
-                        ref: (zast.nameid.create from: e9.key.param.u32.orPanic)
+                        ref: (zast.nameid.create from: e.key.param.u32.orPanic)
                     )
-                    holders9.append hv9
-                    tids9.append e9.value
+                    holders.append hv
+                    tids.append e.value
                 }
             }
         } else null
-        r9: String
-        hi9: u64
-        for hi9 < holders9.length loop {
-            tn9: displayTypeNameSt st: o tid: (ztypes.tid.create from: (tids9.get i: hi9))
-            if r9.length > 0 then r9.appendByte b: 10
-            r9.append "# "
-            r9.append (holders9.get i: hi9)
-            r9.append " = "
-            r9.append tn9
-            hi9 = hi9 + 1
+        r: String
+        hi: u64
+        for hi < holders.length loop {
+            tn: displayTypeNameSt st: o tid: (ztypes.tid.create from: (tids.get i: hi))
+            if r.length > 0 then r.appendByte b: 10
+            r.append "# "
+            r.append (holders.get i: hi)
+            r.append " = "
+            r.append tn
+            hi = hi + 1
         }
-        return r9
+        return r
     } case none then {
         return "".string
     }
@@ -2619,46 +2619,46 @@ inferredGenericLines: function {
 # reference carries no stamped ownership/origin.
 refAnnotation: function {o: (Option zenv.ZSymbolTable) vid: ztypes.vid nid: u64} out String is {
     if vid.isZero then {
-        udo9: useUnitDef :o :nid
-        if udo9 > 0 then return "static unit-level".string
+        udo: useUnitDef :o :nid
+        if udo > 0 then return "static unit-level".string
         return "".string
     }
     match (
         o
     ) case some then {
-        own9: String
-        vo9: o.typing.variableOwnership.get key: vid
+        own: String
+        vo: o.typing.variableOwnership.get key: vid
         match (
-            vo9
+            vo
         ) case some then {
-            if vo9 == ztypes.zownership.owned then own9 = "owned".string
-            if vo9 == ztypes.zownership.borrowed then own9 = "borrowed".string
+            if vo == ztypes.zownership.owned then own = "owned".string
+            if vo == ztypes.zownership.borrowed then own = "borrowed".string
         } case none then null
-        orig9: String
-        ro9: o.typing.variableOrigin.get key: vid
+        orig: String
+        ro: o.typing.variableOrigin.get key: vid
         match (
-            ro9
+            ro
         ) case some then {
-            if ro9 then orig9 = "parameter".string
-            if (ro9) == false then orig9 = "local".string
+            if ro then orig = "parameter".string
+            if (ro) == false then orig = "local".string
         } case none then null
-        if own9.length == 0 when orig9.length == 0 then return "".string
-        r9: String
-        if own9.length > 0 then r9.append own9
-        if orig9.length > 0 then {
-            if r9.length > 0 then r9.append " "
-            r9.append orig9
+        if own.length == 0 when orig.length == 0 then return "".string
+        r: String
+        if own.length > 0 then r.append own
+        if orig.length > 0 then {
+            if r.length > 0 then r.append " "
+            r.append orig
         }
-        bo9: o.typing.variableBorrowOrigin.get key: vid
+        bo: o.typing.variableBorrowOrigin.get key: vid
         match (
-            bo9
+            bo
         ) case some then {
-            if bo9.length > 0 then {
-                r9.append ", from "
-                r9.append bo9
+            if bo.length > 0 then {
+                r.append ", from "
+                r.append bo
             }
         } case none then null
-        return r9
+        return r
     } case none then {
         return "".string
     }
@@ -2698,13 +2698,13 @@ navAnswer: function {
         row: sp.rows.get i: ri
         if row.line == l1u when row.colLo <= cp1 then {
             if cp1 < row.colHi then {
-                fs9: zcheck.fsnoFor r: snap nodeid: row.nodeid
-                pp9: snap.vfs.pathfromprovider dentryid: fs9
-                if (pathMatches pv: pp9.stringview rel: docRel :srcDir) then {
-                    take9: false
-                    if bestIdx < 0 then take9 = true
-                    if row.kind == 2 when bestKind != 2 then take9 = true
-                    if take9 then {
+                fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
+                pp: snap.vfs.pathfromprovider dentryid: fs
+                if (pathMatches pv: pp.stringview rel: docRel :srcDir) then {
+                    shouldTake: false
+                    if bestIdx < 0 then shouldTake = true
+                    if row.kind == 2 when bestKind != 2 then shouldTake = true
+                    if shouldTake then {
                         bestIdx = ri.i64.orPanic
                         bestKind = row.kind
                     }
@@ -2717,7 +2717,7 @@ navAnswer: function {
     bi: bestIdx.u64.orPanic
     hit: sp.rows.get i: bi
     hname: (sp.names.get i: bi)
-    w9: hit.colHi - hit.colLo
+    w: hit.colHi - hit.colLo
     hnid: hit.nodeid.u64
 
     # resolve the hit to a target
@@ -2737,76 +2737,76 @@ navAnswer: function {
     # the Decl the reference resolved to (surface: a re-export keeps its
     # own Decl); fills the type id for hits only the Decl layer knows
     # (public-interface entries)
-    refDeclId9: refDeclOf o: snap.st nid: hnid
+    refDeclId: refDeclOf o: snap.st nid: hnid
     if refVid.isZero when refTid == 0 when refOwner == 0 then {
-        if refDeclId9 > 0 then refTid = declTypeIdOf o: snap.st declId: refDeclId9
+        if refDeclId > 0 then refTid = declTypeIdOf o: snap.st declId: refDeclId
     }
 
-    unitFsno9: zvfs.fsno
-    if refVid.isZero when refTid == 0 then unitFsno9 = unitFsnoByName :snap name: hname.stringview
+    unitFsno: zvfs.fsno
+    if refVid.isZero when refTid == 0 then unitFsno = unitFsnoByName :snap name: hname.stringview
 
     if mode == 2 then {
-        if unitFsno9.u64 > 0 then {
-            ub9: hname.copy
-            ub9.append ": unit"
-            ugs9: unitGenericSuffix prog: snap.prog name: hname.stringview
-            ub9.append ugs9
-            udoc9: unitDocComment :snap fsno: unitFsno9
-            return (hoverMarkdown code: ub9.stringview doc: udoc9.stringview)
+        if unitFsno.u64 > 0 then {
+            ub: hname.copy
+            ub.append ": unit"
+            ugs: unitGenericSuffix prog: snap.prog name: hname.stringview
+            ub.append ugs
+            udoc: unitDocComment :snap fsno: unitFsno
+            return (hoverMarkdown code: ub.stringview doc: udoc.stringview)
         }
         tnid: hnid
-        t9: nodeTypeAt o: snap.st nid: tnid
+        t: nodeTypeAt o: snap.st nid: tnid
         # a callable / unit-member auto-calls to its return type in value
         # position; prefer its stamped def tid so a function hovers as its
         # signature rather than the return value's type.
-        ud9: useUnitDef o: snap.st nid: tnid
-        sigTid9: t9
-        if ud9 > 0 then sigTid9 = ud9
+        ud: useUnitDef o: snap.st nid: tnid
+        sigTid: t
+        if ud > 0 then sigTid = ud
         # a hit only the Decl layer resolves (a public-interface entry)
         # carries no node stamps; its Decl's type is the signature
-        if sigTid9 == 0 then sigTid9 = refTid
-        body9: (fnSigTextOpt
+        if sigTid == 0 then sigTid = refTid
+        body: (fnSigTextOpt
             vfs: snap.vfs
             prog: snap.prog
             o: snap.st
-            tid: (ztypes.tid.create from: sigTid9.u64)
+            tid: (ztypes.tid.create from: sigTid.u64)
             name: hname.stringview
         )
-        if body9.length == 0 then {
-            tk9: typeKindTextOpt o: snap.st tid: (ztypes.tid.create from: refTid.u64)
-            if tk9.length > 0 then {
-                body9 = displayTypeNameOfOpt o: snap.st tid: (ztypes.tid.create from: refTid.u64)
-                body9.append ": "
-                body9.append tk9
+        if body.length == 0 then {
+            tk: typeKindTextOpt o: snap.st tid: (ztypes.tid.create from: refTid.u64)
+            if tk.length > 0 then {
+                body = displayTypeNameOfOpt o: snap.st tid: (ztypes.tid.create from: refTid.u64)
+                body.append ": "
+                body.append tk
             } else {
-                if t9 == 0 then return Value.nul
-                tn: displayTypeNameOfOpt o: snap.st tid: (ztypes.tid.create from: t9.u64)
+                if t == 0 then return Value.nul
+                tn: displayTypeNameOfOpt o: snap.st tid: (ztypes.tid.create from: t.u64)
                 if tn.length == 0 then return Value.nul
                 if refOwner > 0 then {
-                    own9: (displayTypeNameOfOpt
+                    own: (displayTypeNameOfOpt
                         o: snap.st
                         tid: (ztypes.tid.create from: refOwner.u64)
                     )
-                    if own9.length > 0 then {
-                        body9.append own9
-                        body9.appendByte b: 46
+                    if own.length > 0 then {
+                        body.append own
+                        body.appendByte b: 46
                     }
                 }
-                body9.append hname
-                body9.append ": "
-                body9.append tn
-                annot9: refAnnotation o: snap.st vid: refVid nid: tnid
-                if annot9.length > 0 then {
-                    body9.append "  # "
-                    body9.append annot9
+                body.append hname
+                body.append ": "
+                body.append tn
+                annot: refAnnotation o: snap.st vid: refVid nid: tnid
+                if annot.length > 0 then {
+                    body.append "  # "
+                    body.append annot
                 }
             }
         }
-        docBody9: String
+        docBody: String
         # append the `#` doc block above the definition, if any (cross-file
         # ok). The reference's surface Decl wins (a bare `i64` reads core's
         # re-export line); the canonical def node is the doc fallback.
-        legacyDnd9: (defNodeOf
+        legacyDnd: (defNodeOf
             o: snap.st
             prog: snap.prog
             :refVid
@@ -2814,90 +2814,90 @@ navAnswer: function {
             :refOwner
             member: hname.stringview
         )
-        dnd9: declNodeOf o: snap.st declId: refDeclId9
-        if dnd9 == 0 then dnd9 = legacyDnd9
-        if dnd9 > 0 then {
-            dfs9: zcheck.fsnoFor r: snap nodeid: dnd9.u32.orPanic
-            dpg9: sp.pos.get key: dnd9
+        dnd: declNodeOf o: snap.st declId: refDeclId
+        if dnd == 0 then dnd = legacyDnd
+        if dnd > 0 then {
+            dfs: zcheck.fsnoFor r: snap nodeid: dnd.u32.orPanic
+            dpg: sp.pos.get key: dnd
             match (
-                dpg9
+                dpg
             ) case some then {
-                dln9: (dpg9 / 1048576).u32.orPanic
-                if dfs9 > 0 when dln9 > 1 then {
-                    doc9: docCommentForNode :snap fsno: dfs9 defLine: dln9
-                    if doc9.length > 0 then docBody9 = doc9
+                dln: (dpg / 1048576).u32.orPanic
+                if dfs > 0 when dln > 1 then {
+                    doc: docCommentForNode :snap fsno: dfs defLine: dln
+                    if doc.length > 0 then docBody = doc
                     if refOwner > 0 then {
-                        tc9: trailingDocOf vfs: snap.vfs fsno: dfs9 line1: dln9
-                        if tc9.length > 0 then {
-                            body9.append "  # "
-                            body9.append tc9
+                        tc: trailingDocOf vfs: snap.vfs fsno: dfs line1: dln
+                        if tc.length > 0 then {
+                            body.append "  # "
+                            body.append tc
                         }
                     }
                 }
             } case none then null
         }
-        if docBody9.length == 0 when legacyDnd9 > 0 when legacyDnd9 != dnd9 then {
-            lfs9: zcheck.fsnoFor r: snap nodeid: legacyDnd9.u32.orPanic
-            lpg9: sp.pos.get key: legacyDnd9
+        if docBody.length == 0 when legacyDnd > 0 when legacyDnd != dnd then {
+            lfs: zcheck.fsnoFor r: snap nodeid: legacyDnd.u32.orPanic
+            lpg: sp.pos.get key: legacyDnd
             match (
-                lpg9
+                lpg
             ) case some then {
-                lln9: (lpg9 / 1048576).u32.orPanic
-                if lfs9 > 0 when lln9 > 1 then {
-                    ldoc9: docCommentForNode :snap fsno: lfs9 defLine: lln9
-                    if ldoc9.length > 0 then docBody9 = ldoc9
+                lln: (lpg / 1048576).u32.orPanic
+                if lfs > 0 when lln > 1 then {
+                    ldoc: docCommentForNode :snap fsno: lfs defLine: lln
+                    if ldoc.length > 0 then docBody = ldoc
                 }
             } case none then null
         }
         # call-site enrichment: hovering a callee appends inferred generic
         # bindings (in-fence); hovering an argument appends its disposition.
-        hpos9: u64
+        hpos: u64
         {
-            hp9: sp.pos.get key: hnid
+            hp: sp.pos.get key: hnid
             match (
-                hp9
+                hp
             ) case some then {
-                hpos9 = hp9
+                hpos = hp
             } case none then null
         }
-        callId9: sp.innerRangeOfKind curPos: hpos9 kind: 4 slack: 0
-        if callId9 > 0 then {
-            callPos9: u64
+        callId: sp.innerRangeOfKind curPos: hpos kind: 4 slack: 0
+        if callId > 0 then {
+            callPos: u64
             {
-                cp9x: sp.pos.get key: callId9.u64
+                cp9x: sp.pos.get key: callId.u64
                 match (
                     cp9x
                 ) case some then {
-                    callPos9 = cp9x
+                    callPos = cp9x
                 } case none then null
             }
-            if callPos9 == hpos9 then {
-                gl9: inferredGenericLines o: snap.st prog: snap.prog callId: callId9.u64
-                if gl9.length > 0 then {
-                    body9.appendByte b: 10
-                    body9.append gl9
+            if callPos == hpos then {
+                gl: inferredGenericLines o: snap.st prog: snap.prog callId: callId.u64
+                if gl.length > 0 then {
+                    body.appendByte b: 10
+                    body.append gl
                 }
             } else {
                 dn9x: dispositionNote o: snap.st nid: hnid
                 if dn9x.length > 0 then {
-                    if docBody9.length > 0 then {
-                        docBody9.appendByte b: 10
-                        docBody9.appendByte b: 10
+                    if docBody.length > 0 then {
+                        docBody.appendByte b: 10
+                        docBody.appendByte b: 10
                     }
-                    docBody9.append dn9x
+                    docBody.append dn9x
                 }
             }
         }
-        return (hoverMarkdown code: body9.stringview doc: docBody9.stringview)
+        return (hoverMarkdown code: body.stringview doc: docBody.stringview)
     }
 
     if mode == 1 then {
-        if unitFsno9.u64 > 0 then {
-            return (locationAtFileTop :snap fsno: unitFsno9 :docRel :docUri :srcDir :systemDir)
+        if unitFsno.u64 > 0 then {
+            return (locationAtFileTop :snap fsno: unitFsno :docRel :docUri :srcDir :systemDir)
         }
-        dn9: declNodeOf o: snap.st declId: refDeclId9
-        if dn9 == 0 then {
-            dn9 = (defNodeOf
+        dn: declNodeOf o: snap.st declId: refDeclId
+        if dn == 0 then {
+            dn = (defNodeOf
                 o: snap.st
                 prog: snap.prog
                 :refVid
@@ -2906,12 +2906,12 @@ navAnswer: function {
                 member: hname.stringview
             )
         }
-        if dn9 == 0 then return Value.nul
+        if dn == 0 then return Value.nul
         return (locationValue
             :snap
             :sp
-            nid: dn9
-            width: w9
+            nid: dn
+            width: w
             :docRel
             :docUri
             :srcDir
@@ -2927,27 +2927,27 @@ navAnswer: function {
     for rj < nr loop {
         row2: sp.rows.get i: rj
         n2: row2.nodeid.u64
-        add9: false
+        add: false
         if (refVid.isZero) == false then {
             if row2.kind == 1 then {
-                uvN9: useVarId o: snap.st nid: n2
-                if uvN9 == refVid then add9 = true
+                uvN: useVarId o: snap.st nid: n2
+                if uvN == refVid then add = true
             }
             if row2.kind == 3 then {
-                dvN9: defVarIdOf o: snap.st nid: n2
-                if dvN9 == refVid then add9 = true
+                dvN: defVarIdOf o: snap.st nid: n2
+                if dvN == refVid then add = true
             }
         }
         if refTid > 0 when row2.kind == 1 then {
-            if (useUnitDef o: snap.st nid: n2) == refTid then add9 = true
+            if (useUnitDef o: snap.st nid: n2) == refTid then add = true
         }
         if refOwner > 0 when row2.kind == 2 then {
             if (memberOwnerOf o: snap.st nid: n2) == refOwner then {
                 nm2: sp.names.get i: rj
-                if nm2.stringview == hname.stringview then add9 = true
+                if nm2.stringview == hname.stringview then add = true
             }
         }
-        if add9 then {
+        if add then {
             lv2: (locationValue
                 :snap
                 :sp
@@ -2969,13 +2969,13 @@ navAnswer: function {
 
 # appendIfObject -- append `v` when it is a real Location (drop nul).
 appendIfObject: function {arr: Arr v: Value.take} is {
-    keep9: false
+    keep: false
     match (
         v
     ) case object then {
-        keep9 = true
+        keep = true
     } else null
-    if keep9 then arr.items.append v
+    if keep then arr.items.append v
 }
 
 # symbolsAnswer -- flat DocumentSymbol list for the document's unit.
@@ -3004,11 +3004,11 @@ collectUnitSymbols: function {
         uCnt9b: prog.ast.units.length
         uIdx9b: u64
         for uIdx9b < uCnt9b loop {
-            u9Id9: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9b))
+            u9Id: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9b))
             uIdx9b = uIdx9b + 1
             (collectUnitSymbolsIn
                 ast: prog.ast
-                wId: u9Id9
+                wId: u9Id
                 :unitName
                 :docText
                 :utf32
@@ -3031,8 +3031,8 @@ collectUnitSymbolsIn: function {
     match (
         w
     ) case namedoperation then {
-        lb9: zast.nameTextAt :ast ref: w.name
-        if lb9.stringview == unitName then (collectBodySymbols
+        lb: zast.nameTextAt :ast ref: w.name
+        if lb.stringview == unitName then (collectBodySymbols
             :ast
             ud: (ast.nodes.get i: w.operation.u64)
             :docText
@@ -3053,8 +3053,8 @@ collectBodySymbols: function {
     match (
         ud
     ) case unitdef then {
-        bit9: ud.body.iterate
-        for b9Id: bit9 loop symbolOf :ast m: (ast.nodes.get i: b9Id.u64) :docText :utf32 :arr
+        bit: ud.body.iterate
+        for b9Id: bit loop symbolOf :ast m: (ast.nodes.get i: b9Id.u64) :docText :utf32 :arr
     } else null
 }
 
@@ -3069,33 +3069,33 @@ symbolOf: function {
     match (
         m
     ) case namedoperation then {
-        lb9: zast.nameTextAt :ast ref: m.name
-        if lb9.length == 0 then return
-        k9: symbolKindOf op: (ast.nodes.get i: m.operation.u64)
-        lt9: docLine text: docText lineno: m.lineno
-        c0: encodedCol lineText: lt9.stringview cpCol1: m.colno :utf32
-        wname9: lb9.stringview.count
-        c1: encodedCol lineText: lt9.stringview cpCol1: m.colno + wname9.u32.orPanic :utf32
+        lb: zast.nameTextAt :ast ref: m.name
+        if lb.length == 0 then return
+        k: symbolKindOf op: (ast.nodes.get i: m.operation.u64)
+        lt: docLine text: docText lineno: m.lineno
+        c0: encodedCol lineText: lt.stringview cpCol1: m.colno :utf32
+        wname: lb.stringview.count
+        c1: encodedCol lineText: lt.stringview cpCol1: m.colno + wname.u32.orPanic :utf32
         if c1 <= c0 then c1 = c0 + 1
         line0: i64
         if m.lineno > 0 then line0 = (m.lineno - 1).i64
-        st9: newObj
-        st9.set key: "line".string value: (Value.intval line0)
-        st9.set key: "character".string value: (Value.intval c0.i64)
-        en9: newObj
-        en9.set key: "line".string value: (Value.intval line0)
-        en9.set key: "character".string value: (Value.intval c1.i64)
-        rg9: newObj
-        rg9.set key: "start".string value: (Value.object st9)
-        rg9.set key: "end".string value: (Value.object en9)
-        rv9: (Value.object rg9)
-        sy9: newObj
-        sy9.set key: "name".string value: (Value.text lb9.copy)
-        sy9.set key: "kind".string value: (Value.intval k9)
-        sy9.set key: "range".string value: rv9
+        st: newObj
+        st.set key: "line".string value: (Value.intval line0)
+        st.set key: "character".string value: (Value.intval c0.i64)
+        en: newObj
+        en.set key: "line".string value: (Value.intval line0)
+        en.set key: "character".string value: (Value.intval c1.i64)
+        rg: newObj
+        rg.set key: "start".string value: (Value.object st)
+        rg.set key: "end".string value: (Value.object en)
+        rv: (Value.object rg)
+        sy: newObj
+        sy.set key: "name".string value: (Value.text lb.copy)
+        sy.set key: "kind".string value: (Value.intval k)
+        sy.set key: "range".string value: rv
         rgv2: (rangeCopy :docText :utf32 :line0 c0: c0.i64 c1: c1.i64)
-        sy9.set key: "selectionRange".string value: rgv2
-        arr.items.append (Value.object sy9)
+        sy.set key: "selectionRange".string value: rgv2
+        arr.items.append (Value.object sy)
     } else null
 }
 
@@ -3104,16 +3104,16 @@ symbolOf: function {
 rangeCopy: function {docText: StringView utf32: bool line0: i64 c0: i64 c1: i64} out Value is {
     docText
     utf32
-    st9: newObj
-    st9.set key: "line".string value: (Value.intval line0)
-    st9.set key: "character".string value: (Value.intval c0)
-    en9: newObj
-    en9.set key: "line".string value: (Value.intval line0)
-    en9.set key: "character".string value: (Value.intval c1)
-    rg9: newObj
-    rg9.set key: "start".string value: (Value.object st9)
-    rg9.set key: "end".string value: (Value.object en9)
-    return (Value.object rg9)
+    st: newObj
+    st.set key: "line".string value: (Value.intval line0)
+    st.set key: "character".string value: (Value.intval c0)
+    en: newObj
+    en.set key: "line".string value: (Value.intval line0)
+    en.set key: "character".string value: (Value.intval c1)
+    rg: newObj
+    rg.set key: "start".string value: (Value.object st)
+    rg.set key: "end".string value: (Value.object en)
+    return (Value.object rg)
 }
 
 # the LSP SymbolKind code for definition `op`.
@@ -3135,7 +3135,7 @@ symbolKindOf: function {op: zast.Node.view} out i64 is {
 # Information diagnostics (hard errors stay with the compile pass,
 # which owns them).
 lintInto: function {arr: Arr.view text: String.take relpath: StringView utf32: bool} is {
-    la9: (zsource.analyzeSource
+    la: (zsource.analyzeSource
         source: text
         path: relpath.string
         lineLength: 100
@@ -3144,7 +3144,7 @@ lintInto: function {arr: Arr.view text: String.take relpath: StringView utf32: b
         docParams: false
         docFields: false
     )
-    appendLintDiags :arr :la9 :utf32
+    appendLintDiags :arr :la :utf32
 }
 
 # tcLintInto -- lintInto plus the typecheck-tier rules (L005 suffix, L012
@@ -3160,7 +3160,7 @@ tcLintInto: function {
     uname: StringView
     sto: (Option zenv.ZSymbolTable)
 } is {
-    la9: (zsource.analyzeSource
+    la: (zsource.analyzeSource
         source: text
         path: relpath.string
         lineLength: 100
@@ -3172,58 +3172,58 @@ tcLintInto: function {
     match (
         sto
     ) case some then {
-        la9.lintSuffixUnit :prog :uname st: sto
-        la9.reportUnusedDefs :prog :uname st: sto
-        la9.reportUnusedVars :prog :uname st: sto
-        la9.reportViewableLocals :prog :uname st: sto
+        la.lintSuffixUnit :prog :uname st: sto
+        la.reportUnusedDefs :prog :uname st: sto
+        la.reportUnusedVars :prog :uname st: sto
+        la.reportViewableLocals :prog :uname st: sto
     } case none then null
-    appendLintDiags :arr :la9 :utf32
+    appendLintDiags :arr :la :utf32
 }
 
 # appendLintDiags -- an Analysis's collected warnings / infos as LSP
 # diagnostic rows (hard errors stay with the compile pass, which owns them).
-appendLintDiags: function {arr: Arr la9: zsource.Analysis utf32: bool} is {
-    with dit9: la9.diags.iterate do for d9: dit9 loop {
-        sevN9: i64
-        k9: d9.sev
+appendLintDiags: function {arr: Arr la: zsource.Analysis utf32: bool} is {
+    with dit: la.diags.iterate do for d: dit loop {
+        sevN: i64
+        k: d.sev
         match (
-            k9
+            k
         ) case warning then {
-            sevN9 = 2
+            sevN = 2
         } case info then {
-            sevN9 = 3
+            sevN = 3
         } else null
-        if sevN9 > 0 then {
-            lt9: docLine text: la9.source.stringview lineno: d9.lineno
+        if sevN > 0 then {
+            lt: docLine text: la.source.stringview lineno: d.lineno
             line0: i64
-            if d9.lineno > 0 then line0 = (d9.lineno - 1).i64
-            c0: encodedCol lineText: lt9.stringview cpCol1: d9.colno :utf32
-            w9: d9.width
-            if w9 == 0 then w9 = 1
-            c1: encodedCol lineText: lt9.stringview cpCol1: d9.colno + w9 :utf32
+            if d.lineno > 0 then line0 = (d.lineno - 1).i64
+            c0: encodedCol lineText: lt.stringview cpCol1: d.colno :utf32
+            w: d.width
+            if w == 0 then w = 1
+            c1: encodedCol lineText: lt.stringview cpCol1: d.colno + w :utf32
             if c1 <= c0 then c1 = c0 + 1
-            m9: d9.msg.copy
-            if d9.hint.length > 0 then {
-                m9.appendByte b: 10
-                m9.append "hint: "
-                m9.append d9.hint
+            m: d.msg.copy
+            if d.hint.length > 0 then {
+                m.appendByte b: 10
+                m.append "hint: "
+                m.append d.hint
             }
-            st9: newObj
-            st9.set key: "line".string value: (Value.intval line0)
-            st9.set key: "character".string value: (Value.intval c0.i64)
-            en9: newObj
-            en9.set key: "line".string value: (Value.intval line0)
-            en9.set key: "character".string value: (Value.intval c1.i64)
-            rg9: newObj
-            rg9.set key: "start".string value: (Value.object st9)
-            rg9.set key: "end".string value: (Value.object en9)
-            dg9: newObj
-            dg9.set key: "range".string value: (Value.object rg9)
-            dg9.set key: "severity".string value: (Value.intval sevN9)
-            dg9.set key: "code".string value: (Value.text d9.code.copy)
-            dg9.set key: "source".string value: (Value.text "zl".string)
-            dg9.set key: "message".string value: (Value.text m9)
-            arr.items.append (Value.object dg9)
+            st: newObj
+            st.set key: "line".string value: (Value.intval line0)
+            st.set key: "character".string value: (Value.intval c0.i64)
+            en: newObj
+            en.set key: "line".string value: (Value.intval line0)
+            en.set key: "character".string value: (Value.intval c1.i64)
+            rg: newObj
+            rg.set key: "start".string value: (Value.object st)
+            rg.set key: "end".string value: (Value.object en)
+            dg: newObj
+            dg.set key: "range".string value: (Value.object rg)
+            dg.set key: "severity".string value: (Value.intval sevN)
+            dg.set key: "code".string value: (Value.text d.code.copy)
+            dg.set key: "source".string value: (Value.text "zl".string)
+            dg.set key: "message".string value: (Value.text m)
+            arr.items.append (Value.object dg)
         }
     }
 }
@@ -3233,7 +3233,7 @@ appendLintDiags: function {arr: Arr la9: zsource.Analysis utf32: bool} is {
 # when anything changed; null when the buffer has parse errors or a
 # fix would break it (the editor keeps the buffer untouched).
 formatAnswer: function {text: StringView relpath: StringView} out Value is {
-    a9: (zsource.analyzeSource
+    a: (zsource.analyzeSource
         source: text.string
         path: relpath.string
         lineLength: 100
@@ -3242,48 +3242,48 @@ formatAnswer: function {text: StringView relpath: StringView} out Value is {
         docParams: false
         docFields: false
     )
-    if a9.parseErrorCount > 0 then return Value.nul
-    newsrc: a9.source.copy
-    valid9: true
-    if a9.edits.length > 0 then {
-        newsrc = zfix.applyEdits source: a9.source.stringview edits: a9.edits
-        valid9 = zsource.sourceParses source: newsrc.copy
+    if a.parseErrorCount > 0 then return Value.nul
+    newsrc: a.source.copy
+    valid: true
+    if a.edits.length > 0 then {
+        newsrc = zfix.applyEdits source: a.source.stringview edits: a.edits
+        valid = zsource.sourceParses source: newsrc.copy
     }
-    if valid9 == false then return Value.nul
-    wrapped9: zsource.wrapSource source: newsrc.stringview lineLength: 100
-    newsrc = wrapped9
+    if valid == false then return Value.nul
+    wrapped: zsource.wrapSource source: newsrc.stringview lineLength: 100
+    newsrc = wrapped
     arr: newArr
-    changed9: false
+    changed: false
     {
-        cv9: newsrc.stringview
-        if (cv9 == text) == false then changed9 = true
+        cv: newsrc.stringview
+        if (cv == text) == false then changed = true
     }
-    if changed9 then {
-        nl9: i64
-        i9: u64
-        n9: text.length
-        for i9 < n9 loop {
-            b9: text.byteAt i: i9
+    if changed then {
+        nl: i64
+        i: u64
+        n: text.length
+        for i < n loop {
+            b: text.byteAt :i
             match (
-                b9
+                b
             ) case some then {
-                if b9 == 10 then nl9 = nl9 + 1
+                if b == 10 then nl = nl + 1
             } case none then null
-            i9 = i9 + 1
+            i = i + 1
         }
-        st9: newObj
-        st9.set key: "line".string value: (Value.intval 0)
-        st9.set key: "character".string value: (Value.intval 0)
-        en9: newObj
-        en9.set key: "line".string value: (Value.intval nl9 + 1)
-        en9.set key: "character".string value: (Value.intval 0)
-        rg9: newObj
-        rg9.set key: "start".string value: (Value.object st9)
-        rg9.set key: "end".string value: (Value.object en9)
-        te9: newObj
-        te9.set key: "range".string value: (Value.object rg9)
-        te9.set key: "newText".string value: (Value.text newsrc)
-        arr.items.append (Value.object te9)
+        st: newObj
+        st.set key: "line".string value: (Value.intval 0)
+        st.set key: "character".string value: (Value.intval 0)
+        en: newObj
+        en.set key: "line".string value: (Value.intval nl + 1)
+        en.set key: "character".string value: (Value.intval 0)
+        rg: newObj
+        rg.set key: "start".string value: (Value.object st)
+        rg.set key: "end".string value: (Value.object en)
+        te: newObj
+        te.set key: "range".string value: (Value.object rg)
+        te.set key: "newText".string value: (Value.text newsrc)
+        arr.items.append (Value.object te)
     }
     return (Value.array arr)
 }
@@ -3302,9 +3302,9 @@ byteIdxOfCp: function {s: StringView cp1: u32} out u64 is {
         match (
             b
         ) case some then {
-            isStart9: b < 128
-            if b >= 192 then isStart9 = true
-            if isStart9 then {
+            isStart: b < 128
+            if b >= 192 then isStart = true
+            if isStart then {
                 cnt = cnt + 1
                 if cnt == cp1 then return i
             }
@@ -3387,11 +3387,11 @@ collectTopDefs: function {prog: zast.Node.view sink: (MapRV String value: u8)} i
         uCnt9z: prog.ast.units.length
         uIdx9z: u64
         for uIdx9z < uCnt9z loop {
-            u9Id9: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9z))
+            u9Id: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9z))
             uIdx9z = uIdx9z + 1
             (collectUnitDefs
             ast: prog.ast
-            wId: u9Id9
+            wId: u9Id
             :sink
         )
         }
@@ -3404,8 +3404,8 @@ collectUnitDefs: function {ast: Ast.view wId: zast.nodeid sink: (MapRV String va
     match (
         w
     ) case namedoperation then {
-        ul9: zast.nameTextAt :ast ref: w.name
-        addCand :sink name: ul9.stringview kind: 9
+        ul: zast.nameTextAt :ast ref: w.name
+        addCand :sink name: ul.stringview kind: 9
         collectUnitDefsIn :ast ud: (ast.nodes.get i: w.operation.u64) :sink
     } else null
 }
@@ -3415,8 +3415,8 @@ collectUnitDefsIn: function {ast: Ast.view ud: zast.Node.view sink: (MapRV Strin
     match (
         ud
     ) case unitdef then {
-        bit9: ud.body.iterate
-        for b9Id: bit9 loop collectMemberDef :ast m: (ast.nodes.get i: b9Id.u64) :sink
+        bit: ud.body.iterate
+        for b9Id: bit loop collectMemberDef :ast m: (ast.nodes.get i: b9Id.u64) :sink
     } else null
 }
 
@@ -3425,10 +3425,10 @@ collectMemberDef: function {ast: Ast.view m: zast.Node.view sink: (MapRV String 
     match (
         m
     ) case namedoperation then {
-        lb9: zast.nameTextAt :ast ref: m.name
-        if lb9.length > 0 then {
-            k9: defKindOf op: (ast.nodes.get i: m.operation.u64)
-            addCand :sink name: lb9.stringview kind: k9
+        lb: zast.nameTextAt :ast ref: m.name
+        if lb.length > 0 then {
+            k: defKindOf op: (ast.nodes.get i: m.operation.u64)
+            addCand :sink name: lb.stringview kind: k
         }
     } else null
 }
@@ -3449,10 +3449,10 @@ enclosingDefStart: function {
         uCnt9c: prog.ast.units.length
         uIdx9c: u64
         for uIdx9c < uCnt9c loop {
-            u9Id9: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9c))
+            u9Id: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9c))
             uIdx9c = uIdx9c + 1
-            r9: enclosingInUnit ast: prog.ast wId: u9Id9 :unitName :l1u :sink
-            if r9 > 0 then return r9
+            r: enclosingInUnit ast: prog.ast wId: u9Id :unitName :l1u :sink
+            if r > 0 then return r
         }
         return 0
     } else {
@@ -3472,8 +3472,8 @@ enclosingInUnit: function {
     match (
         w
     ) case namedoperation then {
-        ul9: zast.nameTextAt :ast ref: w.name
-        if ul9.stringview == unitName then return (enclosingInBody
+        ul: zast.nameTextAt :ast ref: w.name
+        if ul.stringview == unitName then return (enclosingInBody
             :ast
             ud: (ast.nodes.get i: w.operation.u64)
             :l1u
@@ -3495,26 +3495,26 @@ enclosingInBody: function {
     match (
         ud
     ) case unitdef then {
-        best9: u32
+        best: u32
         {
-            bit9: ud.body.iterate
-            for b9Id: bit9 loop {
-                b9IdNode9: ast.nodes.get i: b9Id.u64
-                ln9: memberStartLine m: b9IdNode9
-                if ln9 > 0 when ln9 <= l1u then {
-                    if ln9 > best9 then best9 = ln9
+            bit: ud.body.iterate
+            for b9Id: bit loop {
+                b9IdNode: ast.nodes.get i: b9Id.u64
+                ln: memberStartLine m: b9IdNode
+                if ln > 0 when ln <= l1u then {
+                    if ln > best then best = ln
                 }
             }
         }
-        if best9 > 0 then {
+        if best > 0 then {
             bit2: ud.body.iterate
             for b2Id: bit2 loop {
                 b2: ast.nodes.get i: b2Id.u64
                 ln2: memberStartLine m: b2
-                if ln2 == best9 then addMemberParams :ast m: b2 :sink
+                if ln2 == best then addMemberParams :ast m: b2 :sink
             }
         }
-        return best9
+        return best
     } else {
         return 0
     }
@@ -3545,10 +3545,10 @@ addFnParams: function {ast: Ast.view op: zast.Node.view sink: (MapRV String valu
     match (
         op
     ) case functiondef then {
-        pit9: op.parameters.iterate
-        for pm9Id9: pit9 loop {
-            pm9: ast.nodes.get i: pm9Id9.u64
-            addParamLabel :ast pm: pm9 :sink
+        pit: op.parameters.iterate
+        for pm9Id: pit loop {
+            pm: ast.nodes.get i: pm9Id.u64
+            addParamLabel :ast :pm :sink
         }
     } else null
 }
@@ -3558,8 +3558,8 @@ addParamLabel: function {ast: Ast.view pm: zast.Node.view sink: (MapRV String va
     match (
         pm
     ) case namedoperation then {
-        pl9: zast.nameTextAt :ast ref: pm.name
-        addCand :sink name: pl9.stringview kind: 6
+        pl: zast.nameTextAt :ast ref: pm.name
+        addCand :sink name: pl.stringview kind: 6
     } else null
 }
 
@@ -3572,9 +3572,9 @@ addScopeCompletions: function {
     l1u: u32
     sink: (MapRV String value: u8)
 } is {
-    docUnit9: zsource.unitNameOf path: docRel
-    defStart9: enclosingDefStart prog: snap.prog unitName: docUnit9.stringview :l1u :sink
-    if defStart9 > 0 then {
+    docUnit: zsource.unitNameOf path: docRel
+    defStart: enclosingDefStart prog: snap.prog unitName: docUnit.stringview :l1u :sink
+    if defStart > 0 then {
         sp: (Spans
             rows: (ListVal spanrow)
             names: (List String)
@@ -3583,21 +3583,21 @@ addScopeCompletions: function {
             lastPos: 0
         )
         sp.walkProgram prog: snap.prog
-        nr9: sp.rows.length
-        ri9: u64
-        for ri9 < nr9 loop {
-            row9: sp.rows.get i: ri9
-            if row9.kind == 3 when row9.line >= defStart9 then {
-                if row9.line <= l1u then {
-                    fs9: zcheck.fsnoFor r: snap nodeid: row9.nodeid
-                    pp9: snap.vfs.pathfromprovider dentryid: fs9
-                    if (pathMatches pv: pp9.stringview rel: docRel :srcDir) then {
-                        nm9: sp.names.get i: ri9
-                        addCand :sink name: nm9.stringview kind: 6
+        nr: sp.rows.length
+        ri: u64
+        for ri < nr loop {
+            row: sp.rows.get i: ri
+            if row.kind == 3 when row.line >= defStart then {
+                if row.line <= l1u then {
+                    fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
+                    pp: snap.vfs.pathfromprovider dentryid: fs
+                    if (pathMatches pv: pp.stringview rel: docRel :srcDir) then {
+                        nm: sp.names.get i: ri
+                        addCand :sink name: nm.stringview kind: 6
                     }
                 }
             }
-            ri9 = ri9 + 1
+            ri = ri + 1
         }
     }
     collectTopDefs prog: snap.prog :sink
@@ -3636,27 +3636,27 @@ userParams: function {
     tids: ListVal u64
     nameIds: ListVal u64
 } is {
-    mNms9: (ListVal u64)
-    mTds9: (ListVal u64)
-    o.typing.declMemberList ownerTid: (ztypes.tid.create from: tid.u64) names: mNms9 tids: mTds9
-    mk9: u64
-    mn9: mNms9.length
-    for mk9 < mn9 loop {
-        mnid9: mNms9.get i: mk9
-        mtid9: mTds9.get i: mk9
-        mk9 = mk9 + 1
-        cnB9: prog.ast.names.texts.get i: mnid9.u64
-        cn9: cnB9.stringview
-        isRecv9: false
-        if mnid9 == zast.wkThis.u64 then isRecv9 = true
+    mNms: (ListVal u64)
+    mTds: (ListVal u64)
+    o.typing.declMemberList ownerTid: (ztypes.tid.create from: tid.u64) names: mNms tids: mTds
+    mk: u64
+    mn: mNms.length
+    for mk < mn loop {
+        mnid: mNms.get i: mk
+        mtid: mTds.get i: mk
+        mk = mk + 1
+        cnB: prog.ast.names.texts.get i: mnid.u64
+        cn: cnB.stringview
+        isRecv: false
+        if mnid == zast.wkThis.u64 then isRecv = true
         if (o.reg.thisParamNameIs
             tid: (ztypes.tid.create from: tid.u64)
-            nameId: (zast.nameid.create from: mnid9.u32.orPanic)
-        ) then isRecv9 = true
-        if (isRecv9) == false then {
-            names.append cn9.string
-            tids.append mtid9
-            nameIds.append mnid9
+            nameId: (zast.nameid.create from: mnid.u32.orPanic)
+        ) then isRecv = true
+        if (isRecv) == false then {
+            names.append cn.string
+            tids.append mtid
+            nameIds.append mnid
         }
     }
 }
@@ -3679,10 +3679,10 @@ addTypeMembersIn: function {
     mk8: u64
     mn8: pn8.length
     for mk8 < mn8 loop {
-        cn9: pn8.get i: mk8
-        k9: 5.u8
-        if (o.reg.typetypeOf typeId: (ztypes.tid.create from: (pt8.get i: mk8))) == ztypes.ztypetype.functionType then k9 = 2
-        addCand :sink name: cn9.stringview kind: k9
+        cn: pn8.get i: mk8
+        k: 5.u8
+        if (o.reg.typetypeOf typeId: (ztypes.tid.create from: (pt8.get i: mk8))) == ztypes.ztypetype.functionType then k = 2
+        addCand :sink name: cn.stringview kind: k
         mk8 = mk8 + 1
     }
 }
@@ -3695,16 +3695,16 @@ addUnitMembers: function {prog: zast.Node name: StringView sink: (MapRV String v
         uCnt9d: prog.ast.units.length
         uIdx9d: u64
         for uIdx9d < uCnt9d loop {
-            u9Id9: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9d))
+            u9Id: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9d))
             uIdx9d = uIdx9d + 1
-            u9: prog.ast.nodes.get i: u9Id9.u64
+            u: prog.ast.nodes.get i: u9Id.u64
             match (
-                u9
+                u
             ) case namedoperation then {
-                lb9: zast.poolTextAt pool: prog.ast.names ref: u9.name
-                if lb9.stringview == name then (collectUnitDefsIn
+                lb: zast.poolTextAt pool: prog.ast.names ref: u.name
+                if lb.stringview == name then (collectUnitDefsIn
                     ast: prog.ast
-                    ud: (prog.ast.nodes.get i: u9.operation.u64)
+                    ud: (prog.ast.nodes.get i: u.operation.u64)
                     :sink
                 )
             } else null
@@ -3719,11 +3719,11 @@ baseTypeInScope: function {
     snap: zcheck.CheckResult
     docRel: StringView
     srcDir: StringView
-    defStart9: u32
+    defStart: u32
     l1u: u32
     base: StringView
 } out u64 is {
-    result9: u64
+    result: u64
     sp: (Spans
         rows: (ListVal spanrow)
         names: (List String)
@@ -3732,46 +3732,46 @@ baseTypeInScope: function {
         lastPos: 0
     )
     sp.walkProgram prog: snap.prog
-    nr9: sp.rows.length
-    ri9: u64
-    for ri9 < nr9 loop {
-        row9: sp.rows.get i: ri9
-        kindok9: false
-        if row9.kind == 3 then kindok9 = true
-        if row9.kind == 1 then kindok9 = true
-        if kindok9 when row9.line >= defStart9 then {
-            if row9.line <= l1u then {
-                nm9: sp.names.get i: ri9
-                if nm9.stringview == base then {
-                    fs9: zcheck.fsnoFor r: snap nodeid: row9.nodeid
-                    pp9: snap.vfs.pathfromprovider dentryid: fs9
-                    if (pathMatches pv: pp9.stringview rel: docRel :srcDir) then {
-                        tt9: nodeTypeAt o: snap.st nid: row9.nodeid.u64
-                        if tt9 > 0 then result9 = tt9
+    nr: sp.rows.length
+    ri: u64
+    for ri < nr loop {
+        row: sp.rows.get i: ri
+        kindok: false
+        if row.kind == 3 then kindok = true
+        if row.kind == 1 then kindok = true
+        if kindok when row.line >= defStart then {
+            if row.line <= l1u then {
+                nm: sp.names.get i: ri
+                if nm.stringview == base then {
+                    fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
+                    pp: snap.vfs.pathfromprovider dentryid: fs
+                    if (pathMatches pv: pp.stringview rel: docRel :srcDir) then {
+                        tt: nodeTypeAt o: snap.st nid: row.nodeid.u64
+                        if tt > 0 then result = tt
                     }
                 }
             }
         }
-        ri9 = ri9 + 1
+        ri = ri + 1
     }
-    return result9
+    return result
 }
 
 # dotFrom -- index of the first `.` at or after `start` in base, or
 # base.length when there is none.
 dotFrom: function {base: StringView start: u64} out u64 is {
-    n9: base.length
-    i9: start
-    for i9 < n9 loop {
-        b9: base.byteAt i: i9
+    n: base.length
+    i: start
+    for i < n loop {
+        b: base.byteAt :i
         match (
-            b9
+            b
         ) case some then {
-            if b9 == 46 then return i9
+            if b == 46 then return i
         } case none then null
-        i9 = i9 + 1
+        i = i + 1
     }
-    return n9
+    return n
 }
 
 # descendUnitType -- the type id of `unit.name`, resolved (and declared on
@@ -3783,24 +3783,24 @@ descendUnitType: function {
     name: StringView
     o: (Option zenv.ZSymbolTable)
 } out u64 is {
-    result9: u64
+    result: u64
     match (
         o
     ) case some then {
         match (
             prog
         ) case program then {
-            ud9: ztypecheck.unitDeclOfName ty: o.typing ast: prog.ast name: unitName
-            result9 = (ztypecheck.descendNamed
+            ud: ztypecheck.unitDeclOfName ty: o.typing ast: prog.ast name: unitName
+            result = (ztypecheck.descendNamed
                 ty: o.typing
                 reg: o.reg
                 ast: prog.ast
-                unitDecl: ud9
+                unitDecl: ud
                 :name
             )
         } else null
     } case none then null
-    return result9
+    return result
 }
 
 # childOfIn -- the type id of `parent`'s child named `name` (a field, method,
@@ -3811,26 +3811,26 @@ childOfIn: function {
     parent: u64
     name: StringView
 } out u64 is {
-    result9: u64
+    result: u64
     match (
         o
     ) case some then {
         match (
             prog
         ) case program then {
-            co9: (o.typing.declChildOf
+            co: (o.typing.declChildOf
                 pool: prog.ast.names
                 parentTypeId: (ztypes.tid.create from: parent.u64)
                 :name
             )
             match (
-                co9
+                co
             ) case some then {
-                result9 = co9
+                result = co
             } case none then null
         } else null
     } case none then null
-    return result9
+    return result
 }
 
 # addMemberCompletions -- members of the base expression before a `.`. A bare
@@ -3846,72 +3846,72 @@ addMemberCompletions: function {
     base: StringView
     sink: (MapRV String value: u8)
 } is {
-    n9: base.length
+    n: base.length
     d09: dotFrom :base start: 0
-    if d09 >= n9 then {
+    if d09 >= n then {
         if (unitFsnoByName :snap name: base) > 0 then {
             addUnitMembers prog: snap.prog name: base :sink
         } else {
-            docUnit9: zsource.unitNameOf path: docRel
-            throwaway9: (MapRV String value: u8)
-            ds9: (enclosingDefStart
+            docUnit: zsource.unitNameOf path: docRel
+            throwaway: (MapRV String value: u8)
+            ds: (enclosingDefStart
                 prog: snap.prog
-                unitName: docUnit9.stringview
+                unitName: docUnit.stringview
                 :l1u
-                sink: throwaway9
+                sink: throwaway
             )
-            bt9: baseTypeInScope :snap :docRel :srcDir defStart9: ds9 :l1u :base
-            if bt9 > 0 then (addTypeMembers
+            bt: baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u :base
+            if bt > 0 then (addTypeMembers
                 prog: snap.prog
                 o: snap.st
-                tid: (ztypes.tid.create from: bt9.u64)
+                tid: (ztypes.tid.create from: bt.u64)
                 :sink
             )
         }
         return
     }
     seg09: (base.substring from: 0 to: d09)
-    cur9: u64
-    startSeg9: d09 + 1
+    cur: u64
+    startSeg: d09 + 1
     if (unitFsnoByName :snap name: seg09) > 0 then {
         d19: dotFrom :base start: d09 + 1
         seg19: base.substring from: d09 + 1 to: d19
-        cur9 = (descendUnitType
+        cur = (descendUnitType
             prog: snap.prog
             unitName: seg09
             name: seg19
             o: snap.st
         )
-        startSeg9 = d19 + 1
+        startSeg = d19 + 1
     } else {
-        docUnit9: zsource.unitNameOf path: docRel
-        throwaway9: (MapRV String value: u8)
-        ds9: enclosingDefStart prog: snap.prog unitName: docUnit9.stringview :l1u sink: throwaway9
-        cur9 = baseTypeInScope :snap :docRel :srcDir defStart9: ds9 :l1u base: seg09
+        docUnit: zsource.unitNameOf path: docRel
+        throwaway: (MapRV String value: u8)
+        ds: enclosingDefStart prog: snap.prog unitName: docUnit.stringview :l1u sink: throwaway
+        cur = baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u base: seg09
     }
-    if cur9 == 0 then return
-    pos9: startSeg9
-    for pos9 <= n9 loop {
-        de9: dotFrom :base start: pos9
-        seg9: (base.substring from: pos9 to: de9)
-        if seg9.length > 0 then {
-            cur9 = childOfIn prog: snap.prog o: snap.st parent: cur9 name: seg9
-            if cur9 == 0 then return
+    if cur == 0 then return
+    pos: startSeg
+    for pos <= n loop {
+        de: dotFrom :base start: pos
+        seg: (base.substring from: pos to: de)
+        if seg.length > 0 then {
+            cur = childOfIn prog: snap.prog o: snap.st parent: cur name: seg
+            if cur == 0 then return
         }
-        pos9 = de9 + 1
+        pos = de + 1
     }
-    addTypeMembers prog: snap.prog o: snap.st tid: (ztypes.tid.create from: cur9.u64) :sink
+    addTypeMembers prog: snap.prog o: snap.st tid: (ztypes.tid.create from: cur.u64) :sink
 }
 
 # completionItem -- a completion item object (label + kind, optional detail).
 completionItem: function {label: StringView kind: u8 detail: StringView} out Value is {
-    it9: newObj
-    it9.set key: "label".string value: (Value.text label.string)
-    it9.set key: "kind".string value: (Value.intval kind.i64)
+    it: newObj
+    it.set key: "label".string value: (Value.text label.string)
+    it.set key: "kind".string value: (Value.intval kind.i64)
     if detail.length > 0 then {
-        it9.set key: "detail".string value: (Value.text detail.string)
+        it.set key: "detail".string value: (Value.text detail.string)
     }
-    return (Value.object it9)
+    return (Value.object it)
 }
 
 # caseArmComplete -- when the cursor sits after `case ` inside a match, append
@@ -3923,146 +3923,146 @@ caseArmComplete: function {
     o: (Option zenv.ZSymbolTable)
     prog: zast.Node
     ltv: StringView
-    ps9: u64
+    ps: u64
     prefix: StringView
     cursorPos: u64
 } out bool is {
-    ws9: ps9
-    for ws9 > 0 loop {
-        wb9: ltv.byteAt i: ws9 - 1
-        stopw9: false
+    ws: ps
+    for ws > 0 loop {
+        wb: ltv.byteAt i: ws - 1
+        stopw: false
         match (
-            wb9
+            wb
         ) case some then {
-            if wb9 != 32 when wb9 != 9 then stopw9 = true
+            if wb != 32 when wb != 9 then stopw = true
         } case none then {
-            stopw9 = true
+            stopw = true
         }
-        if stopw9 then break
-        ws9 = ws9 - 1
+        if stopw then break
+        ws = ws - 1
     }
-    if ws9 == ps9 then return false
-    wb2: ws9
+    if ws == ps then return false
+    wb2: ws
     for wb2 > 0 loop {
-        cb9: ltv.byteAt i: wb2 - 1
-        stopc9: false
+        cb: ltv.byteAt i: wb2 - 1
+        stopc: false
         match (
-            cb9
+            cb
         ) case some then {
-            if (isIdentByte b: cb9) == false then stopc9 = true
+            if (isIdentByte b: cb) == false then stopc = true
         } case none then {
-            stopc9 = true
+            stopc = true
         }
-        if stopc9 then break
+        if stopc then break
         wb2 = wb2 - 1
     }
-    isCaseKw9: false
+    isCaseKw: false
     {
-        word9: ltv.substring from: wb2 to: ws9
-        if word9 == "case" then isCaseKw9 = true
+        word: ltv.substring from: wb2 to: ws
+        if word == "case" then isCaseKw = true
     }
-    if (isCaseKw9) == false then return false
-    sp9: (Spans
+    if (isCaseKw) == false then return false
+    sp: (Spans
         rows: (ListVal spanrow)
         names: (List String)
         pos: (IdMapV u64 value: u64)
         ranges: (ListVal rangerow)
         lastPos: 0
     )
-    sp9.walkProgram :prog
-    caseId9: sp9.innerRangeOfKind curPos: cursorPos kind: 5 slack: 1048576
-    if caseId9 == 0 then return false
+    sp.walkProgram :prog
+    caseId: sp.innerRangeOfKind curPos: cursorPos kind: 5 slack: 1048576
+    if caseId == 0 then return false
     # caseexpr subject index + clause ids (scoped: one node view at a time)
-    subjIdx9: u32
-    clauseIds9: (ListVal u64)
-    okCase9: false
+    subjIdx: u32
+    clauseIds: (ListVal u64)
+    okCase: false
     match (
         prog
     ) case program then {
-        cnode9: prog.ast.nodes.get i: caseId9.u64
+        cnode: prog.ast.nodes.get i: caseId.u64
         match (
-            cnode9
+            cnode
         ) case caseexpr then {
-            subjIdx9 = cnode9.subject
-            with clit9: cnode9.clauses.iterate do for cl9: clit9 loop clauseIds9.append cl9.u64
-            okCase9 = true
+            subjIdx = cnode.subject
+            with clit: cnode.clauses.iterate do for cl: clit loop clauseIds.append cl.u64
+            okCase = true
         } else null
     } else null
-    if (okCase9) == false then return false
-    if subjIdx9 == 0 then return false
-    subjNid9: u32
+    if (okCase) == false then return false
+    if subjIdx == 0 then return false
+    subjNid: u32
     match (
         prog
     ) case program then {
-        subjNode9: prog.ast.nodes.get i: subjIdx9.u64
-        subjNid9 = ztypecheck.nodeId n: subjNode9
+        subjNode: prog.ast.nodes.get i: subjIdx.u64
+        subjNid = ztypecheck.nodeId n: subjNode
     } else null
-    subjTid9: nodeTypeAt :o nid: subjNid9.u64
-    if subjTid9 == 0 then return false
-    arms9: (List String)
-    gotArms9: false
+    subjTid: nodeTypeAt :o nid: subjNid.u64
+    if subjTid == 0 then return false
+    arms: (List String)
+    gotArms: false
     match (
         o
     ) case some then {
         match (
             prog
         ) case program then {
-            arms9 = ztypecheck.sumSubtypeNames ast: prog.ast st: o sid: subjTid9
-            gotArms9 = true
+            arms = ztypecheck.sumSubtypeNames ast: prog.ast st: o sid: subjTid
+            gotArms = true
         } else null
     } case none then null
-    if (gotArms9) == false then return false
-    used9: (List String)
-    ui9: u64
-    for ui9 < clauseIds9.length loop {
-        clId9: clauseIds9.get i: ui9
-        maIdx9: u32
+    if (gotArms) == false then return false
+    used: (List String)
+    ui: u64
+    for ui < clauseIds.length loop {
+        clId: clauseIds.get i: ui
+        maIdx: u32
         match (
             prog
         ) case program then {
-            clNode9: prog.ast.nodes.get i: clId9.u64
+            clNode: prog.ast.nodes.get i: clId.u64
             match (
-                clNode9
+                clNode
             ) case caseclause then {
-                maIdx9 = clNode9.matcharm
+                maIdx = clNode.matcharm
             } else null
         } else null
-        if maIdx9 > 0 then {
-            maRef9: u32
+        if maIdx > 0 then {
+            maRef: u32
             match (
                 prog
             ) case program then {
-                maNode9: prog.ast.nodes.get i: maIdx9.u64
+                maNode: prog.ast.nodes.get i: maIdx.u64
                 match (
-                    maNode9
+                    maNode
                 ) case atomid then {
-                    maRef9 = maNode9.name
+                    maRef = maNode.name
                 } case labelvalue then {
-                    maRef9 = maNode9.name
+                    maRef = maNode.name
                 } else null
             } else null
-            if maRef9 > 0 then {
+            if maRef > 0 then {
                 match (
                     prog
                 ) case program then {
-                    an9: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: maRef9.u32)
-                    if an9.length > 0 then used9.append an9
+                    an: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: maRef.u32)
+                    if an.length > 0 then used.append an
                 } else null
             }
         }
-        ui9 = ui9 + 1
+        ui = ui + 1
     }
-    with ait9: arms9.iterate do for arm9: ait9 loop {
-        skip9: false
-        with uit9: used9.iterate do for u9: uit9 loop {
-            if u9.stringview == arm9.stringview then skip9 = true
+    with ait: arms.iterate do for arm: ait loop {
+        skip: false
+        with uit: used.iterate do for u: uit loop {
+            if u.stringview == arm.stringview then skip = true
         }
-        matchp9: true
+        matchp: true
         if prefix.length > 0 then {
-            if (arm9.startsWith prefix) == false then matchp9 = false
+            if (arm.startsWith prefix) == false then matchp = false
         }
-        if skip9 == false when matchp9 then {
-            arr.items.append (completionItem label: arm9.stringview kind: 20 detail: "")
+        if skip == false when matchp then {
+            arr.items.append (completionItem label: arm.stringview kind: 20 detail: "")
         }
     }
     return true
@@ -4072,22 +4072,22 @@ caseArmComplete: function {
 # carries a method callable's fn tid, useUnitDef a free function's; anything that
 # does not name a function type yields 0.
 resolveCalleeFuncId: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
-    ftid9: nodeTypeAt :o :nid
-    udx9: useUnitDef :o :nid
-    if udx9 > 0 then ftid9 = udx9
-    if ftid9 == 0 then return 0
-    result9: u64
+    ftid: nodeTypeAt :o :nid
+    udx: useUnitDef :o :nid
+    if udx > 0 then ftid = udx
+    if ftid == 0 then return 0
+    result: u64
     match (
         o
     ) case some then {
-        tt9: o.reg.typetypeOf typeId: (ztypes.tid.create from: ftid9.u64)
+        tt: o.reg.typetypeOf typeId: (ztypes.tid.create from: ftid.u64)
         match (
-            tt9
+            tt
         ) case functionType then {
-            result9 = ftid9
+            result = ftid
         } else null
     } case none then null
-    return result9
+    return result
 }
 
 # leafFuncIdAt -- the innermost leaf span at (line1u, idCol) resolved to a
@@ -4103,32 +4103,32 @@ leafFuncIdAt: function {
     line1u: u32
     idCol: u32
 } out u64 is {
-    leafNid9: u32
-    bk9: u8
-    found9: false
-    rix9: u64
-    for rix9 < sp.rows.length loop {
-        row9: sp.rows.get i: rix9
-        if row9.line == line1u when row9.colLo <= idCol then {
-            if idCol < row9.colHi then {
-                fs9: zcheck.fsnoFor r: snap nodeid: row9.nodeid
-                pp9: snap.vfs.pathfromprovider dentryid: fs9
-                if (pathMatches pv: pp9.stringview rel: docRel :srcDir) then {
-                    take9: false
-                    if (found9) == false then take9 = true
-                    if row9.kind == 2 when bk9 != 2 then take9 = true
-                    if take9 then {
-                        leafNid9 = row9.nodeid
-                        bk9 = row9.kind
-                        found9 = true
+    leafNid: u32
+    bk: u8
+    found: false
+    rix: u64
+    for rix < sp.rows.length loop {
+        row: sp.rows.get i: rix
+        if row.line == line1u when row.colLo <= idCol then {
+            if idCol < row.colHi then {
+                fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
+                pp: snap.vfs.pathfromprovider dentryid: fs
+                if (pathMatches pv: pp.stringview rel: docRel :srcDir) then {
+                    shouldTake: false
+                    if (found) == false then shouldTake = true
+                    if row.kind == 2 when bk != 2 then shouldTake = true
+                    if shouldTake then {
+                        leafNid = row.nodeid
+                        bk = row.kind
+                        found = true
                     }
                 }
             }
         }
-        rix9 = rix9 + 1
+        rix = rix + 1
     }
-    if (found9) == false then return 0
-    return (resolveCalleeFuncId :o nid: leafNid9.u64)
+    if (found) == false then return 0
+    return (resolveCalleeFuncId :o nid: leafNid.u64)
 }
 
 # bareCalleeFuncId -- a lone function/method name with no label yet parses as
@@ -4139,61 +4139,61 @@ leafFuncIdAt: function {
 bareCalleeFuncId: function {
     o: (Option zenv.ZSymbolTable)
     ltv: StringView
-    ws9: u64
+    ws: u64
     cursorPos: u64
     sp: Spans
 } out u64 is {
-    is9: ws9
-    for is9 > 0 loop {
-        ib9: ltv.byteAt i: is9 - 1
-        stopid9: false
+    scan: ws
+    for scan > 0 loop {
+        ib: ltv.byteAt i: scan - 1
+        stopid: false
         match (
-            ib9
+            ib
         ) case some then {
-            if (isIdentByte b: ib9) == false then stopid9 = true
+            if (isIdentByte b: ib) == false then stopid = true
         } case none then {
-            stopid9 = true
+            stopid = true
         }
-        if stopid9 then break
-        is9 = is9 - 1
+        if stopid then break
+        scan = scan - 1
     }
-    if is9 == ws9 then return 0
-    idTxt9: (ltv.substring from: is9 to: ws9)
-    sub9: ltv.substring from: 0 to: is9
-    cc9: sub9.count
-    idCol9: cc9.u32.orPanic + 1
-    l1u9: (cursorPos / 1048576).u32.orPanic
-    leafNid9: u32
-    bk9: u8
-    found9: false
-    rix9: u64
-    for rix9 < sp.rows.length loop {
-        row9: sp.rows.get i: rix9
-        if row9.line == l1u9 when row9.colLo <= idCol9 then {
-            if idCol9 < row9.colHi then {
+    if scan == ws then return 0
+    idTxt: (ltv.substring from: scan to: ws)
+    sub: ltv.substring from: 0 to: scan
+    cc: sub.count
+    idCol: cc.u32.orPanic + 1
+    l1u: (cursorPos / 1048576).u32.orPanic
+    leafNid: u32
+    bk: u8
+    found: false
+    rix: u64
+    for rix < sp.rows.length loop {
+        row: sp.rows.get i: rix
+        if row.line == l1u when row.colLo <= idCol then {
+            if idCol < row.colHi then {
                 # the walk spans every unit and rows carry no file id, so a
                 # same-line/column row from another file can collide; the
                 # identifier text disambiguates
-                nmR9: sp.names.get i: rix9
-                if nmR9.stringview == idTxt9 then {
-                    take9: false
-                    if (found9) == false then take9 = true
-                    if row9.kind == 2 when bk9 != 2 then take9 = true
-                    if take9 then {
-                        leafNid9 = row9.nodeid
-                        bk9 = row9.kind
-                        found9 = true
+                nmR: sp.names.get i: rix
+                if nmR.stringview == idTxt then {
+                    shouldTake: false
+                    if (found) == false then shouldTake = true
+                    if row.kind == 2 when bk != 2 then shouldTake = true
+                    if shouldTake then {
+                        leafNid = row.nodeid
+                        bk = row.kind
+                        found = true
                     }
                 }
             }
         }
-        rix9 = rix9 + 1
+        rix = rix + 1
     }
-    if (found9) == false then return 0
-    return (resolveCalleeFuncId :o nid: leafNid9.u64)
+    if (found) == false then return 0
+    return (resolveCalleeFuncId :o nid: leafNid.u64)
 }
 
-# emitLabels -- append `funcId9`'s parameter labels (minus the receiver and any
+# emitLabels -- append `funcId`'s parameter labels (minus the receiver and any
 # already-supplied labels) to `arr` as kind-5 items with a type[+ownership]
 # detail. Shared by the bare-name and call-node arg-label paths. Returns true
 # when it emitted a label context (the callee has non-receiver params).
@@ -4201,14 +4201,14 @@ emitLabels: function {
     arr: Arr
     o: (Option zenv.ZSymbolTable)
     prog: zast.Node.view
-    funcId9: u64
-    supplied9: (List String)
+    funcId: u64
+    supplied: (List String)
     prefix: StringView
 } out bool is {
     # callee params (skip receiver), collected before any declaration read
-    pnames9: (List String)
-    pnids9: (ListVal u64)
-    pptids9: (ListVal u64)
+    pnames: (List String)
+    pnids: (ListVal u64)
+    pptids: (ListVal u64)
     match (
         prog
     ) case program then {
@@ -4218,49 +4218,49 @@ emitLabels: function {
             (userParams
                 :prog
                 :o
-                tid: (ztypes.tid.create from: funcId9.u64)
-                names: pnames9
-                tids: pptids9
-                nameIds: pnids9
+                tid: (ztypes.tid.create from: funcId.u64)
+                names: pnames
+                tids: pptids
+                nameIds: pnids
             )
         } case none then null
     } else null
-    if pnames9.length == 0 then return false
-    ri9: u64
-    for ri9 < pnames9.length loop {
-        pn9: pnames9.get i: ri9
-        isSupp9: false
-        with sit9: supplied9.iterate do for su9: sit9 loop {
-            if su9.stringview == pn9.stringview then isSupp9 = true
+    if pnames.length == 0 then return false
+    ri: u64
+    for ri < pnames.length loop {
+        pn: pnames.get i: ri
+        isSupp: false
+        with sit: supplied.iterate do for su: sit loop {
+            if su.stringview == pn.stringview then isSupp = true
         }
-        matchp9: true
+        matchp: true
         if prefix.length > 0 then {
-            if (pn9.startsWith prefix) == false then matchp9 = false
+            if (pn.startsWith prefix) == false then matchp = false
         }
-        if isSupp9 == false when matchp9 then {
-            det9: String
+        if isSupp == false when matchp then {
+            det: String
             match (
                 o
             ) case some then {
-                tn9: displayTypeNameSt st: o tid: (ztypes.tid.create from: (pptids9.get i: ri9))
-                det9.append tn9
-                oo9: (o.typing.declOwnershipOfId
-                    parentTypeId: (ztypes.tid.create from: funcId9.u64)
-                    nameId: (zast.nameid.create from: (pnids9.get i: ri9).u32.orPanic)
+                tn: displayTypeNameSt st: o tid: (ztypes.tid.create from: (pptids.get i: ri))
+                det.append tn
+                oo: (o.typing.declOwnershipOfId
+                    parentTypeId: (ztypes.tid.create from: funcId.u64)
+                    nameId: (zast.nameid.create from: (pnids.get i: ri).u32.orPanic)
                 )
                 match (
-                    oo9
+                    oo
                 ) case some then {
-                    if oo9 == ztypes.zparamownership.takeMode then det9.append ".take"
-                    if oo9 == ztypes.zparamownership.borrowMode then det9.append ".borrow"
-                    if oo9 == ztypes.zparamownership.viewMode then det9.append ".view"
-                    if oo9 == ztypes.zparamownership.holdMode then det9.append ".hold"
-                    if oo9 == ztypes.zparamownership.takexMode then det9.append ".takex"
+                    if oo == ztypes.zparamownership.takeMode then det.append ".take"
+                    if oo == ztypes.zparamownership.borrowMode then det.append ".borrow"
+                    if oo == ztypes.zparamownership.viewMode then det.append ".view"
+                    if oo == ztypes.zparamownership.holdMode then det.append ".hold"
+                    if oo == ztypes.zparamownership.takexMode then det.append ".takex"
                 } case none then null
             } case none then null
-            arr.items.append (completionItem label: pn9.stringview kind: 5 detail: det9.stringview)
+            arr.items.append (completionItem label: pn.stringview kind: 5 detail: det.stringview)
         }
-        ri9 = ri9 + 1
+        ri = ri + 1
     }
     return true
 }
@@ -4274,111 +4274,111 @@ argLabelComplete: function {
     o: (Option zenv.ZSymbolTable)
     prog: zast.Node
     ltv: StringView
-    ps9: u64
+    ps: u64
     prefix: StringView
     cursorPos: u64
 } out bool is {
-    ws9: ps9
-    for ws9 > 0 loop {
-        wb9: ltv.byteAt i: ws9 - 1
-        stopw9: false
+    ws: ps
+    for ws > 0 loop {
+        wb: ltv.byteAt i: ws - 1
+        stopw: false
         match (
-            wb9
+            wb
         ) case some then {
-            if wb9 != 32 when wb9 != 9 then stopw9 = true
+            if wb != 32 when wb != 9 then stopw = true
         } case none then {
-            stopw9 = true
+            stopw = true
         }
-        if stopw9 then break
-        ws9 = ws9 - 1
+        if stopw then break
+        ws = ws - 1
     }
-    if ws9 == 0 then return false
-    pvb9: ltv.byteAt i: ws9 - 1
-    badPos9: false
+    if ws == 0 then return false
+    pvb: ltv.byteAt i: ws - 1
+    badPos: false
     match (
-        pvb9
+        pvb
     ) case some then {
-        if pvb9 == 58 then badPos9 = true
-        if pvb9 == 46 then badPos9 = true
+        if pvb == 58 then badPos = true
+        if pvb == 46 then badPos = true
     } case none then null
-    if badPos9 then return false
-    sp9: (Spans
+    if badPos then return false
+    sp: (Spans
         rows: (ListVal spanrow)
         names: (List String)
         pos: (IdMapV u64 value: u64)
         ranges: (ListVal rangerow)
         lastPos: 0
     )
-    sp9.walkProgram :prog
-    callId9: sp9.innerRangeOfKind curPos: cursorPos kind: 4 slack: 1048576
-    supplied9: (List String)
+    sp.walkProgram :prog
+    callId: sp.innerRangeOfKind curPos: cursorPos kind: 4 slack: 1048576
+    supplied: (List String)
     # a bare function/method name (no label yet) has no call node; on a fresh
     # arg position (empty prefix) resolve the identifier just before the cursor
     # and, when it names a function/method, offer its labels. Gated to the
     # empty-prefix case so typing a value still falls through to scope
     # completion; given priority since a slack-matched call node may be nearby.
     if prefix.length == 0 then {
-        bfid9: bareCalleeFuncId :o :ltv :ws9 :cursorPos sp: sp9
-        if bfid9 > 0 then {
-            empty9: (List String)
-            return (emitLabels :arr :o :prog funcId9: bfid9 supplied9: empty9 :prefix)
+        bfid: bareCalleeFuncId :o :ltv :ws :cursorPos :sp
+        if bfid > 0 then {
+            empty: (List String)
+            return (emitLabels :arr :o :prog funcId: bfid supplied: empty :prefix)
         }
     }
-    if callId9 == 0 then return false
+    if callId == 0 then return false
     # callable index + supplied argument node ids (scoped: one node view)
-    callableIdx9: u32
-    argIds9: (ListVal u64)
-    okCall9: false
+    callableIdx: u32
+    argIds: (ListVal u64)
+    okCall: false
     match (
         prog
     ) case program then {
-        cnode9: prog.ast.nodes.get i: callId9.u64
+        cnode: prog.ast.nodes.get i: callId.u64
         match (
-            cnode9
+            cnode
         ) case call then {
-            callableIdx9 = cnode9.callable
-            with aiter9: cnode9.arguments.iterate do for aid9: aiter9 loop argIds9.append aid9.u64
-            okCall9 = true
+            callableIdx = cnode.callable
+            with aiter: cnode.arguments.iterate do for aid: aiter loop argIds.append aid.u64
+            okCall = true
         } else null
     } else null
-    if (okCall9) == false then return false
-    if callableIdx9 == 0 then return false
+    if (okCall) == false then return false
+    if callableIdx == 0 then return false
     # callee function id (callable node -> nodeId -> useUnitDef)
-    calNid9: u32
+    calNid: u32
     match (
         prog
     ) case program then {
-        caln9: prog.ast.nodes.get i: callableIdx9.u64
-        calNid9 = ztypecheck.nodeId n: caln9
+        caln: prog.ast.nodes.get i: callableIdx.u64
+        calNid = ztypecheck.nodeId n: caln
     } else null
-    funcId9: resolveCalleeFuncId :o nid: calNid9.u64
-    if funcId9 == 0 then return false
+    funcId: resolveCalleeFuncId :o nid: calNid.u64
+    if funcId == 0 then return false
     # supplied labels (each arg -> namedoperation.name ref -> text)
-    si9: u64
-    for si9 < argIds9.length loop {
-        aid9: argIds9.get i: si9
-        nameRef9: u32
+    si: u64
+    for si < argIds.length loop {
+        aid: argIds.get i: si
+        nameRef: u32
         match (
             prog
         ) case program then {
-            anode9: prog.ast.nodes.get i: aid9.u64
+            anode: prog.ast.nodes.get i: aid.u64
             match (
-                anode9
+                anode
             ) case namedoperation then {
-                nameRef9 = anode9.name
+                nameRef = anode.name
             } else null
         } else null
-        if nameRef9 > 0 then {
+        if nameRef > 0 then {
             match (
                 prog
             ) case program then {
-                lbl9: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: nameRef9.u32)
-                if lbl9.length > 0 then supplied9.append lbl9
+                lbl: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: nameRef.u32)
+                if lbl.length > 0 then supplied.append lbl
             } else null
         }
-        si9 = si9 + 1
+        si = si + 1
     }
-    return (emitLabels :arr :o :prog :funcId9 :supplied9 :prefix)
+    return (emitLabels :arr :o :prog :funcId :supplied :prefix)
 }
 
 # signatureHelpAnswer -- a mid-typing signature popup. A call being typed often
@@ -4402,130 +4402,130 @@ signatureHelpAnswer: function {
     l1u: l1.u32.orPanic
     curLt: docLine text: docText lineno: l1u
     cp1: cpColOf lineText: curLt.stringview :ch :utf32
-    curByte9: byteIdxOfCp s: curLt.stringview :cp1
+    curByte: byteIdxOfCp s: curLt.stringview :cp1
     # scan backward for the operation head: the innermost unmatched "(" (an
     # enclosing, possibly multi-line, call) wins; otherwise the nearest statement
     # start (a line begun outside parens) once a block boundary or the buffer top
     # is reached. Newlines are NOT hard stops -- a call spans lines inside parens.
-    pd9: i64
-    headLine9: l1u
-    headByte9: u64
-    stmtLine9: l1u
-    stmtByte9: u64
-    haveStmt9: false
-    stop9: false
-    scanLine9: l1u
-    scanText9: curLt.copy
-    scanEnd9: curByte9
-    for stop9 == false loop {
+    pd: i64
+    headLine: l1u
+    headByte: u64
+    stmtLine: l1u
+    stmtByte: u64
+    haveStmt: false
+    stop: false
+    scanLine: l1u
+    scanText: curLt.copy
+    scanEnd: curByte
+    for stop == false loop {
         {
-            stv9: scanText9.stringview
-            i9: scanEnd9
-            for i9 > 0 loop {
-                bb9: stv9.byteAt i: i9 - 1
+            stv: scanText.stringview
+            i: scanEnd
+            for i > 0 loop {
+                bb: stv.byteAt i: i - 1
                 match (
-                    bb9
+                    bb
                 ) case some then {
-                    if bb9 == 41 then pd9 = pd9 + 1
-                    if bb9 == 40 then {
-                        if pd9 > 0 then {
-                            pd9 = pd9 - 1
+                    if bb == 41 then pd = pd + 1
+                    if bb == 40 then {
+                        if pd > 0 then {
+                            pd = pd - 1
                         } else {
-                            headLine9 = scanLine9
-                            headByte9 = i9
-                            stop9 = true
+                            headLine = scanLine
+                            headByte = i
+                            stop = true
                         }
                     }
-                    if bb9 == 123 when pd9 == 0 then {
-                        if haveStmt9 then {
-                            headLine9 = stmtLine9
-                            headByte9 = stmtByte9
+                    if bb == 123 when pd == 0 then {
+                        if haveStmt then {
+                            headLine = stmtLine
+                            headByte = stmtByte
                         } else {
-                            headLine9 = scanLine9
-                            headByte9 = i9
+                            headLine = scanLine
+                            headByte = i
                         }
-                        stop9 = true
+                        stop = true
                     }
-                    if bb9 == 125 when pd9 == 0 then {
-                        if haveStmt9 then {
-                            headLine9 = stmtLine9
-                            headByte9 = stmtByte9
+                    if bb == 125 when pd == 0 then {
+                        if haveStmt then {
+                            headLine = stmtLine
+                            headByte = stmtByte
                         } else {
-                            headLine9 = scanLine9
-                            headByte9 = i9
+                            headLine = scanLine
+                            headByte = i
                         }
-                        stop9 = true
+                        stop = true
                     }
                 } case none then null
-                if stop9 then break
-                i9 = i9 - 1
+                if stop then break
+                i = i - 1
             }
         }
-        if stop9 then break
-        if pd9 == 0 when haveStmt9 == false then {
-            stmtLine9 = scanLine9
-            stmtByte9 = 0
-            haveStmt9 = true
+        if stop then break
+        if pd == 0 when haveStmt == false then {
+            stmtLine = scanLine
+            stmtByte = 0
+            haveStmt = true
         }
-        if scanLine9 <= 1 then {
-            if haveStmt9 then {
-                headLine9 = stmtLine9
-                headByte9 = stmtByte9
+        if scanLine <= 1 then {
+            if haveStmt then {
+                headLine = stmtLine
+                headByte = stmtByte
             } else {
-                headLine9 = 1
-                headByte9 = 0
+                headLine = 1
+                headByte = 0
             }
-            stop9 = true
+            stop = true
         } else {
-            scanLine9 = scanLine9 - 1
-            scanText9 = docLine text: docText lineno: scanLine9
-            scanEnd9 = scanText9.length
+            scanLine = scanLine - 1
+            scanText = docLine text: docText lineno: scanLine
+            scanEnd = scanText.length
         }
     }
-    headLt9: docLine text: docText lineno: headLine9
-    hstv9: headLt9.stringview
-    hlen9: hstv9.length
-    j9: headByte9
-    for j9 < hlen9 loop {
-        wb9: hstv9.byteAt i: j9
-        stopw9: false
+    headLt: docLine text: docText lineno: headLine
+    hstv: headLt.stringview
+    hlen: hstv.length
+    j: headByte
+    for j < hlen loop {
+        wb: hstv.byteAt i: j
+        stopw: false
         match (
-            wb9
+            wb
         ) case some then {
-            if wb9 != 32 when wb9 != 9 then stopw9 = true
+            if wb != 32 when wb != 9 then stopw = true
         } case none then {
-            stopw9 = true
+            stopw = true
         }
-        if stopw9 then break
-        j9 = j9 + 1
+        if stopw then break
+        j = j + 1
     }
-    ids9: j9
-    for j9 < hlen9 loop {
-        ib9: hstv9.byteAt i: j9
-        stopi9: false
+    ids: j
+    for j < hlen loop {
+        ib: hstv.byteAt i: j
+        stopi: false
         match (
-            ib9
+            ib
         ) case some then {
-            if (isIdentByte b: ib9) == false then stopi9 = true
+            if (isIdentByte b: ib) == false then stopi = true
         } case none then {
-            stopi9 = true
+            stopi = true
         }
-        if stopi9 then break
-        j9 = j9 + 1
+        if stopi then break
+        j = j + 1
     }
-    isBind9: false
+    isBind: false
     {
-        cb9: hstv9.byteAt i: j9
+        cb: hstv.byteAt i: j
         match (
-            cb9
+            cb
         ) case some then {
-            if cb9 == 58 then isBind9 = true
+            if cb == 58 then isBind = true
         } case none then null
     }
-    if isBind9 then {
-        j9 = j9 + 1
-        for j9 < hlen9 loop {
-            wb2: hstv9.byteAt i: j9
+    if isBind then {
+        j = j + 1
+        for j < hlen loop {
+            wb2: hstv.byteAt i: j
             stopw2: false
             match (
                 wb2
@@ -4535,11 +4535,11 @@ signatureHelpAnswer: function {
                 stopw2 = true
             }
             if stopw2 then break
-            j9 = j9 + 1
+            j = j + 1
         }
-        ids9 = j9
-        for j9 < hlen9 loop {
-            ib2: hstv9.byteAt i: j9
+        ids = j
+        for j < hlen loop {
+            ib2: hstv.byteAt i: j
             stopi2: false
             match (
                 ib2
@@ -4549,24 +4549,24 @@ signatureHelpAnswer: function {
                 stopi2 = true
             }
             if stopi2 then break
-            j9 = j9 + 1
+            j = j + 1
         }
     }
-    if j9 == ids9 then return Value.nul
-    segStart9: ids9
+    if j == ids then return Value.nul
+    segStart: ids
     for true loop {
-        db9: hstv9.byteAt i: j9
-        isDot9: false
+        db: hstv.byteAt i: j
+        isDot: false
         match (
-            db9
+            db
         ) case some then {
-            if db9 == 46 then isDot9 = true
+            if db == 46 then isDot = true
         } case none then null
-        if (isDot9) == false then break
-        j9 = j9 + 1
-        segStart9 = j9
-        for j9 < hlen9 loop {
-            ib3: hstv9.byteAt i: j9
+        if (isDot) == false then break
+        j = j + 1
+        segStart = j
+        for j < hlen loop {
+            ib3: hstv.byteAt i: j
             stopi3: false
             match (
                 ib3
@@ -4576,123 +4576,123 @@ signatureHelpAnswer: function {
                 stopi3 = true
             }
             if stopi3 then break
-            j9 = j9 + 1
+            j = j + 1
         }
     }
-    calleeEnd9: j9
-    activeLabel9: String
+    calleeEnd: j
+    activeLabel: String
     {
-        lowb9: u64
-        if headLine9 == l1u then lowb9 = calleeEnd9
-        alstv9: curLt.stringview
-        k9: curByte9
-        apd9: i64
-        albreak9: false
-        for k9 > lowb9 loop {
-            ab9: alstv9.byteAt i: k9 - 1
+        lowb: u64
+        if headLine == l1u then lowb = calleeEnd
+        alstv: curLt.stringview
+        k: curByte
+        apd: i64
+        albreak: false
+        for k > lowb loop {
+            ab: alstv.byteAt i: k - 1
             match (
-                ab9
+                ab
             ) case some then {
-                if ab9 == 41 then apd9 = apd9 + 1
-                if ab9 == 40 when apd9 > 0 then apd9 = apd9 - 1
-                if ab9 == 58 when apd9 == 0 then {
-                    le9: k9 - 1
-                    ls9: le9
-                    for ls9 > lowb9 loop {
-                        lb9: alstv9.byteAt i: ls9 - 1
-                        stopl9: false
+                if ab == 41 then apd = apd + 1
+                if ab == 40 when apd > 0 then apd = apd - 1
+                if ab == 58 when apd == 0 then {
+                    le: k - 1
+                    ls: le
+                    for ls > lowb loop {
+                        lb: alstv.byteAt i: ls - 1
+                        stopl: false
                         match (
-                            lb9
+                            lb
                         ) case some then {
-                            if (isIdentByte b: lb9) == false then stopl9 = true
+                            if (isIdentByte b: lb) == false then stopl = true
                         } case none then {
-                            stopl9 = true
+                            stopl = true
                         }
-                        if stopl9 then break
-                        ls9 = ls9 - 1
+                        if stopl then break
+                        ls = ls - 1
                     }
-                    if ls9 < le9 then {
-                        activeLabel9 = (alstv9.substring from: ls9 to: le9).string
-                        albreak9 = true
+                    if ls < le then {
+                        activeLabel = (alstv.substring from: ls to: le).string
+                        albreak = true
                     }
                 }
             } case none then null
-            if albreak9 then break
-            k9 = k9 - 1
+            if albreak then break
+            k = k - 1
         }
     }
-    nmS9: (hstv9.substring from: segStart9 to: calleeEnd9)
-    segCp9: u64
+    nmS: (hstv.substring from: segStart to: calleeEnd)
+    segCp: u64
     {
-        hsub9: hstv9.substring from: 0 to: segStart9
-        segCp9 = hsub9.count
+        hsub: hstv.substring from: 0 to: segStart
+        segCp = hsub.count
     }
-    idCol9: segCp9.u32.orPanic + 1
-    sp9: (Spans
+    idCol: segCp.u32.orPanic + 1
+    sp: (Spans
         rows: (ListVal spanrow)
         names: (List String)
         pos: (IdMapV u64 value: u64)
         ranges: (ListVal rangerow)
         lastPos: 0
     )
-    sp9.walkProgram prog: snap.prog
-    funcId9: leafFuncIdAt :snap o: snap.st sp: sp9 :docRel :srcDir line1u: headLine9 idCol: idCol9
-    if funcId9 == 0 then return Value.nul
-    label9: (fnSigTextOpt
+    sp.walkProgram prog: snap.prog
+    funcId: leafFuncIdAt :snap o: snap.st :sp :docRel :srcDir line1u: headLine :idCol
+    if funcId == 0 then return Value.nul
+    label: (fnSigTextOpt
         vfs: snap.vfs
         prog: snap.prog
         o: snap.st
-        tid: (ztypes.tid.create from: funcId9.u64)
-        name: nmS9
+        tid: (ztypes.tid.create from: funcId.u64)
+        name: nmS
     )
-    if label9.length == 0 then return Value.nul
-    pdisps9: fnParamDisplays prog: snap.prog o: snap.st tid: (ztypes.tid.create from: funcId9.u64)
-    params9: newArr
-    activeIdx9: i64
-    foundActive9: false
-    pi9: u64
-    for pi9 < pdisps9.length loop {
-        pds9: pdisps9.get i: pi9
-        pdv9: pds9.stringview
-        colon9: u64
-        hasColon9: false
-        ci9: u64
-        for ci9 < pdv9.length loop {
-            cbb9: pdv9.byteAt i: ci9
+    if label.length == 0 then return Value.nul
+    pdisps: fnParamDisplays prog: snap.prog o: snap.st tid: (ztypes.tid.create from: funcId.u64)
+    params: newArr
+    activeIdx: i64
+    foundActive: false
+    pi: u64
+    for pi < pdisps.length loop {
+        pds: pdisps.get i: pi
+        pdv: pds.stringview
+        colon: u64
+        hasColon: false
+        ci: u64
+        for ci < pdv.length loop {
+            cbb: pdv.byteAt i: ci
             match (
-                cbb9
+                cbb
             ) case some then {
-                if cbb9 == 58 when hasColon9 == false then {
-                    colon9 = ci9
-                    hasColon9 = true
+                if cbb == 58 when hasColon == false then {
+                    colon = ci
+                    hasColon = true
                 }
             } case none then null
-            ci9 = ci9 + 1
+            ci = ci + 1
         }
-        pnm9: pdv9
-        if hasColon9 then pnm9 = pdv9.substring from: 0 to: colon9
-        if foundActive9 == false when activeLabel9.length > 0 then {
-            if pnm9 == activeLabel9.stringview then {
-                activeIdx9 = pi9.i64.orPanic
-                foundActive9 = true
+        pnm: pdv
+        if hasColon then pnm = pdv.substring from: 0 to: colon
+        if foundActive == false when activeLabel.length > 0 then {
+            if pnm == activeLabel.stringview then {
+                activeIdx = pi.i64.orPanic
+                foundActive = true
             }
         }
-        pobj9: newObj
-        pobj9.set key: "label".string value: (Value.text pdv9.string)
-        params9.items.append (Value.object pobj9)
-        pi9 = pi9 + 1
+        pobj: newObj
+        pobj.set key: "label".string value: (Value.text pdv.string)
+        params.items.append (Value.object pobj)
+        pi = pi + 1
     }
-    siginfo9: newObj
-    siginfo9.set key: "label".string value: (Value.text label9)
-    siginfo9.set key: "parameters".string value: (Value.array params9)
-    siginfo9.set key: "activeParameter".string value: (Value.intval activeIdx9)
-    sigs9: newArr
-    sigs9.items.append (Value.object siginfo9)
-    root9: newObj
-    root9.set key: "signatures".string value: (Value.array sigs9)
-    root9.set key: "activeSignature".string value: (Value.intval 0)
-    root9.set key: "activeParameter".string value: (Value.intval activeIdx9)
-    return (Value.object root9)
+    siginfo: newObj
+    siginfo.set key: "label".string value: (Value.text label)
+    siginfo.set key: "parameters".string value: (Value.array params)
+    siginfo.set key: "activeParameter".string value: (Value.intval activeIdx)
+    sigs: newArr
+    sigs.items.append (Value.object siginfo)
+    root: newObj
+    root.set key: "signatures".string value: (Value.array sigs)
+    root.set key: "activeSignature".string value: (Value.intval 0)
+    root.set key: "activeParameter".string value: (Value.intval activeIdx)
+    return (Value.object root)
 }
 
 # completionAnswer -- scope-based completion from the last-good
@@ -4716,114 +4716,114 @@ completionAnswer: function {
     lt: docLine text: docText lineno: l1u
     ltv: lt.stringview
     cp1: cpColOf lineText: ltv :ch :utf32
-    cur9: byteIdxOfCp s: ltv :cp1
+    cur: byteIdxOfCp s: ltv :cp1
     # identifier prefix ending at the cursor
-    ps9: cur9
-    for ps9 > 0 loop {
-        b9: ltv.byteAt i: ps9 - 1
+    ps: cur
+    for ps > 0 loop {
+        b: ltv.byteAt i: ps - 1
         match (
-            b9
+            b
         ) case some then {
-            if (isIdentByte b: b9) == false then break
+            if (isIdentByte :b) == false then break
         } case none then {
             break
         }
-        ps9 = ps9 - 1
+        ps = ps - 1
     }
     cands: (MapRV String value: u8)
-    memberMode9: false
+    memberMode: false
     # member position: a '.' before the prefix -> complete the base's members
-    if ps9 > 0 then {
-        pb9: ltv.byteAt i: ps9 - 1
+    if ps > 0 then {
+        pb: ltv.byteAt i: ps - 1
         match (
-            pb9
+            pb
         ) case some then {
-            if pb9 == 46 then {
-                memberMode9 = true
-                be9: ps9 - 1
-                bs9: be9
-                for bs9 > 0 loop {
-                    bb9: ltv.byteAt i: bs9 - 1
+            if pb == 46 then {
+                memberMode = true
+                be: ps - 1
+                bs: be
+                for bs > 0 loop {
+                    bb: ltv.byteAt i: bs - 1
                     match (
-                        bb9
+                        bb
                     ) case some then {
-                        if (isIdentByte b: bb9) == false when bb9 != 46 then break
+                        if (isIdentByte b: bb) == false when bb != 46 then break
                     } case none then {
                         break
                     }
-                    bs9 = bs9 - 1
+                    bs = bs - 1
                 }
-                base9: (ltv.substring from: bs9 to: be9)
+                base: (ltv.substring from: bs to: be)
                 (addMemberCompletions
                     :snap
                     :docRel
                     :srcDir
                     :l1u
-                    base: base9
+                    :base
                     sink: cands
                 )
             }
         } case none then null
     }
-    prefix9: (ltv.substring from: ps9 to: cur9)
+    prefix: (ltv.substring from: ps to: cur)
 
-    if (memberMode9) == false then {
-        curPos9: (l1u.u64 * 1048576) + cp1.u64
-        handledCA9: (caseArmComplete
+    if (memberMode) == false then {
+        curPos: (l1u.u64 * 1048576) + cp1.u64
+        handledCA: (caseArmComplete
             :arr
             o: snap.st
             prog: snap.prog
             :ltv
-            :ps9
-            prefix: prefix9
-            cursorPos: curPos9
+            :ps
+            :prefix
+            cursorPos: curPos
         )
-        if handledCA9 then return (Value.array arr)
-        handledAL9: (argLabelComplete
+        if handledCA then return (Value.array arr)
+        handledAL: (argLabelComplete
             :arr
             o: snap.st
             prog: snap.prog
             :ltv
-            :ps9
-            prefix: prefix9
-            cursorPos: curPos9
+            :ps
+            :prefix
+            cursorPos: curPos
         )
-        if handledAL9 then return (Value.array arr)
+        if handledAL then return (Value.array arr)
         if trig == " " then return (Value.array arr)
         addScopeCompletions :snap :docRel :srcDir :l1u sink: cands
     }
 
-    labels9: (List String)
-    with cit9: cands.iterateItems do for ce9: cit9 loop {
-        pv9: prefix9
-        if pv9.length == 0 then {
-            lc9: ce9.key.copy
-            labels9.append lc9
+    labels: (List String)
+    with cit: cands.iterateItems do for ce: cit loop {
+        pv: prefix
+        if pv.length == 0 then {
+            lc: ce.key.copy
+            labels.append lc
         } else {
-            kv9: ce9.key.stringview
-            if kv9.startsWith pv9 then {
-                lc2: ce9.key.copy
-                labels9.append lc2
+            kv: ce.key.stringview
+            if kv.startsWith pv then {
+                lc2: ce.key.copy
+                labels.append lc2
             }
         }
     }
-    labels9.sort
-    li9: u64
-    ln9: labels9.length
-    for li9 < ln9 loop {
-        lb9: labels9.get i: li9
-        ko9: cands.get key: lb9
-        kind9: 6.u8
+    labels.sort
+    li: u64
+    ln: labels.length
+    for li < ln loop {
+        lb: labels.get i: li
+        ko: cands.get key: lb
+        kind: 6.u8
         match (
-            ko9
+            ko
         ) case some then {
-            kind9 = ko9
+            kind = ko
         } case none then null
-        it9: newObj
-        it9.set key: "label".string value: (Value.text lb9.copy)
-        it9.set key: "kind".string value: (Value.intval kind9.i64)
-        arr.items.append (Value.object it9)
-        li9 = li9 + 1
+        it: newObj
+        it.set key: "label".string value: (Value.text lb.copy)
+        it.set key: "kind".string value: (Value.intval kind.i64)
+        arr.items.append (Value.object it)
+        li = li + 1
     }
     return (Value.array arr)
 }
@@ -4880,12 +4880,12 @@ main: function is {
         arg: (argv.get :i)
         av: arg.stringview
         if av == "-V" then {
-            v9: zversion.versionLine tool: "zls"
-            print "\{v9}\n"
+            v: zversion.versionLine tool: "zls"
+            print "\{v}\n"
             os.exit code: 0
         } else if av == "--version" then {
-            v9: zversion.versionLine tool: "zls"
-            print "\{v9}\n"
+            v: zversion.versionLine tool: "zls"
+            print "\{v}\n"
             os.exit code: 0
         } else if av == "--stdio" then {
         } else if av == "--replay" then {
@@ -4938,24 +4938,24 @@ main: function is {
         snapshots: (Map String value: zcheck.CheckResult)
     )
     if listenArg.length > 0 then {
-        pr9: listenArg.stringview.parseU64
+        pr: listenArg.stringview.parseU64
         match (
-            pr9
+            pr
         ) case ok then {
-            if pr9 > 65535 then {
+            if pr > 65535 then {
                 io.eprintln "zls: --listen port out of range (0-65535)"
                 os.exit code: 2
             }
-            port9: pr9.u16.orPanic
-            lo9: net.listen port: port9
+            port: pr.u16.orPanic
+            lo: net.listen :port
             match (
-                lo9
+                lo
             ) case ok then {
-                ao9: lo9.accept
+                ao: lo.accept
                 match (
-                    ao9
+                    ao
                 ) case ok then {
-                    srv.transport = (Transport.tcp ao9)
+                    srv.transport = (Transport.tcp ao)
                     serve :srv
                 } case err then {
                     io.eprintln "zls: accept failed"
