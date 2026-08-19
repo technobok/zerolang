@@ -1931,13 +1931,11 @@ stampIdOf: function {symtab: zenv.ZSymbolTable nid: u64} out ztypes.tid is {
 # this, and each had to name the intermediate; the QUESTION is the thing worth
 # naming, not the tid it goes through.
 stampIsStr: function {symtab: zenv.ZSymbolTable ctx: Ctx.view nid: u64} out bool is {
-    tid: stampIdOf :symtab :nid
-    return tid == ctx.strTid
+    return (stampIdOf :symtab :nid) == ctx.strTid
 }
 
 stampIsSv: function {symtab: zenv.ZSymbolTable ctx: Ctx.view nid: u64} out bool is {
-    tid: stampIdOf :symtab :nid
-    return tid == ctx.svTid
+    return (stampIdOf :symtab :nid) == ctx.svTid
 }
 
 # monoStampIdOf -- the per-mono side stamp for a template node: the
@@ -11049,7 +11047,24 @@ emitBinop: function {
                 :ctx
                 n: (ast.nodes.get i: binop.lhs.u64)
             ) == false then {
-                amp: "&\{l}"
+                # `&` needs an LVALUE, and a receiver that is itself a call is
+                # not one -- `&f(x)` is rejected by C. Bind it to a temp the
+                # statement flush declares. A compound literal already is an
+                # lvalue and must not pay for a temp.
+                lhsText: l.copy
+                needsTemp: isNonLvalueArg s: l.stringview
+                if (l.stringview.startsWith prefix: "((") then needsTemp = false
+                if needsTemp then {
+                    lhsTmp: (hoistLvalue
+                        :ast
+                        :symtab
+                        :ctx
+                        av: l.stringview
+                        tid: owner
+                    )
+                    if lhsTmp.length > 0 then lhsText = lhsTmp.copy
+                }
+                amp: "&\{lhsText}"
                 recvText = amp
             }
             if neg then {

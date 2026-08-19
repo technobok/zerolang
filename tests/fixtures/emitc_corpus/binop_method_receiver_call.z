@@ -1,0 +1,29 @@
+# `&` needs an LVALUE, and a receiver that is itself a CALL is not one. A record
+# that declares its own `==` takes `this` by pointer like every other method, so
+# comparing a call result emitted `&f(x)` and gcc rejected the whole program:
+# "lvalue required as unary '&' operand". The lhs binds to a temp first now.
+#
+# Only a DECLARED operator reaches that path. A record without one falls back to
+# structural comparison, which never addresses the receiver -- which is why the
+# defect stayed hidden until a three-line predicate in the emitter tripped it.
+
+point: record { x: u64 } as {
+    ==: function {:this rhs: point} out bool is {
+        return this.x == rhs.x
+    }
+}
+
+mk: function {v: u64} out point is {
+    return (point x: v)
+}
+
+main: function is {
+    a: point x: 1
+    # a bound receiver: the shape that always worked
+    if a == (mk v: 1) then print "bound receiver"
+    # a call as the receiver, in each position it can take
+    if (mk v: 1) == a then print "call receiver in a condition"
+    eq: (mk v: 2) == (point x: 2)
+    if eq then print "call receiver in a binding"
+    if ((mk v: 3) == a) == false then print "call receiver, negated"
+}
