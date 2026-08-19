@@ -15633,23 +15633,6 @@ seedNegatedFromPredicate: function {
     } else null
 }
 
-# seedCondOp -- one if-condition operation, dispatched by form: bare
-# `x.a` (positive), `x.a.true` (positive inner), `x.a.false` (negated
-# inner), and the `(x.a) == true/false` comparisons.
-# bareAtomNameId -- the interned name id of an expression-unwrapped bare atom,
-# 0 for any other shape. The id twin of bareAtomText.
-bareAtomNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
-    match (
-        n
-    ) case expression then {
-        return (bareAtomNameId :ast n: (ast.nodes.get i: n.expression.u64))
-    } case atomid then {
-        return n.name
-    } else {
-        return (zast.nameid.create from: 0)
-    }
-}
-
 # armSideAtNode -- which arm of ITS OWN stamped type the name `nameId` is, for
 # the value at node `nid`. `true` and `false` are arms of bool, so a `== true`
 # operand answers `truthy` and a `== false` one `falsy` -- from bool's arm
@@ -15681,19 +15664,6 @@ boolArmSideOf: function {
         return (armSideAtNode :symtab nid: n.nodeid.u64 nameId: n.name)
     } else {
         return ztyping.armside.none
-    }
-}
-
-# truthyCondArmOf -- the arm a bare 2-arm-sum condition at `nid` holds, 0 when
-# the node is not one.
-truthyCondArmOf: function {symtab: zenv.ZSymbolTable.view nid: u64} out u64 is {
-    o9: symtab.typing.truthyCondArm.get key: nid
-    match (
-        o9
-    ) case some then {
-        return o9
-    } case none then {
-        return 0
     }
 }
 
@@ -15770,7 +15740,7 @@ seedCondOp: function {
     # a bare 2-arm sum condition IS `x.<arm>` with the arm left implicit, so
     # it seeds the alias that form seeds.
     {
-        ta0: truthyCondArmOf :symtab nid: (interpPartNodeId :n)
+        ta0: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n)
         if ta0 > 0 then {
             an0: zast.nameTextCopy :ast ref: (zast.nameid.create from: ta0.u32.orPanic)
             (seedPositiveCore
@@ -15984,7 +15954,7 @@ chainCondFact: function {
 } is {
     # the bare form again -- same fact, recorded for the else emission
     {
-        ta1: truthyCondArmOf :symtab nid: (interpPartNodeId :n)
+        ta1: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n)
         if ta1 > 0 then {
             an1: zast.nameTextCopy :ast ref: (zast.nameid.create from: ta1.u32.orPanic)
             (chainFactCore
@@ -19297,7 +19267,7 @@ emitUnitMonoInstances: function {
                     match (
                         fm9Node9
                     ) case namedoperation then {
-                        if (isFunctionDefWithBody n: (ast.nodes.get i: fm9Node9.operation.u64)) then {
+                        if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: fm9Node9.operation.u64)) then {
                             mname9: zast.nameTextAt :ast ref: fm9Node9.name
                             cfo9: (symtab.typing.declChildOf
                                 pool: ast.names
@@ -19597,7 +19567,7 @@ emitFnsIn: function {
             match (
                 bm
             ) case namedoperation then {
-                if (isFunctionDefWithBody n: (ast.nodes.get i: bm.operation.u64)) then {
+                if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: bm.operation.u64)) then {
                     nm: zast.nameTextCopy :ast ref: bm.name
                     skipDepMain: false
                     # a runtime-backed unit's bodied fn only emits when the
@@ -19719,21 +19689,10 @@ unitOpHasBodiedFn: function {ast: Ast.view opId: u32} out bool is {
     with it9: ids9.iterate do for mId9: it9 loop {
         m9: ast.nodes.get i: mId9.u64
         if m9.namedoperation then {
-            if (isFunctionDefWithBody n: (ast.nodes.get i: m9.operation.u64)) then return true
+            if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: m9.operation.u64)) then return true
         }
     }
     return false
-}
-
-# true when `n` is a function definition that has a body.
-isFunctionDefWithBody: function {n: Node.view} out bool is {
-    match (
-        n
-    ) case functiondef then {
-        return n.body > 0
-    } else {
-        return false
-    }
 }
 
 # strHasSub -- substring containment with a dynamic needle, routed through a
@@ -27033,7 +26992,7 @@ emitRecordDefsIn: function {
             match (
                 bfd
             ) case namedoperation then {
-                if (isFunctionDefWithBody n: (ast.nodes.get i: bfd.operation.u64)) then {
+                if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: bfd.operation.u64)) then {
                     fdn: zast.nameTextAt :ast ref: bfd.name
                     fdid: userFnId :ast :symtab :ctx name: fdn.stringview
                     isGenFnFD9: false
@@ -27727,7 +27686,7 @@ emitClassMonoMethods: function {
                     match (
                         am8
                     ) case namedoperation then {
-                        if (isFunctionDefWithBody n: (ast.nodes.get i: am8.operation.u64)) then {
+                        if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: am8.operation.u64)) then {
                             mn8: zast.nameTextAt :ast ref: am8.name
                             co8: (symtab.typing.declChildOf
                                 pool: ast.names
@@ -27793,7 +27752,7 @@ emitClassMonoMethods: function {
                     match (
                         am8b
                     ) case namedoperation then {
-                        if (isFunctionDefWithBody n: (ast.nodes.get i: am8b.operation.u64)) then {
+                        if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: am8b.operation.u64)) then {
                             mn8b: zast.nameTextAt :ast ref: am8b.name
                             co8b: (symtab.typing.declChildOf
                                 pool: ast.names
@@ -27892,7 +27851,7 @@ emitRecordMethods: function {
             match (
                 am
             ) case namedoperation then {
-                if (isFunctionDefWithBody n: (ast.nodes.get i: am.operation.u64)) then {
+                if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: am.operation.u64)) then {
                     av: ai
                     idxs.append av
                     an: zast.nameTextCopy :ast ref: am.name
@@ -27941,7 +27900,7 @@ emitRecordMethods: function {
             match (
                 im9
             ) case namedoperation then {
-                if (isFunctionDefWithBody n: (ast.nodes.get i: im9.operation.u64)) then {
+                if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: im9.operation.u64)) then {
                     iav9: iai9
                     iidxs9.append iav9
                     ian9: zast.nameTextCopy :ast ref: im9.name
