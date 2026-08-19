@@ -6036,6 +6036,11 @@ emitIdMapMethodCall: function {
         e1: "\{cb}_get(\{recvR9}, \{vk})"
         return e1
     }
+    if mn.stringview == "getMut" then {
+        vkm: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        e1m: "\{cb}_getMut(\{recvR9}, \{vkm})"
+        return e1m
+    }
     if mn.stringview == "has" then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e2: "\{cb}_has(\{recvR9}, \{vk})"
@@ -22462,6 +22467,16 @@ emitIdMapMono: function {
     t9: applyTmpl text: t8 key: "GET_BODY" val: getBody.stringview
     buf.append t9
     buf.append "\n"
+    (emitIdMapGetMut
+        :ast
+        :symtab
+        :ctx
+        :monoId
+        :runtimeDir
+        nm: nm.stringview
+        keyT: keyT.stringview
+        :buf
+    )
     (emitIdMapIters
         :symtab
         :ctx
@@ -22472,6 +22487,40 @@ emitIdMapMono: function {
         valT: valT.stringview
         :buf
     )
+}
+
+# emitIdMapGetMut -- the in-place value reference, from its own template.
+# `getMut` has no well-known name id, so its declared return -- an OptionView
+# over the VALUE in both families, where `get`'s differs between them -- is
+# resolved through the interned name.
+emitIdMapGetMut: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    monoId: ztypes.tid
+    runtimeDir: StringView
+    nm: StringView
+    keyT: StringView
+    buf: String.borrow
+} is {
+    gmId9: (monoMethodReturn
+        :symtab
+        :monoId
+        nameId: (zast.poolFind pool: ast.names text: "getMut")
+    )
+    if gmId9 == 0 then return
+    gmName9: typeNameOfReg9 :symtab tid: (ztypes.tid.create from: gmId9.u64)
+    gmv9: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: gmId9.u64)
+    gmu9: cUpperOf text: gmName9.stringview
+    pm9: "\{runtimeDir}/z_IdMapMut.c.tmpl"
+    rawm9: readTemplateCached :ctx path: pm9.stringview
+    if rawm9.length == 0 then return
+    m1: applyTmpl text: rawm9 key: "NAME" val: nm
+    m2: applyTmpl text: m1 key: "KEY_T" val: keyT
+    m3: applyTmpl text: m2 key: "OPTIONVIEW_V" val: gmv9.stringview
+    m4: applyTmpl text: m3 key: "OPTIONVIEW_V_TAG" val: gmu9.stringview
+    buf.append m4
+    buf.append "\n"
 }
 
 # emitIdMapIters -- the entry projection and the item iterator, from their own
