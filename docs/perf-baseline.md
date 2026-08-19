@@ -866,16 +866,33 @@ two tests:
 | `armNames9` (×2) | 46 | safe — arm names carry their id — but negligible |
 | `gpNames9` | 19 | keys are registry names, not pool names; negligible |
 | `boundParams` | 0 | a self-compile never constructs it |
-| `ArmPredFact` + `covered` / `required9` | 151 facts | safe, worth ~300 allocations |
+| `ArmPredFact` + `covered` / `required9` | 151 facts | **done** — estimated ~300, actual −2,837 |
 
-`ArmPredFact` is the interesting near-miss: one of its two constructors takes
-a name id it already holds and calls `nameTextCopy` on it, and the narrowing
-call sites then convert the text back with `nameIdOf`. That round trip is
-exactly the one worth −185,528 allocations elsewhere in this file — but at 151
-constructions per self-compile it is worth a few hundred, so it stays as a
-readability item rather than a performance one. **The shape being wrong is not
-the same as the shape being expensive; measure before assuming the first
-implies the second.**
+`ArmPredFact` was done, and is worth recording for how the estimate went.
+
+One of its two constructors took a name id it already held and called
+`nameTextCopy` on it; every consumer then called `nameIdOf` to convert both
+fields back — the same round trip as the narrowing state, one layer up. At 151
+constructions per self-compile the case for fixing it was the code, not the
+column, and it was filed here as a readability item worth "a few hundred"
+allocations.
+
+It came in at **−2,837 allocations and −129 KB**, an order of magnitude more.
+The estimate counted *facts* and forgot what each fact **owned**: two heap
+Strings, copied again when facts were duplicated into `guardFacts` and when the
+subject was lifted into `pgSubj9`. **Count what the structure owns, not how
+many of it there are.**
+
+It also removed six `nameIdOf` calls and a `declChildOf` name lookup, and let
+`armPayloadReadonly` / `shadowCollapseIfSingle` / `postGuardRecord` take the
+ids each was rebuilding on its first line. Text is now rendered in exactly two
+places, both of which need it: the lock path, which is spelled, and
+`postGuardName` plus the mangled receiver, which are spelled into the emitted
+C.
+
+So the caveat this row opened with survives, but with its converse attached:
+**the shape being wrong is not the same as the shape being expensive — and a
+cheap-looking shape is worth fixing anyway when the code reads better for it.**
 
 The rule this arrived at, worth keeping: **an id key is only sound when the id
 is minted, not looked up.** A variable id or a name a node already carries is
