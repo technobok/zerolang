@@ -1040,24 +1040,54 @@ emitter assoc-lists (14 `remove` call sites), the `pend*` triple (a
 instantiations — `monostamp`, `callslot`, `constslot`, `dataconstkey`,
 `dataslotkey` — whose keys are two-field records and so cannot be an `idkey`.
 
-**Not finished:** the sweep above converted the four literal type spellings it
-matched, not the family. **95 id-keyed instantiations are still `MapVV` /
-`MapVR`** and all of them are migratable:
+**The rest, now done.** The first sweep converted the four literal type
+spellings its script matched, not the family; 98 instantiations were still
+`MapVV` / `MapVR` over an id key, most of them ztyping's per-node stamp
+tables. They are all converted.
 
-| shape | instantiations | goes to |
-|---|---|---|
-| `MapVV u64 -> bool` | 40 | `IdSet` where set-shaped (5 fields), else `IdMapV` (18) |
-| `MapVV u64 -> tid` | 16 | `IdMapV` |
-| `MapVV tid -> tid` | 12 | `IdMapV` |
-| `MapVV u64 -> vid`, `vid -> bool` | 10 | `IdMapV` / `IdSet` |
-| `MapVR u32 / tid -> String` | 5 | `IdMapR` |
-| `u64 -> u32 / callkind / zownership / zparamownership / cval / foldedbranch` | 12 | `IdMapV` |
+Every candidate was checked for the two methods an append-only container
+cannot offer *before* anything moved: **not one of them calls `iterate`,
+`remove` or `delete`** — the whole set uses get / set / has / iterateItems,
+which is the entire IdMap surface. So the bulk was a declaration change with
+no call site touched.
 
-That is most of `ztyping`'s stamp tables. Given what the finished 65 measured
-(−1.63% instructions, −14.7 MB), this remainder is the larger half of the win
-and is the obvious next slice.
+One capability had to land first. `capacity:` on a builtin container
+construction is a create argument riding the construction sugar, and two lists
+in `checkConstruction` admit it by template identity — one to keep it out of
+the spec key and subs, one to stop it failing over to field inference. Both
+named the eight List / Map / Set templates and neither named the id-keyed
+three, so `atomVariableId`'s `capacity: nodeEst / 4` pre-size stopped
+compiling the moment its type changed. **The seventh and eighth name-keyed
+family list this container has had to join**, and — as ever — it had to be
+declared, seeded, and only then used.
 
-Two smaller items fall out of it: `zemitterc.idSetHas` is a hand-rolled
-`Map u64 -> bool` membership helper whose own name says what it wants to be,
-and `declPendMemberType` scans the whole `pend*` triple without returning on
-the hit, although `declPendWrite` guarantees at most one entry per key.
+Eight of the converted tables were then found to be sets written as maps
+(`collectionChildrenBuilt`, `variableMutated`, `variableMoved`, and the
+emitter's `group` / `emitted` / `lateSet` / `emptySet` / `emittedSet`): every
+writer stored `true` and every reader answered `false` on `none`.
+`zemitterc.idSetHas` went with them — a helper whose own comment read
+"membership in a Map-u64-bool id set", which is a set with extra steps.
+
+| slice | instructions | cycles | bytes churned |
+|---|---|---|---|
+| the 98 declarations | −0.83% | −3.35% | **−21.1 MB (−5.43%)** |
+| the eight sets + `idSetHas` | +0.04% | — | −183 KB |
+| **total** | **−0.75%** | **−2.10%** | **−21.2 MB (−5.48%)** |
+
+Fixed input, `perf stat -r 5`, spread ±0.05%; `allocs == frees` throughout.
+The bytes are the entry losing its `alive` byte and its stored hash while the
+index cell halves, over tables that carry one row per AST node. The IdSet
+slice is recorded honestly: it costs 0.04% of instructions, marginally outside
+the spread rather than inside it, and is kept for the 8-byte entry and for
+nine `get`-and-match readers becoming one call.
+
+`declPendMemberType` also stops scanning past its hit — `declPendWrite` keeps
+one entry per (parent, name), so the first match is the only one, and it sits
+on the miss path of `declChildOfId`.
+
+Oracles per commit: emitted C byte-identical on all 446 corpus programs that
+emit standalone, and the SQL dump byte-identical (3,153,644 rows for the
+declaration slice, 2,279,954 for the sets).
+
+**Nothing id-keyed is left on `Map`.** What remains is the 16 composite-key
+instantiations above and the String-keyed tables.
