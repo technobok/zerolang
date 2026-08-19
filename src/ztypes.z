@@ -1,7 +1,6 @@
 # Type model for the zerolang type checker: the type descriptor (ZType), the
 # variable / overlay-row / conformance carriers, the id registry, and the pure
-# numeric-literal and name-mangling helpers. `main` is the unit's smoke
-# harness, compared against tests/fixtures/ztypes_z/smoke.expected.
+# numeric-literal and name-mangling helpers.
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
@@ -39,6 +38,11 @@ public: unit {
     :suffixInfoOf
     :zconstkind
     :zconstkindName
+    :zcontrolkind
+    :zcontrolkindName
+    :zlockholderkindName
+    :numkind
+    :numkindName
     :zlockholder
     :zlockholderkind
     :zlockscope
@@ -52,7 +56,6 @@ public: unit {
     :zsrcpos
     :ztypetype
     :ztypetypeName
-    :main
 }
 
 # the top-level classification a ZType carries: record / class / variant
@@ -388,16 +391,6 @@ numkindName: function {k: numkind} out String is {
     }
 }
 
-# a bool rendered as "true" or "false".
-boolText: function {b: bool} out String is {
-    match (
-        b
-    ) case true then {
-        return "true".string
-    } case false then {
-        return "false".string
-    }
-}
 
 # --- value-type carriers ---
 
@@ -1821,175 +1814,4 @@ parseLiteralValue: function {numstr: StringView} out parsedval is {
         }
     }
     return (parsedval ok: true isFloat: p.isFloat ival: p.ival fval: p.fval)
-}
-
-# --- smoke harness ---
-
-# standalone entry point for the ztypes smoke tests.
-main: function is {
-    print "=== ztypetype ==="
-    print (ztypetypeName ztypetype.nullType)
-    print (ztypetypeName ztypetype.genericParam)
-    print (ztypetypeName ztypetype.unitType)
-    print (ztypetypeName ztypetype.functionType)
-    print (ztypetypeName ztypetype.recordType)
-    print (ztypetypeName ztypetype.classType)
-    print (ztypetypeName ztypetype.variantType)
-    print (ztypetypeName ztypetype.unionType)
-    print (ztypetypeName ztypetype.protocolType)
-    print (ztypetypeName ztypetype.facetType)
-    print (ztypetypeName ztypetype.dataType)
-    print (ztypetypeName ztypetype.tagType)
-    print (ztypetypeName ztypetype.neverType)
-
-    print "=== zcontrolkind ==="
-    print (zcontrolkindName zcontrolkind.none)
-    print (zcontrolkindName zcontrolkind.returnKind)
-    print (zcontrolkindName zcontrolkind.breakKind)
-    print (zcontrolkindName zcontrolkind.continueKind)
-    print (zcontrolkindName zcontrolkind.errorKind)
-    print (zcontrolkindName zcontrolkind.panicKind)
-
-    print "=== zownership ==="
-    print (zownershipName zownership.owned)
-    print (zownershipName zownership.borrowed)
-
-    print "=== zlockstate ==="
-    print (zlockstateName zlockstate.exclusive)
-    print (zlockstateName zlockstate.shared)
-
-    print "=== zparamownership ==="
-    print (zparamownershipName zparamownership.takeMode)
-    print (zparamownershipName zparamownership.borrowMode)
-    print (zparamownershipName zparamownership.takexMode)
-
-    print "=== zlockholderkind ==="
-    print (zlockholderkindName zlockholderkind.varKind)
-    print (zlockholderkindName zlockholderkind.callKind)
-    print (zlockholderkindName zlockholderkind.forKind)
-
-    print "=== zconstkind ==="
-    print (zconstkindName zconstkind.none)
-    print (zconstkindName zconstkind.ivalKind)
-    print (zconstkindName zconstkind.fvalKind)
-    print (zconstkindName zconstkind.svalKind)
-    print (zconstkindName zconstkind.armKind)
-
-    print "=== carriers ==="
-    reg: newRegistry
-    t0: reg.newType name: "point" typetype: ztypetype.recordType
-    # the smoke asserts presence only; 1 stands in for a pool id
-    reg.setDestructorName typeId: t0 nameId: (zast.nameid.create from: 1)
-    tt0: reg.typetypeOf typeId: t0
-    ht0: reg.hasType typeId: t0
-    hd0: reg.hasDestructorName typeId: t0
-    print "type id=\{t0} typetype=\{ztypetypeName tt0} hasType=\{boolText ht0} hasDtor=\{boolText hd0}"
-
-    t1: reg.newType name: "List" typetype: ztypetype.classType
-    reg.setTagGenericOrigin typeId: t1
-    tt1: reg.typetypeOf typeId: t1
-    tg1: reg.isTagGenericOriginOf typeId: t1
-    print "type id=\{t1} typetype=\{ztypetypeName tt1} tagGenOrigin=\{boolText tg1}"
-
-    miss: reg.typetypeOf typeId: (tid.create from: 99)
-    print "miss typetype=\{ztypetypeName miss} hasType=\{boolText (reg.hasType typeId: (tid.create from: 99))}"
-
-    v0: reg.newVariable ztypeId: t0 ownership: zownership.owned
-    print "var id=\{v0.variableId} ztypeId=\{v0.ztypeId} ownership=\{zownershipName v0.ownership}"
-
-    e0: reg.newEntry nameId: (zast.nameid.create from: 7) ztypeId: t0 isDefinition: true
-    print "entry id=\{e0.entryId} nameId=\{e0.name} ztypeId=\{e0.ztypeId} def=\{boolText e0.isDefinition} taken=\{boolText e0.isTaken}"
-
-    cf0: reg.newConformance implTypeId: t0 specTypeId: t1 label: "drawable" isFacet: false
-    print "conf id=\{cf0.conformanceId} impl=\{cf0.implTypeId} spec=\{cf0.specTypeId} label=\{cf0.label} facet=\{boolText cf0.isFacet}"
-
-    k0: makeIntConst 1024.i64
-    print "const kind=\{zconstkindName k0.kind} ival=\{k0.ival}"
-    k2: makeStrConst 3.u32
-    print "const kind=\{zconstkindName k2.kind} strId=\{k2.strId}"
-    k3: (makeArmConst armTid: (tid.create from: 12) armName: (zast.nameid.create from: 5))
-    print "const kind=\{zconstkindName k3.kind} armTid=\{k3.armTid} armName=\{k3.armName}"
-
-    lh0: zlockholder kind: zlockholderkind.varKind id: 5
-    print "lockholder kind=\{zlockholderkindName lh0.kind} id=\{lh0.id}"
-
-    print "=== mangleVar ==="
-    smokeMangleVar "foo"
-    smokeMangleVar "int"
-    smokeMangleVar "for"
-    smokeMangleVar "main"
-    smokeMangleVar "exit"
-
-    print "=== intFitsFloat ==="
-    smokeIntFits value: 0 k: numkind.f32Type
-    smokeIntFits value: 16777216 k: numkind.f32Type
-    smokeIntFits value: 16777217 k: numkind.f32Type
-    smokeIntFits value: 9007199254740992 k: numkind.f64Type
-    smokeIntFits value: 9007199254740993 k: numkind.f64Type
-    smokeIntFits value: 5 k: numkind.i64Type
-
-    print "=== floatFitsFloat ==="
-    smokeFloatFits label: "0.5" value: 0.5 k: numkind.f32Type
-    smokeFloatFits label: "0.1" value: 0.1 k: numkind.f32Type
-    smokeFloatFits label: "1.0" value: 1.0 k: numkind.f64Type
-    smokeFloatFits label: "1.0" value: 1.0 k: numkind.f128Type
-    smokeFloatFits label: "2.5" value: 2.5 k: numkind.f32Type
-
-    print "=== parseNumber ==="
-    smokeParse "0"
-    smokeParse "42"
-    smokeParse "255"
-    smokeParse "256"
-    smokeParse "0xff"
-    smokeParse "0b1010"
-    smokeParse "0o17"
-    smokeParse "100u8"
-    smokeParse "256u8"
-    smokeParse "200i8"
-    smokeParse "42i128"
-    smokeParse "0cA"
-    smokeParse "0cAB"
-    smokeParse "0c8"
-    smokeParse "0c"
-    smokeParse "0x1f32"
-    smokeParse "1.5"
-    smokeParse "1e3"
-    smokeParse "0xZZ"
-
-    print "=== parseLiteralValue ==="
-    smokeLitVal "42"
-    smokeLitVal "256u8"
-    smokeLitVal "1.5"
-    smokeLitVal "1e3"
-    smokeLitVal "0xZZ"
-}
-
-# smoke-test: print the C-mangled form of `name`.
-smokeMangleVar: function {name: StringView} is {
-    mangled: mangleVarName name
-    print "mangleVar \{name} -> \{mangled}"
-}
-
-# smoke-test: print whether `value` fits numeric kind `k`.
-smokeIntFits: function {value: i64 k: numkind} is {
-    r: intFitsFloat :value :k
-    print "intFits \{value} \{numkindName k} -> \{boolText r}"
-}
-
-# smoke-test: print whether float `value` fits kind `k`.
-smokeFloatFits: function {label: StringView value: f64 k: numkind} is {
-    r: floatFitsFloat :value :k
-    print "floatFits \{label} \{numkindName k} -> \{boolText r}"
-}
-
-# smoke-test: parse `numstr` and print the outcome.
-smokeParse: function {numstr: StringView} is {
-    p: parseNumber numstr
-    print "parse \{numstr} -> kind=\{numkindName p.kind} float=\{boolText p.isFloat} ival=\{p.ival} err=\{p.err}"
-}
-
-# smoke-test: print the parsed literal value of `numstr`.
-smokeLitVal: function {numstr: StringView} is {
-    v: parseLiteralValue numstr
-    print "litval \{numstr} -> ok=\{boolText v.ok} float=\{boolText v.isFloat} ival=\{v.ival}"
 }

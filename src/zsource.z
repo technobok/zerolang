@@ -86,20 +86,65 @@ unitNamesIn: function {dir: StringView} out (List String) is {
     return names
 }
 
-# unitDeclaresMain -- the unit body declares a top-level `main`.
-unitDeclaresMain: function {ast: Ast.view unitId: zast.nodeid} out bool is {
-    mainId: zast.poolFind pool: ast.names text: "main"
-    if mainId.isZero then return false
-    bodyIds: zast.unitBodyIdsAt :ast :unitId
-    with bit: bodyIds.iterate do for mId: bit loop {
-        m: ast.nodes.get i: mId.u64
-        match (
-            m
-        ) case namedoperation then {
-            if m.name == mainId then return true
-        } else null
-    }
-    return false
+# projectReadNames -- the member names dotted reads reach in every `.z` file
+# directly under `dir`, as text: a parse per file, the reassignment targets
+# excluded (a write is not a read).
+projectReadNames: function {dir: StringView into: Set String} is {
+    ents: io.listDir path: dir
+    match (
+        ents
+    ) case ok then {
+        with eit: ents.iterate do for e: eit loop {
+            ev: e.stringview
+            if (ev.endsWith suffix: ".z") then {
+                fp: "\{dir}/\{ev}"
+                rd: io.readText path: fp.stringview
+                match (
+                    rd
+                ) case ok then {
+                    fileReadNames root: (ast.parseSource source: rd.take) :into
+                } case err then null
+            }
+        }
+    } case err then null
+}
+
+# fileReadNames -- the dotted member reads of one parsed file, into `into`.
+fileReadNames: function {root: Node.view into: Set String} is {
+    match (
+        root
+    ) case program then {
+        t: root.ast
+        topaths: (IdSet u64)
+        ni: 1.u64
+        nn: t.nodes.length
+        for ni < nn loop {
+            nd: t.nodes.get i: ni
+            match (
+                nd
+            ) case reassignment then {
+                topaths.add item: nd.topath.u64
+            } else null
+            ni = ni + 1
+        }
+        nj: 1.u64
+        for nj < nn loop {
+            nd2: t.nodes.get i: nj
+            match (
+                nd2
+            ) case dottedpath then {
+                if (topaths.has item: nj) == false then {
+                    cn: t.nodes.get i: nd2.child.u64
+                    match (
+                        cn
+                    ) case atomid then {
+                        into.add item: (zast.poolTextCopy pool: t.names ref: cn.name)
+                    } else null
+                }
+            } else null
+            nj = nj + 1
+        }
+    } else null
 }
 
 # plainLiteralText -- the text of a string literal with no interpolation
@@ -2927,29 +2972,22 @@ Analysis: class {
             this.reportUnusedDefs :prog :uname :st
             this.reportUnusedVars :prog :uname :st
             this.reportViewableLocals :prog :uname :st
-            if this.opts.arch then (this.reportArch
-                :prog
-                :uname
-                :st
-                srcUnits: (unitNamesIn dir: srcdir)
-            )
+            if this.opts.arch then this.reportArch :prog :uname :st :srcdir :systemdir
         }
     }
 
     # reportArch -- the typecheck-tier architecture rules. A003: a `==` / `!=`
     # in this unit against a literal that spells a unit or type name of the
     # program -- routing by the name of a thing that has an id. A004: a record
-    # or class field no dotted read anywhere in the program reaches -- written
-    # (constructed, assigned) and never read. A004 runs only when this unit is
-    # a program root (declares `main`), because only then is the whole program
-    # here to be read from; it then covers the types of every unit under the
-    # project's --src (a library's surface is not dead for being unused by one
-    # program, and a native type's fields are the runtime's to read) and names
-    # the field's unit and line in the message, since the finding is about the
-    # program, not a line of this file. The read evidence is by name over the
-    # whole program: conservative, so a same-named field elsewhere hides a hit
+    # or class field of this unit that no dotted read in the PROJECT reaches --
+    # every `.z` under --src and --system is parsed for its member reads, so the
+    # evidence does not depend on which program happens to be compiled here, and
+    # a field is reported where it is declared. Units under --system are exempt
+    # (a library's surface is not dead for being unread by one project), as are
+    # native types (their fields are the runtime's to read). The read evidence
+    # is by name: conservative, so a same-named field elsewhere hides a hit
     # rather than inventing one.
-    reportArch: function {:this prog: Node uname: StringView st: zenv.ZSymbolTable srcUnits: (List String).view} is {
+    reportArch: function {:this prog: Node uname: StringView st: zenv.ZSymbolTable srcdir: StringView systemdir: StringView} is {
         match (
             prog
         ) case program then {
@@ -2969,72 +3007,26 @@ Analysis: class {
                 }
             }
             this.archWalk ast: ast9 nId: mainOp :namedIds
-            if (unitDeclaresMain ast: ast9 unitId: mainOp) == false then return
-            # the dotted member reads of the whole program, by name; a
-            # reassignment's target path is a write, not a read
-            topaths: (IdSet u64)
-            readNames: (IdSet u64)
-            {
-                ni: 1.u64
-                nn: ast9.nodes.length
-                for ni < nn loop {
-                    nd: ast9.nodes.get i: ni
-                    match (
-                        nd
-                    ) case reassignment then {
-                        topaths.add item: nd.topath.u64
-                    } else null
-                    ni = ni + 1
-                }
-                nj: 1.u64
-                for nj < nn loop {
-                    nd2: ast9.nodes.get i: nj
-                    match (
-                        nd2
-                    ) case dottedpath then {
-                        if (topaths.has item: nj) == false then {
-                            cn: ast9.nodes.get i: nd2.child.u64
-                            match (
-                                cn
-                            ) case atomid then {
-                                readNames.add item: cn.name.u64
-                            } else null
-                        }
-                    } else null
-                    nj = nj + 1
-                }
-            }
-            with uit: ast9.units.iterate do for uId: uit loop {
-                u: ast9.nodes.get i: uId.u64
+            srcUnits: unitNamesIn dir: srcdir
+            if (srcUnits.contains item: uname.string) == false then return
+            readNames: (Set String)
+            projectReadNames dir: srcdir into: readNames
+            projectReadNames dir: systemdir into: readNames
+            bodyIds: zast.unitBodyIdsAt ast: ast9 unitId: mainOp
+            with bit: bodyIds.iterate do for mId: bit loop {
+                m: ast9.nodes.get i: mId.u64
                 match (
-                    u
+                    m
                 ) case namedoperation then {
-                    un: zast.poolTextCopy pool: ast9.names ref: u.name
-                    if (srcUnits.contains item: un) == false then continue
-                    bodyIds: zast.unitBodyIdsAt ast: ast9 unitId: u.operation
-                    with bit: bodyIds.iterate do for mId: bit loop {
-                        m: ast9.nodes.get i: mId.u64
-                        match (
-                            m
-                        ) case namedoperation then {
-                            tn: zast.poolTextCopy pool: ast9.names ref: m.name
-                            (this.archFields
-                                ast: ast9
-                                opId: m.operation
-                                :readNames
-                                unitName: un.stringview
-                                typeName: tn.stringview
-                            )
-                        } else null
-                    }
+                    tn: zast.poolTextCopy pool: ast9.names ref: m.name
+                    this.archFields ast: ast9 opId: m.operation :readNames typeName: tn.stringview
                 } else null
             }
         } else null
     }
 
-    # archFields -- A004 over one record / class definition, reported against
-    # the root file (line 0) with the field's own unit and line in the text.
-    archFields: function {:this ast: Ast.view opId: zast.nodeid readNames: (IdSet u64).view unitName: StringView typeName: StringView} is {
+    # archFields -- A004 over one record / class definition of this unit.
+    archFields: function {:this ast: Ast.view opId: zast.nodeid readNames: (Set String).view typeName: StringView} is {
         n: ast.nodes.get i: opId.u64
         match (
             n
@@ -3049,14 +3041,14 @@ Analysis: class {
                     m
                 ) case namedoperation then {
                     mop: ast.nodes.get i: m.operation.u64
-                    if (mop.functiondef) == false when (readNames.has item: m.name.u64) == false then {
-                        fnm: zast.nameTextAt :ast ref: m.name
+                    fnm: zast.poolTextCopy pool: ast.names ref: m.name
+                    if (mop.functiondef) == false when (readNames.has item: fnm) == false then {
                         (this.warn
                             code: "A004"
-                            msg: "field `\{typeName}.\{fnm}` (\{unitName}.z:\{m.lineno}) is written and never read anywhere in the program"
-                            line: 0
-                            col: 0
-                            width: 0
+                            msg: "field `\{typeName}.\{fnm}` is written and never read anywhere in the project"
+                            line: m.lineno
+                            col: m.colno
+                            width: 1
                         )
                     }
                 } else null

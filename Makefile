@@ -388,10 +388,10 @@ test-bootstrap:
 	@cmp -s $(BUILDDIR)/b1.c bootstrap/zc.c \
 		&& echo "seed is current (b1 == committed seed)" \
 		|| echo "note: seed has lagged (b1 != committed seed) -- run 'make bump-seed' when convenient"
-	$(BUILDDIR)/zc-b1 ztypes --src src --system lib/system --emit-c $(BUILDDIR)/zt.c
+	$(BUILDDIR)/zc-b1 ztypes_smoke --src src --system lib/system --emit-c $(BUILDDIR)/zt.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zt $(BUILDDIR)/zt.c -lm
-	$(BUILDDIR)/zt | diff - tests/fixtures/ztypes_z/smoke.expected \
-		&& echo "correctness OK (seed-built zc compiles ztypes to golden)"
+	$(BUILDDIR)/zt | diff - tests/fixtures/ztypes_smoke_z/smoke.expected \
+		&& echo "correctness OK (seed-built zc compiles the ztypes smoke to golden)"
 	@echo "bootstrap seed OK: 'cc bootstrap/zc.c' builds a correct self-hosting zc (no Python)"
 
 # install -- a self-contained tree at $(ROOT) + a $(BINDIR)/zc symlink.

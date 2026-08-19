@@ -1,0 +1,253 @@
+# ztyping_smoke -- the ztyping smoke harness: declares a type with members,
+# exercises the member setters and the stamp tables, and prints what the
+# container holds. Compared against tests/fixtures/ztyping_smoke_z/smoke.expected.
+# Every name-bearing query goes through a helper that takes the name as a
+# param (a string literal cannot be nested inside an interpolation), and the
+# raw Map.get stamp reads are matched inline (the get result type is the
+# native Map option, distinct from the methods' (optionval t: u64)).
+
+public: unit {
+    :main
+}
+
+# a bool rendered as "true" or "false".
+boolText: function {b: bool} out String is {
+    match (
+        b
+    ) case true then {
+        return "true".string
+    } case false then {
+        return "false".string
+    }
+}
+
+# Render an (optionval u64) as its value text or "none".
+optU64Text: function {o: optionval u64} out String is {
+    match (
+        o
+    ) case some then {
+        return "\{o}"
+    } case none then {
+        return "none".string
+    }
+}
+
+main: function is {
+    reg: ztypes.newRegistry
+    tPoint: reg.newType name: "point" typetype: ztypes.ztypetype.recordType
+    tInt: reg.newType name: "i64" typetype: ztypes.ztypetype.recordType
+    tStr: reg.newType name: "String" typetype: ztypes.ztypetype.classType
+    tList: reg.newType name: "List" typetype: ztypes.ztypetype.classType
+    pid: tPoint
+    lid: tList
+
+    ty: ztyping.newTyping
+    pool: zast.StringPool.create
+
+    # the per-member metadata setters record onto member DECLARATIONS, so the
+    # smoke declares the type and its fields the way the def indexer would.
+    pDecl: (ty.declNew
+        name: (pool.set s: "point")
+        parent: ztypes.declid
+        kind: ztyping.declkind.typeDecl
+        node: 0
+    )
+    ty.declSetType declId: pDecl typeId: pid
+    ty.declNew name: (pool.set s: "x") parent: pDecl kind: ztyping.declkind.fieldDecl node: 0
+    ty.declNew name: (pool.set s: "y") parent: pDecl kind: ztyping.declkind.fieldDecl node: 0
+    ty.declNew name: (pool.set s: "label") parent: pDecl kind: ztyping.declkind.fieldDecl node: 0
+    # a function / arm default names its target by DeclId, so the targets have
+    # to be declared for the defaults below to resolve to anything
+    mkDecl: (ty.declNew
+        name: (pool.set s: "makeY")
+        parent: ztypes.declid
+        kind: ztyping.declkind.funcDecl
+        node: 0
+    )
+    armDecl: (ty.declNew
+        name: (pool.set s: "none")
+        parent: ztypes.declid
+        kind: ztyping.declkind.armDecl
+        node: 0
+    )
+
+    print "=== children ==="
+    ty.setMemberType parentTypeId: pid nameId: (pool.set s: "x") childTypeId: tInt
+    ty.setMemberType parentTypeId: pid nameId: (pool.set s: "y") childTypeId: tInt
+    ty.setMemberType parentTypeId: pid nameId: (pool.set s: "label") childTypeId: tStr
+    ty.setMemberType parentTypeId: pid nameId: (pool.set s: "x") childTypeId: tInt
+
+    print "memberCount point -> \{ty.declMemberCount ownerTid: pid}"
+    smokeHasChild :pool :ty :pid name: "x"
+    smokeHasChild :pool :ty :pid name: "z"
+    smokeChildOf :pool :ty :pid name: "x"
+    smokeChildOf :pool :ty :pid name: "label"
+    smokeChildOf :pool :ty :pid name: "z"
+    dumpChildren :ty :pool parentTypeId: pid
+
+    print "=== member metadata ==="
+    ty.setChildLockField :pool parentTypeId: pid name: "y"
+    ty.setDefaultFunction :pool parentTypeId: pid name: "y" targetDecl: mkDecl
+    (ty.setDefaultVariantArm
+        :pool
+        parentTypeId: pid
+        name: "label"
+        targetDecl: armDecl
+    )
+    (ty.setChildOwnership
+        :pool
+        parentTypeId: pid
+        name: "x"
+        ownership: ztypes.zparamownership.takeMode
+    )
+    (ty.setChildOwnership
+        :pool
+        parentTypeId: pid
+        name: "y"
+        ownership: ztypes.zparamownership.borrowMode
+    )
+
+    smokeIsLockField :pool :ty :pid name: "y"
+    smokeDefault :pool :ty :pid name: "x"
+    smokeDefault :pool :ty :pid name: "y"
+    smokeDefault :pool :ty :pid name: "label"
+    smokeOwn :pool :ty :pid name: "x"
+    smokeOwn :pool :ty :pid name: "y"
+    smokeOwn :pool :ty :pid name: "label"
+
+    print "=== node stamps ==="
+    stagedStr: tStr
+    ztyping.nodeTypeSet tbl: ty.nodeType nid: 100 tid: stagedStr
+    nt: ztyping.nodeTypeAt tbl: ty.nodeType nid: 100
+    if nt > 0 then {
+        print "nodeType[100] -> \{nt}"
+    } else {
+        print "nodeType[100] -> none"
+    }
+    ty.callKind.set key: 101 value: zast.callkind.recordCreate
+    ck: ty.callKind.get key: 101
+    match (
+        ck
+    ) case some then {
+        print "callKind[101] -> \{zast.callkindname ck}"
+    } case none then {
+        print "callKind[101] -> none"
+    }
+    ty.atomVariableId.set key: 103 value: (ztypes.vid.create from: 42)
+    av: ty.atomVariableId.get key: 103
+    match (
+        av
+    ) case some then {
+        print "atomVariableId[103] -> \{av}"
+    } case none then {
+        print "atomVariableId[103] -> none"
+    }
+
+    print "=== node tables ==="
+    k0: ztypes.makeIntConst 1024.i64
+    ty.nodeConst.set key: 200 value: k0
+    ty.nodeConst.set key: 201 value: (ztypes.makeArmConst
+        armTid: (ztypes.tid.create from: 30)
+        armName: (zast.nameid.create from: 70)
+    )
+    (ty.setMemberConst
+        parentTypeId: pid
+        nameId: (zast.nameid.create from: 9)
+        value: (ztypes.makeStrConst 4.u32)
+    )
+    dumpNodeConst :ty
+    mc: ty.memberConstOf parentTypeId: pid nameId: (zast.nameid.create from: 9)
+    print "  memberConst[point.#9] kind=\{ztypes.zconstkindName mc.kind} strId=\{mc.strId}"
+    mx: ty.memberConstOf parentTypeId: pid nameId: (zast.nameid.create from: 10)
+    print "  memberConst[point.#10] kind=\{ztypes.zconstkindName mx.kind}"
+
+    print "=== aggregates ==="
+    cf: reg.newConformance implTypeId: pid specTypeId: lid label: "drawable" isFacet: false
+    ty.conformance.append cf
+    dumpConformance :ty
+    print "isError -> \{boolText ty.isError}"
+}
+
+# smoke-test: print whether type `pid` has a child named `name`.
+smokeHasChild: function {pool: zast.StringPool ty: ztyping.ZTyping pid: u64 name: StringView} is {
+    nid: pool.find s: name
+    b: false
+    if nid > 0 then b = (ty.declHasMemberId
+        parentTypeId: (ztypes.tid.create from: pid.u64)
+        nameId: nid
+    )
+    print "hasMember point.\{name} -> \{boolText b}"
+}
+
+# smoke-test: print the child type id of `pid`'s member `name`.
+smokeChildOf: function {
+    pool: zast.StringPool.view
+    ty: ztyping.ZTyping
+    pid: u64
+    name: StringView
+} is {
+    r: ty.declChildOf :pool parentTypeId: (ztypes.tid.create from: pid.u64) :name
+    print "childOf point.\{name} -> \{optU64Text r}"
+}
+
+# smoke-test: print whether member `name` of `pid` is a lock field.
+smokeIsLockField: function {
+    pool: zast.StringPool.view
+    ty: ztyping.ZTyping
+    pid: u64
+    name: StringView
+} is {
+    b: ty.declIsLockField :pool parentTypeId: (ztypes.tid.create from: pid.u64) :name
+    print "isLockField point.\{name} -> \{boolText b}"
+}
+
+# smoke-test: print the default value of member `name` of `pid`.
+smokeDefault: function {
+    pool: zast.StringPool.view
+    ty: ztyping.ZTyping
+    pid: u64
+    name: StringView
+} is {
+    d: ty.declDefaultText :pool parentTypeId: (ztypes.tid.create from: pid.u64) :name
+    print "default point.\{name} -> \{d}"
+}
+
+# smoke-test: print the ownership of member `name` of `pid`.
+smokeOwn: function {pool: zast.StringPool.view ty: ztyping.ZTyping pid: u64 name: StringView} is {
+    o: ty.declOwnershipText :pool parentTypeId: (ztypes.tid.create from: pid.u64) :name
+    print "ownership point.\{name} -> \{o}"
+}
+
+# smoke-test: print every declared member of parent type `parentTypeId`.
+dumpChildren: function {
+    ty: ztyping.ZTyping
+    pool: zast.StringPool.view
+    parentTypeId: ztypes.tid
+} is {
+    nms: (ListVal u64)
+    tds: (ListVal u64)
+    ty.declMemberList ownerTid: parentTypeId names: nms tids: tds
+    i: u64
+    n: nms.length
+    for i < n loop {
+        rnB: pool.texts.get i: ((nms.get :i)).u64
+        print "  child \{i} \{rnB} -> \{tds.get :i}"
+        i = i + 1
+    }
+}
+
+# smoke-test: print the node-constant table. Takes the mutable typing because
+# a map's item iterator borrows its receiver, as appendAtomStamps does.
+dumpNodeConst: function {ty: ztyping.ZTyping} is {
+    with iter: ty.nodeConst.iterateItems do for row: iter loop {
+        print "  const node=\{row.key} kind=\{ztypes.zconstkindName row.value.kind} ival=\{row.value.ival} armName=\{row.value.armName}"
+    }
+}
+
+# smoke-test: print the recorded protocol conformances.
+dumpConformance: function {ty: ztyping.ZTyping.view} is {
+    iter: ty.conformance.iterate
+    for row: iter loop {
+        print "  conf id=\{row.conformanceId} impl=\{row.implTypeId} spec=\{row.specTypeId} label=\{row.label}"
+    }
+}
