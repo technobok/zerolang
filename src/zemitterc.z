@@ -8897,6 +8897,7 @@ emitFnptrLocalCall: function {
 }
 
 # emit a call used as a value (its result expression).
+
 emitCallValue: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
@@ -8929,6 +8930,97 @@ emitCallValue: function {
         if isPjk then {
             pch: emitProtocolCreateCall :ast :symtab :ctx :call
             if pch.length > 0 then return pch
+        }
+    } case none then null
+    # route by the callee's DECLARATION: its kind and its owner's family
+    # name the handler outright
+    rdo: symtab.typing.refDecl.get key: call.callable.u64
+    match (
+        rdo
+    ) case some then {
+        rdecl: symtab.typing.decls.get i: rdo.u64
+        rkind: rdecl.kind
+        rtid: rdecl.typeId
+        ownerTid: ztypes.tid
+        if (rdecl.parent.isZero) == false then ownerTid = (symtab.typing.decls.get i: rdecl.parent.u64).typeId
+        if rkind.methodDecl when (ownerTid.isZero) == false then {
+            # the owner is the TEMPLATE for a native collection's method (the
+            # mono's methods are the template's); its family is its own id
+            ownerFam: originTidOf :symtab tid: ownerTid
+            if ownerFam.isZero then ownerFam = ownerTid
+            isCol: false
+            if ownerFam == ctx.listOriginTid then isCol = true
+            if ownerFam == ctx.listValOriginTid then isCol = true
+            if ownerFam == ctx.listViewOriginTid then isCol = true
+            if ownerFam == ctx.listViewValOriginTid then isCol = true
+            if ownerFam == ctx.setOriginTid then isCol = true
+            if ownerFam == ctx.setValOriginTid then isCol = true
+            if ownerFam == ctx.mapOriginTid then isCol = true
+            if ownerFam == ctx.mapRVOriginTid then isCol = true
+            if ownerFam == ctx.mapVROriginTid then isCol = true
+            if ownerFam == ctx.mapVVOriginTid then isCol = true
+            if ownerFam == ctx.idMapROriginTid then isCol = true
+            if ownerFam == ctx.idMapVOriginTid then isCol = true
+            if ownerFam == ctx.idSetOriginTid then isCol = true
+            if ownerFam == ctx.arrayOriginTid then isCol = true
+            if isCol then {
+                rcol: emitCollectionMethodCall :ast :symtab :ctx :call
+                if rcol.length > 0 then return rcol
+            }
+            if ownerTid == ctx.strTid then {
+                rsa: emitStringArgMethod :ast :symtab :ctx :call
+                if rsa.length > 0 then return rsa
+                rsd: emitDottedCall :ast :symtab :ctx :call
+                if rsd.length > 0 then return rsd
+            }
+            if ownerTid == ctx.svTid then {
+                rsv: emitDottedCall :ast :symtab :ctx :call
+                if rsv.length > 0 then return rsv
+            }
+            ott: symtab.reg.typetypeOf typeId: ownerTid
+            isSpec: false
+            if ott == ztypes.ztypetype.protocolType then isSpec = true
+            if ott == ztypes.ztypetype.facetType then isSpec = true
+            if isSpec then {
+                rpd: emitProtocolDispatch :ast :symtab :ctx :call
+                if rpd.length > 0 then return rpd
+            }
+            isIoNat: false
+            if ownerTid.u64 == ctx.ioFileTid then isIoNat = true
+            if ownerTid.u64 == ctx.netListenerTid then isIoNat = true
+            if ownerTid.u64 == ctx.netConnTid then isIoNat = true
+            isCreate: (zast.nameid.create from: rdecl.name) == zast.wkCreate
+            if (symtab.reg.isNativeOf tid: ownerTid) == false when (isSpec) == false when (isIoNat) == false when (isCreate) == false then {
+                ruic: emitUserIterCall :ast :symtab :ctx :call
+                if ruic.length > 0 then return ruic
+                rtq: emitTypeQualCall :ast :symtab :ctx :call
+                if rtq.length > 0 then return rtq
+                if rdecl.fnptrField then {
+                    rfp: emitFnptrFieldCall :ast :symtab :ctx :call
+                    if rfp.length > 0 then return rfp
+                }
+                rim: emitInstanceMethodCall :ast :symtab :ctx :call
+                if rim.length > 0 then return rim
+            }
+        }
+        if rkind.funcDecl then {
+            if rtid > 0 when (symtab.reg.isNativeOf tid: rtid) then {
+                rnf: emitNativeFreeFnCall :ast :symtab :ctx :call
+                if rnf.length > 0 then return rnf
+            } else {
+                rcu: emitCrossUnitFnCall :ast :symtab :ctx :call
+                if rcu.length > 0 then return rcu
+            }
+        }
+        if rkind.armDecl then {
+            rvc: emitVariantCtorCall :ast :symtab :ctx :call
+            if rvc.length > 0 then return rvc
+            ruc: emitUnionCtor :ast :symtab :ctx :call
+            if ruc.length > 0 then return ruc
+        }
+        if rkind.typeDecl then {
+            rxc: emitCrossUnitCtor :ast :symtab :ctx :call
+            if rxc.length > 0 then return rxc
         }
     } case none then null
     mcc: emitMetaCreateCall :ast :symtab :ctx :call
@@ -9305,7 +9397,6 @@ emitCallValue: function {
         return m8
     }
 }
-
 # emitStringMethod -- a String value-context method call. String is a native
 # singleton whose struct + methods emit once under ctx.strC; dispatch by name so
 # the cname is canonical (not a per-shell receiver id). `recv` is the receiver C
