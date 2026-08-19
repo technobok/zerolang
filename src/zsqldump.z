@@ -159,7 +159,7 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS member_const (parent_type_id INTEGER NOT NULL, name_id INTEGER NOT NULL, value TEXT NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS scope (scope_id INTEGER PRIMARY KEY, parent_id INTEGER, kind TEXT NOT NULL, name TEXT NOT NULL, depth INTEGER NOT NULL, unreachable INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS variable (variable_id INTEGER PRIMARY KEY, ztype_id INTEGER, ownership TEXT NOT NULL, is_private_access INTEGER NOT NULL, borrow_origin TEXT, synth_origin TEXT);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS variable (variable_id INTEGER PRIMARY KEY, ztype_id INTEGER, ownership TEXT NOT NULL, is_private_access INTEGER NOT NULL, borrow_origin TEXT, synth_origin TEXT, origin TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS entry (entry_id INTEGER PRIMARY KEY, scope_id INTEGER NOT NULL, position INTEGER NOT NULL, name TEXT NOT NULL, ztype_id INTEGER NOT NULL, is_definition INTEGER NOT NULL, variable_id INTEGER, original_ztype_id INTEGER, is_taken INTEGER NOT NULL, taken_at_line INTEGER, taken_at_col INTEGER, taken_at_file INTEGER);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS narrowed_subtype (entry_id INTEGER NOT NULL, name TEXT NOT NULL, type_id INTEGER, excluded INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS generic_child (parent_id INTEGER NOT NULL, arg_key INTEGER NOT NULL, child_id INTEGER NOT NULL);\n"
@@ -171,7 +171,6 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS tag_accessor (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, tag_type_id INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS post_guard (node_id INTEGER PRIMARY KEY, name TEXT NOT NULL, type_id INTEGER NOT NULL, arm TEXT NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS arg_disposition (node_id INTEGER PRIMARY KEY, disposition INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS variable_origin (variable_id INTEGER PRIMARY KEY, is_param INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS call_generic_binding (call_node INTEGER NOT NULL, param_name INTEGER NOT NULL, type_id INTEGER NOT NULL, PRIMARY KEY (call_node, param_name));\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS binop_operator (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, owner_type_id INTEGER NOT NULL, method_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
     return acc
@@ -232,27 +231,9 @@ paramOwnSql: function {o: optionval ztypes.zparamownership} out String is {
 }
 
 # varOwnSql -- a variable's ownership enum as a SQL string literal.
-varOwnSql: function {o: optionval ztypes.zownership} out String is {
-    match (
-        o
-    ) case some then {
-        ow: o
-        ownStr: (ztypes.zownershipName ow)
-        return (sqlStr s: ownStr.stringview)
-    } case none then {
-        return "'BORROWED'".string
-    }
-}
-
-# boolNumText -- an optional bool as SQL "1"/"0", defaulting to "0".
-boolNumText: function {o: optionval bool} out String is {
-    match (
-        o
-    ) case some then {
-        return (boolNum b: o)
-    } case none then {
-        return "0".string
-    }
+varOwnSql: function {o: ztypes.zownership} out String is {
+    ownStr: (ztypes.zownershipName o)
+    return (sqlStr s: ownStr.stringview)
 }
 
 # originSql -- a borrow/synth origin ("" or absent => NULL), else a SQL string.
@@ -271,16 +252,11 @@ originSql: function {o: Option String} out String is {
 }
 
 # originKindSql -- a variable's origin kind as canon text (param/local), or
-# "NULL" when unstamped (unit-level variables carry no origin stamp).
-originKindSql: function {o: optionval bool} out String is {
-    match (
-        o
-    ) case some then {
-        if o then return "param".string
-        return "local".string
-    } case none then {
-        return "NULL".string
-    }
+# "NULL" for a synthesised variable.
+originKindSql: function {o: ztypes.zvarorigin} out String is {
+    if o == ztypes.zvarorigin.param then return "param".string
+    if o == ztypes.zvarorigin.local then return "local".string
+    return "NULL".string
 }
 
 # argAtomName -- the identifier name of the atom node at `id` (1-based), else
@@ -675,11 +651,6 @@ ZDumper: class {
             rowAd: "INSERT OR IGNORE INTO arg_disposition VALUES (\{ad.key}, \{adInt});\n"
             this.acc.append s: rowAd
         }
-        with voit: typing.variableOrigin.iterateItems do for vo: voit loop {
-            voNum: boolNum b: vo.value
-            rowVo: "INSERT OR IGNORE INTO variable_origin VALUES (\{vo.key}, \{voNum});\n"
-            this.acc.append s: rowVo
-        }
         with cgit: typing.callGenericBinding.iterateItems do for cg: cgit loop {
             rowCg: "INSERT OR IGNORE INTO call_generic_binding VALUES (\{cg.key.call}, \{cg.key.param}, \{cg.value});\n"
             this.acc.append s: rowCg
@@ -792,12 +763,17 @@ ZDumper: class {
             } case none then null
         }
         for vid: seen.iterate loop {
-            ztSql: optIdStr o: (st.typing.variableZtype.get key: vid)
-            ownSql: varOwnSql o: (st.typing.variableOwnership.get key: vid)
-            privNum: boolNumText o: (st.typing.variableIsPrivate.get key: vid)
-            boSql: originSql o: (ownOptStr o: (st.typing.variableBorrowOrigin.get key: vid))
-            soSql: originSql o: (ownOptStr o: (st.typing.variableSynthOrigin.get key: vid))
-            r: "INSERT OR IGNORE INTO variable VALUES (\{vid}, \{ztSql}, \{ownSql}, \{privNum}, \{boSql}, \{soSql});\n"
+            vidT: ztypes.vid.create from: vid
+            if (st.reg.hasVariable id: vidT) == false then continue
+            ztSql: "\{(st.reg.variableTypeOf id: vidT)}"
+            ownSql: varOwnSql o: (st.reg.variableOwnershipOf id: vidT)
+            privNum: boolNum b: (st.reg.variableIsPrivate id: vidT)
+            boSql: originSql o: (st.reg.variableBorrowOriginOf id: vidT)
+            soSql: originSql o: (st.reg.variableSynthOriginOf id: vidT)
+            orSqlLit: "NULL".string
+            vorigin: st.reg.variableOriginOf id: vidT
+            if vorigin != ztypes.zvarorigin.synth then orSqlLit = sqlStr s: (originKindSql o: vorigin).stringview
+            r: "INSERT OR IGNORE INTO variable VALUES (\{vid}, \{ztSql}, \{ownSql}, \{privNum}, \{boSql}, \{soSql}, \{orSqlLit});\n"
             this.acc.append s: r
         }
     }
@@ -1227,14 +1203,16 @@ ZDumper: class {
 
         varRows: (List String)
         for vid: seen.iterate loop {
-            ztId: ztypecheck.optU64Or o: (st.typing.variableZtype.get key: vid) d: 0
-            ztName: canonTypeName reg: st.reg tid: (ztypes.tid.create from: ztId.u64)
+            vidT: ztypes.vid.create from: vid
+            if (st.reg.hasVariable id: vidT) == false then continue
+            vtid: st.reg.variableTypeOf id: vidT
+            ztName: canonTypeName reg: st.reg tid: vtid
             ztSql: sqlStr s: ztName.stringview
-            ownSql: varOwnSql o: (st.typing.variableOwnership.get key: vid)
-            privNum: boolNumText o: (st.typing.variableIsPrivate.get key: vid)
-            boSql: originSql o: (ownOptStr o: (st.typing.variableBorrowOrigin.get key: vid))
-            soSql: originSql o: (ownOptStr o: (st.typing.variableSynthOrigin.get key: vid))
-            orSql: originKindSql o: (st.typing.variableOrigin.get key: vid)
+            ownSql: varOwnSql o: (st.reg.variableOwnershipOf id: vidT)
+            privNum: boolNum b: (st.reg.variableIsPrivate id: vidT)
+            boSql: originSql o: (st.reg.variableBorrowOriginOf id: vidT)
+            soSql: originSql o: (st.reg.variableSynthOriginOf id: vidT)
+            orSql: originKindSql o: (st.reg.variableOriginOf id: vidT)
             vline: "\{ztSql} | \{ownSql} | \{privNum} | \{boSql} | \{soSql} | \{orSql}"
             varRows.append vline
         }

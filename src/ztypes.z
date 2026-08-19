@@ -14,6 +14,7 @@ public: unit {
     :ZType
     :ZTypeRegistry
     :ZVariable
+    :zvarorigin
     :constfail
     :constfailkind
     :noConstFail
@@ -504,13 +505,24 @@ cval: record {
 
 # Per-binding ownership info, attached to a scope entry for named
 # runtime bindings.
+# how a runtime variable came to be: a parameter, a local binding, or a
+# variable the checker synthesised (a hoisted temp, an alias) that is neither
+zvarorigin: variant {
+    synth: null
+    local: null
+    param: null
+} as { tag: u8.tag }
+
+# ZVariable -- one runtime variable: the row variableById holds for its vid.
+# The C identifier is the emitter's business -- a variable is known here by
+# its id alone.
 ZVariable: class {
-    variableId: vid
     ztypeId: tid
     ownership: zownership
     isPrivateAccess: bool
     borrowOrigin: (Option String)
     synthOrigin: (Option String)
+    origin: zvarorigin
 }
 
 # Result of parseNumber: the resolved kind, the value (ival for
@@ -647,6 +659,17 @@ ParamList: class {
 
 # the registry of every type: each ZType keyed by id, plus the name and
 # child indexes the resolver and emitter query.
+# optStringCopy -- an owned copy of an optional string.
+optStringCopy: function {o: (Option String).view} out Option String is {
+    match (
+        o
+    ) case some then {
+        return (Option.some o.copy)
+    } case none then {
+        return (Option.none String)
+    }
+}
+
 # holeType -- the row standing in for an id minted by allocType, which names an
 # expression with no type. typeId 0 marks it: a real row carries its own index,
 # and index 0 is `notype`, which is always registered.
@@ -675,7 +698,6 @@ holeType: function {} out ZType is {
 
 ZTypeRegistry: class {
     nextTypeId: u64
-    nextVariableId: u64
     nextEntryId: u64
     nextConformanceId: u64
     # the shared unregistered id worn by every `break` / `continue` entry
@@ -689,6 +711,8 @@ ZTypeRegistry: class {
     literalIntTid: tid
     literalFloatTid: tid
     typeById: (List ZType)
+    # every runtime variable, by vid (row 0 is the sentinel)
+    variableById: (List ZVariable)
     regMainUnit: String
     regMainUnitId: u64
     # generic-template metadata, keyed by the TEMPLATE's DeclId
@@ -754,16 +778,73 @@ ZTypeRegistry: class {
         return id
     }
 
-    newVariable: function {:this ztypeId: tid ownership: zownership} out ZVariable is {
-        id: vid.create from: this.nextVariableId
-        this.nextVariableId = this.nextVariableId + 1
-        return (ZVariable
-            variableId: id
+    # newVariable -- mint a runtime variable: its row is appended to
+    # variableById and its id returned.
+    newVariable: function {:this ztypeId: tid ownership: zownership} out vid is {
+        id: vid.create from: this.variableById.length
+        this.variableById.append (ZVariable
             :ztypeId
             :ownership
             isPrivateAccess: false
             borrowOrigin: (Option.none String)
-            synthOrigin: (Option.none String))
+            synthOrigin: (Option.none String)
+            origin: zvarorigin.synth)
+        return id
+    }
+
+    hasVariable: function {t: this.view id: vid} out bool is {
+        if id.isZero then return false
+        return id < t.variableById.length
+    }
+
+    variableTypeOf: function {t: this.view id: vid} out tid is {
+        got: t.variableById.get i: id
+        return got.ztypeId
+    }
+
+    variableOwnershipOf: function {t: this.view id: vid} out zownership is {
+        got: t.variableById.get i: id
+        return got.ownership
+    }
+
+    variableIsPrivate: function {t: this.view id: vid} out bool is {
+        got: t.variableById.get i: id
+        return got.isPrivateAccess
+    }
+
+    variableBorrowOriginOf: function {t: this.view id: vid} out Option String is {
+        got: t.variableById.get i: id
+        return (optStringCopy o: got.borrowOrigin)
+    }
+
+    variableSynthOriginOf: function {t: this.view id: vid} out Option String is {
+        got: t.variableById.get i: id
+        return (optStringCopy o: got.synthOrigin)
+    }
+
+    variableOriginOf: function {t: this.view id: vid} out zvarorigin is {
+        got: t.variableById.get i: id
+        return got.origin
+    }
+
+    setVariableBorrowOrigin: function {:this id: vid origin: String.take} is {
+        got: this.variableById.getMut i: id
+        got.borrowOrigin = (Option.some origin)
+    }
+
+    setVariableSynthOrigin: function {:this id: vid origin: String.take} is {
+        got: this.variableById.getMut i: id
+        got.synthOrigin = (Option.some origin)
+    }
+
+    setVariablePrivate: function {:this id: vid} is {
+        got: this.variableById.getMut i: id
+        got.isPrivateAccess = true
+    }
+
+    setVariableOrigin: function {:this id: vid origin: zvarorigin} is {
+        got: this.variableById.getMut i: id
+        got.origin = origin
     }
 
     newEntry: function {:this nameId: zast.nameid ztypeId: tid isDefinition: bool} out ZEntry is {
@@ -1269,15 +1350,13 @@ ZTypeRegistry: class {
 newRegistry: function {} out ZTypeRegistry is {
     r: (ZTypeRegistry
         nextTypeId: 0
-        # id 0 is reserved: an atomVariableId stamp of 0 must mean
-        # "unset" to every consumer (maps cannot distinguish otherwise)
-        nextVariableId: 1
         nextEntryId: 0
         nextConformanceId: 0
         ctlPlaceholderTid: 0
         literalIntTid: tid
         literalFloatTid: tid
         typeById: (List ZType capacity: 512)
+        variableById: (List ZVariable)
         regMainUnit: "".string
         regMainUnitId: 0
         genericParams: (IdMapR declid value: ParamList)
@@ -1291,6 +1370,8 @@ newRegistry: function {} out ZTypeRegistry is {
     # else, so they are native in the plainest sense -- compiler-provided, with
     # no declaration a user program could collide with.
     r.newType name: "notype" typetype: ztypetype.nullType
+    # variable row 0 is the sentinel: an atomVariableId stamp of 0 means "unset"
+    r.newVariable ztypeId: tid ownership: zownership.owned
     r.literalIntTid = r.newType name: "literal_int" typetype: ztypetype.recordType
     r.setValtype typeId: r.literalIntTid value: true
     r.setNative typeId: r.literalIntTid value: true

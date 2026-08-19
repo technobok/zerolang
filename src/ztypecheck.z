@@ -320,14 +320,8 @@ addError: function {
 # isBorrowedVar -- true when the variable id is bound BORROWED (a borrowed
 # parameter or a genuine borrowed local).
 isBorrowedVar: function {st: zenv.ZSymbolTable.view vid: ztypes.vid} out bool is {
-    ow: st.typing.variableOwnership.get key: vid
-    isB: false
-    match (
-        ow
-    ) case some then {
-        if ow == ztypes.zownership.borrowed then isB = true
-    } case none then null
-    return isB
+    if (st.reg.hasVariable id: vid) == false then return false
+    return (st.reg.variableOwnershipOf id: vid) == ztypes.zownership.borrowed
 }
 
 # isNumericTid -- a concrete integer/float type id (literal-coercion target).
@@ -17687,14 +17681,7 @@ baseIsPrivateCapable: function {
         match (
             vo
         ) case some then {
-            po: st.typing.variableIsPrivate.get key: vo
-            match (
-                po
-            ) case some then {
-                return po
-            } case none then {
-                return false
-            }
+            return (st.reg.variableIsPrivate id: vo)
         } case none then {
             return false
         }
@@ -20054,12 +20041,10 @@ checkAssignment: function {
         if bsrc.length > 0 when (typeIsReftype :st tid: vt) then {
             if (pboX) == false then own = ztypes.zownership.borrowed
         }
-        v: st.reg.newVariable ztypeId: vt ownership: own
-        vid: v.variableId
+        vid: st.reg.newVariable ztypeId: vt ownership: own
         if own == ztypes.zownership.borrowed then {
             r0: bsrc.get i: 0
-            bo: r0.copy
-            v.borrowOrigin = (Option.some bo)
+            st.reg.setVariableBorrowOrigin id: vid origin: r0.copy
         }
         # An `out T.view` result makes its binding readonly because the binding
         # IS the reference it handed back. A value merely DERIVED from one --
@@ -20082,10 +20067,10 @@ checkAssignment: function {
                 msg: dlm
             )
         }
-        st.defineVar nameId: asgn.name var: v
+        st.defineVar nameId: asgn.name :vid
         vid2: vid
         st.typing.defVariableId.set key: asgn.nodeid.u64 value: vid2
-        st.typing.variableOrigin.set key: vid2 value: false
+        st.reg.setVariableOrigin id: vid2 origin: ztypes.zvarorigin.local
         setk: vt
         stampGate :st nid: asgn.nodeid.u64 tid: setk
         if roRef then {
@@ -20672,7 +20657,7 @@ checkWith: function {
     # of it are not each an unknown reference
     if vt.isZero then {
         vh: st.reg.newVariable ztypeId: ztypes.tid ownership: ztypes.zownership.owned
-        st.defineVar nameId: withnode.name var: vh
+        st.defineVar nameId: withnode.name vid: vh
     }
     if vt > 0 then {
         own: withValueOwnership :ast :st v: (ast.nodes.get i: withnode.value.u64)
@@ -20690,17 +20675,15 @@ checkWith: function {
             # or a borrow-marked return) makes the with-binding borrowed.
             own = ztypes.zownership.borrowed
         }
-        v: st.reg.newVariable ztypeId: vt ownership: own
+        vid: st.reg.newVariable ztypeId: vt ownership: own
         # the borrow origin, as a plain binding records it: what this alias is
         # a reference INTO. A for-loop over an iterator alias reads it back to
         # learn how strongly the alias pins the container it walks.
         if btgt.length > 0 then {
             w0: btgt.get i: 0
-            wbo: w0.copy
-            v.borrowOrigin = (Option.some wbo)
+            st.reg.setVariableBorrowOrigin id: vid origin: w0.copy
         }
-        vid: v.variableId
-        st.defineVar nameId: withnode.name var: v
+        st.defineVar nameId: withnode.name :vid
         vid2: vid
         st.typing.defVariableId.set key: withnode.nodeid.u64 value: vid2
         if (typeIsReftype :st tid: vt) then {
@@ -21110,14 +21093,13 @@ checkFor: function {
                         srcName: atomName :ast n: (ast.nodes.get i: cond.operation.u64)
                         bo: "<iterator>".string
                         if srcName.length > 0 then bo = srcName.copy
-                        v: (st.reg.newVariable
+                        vid: (st.reg.newVariable
                             ztypeId: (ztypes.tid.create from: elem.u64)
                             ownership: ztypes.zownership.borrowed
                         )
-                        v.borrowOrigin = (Option.some bo)
-                        vid: v.variableId
+                        st.reg.setVariableBorrowOrigin id: vid origin: bo
                         nmId: zast.poolSet pool: ast.names text: nm.stringview
-                    st.defineVar nameId: nmId var: v
+                    st.defineVar nameId: nmId :vid
                         condNid: nodeId n: (ast.nodes.get i: cond.operation.u64)
                         st.typing.defVariableId.set key: condNid.u64 value: vid
                         # `for x: xs.iterate` has no iterator binding to carry
@@ -22548,7 +22530,7 @@ iterElementIsReadonly: function {
     # lock on st for its scope, and the lock queries below want st exclusively.
     ocn: String
     {
-        oro: st.typing.variableBorrowOrigin.get key: ivo
+        oro: st.reg.variableBorrowOriginOf id: ivo
         match (
             oro
         ) case some then {
@@ -22874,16 +22856,14 @@ hoistArg: function {ast: Ast
         :st
         tid: (ztypes.tid.create from: argType.u64)
     ) then hown = ztypes.zownership.borrowed
-    v: st.reg.newVariable ztypeId: argType ownership: hown
-    v.synthOrigin = (Option.some "anf".string)
+    vid: st.reg.newVariable ztypeId: argType ownership: hown
+    st.reg.setVariableSynthOrigin id: vid origin: "anf".string
     if hown == ztypes.zownership.borrowed then {
         hr0: hbsrc.get i: 0
-        hbo: hr0.copy
-        v.borrowOrigin = (Option.some hbo)
+        st.reg.setVariableBorrowOrigin id: vid origin: hr0.copy
     }
-    vid: v.variableId
     tnId: zast.poolSet pool: ast.names text: tname.stringview
-    st.defineVar nameId: tnId var: v
+    st.defineVar nameId: tnId :vid
     # the hoisted temp is the user-written hoist made explicit: it borrows
     # its source path for the call scope (SHARED prefixes, leaf kind from
     # the side channel), so aliasing between arguments -- or with a live
@@ -26870,7 +26850,7 @@ checkStmtInner: function {
         # is not a second unknown reference
         if (st.frameBindsHere nameId: inner.name) == false then {
             vh: st.reg.newVariable ztypeId: ztypes.tid ownership: ztypes.zownership.owned
-            st.defineVar nameId: inner.name var: vh
+            st.defineVar nameId: inner.name vid: vh
         }
         return false
     } case reassignment then {
@@ -27706,14 +27686,16 @@ checkFunctionBody: function {
                         if pown == ztypes.zparamownership.viewMode then isRoP = true
                         if pown == ztypes.zparamownership.holdMode then isRoP = true
                     } case none then null
-                    v: st.reg.newVariable ztypeId: (ztypes.tid.create from: ptid.u64) ownership: own
+                    vid2: (st.reg.newVariable
+                        ztypeId: (ztypes.tid.create from: ptid.u64)
+                        ownership: own
+                    )
                     if (typeExprHasPrivate
                         :ast
                         n: (ast.nodes.get i: pm.operation.u64)
-                    ) then v.isPrivateAccess = true
-                    vid2: v.variableId
+                    ) then st.reg.setVariablePrivate id: vid2
                     pnId: zast.poolSet pool: ast.names text: pname.stringview
-        st.defineVar nameId: pnId var: v
+                    st.defineVar nameId: pnId vid: vid2
                     if isRoP then {
                         # A readonly parameter -- `view` (not owned) or `hold`
                         # (owned) -- is readonly for the whole body: it holds a
@@ -27753,7 +27735,7 @@ checkFunctionBody: function {
                         }
                     }
                     st.typing.defVariableId.set key: pnid.u64 value: vid2
-                    st.typing.variableOrigin.set key: vid2 value: true
+                    st.reg.setVariableOrigin id: vid2 origin: ztypes.zvarorigin.param
                 } else null
             }
             # Synth rows carry the unit member's dump label: a method's nodes
