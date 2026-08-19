@@ -1095,8 +1095,8 @@ indexUnitBody: function {
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitopId
     {
-        pubDeclId0: ztypes.declid
-        pubOpId0: u32
+        publicDeclId: ztypes.declid
+        publicOpId: u32
         with bit: bodyIds.iterate do for bmId: bit loop {
             bm: ast.nodes.get i: bmId.u64
             if bm.namedoperation then {
@@ -1109,18 +1109,18 @@ indexUnitBody: function {
                     opNodeId: bm.operation
                 )
                 if (zast.unitOpKindIs :ast opId: bm.operation k: zast.unitkind.publicNs) then {
-                    pubDeclId0 = ddid0
-                    pubOpId0 = bm.operation
+                    publicDeclId = ddid0
+                    publicOpId = bm.operation
                 }
             }
         }
-        if (pubDeclId0.isZero) == false then {
+        if (publicDeclId.isZero) == false then {
             (indexDeclPublicEntries
                 :ty
                 :ast
                 ownerDeclId: unitDeclId
-                pubDeclId: pubDeclId0
-                pubOpId: pubOpId0
+                pubDeclId: publicDeclId
+                pubOpId: publicOpId
             )
         }
     }
@@ -1398,8 +1398,8 @@ indexDeclObjInner: function {
                 }
             }
         }
-        pubDeclId0: ztypes.declid
-        pubOpId0: u32
+        publicDeclId: ztypes.declid
+        publicOpId: u32
         with ait: ob.asItems.iterate do for aId: ait loop {
             an: ast.nodes.get i: aId.u64
             if an.namedoperation then {
@@ -1407,13 +1407,13 @@ indexDeclObjInner: function {
                     # the type's exported-namespace block: a publicNs Decl whose
                     # edges (public name -> internal member Decl) are filled after
                     # all members are indexed. Mirrors the unit `public:` block.
-                    pubDeclId0 = (ty.declNew
+                    publicDeclId = (ty.declNew
                         name: an.name
                         parent: declId
                         kind: ztyping.declkind.publicNs
                         node: an.nodeid
                     )
-                    pubOpId0 = an.operation
+                    publicOpId = an.operation
                 } else {
                     (indexDeclAsMember
                         :ty
@@ -1426,13 +1426,13 @@ indexDeclObjInner: function {
                 }
             }
         }
-        if (pubDeclId0.isZero) == false then {
+        if (publicDeclId.isZero) == false then {
             (indexDeclPublicEntries
                 :ty
                 :ast
                 ownerDeclId: declId
-                pubDeclId: pubDeclId0
-                pubOpId: pubOpId0
+                pubDeclId: publicDeclId
+                pubOpId: publicOpId
             )
         }
     } else null
@@ -8000,17 +8000,17 @@ resolveClass: function {
                 # (take / hold) is an ordinary field on all three counts --
                 # `hold` freezes the contents, not the slot.
                 lockField: false
-                flock0: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
+                fieldLock: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
                 match (
-                    flock0
+                    fieldLock
                 ) case some then {
                     # This test is INVERTED: anything not named here becomes a
                     # lock field, so a new owned mode must be listed or it is
                     # silently treated as non-owned.
                     fOwned: false
-                    if flock0 == ztypes.zparamownership.takeMode then fOwned = true
-                    if flock0 == ztypes.zparamownership.holdMode then fOwned = true
-                    if flock0 == ztypes.zparamownership.takexMode then fOwned = true
+                    if fieldLock == ztypes.zparamownership.takeMode then fOwned = true
+                    if fieldLock == ztypes.zparamownership.holdMode then fOwned = true
+                    if fieldLock == ztypes.zparamownership.takexMode then fOwned = true
                     if fOwned == false then lockField = true
                 } case none then null
                 (forceMemberOf
@@ -8048,13 +8048,13 @@ resolveClass: function {
                         name: fname.stringview
                     )
                     match (
-                        flock0
+                        fieldLock
                     ) case some then {
                         (ty.setChildOwnership
                             pool: ast.names
                             parentTypeId: (ztypes.tid.create from: cid.u64)
                             name: fname.stringview
-                            ownership: flock0
+                            ownership: fieldLock
                         )
                     } case none then null
                     # a sibling-member ref default: the construction fill
@@ -8117,13 +8117,13 @@ resolveClass: function {
                             )
                         }
                         match (
-                            flock0
+                            fieldLock
                         ) case some then {
                             (ty.setChildOwnership
                                 pool: ast.names
                                 parentTypeId: (ztypes.tid.create from: cid.u64)
                                 name: fname.stringview
-                                ownership: flock0
+                                ownership: fieldLock
                             )
                         } case none then null
                         (recordTyperef
@@ -9263,16 +9263,16 @@ resolveDef: function {
     # a definition resolves in the frame it is written in, whatever path
     # asked for it. A definition the name index cannot place keeps the
     # caller's frame (a nested unit's member reached from its own unit walk).
-    rdecl0: declOfUnitDef :ty :ast :unitDecl name: defName
+    resolvedDecl: declOfUnitDef :ty :ast :unitDecl name: defName
     # every resolver funnels through here, so this is where a unit's toolchain
     # requirement is owed: before its first definition resolves.
     {
-        ehd: rdecl0
+        ehd: resolvedDecl
         if ehd.isZero then ehd = ty.curFrame
         ensureUnitRequire :ty :reg :ast declId: ehd
     }
     prevFrame: ty.curFrame
-    if (rdecl0.isZero) == false then ty.curFrame = declParentIdOf :ty declId: rdecl0
+    if (resolvedDecl.isZero) == false then ty.curFrame = declParentIdOf :ty declId: resolvedDecl
     resolveDefIn :ty :reg :ast :unitDecl :defName :defn
     ty.curFrame = prevFrame
 }
@@ -9285,7 +9285,7 @@ resolveDefIn: function {
     defName: StringView
     defn: Node
 } is {
-    rdecl0: declOfUnitDef :ty :ast :unitDecl name: defName
+    resolvedDecl: declOfUnitDef :ty :ast :unitDecl name: defName
     enterUnitOnce :ty :ast :unitDecl
     # a definition's BODY reaches names its signature does not: a type
     # constructed, or a sibling function called, only inside it must be demanded
@@ -9295,11 +9295,11 @@ resolveDefIn: function {
     # scan only queues declarations that are not yet pending, resolving or
     # resolved, so a repeat visit costs a walk and queues nothing.
     scanDefCalls :ty :ast :reg op: defn
-    ty.declSetResolving declId: rdecl0 mark: true
+    ty.declSetResolving declId: resolvedDecl mark: true
     # A containment edge is ONE hop: this def's own resolution starts a
     # fresh context (its field/arm legs re-arm the flag), so an outer field
     # bracket never taints nested param/return resolution.
-    prevCE0: ty.inContainmentEdge
+    prevContainmentEdge: ty.inContainmentEdge
     ty.inContainmentEdge = false
     match (
         defn
@@ -9482,7 +9482,7 @@ resolveDefIn: function {
     } else null
     # Unit -> def childOf edges are built at mint (declareCanonicalType) for real
     # defs and on demand (resolvedByIds' alias-follow) for aliases; no tail pass.
-    ty.inContainmentEdge = prevCE0
+    ty.inContainmentEdge = prevContainmentEdge
     rdecl1: declOfUnitDef :ty :ast :unitDecl name: defName
     ty.declSetResolving declId: rdecl1 mark: false
     if (rdecl1.isZero) == false then {
@@ -14102,13 +14102,13 @@ cloneMethodInto: function {
     # return marker, and funcReturnNode backs methodReturnOf for concrete
     # (non-generic) returns.
     tpn0id: u32
-    isNat0: false
+    isNativeFn: false
     if tplFnId < reg.typeById.length then {
         tz0: reg.typeById.get i: tplFnId
-        if tz0.isNative then isNat0 = true
+        if tz0.isNative then isNativeFn = true
         tpn0id = tz0.thisParamNameId
     }
-    if isNat0 then reg.setNative typeId: fid5 value: true
+    if isNativeFn then reg.setNative typeId: fid5 value: true
     if tpn0id > 0 then (reg.setThisParamName
         typeId: fid5
         nameId: (zast.nameid.create from: tpn0id.u32)
@@ -14163,7 +14163,7 @@ cloneMethodInto: function {
             }
         }
     }
-    tplNm5: regTypeNameOf :reg tid: (ztypes.tid.create from: tplClassId.u64)
+    templateName: regTypeNameOf :reg tid: (ztypes.tid.create from: tplClassId.u64)
     pi5: u64
     pn5: cN5.length
     for pi5 < pn5 loop {
@@ -14177,7 +14177,7 @@ cloneMethodInto: function {
             # `this`/`type`-typed params carry fresh shells named after the
             # class; shell-name identity marks the self type.
             ptn5: regTypeNameOf :reg tid: (ztypes.tid.create from: ptid5.u64)
-            if ptn5.stringview == tplNm5.stringview then tgt5 = specId
+            if ptn5.stringview == templateName.stringview then tgt5 = specId
         }
         if tgt5 == ptid5 then {
             ido5: idSubs.get key: ptid5
@@ -14216,7 +14216,7 @@ cloneMethodInto: function {
         if rto5 == tplClassId then rt5 = specId
         if rt5 == rto5 then {
             rtn5: regTypeNameOf :reg tid: (ztypes.tid.create from: rto5.u64)
-            if rtn5.stringview == tplNm5.stringview then rt5 = specId
+            if rtn5.stringview == templateName.stringview then rt5 = specId
         }
         rdo5: idSubs.get key: rto5
         match (
@@ -14472,7 +14472,7 @@ mintMonoIn: function {
             mmq = mmq + 1
         }
     }
-    listTplT5: builtinTidT :ast :ty :reg base: "ListRef"
+    listRefTid: builtinTidT :ast :ty :reg base: "ListRef"
     monoNeedsDtor: false
     ci: u64
     cn3: cNames.length
@@ -14507,16 +14507,16 @@ mintMonoIn: function {
             # call gate (name + classType + empty body); comparing by name
             # avoids RESOLVING Box here, which would mint its tid earlier
             # than before and renumber every later type id.
-            isBxT5: false
+            isBoxed: false
             if bxg5 > 0 then {
                 bxn5: regTypeNameOf :reg tid: (ztypes.tid.create from: bxg5.u64)
                 if bxn5.stringview == "Box" then {
                     if (reg.typetypeOf typeId: bxg5) == ztypes.ztypetype.classType then {
-                        if (ty.declMemberCount ownerTid: bxg5) == 0 then isBxT5 = true
+                        if (ty.declMemberCount ownerTid: bxg5) == 0 then isBoxed = true
                     }
                 }
             }
-            if isBxT5 then {
+            if isBoxed then {
                 if (reg.genericArgCount specId: (ztypes.tid.create from: target.u64)) == 1 then {
                     target = (reg.genericArgAt
                         specId: (ztypes.tid.create from: target.u64)
@@ -14529,11 +14529,11 @@ mintMonoIn: function {
         # fallback must not swallow them (a method child's dotted name never
         # resolves, so the lookup-miss leg would replace the method with the
         # element type).
-        chGen5: false
+        childIsGeneric: false
         if (reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) == ztypes.ztypetype.functionType then {
-            chGen5 = reg.isGenericOf tid: (ztypes.tid.create from: chId.u64)
+            childIsGeneric = reg.isGenericOf tid: (ztypes.tid.create from: chId.u64)
         }
-        if fallbackArg > 0 when (ctn.stringview == "null") == false when target == chId when (chGen5) == false then {
+        if fallbackArg > 0 when (ctn.stringview == "null") == false when target == chId when (childIsGeneric) == false then {
             cko: (walkLookupTyperef
                 :ast
                 :ty
@@ -14548,39 +14548,39 @@ mintMonoIn: function {
             }
         }
         deep5: false
-        if target == chId when chGen5 then {
-            isSynth5: false
-            if chName.stringview == "create" then isSynth5 = true
-            if chName.stringview == "borrow" then isSynth5 = true
-            if chName.stringview == "==" then isSynth5 = true
-            if chName.stringview == "!=" then isSynth5 = true
-            if isSynth5 == false then {
+        if target == chId when childIsGeneric then {
+            isSynth: false
+            if chName.stringview == "create" then isSynth = true
+            if chName.stringview == "borrow" then isSynth = true
+            if chName.stringview == "==" then isSynth = true
+            if chName.stringview == "!=" then isSynth = true
+            if isSynth == false then {
                 skip5: false
                 # List's contains/sort exist only for eligible element
                 # kinds (use-site parity with the materializer gate).
-                if templateId == listTplT5 when listTplT5 > 0 then {
+                if templateId == listRefTid when listRefTid > 0 then {
                     csM5: false
                     if chName.stringview == "contains" then csM5 = true
                     if chName.stringview == "sort" then csM5 = true
                     if csM5 then {
-                        elemT5: optU64Or o: (subs.get key: ("of".string)) d: 0
-                        if elemT5 == 0 then elemT5 = fallbackArg
+                        elemTid: optU64Or o: (subs.get key: ("of".string)) d: 0
+                        if elemTid == 0 then elemTid = fallbackArg
                         ok5: false
-                        if elemT5 > 0 then {
+                        if elemTid > 0 then {
                             csel5: false
                             if chName.stringview == "contains" then {
                                 csel5 = (isContainsEligibleTid
                                     :ast
                                     :ty
                                     :reg
-                                    tid: (ztypes.tid.create from: elemT5.u64)
+                                    tid: (ztypes.tid.create from: elemTid.u64)
                                 )
                             } else {
                                 csel5 = (isSortEligibleTid
                                     :ast
                                     :ty
                                     :reg
-                                    tid: (ztypes.tid.create from: elemT5.u64)
+                                    tid: (ztypes.tid.create from: elemTid.u64)
                                 )
                             }
                             if csel5 then ok5 = true
@@ -15541,12 +15541,12 @@ getOrMintSpec: function {
         # invocations, which carry the elem/val ids this path cannot derive
         # elem = the first TYPE key (a sized record's leading value key is
         # not an element); val = the second key only when it is a type
-        elemC3: u64
+        elemTid: u64
         ei3: u64
         en3: keys8.length
         for ei3 < en3 loop {
-            if elemC3 == 0 then {
-                if (keyIsVal8.get i: ei3) == false then elemC3 = keys8.get i: ei3
+            if elemTid == 0 then {
+                if (keyIsVal8.get i: ei3) == false then elemTid = keys8.get i: ei3
             }
             ei3 = ei3 + 1
         }
@@ -15556,14 +15556,14 @@ getOrMintSpec: function {
         }
         # MapItemIter's iterator element is the derived MapEntry spec (its
         # call's OptionView some-arm), not a trie key
-        skipC3: false
-        itemIterC3: false
-        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIter") then itemIterC3 = true
-        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIterRV") then itemIterC3 = true
-        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIterVR") then itemIterC3 = true
-        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIterVV") then itemIterC3 = true
-        if itemIterC3 then {
-            skipC3 = true
+        skipChild: false
+        itemIsIter: false
+        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIter") then itemIsIter = true
+        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIterRV") then itemIsIter = true
+        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIterVR") then itemIsIter = true
+        if templateId == (builtinTidT :ast :ty :reg base: "MapItemIterVV") then itemIsIter = true
+        if itemIsIter then {
+            skipChild = true
             (forceMemberOf :ty :reg :ast parentTypeId: mid8 nameId: zast.wkCall)
             micoC4: ty.declChildOfId parentTypeId: mid8 nameId: zast.wkCall
             match (
@@ -15576,20 +15576,20 @@ getOrMintSpec: function {
                     match (
                         mieoC4
                     ) case some then {
-                        elemC3 = mieoC4
-                        skipC3 = false
+                        elemTid = mieoC4
+                        skipChild = false
                     } case none then null
                 }
             } case none then null
         }
-        if skipC3 == false then {
+        if skipChild == false then {
             (mintCollectionChildren
                 :ast
                 :ty
                 :reg
                 monoId: (ztypes.tid.create from: mid8.u64)
                 :templateId
-                elemArg: elemC3
+                elemArg: elemTid
                 valArg: (ztypes.tid.create from: valC3.u64)
             )
         }
@@ -15929,7 +15929,7 @@ inferGenericConstruction: function {
     # Stage the template's children, then keep the ones whose TYPE NAME is a
     # registered generic param (field shells carry the param name, not a
     # GENERIC_PARAM typetype).
-    cNames3: (List String)
+    childNames: (List String)
     cIds3: (ListVal u64)
     {
         igNms: (ListVal u64)
@@ -15940,7 +15940,7 @@ inferGenericConstruction: function {
         for igi < ign loop {
             fnB: ast.names.texts.get i: ((igNms.get i: igi)).u64
             fn1: fnB.copy
-            cNames3.append fn1
+            childNames.append fn1
             cid1: igTds.get i: igi
             cIds3.append cid1
             igi = igi + 1
@@ -15954,7 +15954,7 @@ inferGenericConstruction: function {
         cid3: cIds3.get i: ci3
         pnm3: typeNameOf :st tid: (ztypes.tid.create from: cid3.u64)
         if (st.reg.isGenericParamOf tdecl: tk name: pnm3.stringview) then {
-            nm3: cNames3.get i: ci3
+            nm3: childNames.get i: ci3
             nv3: nm3.stringview
             n3: nv3.string
             fNames.append n3
@@ -16177,7 +16177,7 @@ genericTypeConstruction: function {
     tk0: declOfTypeId reg: st.reg tid: tplId
     sfx: String
     subs: (MapRV String value: u64)
-    valSubs2: (MapRV String value: u64)
+    valueSubs: (MapRV String value: u64)
     numParamNames: (List String)
     numParamNodes: (ListVal u32)
     firstA: u64
@@ -16320,7 +16320,7 @@ genericTypeConstruction: function {
                     ) case some then {
                         vgk0: pk0.copy
                         vgv0: pdv0
-                        valSubs2.set key: vgk0 value: vgv0
+                        valueSubs.set key: vgk0 value: vgv0
                     } case none then null
                 }
             } else {
@@ -16368,7 +16368,7 @@ genericTypeConstruction: function {
         name: mname.stringview
         templateId: (ztypes.tid.create from: tplId.u64)
         :subs
-        valSubs: valSubs2
+        valSubs: valueSubs
         fallbackArg: firstA
     )
     if mid.isZero then return (ztypes.tid.create from: 0)
@@ -16385,10 +16385,10 @@ genericTypeConstruction: function {
         )
         npi = npi + 1
     }
-    isSized2: false
-    if tname.stringview == "str" then isSized2 = true
-    if tname.stringview == "array" then isSized2 = true
-    if isSized2 then {
+    isSized: false
+    if tname.stringview == "str" then isSized = true
+    if tname.stringview == "array" then isSized = true
+    if isSized then {
         (mintCollectionChildren
             :ast
             ty: st.typing
@@ -18387,20 +18387,20 @@ checkDotted: function {
     # exposes the discriminator on instances as a read-only numeric under
     # the declared name; without one, instance reads of `tag` are rejected.
     btt5: st.reg.typetypeOf typeId: bt
-    isSum5: false
-    if btt5 == ztypes.ztypetype.variantType then isSum5 = true
-    if btt5 == ztypes.ztypetype.unionType then isSum5 = true
-    if isSum5 when (taggedRecvIsValue :ast :st n: (ast.nodes.get i: dp.parent.u64)) then {
-        taHit5: false
+    isSum: false
+    if btt5 == ztypes.ztypetype.variantType then isSum = true
+    if btt5 == ztypes.ztypetype.unionType then isSum = true
+    if isSum when (taggedRecvIsValue :ast :st n: (ast.nodes.get i: dp.parent.u64)) then {
+        tagHit: false
         {
             tan5: st.typing.tagAccessorName.get key: bt
             match (
                 tan5
             ) case some then {
-                if tan5.stringview == cn.stringview then taHit5 = true
+                if tan5.stringview == cn.stringview then tagHit = true
             } case none then null
         }
-        if taHit5 then {
+        if tagHit then {
             if st.typing.inAssignTarget then {
                 mro5: "'\{cn}' is read-only — the tag accessor cannot be assigned"
                 en5: String
@@ -18506,15 +18506,15 @@ checkDotted: function {
         # PREDICATE: it types bool (true when the value currently holds
         # that arm) and stamps dpArmPredicate for the tag-compare emission.
         btt0: st.reg.typetypeOf typeId: bt
-        isTagged0: false
-        if btt0 == ztypes.ztypetype.variantType then isTagged0 = true
-        if btt0 == ztypes.ztypetype.unionType then isTagged0 = true
-        if isTagged0 then {
+        isTagged: false
+        if btt0 == ztypes.ztypetype.variantType then isTagged = true
+        if btt0 == ztypes.ztypetype.unionType then isTagged = true
+        if isTagged then {
             ctt0: st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)
-            isMember0: true
-            if ctt0 == ztypes.ztypetype.functionType then isMember0 = false
-            if ctt0 == ztypes.ztypetype.dataType then isMember0 = false
-            if isMember0 then {
+            isMember: true
+            if ctt0 == ztypes.ztypetype.functionType then isMember = false
+            if ctt0 == ztypes.ztypetype.dataType then isMember = false
+            if isMember then {
                 isVal: taggedRecvIsValue :ast :st n: (ast.nodes.get i: dp.parent.u64)
                 if (isVal) == false then {
                     # arm constructors are members: from OUTSIDE the type an
@@ -18552,8 +18552,8 @@ checkDotted: function {
                     dpk0: dp.nodeid.u64
                     dpv0: bt
                     st.typing.dpTaggedParent.set key: dpk0 value: dpv0
-                    setdp0: bt
-                    stampGate :st nid: dp.nodeid.u64 tid: setdp0
+                    stampedTid: bt
+                    stampGate :st nid: dp.nodeid.u64 tid: stampedTid
                     return bt
                 }
                 isArm: true
@@ -20533,25 +20533,28 @@ checkDo: function {
     # A REFTYPE block value wraps in Option instead (boxed payload).
     if result > 0 when (blockHasBreak :ast n: (ast.nodes.get i: donode.statement.u64)) then {
         vtn0: typeNameOf :st tid: (ztypes.tid.create from: result.u64)
-        payId0: result
+        payloadTid: result
         if vtn0.length > 0 then {
-            wrapB0: "optionval"
-            if (typeIsReftype :st tid: (ztypes.tid.create from: payId0.u64)) then wrapB0 = "Option"
+            wrapBase: "optionval"
+            if (typeIsReftype
+                :st
+                tid: (ztypes.tid.create from: payloadTid.u64)
+            ) then wrapBase = "Option"
             ovo0: (walkLookupTyperef
                 :ast
                 ty: st.typing
                 reg: st.reg
                 :unitDecl
-                base: wrapB0
+                base: wrapBase
             )
             match (
                 ovo0
             ) case some then {
-                osubs0: (MapRV String value: u64)
+                optionSubs: (MapRV String value: u64)
                 ok0: "t".string
-                ov0: payId0
-                osubs0.set key: ok0 value: ov0
-                omn0: "\{wrapB0}_\{vtn0}"
+                ov0: payloadTid
+                optionSubs.set key: ok0 value: ov0
+                omn0: "\{wrapBase}_\{vtn0}"
                 vsF: (MapRV String value: u64)
                 omid0: (getOrMintSpec
                     :ast
@@ -20560,7 +20563,7 @@ checkDo: function {
                     :unitDecl
                     name: omn0.stringview
                     templateId: (ztypes.tid.create from: ovo0.u64)
-                    subs: osubs0
+                    subs: optionSubs
                     valSubs: vsF
                     fallbackArg: 0
                 )
@@ -21177,8 +21180,8 @@ checkIf: function {
             # stamp null so consuming it as a value is rejected.
             if nullId > 0 then {
                 result = ztypes.tid.create from: nullId.u64
-                setnv0: result
-                stampGate :st nid: ifnode.nodeid.u64 tid: setnv0
+                stampedTid: result
+                stampGate :st nid: ifnode.nodeid.u64 tid: stampedTid
             }
         }
         if hasElse when (anyEmpty) == false then {
@@ -24653,8 +24656,11 @@ checkCall: function {
                     # tagged subtype constructs (the union/variant branch of
                     # _dispatch_call_construction). Generic templates infer
                     # their mono separately.
-                    calid2: nodeId n: (ast.nodes.get i: call.callable.u64)
-                    dtp: optTidOr o: (st.typing.dpTaggedParent.get key: calid2.u64) d: ztypes.tid
+                    calleeNodeId: nodeId n: (ast.nodes.get i: call.callable.u64)
+                    dtp: (optTidOr
+                        o: (st.typing.dpTaggedParent.get key: calleeNodeId.u64)
+                        d: ztypes.tid
+                    )
                     if dtp > 0 then {
                         isGenT: false
                         {
@@ -24696,9 +24702,9 @@ checkCall: function {
                                 isNullPay: false
                                 if pn0.stringview == "null" then isNullPay = true
                                 subT: ztypes.tid
-                                fiter2: call.arguments.iterate
+                                argIter: call.arguments.iterate
                                 argFound: false
-                                for fargId: fiter2 loop {
+                                for fargId: argIter loop {
                                     farg: ast.nodes.get i: fargId.u64
                                     match (
                                         farg
@@ -24772,7 +24778,7 @@ checkCall: function {
                                 if subT > 0 then {
                                     tn2: typeNameOf :st tid: (ztypes.tid.create from: dtp.u64)
                                     an2: typeNameOf :st tid: (ztypes.tid.create from: subT.u64)
-                                    mname2: "\{tn2}_\{an2}"
+                                    monoName: "\{tn2}_\{an2}"
                                     subs2: (MapRV String value: u64)
                                     if (isNullPay) == false then {
                                         pk2: pn0.copy
@@ -24785,7 +24791,7 @@ checkCall: function {
                                         ty: st.typing
                                         reg: st.reg
                                         :unitDecl
-                                        name: mname2.stringview
+                                        name: monoName.stringview
                                         templateId: (ztypes.tid.create from: dtp.u64)
                                         subs: subs2
                                         valSubs: vsH
@@ -24803,7 +24809,7 @@ checkCall: function {
                                 }
                             }
                         } else {
-                            ucArm2: (dottedChildName
+                            unionCtorArm: (dottedChildName
                                 :ast
                                 n: (ast.nodes.get i: call.callable.u64)
                             )
@@ -24862,7 +24868,7 @@ checkCall: function {
                                     uparmo: (st.typing.declChildOf
                                         pool: ast.names
                                         parentTypeId: (ztypes.tid.create from: dtp.u64)
-                                        name: ucArm2.stringview
+                                        name: unionCtorArm.stringview
                                     )
                                     uparmid: optU64Or o: uparmo d: 0
                                     # a literal payload coerces at the arm's
@@ -24914,7 +24920,7 @@ checkCall: function {
                                                     :st
                                                     tid: (ztypes.tid.create from: dtp.u64)
                                                 )
-                                                upm: "arm '\{ucArm2}' payload type mismatch: expected \{upnm}, got \{apn}"
+                                                upm: "arm '\{unionCtorArm}' payload type mismatch: expected \{upnm}, got \{apn}"
                                                 # Name the rule for the one typedef
                                                 # shape that reaches here. The
                                                 # other direction (a typedef where
@@ -25457,9 +25463,9 @@ checkCall: function {
                     stampGate :st nid: call.nodeid.u64 tid: setgc
                 }
                 if cn.stringview == "panic" then {
-                    calid2: nodeId n: (ast.nodes.get i: call.callable.u64)
+                    calleeNodeId: nodeId n: (ast.nodes.get i: call.callable.u64)
                     setpk: funcId
-                    stampGate :st nid: calid2.u64 tid: setpk
+                    stampGate :st nid: calleeNodeId.u64 tid: setpk
                     st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.panicCall
                 }
                 if cn.stringview == "error" then {
@@ -25669,8 +25675,8 @@ checkGenericCall: function {
     if mname.length == 0 then return (ztypes.tid.create from: 0)
     allOk: true
     gtk4: declOfTypeId reg: st.reg tid: funcId
-    giter2: gparams.iterate
-    for gp3: giter2 loop {
+    genericParamIter: gparams.iterate
+    for gp3: genericParamIter loop {
         gv: gp3.stringview
         gk: gv
         ggot: subs.get key: gk.asString
@@ -25802,9 +25808,9 @@ checkGenericCall: function {
         )
         st.typing.callGenericBinding.set key: gk value: ge.value
     }
-    calid2: nodeId n: (ast.nodes.get i: call.callable.u64)
+    calleeNodeId: nodeId n: (ast.nodes.get i: call.callable.u64)
     setc2: mid
-    stampGate :st nid: calid2.u64 tid: setc2
+    stampGate :st nid: calleeNodeId.u64 tid: setc2
     return (optTidOr o: (methodReturnOf :st :mid) d: ztypes.tid)
 }
 
@@ -26312,8 +26318,8 @@ checkCase: function {
         # an empty (`{}` / null) arm body makes the match valueless: stamp
         # null so consuming the match as a value is rejected.
         if nullId > 0 then {
-            setne0: nullId
-            stampGate :st nid: casenode.nodeid.u64 tid: (ztypes.tid.create from: setne0.u64)
+            nullStampId: nullId
+            stampGate :st nid: casenode.nodeid.u64 tid: (ztypes.tid.create from: nullStampId.u64)
             return (ztypes.tid.create from: nullId)
         }
         return (ztypes.tid.create from: 0)
@@ -27036,7 +27042,7 @@ checkMethodBodies: function {
                 am
             ) case namedoperation then {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: am.operation.u64)) then {
-                    mname2: zast.nameTextAt :ast ref: am.name
+                    monoName: zast.nameTextAt :ast ref: am.name
                     (forceUnitDefMember
                         ty: st.typing
                         reg: st.reg
@@ -27045,7 +27051,7 @@ checkMethodBodies: function {
                         defId: (nameIdOf :ast name: typeName)
                         memberId: am.name
                     )
-                    qn2: "\{typeName}.\{mname2}"
+                    qn2: "\{typeName}.\{monoName}"
                     (checkFunctionBody
                         :st
                         :unitDecl
@@ -27799,7 +27805,7 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
             name: program.mainUnitName.stringview
         )
         mainIdx: u64
-        found0: false
+        found: false
         i0: u64
         uCnt9d: program.ast.units.length
         uIdx9d: u64
@@ -27812,15 +27818,15 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
             ) case namedoperation then {
                 uc5z: unitDeclOfNameIdHere ty: st.typing nameId: u.name
                 if uc5z == unitDecl then {
-                    if (found0) == false then {
+                    if (found) == false then {
                         mainIdx = i0
-                        found0 = true
+                        found = true
                     }
                 }
             } else null
             i0 = i0 + 1
         }
-        if found0 then {
+        if found then {
             muId: (zast.nodeid.create from: (program.ast.units.get i: mainIdx))
             mOpId: zast.nodeid
             {
