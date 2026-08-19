@@ -898,3 +898,139 @@ The rule this arrived at, worth keeping: **an id key is only sound when the id
 is minted, not looked up.** A variable id or a name a node already carries is
 free and exact. A pool lookup on a string of uncertain provenance trades a
 copy for a silent collision.
+
+## The id-keyed containers become the storage (2026-08-19, `d5c125c4`..)
+
+The container arc above built `IdMap` / `IdSet` and migrated what was cheapest
+to migrate. It left the case that motivated it half done, and it left every
+table whose key was an id but whose declaration still said `Map` or `Set`.
+
+### A declaration's namespace was stored twice
+
+`Decl` held `children` — a `ListVal declchild`, always complete and always in
+declaration order — and `nameIndex`, a slot into `ZTyping.nameIndexes` naming
+a `NameIndex` that held the same edges again, keyed by name, built lazily past
+`bucketScanMax` (16) and maintained on every append after that. Both readers
+carried the crossing as a branch: `declFindChild` and `declFindLocal` each
+tested `nameIndex > 0` and either probed the map or scanned the list.
+
+The reason for the slot is in the field's own comment — *"a map is a heap
+object, and every row would own an empty one"* — and it stopped being true
+when the container landed. An IdMap is a 24-byte stack struct, the same size
+as the `ListVal` it replaces; it allocates nothing while empty; and **it makes
+exactly this crossing internally**, which is the point. Below `SMALL_MAX`
+there is no index and `find` scans the dense entries — the loop
+`declFindChild` was writing out by hand.
+
+So `children` is `IdMapV zast.nameid -> declid` and the rest is deleted:
+`declchild`, `NameIndex`, `ZTyping.nameIndexes`, `Decl.nameIndex`,
+`bucketScanMax`, `nameIndexLookup`, the promotion block and both fallback
+legs. `declAddChildEdge` is one `set`.
+
+**Two soundness questions were measured before anything was written**, over a
+self-compile and 488 corpus programs, 1,313,867 edges:
+
+| question | why it matters | answer |
+|---|---|---|
+| any child with name id 0? | an IdMap collapses every anonymous child of one parent onto one entry | **0** |
+| any repeated (parent, name)? | `set` overwrites where `append` appended | **0** |
+
+The `zsqldump` guard on `nameId > 0` suggested the first was possible; it is
+not, and the one deliberately unnamed mint (`declNewFrame`) already takes its
+parent link directly rather than through an edge.
+
+### The threshold, measured at all four settings it can have
+
+`SMALL_MAX` is compared against `capacity`, which is always a power of two,
+so the constant has **four reachable settings and no others** — 12, 20 and 24
+are aliases of 8, 16 and 16. `entries` is capped at `capacity * 2 / 3`:
+
+| `SMALL_MAX` | index built at capacity | small mode holds | instructions | allocations | bytes churned |
+|---|---|---|---|---|---|
+| 8 | 16 | ≤ 5 entries | 3,876,073,515 | 8,150,711 | 390,470,385 |
+| **16** | 32 | **≤ 10 entries** | **3,875,096,208** | 8,130,318 | 389,165,236 |
+| 32 | 64 | ≤ 21 entries | 3,927,641,704 (+1.36%) | 8,119,419 | 387,770,164 |
+| 64 | 128 | ≤ 42 entries | 3,989,780,469 (+2.96%) | 8,115,470 | 386,759,220 |
+
+Fixed input, `perf stat -r 5`, spread ±0.01–0.06%. **16 is the optimum and
+stays.** Allocations and bytes improve monotonically as the constant rises,
+because a higher ceiling means fewer index arrays — so this is the one knob in
+the series that **cannot be read off the allocation column**, which would pick
+64 unconditionally and pay 2.96% of instructions for 0.6% of bytes.
+
+The scan stays competitive further than the folklore figure suggests: the
+common advice that a map overtakes a list past about eight entries is about
+hashed maps with owned keys, and this scan is `==` over a dense array of raw
+scalars with no hash and no allocation. 8 (≤5 entries) is already slightly
+worse than 16.
+
+### The tables that were id-keyed but not id-keyed containers
+
+Three sweeps, each with its own oracle:
+
+* **Six membership tables in the emitter** (`usedLits`, `emittedUserTypes`,
+  `fwdDeclaredTypes`, `demandGatedTids`, `usedTypeIds`, `emittedConformance`)
+  were `MapVV u64 -> bool` storing only `true`. Every reader spelled
+  membership as a `get` and a two-armed match answering `false` on `none` —
+  which is `IdSet.has`. Bytes −566,313, instructions flat.
+* **28 `SetVal u64` and 65 scalar-keyed `MapVV` / `MapVR`** become `IdSet` /
+  `IdMapV` / `IdMapR`: the node-type and mono stamp tables, `declByTypeId`,
+  `publicNsByOwner`, `defUnitId`, `resolveByNameC`, `frameLabel`,
+  `delimClose`, `zls`'s position index, the registry's `genericParams`.
+  Nothing in the tree calls `.delete` on any of them, which is the
+  precondition. **Instructions −1.63%, bytes −14.7 MB (−3.63%).** The bytes
+  are the entry shrinking (no `alive`, no stored hash, a 4-byte index cell);
+  the instructions are the probe losing its hash.
+* **The generic-argument table was a List AND a Map over one key space**, and
+  a census found almost none of it live: `genericArgOf` / `hasGenericArgs`
+  were called only from this unit's own smoke prints, `setGenericArg` had one
+  real caller which always passed `argTypeId: 0`, and
+  `ZTypeGenericArg.position` had no reader at all. Its one real consumer,
+  `checkGenericCall`, scanned every row in the program per generic call site
+  to recover one function's parameter names — which `registerGenericParams`
+  had already recorded on the registry, from the same AST items through the
+  same filter, on the line above. **The equivalence was probed, not argued:**
+  both lists computed at every call and compared element by element, 3,381
+  comparisons over 449 programs, zero divergence — and the probe was inverted
+  first to prove it fires rather than passing vacuously. −103 lines;
+  instructions flat, which is the honest reading: the scan is per call site
+  and there are not many. The win is the table, the composite key and the
+  scan being gone.
+
+### Arc total
+
+Same input (this row's `src`), gcc -O2, `perf stat -r 5`, spread ±0.01%:
+
+| | before | after | delta |
+|---|---|---|---|
+| instructions | 3,956,906,257 | 3,875,408,009 | **−81,498,248 (−2.06%)** |
+| cycles | 1,811,893,394 | 1,761,005,266 | **−50,888,128 (−2.81%)** |
+| allocations | 8,133,049 | 8,130,318 | −2,731 |
+| bytes churned | 406,597,946 | 389,165,242 | **−17,432,704 (−4.29%)** |
+
+`allocs == frees` throughout. This closes the `findLocal` item the
+environment-arc row (`4fc75709`) left open — "locals as Decl children, a
+linear scan per materialised block frame; ~1.3%" — and the "lazy
+`byName`/`children` on Decl" follow-up named at step 2 of that arc.
+
+**Oracles, per commit:** the SQL dump byte-identical old-compiler against new
+on the same source (3,159,509 rows over the three drivers for the namespace
+change, plus 485 corpus programs), and emitted C byte-identical on all 446
+corpus programs that emit standalone. `decl_child` carries both the edge set
+and its position, so an identical dump is the proof that insertion order
+survived the move off a list.
+
+### What the container gained, and what it still refuses
+
+`keyAt` / `valueAt` read an entry by position. `entries` is dense and
+insertion-ordered with nothing able to perforate it, so a position is a real
+coordinate here in a way it is not on a Map. They exist for the walk an
+iterator cannot serve — one whose body must reach the object that OWNS the
+container, which an outstanding iterator borrow forbids for the whole loop.
+Implementing them by counting through `iterateItems` instead would turn the
+ordered walks over a unit root's ~1,400 children into O(n²).
+
+Still `Map`, and still right: `subs` (keys not uniformly interned), the
+five emitter assoc-lists (14 `remove` call sites), the composite-key families,
+and the `pend*` triple, whose key is a (parent, name) pair and whose own
+comment says it holds a handful of entries.
