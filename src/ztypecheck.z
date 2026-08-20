@@ -25797,6 +25797,160 @@ isEmptyBody: function {n: Node.view} out bool is {
         return false
     }
 }
+# genericParamSubjectTid -- the GENERIC_PARAM type a `match t` subject names,
+# once the declaration that owns the parameter is known. 0 when the
+# declaration has no parameter of that name.
+genericParamSubjectTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    casenode: zast.CaseData.view
+    gdecl: ztypes.declid
+    gsn: StringView
+} out ztypes.tid is {
+    subjT: ztypes.tid
+    pgo: (st.reg.genericParamTidOf
+        tdecl: gdecl
+        paramName: (nameIdOf :ast name: gsn)
+    )
+    match (
+        pgo
+    ) case some then {
+        subjT = ztypes.tid.create from: pgo.u64
+    } case none then {
+        ptid: (st.reg.newType
+            name: gsn
+            typetype: ztypes.ztypetype.genericParam
+        )
+        (st.reg.setGenericParamTid
+            tdecl: gdecl
+            paramName: (nameIdOf :ast name: gsn)
+            tid: ptid
+        )
+        subjT = ptid
+    }
+    gsnid: nodeId n: (ast.nodes.get i: casenode.subject.u64)
+    if gsnid > 0 when subjT > 0 then {
+        # direct write, NOT stampGate: this genericParam stamp IS
+        # the dissection marker the emitter dispatches on -- it
+        # must survive the template walk's param-stamp suppression
+        # AND override any substituted per-mono stamp the general
+        # subject walk wrote (the canonical param tid is in
+        # monoParamSubst now, so stampGate substitutes it)
+        setgs: subjT
+        ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gsnid.u64 tid: setgs
+        if st.typing.curMonoStamp > 0 then {
+            gmk: (ztyping.monostamp mono: st.typing.curMonoStamp node: gsnid.u64)
+            st.typing.monoNodeType.set key: gmk value: setgs
+        }
+    }
+    return subjT
+}
+# monoSubjectDecl -- the declaration a `match t` subject resolves to when the
+# enclosing owner did not claim it: a unit-level generic template whose
+# parameter list carries the name. 0 when none does.
+monoSubjectDecl: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    gsn: StringView
+} out ztypes.declid is {
+    gdecl: ztypes.declid
+    # the template's own body walk runs with unitDecl = the
+    # TEMPLATE's name; the template def lives in the main unit,
+    # which the registry names -- the eager walk's current unit
+    # happened to be it for every program that reaches here, but
+    # only because such a template is declared where main is.
+    gunm: unitNameTextOf :st :ast :unitDecl
+    gmud: st.typing.mainUnitRoot
+    gcand: (declOfUnitDef
+        :st
+        frame: st.curFrame
+        unitDecl: gmud
+        nameId: (nameIdOf :ast name: gunm.stringview)
+    )
+    if gcand > 0 then {
+        if (st.reg.isGenericParamOf
+            tdecl: gcand
+            name: (nameIdOf :ast name: gsn)
+        ) then gdecl = gcand
+    }
+    return gdecl
+}
+
+
+# caseGenericSubjectTid -- the type of a `match` subject that is not a value: a
+# bare generic parameter, resolved against the enclosing generic context so it
+# stamps as a genericParam and the emitter can dissect it per mono. 0 when the
+# subject names no such parameter.
+caseGenericSubjectTid: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast.view
+    casenode: zast.CaseData.view
+} out ztypes.tid is {
+    subjT: ztypes.tid
+    gsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject.u64)
+    if gsn.length > 0 then {
+        gdecl: ztypes.declid
+        {
+            gdecl = (declOfUnitDef
+                :st
+                frame: st.curFrame
+                unitDecl: st.typing.synthOwnerUnit
+                nameId: st.typing.synthOwnerName
+            )
+        }
+        if (gdecl.isZero) == false then {
+            if (st.reg.isGenericParamOf
+                tdecl: gdecl
+                name: (nameIdOf :ast name: gsn.stringview)
+            ) == false then {
+                gdecl = ztypes.declid.create from: 0
+            }
+        }
+        if gdecl.isZero then {
+            gur: unitDecl
+            if (gur.isZero) == false then {
+                if (st.reg.isGenericParamOf
+                    tdecl: gur
+                    name: (nameIdOf :ast name: gsn.stringview)
+                ) then gdecl = gur
+            }
+        }
+        if gdecl.isZero when st.typing.curMonoStamp > 0 then {
+            # a mono-clone body walk: the subject's template is the
+            # current mono's generic origin
+            mog: ztypes.tid
+            {
+                mgo: st.reg.genericOriginOf tid: (ztypes.tid.create from: st.typing.curMonoStamp)
+                if mgo > 0 then mog = mgo
+            }
+            if mog > 0 then {
+                gdecl = declOfTypeId :st tid: (ztypes.tid.create from: mog.u64)
+                if (gdecl.isZero) == false then {
+                    if (st.reg.isGenericParamOf
+                        tdecl: gdecl
+                        name: (nameIdOf :ast name: gsn.stringview)
+                    ) == false then gdecl = ztypes.declid.create from: 0
+                }
+            }
+        }
+        if gdecl.isZero then {
+        if gdecl.isZero then gdecl = (monoSubjectDecl :st :ast :unitDecl gsn: gsn.stringview)
+        }
+        if (gdecl.isZero) == false then {
+            subjT = (genericParamSubjectTid
+                :st
+                :ast
+                :casenode
+                :gdecl
+                gsn: gsn.stringview
+            )
+        }
+    }
+    return subjT
+}
+
 
 # checkCase -- walk a match: push the `match` scope, type the subject, push
 # `match_body` (resetting the bare-name subject's narrowing), then per arm an
@@ -25806,457 +25960,238 @@ isEmptyBody: function {n: Node.view} out bool is {
 # resolves to `never` (a completing-arm result type lands with a value-match
 # example) and each diverging arm's subtype is excluded from the subject in
 # the enclosing scope (all-excluded marks it unreachable).
-checkCase: function {
+casearmfacts: record {
+    empty: bool
+    diverges: bool
+}
+# narrowCaseArmSubject -- inside an arm, the subject IS the arm's payload: narrow
+# the binding to it, and carry the payload's readonly-ness from the parent.
+narrowCaseArmSubject: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    targetName: StringView
+    armName: StringView
+    armTid: u64
+    subjT: ztypes.tid
+} is {
+    if armTid == 0 then return
+    (st.narrow
+        nameId: (nameIdOf :ast name: targetName)
+        toTypeId: armTid
+        subtypeName: (nameIdOf :ast name: armName)
+        shadow: true
+    )
+    (armPayloadReadonly
+        :st
+        :ast
+        subject: (nameIdOf :ast name: targetName)
+        parentTid: subjT
+        armName: (nameIdOf :ast name: armName)
+        payloadTid: (ztypes.tid.create from: armTid.u64)
+    )
+}
+# checkSumArmName -- an arm of a sum-typed match must name one of the subject's
+# arms; report the ones it could have meant when it does not.
+checkSumArmName: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    clause: zast.CaseClauseData.view
+    subjT: ztypes.tid
+    armName: StringView
+    armTid: u64
+} is {
+    if armTid == 0 then {
+        subjTn: st.reg.nameOf tid: subjT
+        amsg: "type '\{subjTn}' has no arm '\{armName}'"
+        marm: ast.nodes.get i: clause.matcharm.u64
+        (addError
+            :st
+            nodeid: (nodeId n: marm)
+            lineno: (nodeLine n: marm)
+            colno: (nodeCol n: marm)
+            e: zast.err.typeError
+            msg: amsg
+        )
+    }
+}
+
+
+# checkCaseClause -- type one `case` arm: bind what the arm narrows to, walk
+# its body, and report what the arm contributes to the match -- whether it is
+# empty and whether it diverges. Its arm name and value type are appended to
+# the match's running lists.
+checkCaseClause: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast.view
-    casenode: zast.CaseData.view
-} out ztypes.tid is {
-    foldCaseArm :st :ast :unitDecl n: casenode
-    constFailClear :st
-    matchMarker: st.pushBlock name: "match"
-    subjT: (checkValue
-        :st
-        :unitDecl
-        :ast
-        node: (ast.nodes.get i: casenode.subject.u64)
-    )
-    # A bare generic-parameter subject (`match t`) is not a value -- resolve it
-    # against the enclosing generic context (synthLabel is `{unit}.{type}` for a
-    # method, `{unit}.{fn}` for a generic free function or unit) so it stamps as a
-    # genericParam and the emitter can dissect it per monomorphised instance.
-    if subjT.isZero then {
-        gsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject.u64)
-        if gsn.length > 0 then {
-            gdecl: ztypes.declid
-            {
-                gdecl = (declOfUnitDef
-                    :st
-                    frame: st.curFrame
-                    unitDecl: st.typing.synthOwnerUnit
-                    nameId: st.typing.synthOwnerName
-                )
-            }
-            if (gdecl.isZero) == false then {
-                if (st.reg.isGenericParamOf
-                    tdecl: gdecl
-                    name: (nameIdOf :ast name: gsn.stringview)
-                ) == false then {
-                    gdecl = ztypes.declid.create from: 0
-                }
-            }
-            if gdecl.isZero then {
-                gur: unitDecl
-                if (gur.isZero) == false then {
-                    if (st.reg.isGenericParamOf
-                        tdecl: gur
-                        name: (nameIdOf :ast name: gsn.stringview)
-                    ) then gdecl = gur
-                }
-            }
-            if gdecl.isZero when st.typing.curMonoStamp > 0 then {
-                # a mono-clone body walk: the subject's template is the
-                # current mono's generic origin
-                mog: ztypes.tid
-                {
-                    mgo: st.reg.genericOriginOf tid: (ztypes.tid.create from: st.typing.curMonoStamp)
-                    if mgo > 0 then mog = mgo
-                }
-                if mog > 0 then {
-                    gdecl = declOfTypeId :st tid: (ztypes.tid.create from: mog.u64)
-                    if (gdecl.isZero) == false then {
-                        if (st.reg.isGenericParamOf
-                            tdecl: gdecl
-                            name: (nameIdOf :ast name: gsn.stringview)
-                        ) == false then gdecl = ztypes.declid.create from: 0
-                    }
-                }
-            }
-            if gdecl.isZero then {
-                # the template's own body walk runs with unitDecl = the
-                # TEMPLATE's name; the template def lives in the main unit,
-                # which the registry names -- the eager walk's current unit
-                # happened to be it for every program that reaches here, but
-                # only because such a template is declared where main is.
-                gunm: unitNameTextOf :st :ast :unitDecl
-                gmud: st.typing.mainUnitRoot
-                gcand: (declOfUnitDef
-                    :st
-                    frame: st.curFrame
-                    unitDecl: gmud
-                    nameId: (nameIdOf :ast name: gunm.stringview)
-                )
-                if gcand > 0 then {
-                    if (st.reg.isGenericParamOf
-                        tdecl: gcand
-                        name: (nameIdOf :ast name: gsn.stringview)
-                    ) then gdecl = gcand
-                }
-            }
-            if (gdecl.isZero) == false then {
-                pgo: (st.reg.genericParamTidOf
-                    tdecl: gdecl
-                    paramName: (nameIdOf :ast name: gsn.stringview)
-                )
-                match (
-                    pgo
-                ) case some then {
-                    subjT = ztypes.tid.create from: pgo.u64
-                } case none then {
-                    ptid: (st.reg.newType
-                        name: gsn.stringview
-                        typetype: ztypes.ztypetype.genericParam
-                    )
-                    (st.reg.setGenericParamTid
-                        tdecl: gdecl
-                        paramName: (nameIdOf :ast name: gsn.stringview)
-                        tid: ptid
-                    )
-                    subjT = ptid
-                }
-                gsnid: nodeId n: (ast.nodes.get i: casenode.subject.u64)
-                if gsnid > 0 when subjT > 0 then {
-                    # direct write, NOT stampGate: this genericParam stamp IS
-                    # the dissection marker the emitter dispatches on -- it
-                    # must survive the template walk's param-stamp suppression
-                    # AND override any substituted per-mono stamp the general
-                    # subject walk wrote (the canonical param tid is in
-                    # monoParamSubst now, so stampGate substitutes it)
-                    setgs: subjT
-                    ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gsnid.u64 tid: setgs
-                    if st.typing.curMonoStamp > 0 then {
-                        gmk: (ztyping.monostamp mono: st.typing.curMonoStamp node: gsnid.u64)
-                        st.typing.monoNodeType.set key: gmk value: setgs
-                    }
-                }
-            }
-        }
-    }
-    # per-mono instance walk: a subject that is a bare TYPE name (resolved
-    # by the instance's scope define, not a value) is a compile-time
-    # dissection -- template-time checking validated it and the emitter
-    # dispatches one arm per mono; there is nothing to stamp here
-    if st.typing.curMonoStamp > 0 when subjT > 0 then {
-        dsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject.u64)
-        if dsn.length > 0 then {
-            dsv: st.lookupVarId nameId: (nameIdOf :ast name: dsn.stringview)
-            match (
-                dsv
-            ) case some then null case none then {
-                st.popTo marker: matchMarker
-                return (ztypes.tid.create from: 0)
-            }
-        }
-    }
-    if subjT > 0 then {
-        if (st.reg.typetypeOf typeId: subjT) == ztypes.ztypetype.genericParam then {
-            # a genericParam subject IS a compile-time dissection: write the
-            # marker stamp directly (stampGate suppresses param stamps in
-            # template walks, and the per-mono slot must carry the param,
-            # not its substitution, for the emitter's dispatch gate)
-            gmn: nodeId n: (ast.nodes.get i: casenode.subject.u64)
-            if gmn > 0 then {
-                gmv: subjT
-                ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gmn.u64 tid: gmv
-                if st.typing.curMonoStamp > 0 then {
-                    gmk8: (ztyping.monostamp mono: st.typing.curMonoStamp node: gmn.u64)
-                    st.typing.monoNodeType.set key: gmk8 value: gmv
-                }
-            }
-        }
-    }
-    isSum: false
-    if subjT > 0 then {
-        stt: st.reg.typetypeOf typeId: subjT
-        if stt == ztypes.ztypetype.unionType then isSum = true
-        if stt == ztypes.ztypetype.variantType then isSum = true
-    }
-    isGenericSubj: false
-    if subjT > 0 then {
-        if (st.reg.typetypeOf typeId: subjT) == ztypes.ztypetype.genericParam then isGenericSubj = true
-    }
-    if isGenericSubj then {
-        # `match t` dissects the TYPE parameter at monomorphisation. A match
-        # over a VALUE whose type is the generic parameter has no per-
-        # instance arm dispatch (the template body is shared), so it is
-        # rejected rather than silently taking the else path.
-        gvid: innermostNodeId :ast n: (ast.nodes.get i: casenode.subject.u64)
-        gvav: st.typing.atomVariableId.get key: gvid.u64
-        match (
-            gvav
-        ) case some then {
-            gvav
-            gsub0: ast.nodes.get i: casenode.subject.u64
-            gtn0: st.reg.nameOf tid: subjT
-            gtnc0: gtn0
-            gm: "cannot match over a value of generic parameter type '\{gtnc0}'"
-            gh: "dissect the type parameter itself (`match \{gtnc0}`), or move the value dispatch outside the generic"
-            gn: String
-            (addErrorH
-                :st
-                nodeid: (nodeId n: gsub0)
-                lineno: (nodeLine n: gsub0)
-                colno: (nodeCol n: gsub0)
-                e: zast.err.typeError
-                msg: gm
-                note: gn
-                hint: gh
-                width: 0
-            )
-            return (ztypes.tid.create from: 0)
-        } case none then null
-    }
-    # A match dissects a union/variant into its arms (a runtime discriminator
-    # test) or a generic parameter into its resolutions (at monomorphisation).
-    # Any other subject -- a numeric, string, class, record, or a constant --
-    # has no child arms to dissect into.
-    if subjT > 0 when (isSum) == false when (isGenericSubj) == false then {
-        subjNode: ast.nodes.get i: casenode.subject.u64
-        subjTn0: st.reg.nameOf tid: subjT
-        smsg: "match subject must be a union, variant, or generic parameter, got '\{subjTn0}'"
-        (addError
-            :st
-            nodeid: (nodeId n: subjNode)
-            lineno: (nodeLine n: subjNode)
-            colno: (nodeCol n: subjNode)
-            e: zast.err.typeError
-            msg: smsg
-        )
-    }
-    drainPendingBorrow :st
-    targetName: String
-    if isSum then {
-        tn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject.u64)
-        targetName = tn
-    }
+    clause: zast.CaseClauseData.view
+    subjT: ztypes.tid
+    isSum: bool
+    targetName: StringView
     neverId: u64
-    nvOpt: walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "never"
-    match (
-        nvOpt
-    ) case some then {
-        neverId = nvOpt
-    } case none then null
-    nullId: (optU64Or
-        o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "null")
-        d: 0
-    )
-    anyEmpty: false
-    st.pushBlock name: "match_body"
-    if targetName.length > 0 then st.resetNarrowing nameId: (nameIdOf
-        :ast
-        name: targetName.stringview
-    )
     covered: (List String)
     diverging: (List String)
     armTypes: (ListVal u64)
+} out casearmfacts is {
+    anyEmpty: false
     allDiverge: true
-    cliter: casenode.clauses.iterate
-    for clauseId: cliter loop {
-        clause: ast.nodes.get i: clauseId.u64
-        match (
-            clause
-        ) case caseclause then {
-            armName: atomName :ast n: (ast.nodes.get i: clause.matcharm.u64)
-            armId: atomNameId :ast n: (ast.nodes.get i: clause.matcharm.u64)
-            if (isEmptyBody n: (ast.nodes.get i: clause.statement.u64)) then anyEmpty = true
-            # A value-match literal arm wears the subject's concrete type.
-            if (isSum) == false then {
-                if (isNumericLiteralName name: armName.stringview) when subjT > 0 then {
-                    if (isLiteralTypeId :st tid: subjT) == false then {
-                        amid: clause.matcharm
-                        if amid > 0 then {
-                            seta: subjT
-                            stampGate :st nid: amid.u64 tid: seta
-                        }
-                    }
+    armName: atomName :ast n: (ast.nodes.get i: clause.matcharm.u64)
+    armId: atomNameId :ast n: (ast.nodes.get i: clause.matcharm.u64)
+    if (isEmptyBody n: (ast.nodes.get i: clause.statement.u64)) then anyEmpty = true
+    # A value-match literal arm wears the subject's concrete type.
+    if (isSum) == false then {
+        if (isNumericLiteralName name: armName.stringview) when subjT > 0 then {
+            if (isLiteralTypeId :st tid: subjT) == false then {
+                amid: clause.matcharm
+                if amid > 0 then {
+                    seta: subjT
+                    stampGate :st nid: amid.u64 tid: seta
                 }
-            }
-            asname: "arm:\{armName}"
-            armMarker: st.pushBlock name: asname.stringview
-            # Every arm of a sum subject must name one of its declared arms.
-            armo: (optionval.none u64)
-            (forceMemberOf :st frame: st.curFrame :ast parentTypeId: subjT nameId: armId)
-            if subjT > 0 then armo = st.typing.declChildOfId parentTypeId: subjT nameId: armId
-            if isSum when subjT > 0 then {
-                match (
-                    armo
-                ) case some then null case none then {
-                    subjTn: st.reg.nameOf tid: subjT
-                    amsg: "type '\{subjTn}' has no arm '\{armName}'"
-                    marm: ast.nodes.get i: clause.matcharm.u64
-                    (addError
-                        :st
-                        nodeid: (nodeId n: marm)
-                        lineno: (nodeLine n: marm)
-                        colno: (nodeCol n: marm)
-                        e: zast.err.typeError
-                        msg: amsg
-                    )
-                }
-            }
-            if targetName.length > 0 when subjT > 0 then {
-                match (
-                    armo
-                ) case some then {
-                    (st.narrow
-                        nameId: (nameIdOf :ast name: targetName.stringview)
-                        toTypeId: armo
-                        subtypeName: (nameIdOf :ast name: armName.stringview)
-                        shadow: true
-                    )
-                    (armPayloadReadonly
-                        :st
-                        :ast
-                        subject: (nameIdOf :ast name: targetName.stringview)
-                        parentTid: subjT
-                        armName: (nameIdOf :ast name: armName.stringview)
-                        payloadTid: (ztypes.tid.create from: armo.u64)
-                    )
-                } case none then null
-            }
-            cstC: ast.nodes.get i: clause.statement.u64
-            checkStatement :st :unitDecl :ast block: cstC
-            at: lastStmtType :st :ast block: cstC
-            atc: at
-            armTypes.append atc
-            if at > 0 when at == neverId then {
-                dn: armName.copy
-                diverging.append dn
-            } else {
-                allDiverge = false
-            }
-            cn2: armName.copy
-            covered.append cn2
-            if st.isUnreachable then st.discardTakenInCurrentScope
-            st.popTo marker: armMarker
-        } else null
-    }
-    hasElse: casenode.elseclause > 0
-    if hasElse then {
-        if (isEmptyBody n: (ast.nodes.get i: casenode.elseclause.u64)) then anyEmpty = true
-        elseMarker: st.pushBlock name: "arm:else"
-        if targetName.length > 0 when subjT > 0 then {
-            with eiter: covered.iterate do for en2: eiter loop {
-                (st.exclude
-                    nameId: (nameIdOf :ast name: targetName.stringview)
-                    subtypeName: (nameIdOf :ast name: en2.stringview)
-                    fullTypeId: subjT
-                )
-            }
-            (shadowCollapseIfSingle
-                :ast
-                :st
-                name: (nameIdOf :ast name: targetName.stringview)
-                fullTid: subjT
-            )
-        }
-        walkBodyAt :st :unitDecl :ast bodyId: casenode.elseclause
-        ecr: ast.nodes.get i: casenode.elseclause.u64
-        et: lastStmtType :st :ast block: ecr
-        armTypes.append et
-        # the else is an arm: it decides `allDiverge` like any other. Leaving it
-        # out stamped `never` on a match whose else completes -- and `never` is
-        # read downstream as "control does not continue", so the emitter dropped
-        # the enclosing arm's `break` and the switch fell through.
-        if et > 0 when et == neverId then null else allDiverge = false
-        if st.isUnreachable then st.discardTakenInCurrentScope
-        st.popTo marker: elseMarker
-    }
-    st.popTo marker: matchMarker
-    exhaustive: hasElse
-    if (exhaustive) == false then {
-        if isSum then {
-            arms2: sumSubtypeNames :ast :st sid: subjT
-            # ambient narrowing relaxes the requirement: a subject already
-            # narrowed to a single arm needs only that arm's case; arms the
-            # enclosing flow has excluded are impossible and need none.
-            required: (List String)
-            nsn: String
-            if targetName.length > 0 then {
-                gsn: (st.narrowedArmOf
-                    nameId: (nameIdOf :ast name: targetName.stringview)
-                    fullTypeId: subjT
-                )
-                if (gsn.isZero) == false then {
-                    nsn = zast.poolTextCopy pool: ast.names ref: gsn
-                }
-            }
-            if nsn.length > 0 then {
-                nreq: nsn.copy
-                required.append nreq
-            } else {
-                excl: (IdSet zast.nameid)
-                if targetName.length > 0 then {
-                    (st.collectExcluded
-                        nameId: (nameIdOf :ast name: targetName.stringview)
-                        into: excl
-                    )
-                }
-                with a0it: arms2.iterate do for an0: a0it loop {
-                    anId: nameIdOf :ast name: an0.stringview
-                    if (excl.has item: anId) == false then required.append an0.copy
-                }
-            }
-            allCovered: true
-            missing: (List String)
-            a2iter: required.iterate
-            for an3: a2iter loop {
-                found: false
-                c2iter: covered.iterate
-                for cn3: c2iter loop {
-                    if an3.stringview == cn3.stringview then found = true
-                }
-                if (found) == false then {
-                    allCovered = false
-                    missing.append an3.copy
-                }
-            }
-            exhaustive = allCovered
-            if (allCovered) == false then {
-                mj: String
-                mfirst: true
-                with mit: missing.iterate do for mn: mit loop {
-                    if (mfirst) == false then mj.append ", "
-                    mj.append mn
-                    mfirst = false
-                }
-                (addErrorH
-                    :st
-                    nodeid: casenode.nodeid
-                    lineno: casenode.lineno
-                    colno: casenode.colno
-                    e: zast.err.nonExhaustive
-                    msg: "non-exhaustive match: missing case(s) \{mj} -- add them or an `else` clause"
-                    note: "".string
-                    hint: "".string
-                    width: 5
-                )
             }
         }
+    }
+    asname: "arm:\{armName}"
+    armMarker: st.pushBlock name: asname.stringview
+    # Every arm of a sum subject must name one of its declared arms.
+    armo: (optionval.none u64)
+    (forceMemberOf :st frame: st.curFrame :ast parentTypeId: subjT nameId: armId)
+    if subjT > 0 then armo = st.typing.declChildOfId parentTypeId: subjT nameId: armId
+    if isSum when subjT > 0 then {
+    if isSum when subjT > 0 then {
+        (checkSumArmName
+            :st
+            :ast
+            :clause
+            :subjT
+            armName: armName.stringview
+            armTid: (optU64Or o: armo d: 0)
+        )
+    }
     }
     if targetName.length > 0 when subjT > 0 then {
-        with diter: diverging.iterate do for dn2: diter loop {
-            (st.exclude
-                nameId: (nameIdOf :ast name: targetName.stringview)
-                subtypeName: (nameIdOf :ast name: dn2.stringview)
+        (narrowCaseArmSubject
+            :st
+            :ast
+            :targetName
+            armName: armName.stringview
+            armTid: (optU64Or o: armo d: 0)
+            :subjT
+        )
+    }
+    cstC: ast.nodes.get i: clause.statement.u64
+    checkStatement :st :unitDecl :ast block: cstC
+    at: lastStmtType :st :ast block: cstC
+    atc: at
+    armTypes.append atc
+    if at > 0 when at == neverId then {
+        dn: armName.copy
+        diverging.append dn
+    } else {
+        allDiverge = false
+    }
+    cn2: armName.copy
+    covered.append cn2
+    if st.isUnreachable then st.discardTakenInCurrentScope
+    st.popTo marker: armMarker
+    return (casearmfacts empty: anyEmpty diverges: allDiverge)
+}
+# caseIsExhaustive -- whether an else-less match covers every arm its subject
+# can still hold, reporting the missing ones when it does not. Narrowing and
+# construction both shrink that set, so the answer is about what the subject
+# can reach here, not about the type's full arm list.
+caseIsExhaustive: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    casenode: zast.CaseData.view
+    subjT: ztypes.tid
+    isSum: bool
+    targetName: StringView
+    covered: (List String).view
+} out bool is {
+    exhaustive: false
+    if isSum then {
+        arms2: sumSubtypeNames :ast :st sid: subjT
+        # ambient narrowing relaxes the requirement: a subject already
+        # narrowed to a single arm needs only that arm's case; arms the
+        # enclosing flow has excluded are impossible and need none.
+        required: (List String)
+        nsn: String
+        if targetName.length > 0 then {
+            gsn: (st.narrowedArmOf
+                nameId: (nameIdOf :ast name: targetName)
                 fullTypeId: subjT
             )
+            if (gsn.isZero) == false then {
+                nsn = zast.poolTextCopy pool: ast.names ref: gsn
+            }
         }
-        if diverging.length > 0 then {
-            (shadowCollapseIfSingle
-                :ast
+        if nsn.length > 0 then {
+            nreq: nsn.copy
+            required.append nreq
+        } else {
+            excl: (IdSet zast.nameid)
+            if targetName.length > 0 then {
+                (st.collectExcluded
+                    nameId: (nameIdOf :ast name: targetName)
+                    into: excl
+                )
+            }
+            with a0it: arms2.iterate do for an0: a0it loop {
+                anId: nameIdOf :ast name: an0.stringview
+                if (excl.has item: anId) == false then required.append an0.copy
+            }
+        }
+        allCovered: true
+        missing: (List String)
+        a2iter: required.iterate
+        for an3: a2iter loop {
+            found: false
+            c2iter: covered.iterate
+            for cn3: c2iter loop {
+                if an3.stringview == cn3.stringview then found = true
+            }
+            if (found) == false then {
+                allCovered = false
+                missing.append an3.copy
+            }
+        }
+        exhaustive = allCovered
+        if (allCovered) == false then {
+            mj: String
+            mfirst: true
+            with mit: missing.iterate do for mn: mit loop {
+                if (mfirst) == false then mj.append ", "
+                mj.append mn
+                mfirst = false
+            }
+            (addErrorH
                 :st
-                name: (nameIdOf :ast name: targetName.stringview)
-                fullTid: subjT
-            )
-            (postGuardRecord
-                :st
-                stmtNid: casenode.nodeid
-                subject: (nameIdOf :ast name: targetName.stringview)
-                fullTid: subjT
+                nodeid: casenode.nodeid
+                lineno: casenode.lineno
+                colno: casenode.colno
+                e: zast.err.nonExhaustive
+                msg: "non-exhaustive match: missing case(s) \{mj} -- add them or an `else` clause"
+                note: "".string
+                hint: "".string
+                width: 5
             )
         }
     }
+    return exhaustive
+}
+# caseResultTid -- the value a match produces: `never` when every arm diverges,
+# nothing when an arm is empty, else the first completing arm's type. A match
+# that is not exhaustive produces no value at all.
+caseResultTid: function {
+    st: zenv.ZSymbolTable
+    casenode: zast.CaseData.view
+    exhaustive: bool
+    allDiverge: bool
+    anyEmpty: bool
+    neverId: u64
+    nullId: u64
+    armTypes: (ListVal u64).view
+} out ztypes.tid is {
     if exhaustive when allDiverge when neverId > 0 then {
         if casenode.clauses.length > 0 then {
             setn2: neverId
@@ -26298,6 +26233,416 @@ checkCase: function {
     } else {
         return (ztypes.tid.create from: 0)
     }
+    return (ztypes.tid.create from: 0)
+}
+# applyCaseExclusions -- after an else-less match, the subject can no longer
+# hold any arm the match covered: record those exclusions so the rest of the
+# scope narrows on them.
+applyCaseExclusions: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    targetName: StringView
+    subjT: ztypes.tid
+    diverging: (List String).view
+    casenode: zast.CaseData.view
+} is {
+    with diter: diverging.iterate do for dn2: diter loop {
+        (st.exclude
+            nameId: (nameIdOf :ast name: targetName)
+            subtypeName: (nameIdOf :ast name: dn2.stringview)
+            fullTypeId: subjT
+        )
+    }
+    if diverging.length > 0 then {
+        (shadowCollapseIfSingle
+            :ast
+            :st
+            name: (nameIdOf :ast name: targetName)
+            fullTid: subjT
+        )
+        (postGuardRecord
+            :st
+            stmtNid: casenode.nodeid
+            subject: (nameIdOf :ast name: targetName)
+            fullTid: subjT
+        )
+    }
+}
+# checkCaseElse -- walk a match's `else` arm. It narrows the subject to what no
+# earlier arm covered, and contributes the same two facts every arm does:
+# whether it is empty and whether it diverges.
+checkCaseElse: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast.view
+    casenode: zast.CaseData.view
+    subjT: ztypes.tid
+    targetName: StringView
+    neverId: u64
+    covered: (List String)
+    armTypes: (ListVal u64)
+} out casearmfacts is {
+    anyEmpty: false
+    allDiverge: true
+    if (isEmptyBody n: (ast.nodes.get i: casenode.elseclause.u64)) then anyEmpty = true
+    elseMarker: st.pushBlock name: "arm:else"
+    if targetName.length > 0 when subjT > 0 then {
+        with eiter: covered.iterate do for en2: eiter loop {
+            (st.exclude
+                nameId: (nameIdOf :ast name: targetName)
+                subtypeName: (nameIdOf :ast name: en2.stringview)
+                fullTypeId: subjT
+            )
+        }
+        (shadowCollapseIfSingle
+            :ast
+            :st
+            name: (nameIdOf :ast name: targetName)
+            fullTid: subjT
+        )
+    }
+    walkBodyAt :st :unitDecl :ast bodyId: casenode.elseclause
+    ecr: ast.nodes.get i: casenode.elseclause.u64
+    et: lastStmtType :st :ast block: ecr
+    armTypes.append et
+    # the else is an arm: it decides `allDiverge` like any other. Leaving it
+    # out stamped `never` on a match whose else completes -- and `never` is
+    # read downstream as "control does not continue", so the emitter dropped
+    # the enclosing arm's `break` and the switch fell through.
+    if et > 0 when et == neverId then null else allDiverge = false
+    if st.isUnreachable then st.discardTakenInCurrentScope
+    st.popTo marker: elseMarker
+    return (casearmfacts empty: anyEmpty diverges: allDiverge)
+}
+# walkCaseClauses -- walk every `case` arm of a match, accumulating the arm
+# names, their value types, and the two facts the match needs back: whether any
+# arm was empty and whether they all diverge.
+walkCaseClauses: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast.view
+    casenode: zast.CaseData.view
+    subjT: ztypes.tid
+    isSum: bool
+    targetName: StringView
+    neverId: u64
+    covered: (List String)
+    diverging: (List String)
+    armTypes: (ListVal u64)
+} out casearmfacts is {
+    anyEmpty: false
+    allDiverge: true
+    cliter: casenode.clauses.iterate
+    for clauseId: cliter loop {
+        clause: ast.nodes.get i: clauseId.u64
+        match (
+            clause
+        ) case caseclause then {
+            cf: (checkCaseClause
+                :st
+                :unitDecl
+                :ast
+                :clause
+                :subjT
+                :isSum
+                :targetName
+                :neverId
+                :covered
+                :diverging
+                :armTypes
+            )
+            if cf.empty then anyEmpty = true
+            if (cf.diverges) == false then allDiverge = false
+        } else null
+    }
+    return (casearmfacts empty: anyEmpty diverges: allDiverge)
+}
+# finishCaseMatch -- close a match once its arms are walked: pop the match
+# scope, decide exhaustiveness, record what the subject can no longer hold,
+# and answer the match's own value type.
+finishCaseMatch: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    casenode: zast.CaseData.view
+    subjT: ztypes.tid
+    isSum: bool
+    targetName: StringView
+    hasElse: bool
+    allDiverge: bool
+    anyEmpty: bool
+    neverId: u64
+    nullId: u64
+    matchMarker: u64
+    covered: (List String).view
+    diverging: (List String).view
+    armTypes: (ListVal u64).view
+} out ztypes.tid is {
+    st.popTo marker: matchMarker
+    exhaustive: hasElse
+    if (exhaustive) == false then {
+        exhaustive = (caseIsExhaustive
+            :st
+            :ast
+            :casenode
+            :subjT
+            :isSum
+            :targetName
+            :covered
+        )
+    }
+    if targetName.length > 0 when subjT > 0 then {
+        (applyCaseExclusions
+            :st
+            :ast
+            :targetName
+            :subjT
+            :diverging
+            :casenode
+        )
+    }
+    return (caseResultTid
+        :st
+        :casenode
+        :exhaustive
+        :allDiverge
+        :anyEmpty
+        :neverId
+        :nullId
+        :armTypes
+    )
+}
+
+# checkCaseArms -- walk a match's arms once its subject is typed: each clause,
+# the else, then exhaustiveness and the narrowing the match leaves behind.
+# Answers the match's own value type -- the first completing arm's.
+checkCaseArms: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast.view
+    casenode: zast.CaseData.view
+    subjT: ztypes.tid
+    isSum: bool
+    matchMarker: u64
+} out ztypes.tid is {
+    drainPendingBorrow :st
+    targetName: String
+    if isSum then {
+        tn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject.u64)
+        targetName = tn
+    }
+    neverId: u64
+    nvOpt: walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "never"
+    match (
+        nvOpt
+    ) case some then {
+        neverId = nvOpt
+    } case none then null
+    nullId: (optU64Or
+        o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "null")
+        d: 0
+    )
+    anyEmpty: false
+    st.pushBlock name: "match_body"
+    if targetName.length > 0 then st.resetNarrowing nameId: (nameIdOf
+        :ast
+        name: targetName.stringview
+    )
+    covered: (List String)
+    diverging: (List String)
+    armTypes: (ListVal u64)
+    allDiverge: true
+    cf0: (walkCaseClauses
+        :st
+        :unitDecl
+        :ast
+        :casenode
+        :subjT
+        :isSum
+        targetName: targetName.stringview
+        :neverId
+        :covered
+        :diverging
+        :armTypes
+    )
+    if cf0.empty then anyEmpty = true
+    if (cf0.diverges) == false then allDiverge = false
+    hasElse: casenode.elseclause > 0
+    if hasElse then {
+        ef: (checkCaseElse
+            :st
+            :unitDecl
+            :ast
+            :casenode
+            :subjT
+            targetName: targetName.stringview
+            :neverId
+            :covered
+            :armTypes
+        )
+        if ef.empty then anyEmpty = true
+        if (ef.diverges) == false then allDiverge = false
+    }
+    return (finishCaseMatch
+        :st
+        :ast
+        :casenode
+        :subjT
+        :isSum
+        targetName: targetName.stringview
+        :hasElse
+        :allDiverge
+        :anyEmpty
+        :neverId
+        :nullId
+        :matchMarker
+        :covered
+        :diverging
+        :armTypes
+    )
+}
+# rejectGenericValueMatch -- report a match over a VALUE whose type is a generic
+# parameter, and say whether it was rejected. `match t` dissects the type
+# parameter at monomorphisation; a value of that type has no per-instance arm
+# dispatch (the template body is shared), so it is rejected rather than
+# silently taking the else path.
+rejectGenericValueMatch: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    casenode: zast.CaseData.view
+    subjT: ztypes.tid
+} out bool is {
+    # `match t` dissects the TYPE parameter at monomorphisation. A match
+    # over a VALUE whose type is the generic parameter has no per-
+    # instance arm dispatch (the template body is shared), so it is
+    # rejected rather than silently taking the else path.
+    gvid: innermostNodeId :ast n: (ast.nodes.get i: casenode.subject.u64)
+    gvav: st.typing.atomVariableId.get key: gvid.u64
+    match (
+        gvav
+    ) case some then {
+        gvav
+        gsub0: ast.nodes.get i: casenode.subject.u64
+        gtn0: st.reg.nameOf tid: subjT
+        gtnc0: gtn0
+        gm: "cannot match over a value of generic parameter type '\{gtnc0}'"
+        gh: "dissect the type parameter itself (`match \{gtnc0}`), or move the value dispatch outside the generic"
+        gn: String
+        (addErrorH
+            :st
+            nodeid: (nodeId n: gsub0)
+            lineno: (nodeLine n: gsub0)
+            colno: (nodeCol n: gsub0)
+            e: zast.err.typeError
+            msg: gm
+            note: gn
+            hint: gh
+            width: 0
+        )
+        return true
+    } case none then null
+    return false
+}
+# monoDissectionHandled -- on a per-mono instance walk, a subject that is a bare
+# TYPE name is a compile-time dissection: template-time checking validated it
+# and the emitter dispatches one arm per mono, so there is nothing to stamp.
+# True when the match was handled that way and needs no further walk.
+monoDissectionHandled: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    casenode: zast.CaseData.view
+    matchMarker: u64
+} out bool is {
+    dsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject.u64)
+    if dsn.length > 0 then {
+        dsv: st.lookupVarId nameId: (nameIdOf :ast name: dsn.stringview)
+        match (
+            dsv
+        ) case some then null case none then {
+            st.popTo marker: matchMarker
+            return true
+        }
+    }
+    return false
+}
+
+
+checkCase: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast.view
+    casenode: zast.CaseData.view
+} out ztypes.tid is {
+    foldCaseArm :st :ast :unitDecl n: casenode
+    constFailClear :st
+    matchMarker: st.pushBlock name: "match"
+    subjT: (checkValue
+        :st
+        :unitDecl
+        :ast
+        node: (ast.nodes.get i: casenode.subject.u64)
+    )
+    if subjT.isZero then subjT = (caseGenericSubjectTid :st :unitDecl :ast :casenode)
+    # per-mono instance walk: a subject that is a bare TYPE name (resolved
+    # by the instance's scope define, not a value) is a compile-time
+    # dissection -- template-time checking validated it and the emitter
+    # dispatches one arm per mono; there is nothing to stamp here
+    if st.typing.curMonoStamp > 0 when subjT > 0 then {
+    if st.typing.curMonoStamp > 0 when subjT > 0 then {
+        if (monoDissectionHandled :st :ast :casenode :matchMarker) then {
+            return (ztypes.tid.create from: 0)
+        }
+    }
+    }
+    if subjT > 0 then {
+        if (st.reg.typetypeOf typeId: subjT) == ztypes.ztypetype.genericParam then {
+            # a genericParam subject IS a compile-time dissection: write the
+            # marker stamp directly (stampGate suppresses param stamps in
+            # template walks, and the per-mono slot must carry the param,
+            # not its substitution, for the emitter's dispatch gate)
+            gmn: nodeId n: (ast.nodes.get i: casenode.subject.u64)
+            if gmn > 0 then {
+                gmv: subjT
+                ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gmn.u64 tid: gmv
+                if st.typing.curMonoStamp > 0 then {
+                    gmk8: (ztyping.monostamp mono: st.typing.curMonoStamp node: gmn.u64)
+                    st.typing.monoNodeType.set key: gmk8 value: gmv
+                }
+            }
+        }
+    }
+    isSum: false
+    if subjT > 0 then {
+        stt: st.reg.typetypeOf typeId: subjT
+        if stt == ztypes.ztypetype.unionType then isSum = true
+        if stt == ztypes.ztypetype.variantType then isSum = true
+    }
+    isGenericSubj: false
+    if subjT > 0 then {
+        if (st.reg.typetypeOf typeId: subjT) == ztypes.ztypetype.genericParam then isGenericSubj = true
+    }
+    if isGenericSubj then {
+        if (rejectGenericValueMatch :st :ast :casenode :subjT) then {
+            return (ztypes.tid.create from: 0)
+        }
+    }
+    # A match dissects a union/variant into its arms (a runtime discriminator
+    # test) or a generic parameter into its resolutions (at monomorphisation).
+    # Any other subject -- a numeric, string, class, record, or a constant --
+    # has no child arms to dissect into.
+    if subjT > 0 when (isSum) == false when (isGenericSubj) == false then {
+        subjNode: ast.nodes.get i: casenode.subject.u64
+        subjTn0: st.reg.nameOf tid: subjT
+        smsg: "match subject must be a union, variant, or generic parameter, got '\{subjTn0}'"
+        (addError
+            :st
+            nodeid: (nodeId n: subjNode)
+            lineno: (nodeLine n: subjNode)
+            colno: (nodeCol n: subjNode)
+            e: zast.err.typeError
+            msg: smsg
+        )
+    }
+    return (checkCaseArms :st :unitDecl :ast :casenode :subjT :isSum :matchMarker)
 }
 
 # checkValue -- type an expression-value node, dispatching by kind. Returns the
