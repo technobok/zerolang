@@ -9368,7 +9368,20 @@ emitCallValue: function {
     cn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
     ecc: emitEmptyColCreate :ast :symtab :ctx :call cn0: cn0.stringview
     if ecc.length > 0 then return ecc
-    fid: userFnId :ast :symtab :ctx name: cn0.stringview
+    # The callee's identity comes from the checker's stamps, never from
+    # re-resolving the name: a fn-typed LOCAL may legitimately shadow a
+    # function of the same name (`addit: mulit.take` inside a unit that also
+    # declares `addit`), and the name route would then emit a direct call to
+    # the function the local shadows -- silently, with the wrong answer. A
+    # variable id stamped on the callable atom says "this is a local", which
+    # is the fnptr leg's business. Same precedence implicitTakeSourceAtom
+    # keeps for the same reason.
+    cbn0: atomNodeId n: (ast.nodes.get i: call.callable.u64)
+    calleeIsLocal: false
+    if cbn0 > 0 when (symtab.typing.atomVariableId.has key: cbn0) then calleeIsLocal = true
+    if (symtab.typing.atomVariableId.has key: call.callable.u64) then calleeIsLocal = true
+    fid: ztypes.tid
+    if (calleeIsLocal) == false then fid = userFnId :ast :symtab :ctx name: cn0.stringview
     if fid.isZero then {
         # the name route reads the FILE unit's members; a callee the checker
         # resolved in the scope the call was written in -- a namespace's
