@@ -2142,7 +2142,10 @@ recordConformerContexts: function {
             match (
                 am
             ) case namedoperation then {
-                cn: atomName :ast n: (ast.nodes.get i: am.operation.u64)
+                cn: (zast.nameTextAt
+                    :ast
+                    ref: (atomNameId :ast n: (ast.nodes.get i: am.operation.u64))
+                )
                 skipIt: false
                 if cn.length == 0 then skipIt = true
                 if (isNumericLiteralName name: cn.stringview) then skipIt = true
@@ -2171,7 +2174,7 @@ isBareGenericParam: function {ast: Ast.view op: Node.view} out bool is {
     match (
         op
     ) case dottedpath then {
-        leaf: atomName :ast n: (ast.nodes.get i: op.child.u64)
+        leaf: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: op.child.u64))
         if leaf.stringview == "generic" then return true
         if leaf.stringview == "valtype" then return true
         if leaf.stringview == "reftype" then return true
@@ -2192,7 +2195,7 @@ isGenericParam: function {ast: Ast.view op: Node.view} out bool is {
     } case call then {
         return (isGenericParam :ast op: (ast.nodes.get i: op.callable.u64))
     } case dottedpath then {
-        leaf: atomName :ast n: (ast.nodes.get i: op.child.u64)
+        leaf: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: op.child.u64))
         if leaf.stringview == "generic" then return true
         if leaf.stringview == "valtype" then return true
         if leaf.stringview == "reftype" then return true
@@ -2282,7 +2285,7 @@ genericConstraintKind: function {ast: Ast.view n: Node.view} out String is {
     ) case expression then {
         return (genericConstraintKind :ast n: (ast.nodes.get i: n.expression.u64))
     } case dottedpath then {
-        nameCount: atomName :ast n: (ast.nodes.get i: n.child.u64)
+        nameCount: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
         if nameCount.stringview == "valtype" then return nameCount
         if nameCount.stringview == "reftype" then return nameCount
         return "".string
@@ -2536,8 +2539,8 @@ resolveDottedArgTid: function {
     match (
         dp
     ) case dottedpath then {
-        pq: atomName :ast n: (ast.nodes.get i: dp.parent.u64)
-        cq: atomName :ast n: (ast.nodes.get i: dp.child.u64)
+        pq: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
+        cq: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.child.u64))
         if pq.length > 0 when cq.length > 0 then {
             if (nameDenotesUnit
     :frame
@@ -2959,8 +2962,8 @@ recordTyperef: function {
         # stripped inner atom is stamped too.
         # A `.typedef` marker only recurses -- the dotted node itself resolves to a
         # NULL-defined typedef wrapper the dump filters out.
-        cn: atomName :ast n: (ast.nodes.get i: node.child.u64)
-        pn: atomName :ast n: (ast.nodes.get i: node.parent.u64)
+        cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.child.u64))
+        pn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
         if (nameDenotesUnit :st :frame nameId: (nameIdOf :ast name: pn.stringview)) then {
             # cross-unit qualified type ref (zlexer.Token): record the MEMBER under
             # its DEFINING unit (the parent) so stampTyperefs bridges this node.
@@ -3527,14 +3530,17 @@ resolveTyperefShell: function {
         # type-expr peels to its parent: an ownership/access strip marker
         # (Container.private.lock) or a variant/union subtype default where the arm
         # is the default value and the type is the parent (direction.north).
-        pNm: atomName :ast n: (ast.nodes.get i: typeExpr.parent.u64)
+        pNm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
         if (nameDenotesUnit
     :frame
     :st nameId: (atomNameId
             :ast
             n: (ast.nodes.get i: typeExpr.parent.u64)
         )) then {
-            cNm: atomName :ast n: (ast.nodes.get i: typeExpr.child.u64)
+            cNm: (zast.nameTextAt
+                :ast
+                ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
+            )
             (demandUnitMember
                 :st
                 unitNameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
@@ -3558,7 +3564,10 @@ resolveTyperefShell: function {
             # a dotted numeric literal (4.u64, 2.5.f32) declares the SUFFIX
             # type: peeling to the numeric parent would collapse it to the
             # literal default (i64/f64), silently mistyping the slot
-            nSfx: atomName :ast n: (ast.nodes.get i: typeExpr.child.u64)
+            nSfx: (zast.nameTextAt
+                :ast
+                ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
+            )
             isSfx: isNumericTypeName name: nSfx.stringview
             if (isNumericLiteralName name: pNm.stringview) when isSfx then {
                 return (resolveAtomType
@@ -4332,9 +4341,15 @@ resolveFunction: function {
                             )
                         )
                     } else {
-                        pdcn: dottedChildName :ast n: (ast.nodes.get i: pm.operation.u64)
+                        pdcn: (zast.nameTextAt
+                            :ast
+                            ref: (dottedChildNameId :ast n: (ast.nodes.get i: pm.operation.u64))
+                        )
                         if pdcn.length > 0 when (isStripMarker name: pdcn.stringview) == false then {
-                            prn: rootNameOf :ast n: (ast.nodes.get i: pm.operation.u64)
+                            prn: (zast.nameTextAt
+                                :ast
+                                ref: (rootNameIdOf :ast n: (ast.nodes.get i: pm.operation.u64))
+                            )
                             # a dotted numeric literal (0.u64) is a typed numeric
                             # default, not a variant arm (mirrors the field
                             # classifiers' rootNameOf guard)
@@ -4516,7 +4531,7 @@ paramIsBorrowReftype: function {ast: Ast.view
     thisName: StringView
     op: Node.view
 } out bool is {
-    tn: atomName :ast n: op
+    tn: zast.nameTextAt :ast ref: (atomNameId :ast n: op)
     isref: false
     if tn.stringview == "this" then {
         isref = nameIsInUnitReftype :st :ast :unitDecl name: thisName
@@ -4650,7 +4665,10 @@ stampMemberSignature: function {
         with pit: fnN.parameters.iterate do for pId: pit loop {
             pn: ast.nodes.get i: pId.u64
             if pn.namedoperation then {
-                pRoot: rootNameOf :ast n: (ast.nodes.get i: pn.operation.u64)
+                pRoot: (zast.nameTextAt
+                    :ast
+                    ref: (rootNameIdOf :ast n: (ast.nodes.get i: pn.operation.u64))
+                )
                 if pRoot.stringview == "this" then {
                     (ztyping.nodeTypeSet
                         tbl: st.typing.nodeType
@@ -4841,8 +4859,8 @@ stampForcedTyperef: function {
     # a DOTTED return (`out zast.nodeid`) names its type in another unit, which
     # no single base name reaches
     {
-        rootN: rootNameOf :ast n: (ast.nodes.get i: tnid)
-        childN: dottedChildName :ast n: (ast.nodes.get i: tnid)
+        rootN: zast.nameTextAt :ast ref: (rootNameIdOf :ast n: (ast.nodes.get i: tnid))
+        childN: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: tnid))
         if childN.length > 0 when rootN.length > 0 then {
             dd: (descendNamed
                 :st
@@ -5232,7 +5250,10 @@ asDeclaresMember: function {
         ) case namedoperation then {
             mn: zast.nameTextAt :ast ref: am.name
             if mn.stringview == member then {
-                vn: atomName :ast n: (ast.nodes.get i: am.operation.u64)
+                vn: (zast.nameTextAt
+                    :ast
+                    ref: (atomNameId :ast n: (ast.nodes.get i: am.operation.u64))
+                )
                 if vn.stringview != "null" then result = true
             }
         } else null
@@ -5253,7 +5274,10 @@ memberNullOptOut: function {
         ) case namedoperation then {
             mn: zast.nameTextAt :ast ref: am.name
             if mn.stringview == member then {
-                vn: atomName :ast n: (ast.nodes.get i: am.operation.u64)
+                vn: (zast.nameTextAt
+                    :ast
+                    ref: (atomNameId :ast n: (ast.nodes.get i: am.operation.u64))
+                )
                 if vn.stringview == "null" then result = true
             }
         } else null
@@ -5345,7 +5369,10 @@ attachMethods: function {
                     childTypeId: mido
                 )
             } case none then {
-                cn: atomName :ast n: (ast.nodes.get i: am.operation.u64)
+                cn: (zast.nameTextAt
+                    :ast
+                    ref: (atomNameId :ast n: (ast.nodes.get i: am.operation.u64))
+                )
                 if (isNumericLiteralName name: cn.stringview) then {
                     # A static constant's child is a per-constant NULL-unit
                     # clone of the literal's default type: named through the
@@ -5432,7 +5459,7 @@ attachMarkers: function {
         match (
             mm
         ) case namedoperation then {
-            cnm: atomName :ast n: (ast.nodes.get i: mm.operation.u64)
+            cnm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: mm.operation.u64))
             # `tag: tag` is not a field of the numeric record that carries it:
             # it designates the discriminator STORAGE type so a sum type can
             # spell `u8.tag`. A program declaring no sum type never names it,
@@ -5587,7 +5614,7 @@ resolveData: function {ast: Ast
             # emitted with, and a backend reading it has no unit to fold under.
             # A non-literal element records nothing and keeps its position.
             if opRef > 0 then {
-                lt: atomName :ast n: (ast.nodes.get i: opRef.u64)
+                lt: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: opRef.u64))
                 if lt.length > 0 then {
                     cv: constLiteralValue name: lt.stringview
                     if cv.kind.ivalKind then {
@@ -6632,8 +6659,14 @@ resolveRecord: function {
                             thisName: ""
                             node: (ast.nodes.get i: fm.operation.u64)
                         )
-                        dcn1: dottedChildName :ast n: (ast.nodes.get i: fm.operation.u64)
-                        rdnr: rootNameOf :ast n: (ast.nodes.get i: fm.operation.u64)
+                        dcn1: (zast.nameTextAt
+                            :ast
+                            ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
+                        )
+                        rdnr: (zast.nameTextAt
+                            :ast
+                            ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
+                        )
                         if (isNumericLiteralName name: rdnr.stringview) then {
                             (st.typing.setDefaultLiteral
                                 pool: ast.names
@@ -6802,7 +6835,7 @@ detectTagAccessor: function {
     am: zast.NamedOperationData.view
 } is {
     tp: dottedParentName :ast n: (ast.nodes.get i: am.operation.u64)
-    tc: dottedChildName :ast n: (ast.nodes.get i: am.operation.u64)
+    tc: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: am.operation.u64))
     if tc.stringview != "tag" then return
     if (isNumericTypeName name: tp.stringview) == false then return
     mname: zast.nameTextAt :ast ref: am.name
@@ -7456,7 +7489,7 @@ resolveUnion: function {
             armCountU = armCountU + 1
             if armCountU == 1 then firstArmU = fm.name.u64
             if armCountU == 2 then secondArmU = fm.name.u64
-            an: atomName :ast n: (ast.nodes.get i: fm.operation.u64)
+            an: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation.u64))
             if an.stringview != "null" then allNull = false
             # A `(Box T)` arm collapses to T: the arm child IS the boxed
             # valtype. A union arm is heap-celled whichever family it holds,
@@ -8066,8 +8099,14 @@ resolveClass: function {
                             thisName: ""
                             node: (ast.nodes.get i: fm.operation.u64)
                         )
-                        dcn0: dottedChildName :ast n: (ast.nodes.get i: fm.operation.u64)
-                        rdnc: rootNameOf :ast n: (ast.nodes.get i: fm.operation.u64)
+                        dcn0: (zast.nameTextAt
+                            :ast
+                            ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
+                        )
+                        rdnc: (zast.nameTextAt
+                            :ast
+                            ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
+                        )
                         if (isNumericLiteralName name: rdnc.stringview) then {
                             (st.typing.setDefaultLiteral
                                 pool: ast.names
@@ -9349,10 +9388,10 @@ resolveDef: function {
         # ref to a (shell) type id and register it under the unit's name, so bare-alias
         # return types and value uses resolve. Replicates resolveTyperefShell's
         # cross-unit leg.
-        apNm: atomName :ast n: (ast.nodes.get i: defn.parent.u64)
+        apNm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.parent.u64))
         apId: atomNameId :ast n: (ast.nodes.get i: defn.parent.u64)
         if (nameDenotesUnit :st frame: rf nameId: apId) then {
-            acNm: atomName :ast n: (ast.nodes.get i: defn.child.u64)
+            acNm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.child.u64))
             acId: atomNameId :ast n: (ast.nodes.get i: defn.child.u64)
             demandUnitMember :st unitNameId: apId nameId: acId
             # The alias target is read off the re-export Decl's node on demand
@@ -10568,7 +10607,7 @@ scanCallsInNode: function {
     match (
         node
     ) case call then {
-        cn: atomName :ast n: (ast.nodes.get i: node.callable.u64)
+        cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.callable.u64))
         if cn.stringview == "return" then {
             scFr: unitFrameOf :st declId: frame
             demandDefinition :st frame: scFr nameId: zast.wkReturn
@@ -13684,17 +13723,17 @@ paramTypeId: function {
     if r > 0 then {
         return r
     } else {
-        an: atomName :ast n: op
+        an: zast.nameTextAt :ast ref: (atomNameId :ast n: op)
         ano: walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: an.stringview
         anid: optU64Or o: ano d: 0
         if anid > 0 then return anid
         # a dotted typeref naming a variant/union ARM is an arm DEFAULT:
         # the parameter's type is the tagged parent.
-        bn: rootNameOf :ast n: op
+        bn: zast.nameTextAt :ast ref: (rootNameIdOf :ast n: op)
         if bn.length > 0 then {
             # a dotted numeric literal (0.u64) declares the SUFFIX type: the
             # body read must carry it, not fall to 0 (untyped/permissive)
-            dcn: dottedChildName :ast n: op
+            dcn: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: op)
             isSfx: isNumericTypeName name: dcn.stringview
             if (isNumericLiteralName name: bn.stringview) when isSfx then {
                 return (optU64Or
@@ -16217,7 +16256,7 @@ genericTypeConstruction: function {
     }
     # Only a bare-atom callable restamps to the instance; a dotted callable
     # (the .str conversion form) leaves the path unstamped.
-    gcb: bareAtomName :ast n: (ast.nodes.get i: call.callable.u64)
+    gcb: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: call.callable.u64))
     gcal: nodeId n: (ast.nodes.get i: call.callable.u64)
     if gcal > 0 when gcb.length > 0 then {
         setga: mid
@@ -16759,7 +16798,13 @@ checkProjectionCreate: function {
                                 :ast
                                 op: (ast.nodes.get i: arg.operation.u64)
                             ) then {
-                                pbn: bareAtomName :ast n: (ast.nodes.get i: arg.operation.u64)
+                                pbn: (zast.nameTextAt
+                                    :ast
+                                    ref: (bareAtomNameId
+                                        :ast
+                                        n: (ast.nodes.get i: arg.operation.u64)
+                                    )
+                                )
                                 if pbn.length > 0 then {
                                     pbv: st.lookupVarId nameId: (nameIdOf :ast name: pbn.stringview)
                                     match (
@@ -16875,7 +16920,10 @@ checkTypedefCreate: function {
                     )
                     if vt > 0 then {
                         if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation.u64)) then {
-                            bn: bareAtomName :ast n: (ast.nodes.get i: arg.operation.u64)
+                            bn: (zast.nameTextAt
+                                :ast
+                                ref: (bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
+                            )
                             if bn.length > 0 then {
                                 bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringview)
                                 match (
@@ -17276,7 +17324,7 @@ baseIsPrivateCapable: function {
             return false
         }
     } case dottedpath then {
-        cnm: atomName :ast n: (ast.nodes.get i: baseNode.child.u64)
+        cnm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: baseNode.child.u64))
         if cnm.stringview == "private" then return true
         pbNode: ast.nodes.get i: baseNode.parent.u64
         pbNid: nodeId n: pbNode
@@ -17416,7 +17464,7 @@ checkDotted: function {
     }
     castBase: atomName :ast n: (ast.nodes.get i: castBaseId.u64)
     if (isNumericLiteralName name: castBase.stringview) then {
-        castChild: atomName :ast n: (ast.nodes.get i: dp.child.u64)
+        castChild: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.child.u64))
         castOpt: (walkLookupTyperef
             :st
             frame: st.curFrame
@@ -17507,7 +17555,7 @@ checkDotted: function {
     if bt.isZero then {
         # an unresolved bare-name base may be a unit-qualified member
         # path (io.stdout): the side map types the base as the UNIT type.
-        ubn: atomName :ast n: (ast.nodes.get i: dp.parent.u64)
+        ubn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
         if ubn.length > 0 then {
             ubo: (declTypeIdOf
                 :st
@@ -17666,7 +17714,7 @@ checkDotted: function {
     if (isMoveMarker name: cn.stringview) then isXferMarker = true
     if cn.stringview == "release" then isXferMarker = true
     if isXferMarker then {
-        mkRoot: bareAtomName :ast n: (ast.nodes.get i: dp.parent.u64)
+        mkRoot: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
         if cn.stringview == "release" when mkRoot.length == 0 then {
             mrv: "'.release' can only be applied to a variable name".string
             (addError
@@ -18426,7 +18474,10 @@ checkDotted: function {
         # as its origin (and installs the borrow locks).
         rmtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rm.u64)
         if rmtt == ztypes.ztypetype.protocolType then {
-            pjroot: bareAtomName :ast n: (ast.nodes.get i: dp.parent.u64)
+            pjroot: (zast.nameTextAt
+                :ast
+                ref: (bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
+            )
             if pjroot.length > 0 then {
                 pjvo: st.lookupVarId nameId: (nameIdOf :ast name: pjroot.stringview)
                 match (
@@ -19242,7 +19293,7 @@ predFactOf: function {
             negated: false
         )
     } case binop then {
-        opn: bareAtomName :ast n: (ast.nodes.get i: n.operator.u64)
+        opn: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: n.operator.u64))
         if opn.stringview == "==" then {
             # `== true` / `== false`: the operand names one of bool's arms,
             # and which side it is comes from bool's arm ORDER. boolId is the
@@ -19647,7 +19698,7 @@ checkAssignment: function {
                 )
             }
         }
-        rn5: bareAtomName :ast n: av
+        rn5: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: av)
         # The readonly test runs OUTSIDE the destructor gate below: a frozen
         # binding may not be moved out of whether or not its type owns heap,
         # and without a destructor the emitter builds a value from a pointer
@@ -19844,7 +19895,7 @@ checkReassignment: function {
     # retaken over the new value. Without the marker the lock stands and the
     # write is rejected -- there is no implicit downgrade at a reassignment.
     hbVid: u64
-    hbNm: atomName :ast n: tpn
+    hbNm: zast.nameTextAt :ast ref: (atomNameId :ast n: tpn)
     if hbNm.length > 0 when (valueIsHold :ast n: rvn) then {
         hbo: st.lookupVarId nameId: (nameIdOf :ast name: hbNm.stringview)
         match (
@@ -19944,7 +19995,7 @@ checkReassignment: function {
                 match (
                     tto
                 ) case some then {
-                    tfn: dottedChildName :ast n: tpn
+                    tfn: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: tpn)
                     if tfn.length > 0 then {
                         mrvt: materialiseLiteral :ast :st :unitDecl t: rvt
                         (st.typing.setMemberType
@@ -19987,7 +20038,7 @@ checkReassignment: function {
         # narrowing). A field target has no bare name and keeps lvt.
         chkT: lvt
         {
-            nmC: atomName :ast n: tpn
+            nmC: zast.nameTextAt :ast ref: (atomNameId :ast n: tpn)
             if nmC.length > 0 then {
                 dtoC: st.declaredTypeOf nameId: (nameIdOf :ast name: nmC.stringview)
                 match (
@@ -20028,7 +20079,7 @@ checkReassignment: function {
             }
         }
     }
-    nm: atomName :ast n: tpn
+    nm: zast.nameTextAt :ast ref: (atomNameId :ast n: tpn)
     if nm.length > 0 then {
         st.resetNarrowing nameId: (nameIdOf :ast name: nm.stringview)
         nvo: st.lookupVarId nameId: (nameIdOf :ast name: nm.stringview)
@@ -20054,7 +20105,7 @@ checkReassignment: function {
         } case none then null
     }
     targetRoot: methodReceiverRoot :ast n: tpn
-    targetFnName: dottedChildName :ast n: tpn
+    targetFnName: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: tpn)
     if targetRoot.length > 0 when targetFnName.length > 0 then {
         tto: st.lookup nameId: (nameIdOf :ast name: targetRoot.stringview)
         match (
@@ -20092,7 +20143,7 @@ checkReassignment: function {
     }
     # A bare-name reftype RHS is a move: the source invalidates (the symtab
     # appends its taken overlay entry).
-    rn: bareAtomName :ast n: rvn
+    rn: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: rvn)
     if rn.length > 0 when rvt > 0 when (typeIsReftype :st tid: rvt) then {
         vo: st.lookupVarId nameId: (nameIdOf :ast name: rn.stringview)
         match (
@@ -20435,7 +20486,10 @@ checkFor: function {
             # its walk runs in a call scope and the atom keeps the FUNCTION
             # stamp rather than the auto-call's coerced return.
             facId: u64
-            fbn: bareAtomName :ast n: (ast.nodes.get i: cond.operation.u64)
+            fbn: (zast.nameTextAt
+                :ast
+                ref: (bareAtomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
+            )
             if fbn.length > 0 then {
                 ffo: (walkLookupTyperef
                     :st
@@ -21328,7 +21382,7 @@ checkBinop: function {
             vnode: (ast.nodes.get i: binop.rhs.u64)
         )
     }
-    opn: atomName :ast n: (ast.nodes.get i: binop.operator.u64)
+    opn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: binop.operator.u64))
     opnId: atomNameId :ast n: (ast.nodes.get i: binop.operator.u64)
     result = (checkBinopMethodDispatch
         :st
@@ -23310,7 +23364,10 @@ checkBoxConstruction: function {
                                 setbl: vt
                                 stampGate :st nid: iid.u64 tid: (ztypes.tid.create from: setbl.u64)
                             }
-                            bn: bareAtomName :ast n: (ast.nodes.get i: arg.operation.u64)
+                            bn: (zast.nameTextAt
+                                :ast
+                                ref: (bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
+                            )
                             aid8b: nodeId n: (ast.nodes.get i: arg.operation.u64)
                             aln8b: nodeLine n: (ast.nodes.get i: arg.operation.u64)
                             acl8b: nodeCol n: (ast.nodes.get i: arg.operation.u64)
@@ -23831,7 +23888,10 @@ checkCall: function {
                     }
                     # a returned owned local is CONSUMED: record the
                     # transfer so L022 does not offer a view for it
-                    rbn: bareAtomName :ast n: (ast.nodes.get i: arg.operation.u64)
+                    rbn: (zast.nameTextAt
+                        :ast
+                        ref: (bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
+                    )
                     if rbn.length > 0 when argT > 0 when (typeIsReftype :st tid: argT) then {
                         rvv: st.lookupVarId nameId: (nameIdOf :ast name: rbn.stringview)
                         match (
@@ -24078,7 +24138,10 @@ checkCall: function {
                             pjBorrow: false
                             if pjtt == ztypes.ztypetype.protocolType then {
                                 callableNode: ast.nodes.get i: call.callable.u64
-                                pjcn: dottedChildName :ast n: callableNode
+                                pjcn: (zast.nameTextAt
+                                    :ast
+                                    ref: (dottedChildNameId :ast n: callableNode)
+                                )
                                 if pjcn.stringview == "create" then pjTake = true
                                 if pjcn.stringview == "borrow" then pjBorrow = true
                             }
@@ -24098,7 +24161,10 @@ checkCall: function {
                     # dotted on the type (`Counter.increment c`) passes the
                     # receiver as an ordinary positional arg.
                     recvVal: false
-                    rrn: rootNameOf :ast n: (ast.nodes.get i: call.callable.u64)
+                    rrn: (zast.nameTextAt
+                        :ast
+                        ref: (rootNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
+                    )
                     if rrn.length > 0 then {
                         rlo: st.lookup nameId: (nameIdOf :ast name: rrn.stringview)
                         match (
@@ -24153,7 +24219,10 @@ checkCall: function {
                                 }
                                 if doLock then {
                                     callableNode: ast.nodes.get i: call.callable.u64
-                                    rmn: dottedChildName :ast n: callableNode
+                                    rmn: (zast.nameTextAt
+                                        :ast
+                                        ref: (dottedChildNameId :ast n: callableNode)
+                                    )
                                     shr: (isContainerReaderCall
                                         :ast
                                         :st
@@ -24196,7 +24265,10 @@ checkCall: function {
                                     tid: (ztypes.tid.create from: rvtN.u64)
                                 ) then {
                                     callableNode: ast.nodes.get i: call.callable.u64
-                                    rmnN: dottedChildName :ast n: callableNode
+                                    rmnN: (zast.nameTextAt
+                                        :ast
+                                        ref: (dottedChildNameId :ast n: callableNode)
+                                    )
                                     shrN: (isContainerReaderCall
                                         :ast
                                         :st
@@ -24755,7 +24827,10 @@ checkCall: function {
                                         }
                                         if doLockG then {
                                             callableNode: ast.nodes.get i: call.callable.u64
-                                            rmnG: dottedChildName :ast n: callableNode
+                                            rmnG: (zast.nameTextAt
+                                                :ast
+                                                ref: (dottedChildNameId :ast n: callableNode)
+                                            )
                                             shrG: (isContainerReaderCall
                                                 :ast
                                                 :st
@@ -24801,7 +24876,10 @@ checkCall: function {
                                             tid: (ztypes.tid.create from: rvtNG.u64)
                                         ) then {
                                             callableNode: ast.nodes.get i: call.callable.u64
-                                            rmnNG: dottedChildName :ast n: callableNode
+                                            rmnNG: (zast.nameTextAt
+                                                :ast
+                                                ref: (dottedChildNameId :ast n: callableNode)
+                                            )
                                             shrNG: (isContainerReaderCall
                                                 :ast
                                                 :st
@@ -30004,7 +30082,7 @@ evalConstNode: function {
         if lv.kind.none then return ztypes.noConst
         rv: evalConstNode :st :frame :ast :unitDecl n: (ast.nodes.get i: n.rhs.u64)
         if rv.kind.none then return ztypes.noConst
-        opNode: atomName :ast n: (ast.nodes.get i: n.operator.u64)
+        opNode: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.operator.u64))
         if opNode.length == 0 then return ztypes.noConst
         # two tags compare by ARM IDENTITY -- the owning type and the arm's
         # name-pool id -- never by rendered text. Only equality is defined:
@@ -30083,7 +30161,10 @@ evalConstNode: function {
                     n: (ast.nodes.get i: cnode.parent.u64)
                 )
                 if rcv.kind.svalKind then {
-                    mnc: atomName :ast n: (ast.nodes.get i: cnode.child.u64)
+                    mnc: (zast.nameTextAt
+                        :ast
+                        ref: (atomNameId :ast n: (ast.nodes.get i: cnode.child.u64))
+                    )
                     if mnc.length > 0 then {
                         return (constStringMethod
                             :st
