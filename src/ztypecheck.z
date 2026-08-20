@@ -17096,30 +17096,132 @@ inferGenericConstruction: function {
     }
     return mid
 }
+# skipCapacityArg -- `capacity:` on a builtin container is a create argument riding
+# the construction sugar: it must not reach the spec key or the substitutions, and
+# failing it over to field inference would type the whole call wrong. A skipped
+# argument is still a VALUE, so it is walked here for its atoms' stamps.
+skipCapacityArg: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    arg: zast.NamedOperationData.view
+    tplId: ztypes.tid
+    pk0: zast.nameid
+    isP0: bool
+} out bool is {
+    skipCr: false
+    if (isP0) == false when pk0 == zast.wkCapacity then {
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
 
-# genericTypeConstruction -- a generic TYPE template in callable position
-# with type-name arguments constructs its mono in place (`(List of: String)`
-# in value position): resolve each argument as a type, mint the deduped mono
-# with its chains and children, and the call's
-# value is the mono.
-genericTypeConstruction: function {
+            base: "ListRef"
+        ) then skipCr = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "ListVal"
+        ) then skipCr = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "MapRR"
+        ) then skipCr = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "MapRV"
+        ) then skipCr = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "MapVR"
+        ) then skipCr = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "MapVV"
+        ) then skipCr = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "SetRef"
+        ) then skipCr = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "SetVal"
+        ) then skipCr = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "IdMapR"
+        ) then skipCr = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "IdMapV"
+        ) then skipCr = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "IdSet"
+        ) then skipCr = true
+    }
+    # a skipped capacity: arg is still a value: check it so its
+    # atoms stamp (atomVariableId / refDecl) like any arg
+    if skipCr then {
+        (checkValue
+            :st
+            :unitDecl
+            :ast
+            node: (ast.nodes.get i: arg.operation.u64)
+        )
+    }
+    return skipCr
+}
+
+
+# collectGenericTypeArgs -- read one generic construction's arguments into the type
+# and value substitutions, building the mangled suffix that names the instance.
+collectGenericTypeArgs: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     call: zast.CallData.view
     tplId: ztypes.tid
-} out ztypes.tid is {
-    tname: st.reg.nameOf tid: tplId
-    if tname.length == 0 then return (ztypes.tid.create from: 0)
-    tk0: declOfTypeId :st tid: tplId
+    primaryName: zast.nameid
     sfx: String
     subs: (IdMapV zast.nameid value: u64)
     valueSubs: (IdMapV zast.nameid value: u64)
     numParamNames: (ListVal zast.nameid)
     numParamNodes: (ListVal u32)
+    tk0: ztypes.declid
+    firstOut: (ListVal u64)
+} out bool is {
     firstA: u64
     anyMiss: false
-    primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
     argIdx: u64
     aiter: call.arguments.iterate
     for argId: aiter loop {
@@ -17161,104 +17263,20 @@ genericTypeConstruction: function {
             if (pk0.isZero) == false then {
                 isP0 = st.reg.isGenericParamOf tdecl: tk0 name: pk0
             }
-            # `capacity:` on a builtin container is a create argument riding
-            # the construction sugar: skip it here (it must not reach the
-            # spec key or subs) instead of failing over to field inference
-            skipCr: false
-            if (isP0) == false when pk0 == zast.wkCapacity then {
-                if tplId == (builtinTidT
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    base: "ListRef"
-                ) then skipCr = true
-                if tplId == (builtinTidT
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    base: "ListVal"
-                ) then skipCr = true
-                if tplId == (builtinTidT
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    base: "MapRR"
-                ) then skipCr = true
-                if tplId == (builtinTidT
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    base: "MapRV"
-                ) then skipCr = true
-                if tplId == (builtinTidT
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    base: "MapVR"
-                ) then skipCr = true
-                if tplId == (builtinTidT
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    base: "MapVV"
-                ) then skipCr = true
-                if tplId == (builtinTidT
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    base: "SetRef"
-                ) then skipCr = true
-                if tplId == (builtinTidT
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    base: "SetVal"
-                ) then skipCr = true
-                if tplId == (builtinTidT
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    base: "IdMapR"
-                ) then skipCr = true
-                if tplId == (builtinTidT
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    base: "IdMapV"
-                ) then skipCr = true
-                if tplId == (builtinTidT
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    base: "IdSet"
-                ) then skipCr = true
-            }
-            # a skipped capacity: arg is still a value: check it so its
-            # atoms stamp (atomVariableId / refDecl) like any arg
-            if skipCr then {
-                (checkValue
-                    :st
-                    :unitDecl
-                    :ast
-                    node: (ast.nodes.get i: arg.operation.u64)
-                )
-            }
+            skipCr: (skipCapacityArg
+                :ast
+                :st
+                :unitDecl
+                :arg
+                :tplId
+                :pk0
+                :isP0
+            )
             if (isP0) == false when skipCr == false then anyMiss = true
             an: paramTypeBaseName :ast op: (ast.nodes.get i: arg.operation.u64)
             if (anyMiss) == false when skipCr == false then { if (isNumericLiteralName name: an.stringview) then {
-                nsfx2: "\{sfx}_\{an}"
-                sfx = nsfx2
+                asfx2: "_\{an}"
+                sfx.append s: asfx2
                 if (pk0.isZero) == false then {
                     numParamNames.append pk0
                     numParamNodes.append arg.operation
@@ -17292,8 +17310,8 @@ genericTypeConstruction: function {
 
                         tid: (ztypes.tid.create from: aid.u64)
                     )
-                    nsfx: "\{sfx}_\{atn}"
-                    sfx = nsfx
+                    asfx: "_\{atn}"
+                    sfx.append s: asfx
                     if (pk0.isZero) == false then {
                         pv: aid
                         subs.set key: pk0 value: pv
@@ -17306,7 +17324,50 @@ genericTypeConstruction: function {
         } else null
         argIdx = argIdx + 1
     }
+    firstOut.append firstA
+    return anyMiss
+}
+
+
+# genericTypeConstruction -- a generic TYPE template in callable position
+# with type-name arguments constructs its mono in place (`(List of: String)`
+# in value position): resolve each argument as a type, mint the deduped mono
+# with its chains and children, and the call's
+# value is the mono.
+genericTypeConstruction: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    call: zast.CallData.view
+    tplId: ztypes.tid
+} out ztypes.tid is {
+    tname: st.reg.nameOf tid: tplId
+    if tname.length == 0 then return (ztypes.tid.create from: 0)
+    tk0: declOfTypeId :st tid: tplId
+    sfx: String
+    subs: (IdMapV zast.nameid value: u64)
+    valueSubs: (IdMapV zast.nameid value: u64)
+    numParamNames: (ListVal zast.nameid)
+    numParamNodes: (ListVal u32)
+    primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
+    firstOut: (ListVal u64)
+    anyMiss: (collectGenericTypeArgs
+        :ast
+        :st
+        :unitDecl
+        :call
+        :tplId
+        :primaryName
+        :sfx
+        :subs
+        :valueSubs
+        :numParamNames
+        :numParamNodes
+        :tk0
+        :firstOut
+    )
     if anyMiss then return (ztypes.tid.create from: 0)
+    firstA: firstOut.get i: 0
     if sfx.length == 0 then return (ztypes.tid.create from: 0)
     mname: "\{tname}\{sfx}"
     mid: (getOrMintSpec
@@ -20280,6 +20341,181 @@ checkDotted: function {
         return (checkUnresolvedMember :st :ast :dp :bt cn: cn.stringview :cnId)
     }
 }
+# checkBareTypeValue -- a bare TYPE name in value position is zero-argument
+# construction (`p: Point`), so a synthesized create's required fields are
+# enforced here and an aliased container name resolves through its twin.
+checkBareTypeValue: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast.view
+    node: zast.AtomIdData.view
+    ndNm: StringView
+    fo: u64
+} is {
+    # only an atom NAMING the type is a bare construction; a
+    # value alias typed as it (true: bool.true) is a value use.
+    # The renamed-twin aliases name their type without
+    # matching its registry name; a general typeref retry
+    # cannot stand here because a VALUE alias also resolves
+    # to its type's tid (`true` -> bool).
+    tnq: st.reg.nameOf tid: (ztypes.tid.create from: fo.u64)
+    isTypeAtom: tnq.stringview == ndNm
+    if (isTypeAtom) == false then {
+        twn: aliasedContainerTwin name: ndNm
+        if twn.length > 0 when twn == tnq.stringview then isTypeAtom = true
+        # an atom naming a TYPE alias constructs exactly as the
+        # type's own name does. The tid cannot say so -- a VALUE
+        # alias resolves to its root type's tid too -- but the
+        # alias's own shape can. Without this the atom stays
+        # unstamped and the emitter writes the alias name into
+        # the C.
+        if (isTypeAtom) == false then {
+            aad: (declOfUnitDef
+                :st
+                frame: st.curFrame
+                :unitDecl
+                nameId: (nameIdOf :ast name: ndNm)
+            )
+            if (aliasNamesType
+                :st
+
+                :ast
+                declId: aad
+            ) then {
+                # The alias test says TYPE; the CONSTANT gets to
+                # overrule it. `ECHO: LIB` names a string
+                # constant whose own type is StringView, so the
+                # test above sees a decl carrying a type -- and a
+                # bare StringView is an unconstructible view. A
+                # definition with a compile-time value is a VALUE
+                # alias, the case this leg's own comment names
+                # for `true: bool.true`.
+                # Asked SECOND, not first: the answer only
+                # matters when the alias test said yes, and a
+                # pull in front of it runs the evaluator for
+                # every bare atom in every body.
+                ecv: (constValueOfMember
+                    :st
+                    frame: st.curFrame
+                    :ast
+
+                    :unitDecl
+                    defName: ndNm
+                )
+                constFailClear :st
+                if ecv.kind.none then isTypeAtom = true
+            }
+        }
+    }
+    if isTypeAtom then {
+        if (isImplicitZeroCreateTid
+            :ast
+            :st
+            tid: (ztypes.tid.create from: fo.u64)
+        ) then {
+            icv: fo
+            st.typing.implicitCreate.set key: node.nodeid.u64 value: icv
+        } else {
+            (checkBareTypeConstruction
+                :st
+                :ast
+                :node
+                tid: (ztypes.tid.create from: fo.u64)
+            )
+        }
+    }
+}
+
+# typeOfBareName -- a bare name that is not a local: it names a TYPE, a unit, or a
+# function. A no-arg non-generic FUNCTION name in value position is a call, and
+# an aliased container name resolves through its twin. 0 when it names nothing.
+typeOfBareName: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast.view
+    node: zast.AtomIdData.view
+    ndNm: StringView
+} out ztypes.tid is {
+    result: ztypes.tid
+    fo: (walkLookupTyperef
+        :st
+        frame: st.curFrame
+        :ast
+
+        :unitDecl
+        base: ndNm
+    )
+    match (
+        fo
+    ) case some then {
+        result = ztypes.tid.create from: fo.u64
+        # A bare no-arg non-generic FUNCTION name is a call: the
+        # value is its return (an unregistered shell when out-less).
+        isAutoFn: false
+        if fo < st.reg.typeById.length then {
+            fz: st.reg.typeById.get i: fo
+            if fz.typetype == ztypes.ztypetype.functionType then {
+                if (fz.isgeneric) == false then isAutoFn = true
+            }
+        }
+        if isAutoFn when (st.typing.suppressFnAutoCall) == false then {
+            if (fnAutoCallable
+                :ast
+                :st
+                mid: (ztypes.tid.create from: fo.u64)
+            ) == false then {
+                isAutoFn = false
+                (bareFnRefError
+                    :ast
+                    :st
+                    nodeid: node.nodeid
+                    lineno: node.lineno
+                    colno: node.colno
+                    width: ndNm.length.u32.orPanic
+                    fid: (ztypes.tid.create from: fo.u64)
+                )
+            }
+        } else {
+            isAutoFn = false
+        }
+        if isAutoFn then {
+            ro: methodReturnOf :st mid: (ztypes.tid.create from: fo.u64)
+            match (
+                ro
+            ) case some then {
+                result = ro
+            } case none then {
+                result = ztypes.tid.create from: (st.typing.nullTypeId)
+            }
+        }
+        if (st.typing.suppressBareCtor) == false then {
+            (checkBareTypeValue
+                :st
+                :unitDecl
+                :ast
+                :node
+                :ndNm
+                :fo
+            )
+        }
+        setu: result
+        stampGate :st nid: node.nodeid.u64 tid: setu
+        # atom-use def reference: the DEF's declaration (nodeType
+        # carries the auto-call RETURN type above, not the referent)
+        sfF: (declSurfaceOfName
+            :st
+
+            :ast
+            :unitDecl
+            nameId: node.name
+            tid: (ztypes.tid.create from: fo.u64)
+        )
+        stampRefDecl :st nid: node.nodeid.u64 declId: sfF
+        maybeWalkMethods :st frame: st.curFrame :unitDecl :ast name: ndNm
+    } case none then null
+    return result
+}
+
 
 # typecheck a bare identifier reference.
 checkAtomid: function {
@@ -20417,146 +20653,7 @@ checkAtomid: function {
             setl: result
             stampGate :st nid: node.nodeid.u64 tid: setl
         } else {
-            fo: (walkLookupTyperef
-                :st
-                frame: st.curFrame
-                :ast
-
-                :unitDecl
-                base: ndNm.stringview
-            )
-            match (
-                fo
-            ) case some then {
-                result = ztypes.tid.create from: fo.u64
-                # A bare no-arg non-generic FUNCTION name is a call: the
-                # value is its return (an unregistered shell when out-less).
-                isAutoFn: false
-                if fo < st.reg.typeById.length then {
-                    fz: st.reg.typeById.get i: fo
-                    if fz.typetype == ztypes.ztypetype.functionType then {
-                        if (fz.isgeneric) == false then isAutoFn = true
-                    }
-                }
-                if isAutoFn when (st.typing.suppressFnAutoCall) == false then {
-                    if (fnAutoCallable
-                        :ast
-                        :st
-                        mid: (ztypes.tid.create from: fo.u64)
-                    ) == false then {
-                        isAutoFn = false
-                        (bareFnRefError
-                            :ast
-                            :st
-                            nodeid: node.nodeid
-                            lineno: node.lineno
-                            colno: node.colno
-                            width: ndNm.length.u32.orPanic
-                            fid: (ztypes.tid.create from: fo.u64)
-                        )
-                    }
-                } else {
-                    isAutoFn = false
-                }
-                if isAutoFn then {
-                    ro: methodReturnOf :st mid: (ztypes.tid.create from: fo.u64)
-                    match (
-                        ro
-                    ) case some then {
-                        result = ro
-                    } case none then {
-                        result = ztypes.tid.create from: (st.typing.nullTypeId)
-                    }
-                }
-                if (st.typing.suppressBareCtor) == false then {
-                    # only an atom NAMING the type is a bare construction; a
-                    # value alias typed as it (true: bool.true) is a value use.
-                    # The renamed-twin aliases name their type without
-                    # matching its registry name; a general typeref retry
-                    # cannot stand here because a VALUE alias also resolves
-                    # to its type's tid (`true` -> bool).
-                    tnq: st.reg.nameOf tid: (ztypes.tid.create from: fo.u64)
-                    isTypeAtom: tnq.stringview == ndNm.stringview
-                    if (isTypeAtom) == false then {
-                        twn: aliasedContainerTwin name: ndNm.stringview
-                        if twn.length > 0 when twn == tnq.stringview then isTypeAtom = true
-                        # an atom naming a TYPE alias constructs exactly as the
-                        # type's own name does. The tid cannot say so -- a VALUE
-                        # alias resolves to its root type's tid too -- but the
-                        # alias's own shape can. Without this the atom stays
-                        # unstamped and the emitter writes the alias name into
-                        # the C.
-                        if (isTypeAtom) == false then {
-                            aad: (declOfUnitDef
-                                :st
-                                frame: st.curFrame
-                                :unitDecl
-                                nameId: (nameIdOf :ast name: ndNm.stringview)
-                            )
-                            if (aliasNamesType
-                                :st
-
-                                :ast
-                                declId: aad
-                            ) then {
-                                # The alias test says TYPE; the CONSTANT gets to
-                                # overrule it. `ECHO: LIB` names a string
-                                # constant whose own type is StringView, so the
-                                # test above sees a decl carrying a type -- and a
-                                # bare StringView is an unconstructible view. A
-                                # definition with a compile-time value is a VALUE
-                                # alias, the case this leg's own comment names
-                                # for `true: bool.true`.
-                                # Asked SECOND, not first: the answer only
-                                # matters when the alias test said yes, and a
-                                # pull in front of it runs the evaluator for
-                                # every bare atom in every body.
-                                ecv: (constValueOfMember
-                                    :st
-                                    frame: st.curFrame
-                                    :ast
-
-                                    :unitDecl
-                                    defName: ndNm.stringview
-                                )
-                                constFailClear :st
-                                if ecv.kind.none then isTypeAtom = true
-                            }
-                        }
-                    }
-                    if isTypeAtom then {
-                        if (isImplicitZeroCreateTid
-                            :ast
-                            :st
-                            tid: (ztypes.tid.create from: fo.u64)
-                        ) then {
-                            icv: fo
-                            st.typing.implicitCreate.set key: node.nodeid.u64 value: icv
-                        } else {
-                            (checkBareTypeConstruction
-                                :st
-                                :ast
-                                :node
-                                tid: (ztypes.tid.create from: fo.u64)
-                            )
-                        }
-                    }
-                }
-                setu: result
-                stampGate :st nid: node.nodeid.u64 tid: setu
-                # atom-use def reference: the DEF's declaration (nodeType
-                # carries the auto-call RETURN type above, not the referent)
-                sfF: (declSurfaceOfName
-                    :st
-
-                    :ast
-                    :unitDecl
-                    nameId: node.name
-                    tid: (ztypes.tid.create from: fo.u64)
-                )
-                stampRefDecl :st nid: node.nodeid.u64 declId: sfF
-                maybeWalkMethods :st frame: st.curFrame :unitDecl :ast name: ndNm.stringview
-            } case none then null
+            result = typeOfBareName :st :unitDecl :ast :node ndNm: ndNm.stringview
         }
     }
     return result
