@@ -9618,6 +9618,129 @@ resolveAliasKey: function {
     constFoldDecl :st :ast :declId
     return r
 }
+# aliasTargetTid -- the type a re-export alias stands for, when neither the nested-
+# unit scope nor the file-unit index answered. It may be reached through the
+# target unit's own root, or be TYPE-ROOTED -- a member of a type rather than of a
+# unit -- which rootedOut reports so the caller edges it correctly.
+aliasTargetTid: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    adecl: ztypes.declid
+    aParent: ztypes.declid
+    aName: StringView
+    aUnit: StringView
+    tu: StringView
+    tn: StringView
+    atid0: ztypes.tid
+    rootedOut: (ListVal bool)
+    defNameId: zast.nameid
+} out ztypes.tid is {
+    typeRooted: false
+    atid: atid0
+    if atid.isZero then {
+        # a type-rooted target (`true: bool.true`): the root names a tagged
+        # type, the member one of its value arms -- the alias denotes a VALUE
+        # of the root type, so the edge binds the ROOT's tid
+        rto: (walkLookupTyperef
+            :st
+            :frame
+            :ast
+
+            unitDecl: (unitDeclOfNameOrOwn
+                :st
+                :frame
+                nameId: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
+            )
+            base: tu
+        )
+        if rto.none then {
+            # a tagged type declared in THIS file is invisible to the typeref
+            # walk while resolution runs, so `READY: mode.ready` never reached
+            # the arm test below. resolveAtomType is the current-unit-relative
+            # resolver that sees it.
+            rtb: (resolveAtomType
+                :st
+                :frame
+
+                :ast
+                unitDecl: (unitDeclOfNameOrOwn
+                    :st
+                    :frame
+                    nameId: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
+                )
+                nm: tu
+                thisName: ""
+            )
+            if rtb > 0 then rto = optionval.some rtb.u64
+        }
+        match (
+            rto
+        ) case some then {
+            rtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rto.u64)
+            isTag: false
+            if rtt == ztypes.ztypetype.variantType then isTag = true
+            if rtt == ztypes.ztypetype.unionType then isTag = true
+            if isTag then {
+                memberDecl: (st.typing.declChildOf
+                    pool: ast.names
+                    parentTypeId: (ztypes.tid.create from: rto.u64)
+                    name: tn
+                )
+                match (
+                    memberDecl
+                ) case some then {
+                    mtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: memberDecl.u64)
+                    isMem: true
+                    if mtt == ztypes.ztypetype.functionType then isMem = false
+                    if mtt == ztypes.ztypetype.dataType then isMem = false
+                    if isMem then {
+                        atid = ztypes.tid.create from: (rto)
+                        typeRooted = true
+                    }
+                } case none then null
+            }
+        } case none then null
+    }
+    if atid.isZero then {
+        # a BARE alias (`Text: String`, `tally: u64`): its target resolves
+        # current-unit-relative, so it may live in a stdlib unit rather than in
+        # the alias's own -- the pair carries this unit only because a bare name
+        # has no unit segment. resolveAtomType is that precedence walk.
+        if (aliasIsBareForm :st :ast declId: adecl) then {
+            # a ring of bare aliases (`Alpha: Beta` / `Beta: Alpha`) is cut by
+            # the guard at the top of this function, which returns silently --
+            # the caller then mints a forward shell and the C carries an
+            # incomplete type. Report it the way the dotted leg does instead.
+            btd: st.typing.declFindChild parentDeclId: aParent nameId: defNameId
+            if (st.typing.declIsResolving declId: btd) then {
+                bcm: "alias cycle: '\{aUnit}.\{aName}' aliases '\{aUnit}.\{tn}' which is still resolving"
+                addResolveError :st e: zast.err.typeError msg: bcm
+                rootedOut.append typeRooted
+                return (ztypes.tid.create from: 0)
+            }
+            st.typing.declSetResolving declId: adecl mark: true
+            bat: (resolveAtomType
+                :st
+                :frame
+
+                :ast
+                unitDecl: (unitDeclOfNameOrOwn
+                    :st
+                    :frame
+                    nameId: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
+                )
+                nm: tn
+                thisName: ""
+            )
+            st.typing.declSetResolving declId: adecl mark: false
+            if bat > 0 then atid = ztypes.tid.create from: (bat.u64)
+        }
+    }
+    rootedOut.append typeRooted
+    return atid
+}
+
 
 resolveAliasKeyIn: function {
     st: zenv.ZSymbolTable
@@ -9690,105 +9813,22 @@ resolveAliasKeyIn: function {
         name: tn.stringview
     )
     st.typing.declSetResolving declId: adecl mark: false
-    typeRooted: false
-    if atid.isZero then {
-        # a type-rooted target (`true: bool.true`): the root names a tagged
-        # type, the member one of its value arms -- the alias denotes a VALUE
-        # of the root type, so the edge binds the ROOT's tid
-        rto: (walkLookupTyperef
-            :st
-            :frame
-            :ast
-
-            unitDecl: (unitDeclOfNameOrOwn
-                :st
-                :frame
-                nameId: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
-            )
-            base: tu.stringview
-        )
-        if rto.none then {
-            # a tagged type declared in THIS file is invisible to the typeref
-            # walk while resolution runs, so `READY: mode.ready` never reached
-            # the arm test below. resolveAtomType is the current-unit-relative
-            # resolver that sees it.
-            rtb: (resolveAtomType
-                :st
-                :frame
-
-                :ast
-                unitDecl: (unitDeclOfNameOrOwn
-                    :st
-                    :frame
-                    nameId: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
-                )
-                nm: tu.stringview
-                thisName: ""
-            )
-            if rtb > 0 then rto = optionval.some rtb.u64
-        }
-        match (
-            rto
-        ) case some then {
-            rtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rto.u64)
-            isTag: false
-            if rtt == ztypes.ztypetype.variantType then isTag = true
-            if rtt == ztypes.ztypetype.unionType then isTag = true
-            if isTag then {
-                memberDecl: (st.typing.declChildOf
-                    pool: ast.names
-                    parentTypeId: (ztypes.tid.create from: rto.u64)
-                    name: tn.stringview
-                )
-                match (
-                    memberDecl
-                ) case some then {
-                    mtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: memberDecl.u64)
-                    isMem: true
-                    if mtt == ztypes.ztypetype.functionType then isMem = false
-                    if mtt == ztypes.ztypetype.dataType then isMem = false
-                    if isMem then {
-                        atid = ztypes.tid.create from: (rto)
-                        typeRooted = true
-                    }
-                } case none then null
-            }
-        } case none then null
-    }
-    if atid.isZero then {
-        # a BARE alias (`Text: String`, `tally: u64`): its target resolves
-        # current-unit-relative, so it may live in a stdlib unit rather than in
-        # the alias's own -- the pair carries this unit only because a bare name
-        # has no unit segment. resolveAtomType is that precedence walk.
-        if (aliasIsBareForm :st :ast declId: adecl) then {
-            # a ring of bare aliases (`Alpha: Beta` / `Beta: Alpha`) is cut by
-            # the guard at the top of this function, which returns silently --
-            # the caller then mints a forward shell and the C carries an
-            # incomplete type. Report it the way the dotted leg does instead.
-            btd: st.typing.declFindChild parentDeclId: aParent nameId: altK.defName
-            if (st.typing.declIsResolving declId: btd) then {
-                bcm: "alias cycle: '\{aUnit}.\{aName}' aliases '\{aUnit}.\{tn}' which is still resolving"
-                addResolveError :st e: zast.err.typeError msg: bcm
-                return 0
-            }
-            st.typing.declSetResolving declId: adecl mark: true
-            bat: (resolveAtomType
-                :st
-                :frame
-
-                :ast
-                unitDecl: (unitDeclOfNameOrOwn
-                    :st
-                    :frame
-                    nameId: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
-                )
-                nm: tn.stringview
-                thisName: ""
-            )
-            st.typing.declSetResolving declId: adecl mark: false
-            if bat > 0 then atid = ztypes.tid.create from: (bat.u64)
-        }
-    }
+    rootedOut: (ListVal bool)
+    atid = (aliasTargetTid
+        :st
+        :frame
+        :ast
+        :adecl
+        :aParent
+        aName: aName.stringview
+        aUnit: aUnit.stringview
+        tu: tu.stringview
+        tn: tn.stringview
+        atid0: atid
+        :rootedOut
+        defNameId: altK.defName
+    )
+    typeRooted: rootedOut.get i: 0
     if atid.isZero then return 0
     # the alias is a member of the unit it is WRITTEN in, which is that unit's
     # own id whether it is a file unit or a nested one -- both carry it on the
@@ -17710,6 +17750,194 @@ genericTypeConstruction: function {
     st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.classCreate
     return mid
 }
+# reportBadGenericArgLabel -- a label that names no generic parameter of this
+# template. It may still be a legitimate FIELD label riding the construction
+# sugar, or a builtin container's own create argument, so those are exempted
+# before the error is raised.
+reportBadGenericArgLabel: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    arg: zast.NamedOperationData.view
+    tplId: ztypes.tid
+    pk: zast.nameid
+    childNames: (ListVal zast.nameid).view
+    tname: StringView
+    tk: ztypes.declid
+} out bool is {
+    ok: true
+    isField: false
+    ci: u64
+    cn: childNames.length
+    for ci < cn loop {
+        if (childNames.get i: ci) == pk then isField = true
+        ci = ci + 1
+    }
+    if (isField) == false when pk == zast.wkCapacity then {
+        # `capacity:` on a builtin container construction is a
+        # create argument (`Type arg:` is `Type.create arg:`);
+        # native create params carry no modeled children, so
+        # the label is admitted by template identity.
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "ListRef"
+        ) then isField = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "ListVal"
+        ) then isField = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "MapRR"
+        ) then isField = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "MapRV"
+        ) then isField = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "MapVR"
+        ) then isField = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "MapVV"
+        ) then isField = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "SetRef"
+        ) then isField = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "SetVal"
+        ) then isField = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "IdMapR"
+        ) then isField = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "IdMapV"
+        ) then isField = true
+        if tplId == (builtinTidT
+            :st
+            frame: st.curFrame
+            :ast
+
+            base: "IdSet"
+        ) then isField = true
+    }
+    if (isField) == false then {
+        pkT2: zast.nameTextAt :ast ref: pk
+        m2: "unknown type argument '\{pkT2}' for generic type '\{tname}'"
+        plist: st.reg.genericParamNamesOf tdecl: tk
+        note2: "valid type parameters: ".string
+        pi: u64
+        pn2: plist.length
+        for pi < pn2 loop {
+            if pi > 0 then note2.append s: ", "
+            pnmT: zast.nameTextAt :ast ref: (plist.get i: pi)
+            note2.append s: pnmT
+            pi = pi + 1
+        }
+        eh2: String
+        (addErrorH
+            :st
+            nodeid: arg.nodeid
+            lineno: arg.lineno
+            colno: arg.colno
+            e: zast.err.genericError
+            msg: m2
+            note: note2
+            hint: eh2
+            width: pkT2.length.u32.orPanic
+        )
+        ok = false
+    }
+    return ok
+}
+
+# validateOneGenericArg -- one labelled generic argument: the label must name a
+# parameter of this template, must not repeat, and its value must satisfy the
+# parameter's declared constraint.
+validateOneGenericArg: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    arg: zast.NamedOperationData.view
+    tplId: ztypes.tid
+    tk: ztypes.declid
+    pk: zast.nameid
+    seen: (IdSet zast.nameid)
+    allowFrom: bool
+    childNames: (ListVal zast.nameid).view
+    tname: StringView
+} out bool is {
+    ok: true
+    isP: st.reg.isGenericParamOf tdecl: tk name: pk
+    if isP then {
+        if (seen.has item: pk) when (allowFrom) == false then {
+            pkT: zast.nameTextAt :ast ref: pk
+            m1: "duplicate type argument '\{pkT}'"
+            en1: String
+            eh1: String
+            (addErrorH
+                :st
+                nodeid: arg.nodeid
+                lineno: arg.lineno
+                colno: arg.colno
+                e: zast.err.genericError
+                msg: m1
+                note: en1
+                hint: eh1
+                width: pkT.length.u32.orPanic
+            )
+            ok = false
+        } else {
+            seen.add item: pk
+        }
+    } else {
+        ok = (reportBadGenericArgLabel
+            :ast
+            :st
+            :arg
+            :tplId
+            :pk
+            :childNames
+            :tname
+            :tk
+        )
+    }
+    return ok
+}
+
 
 # validateGenericTypeArgs -- reject unknown / duplicate generic TYPE arguments
 # at a settled construction site. A named arg matching neither a declared
@@ -17777,147 +18005,18 @@ validateGenericTypeArgs: function {
             skipFrom: false
             if allowFrom when pk == fromId then skipFrom = true
             if (pk.isZero) == false when (skipFrom) == false then {
-                isP: st.reg.isGenericParamOf tdecl: tk name: pk
-                if isP then {
-                    if (seen.has item: pk) when (allowFrom) == false then {
-                        pkT: zast.nameTextAt :ast ref: pk
-                        m1: "duplicate type argument '\{pkT}'"
-                        en1: String
-                        eh1: String
-                        (addErrorH
-                            :st
-                            nodeid: arg.nodeid
-                            lineno: arg.lineno
-                            colno: arg.colno
-                            e: zast.err.genericError
-                            msg: m1
-                            note: en1
-                            hint: eh1
-                            width: pkT.length.u32.orPanic
-                        )
-                        ok = false
-                    } else {
-                        seen.add item: pk
-                    }
-                } else {
-                    isField: false
-                    ci: u64
-                    cn: childNames.length
-                    for ci < cn loop {
-                        if (childNames.get i: ci) == pk then isField = true
-                        ci = ci + 1
-                    }
-                    if (isField) == false when pk == zast.wkCapacity then {
-                        # `capacity:` on a builtin container construction is a
-                        # create argument (`Type arg:` is `Type.create arg:`);
-                        # native create params carry no modeled children, so
-                        # the label is admitted by template identity.
-                        if tplId == (builtinTidT
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            base: "ListRef"
-                        ) then isField = true
-                        if tplId == (builtinTidT
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            base: "ListVal"
-                        ) then isField = true
-                        if tplId == (builtinTidT
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            base: "MapRR"
-                        ) then isField = true
-                        if tplId == (builtinTidT
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            base: "MapRV"
-                        ) then isField = true
-                        if tplId == (builtinTidT
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            base: "MapVR"
-                        ) then isField = true
-                        if tplId == (builtinTidT
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            base: "MapVV"
-                        ) then isField = true
-                        if tplId == (builtinTidT
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            base: "SetRef"
-                        ) then isField = true
-                        if tplId == (builtinTidT
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            base: "SetVal"
-                        ) then isField = true
-                        if tplId == (builtinTidT
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            base: "IdMapR"
-                        ) then isField = true
-                        if tplId == (builtinTidT
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            base: "IdMapV"
-                        ) then isField = true
-                        if tplId == (builtinTidT
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            base: "IdSet"
-                        ) then isField = true
-                    }
-                    if (isField) == false then {
-                        pkT2: zast.nameTextAt :ast ref: pk
-                        m2: "unknown type argument '\{pkT2}' for generic type '\{tname}'"
-                        plist: st.reg.genericParamNamesOf tdecl: tk
-                        note2: "valid type parameters: ".string
-                        pi: u64
-                        pn2: plist.length
-                        for pi < pn2 loop {
-                            if pi > 0 then note2.append s: ", "
-                            pnmT: zast.nameTextAt :ast ref: (plist.get i: pi)
-                            note2.append s: pnmT
-                            pi = pi + 1
-                        }
-                        eh2: String
-                        (addErrorH
-                            :st
-                            nodeid: arg.nodeid
-                            lineno: arg.lineno
-                            colno: arg.colno
-                            e: zast.err.genericError
-                            msg: m2
-                            note: note2
-                            hint: eh2
-                            width: pkT2.length.u32.orPanic
-                        )
-                        ok = false
-                    }
-                }
+                if (validateOneGenericArg
+                    :ast
+                    :st
+                    :arg
+                    :tplId
+                    :tk
+                    :pk
+                    :seen
+                    :allowFrom
+                    :childNames
+                    tname: tname.stringview
+                ) == false then ok = false
             }
         } else null
         argIdx = argIdx + 1
@@ -23000,51 +23099,82 @@ invalidateTakenAcross: function {st: zenv.ZSymbolTable names: IdSet u32} is {
         st.invalidate nameId: (zast.nameid.create from: vn.u32) loc: (optionval.none ztypes.zsrcpos)
     }
 }
-
-# typecheck an if-expression, narrowing types across its arms.
-checkIf: function {
+# ifExpressionType -- the type an `if` used as an EXPRESSION produces: never when
+# every branch diverges, otherwise the type its branches agree on -- and null when
+# a branch produces no value or the else is missing, since one path then yields
+# nothing.
+ifExpressionType: function {
+    st: zenv.ZSymbolTable
+    ifnode: zast.IfData.view
+    branchTypes: (ListVal u64).view
+    allDiverge: bool
+    hasElse: bool
+    anyEmpty: bool
+    nvId: u64
+    nullId: u64
+} out ztypes.tid is {
+    result: ztypes.tid
+    if allDiverge then {
+        if nvId > 0 then {
+            result = ztypes.tid.create from: nvId.u64
+            setk: result
+            stampGate :st nid: ifnode.nodeid.u64 tid: setk
+        }
+    } else {
+        # An exhaustive (else-carrying) if is a value: the first completing
+        # branch's type, diverging branches skipped (mirrors the match rule).
+        if hasElse when anyEmpty then {
+            # an empty (`{}` / null) branch body makes the if valueless:
+            # stamp null so consuming it as a value is rejected.
+            if nullId > 0 then {
+                result = ztypes.tid.create from: nullId.u64
+                stampedTid: result
+                stampGate :st nid: ifnode.nodeid.u64 tid: stampedTid
+            }
+        }
+        if hasElse when (anyEmpty) == false then {
+            ti: u64
+            tn: branchTypes.length
+            for ti < tn loop {
+                bt2: branchTypes.get i: ti
+                if bt2 != nvId then {
+                    if bt2 > 0 then {
+                        result = ztypes.tid.create from: bt2.u64
+                        setv: result
+                        stampGate :st nid: ifnode.nodeid.u64 tid: setv
+                        ti = tn
+                    } else {
+                        ti = tn
+                    }
+                }
+                ti = ti + 1
+            }
+        }
+    }
+    return result
+}
+# checkIfClauses -- walk each clause: its conditions, the facts they establish for
+# the arm's body, and the body itself. A clause the fold proved dead is not walked
+# at all -- the language does not promise to resolve names inside it, and that is
+# what keeps a statically-eliminated branch from demanding its unit's link
+# library. flagsOut reports allDiverge and anyEmpty.
+checkIfClauses: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast.view
     ifnode: zast.IfData.view
-} out ztypes.tid is {
-    # Which clause a constant condition selects, recorded for the emitter. Most
-    # body conditions name a local and do not fold at all, and the stamp says
-    # so -- `known: false` means "emit a runtime if", which is the answer for
-    # every ordinary branch. Only a condition made of constants decides
-    # anything here.
-    fbr: foldIfBranch :st frame: st.curFrame :ast :unitDecl n: ifnode
-    constFailClear :st
-    # A clause the fold proved dead is reached by no use site, and the language
-    # does not promise to resolve names or check types inside it. NOT walking it
-    # is what keeps a statically-eliminated branch from demanding its unit's
-    # link library, and from being refused by a toolchain that never sees the
-    # type it names. `--eager` -- and so zls and `zl lint --full` -- still walks
-    # everything, which is what keeps the editor alive inside a branch that is
-    # dead only on this host; neither of those emits C, so no artifact differs.
-    skipDead: false
-    if fbr.known when (st.typing.eagerAll) == false then skipDead = true
-    ifMarker: st.pushBlock name: "if"
-    liveBefore: st.getLiveOwnedVars
-    takenAcross: (IdSet u32)
-    nvId: (optU64Or
-        o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "never")
-        d: 0
-    )
-    nullId: (optU64Or
-        o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "null")
-        d: 0
-    )
-    pBool: (optU64Or
-        o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "bool")
-        d: 0
-    )
     accFacts: (List ArmPredFact)
     guardFacts: (List ArmPredFact)
-    elseDvg: false
-    anyEmpty: false
     branchTypes: (ListVal u64)
+    liveBefore: IdSet u32
+    takenAcross: IdSet u32
+    skipDead: bool
+    pBool: u64
+    flagsOut: (ListVal bool)
+    fbr: ztyping.foldedbranch
+} is {
     allDiverge: true
+    anyEmpty: false
     cliter: ifnode.clauses.iterate
     for clauseId: cliter loop {
         clause: ast.nodes.get i: clauseId.u64
@@ -23090,83 +23220,120 @@ checkIf: function {
             if dvgC then {
                 gf: (ArmPredFact
                     subject: mvf.subject
-                    armName: mvf.armName
-                    fullTid: mvf.fullTid
-                    negated: mvf.negated
-                )
-                guardFacts.append gf
-            }
-            accFacts.append mvf
-        }
-    }
-    hasElse: false
-    if ifnode.elseclause > 0 then {
-        hasElse = true
-        if (isEmptyBody n: (ast.nodes.get i: ifnode.elseclause.u64)) then anyEmpty = true
-        elseDead: false
-        if skipDead when ifnode.elseclause != fbr.stmt then elseDead = true
-        if (elseDead) == false then {
-            ebm: st.pushBlock name: "if_else"
-            with efit: accFacts.iterate do for ef: efit loop (applyPredFact
-                :ast
-                :st
-                f: ef
-                holds: false
+                armName: mvf.armName
+                fullTid: mvf.fullTid
+                negated: mvf.negated
             )
-            walkBodyAt :st :unitDecl :ast bodyId: ifnode.elseclause
-            et: lastStmtType :st :ast block: (ast.nodes.get i: ifnode.elseclause.u64)
-            if st.isUnreachable then elseDvg = true
-            etc: et
-            branchTypes.append etc
-            if st.isUnreachable then {
-                st.discardTakenInCurrentScope
-            } else {
-                allDiverge = false
-                restoreTakenArm :st :liveBefore taken: takenAcross
-            }
-            st.popTo marker: ebm
+            guardFacts.append gf
         }
-    } else {
-        allDiverge = false
+        accFacts.append mvf
     }
-    result: ztypes.tid
-    if allDiverge then {
-        if nvId > 0 then {
-            result = ztypes.tid.create from: nvId.u64
-            setk: result
-            stampGate :st nid: ifnode.nodeid.u64 tid: setk
-        }
-    } else {
-        # An exhaustive (else-carrying) if is a value: the first completing
-        # branch's type, diverging branches skipped (mirrors the match rule).
-        if hasElse when anyEmpty then {
-            # an empty (`{}` / null) branch body makes the if valueless:
-            # stamp null so consuming it as a value is rejected.
-            if nullId > 0 then {
-                result = ztypes.tid.create from: nullId.u64
-                stampedTid: result
-                stampGate :st nid: ifnode.nodeid.u64 tid: stampedTid
-            }
-        }
-        if hasElse when (anyEmpty) == false then {
-            ti: u64
-            tn: branchTypes.length
-            for ti < tn loop {
-                bt2: branchTypes.get i: ti
-                if bt2 != nvId then {
-                    if bt2 > 0 then {
-                        result = ztypes.tid.create from: bt2.u64
-                        setv: result
-                        stampGate :st nid: ifnode.nodeid.u64 tid: setv
-                        ti = tn
-                    } else {
-                        ti = tn
-                    }
-                }
-                ti = ti + 1
-            }
-        }
     }
+    flagsOut.append allDiverge
+    flagsOut.append anyEmpty
+}
+
+
+# typecheck an if-expression, narrowing types across its arms.
+checkIf: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast.view
+    ifnode: zast.IfData.view
+} out ztypes.tid is {
+    # Which clause a constant condition selects, recorded for the emitter. Most
+    # body conditions name a local and do not fold at all, and the stamp says
+    # so -- `known: false` means "emit a runtime if", which is the answer for
+    # every ordinary branch. Only a condition made of constants decides
+    # anything here.
+    fbr: foldIfBranch :st frame: st.curFrame :ast :unitDecl n: ifnode
+    constFailClear :st
+    # A clause the fold proved dead is reached by no use site, and the language
+    # does not promise to resolve names or check types inside it. NOT walking it
+    # is what keeps a statically-eliminated branch from demanding its unit's
+    # link library, and from being refused by a toolchain that never sees the
+    # type it names. `--eager` -- and so zls and `zl lint --full` -- still walks
+    # everything, which is what keeps the editor alive inside a branch that is
+    # dead only on this host; neither of those emits C, so no artifact differs.
+    skipDead: false
+    if fbr.known when (st.typing.eagerAll) == false then skipDead = true
+    ifMarker: st.pushBlock name: "if"
+    liveBefore: st.getLiveOwnedVars
+    takenAcross: (IdSet u32)
+    nvId: (optU64Or
+        o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "never")
+        d: 0
+    )
+    nullId: (optU64Or
+        o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "null")
+        d: 0
+    )
+    pBool: (optU64Or
+        o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "bool")
+        d: 0
+    )
+    accFacts: (List ArmPredFact)
+    guardFacts: (List ArmPredFact)
+    elseDvg: false
+    branchTypes: (ListVal u64)
+    flagsOut: (ListVal bool)
+    (checkIfClauses
+        :st
+        :unitDecl
+        :ast
+        :ifnode
+        :accFacts
+        :guardFacts
+        :branchTypes
+        :liveBefore
+        :takenAcross
+        :skipDead
+        :pBool
+        :flagsOut
+        :fbr
+    )
+    allDiverge: flagsOut.get i: 0
+    anyEmpty: flagsOut.get i: 1
+hasElse: false
+if ifnode.elseclause > 0 then {
+    hasElse = true
+    if (isEmptyBody n: (ast.nodes.get i: ifnode.elseclause.u64)) then anyEmpty = true
+    elseDead: false
+    if skipDead when ifnode.elseclause != fbr.stmt then elseDead = true
+    if (elseDead) == false then {
+        ebm: st.pushBlock name: "if_else"
+        with efit: accFacts.iterate do for ef: efit loop (applyPredFact
+            :ast
+            :st
+            f: ef
+            holds: false
+        )
+        walkBodyAt :st :unitDecl :ast bodyId: ifnode.elseclause
+        et: lastStmtType :st :ast block: (ast.nodes.get i: ifnode.elseclause.u64)
+        if st.isUnreachable then elseDvg = true
+        etc: et
+        branchTypes.append etc
+        if st.isUnreachable then {
+            st.discardTakenInCurrentScope
+        } else {
+            allDiverge = false
+            restoreTakenArm :st :liveBefore taken: takenAcross
+        }
+        st.popTo marker: ebm
+    }
+} else {
+    allDiverge = false
+    }
+    result: (ifExpressionType
+        :st
+        :ifnode
+        :branchTypes
+        :allDiverge
+        :hasElse
+        :anyEmpty
+        :nvId
+        :nullId
+    )
     st.popTo marker: ifMarker
     # post-guard flow typing: a diverging clause's condition was FALSE for
     # the remainder of the enclosing scope; a diverging else of a single-
