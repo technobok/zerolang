@@ -8045,348 +8045,425 @@ fieldTypeNeedsCleanup: function {
         return false
     }
 }
-
-# resolveClass -- resolve a class ObjectDef into a CLASS reference type: a child per
-# field (field name -> type-ref shell), a child per as-block method, then a synthesized
-# `create` child (LAST). Classes are reference types (is_valtype false); they get
-# `create` but NO `==`/`!=` (unlike records). A class keeps a destructor when any field
-# owns heap data (fieldTypeNeedsCleanup), else none. A typedef class (single
-# `X.typedef` field) gets no field child, synth `create`+`borrow`, and inherits
-# needs_destructor from the wrapped base (List -> yes, ListView -> no). Custom /
-# `null` create, generics + protocols come later.
-resolveClass: function {
+# resolveClassMethodDecl -- resolve a method declared in a class's `is` block:
+# its signature, and the member entry that makes it reachable from the type.
+resolveClassMethodDecl: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    cnode: zast.ObjectDefData
+    cid: u64
+    isgen: bool
+    fm: zast.NamedOperationData.view
 } is {
-    cid: (declareCanonicalType
-        :st
-        :frame
-        :ast
+    if (isFunctionDefOp op: (ast.nodes.get i: fm.operation.u64)) then {
+        fname: zast.nameTextAt :ast ref: fm.name
+        prodM4: false
+        if (isgen) == false then {
+            prodM4 = true
+        } else {
+            if (functiondefIsNative op: (ast.nodes.get i: fm.operation.u64)) == false then {
+                prodM4 = true
+            } else {
+                # Flipped collection families resolve their native
+                # method decls like user template methods. create is
+                # special-cased; length/capacity stay field children
+                # (their C surface is a struct read, not a method).
+                if unitDecl == st.typing.collectionsUnitRoot then {
+                    prodSkipL: false
+                    if fm.name == zast.wkCreate then prodSkipL = true
+                    if fm.name == zast.wkLength then prodSkipL = true
+                    if fm.name == zast.wkCapacity then prodSkipL = true
+                    if (prodSkipL) == false then prodM4 = true
+                }
+            }
+        }
+        if prodM4 then {
+            mido: (resolveMethodFnLazy
+                :st
+                :frame
 
-        :unitDecl
-        ownerNameId: zast.nameid
-        name: defName
-        typetype: ztypes.ztypetype.classType
-    )
-    ccid: cid
-    # `class is native` on the TYPE: the runtime supplies the layout and every
-    # method, so routing can ask the declaration whether a type is
-    # runtime-backed instead of comparing its unit's name. Mirrors
-    # resolveFunction, which has always written the function-path flag.
-    st.reg.setNative typeId: (ztypes.tid.create from: cid.u64) value: cnode.isNative
-    pvExcl_ccid: (ListVal u64)
-    pvGrants_ccid: (ListVal u64)
-    scanVisibility :st :ast onode: cnode excl: pvExcl_ccid grants: pvGrants_ccid
-    st.reg.setValtype typeId: (ztypes.tid.create from: cid.u64) value: false
-    needsDtor: false
-    isgen: hasGenericParam :ast items: cnode.asItems
-    if isgen then {
-        st.reg.setGeneric typeId: (ztypes.tid.create from: cid.u64) value: true
-        (registerGenericParams
-            :st
-            :ast
-            tdecl: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
-            items: cnode.asItems
-        )
+                :ast
+                :unitDecl
+                ownerNameId: (nameIdOf :ast name: defName)
+                mname: fname.stringview
+                thisName: defName
+                op: (ast.nodes.get i: fm.operation.u64)
+                lazyOk: (isgen) == false
+            )
+            match (
+                mido
+            ) case some then {
+                (st.typing.setMemberType
+                    parentTypeId: (ztypes.tid.create from: cid.u64)
+                    nameId: fm.name
+                    childTypeId: mido
+                )
+                if isgen then (st.reg.setGeneric
+                    typeId: (ztypes.tid.create from: mido.u64)
+                    value: true
+                )
+                if (fnFieldFlaggableName name: fname.stringview) then {
+                    (st.typing.setChildFnptrField
+                        pool: ast.names
+                        parentTypeId: (ztypes.tid.create from: cid.u64)
+                        name: fname.stringview
+                    )
+                }
+            } case none then null
+        }
     }
-    istd: recordIsTypedef :ast rnode: cnode
-    if istd then {
-        tdbase: objectTypedefBaseId :ast onode: cnode
-        tdbaseT: zast.nameTextAt :ast ref: tdbase
+}
+# resolveNamedFieldSlot -- resolve an ordinary named field: its declared type,
+# its ownership and visibility, the default it carries, and whether owning it
+# gives the class a destructor. True when it does.
+resolveNamedFieldSlot: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    cid: u64
+    fname: StringView
+    ftn: StringView
+    lockField: bool
+    fm: zast.NamedOperationData.view
+} out bool is {
+    needsDtor: false
+    fieldLock: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
+    if fname != "_resume_input" then {
         if (fieldTypeNeedsCleanup
             :st
             :frame
 
             :ast
             :unitDecl
-            name: tdbaseT.stringview
-            isLock: false
+            name: ftn
+            isLock: lockField
         ) then needsDtor = true
-        if (tdbase.isZero) == false then {
-            tdk3: cid
-            st.typing.typedefBaseName.set key: tdk3 value: tdbase
-        }
-        tdt3: objectTypedefBaseTid :st :frame :ast :unitDecl onode: cnode
-        if tdt3 > 0 then {
-            tdk6: cid
-            (st.typing.typedefBaseTid.set
-                key: (ztypes.tid.create from: tdk6.u64)
-                value: (ztypes.tid.create from: tdt3.u64)
+    }
+    cidf: (resolveTyperefShellMarked
+        :st
+        :frame
+
+        :ast
+        :unitDecl
+        ownerId: cid
+        typeExpr: (ast.nodes.get i: fm.operation.u64)
+        thisName: defName
+    )
+    (st.typing.setMemberType
+        parentTypeId: (ztypes.tid.create from: cid.u64)
+        nameId: fm.name
+        childTypeId: cidf
+    )
+    if (st.reg.typetypeOf typeId: cidf) == ztypes.ztypetype.functionType then {
+        (st.typing.setChildFnptrField
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: cid.u64)
+            name: fname
+        )
+    }
+    if lockField then {
+        (st.typing.setChildLockField
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: cid.u64)
+            name: fname
+        )
+    }
+    match (
+        fieldLock
+    ) case some then {
+        (st.typing.setChildOwnership
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: cid.u64)
+            name: fname
+            ownership: fieldLock
+        )
+    } case none then null
+    (recordTyperef
+        :st
+        :frame
+
+        :ast
+        :unitDecl
+        thisName: ""
+        node: (ast.nodes.get i: fm.operation.u64)
+    )
+    dcn0: (zast.nameTextAt
+        :ast
+        ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
+    )
+    rdnc: (zast.nameTextAt
+        :ast
+        ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
+    )
+    if (isNumericLiteralName name: rdnc.stringview) then {
+        (st.typing.setDefaultLiteral
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: cid.u64)
+            name: fname
+            node: fm.operation
+        )
+    } else {
+        if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) == false when (nameDenotesUnit
+            :st
+            :frame
+
+            nameId: (nameIdOf
+            :ast
+            name: rdnc.stringview
+        )
+        ) == false then {
+            cArmNid: zast.poolFind pool: ast.names text: dcn0.stringview
+            cArmDecl: (st.typing.declMemberIdOf
+                parentTypeId: cidf
+                nameId: cArmNid
+            )
+            (st.typing.setDefaultVariantArm
+                pool: ast.names
+                parentTypeId: (ztypes.tid.create from: cid.u64)
+                name: fname
+                targetDecl: cArmDecl
             )
         }
     }
-    fiter: cnode.isItems.iterate
-    for fmId: fiter loop {
-        fm: ast.nodes.get i: fmId.u64
-        match (
-            fm
-        ) case namedoperation then {
-            if (isFunctionDefOp op: (ast.nodes.get i: fm.operation.u64)) then {
-                fname: zast.nameTextAt :ast ref: fm.name
-                prodM4: false
-                if (isgen) == false then {
-                    prodM4 = true
-                } else {
-                    if (functiondefIsNative op: (ast.nodes.get i: fm.operation.u64)) == false then {
-                        prodM4 = true
-                    } else {
-                        # Flipped collection families resolve their native
-                        # method decls like user template methods. create is
-                        # special-cased; length/capacity stay field children
-                        # (their C surface is a struct read, not a method).
-                        if unitDecl == st.typing.collectionsUnitRoot then {
-                            prodSkipL: false
-                            if fm.name == zast.wkCreate then prodSkipL = true
-                            if fm.name == zast.wkLength then prodSkipL = true
-                            if fm.name == zast.wkCapacity then prodSkipL = true
-                            if (prodSkipL) == false then prodM4 = true
-                        }
-                    }
-                }
-                if prodM4 then {
-                    mido: (resolveMethodFnLazy
-                        :st
-                        :frame
-
-                        :ast
-                        :unitDecl
-                        ownerNameId: (nameIdOf :ast name: defName)
-                        mname: fname.stringview
-                        thisName: defName
-                        op: (ast.nodes.get i: fm.operation.u64)
-                        lazyOk: (isgen) == false
-                    )
-                    match (
-                        mido
-                    ) case some then {
-                        (st.typing.setMemberType
-                            parentTypeId: (ztypes.tid.create from: cid.u64)
-                            nameId: fm.name
-                            childTypeId: mido
-                        )
-                        if isgen then (st.reg.setGeneric
-                            typeId: (ztypes.tid.create from: mido.u64)
-                            value: true
-                        )
-                        if (fnFieldFlaggableName name: fname.stringview) then {
-                            (st.typing.setChildFnptrField
-                                pool: ast.names
-                                parentTypeId: (ztypes.tid.create from: cid.u64)
-                                name: fname.stringview
-                            )
-                        }
-                    } case none then null
-                }
-            } else {
-                fname: zast.nameTextAt :ast ref: fm.name
-                ftn: fieldHeadName :ast n: (ast.nodes.get i: fm.operation.u64)
-                # A NON-OWNED field marker (lock / borrow / view) makes the
-                # slot static: it is set in the constructor, never reassigned,
-                # the constructor locks the caller's argument rather than
-                # taking it, and the field holds no destructor. An OWNED one
-                # (take / hold) is an ordinary field on all three counts --
-                # `hold` freezes the contents, not the slot.
-                lockField: false
-                fieldLock: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
-                match (
-                    fieldLock
-                ) case some then {
-                    # This test is INVERTED: anything not named here becomes a
-                    # lock field, so a new owned mode must be listed or it is
-                    # silently treated as non-owned.
-                    fOwned: false
-                    if fieldLock == ztypes.zparamownership.takeMode then fOwned = true
-                    if fieldLock == ztypes.zparamownership.holdMode then fOwned = true
-                    if fieldLock == ztypes.zparamownership.takexMode then fOwned = true
-                    if fOwned == false then lockField = true
-                } case none then null
-                (forceMemberOf
-                    :st
-                    :frame
-
-                    :ast
-                    parentTypeId: (ztypes.tid.create from: cid.u64)
-                    nameId: (zast.poolFind pool: ast.names text: ftn.stringview)
-                )
-                mref: (resolvedByIdsMember
-                    :st
-                    :ast
-                    :unitDecl
-                    defId: (zast.poolFind pool: ast.names text: defName)
-                    memberId: (zast.poolFind pool: ast.names text: ftn.stringview)
-                )
-                match (
-                    mref
-                ) case some then {
-                    (st.typing.setMemberType
-                        parentTypeId: (ztypes.tid.create from: cid.u64)
-                        nameId: fm.name
-                        childTypeId: mref
-                    )
-                    if (st.reg.typetypeOf typeId: (ztypes.tid.create from: mref.u64)) == ztypes.ztypetype.functionType then {
-                        (st.typing.setChildFnptrField
-                            pool: ast.names
-                            parentTypeId: (ztypes.tid.create from: cid.u64)
-                            name: fname.stringview
-                        )
-                    }
-                    if lockField then (st.typing.setChildLockField
-                        pool: ast.names
-                        parentTypeId: (ztypes.tid.create from: cid.u64)
-                        name: fname.stringview
-                    )
-                    match (
-                        fieldLock
-                    ) case some then {
-                        (st.typing.setChildOwnership
-                            pool: ast.names
-                            parentTypeId: (ztypes.tid.create from: cid.u64)
-                            name: fname.stringview
-                            ownership: fieldLock
-                        )
-                    } case none then null
-                    # a sibling-member ref default: the construction fill
-                    # stamps the default's node with the member's type.
-                    pdk: nodeId n: (ast.nodes.get i: fm.operation.u64)
-                    pdo: cid
-                    st.typing.pendingDefaultOwner.set key: pdk.u64 value: pdo
-                    pdk2: nodeId n: (ast.nodes.get i: fm.operation.u64)
-                    pdi: mref
-                    st.typing.pendingDefaultId.set key: pdk2.u64 value: pdi
-                } case none then {
-                    if (isTypedefField :ast n: (ast.nodes.get i: fm.operation.u64)) then {
-                        # No field child for the wrapper, but the inner refs
-                        # (the u8 in `(List of: u8).typedef`) still stamp.
-                        (recordTyperef
-                            :st
-                            :frame
-
-                            :ast
-                            :unitDecl
-                            thisName: ""
-                            node: (ast.nodes.get i: fm.operation.u64)
-                        )
-                    } else {
-                        if fname.stringview != "_resume_input" then {
-                            if (fieldTypeNeedsCleanup
-                                :st
-                                :frame
-
-                                :ast
-                                :unitDecl
-                                name: ftn.stringview
-                                isLock: lockField
-                            ) then needsDtor = true
-                        }
-                        cidf: (resolveTyperefShellMarked
-                            :st
-                            :frame
-
-                            :ast
-                            :unitDecl
-                            ownerId: cid
-                            typeExpr: (ast.nodes.get i: fm.operation.u64)
-                            thisName: defName
-                        )
-                        (st.typing.setMemberType
-                            parentTypeId: (ztypes.tid.create from: cid.u64)
-                            nameId: fm.name
-                            childTypeId: cidf
-                        )
-                        if (st.reg.typetypeOf typeId: cidf) == ztypes.ztypetype.functionType then {
-                            (st.typing.setChildFnptrField
-                                pool: ast.names
-                                parentTypeId: (ztypes.tid.create from: cid.u64)
-                                name: fname.stringview
-                            )
-                        }
-                        if lockField then {
-                            (st.typing.setChildLockField
-                                pool: ast.names
-                                parentTypeId: (ztypes.tid.create from: cid.u64)
-                                name: fname.stringview
-                            )
-                        }
-                        match (
-                            fieldLock
-                        ) case some then {
-                            (st.typing.setChildOwnership
-                                pool: ast.names
-                                parentTypeId: (ztypes.tid.create from: cid.u64)
-                                name: fname.stringview
-                                ownership: fieldLock
-                            )
-                        } case none then null
-                        (recordTyperef
-                            :st
-                            :frame
-
-                            :ast
-                            :unitDecl
-                            thisName: ""
-                            node: (ast.nodes.get i: fm.operation.u64)
-                        )
-                        dcn0: (zast.nameTextAt
-                            :ast
-                            ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
-                        )
-                        rdnc: (zast.nameTextAt
-                            :ast
-                            ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
-                        )
-                        if (isNumericLiteralName name: rdnc.stringview) then {
-                            (st.typing.setDefaultLiteral
-                                pool: ast.names
-                                parentTypeId: (ztypes.tid.create from: cid.u64)
-                                name: fname.stringview
-                                node: fm.operation
-                            )
-                        } else {
-                            if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) == false when (nameDenotesUnit
-                                :st
-                                :frame
-
-                                nameId: (nameIdOf
-                                :ast
-                                name: rdnc.stringview
-                            )
-                            ) == false then {
-                                cArmNid: zast.poolFind pool: ast.names text: dcn0.stringview
-                                cArmDecl: (st.typing.declMemberIdOf
-                                    parentTypeId: cidf
-                                    nameId: cArmNid
-                                )
-                                (st.typing.setDefaultVariantArm
-                                    pool: ast.names
-                                    parentTypeId: (ztypes.tid.create from: cid.u64)
-                                    name: fname.stringview
-                                    targetDecl: cArmDecl
-                                )
-                            }
-                        }
-                        if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) then {} else {
-                            if dcn0.length > 0 then {
-                                rdk: nodeId n: (ast.nodes.get i: fm.operation.u64)
-                                rdo: cid
-                                st.typing.pendingDefaultOwner.set key: rdk.u64 value: rdo
-                                rdk2: nodeId n: (ast.nodes.get i: fm.operation.u64)
-                                rdn: rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64)
-                                st.typing.pendingDefaultName.set key: rdk2.u64 value: rdn
-                            }
-                        }
-                    }
-                }
-            }
-        } else null
+    if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) then {} else {
+        if dcn0.length > 0 then {
+            rdk: nodeId n: (ast.nodes.get i: fm.operation.u64)
+            rdo: cid
+            st.typing.pendingDefaultOwner.set key: rdk.u64 value: rdo
+            rdk2: nodeId n: (ast.nodes.get i: fm.operation.u64)
+            rdn: rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64)
+            st.typing.pendingDefaultName.set key: rdk2.u64 value: rdn
+        }
     }
-    # Flipped iterator families: their only method decl (`call`) lives in
-    # the as-block; produce it like the isItems loop does. attachMethods
-    # stays non-generic-only (it also handles const-clone members and
-    # generator synthesis, which native decls never need).
+    return needsDtor
+}
+
+# resolveClassFieldSlot -- resolve a field that is not a reference to an
+# already-declared member: its declared type, its default, and whether owning
+# it gives the class a destructor. True when it does.
+resolveClassFieldSlot: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    cid: u64
+    fname: StringView
+    ftn: StringView
+    lockField: bool
+    fm: zast.NamedOperationData.view
+} out bool is {
+    needsDtor: false
+    if (isTypedefField :ast n: (ast.nodes.get i: fm.operation.u64)) then {
+        # No field child for the wrapper, but the inner refs
+        # (the u8 in `(List of: u8).typedef`) still stamp.
+        (recordTyperef
+            :st
+            :frame
+
+            :ast
+            :unitDecl
+            thisName: ""
+            node: (ast.nodes.get i: fm.operation.u64)
+        )
+    } else {
+        if (resolveNamedFieldSlot
+            :st
+            :ast
+            :unitDecl
+            :frame
+            :defName
+            :cid
+            :fname
+            :ftn
+            :lockField
+            :fm
+        ) then needsDtor = true
+    }
+    return needsDtor
+}
+# recordMemberRefField -- record a field declared as a reference to a member
+# that already exists: it takes that member's type, and a function-typed one
+# becomes a function-pointer slot.
+recordMemberRefField: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    cid: u64
+    fname: StringView
+    mref: u64
+    lockField: bool
+    fm: zast.NamedOperationData.view
+} is {
+    fieldLock: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
+    (st.typing.setMemberType
+        parentTypeId: (ztypes.tid.create from: cid.u64)
+        nameId: fm.name
+        childTypeId: mref
+    )
+    if (st.reg.typetypeOf typeId: (ztypes.tid.create from: mref.u64)) == ztypes.ztypetype.functionType then {
+        (st.typing.setChildFnptrField
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: cid.u64)
+            name: fname
+        )
+    }
+    if lockField then (st.typing.setChildLockField
+        pool: ast.names
+        parentTypeId: (ztypes.tid.create from: cid.u64)
+        name: fname
+    )
+    match (
+        fieldLock
+    ) case some then {
+        (st.typing.setChildOwnership
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: cid.u64)
+            name: fname
+            ownership: fieldLock
+        )
+    } case none then null
+    # a sibling-member ref default: the construction fill
+    # stamps the default's node with the member's type.
+    pdk: nodeId n: (ast.nodes.get i: fm.operation.u64)
+    pdo: cid
+    st.typing.pendingDefaultOwner.set key: pdk.u64 value: pdo
+    pdk2: nodeId n: (ast.nodes.get i: fm.operation.u64)
+    pdi: mref
+    st.typing.pendingDefaultId.set key: pdk2.u64 value: pdi
+}
+
+# resolveClassFieldEntry -- resolve a class member that is not a method: a
+# reference to an already-declared member, or a field slot of its own. True
+# when owning it gives the class a destructor.
+resolveClassFieldEntry: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    cid: u64
+    fm: zast.NamedOperationData.view
+} out bool is {
+    needsDtor: false
+    fname: zast.nameTextAt :ast ref: fm.name
+    ftn: fieldHeadName :ast n: (ast.nodes.get i: fm.operation.u64)
+    # A NON-OWNED field marker (lock / borrow / view) makes the
+    # slot static: it is set in the constructor, never reassigned,
+    # the constructor locks the caller's argument rather than
+    # taking it, and the field holds no destructor. An OWNED one
+    # (take / hold) is an ordinary field on all three counts --
+    # `hold` freezes the contents, not the slot.
+    lockField: false
+    fieldLock: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
+    match (
+        fieldLock
+    ) case some then {
+        # This test is INVERTED: anything not named here becomes a
+        # lock field, so a new owned mode must be listed or it is
+        # silently treated as non-owned.
+        fOwned: false
+        if fieldLock == ztypes.zparamownership.takeMode then fOwned = true
+        if fieldLock == ztypes.zparamownership.holdMode then fOwned = true
+        if fieldLock == ztypes.zparamownership.takexMode then fOwned = true
+        if fOwned == false then lockField = true
+    } case none then null
+    (forceMemberOf
+        :st
+        :frame
+
+        :ast
+        parentTypeId: (ztypes.tid.create from: cid.u64)
+        nameId: (zast.poolFind pool: ast.names text: ftn.stringview)
+    )
+    mref: (resolvedByIdsMember
+        :st
+        :ast
+        :unitDecl
+        defId: (zast.poolFind pool: ast.names text: defName)
+        memberId: (zast.poolFind pool: ast.names text: ftn.stringview)
+    )
+    match (
+        mref
+    ) case some then {
+        (recordMemberRefField :st :ast :cid fname: fname.stringview :mref :lockField :fm)
+    } case none then {
+        if (resolveClassFieldSlot
+            :st
+            :ast
+            :unitDecl
+            :frame
+            :defName
+            :cid
+            fname: fname.stringview
+            ftn: ftn.stringview
+            :lockField
+            :fm
+        ) then needsDtor = true
+    }
+    return needsDtor
+}
+
+# resolveClassField -- resolve one field of a class: its declared type, its
+# default, its visibility, and whether owning it makes the class need a
+# destructor. True when this field does.
+resolveClassField: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    cid: u64
+    isgen: bool
+    fmId: u32
+} out bool is {
+    needsDtor: false
+    fm: ast.nodes.get i: fmId.u64
+    match (
+        fm
+    ) case namedoperation then {
+        if (isFunctionDefOp op: (ast.nodes.get i: fm.operation.u64)) then {
+            (resolveClassMethodDecl
+                :st
+                :ast
+                :unitDecl
+                :frame
+                :defName
+                :cid
+                :isgen
+                :fm
+            )
+        } else {
+            if (resolveClassFieldEntry
+                :st
+                :ast
+                :unitDecl
+                :frame
+                :defName
+                :cid
+                :fm
+            ) then needsDtor = true
+        }
+    } else null
+    return needsDtor
+}
+# resolveClassAsMethods -- resolve the methods a class declares in its `as`
+# block: each signature, and the member entry that makes it reachable from the
+# type. Native declarations in a generic collection family resolve like a
+# user template's, which is why the walk asks the unit and not the name.
+resolveClassAsMethods: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    cid: u64
+    isgen: bool
+    cnode: zast.ObjectDefData.view
+} is {
     with aiterP4: cnode.asItems.iterate do for amP4Id: aiterP4 loop {
         amP4: ast.nodes.get i: amP4Id.u64
         match (
@@ -8442,6 +8519,22 @@ resolveClass: function {
             }
         } else null
     }
+}
+# resolveClassCreate -- give a class its constructor surface: the declared
+# `create`, or the synthesised field-wise one when it declares none, and the
+# typedef wrapper's pass-through when the class is one.
+resolveClassCreate: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    cid: u64
+    isgen: bool
+    istd: bool
+    cnode: zast.ObjectDefData.view
+} out bool is {
+    needsDtor: false
     hasCreate: false
     if (isgen) == false then {
         hcAs: (attachMethods
@@ -8503,6 +8596,119 @@ resolveClass: function {
             childTypeId: borrowId
         )
     }
+    return needsDtor
+}
+# resolveClassTypedefBase -- record the base a typedef class wraps: its name id
+# and its type, and whether the wrapper inherits the base's destructor. True
+# when it does.
+resolveClassTypedefBase: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    cid: u64
+    cnode: zast.ObjectDefData.view
+} out bool is {
+    needsDtor: false
+    tdbase: objectTypedefBaseId :ast onode: cnode
+    tdbaseT: zast.nameTextAt :ast ref: tdbase
+    if (fieldTypeNeedsCleanup
+        :st
+        :frame
+
+        :ast
+        :unitDecl
+        name: tdbaseT.stringview
+        isLock: false
+    ) then needsDtor = true
+    if (tdbase.isZero) == false then {
+        tdk3: cid
+        st.typing.typedefBaseName.set key: tdk3 value: tdbase
+    }
+    tdt3: objectTypedefBaseTid :st :frame :ast :unitDecl onode: cnode
+    if tdt3 > 0 then {
+        tdk6: cid
+        (st.typing.typedefBaseTid.set
+            key: (ztypes.tid.create from: tdk6.u64)
+            value: (ztypes.tid.create from: tdt3.u64)
+        )
+    }
+    return needsDtor
+}
+
+# resolveClass -- resolve a class ObjectDef into a CLASS reference type: a child per
+# field (field name -> type-ref shell), a child per as-block method, then a synthesized
+# `create` child (LAST). Classes are reference types (is_valtype false); they get
+# `create` but NO `==`/`!=` (unlike records). A class keeps a destructor when any field
+# owns heap data (fieldTypeNeedsCleanup), else none. A typedef class (single
+# `X.typedef` field) gets no field child, synth `create`+`borrow`, and inherits
+# needs_destructor from the wrapped base (List -> yes, ListView -> no). Custom /
+# `null` create, generics + protocols come later.
+resolveClass: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    cnode: zast.ObjectDefData
+} is {
+    cid: (declareCanonicalType
+        :st
+        :frame
+        :ast
+
+        :unitDecl
+        ownerNameId: zast.nameid
+        name: defName
+        typetype: ztypes.ztypetype.classType
+    )
+    ccid: cid
+    # `class is native` on the TYPE: the runtime supplies the layout and every
+    # method, so routing can ask the declaration whether a type is
+    # runtime-backed instead of comparing its unit's name. Mirrors
+    # resolveFunction, which has always written the function-path flag.
+    st.reg.setNative typeId: (ztypes.tid.create from: cid.u64) value: cnode.isNative
+    pvExcl_ccid: (ListVal u64)
+    pvGrants_ccid: (ListVal u64)
+    scanVisibility :st :ast onode: cnode excl: pvExcl_ccid grants: pvGrants_ccid
+    st.reg.setValtype typeId: (ztypes.tid.create from: cid.u64) value: false
+    needsDtor: false
+    isgen: hasGenericParam :ast items: cnode.asItems
+    if isgen then {
+        st.reg.setGeneric typeId: (ztypes.tid.create from: cid.u64) value: true
+        (registerGenericParams
+            :st
+            :ast
+            tdecl: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
+            items: cnode.asItems
+        )
+    }
+    istd: recordIsTypedef :ast rnode: cnode
+    if istd then {
+        if (resolveClassTypedefBase :st :ast :unitDecl :frame :cid :cnode) then needsDtor = true
+    }
+    fiter: cnode.isItems.iterate
+    for fmId: fiter loop {
+        if (resolveClassField :st :ast :unitDecl :frame :defName :cid :isgen :fmId) then {
+            needsDtor = true
+        }
+    }
+    # Flipped iterator families: their only method decl (`call`) lives in
+    # the as-block; produce it like the isItems loop does. attachMethods
+    # stays non-generic-only (it also handles const-clone members and
+    # generator synthesis, which native decls never need).
+    (resolveClassAsMethods :st :ast :unitDecl :frame :defName :cid :isgen :cnode)
+    if (resolveClassCreate
+        :st
+        :ast
+        :unitDecl
+        :frame
+        :defName
+        :cid
+        :isgen
+        :istd
+        :cnode
+    ) then needsDtor = true
     if defName == "String" then needsDtor = true
     if needsDtor then {
         st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: cid.u64)
