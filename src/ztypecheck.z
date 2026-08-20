@@ -6713,264 +6713,157 @@ applyUnitVisibility: function {
         }
     } else null
 }
-
-# resolve a record definition: its fields and methods.
-resolveRecord: function {
+# attachRecordField -- an isItem that is not a method is a FIELD: resolve its
+# type-ref (which may name a SIBLING method, an fn-ptr slot defaulting to it),
+# attach it, and record the marker and default the declaration carries.
+attachRecordField: function {
     st: zenv.ZSymbolTable
+    frame: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
-    frame: ztypes.declid
     defName: StringView
-    rnode: zast.ObjectDefData
+    rid: u64
+    fm: zast.NamedOperationData.view
+    fname: StringView
 } is {
-    rid: (declareCanonicalType
+    ftnR: fieldHeadName :ast n: (ast.nodes.get i: fm.operation.u64)
+    # a field's type-ref can name a SIBLING method (an fn-ptr
+    # slot defaulting to it), which is a member like any other
+    (forceMemberOf
         :st
         :frame
-        :ast
 
-        :unitDecl
-        ownerNameId: zast.nameid
-        name: defName
-        typetype: ztypes.ztypetype.recordType
+        :ast
+        parentTypeId: (ztypes.tid.create from: rid.u64)
+        nameId: (zast.poolFind pool: ast.names text: ftnR.stringview)
     )
-    rrid: rid
-    # `record is native` on the TYPE: the runtime supplies the layout, so
-    # routing can ask the declaration whether a type is runtime-backed instead
-    # of comparing its name. Mirrors resolveClass.
-    st.reg.setNative typeId: (ztypes.tid.create from: rid.u64) value: rnode.isNative
-    pvExcl_rrid: (ListVal u64)
-    pvGrants_rrid: (ListVal u64)
-    scanVisibility :st :ast onode: rnode excl: pvExcl_rrid grants: pvGrants_rrid
-    st.reg.setValtype typeId: (ztypes.tid.create from: rid.u64) value: true
-    isgen: hasGenericParam :ast items: rnode.asItems
-    eqOptR: eqNullOptOut :ast asItems: rnode.asItems
-    eqAsR: asDeclaresMember :ast asItems: rnode.asItems member: "=="
-    # `copy: null` strikes the default byte copy off this type. It is recorded
-    # as a member carrying the null shell so the use site can tell it from a
-    # type that simply never mentioned `copy`.
-    if (memberNullOptOut :ast asItems: rnode.asItems member: "copy") then {
-        st.typing.copyOptOut.add item: rid
-    }
-    if isgen then {
-        st.reg.setGeneric typeId: (ztypes.tid.create from: rid.u64) value: true
-        (registerGenericParams
-            :st
-            :ast
-            tdecl: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
-            items: rnode.asItems
+    mrefR: (resolvedByIdsMember
+        :st
+        :ast
+        :unitDecl
+        defId: (zast.poolFind pool: ast.names text: defName)
+        memberId: (zast.poolFind pool: ast.names text: ftnR.stringview)
+    )
+    handledR: false
+    match (
+        mrefR
+    ) case some then {
+        (st.typing.setMemberType
+            parentTypeId: (ztypes.tid.create from: rid.u64)
+            nameId: fm.name
+            childTypeId: mrefR
         )
-    }
-    istd: recordIsTypedef :ast :rnode
-    if istd then {
-        tdb: objectTypedefBaseId :ast onode: rnode
-        if (tdb.isZero) == false then {
-            tdk: rid
-            st.typing.typedefBaseName.set key: tdk value: tdb
-        }
-        tdt: objectTypedefBaseTid :st :frame :ast :unitDecl onode: rnode
-        if tdt > 0 then {
-            tdk5: rid
-            (st.typing.typedefBaseTid.set
-                key: (ztypes.tid.create from: tdk5.u64)
-                value: (ztypes.tid.create from: tdt.u64)
+        if (st.reg.typetypeOf typeId: (ztypes.tid.create from: mrefR.u64)) == ztypes.ztypetype.functionType then {
+            (st.typing.setChildFnptrField
+                pool: ast.names
+                parentTypeId: (ztypes.tid.create from: rid.u64)
+                name: fname
             )
         }
-    }
-    hasCreateIs: false
-    hasEqIs: false
-    if (istd) == false then {
-        fiter: rnode.isItems.iterate
-        for fmId: fiter loop {
-            fm: ast.nodes.get i: fmId.u64
-            match (
-                fm
-            ) case namedoperation then {
-                fname: zast.nameTextAt :ast ref: fm.name
-                mido: (resolveMethodFnLazy
-                    :st
-                    :frame
+        pdkR: nodeId n: (ast.nodes.get i: fm.operation.u64)
+        pdoR: rid
+        st.typing.pendingDefaultOwner.set key: pdkR.u64 value: pdoR
+        pdk2R: nodeId n: (ast.nodes.get i: fm.operation.u64)
+        pdiR: mrefR
+        st.typing.pendingDefaultId.set key: pdk2R.u64 value: pdiR
+        handledR = true
+    } case none then null
+    if (handledR) == false then {
+        cid: (resolveTyperefShellMarked
+            :st
+            :frame
 
-                    :ast
-                    :unitDecl
-                    ownerNameId: (nameIdOf :ast name: defName)
-                    mname: fname.stringview
-                    thisName: defName
-                    op: (ast.nodes.get i: fm.operation.u64)
-                    lazyOk: (isgen) == false
-                )
-                match (
-                    mido
-                ) case some then {
-                    if fname.stringview == "create" then hasCreateIs = true
-                    if fname.stringview == "==" then hasEqIs = true
-                    (st.typing.setMemberType
-                        parentTypeId: (ztypes.tid.create from: rid.u64)
-                        nameId: fm.name
-                        childTypeId: mido
-                    )
-                    if (fnFieldFlaggableName name: fname.stringview) then {
-                        (st.typing.setChildFnptrField
-                            pool: ast.names
-                            parentTypeId: (ztypes.tid.create from: rid.u64)
-                            name: fname.stringview
-                        )
-                    }
-                } case none then {
-                    ftnR: fieldHeadName :ast n: (ast.nodes.get i: fm.operation.u64)
-                    # a field's type-ref can name a SIBLING method (an fn-ptr
-                    # slot defaulting to it), which is a member like any other
-                    (forceMemberOf
-                        :st
-                        :frame
-
-                        :ast
-                        parentTypeId: (ztypes.tid.create from: rid.u64)
-                        nameId: (zast.poolFind pool: ast.names text: ftnR.stringview)
-                    )
-                    mrefR: (resolvedByIdsMember
-                        :st
-                        :ast
-                        :unitDecl
-                        defId: (zast.poolFind pool: ast.names text: defName)
-                        memberId: (zast.poolFind pool: ast.names text: ftnR.stringview)
-                    )
-                    handledR: false
-                    match (
-                        mrefR
-                    ) case some then {
-                        (st.typing.setMemberType
-                            parentTypeId: (ztypes.tid.create from: rid.u64)
-                            nameId: fm.name
-                            childTypeId: mrefR
-                        )
-                        if (st.reg.typetypeOf typeId: (ztypes.tid.create from: mrefR.u64)) == ztypes.ztypetype.functionType then {
-                            (st.typing.setChildFnptrField
-                                pool: ast.names
-                                parentTypeId: (ztypes.tid.create from: rid.u64)
-                                name: fname.stringview
-                            )
-                        }
-                        pdkR: nodeId n: (ast.nodes.get i: fm.operation.u64)
-                        pdoR: rid
-                        st.typing.pendingDefaultOwner.set key: pdkR.u64 value: pdoR
-                        pdk2R: nodeId n: (ast.nodes.get i: fm.operation.u64)
-                        pdiR: mrefR
-                        st.typing.pendingDefaultId.set key: pdk2R.u64 value: pdiR
-                        handledR = true
-                    } case none then null
-                    if (handledR) == false then {
-                        cid: (resolveTyperefShellMarked
-                            :st
-                            :frame
-
-                            :ast
-                            :unitDecl
-                            ownerId: 0
-                            typeExpr: (ast.nodes.get i: fm.operation.u64)
-                            thisName: defName
-                        )
-                        (st.typing.setMemberType
-                            parentTypeId: (ztypes.tid.create from: rid.u64)
-                            nameId: fm.name
-                            childTypeId: cid
-                        )
-                        if (st.reg.typetypeOf typeId: cid) == ztypes.ztypetype.functionType then {
-                            (st.typing.setChildFnptrField
-                                pool: ast.names
-                                parentTypeId: (ztypes.tid.create from: rid.u64)
-                                name: fname.stringview
-                            )
-                        }
-                        (recordTyperef
-                            :st
-                            :frame
-
-                            :ast
-                            :unitDecl
-                            thisName: ""
-                            node: (ast.nodes.get i: fm.operation.u64)
-                        )
-                        dcn1: (zast.nameTextAt
-                            :ast
-                            ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
-                        )
-                        rdnr: (zast.nameTextAt
-                            :ast
-                            ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
-                        )
-                        if (isNumericLiteralName name: rdnr.stringview) then {
-                            (st.typing.setDefaultLiteral
-                                pool: ast.names
-                                parentTypeId: (ztypes.tid.create from: rid.u64)
-                                name: fname.stringview
-                                node: fm.operation
-                            )
-                        } else {
-                            if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) == false when (nameDenotesUnit
-                                :st
-                                :frame
-
-                                nameId: (nameIdOf
-                                :ast
-                                name: rdnr.stringview
-                            )
-                            ) == false then {
-                                rArmNid: zast.poolFind pool: ast.names text: dcn1.stringview
-                                rArmDecl: st.typing.declMemberIdOf parentTypeId: cid nameId: rArmNid
-                                (st.typing.setDefaultVariantArm
-                                    pool: ast.names
-                                    parentTypeId: (ztypes.tid.create from: rid.u64)
-                                    name: fname.stringview
-                                    targetDecl: rArmDecl
-                                )
-                            }
-                        }
-                        if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) then {} else {
-                            if dcn1.length > 0 then {
-                                rdk3: nodeId n: (ast.nodes.get i: fm.operation.u64)
-                                rdo3: rid
-                                st.typing.pendingDefaultOwner.set key: rdk3.u64 value: rdo3
-                                rdk4: nodeId n: (ast.nodes.get i: fm.operation.u64)
-                                rdn4: rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64)
-                                st.typing.pendingDefaultName.set key: rdk4.u64 value: rdn4
-                            }
-                        }
-                    }
-                }
-            } else null
-        }
-    }
-    hasCreateAs: (attachMethods
-        :st
-        :frame
-
-        :ast
-        :unitDecl
-        :defName
-        parentId: (ztypes.tid.create from: rid.u64)
-        asItems: rnode.asItems
-    )
-    hasCreate: hasCreateIs
-    if hasCreateAs then hasCreate = true
-    attachMarkers :st :frame :ast :unitDecl parentId: rid asItems: rnode.asItems
-    if (hasCreate) == false then {
-        createId: (st.reg.newType
-            name: "create"
-            ownerTid: rid
-            typetype: ztypes.ztypetype.functionType
-        )
-        (st.typing.declSynthMember
-            parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.wkCreate
-            kind: ztyping.declkind.methodDecl
+            :ast
+            :unitDecl
+            ownerId: 0
+            typeExpr: (ast.nodes.get i: fm.operation.u64)
+            thisName: defName
         )
         (st.typing.setMemberType
             parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.wkCreate
-            childTypeId: createId
+            nameId: fm.name
+            childTypeId: cid
         )
-        materializeCreateParams :st :frame :ast typeTid: rid :createId
+        if (st.reg.typetypeOf typeId: cid) == ztypes.ztypetype.functionType then {
+            (st.typing.setChildFnptrField
+                pool: ast.names
+                parentTypeId: (ztypes.tid.create from: rid.u64)
+                name: fname
+            )
+        }
+        (recordTyperef
+            :st
+            :frame
+
+            :ast
+            :unitDecl
+            thisName: ""
+            node: (ast.nodes.get i: fm.operation.u64)
+        )
+        dcn1: (zast.nameTextAt
+            :ast
+            ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
+        )
+        rdnr: (zast.nameTextAt
+            :ast
+            ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
+        )
+        if (isNumericLiteralName name: rdnr.stringview) then {
+            (st.typing.setDefaultLiteral
+                pool: ast.names
+                parentTypeId: (ztypes.tid.create from: rid.u64)
+                name: fname
+                node: fm.operation
+            )
+        } else {
+            if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) == false when (nameDenotesUnit
+                :st
+                :frame
+
+                nameId: (nameIdOf
+                :ast
+                name: rdnr.stringview
+            )
+            ) == false then {
+                rArmNid: zast.poolFind pool: ast.names text: dcn1.stringview
+                rArmDecl: st.typing.declMemberIdOf parentTypeId: cid nameId: rArmNid
+                (st.typing.setDefaultVariantArm
+                    pool: ast.names
+                    parentTypeId: (ztypes.tid.create from: rid.u64)
+                    name: fname
+                    targetDecl: rArmDecl
+                )
+            }
+        }
+        if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) then {} else {
+            if dcn1.length > 0 then {
+                rdk3: nodeId n: (ast.nodes.get i: fm.operation.u64)
+                rdo3: rid
+                st.typing.pendingDefaultOwner.set key: rdk3.u64 value: rdo3
+                rdk4: nodeId n: (ast.nodes.get i: fm.operation.u64)
+                rdn4: rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64)
+                st.typing.pendingDefaultName.set key: rdk4.u64 value: rdn4
+            }
+        }
     }
+}
+# synthRecordMembers -- the members a record gets without declaring them: a typedef
+# wrapper's `borrow` projection, or the byte-wise `==` and `hash` a plain record
+# carries. `hash` is INDEPENDENT of whether `==` was synthesised -- a type that
+# declares its own `==` (every numeric does) still hashes by its bytes -- and a
+# heap-owning value has no byte range to hash, so it gets none and is not
+# Hashable.
+synthRecordMembers: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rnode: zast.ObjectDefData.view
+    rid: u64
+    istd: bool
+    isgen: bool
+    eqOptR: bool
+    eqAsR: bool
+    hasEqIs: bool
+} is {
     if istd then {
         borrowId: (st.reg.newType
             name: "borrow"
@@ -7043,6 +6936,178 @@ resolveRecord: function {
             childTypeId: hshR
         )
     }
+}
+# recordTypedefBase -- `X: T.typedef` records the base it wraps by BOTH channels:
+# the declaration's name id and, when it resolves here, its tid. The two are not
+# the same presence set, so both are written.
+recordTypedefBase: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    rnode: zast.ObjectDefData.view
+    rid: u64
+} is {
+    tdb: objectTypedefBaseId :ast onode: rnode
+    if (tdb.isZero) == false then {
+        tdk: rid
+        st.typing.typedefBaseName.set key: tdk value: tdb
+    }
+    tdt: objectTypedefBaseTid :st :frame :ast :unitDecl onode: rnode
+    if tdt > 0 then {
+        tdk5: rid
+        (st.typing.typedefBaseTid.set
+            key: (ztypes.tid.create from: tdk5.u64)
+            value: (ztypes.tid.create from: tdt.u64)
+        )
+    }
+}
+
+
+# resolve a record definition: its fields and methods.
+resolveRecord: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    rnode: zast.ObjectDefData
+} is {
+    rid: (declareCanonicalType
+        :st
+        :frame
+        :ast
+
+        :unitDecl
+        ownerNameId: zast.nameid
+        name: defName
+        typetype: ztypes.ztypetype.recordType
+    )
+    rrid: rid
+    # `record is native` on the TYPE: the runtime supplies the layout, so
+    # routing can ask the declaration whether a type is runtime-backed instead
+    # of comparing its name. Mirrors resolveClass.
+    st.reg.setNative typeId: (ztypes.tid.create from: rid.u64) value: rnode.isNative
+    pvExcl_rrid: (ListVal u64)
+    pvGrants_rrid: (ListVal u64)
+    scanVisibility :st :ast onode: rnode excl: pvExcl_rrid grants: pvGrants_rrid
+    st.reg.setValtype typeId: (ztypes.tid.create from: rid.u64) value: true
+    isgen: hasGenericParam :ast items: rnode.asItems
+    eqOptR: eqNullOptOut :ast asItems: rnode.asItems
+    eqAsR: asDeclaresMember :ast asItems: rnode.asItems member: "=="
+    # `copy: null` strikes the default byte copy off this type. It is recorded
+    # as a member carrying the null shell so the use site can tell it from a
+    # type that simply never mentioned `copy`.
+    if (memberNullOptOut :ast asItems: rnode.asItems member: "copy") then {
+        st.typing.copyOptOut.add item: rid
+    }
+    if isgen then {
+        st.reg.setGeneric typeId: (ztypes.tid.create from: rid.u64) value: true
+        (registerGenericParams
+            :st
+            :ast
+            tdecl: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
+            items: rnode.asItems
+        )
+    }
+    istd: recordIsTypedef :ast :rnode
+    if istd then recordTypedefBase :st :frame :ast :unitDecl :rnode :rid
+    hasCreateIs: false
+    hasEqIs: false
+    if (istd) == false then {
+        fiter: rnode.isItems.iterate
+        for fmId: fiter loop {
+            fm: ast.nodes.get i: fmId.u64
+            match (
+                fm
+            ) case namedoperation then {
+                fname: zast.nameTextAt :ast ref: fm.name
+                mido: (resolveMethodFnLazy
+                    :st
+                    :frame
+
+                    :ast
+                    :unitDecl
+                    ownerNameId: (nameIdOf :ast name: defName)
+                    mname: fname.stringview
+                    thisName: defName
+                    op: (ast.nodes.get i: fm.operation.u64)
+                    lazyOk: (isgen) == false
+                )
+                match (
+                    mido
+                ) case some then {
+                    if fname.stringview == "create" then hasCreateIs = true
+                    if fname.stringview == "==" then hasEqIs = true
+                    (st.typing.setMemberType
+                        parentTypeId: (ztypes.tid.create from: rid.u64)
+                        nameId: fm.name
+                        childTypeId: mido
+                    )
+                    if (fnFieldFlaggableName name: fname.stringview) then {
+                        (st.typing.setChildFnptrField
+                            pool: ast.names
+                            parentTypeId: (ztypes.tid.create from: rid.u64)
+                            name: fname.stringview
+                        )
+                    }
+                } case none then {
+                    (attachRecordField
+                        :st
+                        :frame
+                        :ast
+                        :unitDecl
+                        :defName
+                        :rid
+                        :fm
+                        fname: fname.stringview
+                    )
+                }
+            } else null
+        }
+    }
+    hasCreateAs: (attachMethods
+        :st
+        :frame
+
+        :ast
+        :unitDecl
+        :defName
+        parentId: (ztypes.tid.create from: rid.u64)
+        asItems: rnode.asItems
+    )
+    hasCreate: hasCreateIs
+    if hasCreateAs then hasCreate = true
+    attachMarkers :st :frame :ast :unitDecl parentId: rid asItems: rnode.asItems
+    if (hasCreate) == false then {
+        createId: (st.reg.newType
+            name: "create"
+            ownerTid: rid
+            typetype: ztypes.ztypetype.functionType
+        )
+        (st.typing.declSynthMember
+            parentTypeId: (ztypes.tid.create from: rid.u64)
+            nameId: zast.wkCreate
+            kind: ztyping.declkind.methodDecl
+        )
+        (st.typing.setMemberType
+            parentTypeId: (ztypes.tid.create from: rid.u64)
+            nameId: zast.wkCreate
+            childTypeId: createId
+        )
+        materializeCreateParams :st :frame :ast typeTid: rid :createId
+    }
+    (synthRecordMembers
+        :st
+        :ast
+        :rnode
+        :rid
+        :istd
+        :isgen
+        :eqOptR
+        :eqAsR
+        :hasEqIs
+    )
     if pvExcl_rrid.length > 0 then st.typing.privacySeen = true
     applyGrantsPrivate :st parentId: rrid grants: pvGrants_rrid
 }
@@ -15879,43 +15944,142 @@ heapOwningValtypeTid: function {
     }
     return false
 }
+# completeSpecChildren -- finish a spec that the trie already carries: its generic
+# argument rows, its members, and the walks its members demand.
+completeSpecChildren: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    templateId: ztypes.tid
+    mid8: ztypes.tid
+    keys8: (ListVal u64)
+    keyIsVal8: (ListVal bool)
+} is {
+    # a trie-keyed concrete specialization mints its chain family and
+    # collection children here with def-order args; name-keyed mints
+    # (sized records, empty-subs chains) keep their caller-side
+    # invocations, which carry the elem/val ids this path cannot derive
+    # elem = the first TYPE key (a sized record's leading value key is
+    # not an element); val = the second key only when it is a type
+    elemTid: u64
+    ei3: u64
+    en3: keys8.length
+    for ei3 < en3 loop {
+        if elemTid == 0 then {
+            if (keyIsVal8.get i: ei3) == false then elemTid = keys8.get i: ei3
+        }
+        ei3 = ei3 + 1
+    }
+    valC3: ztypes.tid
+    if keys8.length > 1 then {
+        if (keyIsVal8.get i: 1) == false then valC3 = ztypes.tid.create from: (keys8.get i: 1)
+    }
+    # MapItemIter's iterator element is the derived MapEntry spec (its
+    # call's OptionView some-arm), not a trie key
+    skipChild: false
+    itemIsIter: false
+    if templateId == (builtinTidT :st :frame :ast base: "MapItemIter") then itemIsIter = true
+    if templateId == (builtinTidT :st :frame :ast base: "MapItemIterRV") then itemIsIter = true
+    if templateId == (builtinTidT :st :frame :ast base: "MapItemIterVR") then itemIsIter = true
+    if templateId == (builtinTidT :st :frame :ast base: "MapItemIterVV") then itemIsIter = true
+    if itemIsIter then {
+        skipChild = true
+        (forceMemberOf :st :frame :ast parentTypeId: mid8 nameId: zast.wkCall)
+        micoC4: st.typing.declChildOfId parentTypeId: mid8 nameId: zast.wkCall
+        match (
+            micoC4
+        ) case some then {
+            mrtoC4: st.reg.returnTypeOf tid: (ztypes.tid.create from: micoC4.u64)
+            if mrtoC4 > 0 then {
+                (forceMemberOf :st :frame :ast parentTypeId: mrtoC4 nameId: zast.wkSome)
+                mieoC4: st.typing.declChildOfId parentTypeId: mrtoC4 nameId: zast.wkSome
+                match (
+                    mieoC4
+                ) case some then {
+                    elemTid = mieoC4
+                    skipChild = false
+                } case none then null
+            }
+        } case none then null
+    }
+    if skipChild == false then {
+        (mintCollectionChildren
+            :st
+            :frame
+            :ast
 
-# get, or mint on first use, the specialisation for a generic instantiation.
-getOrMintSpec: function {
+            monoId: (ztypes.tid.create from: mid8.u64)
+            :templateId
+            elemArg: elemTid
+            valArg: (ztypes.tid.create from: valC3.u64)
+        )
+    }
+}
+# mintSpecUnderTemplate -- build the spec's children, LAST, and the trie edge laid
+# above is why: building them respecializes, which re-enters getOrMintSpec for this
+# very instantiation, and before the edge existed that re-entry found nothing and
+# minted a SECOND spec under the same name -- which the emitter then emitted
+# beside the first.
+mintSpecUnderTemplate: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
     name: StringView
     templateId: ztypes.tid
+    mid8: ztypes.tid
+    subs: (IdMapV zast.nameid value: u64)
+    idSubs8: (IdMapV u64 value: u64)
+    fallbackArg: u64
+} out ztypes.tid is {
+    {
+        (mintMono
+            :st
+            :frame
+            :ast
+
+            :unitDecl
+            :name
+            :templateId
+            :subs
+            idSubs: idSubs8
+            :fallbackArg
+            monoTid: mid8
+        )
+        # a Box spec minted from TYPE POSITION (a union's type argument)
+        # registers the identity the construction path stamps: isBox drives
+        # typeRefC's bare-pointer rendering and the destructor plumbing. The
+        # member copy stays with construction -- nothing reads members off
+        # an un-constructed Box.
+        isBxM8: false
+        bxmn8: st.reg.nameOf tid: templateId
+        if bxmn8.stringview == "Box" then {
+            if (st.reg.typetypeOf typeId: templateId) == ztypes.ztypetype.classType then {
+                if (st.typing.declMemberCount ownerTid: templateId) == 0 then isBxM8 = true
+            }
+        }
+        if isBxM8 then {
+            st.reg.setIsBox typeId: mid8
+            st.reg.setIsHeapAllocated typeId: mid8
+        }
+    }
+    return mid8
+}
+# buildSpecTrieKeys -- the arguments that key this spec's level of the id trie, in
+# the template's DECLARATION order. Answers false when a key cannot be settled, in
+# which case the trie is not consulted at all.
+buildSpecTrieKeys: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    pnames8: (ListVal zast.nameid).view
     subs: (IdMapV zast.nameid value: u64)
     valSubs: (IdMapV zast.nameid value: u64)
     fallbackArg: u64
-} out ztypes.tid is {
-    tk8: declOfTypeId :st tid: templateId
-    pnames8: st.reg.genericParamNamesOf tdecl: tk8
-    # An elided leading type argument stages under the empty name; rebind it
-    # to the primary generic parameter before the trie keys and idSubs build
-    # (mintMono's own rebind happens after both).
-    {
-        emptyKey8: zast.nameid
-        ev8: subs.get key: emptyKey8
-        match (
-            ev8
-        ) case some then {
-            prnm8: firstGenericParamId :st :templateId
-            if (prnm8.isZero) == false then subs.set key: prnm8 value: ev8
-        } case none then null
-        evv8: valSubs.get key: emptyKey8
-        match (
-            evv8
-        ) case some then {
-            prnmv8: firstGenericParamId :st :templateId
-            if (prnmv8.isZero) == false then valSubs.set key: prnmv8 value: evv8
-        } case none then null
-    }
     keys8: (ListVal u64)
     keyIsVal8: (ListVal bool)
+    frame: ztypes.declid
+    tk8: ztypes.declid
+} out bool is {
     trieOk8: true
     if pnames8.length == 0 then {
         # The template's arity is unreadable here -- its parameters are keyed by
@@ -15986,6 +16150,152 @@ getOrMintSpec: function {
             }
         }
     }
+    return trieOk8
+}
+# registerSpecOnTrie -- lay the trie edge for a spec BEFORE its children are built,
+# and record its generic-argument rows. The edge has to exist first: building the
+# children respecializes, which re-enters getOrMintSpec for this very
+# instantiation and must find the spec rather than mint a second one.
+registerSpecOnTrie: function {
+    st: zenv.ZSymbolTable
+    name: StringView
+    templateId: ztypes.tid
+    mid8: ztypes.tid
+    keys8: (ListVal u64).view
+    keyIsVal8: (ListVal bool).view
+} is {
+    cur: templateId
+    ki: u64
+    kn: keys8.length
+    for ki < kn loop {
+        k: keys8.get i: ki
+        last: false
+        if ki + 1 == kn then last = true
+        n: st.reg.getGenericChild parentId: cur key: k
+        step: u64
+        match (
+            n
+        ) case some then {
+            step = n
+        } case none then {
+            if last then {
+                step = mid8
+            } else {
+                inm: "\{name}__node"
+                step = (st.reg.newType
+                    name: inm.stringview
+                    typetype: ztypes.ztypetype.genericParam
+                )
+                kj: u64
+                for kj <= ki loop {
+                    pk: keys8.get i: kj
+                    if (keyIsVal8.get i: kj) then {
+                        (st.reg.appendGenericArgValue
+                            specId: (ztypes.tid.create from: step.u64)
+                            value: pk
+                        )
+                    } else {
+                        (st.reg.appendGenericArg
+                            specId: (ztypes.tid.create from: step.u64)
+                            arg: pk
+                        )
+                    }
+                    kj = kj + 1
+                }
+            }
+            st.reg.setGenericChild parentId: cur key: k child: step
+        }
+        cur = ztypes.tid.create from: (step)
+        ki = ki + 1
+    }
+    ka: u64
+    for ka < kn loop {
+        av: keys8.get i: ka
+        if (keyIsVal8.get i: ka) then {
+            st.reg.appendGenericArgValue specId: mid8 value: av
+        } else {
+            st.reg.appendGenericArg specId: mid8 arg: av
+        }
+        ka = ka + 1
+    }
+}
+# buildSpecIdSubs -- the same substitutions the trie keys carry, keyed by the
+# template's generic-parameter DECLARATION ids rather than by name.
+buildSpecIdSubs: function {
+    st: zenv.ZSymbolTable
+    pnames8: (ListVal zast.nameid).view
+    keys8: (ListVal u64).view
+    keyIsVal8: (ListVal bool).view
+    idSubs8: (IdMapV u64 value: u64)
+    tk8: ztypes.declid
+} is {
+    pi8: u64
+    pt8: pnames8.length
+    for pi8 < pt8 loop {
+        pnm8: pnames8.get i: pi8
+        pto8: st.reg.genericParamTidOf tdecl: tk8 paramName: pnm8
+        match (
+            pto8
+        ) case some then {
+            if (keyIsVal8.get i: pi8) == false then {
+                kv8: keys8.get i: pi8
+                pk8: pto8
+                idSubs8.set key: pk8 value: kv8
+            }
+        } case none then null
+        pi8 = pi8 + 1
+    }
+}
+
+
+# get, or mint on first use, the specialisation for a generic instantiation.
+getOrMintSpec: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    name: StringView
+    templateId: ztypes.tid
+    subs: (IdMapV zast.nameid value: u64)
+    valSubs: (IdMapV zast.nameid value: u64)
+    fallbackArg: u64
+} out ztypes.tid is {
+    tk8: declOfTypeId :st tid: templateId
+    pnames8: st.reg.genericParamNamesOf tdecl: tk8
+    # An elided leading type argument stages under the empty name; rebind it
+    # to the primary generic parameter before the trie keys and idSubs build
+    # (mintMono's own rebind happens after both).
+    {
+        emptyKey8: zast.nameid
+        ev8: subs.get key: emptyKey8
+        match (
+            ev8
+        ) case some then {
+            prnm8: firstGenericParamId :st :templateId
+            if (prnm8.isZero) == false then subs.set key: prnm8 value: ev8
+        } case none then null
+        evv8: valSubs.get key: emptyKey8
+        match (
+            evv8
+        ) case some then {
+            prnmv8: firstGenericParamId :st :templateId
+            if (prnmv8.isZero) == false then valSubs.set key: prnmv8 value: evv8
+        } case none then null
+    }
+    keys8: (ListVal u64)
+    keyIsVal8: (ListVal bool)
+    trieOk8: (buildSpecTrieKeys
+        :ast
+        :st
+        :frame
+        :tk8
+        :pnames8
+        :subs
+        :valSubs
+        :fallbackArg
+        :keys8
+        :keyIsVal8
+    )
     if trieOk8 then {
         cur8: templateId
         ki8: u64
@@ -16010,24 +16320,7 @@ getOrMintSpec: function {
         }
     }
     idSubs8: (IdMapV u64 value: u64)
-    if trieOk8 then {
-        pi8: u64
-        pt8: pnames8.length
-        for pi8 < pt8 loop {
-            pnm8: pnames8.get i: pi8
-            pto8: st.reg.genericParamTidOf tdecl: tk8 paramName: pnm8
-            match (
-                pto8
-            ) case some then {
-                if (keyIsVal8.get i: pi8) == false then {
-                    kv8: keys8.get i: pi8
-                    pk8: pto8
-                    idSubs8.set key: pk8 value: kv8
-                }
-            } case none then null
-            pi8 = pi8 + 1
-        }
-    }
+    if trieOk8 then buildSpecIdSubs :st :pnames8 :keys8 :keyIsVal8 :idSubs8 :tk8
     hasParamKey8: false
     if trieOk8 then {
         hk8: u64
@@ -16054,160 +16347,45 @@ getOrMintSpec: function {
         mid8 = st.reg.newType :name typetype: (templateTypetypeOf :st :templateId)
     }
     if trieOk8 when mid8 > 0 then {
-        cur: templateId
-        ki: u64
-        kn: keys8.length
-        for ki < kn loop {
-            k: keys8.get i: ki
-            last: false
-            if ki + 1 == kn then last = true
-            n: st.reg.getGenericChild parentId: cur key: k
-            step: u64
-            match (
-                n
-            ) case some then {
-                step = n
-            } case none then {
-                if last then {
-                    step = mid8
-                } else {
-                    inm: "\{name}__node"
-                    step = (st.reg.newType
-                        name: inm.stringview
-                        typetype: ztypes.ztypetype.genericParam
-                    )
-                    kj: u64
-                    for kj <= ki loop {
-                        pk: keys8.get i: kj
-                        if (keyIsVal8.get i: kj) then {
-                            (st.reg.appendGenericArgValue
-                                specId: (ztypes.tid.create from: step.u64)
-                                value: pk
-                            )
-                        } else {
-                            (st.reg.appendGenericArg
-                                specId: (ztypes.tid.create from: step.u64)
-                                arg: pk
-                            )
-                        }
-                        kj = kj + 1
-                    }
-                }
-                st.reg.setGenericChild parentId: cur key: k child: step
-            }
-            cur = ztypes.tid.create from: (step)
-            ki = ki + 1
-        }
-        ka: u64
-        for ka < kn loop {
-            av: keys8.get i: ka
-            if (keyIsVal8.get i: ka) then {
-                st.reg.appendGenericArgValue specId: mid8 value: av
-            } else {
-                st.reg.appendGenericArg specId: mid8 arg: av
-            }
-            ka = ka + 1
-        }
+        (registerSpecOnTrie
+            :st
+            :name
+            :templateId
+            :mid8
+            :keys8
+            :keyIsVal8
+        )
     }
     # The children are built LAST, and the trie path above is why. Building
     # them respecializes, which re-enters this function for this very
     # instantiation; before the edge existed that re-entry found nothing and
     # minted a SECOND spec under the same name, which the emitter then emitted
     # beside the first.
-    if (hasParamKey8) == false then {
-        (mintMono
-            :st
-            :frame
-            :ast
-
-            :unitDecl
-            :name
-            :templateId
-            :subs
-            idSubs: idSubs8
-            :fallbackArg
-            monoTid: mid8
-        )
-        # a Box spec minted from TYPE POSITION (a union's type argument)
-        # registers the identity the construction path stamps: isBox drives
-        # typeRefC's bare-pointer rendering and the destructor plumbing. The
-        # member copy stays with construction -- nothing reads members off
-        # an un-constructed Box.
-        isBxM8: false
-        bxmn8: st.reg.nameOf tid: templateId
-        if bxmn8.stringview == "Box" then {
-            if (st.reg.typetypeOf typeId: templateId) == ztypes.ztypetype.classType then {
-                if (st.typing.declMemberCount ownerTid: templateId) == 0 then isBxM8 = true
-            }
-        }
-        if isBxM8 then {
-            st.reg.setIsBox typeId: mid8
-            st.reg.setIsHeapAllocated typeId: mid8
-        }
-    }
+    if (hasParamKey8) == false then mid8 = (mintSpecUnderTemplate
+        :ast
+        :st
+        :unitDecl
+        :frame
+        :name
+        :templateId
+        :mid8
+        :subs
+        :idSubs8
+        :fallbackArg
+    )
     okC3: trieOk8
     if hasParamKey8 then okC3 = false
     if mid8.isZero then okC3 = false
     if okC3 then {
-        # a trie-keyed concrete specialization mints its chain family and
-        # collection children here with def-order args; name-keyed mints
-        # (sized records, empty-subs chains) keep their caller-side
-        # invocations, which carry the elem/val ids this path cannot derive
-        # elem = the first TYPE key (a sized record's leading value key is
-        # not an element); val = the second key only when it is a type
-        elemTid: u64
-        ei3: u64
-        en3: keys8.length
-        for ei3 < en3 loop {
-            if elemTid == 0 then {
-                if (keyIsVal8.get i: ei3) == false then elemTid = keys8.get i: ei3
-            }
-            ei3 = ei3 + 1
-        }
-        valC3: ztypes.tid
-        if keys8.length > 1 then {
-            if (keyIsVal8.get i: 1) == false then valC3 = ztypes.tid.create from: (keys8.get i: 1)
-        }
-        # MapItemIter's iterator element is the derived MapEntry spec (its
-        # call's OptionView some-arm), not a trie key
-        skipChild: false
-        itemIsIter: false
-        if templateId == (builtinTidT :st :frame :ast base: "MapItemIter") then itemIsIter = true
-        if templateId == (builtinTidT :st :frame :ast base: "MapItemIterRV") then itemIsIter = true
-        if templateId == (builtinTidT :st :frame :ast base: "MapItemIterVR") then itemIsIter = true
-        if templateId == (builtinTidT :st :frame :ast base: "MapItemIterVV") then itemIsIter = true
-        if itemIsIter then {
-            skipChild = true
-            (forceMemberOf :st :frame :ast parentTypeId: mid8 nameId: zast.wkCall)
-            micoC4: st.typing.declChildOfId parentTypeId: mid8 nameId: zast.wkCall
-            match (
-                micoC4
-            ) case some then {
-                mrtoC4: st.reg.returnTypeOf tid: (ztypes.tid.create from: micoC4.u64)
-                if mrtoC4 > 0 then {
-                    (forceMemberOf :st :frame :ast parentTypeId: mrtoC4 nameId: zast.wkSome)
-                    mieoC4: st.typing.declChildOfId parentTypeId: mrtoC4 nameId: zast.wkSome
-                    match (
-                        mieoC4
-                    ) case some then {
-                        elemTid = mieoC4
-                        skipChild = false
-                    } case none then null
-                }
-            } case none then null
-        }
-        if skipChild == false then {
-            (mintCollectionChildren
-                :st
-                :frame
-                :ast
-
-                monoId: (ztypes.tid.create from: mid8.u64)
-                :templateId
-                elemArg: elemTid
-                valArg: (ztypes.tid.create from: valC3.u64)
-            )
-        }
+        (completeSpecChildren
+            :ast
+            :st
+            :frame
+            :templateId
+            :mid8
+            :keys8
+            :keyIsVal8
+        )
     }
     st.reg.specWasFresh = true
     return (ztypes.tid.create from: mid8)
@@ -21007,6 +21185,286 @@ checkAssignment: function {
         }
     }
 }
+# invalidateMovedSource -- a bare-name reftype RHS is a MOVE: the source
+# invalidates, which the symtab records by appending its taken overlay entry.
+invalidateMovedSource: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rasgn: zast.ReassignmentData.view
+    rvn: Node.view
+    rvt: ztypes.tid
+} is {
+    # A bare-name reftype RHS is a move: the source invalidates (the symtab
+    # appends its taken overlay entry).
+    rn: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: rvn)
+    if rn.length > 0 when rvt > 0 when (typeIsReftype :st tid: rvt) then {
+        vo: st.lookupVarId nameId: (nameIdOf :ast name: rn.stringview)
+        match (
+            vo
+        ) case some then {
+            if (nameIsReadonly :st :ast name: rn.stringview) then {
+                (readonlyMoveError
+                    :st
+                    nodeid: rasgn.nodeid
+                    lineno: rasgn.lineno
+                    colno: rasgn.colno
+                    name: rn.stringview
+                    verb: "by reassignment"
+                )
+            } else {
+                rpin: (pinnedMoveError
+                    :st
+                    :ast
+                    nodeid: rasgn.nodeid
+                    lineno: rasgn.lineno
+                    colno: rasgn.colno
+                    name: rn.stringview
+                    verb: "by reassignment"
+                )
+                if rpin then null else if (isBorrowedVar :st vid: vo) then {
+                    mc: "Cannot move borrowed variable '\{rn}' by reassignment — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+                    (addError
+                        :st
+                        nodeid: rasgn.nodeid
+                        lineno: rasgn.lineno
+                        colno: rasgn.colno
+                        e: zast.err.ownerError
+                        msg: mc
+                    )
+                } else {
+                    (st.invalidate
+                        nameId: (nameIdOf :ast name: rn.stringview)
+                        loc: (optionval.none ztypes.zsrcpos)
+                    )
+                }
+            }
+        } case none then null
+    }
+}
+# checkMethodRefTarget -- reassigning through a dotted target whose root is a
+# receiver: the member being written must be a field of it, not a method.
+checkMethodRefTarget: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rasgn: zast.ReassignmentData.view
+    tpn: Node.view
+} is {
+    targetRoot: methodReceiverRoot :ast n: tpn
+    targetFnName: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: tpn)
+    if targetRoot.length > 0 when targetFnName.length > 0 then {
+        tto: st.lookup nameId: (nameIdOf :ast name: targetRoot.stringview)
+        match (
+            tto
+        ) case some then {
+            if (st.typing.declIsLockField
+                pool: ast.names
+                parentTypeId: (ztypes.tid.create from: tto.u64)
+                name: targetFnName.stringview
+            ) then {
+                tmk: "lock".string
+                {
+                    tmo: (st.typing.declOwnershipOfId
+                        parentTypeId: (ztypes.tid.create from: tto.u64)
+                        nameId: (zast.poolFind pool: ast.names text: targetFnName.stringview)
+                    )
+                    match (
+                        tmo
+                    ) case some then {
+                        tmt: markerText o: tmo
+                        if tmt.length > 0 then tmk = tmt
+                    } case none then null
+                }
+                md: "Cannot reassign '.\{tmk}' field '\{targetFnName}' — a non-owned field is set at construction time and immutable"
+                (addError
+                    :st
+                    nodeid: rasgn.nodeid
+                    lineno: rasgn.lineno
+                    colno: rasgn.colno
+                    e: zast.err.ownerError
+                    msg: md
+                )
+            }
+        } case none then null
+    }
+}
+# checkReassignedType -- the RHS value must be assignable to the target's DECLARED
+# type. Numeric coercion (a literal, or concrete-to-concrete) is permitted exactly
+# as at a call argument; a non-numeric mismatch is an error rather than invalid C
+# downstream. A narrowed bare-name target accepts a fresh value of its whole type
+# -- reassignment resets narrowing -- while a field target keeps lvt.
+checkReassignedType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rasgn: zast.ReassignmentData.view
+    tpn: Node.view
+    lvt: ztypes.tid
+    rvt: ztypes.tid
+} is {
+    # The RHS value must be assignable to the target's declared type. Numeric
+    # coercion (a literal, or a concrete-to-concrete numeric) is permitted here
+    # exactly as at a call argument; a non-numeric type mismatch -- a resultval
+    # where a scalar is expected, a String into a numeric field -- is an error
+    # rather than invalid C downstream.
+    if lvt > 0 when rvt > 0 then {
+        # Validate against the target's declared type: a narrowed bare-name
+        # target accepts a fresh value of its whole type (reassignment resets
+        # narrowing). A field target has no bare name and keeps lvt.
+        chkT: lvt
+        {
+            nmC: zast.nameTextAt :ast ref: (atomNameId :ast n: tpn)
+            if nmC.length > 0 then {
+                dtoC: st.declaredTypeOf nameId: (nameIdOf :ast name: nmC.stringview)
+                match (
+                    dtoC
+                ) case some then {
+                    chkT = ztypes.tid.create from: dtoC.u64
+                } case none then null
+            }
+        }
+        if (typesCompatible :ast :st a: rvt b: chkT) == false then {
+            skipR: false
+            if (isNumericTid
+                :st
+                frame: st.curFrame
+                :ast
+
+                tid: rvt
+            ) when (isNumericTid :st frame: st.curFrame :ast tid: chkT) then skipR = true
+            lttR: st.reg.typetypeOf typeId: chkT
+            if lttR == ztypes.ztypetype.protocolType then skipR = true
+            if lttR == ztypes.ztypetype.facetType then skipR = true
+            if lttR == ztypes.ztypetype.genericParam then skipR = true
+            if lttR == ztypes.ztypetype.functionType then skipR = true
+            tsoR: st.typing.typeofShell.get key: chkT
+            if tsoR.some then skipR = true
+            if (skipR) == false then {
+                enR: st.reg.nameOf tid: chkT
+                anR: st.reg.nameOf tid: rvt
+                mmR: "cannot assign value of type '\{anR}' to '\{enR}' target"
+                (addError
+                    :st
+                    nodeid: rasgn.nodeid
+                    lineno: rasgn.lineno
+                    colno: rasgn.colno
+                    e: zast.err.callError
+                    msg: mmR
+                )
+            }
+        }
+    }
+}
+# checkNarrowedTargetWrite -- writing a bare name resets its narrowing (a fresh
+# value of the whole declared type is legal again) and is refused outright when
+# the name is borrowed or readonly-locked.
+checkNarrowedTargetWrite: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rasgn: zast.ReassignmentData.view
+    tpn: Node.view
+} is {
+    nm: zast.nameTextAt :ast ref: (atomNameId :ast n: tpn)
+    if nm.length > 0 then {
+        st.resetNarrowing nameId: (nameIdOf :ast name: nm.stringview)
+        nvo: st.lookupVarId nameId: (nameIdOf :ast name: nm.stringview)
+        match (
+            nvo
+        ) case some then {
+            if (isBorrowedVar :st vid: nvo) then {
+                ma: "Cannot reassign borrowed variable '\{nm}'"
+                ha: "borrowed names are bound for their full scope; shadow in an inner scope instead".string
+                ena: String
+                (addErrorH
+                    :st
+                    nodeid: rasgn.nodeid
+                    lineno: rasgn.lineno
+                    colno: rasgn.colno
+                    e: zast.err.ownerError
+                    msg: ma
+                    note: ena
+                    hint: ha
+                    width: nm.length.u32.orPanic
+                )
+            }
+        } case none then null
+    }
+}
+# resolveTypeofTarget -- a typeof-placeholder field resolves at its FIRST write:
+# swap the field child to the RHS's type and restamp the target path.
+resolveTypeofTarget: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    tpn: Node.view
+    lvt: ztypes.tid
+    rvt: ztypes.tid
+} is {
+    # A typeof-placeholder field resolves at its first write: swap the
+    # field child to the RHS's type and restamp the target path.
+    if lvt > 0 when rvt > 0 then {
+        tso: st.typing.typeofShell.get key: lvt
+        match (
+            tso
+        ) case some then {
+            troot: methodReceiverRoot :ast n: tpn
+            if troot.length > 0 then {
+                tto: st.lookup nameId: (nameIdOf :ast name: troot.stringview)
+                match (
+                    tto
+                ) case some then {
+                    tfn: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: tpn)
+                    if tfn.length > 0 then {
+                        mrvt: materialiseLiteral :ast :st :unitDecl t: rvt
+                        (st.typing.setMemberType
+                            parentTypeId: (ztypes.tid.create from: tto.u64)
+                            nameId: (zast.poolFind pool: ast.names text: tfn.stringview)
+                            childTypeId: mrvt
+                        )
+                        settof: mrvt
+                        stampGate :st nid: tso.u64 tid: settof
+                        tpid: nodeId n: tpn
+                        if tpid > 0 then {
+                            settp: mrvt
+                            stampGate :st nid: tpid.u64 tid: settp
+                        }
+                    }
+                } case none then null
+            }
+        } case none then null
+    }
+}
+# retakeHoldLock -- `h = y.hold` rebinds a hold binding, so its readonly self-lock
+# stepped aside for the write and is retaken here over the new value.
+retakeHoldLock: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rasgn: zast.ReassignmentData.view
+    hbVid: u64
+    hbNm: StringView
+} is {
+    hrp: (ListVal zast.nameid)
+    hrp.append (nameIdOf :ast name: hbNm)
+    hrh: (ztypes.zlockholder
+        kind: ztypes.zlockholderkind.varKind
+        id: hbVid
+    )
+    hrr: (st.tryLock
+        pool: ast.names
+        path: hrp
+        lockType: ztypes.zlockstate.shared
+        lockScope: ztypes.zlockscope.target
+        holder: hrh
+    )
+    if hrr.length > 0 then {
+        (addError
+            :st
+            nodeid: rasgn.nodeid
+            lineno: rasgn.lineno
+            colno: rasgn.colno
+            e: zast.err.ownerError
+            msg: hrr
+        )
+    }
+}
 
 # checkReassignment -- `lhs = value`: resolve the target path and the value, then
 # reset any narrowing on a bare-name target (appends a non-definition overlay
@@ -21091,31 +21549,7 @@ checkReassignment: function {
             )
         }
     }
-    if hbVid > 0 then {
-        hrp: (ListVal zast.nameid)
-        hrp.append (nameIdOf :ast name: hbNm.stringview)
-        hrh: (ztypes.zlockholder
-            kind: ztypes.zlockholderkind.varKind
-            id: hbVid
-        )
-        hrr: (st.tryLock
-            pool: ast.names
-            path: hrp
-            lockType: ztypes.zlockstate.shared
-            lockScope: ztypes.zlockscope.target
-            holder: hrh
-        )
-        if hrr.length > 0 then {
-            (addError
-                :st
-                nodeid: rasgn.nodeid
-                lineno: rasgn.lineno
-                colno: rasgn.colno
-                e: zast.err.ownerError
-                msg: hrr
-            )
-        }
-    }
+    if hbVid > 0 then retakeHoldLock :st :ast :rasgn :hbVid hbNm: hbNm.stringview
     mrv0: materialiseLiteral :ast :st :unitDecl t: rvt
     if mrv0 > 0 when (st.reg.typetypeOf typeId: mrv0) == ztypes.ztypetype.nullType then {
         m0n: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
@@ -21137,39 +21571,7 @@ checkReassignment: function {
         )
         return
     }
-    # A typeof-placeholder field resolves at its first write: swap the
-    # field child to the RHS's type and restamp the target path.
-    if lvt > 0 when rvt > 0 then {
-        tso: st.typing.typeofShell.get key: lvt
-        match (
-            tso
-        ) case some then {
-            troot: methodReceiverRoot :ast n: tpn
-            if troot.length > 0 then {
-                tto: st.lookup nameId: (nameIdOf :ast name: troot.stringview)
-                match (
-                    tto
-                ) case some then {
-                    tfn: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: tpn)
-                    if tfn.length > 0 then {
-                        mrvt: materialiseLiteral :ast :st :unitDecl t: rvt
-                        (st.typing.setMemberType
-                            parentTypeId: (ztypes.tid.create from: tto.u64)
-                            nameId: (zast.poolFind pool: ast.names text: tfn.stringview)
-                            childTypeId: mrvt
-                        )
-                        settof: mrvt
-                        stampGate :st nid: tso.u64 tid: settof
-                        tpid: nodeId n: tpn
-                        if tpid > 0 then {
-                            settp: mrvt
-                            stampGate :st nid: tpid.u64 tid: settp
-                        }
-                    }
-                } case none then null
-            }
-        } case none then null
-    }
+    resolveTypeofTarget :st :unitDecl :ast :tpn :lvt :rvt
     # A literal RHS at a concretely-typed target coerces: restamp the RHS's
     # innermost node (wrappers derive through the dump's descent). A
     # literal-typed target (a literal-init loop binding) keeps the pseudo.
@@ -21182,166 +21584,17 @@ checkReassignment: function {
             }
         }
     }
-    # The RHS value must be assignable to the target's declared type. Numeric
-    # coercion (a literal, or a concrete-to-concrete numeric) is permitted here
-    # exactly as at a call argument; a non-numeric type mismatch -- a resultval
-    # where a scalar is expected, a String into a numeric field -- is an error
-    # rather than invalid C downstream.
-    if lvt > 0 when rvt > 0 then {
-        # Validate against the target's declared type: a narrowed bare-name
-        # target accepts a fresh value of its whole type (reassignment resets
-        # narrowing). A field target has no bare name and keeps lvt.
-        chkT: lvt
-        {
-            nmC: zast.nameTextAt :ast ref: (atomNameId :ast n: tpn)
-            if nmC.length > 0 then {
-                dtoC: st.declaredTypeOf nameId: (nameIdOf :ast name: nmC.stringview)
-                match (
-                    dtoC
-                ) case some then {
-                    chkT = ztypes.tid.create from: dtoC.u64
-                } case none then null
-            }
-        }
-        if (typesCompatible :ast :st a: rvt b: chkT) == false then {
-            skipR: false
-            if (isNumericTid
-                :st
-                frame: st.curFrame
-                :ast
-
-                tid: rvt
-            ) when (isNumericTid :st frame: st.curFrame :ast tid: chkT) then skipR = true
-            lttR: st.reg.typetypeOf typeId: chkT
-            if lttR == ztypes.ztypetype.protocolType then skipR = true
-            if lttR == ztypes.ztypetype.facetType then skipR = true
-            if lttR == ztypes.ztypetype.genericParam then skipR = true
-            if lttR == ztypes.ztypetype.functionType then skipR = true
-            tsoR: st.typing.typeofShell.get key: chkT
-            if tsoR.some then skipR = true
-            if (skipR) == false then {
-                enR: st.reg.nameOf tid: chkT
-                anR: st.reg.nameOf tid: rvt
-                mmR: "cannot assign value of type '\{anR}' to '\{enR}' target"
-                (addError
-                    :st
-                    nodeid: rasgn.nodeid
-                    lineno: rasgn.lineno
-                    colno: rasgn.colno
-                    e: zast.err.callError
-                    msg: mmR
-                )
-            }
-        }
-    }
-    nm: zast.nameTextAt :ast ref: (atomNameId :ast n: tpn)
-    if nm.length > 0 then {
-        st.resetNarrowing nameId: (nameIdOf :ast name: nm.stringview)
-        nvo: st.lookupVarId nameId: (nameIdOf :ast name: nm.stringview)
-        match (
-            nvo
-        ) case some then {
-            if (isBorrowedVar :st vid: nvo) then {
-                ma: "Cannot reassign borrowed variable '\{nm}'"
-                ha: "borrowed names are bound for their full scope; shadow in an inner scope instead".string
-                ena: String
-                (addErrorH
-                    :st
-                    nodeid: rasgn.nodeid
-                    lineno: rasgn.lineno
-                    colno: rasgn.colno
-                    e: zast.err.ownerError
-                    msg: ma
-                    note: ena
-                    hint: ha
-                    width: nm.length.u32.orPanic
-                )
-            }
-        } case none then null
-    }
-    targetRoot: methodReceiverRoot :ast n: tpn
-    targetFnName: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: tpn)
-    if targetRoot.length > 0 when targetFnName.length > 0 then {
-        tto: st.lookup nameId: (nameIdOf :ast name: targetRoot.stringview)
-        match (
-            tto
-        ) case some then {
-            if (st.typing.declIsLockField
-                pool: ast.names
-                parentTypeId: (ztypes.tid.create from: tto.u64)
-                name: targetFnName.stringview
-            ) then {
-                tmk: "lock".string
-                {
-                    tmo: (st.typing.declOwnershipOfId
-                        parentTypeId: (ztypes.tid.create from: tto.u64)
-                        nameId: (zast.poolFind pool: ast.names text: targetFnName.stringview)
-                    )
-                    match (
-                        tmo
-                    ) case some then {
-                        tmt: markerText o: tmo
-                        if tmt.length > 0 then tmk = tmt
-                    } case none then null
-                }
-                md: "Cannot reassign '.\{tmk}' field '\{targetFnName}' — a non-owned field is set at construction time and immutable"
-                (addError
-                    :st
-                    nodeid: rasgn.nodeid
-                    lineno: rasgn.lineno
-                    colno: rasgn.colno
-                    e: zast.err.ownerError
-                    msg: md
-                )
-            }
-        } case none then null
-    }
-    # A bare-name reftype RHS is a move: the source invalidates (the symtab
-    # appends its taken overlay entry).
-    rn: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: rvn)
-    if rn.length > 0 when rvt > 0 when (typeIsReftype :st tid: rvt) then {
-        vo: st.lookupVarId nameId: (nameIdOf :ast name: rn.stringview)
-        match (
-            vo
-        ) case some then {
-            if (nameIsReadonly :st :ast name: rn.stringview) then {
-                (readonlyMoveError
-                    :st
-                    nodeid: rasgn.nodeid
-                    lineno: rasgn.lineno
-                    colno: rasgn.colno
-                    name: rn.stringview
-                    verb: "by reassignment"
-                )
-            } else {
-                rpin: (pinnedMoveError
-                    :st
-                    :ast
-                    nodeid: rasgn.nodeid
-                    lineno: rasgn.lineno
-                    colno: rasgn.colno
-                    name: rn.stringview
-                    verb: "by reassignment"
-                )
-                if rpin then null else if (isBorrowedVar :st vid: vo) then {
-                    mc: "Cannot move borrowed variable '\{rn}' by reassignment — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
-                    (addError
-                        :st
-                        nodeid: rasgn.nodeid
-                        lineno: rasgn.lineno
-                        colno: rasgn.colno
-                        e: zast.err.ownerError
-                        msg: mc
-                    )
-                } else {
-                    (st.invalidate
-                        nameId: (nameIdOf :ast name: rn.stringview)
-                        loc: (optionval.none ztypes.zsrcpos)
-                    )
-                }
-            }
-        } case none then null
-    }
+    (checkReassignedType
+        :st
+        :ast
+        :rasgn
+        :tpn
+        :lvt
+        :rvt
+    )
+    checkNarrowedTargetWrite :st :ast :rasgn :tpn
+    checkMethodRefTarget :st :ast :rasgn :tpn
+    invalidateMovedSource :st :ast :rasgn :rvn :rvt
 }
 
 # checkSwap -- `lhs swap rhs`: resolve both operand paths (stamping them). The swap
