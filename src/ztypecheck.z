@@ -1872,15 +1872,16 @@ resolveNamedType: function {
     }
     if thisName.length > 0 then {
         etk7: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: thisName)
-        if (st.reg.isGenericParamOf tdecl: etk7 :name) then {
-            pgo7: st.reg.genericParamTidOf tdecl: etk7 paramName: name
+        gpn7: nameIdOf :ast :name
+        if (st.reg.isGenericParamOf tdecl: etk7 name: gpn7) then {
+            pgo7: st.reg.genericParamTidOf tdecl: etk7 paramName: gpn7
             match (
                 pgo7
             ) case some then {
                 return pgo7
             } case none then null
             ptid7: st.reg.newType :name typetype: ztypes.ztypetype.genericParam
-            st.reg.setGenericParamTid tdecl: etk7 paramName: name tid: ptid7
+            st.reg.setGenericParamTid tdecl: etk7 paramName: gpn7 tid: ptid7
             return ptid7
         }
     }
@@ -2331,7 +2332,6 @@ registerGenericParamOne: function {
         m
     ) case namedoperation then {
         if (isGenericParam :ast op: (ast.nodes.get i: m.operation.u64)) then {
-            pn: zast.nameTextAt :ast ref: m.name
             cb: genericConstraintBase :ast n: (ast.nodes.get i: m.operation.u64)
             ckx: genericConstraintKind :ast n: (ast.nodes.get i: m.operation.u64)
             cf9x: cb.copy
@@ -2341,7 +2341,7 @@ registerGenericParamOne: function {
             if k == ztypes.constraintkind.numeric then {
                 mx = constraintNumericMax cv: cf9x.stringview
             }
-            st.reg.addGenericParam :tdecl paramName: pn.stringview kind: k numericMax: mx
+            st.reg.addGenericParam :tdecl paramName: m.name kind: k numericMax: mx
         }
     } else null
 }
@@ -2565,14 +2565,15 @@ recordResolvedName: function {
                 # map feeds mono substitution) but never name-resolves: mark
                 # it no-stamp so resolution doesn't chase or report it
                 gskip: false
+                gpnr: nameIdOf :ast :name
                 if thisName.length > 0 then {
                     enclK: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: thisName)
-                    if (st.reg.isGenericParamOf tdecl: enclK :name) then gskip = true
+                    if (st.reg.isGenericParamOf tdecl: enclK name: gpnr) then gskip = true
                 }
                 if gskip == false when st.typing.sigGenericDecl > 0 then {
                     if (st.reg.isGenericParamOf
                         tdecl: st.typing.sigGenericDecl
-                        :name
+                        name: gpnr
                     ) then gskip = true
                 }
                 recordNodeName :st :name :nid frame: recFrame
@@ -2935,8 +2936,8 @@ resolveMonoRefParts: function {
         tname: atomName :ast n: callable
         if tname.length == 0 then return 0
         sfx: String
-        typeSubs: (MapRV String value: u64)
-        valSubsR: (MapRV String value: u64)
+        typeSubs: (IdMapV zast.nameid value: u64)
+        valSubsR: (IdMapV zast.nameid value: u64)
         firstA: ztypes.tid
         allOk: true
         aiter: arguments.iterate
@@ -2953,10 +2954,8 @@ resolveMonoRefParts: function {
                     match (
                         pdv
                     ) case some then {
-                        vpn: zast.nameTextAt :ast ref: arg.name
-                        vsk: vpn.copy
                         vsv: pdv
-                        valSubsR.set key: vsk value: vsv
+                        valSubsR.set key: arg.name value: vsv
                     } case none then null
                 } else {
                     aid: ztypes.tid
@@ -2994,11 +2993,11 @@ resolveMonoRefParts: function {
                         } else {
                             if enclDecl > 0 when (st.reg.isGenericParamOf
                                 tdecl: enclDecl
-                                name: anc.stringview
+                                name: (nameIdOf :ast name: anc.stringview)
                             ) then {
                                 epo: (st.reg.genericParamTidOf
                                     tdecl: enclDecl
-                                    paramName: anc.stringview
+                                    paramName: (nameIdOf :ast name: anc.stringview)
                                 )
                                 match (
                                     epo
@@ -3011,7 +3010,7 @@ resolveMonoRefParts: function {
                                     )
                                     (st.reg.setGenericParamTid
                                         tdecl: enclDecl
-                                        paramName: anc.stringview
+                                        paramName: (nameIdOf :ast name: anc.stringview)
                                         tid: aid
                                     )
                                 }
@@ -3068,10 +3067,8 @@ resolveMonoRefParts: function {
                         vn: monoValName :st :frame :ast tid: (ztypes.tid.create from: aid.u64)
                         sfx.append s: vn
                         if firstA.isZero then firstA = aid
-                        pn: zast.nameTextAt :ast ref: arg.name
-                        sk: pn.copy
                         sv: aid
-                        typeSubs.set key: sk value: sv
+                        typeSubs.set key: arg.name value: sv
                     }
                 }
             } else null
@@ -3394,15 +3391,19 @@ returnParamTid: function {
     # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
     # base name through the peeled parent.
     if bn.length == 0 then bn = markerPeeledBase :ast n: o
-    if (st.reg.isGenericParamOf tdecl: enclDecl name: bn.stringview) then {
-        po: st.reg.genericParamTidOf tdecl: enclDecl paramName: bn.stringview
+    if (st.reg.isGenericParamOf tdecl: enclDecl name: (nameIdOf :ast name: bn.stringview)) then {
+        po: st.reg.genericParamTidOf tdecl: enclDecl paramName: (nameIdOf :ast name: bn.stringview)
         match (
             po
         ) case some then {
             return po
         } case none then null
         rpt7: st.reg.newType name: bn.stringview typetype: ztypes.ztypetype.genericParam
-        st.reg.setGenericParamTid tdecl: enclDecl paramName: bn.stringview tid: rpt7
+        (st.reg.setGenericParamTid
+            tdecl: enclDecl
+            paramName: (nameIdOf :ast name: bn.stringview)
+            tid: rpt7
+        )
         return rpt7
     }
 
@@ -3559,9 +3560,12 @@ stampGenericParamRef: function {
     # base name through the peeled parent; the marker dp wears the stamp,
     # matching recordTyperef's convention for concrete marked returns.
     if bn.length == 0 then bn = markerPeeledBase :ast n: o
-    if (st.reg.isGenericParamOf tdecl: enclDecl name: bn.stringview) then {
+    if (st.reg.isGenericParamOf tdecl: enclDecl name: (nameIdOf :ast name: bn.stringview)) then {
         gpt3: u64
-        gpo3: st.reg.genericParamTidOf tdecl: enclDecl paramName: bn.stringview
+        gpo3: (st.reg.genericParamTidOf
+            tdecl: enclDecl
+            paramName: (nameIdOf :ast name: bn.stringview)
+        )
         match (
             gpo3
         ) case some then {
@@ -3570,7 +3574,7 @@ stampGenericParamRef: function {
             gpt3 = st.reg.newType name: bn.stringview typetype: ztypes.ztypetype.genericParam
             (st.reg.setGenericParamTid
                 tdecl: enclDecl
-                paramName: bn.stringview
+                paramName: (nameIdOf :ast name: bn.stringview)
                 tid: (ztypes.tid.create from: gpt3.u64)
             )
         }
@@ -3598,7 +3602,10 @@ recordGenericMarkerReturn: function {
     if oId.isZero then return
     o: ast.nodes.get i: oId.u64
     mpb3: markerPeeledBase :ast n: o
-    if mpb3.length > 0 when (st.reg.isGenericParamOf tdecl: enclDecl name: mpb3.stringview) then {
+    if mpb3.length > 0 when (st.reg.isGenericParamOf
+        tdecl: enclDecl
+        name: (nameIdOf :ast name: mpb3.stringview)
+    ) then {
         mnid3: nodeId n: o
         recordNodeName :st name: mpb3.stringview nid: mnid3.u64 :frame
         # the entry feeds mono-return substitution (the pending MAP is the
@@ -4448,14 +4455,17 @@ resolveFunction: function {
                 if isRecvP then skipParam = true
             }
             if skipParam == false when isgen then {
-                if (st.reg.isGenericParamOf tdecl: fnDecl name: ptn.stringview) then {
+                if (st.reg.isGenericParamOf
+                    tdecl: fnDecl
+                    name: (nameIdOf :ast name: ptn.stringview)
+                ) then {
                     skipParam = true
                     fnParam = true
                 }
             }
             if skipParam == false when (st.reg.isGenericParamOf
                 tdecl: receiverEnclDecl
-                name: ptn.stringview
+                name: (nameIdOf :ast name: ptn.stringview)
             ) then {
                 skipParam = true
                 genParam = true
@@ -4499,7 +4509,10 @@ resolveFunction: function {
                     # AST) and no typeref/demand recording (a user type
                     # coincidentally named like the param must not bind).
                     fpt: u64
-                    fpo: st.reg.genericParamTidOf tdecl: fnDecl paramName: ptn.stringview
+                    fpo: (st.reg.genericParamTidOf
+                        tdecl: fnDecl
+                        paramName: (nameIdOf :ast name: ptn.stringview)
+                    )
                     match (
                         fpo
                     ) case some then {
@@ -4511,7 +4524,7 @@ resolveFunction: function {
                         )
                         (st.reg.setGenericParamTid
                             tdecl: fnDecl
-                            paramName: ptn.stringview
+                            paramName: (nameIdOf :ast name: ptn.stringview)
                             tid: (ztypes.tid.create from: fpt.u64)
                         )
                     }
@@ -4527,7 +4540,10 @@ resolveFunction: function {
                     # member type -- unit template methods stay childless (emit
                     # `(void)`); unit bodies clone, so the stamp is per-clone.
                     gpt2: u64
-                    gpo2: st.reg.genericParamTidOf tdecl: receiverEnclDecl paramName: ptn.stringview
+                    gpo2: (st.reg.genericParamTidOf
+                        tdecl: receiverEnclDecl
+                        paramName: (nameIdOf :ast name: ptn.stringview)
+                    )
                     match (
                         gpo2
                     ) case some then {
@@ -4539,7 +4555,7 @@ resolveFunction: function {
                         )
                         (st.reg.setGenericParamTid
                             tdecl: receiverEnclDecl
-                            paramName: ptn.stringview
+                            paramName: (nameIdOf :ast name: ptn.stringview)
                             tid: (ztypes.tid.create from: gpt2.u64)
                         )
                     }
@@ -9755,7 +9771,10 @@ registerUnitGenericParams: function {
                 ) then {
                     gpn0: zast.nameTextAt :ast ref: gm.name
                     gtid0: ztypes.tid
-                    gpo0: st.reg.genericParamTidOf tdecl: urd0 paramName: gpn0.stringview
+                    gpo0: (st.reg.genericParamTidOf
+                        tdecl: urd0
+                        paramName: (nameIdOf :ast name: gpn0.stringview)
+                    )
                     match (
                         gpo0
                     ) case some then {
@@ -9765,7 +9784,11 @@ registerUnitGenericParams: function {
                             name: gpn0.stringview
                             typetype: ztypes.ztypetype.genericParam
                         )
-                        st.reg.setGenericParamTid tdecl: urd0 paramName: gpn0.stringview tid: gtid0
+                        (st.reg.setGenericParamTid
+                            tdecl: urd0
+                            paramName: (nameIdOf :ast name: gpn0.stringview)
+                            tid: gtid0
+                        )
                     }
                     (linkDeclType
                         :st
@@ -11337,7 +11360,7 @@ InstReq: class {
     # the Decl the instantiation was written under: the unit root, or the
     # namespace when it is nested. Where the binding's own name belongs.
     scopeDeclId: ztypes.declid
-    argLabels: (List String)
+    argLabels: (ListVal zast.nameid)
     argNames: (List String)
     argAtomIds: (ListVal u64)
     # every argument's operation node, whatever its shape: a bare atom names
@@ -11402,10 +11425,9 @@ fillUnitArgs: function {ast: Ast.view r: InstReq op: Node.view} is {
             match (
                 a
             ) case namedoperation then {
-                lbl: zast.nameTextCopy :ast ref: a.name
                 anm: atomName :ast n: (ast.nodes.get i: a.operation.u64)
                 aid: instArgAtomId :ast op: (ast.nodes.get i: a.operation.u64)
-                r.argLabels.append lbl
+                r.argLabels.append a.name
                 r.argNames.append anm
                 r.argAtomIds.append aid
                 r.argNodeIds.append a.operation.u64
@@ -11477,7 +11499,7 @@ collectMainInstantiations: function {
                             tmplOpId: topId.u64
                             tmplUnit: tuN
                             :scopeDeclId
-                            argLabels: (List String)
+                            argLabels: (ListVal zast.nameid)
                             argNames: (List String)
                             argAtomIds: (ListVal u64)
                             argNodeIds: (ListVal u64)
@@ -12300,7 +12322,10 @@ resolveInlineGenericUnit: function {
                     ) then {
                         gpn5: zast.nameTextAt :ast ref: gm.name
                         gtid5: u64
-                        gpo5: st.reg.genericParamTidOf tdecl: tdl5 paramName: gpn5.stringview
+                        gpo5: (st.reg.genericParamTidOf
+                            tdecl: tdl5
+                            paramName: (nameIdOf :ast name: gpn5.stringview)
+                        )
                         match (
                             gpo5
                         ) case some then {
@@ -12312,7 +12337,7 @@ resolveInlineGenericUnit: function {
                             )
                             (st.reg.setGenericParamTid
                                 tdecl: tdl5
-                                paramName: gpn5.stringview
+                                paramName: (nameIdOf :ast name: gpn5.stringview)
                                 tid: (ztypes.tid.create from: gtid5.u64)
                             )
                         }
@@ -12456,7 +12481,7 @@ registerMonoFnParams: function {
     st: zenv.ZSymbolTable
     op: Node.view
     fnId: u64
-    subs: (MapRV String value: u64)
+    subs: (IdMapV zast.nameid value: u64)
 } is {
     match (
         op
@@ -12467,7 +12492,7 @@ registerMonoFnParams: function {
             match (
                 ppm
             ) case namedoperation then {
-                pptn: atomName :ast n: (ast.nodes.get i: ppm.operation.u64)
+                pptn: atomNameId :ast n: (ast.nodes.get i: ppm.operation.u64)
                 ppgo: subs.get key: pptn
                 match (
                     ppgo
@@ -12492,7 +12517,7 @@ buildUnitMono: function {
     tmplName: StringView
     monoId: ztypes.tid
     tplId: ztypes.tid
-    subs: (MapRV String value: u64)
+    subs: (IdMapV zast.nameid value: u64)
     templateOpId: zast.nodeid
 } is {
     if (st.typing.collectionChildrenBuilt.has item: monoId) then return
@@ -12505,7 +12530,7 @@ buildUnitMono: function {
         if (td.isZero) == false then rf = td
     }
     bodyIds: zast.unitBodyIdsAt :ast unitId: templateOpId
-    gpNames: (MapRV String value: bool)
+    gpNames: (IdMapV zast.nameid value: bool)
     {
         with giter: bodyIds.iterate do for gmId: giter loop {
             gm: ast.nodes.get i: gmId.u64
@@ -12513,9 +12538,8 @@ buildUnitMono: function {
                 gm
             ) case namedoperation then {
                 if (isGenericParam :ast op: (ast.nodes.get i: gm.operation.u64)) then {
-                    gn: zast.nameTextCopy :ast ref: gm.name
                     gv: true
-                    gpNames.set key: gn value: gv
+                    gpNames.set key: gm.name value: gv
                 }
             } else null
         }
@@ -12619,7 +12643,8 @@ buildUnitMono: function {
                             chName: cNames.get i: ci
                             chId: cIds.get i: ci
                             target: chId
-                            ctn: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
+                            ctnT: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
+                            ctn: nameIdOf :ast name: ctnT.stringview
                             cgo: gpNames.get key: ctn
                             match (
                                 cgo
@@ -12641,7 +12666,8 @@ buildUnitMono: function {
                         rto: st.reg.returnTypeOf tid: (ztypes.tid.create from: srcId.u64)
                         if rto > 0 then {
                             rtv: rto
-                            rtn: st.reg.nameOf tid: rtv
+                            rtnT: st.reg.nameOf tid: rtv
+                            rtn: nameIdOf :ast name: rtnT.stringview
                             rgo: gpNames.get key: rtn
                             match (
                                 rgo
@@ -12662,12 +12688,13 @@ buildUnitMono: function {
                                 op: (ast.nodes.get i: fmNode.operation.u64)
                             )
                             if rnm.length > 0 then {
-                                rgo2: gpNames.get key: rnm
+                                rnmId: nameIdOf :ast name: rnm.stringview
+                                rgo2: gpNames.get key: rnmId
                                 rid2: u64
                                 match (
                                     rgo2
                                 ) case some then {
-                                    sg2: subs.get key: rnm
+                                    sg2: subs.get key: rnmId
                                     match (
                                         sg2
                                     ) case some then {
@@ -12716,7 +12743,7 @@ completeInlineReq: function {
     monoId: ztypes.tid
     tmplName: StringView
     tplId: ztypes.tid
-    subs: (MapRV String value: u64)
+    subs: (IdMapV zast.nameid value: u64)
     mainOpId: zast.nodeid
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
@@ -12810,8 +12837,8 @@ completeUnitInstantiations: function {
         rtid: r.tmplTid
         rtdecl: r.tmplDeclId
         rscope: r.scopeDeclId
-        subs: (MapRV String value: u64)
-        valSubs: (MapRV String value: u64)
+        subs: (IdMapV zast.nameid value: u64)
+        valSubs: (IdMapV zast.nameid value: u64)
         naR: r.argLabels.length
         aiR: u64
         # the arguments resolve where the instantiation is written
@@ -12826,7 +12853,7 @@ completeUnitInstantiations: function {
                 match (
                     pvR
                 ) case some then {
-                    valSubs.set key: lblR.copy value: pvR
+                    valSubs.set key: lblR value: pvR
                 } case none then null
             } else {
                 aoR: (optionval.none u64)
@@ -12851,7 +12878,7 @@ completeUnitInstantiations: function {
                 match (
                     aoR
                 ) case some then {
-                    subs.set key: lblR.copy value: aoR
+                    subs.set key: lblR value: aoR
                     if aidR > 0 then {
                         (ztyping.nodeTypeSet
                             tbl: st.typing.nodeType
@@ -12979,14 +13006,14 @@ completeUnitInstantiations: function {
                 pnI: u64
                 for pnI < pnN loop {
                     pnmR: (pnR.get i: pnI)
-                    tgoR: subs.get key: pnmR.copy
+                    tgoR: subs.get key: pnmR
                     match (
                         tgoR
                     ) case some then {
                         mkeys.append tgoR
                         mkval.append false
                     } case none then {
-                        vgoR: valSubs.get key: pnmR.copy
+                        vgoR: valSubs.get key: pnmR
                         match (
                             vgoR
                         ) case some then {
@@ -13215,7 +13242,7 @@ instMonoKeys: function {
         ai: u64
         for ai < r.argLabels.length loop {
             lbl: r.argLabels.get i: ai
-            if lbl.stringview == pnm.stringview then {
+            if lbl == pnm then {
                 an: r.argNames.get i: ai
                 if (isNumericLiteralName name: an.stringview) then {
                     pv: parseDecimalU64 text: an.stringview
@@ -14452,8 +14479,8 @@ respecialize: function {
     tk: declOfTypeId :st tid: origin
     pn: st.reg.genericParamNamesOf tdecl: tk
     if pn.length != an then return 0
-    typeSubs: (MapRV String value: u64)
-    rvSubs: (MapRV String value: u64)
+    typeSubs: (IdMapV zast.nameid value: u64)
+    rvSubs: (IdMapV zast.nameid value: u64)
     sfx: String
     originName: st.reg.nameOf tid: origin
     mi: u64
@@ -14465,15 +14492,13 @@ respecialize: function {
             specId: (ztypes.tid.create from: specTid.u64)
             ordinal: mi
         ) then {
-            vk: mp.copy
             vv9r: mv
-            rvSubs.set key: vk value: vv9r
+            rvSubs.set key: mp value: vv9r
             nvs: "\{mv}"
             sfx.append s: nvs
         } else {
-            sk: mp.copy
             sv: mv
-            typeSubs.set key: sk value: sv
+            typeSubs.set key: mp value: sv
             vn: monoValName :st :frame :ast tid: (ztypes.tid.create from: mv.u64)
             sfx.append s: vn
         }
@@ -14523,7 +14548,7 @@ mintMono: function {
     frame: ztypes.declid
     name: StringView
     templateId: ztypes.tid
-    subs: (MapRV String value: u64)
+    subs: (IdMapV zast.nameid value: u64)
     idSubs: (IdMapV u64 value: u64)
     fallbackArg: u64
     monoTid: u64
@@ -14588,13 +14613,13 @@ mintMono: function {
     # to the template's primary generic parameter so the substituted children
     # resolve (`(List String)` == `(List of: String)`).
     {
-        emptyKey: String
+        emptyKey: zast.nameid
         ev: subs.get key: emptyKey
         match (
             ev
         ) case some then {
-            prnm: firstGenericParamName :st :templateId
-            if prnm.length > 0 then subs.set key: prnm value: ev
+            prnm: firstGenericParamId :st :templateId
+            if (prnm.isZero) == false then subs.set key: prnm value: ev
         } case none then null
     }
     cNames: (List String)
@@ -14629,7 +14654,8 @@ mintMono: function {
             rsp: respecialize :st frame: rf :ast :unitDecl specTid: chId :idSubs
             if rsp > 0 then target = rsp
         }
-        ctn: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
+        ctnT: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
+        ctn: nameIdOf :ast name: ctnT.stringview
         if target == chId then target = optU64Or o: (subs.get key: ctn) d: target
         # THE BOX RULE at instantiation: a union arm whose substituted type
         # is a builtin Box mono collapses to the ELEMENT, exactly as a
@@ -14673,14 +14699,14 @@ mintMono: function {
         if (st.reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) == ztypes.ztypetype.functionType then {
             childIsGeneric = st.reg.isGenericOf tid: (ztypes.tid.create from: chId.u64)
         }
-        if fallbackArg > 0 when (ctn.stringview == "null") == false when target == chId when (childIsGeneric) == false then {
+        if fallbackArg > 0 when (ctnT.stringview == "null") == false when target == chId when (childIsGeneric) == false then {
             cko: (walkLookupTyperef
                 :st
                 frame: rf
                 :ast
 
                 unitDecl: tplUnit
-                base: ctn.stringview
+                base: ctnT.stringview
             )
             match (
                 cko
@@ -14704,7 +14730,7 @@ mintMono: function {
                     if chName.stringview == "contains" then csM5 = true
                     if chName.stringview == "sort" then csM5 = true
                     if csM5 then {
-                        elemTid: optU64Or o: (subs.get key: ("of".string)) d: 0
+                        elemTid: optU64Or o: (subs.get key: (nameIdOf :ast name: "of")) d: 0
                         if elemTid == 0 then elemTid = fallbackArg
                         ok5: false
                         if elemTid > 0 then {
@@ -14813,7 +14839,7 @@ mintMono: function {
         pn0: pNames.length
         for pi < pn0 loop {
             pname: pNames.get i: pi
-            cdx: st.reg.genericParamConstraintOf tdecl: tk paramName: pname.stringview
+            cdx: st.reg.genericParamConstraintOf tdecl: tk paramName: pname
             # A NUMERIC bound is what synthesizes a field (`size: u64.generic`
             # becomes a real `size` field). Written as a denylist -- everything
             # except `any` and `none` -- this also claimed the FAMILY bounds and
@@ -14823,10 +14849,9 @@ mintMono: function {
             # the comment above states.
             isNum: cdx.kind == ztypes.constraintkind.numeric
             if isNum then {
-                exo: (st.typing.declChildOf
-                    pool: ast.names
+                exo: (st.typing.declChildOfId
                     parentTypeId: (ztypes.tid.create from: mid.u64)
-                    name: pname.stringview
+                    nameId: pname
                 )
                 match (
                     exo
@@ -14845,7 +14870,7 @@ mintMono: function {
                     ) case some then {
                         (st.typing.setMemberType
                             parentTypeId: (ztypes.tid.create from: mid.u64)
-                            nameId: (zast.poolFind pool: ast.names text: pname.stringview)
+                            nameId: pname
                             childTypeId: cno
                         )
                     } case none then null
@@ -15148,7 +15173,7 @@ checkConstraintSat: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
     tdecl: ztypes.declid
-    paramName: StringView
+    paramName: zast.nameid
     argTid: ztypes.tid
 } is {
     if (st.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.genericParam then return
@@ -15236,7 +15261,8 @@ checkConstraintSat: function {
             un9x: unitNameOfTid :st tid: (ztypes.tid.create from: tdo.typeId)
             if un9x.length > 0 then tdn = "\{un9x}.\{tdn}"
         }
-        m: "generic argument '\{an}' does not satisfy constraint '\{con}' on parameter '\{paramName}' of '\{tdn}'"
+        pnmT: zast.nameTextAt :ast ref: paramName
+        m: "generic argument '\{an}' does not satisfy constraint '\{con}' on parameter '\{pnmT}' of '\{tdn}'"
         addResolveError :st e: zast.err.genericError msg: m
     }
 }
@@ -15431,8 +15457,8 @@ getOrMintSpec: function {
     frame: ztypes.declid
     name: StringView
     templateId: ztypes.tid
-    subs: (MapRV String value: u64)
-    valSubs: (MapRV String value: u64)
+    subs: (IdMapV zast.nameid value: u64)
+    valSubs: (IdMapV zast.nameid value: u64)
     fallbackArg: u64
 } out ztypes.tid is {
     tk8: declOfTypeId :st tid: templateId
@@ -15441,20 +15467,20 @@ getOrMintSpec: function {
     # to the primary generic parameter before the trie keys and idSubs build
     # (mintMono's own rebind happens after both).
     {
-        emptyKey8: String
+        emptyKey8: zast.nameid
         ev8: subs.get key: emptyKey8
         match (
             ev8
         ) case some then {
-            prnm8: firstGenericParamName :st :templateId
-            if prnm8.length > 0 then subs.set key: prnm8 value: ev8
+            prnm8: firstGenericParamId :st :templateId
+            if (prnm8.isZero) == false then subs.set key: prnm8 value: ev8
         } case none then null
         evv8: valSubs.get key: emptyKey8
         match (
             evv8
         ) case some then {
-            prnmv8: firstGenericParamName :st :templateId
-            if prnmv8.length > 0 then valSubs.set key: prnmv8 value: evv8
+            prnmv8: firstGenericParamId :st :templateId
+            if (prnmv8.isZero) == false then valSubs.set key: prnmv8 value: evv8
         } case none then null
     }
     keys8: (ListVal u64)
@@ -15479,7 +15505,7 @@ getOrMintSpec: function {
         }
     }
     with pit8: pnames8.iterate do for pn8: pit8 loop {
-        pgot8: subs.get key: pn8.copy
+        pgot8: subs.get key: pn8
         match (
             pgot8
         ) case some then {
@@ -15489,20 +15515,20 @@ getOrMintSpec: function {
                 :ast
 
                 tdecl: tk8
-                paramName: pn8.stringview
+                paramName: pn8
                 argTid: (ztypes.tid.create from: pgot8.u64)
             )
             keys8.append pgot8
             keyIsVal8.append false
         } case none then {
-            vgot8: valSubs.get key: pn8.copy
+            vgot8: valSubs.get key: pn8
             match (
                 vgot8
             ) case some then {
                 # a numeric literal keys its trie level by VALUE; per-level
                 # kind is fixed by the parameter, so values and type ids
                 # cannot collide
-                cd8: st.reg.genericParamConstraintOf tdecl: tk8 paramName: pn8.stringview
+                cd8: st.reg.genericParamConstraintOf tdecl: tk8 paramName: pn8
                 nmx8: cd8.numericMax
                 match (
                     nmx8
@@ -15558,7 +15584,7 @@ getOrMintSpec: function {
         pt8: pnames8.length
         for pi8 < pt8 loop {
             pnm8: pnames8.get i: pi8
-            pto8: st.reg.genericParamTidOf tdecl: tk8 paramName: pnm8.stringview
+            pto8: st.reg.genericParamTidOf tdecl: tk8 paramName: pnm8
             match (
                 pto8
             ) case some then {
@@ -16043,20 +16069,17 @@ mintCollectionChildren: function {
 }
 
 
-# firstGenericParamName -- the primary (first-declared) generic parameter
-# name of a template, or empty when it has none. Binds an elided leading type
+# firstGenericParamId -- the primary (first-declared) generic parameter name
+# of a template as a pool id, 0 when it has none. Binds an elided leading type
 # argument (`(List String)` == `(List of: String)`) to its parameter.
-firstGenericParamName: function {
+firstGenericParamId: function {
     st: zenv.ZSymbolTable
     templateId: ztypes.tid
-} out String is {
+} out zast.nameid is {
     tk: declOfTypeId :st tid: templateId
     names: st.reg.genericParamNamesOf tdecl: tk
-    if names.length > 0 then {
-        firstNm: names.get i: 0
-        return firstNm.copy
-    }
-    return "".string
+    if names.length > 0 then return (names.get i: 0)
+    return zast.nameid
 }
 
 # inferGenericConstruction -- a generic class/record template called with
@@ -16079,7 +16102,7 @@ inferGenericConstruction: function {
     # Stage the template's children, then keep the ones whose TYPE NAME is a
     # registered generic param (field shells carry the param name, not a
     # GENERIC_PARAM typetype).
-    childNames: (List String)
+    childNames: (ListVal zast.nameid)
     cIds3: (ListVal u64)
     {
         igNms: (ListVal u64)
@@ -16088,35 +16111,31 @@ inferGenericConstruction: function {
         igi: u64
         ign: igNms.length
         for igi < ign loop {
-            fnB: ast.names.texts.get i: ((igNms.get i: igi)).u64
-            fn1: fnB.copy
-            childNames.append fn1
+            childNames.append (zast.nameid.create from: ((igNms.get i: igi)).u32.orPanic)
             cid1: igTds.get i: igi
             cIds3.append cid1
             igi = igi + 1
         }
     }
-    fNames: (List String)
-    fParams: (List String)
+    fNames: (ListVal zast.nameid)
+    fParams: (ListVal zast.nameid)
     ci3: u64
     cn3: cIds3.length
     for ci3 < cn3 loop {
         cid3: cIds3.get i: ci3
         pnm3: st.reg.nameOf tid: (ztypes.tid.create from: cid3.u64)
-        if (st.reg.isGenericParamOf tdecl: tk name: pnm3.stringview) then {
-            nm3: childNames.get i: ci3
-            nv3: nm3.stringview
-            n3: nv3.string
-            fNames.append n3
-            fParams.append pnm3
+        pid3: nameIdOf :ast name: pnm3.stringview
+        if (st.reg.isGenericParamOf tdecl: tk name: pid3) then {
+            fNames.append (childNames.get i: ci3)
+            fParams.append pid3
         }
         ci3 = ci3 + 1
     }
     sfx: String
-    subs: (MapRV String value: u64)
-    boundParams: (Set String)
+    subs: (IdMapV zast.nameid value: u64)
+    boundParams: (IdSet zast.nameid)
     firstA: u64
-    primaryName: firstGenericParamName :st templateId: (ztypes.tid.create from: tplId.u64)
+    primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
     # the value-arg walk below is a DRY RUN for type inference: bracket its
     # ownership effects (take overlays, borrow locks) in a frame that is
     # discarded whole, so the real ctor walk re-checks from a clean slate --
@@ -16128,11 +16147,11 @@ inferGenericConstruction: function {
         match (
             arg
         ) case namedoperation then {
-            pk: zast.nameTextCopy :ast ref: arg.name
+            pk: arg.name
             # elided leading type arg: an unnamed first arg naming a type
             # binds the primary generic param (`(List String)`); a value
             # first arg (`(box 5)`) is left for value inference.
-            if pk.length == 0 when argIdx == 0 then {
+            if pk.isZero when argIdx == 0 then {
                 anE: paramTypeBaseName :ast op: (ast.nodes.get i: arg.operation.u64)
                 if (isNumericLiteralName name: anE.stringview) == false then {
                     teo: (walkLookupTyperef
@@ -16146,20 +16165,20 @@ inferGenericConstruction: function {
                     match (
                         teo
                     ) case some then {
-                        if primaryName.length > 0 then pk = primaryName.copy
+                        if (primaryName.isZero) == false then pk = primaryName
                     } case none then null
                 }
             }
             isP: false
-            if pk.length > 0 then {
-                isP = st.reg.isGenericParamOf tdecl: tk name: pk.stringview
+            if (pk.isZero) == false then {
+                isP = st.reg.isGenericParamOf tdecl: tk name: pk
             }
             if isP then {
                 an: paramTypeBaseName :ast op: (ast.nodes.get i: arg.operation.u64)
                 if (isNumericLiteralName name: an.stringview) then {
                     sfx.append s: "_"
                     sfx.append s: an
-                    boundParams.add item: pk.copy
+                    boundParams.add item: pk
                 } else {
                     ao: (walkLookupTyperef
                         :st
@@ -16181,10 +16200,9 @@ inferGenericConstruction: function {
                         )
                         sfx.append s: "_"
                         sfx.append s: atn
-                        pk2: pk.copy
                         pv2: ao
-                        subs.set key: pk2 value: pv2
-                        boundParams.add item: pk.copy
+                        subs.set key: pk value: pv2
+                        boundParams.add item: pk
                         if firstA == 0 then firstA = ao
                     } case none then null
                 }
@@ -16200,8 +16218,7 @@ inferGenericConstruction: function {
                 fi: u64
                 fn2: fNames.length
                 for fi < fn2 loop {
-                    f0: fNames.get i: fi
-                    if f0.stringview == pk.stringview then {
+                    if (fNames.get i: fi) == pk then {
                         if (gfound) == false then {
                             gidx = fi
                             gfound = true
@@ -16224,11 +16241,9 @@ inferGenericConstruction: function {
                         vtn: monoValName :st frame: st.curFrame :ast tid: mv0
                         sfx.append s: "_"
                         sfx.append s: vtn
-                        gpv0: gp0.stringview
-                        gpc: gpv0.string
                         gpv: mv0
-                        subs.set key: gpc value: gpv
-                        boundParams.add item: gp0.copy
+                        subs.set key: gp0 value: gpv
+                        boundParams.add item: gp0
                         if firstA == 0 then firstA = mv0
                     }
                 }
@@ -16238,17 +16253,17 @@ inferGenericConstruction: function {
     }
     st.popDiscard
     paramsM: st.reg.genericParamNamesOf tdecl: tk
-    firstMissing: String
+    firstMissing: zast.nameid
     pmi: u64
     pmn: paramsM.length
     for pmi < pmn loop {
         pmName: paramsM.get i: pmi
-        if (boundParams.has item: pmName.copy) == false then {
-            if firstMissing.length == 0 then firstMissing = pmName.copy
+        if (boundParams.has item: pmName) == false then {
+            if firstMissing.isZero then firstMissing = pmName
         }
         pmi = pmi + 1
     }
-    if firstMissing.length > 0 then {
+    if (firstMissing.isZero) == false then {
         if reportMissing then {
             emn: String
             ehn: String
@@ -16266,7 +16281,8 @@ inferGenericConstruction: function {
                     width: 0
                 )
             } else {
-                mmsg2: "cannot infer generic parameter '\{firstMissing}' for '\{tname}'"
+                fmT: zast.nameTextAt :ast ref: firstMissing
+                mmsg2: "cannot infer generic parameter '\{fmT}' for '\{tname}'"
                 (addErrorH
                     :st
                     nodeid: call.nodeid
@@ -16284,7 +16300,7 @@ inferGenericConstruction: function {
     }
     if sfx.length == 0 then return (ztypes.tid.create from: 0)
     mname: "\{tname}\{sfx}"
-    vsD: (MapRV String value: u64)
+    vsD: (IdMapV zast.nameid value: u64)
     mid: (getOrMintSpec
         :st
         frame: st.curFrame
@@ -16330,13 +16346,13 @@ genericTypeConstruction: function {
     if tname.length == 0 then return (ztypes.tid.create from: 0)
     tk0: declOfTypeId :st tid: tplId
     sfx: String
-    subs: (MapRV String value: u64)
-    valueSubs: (MapRV String value: u64)
-    numParamNames: (List String)
+    subs: (IdMapV zast.nameid value: u64)
+    valueSubs: (IdMapV zast.nameid value: u64)
+    numParamNames: (ListVal zast.nameid)
     numParamNodes: (ListVal u32)
     firstA: u64
     anyMiss: false
-    primaryName: firstGenericParamName :st templateId: (ztypes.tid.create from: tplId.u64)
+    primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
     argIdx: u64
     aiter: call.arguments.iterate
     for argId: aiter loop {
@@ -16346,14 +16362,14 @@ genericTypeConstruction: function {
         ) case namedoperation then {
             # only generic-param labels construct here; a value arg means
             # the field-bound inference leg owns the call.
-            pk0: zast.nameTextCopy :ast ref: arg.name
+            pk0: arg.name
             # An elided leading type argument (`(List zvfs.ProviderBox)`) binds
             # the primary generic param: probe the unnamed first arg as a type
             # (atom via walkLookupTyperef, cross-unit dotted via dottedTyperefId).
             # Only a real type rebinds; a value first arg (`(box 5)`) keeps its
             # empty label so the field-bound inference leg owns the call.
-            if pk0.length == 0 when argIdx == 0 then {
-                if primaryName.length > 0 then {
+            if pk0.isZero when argIdx == 0 then {
+                if (primaryName.isZero) == false then {
                     anP: paramTypeBaseName :ast op: (ast.nodes.get i: arg.operation.u64)
                     pid0: u64
                     if (isNumericLiteralName name: anP.stringview) == false then {
@@ -16371,18 +16387,18 @@ genericTypeConstruction: function {
                             pid0 = dottedTyperefId :ast :st op: dop
                         }
                     }
-                    if pid0 > 0 then pk0 = primaryName.copy
+                    if pid0 > 0 then pk0 = primaryName
                 }
             }
             isP0: false
-            if pk0.length > 0 then {
-                isP0 = st.reg.isGenericParamOf tdecl: tk0 name: pk0.stringview
+            if (pk0.isZero) == false then {
+                isP0 = st.reg.isGenericParamOf tdecl: tk0 name: pk0
             }
             # `capacity:` on a builtin container is a create argument riding
             # the construction sugar: skip it here (it must not reach the
             # spec key or subs) instead of failing over to field inference
             skipCr: false
-            if (isP0) == false when pk0.stringview == "capacity" then {
+            if (isP0) == false when pk0 == zast.wkCapacity then {
                 if tplId == (builtinTidT
                     :st
                     frame: st.curFrame
@@ -16476,17 +16492,15 @@ genericTypeConstruction: function {
             if (anyMiss) == false when skipCr == false then { if (isNumericLiteralName name: an.stringview) then {
                 nsfx2: "\{sfx}_\{an}"
                 sfx = nsfx2
-                if pk0.length > 0 then {
-                    npn0: pk0.copy
-                    numParamNames.append npn0
+                if (pk0.isZero) == false then {
+                    numParamNames.append pk0
                     numParamNodes.append arg.operation
                     pdv0: parseDecimalU64 text: an.stringview
                     match (
                         pdv0
                     ) case some then {
-                        vgk0: pk0.copy
                         vgv0: pdv0
-                        valueSubs.set key: vgk0 value: vgv0
+                        valueSubs.set key: pk0 value: vgv0
                     } case none then null
                 }
             } else {
@@ -16513,9 +16527,9 @@ genericTypeConstruction: function {
                     )
                     nsfx: "\{sfx}_\{atn}"
                     sfx = nsfx
-                    if pk0.length > 0 then {
+                    if (pk0.isZero) == false then {
                         pv: aid
-                        subs.set key: pk0.copy value: pv
+                        subs.set key: pk0 value: pv
                     }
                     if firstA == 0 then firstA = aid
                 } else {
@@ -16544,7 +16558,7 @@ genericTypeConstruction: function {
     npi: u64
     npn: numParamNames.length
     for npi < npn loop {
-        npName: numParamNames.get i: npi
+        npName: zast.nameTextAt :ast ref: (numParamNames.get i: npi)
         npNode: numParamNodes.get i: npi
         (st.typing.setDefaultLiteral
             pool: ast.names
@@ -16599,7 +16613,7 @@ validateGenericTypeArgs: function {
     tname: st.reg.nameOf tid: tplId
     if tname.length == 0 then return true
     tk: declOfTypeId :st tid: tplId
-    childNames: (List String)
+    childNames: (ListVal zast.nameid)
     {
         vgN: (ListVal u64)
         vgT: (ListVal u64)
@@ -16609,13 +16623,12 @@ validateGenericTypeArgs: function {
         for vgi < vgn loop {
             vgnid: vgN.get i: vgi
             vgi = vgi + 1
-            cnB2: ast.names.texts.get i: vgnid.u64
-            cn1: cnB2.copy
-            childNames.append cn1
+            childNames.append (zast.nameid.create from: vgnid.u32.orPanic)
         }
     }
-    primaryName: firstGenericParamName :st templateId: (ztypes.tid.create from: tplId.u64)
-    seen: (Set String)
+    primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
+    fromId: nameIdOf :ast name: "from"
+    seen: (IdSet zast.nameid)
     ok: true
     argIdx: u64
     aiter: call.arguments.iterate
@@ -16624,9 +16637,9 @@ validateGenericTypeArgs: function {
         match (
             arg
         ) case namedoperation then {
-            pk: zast.nameTextCopy :ast ref: arg.name
-            if pk.length == 0 when argIdx == 0 then {
-                if primaryName.length > 0 then {
+            pk: arg.name
+            if pk.isZero when argIdx == 0 then {
+                if (primaryName.isZero) == false then {
                     anP: paramTypeBaseName :ast op: (ast.nodes.get i: arg.operation.u64)
                     pid0: u64
                     if (isNumericLiteralName name: anP.stringview) == false then {
@@ -16644,16 +16657,17 @@ validateGenericTypeArgs: function {
                             pid0 = dottedTyperefId :ast :st op: dop
                         }
                     }
-                    if pid0 > 0 then pk = primaryName.copy
+                    if pid0 > 0 then pk = primaryName
                 }
             }
             skipFrom: false
-            if allowFrom when pk.stringview == "from" then skipFrom = true
-            if pk.length > 0 when (skipFrom) == false then {
-                isP: st.reg.isGenericParamOf tdecl: tk name: pk.stringview
+            if allowFrom when pk == fromId then skipFrom = true
+            if (pk.isZero) == false when (skipFrom) == false then {
+                isP: st.reg.isGenericParamOf tdecl: tk name: pk
                 if isP then {
-                    if (seen.has item: pk.copy) when (allowFrom) == false then {
-                        m1: "duplicate type argument '\{pk}'"
+                    if (seen.has item: pk) when (allowFrom) == false then {
+                        pkT: zast.nameTextAt :ast ref: pk
+                        m1: "duplicate type argument '\{pkT}'"
                         en1: String
                         eh1: String
                         (addErrorH
@@ -16665,22 +16679,21 @@ validateGenericTypeArgs: function {
                             msg: m1
                             note: en1
                             hint: eh1
-                            width: pk.length.u32.orPanic
+                            width: pkT.length.u32.orPanic
                         )
                         ok = false
                     } else {
-                        seen.add item: pk.copy
+                        seen.add item: pk
                     }
                 } else {
                     isField: false
                     ci: u64
                     cn: childNames.length
                     for ci < cn loop {
-                        cnm: childNames.get i: ci
-                        if cnm.stringview == pk.stringview then isField = true
+                        if (childNames.get i: ci) == pk then isField = true
                         ci = ci + 1
                     }
-                    if (isField) == false when pk.stringview == "capacity" then {
+                    if (isField) == false when pk == zast.wkCapacity then {
                         # `capacity:` on a builtin container construction is a
                         # create argument (`Type arg:` is `Type.create arg:`);
                         # native create params carry no modeled children, so
@@ -16764,15 +16777,16 @@ validateGenericTypeArgs: function {
                         ) then isField = true
                     }
                     if (isField) == false then {
-                        m2: "unknown type argument '\{pk}' for generic type '\{tname}'"
+                        pkT2: zast.nameTextAt :ast ref: pk
+                        m2: "unknown type argument '\{pkT2}' for generic type '\{tname}'"
                         plist: st.reg.genericParamNamesOf tdecl: tk
                         note2: "valid type parameters: ".string
                         pi: u64
                         pn2: plist.length
                         for pi < pn2 loop {
                             if pi > 0 then note2.append s: ", "
-                            pnm: plist.get i: pi
-                            note2.append s: pnm
+                            pnmT: zast.nameTextAt :ast ref: (plist.get i: pi)
+                            note2.append s: pnmT
                             pi = pi + 1
                         }
                         eh2: String
@@ -16785,7 +16799,7 @@ validateGenericTypeArgs: function {
                             msg: m2
                             note: note2
                             hint: eh2
-                            width: pk.length.u32.orPanic
+                            width: pkT2.length.u32.orPanic
                         )
                         ok = false
                     }
@@ -18270,12 +18284,11 @@ checkDotted: function {
                             ato
                         ) case some then {
                             amn: "array_\{den}_\{ecnt}"
-                            asubs: (MapRV String value: u64)
-                            sk0: "of".string
+                            asubs: (IdMapV zast.nameid value: u64)
                             sv0: elo
-                            asubs.set key: sk0 value: sv0
-                            vsE: (MapRV String value: u64)
-                            vsE.set key: "to".string value: ecnt
+                            asubs.set key: (nameIdOf :ast name: "of") value: sv0
+                            vsE: (IdMapV zast.nameid value: u64)
+                            vsE.set key: (nameIdOf :ast name: "to") value: ecnt
                             amid: (getOrMintSpec
                                 :st
                                 frame: st.curFrame
@@ -20744,12 +20757,11 @@ checkDo: function {
             match (
                 ovo0
             ) case some then {
-                optionSubs: (MapRV String value: u64)
-                ok0: "t".string
+                optionSubs: (IdMapV zast.nameid value: u64)
                 ov0: payloadTid
-                optionSubs.set key: ok0 value: ov0
+                optionSubs.set key: (nameIdOf :ast name: "t") value: ov0
                 omn0: "\{wrapBase}_\{vtn0}"
-                vsF: (MapRV String value: u64)
+                vsF: (IdMapV zast.nameid value: u64)
                 omid0: (getOrMintSpec
                     :st
                     frame: st.curFrame
@@ -21184,13 +21196,12 @@ checkFor: function {
             match (
                 lto
             ) case some then {
-                lsubs: (MapRV String value: u64)
-                lk: "of".string
+                lsubs: (IdMapV zast.nameid value: u64)
                 lv: elemT
-                lsubs.set key: lk value: lv
+                lsubs.set key: (nameIdOf :ast name: "of") value: lv
                 lsfx: "_\{en}"
                 lmn: "\{ltn}\{lsfx}"
-                vsG: (MapRV String value: u64)
+                vsG: (IdMapV zast.nameid value: u64)
                 lmid: (getOrMintSpec
                     :st
                     frame: st.curFrame
@@ -23774,11 +23785,10 @@ checkBoxConstruction: function {
     if vt.isZero then return (ztypes.tid.create from: 0)
     tn: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
     mname: "Box_\{tn}"
-    subs: (MapRV String value: u64)
-    sk: "t".string
+    subs: (IdMapV zast.nameid value: u64)
     sv: vt
-    subs.set key: sk value: sv
-    vsJ: (MapRV String value: u64)
+    subs.set key: (nameIdOf :ast name: "t") value: sv
+    vsJ: (IdMapV zast.nameid value: u64)
     mid: (getOrMintSpec
         :st
         frame: st.curFrame
@@ -24914,13 +24924,15 @@ checkCall: function {
                                     tn2: st.reg.nameOf tid: (ztypes.tid.create from: dtp.u64)
                                     an2: st.reg.nameOf tid: (ztypes.tid.create from: subT.u64)
                                     monoName: "\{tn2}_\{an2}"
-                                    subs2: (MapRV String value: u64)
+                                    subs2: (IdMapV zast.nameid value: u64)
                                     if (isNullPay) == false then {
-                                        pk2: pn0.copy
                                         pv2: subT
-                                        subs2.set key: pk2 value: pv2
+                                        (subs2.set
+                                            key: (nameIdOf :ast name: pn0.stringview)
+                                            value: pv2
+                                        )
                                     }
-                                    vsH: (MapRV String value: u64)
+                                    vsH: (IdMapV zast.nameid value: u64)
                                     mintedT: (getOrMintSpec
                                         :st
                                         frame: st.curFrame
@@ -25669,7 +25681,7 @@ checkGenericCall: function {
     funcId: ztypes.tid
 } out ztypes.tid is {
     gparams: (st.reg.genericParamNamesOf tdecl: (st.typing.declIdOfType typeId: funcId))
-    pNames: (List String)
+    pNames: (ListVal zast.nameid)
     pHolderIds: (ListVal u64)
     {
         gcNms: (ListVal u64)
@@ -25688,7 +25700,6 @@ checkGenericCall: function {
                     # maps to the first USER param (T holders included). The
                     # receiver is the shorthand `this` or the type's recorded
                     # long-form receiver name.
-                    pnB: ast.names.texts.get i: gcNid.u64
                     isRecv: gcNid == zast.wkThis.u64
                     if (isRecv) == false then {
                         isRecv = (st.reg.thisParamNameIs
@@ -25697,8 +25708,7 @@ checkGenericCall: function {
                         )
                     }
                     if (isRecv) == false then {
-                        pn2: pnB.copy
-                        pNames.append pn2
+                        pNames.append (zast.nameid.create from: gcNid.u32.orPanic)
                         cto2: cto
                         pHolderIds.append cto2
                     }
@@ -25706,16 +25716,16 @@ checkGenericCall: function {
             }
         }
     }
-    pHolders: (List String)
+    pHolders: (ListVal zast.nameid)
     phi: u64
     phn: pHolderIds.length
     for phi < phn loop {
         hid: pHolderIds.get i: phi
         hn: st.reg.nameOf tid: (ztypes.tid.create from: hid.u64)
-        pHolders.append hn
+        pHolders.append (nameIdOf :ast name: hn.stringview)
         phi = phi + 1
     }
-    subs: (MapRV String value: u64)
+    subs: (IdMapV zast.nameid value: u64)
     posIdx: u64
     aiter: call.arguments.iterate
     for argId: aiter loop {
@@ -25723,11 +25733,11 @@ checkGenericCall: function {
         match (
             arg
         ) case namedoperation then {
-            an2: zast.nameTextAt :ast ref: arg.name
+            an2: arg.name
             isTypeArg: false
             tgi: gparams.iterate
             for gp2: tgi loop {
-                if an2.stringview == gp2.stringview then isTypeArg = true
+                if an2 == gp2 then isTypeArg = true
             }
             if isTypeArg then {
                 tn3: atomName :ast n: (ast.nodes.get i: arg.operation.u64)
@@ -25742,9 +25752,8 @@ checkGenericCall: function {
                 match (
                     to3
                 ) case some then {
-                    sk: an2.copy
                     sv: to3
-                    subs.set key: sk value: sv
+                    subs.set key: an2 value: sv
                 } case none then null
             } else {
                 avt: (checkValue
@@ -25754,21 +25763,25 @@ checkGenericCall: function {
                     node: (ast.nodes.get i: arg.operation.u64)
                 )
                 mat: materialiseLiteral :ast :st :unitDecl t: avt
-                holder: ""
-                if an2.length > 0 then {
+                holder: zast.nameid
+                # a holder of 0 is a parameter whose type name the pool never
+                # interned (a minted mono like `ListRef_String`): it binds no
+                # generic parameter, which is not the same as an unknown label
+                argFound: false
+                if (an2.isZero) == false then {
                     hi: u64
                     hn2: pNames.length
                     for hi < hn2 loop {
-                        pn3: pNames.get i: hi
-                        if an2.stringview == pn3.stringview then {
-                            hv: pHolders.get i: hi
-                            holder = hv.stringview
+                        if (pNames.get i: hi) == an2 then {
+                            holder = pHolders.get i: hi
+                            argFound = true
                         }
                         hi = hi + 1
                     }
-                    if holder.length == 0 then {
-                        m3: "unknown argument '\{an2}'"
-                        sug3: suggestSimilar :ast :st parentTypeId: funcId name: an2.stringview
+                    if (argFound) == false then {
+                        an2T: zast.nameTextAt :ast ref: an2
+                        m3: "unknown argument '\{an2T}'"
+                        sug3: suggestSimilar :ast :st parentTypeId: funcId name: an2T.stringview
                         h3: String
                         if sug3.length > 0 then {
                             hh3: "did you mean '\{sug3}'?"
@@ -25784,25 +25797,22 @@ checkGenericCall: function {
                             msg: m3
                             note: en3
                             hint: h3
-                            width: an2.length.u32.orPanic
+                            width: an2T.length.u32.orPanic
                         )
                     }
                 } else {
                     if posIdx < pHolders.length then {
-                        hv2: pHolders.get i: posIdx
-                        holder = hv2.stringview
+                        holder = pHolders.get i: posIdx
                     }
                 }
                 posIdx = posIdx + 1
-                if holder.length > 0 when mat > 0 then {
-                    hk: holder
-                    hgot: subs.get key: hk.asString
+                if (holder.isZero) == false when mat > 0 then {
+                    hgot: subs.get key: holder
                     match (
                         hgot
                     ) case some then null case none then {
-                        sk2: holder.string
                         sv2: mat
-                        subs.set key: sk2 value: sv2
+                        subs.set key: holder value: sv2
                     }
                 }
             }
@@ -25814,9 +25824,7 @@ checkGenericCall: function {
     gtk4: declOfTypeId :st tid: funcId
     genericParamIter: gparams.iterate
     for gp3: genericParamIter loop {
-        gv: gp3.stringview
-        gk: gv
-        ggot: subs.get key: gk.asString
+        ggot: subs.get key: gp3
         match (
             ggot
         ) case some then {
@@ -25826,7 +25834,7 @@ checkGenericCall: function {
                 :ast
 
                 tdecl: gtk4
-                paramName: gv
+                paramName: gp3
                 argTid: (ztypes.tid.create from: ggot.u64)
             )
             an4: (monoValName
@@ -25843,7 +25851,7 @@ checkGenericCall: function {
     }
     if allOk == false then return (ztypes.tid.create from: 0)
     if gparams.length == 0 then return (ztypes.tid.create from: 0)
-    vsI: (MapRV String value: u64)
+    vsI: (IdMapV zast.nameid value: u64)
     mid: (getOrMintSpec
         :st
         frame: st.curFrame
@@ -25865,7 +25873,7 @@ checkGenericCall: function {
     ) case some then {
         rk2: copiedMapStr m: st.typing.pendingTyperef key: rno
         if rk2.length > 0 then {
-            rgot2: subs.get key: rk2
+            rgot2: subs.get key: (nameIdOf :ast name: rk2.stringview)
             match (
                 rgot2
             ) case some then {
@@ -25950,7 +25958,7 @@ checkGenericCall: function {
     with gsub: subs.iterateItems do for ge: gsub loop {
         gk: (ztyping.callslot
             call: call.nodeid.u64
-            param: (zast.poolFind pool: ast.names text: ge.key.stringview).u64
+            param: ge.key.u64
         )
         st.typing.callGenericBinding.set key: gk value: ge.value
     }
@@ -26046,14 +26054,20 @@ checkCase: function {
                 )
             }
             if (gdecl.isZero) == false then {
-                if (st.reg.isGenericParamOf tdecl: gdecl name: gsn.stringview) == false then {
+                if (st.reg.isGenericParamOf
+                    tdecl: gdecl
+                    name: (nameIdOf :ast name: gsn.stringview)
+                ) == false then {
                     gdecl = ztypes.declid.create from: 0
                 }
             }
             if gdecl.isZero then {
                 gur: unitDecl
                 if (gur.isZero) == false then {
-                    if (st.reg.isGenericParamOf tdecl: gur name: gsn.stringview) then gdecl = gur
+                    if (st.reg.isGenericParamOf
+                        tdecl: gur
+                        name: (nameIdOf :ast name: gsn.stringview)
+                    ) then gdecl = gur
                 }
             }
             if gdecl.isZero when st.typing.curMonoStamp > 0 then {
@@ -26069,7 +26083,7 @@ checkCase: function {
                     if (gdecl.isZero) == false then {
                         if (st.reg.isGenericParamOf
                             tdecl: gdecl
-                            name: gsn.stringview
+                            name: (nameIdOf :ast name: gsn.stringview)
                         ) == false then gdecl = ztypes.declid.create from: 0
                     }
                 }
@@ -26089,13 +26103,17 @@ checkCase: function {
                     nameId: (nameIdOf :ast name: gunm.stringview)
                 )
                 if gcand > 0 then {
-                    if (st.reg.isGenericParamOf tdecl: gcand name: gsn.stringview) then {
-                        gdecl = gcand
-                    }
+                    if (st.reg.isGenericParamOf
+                        tdecl: gcand
+                        name: (nameIdOf :ast name: gsn.stringview)
+                    ) then gdecl = gcand
                 }
             }
             if (gdecl.isZero) == false then {
-                pgo: st.reg.genericParamTidOf tdecl: gdecl paramName: gsn.stringview
+                pgo: (st.reg.genericParamTidOf
+                    tdecl: gdecl
+                    paramName: (nameIdOf :ast name: gsn.stringview)
+                )
                 match (
                     pgo
                 ) case some then {
@@ -26105,7 +26123,11 @@ checkCase: function {
                         name: gsn.stringview
                         typetype: ztypes.ztypetype.genericParam
                     )
-                    st.reg.setGenericParamTid tdecl: gdecl paramName: gsn.stringview tid: ptid
+                    (st.reg.setGenericParamTid
+                        tdecl: gdecl
+                        paramName: (nameIdOf :ast name: gsn.stringview)
+                        tid: ptid
+                    )
                     subjT = ptid
                 }
                 gsnid: nodeId n: (ast.nodes.get i: casenode.subject.u64)
@@ -28169,7 +28191,6 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
 # substitution at stamp time; the template's Decl is the one key.
 bindMonoParams: function {
     st: zenv.ZSymbolTable
-    pool: zast.StringPool.view
     monoId: ztypes.tid
 } is {
     morig: ztypes.tid
@@ -28187,10 +28208,10 @@ bindMonoParams: function {
             if av > 0 then {
                 pnm: (pn.get i: pj)
                 (st.define
-                    nameId: (zast.poolSet :pool text: pnm.stringview)
+                    nameId: pnm
                     ztypeId: (ztypes.tid.create from: av.u64)
                 )
-                pto: st.reg.genericParamTidOf :tdecl paramName: pnm.stringview
+                pto: st.reg.genericParamTidOf :tdecl paramName: pnm
                 match (
                     pto
                 ) case some then {
@@ -28260,7 +28281,7 @@ stampOneFnMono: function {
     st.push name: sn.stringview parent: frame
     st.typing.monoParamSubst = (IdMapV ztypes.tid value: ztypes.tid)
     {
-        bindMonoParams :st pool: ast.names :monoId
+        bindMonoParams :st :monoId
     }
     st.typing.curMonoStamp = monoId
     st.typing.curMonoFnTid = monoId
@@ -28366,7 +28387,7 @@ stampOneClassMono: function {
     st.push name: sn.stringview parent: frame
     st.typing.monoParamSubst = (IdMapV ztypes.tid value: ztypes.tid)
     {
-        bindMonoParams :st pool: ast.names :monoId
+        bindMonoParams :st :monoId
     }
     mNames: (List String)
     mOps: (ListVal u32)
@@ -28703,7 +28724,7 @@ stampOneUnitMono: function {
     st.push name: sn.stringview parent: frame
     st.typing.monoParamSubst = (IdMapV ztypes.tid value: ztypes.tid)
     {
-        bindMonoParams :st pool: ast.names :monoId
+        bindMonoParams :st :monoId
     }
     idxs: (ListVal u64)
     {

@@ -648,7 +648,7 @@ constraintdesc: record {
 # GENERIC_PARAM type id minted for it during resolution (0 until then).
 # ParamDesc is a class because it holds a String.
 ParamDesc: class {
-    name: String
+    name: zast.nameid
     constraint: constraintdesc
     paramTid: tid
 }
@@ -1192,7 +1192,7 @@ ZTypeRegistry: class {
     # child (a generic type's methods resolve without the type's generic
     # context, so the param type is unresolvable there).
     # paramOrdinalOf -- a parameter's declaration ordinal, or none.
-    paramOrdinalOf: function {:this tdecl: declid paramName: StringView} out optionval u64 is {
+    paramOrdinalOf: function {:this tdecl: declid paramName: zast.nameid} out optionval u64 is {
         plo: this.genericParams.get key: tdecl
         match (
             plo
@@ -1201,7 +1201,7 @@ ZTypeRegistry: class {
             n: plo.params.length
             for i < n loop {
                 pdx: plo.params.get :i
-                if pdx.name.stringview == paramName then return (optionval.some i)
+                if pdx.name == paramName then return (optionval.some i)
                 i = i + 1
             }
         } case none then null
@@ -1211,7 +1211,7 @@ ZTypeRegistry: class {
     # one canonical GENERIC_PARAM type per (template, parameter): references
     # inside the template's members resolve the parameter name to this id. It
     # lives on the parameter's own row; 0 means not yet minted.
-    genericParamTidOf: function {:this tdecl: declid paramName: StringView} out optionval u64 is {
+    genericParamTidOf: function {:this tdecl: declid paramName: zast.nameid} out optionval u64 is {
         po: this.paramOrdinalOf :tdecl :paramName
         match (
             po
@@ -1227,7 +1227,7 @@ ZTypeRegistry: class {
         return (optionval.none u64)
     }
 
-    setGenericParamTid: function {:this tdecl: declid paramName: StringView tid: tid} is {
+    setGenericParamTid: function {:this tdecl: declid paramName: zast.nameid tid: tid} is {
         po: this.paramOrdinalOf :tdecl :paramName
         match (
             po
@@ -1243,7 +1243,7 @@ ZTypeRegistry: class {
         } case none then null
     }
 
-    addGenericParam: function {:this tdecl: declid paramName: StringView kind: constraintkind numericMax: (optionval u64)} is {
+    addGenericParam: function {:this tdecl: declid paramName: zast.nameid kind: constraintkind numericMax: (optionval u64)} is {
         found: false
         {
             plo: this.genericParams.get key: tdecl
@@ -1256,12 +1256,12 @@ ZTypeRegistry: class {
                 n: plo.params.length
                 for i < n loop {
                     pdx: plo.params.get :i
-                    if pdx.name.stringview == paramName then has = true
+                    if pdx.name == paramName then has = true
                     i = i + 1
                 }
                 if (has) == false then {
                     plo.params.append (ParamDesc
-                        name: paramName.string
+                        name: paramName
                         constraint: (constraintdesc :kind :numericMax)
                         paramTid: tid
                     )
@@ -1271,7 +1271,7 @@ ZTypeRegistry: class {
         if (found) == false then {
             np: (ParamList params: (List ParamDesc))
             np.params.append (ParamDesc
-                name: paramName.string
+                name: paramName
                 constraint: (constraintdesc :kind :numericMax)
                 paramTid: tid
             )
@@ -1279,7 +1279,7 @@ ZTypeRegistry: class {
         }
     }
 
-    isGenericParamOf: function {:this tdecl: declid name: StringView} out bool is {
+    isGenericParamOf: function {:this tdecl: declid name: zast.nameid} out bool is {
         plo: this.genericParams.get key: tdecl
         match (
             plo
@@ -1288,7 +1288,7 @@ ZTypeRegistry: class {
             n: plo.params.length
             for i < n loop {
                 pdx: plo.params.get :i
-                if pdx.name.stringview == name then return true
+                if pdx.name == name then return true
                 i = i + 1
             }
         } case none then null
@@ -1297,7 +1297,7 @@ ZTypeRegistry: class {
 
     # genericParamConstraintOf -- the classified constraint for a template
     # parameter, or a NONE-kind descriptor when the parameter is unknown.
-    genericParamConstraintOf: function {:this tdecl: declid paramName: StringView} out constraintdesc is {
+    genericParamConstraintOf: function {:this tdecl: declid paramName: zast.nameid} out constraintdesc is {
         plo: this.genericParams.get key: tdecl
         match (
             plo
@@ -1306,7 +1306,7 @@ ZTypeRegistry: class {
             n: plo.params.length
             for i < n loop {
                 pdx: plo.params.get :i
-                if pdx.name.stringview == paramName then {
+                if pdx.name == paramName then {
                     return (constraintdesc
                         kind: pdx.constraint.kind
                         numericMax: pdx.constraint.numericMax
@@ -1318,8 +1318,9 @@ ZTypeRegistry: class {
         return (constraintdesc kind: constraintkind.none numericMax: (optionval.none u64))
     }
 
-    genericParamNamesOf: function {:this tdecl: declid} out List String is {
-        names: (List String)
+    # genericParamNamesOf -- a template's parameter names, in declaration order.
+    genericParamNamesOf: function {:this tdecl: declid} out ListVal zast.nameid is {
+        names: (ListVal zast.nameid)
         plo: this.genericParams.get key: tdecl
         match (
             plo
@@ -1328,7 +1329,7 @@ ZTypeRegistry: class {
             n: plo.params.length
             for i < n loop {
                 pdx: plo.params.get :i
-                names.append pdx.name.copy
+                names.append pdx.name
                 i = i + 1
             }
         } case none then null
