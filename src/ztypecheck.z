@@ -11170,6 +11170,123 @@ ensureUnitRequire: function {
     reportPendingConstFail :st
     st.typing.constFail = prevFail
 }
+# resolveDemandedReexport -- a re-export is a definition like any other, and
+# resolving it means FOLLOWING its target. Without this a re-export of a re-export
+# stops at the first hop: the second alias is demanded, resolveDef has no leg for
+# a bare dotted alias, and the chain ends there.
+resolveDemandedReexport: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rf: ztypes.declid
+    declId: ztypes.declid
+    puDecl: ztypes.declid
+    defNameText: StringView
+    opId: zast.nodeid
+} is {
+    # A re-export is a definition like any other, and resolving it means
+    # following its target -- which is what resolveAliasKey does, from the
+    # declaration. Without this a re-export of a re-export stops at the
+    # first hop: the second alias is demanded, resolveDef has no leg for a
+    # dotted target that names a NESTED unit, and the chain reads as a
+    # member the parent does not have.
+    isRx: false
+    {
+        rdo: st.typing.decls.get i: declId.u64
+        if rdo.kind.reexportDecl then isRx = true
+    }
+    if isRx then {
+        resolveAliasKey :st :ast :declId
+    } else {
+        (resolveDef
+            :st
+            frame: rf
+
+            :ast
+            unitDecl: puDecl
+            defName: defNameText
+            defn: (ast.nodes.get i: opId.u64)
+        )
+    }
+    # A unit-level CONSTANT is a definition like any other, and resolveDef
+    # has no leg for the shapes one takes -- a bare literal, a suffixed
+    # one, a constant expression. Its type and its value are registered
+    # here, where the demanding reference is asking. The eager tier
+    # walks every definition of every unit instead, so exactly one of the
+    # two speaks.
+    if st.typing.eagerAll then return
+    (resolveConstantMember
+        :st
+        frame: rf
+
+        :ast
+        unitDecl: puDecl
+        defName: defNameText
+        defn: (ast.nodes.get i: opId.u64)
+    )
+}
+# resolveDemandedNamespace -- a demanded `unit { … }` resolves as the namespace it
+# is. A DEMAND for one -- a `require:` block owed before its unit's first
+# definition -- has to reach the same door the enclosing walk does, or its members
+# never resolve.
+resolveDemandedNamespace: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    declId: ztypes.declid
+    dParent: ztypes.declid
+    puDecl: ztypes.declid
+    puNm: u32
+    defNameText: StringView
+    opId: zast.nodeid
+} is {
+    # A unit is RESOLVED when its unitdef node carries an id; the DEFINED
+    # mark on its Decl answers a different question and can be laid by a
+    # path that never resolved it as a unit. So the mark does not gate this
+    # leg -- only the resolution itself is skipped when the unit is already
+    # built, and the debts below are owed however it got there.
+    alreadyU: false
+    {
+        unid: unitdefNodeId :ast nId: opId
+        if (unid.isZero) == false then {
+            if (ztyping.nodeTypeAt
+                tbl: st.typing.nodeType
+                nid: unid.u64
+            ) > 0 then alreadyU = true
+        }
+    }
+    if (alreadyU) == false then {
+        (resolveNamespaceUnit
+            :st
+
+            :ast
+            unitDecl: puDecl
+            defName: defNameText
+            parentTid: (ztypes.tid.create from: (declTypeIdOf :st declId: puDecl).u64)
+            parentDeclId: dParent
+            unitOpId: opId
+        )
+    }
+    st.typing.declSetDefined :declId
+    # Signatures are resolved; the member bodies are owed a walk, which the
+    # top-level drain does.
+    (st.typing.nsBodiesOwed.append
+        (ztyping.nsbody
+            unitName: (zast.nameid.create from: puNm)
+            unitOp: opId
+        )
+    )
+    # The members just resolved recorded their signature type-refs the way
+    # every definition does, and a unit materialises at whatever point
+    # something first asks for it -- which can be after the post-demand
+    # stamp pass. Stamp them here, as the drain stamps what it resolved:
+    # unstamped, a re-exported function's return type reads as nothing and
+    # its call sites reach the emitter bare.
+    (stampPendingTyperefs
+        :st
+
+        :ast
+        unitDecl: st.typing.mainUnitRoot
+    )
+}
 
 # resolveDemandedDecl -- resolve one demanded declaration now, unless it is
 # already resolved or mid-resolution: a prelude re-export follows its alias
@@ -11235,53 +11352,15 @@ resolveDemandedDecl: function {
     isNs: zast.unitOpDeclaresUnit :ast :opId
     isTmpl: (zast.unitOpKindIs :ast :opId k: zast.unitkind.template)
     if isNs then {
-        # A unit is RESOLVED when its unitdef node carries an id; the DEFINED
-        # mark on its Decl answers a different question and can be laid by a
-        # path that never resolved it as a unit. So the mark does not gate this
-        # leg -- only the resolution itself is skipped when the unit is already
-        # built, and the debts below are owed however it got there.
-        alreadyU: false
-        {
-            unid: unitdefNodeId :ast nId: opId
-            if (unid.isZero) == false then {
-                if (ztyping.nodeTypeAt
-                    tbl: st.typing.nodeType
-                    nid: unid.u64
-                ) > 0 then alreadyU = true
-            }
-        }
-        if (alreadyU) == false then {
-            (resolveNamespaceUnit
-                :st
-
-                :ast
-                unitDecl: puDecl
-                defName: defNameText.stringview
-                parentTid: (ztypes.tid.create from: (declTypeIdOf :st declId: puDecl).u64)
-                parentDeclId: dParent
-                unitOpId: opId
-            )
-        }
-        st.typing.declSetDefined :declId
-        # Signatures are resolved; the member bodies are owed a walk, which the
-        # top-level drain does.
-        (st.typing.nsBodiesOwed.append
-            (ztyping.nsbody
-                unitName: (zast.nameid.create from: puNm)
-                unitOp: opId
-            )
-        )
-        # The members just resolved recorded their signature type-refs the way
-        # every definition does, and a unit materialises at whatever point
-        # something first asks for it -- which can be after the post-demand
-        # stamp pass. Stamp them here, as the drain stamps what it resolved:
-        # unstamped, a re-exported function's return type reads as nothing and
-        # its call sites reach the emitter bare.
-        (stampPendingTyperefs
+        (resolveDemandedNamespace
             :st
-
             :ast
-            unitDecl: st.typing.mainUnitRoot
+            :declId
+            :dParent
+            :puDecl
+            :puNm
+            defNameText: defNameText.stringview
+            :opId
         )
     } else if isTmpl then {
         (resolveInlineGenericUnit
@@ -11326,45 +11405,14 @@ resolveDemandedDecl: function {
         st.typing.declSetDefined :declId
         return
     } else {
-        # A re-export is a definition like any other, and resolving it means
-        # following its target -- which is what resolveAliasKey does, from the
-        # declaration. Without this a re-export of a re-export stops at the
-        # first hop: the second alias is demanded, resolveDef has no leg for a
-        # dotted target that names a NESTED unit, and the chain reads as a
-        # member the parent does not have.
-        isRx: false
-        {
-            rdo: st.typing.decls.get i: declId.u64
-            if rdo.kind.reexportDecl then isRx = true
-        }
-        if isRx then {
-            resolveAliasKey :st :ast :declId
-        } else {
-            (resolveDef
-                :st
-                frame: rf
-
-                :ast
-                unitDecl: puDecl
-                defName: defNameText.stringview
-                defn: (ast.nodes.get i: opId.u64)
-            )
-        }
-        # A unit-level CONSTANT is a definition like any other, and resolveDef
-        # has no leg for the shapes one takes -- a bare literal, a suffixed
-        # one, a constant expression. Its type and its value are registered
-        # here, where the demanding reference is asking. The eager tier
-        # walks every definition of every unit instead, so exactly one of the
-        # two speaks.
-        if st.typing.eagerAll then return
-        (resolveConstantMember
+        (resolveDemandedReexport
             :st
-            frame: rf
-
             :ast
-            unitDecl: puDecl
-            defName: defNameText.stringview
-            defn: (ast.nodes.get i: opId.u64)
+            :rf
+            :declId
+            :puDecl
+            defNameText: defNameText.stringview
+            :opId
         )
     }
 }
@@ -14438,6 +14486,160 @@ stampTyperefs: function {st: zenv.ZSymbolTable program: Node} is {
         st.typing.typerefPassRan = true
     } else null
 }
+# stampOnePendingTyperef -- resolve one deferred type-ref and stamp it. The ref
+# resolves in the frame it was WRITTEN in, not in whatever frame the drain runs
+# under; one whose declaration is still unresolved is queued for retry rather
+# than reported.
+stampOnePendingTyperef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    uk: u64
+    pval: zast.nameid
+    gpNames: (IdSet zast.nameid)
+} is {
+    # the type-ref resolves in the frame it was written in
+    rf: ztypes.declid
+    {
+        fo: st.typing.pendingTyperefFrame.get key: uk
+        match (
+            fo
+        ) case some then {
+            rf = fo
+        } case none then null
+    }
+    # the frame's unit, as the label the surface / claim probes take
+    origin: unitDecl
+    originOwn: String
+    {
+        our: unitRootOfDecl :st declId: rf
+        if (our.isZero) == false then {
+            originOwn = zast.poolTextCopy pool: ast.names ref: (declNameIdOf :st declId: our)
+        }
+    }
+    if originOwn.length > 0 then origin = (unitDeclOfNameOrOwn
+        :st
+        frame: rf
+        nameId: (nameIdOf :ast name: originOwn.stringview)
+        )
+    skip0: false
+    {
+        sk0: st.typing.noStampNode.get key: uk
+        match (
+            sk0
+        ) case some then {
+            if sk0 then skip0 = true
+        } case none then null
+    }
+    if (skip0) == false then {
+        r: (walkLookupTyperefFrom
+            :st
+            :ast
+
+            frame: rf
+            baseId: pval
+        )
+        match (
+            r
+        ) case some then {
+            nid: uk
+            (ztyping.nodeTypeSet
+                tbl: st.typing.nodeType
+                :nid
+                tid: (ztypes.tid.create from: r.u64)
+            )
+            # every resolved type reference records the declaration it
+            # names (refDecl), for go-to-definition (bare + dotted);
+            # codegen-inert -- a type-annotation atom is never emitted
+            # as an expression.
+            sfNmB: pval
+            sfB: (declSurfaceOfName
+                :st
+
+                :ast
+                unitDecl: origin
+                nameId: sfNmB
+                tid: (ztypes.tid.create from: r.u64)
+            )
+            stampRefDecl :st :nid declId: sfB
+        } case none then {
+            # a signature typeref that resolves NOWHERE after every
+            # demand pass names a nonexistent type. Template param
+            # names are exempt: their pendings feed mono substitution
+            # and resolve per instantiation (a dead-signature typo
+            # that collides with some template's param name is the
+            # accepted blind spot).
+            if (gpNames.has item: pval) then return
+            # a name whose declaration the environment finds queued or
+            # mid-resolution is not unknown: this pass may run in the
+            # middle of a drain (a nested unit materialising stamps what
+            # it recorded) before the declaration has resolved. The
+            # reference stamps on a later pass, once it has.
+            dh: (envLookup
+                :st
+                frame: rf
+                nameId: pval
+            )
+            dhWait: false
+            if (dh.declId.isZero) == false then {
+                if (st.typing.declIsPending declId: dh.declId) then dhWait = true
+                if (st.typing.declIsResolving declId: dh.declId) then dhWait = true
+            }
+            if dhWait then {
+                st.typing.typerefRetry.append from: uk
+                return
+            }
+            pvalT: zast.nameTextAt :ast ref: pval
+            urHit: (nameClaimedByScope
+                :st
+                frame: rf
+                :ast
+
+                unitDecl: origin
+                name: pvalT.stringview
+            )
+            if urHit == false when pvalT.stringview == "Any" then {
+                # `Any` is not user-reachable through the closure:
+                # only a scope claim (its own unit defining it)
+                # resolves it, so an unclaimed `Any` reports.
+                urHit = false
+            } else if urHit == false then {
+                # closure-wide: a bare name may resolve to a member
+                # of ANY loaded unit (the demand resolvers search
+                # the closure; the typeref walk does not)
+                puds: programUnitDecls :st
+                with uit: puds.iterate do for ud: uit loop {
+                    if urHit == false then {
+                        uro2: (resolvedByIds
+                            :st
+                            :ast
+                            unitDecl: (ztypes.declid.create from: ud)
+                            name: pval
+                        )
+                        match (
+                            uro2
+                        ) case some then {
+                            urHit = true
+                        } case none then null
+                    }
+                }
+            }
+            if urHit then return
+            un: ast.nodes.get i: uk
+            um: "Unknown type '\{pvalT}'"
+            (addResolveErrorH
+                :st
+                nodeid: (nodeId n: un)
+                lineno: (nodeLine n: un)
+                colno: (nodeCol n: un)
+                e: zast.err.badReference
+                msg: um
+                width: pvalT.length.u32.orPanic
+            )
+        }
+    }
+}
+
 
 # stampPendingTyperefs -- stamp the type-ref nodes recorded since the last
 # call (pendingTyperef is append-only and iterates in insertion order, so a
@@ -14494,146 +14696,14 @@ stampPendingTyperefs: function {
         uk: pkeys.get i: pi
         pval: pvals.get i: pi
         pi = pi + 1
-        # the type-ref resolves in the frame it was written in
-        rf: ztypes.declid
-        {
-            fo: st.typing.pendingTyperefFrame.get key: uk
-            match (
-                fo
-            ) case some then {
-                rf = fo
-            } case none then null
-        }
-        # the frame's unit, as the label the surface / claim probes take
-        origin: unitDecl
-        originOwn: String
-        {
-            our: unitRootOfDecl :st declId: rf
-            if (our.isZero) == false then {
-                originOwn = zast.poolTextCopy pool: ast.names ref: (declNameIdOf :st declId: our)
-            }
-        }
-        if originOwn.length > 0 then origin = (unitDeclOfNameOrOwn
+        (stampOnePendingTyperef
             :st
-            frame: rf
-            nameId: (nameIdOf :ast name: originOwn.stringview)
-            )
-        skip0: false
-        {
-            sk0: st.typing.noStampNode.get key: uk
-            match (
-                sk0
-            ) case some then {
-                if sk0 then skip0 = true
-            } case none then null
-        }
-        if (skip0) == false then {
-            r: (walkLookupTyperefFrom
-                :st
-                :ast
-
-                frame: rf
-                baseId: pval
-            )
-            match (
-                r
-            ) case some then {
-                nid: uk
-                (ztyping.nodeTypeSet
-                    tbl: st.typing.nodeType
-                    :nid
-                    tid: (ztypes.tid.create from: r.u64)
-                )
-                # every resolved type reference records the declaration it
-                # names (refDecl), for go-to-definition (bare + dotted);
-                # codegen-inert -- a type-annotation atom is never emitted
-                # as an expression.
-                sfNmB: pval
-                sfB: (declSurfaceOfName
-                    :st
-
-                    :ast
-                    unitDecl: origin
-                    nameId: sfNmB
-                    tid: (ztypes.tid.create from: r.u64)
-                )
-                stampRefDecl :st :nid declId: sfB
-            } case none then {
-                # a signature typeref that resolves NOWHERE after every
-                # demand pass names a nonexistent type. Template param
-                # names are exempt: their pendings feed mono substitution
-                # and resolve per instantiation (a dead-signature typo
-                # that collides with some template's param name is the
-                # accepted blind spot).
-                if (gpNames.has item: pval) then continue
-                # a name whose declaration the environment finds queued or
-                # mid-resolution is not unknown: this pass may run in the
-                # middle of a drain (a nested unit materialising stamps what
-                # it recorded) before the declaration has resolved. The
-                # reference stamps on a later pass, once it has.
-                dh: (envLookup
-                    :st
-                    frame: rf
-                    nameId: pval
-                )
-                dhWait: false
-                if (dh.declId.isZero) == false then {
-                    if (st.typing.declIsPending declId: dh.declId) then dhWait = true
-                    if (st.typing.declIsResolving declId: dh.declId) then dhWait = true
-                }
-                if dhWait then {
-                    st.typing.typerefRetry.append from: uk
-                    continue
-                }
-                pvalT: zast.nameTextAt :ast ref: pval
-                urHit: (nameClaimedByScope
-                    :st
-                    frame: rf
-                    :ast
-
-                    unitDecl: origin
-                    name: pvalT.stringview
-                )
-                if urHit == false when pvalT.stringview == "Any" then {
-                    # `Any` is not user-reachable through the closure:
-                    # only a scope claim (its own unit defining it)
-                    # resolves it, so an unclaimed `Any` reports.
-                    urHit = false
-                } else if urHit == false then {
-                    # closure-wide: a bare name may resolve to a member
-                    # of ANY loaded unit (the demand resolvers search
-                    # the closure; the typeref walk does not)
-                    puds: programUnitDecls :st
-                    with uit: puds.iterate do for ud: uit loop {
-                        if urHit == false then {
-                            uro2: (resolvedByIds
-                                :st
-                                :ast
-                                unitDecl: (ztypes.declid.create from: ud)
-                                name: pval
-                            )
-                            match (
-                                uro2
-                            ) case some then {
-                                urHit = true
-                            } case none then null
-                        }
-                    }
-                }
-                if urHit then continue
-                un: ast.nodes.get i: uk
-                um: "Unknown type '\{pvalT}'"
-                (addResolveErrorH
-                    :st
-                    nodeid: (nodeId n: un)
-                    lineno: (nodeLine n: un)
-                    colno: (nodeCol n: un)
-                    e: zast.err.badReference
-                    msg: um
-                    width: pvalT.length.u32.orPanic
-                )
-            }
-        }
+            :ast
+            :unitDecl
+            :uk
+            :pval
+            :gpNames
+        )
     }
 }
 
@@ -25947,18 +26017,13 @@ walkCallArgsHoist: function {
     }
     return lockRoot
 }
-
-# checkBoxConstruction -- `Box from: val`: the value's (materialised) type
-# binds t; the argument is consumed (hoisted first when non-trivial); the
-# instance carries create plus the element type's children copied for
-# transparent member access. Heap passthrough (List/Map boxing) lands when
-# an example needs it.
-checkBoxConstruction: function {
+# boxArgumentTid -- the type a `Box` construction is given: an explicit `t:` type
+# argument, or the type of the single value it boxes. 0 when neither is present.
+boxArgumentTid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     call: zast.CallData.view
-    tplId: ztypes.tid
 } out ztypes.tid is {
     fnd: false
     vt: ztypes.tid
@@ -26076,6 +26141,23 @@ checkBoxConstruction: function {
             }
         } else null
     }
+    return vt
+}
+
+
+# checkBoxConstruction -- `Box from: val`: the value's (materialised) type
+# binds t; the argument is consumed (hoisted first when non-trivial); the
+# instance carries create plus the element type's children copied for
+# transparent member access. Heap passthrough (List/Map boxing) lands when
+# an example needs it.
+checkBoxConstruction: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: zast.CallData.view
+    tplId: ztypes.tid
+} out ztypes.tid is {
+    vt: boxArgumentTid :st :unitDecl :ast :call
     if vt.isZero then return (ztypes.tid.create from: 0)
     tn: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
     mname: "Box_\{tn}"
