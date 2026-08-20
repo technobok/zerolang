@@ -17638,10 +17638,7 @@ baseIsPrivateCapable: function {
     bt: ztypes.tid
     baseNode: Node.view
 } out bool is {
-    btNm: st.reg.nameOf tid: (ztypes.tid.create from: bt.u64)
-    if btNm.length > 0 when st.typing.currentThisName.length > 0 then {
-        if st.typing.currentThisName.stringview == btNm.stringview then return true
-    }
+    if (bt.isZero) == false when bt == st.typing.currentThisTid then return true
     match (
         baseNode
     ) case atomid then {
@@ -24340,20 +24337,11 @@ checkCall: function {
         ) case some then {
             mcid = mcb
         } case none then null
-        if mcid > 0 when st.typing.currentThisName.length > 0 then {
+        if mcid > 0 when (st.typing.currentThisTid.isZero) == false then {
             # `meta.create` constructs the enclosing type: the raw allocator's
             # params are the type's field children, so the ctor arg walk
             # (hoists, coercion, field consumption) rides funcId = the type.
-            mctn: st.typing.currentThisName
-            mto: (walkLookupTyperef
-                :st
-                frame: st.curFrame
-                :ast
-
-                :unitDecl
-                base: mctn.stringview
-            )
-            mtid: optU64Or o: mto d: 0
+            mtid: st.typing.currentThisTid.u64
             if mtid > 0 then {
                 setmb: mtid
                 stampGate :st nid: mcid.u64 tid: (ztypes.tid.create from: setmb.u64)
@@ -27013,13 +27001,13 @@ walkDeclaredDef: function {
     if isFn then {
         # a demand-time walk is its own scope, and checkFunctionBody SETS the
         # ambient receiver without restoring it: a free function walked from
-        # inside a method's body would leave currentThisName cleared, and the
+        # inside a method's body would leave the ambient receiver cleared, and the
         # rest of that method then reads `b.private` as external code. The type
         # branch has bracketed these two since it was the only branch.
         prevL: st.typing.synthLabel.copy
         prevL9U: st.typing.synthOwnerUnit
         prevL9N: st.typing.synthOwnerName
-        prevT: st.typing.currentThisName.copy
+        prevT: st.typing.currentThisTid
         (checkFunctionBody
             :st
             frame: rf
@@ -27027,13 +27015,14 @@ walkDeclaredDef: function {
             defName: name
             defn: (ast.nodes.get i: mopId.u64)
             thisName: ""
+            thisTid: ztypes.tid
             :ast
             declId: dd
         )
         st.typing.synthLabel = prevL
         st.typing.synthOwnerUnit = prevL9U
         st.typing.synthOwnerName = prevL9N
-        st.typing.currentThisName = prevT
+        st.typing.currentThisTid = prevT
     } else {
         walkOwnerMethods :st frame: rf :unitDecl :ast :memId :name
     }
@@ -27090,19 +27079,20 @@ walkOwnerMethods: function {
             prev: st.typing.synthLabel.copy
             prevU: st.typing.synthOwnerUnit
             prevN: st.typing.synthOwnerName
-            prevThis: st.typing.currentThisName.copy
+            prevThis: st.typing.currentThisTid
             (checkMethodBodies
                 :st
                 :frame
                 :unitDecl
                 :ast
                 typeName: name
+                typeTid: (ztypes.tid.create from: owTid)
                 op: (ast.nodes.get i: mem.operation.u64)
             )
             st.typing.synthLabel = prev
             st.typing.synthOwnerUnit = prevU
             st.typing.synthOwnerName = prevN
-            st.typing.currentThisName = prevThis
+            st.typing.currentThisTid = prevThis
         }
         st.typing.suppressFnAutoCall = mwSupFn
         st.typing.suppressBareCtor = mwSup
@@ -27166,6 +27156,7 @@ checkMethodBodies: function {
     frame: ztypes.declid
     ast: Ast.view
     typeName: StringView
+    typeTid: ztypes.tid
     op: Node.view
 } is {
     match (
@@ -27198,6 +27189,7 @@ checkMethodBodies: function {
                         defName: qn.stringview
                         defn: (ast.nodes.get i: im.operation.u64)
                         thisName: typeName
+                        thisTid: typeTid
                         :ast
                         declId: (methodDeclOf :st :ast :unitDecl :typeName memberId: im.name)
                     )
@@ -27229,6 +27221,7 @@ checkMethodBodies: function {
                         defName: qn2.stringview
                         defn: (ast.nodes.get i: am.operation.u64)
                         thisName: typeName
+                        thisTid: typeTid
                         :ast
                         declId: (methodDeclOf :st :ast :unitDecl :typeName memberId: am.name)
                     )
@@ -27274,6 +27267,7 @@ checkFunctionBody: function {
     defName: StringView
     defn: Node.view
     thisName: StringView
+    thisTid: ztypes.tid
     ast: Ast
     declId: ztypes.declid
 } is {
@@ -27591,8 +27585,7 @@ checkFunctionBody: function {
                 )
                 st.typing.synthOwnerName = soid
             }
-            tnl: thisName.string
-            st.typing.currentThisName = tnl
+            st.typing.currentThisTid = thisTid
             prevRet: st.typing.currentReturnTypeId
             fitid: (optU64Or o: rgot d: 0)
             crt: ztypes.tid
@@ -27695,6 +27688,7 @@ walkUnitTemplateBodies: function {
                     defName: dn.stringview
                     defn: (ast.nodes.get i: bm.operation.u64)
                     thisName: ""
+                    thisTid: ztypes.tid
                     :ast
                     declId: fdecl
                 )
@@ -27834,6 +27828,7 @@ checkNamespaceBodies: function {
                     defName: defNameText.stringview
                     defn: (ast.nodes.get i: bm.operation.u64)
                     thisName: ""
+                    thisTid: ztypes.tid
                     :ast
                     declId: (st.typing.declFindChild
                         parentDeclId: nsDecl
@@ -27874,6 +27869,7 @@ checkUnitBodies: function {
                         defName: memberName.stringview
                         defn: (ast.nodes.get i: mm.operation.u64)
                         thisName: ""
+                        thisTid: ztypes.tid
                         :ast
                         declId: (declOfUnitDefIds
                             :st
@@ -27944,6 +27940,7 @@ checkUnitBodies: function {
                         defName: defName.stringview
                         defn: (ast.nodes.get i: bm.operation.u64)
                         thisName: ""
+                        thisTid: ztypes.tid
                         :ast
                         declId: (declOfUnitDefIds
                             :st
@@ -28277,7 +28274,7 @@ stampOneFnMono: function {
     prevL: st.typing.synthLabel.copy
     prevL9U: st.typing.synthOwnerUnit
     prevL9N: st.typing.synthOwnerName
-    prevT: st.typing.currentThisName.copy
+    prevT: st.typing.currentThisTid
     tplDecl29Org: st.reg.genericOriginOf tid: monoId
     fnTemplateDecl: declOfTypeId :st tid: tplDecl29Org
     (checkFunctionBody
@@ -28287,13 +28284,14 @@ stampOneFnMono: function {
         defName: monoNm.stringview
         defn: (ast.nodes.get i: fnOpId.u64)
         thisName: ""
+        thisTid: ztypes.tid
         :ast
         declId: fnTemplateDecl
     )
     st.typing.synthLabel = prevL
     st.typing.synthOwnerUnit = prevL9U
     st.typing.synthOwnerName = prevL9N
-    st.typing.currentThisName = prevT
+    st.typing.currentThisTid = prevT
     st.typing.curMonoFnTid = ztypes.tid.create from: 0
     st.typing.curMonoStamp = 0
     st.typing.suppressParamStamps = prevSup
@@ -28415,7 +28413,7 @@ stampOneClassMono: function {
     prevL: st.typing.synthLabel.copy
     prevL9U: st.typing.synthOwnerUnit
     prevL9N: st.typing.synthOwnerName
-    prevT: st.typing.currentThisName.copy
+    prevT: st.typing.currentThisTid
     mi: u64
     for mi < mNames.length loop {
         mnm: (mNames.get i: mi)
@@ -28439,6 +28437,7 @@ stampOneClassMono: function {
             defName: q.stringview
             defn: (ast.nodes.get i: mop.u64)
             thisName: monoNm.stringview
+            thisTid: monoId
             :ast
             declId: classTemplateDecl
         )
@@ -28446,7 +28445,7 @@ stampOneClassMono: function {
     st.typing.synthLabel = prevL
     st.typing.synthOwnerUnit = prevL9U
     st.typing.synthOwnerName = prevL9N
-    st.typing.currentThisName = prevT
+    st.typing.currentThisTid = prevT
     st.typing.curMonoFnTid = ztypes.tid.create from: 0
     st.typing.curMonoStamp = 0
     st.typing.suppressParamStamps = prevSup
@@ -28735,7 +28734,7 @@ stampOneUnitMono: function {
     prevL: st.typing.synthLabel.copy
     prevL9U: st.typing.synthOwnerUnit
     prevL9N: st.typing.synthOwnerName
-    prevT: st.typing.currentThisName.copy
+    prevT: st.typing.currentThisTid
     wi: u64
     for wi < idxs.length loop {
         bidx: idxs.get i: wi
@@ -28768,6 +28767,7 @@ stampOneUnitMono: function {
                 defName: q.stringview
                 defn: (ast.nodes.get i: bm2.operation.u64)
                 thisName: ""
+                thisTid: ztypes.tid
                 :ast
                 declId: unitTemplateDecl
             )
@@ -28776,7 +28776,7 @@ stampOneUnitMono: function {
     st.typing.synthLabel = prevL
     st.typing.synthOwnerUnit = prevL9U
     st.typing.synthOwnerName = prevL9N
-    st.typing.currentThisName = prevT
+    st.typing.currentThisTid = prevT
     st.typing.curMonoFnTid = ztypes.tid.create from: 0
     st.typing.curMonoStamp = 0
     st.typing.suppressParamStamps = prevSup
