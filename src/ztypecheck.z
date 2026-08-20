@@ -3994,8 +3994,7 @@ typeHasNonOwnedField: function {st: zenv.ZSymbolTable tid: ztypes.tid} out bool 
 # with or without a marker), which is what a constructor writes.
 returnNamesThis: function {ast: Ast.view oId: zast.nodeid} out bool is {
     if oId.isZero then return false
-    rn: rootNameOf :ast n: (ast.nodes.get i: oId.u64)
-    return rn.stringview == "this"
+    return (rootNameIdOf :ast n: (ast.nodes.get i: oId.u64)) == zast.wkThis
 }
 
 # checkTakexHonesty -- an OWNED `out this` whose type declares a non-owned field
@@ -4139,7 +4138,8 @@ resolveFunction: function {
             skipParam: false
             genParam: false
             fnParam: false
-            ptn: atomName :ast n: (ast.nodes.get i: pm.operation.u64)
+            ptn: atomNameId :ast n: (ast.nodes.get i: pm.operation.u64)
+            ptnT: zast.nameTextAt :ast ref: ptn
             # A MARKED receiver is an alias, so its type is `this.view` rather
             # than the bare `this` an atom name reports. Ask the shared
             # predicate, which knows every marker form.
@@ -4154,13 +4154,13 @@ resolveFunction: function {
                 # the predicate catches every MARKED form, whose type is a
                 # dotted path and so has no atom name at all. Dropping either
                 # leaves that family of receivers as ordinary parameters.
-                if ptn.stringview == "this" then skipParam = true
+                if ptn == zast.wkThis then skipParam = true
                 if isRecvP then skipParam = true
             }
             if skipParam == false when isgen then {
                 if (st.reg.isGenericParamOf
                     tdecl: fnDecl
-                    name: (nameIdOf :ast name: ptn.stringview)
+                    name: ptn
                 ) then {
                     skipParam = true
                     fnParam = true
@@ -4168,7 +4168,7 @@ resolveFunction: function {
             }
             if skipParam == false when (st.reg.isGenericParamOf
                 tdecl: receiverEnclDecl
-                name: (nameIdOf :ast name: ptn.stringview)
+                name: ptn
             ) then {
                 skipParam = true
                 genParam = true
@@ -4214,7 +4214,7 @@ resolveFunction: function {
                     fpt: u64
                     fpo: (st.reg.genericParamTidOf
                         tdecl: fnDecl
-                        paramName: (nameIdOf :ast name: ptn.stringview)
+                        paramName: ptn
                     )
                     match (
                         fpo
@@ -4222,12 +4222,12 @@ resolveFunction: function {
                         fpt = fpo
                     } case none then {
                         fpt = (st.reg.newType
-                            name: ptn.stringview
+                            name: ptnT.stringview
                             typetype: ztypes.ztypetype.genericParam
                         )
                         (st.reg.setGenericParamTid
                             tdecl: fnDecl
-                            paramName: (nameIdOf :ast name: ptn.stringview)
+                            paramName: ptn
                             tid: (ztypes.tid.create from: fpt.u64)
                         )
                     }
@@ -4245,7 +4245,7 @@ resolveFunction: function {
                     gpt2: u64
                     gpo2: (st.reg.genericParamTidOf
                         tdecl: receiverEnclDecl
-                        paramName: (nameIdOf :ast name: ptn.stringview)
+                        paramName: ptn
                     )
                     match (
                         gpo2
@@ -4253,12 +4253,12 @@ resolveFunction: function {
                         gpt2 = gpo2
                     } case none then {
                         gpt2 = (st.reg.newType
-                            name: ptn.stringview
+                            name: ptnT.stringview
                             typetype: ztypes.ztypetype.genericParam
                         )
                         (st.reg.setGenericParamTid
                             tdecl: receiverEnclDecl
-                            paramName: (nameIdOf :ast name: ptn.stringview)
+                            paramName: ptn
                             tid: (ztypes.tid.create from: gpt2.u64)
                         )
                     }
@@ -4292,7 +4292,7 @@ resolveFunction: function {
                     nameId: pm.name
                     childTypeId: cid
                 )
-                if (isNumericLiteralName name: ptn.stringview) then {
+                if (isNumericLiteralName name: ptnT.stringview) then {
                     (st.typing.setDefaultLiteral
                         pool: ast.names
                         parentTypeId: (ztypes.tid.create from: fid.u64)
@@ -4307,7 +4307,7 @@ resolveFunction: function {
                         :ast
 
                         :unitDecl
-                        base: ptn.stringview
+                        base: ptnT.stringview
                     )
                     fnRefTid: ztypes.tid
                     match (
@@ -17247,9 +17247,8 @@ baseIsPrivateCapable: function {
     match (
         baseNode
     ) case atomid then {
-        anm: zast.nameTextAt :ast ref: baseNode.name
-        if anm.stringview == "this" then return true
-        vo: st.lookupVarId nameId: (nameIdOf :ast name: anm.stringview)
+        if baseNode.name == zast.wkThis then return true
+        vo: st.lookupVarId nameId: baseNode.name
         match (
             vo
         ) case some then {
