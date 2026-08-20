@@ -17595,6 +17595,7 @@ inferGenericConstruction: function {
         )
         st.typing.setMemberType parentTypeId: mid nameId: zast.wkCreate childTypeId: crId
     }
+    stampConstructionKind :st nid: call.nodeid.u64 tid: mid
     return mid
 }
 # skipCapacityArg -- `capacity:` on a builtin container is a create argument riding
@@ -27191,6 +27192,7 @@ checkResolvedMethodCall: function {
                 }
             }
         }
+        st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.regular
         return (ztypes.tid.create from: mres)
 }
 # mintSumArmInstance -- constructing a generic sum's ARM infers the whole type's
@@ -27572,6 +27574,7 @@ checkGenericFnCall: function {
             setgf: gfr
             stampGate :st nid: call.nodeid.u64 tid: setgf
         }
+        st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.regular
         # A value receiver locks for the call's duration,
         # exactly like the concrete-method path: a generic
         # method's writer receiver must conflict with live
@@ -27833,7 +27836,10 @@ checkBareGenericCall: function {
             allowFrom: false
         )
         gres: genericTypeConstruction :ast :st :unitDecl :call tplId: funcId
-        if gres > 0 then return (callleg handled: true tid: gres)
+        if gres > 0 then {
+            stampConstructionKind :st nid: call.nodeid.u64 tid: gres
+            return (callleg handled: true tid: gres)
+        }
         # field-bound value args: infer the instance and construct
         # through the standard ctor flow, as a generic record/class
         # construction does.
@@ -27881,6 +27887,7 @@ checkBareGenericCall: function {
             st.typing.constructedTypes.set key: ctk value: ctv
             setr: gmid
             stampGate :st nid: call.nodeid.u64 tid: setr
+            stampConstructionKind :st nid: call.nodeid.u64 tid: gmid
             return (callleg handled: true tid: (ztypes.tid.create from: gmid))
         }
         # Construction failed AND a type-argument diagnostic was
@@ -27895,6 +27902,7 @@ checkBareGenericCall: function {
     }
     gr: checkGenericCall :st :unitDecl :ast :call :funcId
     result = gr
+    st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.regular
     if gr > 0 then {
         setgc: gr
         stampGate :st nid: call.nodeid.u64 tid: setgc
@@ -28054,6 +28062,7 @@ checkUserFnCall: function {
             st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.unionCreate
         }
     } else {
+        st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.regular
         rnOpt: st.typing.funcReturnNode.get key: funcId
         match (
             rnOpt
@@ -28178,6 +28187,7 @@ checkWrappedCall: function {
         }
         setwc: wcv
         stampGate :st nid: call.nodeid.u64 tid: setwc
+        stampConstructionKind :st nid: call.nodeid.u64 tid: wcv
         return wcv
     }
     return (ztypes.tid.create from: 0)
@@ -28296,6 +28306,11 @@ checkMetaCreateCall: function {
         st.popTo marker: mcm
         setmc: mtid
         stampGate :st nid: call.nodeid.u64 tid: (ztypes.tid.create from: setmc.u64)
+        (stampConstructionKind
+            :st
+            nid: call.nodeid.u64
+            tid: (ztypes.tid.create from: mtid)
+        )
         return (ztypes.tid.create from: mtid)
     }
     return (ztypes.tid.create from: 0)
@@ -28376,6 +28391,7 @@ checkCall: function {
     call: zast.CallData.view
 } out ztypes.tid is {
     result: ztypes.tid
+    st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.unknown
     cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: call.callable.u64))
     if cn.stringview == "return" then {
         result = checkControlBuiltinCall :st :unitDecl :ast :call
@@ -35402,6 +35418,21 @@ lowerGeneratorItems: function {
         }
         bi = bi + 1
     }
+}
+
+# stampConstructionKind -- record what a call CONSTRUCTS, derived from the type
+# it answers. The three families are the three the emitter renders differently;
+# anything else is an ordinary call and says so.
+stampConstructionKind: function {st: zenv.ZSymbolTable nid: u64 tid: ztypes.tid} is {
+    if nid == 0 then return
+    if tid.isZero then return
+    tt: st.reg.typetypeOf typeId: tid
+    ck: zast.callkind.regular
+    if tt == ztypes.ztypetype.recordType then ck = zast.callkind.recordCreate
+    if tt == ztypes.ztypetype.classType then ck = zast.callkind.classCreate
+    if tt == ztypes.ztypetype.unionType then ck = zast.callkind.unionCreate
+    if tt == ztypes.ztypetype.variantType then ck = zast.callkind.unionCreate
+    st.typing.callKind.set key: nid value: ck
 }
 
 # stampRefDecl -- record the declaration a reference node resolved to.
