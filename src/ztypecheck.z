@@ -2945,6 +2945,108 @@ resolveMonoRefParts: function {
         return memberIdAt
     }
 }
+# recordDottedTyperef -- a type-ref written as a dotted path: a unit-qualified type
+# name, a nested namespace's type, or a member type of a type. Records the
+# dependency the reference creates, whichever shape it takes.
+recordDottedTyperef: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    thisName: StringView
+    node: zast.DottedPathData.view
+} is {
+    # Ownership/access strip marker (this.lock / StringView.borrow / Container.private):
+    # record the dotted node with its peeled base AND recurse on the parent so the
+    # stripped inner atom is stamped too.
+    # A `.typedef` marker only recurses -- the dotted node itself resolves to a
+    # NULL-defined typedef wrapper the dump filters out.
+    cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.child.u64))
+    pn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
+    if (nameDenotesUnit :st :frame nameId: (nameIdOf :ast name: pn.stringview)) then {
+        # cross-unit qualified type ref (zlexer.Token): record the MEMBER under
+        # its DEFINING unit (the parent) so stampTyperefs bridges this node.
+        # The member resolves in the qualifier's frame, not the writer's.
+        qfr: ztypes.declid
+        {
+            qro: (st.typing.declFindChild
+                parentDeclId: st.typing.programRoot
+                nameId: (nameIdOf :ast name: pn.stringview)
+            )
+            if (qro.isZero) == false then qfr = qro
+        }
+        (recordResolvedName
+            :st
+            :frame
+
+            :ast
+            unitDecl: (unitDeclOfNameOrOwn
+                :st
+                :frame
+                nameId: (nameIdOf :ast name: pn.stringview)
+            )
+            :thisName
+            name: cn.stringview
+            nid: node.nodeid.u64
+            recFrame: qfr
+        )
+    } else {
+        if (isStripMarker name: cn.stringview) then {
+            bn: baseTypeName :ast n: (ast.nodes.get i: node.parent.u64)
+            (recordResolvedName
+                :st
+                :frame
+
+                :ast
+                :unitDecl
+                :thisName
+                name: bn.stringview
+                nid: node.nodeid.u64
+                recFrame: frame
+            )
+            # a parameterized parent ((List of: String).take) has no base
+            # name; the marker dp wears the parent's mono stamp.
+            if bn.length == 0 then {
+                (resolveMonoRefInline
+                    :st
+                    :frame
+
+                    :ast
+                    :unitDecl
+                    :thisName
+                    enclDecl: ztypes.declid
+                    op: (ast.nodes.get i: node.parent.u64)
+                    nid: node.nodeid
+                )
+            }
+            # Ownership markers peel and stamp the inner ref; `.private` /
+            # `.public` resolve the pair atomically (no base-atom stamp).
+            if cn.stringview != "private" then {
+                if cn.stringview != "public" then {
+                    dpp: ast.nodes.get i: node.parent.u64
+                    recordTyperef :st :frame :ast :unitDecl :thisName node: dpp
+                }
+            }
+        } else {
+            if cn.stringview == "typedef" then {
+                dpp: ast.nodes.get i: node.parent.u64
+                recordTyperef :st :frame :ast :unitDecl :thisName node: dpp
+            } else {
+                (stampNestedTyperef
+                    :st
+                    :frame
+
+                    :ast
+                    :unitDecl
+                    unitId: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
+                    memberId: (atomNameId :ast n: (ast.nodes.get i: node.child.u64))
+                    nid: node.nodeid
+                )
+            }
+        }
+    }
+}
+
 
 # recordTyperef -- record a signature type-ref node (param / field / arm / return) for
 # post-demand stamping. resolveTyperefShell yields only a NULL-unit shell and the real
@@ -3025,95 +3127,14 @@ recordTyperef: function {
             node: (ast.nodes.get i: node.callable.u64)
         )
     } case dottedpath then {
-        # Ownership/access strip marker (this.lock / StringView.borrow / Container.private):
-        # record the dotted node with its peeled base AND recurse on the parent so the
-        # stripped inner atom is stamped too.
-        # A `.typedef` marker only recurses -- the dotted node itself resolves to a
-        # NULL-defined typedef wrapper the dump filters out.
-        cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.child.u64))
-        pn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
-        if (nameDenotesUnit :st :frame nameId: (nameIdOf :ast name: pn.stringview)) then {
-            # cross-unit qualified type ref (zlexer.Token): record the MEMBER under
-            # its DEFINING unit (the parent) so stampTyperefs bridges this node.
-            # The member resolves in the qualifier's frame, not the writer's.
-            qfr: ztypes.declid
-            {
-                qro: (st.typing.declFindChild
-                    parentDeclId: st.typing.programRoot
-                    nameId: (nameIdOf :ast name: pn.stringview)
-                )
-                if (qro.isZero) == false then qfr = qro
-            }
-            (recordResolvedName
-                :st
-                :frame
-
-                :ast
-                unitDecl: (unitDeclOfNameOrOwn
-                    :st
-                    :frame
-                    nameId: (nameIdOf :ast name: pn.stringview)
-                )
-                :thisName
-                name: cn.stringview
-                nid: node.nodeid.u64
-                recFrame: qfr
-            )
-        } else {
-            if (isStripMarker name: cn.stringview) then {
-                bn: baseTypeName :ast n: (ast.nodes.get i: node.parent.u64)
-                (recordResolvedName
-                    :st
-                    :frame
-
-                    :ast
-                    :unitDecl
-                    :thisName
-                    name: bn.stringview
-                    nid: node.nodeid.u64
-                    recFrame: frame
-                )
-                # a parameterized parent ((List of: String).take) has no base
-                # name; the marker dp wears the parent's mono stamp.
-                if bn.length == 0 then {
-                    (resolveMonoRefInline
-                        :st
-                        :frame
-
-                        :ast
-                        :unitDecl
-                        :thisName
-                        enclDecl: ztypes.declid
-                        op: (ast.nodes.get i: node.parent.u64)
-                        nid: node.nodeid
-                    )
-                }
-                # Ownership markers peel and stamp the inner ref; `.private` /
-                # `.public` resolve the pair atomically (no base-atom stamp).
-                if cn.stringview != "private" then {
-                    if cn.stringview != "public" then {
-                        dpp: ast.nodes.get i: node.parent.u64
-                        recordTyperef :st :frame :ast :unitDecl :thisName node: dpp
-                    }
-                }
-            } else {
-                if cn.stringview == "typedef" then {
-                    dpp: ast.nodes.get i: node.parent.u64
-                    recordTyperef :st :frame :ast :unitDecl :thisName node: dpp
-                } else {
-                    (stampNestedTyperef
-                        :st
-                        :frame
-
-                        :ast
-                        :unitDecl
-                        unitId: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
-                        memberId: (atomNameId :ast n: (ast.nodes.get i: node.child.u64))
-                        nid: node.nodeid
-                    )
-                }
-            }
-        }
+        (recordDottedTyperef
+            :st
+            :ast
+            :unitDecl
+            :frame
+            :thisName
+            :node
+        )
     } case atomid then {
         rrA: ast.names.texts.get i: node.name.u64
         (recordResolvedName
@@ -3504,6 +3525,104 @@ typeArgSuffixName: function {
         return (atomName :ast n: op)
     }
 }
+# dottedTyperefShell -- the shell a dotted type-ref names: a unit-qualified type, a
+# nested namespace's type, a member type of a type, or the parent a marker peels
+# back to (`Container.private.lock`, `direction.north`).
+dottedTyperefShell: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    typeExpr: zast.DottedPathData.view
+    thisName: StringView
+} out u64 is {
+    result: u64
+    # A cross-unit qualified type ref (zlexer.Token) names the MEMBER in the
+    # referenced unit -- resolve the child like a bare atom. Otherwise a dotted
+    # type-expr peels to its parent: an ownership/access strip marker
+    # (Container.private.lock) or a variant/union subtype default where the arm
+    # is the default value and the type is the parent (direction.north).
+    pNm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
+    if (nameDenotesUnit
+        :frame
+        :st
+        nameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
+    ) then {
+        cNm: (zast.nameTextAt
+            :ast
+            ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
+        )
+        (demandUnitMember
+            :st
+            unitNameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
+            nameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
+        )
+        did8: (descendNamed
+            :st
+            :frame
+
+            :ast
+            unitDecl: (unitDeclOfNameOrOwn
+                :st
+                :frame
+                nameId: (nameIdOf :ast name: pNm.stringview)
+            )
+            name: cNm.stringview
+        )
+        if did8 > 0 then return did8
+        return (resolveAtomType :st :frame :ast :unitDecl nm: cNm.stringview :thisName)
+    } else {
+        # a dotted numeric literal (4.u64, 2.5.f32) declares the SUFFIX
+        # type: peeling to the numeric parent would collapse it to the
+        # literal default (i64/f64), silently mistyping the slot
+        nSfx: (zast.nameTextAt
+            :ast
+            ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
+        )
+        isSfx: isNumericTypeName name: nSfx.stringview
+        if (isNumericLiteralName name: pNm.stringview) when isSfx then {
+            return (resolveAtomType
+                :st
+                :frame
+
+                :ast
+                :unitDecl
+                nm: nSfx.stringview
+                :thisName
+            )
+        }
+        # A qualified ref into a NESTED unit names a MEMBER, the way a
+        # cross-unit ref does -- the leg above cannot see it because a
+        # nested unit is absent from the unit-name index. Peeling to the
+        # parent instead handed the slot the UNIT's own type.
+        nsRoot: ztypes.declid
+        {
+            nsro: unitDecl
+            if (nsro.isZero) == false then nsRoot = nsro
+        }
+        nsTid: (nestedUnitMemberTid
+            :st
+            :frame
+
+            :ast
+            ownerDeclId: nsRoot
+            nestedNameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
+            defName: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
+        )
+        if (nsTid.isZero) == false then return nsTid.u64
+        return (resolveTyperefShell
+            :st
+            :frame
+
+            :ast
+            :unitDecl
+            typeExpr: (ast.nodes.get i: typeExpr.parent.u64)
+            :thisName
+        )
+    }
+    return result
+}
+
 
 # resolve a type reference to its shell type id, deferring member resolution.
 resolveTyperefShell: function {
@@ -3593,90 +3712,14 @@ resolveTyperefShell: function {
         }
         return (st.reg.newType name: suffix.stringview typetype: ztypes.ztypetype.recordType)
     } case dottedpath then {
-        # A cross-unit qualified type ref (zlexer.Token) names the MEMBER in the
-        # referenced unit -- resolve the child like a bare atom. Otherwise a dotted
-        # type-expr peels to its parent: an ownership/access strip marker
-        # (Container.private.lock) or a variant/union subtype default where the arm
-        # is the default value and the type is the parent (direction.north).
-        pNm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
-        if (nameDenotesUnit
-    :frame
-    :st nameId: (atomNameId
+        return (dottedTyperefShell
+            :st
             :ast
-            n: (ast.nodes.get i: typeExpr.parent.u64)
-        )) then {
-            cNm: (zast.nameTextAt
-                :ast
-                ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
-            )
-            (demandUnitMember
-                :st
-                unitNameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
-                nameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
-            )
-            did8: (descendNamed
-                :st
-                :frame
-
-                :ast
-                unitDecl: (unitDeclOfNameOrOwn
-                    :st
-                    :frame
-                    nameId: (nameIdOf :ast name: pNm.stringview)
-                )
-                name: cNm.stringview
-            )
-            if did8 > 0 then return did8
-            return (resolveAtomType :st :frame :ast :unitDecl nm: cNm.stringview :thisName)
-        } else {
-            # a dotted numeric literal (4.u64, 2.5.f32) declares the SUFFIX
-            # type: peeling to the numeric parent would collapse it to the
-            # literal default (i64/f64), silently mistyping the slot
-            nSfx: (zast.nameTextAt
-                :ast
-                ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
-            )
-            isSfx: isNumericTypeName name: nSfx.stringview
-            if (isNumericLiteralName name: pNm.stringview) when isSfx then {
-                return (resolveAtomType
-                    :st
-                    :frame
-
-                    :ast
-                    :unitDecl
-                    nm: nSfx.stringview
-                    :thisName
-                )
-            }
-            # A qualified ref into a NESTED unit names a MEMBER, the way a
-            # cross-unit ref does -- the leg above cannot see it because a
-            # nested unit is absent from the unit-name index. Peeling to the
-            # parent instead handed the slot the UNIT's own type.
-            nsRoot: ztypes.declid
-            {
-                nsro: unitDecl
-                if (nsro.isZero) == false then nsRoot = nsro
-            }
-            nsTid: (nestedUnitMemberTid
-                :st
-                :frame
-
-                :ast
-                ownerDeclId: nsRoot
-                nestedNameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
-                defName: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
-            )
-            if (nsTid.isZero) == false then return nsTid.u64
-            return (resolveTyperefShell
-                :st
-                :frame
-
-                :ast
-                :unitDecl
-                typeExpr: (ast.nodes.get i: typeExpr.parent.u64)
-                :thisName
-            )
-        }
+            :unitDecl
+            :frame
+            :typeExpr
+            :thisName
+        )
     } else {
         return (st.reg.newType name: "?" typetype: ztypes.ztypetype.recordType)
     }
@@ -14959,6 +15002,112 @@ checkString: function {
     drainPendingBorrow :st
     return result
 }
+# cloneMethodParams -- copy the template method's parameters onto the clone, with
+# the specialisation's arguments substituted for the generic parameters, and the
+# ownership markers the template declared carried across unchanged.
+cloneMethodParams: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    specId: ztypes.tid
+    fid5: ztypes.tid
+    templateName: StringView
+    cN5: (List String).view
+    cI5: (ListVal u64).view
+    cOh5: (ListVal bool).view
+    cOv5: (ListVal ztypes.zparamownership).view
+    idSubs: (IdMapV u64 value: u64)
+    tplClassId: ztypes.tid
+    tpn0: StringView
+} is {
+    pi5: u64
+    pn5: cN5.length
+    for pi5 < pn5 loop {
+        pnm5: cN5.get i: pi5
+        ptid5: cI5.get i: pi5
+        tgt5: ptid5
+        if ptid5 == tplClassId then tgt5 = specId
+        if pnm5.stringview == "this" then tgt5 = specId
+        if tpn0.length > 0 when pnm5.stringview == tpn0 then tgt5 = specId
+        if tgt5 == ptid5 then {
+            # `this`/`type`-typed params carry fresh shells named after the
+            # class; shell-name identity marks the self type.
+            ptn5: st.reg.nameOf tid: (ztypes.tid.create from: ptid5.u64)
+            if ptn5.stringview == templateName then tgt5 = specId
+        }
+        if tgt5 == ptid5 then {
+            ido5: idSubs.get key: ptid5
+            match (
+                ido5
+            ) case some then {
+                tgt5 = ido5
+            } case none then {
+                rs5: respecialize :st :frame :ast :unitDecl specTid: ptid5 :idSubs
+                if rs5 > 0 then tgt5 = rs5
+            }
+        }
+        (st.typing.setMemberType
+            parentTypeId: fid5
+            nameId: (zast.poolFind pool: ast.names text: pnm5.stringview)
+            childTypeId: tgt5
+        )
+        if (cOh5.get i: pi5) then {
+            pov5: cOv5.get i: pi5
+            (st.typing.setChildOwnership
+                pool: ast.names
+                parentTypeId: fid5
+                name: pnm5.stringview
+                ownership: pov5
+            )
+        }
+        pi5 = pi5 + 1
+    }
+}
+# cloneMethodReturn -- the clone's return type: the template's, with the
+# specialisation's arguments substituted. A composite return that still mentions a
+# generic parameter respecializes rather than being copied through.
+cloneMethodReturn: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    specId: ztypes.tid
+    tplClassId: ztypes.tid
+    fid5: ztypes.tid
+    tplFnId: u64
+    templateName: StringView
+    idSubs: (IdMapV u64 value: u64)
+} is {
+    rto5: ztypes.tid
+    {
+        ro5: st.reg.returnTypeOf tid: (ztypes.tid.create from: tplFnId.u64)
+        if ro5 > 0 then rto5 = ro5
+    }
+    if rto5 > 0 then {
+        rt5: rto5
+        if rto5 == tplClassId then rt5 = specId
+        if rt5 == rto5 then {
+            rtn5: st.reg.nameOf tid: (ztypes.tid.create from: rto5.u64)
+            if rtn5.stringview == templateName then rt5 = specId
+        }
+        rdo5: idSubs.get key: rto5
+        match (
+            rdo5
+        ) case some then {
+            rt5 = ztypes.tid.create from: (rdo5)
+        } case none then {
+            rr5: respecialize :st :frame :ast :unitDecl specTid: rto5 :idSubs
+            if rr5 > 0 then rt5 = ztypes.tid.create from: rr5.u64
+        }
+        # a return still GENERIC_PARAM-typed (a partial the subs could not
+        # complete -- multi-param chains mint with empty subs) stays unset;
+        # the name-keyed fixup arms heal it after minting
+        if (st.reg.typetypeOf typeId: rt5) != ztypes.ztypetype.genericParam then {
+            st.reg.setReturnType typeId: fid5 value: rt5
+        }
+    }
+}
 
 # checkAtomid -- type a name-atom in value position: a local variable resolves
 # via the symbol table. (Numeric literals + unit-def atoms land in later slices.)
@@ -15063,76 +15212,34 @@ cloneMethodInto: function {
         }
     }
     templateName: st.reg.nameOf tid: (ztypes.tid.create from: tplClassId.u64)
-    pi5: u64
-    pn5: cN5.length
-    for pi5 < pn5 loop {
-        pnm5: cN5.get i: pi5
-        ptid5: cI5.get i: pi5
-        tgt5: ptid5
-        if ptid5 == tplClassId then tgt5 = specId
-        if pnm5.stringview == "this" then tgt5 = specId
-        if tpn0.length > 0 when pnm5.stringview == tpn0.stringview then tgt5 = specId
-        if tgt5 == ptid5 then {
-            # `this`/`type`-typed params carry fresh shells named after the
-            # class; shell-name identity marks the self type.
-            ptn5: st.reg.nameOf tid: (ztypes.tid.create from: ptid5.u64)
-            if ptn5.stringview == templateName.stringview then tgt5 = specId
-        }
-        if tgt5 == ptid5 then {
-            ido5: idSubs.get key: ptid5
-            match (
-                ido5
-            ) case some then {
-                tgt5 = ido5
-            } case none then {
-                rs5: respecialize :st :frame :ast :unitDecl specTid: ptid5 :idSubs
-                if rs5 > 0 then tgt5 = rs5
-            }
-        }
-        (st.typing.setMemberType
-            parentTypeId: fid5
-            nameId: (zast.poolFind pool: ast.names text: pnm5.stringview)
-            childTypeId: tgt5
-        )
-        if (cOh5.get i: pi5) then {
-            pov5: cOv5.get i: pi5
-            (st.typing.setChildOwnership
-                pool: ast.names
-                parentTypeId: fid5
-                name: pnm5.stringview
-                ownership: pov5
-            )
-        }
-        pi5 = pi5 + 1
-    }
-    rto5: ztypes.tid
-    {
-        ro5: st.reg.returnTypeOf tid: (ztypes.tid.create from: tplFnId.u64)
-        if ro5 > 0 then rto5 = ro5
-    }
-    if rto5 > 0 then {
-        rt5: rto5
-        if rto5 == tplClassId then rt5 = specId
-        if rt5 == rto5 then {
-            rtn5: st.reg.nameOf tid: (ztypes.tid.create from: rto5.u64)
-            if rtn5.stringview == templateName.stringview then rt5 = specId
-        }
-        rdo5: idSubs.get key: rto5
-        match (
-            rdo5
-        ) case some then {
-            rt5 = ztypes.tid.create from: (rdo5)
-        } case none then {
-            rr5: respecialize :st :frame :ast :unitDecl specTid: rto5 :idSubs
-            if rr5 > 0 then rt5 = ztypes.tid.create from: rr5.u64
-        }
-        # a return still GENERIC_PARAM-typed (a partial the subs could not
-        # complete -- multi-param chains mint with empty subs) stays unset;
-        # the name-keyed fixup arms heal it after minting
-        if (st.reg.typetypeOf typeId: rt5) != ztypes.ztypetype.genericParam then {
-            st.reg.setReturnType typeId: fid5 value: rt5
-        }
-    }
+    (cloneMethodParams
+        :ast
+        :st
+        :unitDecl
+        :frame
+        :specId
+        :fid5
+        templateName: templateName.stringview
+        :cN5
+        :cI5
+        :cOh5
+        :cOv5
+        :idSubs
+        :tplClassId
+        tpn0: tpn0.stringview
+    )
+    (cloneMethodReturn
+        :ast
+        :st
+        :unitDecl
+        :frame
+        :specId
+        :tplClassId
+        :fid5
+        :tplFnId
+        templateName: templateName.stringview
+        :idSubs
+    )
 }
 
 # respecialize -- a type that is itself a specialization (nonempty genericArgs)
@@ -34990,6 +35097,86 @@ lowerGenerators: function {
         }
     } else null
 }
+# lowerFreeGenerators -- lower each free-function generator in the unit body into
+# its state class and driver, staging the synth classes on a local list: the
+# element view of the body list ends with each iteration, so it must not grow
+# underneath the walk.
+lowerFreeGenerators: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    bodyIds: (ListVal u32).view
+    cIdx: (ListVal u64).view
+    stagedCls: (List Node)
+} is {
+    ci: u64
+    cn: cIdx.length
+    for ci < cn loop {
+        idx: cIdx.get i: ci
+        uel2Id: bodyIds.get i: idx
+        # scope the row view: lowering appends to the table below, and a
+        # live row view must not span a growing append
+        opId: zast.nodeid
+        dnm: String
+        {
+            uel2: ast.nodes.get i: uel2Id.u64
+            match (
+                uel2
+            ) case namedoperation then {
+                dnm = zast.nameTextCopy :ast ref: uel2.name
+                opId = uel2.operation
+            } else null
+        }
+        if opId > 0 then {
+            sname: "\{dnm}_iter"
+            fnNode: zast.tableTake :ast id: opId
+            lowOpt: (zgenerator.lowerOne :ast
+                fn: fnNode
+                synthName: sname.stringview
+                receiverType: ""
+            )
+            match (
+                lowOpt
+            ) case some then {
+                wfid: lowOpt.wrapperNodeId
+                wfv: true
+                st.typing.generatorWrapper.set key: wfid.u64 value: wfv
+                # the create-param and field-path clones must not stamp:
+                # those nodes are shared with the factory, and each ref
+                # carries exactly one stamp.
+                nsi: u64
+                nsn: lowOpt.noStamp.length
+                for nsi < nsn loop {
+                    ns0: lowOpt.noStamp.get i: nsi
+                    nsk: ns0.u64
+                    nsv: true
+                    st.typing.noStampNode.set key: nsk value: nsv
+                    nsi = nsi + 1
+                }
+                fac: lowOpt.factory.take
+                facId: zast.tableAdd :ast n: fac
+                {
+                    uel2w: ast.nodes.getMut i: uel2Id.u64
+                    match (
+                        uel2w
+                    ) case namedoperation then {
+                        uel2w.operation = facId
+                    } else null
+                }
+                cls: lowOpt.synthClass.take
+                clsN: (zgenerator.mkNamedOp
+                    :ast
+                    line: 0
+                    col: 0
+                    name: sname.stringview
+                    op: cls
+                )
+                stagedCls.append clsN
+            } case none then null
+        }
+        ci = ci + 1
+    }
+}
+
 
 # lowerGeneratorsInUnit -- candidates collect first (indexes + names),
 # then each lowers by index: the functiondef moves out of its
@@ -35034,73 +35221,13 @@ lowerGeneratorsInUnit: function {
             bi = bi + 1
         }
         stagedCls: (List Node)
-        ci: u64
-        cn: cIdx.length
-        for ci < cn loop {
-            idx: cIdx.get i: ci
-            uel2Id: bodyIds.get i: idx
-            # scope the row view: lowering appends to the table below, and a
-            # live row view must not span a growing append
-            opId: zast.nodeid
-            dnm: String
-            {
-                uel2: ast.nodes.get i: uel2Id.u64
-                match (
-                    uel2
-                ) case namedoperation then {
-                    dnm = zast.nameTextCopy :ast ref: uel2.name
-                    opId = uel2.operation
-                } else null
-            }
-            if opId > 0 then {
-                sname: "\{dnm}_iter"
-                fnNode: zast.tableTake :ast id: opId
-                lowOpt: (zgenerator.lowerOne :ast
-                    fn: fnNode
-                    synthName: sname.stringview
-                    receiverType: ""
-                )
-                match (
-                    lowOpt
-                ) case some then {
-                    wfid: lowOpt.wrapperNodeId
-                    wfv: true
-                    st.typing.generatorWrapper.set key: wfid.u64 value: wfv
-                    # the create-param and field-path clones must not stamp:
-                    # those nodes are shared with the factory, and each ref
-                    # carries exactly one stamp.
-                    nsi: u64
-                    nsn: lowOpt.noStamp.length
-                    for nsi < nsn loop {
-                        ns0: lowOpt.noStamp.get i: nsi
-                        nsk: ns0.u64
-                        nsv: true
-                        st.typing.noStampNode.set key: nsk value: nsv
-                        nsi = nsi + 1
-                    }
-                    fac: lowOpt.factory.take
-                    facId: zast.tableAdd :ast n: fac
-                    {
-                        uel2w: ast.nodes.getMut i: uel2Id.u64
-                        match (
-                            uel2w
-                        ) case namedoperation then {
-                            uel2w.operation = facId
-                        } else null
-                    }
-                    cls: lowOpt.synthClass.take
-                    clsN: (zgenerator.mkNamedOp
-                        :ast
-                        line: 0
-                        col: 0
-                        name: sname.stringview
-                        op: cls
-                    )
-                    stagedCls.append clsN
-                } case none then null
-            }
-            ci = ci + 1
-        }
+        (lowerFreeGenerators
+            :st
+            :ast
+            :bodyIds
+            :cIdx
+            :stagedCls
+        )
         # staged synth classes append after the loop: uel2's element view
         # ends with each iteration, and the list must not grow under it.
         for stagedCls.length > 0 loop {
