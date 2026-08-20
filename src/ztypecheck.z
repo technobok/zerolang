@@ -13018,6 +13018,218 @@ registerMonoFnParams: function {
         }
     } else null
 }
+# fillMonoMethodSignature -- copy a template method's parameters and return type
+# into the mono's method, with the instantiation's arguments substituted for the
+# generic parameters the template names.
+fillMonoMethodSignature: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rf: ztypes.declid
+    tmplUnitName: ztypes.declid
+    fmNode: zast.NamedOperationData.view
+    srcId: u64
+    newFnId: ztypes.tid
+    subs: (IdMapV zast.nameid value: u64)
+    gpNames: (IdMapV zast.nameid value: bool)
+} is {
+    bmNms: (ListVal u64)
+    cIds: (ListVal u64)
+    (st.typing.declMemberList
+        ownerTid: (ztypes.tid.create from: srcId.u64)
+        names: bmNms
+        tids: cIds
+    )
+    ci: u64
+    cn3: bmNms.length
+    for ci < cn3 loop {
+        chName: zast.nameid.create from: (bmNms.get i: ci).u32.orPanic
+        chId: cIds.get i: ci
+        target: chId
+        ctnT: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
+        ctn: nameIdOf :ast name: ctnT.stringview
+        cgo: gpNames.get key: ctn
+        match (
+            cgo
+        ) case some then {
+            cg: subs.get key: ctn
+            match (
+                cg
+            ) case some then {
+                target = cg
+            } case none then null
+        } case none then null
+        (st.typing.setMemberType
+            parentTypeId: newFnId
+            nameId: chName
+            childTypeId: target
+        )
+        ci = ci + 1
+    }
+    rto: st.reg.returnTypeOf tid: (ztypes.tid.create from: srcId.u64)
+    if rto > 0 then {
+        rtv: rto
+        rtnT: st.reg.nameOf tid: rtv
+        rtn: nameIdOf :ast name: rtnT.stringview
+        rgo: gpNames.get key: rtn
+        match (
+            rgo
+        ) case some then {
+            rg: subs.get key: rtn
+            match (
+                rg
+            ) case some then {
+                rtv = ztypes.tid.create from: rg
+            } case none then null
+        } case none then null
+        st.reg.setReturnType typeId: newFnId value: rtv
+    } else {
+        # template return unresolved at signature time
+        # (out t): derive from the method's AST typeref.
+        rnm: (fnReturnBaseNameOf
+            :ast
+            op: (ast.nodes.get i: fmNode.operation.u64)
+        )
+        if rnm.length > 0 then {
+            rnmId: nameIdOf :ast name: rnm.stringview
+            rgo2: gpNames.get key: rnmId
+            rid2: u64
+            match (
+                rgo2
+            ) case some then {
+                sg2: subs.get key: rnmId
+                match (
+                    sg2
+                ) case some then {
+                    rid2 = sg2
+                } case none then null
+            } case none then {
+                rlo2: (walkLookupTyperef
+                    :st
+                    frame: rf
+                    :ast
+
+                    unitDecl: tmplUnitName
+                    base: rnm.stringview
+                )
+                match (
+                    rlo2
+                ) case some then {
+                    rid2 = rlo2
+                } case none then null
+            }
+            if rid2 > 0 then st.reg.setReturnType typeId: newFnId value: rid2
+        }
+    }
+}
+
+# buildUnitMonoMember -- substitute one member of a generic unit's body into the
+# monomorphised instance: its own generic parameters bound to the instantiation's
+# arguments, its type resolved in the TEMPLATE's frame (lexical scoping -- the
+# instantiating unit is not where the template's names live).
+buildUnitMonoMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rf: ztypes.declid
+    tmplUnitName: ztypes.declid
+    tmplNameId: zast.nameid
+    monoId: ztypes.tid
+    tplId: ztypes.tid
+    fmNode: zast.NamedOperationData.view
+    subs: (IdMapV zast.nameid value: u64)
+    gpNames: (IdMapV zast.nameid value: bool)
+} is {
+    if (isFunctionDefOp op: (ast.nodes.get i: fmNode.operation.u64)) then {
+        fn: zast.nameTextAt :ast ref: fmNode.name
+        srcId: u64
+        tfo: (st.typing.declChildOf
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: tplId.u64)
+            name: fn.stringview
+        )
+        match (
+            tfo
+        ) case some then {
+            srcId = tfo
+        } case none then {
+            mo0: (resolveMethodFn
+                :st
+                frame: rf
+
+                :ast
+                unitDecl: tmplUnitName
+                ownerNameId: tmplNameId
+                mname: fn.stringview
+                thisName: ""
+                op: (ast.nodes.get i: fmNode.operation.u64)
+            )
+            {
+                mo0v: optU64Or o: mo0 d: 0
+                tdl0: (declOfUnitDef
+                    :st
+                    frame: rf
+                    unitDecl: tmplUnitName
+                    nameId: tmplNameId
+                )
+                (declLinkTemplateMethod
+                    :st
+                    tmplDeclId: tdl0
+                    memberNameId: fmNode.name
+                    fnTid: mo0v
+                )
+            }
+            match (
+                mo0
+            ) case some then {
+                srcId = mo0
+                (st.typing.setMemberType
+                    parentTypeId: (ztypes.tid.create from: tplId.u64)
+                    nameId: fmNode.name
+                    childTypeId: mo0
+                )
+            } case none then null
+        }
+        newFnId: (st.reg.newType
+            name: fn.stringview
+            ownerTid: monoId
+            typetype: ztypes.ztypetype.functionType
+        )
+        # declare and edge the method before filling its parameters:
+        # edging claims the method's own function type for its
+        # declaration, which is what the parameter writes below --
+        # here and in registerMonoFnParams -- reach through
+        (st.typing.declSynthMember
+            parentTypeId: monoId
+            nameId: fmNode.name
+            kind: ztyping.declkind.methodDecl
+        )
+        (st.typing.setMemberType
+            parentTypeId: monoId
+            nameId: fmNode.name
+            childTypeId: newFnId
+        )
+        if srcId > 0 then {
+            (fillMonoMethodSignature
+                :st
+                :ast
+                :rf
+                :tmplUnitName
+                :fmNode
+                :srcId
+                :newFnId
+                :subs
+                :gpNames
+            )
+        }
+        (registerMonoFnParams
+            :st
+            :ast
+            op: (ast.nodes.get i: fmNode.operation.u64)
+            fnId: newFnId
+            :subs
+        )
+    }
+}
+
 
 # build a monomorphised instance of a generic unit.
 buildUnitMono: function {
@@ -13060,173 +13272,18 @@ buildUnitMono: function {
             match (
                 fmNode
             ) case namedoperation then {
-                if (isFunctionDefOp op: (ast.nodes.get i: fmNode.operation.u64)) then {
-                    fn: zast.nameTextAt :ast ref: fmNode.name
-                    srcId: u64
-                    tfo: (st.typing.declChildOf
-                        pool: ast.names
-                        parentTypeId: (ztypes.tid.create from: tplId.u64)
-                        name: fn.stringview
-                    )
-                    match (
-                        tfo
-                    ) case some then {
-                        srcId = tfo
-                    } case none then {
-                        mo0: (resolveMethodFn
-                            :st
-                            frame: rf
-
-                            :ast
-                            unitDecl: tmplUnitName
-                            ownerNameId: tmplNameId
-                            mname: fn.stringview
-                            thisName: ""
-                            op: (ast.nodes.get i: fmNode.operation.u64)
-                        )
-                        {
-                            mo0v: optU64Or o: mo0 d: 0
-                            tdl0: (declOfUnitDef
-                                :st
-                                frame: rf
-                                unitDecl: tmplUnitName
-                                nameId: tmplNameId
-                            )
-                            (declLinkTemplateMethod
-                                :st
-                                tmplDeclId: tdl0
-                                memberNameId: fmNode.name
-                                fnTid: mo0v
-                            )
-                        }
-                        match (
-                            mo0
-                        ) case some then {
-                            srcId = mo0
-                            (st.typing.setMemberType
-                                parentTypeId: (ztypes.tid.create from: tplId.u64)
-                                nameId: fmNode.name
-                                childTypeId: mo0
-                            )
-                        } case none then null
-                    }
-                    newFnId: (st.reg.newType
-                        name: fn.stringview
-                        ownerTid: monoId
-                        typetype: ztypes.ztypetype.functionType
-                    )
-                    # declare and edge the method before filling its parameters:
-                    # edging claims the method's own function type for its
-                    # declaration, which is what the parameter writes below --
-                    # here and in registerMonoFnParams -- reach through
-                    (st.typing.declSynthMember
-                        parentTypeId: monoId
-                        nameId: fmNode.name
-                        kind: ztyping.declkind.methodDecl
-                    )
-                    (st.typing.setMemberType
-                        parentTypeId: monoId
-                        nameId: fmNode.name
-                        childTypeId: newFnId
-                    )
-                    if srcId > 0 then {
-                        bmNms: (ListVal u64)
-                        cIds: (ListVal u64)
-                        (st.typing.declMemberList
-                            ownerTid: (ztypes.tid.create from: srcId.u64)
-                            names: bmNms
-                            tids: cIds
-                        )
-                        ci: u64
-                        cn3: bmNms.length
-                        for ci < cn3 loop {
-                            chName: zast.nameid.create from: (bmNms.get i: ci).u32.orPanic
-                            chId: cIds.get i: ci
-                            target: chId
-                            ctnT: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
-                            ctn: nameIdOf :ast name: ctnT.stringview
-                            cgo: gpNames.get key: ctn
-                            match (
-                                cgo
-                            ) case some then {
-                                cg: subs.get key: ctn
-                                match (
-                                    cg
-                                ) case some then {
-                                    target = cg
-                                } case none then null
-                            } case none then null
-                            (st.typing.setMemberType
-                                parentTypeId: newFnId
-                                nameId: chName
-                                childTypeId: target
-                            )
-                            ci = ci + 1
-                        }
-                        rto: st.reg.returnTypeOf tid: (ztypes.tid.create from: srcId.u64)
-                        if rto > 0 then {
-                            rtv: rto
-                            rtnT: st.reg.nameOf tid: rtv
-                            rtn: nameIdOf :ast name: rtnT.stringview
-                            rgo: gpNames.get key: rtn
-                            match (
-                                rgo
-                            ) case some then {
-                                rg: subs.get key: rtn
-                                match (
-                                    rg
-                                ) case some then {
-                                    rtv = ztypes.tid.create from: rg
-                                } case none then null
-                            } case none then null
-                            st.reg.setReturnType typeId: newFnId value: rtv
-                        } else {
-                            # template return unresolved at signature time
-                            # (out t): derive from the method's AST typeref.
-                            rnm: (fnReturnBaseNameOf
-                                :ast
-                                op: (ast.nodes.get i: fmNode.operation.u64)
-                            )
-                            if rnm.length > 0 then {
-                                rnmId: nameIdOf :ast name: rnm.stringview
-                                rgo2: gpNames.get key: rnmId
-                                rid2: u64
-                                match (
-                                    rgo2
-                                ) case some then {
-                                    sg2: subs.get key: rnmId
-                                    match (
-                                        sg2
-                                    ) case some then {
-                                        rid2 = sg2
-                                    } case none then null
-                                } case none then {
-                                    rlo2: (walkLookupTyperef
-                                        :st
-                                        frame: rf
-                                        :ast
-
-                                        unitDecl: tmplUnitName
-                                        base: rnm.stringview
-                                    )
-                                    match (
-                                        rlo2
-                                    ) case some then {
-                                        rid2 = rlo2
-                                    } case none then null
-                                }
-                                if rid2 > 0 then st.reg.setReturnType typeId: newFnId value: rid2
-                            }
-                        }
-                    }
-                    (registerMonoFnParams
-                        :st
-                        :ast
-                        op: (ast.nodes.get i: fmNode.operation.u64)
-                        fnId: newFnId
-                        :subs
-                    )
-                }
+                (buildUnitMonoMember
+                    :st
+                    :ast
+                    :rf
+                    :tmplUnitName
+                    :tmplNameId
+                    :monoId
+                    :tplId
+                    :fmNode
+                    :subs
+                    :gpNames
+                )
             } else null
         }
     }
@@ -23144,6 +23201,192 @@ checkIf: function {
     if allDiverge then st.markUnreachable
     return result
 }
+# reportMissingBinopMethod -- the receiver declares no method for this operator.
+# `!=` derives from `==`, so it only errors when `==` is unavailable too, and a
+# comparison against a compatible type answers bool rather than nothing.
+reportMissingBinopMethod: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    binop: zast.BinOpData.view
+    opn: StringView
+    lt: ztypes.tid
+    dt: ztypes.tid
+    isCmp: bool
+} out ztypes.tid is {
+    result: ztypes.tid
+    if isCmp then {
+        # `!=` derives from `==`: only error when `==` is also unavailable.
+        if opn == "!=" then {
+            (forceMemberOf
+                :st
+                frame: st.curFrame
+                :ast
+                parentTypeId: dt
+                nameId: zast.wkOpEq
+            )
+            eqEdge: st.typing.declChildOfId parentTypeId: dt nameId: zast.wkOpEq
+            if eqEdge.some then {
+                boD: builtinTidTc :ast :st base: "bool"
+                if boD > 0 then return boD
+                return (ztypes.tid.create from: lt)
+            }
+        }
+        # Ordering comparisons have no structural fallback: unlike `==` /
+        # `!=` there is no structural ordering, so the operand type must
+        # declare the operator (numerics declare all six). An undeclared
+        # `<` / `>` / `<=` / `>=` -- on a resultval or any other aggregate --
+        # is a hard error, not invalid C.
+        isOrd: false
+        if opn == "<" then isOrd = true
+        if opn == ">" then isOrd = true
+        if opn == "<=" then isOrd = true
+        if opn == ">=" then isOrd = true
+        if isOrd then {
+            lnOr: st.reg.nameOf tid: (ztypes.tid.create from: dt.u64)
+            mgOr: "type '\{lnOr}' has no '\{opn}' method"
+            (addError
+                :st
+                nodeid: binop.nodeid
+                lineno: binop.lineno
+                colno: binop.colno
+                e: zast.err.typeError
+                msg: mgOr
+            )
+            return (ztypes.tid.create from: 0)
+        }
+        # A concrete type that declares no comparison method -- a class or
+        # union without `==`, or a record/variant that opted out with
+        # `==: null` -- is a hard error rather than invalid C.
+        if (memberStrictType :st bt: dt) then {
+            lnc: st.reg.nameOf tid: (ztypes.tid.create from: dt.u64)
+            mgc: "type '\{lnc}' has no '\{opn}' method"
+            (addError
+                :st
+                nodeid: binop.nodeid
+                lineno: binop.lineno
+                colno: binop.colno
+                e: zast.err.typeError
+                msg: mgc
+            )
+            return (ztypes.tid.create from: 0)
+        }
+        bo: builtinTidTc :ast :st base: "bool"
+        if bo > 0 then return bo
+        return (ztypes.tid.create from: lt)
+    }
+    # A concrete aggregate (record / class / union / variant, including a
+    # generic mono like resultval) that declares no arithmetic operator is a
+    # type error rather than invalid C. Type params, protocols, facets and
+    # non-aggregates resolve elsewhere and keep the coercible lhs result.
+    aTt: st.reg.typetypeOf typeId: dt
+    aAgg: false
+    if aTt == ztypes.ztypetype.recordType then aAgg = true
+    if aTt == ztypes.ztypetype.classType then aAgg = true
+    if aTt == ztypes.ztypetype.unionType then aAgg = true
+    if aTt == ztypes.ztypetype.variantType then aAgg = true
+    if aAgg then {
+        ln: st.reg.nameOf tid: (ztypes.tid.create from: dt.u64)
+        noMethodMsg: "type '\{ln}' has no '\{opn}' method"
+        (addError
+            :st
+            nodeid: binop.nodeid
+            lineno: binop.lineno
+            colno: binop.colno
+            e: zast.err.typeError
+            msg: noMethodMsg
+        )
+        return (ztypes.tid.create from: 0)
+    }
+    return (ztypes.tid.create from: lt)
+    return result
+}
+# checkBinopMethodArg -- the right operand must suit the operator method's declared
+# parameter, and a comparison answers bool whatever the method's own return says.
+checkBinopMethodArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    binop: zast.BinOpData.view
+    lt: ztypes.tid
+    rt: ztypes.tid
+    opo: u64
+    isCmp: bool
+    ltLit: bool
+} out ztypes.tid is {
+    result: ztypes.tid
+    oParamT: ztypes.tid
+    p0n: (positionalParamName
+        :ast
+        :st
+        funcId: (ztypes.tid.create from: opo.u64)
+        idx: 0
+        skipRecv: true
+    )
+    if p0n.length > 0 then {
+        ppo: (st.typing.declChildOf
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: opo.u64)
+            name: p0n.stringview
+        )
+        match (
+            ppo
+        ) case some then {
+            oParamT = ztypes.tid.create from: (ppo)
+        } case none then null
+    }
+    if oParamT > 0 when rt > 0 then {
+        if (typesCompatible :ast :st a: rt b: oParamT) == false then {
+            skipA: false
+            strT9x: builtinTidTc :ast :st base: "String"
+            svT9x: builtinTidTc :ast :st base: "StringView"
+            rSty: false
+            if rt == strT9x then rSty = true
+            if rt == svT9x then rSty = true
+            pSty: false
+            if oParamT == strT9x then pSty = true
+            if oParamT == svT9x then pSty = true
+            if rSty when pSty then skipA = true
+            ptt: st.reg.typetypeOf typeId: oParamT
+            if ptt == ztypes.ztypetype.protocolType then skipA = true
+            if ptt == ztypes.ztypetype.facetType then skipA = true
+            if ptt == ztypes.ztypetype.genericParam then skipA = true
+            if ptt == ztypes.ztypetype.functionType then skipA = true
+            if (skipA) == false then {
+                ea: st.reg.nameOf tid: (ztypes.tid.create from: oParamT.u64)
+                aa: st.reg.nameOf tid: (ztypes.tid.create from: rt.u64)
+                # an unresolved got-side renders empty: suppress the
+                # knock-on when a prior error explains it, else name it
+                if aa.length == 0 then {
+                    if st.typing.errors.length > 0 then return (ztypes.tid.create from: 0)
+                    aa = "an unresolved value".string
+                }
+                mma: "argument type mismatch: expected \{ea}, got \{aa}"
+                (addError
+                    :st
+                    nodeid: binop.nodeid
+                    lineno: binop.lineno
+                    colno: binop.colno
+                    e: zast.err.callError
+                    msg: mma
+                )
+                return (ztypes.tid.create from: 0)
+            }
+        }
+    }
+    if isCmp then {
+        cb: builtinTidTc :ast :st base: "bool"
+        if cb > 0 then return cb
+        return (ztypes.tid.create from: lt)
+    }
+    if ltLit then return (ztypes.tid.create from: lt)
+    oro: methodReturnOf :st mid: (ztypes.tid.create from: opo.u64)
+    match (
+        oro
+    ) case some then {
+        return oro
+    } case none then null
+    return (ztypes.tid.create from: lt)
+    return result
+}
 
 # checkBinopMethodDispatch -- resolve a binary operator as a declared method on
 # the lhs type: materialise a bare-literal lhs for dispatch, chase typedef bases
@@ -23220,163 +23463,26 @@ checkBinopMethodDispatch: function {
     match (
         opo
     ) case some then {
-        oParamT: ztypes.tid
-        p0n: (positionalParamName
-            :ast
+        return (checkBinopMethodArg
             :st
-            funcId: (ztypes.tid.create from: opo.u64)
-            idx: 0
-            skipRecv: true
+            :ast
+            :binop
+            :lt
+            :rt
+            :opo
+            :isCmp
+            :ltLit
         )
-        if p0n.length > 0 then {
-            ppo: (st.typing.declChildOf
-                pool: ast.names
-                parentTypeId: (ztypes.tid.create from: opo.u64)
-                name: p0n.stringview
-            )
-            match (
-                ppo
-            ) case some then {
-                oParamT = ztypes.tid.create from: (ppo)
-            } case none then null
-        }
-        if oParamT > 0 when rt > 0 then {
-            if (typesCompatible :ast :st a: rt b: oParamT) == false then {
-                skipA: false
-                strT9x: builtinTidTc :ast :st base: "String"
-                svT9x: builtinTidTc :ast :st base: "StringView"
-                rSty: false
-                if rt == strT9x then rSty = true
-                if rt == svT9x then rSty = true
-                pSty: false
-                if oParamT == strT9x then pSty = true
-                if oParamT == svT9x then pSty = true
-                if rSty when pSty then skipA = true
-                ptt: st.reg.typetypeOf typeId: oParamT
-                if ptt == ztypes.ztypetype.protocolType then skipA = true
-                if ptt == ztypes.ztypetype.facetType then skipA = true
-                if ptt == ztypes.ztypetype.genericParam then skipA = true
-                if ptt == ztypes.ztypetype.functionType then skipA = true
-                if (skipA) == false then {
-                    ea: st.reg.nameOf tid: (ztypes.tid.create from: oParamT.u64)
-                    aa: st.reg.nameOf tid: (ztypes.tid.create from: rt.u64)
-                    # an unresolved got-side renders empty: suppress the
-                    # knock-on when a prior error explains it, else name it
-                    if aa.length == 0 then {
-                        if st.typing.errors.length > 0 then return (ztypes.tid.create from: 0)
-                        aa = "an unresolved value".string
-                    }
-                    mma: "argument type mismatch: expected \{ea}, got \{aa}"
-                    (addError
-                        :st
-                        nodeid: binop.nodeid
-                        lineno: binop.lineno
-                        colno: binop.colno
-                        e: zast.err.callError
-                        msg: mma
-                    )
-                    return (ztypes.tid.create from: 0)
-                }
-            }
-        }
-        if isCmp then {
-            cb: builtinTidTc :ast :st base: "bool"
-            if cb > 0 then return cb
-            return (ztypes.tid.create from: lt)
-        }
-        if ltLit then return (ztypes.tid.create from: lt)
-        oro: methodReturnOf :st mid: (ztypes.tid.create from: opo.u64)
-        match (
-            oro
-        ) case some then {
-            return oro
-        } case none then null
-        return (ztypes.tid.create from: lt)
     } case none then {
-        if isCmp then {
-            # `!=` derives from `==`: only error when `==` is also unavailable.
-            if opn == "!=" then {
-                (forceMemberOf
-                    :st
-                    frame: st.curFrame
-                    :ast
-                    parentTypeId: dt
-                    nameId: zast.wkOpEq
-                )
-                eqEdge: st.typing.declChildOfId parentTypeId: dt nameId: zast.wkOpEq
-                if eqEdge.some then {
-                    boD: builtinTidTc :ast :st base: "bool"
-                    if boD > 0 then return boD
-                    return (ztypes.tid.create from: lt)
-                }
-            }
-            # Ordering comparisons have no structural fallback: unlike `==` /
-            # `!=` there is no structural ordering, so the operand type must
-            # declare the operator (numerics declare all six). An undeclared
-            # `<` / `>` / `<=` / `>=` -- on a resultval or any other aggregate --
-            # is a hard error, not invalid C.
-            isOrd: false
-            if opn == "<" then isOrd = true
-            if opn == ">" then isOrd = true
-            if opn == "<=" then isOrd = true
-            if opn == ">=" then isOrd = true
-            if isOrd then {
-                lnOr: st.reg.nameOf tid: (ztypes.tid.create from: dt.u64)
-                mgOr: "type '\{lnOr}' has no '\{opn}' method"
-                (addError
-                    :st
-                    nodeid: binop.nodeid
-                    lineno: binop.lineno
-                    colno: binop.colno
-                    e: zast.err.typeError
-                    msg: mgOr
-                )
-                return (ztypes.tid.create from: 0)
-            }
-            # A concrete type that declares no comparison method -- a class or
-            # union without `==`, or a record/variant that opted out with
-            # `==: null` -- is a hard error rather than invalid C.
-            if (memberStrictType :st bt: dt) then {
-                lnc: st.reg.nameOf tid: (ztypes.tid.create from: dt.u64)
-                mgc: "type '\{lnc}' has no '\{opn}' method"
-                (addError
-                    :st
-                    nodeid: binop.nodeid
-                    lineno: binop.lineno
-                    colno: binop.colno
-                    e: zast.err.typeError
-                    msg: mgc
-                )
-                return (ztypes.tid.create from: 0)
-            }
-            bo: builtinTidTc :ast :st base: "bool"
-            if bo > 0 then return bo
-            return (ztypes.tid.create from: lt)
-        }
-        # A concrete aggregate (record / class / union / variant, including a
-        # generic mono like resultval) that declares no arithmetic operator is a
-        # type error rather than invalid C. Type params, protocols, facets and
-        # non-aggregates resolve elsewhere and keep the coercible lhs result.
-        aTt: st.reg.typetypeOf typeId: dt
-        aAgg: false
-        if aTt == ztypes.ztypetype.recordType then aAgg = true
-        if aTt == ztypes.ztypetype.classType then aAgg = true
-        if aTt == ztypes.ztypetype.unionType then aAgg = true
-        if aTt == ztypes.ztypetype.variantType then aAgg = true
-        if aAgg then {
-            ln: st.reg.nameOf tid: (ztypes.tid.create from: dt.u64)
-            noMethodMsg: "type '\{ln}' has no '\{opn}' method"
-            (addError
-                :st
-                nodeid: binop.nodeid
-                lineno: binop.lineno
-                colno: binop.colno
-                e: zast.err.typeError
-                msg: noMethodMsg
-            )
-            return (ztypes.tid.create from: 0)
-        }
-        return (ztypes.tid.create from: lt)
+        return (reportMissingBinopMethod
+            :st
+            :ast
+            :binop
+            :opn
+            :lt
+            :dt
+            :isCmp
+        )
     }
 }
 
