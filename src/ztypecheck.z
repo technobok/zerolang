@@ -20451,381 +20451,399 @@ isCallNode: function {ast: Ast.view n: Node.view} out bool is {
         return false
     }
 }
+# bindForBorrowedElement -- bind a `for` loop name to a BORROWED element: the
+# iteration hands back a view into the container, so the binding records its
+# borrow origin and holds the container locked for the body.
+bindForBorrowedElement: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    cond: zast.NamedOperationData.view
+    vt: ztypes.tid
+    elem: u64
+    nm: StringView
+} is {
+    vid: (st.reg.newVariable
+        ztypeId: (ztypes.tid.create from: elem.u64)
+        ownership: ztypes.zownership.borrowed
+    )
+    (st.reg.setVariableBorrowOrigin
+        id: vid
+        origin: (atomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
+    )
+    nmId: cond.name
+    st.defineVar nameId: nmId :vid
+    condNid: nodeId n: (ast.nodes.get i: cond.operation.u64)
+    st.typing.defVariableId.set key: condNid.u64 value: vid
+    # `for x: xs.iterate` has no iterator binding to carry
+    # the container's lock, so the element carries it: the
+    # reference the loop hands out points into the
+    # container's storage, and a write through the
+    # container reallocates it. The `with` form leaves
+    # nothing pending here -- its binding took the lock.
+    fbs: (ListVal zast.nameid)
+    takePendingBorrow :st dst: fbs
+    flf: isViewFamilyTid :ast :st tid: vt
+    if st.typing.pendingBorrowShared then flf = true
+    st.typing.pendingBorrowShared = false
+    if fbs.length > 0 then {
+        fcn: ast.nodes.get i: cond.operation.u64
+        fnd: nodeId n: fcn
+        fln: nodeLine n: fcn
+        fcl: nodeCol n: fcn
+        (installBorrowLocks
+            :st
+            pool: ast.names
+            src: fbs
+            :vid
+            leafShared: flf
+            nodeid: fnd
+            lineno: fln
+            colno: fcl
+        )
+    }
+    # The element is a reference derived from the lock its
+    # holder has on the container, so it inherits that
+    # lock's strength: a SHARED pin (a `view` iterator
+    # receiver) yields READONLY elements, an exclusive one
+    # yields writable ones. The binding-free form knows its
+    # own strength; the `with` form has to ask its binding.
+    elr: flf
+    if fbs.length == 0 then {
+        elr = (iterElementIsReadonly
+            :st
+            iterName: (atomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
+        )
+    }
+    if elr then {
+        erm: readonlySelfLock :st :ast name: nm :vid
+        if erm.length > 0 then {
+            ecn: ast.nodes.get i: cond.operation.u64
+            end: nodeId n: ecn
+            eln: nodeLine n: ecn
+            ecl: nodeCol n: ecn
+            (addError
+                :st
+                nodeid: end
+                lineno: eln
+                colno: ecl
+                e: zast.err.ownerError
+                msg: erm
+            )
+        }
+    }
+}
+# probeForCallIteration -- walk a call-shaped iterator init once, in an empty
+# call scope, so its per-iteration call is typed before the loop binds an
+# element. Gated on the value being an iterator wrapper.
+probeForCallIteration: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    cond: zast.NamedOperationData.view
+    vt: ztypes.tid
+} is {
+    doProbe: false
+    pw: iterWrapperElem :ast :st :unitDecl wid: vt
+    match (
+        pw
+    ) case some then {
+        doProbe = true
+    } case none then {
+        (forceMemberOf
+            :st
+            frame: st.curFrame
 
-# checkFor -- walk a for-loop: push the `for` scope, define break/continue (entry
-# position placeholders with unregistered type ids, so they never join the dump),
-# then walk the conditions, postconditions, and body, and pop. A named condition
-# is a binding: define the loop var with the condition value's type (the value of
-# a bare literal init stays the literal pseudo-type, keeping the entry out of the
-# dump joins). Iterator-wrapper element extraction needs monomorphization and is
-# not implemented. The for itself resolves to null (filtered) in statement position.
-checkFor: function {
+            :ast
+            parentTypeId: vt
+            nameId: zast.wkCall
+        )
+        ico: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
+        match (
+            ico
+        ) case some then {
+            doProbe = true
+        } case none then null
+    }
+    if doProbe then {
+        ecm: st.pushCall
+        st.popTo marker: ecm
+    }
+}
+
+
+# bindForIteration -- bind a `for` header's loop name to what its iterable
+# yields: the element type and ownership, and the lock the iteration holds
+# on the container for the body's duration.
+bindForIteration: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    cond: zast.NamedOperationData.view
+    vt: ztypes.tid
+    nm: StringView
+} is {
+    # A call-shaped iterator init probes its per-iteration call
+    # in an empty call scope; gated on the value being an iterator
+    # wrapper.
+    if (isCallNode :ast n: (ast.nodes.get i: cond.operation.u64)) then {
+        probeForCallIteration :st :unitDecl :ast :cond :vt
+    }
+    elem: u64
+    isView: false
+    w1: iterWrapperElem :ast :st :unitDecl wid: vt
+    match (
+        w1
+    ) case some then {
+        elem = w1
+        isView = isOptionViewMono :ast :st :unitDecl wid: vt
+    } case none then null
+    if elem == 0 then {
+        if (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.functionType then {
+            r1: methodReturnOf :st mid: vt
+            match (
+                r1
+            ) case some then {
+                w2: iterWrapperElem :ast :st :unitDecl wid: r1
+                match (
+                    w2
+                ) case some then {
+                    elem = w2
+                    isView = isOptionViewMono :ast :st :unitDecl wid: r1
+                } case none then null
+            } case none then null
+        } else {
+            (forceMemberOf
+                :st
+                frame: st.curFrame
+
+                :ast
+                parentTypeId: vt
+                nameId: zast.wkCall
+            )
+            c1: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
+            match (
+                c1
+            ) case some then {
+                r2: methodReturnOf :st mid: (ztypes.tid.create from: c1.u64)
+                match (
+                    r2
+                ) case some then {
+                    w3: iterWrapperElem :ast :st :unitDecl wid: r2
+                    match (
+                        w3
+                    ) case some then {
+                        elem = w3
+                        isView = isOptionViewMono :ast :st :unitDecl wid: r2
+                    } case none then null
+                } case none then null
+            } case none then null
+        }
+    }
+    if elem > 0 then {
+        if isView then {
+            bindForBorrowedElement :st :unitDecl :ast :cond :vt :elem :nm
+        } else {
+            (st.define
+                nameId: cond.name
+                ztypeId: (ztypes.tid.create from: elem.u64)
+            )
+        }
+    } else {
+        st.define nameId: cond.name ztypeId: vt
+    }
+}
+# forFactoryTid -- the type id of a bare 0-arg function in a `for` header that
+# returns an iterator class, and so auto-invokes; 0 when the condition names
+# no such function. Its walk runs in a call scope, so the atom keeps the
+# FUNCTION stamp rather than the auto-call's coerced return.
+forFactoryTid: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    cond: zast.NamedOperationData.view
+    fbn: StringView
+} out u64 is {
+    facId: u64
+    if fbn.length > 0 then {
+        ffo: (walkLookupTyperef
+            :st
+            frame: st.curFrame
+            :ast
+
+            :unitDecl
+            base: fbn
+        )
+        match (
+            ffo
+        ) case some then {
+            if (st.reg.typetypeOf typeId: (ztypes.tid.create from: ffo.u64)) == ztypes.ztypetype.functionType then {
+                if (methodHasNoUserArgs
+                    :ast
+                    :st
+                    mid: (ztypes.tid.create from: ffo.u64)
+                ) then {
+                    fro: methodReturnOf :st mid: (ztypes.tid.create from: ffo.u64)
+                    match (
+                        fro
+                    ) case some then {
+                        if (st.reg.typetypeOf typeId: fro) == ztypes.ztypetype.classType then {
+                            (forceMemberOf
+                                :st
+                                frame: st.curFrame
+
+                                :ast
+                                parentTypeId: fro
+                                nameId: zast.wkCall
+                            )
+                            fco: (st.typing.declChildOfId
+                                parentTypeId: fro
+                                nameId: zast.wkCall
+                            )
+                            match (
+                                fco
+                            ) case some then {
+                                facId = ffo
+                            } case none then null
+                        }
+                    } case none then null
+                }
+            }
+        } case none then null
+    }
+    return facId
+}
+
+# checkBareForCondition -- type a `for while <cond> loop` header that binds no
+# name: the value must be bool, or an iterable the loop can drive. Anything
+# else is a type error rather than the invalid C a struct in a `while` head
+# would emit.
+checkBareForCondition: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    cond: zast.NamedOperationData.view
+    vt: ztypes.tid
+} is {
+    fbId: builtinTidTc :ast :st base: "bool"
+    fIter: false
+    {
+        fpw: iterWrapperElem :ast :st :unitDecl wid: vt
+        match (
+            fpw
+        ) case some then {
+            fIter = true
+        } case none then null
+    }
+    {
+        (forceMemberOf
+            :st
+            frame: st.curFrame
+
+            :ast
+            parentTypeId: vt
+            nameId: zast.wkCall
+        )
+        fico: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
+        match (
+            fico
+        ) case some then {
+            fIter = true
+        } case none then null
+    }
+    fTt: st.reg.typetypeOf typeId: vt
+    fPair: ztyping.isSumPair ty: st.typing reg: st.reg tid: vt
+    if fPair when (fIter) == false then {
+        (stampTruthyCond
+            :st
+            n: (ast.nodes.get i: cond.operation.u64)
+            tid: vt
+        )
+    }
+    if fbId > 0 when vt != fbId when (fIter) == false when fTt != ztypes.ztypetype.neverType when (fPair) == false then {
+        fcn: ast.nodes.get i: cond.operation.u64
+        fctn: st.reg.nameOf tid: vt
+        fcmsg: "loop condition must be bool or a 2-arm sum type, got '\{fctn}'"
+        (addError
+            :st
+            nodeid: (nodeId n: fcn)
+            lineno: (nodeLine n: fcn)
+            colno: (nodeCol n: fcn)
+            e: zast.err.typeError
+            msg: fcmsg
+        )
+    }
+}
+
+
+# checkForCondition -- resolve one condition in a `for` header: the binding it
+# introduces, the element type it iterates, and the locks that iteration takes.
+checkForCondition: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    cond: Node.view
+} is {
+    match (
+        cond
+    ) case namedoperation then {
+        # A bare 0-arg function returning an iterator class auto-invokes:
+        # its walk runs in a call scope and the atom keeps the FUNCTION
+        # stamp rather than the auto-call's coerced return.
+        fbn: (zast.nameTextAt
+            :ast
+            ref: (bareAtomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
+        )
+        facId: forFactoryTid :st :unitDecl :ast :cond fbn: fbn.stringview
+        vt: ztypes.tid
+        if facId > 0 then {
+            # the factory's lazy walks (its body + the iterator class's
+            # methods via return-first transitivity) fire before the
+            # synthetic invocation's call scope opens.
+            maybeWalkMethods :st frame: st.curFrame :unitDecl :ast name: fbn.stringview
+            fcm: st.pushCall
+            condOpNode: ast.nodes.get i: cond.operation.u64
+            vt = checkValue :st :unitDecl :ast node: condOpNode
+            st.popTo marker: fcm
+            fiid: innermostNodeId :ast n: (ast.nodes.get i: cond.operation.u64)
+            if fiid > 0 then {
+                setff: facId
+                stampGate :st nid: fiid.u64 tid: (ztypes.tid.create from: setff.u64)
+            }
+        } else {
+            condOpNode: ast.nodes.get i: cond.operation.u64
+            vt = checkValue :st :unitDecl :ast node: condOpNode
+        }
+        nm: zast.nameTextAt :ast ref: cond.name
+        # A bare `for while <cond> loop` (no binding, no iterator factory)
+        # must be boolean; a non-bool, non-iterable value is a type error
+        # rather than invalid C. Iterator bindings (`for e: it`) carry a
+        # name; iterable inits expose an element wrapper or a `call` child.
+        if nm.length == 0 when vt > 0 when facId == 0 then {
+            checkBareForCondition :st :unitDecl :ast :cond :vt
+        }
+        if nm.length > 0 when vt > 0 then {
+            bindForIteration :st :unitDecl :ast :cond :vt nm: nm.stringview
+        }
+        # an iterable that failed still binds its loop name, typeless, so
+        # the body's reads of it are not each an unknown reference
+        if nm.length > 0 when vt.isZero then {
+            (st.define
+                nameId: cond.name
+                ztypeId: ztypes.tid
+            )
+        }
+    } else null
+}
+# forComprehensionTid -- the type a `for` used as an expression produces: a
+# List of the body's value type, and 0 when the body produces no value.
+forComprehensionTid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     fornode: zast.ForData.view
-} out ztypes.tid is {
-    forMarker: st.pushBlock name: "for"
-    bk: st.reg.ctlPlaceholder
-    (st.define
-        nameId: zast.wkBreak
-        ztypeId: (ztypes.tid.create from: bk.u64)
-    )
-    ct: st.reg.ctlPlaceholder
-    (st.define
-        nameId: zast.wkContinue
-        ztypeId: (ztypes.tid.create from: ct.u64)
-    )
-    citer: fornode.conditions.iterate
-    for condId: citer loop {
-        cond: ast.nodes.get i: condId.u64
-        match (
-            cond
-        ) case namedoperation then {
-            # A bare 0-arg function returning an iterator class auto-invokes:
-            # its walk runs in a call scope and the atom keeps the FUNCTION
-            # stamp rather than the auto-call's coerced return.
-            facId: u64
-            fbn: (zast.nameTextAt
-                :ast
-                ref: (bareAtomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
-            )
-            if fbn.length > 0 then {
-                ffo: (walkLookupTyperef
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    :unitDecl
-                    base: fbn.stringview
-                )
-                match (
-                    ffo
-                ) case some then {
-                    if (st.reg.typetypeOf typeId: (ztypes.tid.create from: ffo.u64)) == ztypes.ztypetype.functionType then {
-                        if (methodHasNoUserArgs
-                            :ast
-                            :st
-                            mid: (ztypes.tid.create from: ffo.u64)
-                        ) then {
-                            fro: methodReturnOf :st mid: (ztypes.tid.create from: ffo.u64)
-                            match (
-                                fro
-                            ) case some then {
-                                if (st.reg.typetypeOf typeId: fro) == ztypes.ztypetype.classType then {
-                                    (forceMemberOf
-                                        :st
-                                        frame: st.curFrame
-
-                                        :ast
-                                        parentTypeId: fro
-                                        nameId: zast.wkCall
-                                    )
-                                    fco: (st.typing.declChildOfId
-                                        parentTypeId: fro
-                                        nameId: zast.wkCall
-                                    )
-                                    match (
-                                        fco
-                                    ) case some then {
-                                        facId = ffo
-                                    } case none then null
-                                }
-                            } case none then null
-                        }
-                    }
-                } case none then null
-            }
-            vt: ztypes.tid
-            if facId > 0 then {
-                # the factory's lazy walks (its body + the iterator class's
-                # methods via return-first transitivity) fire before the
-                # synthetic invocation's call scope opens.
-                maybeWalkMethods :st frame: st.curFrame :unitDecl :ast name: fbn.stringview
-                fcm: st.pushCall
-                condOpNode: ast.nodes.get i: cond.operation.u64
-                vt = checkValue :st :unitDecl :ast node: condOpNode
-                st.popTo marker: fcm
-                fiid: innermostNodeId :ast n: (ast.nodes.get i: cond.operation.u64)
-                if fiid > 0 then {
-                    setff: facId
-                    stampGate :st nid: fiid.u64 tid: (ztypes.tid.create from: setff.u64)
-                }
-            } else {
-                condOpNode: ast.nodes.get i: cond.operation.u64
-                vt = checkValue :st :unitDecl :ast node: condOpNode
-            }
-            nm: zast.nameTextAt :ast ref: cond.name
-            # A bare `for while <cond> loop` (no binding, no iterator factory)
-            # must be boolean; a non-bool, non-iterable value is a type error
-            # rather than invalid C. Iterator bindings (`for e: it`) carry a
-            # name; iterable inits expose an element wrapper or a `call` child.
-            if nm.length == 0 when vt > 0 when facId == 0 then {
-                fbId: builtinTidTc :ast :st base: "bool"
-                fIter: false
-                {
-                    fpw: iterWrapperElem :ast :st :unitDecl wid: vt
-                    match (
-                        fpw
-                    ) case some then {
-                        fIter = true
-                    } case none then null
-                }
-                {
-                    (forceMemberOf
-                        :st
-                        frame: st.curFrame
-
-                        :ast
-                        parentTypeId: vt
-                        nameId: zast.wkCall
-                    )
-                    fico: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
-                    match (
-                        fico
-                    ) case some then {
-                        fIter = true
-                    } case none then null
-                }
-                fTt: st.reg.typetypeOf typeId: vt
-                fPair: ztyping.isSumPair ty: st.typing reg: st.reg tid: vt
-                if fPair when (fIter) == false then {
-                    (stampTruthyCond
-                        :st
-                        n: (ast.nodes.get i: cond.operation.u64)
-                        tid: vt
-                    )
-                }
-                if fbId > 0 when vt != fbId when (fIter) == false when fTt != ztypes.ztypetype.neverType when (fPair) == false then {
-                    fcn: ast.nodes.get i: cond.operation.u64
-                    fctn: st.reg.nameOf tid: vt
-                    fcmsg: "loop condition must be bool or a 2-arm sum type, got '\{fctn}'"
-                    (addError
-                        :st
-                        nodeid: (nodeId n: fcn)
-                        lineno: (nodeLine n: fcn)
-                        colno: (nodeCol n: fcn)
-                        e: zast.err.typeError
-                        msg: fcmsg
-                    )
-                }
-            }
-            if nm.length > 0 when vt > 0 then {
-                # A call-shaped iterator init probes its per-iteration call
-                # in an empty call scope; gated on the value being an iterator
-                # wrapper.
-                if (isCallNode :ast n: (ast.nodes.get i: cond.operation.u64)) then {
-                    doProbe: false
-                    pw: iterWrapperElem :ast :st :unitDecl wid: vt
-                    match (
-                        pw
-                    ) case some then {
-                        doProbe = true
-                    } case none then {
-                        (forceMemberOf
-                            :st
-                            frame: st.curFrame
-
-                            :ast
-                            parentTypeId: vt
-                            nameId: zast.wkCall
-                        )
-                        ico: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
-                        match (
-                            ico
-                        ) case some then {
-                            doProbe = true
-                        } case none then null
-                    }
-                    if doProbe then {
-                        ecm: st.pushCall
-                        st.popTo marker: ecm
-                    }
-                }
-                elem: u64
-                isView: false
-                w1: iterWrapperElem :ast :st :unitDecl wid: vt
-                match (
-                    w1
-                ) case some then {
-                    elem = w1
-                    isView = isOptionViewMono :ast :st :unitDecl wid: vt
-                } case none then null
-                if elem == 0 then {
-                    if (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.functionType then {
-                        r1: methodReturnOf :st mid: vt
-                        match (
-                            r1
-                        ) case some then {
-                            w2: iterWrapperElem :ast :st :unitDecl wid: r1
-                            match (
-                                w2
-                            ) case some then {
-                                elem = w2
-                                isView = isOptionViewMono :ast :st :unitDecl wid: r1
-                            } case none then null
-                        } case none then null
-                    } else {
-                        (forceMemberOf
-                            :st
-                            frame: st.curFrame
-
-                            :ast
-                            parentTypeId: vt
-                            nameId: zast.wkCall
-                        )
-                        c1: st.typing.declChildOfId parentTypeId: vt nameId: zast.wkCall
-                        match (
-                            c1
-                        ) case some then {
-                            r2: methodReturnOf :st mid: (ztypes.tid.create from: c1.u64)
-                            match (
-                                r2
-                            ) case some then {
-                                w3: iterWrapperElem :ast :st :unitDecl wid: r2
-                                match (
-                                    w3
-                                ) case some then {
-                                    elem = w3
-                                    isView = isOptionViewMono :ast :st :unitDecl wid: r2
-                                } case none then null
-                            } case none then null
-                        } case none then null
-                    }
-                }
-                if elem > 0 then {
-                    if isView then {
-                        vid: (st.reg.newVariable
-                            ztypeId: (ztypes.tid.create from: elem.u64)
-                            ownership: ztypes.zownership.borrowed
-                        )
-                        (st.reg.setVariableBorrowOrigin
-                            id: vid
-                            origin: (atomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
-                        )
-                        nmId: cond.name
-                    st.defineVar nameId: nmId :vid
-                        condNid: nodeId n: (ast.nodes.get i: cond.operation.u64)
-                        st.typing.defVariableId.set key: condNid.u64 value: vid
-                        # `for x: xs.iterate` has no iterator binding to carry
-                        # the container's lock, so the element carries it: the
-                        # reference the loop hands out points into the
-                        # container's storage, and a write through the
-                        # container reallocates it. The `with` form leaves
-                        # nothing pending here -- its binding took the lock.
-                        fbs: (ListVal zast.nameid)
-                        takePendingBorrow :st dst: fbs
-                        flf: isViewFamilyTid :ast :st tid: vt
-                        if st.typing.pendingBorrowShared then flf = true
-                        st.typing.pendingBorrowShared = false
-                        if fbs.length > 0 then {
-                            fcn: ast.nodes.get i: cond.operation.u64
-                            fnd: nodeId n: fcn
-                            fln: nodeLine n: fcn
-                            fcl: nodeCol n: fcn
-                            (installBorrowLocks
-                                :st
-                                pool: ast.names
-                                src: fbs
-                                :vid
-                                leafShared: flf
-                                nodeid: fnd
-                                lineno: fln
-                                colno: fcl
-                            )
-                        }
-                        # The element is a reference derived from the lock its
-                        # holder has on the container, so it inherits that
-                        # lock's strength: a SHARED pin (a `view` iterator
-                        # receiver) yields READONLY elements, an exclusive one
-                        # yields writable ones. The binding-free form knows its
-                        # own strength; the `with` form has to ask its binding.
-                        elr: flf
-                        if fbs.length == 0 then {
-                            elr = (iterElementIsReadonly
-                                :st
-                                iterName: (atomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
-                            )
-                        }
-                        if elr then {
-                            erm: readonlySelfLock :st :ast name: nm.stringview :vid
-                            if erm.length > 0 then {
-                                ecn: ast.nodes.get i: cond.operation.u64
-                                end: nodeId n: ecn
-                                eln: nodeLine n: ecn
-                                ecl: nodeCol n: ecn
-                                (addError
-                                    :st
-                                    nodeid: end
-                                    lineno: eln
-                                    colno: ecl
-                                    e: zast.err.ownerError
-                                    msg: erm
-                                )
-                            }
-                        }
-                    } else {
-                        (st.define
-                            nameId: cond.name
-                            ztypeId: (ztypes.tid.create from: elem.u64)
-                        )
-                    }
-                } else {
-                    st.define nameId: cond.name ztypeId: vt
-                }
-            }
-            # an iterable that failed still binds its loop name, typeless, so
-            # the body's reads of it are not each an unknown reference
-            if nm.length > 0 when vt.isZero then {
-                (st.define
-                    nameId: cond.name
-                    ztypeId: ztypes.tid
-                )
-            }
-        } else null
-    }
-    piter: fornode.postconditions.iterate
-    for pcId: piter loop {
-        pc: ast.nodes.get i: pcId.u64
-        pcOp: pcId
-        match (
-            pc
-        ) case namedoperation then {
-            pcOp = pc.operation
-        } else null
-        pcNd: ast.nodes.get i: pcOp.u64
-        pcVt: checkValue :st :unitDecl :ast node: pcNd
-        # A `for loop { ... } while <cond>` post-condition must be boolean, the
-        # same rule the pre-condition carries above: a non-bool value is a type
-        # error rather than the invalid C a struct in a `while` head emits.
-        pbId: builtinTidTc :ast :st base: "bool"
-        if pbId > 0 when pcVt > 0 when pcVt != pbId then {
-            pTt: st.reg.typetypeOf typeId: pcVt
-            pPair: ztyping.isSumPair ty: st.typing reg: st.reg tid: pcVt
-            if pPair then stampTruthyCond :st n: pcNd tid: pcVt
-            if pTt != ztypes.ztypetype.neverType when (pPair) == false then {
-                pctn: st.reg.nameOf tid: pcVt
-                pcmsg: "loop postcondition must be bool or a 2-arm sum type, got '\{pctn}'"
-                (addError
-                    :st
-                    nodeid: (nodeId n: pcNd)
-                    lineno: (nodeLine n: pcNd)
-                    colno: (nodeCol n: pcNd)
-                    e: zast.err.typeError
-                    msg: pcmsg
-                )
-            }
-        }
-    }
-    drainPendingBorrow :st
-    walkBodyAt :st :unitDecl :ast bodyId: fornode.body
     elemT: ztypes.tid
-    if fornode.body > 0 then {
-        fb: ast.nodes.get i: fornode.body.u64
-        elemT = ztypes.tid.create from: (lastStmtType :st :ast block: fb)
-    }
-    if st.isUnreachable then st.discardTakenInCurrentScope
-    st.popTo marker: forMarker
+} out ztypes.tid is {
     # for-as-expression: a value-producing body makes the loop a List of
     # that element type (the comprehension form).
     if elemT > 0 then {
@@ -20880,6 +20898,92 @@ checkFor: function {
         }
     }
     return (ztypes.tid.create from: 0)
+}
+# checkForPostcondition -- type one `for loop { … } while <cond>` trailing
+# condition. It carries the same bool rule as the header conditions: a
+# non-bool value is a type error, not the invalid C a struct in a `while`
+# head would emit.
+checkForPostcondition: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    pcId: u32
+} is {
+    pc: ast.nodes.get i: pcId.u64
+    pcOp: pcId
+    match (
+        pc
+    ) case namedoperation then {
+        pcOp = pc.operation
+    } else null
+    pcNd: ast.nodes.get i: pcOp.u64
+    pcVt: checkValue :st :unitDecl :ast node: pcNd
+    # A `for loop { ... } while <cond>` post-condition must be boolean, the
+    # same rule the pre-condition carries above: a non-bool value is a type
+    # error rather than the invalid C a struct in a `while` head emits.
+    pbId: builtinTidTc :ast :st base: "bool"
+    if pbId > 0 when pcVt > 0 when pcVt != pbId then {
+        pTt: st.reg.typetypeOf typeId: pcVt
+        pPair: ztyping.isSumPair ty: st.typing reg: st.reg tid: pcVt
+        if pPair then stampTruthyCond :st n: pcNd tid: pcVt
+        if pTt != ztypes.ztypetype.neverType when (pPair) == false then {
+            pctn: st.reg.nameOf tid: pcVt
+            pcmsg: "loop postcondition must be bool or a 2-arm sum type, got '\{pctn}'"
+            (addError
+                :st
+                nodeid: (nodeId n: pcNd)
+                lineno: (nodeLine n: pcNd)
+                colno: (nodeCol n: pcNd)
+                e: zast.err.typeError
+                msg: pcmsg
+            )
+        }
+    }
+}
+
+
+# checkFor -- walk a for-loop: push the `for` scope, define break/continue (entry
+# position placeholders with unregistered type ids, so they never join the dump),
+# then walk the conditions, postconditions, and body, and pop. A named condition
+# is a binding: define the loop var with the condition value's type (the value of
+# a bare literal init stays the literal pseudo-type, keeping the entry out of the
+# dump joins). Iterator-wrapper element extraction needs monomorphization and is
+# not implemented. The for itself resolves to null (filtered) in statement position.
+checkFor: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    fornode: zast.ForData.view
+} out ztypes.tid is {
+    forMarker: st.pushBlock name: "for"
+    bk: st.reg.ctlPlaceholder
+    (st.define
+        nameId: zast.wkBreak
+        ztypeId: (ztypes.tid.create from: bk.u64)
+    )
+    ct: st.reg.ctlPlaceholder
+    (st.define
+        nameId: zast.wkContinue
+        ztypeId: (ztypes.tid.create from: ct.u64)
+    )
+    citer: fornode.conditions.iterate
+    for condId: citer loop {
+        checkForCondition :st :unitDecl :ast cond: (ast.nodes.get i: condId.u64)
+    }
+    piter: fornode.postconditions.iterate
+    for pcId: piter loop {
+        checkForPostcondition :st :unitDecl :ast :pcId
+    }
+    drainPendingBorrow :st
+    walkBodyAt :st :unitDecl :ast bodyId: fornode.body
+    elemT: ztypes.tid
+    if fornode.body > 0 then {
+        fb: ast.nodes.get i: fornode.body.u64
+        elemT = ztypes.tid.create from: (lastStmtType :st :ast block: fb)
+    }
+    if st.isUnreachable then st.discardTakenInCurrentScope
+    st.popTo marker: forMarker
+    return (forComprehensionTid :st :unitDecl :ast :fornode :elemT)
 }
 
 # checkIf -- walk an if: push the `if` scope, then a `if_branch` scope per clause
