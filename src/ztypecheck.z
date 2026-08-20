@@ -11289,8 +11289,8 @@ InstReq: class {
     # it, and reading them off the main unit is why a generic unit worked only
     # there.
     declUnit: ztypes.declid
-    bind: String
-    tmpl: String
+    bindId: zast.nameid
+    tmplId: zast.nameid
     # the template's own id, the unitdef node that declares it, and the unit
     # whose AST that node lives in -- all resolved at COLLECTION, through the
     # scope the instantiation was written in. A name reached only a top-level
@@ -11419,24 +11419,17 @@ collectMainInstantiations: function {
                     callableInstPath :ast op: mop :segs
                     tdecl: instTemplateDecl :st :scopeDeclId :segs
                     topId: instTemplateOpOf :st :ast declId: tdecl
-                    tn: String
+                    tnId: zast.nameid
                     if segs.length > 0 then {
                         lastv: segs.get i: (segs.length - 1)
-                        if lastv > 0 then {
-                            tnt: (zast.poolTextAt
-                                pool: ast.names
-                                ref: (zast.nameid.create from: lastv.u32.orPanic)
-                            )
-                            tn = tnt.copy
-                        }
+                        if lastv > 0 then tnId = (zast.nameid.create from: lastv.u32.orPanic)
                     }
-                    if tn.length != 0 then {
-                        bindn: zast.nameTextCopy :ast ref: bmNode.name
+                    if (tnId.isZero) == false then {
                         tuN: unitRootOfDecl :st declId: tdecl
                         r: (InstReq
                             declUnit: unitDecl
-                            bind: bindn
-                            tmpl: tn.copy
+                            bindId: bmNode.name
+                            tmplId: tnId
                             tmplTid: (declTypeIdOf :st declId: tdecl)
                             tmplDeclId: tdecl
                             tmplOpId: topId.u64
@@ -12457,7 +12450,7 @@ buildUnitMono: function {
     frame: ztypes.declid
     ast: Ast
     tmplUnitName: ztypes.declid
-    tmplName: StringView
+    tmplNameId: zast.nameid
     monoId: ztypes.tid
     tplId: ztypes.tid
     subs: (IdMapV zast.nameid value: u64)
@@ -12511,7 +12504,7 @@ buildUnitMono: function {
 
                             :ast
                             unitDecl: tmplUnitName
-                            ownerNameId: (nameIdOf :ast name: tmplName)
+                            ownerNameId: tmplNameId
                             mname: fn.stringview
                             thisName: ""
                             op: (ast.nodes.get i: fmNode.operation.u64)
@@ -12522,7 +12515,7 @@ buildUnitMono: function {
                                 :st
                                 frame: rf
                                 unitDecl: tmplUnitName
-                                nameId: (nameIdOf :ast name: tmplName)
+                                nameId: tmplNameId
                             )
                             (declLinkTemplateMethod
                                 :st
@@ -12673,7 +12666,7 @@ completeInlineReq: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     monoId: ztypes.tid
-    tmplName: StringView
+    tmplNameId: zast.nameid
     tplId: ztypes.tid
     subs: (IdMapV zast.nameid value: u64)
     mainOpId: zast.nodeid
@@ -12686,8 +12679,7 @@ completeInlineReq: function {
             match (
                 bmNode
             ) case namedoperation then {
-                bn: zast.nameTextAt :ast ref: bmNode.name
-                if bn.stringview == tmplName then {
+                if bmNode.name == tmplNameId then {
                     if (isUnitOp op: (ast.nodes.get i: bmNode.operation.u64)) then {
                         (buildUnitMono
                             :st
@@ -12695,7 +12687,7 @@ completeInlineReq: function {
 
                             :ast
                             tmplUnitName: unitDecl
-                            :tmplName
+                            :tmplNameId
                             :monoId
                             :tplId
                             :subs
@@ -12717,7 +12709,7 @@ inlineTemplateTid: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     mainOpId: zast.nodeid
-    tmplName: StringView
+    tmplNameId: zast.nameid
 } out ztypes.tid is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
     found: u64
@@ -12728,8 +12720,7 @@ inlineTemplateTid: function {
             match (
                 bmNode
             ) case namedoperation then {
-                bn: zast.nameTextAt :ast ref: bmNode.name
-                if bn.stringview == tmplName then {
+                if bmNode.name == tmplNameId then {
                     if (isUnitOp op: (ast.nodes.get i: bmNode.operation.u64)) then {
                         tnid: unitdefNodeId :ast nId: bmNode.operation
                         tso: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: tnid.u64
@@ -12756,10 +12747,8 @@ completeUnitInstantiations: function {
     i: u64
     for i < reqs.length loop {
         r: reqs.get :i
-        rbv1: r.bind.stringview
-        rb: rbv1
-        rtv1: r.tmpl.stringview
-        rt: rtv1
+        rbId: r.bindId
+        rtId: r.tmplId
         ru: r.declUnit
         re: r.exprId
         rc: r.callId
@@ -12826,7 +12815,6 @@ completeUnitInstantiations: function {
         # resolved arguments -- the identity the mint pass laid; the label is
         # not consulted
         mgo: (optionval.none u64)
-        rbId: zast.nameid
         tnId: u32
         match (
             program
@@ -12847,8 +12835,7 @@ completeUnitInstantiations: function {
                     mgo = unitMonoOnTrie :st tplTid: (declTypeIdOf :st declId: rtdecl) keys: keysC
                 }
             }
-            rbId = zast.poolSet pool: program.ast.names text: rb
-            tnId = nameIdOf ast: program.ast name: rt
+            tnId = rtId.u32
         } else null
         match (
             mgo
@@ -12883,7 +12870,7 @@ completeUnitInstantiations: function {
                 program
             ) case program then {
                 mnUid8: unitNameIdOf :st unitDecl: ru
-                rtNid: nameIdOf ast: program.ast name: rt
+                rtNid: rtId
                 tgo = (resolvedByIds
                     :st
                     ast: program.ast
@@ -12894,7 +12881,7 @@ completeUnitInstantiations: function {
                     :st
                     :frame
                     unitDecl: ru
-                    nameId: (nameIdOf ast: program.ast name: rt)
+                    nameId: rtId
                 )
                 if tplDecl.isZero then tplDecl = rtdecl
                 if tplDecl.isZero then {
@@ -12902,7 +12889,7 @@ completeUnitInstantiations: function {
                     # live on its root Decl
                     tro: (st.typing.declFindChild
                         parentDeclId: st.typing.programRoot
-                        nameId: (nameIdOf ast: program.ast name: rt)
+                        nameId: rtId
                     )
                     if (tro.isZero) == false then tplDecl = tro
                 }
@@ -12993,7 +12980,7 @@ completeUnitInstantiations: function {
 
                         ast: program.ast
                         tmplUnitName: rtu
-                        tmplName: rt
+                        tmplNameId: rtId
                         monoId: (ztypes.tid.create from: memberIdAt.u64)
                         :tplId
                         :subs
@@ -13021,7 +13008,7 @@ completeUnitInstantiations: function {
                                         :st
                                         ast: program.ast
                                         mainOpId: tu.operation
-                                        tmplName: rt
+                                        tmplNameId: rtId
                                     )
                                 }
                             } else null
@@ -13040,22 +13027,17 @@ completeUnitInstantiations: function {
                             # scope the element borrow: the calls below lock
                             # `program.ast` exclusively (they intern mono names)
                             unitOpNodeId: zast.nodeid
-                            unitNameText: String
                             un29Id: zast.nameid
                             {
                                 u: program.ast.nodes.get i: u9Id.u64
                                 match (
                                     u
                                 ) case namedoperation then {
-                                    unitNameText = (zast.poolTextCopy
-                                        pool: program.ast.names
-                                        ref: u.name
-                                    )
                                     un29Id = u.name
                                     unitOpNodeId = u.operation
                                 } else null
                             }
-                            if unitNameText == rt then {
+                            if un29Id == rtId then {
                                 uq2z: (unitDeclOfNameOrOwn
                                     :st
                                     :frame
@@ -13067,7 +13049,7 @@ completeUnitInstantiations: function {
 
                                     ast: program.ast
                                     tmplUnitName: uq2z
-                                    tmplName: rt
+                                    tmplNameId: rtId
                                     monoId: (ztypes.tid.create from: memberIdAt.u64)
                                     :tplId
                                     :subs
@@ -13077,7 +13059,7 @@ completeUnitInstantiations: function {
                             uc4z: (unitDeclOfNameOrOwn
                                 :st
                                 :frame
-                                nameId: (nameIdOf ast: program.ast name: unitNameText.stringview)
+                                nameId: un29Id
                                 )
                             if uc4z == ru then {
                                 (completeInlineReq
@@ -13087,7 +13069,7 @@ completeUnitInstantiations: function {
                                     ast: program.ast
                                     unitDecl: ru
                                     monoId: (ztypes.tid.create from: memberIdAt.u64)
-                                    tmplName: rt
+                                    tmplNameId: rtId
                                     :tplId
                                     :subs
                                     mainOpId: unitOpNodeId
@@ -13326,7 +13308,7 @@ instMonoLabel: function {
     ast: Ast
     r: InstReq
 } out String is {
-    mn: r.tmpl.copy
+    mn: zast.poolTextCopy pool: ast.names ref: r.tmplId
     na: r.argNames.length
     i: u64
     for i < na loop {
@@ -13371,8 +13353,7 @@ resolveMainUnitInstantiations: function {
             rmL0 = instMonoLabel :st :frame ast: program.ast :r
         } else null
         rm: rmL0.stringview
-        rtv0: r.tmpl.stringview
-        rt: rtv0
+        rtId: r.tmplId
         # the template has to be RESOLVED before a mono is minted from it:
         # createUnitMono reads the template's id -- for an inline one, the stamp
         # resolveInlineGenericUnit lays on its def node -- to record the mono's
@@ -13392,12 +13373,13 @@ resolveMainUnitInstantiations: function {
                 match (
                     program
                 ) case program then {
+                    rtT: zast.poolTextAt pool: program.ast.names ref: rtId
                     (resolveInlineGenericUnit
                         :st
 
                         ast: program.ast
                         unitDecl: tu
-                        defName: rt
+                        defName: rtT.stringview
                         parentTid: (declTypeIdOf :st declId: tpd)
                         parentDeclId: tpd
                         unitOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
@@ -13464,7 +13446,8 @@ mintUnitMonoOf: function {
         tplTid: templateTid
         templateOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
     )
-    unitMonoJoinTrie :st tplTid: templateTid tplName: r.tmpl.stringview :keys monoId: mono
+    tplT9: zast.poolTextAt pool: ast.names ref: r.tmplId
+    unitMonoJoinTrie :st tplTid: templateTid tplName: tplT9.stringview :keys monoId: mono
 }
 
 # reportUnresolvedInstArgs -- E0023 at every instantiation argument that names
