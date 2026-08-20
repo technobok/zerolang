@@ -8115,6 +8115,68 @@ resolveClassMethodDecl: function {
         }
     }
 }
+# recordFieldDefault -- record the default a field declares: a numeric literal
+# folds to the field's own type, a named one waits for the type it references
+# to resolve, and a marker-suffixed one is not a default at all.
+recordFieldDefault: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    frame: ztypes.declid
+    cid: u64
+    cidf: ztypes.tid
+    fname: StringView
+    fm: zast.NamedOperationData.view
+} is {
+    dcn0: (zast.nameTextAt
+        :ast
+        ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
+    )
+    rdnc: (zast.nameTextAt
+        :ast
+        ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
+    )
+    if (isNumericLiteralName name: rdnc.stringview) then {
+        (st.typing.setDefaultLiteral
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: cid.u64)
+            name: fname
+            node: fm.operation
+        )
+    } else {
+        if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) == false when (nameDenotesUnit
+            :st
+            :frame
+
+            nameId: (nameIdOf
+            :ast
+            name: rdnc.stringview
+        )
+        ) == false then {
+            cArmNid: zast.poolFind pool: ast.names text: dcn0.stringview
+            cArmDecl: (st.typing.declMemberIdOf
+                parentTypeId: cidf
+                nameId: cArmNid
+            )
+            (st.typing.setDefaultVariantArm
+                pool: ast.names
+                parentTypeId: (ztypes.tid.create from: cid.u64)
+                name: fname
+                targetDecl: cArmDecl
+            )
+        }
+    }
+    if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) then {} else {
+        if dcn0.length > 0 then {
+            rdk: nodeId n: (ast.nodes.get i: fm.operation.u64)
+            rdo: cid
+            st.typing.pendingDefaultOwner.set key: rdk.u64 value: rdo
+            rdk2: nodeId n: (ast.nodes.get i: fm.operation.u64)
+            rdn: rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64)
+            st.typing.pendingDefaultName.set key: rdk2.u64 value: rdn
+        }
+    }
+}
+
 # resolveNamedFieldSlot -- resolve an ordinary named field: its declared type,
 # its ownership and visibility, the default it carries, and whether owning it
 # gives the class a destructor. True when it does.
@@ -8191,54 +8253,7 @@ resolveNamedFieldSlot: function {
         thisName: ""
         node: (ast.nodes.get i: fm.operation.u64)
     )
-    dcn0: (zast.nameTextAt
-        :ast
-        ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
-    )
-    rdnc: (zast.nameTextAt
-        :ast
-        ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
-    )
-    if (isNumericLiteralName name: rdnc.stringview) then {
-        (st.typing.setDefaultLiteral
-            pool: ast.names
-            parentTypeId: (ztypes.tid.create from: cid.u64)
-            name: fname
-            node: fm.operation
-        )
-    } else {
-        if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) == false when (nameDenotesUnit
-            :st
-            :frame
-
-            nameId: (nameIdOf
-            :ast
-            name: rdnc.stringview
-        )
-        ) == false then {
-            cArmNid: zast.poolFind pool: ast.names text: dcn0.stringview
-            cArmDecl: (st.typing.declMemberIdOf
-                parentTypeId: cidf
-                nameId: cArmNid
-            )
-            (st.typing.setDefaultVariantArm
-                pool: ast.names
-                parentTypeId: (ztypes.tid.create from: cid.u64)
-                name: fname
-                targetDecl: cArmDecl
-            )
-        }
-    }
-    if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) then {} else {
-        if dcn0.length > 0 then {
-            rdk: nodeId n: (ast.nodes.get i: fm.operation.u64)
-            rdo: cid
-            st.typing.pendingDefaultOwner.set key: rdk.u64 value: rdo
-            rdk2: nodeId n: (ast.nodes.get i: fm.operation.u64)
-            rdn: rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64)
-            st.typing.pendingDefaultName.set key: rdk2.u64 value: rdn
-        }
-    }
+    recordFieldDefault :st :ast :frame :cid :cidf :fname :fm
     return needsDtor
 }
 
