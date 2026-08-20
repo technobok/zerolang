@@ -10759,7 +10759,617 @@ emitDottedAtomBase: function {
     if cmr.length > 0 then return cmr
     return "".string
 }
+# emitDottedUnitRead -- a read whose BASE names a unit: another unit's constant
+# inlines its rendered C text, a unit-qualified type path constructs, and a
+# zero-argument function member of a unit or namespace auto-calls. A base naming a
+# top-level unit may ALSO name a nested unit of the one being emitted, and the
+# nested one is nearer -- it is what the checker bound.
+emitDottedUnitRead: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.DottedPathData.view
+} out String is {
+    # `unit.CONST` -- a constant of another unit inlines its rendered C
+    # text, exactly as a bare reference to a constant of this unit does
+    {
+        ucv: unitConstTextOf :ast :symtab :ctx :n
+        if ucv.length > 0 then return ucv
+    }
+    # a stamped implicit zero-create on a unit-qualified type path
+    # (`unit.Conf`) constructs like the bare-atom legs
+    izd: symtab.typing.implicitCreate.get key: n.nodeid.u64
+    match (
+        izd
+    ) case some then {
+        dzn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+        dzc: (scalarCTypeFor
+            :symtab
+            name: dzn.stringview
+            tid: (ztypes.tid.create from: izd.u64)
+        )
+        if dzc.length > 0 then return "((\{dzc})0)"
+        if izd == ctx.strTid then return (emitExprStrZero :ctx)
+        dzb: symtab.typing.typedefBaseName.get key: izd
+        match (
+            dzb
+        ) case some then {
+            dzbId: zast.nameid
+            dzbId = dzb
+            dzbT: zast.poolTextAt pool: ast.names ref: dzbId
+            if dzbT.stringview == "String" then return (emitExprStrZero :ctx)
+        } case none then null
+        dzt: typedefChaseC :ast :symtab :ctx tid: (ztypes.tid.create from: izd.u64)
+        if dzt.length > 0 then return "((\{dzt})0)"
+        dzm: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: izd.u64)
+        if dzm != izd then {
+            dzmc: ctxCname :ctx tid: (ztypes.tid.create from: dzm.u64)
+            if (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: dzm.u64)) then {
+                return "\{dzmc}_create((uint64_t)0)"
+            }
+            return "\{dzmc}_create()"
+        }
+        return (emitCtorDefaultsFill :ast :symtab :ctx tid: (ztypes.tid.create from: izd.u64))
+    } case none then null
+    dpUb: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
+    dpUbId: atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64)
+    dpIsFile: false
+    if (ztypecheck.isUnitNameDecl
+        st: symtab
+        nameId: dpUbId
+    ) then dpIsFile = true
+    # A base that names a top-level unit may ALSO name a nested unit of the
+    # unit being emitted, and the nested one is nearer -- it is what the
+    # checker bound. Deciding by the name alone let the emitter call the
+    # other unit's member, with no diagnostic anywhere.
+    if dpIsFile then {
+        dpEncl: ctx.nsTid
+        if dpEncl.isZero then dpEncl = (unitTidOf
+            :ast
+            :symtab
+            unitName: ctx.mainName.stringview
+        )
+        dpOwn: unitChildTidOf :symtab parentTid: dpEncl nameId: dpUbId
+        if (dpOwn.isZero) == false then dpIsFile = false
+    }
+    # a zero-argument function member reads as a dotted path, not a call,
+    # so a namespace's own needs the by-id route here too
+    dpNsTid: ztypes.tid
+    if (dpIsFile) == false then dpNsTid = pathUnitTidOf :ast :symtab :ctx baseId: n.parent
+    if dpIsFile when (dpNsTid.isZero) then {
+        ud6x: ztypecheck.unitDeclOfName st: symtab nameId: dpUbId
+        dpUfo: (ztypecheck.resolvedByIds
+            :ast
+            st: symtab
+            unitDecl: ud6x
+            name: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+        )
+        match (
+            dpUfo
+        ) case some then {
+            dpOk: isEmittableFileUnit name: dpUb.stringview
+            if (dpOk) == false then {
+                # runtime-backed units: only a bodied+demanded free fn
+                # earns the id-cname reference/auto-call route here
+                dpOk = stdFnRefEmittable :ast :symtab fid: (ztypes.tid.create from: dpUfo.u64)
+            }
+            if dpOk when (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dpUfo.u64)) == ztypes.ztypetype.functionType then {
+                dpUfc: ctxCname :ctx tid: (ztypes.tid.create from: dpUfo.u64)
+                # a node stamped FUNCTION is a fn REFERENCE (a .take peel
+                # delegates here): the bare cname, like the atom leg
+                dpStamp: stampIdOf :symtab nid: n.nodeid.u64
+                if dpStamp > 0 then {
+                    if (symtab.reg.typetypeOf typeId: dpStamp) == ztypes.ztypetype.functionType then {
+                        return dpUfc
+                    }
+                }
+                dpAd: (emitAllDefaultedCall
+                    :ast
+                    :symtab
+                    :ctx
+                    fnTid: (ztypes.tid.create from: dpUfo.u64)
+                    fcn: dpUfc.stringview
+                )
+                if dpAd.length > 0 then return dpAd
+                return "\{dpUfc}()"
+            }
+        } case none then null
+    }
+    if (dpNsTid.isZero) == false then {
+        nfo: (symtab.typing.declChildOfId
+            parentTypeId: dpNsTid
+            nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+        )
+        match (
+            nfo
+        ) case some then {
+            nftid: ztypes.tid.create from: (nfo)
+            if (symtab.reg.typetypeOf typeId: nftid) == ztypes.ztypetype.functionType then {
+                nfcn: ctxCname :ctx tid: nftid
+                nfs: stampIdOf :symtab nid: n.nodeid.u64
+                if nfs > 0 then {
+                    if (symtab.reg.typetypeOf
+                        typeId: nfs
+                    ) == ztypes.ztypetype.functionType then return nfcn
+                }
+                nfad: (emitAllDefaultedCall
+                    :ast
+                    :symtab
+                    :ctx
+                    fnTid: nftid
+                    fcn: nfcn.stringview
+                )
+                if nfad.length > 0 then return nfad
+                return "\{nfcn}()"
+            }
+        } case none then null
+    }
+    return "".string
+}
+# emitDottedConversionRead -- a cross-unit bare construction, and the two deep
+# conversions `.copy` and `.string`, whose shape depends on the receiver family:
+# a String clones its buffer, a container clones per element, a valtype is a
+# bitwise copy, and a generic parameter's copy is chosen per instance.
+emitDottedConversionRead: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.DottedPathData.view
+} out String is {
+    mnc0: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
+    dps: ast.nodes.get i: n.parent.u64
+    ccbc: emitCrossUnitBareCreate :ctx :ast :symtab parent: dps child: mnc0.stringview
+    if ccbc.length > 0 then return ccbc
+    if mnc0.stringview == "copy" then {
+        # `.copy` on a generic-param field inside a clone body: the node
+        # carries no concrete stamp, so resolve the field's SUBSTITUTED
+        # type through the current receiver mono. Only the clone-resolved
+        # case is claimed here -- concrete receivers keep their legs.
+        cvp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
+        cvgen: cvp.isZero
+        if (symtab.reg.typetypeOf typeId: cvp) == ztypes.ztypetype.genericParam then cvgen = true
+        # A CONCRETE valtype receiver takes the same lowering the resolved
+        # generic leg below gives it: the value itself, copied by the
+        # assignment or argument it feeds.
+        if (cvgen) == false when cvp > 0 then {
+            cvvt: symtab.reg.typetypeOf typeId: cvp
+            cvval: false
+            if cvvt == ztypes.ztypetype.recordType then cvval = true
+            if cvvt == ztypes.ztypetype.variantType then cvval = true
+            if cvvt == ztypes.ztypetype.facetType then cvval = true
+            # An as-block `copy` OVERRIDES the default, so the default may
+            # only be claimed when the type declares none -- otherwise the
+            # author's method is silently skipped.
+            if cvval then {
+                cvown: (symtab.typing.declChildOf
+                    pool: ast.names
+                    parentTypeId: cvp
+                    name: "copy"
+                )
+                match (
+                    cvown
+                ) case some then {
+                    cvval = false
+                } case none then null
+            }
+            if cvval when (symtab.reg.needsDestructor typeId: cvp) == false then {
+                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+            }
+        }
+        cvres: false
+        if cvgen then {
+            # the checker's per-mono instance walk side-stamps template
+            # nodes with the substituted type
+            cvms: (monoStampIdOf
+                :symtab
+                :ctx
+                nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
+            )
+            if cvms > 0 then {
+                cvp = cvms
+                cvres = true
+            }
+        }
+        if cvres then {
+            if cvp == ctx.svTid then {
+                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+            }
+            cvtt: symtab.reg.typetypeOf typeId: cvp
+            cvstr: cvp == ctx.strTid
+            if (originIsTid :symtab tid: cvp originTid: ctx.strOriginTid) then cvstr = true
+            cvref: false
+            if cvtt == ztypes.ztypetype.classType then cvref = true
+            if cvtt == ztypes.ztypetype.unionType then cvref = true
+            if cvtt == ztypes.ztypetype.protocolType then cvref = true
+            if cvstr then cvref = true
+            if (cvref) == false when (symtab.reg.needsDestructor typeId: cvp) == false then {
+                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+            }
+            if cvstr then {
+                cvpv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+                if (isNonLvalueArg s: cvpv.stringview) == false then {
+                    cvpn: ast.nodes.get i: n.parent.u64
+                    cvan2: atomTextDeep :ast n: cvpn
+                    cvav: atomVid :symtab nid: (atomNodeIdDeep :ast n: cvpn)
+                    if cvan2.length > 0 when (isPtrVid :ctx vid: cvav) then {
+                        return "\{ctx.strC}_copy(\{cvpv})"
+                    }
+                    return "\{ctx.strC}_copy(&\{cvpv})"
+                }
+            }
+            if cvgen then {
+                cvtn: ctxCname :ctx tid: cvp
+                (emitFail
+                    :ctx
+                    what: "unsupported .copy of type \{cvtn} in a generic body"
+                    line: n.lineno
+                )
+                return "/* zemitterc: unhandled copy */0".string
+            }
+        } else if cvgen when ctx.curThisTid > 0 then {
+            (emitFail
+                :ctx
+                what: "unresolved .copy receiver in a generic body".string
+                line: n.lineno
+            )
+            return "/* zemitterc: unhandled copy */0".string
+        }
+    }
+    if mnc0.stringview == "string" then {
+        scl: bindLitIndex :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+        if scl > 0 then {
+            se0: "\{ctx.strC}_from_view(_zs\{scl})"
+            return se0
+        }
+        if (stampIsSv :symtab :ctx nid: n.parent.u64) then {
+            sbv0: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+            se1: "\{ctx.strC}_from_view(\{sbv0})"
+            return se1
+        }
+    }
+    xpb: dottedBaseAtom :ast n: (ast.nodes.get i: n.parent.u64)
+    xpt: dottedChildText :ast n: (ast.nodes.get i: n.parent.u64)
+    xar: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+    xtag: (emitCrossUnitTag
+        :ast
+        :symtab
+        :ctx
+        pbase: xpb.stringview
+        ptype: xpt.stringview
+        arm: xar.stringview
+    )
+    if xtag.length > 0 then return xtag
+    return "".string
+}
+# emitDottedTagRead -- the three tagged-type stamps the checker leaves on a dotted
+# path: a construction reference (`Type.arm`), an arm PREDICATE on a value
+# receiver (a tag test), and an explicit tag-accessor read. A bool receiver is a
+# C bool with no tag field, so its VALUE is its discriminator.
+emitDottedTagRead: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.DottedPathData.view
+    mnc0: StringView
+} out String is {
+    # tagged-construction stamp: the typechecker resolved this path as
+    # `Type.arm`, so member emission wins over the name-matched legs
+    # below (io/os bases, ownership markers, numeric casts). Null-payload
+    # arms emit the tag; payload arms and generic templates fall through
+    # (construction calls and inference are handled by later legs).
+    dtp: dottedTaggedTid :symtab nid: n.nodeid.u64
+    if dtp > 0 then {
+        dtg: false
+        if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dtp.u64)) == ztypes.ztypetype.variantType then dtg = true
+        if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dtp.u64)) == ztypes.ztypetype.unionType then dtg = true
+        if dtg when (isGenericType
+            :symtab
+            tid: (ztypes.tid.create from: dtp.u64)
+        ) == false then {
+            vcH: ctxCname :ctx tid: (ztypes.tid.create from: dtp.u64)
+            if vcH.length > 0 then {
+                pcH: (armPayloadC
+                    :ast
+                    :symtab
+                    :ctx
+                    tid: (ztypes.tid.create from: dtp.u64)
+                    arm: mnc0
+                )
+                if pcH.length == 0 then {
+                    tgH: (variantTag
+                        :symtab
+                        tid: (ztypes.tid.create from: dtp.u64)
+                        arm: mnc0
+                    )
+                    avh: (armValueC
+                        :symtab
+                        tid: (ztypes.tid.create from: dtp.u64)
+                        arm: mnc0
+                    )
+                    if avh.length > 0 then return avh
+                    eH: "((\{vcH}_t){ .tag = \{tgH} })"
+                    return eH
+                }
+            }
+        }
+    }
+    # arm predicate on a VALUE receiver: the typechecker stamped
+    # dpArmPredicate, so the path is a tag test. A bool receiver is a
+    # C bool (no tag field): identity for `.true`, negation for
+    # `.false`.
+    dap: dottedArmPredicateTid :symtab nid: n.nodeid.u64
+    if dap > 0 then {
+        recvP: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+        if (isOrdinalPair :symtab tid: (ztypes.tid.create from: dap.u64)) then {
+            fa: (ordinalPairFirstArmId
+                :symtab
+                tid: (ztypes.tid.create from: dap.u64)
+            )
+            # the arm NAME resolved through any alias, as an id
+            mid: zast.poolFind pool: ast.names text: mnc0
+            if fa > 0 when mid.u64 == fa then return "(!(\{recvP}))"
+            return "(\{recvP})"
+        }
+        accP: ".".string
+        rootP: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
+        if rootP.length > 0 then {
+            rpn: atomNodeId n: (ast.nodes.get i: n.parent.u64)
+            if (isPtrVid :ctx vid: (atomVid :symtab nid: rpn)) then accP = "->".string
+        }
+        tgP: variantTag :symtab tid: (ztypes.tid.create from: dap.u64) arm: mnc0
+        # an ordinal IS its discriminator: compare the value, not a field
+        if (isOrdinalVariant
+            :symtab
+            tid: (ztypes.tid.create from: dap.u64)
+        ) then return "((\{recvP}) == \{tgP})"
+        eP: "((\{recvP})\{accP}tag == \{tgP})"
+        return eP
+    }
+    # explicit tag-accessor read: the discriminator cast to the declared
+    # numeric type. A bool receiver is a C bool with no tag field -- the
+    # bool VALUE is its discriminator.
+    dtr: dottedTagReadTid :symtab nid: n.nodeid.u64
+    if dtr > 0 then {
+        recvT: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+        tatE: ztypes.tid
+        tato: symtab.typing.tagAccessorTid.get key: (ztypes.tid.create from: dtr.u64)
+        match (
+            tato
+        ) case some then {
+            tatE = ztypes.tid.create from: (tato)
+        } case none then null
+        castT: (typeRefC
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: tatE.u64)
+            thisTid: ztypes.tid
+        )
+        if (isOrdinalVariant
+            :symtab
+            tid: (ztypes.tid.create from: dtr.u64)
+        ) then return "((\{castT})(\{recvT}))"
+        accT: ".".string
+        rootT: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
+        if rootT.length > 0 then {
+            rtn: atomNodeId n: (ast.nodes.get i: n.parent.u64)
+            if (isPtrVid :ctx vid: (atomVid :symtab nid: rtn)) then accT = "->".string
+        }
+        eT: "((\{castT})(\{recvT})\{accT}tag)"
+        return eT
+    }
+    return "".string
+}
+# emitDottedNativeMarker -- a data block's element read, a zero-parameter native
+# that auto-calls (io.stdout, os.pid), the compile-time markers `.private` /
+# `.lock` / `.take`, and a runtime numeric conversion. The conversion is whichever
+# member resolves to a row on the SOURCE type, so a user field merely NAMED `u32`
+# finds nothing and takes the member legs instead.
+emitDottedNativeMarker: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.DottedPathData.view
+    bn2r: StringView
+} out String is {
+    mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
+    # a data block's element read (`codes.ht`, `consts.codes.ht`, `primes.0`):
+    # the block is the base's stamped type, whatever shape the base takes;
+    # no base is emitted
+    dpbT: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
+    if dpbT > 0 then {
+        if (symtab.reg.typetypeOf typeId: dpbT) == ztypes.ztypetype.dataType then {
+            dres0: emitDataMember :ast :symtab :ctx :n dbt: dpbT :mn2
+            if dres0.length > 0 then return dres0
+        }
+    }
+    # a zero-parameter native read without parens auto-calls: the member's
+    # DECLARATION says so, so io.stdout and os.pid take one leg and no
+    # name is listed
+    nnu: (nativeNoArgOf
+        :ast
+        :symtab
+        unitName: ctx.mainName.stringview
+        baseId: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
+        base: bn2r
+        membId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+    )
+    if nnu.length > 0 then {
+        needsAddM :ctx uname: nnu.stringview memb: "@unit"
+        needsAddM :ctx uname: nnu.stringview memb: mn2.stringview
+        return "z_\{nnu}_\{mn2}()"
+    }
+    # `.private` is a compile-time friend marker -- it emits the receiver itself.
+    if mn2.stringview == "private" then {
+        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+    }
+    # `.lock` on a value is a borrow marker (no type has a literal `lock`
+    # field); emit the base, which the borrow param then addresses.
+    if mn2.stringview == "lock" then {
+        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+    }
+    # `.take` on a heap reftype (String / union / by-value class) is an
+    # ownership MOVE: emit the base value. The statement-level emitter zeroes
+    # the source after the call so its scope-exit free is a no-op (the callee
+    # now owns the heap). A borrowed pointer-param class is not a move source.
+    if (ztypecheck.isMoveMarker name: mn2.stringview) then {
+        tknid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
+        if tknid == 0 then tknid = n.parent.u64
+        tkt: stampIdOf :symtab nid: tknid
+        isMove: false
+        if tkt == ctx.strTid then isMove = true
+        if (symtab.reg.typetypeOf typeId: tkt) == ztypes.ztypetype.unionType then isMove = true
+        if (symtab.reg.typetypeOf typeId: tkt) == ztypes.ztypetype.classType then {
+            tkv: atomVid :symtab nid: tknid
+            if (isPtrVid :ctx vid: tkv) == false then isMove = true
+        }
+        if (symtab.reg.typetypeOf typeId: tkt) == ztypes.ztypetype.functionType then isMove = true
+        if isMove then return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+    }
+    # a runtime numeric conversion `<expr>.<numtype>` is whichever member
+    # resolves to a conversion ROW on the source type -- so a user record's
+    # field merely NAMED `u32` finds nothing and takes the member legs, with
+    # no separate shadow test to keep in step. A typedef converts as its
+    # chain end, which is where the declaration lives. Folded literal
+    # conversions return earlier via nodeConstText.
+    ncChase: (typedefChaseTid
+        :symtab
+        tid: (stampIdOf
+            :symtab
+            nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64)).u64
+        )
+    )
+    ncSrcP: convSrcPathOf :symtab srcTid: ncChase
+    ncHas: false
+    if ncSrcP.length > 0 then {
+        ncHas = nativeIsConvOf :ctx srcPath: ncSrcP.stringview memb: mn2.stringview
+    }
+    if ncHas then {
+        ncKey: "\{ncSrcP}.\{mn2}"
+        ncVal: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+        if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)) then {
+            ncDeref: "(*\{ncVal})"
+            ncVal = ncDeref.copy
+        }
+        ncRet: stampIdOf :symtab nid: n.nodeid.u64
+        ncRetM: chaseColMono :symtab :ctx tid: ncRet
+        return (emitNumericCast
+            :ctx
+            dstName: mn2.stringview
+            val: ncVal.stringview
+            :symtab
+            retTid: (ztypes.tid.create from: ncRetM.u64)
+            key: ncKey.stringview
+        )
+    }
+    return "".string
+}
 
+
+# emitDottedRead -- the C text of a dotted PATH read (the call form is
+# emitDottedCall). The legs run in the order the checker's stamps settle them:
+# built-in combinators, unit-qualified reads, the conversions, the tagged-type
+# stamps, the markers, and only then the member families.
+emitDottedRead: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.DottedPathData.view
+} out String is {
+    # built-in `.orPanic` on a resultval/Result receiver -- any base
+    # (a bound var, or a chained call/conversion), emitted via emitExpr so
+    # the receiver value is materialized once. `.or d:` is a call node and
+    # is handled by emitResultCombinator in the call dispatch instead.
+    dcMn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+    if dcMn.stringview == "orPanic" then {
+        pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
+        pMono: chaseColMono :symtab :ctx tid: pStamp
+        pOrig: monoOriginName :symtab tid: (ztypes.tid.create from: pMono.u64)
+        isRcc: false
+        if pOrig.stringview == "resultval" then isRcc = true
+        if isRcc then {
+            rcRecv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+            okTagX: variantTag :symtab tid: (ztypes.tid.create from: pMono.u64) arm: "ok"
+            rcT: ctxCname :ctx tid: (ztypes.tid.create from: pMono.u64)
+            return "({ \{rcT}_t _rc = (\{rcRecv.stringview}); if (_rc.tag != \{okTagX.stringview}) z_panic(\"orPanic: result is err\"); _rc.data.ok; })"
+        }
+    }
+    dur: emitDottedUnitRead :ast :symtab :ctx :n
+    if dur.length > 0 then return dur
+    dcr: emitDottedConversionRead :ast :symtab :ctx :n
+    if dcr.length > 0 then return dcr
+    mnc0: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
+    dtg: emitDottedTagRead :ast :symtab :ctx :n mnc0: mnc0.stringview
+    if dtg.length > 0 then return dtg
+    bn2r: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
+    baseAtomVid: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
+    bn2a: aliasResolve :ctx name: bn2r.stringview vid: baseAtomVid
+    # the receiver's variable, for the pointer-access checks below. An alias
+    # substitution means the base binding is not what is being read, so the
+    # vid stays 0 and bn2 becomes the substituted text.
+    bn2v: ztypes.vid
+    if bn2a.stringview == bn2r.stringview then {
+        bn2v = (atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64)))
+    }
+    bn2: emitLocalAtomName :ctx name: bn2r.stringview vid: baseAtomVid
+    # a base with no atom NAME still has a stamped type. Every native leg
+    # below sits behind `bn2.length > 0`, so a projection (h.text.stringview)
+    # or a call (s.trim, (mk s: s)) skipped the lot and fell through to the
+    # user-method path, which renders the callee as the method's
+    # function-type id -- a symbol nothing defines. emitDottedCall already
+    # carries this leg for the CALL form; the READ form never got it.
+    if bn2.length == 0 then {
+        nbId: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
+        nbT: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: nbId)
+        # StringView only: svValueForm reads a String receiver's expression
+        # twice, once for .data and once for .size, and twice is a second
+        # evaluation when the expression is a call.
+        if nbT == ctx.svTid then {
+            nbX: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+            if nbX.length > 0 then {
+                # `&` needs an lvalue. A compound literal is one; a call is
+                # not, so it binds to a temp the statement flush declares.
+                nbH: isNonLvalueArg s: nbX.stringview
+                if nbX.stringview.startsWith "((" then nbH = false
+                if nbH then {
+                    nbTmp: (hoistLvalue
+                        :ast
+                        :symtab
+                        :ctx
+                        av: nbX.stringview
+                        tid: (ztypes.tid.create from: nbT.u64)
+                    )
+                    if nbTmp.length > 0 then nbX = nbTmp.copy
+                }
+                bn2 = nbX.copy
+            }
+        }
+    }
+    dnm: (emitDottedNativeMarker
+        :ast
+        :symtab
+        :ctx
+        :n
+        bn2r: bn2r.stringview
+    )
+    if dnm.length > 0 then return dnm
+    mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
+    if bn2.length > 0 then {
+        aba: (emitDottedAtomBase
+            :ast
+            :symtab
+            :ctx
+            :n
+            mn2: mn2.stringview
+            bn2: bn2.stringview
+            bn2r: bn2r.stringview
+            :bn2v
+            :baseAtomVid
+        )
+        if aba.length > 0 then return aba
+    }
+    return (emitDottedNestedBase :ast :symtab :ctx :n mn2: mn2.stringview)
+}
 
 # emitExpr -- the C expression text for a node (calls inline; the scalar
 # examples carry no order-sensitive multi-call arguments).
@@ -10791,538 +11401,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
         lvv: atomVid :symtab nid: n.nodeid.u64
         return (emitLocalAtomName :ctx name: lvC.stringview vid: lvv)
     } case dottedpath then {
-        # built-in `.orPanic` on a resultval/Result receiver -- any base
-        # (a bound var, or a chained call/conversion), emitted via emitExpr so
-        # the receiver value is materialized once. `.or d:` is a call node and
-        # is handled by emitResultCombinator in the call dispatch instead.
-        dcMn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if dcMn.stringview == "orPanic" then {
-            pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
-            pMono: chaseColMono :symtab :ctx tid: pStamp
-            pOrig: monoOriginName :symtab tid: (ztypes.tid.create from: pMono.u64)
-            isRcc: false
-            if pOrig.stringview == "resultval" then isRcc = true
-            if isRcc then {
-                rcRecv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-                okTagX: variantTag :symtab tid: (ztypes.tid.create from: pMono.u64) arm: "ok"
-                rcT: ctxCname :ctx tid: (ztypes.tid.create from: pMono.u64)
-                return "({ \{rcT}_t _rc = (\{rcRecv.stringview}); if (_rc.tag != \{okTagX.stringview}) z_panic(\"orPanic: result is err\"); _rc.data.ok; })"
-            }
-        }
-        # `unit.CONST` -- a constant of another unit inlines its rendered C
-        # text, exactly as a bare reference to a constant of this unit does
-        {
-            ucv: unitConstTextOf :ast :symtab :ctx :n
-            if ucv.length > 0 then return ucv
-        }
-        # a stamped implicit zero-create on a unit-qualified type path
-        # (`unit.Conf`) constructs like the bare-atom legs
-        izd: symtab.typing.implicitCreate.get key: n.nodeid.u64
-        match (
-            izd
-        ) case some then {
-            dzn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-            dzc: (scalarCTypeFor
-                :symtab
-                name: dzn.stringview
-                tid: (ztypes.tid.create from: izd.u64)
-            )
-            if dzc.length > 0 then return "((\{dzc})0)"
-            if izd == ctx.strTid then return (emitExprStrZero :ctx)
-            dzb: symtab.typing.typedefBaseName.get key: izd
-            match (
-                dzb
-            ) case some then {
-                dzbId: zast.nameid
-                dzbId = dzb
-                dzbT: zast.poolTextAt pool: ast.names ref: dzbId
-                if dzbT.stringview == "String" then return (emitExprStrZero :ctx)
-            } case none then null
-            dzt: typedefChaseC :ast :symtab :ctx tid: (ztypes.tid.create from: izd.u64)
-            if dzt.length > 0 then return "((\{dzt})0)"
-            dzm: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: izd.u64)
-            if dzm != izd then {
-                dzmc: ctxCname :ctx tid: (ztypes.tid.create from: dzm.u64)
-                if (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: dzm.u64)) then {
-                    return "\{dzmc}_create((uint64_t)0)"
-                }
-                return "\{dzmc}_create()"
-            }
-            return (emitCtorDefaultsFill :ast :symtab :ctx tid: (ztypes.tid.create from: izd.u64))
-        } case none then null
-        dpUb: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-        dpUbId: atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64)
-        dpIsFile: false
-        if (ztypecheck.isUnitNameDecl
-            st: symtab
-            nameId: dpUbId
-) then dpIsFile = true
-        # A base that names a top-level unit may ALSO name a nested unit of the
-        # unit being emitted, and the nested one is nearer -- it is what the
-        # checker bound. Deciding by the name alone let the emitter call the
-        # other unit's member, with no diagnostic anywhere.
-        if dpIsFile then {
-            dpEncl: ctx.nsTid
-            if dpEncl.isZero then dpEncl = (unitTidOf
-                :ast
-                :symtab
-                unitName: ctx.mainName.stringview
-            )
-            dpOwn: unitChildTidOf :symtab parentTid: dpEncl nameId: dpUbId
-            if (dpOwn.isZero) == false then dpIsFile = false
-        }
-        # a zero-argument function member reads as a dotted path, not a call,
-        # so a namespace's own needs the by-id route here too
-        dpNsTid: ztypes.tid
-        if (dpIsFile) == false then dpNsTid = pathUnitTidOf :ast :symtab :ctx baseId: n.parent
-        if dpIsFile when (dpNsTid.isZero) then {
-            ud6x: ztypecheck.unitDeclOfName st: symtab nameId: dpUbId
-            dpUfo: (ztypecheck.resolvedByIds
-                :ast
-                st: symtab
-                unitDecl: ud6x
-                name: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-            )
-            match (
-                dpUfo
-            ) case some then {
-                dpOk: isEmittableFileUnit name: dpUb.stringview
-                if (dpOk) == false then {
-                    # runtime-backed units: only a bodied+demanded free fn
-                    # earns the id-cname reference/auto-call route here
-                    dpOk = stdFnRefEmittable :ast :symtab fid: (ztypes.tid.create from: dpUfo.u64)
-                }
-                if dpOk when (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dpUfo.u64)) == ztypes.ztypetype.functionType then {
-                    dpUfc: ctxCname :ctx tid: (ztypes.tid.create from: dpUfo.u64)
-                    # a node stamped FUNCTION is a fn REFERENCE (a .take peel
-                    # delegates here): the bare cname, like the atom leg
-                    dpStamp: stampIdOf :symtab nid: n.nodeid.u64
-                    if dpStamp > 0 then {
-                        if (symtab.reg.typetypeOf typeId: dpStamp) == ztypes.ztypetype.functionType then {
-                            return dpUfc
-                        }
-                    }
-                    dpAd: (emitAllDefaultedCall
-                        :ast
-                        :symtab
-                        :ctx
-                        fnTid: (ztypes.tid.create from: dpUfo.u64)
-                        fcn: dpUfc.stringview
-                    )
-                    if dpAd.length > 0 then return dpAd
-                    return "\{dpUfc}()"
-                }
-            } case none then null
-        }
-        if (dpNsTid.isZero) == false then {
-            nfo: (symtab.typing.declChildOfId
-                parentTypeId: dpNsTid
-                nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-            )
-            match (
-                nfo
-            ) case some then {
-                nftid: ztypes.tid.create from: (nfo)
-                if (symtab.reg.typetypeOf typeId: nftid) == ztypes.ztypetype.functionType then {
-                    nfcn: ctxCname :ctx tid: nftid
-                    nfs: stampIdOf :symtab nid: n.nodeid.u64
-                    if nfs > 0 then {
-                        if (symtab.reg.typetypeOf
-                            typeId: nfs
-                        ) == ztypes.ztypetype.functionType then return nfcn
-                    }
-                    nfad: (emitAllDefaultedCall
-                        :ast
-                        :symtab
-                        :ctx
-                        fnTid: nftid
-                        fcn: nfcn.stringview
-                    )
-                    if nfad.length > 0 then return nfad
-                    return "\{nfcn}()"
-                }
-            } case none then null
-        }
-        mnc0: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
-        dps: ast.nodes.get i: n.parent.u64
-        ccbc: emitCrossUnitBareCreate :ctx :ast :symtab parent: dps child: mnc0.stringview
-        if ccbc.length > 0 then return ccbc
-        if mnc0.stringview == "copy" then {
-            # `.copy` on a generic-param field inside a clone body: the node
-            # carries no concrete stamp, so resolve the field's SUBSTITUTED
-            # type through the current receiver mono. Only the clone-resolved
-            # case is claimed here -- concrete receivers keep their legs.
-            cvp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
-            cvgen: cvp.isZero
-            if (symtab.reg.typetypeOf typeId: cvp) == ztypes.ztypetype.genericParam then cvgen = true
-            # A CONCRETE valtype receiver takes the same lowering the resolved
-            # generic leg below gives it: the value itself, copied by the
-            # assignment or argument it feeds.
-            if (cvgen) == false when cvp > 0 then {
-                cvvt: symtab.reg.typetypeOf typeId: cvp
-                cvval: false
-                if cvvt == ztypes.ztypetype.recordType then cvval = true
-                if cvvt == ztypes.ztypetype.variantType then cvval = true
-                if cvvt == ztypes.ztypetype.facetType then cvval = true
-                # An as-block `copy` OVERRIDES the default, so the default may
-                # only be claimed when the type declares none -- otherwise the
-                # author's method is silently skipped.
-                if cvval then {
-                    cvown: (symtab.typing.declChildOf
-                        pool: ast.names
-                        parentTypeId: cvp
-                        name: "copy"
-                    )
-                    match (
-                        cvown
-                    ) case some then {
-                        cvval = false
-                    } case none then null
-                }
-                if cvval when (symtab.reg.needsDestructor typeId: cvp) == false then {
-                    return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-                }
-            }
-            cvres: false
-            if cvgen then {
-                # the checker's per-mono instance walk side-stamps template
-                # nodes with the substituted type
-                cvms: (monoStampIdOf
-                    :symtab
-                    :ctx
-                    nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
-                )
-                if cvms > 0 then {
-                    cvp = cvms
-                    cvres = true
-                }
-            }
-            if cvres then {
-                if cvp == ctx.svTid then {
-                    return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-                }
-                cvtt: symtab.reg.typetypeOf typeId: cvp
-                cvstr: cvp == ctx.strTid
-                if (originIsTid :symtab tid: cvp originTid: ctx.strOriginTid) then cvstr = true
-                cvref: false
-                if cvtt == ztypes.ztypetype.classType then cvref = true
-                if cvtt == ztypes.ztypetype.unionType then cvref = true
-                if cvtt == ztypes.ztypetype.protocolType then cvref = true
-                if cvstr then cvref = true
-                if (cvref) == false when (symtab.reg.needsDestructor typeId: cvp) == false then {
-                    return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-                }
-                if cvstr then {
-                    cvpv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-                    if (isNonLvalueArg s: cvpv.stringview) == false then {
-                        cvpn: ast.nodes.get i: n.parent.u64
-                        cvan2: atomTextDeep :ast n: cvpn
-                        cvav: atomVid :symtab nid: (atomNodeIdDeep :ast n: cvpn)
-                        if cvan2.length > 0 when (isPtrVid :ctx vid: cvav) then {
-                            return "\{ctx.strC}_copy(\{cvpv})"
-                        }
-                        return "\{ctx.strC}_copy(&\{cvpv})"
-                    }
-                }
-                if cvgen then {
-                    cvtn: ctxCname :ctx tid: cvp
-                    (emitFail
-                        :ctx
-                        what: "unsupported .copy of type \{cvtn} in a generic body"
-                        line: n.lineno
-                    )
-                    return "/* zemitterc: unhandled copy */0".string
-                }
-            } else if cvgen when ctx.curThisTid > 0 then {
-                (emitFail
-                    :ctx
-                    what: "unresolved .copy receiver in a generic body".string
-                    line: n.lineno
-                )
-                return "/* zemitterc: unhandled copy */0".string
-            }
-        }
-        if mnc0.stringview == "string" then {
-            scl: bindLitIndex :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-            if scl > 0 then {
-                se0: "\{ctx.strC}_from_view(_zs\{scl})"
-                return se0
-            }
-            if (stampIsSv :symtab :ctx nid: n.parent.u64) then {
-                sbv0: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-                se1: "\{ctx.strC}_from_view(\{sbv0})"
-                return se1
-            }
-        }
-        xpb: dottedBaseAtom :ast n: (ast.nodes.get i: n.parent.u64)
-        xpt: dottedChildText :ast n: (ast.nodes.get i: n.parent.u64)
-        xar: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        xtag: (emitCrossUnitTag
-            :ast
-            :symtab
-            :ctx
-            pbase: xpb.stringview
-            ptype: xpt.stringview
-            arm: xar.stringview
-        )
-        if xtag.length > 0 then return xtag
-        # tagged-construction stamp: the typechecker resolved this path as
-        # `Type.arm`, so member emission wins over the name-matched legs
-        # below (io/os bases, ownership markers, numeric casts). Null-payload
-        # arms emit the tag; payload arms and generic templates fall through
-        # (construction calls and inference are handled by later legs).
-        dtp: dottedTaggedTid :symtab nid: n.nodeid.u64
-        if dtp > 0 then {
-            dtg: false
-            if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dtp.u64)) == ztypes.ztypetype.variantType then dtg = true
-            if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dtp.u64)) == ztypes.ztypetype.unionType then dtg = true
-            if dtg when (isGenericType
-                :symtab
-                tid: (ztypes.tid.create from: dtp.u64)
-            ) == false then {
-                vcH: ctxCname :ctx tid: (ztypes.tid.create from: dtp.u64)
-                if vcH.length > 0 then {
-                    pcH: (armPayloadC
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: dtp.u64)
-                        arm: mnc0.stringview
-                    )
-                    if pcH.length == 0 then {
-                        tgH: (variantTag
-                            :symtab
-                            tid: (ztypes.tid.create from: dtp.u64)
-                            arm: mnc0.stringview
-                        )
-                        avh: (armValueC
-                            :symtab
-                            tid: (ztypes.tid.create from: dtp.u64)
-                            arm: mnc0.stringview
-                        )
-                        if avh.length > 0 then return avh
-                        eH: "((\{vcH}_t){ .tag = \{tgH} })"
-                        return eH
-                    }
-                }
-            }
-        }
-        # arm predicate on a VALUE receiver: the typechecker stamped
-        # dpArmPredicate, so the path is a tag test. A bool receiver is a
-        # C bool (no tag field): identity for `.true`, negation for
-        # `.false`.
-        dap: dottedArmPredicateTid :symtab nid: n.nodeid.u64
-        if dap > 0 then {
-            recvP: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-            if (isOrdinalPair :symtab tid: (ztypes.tid.create from: dap.u64)) then {
-                fa: (ordinalPairFirstArmId
-                    :symtab
-                    tid: (ztypes.tid.create from: dap.u64)
-                )
-                # the arm NAME resolved through any alias, as an id
-                mid: zast.poolFind pool: ast.names text: mnc0.stringview
-                if fa > 0 when mid.u64 == fa then return "(!(\{recvP}))"
-                return "(\{recvP})"
-            }
-            accP: ".".string
-            rootP: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-            if rootP.length > 0 then {
-                rpn: atomNodeId n: (ast.nodes.get i: n.parent.u64)
-                if (isPtrVid :ctx vid: (atomVid :symtab nid: rpn)) then accP = "->".string
-            }
-            tgP: variantTag :symtab tid: (ztypes.tid.create from: dap.u64) arm: mnc0.stringview
-            # an ordinal IS its discriminator: compare the value, not a field
-            if (isOrdinalVariant
-                :symtab
-                tid: (ztypes.tid.create from: dap.u64)
-            ) then return "((\{recvP}) == \{tgP})"
-            eP: "((\{recvP})\{accP}tag == \{tgP})"
-            return eP
-        }
-        # explicit tag-accessor read: the discriminator cast to the declared
-        # numeric type. A bool receiver is a C bool with no tag field -- the
-        # bool VALUE is its discriminator.
-        dtr: dottedTagReadTid :symtab nid: n.nodeid.u64
-        if dtr > 0 then {
-            recvT: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-            tatE: ztypes.tid
-            tato: symtab.typing.tagAccessorTid.get key: (ztypes.tid.create from: dtr.u64)
-            match (
-                tato
-            ) case some then {
-                tatE = ztypes.tid.create from: (tato)
-            } case none then null
-            castT: (typeRefC
-                :ast
-                :symtab
-                :ctx
-                tid: (ztypes.tid.create from: tatE.u64)
-                thisTid: ztypes.tid
-            )
-            if (isOrdinalVariant
-                :symtab
-                tid: (ztypes.tid.create from: dtr.u64)
-            ) then return "((\{castT})(\{recvT}))"
-            accT: ".".string
-            rootT: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-            if rootT.length > 0 then {
-                rtn: atomNodeId n: (ast.nodes.get i: n.parent.u64)
-                if (isPtrVid :ctx vid: (atomVid :symtab nid: rtn)) then accT = "->".string
-            }
-            eT: "((\{castT})(\{recvT})\{accT}tag)"
-            return eT
-        }
-        bn2r: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-        baseAtomVid: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
-        bn2a: aliasResolve :ctx name: bn2r.stringview vid: baseAtomVid
-        # the receiver's variable, for the pointer-access checks below. An alias
-        # substitution means the base binding is not what is being read, so the
-        # vid stays 0 and bn2 becomes the substituted text.
-        bn2v: ztypes.vid
-        if bn2a.stringview == bn2r.stringview then {
-            bn2v = (atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64)))
-        }
-        bn2: emitLocalAtomName :ctx name: bn2r.stringview vid: baseAtomVid
-        # a base with no atom NAME still has a stamped type. Every native leg
-        # below sits behind `bn2.length > 0`, so a projection (h.text.stringview)
-        # or a call (s.trim, (mk s: s)) skipped the lot and fell through to the
-        # user-method path, which renders the callee as the method's
-        # function-type id -- a symbol nothing defines. emitDottedCall already
-        # carries this leg for the CALL form; the READ form never got it.
-        if bn2.length == 0 then {
-            nbId: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
-            nbT: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: nbId)
-            # StringView only: svValueForm reads a String receiver's expression
-            # twice, once for .data and once for .size, and twice is a second
-            # evaluation when the expression is a call.
-            if nbT == ctx.svTid then {
-                nbX: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-                if nbX.length > 0 then {
-                    # `&` needs an lvalue. A compound literal is one; a call is
-                    # not, so it binds to a temp the statement flush declares.
-                    nbH: isNonLvalueArg s: nbX.stringview
-                    if nbX.stringview.startsWith "((" then nbH = false
-                    if nbH then {
-                        nbTmp: (hoistLvalue
-                            :ast
-                            :symtab
-                            :ctx
-                            av: nbX.stringview
-                            tid: (ztypes.tid.create from: nbT.u64)
-                        )
-                        if nbTmp.length > 0 then nbX = nbTmp.copy
-                    }
-                    bn2 = nbX.copy
-                }
-            }
-        }
-        mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
-        # a data block's element read (`codes.ht`, `consts.codes.ht`, `primes.0`):
-        # the block is the base's stamped type, whatever shape the base takes;
-        # no base is emitted
-        dpbT: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
-        if dpbT > 0 then {
-            if (symtab.reg.typetypeOf typeId: dpbT) == ztypes.ztypetype.dataType then {
-                dres0: emitDataMember :ast :symtab :ctx :n dbt: dpbT :mn2
-                if dres0.length > 0 then return dres0
-            }
-        }
-        # a zero-parameter native read without parens auto-calls: the member's
-        # DECLARATION says so, so io.stdout and os.pid take one leg and no
-        # name is listed
-        nnu: (nativeNoArgOf
-            :ast
-            :symtab
-            unitName: ctx.mainName.stringview
-            baseId: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-            base: bn2r.stringview
-            membId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        )
-        if nnu.length > 0 then {
-            needsAddM :ctx uname: nnu.stringview memb: "@unit"
-            needsAddM :ctx uname: nnu.stringview memb: mn2.stringview
-            return "z_\{nnu}_\{mn2}()"
-        }
-        # `.private` is a compile-time friend marker -- it emits the receiver itself.
-        if mn2.stringview == "private" then {
-            return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-        }
-        # `.lock` on a value is a borrow marker (no type has a literal `lock`
-        # field); emit the base, which the borrow param then addresses.
-        if mn2.stringview == "lock" then {
-            return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-        }
-        # `.take` on a heap reftype (String / union / by-value class) is an
-        # ownership MOVE: emit the base value. The statement-level emitter zeroes
-        # the source after the call so its scope-exit free is a no-op (the callee
-        # now owns the heap). A borrowed pointer-param class is not a move source.
-        if (ztypecheck.isMoveMarker name: mn2.stringview) then {
-            tknid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
-            if tknid == 0 then tknid = n.parent.u64
-            tkt: stampIdOf :symtab nid: tknid
-            isMove: false
-            if tkt == ctx.strTid then isMove = true
-            if (symtab.reg.typetypeOf typeId: tkt) == ztypes.ztypetype.unionType then isMove = true
-            if (symtab.reg.typetypeOf typeId: tkt) == ztypes.ztypetype.classType then {
-                tkv: atomVid :symtab nid: tknid
-                if (isPtrVid :ctx vid: tkv) == false then isMove = true
-            }
-            if (symtab.reg.typetypeOf typeId: tkt) == ztypes.ztypetype.functionType then isMove = true
-            if isMove then return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-        }
-        # a runtime numeric conversion `<expr>.<numtype>` is whichever member
-        # resolves to a conversion ROW on the source type -- so a user record's
-        # field merely NAMED `u32` finds nothing and takes the member legs, with
-        # no separate shadow test to keep in step. A typedef converts as its
-        # chain end, which is where the declaration lives. Folded literal
-        # conversions return earlier via nodeConstText.
-        ncChase: (typedefChaseTid
-            :symtab
-            tid: (stampIdOf
-                :symtab
-                nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64)).u64
-            )
-        )
-        ncSrcP: convSrcPathOf :symtab srcTid: ncChase
-        ncHas: false
-        if ncSrcP.length > 0 then {
-            ncHas = nativeIsConvOf :ctx srcPath: ncSrcP.stringview memb: mn2.stringview
-        }
-        if ncHas then {
-            ncKey: "\{ncSrcP}.\{mn2}"
-            ncVal: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-            if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)) then {
-                ncDeref: "(*\{ncVal})"
-                ncVal = ncDeref.copy
-            }
-            ncRet: stampIdOf :symtab nid: n.nodeid.u64
-            ncRetM: chaseColMono :symtab :ctx tid: ncRet
-            return (emitNumericCast
-                :ctx
-                dstName: mn2.stringview
-                val: ncVal.stringview
-                :symtab
-                retTid: (ztypes.tid.create from: ncRetM.u64)
-                key: ncKey.stringview
-            )
-        }
-        if bn2.length > 0 then {
-        if bn2.length > 0 then {
-            aba: (emitDottedAtomBase
-                :ast
-                :symtab
-                :ctx
-                :n
-                mn2: mn2.stringview
-                bn2: bn2.stringview
-                bn2r: bn2r.stringview
-                :bn2v
-                :baseAtomVid
-            )
-            if aba.length > 0 then return aba
-        }
-        }
-        return (emitDottedNestedBase :ast :symtab :ctx :n mn2: mn2.stringview)
+        return (emitDottedRead :ast :symtab :ctx :n)
     } case atomstring then {
         li: litIndexOf :ctx nid: n.nodeid.u64
         if li > 0 then {
