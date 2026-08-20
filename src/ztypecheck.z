@@ -7715,251 +7715,203 @@ unionCustomTagId: function {
     }
     return (optionval.none u64)
 }
+# checkUnionArmIsReftype -- THE BOX RULE: a union holds reftypes. A null arm carries
+# no payload; a MARKED arm (view/borrow/hold) is reference-family whatever it
+# points at; a collapsed `(Box T)` arm was already vetted valtype. What remains
+# must be a reftype.
+checkUnionArmIsReftype: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    fm: zast.NamedOperationData.view
+    an: StringView
+    aname: StringView
+    armTe: zast.nodeid
+    armMk: bool
+    cid: ztypes.tid
+} is {
+    # THE BOX RULE: a union holds reftypes. A null arm carries no
+    # payload; a MARKED arm (view/borrow/hold) is reference-family
+    # whatever it points at; a collapsed (Box T) arm was already
+    # vetted valtype. What remains must be a reftype.
+    if an != "null" when armTe == fm.operation then {
+        if (armMk) == false when (typeIsValtype :st tid: cid) then {
+            bxv: atomName :ast n: (ast.nodes.get i: armTe.u64)
+            mbv: "a union arm holds reftypes; box the valtype: '\{aname}: (Box \{bxv})'"
+            (addResolveErrorH
+                :st
+                nodeid: fm.nodeid
+                lineno: fm.lineno
+                colno: fm.colno
+                e: zast.err.typeError
+                msg: mbv
+                width: aname.length.u32.orPanic
+            )
+        }
+    }
+}
 
-# resolveUnion -- resolve a union ObjectDef into a UNION reference type: a child
-# per arm (arm name -> payload type-ref shell; a `null` arm -> the `null` shell),
-# a synthesized `tag` child (the `{name}:tag:data` discriminator wrapper), then any
-# as-block methods. Unions are reference types (is_valtype false); they have no
-# `create` (bare construction is disabled) and no `==`/`!=`. A union keeps a
-# destructor unless every arm is `null` (Priority elides it; IntResult/Result/Typed
-# keep it). A custom DATA tag (`as { tag: <data>.tag }`) becomes the `tag` child in
-# place of the synth wrapper; generics arrive later.
-resolveUnion: function {
+# attachUnionArm -- resolve one union isItem into an arm: its payload type, the
+# ordinal it carries, and the diagnostics an ill-formed arm earns. Answers the
+# arm's tid, or 0 for a null (payload-less) arm.
+attachUnionArm: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    uid: u64
+    defName: StringView
+    fm: zast.NamedOperationData.view
+    ordinalArmNames: (IdSet u64)
+} is {
+    aname: zast.nameTextAt :ast ref: fm.name
+    if fm.name == zast.wkTag then {
+        mt: "'tag' is a reserved member name".string
+        (addResolveErrorH
+            :st
+            nodeid: fm.nodeid
+            lineno: fm.lineno
+            colno: fm.colno
+            e: zast.err.reservedMember
+            msg: mt
+            width: 3
+        )
+    }
+    ordinalArmNames.add item: fm.name.u64
+    an: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation.u64))
+    # A `(Box T)` arm collapses to T: the arm child IS the boxed
+    # valtype. A union arm is heap-celled whichever family it holds,
+    # so the spelling changes no emitted C; it exists so the
+    # declaration SAYS the arm boxes a valtype. Only the builtin Box
+    # (empty generic class body) collapses; a user class named Box
+    # resolves as an ordinary parameterized arm.
+    armTe: fm.operation
+    armOpId: fm.operation
+    armW: true
+    for armW loop {
+        armW = false
+        {
+            awn: ast.nodes.get i: armOpId.u64
+            match (
+                awn
+            ) case expression then {
+                armOpId = awn.expression
+                armW = true
+            } else null
+        }
+    }
+    {
+        acn: ast.nodes.get i: armOpId.u64
+        match (
+            acn
+        ) case call then {
+            bxh: (zast.nameTextAt
+                :ast
+                ref: (atomNameId :ast n: (ast.nodes.get i: acn.callable.u64))
+            )
+            if bxh.stringview == "Box" then {
+                bxt: (optU64Or
+                    o: (walkLookupTyperef :st :frame :ast :unitDecl base: "Box")
+                    d: 0)
+                isBx: false
+                if bxt > 0 then {
+                    if (st.reg.typetypeOf typeId: (ztypes.tid.create from: bxt.u64)) == ztypes.ztypetype.classType then {
+                        if (st.typing.declMemberCount ownerTid: (ztypes.tid.create from: bxt.u64)) == 0 then isBx = true
+                    }
+                }
+                if isBx then {
+                    baiter: acn.arguments.iterate
+                    for baId: baiter loop {
+                        ba: ast.nodes.get i: baId.u64
+                        match (
+                            ba
+                        ) case namedoperation then {
+                            if armTe == fm.operation then armTe = ba.operation
+                        } else null
+                    }
+                }
+            }
+        } else null
+    }
+    cid: (resolveTyperefShellMarked
+        :st
+        :frame
+
+        :ast
+        :unitDecl
+        ownerId: 0
+        typeExpr: (ast.nodes.get i: armTe.u64)
+        thisName: defName
+    )
+    if armTe != fm.operation then {
+        if (typeIsValtype :st tid: cid) == false then {
+            bxw: atomName :ast n: (ast.nodes.get i: armTe.u64)
+            mbx: "'\{bxw}' is already a reftype; a union arm holds it directly -- drop the Box"
+            (addResolveErrorH
+                :st
+                nodeid: fm.nodeid
+                lineno: fm.lineno
+                colno: fm.colno
+                e: zast.err.typeError
+                msg: mbx
+                width: aname.length.u32.orPanic
+            )
+        }
+    }
+    (st.typing.setMemberType
+        parentTypeId: (ztypes.tid.create from: uid.u64)
+        nameId: fm.name
+        childTypeId: cid
+    )
+    # An arm's marker is the payload's, not the union's: the shell
+    # resolve above strips it, so record it per member the way a class
+    # field does. `view` / `hold` are what a match arm reads back.
+    alk: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
+    armMk: false
+    match (
+        alk
+    ) case some then {
+        armMk = true
+        (st.typing.setChildOwnership
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: uid.u64)
+            name: aname.stringview
+            ownership: alk
+        )
+    } case none then null
+    (checkUnionArmIsReftype
+        :st
+        :ast
+        :fm
+        an: an.stringview
+        aname: aname.stringview
+        :armTe
+        :armMk
+        :cid
+    )
+    (recordTyperef
+        :st
+        :frame
+
+        :ast
+        :unitDecl
+        thisName: ""
+        node: (ast.nodes.get i: armTe.u64)
+    )
+}
+# attachUnionMethods -- a union's asItems are its methods. A name that collides
+# with one of its ARM names is rejected here: an arm read and a method call spell
+# the same at the use site.
+attachUnionMethods: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    vnode: zast.ObjectDefData
-} is {
-    uid: (declareCanonicalType
-        :st
-        :frame
-        :ast
-
-        :unitDecl
-        ownerNameId: zast.nameid
-        name: defName
-        typetype: ztypes.ztypetype.unionType
-    )
-    uuid: uid
-    pvExcl_uuid: (ListVal u64)
-    pvGrants_uuid: (ListVal u64)
-    scanVisibility :st :ast onode: vnode excl: pvExcl_uuid grants: pvGrants_uuid
-    st.reg.setValtype typeId: (ztypes.tid.create from: uid.u64) value: false
-    isgen: hasGenericParam :ast items: vnode.asItems
-    if isgen then {
-        st.reg.setGeneric typeId: (ztypes.tid.create from: uid.u64) value: true
-        (registerGenericParams
-            :st
-            :ast
-            tdecl: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
-            items: vnode.asItems
-        )
-    }
-    allNull: true
-    armCountU: u64
-    firstArmU: u64
-    secondArmU: u64
+    vnode: zast.ObjectDefData.view
+    uid: u64
+    isgen: bool
     ordinalArmNames: (IdSet u64)
-    fiter: vnode.isItems.iterate
-    for fmId: fiter loop {
-        fm: ast.nodes.get i: fmId.u64
-        match (
-            fm
-        ) case namedoperation then {
-            aname: zast.nameTextAt :ast ref: fm.name
-            if fm.name == zast.wkTag then {
-                mt: "'tag' is a reserved member name".string
-                (addResolveErrorH
-                    :st
-                    nodeid: fm.nodeid
-                    lineno: fm.lineno
-                    colno: fm.colno
-                    e: zast.err.reservedMember
-                    msg: mt
-                    width: 3
-                )
-            }
-            ordinalArmNames.add item: fm.name.u64
-            armCountU = armCountU + 1
-            if armCountU == 1 then firstArmU = fm.name.u64
-            if armCountU == 2 then secondArmU = fm.name.u64
-            an: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation.u64))
-            if an.stringview != "null" then allNull = false
-            # A `(Box T)` arm collapses to T: the arm child IS the boxed
-            # valtype. A union arm is heap-celled whichever family it holds,
-            # so the spelling changes no emitted C; it exists so the
-            # declaration SAYS the arm boxes a valtype. Only the builtin Box
-            # (empty generic class body) collapses; a user class named Box
-            # resolves as an ordinary parameterized arm.
-            armTe: fm.operation
-            armOpId: fm.operation
-            armW: true
-            for armW loop {
-                armW = false
-                {
-                    awn: ast.nodes.get i: armOpId.u64
-                    match (
-                        awn
-                    ) case expression then {
-                        armOpId = awn.expression
-                        armW = true
-                    } else null
-                }
-            }
-            {
-                acn: ast.nodes.get i: armOpId.u64
-                match (
-                    acn
-                ) case call then {
-                    bxh: (zast.nameTextAt
-                        :ast
-                        ref: (atomNameId :ast n: (ast.nodes.get i: acn.callable.u64))
-                    )
-                    if bxh.stringview == "Box" then {
-                        bxt: (optU64Or
-                            o: (walkLookupTyperef :st :frame :ast :unitDecl base: "Box")
-                            d: 0)
-                        isBx: false
-                        if bxt > 0 then {
-                            if (st.reg.typetypeOf typeId: (ztypes.tid.create from: bxt.u64)) == ztypes.ztypetype.classType then {
-                                if (st.typing.declMemberCount ownerTid: (ztypes.tid.create from: bxt.u64)) == 0 then isBx = true
-                            }
-                        }
-                        if isBx then {
-                            baiter: acn.arguments.iterate
-                            for baId: baiter loop {
-                                ba: ast.nodes.get i: baId.u64
-                                match (
-                                    ba
-                                ) case namedoperation then {
-                                    if armTe == fm.operation then armTe = ba.operation
-                                } else null
-                            }
-                        }
-                    }
-                } else null
-            }
-            cid: (resolveTyperefShellMarked
-                :st
-                :frame
-
-                :ast
-                :unitDecl
-                ownerId: 0
-                typeExpr: (ast.nodes.get i: armTe.u64)
-                thisName: defName
-            )
-            if armTe != fm.operation then {
-                if (typeIsValtype :st tid: cid) == false then {
-                    bxw: atomName :ast n: (ast.nodes.get i: armTe.u64)
-                    mbx: "'\{bxw}' is already a reftype; a union arm holds it directly -- drop the Box"
-                    (addResolveErrorH
-                        :st
-                        nodeid: fm.nodeid
-                        lineno: fm.lineno
-                        colno: fm.colno
-                        e: zast.err.typeError
-                        msg: mbx
-                        width: aname.length.u32.orPanic
-                    )
-                }
-            }
-            (st.typing.setMemberType
-                parentTypeId: (ztypes.tid.create from: uid.u64)
-                nameId: fm.name
-                childTypeId: cid
-            )
-            # An arm's marker is the payload's, not the union's: the shell
-            # resolve above strips it, so record it per member the way a class
-            # field does. `view` / `hold` are what a match arm reads back.
-            alk: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
-            armMk: false
-            match (
-                alk
-            ) case some then {
-                armMk = true
-                (st.typing.setChildOwnership
-                    pool: ast.names
-                    parentTypeId: (ztypes.tid.create from: uid.u64)
-                    name: aname.stringview
-                    ownership: alk
-                )
-            } case none then null
-            # THE BOX RULE: a union holds reftypes. A null arm carries no
-            # payload; a MARKED arm (view/borrow/hold) is reference-family
-            # whatever it points at; a collapsed (Box T) arm was already
-            # vetted valtype. What remains must be a reftype.
-            if an.stringview != "null" when armTe == fm.operation then {
-                if (armMk) == false when (typeIsValtype :st tid: cid) then {
-                    bxv: atomName :ast n: (ast.nodes.get i: armTe.u64)
-                    mbv: "a union arm holds reftypes; box the valtype: '\{aname}: (Box \{bxv})'"
-                    (addResolveErrorH
-                        :st
-                        nodeid: fm.nodeid
-                        lineno: fm.lineno
-                        colno: fm.colno
-                        e: zast.err.typeError
-                        msg: mbv
-                        width: aname.length.u32.orPanic
-                    )
-                }
-            }
-            (recordTyperef
-                :st
-                :frame
-
-                :ast
-                :unitDecl
-                thisName: ""
-                node: (ast.nodes.get i: armTe.u64)
-            )
-        } else null
-    }
-    # both arm names of a 2-arm sum -- the union half of the same record the
-    # variant resolver writes. Option and Result are the reason it exists.
-    if armCountU == 2 then {
-        st.typing.sumPairFirstArm.set key: uid.u64 value: firstArmU
-        st.typing.sumPairSecondArm.set key: uid.u64 value: secondArmU
-    }
-    if (isgen) == false then {
-        # the discriminator's declared storage, so a backend can honour it
-        {
-            tbU: (variantTagBaseTid
-                :st
-                :frame
-                :ast
-
-                :unitDecl
-                asItems: vnode.asItems
-            )
-            if tbU != 18446744073709551615.u64 then (st.typing.variantTagBase.set
-                key: uid.u64
-                value: tbU
-            )
-        }
-        customTag: unionCustomTagId :st :frame :ast :unitDecl :uid asItems: vnode.asItems
-        tagId: u64
-        match (
-            customTag
-        ) case some then {
-            tagId = customTag
-        } case none then {
-            tagName: "\{defName}:tag:data"
-            tagId = st.reg.newType name: tagName.stringview typetype: ztypes.ztypetype.dataType
-        }
-        (st.typing.declSynthMember
-            parentTypeId: (ztypes.tid.create from: uid.u64)
-            nameId: zast.wkTag
-            kind: ztyping.declkind.fieldDecl
-        )
-        (st.typing.setMemberType
-            parentTypeId: (ztypes.tid.create from: uid.u64)
-            nameId: zast.wkTag
-            childTypeId: tagId
-        )
-    }
+} is {
     aiter: vnode.asItems.iterate
     for amId: aiter loop {
         am: ast.nodes.get i: amId.u64
@@ -8028,6 +7980,134 @@ resolveUnion: function {
             }
         } else null
     }
+}
+
+# resolveUnion -- resolve a union ObjectDef into a UNION reference type: a child
+# per arm (arm name -> payload type-ref shell; a `null` arm -> the `null` shell),
+# a synthesized `tag` child (the `{name}:tag:data` discriminator wrapper), then any
+# as-block methods. Unions are reference types (is_valtype false); they have no
+# `create` (bare construction is disabled) and no `==`/`!=`. A union keeps a
+# destructor unless every arm is `null` (Priority elides it; IntResult/Result/Typed
+# keep it). A custom DATA tag (`as { tag: <data>.tag }`) becomes the `tag` child in
+# place of the synth wrapper; generics arrive later.
+resolveUnion: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    vnode: zast.ObjectDefData
+} is {
+    uid: (declareCanonicalType
+        :st
+        :frame
+        :ast
+
+        :unitDecl
+        ownerNameId: zast.nameid
+        name: defName
+        typetype: ztypes.ztypetype.unionType
+    )
+    uuid: uid
+    pvExcl_uuid: (ListVal u64)
+    pvGrants_uuid: (ListVal u64)
+    scanVisibility :st :ast onode: vnode excl: pvExcl_uuid grants: pvGrants_uuid
+    st.reg.setValtype typeId: (ztypes.tid.create from: uid.u64) value: false
+    isgen: hasGenericParam :ast items: vnode.asItems
+    if isgen then {
+        st.reg.setGeneric typeId: (ztypes.tid.create from: uid.u64) value: true
+        (registerGenericParams
+            :st
+            :ast
+            tdecl: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
+            items: vnode.asItems
+        )
+    }
+    allNull: true
+    armCountU: u64
+    firstArmU: u64
+    secondArmU: u64
+    ordinalArmNames: (IdSet u64)
+    fiter: vnode.isItems.iterate
+    for fmId: fiter loop {
+        fm: ast.nodes.get i: fmId.u64
+        match (
+            fm
+        ) case namedoperation then {
+            armCountU = armCountU + 1
+            if armCountU == 1 then firstArmU = fm.name.u64
+            if armCountU == 2 then secondArmU = fm.name.u64
+            anU: (zast.nameTextAt
+                :ast
+                ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation.u64))
+            )
+            if anU.stringview != "null" then allNull = false
+            (attachUnionArm
+                :st
+                :ast
+                :unitDecl
+                :frame
+                :uid
+                :defName
+                :fm
+                :ordinalArmNames
+            )
+        } else null
+    }
+    # both arm names of a 2-arm sum -- the union half of the same record the
+    # variant resolver writes. Option and Result are the reason it exists.
+    if armCountU == 2 then {
+        st.typing.sumPairFirstArm.set key: uid.u64 value: firstArmU
+        st.typing.sumPairSecondArm.set key: uid.u64 value: secondArmU
+    }
+    if (isgen) == false then {
+        # the discriminator's declared storage, so a backend can honour it
+        {
+            tbU: (variantTagBaseTid
+                :st
+                :frame
+                :ast
+
+                :unitDecl
+                asItems: vnode.asItems
+            )
+            if tbU != 18446744073709551615.u64 then (st.typing.variantTagBase.set
+                key: uid.u64
+                value: tbU
+            )
+        }
+        customTag: unionCustomTagId :st :frame :ast :unitDecl :uid asItems: vnode.asItems
+        tagId: u64
+        match (
+            customTag
+        ) case some then {
+            tagId = customTag
+        } case none then {
+            tagName: "\{defName}:tag:data"
+            tagId = st.reg.newType name: tagName.stringview typetype: ztypes.ztypetype.dataType
+        }
+        (st.typing.declSynthMember
+            parentTypeId: (ztypes.tid.create from: uid.u64)
+            nameId: zast.wkTag
+            kind: ztyping.declkind.fieldDecl
+        )
+        (st.typing.setMemberType
+            parentTypeId: (ztypes.tid.create from: uid.u64)
+            nameId: zast.wkTag
+            childTypeId: tagId
+        )
+    }
+    (attachUnionMethods
+        :st
+        :ast
+        :unitDecl
+        :frame
+        :defName
+        :vnode
+        :uid
+        :isgen
+        :ordinalArmNames
+    )
     if (allNull) == false then {
         st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: uid.u64)
     }
@@ -32937,6 +33017,303 @@ reportUnitConstantRef: function {
     )
     st.typing.isError = true
 }
+# resolveDottedConstantDef -- a unit-level constant whose value is a dotted path.
+# That is a width-suffixed literal (`1.u32`, the child naming the type), a variant
+# arm read (`false: bool.false` -- a compile-time value, the shape core.z uses 41
+# times), the unit-alias form resolveDef registers, or a member read on a type.
+resolveDottedConstantDef: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    defn: zast.DottedPathData.view
+    sfLit: StringView
+    sfTy: StringView
+} is {
+    # `origin: Point.create x: 0` parses as TWO unit members -- the
+    # dotted value `Point.create` and a separate constant `x: 0` --
+    # so the construction never reaches this pass as a call. A dotted
+    # value is a suffixed literal (`1.u32`) or the unit-alias form
+    # (`Node: zast.Node`, whose parent names a UNIT and which
+    # resolveDef registers); anything else is a member read on a type.
+    if (isNumericLiteralName name: sfLit) == false then {
+        # `false: bool.false` reads a variant ARM -- a compile-time
+        # value, and the shape core.z uses 41 times. A FUNCTION member
+        # (`Point.create`) is a runtime construction instead, which a
+        # unit constant cannot hold.
+        # The parent's FAMILY decides: a variant or union parent means
+        # the child is an ARM -- a compile-time value. Any other family
+        # means a member read or a construction. `declDefTypetype`
+        # classifies a definition without resolving it, which is what
+        # reaches a SAME-UNIT type at this stage; the typeref walk
+        # answers for the resolvable ones.
+        isCtor: false
+        if (nameDenotesUnit
+            :st
+            :frame
+
+            nameId: (nameIdOf :ast name: sfLit)
+        ) == false then {
+            ptt: ztypes.ztypetype.nullType
+            known: false
+            {
+                pdc: (declOfUnitDef
+                    :st
+                    :frame
+                    :unitDecl
+                    nameId: (nameIdOf :ast name: sfLit)
+                )
+                if (pdc.isZero) == false then {
+                    pdt: declDefTypetype :st :ast declId: pdc
+                    match (
+                        pdt
+                    ) case some then {
+                        ptt = pdt
+                        known = true
+                    } case none then null
+                }
+            }
+            if (known) == false then {
+                pTo: (walkLookupTyperef
+                    :st
+                    :frame
+                    :ast
+
+                    :unitDecl
+                    base: sfLit
+                )
+                match (
+                    pTo
+                ) case some then {
+                    ptt = st.reg.typetypeOf typeId: (ztypes.tid.create from: pTo.u64)
+                    known = true
+                } case none then null
+            }
+            if known then {
+                isCtor = true
+                if ptt == ztypes.ztypetype.variantType then isCtor = false
+                if ptt == ztypes.ztypetype.unionType then isCtor = false
+                # `sub.NAME` where the parent is a UNIT reads a member
+                # of it, which is what every cross-unit re-export is;
+                # only a TYPE parent makes the read a construction.
+                if ptt == ztypes.ztypetype.unitType then isCtor = false
+            }
+        }
+        # ASK THE CONSTANT FIRST. `LEN: LIB.length` reads a member of
+        # a string CONSTANT, and LIB's own type is StringView -- a
+        # class -- so the typeref walk above finds a non-variant parent
+        # and calls the read a construction. The value settles it.
+        if isCtor then {
+            pcs: (constValueOfMember
+                :st
+                :frame
+                :ast
+
+                :unitDecl
+                defName: sfLit
+            )
+            if pcs.kind.svalKind then isCtor = false
+        }
+        if isCtor then {
+            dm: "a unit-level constant takes a literal value, not a construction".string
+            dh: "construct it inside a function, or make '\{defName}' a function that returns the value"
+            (reportUnitConstantShape
+                :st
+                nodeid: defn.nodeid
+                lineno: defn.lineno
+                colno: defn.colno
+                width: sfLit.length.u32.orPanic
+                msg: dm
+                hint: dh
+            )
+        }
+    }
+    if (isNumericLiteralName name: sfLit) then {
+        # `wkFirst: 1.nid` NAMES its type, so asking for the constant
+        # is asking for that type: descend for it rather than only
+        # looking it up, or a typedef nothing else references is
+        # unresolved at the moment the constant needs it and the
+        # value's own i64 registers in its place.
+        sfT: walkLookupTyperef :st :frame :ast :unitDecl base: sfTy
+        if sfT.none then {
+            sfD: descendNamed :st :frame :ast :unitDecl name: sfTy
+            if sfD > 0 then sfT = optionval.some sfD.u64
+        }
+        match (
+            sfT
+        ) case some then {
+            # keyed on the constant's OWNER -- the namespace, block or
+            # file unit it is written in -- as the value channel keys
+            # it, not on the file unit by name (which leaked a nested
+            # unit's constant into the file unit's index)
+            sfU: (declTypeIdOf
+                :st
+                declId: (constOwnerDeclFor :st :frame :ast :unitDecl :defName)
+            )
+            if (sfU.isZero) == false then {
+                (st.typing.setMemberType
+                    parentTypeId: sfU
+                    nameId: (zast.poolFind pool: ast.names text: defName)
+                    childTypeId: sfT
+                )
+            }
+        } case none then null
+    }
+}
+# resolveBinopConstantDef -- a unit-level constant whose value is a binary
+# expression folds here, and a fold that fails is reported: a definition at unit
+# level is required to be a compile-time constant.
+resolveBinopConstantDef: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    defn: Node.view
+} is {
+    # A constant expression (`COMBINED: OFFSET + SCALE`): the operand
+    # walk stamps the refs and the binop; a literal result materialises
+    # to its default, a concrete one (an already-materialised constant)
+    # keeps it.
+    bt: constantOperandType :st :frame :ast :unitDecl n: defn
+    base2: ""
+    if bt == st.reg.literalIntTid then base2 = "i64"
+    if bt == st.reg.literalFloatTid then base2 = "f64"
+    if base2.length > 0 then {
+        mOpt: walkLookupTyperef :st :frame :ast :unitDecl base: base2
+        match (
+            mOpt
+        ) case some then {
+            cu2: (declTypeIdOf
+                :st
+                declId: unitDecl
+            )
+            if (cu2.isZero) == false then {
+                (st.typing.setMemberType
+                    parentTypeId: (ztypes.tid.create from: cu2.u64)
+                    nameId: (zast.poolFind pool: ast.names text: defName)
+                    childTypeId: mOpt
+                )
+            }
+        } case none then null
+    } else {
+        if bt > 0 then {
+            cu3: (declTypeIdOf
+                :st
+                declId: unitDecl
+            )
+            if (cu3.isZero) == false then {
+                (st.typing.setMemberType
+                    parentTypeId: (ztypes.tid.create from: cu3.u64)
+                    nameId: (zast.poolFind pool: ast.names text: defName)
+                    childTypeId: bt
+                )
+            }
+        }
+    }
+}
+# resolveCalledConstantDef -- a unit-level constant whose value is a CALL. A
+# construction is not a literal, but the parenthesised form is the generic-unit
+# instantiation (`intmath: (genmath t: i64)`) and stays legal -- its callee names
+# a UNIT, which is the test here. A unit declared in THIS file has no registry
+# entry yet and a generic-unit binding is no file unit at all, so the Decl tree
+# answers both.
+resolveCalledConstantDef: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    defn: zast.CallData.view
+} is {
+    ccn: ast.nodes.get i: defn.callable.u64
+    cbn: atomName :ast n: ccn
+    if cbn.length == 0 then cbn = dottedRootName :ast n: ccn
+    if cbn.length > 0 then {
+        # a unit declared in THIS file has no registry entry yet, and
+        # a generic-unit binding is no file unit at all: the Decl tree
+        # answers both -- without it every `intmath: (mathops t: i64)`
+        # reads as a construction.
+        cbu: nameDenotesUnit :st :frame nameId: (nameIdOf :ast name: cbn.stringview)
+        if (cbu) == false then {
+            # the same scope walk the instantiation collector uses --
+            # this namespace, each enclosing one, the unit root, then a
+            # file unit of that name. declOfUnitDef reached only a
+            # TOP-LEVEL binding of this unit, so a template nested in a
+            # namespace, or named through another unit, read as a
+            # construction and was reported as a malformed constant.
+            cscp: unitFrameOf :st declId: frame
+            csg: (ListVal u64)
+            instCallablePath :ast op: ccn segs: csg
+            cdc: instTemplateDecl :st scopeDeclId: cscp segs: csg
+            if (cdc.isZero) == false then {
+                cdo: st.typing.decls.get i: cdc.u64
+                if cdo.kind.unitDecl then cbu = true
+            }
+        }
+        # ASK THE CONSTANT FIRST, the same ordering the dotted-path
+        # value read uses: `CT: (LIB.contains needle: "x")` is a call
+        # whose receiver is a string CONSTANT, so it is a value and not
+        # a construction. Classifying by the callee's shape alone calls
+        # every static string method a construction.
+        if (cbu) == false then {
+            crv: (constValueOfMember
+                :st
+                :frame
+                :ast
+
+                :unitDecl
+                defName: cbn.stringview
+            )
+            if crv.kind.svalKind then cbu = true
+        }
+        if (cbu) == false then {
+            ckn: false
+            {
+                cko: (walkLookupTyperef
+                    :st
+                    :frame
+                    :ast
+
+                    :unitDecl
+                    base: cbn.stringview
+                )
+                match (
+                    cko
+                ) case some then {
+                    ckn = true
+                } case none then null
+            }
+            if (ckn) == false then {
+                crm: "Unknown reference '\{cbn}'"
+                (reportUnitConstantRef
+                    :st
+                    nodeid: defn.nodeid
+                    lineno: defn.lineno
+                    colno: defn.colno
+                    width: cbn.length.u32.orPanic
+                    msg: crm
+                )
+                cbu = true
+            }
+        }
+        if (cbu) == false then {
+            cm: "a unit-level constant takes a literal value, not a construction".string
+            ch: "construct it inside a function, or make '\{defName}' a function that returns the value"
+            (reportUnitConstantShape
+                :st
+                nodeid: defn.nodeid
+                lineno: defn.lineno
+                colno: defn.colno
+                width: cbn.length.u32.orPanic
+                msg: cm
+                hint: ch
+            )
+        }
+    }
+}
+
 
 # resolveConstantDef -- one definition: an (expression-wrapped) numeric-literal
 # atomid is a unit constant, recorded as the literal's concrete default (i64 /
@@ -32979,135 +33356,16 @@ resolveConstantDef: function {
             if sfC.atomid then sfTy = zast.nameTextCopy :ast ref: sfC.name
         }
         if sfLit.length > 0 when sfTy.length > 0 then {
-            # `origin: Point.create x: 0` parses as TWO unit members -- the
-            # dotted value `Point.create` and a separate constant `x: 0` --
-            # so the construction never reaches this pass as a call. A dotted
-            # value is a suffixed literal (`1.u32`) or the unit-alias form
-            # (`Node: zast.Node`, whose parent names a UNIT and which
-            # resolveDef registers); anything else is a member read on a type.
-            if (isNumericLiteralName name: sfLit.stringview) == false then {
-                # `false: bool.false` reads a variant ARM -- a compile-time
-                # value, and the shape core.z uses 41 times. A FUNCTION member
-                # (`Point.create`) is a runtime construction instead, which a
-                # unit constant cannot hold.
-                # The parent's FAMILY decides: a variant or union parent means
-                # the child is an ARM -- a compile-time value. Any other family
-                # means a member read or a construction. `declDefTypetype`
-                # classifies a definition without resolving it, which is what
-                # reaches a SAME-UNIT type at this stage; the typeref walk
-                # answers for the resolvable ones.
-                isCtor: false
-                if (nameDenotesUnit
-                    :st
-                    :frame
-
-                    nameId: (nameIdOf :ast name: sfLit.stringview)
-                ) == false then {
-                    ptt: ztypes.ztypetype.nullType
-                    known: false
-                    {
-                        pdc: (declOfUnitDef
-                            :st
-                            :frame
-                            :unitDecl
-                            nameId: (nameIdOf :ast name: sfLit.stringview)
-                        )
-                        if (pdc.isZero) == false then {
-                            pdt: declDefTypetype :st :ast declId: pdc
-                            match (
-                                pdt
-                            ) case some then {
-                                ptt = pdt
-                                known = true
-                            } case none then null
-                        }
-                    }
-                    if (known) == false then {
-                        pTo: (walkLookupTyperef
-                            :st
-                            :frame
-                            :ast
-
-                            :unitDecl
-                            base: sfLit.stringview
-                        )
-                        match (
-                            pTo
-                        ) case some then {
-                            ptt = st.reg.typetypeOf typeId: (ztypes.tid.create from: pTo.u64)
-                            known = true
-                        } case none then null
-                    }
-                    if known then {
-                        isCtor = true
-                        if ptt == ztypes.ztypetype.variantType then isCtor = false
-                        if ptt == ztypes.ztypetype.unionType then isCtor = false
-                        # `sub.NAME` where the parent is a UNIT reads a member
-                        # of it, which is what every cross-unit re-export is;
-                        # only a TYPE parent makes the read a construction.
-                        if ptt == ztypes.ztypetype.unitType then isCtor = false
-                    }
-                }
-                # ASK THE CONSTANT FIRST. `LEN: LIB.length` reads a member of
-                # a string CONSTANT, and LIB's own type is StringView -- a
-                # class -- so the typeref walk above finds a non-variant parent
-                # and calls the read a construction. The value settles it.
-                if isCtor then {
-                    pcs: (constValueOfMember
-                        :st
-                        :frame
-                        :ast
-
-                        :unitDecl
-                        defName: sfLit.stringview
-                    )
-                    if pcs.kind.svalKind then isCtor = false
-                }
-                if isCtor then {
-                    dm: "a unit-level constant takes a literal value, not a construction".string
-                    dh: "construct it inside a function, or make '\{defName}' a function that returns the value"
-                    (reportUnitConstantShape
-                        :st
-                        nodeid: defn.nodeid
-                        lineno: defn.lineno
-                        colno: defn.colno
-                        width: sfLit.length.u32.orPanic
-                        msg: dm
-                        hint: dh
-                    )
-                }
-            }
-            if (isNumericLiteralName name: sfLit.stringview) then {
-                # `wkFirst: 1.nid` NAMES its type, so asking for the constant
-                # is asking for that type: descend for it rather than only
-                # looking it up, or a typedef nothing else references is
-                # unresolved at the moment the constant needs it and the
-                # value's own i64 registers in its place.
-                sfT: walkLookupTyperef :st :frame :ast :unitDecl base: sfTy.stringview
-                if sfT.none then {
-                    sfD: descendNamed :st :frame :ast :unitDecl name: sfTy.stringview
-                    if sfD > 0 then sfT = optionval.some sfD.u64
-                }
-                match (
-                    sfT
-                ) case some then {
-                    # keyed on the constant's OWNER -- the namespace, block or
-                    # file unit it is written in -- as the value channel keys
-                    # it, not on the file unit by name (which leaked a nested
-                    # unit's constant into the file unit's index)
-                    sfU: (declTypeIdOf
-                        :st
-                        declId: (constOwnerDeclFor :st :frame :ast :unitDecl :defName)
-)
-                    if (sfU.isZero) == false then {
-                        (st.typing.setMemberType
-                            parentTypeId: sfU
-                            nameId: (zast.poolFind pool: ast.names text: defName)
-                            childTypeId: sfT
-                        )
-                    }
-                } case none then null
-            }
+            (resolveDottedConstantDef
+                :ast
+                :st
+                :unitDecl
+                :frame
+                :defName
+                :defn
+                sfLit: sfLit.stringview
+                sfTy: sfTy.stringview
+            )
         }
     } case atomid then {
         dfN: zast.nameTextAt :ast ref: defn.name
@@ -33121,7 +33379,7 @@ resolveConstantDef: function {
                 cu: (declTypeIdOf
                     :st
                     declId: (constOwnerDeclFor :st :frame :ast :unitDecl :defName)
-)
+                )
                 if (cu.isZero) == false then {
                     (st.typing.setMemberType
                         parentTypeId: cu
@@ -33142,133 +33400,24 @@ resolveConstantDef: function {
         match (
             defn
         ) case call then {
-            ccn: ast.nodes.get i: defn.callable.u64
-            cbn: atomName :ast n: ccn
-            if cbn.length == 0 then cbn = dottedRootName :ast n: ccn
-            if cbn.length > 0 then {
-                # a unit declared in THIS file has no registry entry yet, and
-                # a generic-unit binding is no file unit at all: the Decl tree
-                # answers both -- without it every `intmath: (mathops t: i64)`
-                # reads as a construction.
-                cbu: nameDenotesUnit :st :frame nameId: (nameIdOf :ast name: cbn.stringview)
-                if (cbu) == false then {
-                    # the same scope walk the instantiation collector uses --
-                    # this namespace, each enclosing one, the unit root, then a
-                    # file unit of that name. declOfUnitDef reached only a
-                    # TOP-LEVEL binding of this unit, so a template nested in a
-                    # namespace, or named through another unit, read as a
-                    # construction and was reported as a malformed constant.
-                    cscp: unitFrameOf :st declId: frame
-                    csg: (ListVal u64)
-                    instCallablePath :ast op: ccn segs: csg
-                    cdc: instTemplateDecl :st scopeDeclId: cscp segs: csg
-                    if (cdc.isZero) == false then {
-                        cdo: st.typing.decls.get i: cdc.u64
-                        if cdo.kind.unitDecl then cbu = true
-                    }
-                }
-                # ASK THE CONSTANT FIRST, the same ordering the dotted-path
-                # value read uses: `CT: (LIB.contains needle: "x")` is a call
-                # whose receiver is a string CONSTANT, so it is a value and not
-                # a construction. Classifying by the callee's shape alone calls
-                # every static string method a construction.
-                if (cbu) == false then {
-                    crv: (constValueOfMember
-                        :st
-                        :frame
-                        :ast
-
-                        :unitDecl
-                        defName: cbn.stringview
-                    )
-                    if crv.kind.svalKind then cbu = true
-                }
-                if (cbu) == false then {
-                    ckn: false
-                    {
-                        cko: (walkLookupTyperef
-                            :st
-                            :frame
-                            :ast
-
-                            :unitDecl
-                            base: cbn.stringview
-                        )
-                        match (
-                            cko
-                        ) case some then {
-                            ckn = true
-                        } case none then null
-                    }
-                    if (ckn) == false then {
-                        crm: "Unknown reference '\{cbn}'"
-                        (reportUnitConstantRef
-                            :st
-                            nodeid: defn.nodeid
-                            lineno: defn.lineno
-                            colno: defn.colno
-                            width: cbn.length.u32.orPanic
-                            msg: crm
-                        )
-                        cbu = true
-                    }
-                }
-                if (cbu) == false then {
-                    cm: "a unit-level constant takes a literal value, not a construction".string
-                    ch: "construct it inside a function, or make '\{defName}' a function that returns the value"
-                    (reportUnitConstantShape
-                        :st
-                        nodeid: defn.nodeid
-                        lineno: defn.lineno
-                        colno: defn.colno
-                        width: cbn.length.u32.orPanic
-                        msg: cm
-                        hint: ch
-                    )
-                }
-            }
+            (resolveCalledConstantDef
+                :ast
+                :st
+                :unitDecl
+                :frame
+                :defName
+                :defn
+            )
         } else null
         if (isBinopNode n: defn) then {
-            # A constant expression (`COMBINED: OFFSET + SCALE`): the operand
-            # walk stamps the refs and the binop; a literal result materialises
-            # to its default, a concrete one (an already-materialised constant)
-            # keeps it.
-            bt: constantOperandType :st :frame :ast :unitDecl n: defn
-            base2: ""
-            if bt == st.reg.literalIntTid then base2 = "i64"
-            if bt == st.reg.literalFloatTid then base2 = "f64"
-            if base2.length > 0 then {
-                mOpt: walkLookupTyperef :st :frame :ast :unitDecl base: base2
-                match (
-                    mOpt
-                ) case some then {
-                    cu2: (declTypeIdOf
-                        :st
-                        declId: unitDecl
-                    )
-                    if (cu2.isZero) == false then {
-                        (st.typing.setMemberType
-                            parentTypeId: (ztypes.tid.create from: cu2.u64)
-                            nameId: (zast.poolFind pool: ast.names text: defName)
-                            childTypeId: mOpt
-                        )
-                    }
-                } case none then null
-            } else {
-                if bt > 0 then {
-                    cu3: (declTypeIdOf
-                        :st
-                        declId: unitDecl
-                    )
-                    if (cu3.isZero) == false then {
-                        (st.typing.setMemberType
-                            parentTypeId: (ztypes.tid.create from: cu3.u64)
-                            nameId: (zast.poolFind pool: ast.names text: defName)
-                            childTypeId: bt
-                        )
-                    }
-                }
-            }
+            (resolveBinopConstantDef
+                :ast
+                :st
+                :unitDecl
+                :frame
+                :defName
+                :defn
+            )
         }
     }
 }
