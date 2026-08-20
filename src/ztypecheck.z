@@ -7162,6 +7162,217 @@ detectTagAccessor: function {
     st.typing.tagAccessorName.set key: ownerId value: am.name
     st.typing.tagAccessorTid.set key: (ztypes.tid.create from: ownerId.u64) value: nid
 }
+# synthVariantEqHash -- a variant that writes its own `==` keeps it: the synthesised
+# pair is the DEFAULT, and a default yields to a declaration, exactly as
+# resolveRecord yields through eqAsR. Without this the synthesised marker
+# overwrites the declared method's type, and the registry then answers that
+# `bool`'s native `==` is a structural compare no runtime supplies. `hash` is on
+# the same terms.
+synthVariantEqHash: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    vnode: zast.ObjectDefData.view
+    vid: u64
+    isgen: bool
+    eqOptV: bool
+    eqAsV: bool
+} is {
+    # a variant that writes its own `==` keeps it: the synthesised pair is the
+    # DEFAULT, and a default yields to a declaration, exactly as resolveRecord
+    # yields through eqAsR and as `hash` yields three lines below. Without
+    # this the synthesised marker overwrites the declared method's type, and
+    # the registry then answers that `bool`'s native `==` is a structural
+    # compare that no runtime supplies.
+    if (isgen) == false when (eqOptV) == false when (eqAsV) == false then {
+        eqId: st.reg.newType name: "==" ownerTid: vid typetype: ztypes.ztypetype.functionType
+        (st.typing.declSynthMember
+            parentTypeId: (ztypes.tid.create from: vid.u64)
+            nameId: zast.wkOpEq
+            kind: ztyping.declkind.methodDecl
+        )
+        (st.typing.setMemberType
+            parentTypeId: (ztypes.tid.create from: vid.u64)
+            nameId: zast.wkOpEq
+            childTypeId: eqId
+        )
+        neqId: st.reg.newType name: "!=" ownerTid: vid typetype: ztypes.ztypetype.functionType
+        (st.typing.declSynthMember
+            parentTypeId: (ztypes.tid.create from: vid.u64)
+            nameId: zast.wkOpNe
+            kind: ztyping.declkind.methodDecl
+        )
+        (st.typing.setMemberType
+            parentTypeId: (ztypes.tid.create from: vid.u64)
+            nameId: zast.wkOpNe
+            childTypeId: neqId
+        )
+    }
+    # `hash` on the same terms as `==` above (see resolveRecord).
+    hshOptV: memberNullOptOut :ast asItems: vnode.asItems member: "hash"
+    hshAsV: asDeclaresMember :ast asItems: vnode.asItems member: "hash"
+    if (isgen) == false when hshOptV == false when hshAsV == false then {
+        hshV: st.reg.newType name: "hash" ownerTid: vid typetype: ztypes.ztypetype.functionType
+        (st.typing.declSynthMember
+            parentTypeId: (ztypes.tid.create from: vid.u64)
+            nameId: zast.wkHash
+            kind: ztyping.declkind.methodDecl
+        )
+        (st.typing.setMemberType
+            parentTypeId: (ztypes.tid.create from: vid.u64)
+            nameId: zast.wkHash
+            childTypeId: hshV
+        )
+    }
+}
+# attachVariantMethods -- a variant's asItems are its methods. A name that collides
+# with one of its ARM names is rejected here: an arm read and a method call spell
+# the same at the use site.
+attachVariantMethods: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    vnode: zast.ObjectDefData.view
+    vid: u64
+    isgen: bool
+    ordinalArmNames: (IdSet u64)
+} is {
+    aiter: vnode.asItems.iterate
+    for amId: aiter loop {
+        am: ast.nodes.get i: amId.u64
+        match (
+            am
+        ) case namedoperation then {
+            mname: zast.nameTextAt :ast ref: am.name
+            mido: (resolveMethodFnLazy
+                :st
+                :frame
+
+                :ast
+                :unitDecl
+                ownerNameId: (nameIdOf :ast name: defName)
+                mname: mname.stringview
+                thisName: defName
+                op: (ast.nodes.get i: am.operation.u64)
+                lazyOk: (isgen) == false
+            )
+            match (
+                mido
+            ) case some then {
+                if (ordinalArmNames.has item: am.name.u64) then {
+                    mc: "'\{mname}' collides with the '\{defName}' arm of the same name"
+                    (addResolveErrorH
+                        :st
+                        nodeid: am.nodeid
+                        lineno: am.lineno
+                        colno: am.colno
+                        e: zast.err.duplicateDef
+                        msg: mc
+                        width: mname.length.u32.orPanic
+                    )
+                } else if mname.stringview == "tag" then {
+                    mr: "'tag' is a reserved member name".string
+                    (addResolveErrorH
+                        :st
+                        nodeid: am.nodeid
+                        lineno: am.lineno
+                        colno: am.colno
+                        e: zast.err.reservedMember
+                        msg: mr
+                        width: 3
+                    )
+                } else {
+                    (st.typing.setMemberType
+                        parentTypeId: (ztypes.tid.create from: vid.u64)
+                        nameId: am.name
+                        childTypeId: mido
+                    )
+                }
+            } else {
+                if (isgen) == false then {
+                    (detectTagAccessor
+                        :st
+                        :frame
+
+                        :ast
+                        :unitDecl
+                        :defName
+                        ownerId: vid
+                        armNames: ordinalArmNames
+                        :am
+                    )
+                }
+            }
+        } else null
+    }
+}
+# attachVariantTag -- the discriminator member a concrete variant carries: the
+# custom tag type its `as` block names, or the default one. A 2-arm sum also
+# records which arm the zero discriminator selects.
+attachVariantTag: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    vnode: zast.ObjectDefData.view
+    vid: u64
+    armCountV: u64
+    allNullV: bool
+} is {
+    customTagV: unionCustomTagId :st :frame :ast :unitDecl uid: vid asItems: vnode.asItems
+    tagId: u64
+    match (
+        customTagV
+    ) case some then {
+        tagId = customTagV
+    } case none then {
+        tagName: "\{defName}:tag:data"
+        tagId = st.reg.newType name: tagName.stringview typetype: ztypes.ztypetype.dataType
+    }
+    (st.typing.declSynthMember
+        parentTypeId: (ztypes.tid.create from: vid.u64)
+        nameId: zast.wkTag
+        kind: ztyping.declkind.fieldDecl
+    )
+    (st.typing.setMemberType
+        parentTypeId: (ztypes.tid.create from: vid.u64)
+        nameId: zast.wkTag
+        childTypeId: tagId
+    )
+    # the discriminator's declared storage, so a backend can honour it
+    {
+        tbV: (variantTagBaseTid
+            :st
+            :frame
+            :ast
+
+            :unitDecl
+            asItems: vnode.asItems
+        )
+        if tbV != 18446744073709551615.u64 then (st.typing.variantTagBase.set
+            key: vid.u64
+            value: tbV
+        )
+    }
+    # the shape, for whatever backend reads it: every arm written `null`,
+    # so the value is an ordinal and nothing needs a tagged struct -- and a
+    # discriminator whose values ARE those ordinals.
+    if allNullV when armCountV > 0 then {
+        if (variantTagIsOrdinalPlain
+            :st
+            :frame
+            :ast
+
+            :unitDecl
+            asItems: vnode.asItems
+        ) then {
+            st.typing.ordinalVariant.set key: vid.u64 value: armCountV
+        }
+    }
+}
+
 
 # resolve a variant definition: its arms and methods.
 resolveVariant: function {
@@ -7278,171 +7489,38 @@ resolveVariant: function {
         st.typing.sumPairSecondArm.set key: vid.u64 value: secondArmV
     }
     if (isgen) == false then {
-        customTagV: unionCustomTagId :st :frame :ast :unitDecl uid: vid asItems: vnode.asItems
-        tagId: u64
-        match (
-            customTagV
-        ) case some then {
-            tagId = customTagV
-        } case none then {
-            tagName: "\{defName}:tag:data"
-            tagId = st.reg.newType name: tagName.stringview typetype: ztypes.ztypetype.dataType
-        }
-        (st.typing.declSynthMember
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkTag
-            kind: ztyping.declkind.fieldDecl
-        )
-        (st.typing.setMemberType
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkTag
-            childTypeId: tagId
-        )
-        # the discriminator's declared storage, so a backend can honour it
-        {
-            tbV: (variantTagBaseTid
-                :st
-                :frame
-                :ast
-
-                :unitDecl
-                asItems: vnode.asItems
-            )
-            if tbV != 18446744073709551615.u64 then (st.typing.variantTagBase.set
-                key: vid.u64
-                value: tbV
-            )
-        }
-        # the shape, for whatever backend reads it: every arm written `null`,
-        # so the value is an ordinal and nothing needs a tagged struct -- and a
-        # discriminator whose values ARE those ordinals.
-        if allNullV when armCountV > 0 then {
-            if (variantTagIsOrdinalPlain
-                :st
-                :frame
-                :ast
-
-                :unitDecl
-                asItems: vnode.asItems
-            ) then {
-                st.typing.ordinalVariant.set key: vid.u64 value: armCountV
-            }
-        }
-    }
-    aiter: vnode.asItems.iterate
-    for amId: aiter loop {
-        am: ast.nodes.get i: amId.u64
-        match (
-            am
-        ) case namedoperation then {
-            mname: zast.nameTextAt :ast ref: am.name
-            mido: (resolveMethodFnLazy
-                :st
-                :frame
-
-                :ast
-                :unitDecl
-                ownerNameId: (nameIdOf :ast name: defName)
-                mname: mname.stringview
-                thisName: defName
-                op: (ast.nodes.get i: am.operation.u64)
-                lazyOk: (isgen) == false
-            )
-            match (
-                mido
-            ) case some then {
-                if (ordinalArmNames.has item: am.name.u64) then {
-                    mc: "'\{mname}' collides with the '\{defName}' arm of the same name"
-                    (addResolveErrorH
-                        :st
-                        nodeid: am.nodeid
-                        lineno: am.lineno
-                        colno: am.colno
-                        e: zast.err.duplicateDef
-                        msg: mc
-                        width: mname.length.u32.orPanic
-                    )
-                } else if mname.stringview == "tag" then {
-                    mr: "'tag' is a reserved member name".string
-                    (addResolveErrorH
-                        :st
-                        nodeid: am.nodeid
-                        lineno: am.lineno
-                        colno: am.colno
-                        e: zast.err.reservedMember
-                        msg: mr
-                        width: 3
-                    )
-                } else {
-                    (st.typing.setMemberType
-                        parentTypeId: (ztypes.tid.create from: vid.u64)
-                        nameId: am.name
-                        childTypeId: mido
-                    )
-                }
-            } else {
-                if (isgen) == false then {
-                    (detectTagAccessor
-                        :st
-                        :frame
-
-                        :ast
-                        :unitDecl
-                        :defName
-                        ownerId: vid
-                        armNames: ordinalArmNames
-                        :am
-                    )
-                }
-            }
-        } else null
-    }
-    # a variant that writes its own `==` keeps it: the synthesised pair is the
-    # DEFAULT, and a default yields to a declaration, exactly as resolveRecord
-    # yields through eqAsR and as `hash` yields three lines below. Without
-    # this the synthesised marker overwrites the declared method's type, and
-    # the registry then answers that `bool`'s native `==` is a structural
-    # compare that no runtime supplies.
-    if (isgen) == false when (eqOptV) == false when (eqAsV) == false then {
-        eqId: st.reg.newType name: "==" ownerTid: vid typetype: ztypes.ztypetype.functionType
-        (st.typing.declSynthMember
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkOpEq
-            kind: ztyping.declkind.methodDecl
-        )
-        (st.typing.setMemberType
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkOpEq
-            childTypeId: eqId
-        )
-        neqId: st.reg.newType name: "!=" ownerTid: vid typetype: ztypes.ztypetype.functionType
-        (st.typing.declSynthMember
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkOpNe
-            kind: ztyping.declkind.methodDecl
-        )
-        (st.typing.setMemberType
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkOpNe
-            childTypeId: neqId
+        (attachVariantTag
+            :st
+            :ast
+            :unitDecl
+            :frame
+            :defName
+            :vnode
+            :vid
+            :armCountV
+            :allNullV
         )
     }
-    # `hash` on the same terms as `==` above (see resolveRecord).
-    hshOptV: memberNullOptOut :ast asItems: vnode.asItems member: "hash"
-    hshAsV: asDeclaresMember :ast asItems: vnode.asItems member: "hash"
-    if (isgen) == false when hshOptV == false when hshAsV == false then {
-        hshV: st.reg.newType name: "hash" ownerTid: vid typetype: ztypes.ztypetype.functionType
-        (st.typing.declSynthMember
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkHash
-            kind: ztyping.declkind.methodDecl
-        )
-        (st.typing.setMemberType
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.wkHash
-            childTypeId: hshV
-        )
-    }
+    (attachVariantMethods
+        :st
+        :ast
+        :unitDecl
+        :frame
+        :defName
+        :vnode
+        :vid
+        :isgen
+        :ordinalArmNames
+    )
+    (synthVariantEqHash
+        :st
+        :ast
+        :vnode
+        :vid
+        :isgen
+        :eqOptV
+        :eqAsV
+    )
     if pvExcl_vvid.length > 0 then st.typing.privacySeen = true
     applyGrantsPrivate :st parentId: vvid grants: pvGrants_vvid
 }
@@ -27587,69 +27665,76 @@ checkCall: function {
     }
     return result
 }
+# healGenericReturn -- a generic-instance return (`out (optionval t: u64)`) has no
+# bare pendingTyperef name, so the substitution path leaves the mono's return
+# unset, and a native template has no body walk to heal it later. Heal from the
+# template's resolved return type, respecializing a spec that mentions generic
+# params -- the same treatment the generic-class method path gets.
+healGenericReturn: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    funcId: ztypes.tid
+    mid: ztypes.tid
+} is {
+    # A generic-instance return (`out (optionval t: u64)`) has no bare
+    # pendingTyperef name, so the sub/name path above leaves the mono's
+    # return unset -- a native template has no body walk to heal it later.
+    # Heal from the template's resolved return type, respecializing a spec
+    # that mentions generic params (mirrors the generic-class method path).
+    rhas: false
+    {
+        rmo: st.reg.returnTypeOf tid: mid
+        if rmo > 0 then rhas = true
+    }
+    if (rhas) == false then {
+        rto: u64
+        {
+            rns: st.typing.funcReturnNode.get key: funcId
+            match (
+                rns
+            ) case some then {
+                rst: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rns
+                if rst > 0 then rto = rst
+            } case none then null
+        }
+        if rto == 0 then {
+            tro: st.reg.returnTypeOf tid: funcId
+            if tro > 0 then rto = tro
+        }
+        if rto > 0 then {
+            respecIdSubs: (IdMapV u64 value: u64)
+            rr: (respecialize
+                :st
+                frame: st.curFrame
+                :ast
 
-# checkGenericCall -- a call to a generic user function: walk the value args,
-# infer the type-param bindings (explicit `param: Type` args, else each value
-# arg's materialised type through the parameter it feeds), mint the instance
-# (children substituted; return substituted from the recorded `out` placeholder
-# name), synthesize the clone scope on first instantiation (empty, named by the
-# instance, unreachable per the template body's syntactic divergence -- bodied
-# templates only, so native generics like print add no scope), stamp the
-# callable with the instance, and resolve to the instance's return. Nested
-# control flow inside generic bodies needs a real clone walk and is deferred.
-checkGenericCall: function {
+                :unitDecl
+                specTid: rto
+                idSubs: respecIdSubs
+            )
+            rt: rto
+            if rr > 0 then rt = rr
+            if (st.reg.typetypeOf typeId: (ztypes.tid.create from: rt.u64)) != ztypes.ztypetype.genericParam then {
+                st.reg.setReturnType typeId: mid value: rt
+            }
+        }
+    }
+}
+# inferGenericCallSubs -- read one call's arguments into the generic-parameter
+# substitutions: an explicit type argument names its parameter, a value argument
+# infers from the type it walks to, and a positional one binds by index.
+inferGenericCallSubs: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     call: zast.CallData.view
-    funcId: ztypes.tid
-} out ztypes.tid is {
-    gparams: (st.reg.genericParamNamesOf tdecl: (st.typing.declIdOfType typeId: funcId))
-    pNames: (ListVal zast.nameid)
-    pHolderIds: (ListVal u64)
-    {
-        gcNms: (ListVal u64)
-        gcTds: (ListVal u64)
-        st.typing.declMemberList ownerTid: funcId names: gcNms tids: gcTds
-        {
-            gci: u64
-            gcn: gcNms.length
-            for gci < gcn loop {
-                gcNid: gcNms.get i: gci
-                cto: gcTds.get i: gci
-                gci = gci + 1
-                {
-                    # the receiver is implicit at method call sites: keep it
-                    # out of the positional holder list so a label-free arg
-                    # maps to the first USER param (T holders included). The
-                    # receiver is the shorthand `this` or the type's recorded
-                    # long-form receiver name.
-                    isRecv: gcNid == zast.wkThis.u64
-                    if (isRecv) == false then {
-                        isRecv = (st.reg.thisParamNameIs
-                            tid: funcId
-                            nameId: (zast.nameid.create from: gcNid.u32.orPanic)
-                        )
-                    }
-                    if (isRecv) == false then {
-                        pNames.append (zast.nameid.create from: gcNid.u32.orPanic)
-                        cto2: cto
-                        pHolderIds.append cto2
-                    }
-                }
-            }
-        }
-    }
-    pHolders: (ListVal zast.nameid)
-    phi: u64
-    phn: pHolderIds.length
-    for phi < phn loop {
-        hid: pHolderIds.get i: phi
-        hn: st.reg.nameOf tid: (ztypes.tid.create from: hid.u64)
-        pHolders.append (nameIdOf :ast name: hn.stringview)
-        phi = phi + 1
-    }
+    gparams: (ListVal zast.nameid).view
+    pNames: (ListVal zast.nameid).view
     subs: (IdMapV zast.nameid value: u64)
+    funcId: ztypes.tid
+    pHolders: (ListVal zast.nameid).view
+} is {
     posIdx: u64
     aiter: call.arguments.iterate
     for argId: aiter loop {
@@ -27745,6 +27830,152 @@ checkGenericCall: function {
             }
         } else null
     }
+}
+# substituteGenericReturn -- the mono's return type, from the template's return
+# NODE with the call's substitutions applied. getOrMintSpec resolved the mono
+# structurally through the trie and reports whether it minted, so a reused spec
+# keeps the return it already has.
+substituteGenericReturn: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    funcId: ztypes.tid
+    mid: ztypes.tid
+    subs: (IdMapV zast.nameid value: u64)
+} is {
+    rno: st.typing.funcReturnNode.get key: funcId
+    match (
+        rno
+    ) case some then {
+        rk2: zast.nameid
+        {
+            rko: st.typing.pendingTyperef.get key: rno
+            match (
+                rko
+            ) case some then {
+                rk2 = rko
+            } case none then null
+        }
+        if (rk2.isZero) == false then {
+            rgot2: subs.get key: rk2
+            match (
+                rgot2
+            ) case some then {
+                st.reg.setReturnType typeId: mid value: rgot2
+            } case none then {
+                rk2T: zast.nameTextAt :ast ref: rk2
+                rconc: (walkLookupTyperef
+                    :st
+                    frame: st.curFrame
+                    :ast
+
+                    :unitDecl
+                    base: rk2T.stringview
+                )
+                match (
+                    rconc
+                ) case some then {
+                    st.reg.setReturnType typeId: mid value: rconc
+                } case none then null
+            }
+        }
+    } case none then null
+}
+# genericCallHolders -- the template's value parameters whose declared types name a
+# generic parameter. Inferring the call's type arguments reads them by name, so
+# their names and the parameters they hold are collected once, up front.
+genericCallHolders: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    funcId: ztypes.tid
+    pNames: (ListVal zast.nameid)
+    pHolderIds: (ListVal u64)
+    pHolders: (ListVal zast.nameid)
+} out (ListVal zast.nameid) is {
+    gparams: (st.reg.genericParamNamesOf tdecl: (st.typing.declIdOfType typeId: funcId))
+    {
+        gcNms: (ListVal u64)
+        gcTds: (ListVal u64)
+        st.typing.declMemberList ownerTid: funcId names: gcNms tids: gcTds
+        {
+            gci: u64
+            gcn: gcNms.length
+            for gci < gcn loop {
+                gcNid: gcNms.get i: gci
+                cto: gcTds.get i: gci
+                gci = gci + 1
+                {
+                    # the receiver is implicit at method call sites: keep it
+                    # out of the positional holder list so a label-free arg
+                    # maps to the first USER param (T holders included). The
+                    # receiver is the shorthand `this` or the type's recorded
+                    # long-form receiver name.
+                    isRecv: gcNid == zast.wkThis.u64
+                    if (isRecv) == false then {
+                        isRecv = (st.reg.thisParamNameIs
+                            tid: funcId
+                            nameId: (zast.nameid.create from: gcNid.u32.orPanic)
+                        )
+                    }
+                    if (isRecv) == false then {
+                        pNames.append (zast.nameid.create from: gcNid.u32.orPanic)
+                        cto2: cto
+                        pHolderIds.append cto2
+                    }
+                }
+            }
+        }
+    }
+    phi: u64
+    phn: pHolderIds.length
+    for phi < phn loop {
+        hid: pHolderIds.get i: phi
+        hn: st.reg.nameOf tid: (ztypes.tid.create from: hid.u64)
+        pHolders.append (nameIdOf :ast name: hn.stringview)
+        phi = phi + 1
+    }
+    return gparams
+}
+
+# checkGenericCall -- a call to a generic user function: walk the value args,
+# infer the type-param bindings (explicit `param: Type` args, else each value
+# arg's materialised type through the parameter it feeds), mint the instance
+# (children substituted; return substituted from the recorded `out` placeholder
+# name), synthesize the clone scope on first instantiation (empty, named by the
+# instance, unreachable per the template body's syntactic divergence -- bodied
+# templates only, so native generics like print add no scope), stamp the
+# callable with the instance, and resolve to the instance's return. Nested
+# control flow inside generic bodies needs a real clone walk and is deferred.
+checkGenericCall: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: zast.CallData.view
+    funcId: ztypes.tid
+} out ztypes.tid is {
+    pNames: (ListVal zast.nameid)
+    pHolderIds: (ListVal u64)
+    pHolders: (ListVal zast.nameid)
+    gparams: (genericCallHolders
+        :st
+        :ast
+        :funcId
+        :pNames
+        :pHolderIds
+        :pHolders
+    )
+    subs: (IdMapV zast.nameid value: u64)
+    (inferGenericCallSubs
+        :st
+        :unitDecl
+        :ast
+        :call
+        :gparams
+        :pNames
+        :subs
+        :funcId
+        :pHolders
+    )
     mname: st.reg.nameOf tid: funcId
     if mname.length == 0 then return (ztypes.tid.create from: 0)
     allOk: true
@@ -27794,86 +28025,15 @@ checkGenericCall: function {
     # getOrMintSpec resolved the mono structurally through the trie and reports
     # whether it minted rather than reusing an existing spec
     wasNew: st.reg.specWasFresh
-    rno: st.typing.funcReturnNode.get key: funcId
-    match (
-        rno
-    ) case some then {
-        rk2: zast.nameid
-        {
-            rko: st.typing.pendingTyperef.get key: rno
-            match (
-                rko
-            ) case some then {
-                rk2 = rko
-            } case none then null
-        }
-        if (rk2.isZero) == false then {
-            rgot2: subs.get key: rk2
-            match (
-                rgot2
-            ) case some then {
-                st.reg.setReturnType typeId: mid value: rgot2
-            } case none then {
-                rk2T: zast.nameTextAt :ast ref: rk2
-                rconc: (walkLookupTyperef
-                    :st
-                    frame: st.curFrame
-                    :ast
-
-                    :unitDecl
-                    base: rk2T.stringview
-                )
-                match (
-                    rconc
-                ) case some then {
-                    st.reg.setReturnType typeId: mid value: rconc
-                } case none then null
-            }
-        }
-    } case none then null
-    # A generic-instance return (`out (optionval t: u64)`) has no bare
-    # pendingTyperef name, so the sub/name path above leaves the mono's
-    # return unset -- a native template has no body walk to heal it later.
-    # Heal from the template's resolved return type, respecializing a spec
-    # that mentions generic params (mirrors the generic-class method path).
-    rhas: false
-    {
-        rmo: st.reg.returnTypeOf tid: mid
-        if rmo > 0 then rhas = true
-    }
-    if (rhas) == false then {
-        rto: u64
-        {
-            rns: st.typing.funcReturnNode.get key: funcId
-            match (
-                rns
-            ) case some then {
-                rst: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rns
-                if rst > 0 then rto = rst
-            } case none then null
-        }
-        if rto == 0 then {
-            tro: st.reg.returnTypeOf tid: funcId
-            if tro > 0 then rto = tro
-        }
-        if rto > 0 then {
-            respecIdSubs: (IdMapV u64 value: u64)
-            rr: (respecialize
-                :st
-                frame: st.curFrame
-                :ast
-
-                :unitDecl
-                specTid: rto
-                idSubs: respecIdSubs
-            )
-            rt: rto
-            if rr > 0 then rt = rr
-            if (st.reg.typetypeOf typeId: (ztypes.tid.create from: rt.u64)) != ztypes.ztypetype.genericParam then {
-                st.reg.setReturnType typeId: mid value: rt
-            }
-        }
-    }
+    (substituteGenericReturn
+        :st
+        :unitDecl
+        :ast
+        :funcId
+        :mid
+        :subs
+    )
+    healGenericReturn :st :unitDecl :ast :funcId :mid
     if wasNew then {
         dvo: st.typing.fnBodyDiverges.get key: funcId
         match (
