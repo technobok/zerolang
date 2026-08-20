@@ -20614,12 +20614,25 @@ checkClause: function {
             match (
                 cond
             ) case namedoperation then {
+                errC: st.typing.errors.length
                 ctv: (checkValue
                     :st
                     :unitDecl
                     :ast
                     node: (ast.nodes.get i: cond.operation.u64)
                 )
+                # a condition that typed to nothing and raised nothing is an
+                # unresolvable name, exactly as in a binding or an operand: the
+                # 0 disables the bool check below, and the emitter would write
+                # the bare name into the C.
+                if ctv.isZero when st.typing.errors.length == errC then {
+                    (reportUnresolvedValue
+                        :st
+                        :unitDecl
+                        :ast
+                        vnode: (ast.nodes.get i: cond.operation.u64)
+                    )
+                }
                 # An if-condition must be a boolean. A non-bool value (a
                 # resultval, an aggregate, a raw numeric) is a type error rather
                 # than invalid C. Bare arm predicates (`o.none`, `b.false`) type
@@ -21935,6 +21948,7 @@ checkForCondition: function {
         )
         facId: forFactoryTid :st :unitDecl :ast fbn: fbn.stringview
         vt: ztypes.tid
+        errC: st.typing.errors.length
         if facId > 0 then {
             # the factory's lazy walks (its body + the iterator class's
             # methods via return-first transitivity) fire before the
@@ -21952,6 +21966,17 @@ checkForCondition: function {
         } else {
             condOpNode: ast.nodes.get i: cond.operation.u64
             vt = checkValue :st :unitDecl :ast node: condOpNode
+        }
+        # a condition that typed to nothing and raised nothing is an
+        # unresolvable name -- the same rule the binding and operand sites
+        # follow. Without it the emitter writes the bare name into the C.
+        if vt.isZero when st.typing.errors.length == errC then {
+            (reportUnresolvedValue
+                :st
+                :unitDecl
+                :ast
+                vnode: (ast.nodes.get i: cond.operation.u64)
+            )
         }
         nm: zast.nameTextAt :ast ref: cond.name
         # A bare `for while <cond> loop` (no binding, no iterator factory)
@@ -22056,7 +22081,11 @@ checkForPostcondition: function {
         pcOp = pc.operation
     } else null
     pcNd: ast.nodes.get i: pcOp.u64
+    errP: st.typing.errors.length
     pcVt: checkValue :st :unitDecl :ast node: pcNd
+    if pcVt.isZero when st.typing.errors.length == errP then {
+        reportUnresolvedValue :st :unitDecl :ast vnode: pcNd
+    }
     # A `for loop { ... } while <cond>` post-condition must be boolean, the
     # same rule the pre-condition carries above: a non-bool value is a type
     # error rather than the invalid C a struct in a `while` head emits.
