@@ -26305,24 +26305,6 @@ checkValue: function {
     }
 }
 
-# checkExpression -- type an expression wrapper from its inner value; returns
-# true when the inner is a return terminator (so the caller marks the scope
-# unreachable).
-checkExpression: function {
-    st: zenv.ZSymbolTable.view
-    unitDecl: ztypes.declid
-    ast: Ast.view
-    expr: zast.ExpressionData.view
-} out bool is {
-    isRet: false
-    t: checkValue :st :unitDecl :ast node: (ast.nodes.get i: expr.expression.u64)
-    if t > 0 then stampGate :st nid: expr.nodeid.u64 tid: t
-    innerNid: nodeId n: (ast.nodes.get i: expr.expression.u64)
-    ckOpt: st.typing.callKind.get key: innerNid.u64
-    isRet = isReturnCallKind o: ckOpt
-    return isRet
-}
-
 # checkStmtInner -- dispatch a statement line's inner node (C1: expressions).
 checkStmtInner: function {
     st: zenv.ZSymbolTable
@@ -26334,7 +26316,11 @@ checkStmtInner: function {
         inner
     ) case expression then {
         errE0: st.typing.errors.length
-        isR0: checkExpression :st :unitDecl :ast expr: inner
+        et0: checkValue :st :unitDecl :ast node: (ast.nodes.get i: inner.expression.u64)
+        if et0 > 0 then stampGate :st nid: inner.nodeid.u64 tid: et0
+        eNid0: nodeId n: (ast.nodes.get i: inner.expression.u64)
+        ckOpt0: st.typing.callKind.get key: eNid0.u64
+        isR0: isReturnCallKind o: ckOpt0
         bn0: bareAtomNameId :ast n: (ast.nodes.get i: inner.expression.u64)
         ctl0: false
         if bn0 == zast.wkBreak then ctl0 = true
@@ -26388,29 +26374,6 @@ checkStmtInner: function {
     }
 }
 
-# checkStatementLine -- type a statement line; propagate the inner type to the
-# line wrapper. Returns true for a return terminator.
-checkStatementLine: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast.view
-    sline: Node.view
-} out bool is {
-    isRet: false
-    match (
-        sline
-    ) case statementline then {
-        sln: ast.nodes.get i: sline.statementline.u64
-        isRet = checkStmtInner :st :unitDecl :ast inner: sln
-        inid: nodeId n: sln
-        itOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: inid.u64
-        if itOpt > 0 then {
-            stampGate :st nid: sline.nodeid.u64 tid: (ztypes.tid.create from: itOpt.u64)
-        }
-    } else null
-    return isRet
-}
-
 # checkStatement -- walk a function-body statement block, marking the scope
 # unreachable after a control-flow terminator (return).
 checkStatement: function {
@@ -26425,7 +26388,23 @@ checkStatement: function {
         siter: block.statements.iterate
         for slnId: siter loop {
             sline: ast.nodes.get i: slnId.u64
-            isRet: checkStatementLine :st :unitDecl :ast :sline
+            isRet: false
+            match (
+                sline
+            ) case statementline then {
+                # the line wrapper carries its inner node's type
+                isRet = (checkStmtInner
+                    :st
+                    :unitDecl
+                    :ast
+                    inner: (ast.nodes.get i: sline.statementline.u64)
+                )
+                inid: nodeId n: (ast.nodes.get i: sline.statementline.u64)
+                itOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: inid.u64
+                if itOpt > 0 then {
+                    stampGate :st nid: sline.nodeid.u64 tid: (ztypes.tid.create from: itOpt.u64)
+                }
+            } else null
             drainPendingBorrow :st
             if isRet then st.markUnreachable
         }
