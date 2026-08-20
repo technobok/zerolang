@@ -9955,6 +9955,154 @@ descendNamed: function {
     }
     return (ztypes.tid.create from: tid)
 }
+# resolveDottedDef -- a unit-level definition whose value is a dotted path is the
+# ALIAS form (`Node: zast.Node`): the name it binds stands for what the path names,
+# so the alias edge is recorded rather than a fresh type minted.
+resolveDottedDef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    rf: ztypes.declid
+    defName: StringView
+    defn: zast.DottedPathData.view
+} is {
+    # A unit-level type alias (`Node: zast.Node`): resolve the cross-unit dotted
+    # ref to a (shell) type id and register it under the unit's name, so bare-alias
+    # return types and value uses resolve. Replicates resolveTyperefShell's
+    # cross-unit leg.
+    apNm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.parent.u64))
+    apId: atomNameId :ast n: (ast.nodes.get i: defn.parent.u64)
+    if (nameDenotesUnit :st frame: rf nameId: apId) then {
+        acNm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.child.u64))
+        acId: atomNameId :ast n: (ast.nodes.get i: defn.child.u64)
+        demandUnitMember :st unitNameId: apId nameId: acId
+        # The alias target is read off the re-export Decl's node on demand
+        # (reexportTargetIdsOf); resolution reuses the target's canonical id.
+        if (st.typing.declIsResolving
+            declId: (declOfUnitDef
+                :st
+                frame: rf
+                unitDecl: (unitDeclOfNameOrOwn :st frame: rf nameId: apId)
+                nameId: acId
+            )
+        ) then {
+            aem: "alias cycle: '\{unitNameTextOf :st :ast :unitDecl}.\{defName}' aliases '\{apNm}.\{acNm}' which is still resolving"
+            addResolveError :st e: zast.err.typeError msg: aem
+        }
+        (descendNamed
+            :st
+            frame: rf
+
+            :ast
+            unitDecl: (unitDeclOfNameOrOwn
+                :st
+                frame: rf
+                nameId: (nameIdOf :ast name: apNm.stringview)
+            )
+            name: acNm.stringview
+        )
+        tgo: resolvedByIds :st :ast unitDecl: (unitDeclOfName :st nameId: apId) name: acId
+        aid: u64
+        match (
+            tgo
+        ) case some then {
+            aid = tgo
+        } case none then {
+            aid = (resolveAtomType
+                :st
+                frame: rf
+
+                :ast
+                :unitDecl
+                nm: acNm.stringview
+                thisName: ""
+            )
+        }
+        sda: aid
+        (ztyping.nodeTypeSet
+            tbl: st.typing.nodeType
+            nid: defn.nodeid.u64
+            tid: (ztypes.tid.create from: sda.u64)
+        )
+        # a cross-unit `unit.Type` alias records its target's declaration
+        # for go-to-definition (dotted node; see the type-position stamp)
+        (stampRefDecl
+            :st
+            nid: defn.nodeid.u64
+            declId: (declOfTypeId :st tid: (ztypes.tid.create from: sda.u64))
+        )
+    }
+}
+# resolveObjectDef -- a record / class / union / variant / facet / protocol / unit
+# definition, routed to its family's resolver. A generic one resolves its
+# constraint bounds first: a bound names a type the body then relies on.
+resolveObjectDef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    rf: ztypes.declid
+    defName: StringView
+    defn: zast.ObjectDefData
+} is {
+    match (
+        defn.kind
+    ) case recordDef then {
+        if defName == "null" then {
+            (registerEmptyType
+                :st
+                frame: rf
+                :ast
+                :unitDecl
+                name: "null"
+                tt: ztypes.ztypetype.nullType
+            )
+        } else {
+            if defName == "never" then {
+                nvid: (registerEmptyType
+                    :st
+                    frame: rf
+                    :ast
+
+                    :unitDecl
+                    name: "never"
+                    tt: ztypes.ztypetype.neverType
+                )
+                (ztyping.nodeTypeSet
+                    tbl: st.typing.nodeType
+                    nid: defn.nodeid.u64
+                    tid: (ztypes.tid.create from: nvid.u64)
+                )
+            } else {
+                resolveRecord :st frame: rf :ast :unitDecl :defName rnode: defn
+            }
+        }
+    } case variantDef then {
+        resolveVariant :st frame: rf :ast :unitDecl :defName vnode: defn
+    } case unionDef then {
+        resolveUnion :st frame: rf :ast :unitDecl :defName vnode: defn
+    } case classDef then {
+        resolveClass :st frame: rf :ast :unitDecl :defName cnode: defn
+    } case facetDef then {
+        resolveFacet :st frame: rf :ast :unitDecl :defName fnode: defn
+    } case protocolDef then {
+        resolveProtocol :st frame: rf :ast :unitDecl :defName fnode: defn
+    } else null
+    objrid: (resolvedByIds
+        :st
+        :ast
+        :unitDecl
+        name: (zast.poolFind pool: ast.names text: defName)
+    )
+    match (
+        objrid
+    ) case some then {
+        (ztyping.nodeTypeSet
+            tbl: st.typing.nodeType
+            nid: defn.nodeid.u64
+            tid: (ztypes.tid.create from: objrid.u64)
+        )
+    } case none then null
+}
 
 
 # resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
@@ -10068,131 +10216,23 @@ resolveDef: function {
             )
         } case none then null
     } case objectdef then {
-        match (
-            defn.kind
-        ) case recordDef then {
-            if defName == "null" then {
-                (registerEmptyType
-                    :st
-                    frame: rf
-                    :ast
-                    :unitDecl
-                    name: "null"
-                    tt: ztypes.ztypetype.nullType
-                )
-            } else {
-                if defName == "never" then {
-                    nvid: (registerEmptyType
-                        :st
-                        frame: rf
-                        :ast
-
-                        :unitDecl
-                        name: "never"
-                        tt: ztypes.ztypetype.neverType
-                    )
-                    (ztyping.nodeTypeSet
-                        tbl: st.typing.nodeType
-                        nid: defn.nodeid.u64
-                        tid: (ztypes.tid.create from: nvid.u64)
-                    )
-                } else {
-                    resolveRecord :st frame: rf :ast :unitDecl :defName rnode: defn
-                }
-            }
-        } case variantDef then {
-            resolveVariant :st frame: rf :ast :unitDecl :defName vnode: defn
-        } case unionDef then {
-            resolveUnion :st frame: rf :ast :unitDecl :defName vnode: defn
-        } case classDef then {
-            resolveClass :st frame: rf :ast :unitDecl :defName cnode: defn
-        } case facetDef then {
-            resolveFacet :st frame: rf :ast :unitDecl :defName fnode: defn
-        } case protocolDef then {
-            resolveProtocol :st frame: rf :ast :unitDecl :defName fnode: defn
-        } else null
-        objrid: (resolvedByIds
+        (resolveObjectDef
             :st
             :ast
             :unitDecl
-            name: (zast.poolFind pool: ast.names text: defName)
+            :rf
+            :defName
+            :defn
         )
-        match (
-            objrid
-        ) case some then {
-            (ztyping.nodeTypeSet
-                tbl: st.typing.nodeType
-                nid: defn.nodeid.u64
-                tid: (ztypes.tid.create from: objrid.u64)
-            )
-        } case none then null
     } case dottedpath then {
-        # A unit-level type alias (`Node: zast.Node`): resolve the cross-unit dotted
-        # ref to a (shell) type id and register it under the unit's name, so bare-alias
-        # return types and value uses resolve. Replicates resolveTyperefShell's
-        # cross-unit leg.
-        apNm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.parent.u64))
-        apId: atomNameId :ast n: (ast.nodes.get i: defn.parent.u64)
-        if (nameDenotesUnit :st frame: rf nameId: apId) then {
-            acNm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.child.u64))
-            acId: atomNameId :ast n: (ast.nodes.get i: defn.child.u64)
-            demandUnitMember :st unitNameId: apId nameId: acId
-            # The alias target is read off the re-export Decl's node on demand
-            # (reexportTargetIdsOf); resolution reuses the target's canonical id.
-            if (st.typing.declIsResolving
-                declId: (declOfUnitDef
-                    :st
-                    frame: rf
-                    unitDecl: (unitDeclOfNameOrOwn :st frame: rf nameId: apId)
-                    nameId: acId
-                )
-            ) then {
-                aem: "alias cycle: '\{unitNameTextOf :st :ast :unitDecl}.\{defName}' aliases '\{apNm}.\{acNm}' which is still resolving"
-                addResolveError :st e: zast.err.typeError msg: aem
-            }
-            (descendNamed
-                :st
-                frame: rf
-
-                :ast
-                unitDecl: (unitDeclOfNameOrOwn
-                    :st
-                    frame: rf
-                    nameId: (nameIdOf :ast name: apNm.stringview)
-                )
-                name: acNm.stringview
-            )
-            tgo: resolvedByIds :st :ast unitDecl: (unitDeclOfName :st nameId: apId) name: acId
-            aid: u64
-            match (
-                tgo
-            ) case some then {
-                aid = tgo
-            } case none then {
-                aid = (resolveAtomType
-                    :st
-                    frame: rf
-
-                    :ast
-                    :unitDecl
-                    nm: acNm.stringview
-                    thisName: ""
-                )
-            }
-            sda: aid
-            (ztyping.nodeTypeSet
-                tbl: st.typing.nodeType
-                nid: defn.nodeid.u64
-                tid: (ztypes.tid.create from: sda.u64)
-            )
-            # a cross-unit `unit.Type` alias records its target's declaration
-            # for go-to-definition (dotted node; see the type-position stamp)
-            (stampRefDecl
-                :st
-                nid: defn.nodeid.u64
-                declId: (declOfTypeId :st tid: (ztypes.tid.create from: sda.u64))
-            )
-        }
+        (resolveDottedDef
+            :st
+            :ast
+            :unitDecl
+            :rf
+            :defName
+            :defn
+        )
     } else null
     # Unit -> def childOf edges are built at mint (declareCanonicalType) for real
     # defs and on demand (resolvedByIds' alias-follow) for aliases; no tail pass.
@@ -17007,67 +17047,30 @@ firstGenericParamId: function {
     if names.length > 0 then return (names.get i: 0)
     return zast.nameid
 }
-
-# inferGenericConstruction -- a generic class/record template called with
-# field-bound value arguments: labels naming generic params resolve as
-# explicit type args; other args walk as values and bind their field's
-# param (literals materialise + restamp the bare node). The deduped
-# instance mints with substituted fields plus a synthesized create.
-# 0 when nothing infers.
-inferGenericConstruction: function {
+# inferConstructionSubs -- infer a generic construction's type arguments from the
+# values it is given. The value-arg walk is a DRY RUN: its ownership effects (take
+# overlays, borrow locks) are bracketed in a frame discarded whole, so the real
+# ctor walk re-checks from a clean slate -- an explicit `.take` argument otherwise
+# collides with its own inference pass.
+inferConstructionSubs: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast.view
     call: zast.CallData.view
-    tplId: ztypes.tid
-    reportMissing: bool
-} out ztypes.tid is {
-    tname: st.reg.nameOf tid: tplId
-    if tname.length == 0 then return (ztypes.tid.create from: 0)
-    tk: declOfTypeId :st tid: tplId
-    # Stage the template's children, then keep the ones whose TYPE NAME is a
-    # registered generic param (field shells carry the param name, not a
-    # GENERIC_PARAM typetype).
-    childNames: (ListVal zast.nameid)
-    cIds3: (ListVal u64)
-    {
-        igNms: (ListVal u64)
-        igTds: (ListVal u64)
-        st.typing.declMemberList ownerTid: tplId names: igNms tids: igTds
-        igi: u64
-        ign: igNms.length
-        for igi < ign loop {
-            childNames.append (zast.nameid.create from: ((igNms.get i: igi)).u32.orPanic)
-            cid1: igTds.get i: igi
-            cIds3.append cid1
-            igi = igi + 1
-        }
-    }
-    fNames: (ListVal zast.nameid)
-    fParams: (ListVal zast.nameid)
-    ci3: u64
-    cn3: cIds3.length
-    for ci3 < cn3 loop {
-        cid3: cIds3.get i: ci3
-        pnm3: st.reg.nameOf tid: (ztypes.tid.create from: cid3.u64)
-        pid3: nameIdOf :ast name: pnm3.stringview
-        if (st.reg.isGenericParamOf tdecl: tk name: pid3) then {
-            fNames.append (childNames.get i: ci3)
-            fParams.append pid3
-        }
-        ci3 = ci3 + 1
-    }
+    primaryName: zast.nameid
+    fNames: (ListVal zast.nameid).view
+    fParams: (ListVal zast.nameid).view
     sfx: String
     subs: (IdMapV zast.nameid value: u64)
     boundParams: (IdSet zast.nameid)
-    firstA: u64
-    primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
+    tk: ztypes.declid
+} is {
+    argIdx: u64
     # the value-arg walk below is a DRY RUN for type inference: bracket its
     # ownership effects (take overlays, borrow locks) in a frame that is
     # discarded whole, so the real ctor walk re-checks from a clean slate --
     # an explicit `.take` arg otherwise collides with its own inference pass.
     st.pushDryRun
-    argIdx: u64
     with aiter: call.arguments.iterate do for argId: aiter loop {
         arg: ast.nodes.get i: argId.u64
         match (
@@ -17129,7 +17132,6 @@ inferGenericConstruction: function {
                         pv2: ao
                         subs.set key: pk value: pv2
                         boundParams.add item: pk
-                        if firstA == 0 then firstA = ao
                     } case none then null
                 }
             } else {
@@ -17170,13 +17172,81 @@ inferGenericConstruction: function {
                         gpv: mv0
                         subs.set key: gp0 value: gpv
                         boundParams.add item: gp0
-                        if firstA == 0 then firstA = mv0
                     }
                 }
             }
         } else null
         argIdx = argIdx + 1
     }
+}
+
+
+# inferGenericConstruction -- a generic class/record template called with
+# field-bound value arguments: labels naming generic params resolve as
+# explicit type args; other args walk as values and bind their field's
+# param (literals materialise + restamp the bare node). The deduped
+# instance mints with substituted fields plus a synthesized create.
+# 0 when nothing infers.
+inferGenericConstruction: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast.view
+    call: zast.CallData.view
+    tplId: ztypes.tid
+    reportMissing: bool
+} out ztypes.tid is {
+    tname: st.reg.nameOf tid: tplId
+    if tname.length == 0 then return (ztypes.tid.create from: 0)
+    tk: declOfTypeId :st tid: tplId
+    # Stage the template's children, then keep the ones whose TYPE NAME is a
+    # registered generic param (field shells carry the param name, not a
+    # GENERIC_PARAM typetype).
+    childNames: (ListVal zast.nameid)
+    cIds3: (ListVal u64)
+    {
+        igNms: (ListVal u64)
+        igTds: (ListVal u64)
+        st.typing.declMemberList ownerTid: tplId names: igNms tids: igTds
+        igi: u64
+        ign: igNms.length
+        for igi < ign loop {
+            childNames.append (zast.nameid.create from: ((igNms.get i: igi)).u32.orPanic)
+            cid1: igTds.get i: igi
+            cIds3.append cid1
+            igi = igi + 1
+        }
+    }
+    fNames: (ListVal zast.nameid)
+    fParams: (ListVal zast.nameid)
+    ci3: u64
+    cn3: cIds3.length
+    for ci3 < cn3 loop {
+        cid3: cIds3.get i: ci3
+        pnm3: st.reg.nameOf tid: (ztypes.tid.create from: cid3.u64)
+        pid3: nameIdOf :ast name: pnm3.stringview
+        if (st.reg.isGenericParamOf tdecl: tk name: pid3) then {
+            fNames.append (childNames.get i: ci3)
+            fParams.append pid3
+        }
+        ci3 = ci3 + 1
+    }
+    sfx: String
+    subs: (IdMapV zast.nameid value: u64)
+    boundParams: (IdSet zast.nameid)
+    primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
+    (inferConstructionSubs
+        :st
+        :unitDecl
+        :ast
+        :call
+        :primaryName
+        :fNames
+        :fParams
+        :sfx
+        :subs
+        :boundParams
+        :tk
+    )
     st.popDiscard
     paramsM: st.reg.genericParamNamesOf tdecl: tk
     firstMissing: zast.nameid
@@ -21349,6 +21419,143 @@ materialiseLiteral: function {
     if dn > 0 then return dn
     return (ztypes.tid.create from: t)
 }
+# checkReadonlyBindSource -- binding FROM a readonly source. The test runs outside
+# the destructor gate: a frozen binding may not be moved out of whether or not its
+# type owns heap, and without a destructor the emitter builds a value from a
+# pointer and gcc rejects the C. Readonly is also DEEP -- a reftype read out of a
+# readonly path is itself readonly and takes the same self-lock, or the binding
+# would be a laundering step.
+checkReadonlyBindSource: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    asgn: zast.AssignmentData.view
+    av: Node.view
+    vt: ztypes.tid
+    vid2: ztypes.vid
+} is {
+    # The readonly test runs OUTSIDE the destructor gate below: a frozen
+    # binding may not be moved out of whether or not its type owns heap,
+    # and without a destructor the emitter builds a value from a pointer
+    # and gcc rejects the C.
+    rn5: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: av)
+    roMv5: false
+    if rn5.length > 0 when (typeIsReftype :st tid: vt) then {
+        if (nameIsReadonly :st :ast name: rn5.stringview) then {
+            roMv5 = true
+            (readonlyMoveError
+                :st
+                nodeid: asgn.nodeid
+                lineno: asgn.lineno
+                colno: asgn.colno
+                name: rn5.stringview
+                verb: "into an owned binding"
+            )
+        } else {
+            if (pinnedMoveError
+                :st
+                :ast
+                nodeid: asgn.nodeid
+                lineno: asgn.lineno
+                colno: asgn.colno
+                name: rn5.stringview
+                verb: "into an owned binding"
+            ) then roMv5 = true
+        }
+    }
+    if rn5.length > 0 when (roMv5) == false when (typeIsReftype
+        :st
+        tid: vt
+    ) when (st.reg.needsDestructor typeId: vt) then {
+        vo5: st.lookupVarId nameId: (nameIdOf :ast name: rn5.stringview)
+        match (
+            vo5
+        ) case some then {
+            if (isBorrowedVar :st vid: vo5) then {
+                mb5: "Cannot move borrowed variable '\{rn5}' into an owned binding — borrowed names stay bound to their source for the full scope"
+                (addError
+                    :st
+                    nodeid: asgn.nodeid
+                    lineno: asgn.lineno
+                    colno: asgn.colno
+                    e: zast.err.ownerError
+                    msg: mb5
+                )
+            } else {
+                (st.invalidate
+                    nameId: (nameIdOf :ast name: rn5.stringview)
+                    loc: (optionval.none ztypes.zsrcpos)
+                )
+            }
+        } case none then null
+    }
+    # Readonly is deep: a reftype read out of a readonly path is itself
+    # readonly, and takes the same self-lock. Without this the binding is
+    # a laundering step -- `i: c.sub` off a `view` receiver would hand back
+    # a freely mutable name.
+    roPath: (ListVal zast.nameid)
+    appendValueTuple :ast n: av dst: roPath
+    roDeep: false
+    if roPath.length > 1 when (typeIsReftype :st tid: vt) then {
+        if (pathLeafIsMethod :st path: roPath) == false then {
+            if (pathIsReadonly :st path: roPath) then roDeep = true
+        }
+    }
+    if roDeep when (valueIsHold :ast n: av) == false then {
+        rop: (ListVal zast.nameid)
+        rop.append asgn.name
+        roh: (ztypes.zlockholder
+            kind: ztypes.zlockholderkind.varKind
+            id: vid2
+        )
+        ror: (st.tryLock
+            pool: ast.names
+            path: rop
+            lockType: ztypes.zlockstate.shared
+            lockScope: ztypes.zlockscope.target
+            holder: roh
+        )
+        if ror.length > 0 then {
+            (addError
+                :st
+                nodeid: asgn.nodeid
+                lineno: asgn.lineno
+                colno: asgn.colno
+                e: zast.err.ownerError
+                msg: ror
+            )
+        }
+    }
+    if (valueIsHold :ast n: av) when (typeIsReftype :st tid: vt) then {
+        # Owned but frozen: the same readonly self-lock a `view` parameter
+        # takes, so writes, mutating receivers and re-passing to a mutable
+        # parameter are all caught by the ordinary lock rules. Ownership is
+        # the other axis and is already `owned` above.
+        hpp: (ListVal zast.nameid)
+        hpp.append asgn.name
+        hph: (ztypes.zlockholder
+            kind: ztypes.zlockholderkind.varKind
+            id: vid2
+        )
+        hpr: (st.tryLock
+            pool: ast.names
+            path: hpp
+            lockType: ztypes.zlockstate.shared
+            lockScope: ztypes.zlockscope.target
+            holder: hph
+        )
+        if hpr.length > 0 then {
+            (addError
+                :st
+                nodeid: asgn.nodeid
+                lineno: asgn.lineno
+                colno: asgn.colno
+                e: zast.err.ownerError
+                msg: hpr
+            )
+        }
+    }
+}
+
 
 # checkAssignment -- a local binding `name: value`: walk the value, materialise a
 # literal-typed value to its concrete default (the binding takes i64, unlike a
@@ -21445,127 +21652,14 @@ checkAssignment: function {
                 )
             }
         }
-        rn5: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: av)
-        # The readonly test runs OUTSIDE the destructor gate below: a frozen
-        # binding may not be moved out of whether or not its type owns heap,
-        # and without a destructor the emitter builds a value from a pointer
-        # and gcc rejects the C.
-        roMv5: false
-        if rn5.length > 0 when (typeIsReftype :st tid: vt) then {
-            if (nameIsReadonly :st :ast name: rn5.stringview) then {
-                roMv5 = true
-                (readonlyMoveError
-                    :st
-                    nodeid: asgn.nodeid
-                    lineno: asgn.lineno
-                    colno: asgn.colno
-                    name: rn5.stringview
-                    verb: "into an owned binding"
-                )
-            } else {
-                if (pinnedMoveError
-                    :st
-                    :ast
-                    nodeid: asgn.nodeid
-                    lineno: asgn.lineno
-                    colno: asgn.colno
-                    name: rn5.stringview
-                    verb: "into an owned binding"
-                ) then roMv5 = true
-            }
-        }
-        if rn5.length > 0 when (roMv5) == false when (typeIsReftype
+        (checkReadonlyBindSource
             :st
-            tid: vt
-        ) when (st.reg.needsDestructor typeId: vt) then {
-            vo5: st.lookupVarId nameId: (nameIdOf :ast name: rn5.stringview)
-            match (
-                vo5
-            ) case some then {
-                if (isBorrowedVar :st vid: vo5) then {
-                    mb5: "Cannot move borrowed variable '\{rn5}' into an owned binding — borrowed names stay bound to their source for the full scope"
-                    (addError
-                        :st
-                        nodeid: asgn.nodeid
-                        lineno: asgn.lineno
-                        colno: asgn.colno
-                        e: zast.err.ownerError
-                        msg: mb5
-                    )
-                } else {
-                    (st.invalidate
-                        nameId: (nameIdOf :ast name: rn5.stringview)
-                        loc: (optionval.none ztypes.zsrcpos)
-                    )
-                }
-            } case none then null
-        }
-        # Readonly is deep: a reftype read out of a readonly path is itself
-        # readonly, and takes the same self-lock. Without this the binding is
-        # a laundering step -- `i: c.sub` off a `view` receiver would hand back
-        # a freely mutable name.
-        roPath: (ListVal zast.nameid)
-        appendValueTuple :ast n: av dst: roPath
-        roDeep: false
-        if roPath.length > 1 when (typeIsReftype :st tid: vt) then {
-            if (pathLeafIsMethod :st path: roPath) == false then {
-                if (pathIsReadonly :st path: roPath) then roDeep = true
-            }
-        }
-        if roDeep when (valueIsHold :ast n: av) == false then {
-            rop: (ListVal zast.nameid)
-            rop.append asgn.name
-            roh: (ztypes.zlockholder
-                kind: ztypes.zlockholderkind.varKind
-                id: vid2
-            )
-            ror: (st.tryLock
-                pool: ast.names
-                path: rop
-                lockType: ztypes.zlockstate.shared
-                lockScope: ztypes.zlockscope.target
-                holder: roh
-            )
-            if ror.length > 0 then {
-                (addError
-                    :st
-                    nodeid: asgn.nodeid
-                    lineno: asgn.lineno
-                    colno: asgn.colno
-                    e: zast.err.ownerError
-                    msg: ror
-                )
-            }
-        }
-        if (valueIsHold :ast n: av) when (typeIsReftype :st tid: vt) then {
-            # Owned but frozen: the same readonly self-lock a `view` parameter
-            # takes, so writes, mutating receivers and re-passing to a mutable
-            # parameter are all caught by the ordinary lock rules. Ownership is
-            # the other axis and is already `owned` above.
-            hpp: (ListVal zast.nameid)
-            hpp.append asgn.name
-            hph: (ztypes.zlockholder
-                kind: ztypes.zlockholderkind.varKind
-                id: vid2
-            )
-            hpr: (st.tryLock
-                pool: ast.names
-                path: hpp
-                lockType: ztypes.zlockstate.shared
-                lockScope: ztypes.zlockscope.target
-                holder: hph
-            )
-            if hpr.length > 0 then {
-                (addError
-                    :st
-                    nodeid: asgn.nodeid
-                    lineno: asgn.lineno
-                    colno: asgn.colno
-                    e: zast.err.ownerError
-                    msg: hpr
-                )
-            }
-        }
+            :ast
+            :asgn
+            :av
+            :vt
+            :vid2
+        )
         instX: false
         if own == ztypes.zownership.borrowed then instX = true
         if pboX when bsrc.length > 0 then instX = true
