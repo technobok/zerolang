@@ -12976,6 +12976,409 @@ inlineTemplateTid: function {
     }
     return (ztypes.tid.create from: found.u64)
 }
+# buildInstanceMono -- build the monomorphised unit for one instantiation request.
+# When collection resolved the template (its id, the declaring node and the unit
+# whose AST holds it) one call covers both shapes; otherwise the template is
+# hunted down as a file unit named by the request or as an inline binding.
+buildInstanceMono: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    program: Node
+    rtId: zast.nameid
+    rtu: ztypes.declid
+    ru: ztypes.declid
+    rtop: u64
+    tplId0: ztypes.tid
+    memberIdAt: u64
+    subs: (IdMapV zast.nameid value: u64)
+} is {
+    tplId: tplId0
+    # the request resolved its template at COLLECTION: its id, the
+    # node that declares it, and the unit whose AST holds that node.
+    # One call covers both shapes the scans below split -- a file unit
+    # named by the template, and an inline binding of the instantiating
+    # unit -- because neither is found by name any more.
+    if rtop > 0 when tplId > 0 then {
+        match (
+            program
+        ) case program then {
+            (buildUnitMono
+                :st
+                :frame
+
+                ast: program.ast
+                tmplUnitName: rtu
+                tmplNameId: rtId
+                monoId: (ztypes.tid.create from: memberIdAt.u64)
+                :tplId
+                :subs
+                templateOpId: (zast.nodeid.create from: rtop.u32.orPanic)
+            )
+        } else null
+    } else {
+        if tplId.isZero then {
+            match (
+                program
+            ) case program then {
+                tuiter: program.ast.units.iterate
+                for tuId: tuiter loop {
+                    tu: program.ast.nodes.get i: tuId.u64
+                    match (
+                        tu
+                    ) case namedoperation then {
+                        uc3z: (unitDeclOfNameOrOwn
+                            :st
+                            :frame
+                            nameId: tu.name
+                        )
+                        if uc3z == ru then {
+                            tplId = (inlineTemplateTid
+                                :st
+                                ast: program.ast
+                                mainOpId: tu.operation
+                                tmplNameId: rtId
+                            )
+                        }
+                    } else null
+                }
+            } else null
+        }
+        if tplId > 0 then {
+            match (
+                program
+            ) case program then {
+                uN: program.ast.units.length
+                uI: u64
+                for uI < uN loop {
+                    u9Id: (zast.nodeid.create from: (program.ast.units.get i: uI))
+                    uI = uI + 1
+                    # scope the element borrow: the calls below lock
+                    # `program.ast` exclusively (they intern mono names)
+                    unitOpNodeId: zast.nodeid
+                    un29Id: zast.nameid
+                    {
+                        u: program.ast.nodes.get i: u9Id.u64
+                        match (
+                            u
+                        ) case namedoperation then {
+                            un29Id = u.name
+                            unitOpNodeId = u.operation
+                        } else null
+                    }
+                    if un29Id == rtId then {
+                        uq2z: (unitDeclOfNameOrOwn
+                            :st
+                            :frame
+                            nameId: un29Id
+                        )
+                        (buildUnitMono
+                            :st
+                            :frame
+
+                            ast: program.ast
+                            tmplUnitName: uq2z
+                            tmplNameId: rtId
+                            monoId: (ztypes.tid.create from: memberIdAt.u64)
+                            :tplId
+                            :subs
+                            templateOpId: unitOpNodeId
+                        )
+                    }
+                    uc4z: (unitDeclOfNameOrOwn
+                        :st
+                        :frame
+                        nameId: un29Id
+                        )
+                    if uc4z == ru then {
+                        (completeInlineReq
+                            :st
+                            :frame
+
+                            ast: program.ast
+                            unitDecl: ru
+                            monoId: (ztypes.tid.create from: memberIdAt.u64)
+                            tmplNameId: rtId
+                            :tplId
+                            :subs
+                            mainOpId: unitOpNodeId
+                        )
+                    }
+                }
+            } else null
+        }
+    }
+}
+# resolveInstArgSubs -- resolve one request's generic arguments into the type and
+# value substitution maps. The arguments resolve where the instantiation is
+# WRITTEN, so a request that carries its own scope binds there rather than in
+# the frame the pass is walking.
+resolveInstArgSubs: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    program: Node
+    r: InstReq.view
+    subs: (IdMapV zast.nameid value: u64)
+    valSubs: (IdMapV zast.nameid value: u64)
+} is {
+    ru: r.declUnit
+    rscope: r.scopeDeclId
+    naR: r.argLabels.length
+    aiR: u64
+    # the arguments resolve where the instantiation is written
+    rf: frame
+    if (rscope.isZero) == false then rf = rscope
+    for aiR < naR loop {
+        lblR: (r.argLabels.get i: aiR)
+        anmR: (r.argNames.get i: aiR)
+        aidR: r.argAtomIds.get i: aiR
+        if (isNumericLiteralName name: anmR.stringview) then {
+            pvR: parseDecimalU64 text: anmR.stringview
+            match (
+                pvR
+            ) case some then {
+                valSubs.set key: lblR value: pvR
+            } case none then null
+        } else {
+            aoR: (optionval.none u64)
+            match (
+                program
+            ) case program then {
+                if anmR.length > 0 then {
+                    aoR = (walkLookupTyperef
+                        :st
+                        frame: rf
+                        ast: program.ast
+
+                        unitDecl: ru
+                        base: anmR.stringview
+                    )
+                } else {
+                    # a call-shaped argument: the specialisation it names
+                    atR: instArgTypeOf :st frame: rf ast: program.ast :r i: aiR
+                    if atR > 0 then aoR = (optionval.some atR)
+                }
+            } else null
+            match (
+                aoR
+            ) case some then {
+                subs.set key: lblR value: aoR
+                if aidR > 0 then {
+                    (ztyping.nodeTypeSet
+                        tbl: st.typing.nodeType
+                        nid: aidR
+                        tid: (ztypes.tid.create from: aoR.u64)
+                    )
+                }
+            } case none then null
+        }
+        aiR = aiR + 1
+    }
+}
+# recordInstanceGenericArgs -- record a mono's arguments in DECLARATION order, the
+# order the generic_arg rows keep and the order that keys its level of the id
+# trie. A parameter with no substitution keys as 0 rather than being skipped, so
+# the arity of the key always matches the template's.
+recordInstanceGenericArgs: function {
+    st: zenv.ZSymbolTable
+    tplDecl: ztypes.declid
+    memberIdAt: u64
+    subs: (IdMapV zast.nameid value: u64)
+    valSubs: (IdMapV zast.nameid value: u64)
+} is {
+    # the mono's arguments in DECLARATION order: what the generic_arg
+    # rows record, and what keys its level of the id trie.
+    mkeys: (ListVal u64)
+    mkval: (ListVal bool)
+    {
+        pnR: st.reg.genericParamNamesOf tdecl: tplDecl
+        pnN: pnR.length
+        pnI: u64
+        for pnI < pnN loop {
+            pnmR: (pnR.get i: pnI)
+            tgoR: subs.get key: pnmR
+            match (
+                tgoR
+            ) case some then {
+                mkeys.append tgoR
+                mkval.append false
+            } case none then {
+                vgoR: valSubs.get key: pnmR
+                match (
+                    vgoR
+                ) case some then {
+                    mkeys.append vgoR
+                    mkval.append true
+                } case none then {
+                    mkeys.append 0
+                    mkval.append false
+                }
+            }
+            pnI = pnI + 1
+        }
+    }
+    if (st.reg.genericArgCount specId: (ztypes.tid.create from: memberIdAt.u64)) == 0 then {
+        aiM: u64
+        anM: mkeys.length
+        for aiM < anM loop {
+            kM: mkeys.get i: aiM
+            if (mkval.get i: aiM) then {
+                (st.reg.appendGenericArgValue
+                    specId: (ztypes.tid.create from: memberIdAt.u64)
+                    value: kM
+                )
+            } else {
+                (st.reg.appendGenericArg
+                    specId: (ztypes.tid.create from: memberIdAt.u64)
+                    arg: kM
+                )
+            }
+            aiM = aiM + 1
+        }
+    }
+}
+# completeOneInstance -- finish one instantiation whose mono the mint pass already
+# laid on the trie. The binding's own Decl carries the instantiated unit's type
+# wherever the binding is written, a binding inside a namespace is also a member
+# of it, and the template settles here -- the trie join needs it as its root.
+completeOneInstance: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    program: Node
+    r: InstReq.view
+    mgo: u64
+    tnId: u32
+    subs: (IdMapV zast.nameid value: u64)
+    valSubs: (IdMapV zast.nameid value: u64)
+} is {
+    rbId: r.bindId
+    rtId: r.tmplId
+    ru: r.declUnit
+    re: r.exprId
+    rc: r.callId
+    rl: r.calId
+    rtu: r.tmplUnit
+    rtop: r.tmplOpId
+    rtid: r.tmplTid
+    rtdecl: r.tmplDeclId
+    rscope: r.scopeDeclId
+    memberIdAt: mgo
+    # the binding's own Decl carries the instantiated unit's type
+    # WHEREVER the binding is written: that is what makes `intmath` a
+    # unit to a reader, without asking a bare-name index.
+    bDecl: st.typing.declFindChild parentDeclId: rscope nameId: rbId
+    if (bDecl.isZero) == false then {
+        st.typing.declSetType declId: bDecl typeId: (ztypes.tid.create from: memberIdAt.u64)
+    }
+    # A binding written inside a NAMESPACE is ALSO a member of that
+    # namespace -- `outer.intmath` -- and a qualified read finds it on
+    # the namespace's own type id. A top-level binding has no such
+    # owner: the file unit's members are not indexed that way.
+    rsp: declParentIdOf :st declId: rscope
+    if (declAtProgramTop :st parentDeclId: rsp) == false then {
+        sTid: declTypeIdOf :st declId: rscope
+        if (sTid.isZero) == false then {
+            (st.typing.setMemberType
+                parentTypeId: sTid
+                nameId: rbId
+                childTypeId: memberIdAt
+            )
+        }
+    }
+    tplId: ztypes.tid
+    tgo: (optionval.none u64)
+    tplDecl: ztypes.declid
+    match (
+        program
+    ) case program then {
+        mnUid8: unitNameIdOf :st unitDecl: ru
+        rtNid: rtId
+        tgo = (resolvedByIds
+            :st
+            ast: program.ast
+            unitDecl: (unitDeclOfName :st nameId: mnUid8)
+            name: rtNid
+        )
+        tplDecl = (declOfUnitDef
+            :st
+            :frame
+            unitDecl: ru
+            nameId: rtId
+        )
+        if tplDecl.isZero then tplDecl = rtdecl
+        if tplDecl.isZero then {
+            # a generic FILE unit used as the template: its params
+            # live on its root Decl
+            tro: (st.typing.declFindChild
+                parentDeclId: st.typing.programRoot
+                nameId: rtId
+            )
+            if (tro.isZero) == false then tplDecl = tro
+        }
+    } else null
+    match (
+        tgo
+    ) case some then {
+        tplId = ztypes.tid.create from: tgo.u64
+    } case none then {
+        ugo: (declTypeIdOf
+            :st
+            declId: (st.typing.declFindChild
+                parentDeclId: st.typing.programRoot
+                nameId: (zast.nameid.create from: tnId)
+            )
+        )
+        if (ugo.isZero) == false then {
+            tplId = ztypes.tid.create from: ugo.u64
+        }
+    }
+    # neither probe reaches a template nested in a namespace or living
+    # in another unit; the request resolved one at COLLECTION. Settled
+    # HERE, before the arguments are keyed -- the trie join below needs
+    # the template as its root.
+    if tplId.isZero then tplId = rtid
+    (recordInstanceGenericArgs
+        :st
+        :tplDecl
+        :memberIdAt
+        :subs
+        :valSubs
+    )
+    (buildInstanceMono
+        :st
+        :frame
+        :program
+        :rtId
+        :rtu
+        :ru
+        :rtop
+        tplId0: tplId
+        :memberIdAt
+        :subs
+    )
+    if re > 0 then {
+        ev: memberIdAt
+        (ztyping.nodeTypeSet
+            tbl: st.typing.nodeType
+            nid: re
+            tid: (ztypes.tid.create from: ev.u64)
+        )
+    }
+    if rc > 0 then {
+        cv: memberIdAt
+        (ztyping.nodeTypeSet
+            tbl: st.typing.nodeType
+            nid: rc
+            tid: (ztypes.tid.create from: cv.u64)
+        )
+    }
+    if rl > 0 when tplId > 0 then {
+        (ztyping.nodeTypeSet
+            tbl: st.typing.nodeType
+            nid: rl
+            tid: (ztypes.tid.create from: tplId.u64)
+        )
+    }
+}
 
 # completeUnitInstantiations -- post-demand pass: with system types
 # resolved, finish each generic-unit instantiation (substituted children +
@@ -12991,70 +13394,11 @@ completeUnitInstantiations: function {
     i: u64
     for i < reqs.length loop {
         r: reqs.get :i
-        rbId: r.bindId
         rtId: r.tmplId
-        ru: r.declUnit
-        re: r.exprId
-        rc: r.callId
-        rl: r.calId
-        rtu: r.tmplUnit
-        rtop: r.tmplOpId
-        rtid: r.tmplTid
         rtdecl: r.tmplDeclId
-        rscope: r.scopeDeclId
         subs: (IdMapV zast.nameid value: u64)
         valSubs: (IdMapV zast.nameid value: u64)
-        naR: r.argLabels.length
-        aiR: u64
-        # the arguments resolve where the instantiation is written
-        rf: frame
-        if (rscope.isZero) == false then rf = rscope
-        for aiR < naR loop {
-            lblR: (r.argLabels.get i: aiR)
-            anmR: (r.argNames.get i: aiR)
-            aidR: r.argAtomIds.get i: aiR
-            if (isNumericLiteralName name: anmR.stringview) then {
-                pvR: parseDecimalU64 text: anmR.stringview
-                match (
-                    pvR
-                ) case some then {
-                    valSubs.set key: lblR value: pvR
-                } case none then null
-            } else {
-                aoR: (optionval.none u64)
-                match (
-                    program
-                ) case program then {
-                    if anmR.length > 0 then {
-                        aoR = (walkLookupTyperef
-                            :st
-                            frame: rf
-                            ast: program.ast
-
-                            unitDecl: ru
-                            base: anmR.stringview
-                        )
-                    } else {
-                        # a call-shaped argument: the specialisation it names
-                        atR: instArgTypeOf :st frame: rf ast: program.ast :r i: aiR
-                        if atR > 0 then aoR = (optionval.some atR)
-                    }
-                } else null
-                match (
-                    aoR
-                ) case some then {
-                    subs.set key: lblR value: aoR
-                    if aidR > 0 then {
-                        (ztyping.nodeTypeSet
-                            tbl: st.typing.nodeType
-                            nid: aidR
-                            tid: (ztypes.tid.create from: aoR.u64)
-                        )
-                    }
-                } case none then null
-            }
-            aiR = aiR + 1
-        }
+        resolveInstArgSubs :st :frame :program :r :subs :valSubs
         # the mono is the one on the trie under the template, keyed on the
         # resolved arguments -- the identity the mint pass laid; the label is
         # not consulted
@@ -13084,268 +13428,16 @@ completeUnitInstantiations: function {
         match (
             mgo
         ) case some then {
-            memberIdAt: mgo
-            # the binding's own Decl carries the instantiated unit's type
-            # WHEREVER the binding is written: that is what makes `intmath` a
-            # unit to a reader, without asking a bare-name index.
-            bDecl: st.typing.declFindChild parentDeclId: rscope nameId: rbId
-            if (bDecl.isZero) == false then {
-                st.typing.declSetType declId: bDecl typeId: (ztypes.tid.create from: memberIdAt.u64)
-            }
-            # A binding written inside a NAMESPACE is ALSO a member of that
-            # namespace -- `outer.intmath` -- and a qualified read finds it on
-            # the namespace's own type id. A top-level binding has no such
-            # owner: the file unit's members are not indexed that way.
-            rsp: declParentIdOf :st declId: rscope
-            if (declAtProgramTop :st parentDeclId: rsp) == false then {
-                sTid: declTypeIdOf :st declId: rscope
-                if (sTid.isZero) == false then {
-                    (st.typing.setMemberType
-                        parentTypeId: sTid
-                        nameId: rbId
-                        childTypeId: memberIdAt
-                    )
-                }
-            }
-            tplId: ztypes.tid
-            tgo: (optionval.none u64)
-            tplDecl: ztypes.declid
-            match (
-                program
-            ) case program then {
-                mnUid8: unitNameIdOf :st unitDecl: ru
-                rtNid: rtId
-                tgo = (resolvedByIds
-                    :st
-                    ast: program.ast
-                    unitDecl: (unitDeclOfName :st nameId: mnUid8)
-                    name: rtNid
-                )
-                tplDecl = (declOfUnitDef
-                    :st
-                    :frame
-                    unitDecl: ru
-                    nameId: rtId
-                )
-                if tplDecl.isZero then tplDecl = rtdecl
-                if tplDecl.isZero then {
-                    # a generic FILE unit used as the template: its params
-                    # live on its root Decl
-                    tro: (st.typing.declFindChild
-                        parentDeclId: st.typing.programRoot
-                        nameId: rtId
-                    )
-                    if (tro.isZero) == false then tplDecl = tro
-                }
-            } else null
-            match (
-                tgo
-            ) case some then {
-                tplId = ztypes.tid.create from: tgo.u64
-            } case none then {
-                ugo: (declTypeIdOf
-                    :st
-                    declId: (st.typing.declFindChild
-                        parentDeclId: st.typing.programRoot
-                        nameId: (zast.nameid.create from: tnId)
-                    )
-                )
-                if (ugo.isZero) == false then {
-                    tplId = ztypes.tid.create from: ugo.u64
-                }
-            }
-            # neither probe reaches a template nested in a namespace or living
-            # in another unit; the request resolved one at COLLECTION. Settled
-            # HERE, before the arguments are keyed -- the trie join below needs
-            # the template as its root.
-            if tplId.isZero then tplId = rtid
-            # the mono's arguments in DECLARATION order: what the generic_arg
-            # rows record, and what keys its level of the id trie.
-            mkeys: (ListVal u64)
-            mkval: (ListVal bool)
-            {
-                pnR: st.reg.genericParamNamesOf tdecl: tplDecl
-                pnN: pnR.length
-                pnI: u64
-                for pnI < pnN loop {
-                    pnmR: (pnR.get i: pnI)
-                    tgoR: subs.get key: pnmR
-                    match (
-                        tgoR
-                    ) case some then {
-                        mkeys.append tgoR
-                        mkval.append false
-                    } case none then {
-                        vgoR: valSubs.get key: pnmR
-                        match (
-                            vgoR
-                        ) case some then {
-                            mkeys.append vgoR
-                            mkval.append true
-                        } case none then {
-                            mkeys.append 0
-                            mkval.append false
-                        }
-                    }
-                    pnI = pnI + 1
-                }
-            }
-            if (st.reg.genericArgCount specId: (ztypes.tid.create from: memberIdAt.u64)) == 0 then {
-                aiM: u64
-                anM: mkeys.length
-                for aiM < anM loop {
-                    kM: mkeys.get i: aiM
-                    if (mkval.get i: aiM) then {
-                        (st.reg.appendGenericArgValue
-                            specId: (ztypes.tid.create from: memberIdAt.u64)
-                            value: kM
-                        )
-                    } else {
-                        (st.reg.appendGenericArg
-                            specId: (ztypes.tid.create from: memberIdAt.u64)
-                            arg: kM
-                        )
-                    }
-                    aiM = aiM + 1
-                }
-            }
-            # the request resolved its template at COLLECTION: its id, the
-            # node that declares it, and the unit whose AST holds that node.
-            # One call covers both shapes the scans below split -- a file unit
-            # named by the template, and an inline binding of the instantiating
-            # unit -- because neither is found by name any more.
-            if rtop > 0 when tplId > 0 then {
-                match (
-                    program
-                ) case program then {
-                    (buildUnitMono
-                        :st
-                        :frame
-
-                        ast: program.ast
-                        tmplUnitName: rtu
-                        tmplNameId: rtId
-                        monoId: (ztypes.tid.create from: memberIdAt.u64)
-                        :tplId
-                        :subs
-                        templateOpId: (zast.nodeid.create from: rtop.u32.orPanic)
-                    )
-                } else null
-            } else {
-                if tplId.isZero then {
-                    match (
-                        program
-                    ) case program then {
-                        tuiter: program.ast.units.iterate
-                        for tuId: tuiter loop {
-                            tu: program.ast.nodes.get i: tuId.u64
-                            match (
-                                tu
-                            ) case namedoperation then {
-                                uc3z: (unitDeclOfNameOrOwn
-                                    :st
-                                    :frame
-                                    nameId: tu.name
-                                )
-                                if uc3z == ru then {
-                                    tplId = (inlineTemplateTid
-                                        :st
-                                        ast: program.ast
-                                        mainOpId: tu.operation
-                                        tmplNameId: rtId
-                                    )
-                                }
-                            } else null
-                        }
-                    } else null
-                }
-                if tplId > 0 then {
-                    match (
-                        program
-                    ) case program then {
-                        uN: program.ast.units.length
-                        uI: u64
-                        for uI < uN loop {
-                            u9Id: (zast.nodeid.create from: (program.ast.units.get i: uI))
-                            uI = uI + 1
-                            # scope the element borrow: the calls below lock
-                            # `program.ast` exclusively (they intern mono names)
-                            unitOpNodeId: zast.nodeid
-                            un29Id: zast.nameid
-                            {
-                                u: program.ast.nodes.get i: u9Id.u64
-                                match (
-                                    u
-                                ) case namedoperation then {
-                                    un29Id = u.name
-                                    unitOpNodeId = u.operation
-                                } else null
-                            }
-                            if un29Id == rtId then {
-                                uq2z: (unitDeclOfNameOrOwn
-                                    :st
-                                    :frame
-                                    nameId: un29Id
-                                )
-                                (buildUnitMono
-                                    :st
-                                    :frame
-
-                                    ast: program.ast
-                                    tmplUnitName: uq2z
-                                    tmplNameId: rtId
-                                    monoId: (ztypes.tid.create from: memberIdAt.u64)
-                                    :tplId
-                                    :subs
-                                    templateOpId: unitOpNodeId
-                                )
-                            }
-                            uc4z: (unitDeclOfNameOrOwn
-                                :st
-                                :frame
-                                nameId: un29Id
-                                )
-                            if uc4z == ru then {
-                                (completeInlineReq
-                                    :st
-                                    :frame
-
-                                    ast: program.ast
-                                    unitDecl: ru
-                                    monoId: (ztypes.tid.create from: memberIdAt.u64)
-                                    tmplNameId: rtId
-                                    :tplId
-                                    :subs
-                                    mainOpId: unitOpNodeId
-                                )
-                            }
-                        }
-                    } else null
-                }
-            }
-            if re > 0 then {
-                ev: memberIdAt
-                (ztyping.nodeTypeSet
-                    tbl: st.typing.nodeType
-                    nid: re
-                    tid: (ztypes.tid.create from: ev.u64)
-                )
-            }
-            if rc > 0 then {
-                cv: memberIdAt
-                (ztyping.nodeTypeSet
-                    tbl: st.typing.nodeType
-                    nid: rc
-                    tid: (ztypes.tid.create from: cv.u64)
-                )
-            }
-            if rl > 0 when tplId > 0 then {
-                (ztyping.nodeTypeSet
-                    tbl: st.typing.nodeType
-                    nid: rl
-                    tid: (ztypes.tid.create from: tplId.u64)
-                )
-            }
+            (completeOneInstance
+                :st
+                :frame
+                :program
+                :r
+                :mgo
+                :tnId
+                :subs
+                :valSubs
+            )
         } case none then null
         i = i + 1
     }
@@ -31975,6 +32067,284 @@ constStringMethod: function {
     }
     return (constUnsupportedMethod :st :name :nodeid :lineno :colno)
 }
+# constOfBinop -- fold a binary operator over two constant operands. Two tags
+# compare by ARM IDENTITY (owning type plus name-pool id), never by rendered
+# text, and only equality is defined -- arms have no order.
+constOfBinop: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    n: zast.BinOpData.view
+} out ztypes.cval is {
+    lv: evalConstNode :st :frame :ast :unitDecl n: (ast.nodes.get i: n.lhs.u64)
+    if lv.kind.none then return ztypes.noConst
+    rv: evalConstNode :st :frame :ast :unitDecl n: (ast.nodes.get i: n.rhs.u64)
+    if rv.kind.none then return ztypes.noConst
+    opNode: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.operator.u64))
+    if opNode.length == 0 then return ztypes.noConst
+    # two tags compare by ARM IDENTITY -- the owning type and the arm's
+    # name-pool id -- never by rendered text. Only equality is defined:
+    # arms have no order.
+    if lv.kind.armKind when rv.kind.armKind then {
+        same: false
+        if lv.armTid == rv.armTid when lv.armName == rv.armName then same = true
+        if opNode.stringview == "==" then return (boolConst :st :frame :ast v: same)
+        if opNode.stringview == "!=" then return (boolConst
+            :st
+            :frame
+            :ast
+            v: ((same) == false)
+        )
+        return ztypes.noConst
+    }
+    # two string constants compare by their interned TEXT. Only equality is
+    # folded: ordering is defined but nothing needs it at compile time yet,
+    # and a wrong answer here would be silent.
+    if lv.kind.svalKind when rv.kind.svalKind then {
+        ls: constStringAt :st id: lv.strId
+        rs: constStringAt :st id: rv.strId
+        eq: ls.stringview == rs.stringview
+        if opNode.stringview == "==" then return (boolConst :st :frame :ast v: eq)
+        if opNode.stringview == "!=" then return (boolConst :st :frame :ast v: ((eq) == false))
+        # `+` BUILDS, so the folded value is the joined text, interned like
+        # any other. `A + B + C` folds left to right through this leg with
+        # no runtime temporary at any step.
+        if opNode.stringview == "+" then {
+            ls.append rs
+            return (ztypes.makeStrConst (constInternString :st text: ls.stringview))
+        }
+        return ztypes.noConst
+    }
+    if lv.kind.ivalKind when rv.kind.ivalKind then {
+        if (isComparisonOp name: opNode.stringview) then {
+            return (constCompareInt :st :frame :ast op: opNode.stringview a: lv.ival b: rv.ival)
+        }
+        return (constArithInt
+            :st
+            nodeid: n.nodeid
+            lineno: n.lineno
+            colno: n.colno
+            op: opNode.stringview
+            a: lv.ival
+            b: rv.ival
+        )
+    }
+    lf: constFloatOf v: lv
+    rf: constFloatOf v: rv
+    if lf.has when rf.has then {
+        if (isComparisonOp name: opNode.stringview) then {
+            return (constCompareFloat :st :frame :ast op: opNode.stringview a: lf.val b: rf.val)
+        }
+        return (constArithFloat op: opNode.stringview a: lf.val b: rf.val)
+    }
+    return ztypes.noConst
+    return ztypes.noConst
+}
+# constOfCall -- a call in constant position. `error "..."` is the program
+# asserting: only the WINNING branch of a fold is ever evaluated, so an `error`
+# in a dead one is never visited, which is why it lives here and not in a tree
+# walk. A static method on a string constant folds here too.
+constOfCall: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    n: zast.CallData.view
+} out ztypes.cval is {
+    # `error "..."` in constant position is the program asserting. Only the
+    # WINNING branch of a fold is ever evaluated, so an `error` in a dead
+    # one is never visited -- which is why this lives in the evaluator and
+    # not in a tree walk, and why the spec can promise that a statically
+    # false branch's error goes unreported.
+    # A static method on a string constant is a CALL whose callable is a
+    # dotted path, so atomName is "" for it and the `error` test below would
+    # bail before ever looking at the receiver. Intercept first.
+    {
+        cnode: ast.nodes.get i: n.callable.u64
+        if cnode.dottedpath then {
+            rcv: (evalConstNode
+                :st
+                :frame
+                :ast
+
+                :unitDecl
+                n: (ast.nodes.get i: cnode.parent.u64)
+            )
+            if rcv.kind.svalKind then {
+                mnc: (zast.nameTextAt
+                    :ast
+                    ref: (atomNameId :ast n: (ast.nodes.get i: cnode.child.u64))
+                )
+                if mnc.length > 0 then {
+                    return (constStringMethod
+                        :st
+                        :frame
+                        :ast
+
+                        :unitDecl
+                        args: n.arguments
+                        recv: rcv
+                        name: mnc.stringview
+                        nodeid: n.nodeid
+                        lineno: n.lineno
+                        colno: n.colno
+                    )
+                }
+            }
+        }
+    }
+    cbn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.callable.u64))
+    if cbn.stringview != "error" then return ztypes.noConst
+    umsg: "compile-time error".string
+    with ait: n.arguments.iterate do for aId: ait loop {
+        an: ast.nodes.get i: aId.u64
+        match (
+            an
+        ) case namedoperation then {
+            av: (evalConstNode
+                :st
+                :frame
+                :ast
+
+                :unitDecl
+                n: (ast.nodes.get i: an.operation.u64)
+            )
+            if av.kind.svalKind then umsg = constStringAt :st id: av.strId
+        } else null
+    }
+    (constFailRecord
+        :st
+        kind: ztypes.constfailkind.reachedError
+        nodeid: n.nodeid
+        lineno: n.lineno
+        colno: n.colno
+        width: 5
+        strId: (constInternString :st text: umsg.stringview)
+    )
+    return ztypes.noConst
+    return ztypes.noConst
+}
+# constOfNamedBase -- a dotted path whose base is a bare atom. The base can name a
+# numeric literal (`1.u32` is a width suffix, not a member read), another unit, a
+# nested namespace, a nested unit of the scope being evaluated, or a same-unit
+# constant or type -- the constant is asked first, being the narrower question.
+constOfNamedBase: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    unitDecl: ztypes.declid
+    ast: Ast
+    n: zast.DottedPathData.view
+    pt: StringView
+    nameCount: StringView
+} out ztypes.cval is {
+    if pt.length > 0 then {
+        # `1.u32` is a width-suffixed literal, not a member read: the value
+        # is the parent's lexeme and the child only names its type.
+        if (isNumericLiteralName name: pt) then return (constLiteralValue name: pt)
+        # `unit.CONST` reads a constant out of another unit.
+        if (nameDenotesUnit :st :frame nameId: (nameIdOf :ast name: pt)) then {
+            return (constValueOfMember
+                :st
+                :frame
+                :ast
+
+                unitDecl: (unitDeclOfNameOrOwn
+                    :st
+                    :frame
+                    nameId: (nameIdOf :ast name: pt)
+                )
+                defName: nameCount
+            )
+        }
+        # A nested namespace (`m: unit { NUM: 7 }`) is a definition of THIS
+        # unit whose type is a unit; it is deliberately absent from the
+        # unit-name index, so its members are read off its type id.
+        {
+            nso: (resolvedByIds
+                :st
+                :ast
+                :unitDecl
+                name: (nameIdOf :ast name: pt)
+            )
+            match (
+                nso
+            ) case some then {
+                nst: ztypes.tid.create from: nso
+                if (st.reg.typetypeOf typeId: nst) == ztypes.ztypetype.unitType then {
+                    nsv: (constValueOfMemberTid
+                        :st
+                        :ast
+
+                        unitTid: nst
+                        defName: nameCount
+                    )
+                    if (nsv.kind.none) == false then return nsv
+                }
+            } case none then null
+        }
+        # A nested unit of the SCOPE being evaluated: not in the unit-name
+        # index either, and it resolves on demand, so it may have no id at
+        # all until asked for here. The scope is the enclosing namespace
+        # while its own members evaluate and the file unit otherwise --
+        # rooting this at the file unit alone stopped a re-export chain at
+        # its first hop, since a subunit's subunit is no child of the file.
+        {
+            sro: unitFrameOf :st declId: frame
+            sst: (nestedUnitTidOf
+                :st
+                :frame
+
+                :ast
+                ownerDeclId: sro
+                nestedNameId: (nameIdOf :ast name: pt)
+            )
+            if (sst.isZero) == false then {
+                ssv: (constValueOfMemberTid
+                    :st
+                    :ast
+
+                    unitTid: sst
+                    defName: nameCount
+                )
+                if (ssv.kind.none) == false then return ssv
+            }
+        }
+        # A same-unit name can be a CONSTANT or a TYPE, and the two read
+        # identically: `CC.tcc` asks whether the constant CC holds that arm,
+        # `cckind.tcc` names an arm of the type. The constant is asked
+        # first because it is the narrower question -- a name is not both,
+        # and classifying a constant by its definition's shape would call
+        # `CC: cckind.tcc` a variant and read a nonexistent arm off it.
+        pcv: constValueOfMember :st :frame :ast :unitDecl defName: pt
+        if pcv.kind.armKind then {
+            cnid0: zast.poolFind pool: ast.names text: nameCount
+            if cnid0.isZero then return ztypes.noConst
+            return (boolConst :st :frame :ast v: (pcv.armName == cnid0))
+        }
+        if pcv.kind.svalKind then {
+            return (constStringDotted
+                :st
+                v: pcv
+                name: nameCount
+                nodeid: n.nodeid
+                lineno: n.lineno
+                colno: n.colno
+            )
+        }
+        return (constArmRead
+            :st
+            :frame
+            :ast
+
+            lookupUnit: unitDecl
+            typeName: pt
+            armName: nameCount
+        )
+    }
+    return ztypes.noConst
+}
+
 
 # evalConstNode -- the compile-time value of a node, or `none` when the node is
 # not a constant shape. Numeric shapes only for now: bool and variant arms,
@@ -32040,110 +32410,16 @@ evalConstNode: function {
         pt: String
         if pn.atomid then pt = zast.nameTextCopy :ast ref: pn.name
         if pt.length > 0 then {
-            # `1.u32` is a width-suffixed literal, not a member read: the value
-            # is the parent's lexeme and the child only names its type.
-            if (isNumericLiteralName name: pt.stringview) then {
-                return (constLiteralValue name: pt.stringview)
-            }
-            # `unit.CONST` reads a constant out of another unit.
-            if (nameDenotesUnit :st :frame nameId: (nameIdOf :ast name: pt.stringview)) then {
-                return (constValueOfMember
-                    :st
-                    :frame
-                    :ast
-
-                    unitDecl: (unitDeclOfNameOrOwn
-                        :st
-                        :frame
-                        nameId: (nameIdOf :ast name: pt.stringview)
-                    )
-                    defName: nameCount.stringview
-                )
-            }
-            # A nested namespace (`m: unit { NUM: 7 }`) is a definition of THIS
-            # unit whose type is a unit; it is deliberately absent from the
-            # unit-name index, so its members are read off its type id.
-            {
-                nso: (resolvedByIds
-                    :st
-                    :ast
-                    :unitDecl
-                    name: (nameIdOf :ast name: pt.stringview)
-                )
-                match (
-                    nso
-                ) case some then {
-                    nst: ztypes.tid.create from: nso
-                    if (st.reg.typetypeOf typeId: nst) == ztypes.ztypetype.unitType then {
-                        nsv: (constValueOfMemberTid
-                            :st
-                            :ast
-
-                            unitTid: nst
-                            defName: nameCount.stringview
-                        )
-                        if (nsv.kind.none) == false then return nsv
-                    }
-                } case none then null
-            }
-            # A nested unit of the SCOPE being evaluated: not in the unit-name
-            # index either, and it resolves on demand, so it may have no id at
-            # all until asked for here. The scope is the enclosing namespace
-            # while its own members evaluate and the file unit otherwise --
-            # rooting this at the file unit alone stopped a re-export chain at
-            # its first hop, since a subunit's subunit is no child of the file.
-            {
-                sro: unitFrameOf :st declId: frame
-                sst: (nestedUnitTidOf
-                    :st
-                    :frame
-
-                    :ast
-                    ownerDeclId: sro
-                    nestedNameId: (nameIdOf :ast name: pt.stringview)
-                )
-                if (sst.isZero) == false then {
-                    ssv: (constValueOfMemberTid
-                        :st
-                        :ast
-
-                        unitTid: sst
-                        defName: nameCount.stringview
-                    )
-                    if (ssv.kind.none) == false then return ssv
-                }
-            }
-            # A same-unit name can be a CONSTANT or a TYPE, and the two read
-            # identically: `CC.tcc` asks whether the constant CC holds that arm,
-            # `cckind.tcc` names an arm of the type. The constant is asked
-            # first because it is the narrower question -- a name is not both,
-            # and classifying a constant by its definition's shape would call
-            # `CC: cckind.tcc` a variant and read a nonexistent arm off it.
-            pcv: constValueOfMember :st :frame :ast :unitDecl defName: pt.stringview
-            if pcv.kind.armKind then {
-                cnid0: zast.poolFind pool: ast.names text: nameCount.stringview
-                if cnid0.isZero then return ztypes.noConst
-                return (boolConst :st :frame :ast v: (pcv.armName == cnid0))
-            }
-            if pcv.kind.svalKind then {
-                return (constStringDotted
-                    :st
-                    v: pcv
-                    name: nameCount.stringview
-                    nodeid: n.nodeid
-                    lineno: n.lineno
-                    colno: n.colno
-                )
-            }
-            return (constArmRead
+            pbv: (constOfNamedBase
                 :st
                 :frame
+                :unitDecl
                 :ast
-
-                lookupUnit: unitDecl
-                typeName: pt.stringview
-                armName: nameCount.stringview
+                :n
+                pt: pt.stringview
+                nameCount: nameCount.stringview
             )
+            if (pbv.kind.none) == false then return pbv
         }
         # `platform.os.linux` -- the ARM-PREDICATE form, asked FIRST for the
         # same reason the atomid case asks the constant first: `tsrc.os` is a
@@ -32201,140 +32477,9 @@ evalConstNode: function {
         }
         return ztypes.noConst
     } case binop then {
-        lv: evalConstNode :st :frame :ast :unitDecl n: (ast.nodes.get i: n.lhs.u64)
-        if lv.kind.none then return ztypes.noConst
-        rv: evalConstNode :st :frame :ast :unitDecl n: (ast.nodes.get i: n.rhs.u64)
-        if rv.kind.none then return ztypes.noConst
-        opNode: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.operator.u64))
-        if opNode.length == 0 then return ztypes.noConst
-        # two tags compare by ARM IDENTITY -- the owning type and the arm's
-        # name-pool id -- never by rendered text. Only equality is defined:
-        # arms have no order.
-        if lv.kind.armKind when rv.kind.armKind then {
-            same: false
-            if lv.armTid == rv.armTid when lv.armName == rv.armName then same = true
-            if opNode.stringview == "==" then return (boolConst :st :frame :ast v: same)
-            if opNode.stringview == "!=" then return (boolConst
-                :st
-                :frame
-                :ast
-                v: ((same) == false)
-            )
-            return ztypes.noConst
-        }
-        # two string constants compare by their interned TEXT. Only equality is
-        # folded: ordering is defined but nothing needs it at compile time yet,
-        # and a wrong answer here would be silent.
-        if lv.kind.svalKind when rv.kind.svalKind then {
-            ls: constStringAt :st id: lv.strId
-            rs: constStringAt :st id: rv.strId
-            eq: ls.stringview == rs.stringview
-            if opNode.stringview == "==" then return (boolConst :st :frame :ast v: eq)
-            if opNode.stringview == "!=" then return (boolConst :st :frame :ast v: ((eq) == false))
-            # `+` BUILDS, so the folded value is the joined text, interned like
-            # any other. `A + B + C` folds left to right through this leg with
-            # no runtime temporary at any step.
-            if opNode.stringview == "+" then {
-                ls.append rs
-                return (ztypes.makeStrConst (constInternString :st text: ls.stringview))
-            }
-            return ztypes.noConst
-        }
-        if lv.kind.ivalKind when rv.kind.ivalKind then {
-            if (isComparisonOp name: opNode.stringview) then {
-                return (constCompareInt :st :frame :ast op: opNode.stringview a: lv.ival b: rv.ival)
-            }
-            return (constArithInt
-                :st
-                nodeid: n.nodeid
-                lineno: n.lineno
-                colno: n.colno
-                op: opNode.stringview
-                a: lv.ival
-                b: rv.ival
-            )
-        }
-        lf: constFloatOf v: lv
-        rf: constFloatOf v: rv
-        if lf.has when rf.has then {
-            if (isComparisonOp name: opNode.stringview) then {
-                return (constCompareFloat :st :frame :ast op: opNode.stringview a: lf.val b: rf.val)
-            }
-            return (constArithFloat op: opNode.stringview a: lf.val b: rf.val)
-        }
-        return ztypes.noConst
+        return (constOfBinop :st :frame :ast :unitDecl :n)
     } case call then {
-        # `error "..."` in constant position is the program asserting. Only the
-        # WINNING branch of a fold is ever evaluated, so an `error` in a dead
-        # one is never visited -- which is why this lives in the evaluator and
-        # not in a tree walk, and why the spec can promise that a statically
-        # false branch's error goes unreported.
-        # A static method on a string constant is a CALL whose callable is a
-        # dotted path, so atomName is "" for it and the `error` test below would
-        # bail before ever looking at the receiver. Intercept first.
-        {
-            cnode: ast.nodes.get i: n.callable.u64
-            if cnode.dottedpath then {
-                rcv: (evalConstNode
-                    :st
-                    :frame
-                    :ast
-
-                    :unitDecl
-                    n: (ast.nodes.get i: cnode.parent.u64)
-                )
-                if rcv.kind.svalKind then {
-                    mnc: (zast.nameTextAt
-                        :ast
-                        ref: (atomNameId :ast n: (ast.nodes.get i: cnode.child.u64))
-                    )
-                    if mnc.length > 0 then {
-                        return (constStringMethod
-                            :st
-                            :frame
-                            :ast
-
-                            :unitDecl
-                            args: n.arguments
-                            recv: rcv
-                            name: mnc.stringview
-                            nodeid: n.nodeid
-                            lineno: n.lineno
-                            colno: n.colno
-                        )
-                    }
-                }
-            }
-        }
-        cbn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.callable.u64))
-        if cbn.stringview != "error" then return ztypes.noConst
-        umsg: "compile-time error".string
-        with ait: n.arguments.iterate do for aId: ait loop {
-            an: ast.nodes.get i: aId.u64
-            match (
-                an
-            ) case namedoperation then {
-                av: (evalConstNode
-                    :st
-                    :frame
-                    :ast
-
-                    :unitDecl
-                    n: (ast.nodes.get i: an.operation.u64)
-                )
-                if av.kind.svalKind then umsg = constStringAt :st id: av.strId
-            } else null
-        }
-        (constFailRecord
-            :st
-            kind: ztypes.constfailkind.reachedError
-            nodeid: n.nodeid
-            lineno: n.lineno
-            colno: n.colno
-            width: 5
-            strId: (constInternString :st text: umsg.stringview)
-        )
-        return ztypes.noConst
+        return (constOfCall :st :frame :ast :unitDecl :n)
     } case ifexpr then {
         fb: foldIfBranch :st :frame :ast :unitDecl :n
         if (fb.known) == false then return ztypes.noConst
