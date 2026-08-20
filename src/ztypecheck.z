@@ -2487,6 +2487,7 @@ fieldHeadName: function {ast: Ast.view n: Node.view} out String is {
 # Source-type rows never include these shells (they fall outside `defined_in_unit`),
 # but a `type_children` row joins to the shell's name. Returns the shell's type id.
 recordNodeName: function {
+    ast: Ast.view
     st: zenv.ZSymbolTable
     name: StringView
     nid: u64
@@ -2494,7 +2495,7 @@ recordNodeName: function {
 } is {
     if name.length != 0 then {
         kc: nid
-        st.typing.pendingTyperef.set key: kc value: name.string
+        st.typing.pendingTyperef.set key: kc value: (nameIdOf :ast :name)
         kc3: nid
         st.typing.pendingTyperefFrame.set key: kc3 value: frame
     }
@@ -2549,16 +2550,16 @@ recordResolvedName: function {
     recFrame: ztypes.declid
 } is {
     if name == "this" then {
-        recordNodeName :st name: thisName :nid frame: recFrame
+        recordNodeName :ast :st name: thisName :nid frame: recFrame
     } else {
         if name == "type" then {
-            recordNodeName :st name: thisName :nid frame: recFrame
+            recordNodeName :ast :st name: thisName :nid frame: recFrame
         } else {
             if (isNumericLiteralName :name) then {
                 if name.contains "." then {
-                    recordNodeName :st name: "f64" :nid frame: recFrame
+                    recordNodeName :ast :st name: "f64" :nid frame: recFrame
                 } else {
-                    recordNodeName :st name: "i64" :nid frame: recFrame
+                    recordNodeName :ast :st name: "i64" :nid frame: recFrame
                 }
             } else {
                 # a template's own param name still RECORDS (the pending
@@ -2576,7 +2577,7 @@ recordResolvedName: function {
                         name: gpnr
                     ) then gskip = true
                 }
-                recordNodeName :st :name :nid frame: recFrame
+                recordNodeName :ast :st :name :nid frame: recFrame
                 if gskip then {
                     nsg: nid
                     nsv: true
@@ -3607,7 +3608,7 @@ recordGenericMarkerReturn: function {
         name: (nameIdOf :ast name: mpb3.stringview)
     ) then {
         mnid3: nodeId n: o
-        recordNodeName :st name: mpb3.stringview nid: mnid3.u64 :frame
+        recordNodeName :ast :st name: mpb3.stringview nid: mnid3.u64 :frame
         # the entry feeds mono-return substitution (the pending MAP is the
         # consumer); it names a template param, so it never name-resolves
         nsk3: mnid3.u64
@@ -3996,7 +3997,10 @@ resolveTyperefShellMarked: function {
             # on the globally-resolved type, not an early shell
             tnm: st.reg.nameOf tid: (ztypes.tid.create from: rid.u64)
             if tnm.length > 0 then {
-                st.typing.pendingTyperef.set key: typeExpr.nodeid.u64 value: tnm
+                (st.typing.pendingTyperef.set
+                    key: typeExpr.nodeid.u64
+                    value: (nameIdOf :ast name: tnm.stringview)
+                )
                 st.typing.pendingTyperefFrame.set key: typeExpr.nodeid.u64 value: frame
             }
             return (ztypes.tid.create from: rid)
@@ -5166,7 +5170,8 @@ stampForcedTyperef: function {
         match (
             pv
         ) case some then {
-            recvBaseTid = pv.copy
+            pvT: zast.nameTextAt :ast ref: pv
+            recvBaseTid = pvT.copy
         } case none then null
     }
     if recvBaseTid.length == 0 then recvBaseTid = (baseTypeName :ast n: (ast.nodes.get i: tnid))
@@ -9341,8 +9346,7 @@ resolveAliasKeyIn: function {
             if nop8.namedoperation then dnid = nop8.operation.u64
         }
         if dnid > 0 then {
-            ptn: tu.copy
-            st.typing.pendingTyperef.set key: dnid value: ptn
+            st.typing.pendingTyperef.set key: dnid value: (nameIdOf :ast name: tu.stringview)
             # the alias resolves in the frame it is written in
             st.typing.pendingTyperefFrame.set key: dnid value: aParent
         }
@@ -13791,7 +13795,7 @@ stampPendingTyperefs: function {
     unitDecl: ztypes.declid
 } is {
     pkeys: (ListVal u64)
-    pvals: (List String)
+    pvals: (ListVal zast.nameid)
     # entries an earlier pass deferred (their declaration was still
     # unresolved) come first, then the entries recorded since the last pass
     ri: u64
@@ -13804,7 +13808,7 @@ stampPendingTyperefs: function {
             rv
         ) case some then {
             pkeys.append rk
-            pvals.append rv.copy
+            pvals.append rv
         } case none then null
     }
     st.typing.typerefRetry = (ListVal u64)
@@ -13814,18 +13818,18 @@ stampPendingTyperefs: function {
         if seen > st.typing.typerefsStamped then {
             pk: e.key
             pkeys.append pk
-            pv: e.value.copy
-            pvals.append pv
+            pvals.append e.value
         }
     }
     st.typing.typerefsStamped = seen
-    gpNames: (Set String)
+    gpNames: (IdSet zast.nameid)
     gpiN: 1.u64
     gpLast: st.reg.nextTypeId
     for gpiN < gpLast loop {
         if (st.reg.typetypeOf typeId: (ztypes.tid.create from: gpiN.u64)) == ztypes.ztypetype.genericParam then {
             gnm: st.reg.nameOf tid: (ztypes.tid.create from: gpiN.u64)
-            if gnm.length > 0 then gpNames.add item: gnm
+            gnmId: nameIdOf :ast name: gnm.stringview
+            if (gnmId.isZero) == false then gpNames.add item: gnmId
         }
         gpiN = gpiN + 1
     }
@@ -13874,7 +13878,7 @@ stampPendingTyperefs: function {
                 :ast
 
                 frame: rf
-                baseId: (zast.poolFind pool: ast.names text: pval.stringview)
+                baseId: pval
             )
             match (
                 r
@@ -13889,7 +13893,7 @@ stampPendingTyperefs: function {
                 # names (refDecl), for go-to-definition (bare + dotted);
                 # codegen-inert -- a type-annotation atom is never emitted
                 # as an expression.
-                sfNmB: zast.poolFind pool: ast.names text: pval.stringview
+                sfNmB: pval
                 sfB: (declSurfaceOfName
                     :st
 
@@ -13906,7 +13910,7 @@ stampPendingTyperefs: function {
                 # and resolve per instantiation (a dead-signature typo
                 # that collides with some template's param name is the
                 # accepted blind spot).
-                if (gpNames.has item: pval.copy) then continue
+                if (gpNames.has item: pval) then continue
                 # a name whose declaration the environment finds queued or
                 # mid-resolution is not unknown: this pass may run in the
                 # middle of a drain (a nested unit materialising stamps what
@@ -13915,7 +13919,7 @@ stampPendingTyperefs: function {
                 dh: (envLookup
                     :st
                     frame: rf
-                    nameId: (nameIdOf :ast name: pval.stringview)
+                    nameId: pval
                 )
                 dhWait: false
                 if (dh.declId.isZero) == false then {
@@ -13926,15 +13930,16 @@ stampPendingTyperefs: function {
                     st.typing.typerefRetry.append from: uk
                     continue
                 }
+                pvalT: zast.nameTextAt :ast ref: pval
                 urHit: (nameClaimedByScope
                     :st
                     frame: rf
                     :ast
 
                     unitDecl: origin
-                    name: pval.stringview
+                    name: pvalT.stringview
                 )
-                if urHit == false when pval.stringview == "Any" then {
+                if urHit == false when pvalT.stringview == "Any" then {
                     # `Any` is not user-reachable through the closure:
                     # only a scope claim (its own unit defining it)
                     # resolves it, so an unclaimed `Any` reports.
@@ -13943,7 +13948,6 @@ stampPendingTyperefs: function {
                     # closure-wide: a bare name may resolve to a member
                     # of ANY loaded unit (the demand resolvers search
                     # the closure; the typeref walk does not)
-                    pvId: nameIdOf :ast name: pval.stringview
                     puds: programUnitDecls :st
                     with uit: puds.iterate do for ud: uit loop {
                         if urHit == false then {
@@ -13951,7 +13955,7 @@ stampPendingTyperefs: function {
                                 :st
                                 :ast
                                 unitDecl: (ztypes.declid.create from: ud)
-                                name: pvId
+                                name: pval
                             )
                             match (
                                 uro2
@@ -13963,7 +13967,7 @@ stampPendingTyperefs: function {
                 }
                 if urHit then continue
                 un: ast.nodes.get i: uk
-                um: "Unknown type '\{pval}'"
+                um: "Unknown type '\{pvalT}'"
                 (addResolveErrorH
                     :st
                     nodeid: (nodeId n: un)
@@ -13971,7 +13975,7 @@ stampPendingTyperefs: function {
                     colno: (nodeCol n: un)
                     e: zast.err.badReference
                     msg: um
-                    width: pval.length.u32.orPanic
+                    width: pvalT.length.u32.orPanic
                 )
             }
         }
@@ -25871,21 +25875,30 @@ checkGenericCall: function {
     match (
         rno
     ) case some then {
-        rk2: copiedMapStr m: st.typing.pendingTyperef key: rno
-        if rk2.length > 0 then {
-            rgot2: subs.get key: (nameIdOf :ast name: rk2.stringview)
+        rk2: zast.nameid
+        {
+            rko: st.typing.pendingTyperef.get key: rno
+            match (
+                rko
+            ) case some then {
+                rk2 = rko
+            } case none then null
+        }
+        if (rk2.isZero) == false then {
+            rgot2: subs.get key: rk2
             match (
                 rgot2
             ) case some then {
                 st.reg.setReturnType typeId: mid value: rgot2
             } case none then {
+                rk2T: zast.nameTextAt :ast ref: rk2
                 rconc: (walkLookupTyperef
                     :st
                     frame: st.curFrame
                     :ast
 
                     :unitDecl
-                    base: rk2.stringview
+                    base: rk2T.stringview
                 )
                 match (
                     rconc
