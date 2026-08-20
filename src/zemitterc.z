@@ -9551,11 +9551,6 @@ emitDataMember: function {
         ctx.argHoistRaw.append daRaw
         return daNm
     }
-    if mn2.stringview == "length" then {
-        edSym: ctxCname :ctx tid: (ztypes.tid.create from: dbt.u64)
-        ed0: "\{edSym}_len"
-        return ed0
-    }
     # `primes.0` reaches the element by ordinal, `primes.first`
     # by label; ask the right table rather than spelling one key
     # that could mean either
@@ -18911,6 +18906,7 @@ fillOneDataElem: function {
             ctx.dataElems.set key: k value: iv
         }
         idx: u64
+        hasLen: false
         eiter: op.elements.iterate
         for e: eiter loop {
             vx: emitDataElem :ast :symtab :ctx n: (ast.nodes.get i: e.u64)
@@ -18919,14 +18915,21 @@ fillOneDataElem: function {
             ctx.dataSlot.set key: ik value: iv2
             elbl: dataElemLabel :ast n: (ast.nodes.get i: e.u64)
             if elbl.length > 0 then {
-                lk: (dataconstkey
-                    owner: dtid.u64
-                    name: (zast.poolFind pool: ast.names text: elbl.stringview).u64
-                )
+                elid: zast.poolFind pool: ast.names text: elbl.stringview
+                if elid == zast.wkLength then hasLen = true
+                lk: (dataconstkey owner: dtid.u64 name: elid.u64)
                 lv: vx.copy
                 ctx.dataConst.set key: lk value: lv
             }
             idx = idx + 1
+        }
+        # `.length` folds like a label: the count is known here, so reading it
+        # never forces the static array out. An element labelled `length` has
+        # already claimed the name.
+        if (hasLen) == false then {
+            lnk: (dataconstkey owner: dtid.u64 name: zast.wkLength.u64)
+            lnv: "\{idx}"
+            ctx.dataConst.set key: lnk value: lnv
         }
     } else null
 }
@@ -27231,8 +27234,9 @@ emitRecordDefsIn: function {
 }
 
 # emitDataBlock -- `name: data { e0 e1 ... } out T`: a static const array
-# z_{name}[] plus z_{name}_len, with the element C type from out T (i64
-# default).
+# z_{name}[], with the element C type from out T (i64 default). Emitted only
+# when the block is read at runtime (`.index` / `.array`); labels, ordinals and
+# `.length` fold to constants and need no array.
 emitDataBlock: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
