@@ -568,7 +568,7 @@ ZDumper: class {
     }
 
     # appendAtomStamps -- one row per atom-use variable-id stamp and per
-    appendAtomStamps: function {:this typing: ztyping.ZTyping} is {
+    appendAtomStamps: function {:this typing: ztyping.ZTyping pool: zast.StringPool.view} is {
         with avit: typing.atomVariableId.iterateItems do for av: avit loop {
             row: "INSERT OR IGNORE INTO atom_variable VALUES (\{av.key}, \{av.value});\n"
             this.acc.append s: row
@@ -597,15 +597,16 @@ ZDumper: class {
             ) case some then {
                 pgt = pgo
             } case none then null
-            pga: String
+            pgaId: zast.nameid
             pgao: typing.postGuardArm.get key: pg.key
             match (
                 pgao
             ) case some then {
-                pgv: pgao.copy
-                pga = pgv
+                pgaId = pgao
             } case none then null
-            row7: "INSERT OR IGNORE INTO post_guard VALUES (\{pg.key}, '\{pg.value}', \{pgt}, '\{pga}');\n"
+            pga: zast.poolTextAt :pool ref: pgaId
+            pgn: zast.poolTextAt :pool ref: pg.value
+            row7: "INSERT OR IGNORE INTO post_guard VALUES (\{pg.key}, '\{pgn}', \{pgt}, '\{pga}');\n"
             this.acc.append s: row7
         }
         with tait: typing.tagAccessorName.iterateItems do for ta: tait loop {
@@ -1482,7 +1483,11 @@ dumpSql: function {program: Node.view vfs: zvfs.ZVfs.view symtab: zenv.ZSymbolTa
     d.appendGenericArgs st: symtab
     overrideExpressionStamps typing: symtab.typing :program
     d.appendTypedNodes typing: symtab.typing
-    d.appendAtomStamps typing: symtab.typing
+    match (
+        program
+    ) case program then {
+        d.appendAtomStamps typing: symtab.typing pool: program.ast.names
+    } else null
     d.appendMemberConst typing: symtab.typing
     d.appendConformance typing: symtab.typing
     match (
