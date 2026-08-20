@@ -54,6 +54,13 @@ foldedbranch: record {
 
 # One typecheck-synthesised AST row for the dump: a node minted during the
 # body walk (call-arg hoist temps) that the parsed-program walk cannot reach.
+# One member-type write held while its owner had no declaration to land on.
+pendwrite: record {
+    parent: ztypes.tid
+    name: zast.nameid
+    type: ztypes.tid
+}
+
 SynthNode: class {
     nodeid: u32
     kind: String
@@ -562,9 +569,7 @@ ZTyping: class {
     # declares them. The write is held here and answers member-type reads for
     # the rest of the run. Keyed by (parent, name), last write wins, a handful
     # of entries.
-    pendParent: (ListVal u64)
-    pendName: (ListVal u64)
-    pendType: (ListVal u64)
+    pendWrites: (ListVal pendwrite)
     isError: bool
     errors: (List zast.ErrorData)
     currentReturnTypeId: ztypes.tid
@@ -860,22 +865,18 @@ ZTyping: class {
     # (parent, name).
     declPendWrite: function {:this parentTypeId: ztypes.tid nameId: zast.nameid typeId: ztypes.tid} is {
         i: u64
-        n: this.pendParent.length
+        n: this.pendWrites.length
         for i < n loop {
-            hit: (this.pendParent.get :i) == parentTypeId
-            if hit then hit = (this.pendName.get :i) == nameId.u64
-            if hit then {
-                this.pendType.set :i val: typeId
+            w: this.pendWrites.get :i
+            if w.parent == parentTypeId when w.name == nameId then {
+                nw: pendwrite parent: parentTypeId name: nameId type: typeId
+                this.pendWrites.set :i val: nw
                 return
             }
             i = i + 1
         }
-        pp: parentTypeId
-        this.pendParent.append pp
-        pn: nameId.u64
-        this.pendName.append pn
-        pt: typeId
-        this.pendType.append pt
+        pw: pendwrite parent: parentTypeId name: nameId type: typeId
+        this.pendWrites.append pw
     }
 
     # declPendMemberType -- the type a pended write recorded for
@@ -886,13 +887,12 @@ ZTyping: class {
         nameId: zast.nameid
     } out u64 is {
         i: u64
-        n: t.pendParent.length
+        n: t.pendWrites.length
         for i < n loop {
-            hit: (t.pendParent.get :i) == parentTypeId
-            if hit then hit = (t.pendName.get :i) == nameId.u64
+            w: t.pendWrites.get :i
             # declPendWrite keeps one entry per (parent, name), so the first
             # match is the only one
-            if hit then return (t.pendType.get :i)
+            if w.parent == parentTypeId when w.name == nameId then return w.type.u64
             i = i + 1
         }
         return 0
@@ -902,9 +902,10 @@ ZTyping: class {
     declPendCount: function {:this parentTypeId: ztypes.tid} out u64 is {
         c: u64
         i: u64
-        n: this.pendParent.length
+        n: this.pendWrites.length
         for i < n loop {
-            if (this.pendParent.get :i) == parentTypeId then c = c + 1
+            w: this.pendWrites.get :i
+            if w.parent == parentTypeId then c = c + 1
             i = i + 1
         }
         return c
@@ -913,11 +914,14 @@ ZTyping: class {
     # declPendRows -- one parent's pended writes, in write order.
     declPendRows: function {:this parentTypeId: ztypes.tid names: ListVal u64 tids: ListVal u64} is {
         i: u64
-        n: this.pendParent.length
+        n: this.pendWrites.length
         for i < n loop {
-            if (this.pendParent.get :i) == parentTypeId then {
-                names.append (this.pendName.get :i)
-                tids.append (this.pendType.get :i)
+            w: this.pendWrites.get :i
+            if w.parent == parentTypeId then {
+                nv: w.name.u64
+                names.append nv
+                tv: w.type.u64
+                tids.append tv
             }
             i = i + 1
         }
@@ -2133,9 +2137,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         typerefsStamped: 0
         typerefPassRan: false
         typerefRetry: (ListVal u64)
-        pendParent: (ListVal u64)
-        pendName: (ListVal u64)
-        pendType: (ListVal u64)
+        pendWrites: (ListVal pendwrite)
         errors: (List zast.ErrorData)
         currentReturnTypeId: ztypes.tid
         isError: false)
