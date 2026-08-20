@@ -29170,6 +29170,335 @@ lastStmtLineIdAt: function {ast: Ast.view oId: zast.nodeid} out zast.nodeid is {
     if oId.isZero then return (zast.nodeid.create from: 0)
     return (lastStmtLineId :ast block: (ast.nodes.get i: oId.u64))
 }
+# checkReceiverOwnership -- a receiver may be `borrow` (the default) or `view` only:
+# an object cannot own itself. Family-independent -- the ownership axis says
+# nothing about valtype or reftype -- and a `lock` receiver is rejected the same
+# way, a lock being a thing a caller holds rather than a thing a method takes.
+checkReceiverOwnership: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    pm: zast.NamedOperationData.view
+    pnid: zast.nodeid
+    ptid: u64
+    hasOwn: bool
+    ownMode: ztypes.zparamownership
+    isLockP: bool
+    isGenP: bool
+    mkn: StringView
+    pname: StringView
+} is {
+    # A receiver may be `borrow` (the default) or `view` only:
+    # an object cannot own itself. Family-independent -- the
+    # ownership axis says nothing about valtype or reftype.
+    ownRecv: false
+    if hasOwn then {
+        if ownMode == ztypes.zparamownership.takeMode then ownRecv = true
+        if ownMode == ztypes.zparamownership.holdMode then ownRecv = true
+    }
+    if ownRecv when (paramIsThisReceiver
+        :ast
+        op: (ast.nodes.get i: pm.operation.u64)
+    ) then {
+        orm: "take".string
+        if hasOwn when ownMode == ztypes.zparamownership.holdMode then orm = "hold".string
+        orln: nodeLine n: (ast.nodes.get i: pm.operation.u64)
+        orcl: nodeCol n: (ast.nodes.get i: pm.operation.u64)
+        orm2: "Cannot use '.\{orm}' on a receiver — an object cannot own itself; a receiver is 'borrow' (the default) or 'view'"
+        (addError
+            :st
+            nodeid: pnid
+            lineno: orln
+            colno: orcl
+            e: zast.err.ownerError
+            msg: orm2
+        )
+    }
+    if isLockP when (paramIsThisReceiver
+        :ast
+        op: (ast.nodes.get i: pm.operation.u64)
+    ) == false when (typeIsValtype
+        :st
+
+        tid: (ztypes.tid.create from: ptid.u64)
+    ) when (isGenP) == false then {
+        ptn: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
+        plln: nodeLine n: (ast.nodes.get i: pm.operation.u64)
+        plcl: nodeCol n: (ast.nodes.get i: pm.operation.u64)
+        ml: "Cannot use '.\{mkn}' on valtype parameter '\{pname}' (type '\{ptn}') — locking requires identity (use a class)"
+        (addError
+            :st
+            nodeid: pnid
+            lineno: plln
+            colno: plcl
+            e: zast.err.ownerError
+            msg: ml
+        )
+    }
+}
+# lockReadonlyParam -- a readonly parameter (`view`, not owned, or `hold`, owned) is
+# readonly for the whole body: it holds a readonly lock on itself, so writes,
+# mutating receivers and re-passing to a mutable parameter are all caught by the
+# ordinary lock rules. Both families -- a `view`/`hold` valtype is not a copy, so
+# the lock is taken here rather than left to the emitter's ABI choice.
+lockReadonlyParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    pm: zast.NamedOperationData.view
+    pnid: zast.nodeid
+    pnId: zast.nameid
+    vid2: ztypes.vid
+} is {
+    # A readonly parameter -- `view` (not owned) or `hold`
+    # (owned) -- is readonly for the whole body: it holds a
+    # readonly lock on itself, so writes, mutating receivers
+    # and re-passing to a mutable parameter are all caught
+    # by the ordinary lock rules. Ownership is a separate
+    # axis and is carried by `own` above.
+    #
+    # Both families. A valtype leaf normally skips locking
+    # -- the read is a copy, with no identity to protect --
+    # but a `view`/`hold` valtype is not a copy: the lock is
+    # what makes the marker mean anything, and it is taken
+    # here rather than left to the emitter's ABI choice.
+    vpp: (ListVal zast.nameid)
+    vpp.append pnId
+    vph: (ztypes.zlockholder
+        kind: ztypes.zlockholderkind.varKind
+        id: vid2
+    )
+    vpr: (st.tryLock
+        pool: ast.names
+        path: vpp
+        lockType: ztypes.zlockstate.shared
+        lockScope: ztypes.zlockscope.target
+        holder: vph
+    )
+    if vpr.length > 0 then {
+        (addError
+            :st
+            nodeid: pnid
+            lineno: (nodeLine n: (ast.nodes.get i: pm.operation.u64))
+            colno: (nodeCol n: (ast.nodes.get i: pm.operation.u64))
+            e: zast.err.ownerError
+            msg: vpr
+        )
+    }
+}
+
+
+# bindFunctionParam -- bind one declared parameter into the body's scope: its type,
+# its ownership (a receiver may be `borrow` or `view` only -- an object cannot own
+# itself), its locks, and the readonly and privacy gates its type expression
+# carries. A template's own bare param has no stamp, so it binds the canonical
+# param tid off the FUNCTION child instead.
+bindFunctionParam: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    rf: ztypes.declid
+    pm: zast.NamedOperationData.view
+    thisName: StringView
+    isGenDef: bool
+    fnTid: ztypes.tid
+} is {
+    rgot: (optionval.none u64)
+    if (fnTid.isZero) == false then rgot = (optionval.some fnTid.u64)
+    pname: zast.nameTextAt :ast ref: pm.name
+    pnid: nodeId n: (ast.nodes.get i: pm.operation.u64)
+    ptid: (paramTypeId
+        :st
+        :ast
+        :unitDecl
+        op: (ast.nodes.get i: pm.operation.u64)
+    )
+    if st.typing.curMonoFnTid > 0 then {
+        # per-mono instance walk: the mono FUNCTION child
+        # carries the substituted param type
+        mpo: (st.typing.declChildOf
+            pool: ast.names
+            parentTypeId: st.typing.curMonoFnTid
+            name: pname.stringview
+        )
+        match (
+            mpo
+        ) case some then {
+            ptid = mpo
+        } case none then null
+    }
+    if ptid == 0 when isGenDef then {
+        # a template's own bare param carries no stamp; bind
+        # the canonical param tid from the FUNCTION child so
+        # the walk types it (stampGate suppresses the stamp)
+        fgo3: rgot
+        match (
+            fgo3
+        ) case some then {
+            fco3: (st.typing.declChildOf
+                pool: ast.names
+                parentTypeId: (ztypes.tid.create from: fgo3.u64)
+                name: pname.stringview
+            )
+            match (
+                fco3
+            ) case some then {
+                if (st.reg.typetypeOf typeId: (ztypes.tid.create from: fco3.u64)) == ztypes.ztypetype.genericParam then {
+                    ptid = fco3
+                }
+            } case none then null
+        } case none then null
+    }
+    if ptid > 0 then {
+        noSt: optBoolOr o: (st.typing.noStampNode.get key: pnid.u64) d: false
+        if (noSt) == false then {
+            ppre: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: pnid.u64
+            if ppre.isZero then {
+                setpp: ptid
+                stampGate :st nid: pnid.u64 tid: (ztypes.tid.create from: setpp.u64)
+            }
+        }
+    }
+    if thisName.length > 0 when (paramIsThisReceiver
+        :ast
+        op: (ast.nodes.get i: pm.operation.u64)
+    ) then {
+        thOpt: (walkLookupTyperef
+            :st
+            frame: rf
+            :ast
+
+            :unitDecl
+            base: thisName
+        )
+        match (
+            thOpt
+        ) case some then {
+            ptid = thOpt
+        } case none then null
+    }
+    pown: pathOwnership :ast n: (ast.nodes.get i: pm.operation.u64)
+    isLockP: false
+    mkn: "lock".string
+    match (
+        pown
+    ) case some then {
+        # Only `.lock` needs an identity to point at, so only
+        # `.lock` is refused on a valtype below. `.view` and
+        # `.hold` are readonly markers, enforced by a lock on
+        # the parameter's own NAME, which a valtype has just as
+        # much as a class does.
+        if pown == ztypes.zparamownership.viewMode then mkn = "view".string
+        if pown == ztypes.zparamownership.holdMode then mkn = "hold".string
+    } case none then null
+    isGenP: false
+    if (st.reg.typetypeOf typeId: (ztypes.tid.create from: ptid.u64)) == ztypes.ztypetype.genericParam then isGenP = true
+    hasOwn: false
+    ownMode: ztypes.zparamownership.borrowMode
+    match (
+        pown
+    ) case some then {
+        hasOwn = true
+        ownMode = pown
+    } case none then null
+    (checkReceiverOwnership
+        :st
+        :ast
+        :pm
+        :pnid
+        :ptid
+        :hasOwn
+        :ownMode
+        :isLockP
+        :isGenP
+        mkn: mkn.stringview
+        pname: pname.stringview
+    )
+    own: ownershipOfParam o: (pathOwnership
+        :ast
+        n: (ast.nodes.get i: pm.operation.u64)
+    )
+    isRoP: false
+    match (
+        pown
+    ) case some then {
+        if pown == ztypes.zparamownership.viewMode then isRoP = true
+        if pown == ztypes.zparamownership.holdMode then isRoP = true
+    } case none then null
+    vid2: (st.reg.newVariable
+        ztypeId: (ztypes.tid.create from: ptid.u64)
+        ownership: own
+    )
+    if (typeExprHasPrivate
+        :ast
+        n: (ast.nodes.get i: pm.operation.u64)
+    ) then st.reg.setVariablePrivate id: vid2
+    pnId: pm.name
+    st.defineVar nameId: pnId vid: vid2
+    if isRoP then lockReadonlyParam :st :ast :pm :pnid :pnId :vid2
+    st.typing.defVariableId.set key: pnid.u64 value: vid2
+    st.reg.setVariableOrigin id: vid2 origin: ztypes.zvarorigin.param
+}
+# coerceImplicitReturn -- a literal-typed last statement takes the function's
+# concrete return type, stamped on the statement line.
+coerceImplicitReturn: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    defn: zast.FunctionData.view
+    fnTid: ztypes.tid
+} is {
+    # Implicit-return coercion: a literal-typed last statement takes
+    # the function's concrete return type, stamped on the statement
+    # line.
+    ftid: fnTid
+    if ftid > 0 then {
+        ro: methodReturnOf :st mid: ftid
+        match (
+            ro
+        ) case some then {
+            lsid: lastStmtLineIdAt :ast oId: defn.body
+            if lsid > 0 then {
+                cur: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lsid.u64
+                if cur > 0 then {
+                    if (isLiteralTypeId
+                        :st
+                        tid: (ztypes.tid.create from: cur.u64)
+                    ) then stampGate :st nid: lsid.u64 tid: ro
+                }
+            }
+        } case none then null
+    }
+}
+# setSynthOwnerLabel -- synth rows carry the unit member's dump label: a method's
+# nodes live inside its TYPE's subtree, so the label is the type name. The same
+# pair travels as ids too -- a method's owner is its TYPE, everything else owns
+# itself -- which is what checkCase reads instead of splitting the label apart.
+setSynthOwnerLabel: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    defName: StringView
+    thisName: StringView
+} is {
+    # Synth rows carry the unit member's dump label: a method's nodes
+    # live inside its TYPE's subtree, so the label is the type name.
+    # Nested method walks save and restore it around their bodies.
+    lblUnit: zast.poolTextAt pool: ast.names ref: (unitNameIdOf :st :unitDecl)
+    lbl: "\{lblUnit}.\{defName}"
+    if thisName.length > 0 then lbl = "\{lblUnit}.\{thisName}"
+    st.typing.synthLabel = lbl
+    # the same pair as ids: a method's owner is its TYPE, everything
+    # else owns itself. checkCase reads this instead of splitting the
+    # label back apart.
+    st.typing.synthOwnerUnit = unitDecl
+    {
+        soid: zast.poolFind pool: ast.names text: defName
+        if thisName.length > 0 then soid = (zast.poolFind
+            pool: ast.names
+            text: thisName
+        )
+        st.typing.synthOwnerName = soid
+    }
+}
+
 
 # checkFunctionBody -- type-check one function body. Pushes a scope, binds each
 # parameter as a runtime variable, walks the body, then pops (the pop snapshots
@@ -29274,231 +29603,19 @@ checkFunctionBody: function {
                 match (
                     pm
                 ) case namedoperation then {
-                    pname: zast.nameTextAt :ast ref: pm.name
-                    pnid: nodeId n: (ast.nodes.get i: pm.operation.u64)
-                    ptid: (paramTypeId
+                    (bindFunctionParam
                         :st
-                        :ast
                         :unitDecl
-                        op: (ast.nodes.get i: pm.operation.u64)
+                        :ast
+                        :rf
+                        :pm
+                        :thisName
+                        :isGenDef
+                        :fnTid
                     )
-                    if st.typing.curMonoFnTid > 0 then {
-                        # per-mono instance walk: the mono FUNCTION child
-                        # carries the substituted param type
-                        mpo: (st.typing.declChildOf
-                            pool: ast.names
-                            parentTypeId: st.typing.curMonoFnTid
-                            name: pname.stringview
-                        )
-                        match (
-                            mpo
-                        ) case some then {
-                            ptid = mpo
-                        } case none then null
-                    }
-                    if ptid == 0 when isGenDef then {
-                        # a template's own bare param carries no stamp; bind
-                        # the canonical param tid from the FUNCTION child so
-                        # the walk types it (stampGate suppresses the stamp)
-                        fgo3: rgot
-                        match (
-                            fgo3
-                        ) case some then {
-                            fco3: (st.typing.declChildOf
-                                pool: ast.names
-                                parentTypeId: (ztypes.tid.create from: fgo3.u64)
-                                name: pname.stringview
-                            )
-                            match (
-                                fco3
-                            ) case some then {
-                                if (st.reg.typetypeOf typeId: (ztypes.tid.create from: fco3.u64)) == ztypes.ztypetype.genericParam then {
-                                    ptid = fco3
-                                }
-                            } case none then null
-                        } case none then null
-                    }
-                    if ptid > 0 then {
-                        noSt: optBoolOr o: (st.typing.noStampNode.get key: pnid.u64) d: false
-                        if (noSt) == false then {
-                            ppre: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: pnid.u64
-                            if ppre.isZero then {
-                                setpp: ptid
-                                stampGate :st nid: pnid.u64 tid: (ztypes.tid.create from: setpp.u64)
-                            }
-                        }
-                    }
-                    if thisName.length > 0 when (paramIsThisReceiver
-                        :ast
-                        op: (ast.nodes.get i: pm.operation.u64)
-                    ) then {
-                        thOpt: (walkLookupTyperef
-                            :st
-                            frame: rf
-                            :ast
-
-                            :unitDecl
-                            base: thisName
-                        )
-                        match (
-                            thOpt
-                        ) case some then {
-                            ptid = thOpt
-                        } case none then null
-                    }
-                    pown: pathOwnership :ast n: (ast.nodes.get i: pm.operation.u64)
-                    isLockP: false
-                    mkn: "lock".string
-                    match (
-                        pown
-                    ) case some then {
-                        # Only `.lock` needs an identity to point at, so only
-                        # `.lock` is refused on a valtype below. `.view` and
-                        # `.hold` are readonly markers, enforced by a lock on
-                        # the parameter's own NAME, which a valtype has just as
-                        # much as a class does.
-                        if pown == ztypes.zparamownership.viewMode then mkn = "view".string
-                        if pown == ztypes.zparamownership.holdMode then mkn = "hold".string
-                    } case none then null
-                    isGenP: false
-                    if (st.reg.typetypeOf typeId: (ztypes.tid.create from: ptid.u64)) == ztypes.ztypetype.genericParam then isGenP = true
-                    # A receiver may be `borrow` (the default) or `view` only:
-                    # an object cannot own itself. Family-independent -- the
-                    # ownership axis says nothing about valtype or reftype.
-                    ownRecv: false
-                    match (
-                        pown
-                    ) case some then {
-                        if pown == ztypes.zparamownership.takeMode then ownRecv = true
-                        if pown == ztypes.zparamownership.holdMode then ownRecv = true
-                    } case none then null
-                    if ownRecv when (paramIsThisReceiver
-                        :ast
-                        op: (ast.nodes.get i: pm.operation.u64)
-                    ) then {
-                        orm: "take".string
-                        {
-                            oro: pown
-                            match (
-                                oro
-                            ) case some then {
-                                if oro == ztypes.zparamownership.holdMode then orm = "hold".string
-                            } case none then null
-                        }
-                        orln: nodeLine n: (ast.nodes.get i: pm.operation.u64)
-                        orcl: nodeCol n: (ast.nodes.get i: pm.operation.u64)
-                        orm2: "Cannot use '.\{orm}' on a receiver — an object cannot own itself; a receiver is 'borrow' (the default) or 'view'"
-                        (addError
-                            :st
-                            nodeid: pnid
-                            lineno: orln
-                            colno: orcl
-                            e: zast.err.ownerError
-                            msg: orm2
-                        )
-                    }
-                    if isLockP when (paramIsThisReceiver
-                        :ast
-                        op: (ast.nodes.get i: pm.operation.u64)
-                    ) == false when (typeIsValtype
-                        :st
-
-                        tid: (ztypes.tid.create from: ptid.u64)
-                    ) when (isGenP) == false then {
-                        ptn: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
-                        plln: nodeLine n: (ast.nodes.get i: pm.operation.u64)
-                        plcl: nodeCol n: (ast.nodes.get i: pm.operation.u64)
-                        ml: "Cannot use '.\{mkn}' on valtype parameter '\{pname}' (type '\{ptn}') — locking requires identity (use a class)"
-                        (addError
-                            :st
-                            nodeid: pnid
-                            lineno: plln
-                            colno: plcl
-                            e: zast.err.ownerError
-                            msg: ml
-                        )
-                    }
-                    own: ownershipOfParam o: (pathOwnership
-                        :ast
-                        n: (ast.nodes.get i: pm.operation.u64)
-                    )
-                    isRoP: false
-                    match (
-                        pown
-                    ) case some then {
-                        if pown == ztypes.zparamownership.viewMode then isRoP = true
-                        if pown == ztypes.zparamownership.holdMode then isRoP = true
-                    } case none then null
-                    vid2: (st.reg.newVariable
-                        ztypeId: (ztypes.tid.create from: ptid.u64)
-                        ownership: own
-                    )
-                    if (typeExprHasPrivate
-                        :ast
-                        n: (ast.nodes.get i: pm.operation.u64)
-                    ) then st.reg.setVariablePrivate id: vid2
-                    pnId: pm.name
-                    st.defineVar nameId: pnId vid: vid2
-                    if isRoP then {
-                        # A readonly parameter -- `view` (not owned) or `hold`
-                        # (owned) -- is readonly for the whole body: it holds a
-                        # readonly lock on itself, so writes, mutating receivers
-                        # and re-passing to a mutable parameter are all caught
-                        # by the ordinary lock rules. Ownership is a separate
-                        # axis and is carried by `own` above.
-                        #
-                        # Both families. A valtype leaf normally skips locking
-                        # -- the read is a copy, with no identity to protect --
-                        # but a `view`/`hold` valtype is not a copy: the lock is
-                        # what makes the marker mean anything, and it is taken
-                        # here rather than left to the emitter's ABI choice.
-                        vpp: (ListVal zast.nameid)
-                        vpp.append pnId
-                        vph: (ztypes.zlockholder
-                            kind: ztypes.zlockholderkind.varKind
-                            id: vid2
-                        )
-                        vpr: (st.tryLock
-                            pool: ast.names
-                            path: vpp
-                            lockType: ztypes.zlockstate.shared
-                            lockScope: ztypes.zlockscope.target
-                            holder: vph
-                        )
-                        if vpr.length > 0 then {
-                            (addError
-                                :st
-                                nodeid: pnid
-                                lineno: (nodeLine n: (ast.nodes.get i: pm.operation.u64))
-                                colno: (nodeCol n: (ast.nodes.get i: pm.operation.u64))
-                                e: zast.err.ownerError
-                                msg: vpr
-                            )
-                        }
-                    }
-                    st.typing.defVariableId.set key: pnid.u64 value: vid2
-                    st.reg.setVariableOrigin id: vid2 origin: ztypes.zvarorigin.param
                 } else null
             }
-            # Synth rows carry the unit member's dump label: a method's nodes
-            # live inside its TYPE's subtree, so the label is the type name.
-            # Nested method walks save and restore it around their bodies.
-            lblUnit: zast.poolTextAt pool: ast.names ref: (unitNameIdOf :st :unitDecl)
-            lbl: "\{lblUnit}.\{defName}"
-            if thisName.length > 0 then lbl = "\{lblUnit}.\{thisName}"
-            st.typing.synthLabel = lbl
-            # the same pair as ids: a method's owner is its TYPE, everything
-            # else owns itself. checkCase reads this instead of splitting the
-            # label back apart.
-            st.typing.synthOwnerUnit = unitDecl
-            {
-                soid: zast.poolFind pool: ast.names text: defName
-                if thisName.length > 0 then soid = (zast.poolFind
-                    pool: ast.names
-                    text: thisName
-                )
-                st.typing.synthOwnerName = soid
-            }
+            setSynthOwnerLabel :st :unitDecl :ast :defName :thisName
             st.typing.currentThisTid = thisTid
             prevRet: st.typing.currentReturnTypeId
             fitid: (optU64Or o: rgot d: 0)
@@ -29516,28 +29633,12 @@ checkFunctionBody: function {
             walkBodyAt :st :unitDecl :ast bodyId: defn.body
             st.typing.currentReturnTypeId = prevRet
             st.typing.currentReturnsBorrow = prevRb
-            # Implicit-return coercion: a literal-typed last statement takes
-            # the function's concrete return type, stamped on the statement
-            # line.
-            ftid: ztypes.tid
-            ftid = ztypes.tid.create from: (optU64Or o: rgot d: ftid)
-            if ftid > 0 then {
-                ro: methodReturnOf :st mid: ftid
-                match (
-                    ro
-                ) case some then {
-                    lsid: lastStmtLineIdAt :ast oId: defn.body
-                    if lsid > 0 then {
-                        cur: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lsid.u64
-                        if cur > 0 then {
-                            if (isLiteralTypeId
-                                :st
-                                tid: (ztypes.tid.create from: cur.u64)
-                            ) then stampGate :st nid: lsid.u64 tid: ro
-                        }
-                    }
-                } case none then null
-            }
+            (coerceImplicitReturn
+                :st
+                :ast
+                :defn
+                fnTid: (ztypes.tid.create from: (optU64Or o: rgot d: ztypes.tid))
+            )
             st.pop
             st.typing.suppressParamStamps = prevSup
         }
