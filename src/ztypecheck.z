@@ -18111,14 +18111,1484 @@ unitMemberTypeOf: function {
     }
     return (optionval.none u64)
 }
+# reportUnknownMember -- an unknown member on a concrete user-defined type is a
+# hard error. Shells (no defining unit), stdlib/native types and template walks
+# stay silent: their members resolve through later passes or per-instantiation.
+reportUnknownMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+    cnId: zast.nameid
+} is {
+    # unknown member on a concrete user-defined type: hard error.
+    # Shells (no defining unit), stdlib/native types, and template
+    # walks stay silent -- their members resolve through later
+    # passes or per-instantiation.
+    bttMm: st.reg.typetypeOf typeId: bt
+    isConcMm: false
+    if bttMm == ztypes.ztypetype.recordType then isConcMm = true
+    if bttMm == ztypes.ztypetype.classType then isConcMm = true
+    if bttMm == ztypes.ztypetype.unionType then isConcMm = true
+    if bttMm == ztypes.ztypetype.variantType then isConcMm = true
+    if bttMm == ztypes.ztypetype.dataType then isConcMm = true
+    if isConcMm when (memberStrictType :st :bt) then {
+        if st.typing.suppressParamStamps == false then {
+            # demand-order safety: walk the type's methods once and
+            # re-probe before declaring the member unknown
+            btnMm0: st.reg.nameOf tid: bt
+            walkDefinitionById :st :ast tid: bt
+            (forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId)
+            moMm: st.typing.declChildOfId parentTypeId: bt nameId: cnId
+            stillMiss: true
+            match (
+                moMm
+            ) case some then {
+                stillMiss = false
+            } case none then null
+            # a numeric-type-named member on a numeric base is a width
+            # conversion; the identity form (x.T where x is already T) is
+            # not a declared child but is a valid (redundant) cast.
+            if stillMiss then {
+                baseNum: false
+                if (isNumericTypeName name: btnMm0.stringview) then baseNum = true
+                if btnMm0.stringview == "literal_int" then baseNum = true
+                if btnMm0.stringview == "literal_float" then baseNum = true
+                if (isNumericTypeName name: cn) when baseNum then stillMiss = false
+            }
+            if stillMiss then {
+                btnMm: st.reg.nameOf tid: bt
+                mMm: "type '\{btnMm}' has no member '\{cn}'"
+                sugMm: suggestSimilar :ast :st parentTypeId: bt name: cn
+                hMm: String
+                if sugMm.length > 0 then {
+                    hhMm: "did you mean '\{sugMm}'?"
+                    hMm = hhMm
+                }
+                if (declMemberIsPrivate
+                    :st
 
-checkDotted: function {
+                    tid: bt
+                    nameId: (ast.names.find s: cn)
+                ) then {
+                    hpMm: "'\{cn}' is private (not in the public interface)"
+                    hMm = hpMm
+                }
+                cnidMm: nodeId n: (ast.nodes.get i: dp.child.u64)
+                cnlnMm: nodeLine n: (ast.nodes.get i: dp.child.u64)
+                cnclMm: nodeCol n: (ast.nodes.get i: dp.child.u64)
+                (addErrorH
+                    :st
+                    nodeid: cnidMm
+                    lineno: cnlnMm
+                    colno: cnclMm
+                    e: zast.err.typeError
+                    msg: mMm
+                    note: "".string
+                    hint: hMm
+                    width: cn.length.u32.orPanic
+                )
+            }
+        }
+    }
+}
+# checkCopyMember -- `.copy` on a receiver that declares no copy member. Deep copy
+# exists for strings, containers and generic type parameters only, so the gap is a
+# hard error here rather than invalid C out of the emitter.
+checkCopyMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+} out callleg is {
+    # `.copy` on a receiver with no copy member is a hard error: deep
+    # copy exists for strings, containers, and generic type parameters
+    # only. Without this the emitter has no clone to emit and the
+    # miss would surface as invalid C.
+    if cn == "copy" when (st.reg.typetypeOf typeId: bt) != ztypes.ztypetype.genericParam then {
+        # per-mono instance walk: `.copy` on a template param was
+        # validated against the template (t -> t); the instance lowers
+        # it per type (valtypes/views bitwise, String deep). Only the
+        # user-reftype capability gap stays an error.
+        if st.typing.curMonoStamp > 0 then {
+            bttIw: st.reg.typetypeOf typeId: bt
+            isRefIw: false
+            if bttIw == ztypes.ztypetype.classType then isRefIw = true
+            if bttIw == ztypes.ztypetype.unionType then isRefIw = true
+            if isRefIw then {
+                # native view classes (StringView) copy by assignment --
+                # only USER reftypes lack a lowering
+                if (st.reg.isNativeOf tid: bt) then isRefIw = false
+            }
+            if bt == (builtinTidTc :ast :st base: "StringView") then isRefIw = false
+            if (isRefIw) == false then {
+                stampGate :st nid: dp.nodeid.u64 tid: bt
+                return (callleg handled: true tid: bt)
+            }
+        }
+        btnCp: st.reg.nameOf tid: bt
+        bttCp: st.reg.typetypeOf typeId: bt
+        isValCp: false
+        if bttCp == ztypes.ztypetype.recordType then isValCp = true
+        if bttCp == ztypes.ztypetype.variantType then isValCp = true
+        if bttCp == ztypes.ztypetype.facetType then isValCp = true
+        # A valtype's DEFAULT `.copy` is the byte copy its assignment
+        # already performs -- a valtype holds no reftype, so copying the
+        # bytes copies the whole value. Writing one in the as-block
+        # overrides this default; the member lookup above finds it first
+        # and never reaches here. `copy: null` strikes the default off,
+        # and a monomorphised instance inherits its template's decision.
+        cpOff: st.typing.copyOptOut.has item: bt
+        if (cpOff) == false then {
+            cpOrg: st.reg.genericOriginOf tid: bt
+            if cpOrg > 0 then cpOff = st.typing.copyOptOut.has item: cpOrg
+        }
+        if isValCp when (cpOff) == false then {
+            stampGate :st nid: dp.nodeid.u64 tid: bt
+            return (callleg handled: true tid: bt)
+        }
+        if cpOff then {
+            mOff: "type '\{btnCp}' has no '.copy': its `as` block defines `copy: null`, striking the default copy off the type"
+            (addError
+                :st
+                nodeid: dp.nodeid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.typeError
+                msg: mOff
+            )
+            return (callleg handled: true tid: (ztypes.tid.create from: 0))
+        }
+        mCp: "type '\{btnCp}' has no '.copy': a reftype has no default copy -- define a 'copy' method on '\{btnCp}' saying what a duplicate means, or move with '.take'"
+
+        if bt == (builtinTidTc :ast :st base: "StringView") then {
+            mCp = "type 'StringView' has no '.copy': a view is copied by assignment; '.string' makes an owned String (allocates)".string
+        }
+        (addError
+            :st
+            nodeid: dp.nodeid
+            lineno: dp.lineno
+            colno: dp.colno
+            e: zast.err.typeError
+            msg: mCp
+        )
+        return (callleg handled: true tid: (ztypes.tid.create from: 0))
+    }
+    return (callleg handled: false tid: (ztypes.tid.create from: 0))
+}
+# reportPrivateMember -- E0102 for a member the type does not make public, unless
+# the base already holds private access or a public alias routed us here.
+reportPrivateMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+    aliasViaX: bool
+} is {
+    if aliasViaX == false when (declMemberIsPrivate
+        :st
+
+        tid: bt
+        nameId: (ast.names.find s: cn)
+    ) then {
+        baseN: ast.nodes.get i: dp.parent.u64
+        if (baseIsPrivateCapable :st :ast :bt baseNode: baseN) == false then {
+            cnidP: nodeId n: (ast.nodes.get i: dp.child.u64)
+            cnlnP: nodeLine n: (ast.nodes.get i: dp.child.u64)
+            cnclP: nodeCol n: (ast.nodes.get i: dp.child.u64)
+            btNmP: st.reg.nameOf tid: bt
+            pmsgP: "'\{cn}' is not public on type '\{btNmP}'"
+            (addErrorH
+                :st
+                nodeid: cnidP
+                lineno: cnlnP
+                colno: cnclP
+                e: zast.err.notPublic
+                msg: pmsgP
+                note: "".string
+                hint: "".string
+                width: cn.length.u32.orPanic
+            )
+        }
+    }
+}
+# checkMemberAutoCall -- a FUNCTION member read in value position auto-calls: it
+# takes the receiver lock a reader takes, answers the method's return type, and
+# routes the borrow / view / takex return reports. Answers the path's type.
+checkMemberAutoCall: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+    mo: u64
+    coerce: bool
+    result0: ztypes.tid
+} out ztypes.tid is {
+    result: result0
+    if coerce when (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
+        :ast
+        :st
+        mid: (ztypes.tid.create from: mo.u64)
+    ) then {
+        aShr: isContainerReaderCall :ast :st recvTid: bt mname: cn
+        if (methodReceiverIsView :st mid: (ztypes.tid.create from: mo.u64)) then aShr = true
+        lockAutoCallReceiver :ast :st :dp :bt shared: aShr
+        ro: methodReturnOf :st mid: (ztypes.tid.create from: mo.u64)
+        match (
+            ro
+        ) case some then {
+            result = ro
+            fb: st.typing.funcReturnsBorrow.get key: mo
+            match (
+                fb
+            ) case some then {
+                if fb then {
+                    # Build locally, then append through the full field
+                    # path (a field list passed as an argument is a
+                    # non-owning shallow copy -- appends would be lost).
+                    tup: (ListVal zast.nameid)
+                    appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: tup
+                    drainPendingBorrow :st
+                    with tit: tup.iterate do for te: tit loop st.typing.pendingBorrowPath.append te
+                    if (returnIsIteratorTid :st tid: result) == false then {
+                        st.typing.pendingBorrowShared = true
+                    } else {
+                        mrv: (methodReceiverIsView
+                            :st
+                            mid: (ztypes.tid.create from: mo.u64)
+                        )
+                        if mrv then st.typing.pendingBorrowShared = true
+                    }
+                    # An `out T.view` result is a READONLY reference: shared pin,
+                    # and the binding it lands on may only be read.
+                    if (optBoolOr o: (st.typing.funcReturnsView.get key: mo) d: false) then {
+                        st.typing.pendingBorrowShared = true
+                        st.typing.pendingBorrowReadonly = true
+                    }
+                } else {
+                    drainPendingBorrow :st
+                }
+            } case none then {
+                # an owning auto-call (`.copy` / `.string` / user methods)
+                # consumes any receiver-evaluation borrow residue (the get
+                # in `(xs.get i).copy` must not flow to the binding).
+                drainPendingBorrow :st
+                if (optBoolOr o: (st.typing.funcReturnsTakex.get key: mo) d: false) then {
+                    # `takex`: the result is OWNED but pins its source --
+                    # the same receiver pin a borrow return takes, without
+                    # demoting the binding (`pendingBorrowOwned`).
+                    tupX: (ListVal zast.nameid)
+                    appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: tupX
+                    with titX: tupX.iterate do for teX: titX loop st.typing.pendingBorrowPath.append teX
+                    if (returnIsIteratorTid :st tid: result) == false then {
+                        st.typing.pendingBorrowShared = true
+                    } else {
+                        mrvX: (methodReceiverIsView :st mid: (ztypes.tid.create from: mo.u64))
+                        if mrvX then st.typing.pendingBorrowShared = true
+                    }
+                    st.typing.pendingBorrowOwned = true
+                }
+            }
+        } case none then {
+            # A no-`out` METHOD auto-call resolves to null (the
+            # reference's auto-call rule for out-less methods). Non-
+            # function members (field shells) keep their re-resolved
+            # type.
+            if (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) == ztypes.ztypetype.functionType then {
+                result = ztypes.tid.create from: (st.typing.nullTypeId)
+            }
+        }
+    }
+    return result
+}
+# checkMemberProjections -- the three legs a resolved member takes before the
+# auto-call one: `X.create` in value position is zero-argument construction, a
+# protocol-typed conformance member projects a borrow of its receiver, and an
+# args-bearing fn-pointer field read bare is a call missing its arguments.
+checkMemberProjections: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+    cnId: zast.nameid
+    mo: u64
+    rm: u64
+    coerce: bool
+} out callleg is {
+    # `X.create` in value position is zero-argument construction (the same
+    # as the bare type name); route it through the shared construction check
+    # so a synthesized create's required fields are enforced and the
+    # implicitCreate stamp drives field-wise emission.
+    if coerce when cnId == zast.wkCreate when (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) == ztypes.ztypetype.functionType when (isImplicitZeroCreateTid
+        :ast
+        :st
+        tid: bt
+    ) == false then {
+        (checkBareTypeValueAt
+            :ast
+            :st
+            nodeid: dp.nodeid
+            lineno: dp.lineno
+            colno: dp.colno
+            width: cn.length.u32.orPanic
+            tid: bt
+        )
+        setcr: bt
+        stampGate :st nid: dp.nodeid.u64 tid: setcr
+        return (callleg handled: true tid: bt)
+    }
+    # Reading a protocol-typed conformance member projects a borrow of
+    # the receiver: the consuming binding becomes BORROWED with the base
+    # as its origin (and installs the borrow locks).
+    rmtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rm.u64)
+    if rmtt == ztypes.ztypetype.protocolType then {
+        pjroot: (zast.nameTextAt
+            :ast
+            ref: (bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
+        )
+        if pjroot.length > 0 then {
+            pjvo: st.lookupVarId nameId: (nameIdOf :ast name: pjroot.stringview)
+            match (
+                pjvo
+            ) case some then {
+                drainPendingBorrow :st
+                st.typing.pendingBorrowPath.append (nameIdOf :ast name: pjroot.stringview)
+            } case none then null
+        }
+    }
+    if coerce when (st.typing.declIsFnptrField
+        pool: ast.names
+        parentTypeId: bt
+        name: cn
+    ) then {
+        # bare name = call: a value-position read of an args-bearing
+        # fn-pointer field is a call missing its arguments; `.take` is
+        # the reference form (peeled before this leg)
+        natE3: st.typing.inAssignTarget
+        {
+            isNative9v: st.reg.isNativeOf tid: (ztypes.tid.create from: mo.u64)
+                if isNative9v then natE3 = true
+        }
+        if natE3 == false when (methodHasNoUserArgs
+            :ast
+            :st
+            mid: (ztypes.tid.create from: mo.u64)
+        ) == false then {
+            mE3: "function-pointer field '\{cn}' takes arguments; call it, or reference it with '.take'"
+            (addError
+                :st
+                nodeid: dp.nodeid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.callError
+                msg: mE3
+            )
+        }
+    }
+    return (callleg handled: false tid: (ztypes.tid.create from: 0))
+}
+# checkTaggedMemberPath -- a subtype member named on a tagged TYPE (not a value of
+# it, not the tag, not a method) is a construction reference: the path's value IS
+# the tagged parent. A VALUE base makes the path the arm PREDICATE instead -- it
+# types bool and stamps dpArmPredicate for the tag-compare emission.
+checkTaggedMemberPath: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+    mo: u64
+    aliasViaX: bool
+} out callleg is {
+    # A subtype member named on a tagged TYPE (not a value of it, not the
+    # tag, not a method) is a construction reference: record the dotted
+    # node's tagged parent (construction dispatch and generic-union
+    # inference key off it), stamp the path with the parent, and the
+    # path's value IS the parent. A VALUE base makes the path the arm
+    # PREDICATE: it types bool (true when the value currently holds
+    # that arm) and stamps dpArmPredicate for the tag-compare emission.
+    btt0: st.reg.typetypeOf typeId: bt
+    isTagged: false
+    if btt0 == ztypes.ztypetype.variantType then isTagged = true
+    if btt0 == ztypes.ztypetype.unionType then isTagged = true
+    if isTagged then {
+        ctt0: st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)
+        isMember: true
+        if ctt0 == ztypes.ztypetype.functionType then isMember = false
+        if ctt0 == ztypes.ztypetype.dataType then isMember = false
+        if isMember then {
+            isVal: taggedRecvIsValue :ast :st n: (ast.nodes.get i: dp.parent.u64)
+            if (isVal) == false then {
+                # arm constructors are members: from OUTSIDE the type an
+                # unlisted arm is private (a public alias translated above).
+                armHidden: false
+                if aliasViaX == false then {
+                    baseNodeC: ast.nodes.get i: dp.parent.u64
+                    if (baseIsPrivateCapable :st :ast :bt baseNode: baseNodeC) == false then {
+                        if (declMemberIsPrivate
+                            :st
+
+                            tid: bt
+                            nameId: (ast.names.find s: cn)
+                        ) then armHidden = true
+                    }
+                }
+                if armHidden then {
+                    ccnid: nodeId n: (ast.nodes.get i: dp.child.u64)
+                    ccln: nodeLine n: (ast.nodes.get i: dp.child.u64)
+                    cccl: nodeCol n: (ast.nodes.get i: dp.child.u64)
+                    ccbn: st.reg.nameOf tid: bt
+                    (addErrorH
+                        :st
+                        nodeid: ccnid
+                        lineno: ccln
+                        colno: cccl
+                        e: zast.err.notPublic
+                        msg: "'\{cn}' is not public on type '\{ccbn}'"
+                        note: "".string
+                        hint: "".string
+                        width: cn.length.u32.orPanic
+                    )
+                    return (callleg handled: true tid: (ztypes.tid.create from: 0))
+                }
+                dpk0: dp.nodeid.u64
+                dpv0: bt
+                st.typing.dpTaggedParent.set key: dpk0 value: dpv0
+                stampedTid: bt
+                stampGate :st nid: dp.nodeid.u64 tid: stampedTid
+                return (callleg handled: true tid: bt)
+            }
+            isArm: true
+            if ctt0 == ztypes.ztypetype.tagType then isArm = false
+            gtpl: false
+            {
+                isgeneric9v: st.reg.isGenericOf tid: bt
+                    if isgeneric9v then gtpl = true
+            }
+            if isArm when (gtpl) == false then {
+                boolId: (optU64Or
+                    o: (walkLookupTyperef
+                        :st
+                        frame: st.curFrame
+                        :ast
+
+                        :unitDecl
+                        base: "bool"
+                    )
+                    d: 0
+                )
+                if boolId > 0 then {
+                    st.typing.dpArmPredicate.set key: dp.nodeid.u64 value: bt
+                    stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: boolId.u64)
+                    return (callleg handled: true tid: (ztypes.tid.create from: boolId))
+                }
+            }
+        }
+    }
+    return (callleg handled: false tid: (ztypes.tid.create from: 0))
+}
+# checkTagAccessor -- a variant/union as-item `name: <numeric>.tag` exposes the
+# discriminator on instances as a read-only numeric under the declared name.
+# Without one, an instance read of `tag` is rejected here.
+checkTagAccessor: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+    cnId: zast.nameid
+} out callleg is {
+    # explicit tag accessor: a variant/union as-item `name: <numeric>.tag`
+    # exposes the discriminator on instances as a read-only numeric under
+    # the declared name; without one, instance reads of `tag` are rejected.
+    btt5: st.reg.typetypeOf typeId: bt
+    isSum: false
+    if btt5 == ztypes.ztypetype.variantType then isSum = true
+    if btt5 == ztypes.ztypetype.unionType then isSum = true
+    if isSum when (taggedRecvIsValue :ast :st n: (ast.nodes.get i: dp.parent.u64)) then {
+        tagHit: false
+        {
+            tan5: st.typing.tagAccessorName.get key: bt
+            match (
+                tan5
+            ) case some then {
+                if tan5 == cnId then tagHit = true
+            } case none then null
+        }
+        if tagHit then {
+            if st.typing.inAssignTarget then {
+                mro5: "'\{cn}' is read-only — the tag accessor cannot be assigned"
+                en5: String
+                eh5: String
+                (addErrorH
+                    :st
+                    nodeid: dp.nodeid
+                    lineno: dp.lineno
+                    colno: dp.colno
+                    e: zast.err.typeError
+                    msg: mro5
+                    note: en5
+                    hint: eh5
+                    width: cn.length.u32.orPanic
+                )
+                return (callleg handled: true tid: (ztypes.tid.create from: 0))
+            }
+            tat5: optTidOr o: (st.typing.tagAccessorTid.get key: bt) d: ztypes.tid
+            if tat5 > 0 then {
+                st.typing.dpTagRead.set key: dp.nodeid.u64 value: bt
+                mD5: (declMemberOf
+                    :st
+
+                    ownerTid: bt
+                    nameId: cnId
+                )
+                stampRefDecl :st nid: dp.nodeid.u64 declId: mD5
+                stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: tat5.u64)
+                return (callleg handled: true tid: (ztypes.tid.create from: tat5))
+            }
+        }
+        if cn == "tag" then {
+            btn5: st.reg.nameOf tid: bt
+            mnx5: "tag not exposed on '\{btn5}' — declare it in the as block (eg. `tag: u8.tag`)"
+            en6: String
+            eh6: String
+            (addErrorH
+                :st
+                nodeid: dp.nodeid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.typeError
+                msg: mnx5
+                note: en6
+                hint: eh6
+                width: cn.length.u32.orPanic
+            )
+            return (callleg handled: true tid: (ztypes.tid.create from: 0))
+        }
+    }
+    return (callleg handled: false tid: (ztypes.tid.create from: 0))
+}
+# unitMemberEffectiveName -- the name a unit-qualified member actually resolves
+# under. From ANOTHER unit a public alias translates to the internal def it
+# exposes, and a private (unlisted) definition is rejected: E0101 and an empty
+# answer, which leaves the path untyped.
+unitMemberEffectiveName: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+    un: StringView
+} out String is {
+    # public-interface visibility: from ANOTHER unit, translate a public
+    # alias to the internal def it exposes, and reject a reference to a
+    # private (unlisted) definition (E0101). Same-unit refs use declared
+    # names and are never restricted.
+    effUcn: cn.string
+    # the unit a dotted base names, by id: two units may share a spelling,
+    # so the DECLARATION that minted the unit type is the identity here
+    btUd: declOfTypeId :st tid: bt
+    if (st.typing.privacySeen) when btUd != unitDecl then {
+        aliasHitU: false
+        if st.typing.renameSeen then {
+            intU: (declPublicAliasInternal
+                :st
+
+                pool: ast.names
+                tid: bt
+                name: cn
+            )
+            if intU.length > 0 then {
+                (st.typing.setAliasInternalName
+                    nodeid: dp.nodeid
+                    internalName: intU.stringview
+                )
+                effUcn = intU.copy
+                aliasHitU = true
+            }
+        }
+        if (aliasHitU) == false when (declMemberIsPrivate
+            :st
+
+            tid: bt
+            nameId: (ast.names.find s: cn)
+        ) then {
+            ucnid: nodeId n: (ast.nodes.get i: dp.child.u64)
+            ucln: nodeLine n: (ast.nodes.get i: dp.child.u64)
+            uccl: nodeCol n: (ast.nodes.get i: dp.child.u64)
+            (addErrorH
+                :st
+                nodeid: ucnid
+                lineno: ucln
+                colno: uccl
+                e: zast.err.notPublic
+                msg: "'\{cn}' is not public on unit '\{un}'"
+                note: "".string
+                hint: "".string
+                width: cn.length.u32.orPanic
+            )
+            return "".string
+        }
+    }
+    return effUcn
+}
+# reportUnknownUnitMember -- `unit.name` naming nothing the unit declares. The hint
+# separates a typo (a near-miss suggestion) from a member that exists but is not
+# in the unit's public interface.
+reportUnknownUnitMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+    un: StringView
+} is {
+    m3: "unit '\{un}' has no member '\{cn}'"
+    sug3: suggestSimilar :ast :st parentTypeId: bt name: cn
+    h3: String
+    if sug3.length > 0 then {
+        hh3: "did you mean '\{sug3}'?"
+        h3 = hh3
+    }
+    if (declMemberIsPrivate
+        :st
+
+        tid: bt
+        nameId: (ast.names.find s: cn)
+    ) then {
+        hp3: "'\{cn}' is private (not in the public interface)"
+        h3 = hp3
+    }
+    en3: String
+    cnid3: nodeId n: (ast.nodes.get i: dp.child.u64)
+    cnln3: nodeLine n: (ast.nodes.get i: dp.child.u64)
+    cncl3: nodeCol n: (ast.nodes.get i: dp.child.u64)
+    (addErrorH
+        :st
+        nodeid: cnid3
+        lineno: cnln3
+        colno: cncl3
+        e: zast.err.typeError
+        msg: m3
+        note: en3
+        hint: h3
+        width: cn.length.u32.orPanic
+    )
+}
+# checkUnitMemberValue -- a resolved `unit.member` in value position. The definition
+# is walked where it is demanded, a no-arg FUNCTION member auto-calls, a TYPE
+# member constructs like a bare atom, and the declaration is stamped so
+# go-to-definition can find the unit it lives in.
+checkUnitMemberValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    cn: StringView
+    un: StringView
+    memberDecl: u64
     coerce: bool
 } out ztypes.tid is {
+    result: memberDecl
+    # `unit.member` resolved, so the definition it names is reachable
+    # from here: walk it where it is demanded, in whatever unit it lives.
+    walkDefinitionById :st :ast tid: (ztypes.tid.create from: memberDecl.u64)
+    isFn: false
+    if (st.reg.typetypeOf typeId: (ztypes.tid.create from: memberDecl.u64)) == ztypes.ztypetype.functionType then isFn = true
+    if coerce when isFn then {
+        if (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
+            :ast
+            :st
+            mid: (ztypes.tid.create from: memberDecl.u64)
+        ) == false then {
+            ufl: nodeLine n: (ast.nodes.get i: dp.child.u64)
+            ufc: nodeCol n: (ast.nodes.get i: dp.child.u64)
+            (bareFnRefError
+                :ast
+                :st
+                nodeid: dp.nodeid
+                lineno: ufl
+                colno: ufc
+                width: cn.length.u32.orPanic
+                fid: (ztypes.tid.create from: memberDecl.u64)
+            )
+        }
+        if (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
+            :ast
+            :st
+            mid: (ztypes.tid.create from: memberDecl.u64)
+        ) then {
+            ro: methodReturnOf :st mid: (ztypes.tid.create from: memberDecl.u64)
+            match (
+                ro
+            ) case some then {
+                result = ro
+            } case none then {
+                result = st.typing.nullTypeId
+            }
+        }
+    }
+    # a unit-qualified TYPE member in value position is the same
+    # zero-argument construction as a bare atom (`p: unit.Conf`);
+    # the name gate keeps value aliases out, the suppress flag
+    # keeps dotted-path bases out
+    if coerce when (isFn) == false then {
+        if (st.typing.suppressBareCtor) == false then {
+            tnd: st.reg.nameOf tid: (ztypes.tid.create from: memberDecl.u64)
+            if tnd.stringview == cn then {
+                cdl: nodeLine n: (ast.nodes.get i: dp.child.u64)
+                cdc: nodeCol n: (ast.nodes.get i: dp.child.u64)
+                if (isImplicitZeroCreateTid
+                    :ast
+                    :st
+                    tid: (ztypes.tid.create from: memberDecl.u64)
+                ) then {
+                    icd: memberDecl
+                    st.typing.implicitCreate.set key: dp.nodeid.u64 value: icd
+                } else {
+                    (checkBareTypeValueAt
+                        :ast
+                        :st
+                        nodeid: dp.nodeid
+                        lineno: cdl
+                        colno: cdc
+                        width: cn.length.u32.orPanic
+                        tid: (ztypes.tid.create from: memberDecl.u64)
+                    )
+                }
+            }
+        }
+    }
+    setu: result
+    stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: setu.u64)
+    # record the resolved declaration so go-to-definition on a
+    # unit-qualified `unit.member` can locate its defining unit.
+    udD: ztypes.declid
+    udR: (st.typing.declFindChild
+        parentDeclId: st.typing.programRoot
+        nameId: (nameIdOf :ast name: un)
+    )
+    if (udR.isZero) == false then {
+        cnRef: zast.poolFind pool: ast.names text: cn
+        udD = st.typing.declFindChild parentDeclId: udR nameId: cnRef
+    }
+    if udD.isZero then udD = (declOfTypeId
+        :st
+        tid: (ztypes.tid.create from: memberDecl.u64)
+    )
+    stampRefDecl :st nid: dp.nodeid.u64 declId: udD
+    return (ztypes.tid.create from: result)
+}
+# checkUnitQualifiedMember -- `io.stdout`: the member resolves in that unit's
+# namespace, under the name the public interface exposes it by. Answers
+# handled: false when the base is not a unit type at all.
+checkUnitQualifiedMember: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+    coerce: bool
+} out callleg is {
+    # a unit-qualified member (`io.stdout`): the member resolves in that
+    # unit's namespace; a no-arg FUNCTION member auto-calls in value
+    # position (its return is the path's value).
+    if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.unitType then {
+        un: st.reg.nameOf tid: bt
+        # the unit a dotted base names, by id: two units may share a spelling,
+        # so the DECLARATION that minted the unit type is the identity here
+        btUd: declOfTypeId :st tid: bt
+        effUcn: (unitMemberEffectiveName
+            :st
+            :unitDecl
+            :ast
+            :dp
+            :bt
+            :cn
+            un: un.stringview
+        )
+        if effUcn.length == 0 then return (callleg handled: true tid: (ztypes.tid.create from: 0))
+        memberDecl: (unitMemberTypeOf
+            :st
+            :ast
+
+            unitTid: bt
+            unitDecl: btUd
+            member: effUcn.stringview
+        )
+        # A hidden subunit is private to its parent BY DEFAULT: it is read
+        # only because the parent named it, so it was never declared surface.
+        # A `public:` block is the one visibility mechanism -- when the unit
+        # has one, the block decides (declMemberIsPrivate above), and a
+        # subunit listed there is public.
+        if (isSubunitMemberOf :st :ast unitTid: bt member: memberDecl) then {
+            pubU: publicNsOf :st tid: bt
+            if btUd != unitDecl when pubU.isZero then {
+                sbl: nodeLine n: (ast.nodes.get i: dp.child.u64)
+                sbc: nodeCol n: (ast.nodes.get i: dp.child.u64)
+                (addErrorH
+                    :st
+                    nodeid: (nodeId n: (ast.nodes.get i: dp.child.u64))
+                    lineno: sbl
+                    colno: sbc
+                    e: zast.err.notPublic
+                    msg: "'\{cn}' is an implementation subunit of '\{un}' and is private to it"
+                    note: "a subunit is loaded only because its own unit named it".string
+                    hint: "reach it through a definition '\{un}' exposes"
+                    width: cn.length.u32.orPanic
+                )
+                return (callleg handled: true tid: (ztypes.tid.create from: 0))
+            }
+        }
+        match (
+            memberDecl
+        ) case some then {
+            return (callleg handled: true tid: (checkUnitMemberValue
+                :st
+                :ast
+                :dp
+                :cn
+                un: un.stringview
+                :memberDecl
+                :coerce
+            ))
+        } case none then {
+            reportUnknownUnitMember :st :ast :dp :bt :cn un: un.stringview
+            return (callleg handled: true tid: (ztypes.tid.create from: 0))
+        }
+    }
+    return (callleg handled: false tid: (ztypes.tid.create from: 0))
+}
+# checkDataBlockMember -- `.index` and `.array` on a data block. Both need the
+# block's static array kept by the emitter (label accesses fold to constants);
+# `.array` additionally copies the elements into the sized array instance
+# (array_{elem}_{count}), minting it on first access.
+checkDataBlockMember: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+} out callleg is {
+    # `.index` / `.array` on a data block need its static array emitted (label
+    # accesses fold to constants); mark the type so the emitter keeps the array.
+    if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType then {
+        if cn == "index" then {
+            markDataRuntimeIndexed :st tid: bt
+            sedi: dataElemTypeOf :ast :st :unitDecl dataTid: bt
+            if sedi > 0 then {
+                stampGate :st nid: dp.nodeid.u64 tid: sedi
+                return (callleg handled: true tid: sedi)
+            }
+        }
+        if cn == "array" then markDataRuntimeIndexed :st tid: bt
+    }
+    # `.array` on a data block copies the elements into the sized array
+    # instance (array_{elem}_{count}), minting it on first access. The
+    # element type rides the data's `tag__{elem}` tag-child name.
+    if cn == "array" then {
+        if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType then {
+            (forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: zast.wkTag)
+            tgo: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkTag
+            match (
+                tgo
+            ) case some then {
+                tagn: st.reg.nameOf tid: (ztypes.tid.create from: tgo.u64)
+                eno: tagn.stringview.stripPrefix p: "tag__"
+                match (
+                    eno
+                ) case some then {
+                    den: eno
+                    elo: (walkLookupTyperef
+                        :st
+                        frame: st.curFrame
+                        :ast
+
+                        :unitDecl
+                        base: den
+                    )
+                    match (
+                        elo
+                    ) case some then {
+                        ecnt: (st.typing.declMemberCount ownerTid: bt) - 1
+                        ato: (walkLookupTyperef
+                            :st
+                            frame: st.curFrame
+                            :ast
+
+                            :unitDecl
+                            base: "array"
+                        )
+                        match (
+                            ato
+                        ) case some then {
+                            amn: "array_\{den}_\{ecnt}"
+                            asubs: (IdMapV zast.nameid value: u64)
+                            sv0: elo
+                            asubs.set key: (nameIdOf :ast name: "of") value: sv0
+                            vsE: (IdMapV zast.nameid value: u64)
+                            vsE.set key: (nameIdOf :ast name: "to") value: ecnt
+                            amid: (getOrMintSpec
+                                :st
+                                frame: st.curFrame
+                                :ast
+
+                                :unitDecl
+                                name: amn.stringview
+                                templateId: (ztypes.tid.create from: ato.u64)
+                                subs: asubs
+                                valSubs: vsE
+                                fallbackArg: 0
+                            )
+                            (mintCollectionChildren
+                                :st
+                                frame: st.curFrame
+                                :ast
+
+                                monoId: amid
+                                templateId: (ztypes.tid.create from: ato.u64)
+                                elemArg: elo
+                                valArg: ztypes.tid
+                            )
+                            setar: amid
+                            stampGate :st nid: dp.nodeid.u64 tid: setar
+                            return (callleg handled: true tid: amid)
+                        } case none then null
+                    } case none then null
+                } case none then null
+            } case none then null
+        }
+    }
+    return (callleg handled: false tid: (ztypes.tid.create from: 0))
+}
+# checkArrayIndexMember -- a compile-time numeric index on an array instance
+# projects the element type (`a.0` reads / reassigns element zero).
+checkArrayIndexMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+} out callleg is {
+    # A compile-time numeric index on an array instance projects the element
+    # type (`a.0` reads / reassigns element zero).
+    if (isNumericLiteralName name: cn) then {
+        isArr: false
+        bga8: ztypes.tid
+        {
+            bgo8: st.reg.genericOriginOf tid: bt
+            if bgo8 > 0 then bga8 = bgo8
+        }
+        if bga8 > 0 then {
+            gn8: st.reg.nameOf tid: (ztypes.tid.create from: bga8.u64)
+            if gn8.stringview == "array" then isArr = true
+        }
+        if isArr then {
+            (forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: zast.wkGet)
+            go8: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkGet
+            match (
+                go8
+            ) case some then {
+                ro8: methodReturnOf :st mid: (ztypes.tid.create from: go8.u64)
+                match (
+                    ro8
+                ) case some then {
+                    seta8: ro8
+                    stampGate :st nid: dp.nodeid.u64 tid: seta8
+                    return (callleg handled: true tid: ro8)
+                } case none then null
+            } case none then null
+        }
+    }
+    return (callleg handled: false tid: (ztypes.tid.create from: 0))
+}
+# checkReleaseMarkerVar -- `.release` on a name in scope. Answers true when the
+# release is blocked (and the error is already reported), so the caller leaves
+# the ownership transfer unrecorded.
+checkReleaseMarkerVar: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    cn: StringView
+    mkRoot: StringView
+    blocked: bool
+} out bool is {
+    relBlocked: blocked
+    if cn == "release" then {
+        rpath: (ListVal zast.nameid)
+        rpath.append (nameIdOf :ast name: mkRoot)
+        elh: st.findExclusiveLock path: rpath
+        match (
+            elh
+        ) case some then {
+            relBlocked = true
+            ahn: st.formatLockHolder pool: ast.names holder: elh
+            macc: "Cannot access: '\{mkRoot}' has exclusive lock held by '\{ahn}'"
+            ahint: String
+            if elh.kind == ztypes.zlockholderkind.varKind then {
+                ahint = "read through '\{ahn}' instead, or end '\{ahn}'s scope first to release the lock"
+            }
+            aen: String
+            aid: nodeId n: (ast.nodes.get i: dp.parent.u64)
+            aln: nodeLine n: (ast.nodes.get i: dp.parent.u64)
+            acl: nodeCol n: (ast.nodes.get i: dp.parent.u64)
+            (addErrorH
+                :st
+                nodeid: aid
+                lineno: aln
+                colno: acl
+                e: zast.err.ownerError
+                msg: macc
+                note: aen
+                hint: ahint
+                width: mkRoot.length.u32.orPanic
+            )
+        } case none then null
+        rlk: st.findLock nameId: (nameIdOf :ast name: mkRoot)
+        match (
+            rlk
+        ) case some then {
+            relBlocked = true
+            rhn: String
+            rlhh: st.findLockHolder nameId: (nameIdOf :ast name: mkRoot)
+            match (
+                rlhh
+            ) case some then {
+                rhn = st.formatLockHolder pool: ast.names holder: rlhh
+            } case none then null
+            lsn: zenv.zlockstateNameLower t: rlk
+            mrel: "Cannot release '\{mkRoot}': \{lsn} lock held by '\{rhn}'"
+            (addError
+                :st
+                nodeid: dp.nodeid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.ownerError
+                msg: mrel
+            )
+        } case none then null
+    }
+    return relBlocked
+}
+# checkMoveMarkerVar -- `.take` on a name in scope: readonly first (a `view`
+# parameter is both readonly and pinned), then pinned, then borrowed. Answers true
+# when the move is blocked, so the caller leaves the transfer unrecorded.
+checkMoveMarkerVar: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    cn: StringView
+    mkRoot: StringView
+    mvo: ztypes.vid
+} out bool is {
+    relBlocked: false
+    if (isMoveMarker name: cn) then {
+        # Readonly first: a `view` parameter is both readonly and
+        # non-owned, and readonly is the rule the author has to
+        # satisfy. A `hold` binding IS owned, so only this leg
+        # catches it -- moving it out would thaw a frozen cell.
+        if (nameIsReadonly :st :ast name: mkRoot) then {
+            relBlocked = true
+            tvb: "with '.\{cn}'"
+            (readonlyMoveError
+                :st
+                nodeid: dp.nodeid
+                lineno: dp.lineno
+                colno: dp.colno
+                name: mkRoot
+                verb: tvb.stringview
+            )
+        }
+        if (relBlocked) == false then {
+            tpv: "with '.\{cn}'"
+            if (pinnedMoveError
+                :st
+                :ast
+                nodeid: dp.nodeid
+                lineno: dp.lineno
+                colno: dp.colno
+                name: mkRoot
+                verb: tpv.stringview
+            ) then relBlocked = true
+        }
+        if (relBlocked) == false when (isBorrowedVar :st vid: mvo) then {
+            relBlocked = true
+            mtb: "Cannot move borrowed variable '\{mkRoot}' with '.take' — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+            (addError
+                :st
+                nodeid: dp.nodeid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.ownerError
+                msg: mtb
+            )
+        }
+    }
+    return relBlocked
+}
+# checkUnresolvedMember -- the member did not resolve on the base type. `.copy` is
+# an ownership primitive rather than a constrained member, so a generic-param
+# receiver still types it t -> t; everything else is diagnosed here.
+checkUnresolvedMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+    cnId: zast.nameid
+} out ztypes.tid is {
+    if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.genericParam then {
+        # `.copy` is an ownership primitive, not a constrained member:
+        # every instantiation copies, so a generic-param receiver types
+        # it t -> t (the per-instance clone emits the concrete copy).
+        if cn == "copy" then {
+            stampGate :st nid: dp.nodeid.u64 tid: bt
+            return bt
+        }
+        btn9x: st.reg.nameOf tid: bt
+        mgp: "type parameter '\{btn9x}' has no member '\{cn}' (its constraint provides none)"
+        (addError
+            :st
+            nodeid: dp.nodeid
+            lineno: dp.lineno
+            colno: dp.colno
+            e: zast.err.genericError
+            msg: mgp
+        )
+    }
+    cpleg: checkCopyMember :st :ast :dp :bt :cn
+    if cpleg.handled then return cpleg.tid
+    reportUnknownMember :st :ast :dp :bt :cn :cnId
+    return (ztypes.tid.create from: 0)
+}
+# checkResolvedMember -- the member resolved on the base type. Stamps the owner for
+# tooling and the emitter, then runs the legs in order: tagged-type construction
+# or arm predicate, the as-const clone, the projection legs, the auto-call, and
+# finally the public-interface gate.
+checkResolvedMember: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+    cnId: zast.nameid
+    mo: u64
+    coerce: bool
+    aliasViaX: bool
+} out ztypes.tid is {
+    # member-owner stamp: the use-site dotted path resolved a member of
+    # `bt` (field, method, or tagged arm). Tooling reads the member's
+    # declaration for go-to-definition; the emitter derives the owner
+    # from it to gate the numeric-cast leg (a scalar-named member of a
+    # user type is not a conversion).
+    if dp.nodeid > 0 when bt > 0 then {
+        mD: (declMemberOf
+            :st
+
+            ownerTid: bt
+            nameId: cnId
+        )
+        stampRefDecl :st nid: dp.nodeid.u64 declId: mD
+    }
+    tgleg: (checkTaggedMemberPath
+        :st
+        :unitDecl
+        :ast
+        :dp
+        :bt
+        :cn
+        :mo
+        :aliasViaX
+    )
+    if tgleg.handled then return tgleg.tid
+    if (st.typing.isAsConstClone typeId: (ztypes.tid.create from: mo.u64)) then {
+        setcc: mo
+        stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: setcc.u64)
+        return (ztypes.tid.create from: mo)
+    }
+    rm: mo
+    result: ztypes.tid
+    result = ztypes.tid.create from: rm.u64
+    prleg: (checkMemberProjections
+        :st
+        :ast
+        :dp
+        :bt
+        :cn
+        :cnId
+        :mo
+        :rm
+        :coerce
+    )
+    if prleg.handled then return prleg.tid
+    # A member DECLARED as a method but materialised as a plain scalar --
+    # a collection's `length`/`capacity`, which emit as a struct field read
+    # -- resolves to its RETURN type, so everything keyed on "is this a
+    # method?" skipped it, the auto-call receiver lock included. It is still
+    # a call, and collapsing is only sound for a READ of the receiver, so it
+    # takes the SHARED lock a reader takes. Without this `xs.length` inside
+    # an exclusively-pinned iteration was accepted while `xs.contains item:
+    # x` beside it was refused -- both readers, and under the locking model
+    # a reader takes SHARED for its duration.
+    if coerce when (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) != ztypes.ztypetype.functionType then {
+        if (st.typing.declIsMethodId
+            parentTypeId: bt
+            nameId: cnId
+        ) then {
+            lockAutoCallReceiver :ast :st :dp :bt shared: true
+        }
+    }
+    result = (checkMemberAutoCall
+        :st
+        :ast
+        :dp
+        :bt
+        :cn
+        :mo
+        :coerce
+        result0: result
+    )
+    reportPrivateMember :st :ast :dp :bt :cn :aliasViaX
+    stampGate :st nid: dp.nodeid.u64 tid: result
+    return result
+}
+# checkMarkerMember -- the access and conversion markers a dotted path can name
+# instead of a member: `.private` / `.public` / `.lock` carry the base's own type,
+# `.stringview` and `.str` convert between the two string forms, and `.borrow` is
+# an ownership marker except on a protocol / facet / typedef-wrapper receiver,
+# where it is a projection callable.
+checkMarkerMember: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+} out callleg is {
+    # `.private` / `.public` access markers: the path carries the base's
+    # type (the access view is a dump-filtered shell, not a member).
+    if cn == "private" then {
+        # Gate B: a `.private` view may only be produced from a base that
+        # already holds private access -- the type's own `this`/same-type
+        # receiver (the class minting it), or an existing `.private` handle (a
+        # friend forwarding what it was given, per spec). External code holding
+        # only a public value cannot mint one -- E0102.
+        baseGN: ast.nodes.get i: dp.parent.u64
+        if (baseIsPrivateCapable :st :ast :bt baseNode: baseGN) == false then {
+            pcNode: ast.nodes.get i: dp.child.u64
+            pcnid: nodeId n: pcNode
+            pcln: nodeLine n: pcNode
+            pccl: nodeCol n: pcNode
+            btNm: st.reg.nameOf tid: bt
+            pmsg: "'.private' of '\{btNm}' may only be taken by '\{btNm}' or a holder of its '.private' handle"
+            (addErrorH
+                :st
+                nodeid: pcnid
+                lineno: pcln
+                colno: pccl
+                e: zast.err.privateEscape
+                msg: pmsg
+                note: "".string
+                hint: "".string
+                width: cn.length.u32.orPanic
+            )
+        }
+        setpv: bt
+        stampGate :st nid: dp.nodeid.u64 tid: setpv
+        return (callleg handled: true tid: bt)
+    }
+    if cn == "public" then {
+        setpb: bt
+        stampGate :st nid: dp.nodeid.u64 tid: setpb
+        return (callleg handled: true tid: bt)
+    }
+    if cn == "lock" then {
+        setlk: bt
+        stampGate :st nid: dp.nodeid.u64 tid: setlk
+        return (callleg handled: true tid: bt)
+    }
+    # `.stringview` on a StringView is an identity no-op and is rejected --
+    # the value is already a StringView.
+    if cn == "stringview" then {
+        if bt == (builtinTidTc :ast :st base: "StringView") then {
+            msv: "redundant conversion: '.stringview' on a StringView".string
+            nsv: "the value is already a StringView".string
+            hsv: "drop '.stringview'".string
+            (addErrorH
+                :st
+                nodeid: dp.nodeid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.typeError
+                msg: msv
+                note: nsv
+                hint: hsv
+                width: cn.length.u32.orPanic
+            )
+            return (callleg handled: true tid: (ztypes.tid.create from: 0))
+        }
+    }
+    # `.str` on String/StringView/str bases is the sized-conversion form:
+    # the path resolves to the str TEMPLATE (unstamped -- the call check
+    # mints the sized instance and stamps only the Call node).
+    if cn == "str" then {
+        isStrBase: false
+        if bt == (builtinTidTc :ast :st base: "String") then isStrBase = true
+        if bt == (builtinTidTc :ast :st base: "StringView") then isStrBase = true
+        if (isStrBase) == false then {
+            bga: u64
+            {
+                bgo: st.reg.genericOriginOf tid: bt
+                if bgo > 0 then bga = bgo
+            }
+            if bga > 0 then {
+                if bga == (builtinTidTc :ast :st base: "str") then isStrBase = true
+            }
+        }
+        if isStrBase then {
+            sto: walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "str"
+            match (
+                sto
+            ) case some then {
+                return (callleg handled: true tid: (ztypes.tid.create from: sto))
+            } case none then null
+        }
+    }
+    if cn == "borrow" then {
+        # Protocol/facet `.borrow` and a typedef wrapper's FUNCTION borrow
+        # child are projection callables, not ownership markers.
+        btt1: st.reg.typetypeOf typeId: bt
+        isMk: true
+        if btt1 == ztypes.ztypetype.protocolType then isMk = false
+        if btt1 == ztypes.ztypetype.facetType then isMk = false
+        if isMk then {
+            (forceMemberOf
+                :st
+                frame: st.curFrame
+                :ast
+                parentTypeId: bt
+                nameId: zast.wkBorrow
+            )
+            bco: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkBorrow
+            bcid: optU64Or o: bco d: 0
+            if bcid > 0 then {
+                if (st.reg.typetypeOf typeId: (ztypes.tid.create from: bcid.u64)) == ztypes.ztypetype.functionType then isMk = false
+            }
+        }
+        if isMk then {
+            setbw: bt
+            stampGate :st nid: dp.nodeid.u64 tid: setbw
+            return (callleg handled: true tid: bt)
+        }
+    }
+    return (callleg handled: false tid: (ztypes.tid.create from: 0))
+}
+# checkTransferMarker -- `.take` / `.release` are ownership transfer markers, not
+# members. The path carries the base's type; a bare-name source releases its held
+# locks and invalidates (the taken overlay propagates out of popped scopes).
+checkTransferMarker: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: zast.DottedPathData.view
+    bt: ztypes.tid
+    cn: StringView
+} out callleg is {
+    # `.take` / `.release`: ownership transfer markers, not members. The path
+    # carries the base's type; a bare-name source releases its held locks and
+    # invalidates (the taken overlay propagates out of popped scopes).
+    isXferMarker: false
+    if (isMoveMarker name: cn) then isXferMarker = true
+    if cn == "release" then isXferMarker = true
+    if isXferMarker then {
+        mkRoot: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
+        if cn == "release" when mkRoot.length == 0 then {
+            mrv: "'.release' can only be applied to a variable name".string
+            (addError
+                :st
+                nodeid: dp.nodeid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.ownerError
+                msg: mrv
+            )
+        }
+        if mkRoot.length > 0 then {
+            mvo: st.lookupVarId nameId: (nameIdOf :ast name: mkRoot.stringview)
+            match (
+                mvo
+            ) case some then {
+                relBlocked: (checkMoveMarkerVar
+                    :st
+                    :ast
+                    :dp
+                    :cn
+                    mkRoot: mkRoot.stringview
+                    :mvo
+                )
+                relBlocked = (checkReleaseMarkerVar
+                    :st
+                    :ast
+                    :dp
+                    :cn
+                    mkRoot: mkRoot.stringview
+                    blocked: relBlocked
+                )
+                if (relBlocked) == false then {
+                    mh: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: mvo)
+                    st.releaseHeldLocks holder: mh
+                    st.invalidate nameId: (nameIdOf :ast name: mkRoot.stringview) loc: takenHere
+                }
+            } case none then {
+                if cn == "release" then {
+                    dfo: (walkLookupTyperef
+                        :st
+                        frame: st.curFrame
+                        :ast
+
+                        :unitDecl
+                        base: mkRoot.stringview
+                    )
+                    match (
+                        dfo
+                    ) case some then {
+                        mtl: "Cannot release top-level definition '\{mkRoot}'"
+                        (addError
+                            :st
+                            nodeid: dp.nodeid
+                            lineno: dp.lineno
+                            colno: dp.colno
+                            e: zast.err.ownerError
+                            msg: mtl
+                        )
+                    } case none then null
+                }
+            }
+        }
+        setmk: bt
+        stampGate :st nid: dp.nodeid.u64 tid: setmk
+        return (callleg handled: true tid: bt)
+    }
+    return (callleg handled: false tid: (ztypes.tid.create from: 0))
+}
+# checkNumericSuffixCast -- `1.u8` / `(2.5).f32`: when the child names a non-
+# function type and the parent is a numeric literal, the path is a typed-literal
+# cast -- the parent atom coerces to the suffix type and the path carries it.
+checkNumericSuffixCast: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: zast.DottedPathData.view
+} out callleg is {
     # Numeric dotted suffix (`1.u8`, `(2.5).f32`): when the child names a
     # non-function type, the path is a typed-literal cast -- the parent atom
     # coerces to the suffix type and the path carries it. Parens around the
@@ -18200,10 +19670,22 @@ checkDotted: function {
                 stampGate :st nid: castPid.u64 tid: (ztypes.tid.create from: setcp.u64)
                 setcd: castOpt
                 stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: setcd.u64)
-                return (ztypes.tid.create from: castOpt)
+                return (callleg handled: true tid: (ztypes.tid.create from: castOpt))
             }
         } case none then null
     }
+    return (callleg handled: false tid: (ztypes.tid.create from: 0))
+}
+# dottedBaseTid -- type the base a dotted path hangs off. The base is a REFERENCE,
+# so a name-shaped one must not construct and a `.take` child must not auto-call;
+# an unresolved bare name may still be a unit, and a literal materialises to its
+# concrete default before member lookup. 0 when the base types to nothing.
+dottedBaseTid: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: zast.DottedPathData.view
+} out ztypes.tid is {
     # the base of a dotted path is a reference, not a bare value: a type
     # name there must not construct (Counter.create, unit.Type.arm). Only
     # name-shaped bases suppress -- an expression base walks normally so
@@ -18256,614 +19738,34 @@ checkDotted: function {
             }
         }
     }
+    return bt
+}
+
+
+checkDotted: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: zast.DottedPathData.view
+    coerce: bool
+} out ztypes.tid is {
+    nsc: checkNumericSuffixCast :st :unitDecl :ast :dp
+    if nsc.handled then return nsc.tid
+    bt: dottedBaseTid :st :unitDecl :ast :dp
+    if bt.isZero then return (ztypes.tid.create from: 0)
     cn: atomName :ast n: (ast.nodes.get i: dp.child.u64)
     if cn.length == 0 then return (ztypes.tid.create from: 0)
     cnId: atomNameId :ast n: (ast.nodes.get i: dp.child.u64)
-    # `.private` / `.public` access markers: the path carries the base's
-    # type (the access view is a dump-filtered shell, not a member).
-    if cn.stringview == "private" then {
-        # Gate B: a `.private` view may only be produced from a base that
-        # already holds private access -- the type's own `this`/same-type
-        # receiver (the class minting it), or an existing `.private` handle (a
-        # friend forwarding what it was given, per spec). External code holding
-        # only a public value cannot mint one -- E0102.
-        baseGN: ast.nodes.get i: dp.parent.u64
-        if (baseIsPrivateCapable :st :ast :bt baseNode: baseGN) == false then {
-            pcNode: ast.nodes.get i: dp.child.u64
-            pcnid: nodeId n: pcNode
-            pcln: nodeLine n: pcNode
-            pccl: nodeCol n: pcNode
-            btNm: st.reg.nameOf tid: bt
-            pmsg: "'.private' of '\{btNm}' may only be taken by '\{btNm}' or a holder of its '.private' handle"
-            (addErrorH
-                :st
-                nodeid: pcnid
-                lineno: pcln
-                colno: pccl
-                e: zast.err.privateEscape
-                msg: pmsg
-                note: "".string
-                hint: "".string
-                width: cn.length.u32.orPanic
-            )
-        }
-        setpv: bt
-        stampGate :st nid: dp.nodeid.u64 tid: setpv
-        return bt
-    }
-    if cn.stringview == "public" then {
-        setpb: bt
-        stampGate :st nid: dp.nodeid.u64 tid: setpb
-        return bt
-    }
-    if cn.stringview == "lock" then {
-        setlk: bt
-        stampGate :st nid: dp.nodeid.u64 tid: setlk
-        return bt
-    }
-    # `.stringview` on a StringView is an identity no-op and is rejected --
-    # the value is already a StringView.
-    if cn.stringview == "stringview" then {
-        if bt == (builtinTidTc :ast :st base: "StringView") then {
-            msv: "redundant conversion: '.stringview' on a StringView".string
-            nsv: "the value is already a StringView".string
-            hsv: "drop '.stringview'".string
-            (addErrorH
-                :st
-                nodeid: dp.nodeid
-                lineno: dp.lineno
-                colno: dp.colno
-                e: zast.err.typeError
-                msg: msv
-                note: nsv
-                hint: hsv
-                width: cn.length.u32.orPanic
-            )
-            return (ztypes.tid.create from: 0)
-        }
-    }
-    # `.str` on String/StringView/str bases is the sized-conversion form:
-    # the path resolves to the str TEMPLATE (unstamped -- the call check
-    # mints the sized instance and stamps only the Call node).
-    if cn.stringview == "str" then {
-        isStrBase: false
-        if bt == (builtinTidTc :ast :st base: "String") then isStrBase = true
-        if bt == (builtinTidTc :ast :st base: "StringView") then isStrBase = true
-        if (isStrBase) == false then {
-            bga: u64
-            {
-                bgo: st.reg.genericOriginOf tid: bt
-                if bgo > 0 then bga = bgo
-            }
-            if bga > 0 then {
-                if bga == (builtinTidTc :ast :st base: "str") then isStrBase = true
-            }
-        }
-        if isStrBase then {
-            sto: walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "str"
-            match (
-                sto
-            ) case some then {
-                return (ztypes.tid.create from: sto)
-            } case none then null
-        }
-    }
-    if cn.stringview == "borrow" then {
-        # Protocol/facet `.borrow` and a typedef wrapper's FUNCTION borrow
-        # child are projection callables, not ownership markers.
-        btt1: st.reg.typetypeOf typeId: bt
-        isMk: true
-        if btt1 == ztypes.ztypetype.protocolType then isMk = false
-        if btt1 == ztypes.ztypetype.facetType then isMk = false
-        if isMk then {
-            (forceMemberOf
-                :st
-                frame: st.curFrame
-                :ast
-                parentTypeId: bt
-                nameId: zast.wkBorrow
-            )
-            bco: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkBorrow
-            bcid: optU64Or o: bco d: 0
-            if bcid > 0 then {
-                if (st.reg.typetypeOf typeId: (ztypes.tid.create from: bcid.u64)) == ztypes.ztypetype.functionType then isMk = false
-            }
-        }
-        if isMk then {
-            setbw: bt
-            stampGate :st nid: dp.nodeid.u64 tid: setbw
-            return bt
-        }
-    }
-    # `.take` / `.release`: ownership transfer markers, not members. The path
-    # carries the base's type; a bare-name source releases its held locks and
-    # invalidates (the taken overlay propagates out of popped scopes).
-    isXferMarker: false
-    if (isMoveMarker name: cn.stringview) then isXferMarker = true
-    if cn.stringview == "release" then isXferMarker = true
-    if isXferMarker then {
-        mkRoot: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
-        if cn.stringview == "release" when mkRoot.length == 0 then {
-            mrv: "'.release' can only be applied to a variable name".string
-            (addError
-                :st
-                nodeid: dp.nodeid
-                lineno: dp.lineno
-                colno: dp.colno
-                e: zast.err.ownerError
-                msg: mrv
-            )
-        }
-        if mkRoot.length > 0 then {
-            mvo: st.lookupVarId nameId: (nameIdOf :ast name: mkRoot.stringview)
-            match (
-                mvo
-            ) case some then {
-                relBlocked: false
-                if (isMoveMarker name: cn.stringview) then {
-                    # Readonly first: a `view` parameter is both readonly and
-                    # non-owned, and readonly is the rule the author has to
-                    # satisfy. A `hold` binding IS owned, so only this leg
-                    # catches it -- moving it out would thaw a frozen cell.
-                    if (nameIsReadonly :st :ast name: mkRoot.stringview) then {
-                        relBlocked = true
-                        tvb: "with '.\{cn}'"
-                        (readonlyMoveError
-                            :st
-                            nodeid: dp.nodeid
-                            lineno: dp.lineno
-                            colno: dp.colno
-                            name: mkRoot.stringview
-                            verb: tvb.stringview
-                        )
-                    }
-                    if (relBlocked) == false then {
-                        tpv: "with '.\{cn}'"
-                        if (pinnedMoveError
-                            :st
-                            :ast
-                            nodeid: dp.nodeid
-                            lineno: dp.lineno
-                            colno: dp.colno
-                            name: mkRoot.stringview
-                            verb: tpv.stringview
-                        ) then relBlocked = true
-                    }
-                    if (relBlocked) == false when (isBorrowedVar :st vid: mvo) then {
-                        relBlocked = true
-                        mtb: "Cannot move borrowed variable '\{mkRoot}' with '.take' — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
-                        (addError
-                            :st
-                            nodeid: dp.nodeid
-                            lineno: dp.lineno
-                            colno: dp.colno
-                            e: zast.err.ownerError
-                            msg: mtb
-                        )
-                    }
-                }
-                if cn.stringview == "release" then {
-                    rpath: (ListVal zast.nameid)
-                    rpath.append (nameIdOf :ast name: mkRoot.stringview)
-                    elh: st.findExclusiveLock path: rpath
-                    match (
-                        elh
-                    ) case some then {
-                        relBlocked = true
-                        ahn: st.formatLockHolder pool: ast.names holder: elh
-                        macc: "Cannot access: '\{mkRoot}' has exclusive lock held by '\{ahn}'"
-                        ahint: String
-                        if elh.kind == ztypes.zlockholderkind.varKind then {
-                            ahint = "read through '\{ahn}' instead, or end '\{ahn}'s scope first to release the lock"
-                        }
-                        aen: String
-                        aid: nodeId n: (ast.nodes.get i: dp.parent.u64)
-                        aln: nodeLine n: (ast.nodes.get i: dp.parent.u64)
-                        acl: nodeCol n: (ast.nodes.get i: dp.parent.u64)
-                        (addErrorH
-                            :st
-                            nodeid: aid
-                            lineno: aln
-                            colno: acl
-                            e: zast.err.ownerError
-                            msg: macc
-                            note: aen
-                            hint: ahint
-                            width: mkRoot.length.u32.orPanic
-                        )
-                    } case none then null
-                    rlk: st.findLock nameId: (nameIdOf :ast name: mkRoot.stringview)
-                    match (
-                        rlk
-                    ) case some then {
-                        relBlocked = true
-                        rhn: String
-                        rlhh: st.findLockHolder nameId: (nameIdOf :ast name: mkRoot.stringview)
-                        match (
-                            rlhh
-                        ) case some then {
-                            rhn = st.formatLockHolder pool: ast.names holder: rlhh
-                        } case none then null
-                        lsn: zenv.zlockstateNameLower t: rlk
-                        mrel: "Cannot release '\{mkRoot}': \{lsn} lock held by '\{rhn}'"
-                        (addError
-                            :st
-                            nodeid: dp.nodeid
-                            lineno: dp.lineno
-                            colno: dp.colno
-                            e: zast.err.ownerError
-                            msg: mrel
-                        )
-                    } case none then null
-                }
-                if (relBlocked) == false then {
-                    mh: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: mvo)
-                    st.releaseHeldLocks holder: mh
-                    st.invalidate nameId: (nameIdOf :ast name: mkRoot.stringview) loc: takenHere
-                }
-            } case none then {
-                if cn.stringview == "release" then {
-                    dfo: (walkLookupTyperef
-                        :st
-                        frame: st.curFrame
-                        :ast
-
-                        :unitDecl
-                        base: mkRoot.stringview
-                    )
-                    match (
-                        dfo
-                    ) case some then {
-                        mtl: "Cannot release top-level definition '\{mkRoot}'"
-                        (addError
-                            :st
-                            nodeid: dp.nodeid
-                            lineno: dp.lineno
-                            colno: dp.colno
-                            e: zast.err.ownerError
-                            msg: mtl
-                        )
-                    } case none then null
-                }
-            }
-        }
-        setmk: bt
-        stampGate :st nid: dp.nodeid.u64 tid: setmk
-        return bt
-    }
-    # A compile-time numeric index on an array instance projects the element
-    # type (`a.0` reads / reassigns element zero).
-    if (isNumericLiteralName name: cn.stringview) then {
-        isArr: false
-        bga8: ztypes.tid
-        {
-            bgo8: st.reg.genericOriginOf tid: bt
-            if bgo8 > 0 then bga8 = bgo8
-        }
-        if bga8 > 0 then {
-            gn8: st.reg.nameOf tid: (ztypes.tid.create from: bga8.u64)
-            if gn8.stringview == "array" then isArr = true
-        }
-        if isArr then {
-            (forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: zast.wkGet)
-            go8: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkGet
-            match (
-                go8
-            ) case some then {
-                ro8: methodReturnOf :st mid: (ztypes.tid.create from: go8.u64)
-                match (
-                    ro8
-                ) case some then {
-                    seta8: ro8
-                    stampGate :st nid: dp.nodeid.u64 tid: seta8
-                    return ro8
-                } case none then null
-            } case none then null
-        }
-    }
-    # `.index` / `.array` on a data block need its static array emitted (label
-    # accesses fold to constants); mark the type so the emitter keeps the array.
-    if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType then {
-        if cn.stringview == "index" then {
-            markDataRuntimeIndexed :st tid: bt
-            sedi: dataElemTypeOf :ast :st :unitDecl dataTid: bt
-            if sedi > 0 then {
-                stampGate :st nid: dp.nodeid.u64 tid: sedi
-                return sedi
-            }
-        }
-        if cn.stringview == "array" then markDataRuntimeIndexed :st tid: bt
-    }
-    # `.array` on a data block copies the elements into the sized array
-    # instance (array_{elem}_{count}), minting it on first access. The
-    # element type rides the data's `tag__{elem}` tag-child name.
-    if cn.stringview == "array" then {
-        if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType then {
-            (forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: zast.wkTag)
-            tgo: st.typing.declChildOfId parentTypeId: bt nameId: zast.wkTag
-            match (
-                tgo
-            ) case some then {
-                tagn: st.reg.nameOf tid: (ztypes.tid.create from: tgo.u64)
-                eno: tagn.stringview.stripPrefix p: "tag__"
-                match (
-                    eno
-                ) case some then {
-                    den: eno
-                    elo: (walkLookupTyperef
-                        :st
-                        frame: st.curFrame
-                        :ast
-
-                        :unitDecl
-                        base: den
-                    )
-                    match (
-                        elo
-                    ) case some then {
-                        ecnt: (st.typing.declMemberCount ownerTid: bt) - 1
-                        ato: (walkLookupTyperef
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            :unitDecl
-                            base: "array"
-                        )
-                        match (
-                            ato
-                        ) case some then {
-                            amn: "array_\{den}_\{ecnt}"
-                            asubs: (IdMapV zast.nameid value: u64)
-                            sv0: elo
-                            asubs.set key: (nameIdOf :ast name: "of") value: sv0
-                            vsE: (IdMapV zast.nameid value: u64)
-                            vsE.set key: (nameIdOf :ast name: "to") value: ecnt
-                            amid: (getOrMintSpec
-                                :st
-                                frame: st.curFrame
-                                :ast
-
-                                :unitDecl
-                                name: amn.stringview
-                                templateId: (ztypes.tid.create from: ato.u64)
-                                subs: asubs
-                                valSubs: vsE
-                                fallbackArg: 0
-                            )
-                            (mintCollectionChildren
-                                :st
-                                frame: st.curFrame
-                                :ast
-
-                                monoId: amid
-                                templateId: (ztypes.tid.create from: ato.u64)
-                                elemArg: elo
-                                valArg: ztypes.tid
-                            )
-                            setar: amid
-                            stampGate :st nid: dp.nodeid.u64 tid: setar
-                            return amid
-                        } case none then null
-                    } case none then null
-                } case none then null
-            } case none then null
-        }
-    }
-    # a unit-qualified member (`io.stdout`): the member resolves in that
-    # unit's namespace; a no-arg FUNCTION member auto-calls in value
-    # position (its return is the path's value).
-    if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.unitType then {
-        un: st.reg.nameOf tid: bt
-        # public-interface visibility: from ANOTHER unit, translate a public
-        # alias to the internal def it exposes, and reject a reference to a
-        # private (unlisted) definition (E0101). Same-unit refs use declared
-        # names and are never restricted.
-        effUcn: cn.copy
-        # the unit a dotted base names, by id: two units may share a spelling,
-        # so the DECLARATION that minted the unit type is the identity here
-        btUd: declOfTypeId :st tid: bt
-        if (st.typing.privacySeen) when btUd != unitDecl then {
-            aliasHitU: false
-            if st.typing.renameSeen then {
-                intU: (declPublicAliasInternal
-                    :st
-
-                    pool: ast.names
-                    tid: bt
-                    name: cn.stringview
-                )
-                if intU.length > 0 then {
-                    (st.typing.setAliasInternalName
-                        nodeid: dp.nodeid
-                        internalName: intU.stringview
-                    )
-                    effUcn = intU.copy
-                    aliasHitU = true
-                }
-            }
-            if (aliasHitU) == false when (declMemberIsPrivate
-                :st
-
-                tid: bt
-                nameId: (ast.names.find s: cn.stringview)
-            ) then {
-                ucnid: nodeId n: (ast.nodes.get i: dp.child.u64)
-                ucln: nodeLine n: (ast.nodes.get i: dp.child.u64)
-                uccl: nodeCol n: (ast.nodes.get i: dp.child.u64)
-                (addErrorH
-                    :st
-                    nodeid: ucnid
-                    lineno: ucln
-                    colno: uccl
-                    e: zast.err.notPublic
-                    msg: "'\{cn}' is not public on unit '\{un}'"
-                    note: "".string
-                    hint: "".string
-                    width: cn.length.u32.orPanic
-                )
-                return (ztypes.tid.create from: 0)
-            }
-        }
-        memberDecl: (unitMemberTypeOf
-            :st
-            :ast
-
-            unitTid: bt
-            unitDecl: btUd
-            member: effUcn.stringview
-        )
-        # A hidden subunit is private to its parent BY DEFAULT: it is read
-        # only because the parent named it, so it was never declared surface.
-        # A `public:` block is the one visibility mechanism -- when the unit
-        # has one, the block decides (declMemberIsPrivate above), and a
-        # subunit listed there is public.
-        if (isSubunitMemberOf :st :ast unitTid: bt member: memberDecl) then {
-            pubU: publicNsOf :st tid: bt
-            if btUd != unitDecl when pubU.isZero then {
-                sbl: nodeLine n: (ast.nodes.get i: dp.child.u64)
-                sbc: nodeCol n: (ast.nodes.get i: dp.child.u64)
-                (addErrorH
-                    :st
-                    nodeid: (nodeId n: (ast.nodes.get i: dp.child.u64))
-                    lineno: sbl
-                    colno: sbc
-                    e: zast.err.notPublic
-                    msg: "'\{cn}' is an implementation subunit of '\{un}' and is private to it"
-                    note: "a subunit is loaded only because its own unit named it".string
-                    hint: "reach it through a definition '\{un}' exposes"
-                    width: cn.length.u32.orPanic
-                )
-                return (ztypes.tid.create from: 0)
-            }
-        }
-        match (
-            memberDecl
-        ) case some then {
-            result: memberDecl
-            # `unit.member` resolved, so the definition it names is reachable
-            # from here: walk it where it is demanded, in whatever unit it lives.
-            walkDefinitionById :st :ast tid: (ztypes.tid.create from: memberDecl.u64)
-            isFn: false
-            if (st.reg.typetypeOf typeId: (ztypes.tid.create from: memberDecl.u64)) == ztypes.ztypetype.functionType then isFn = true
-            if coerce when isFn then {
-                if (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
-                    :ast
-                    :st
-                    mid: (ztypes.tid.create from: memberDecl.u64)
-                ) == false then {
-                    ufl: nodeLine n: (ast.nodes.get i: dp.child.u64)
-                    ufc: nodeCol n: (ast.nodes.get i: dp.child.u64)
-                    (bareFnRefError
-                        :ast
-                        :st
-                        nodeid: dp.nodeid
-                        lineno: ufl
-                        colno: ufc
-                        width: cn.length.u32.orPanic
-                        fid: (ztypes.tid.create from: memberDecl.u64)
-                    )
-                }
-                if (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
-                    :ast
-                    :st
-                    mid: (ztypes.tid.create from: memberDecl.u64)
-                ) then {
-                    ro: methodReturnOf :st mid: (ztypes.tid.create from: memberDecl.u64)
-                    match (
-                        ro
-                    ) case some then {
-                        result = ro
-                    } case none then {
-                        result = st.typing.nullTypeId
-                    }
-                }
-            }
-            # a unit-qualified TYPE member in value position is the same
-            # zero-argument construction as a bare atom (`p: unit.Conf`);
-            # the name gate keeps value aliases out, the suppress flag
-            # keeps dotted-path bases out
-            if coerce when (isFn) == false then {
-                if (st.typing.suppressBareCtor) == false then {
-                    tnd: st.reg.nameOf tid: (ztypes.tid.create from: memberDecl.u64)
-                    if tnd.stringview == cn.stringview then {
-                        cdl: nodeLine n: (ast.nodes.get i: dp.child.u64)
-                        cdc: nodeCol n: (ast.nodes.get i: dp.child.u64)
-                        if (isImplicitZeroCreateTid
-                            :ast
-                            :st
-                            tid: (ztypes.tid.create from: memberDecl.u64)
-                        ) then {
-                            icd: memberDecl
-                            st.typing.implicitCreate.set key: dp.nodeid.u64 value: icd
-                        } else {
-                            (checkBareTypeValueAt
-                                :ast
-                                :st
-                                nodeid: dp.nodeid
-                                lineno: cdl
-                                colno: cdc
-                                width: cn.length.u32.orPanic
-                                tid: (ztypes.tid.create from: memberDecl.u64)
-                            )
-                        }
-                    }
-                }
-            }
-            setu: result
-            stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: setu.u64)
-            # record the resolved declaration so go-to-definition on a
-            # unit-qualified `unit.member` can locate its defining unit.
-            udD: ztypes.declid
-            udR: (st.typing.declFindChild
-                parentDeclId: st.typing.programRoot
-                nameId: (nameIdOf :ast name: un.stringview)
-            )
-            if (udR.isZero) == false then {
-                cnRef: zast.poolFind pool: ast.names text: cn.stringview
-                udD = st.typing.declFindChild parentDeclId: udR nameId: cnRef
-            }
-            if udD.isZero then udD = (declOfTypeId
-                :st
-                tid: (ztypes.tid.create from: memberDecl.u64)
-            )
-            stampRefDecl :st nid: dp.nodeid.u64 declId: udD
-            return (ztypes.tid.create from: result)
-        } case none then {
-            m3: "unit '\{un}' has no member '\{cn}'"
-            sug3: suggestSimilar :ast :st parentTypeId: bt name: cn.stringview
-            h3: String
-            if sug3.length > 0 then {
-                hh3: "did you mean '\{sug3}'?"
-                h3 = hh3
-            }
-            if (declMemberIsPrivate
-                :st
-
-                tid: bt
-                nameId: (ast.names.find s: cn.stringview)
-            ) then {
-                hp3: "'\{cn}' is private (not in the public interface)"
-                h3 = hp3
-            }
-            en3: String
-            cnid3: nodeId n: (ast.nodes.get i: dp.child.u64)
-            cnln3: nodeLine n: (ast.nodes.get i: dp.child.u64)
-            cncl3: nodeCol n: (ast.nodes.get i: dp.child.u64)
-            (addErrorH
-                :st
-                nodeid: cnid3
-                lineno: cnln3
-                colno: cncl3
-                e: zast.err.typeError
-                msg: m3
-                note: en3
-                hint: h3
-                width: cn.length.u32.orPanic
-            )
-            return (ztypes.tid.create from: 0)
-        }
-    }
+    mkm: checkMarkerMember :st :unitDecl :ast :dp :bt cn: cn.stringview
+    if mkm.handled then return mkm.tid
+    xfm: checkTransferMarker :st :unitDecl :ast :dp :bt cn: cn.stringview
+    if xfm.handled then return xfm.tid
+    aix: checkArrayIndexMember :st :ast :dp :bt cn: cn.stringview
+    if aix.handled then return aix.tid
+    dbm: checkDataBlockMember :st :unitDecl :ast :dp :bt cn: cn.stringview
+    if dbm.handled then return dbm.tid
+    uqm: checkUnitQualifiedMember :st :unitDecl :ast :dp :bt cn: cn.stringview :coerce
+    if uqm.handled then return uqm.tid
     # public-interface rename: from OUTSIDE the type, a public alias resolves
     # to the internal member it exposes (the internal name stays private,
     # enforced below). Same-object access (this / a .private handle) uses
@@ -18906,86 +19808,12 @@ checkDotted: function {
         }
         if tdd > 0 then bt = tdd
     }
-    # explicit tag accessor: a variant/union as-item `name: <numeric>.tag`
-    # exposes the discriminator on instances as a read-only numeric under
-    # the declared name; without one, instance reads of `tag` are rejected.
-    btt5: st.reg.typetypeOf typeId: bt
-    isSum: false
-    if btt5 == ztypes.ztypetype.variantType then isSum = true
-    if btt5 == ztypes.ztypetype.unionType then isSum = true
-    if isSum when (taggedRecvIsValue :ast :st n: (ast.nodes.get i: dp.parent.u64)) then {
-        tagHit: false
-        {
-            tan5: st.typing.tagAccessorName.get key: bt
-            match (
-                tan5
-            ) case some then {
-                if tan5 == cnId then tagHit = true
-            } case none then null
-        }
-        if tagHit then {
-            if st.typing.inAssignTarget then {
-                mro5: "'\{cn}' is read-only — the tag accessor cannot be assigned"
-                en5: String
-                eh5: String
-                (addErrorH
-                    :st
-                    nodeid: dp.nodeid
-                    lineno: dp.lineno
-                    colno: dp.colno
-                    e: zast.err.typeError
-                    msg: mro5
-                    note: en5
-                    hint: eh5
-                    width: cn.length.u32.orPanic
-                )
-                return (ztypes.tid.create from: 0)
-            }
-            tat5: optTidOr o: (st.typing.tagAccessorTid.get key: bt) d: ztypes.tid
-            if tat5 > 0 then {
-                st.typing.dpTagRead.set key: dp.nodeid.u64 value: bt
-                mD5: (declMemberOf
-                    :st
-
-                    ownerTid: bt
-                    nameId: cnId
-                )
-                stampRefDecl :st nid: dp.nodeid.u64 declId: mD5
-                stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: tat5.u64)
-                return (ztypes.tid.create from: tat5)
-            }
-        }
-        if cn.stringview == "tag" then {
-            btn5: st.reg.nameOf tid: bt
-            mnx5: "tag not exposed on '\{btn5}' — declare it in the as block (eg. `tag: u8.tag`)"
-            en6: String
-            eh6: String
-            (addErrorH
-                :st
-                nodeid: dp.nodeid
-                lineno: dp.lineno
-                colno: dp.colno
-                e: zast.err.typeError
-                msg: mnx5
-                note: en6
-                hint: eh6
-                width: cn.length.u32.orPanic
-            )
-            return (ztypes.tid.create from: 0)
-        }
-    }
+    tacc: checkTagAccessor :st :ast :dp :bt cn: cn.stringview :cnId
+    if tacc.handled then return tacc.tid
     # A cross-unit narrowed match-arm base can be a SHELL whose member
     # children are not registered (cross-unit demand mints a shell id distinct
     # from the canonical defining-unit id); on a member miss retarget the base
     # to a same-named type in another unit's resolved scope that has the member.
-    (forceMemberOf
-        :st
-        frame: st.curFrame
-
-        :ast
-        parentTypeId: bt
-        nameId: cnId
-    )
     (forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId)
     mo: st.typing.declChildOfId parentTypeId: bt nameId: cnId
     preHas: false
@@ -19008,466 +19836,20 @@ checkDotted: function {
     match (
         mo
     ) case some then {
-        # member-owner stamp: the use-site dotted path resolved a member of
-        # `bt` (field, method, or tagged arm). Tooling reads the member's
-        # declaration for go-to-definition; the emitter derives the owner
-        # from it to gate the numeric-cast leg (a scalar-named member of a
-        # user type is not a conversion).
-        if dp.nodeid > 0 when bt > 0 then {
-            mD: (declMemberOf
-                :st
-
-                ownerTid: bt
-                nameId: cnId
-            )
-            stampRefDecl :st nid: dp.nodeid.u64 declId: mD
-        }
-        # A subtype member named on a tagged TYPE (not a value of it, not the
-        # tag, not a method) is a construction reference: record the dotted
-        # node's tagged parent (construction dispatch and generic-union
-        # inference key off it), stamp the path with the parent, and the
-        # path's value IS the parent. A VALUE base makes the path the arm
-        # PREDICATE: it types bool (true when the value currently holds
-        # that arm) and stamps dpArmPredicate for the tag-compare emission.
-        btt0: st.reg.typetypeOf typeId: bt
-        isTagged: false
-        if btt0 == ztypes.ztypetype.variantType then isTagged = true
-        if btt0 == ztypes.ztypetype.unionType then isTagged = true
-        if isTagged then {
-            ctt0: st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)
-            isMember: true
-            if ctt0 == ztypes.ztypetype.functionType then isMember = false
-            if ctt0 == ztypes.ztypetype.dataType then isMember = false
-            if isMember then {
-                isVal: taggedRecvIsValue :ast :st n: (ast.nodes.get i: dp.parent.u64)
-                if (isVal) == false then {
-                    # arm constructors are members: from OUTSIDE the type an
-                    # unlisted arm is private (a public alias translated above).
-                    armHidden: false
-                    if aliasViaX == false then {
-                        baseNodeC: ast.nodes.get i: dp.parent.u64
-                        if (baseIsPrivateCapable :st :ast :bt baseNode: baseNodeC) == false then {
-                            if (declMemberIsPrivate
-                                :st
-
-                                tid: bt
-                                nameId: (ast.names.find s: cn.stringview)
-                            ) then armHidden = true
-                        }
-                    }
-                    if armHidden then {
-                        ccnid: nodeId n: (ast.nodes.get i: dp.child.u64)
-                        ccln: nodeLine n: (ast.nodes.get i: dp.child.u64)
-                        cccl: nodeCol n: (ast.nodes.get i: dp.child.u64)
-                        ccbn: st.reg.nameOf tid: bt
-                        (addErrorH
-                            :st
-                            nodeid: ccnid
-                            lineno: ccln
-                            colno: cccl
-                            e: zast.err.notPublic
-                            msg: "'\{cn}' is not public on type '\{ccbn}'"
-                            note: "".string
-                            hint: "".string
-                            width: cn.length.u32.orPanic
-                        )
-                        return (ztypes.tid.create from: 0)
-                    }
-                    dpk0: dp.nodeid.u64
-                    dpv0: bt
-                    st.typing.dpTaggedParent.set key: dpk0 value: dpv0
-                    stampedTid: bt
-                    stampGate :st nid: dp.nodeid.u64 tid: stampedTid
-                    return bt
-                }
-                isArm: true
-                if ctt0 == ztypes.ztypetype.tagType then isArm = false
-                gtpl: false
-                {
-                    isgeneric9v: st.reg.isGenericOf tid: bt
-                        if isgeneric9v then gtpl = true
-                }
-                if isArm when (gtpl) == false then {
-                    boolId: (optU64Or
-                        o: (walkLookupTyperef
-                            :st
-                            frame: st.curFrame
-                            :ast
-
-                            :unitDecl
-                            base: "bool"
-                        )
-                        d: 0
-                    )
-                    if boolId > 0 then {
-                        st.typing.dpArmPredicate.set key: dp.nodeid.u64 value: bt
-                        stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: boolId.u64)
-                        return (ztypes.tid.create from: boolId)
-                    }
-                }
-            }
-        }
-        if (st.typing.isAsConstClone typeId: (ztypes.tid.create from: mo.u64)) then {
-            setcc: mo
-            stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: setcc.u64)
-            return (ztypes.tid.create from: mo)
-        }
-        rm: mo
-        result: ztypes.tid
-        result = ztypes.tid.create from: rm.u64
-        # `X.create` in value position is zero-argument construction (the same
-        # as the bare type name); route it through the shared construction check
-        # so a synthesized create's required fields are enforced and the
-        # implicitCreate stamp drives field-wise emission.
-        if coerce when cnId == zast.wkCreate when (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) == ztypes.ztypetype.functionType when (isImplicitZeroCreateTid
+        return (checkResolvedMember
+            :st
+            :unitDecl
             :ast
-            :st
-            tid: bt
-        ) == false then {
-            (checkBareTypeValueAt
-                :ast
-                :st
-                nodeid: dp.nodeid
-                lineno: dp.lineno
-                colno: dp.colno
-                width: cn.length.u32.orPanic
-                tid: bt
-            )
-            setcr: bt
-            stampGate :st nid: dp.nodeid.u64 tid: setcr
-            return bt
-        }
-        # Reading a protocol-typed conformance member projects a borrow of
-        # the receiver: the consuming binding becomes BORROWED with the base
-        # as its origin (and installs the borrow locks).
-        rmtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rm.u64)
-        if rmtt == ztypes.ztypetype.protocolType then {
-            pjroot: (zast.nameTextAt
-                :ast
-                ref: (bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
-            )
-            if pjroot.length > 0 then {
-                pjvo: st.lookupVarId nameId: (nameIdOf :ast name: pjroot.stringview)
-                match (
-                    pjvo
-                ) case some then {
-                    drainPendingBorrow :st
-                    st.typing.pendingBorrowPath.append (nameIdOf :ast name: pjroot.stringview)
-                } case none then null
-            }
-        }
-        if coerce when (st.typing.declIsFnptrField
-            pool: ast.names
-            parentTypeId: bt
-            name: cn.stringview
-        ) then {
-            # bare name = call: a value-position read of an args-bearing
-            # fn-pointer field is a call missing its arguments; `.take` is
-            # the reference form (peeled before this leg)
-            natE3: st.typing.inAssignTarget
-            {
-                isNative9v: st.reg.isNativeOf tid: (ztypes.tid.create from: mo.u64)
-                    if isNative9v then natE3 = true
-            }
-            if natE3 == false when (methodHasNoUserArgs
-                :ast
-                :st
-                mid: (ztypes.tid.create from: mo.u64)
-            ) == false then {
-                mE3: "function-pointer field '\{cn}' takes arguments; call it, or reference it with '.take'"
-                (addError
-                    :st
-                    nodeid: dp.nodeid
-                    lineno: dp.lineno
-                    colno: dp.colno
-                    e: zast.err.callError
-                    msg: mE3
-                )
-            }
-        }
-        # A member DECLARED as a method but materialised as a plain scalar --
-        # a collection's `length`/`capacity`, which emit as a struct field read
-        # -- resolves to its RETURN type, so everything keyed on "is this a
-        # method?" skipped it, the auto-call receiver lock included. It is still
-        # a call, and collapsing is only sound for a READ of the receiver, so it
-        # takes the SHARED lock a reader takes. Without this `xs.length` inside
-        # an exclusively-pinned iteration was accepted while `xs.contains item:
-        # x` beside it was refused -- both readers, and under the locking model
-        # a reader takes SHARED for its duration.
-        if coerce when (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) != ztypes.ztypetype.functionType then {
-            if (st.typing.declIsMethodId
-                parentTypeId: bt
-                nameId: cnId
-            ) then {
-                lockAutoCallReceiver :ast :st :dp :bt shared: true
-            }
-        }
-        if coerce when (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
-            :ast
-            :st
-            mid: (ztypes.tid.create from: mo.u64)
-        ) then {
-            aShr: isContainerReaderCall :ast :st recvTid: bt mname: cn.stringview
-            if (methodReceiverIsView :st mid: (ztypes.tid.create from: mo.u64)) then aShr = true
-            lockAutoCallReceiver :ast :st :dp :bt shared: aShr
-            ro: methodReturnOf :st mid: (ztypes.tid.create from: mo.u64)
-            match (
-                ro
-            ) case some then {
-                result = ro
-                fb: st.typing.funcReturnsBorrow.get key: mo
-                match (
-                    fb
-                ) case some then {
-                    if fb then {
-                        # Build locally, then append through the full field
-                        # path (a field list passed as an argument is a
-                        # non-owning shallow copy -- appends would be lost).
-                        tup: (ListVal zast.nameid)
-                        appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: tup
-                        drainPendingBorrow :st
-                        with tit: tup.iterate do for te: tit loop st.typing.pendingBorrowPath.append te
-                        if (returnIsIteratorTid :st tid: result) == false then {
-                            st.typing.pendingBorrowShared = true
-                        } else {
-                            mrv: (methodReceiverIsView
-                                :st
-                                mid: (ztypes.tid.create from: mo.u64)
-                            )
-                            if mrv then st.typing.pendingBorrowShared = true
-                        }
-                        # An `out T.view` result is a READONLY reference: shared pin,
-                        # and the binding it lands on may only be read.
-                        if (optBoolOr o: (st.typing.funcReturnsView.get key: mo) d: false) then {
-                            st.typing.pendingBorrowShared = true
-                            st.typing.pendingBorrowReadonly = true
-                        }
-                    } else {
-                        drainPendingBorrow :st
-                    }
-                } case none then {
-                    # an owning auto-call (`.copy` / `.string` / user methods)
-                    # consumes any receiver-evaluation borrow residue (the get
-                    # in `(xs.get i).copy` must not flow to the binding).
-                    drainPendingBorrow :st
-                    if (optBoolOr o: (st.typing.funcReturnsTakex.get key: mo) d: false) then {
-                        # `takex`: the result is OWNED but pins its source --
-                        # the same receiver pin a borrow return takes, without
-                        # demoting the binding (`pendingBorrowOwned`).
-                        tupX: (ListVal zast.nameid)
-                        appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: tupX
-                        with titX: tupX.iterate do for teX: titX loop st.typing.pendingBorrowPath.append teX
-                        if (returnIsIteratorTid :st tid: result) == false then {
-                            st.typing.pendingBorrowShared = true
-                        } else {
-                            mrvX: (methodReceiverIsView :st mid: (ztypes.tid.create from: mo.u64))
-                            if mrvX then st.typing.pendingBorrowShared = true
-                        }
-                        st.typing.pendingBorrowOwned = true
-                    }
-                }
-            } case none then {
-                # A no-`out` METHOD auto-call resolves to null (the
-                # reference's auto-call rule for out-less methods). Non-
-                # function members (field shells) keep their re-resolved
-                # type.
-                if (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) == ztypes.ztypetype.functionType then {
-                    result = ztypes.tid.create from: (st.typing.nullTypeId)
-                }
-            }
-        }
-        if aliasViaX == false when (declMemberIsPrivate
-            :st
-
-            tid: bt
-            nameId: (ast.names.find s: cn.stringview)
-        ) then {
-            baseN: ast.nodes.get i: dp.parent.u64
-            if (baseIsPrivateCapable :st :ast :bt baseNode: baseN) == false then {
-                cnidP: nodeId n: (ast.nodes.get i: dp.child.u64)
-                cnlnP: nodeLine n: (ast.nodes.get i: dp.child.u64)
-                cnclP: nodeCol n: (ast.nodes.get i: dp.child.u64)
-                btNmP: st.reg.nameOf tid: bt
-                pmsgP: "'\{cn}' is not public on type '\{btNmP}'"
-                (addErrorH
-                    :st
-                    nodeid: cnidP
-                    lineno: cnlnP
-                    colno: cnclP
-                    e: zast.err.notPublic
-                    msg: pmsgP
-                    note: "".string
-                    hint: "".string
-                    width: cn.length.u32.orPanic
-                )
-            }
-        }
-        stampGate :st nid: dp.nodeid.u64 tid: result
-        return result
+            :dp
+            :bt
+            cn: cn.stringview
+            :cnId
+            :mo
+            :coerce
+            :aliasViaX
+        )
     } case none then {
-        if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.genericParam then {
-            # `.copy` is an ownership primitive, not a constrained member:
-            # every instantiation copies, so a generic-param receiver types
-            # it t -> t (the per-instance clone emits the concrete copy).
-            if cn.stringview == "copy" then {
-                stampGate :st nid: dp.nodeid.u64 tid: bt
-                return bt
-            }
-            btn9x: st.reg.nameOf tid: bt
-            mgp: "type parameter '\{btn9x}' has no member '\{cn}' (its constraint provides none)"
-            (addError
-                :st
-                nodeid: dp.nodeid
-                lineno: dp.lineno
-                colno: dp.colno
-                e: zast.err.genericError
-                msg: mgp
-            )
-        }
-        # `.copy` on a receiver with no copy member is a hard error: deep
-        # copy exists for strings, containers, and generic type parameters
-        # only. Without this the emitter has no clone to emit and the
-        # miss would surface as invalid C.
-        if cn.stringview == "copy" when (st.reg.typetypeOf typeId: bt) != ztypes.ztypetype.genericParam then {
-            # per-mono instance walk: `.copy` on a template param was
-            # validated against the template (t -> t); the instance lowers
-            # it per type (valtypes/views bitwise, String deep). Only the
-            # user-reftype capability gap stays an error.
-            if st.typing.curMonoStamp > 0 then {
-                bttIw: st.reg.typetypeOf typeId: bt
-                isRefIw: false
-                if bttIw == ztypes.ztypetype.classType then isRefIw = true
-                if bttIw == ztypes.ztypetype.unionType then isRefIw = true
-                if isRefIw then {
-                    # native view classes (StringView) copy by assignment --
-                    # only USER reftypes lack a lowering
-                    if (st.reg.isNativeOf tid: bt) then isRefIw = false
-                }
-                if bt == (builtinTidTc :ast :st base: "StringView") then isRefIw = false
-                if (isRefIw) == false then {
-                    stampGate :st nid: dp.nodeid.u64 tid: bt
-                    return bt
-                }
-            }
-            btnCp: st.reg.nameOf tid: bt
-            bttCp: st.reg.typetypeOf typeId: bt
-            isValCp: false
-            if bttCp == ztypes.ztypetype.recordType then isValCp = true
-            if bttCp == ztypes.ztypetype.variantType then isValCp = true
-            if bttCp == ztypes.ztypetype.facetType then isValCp = true
-            # A valtype's DEFAULT `.copy` is the byte copy its assignment
-            # already performs -- a valtype holds no reftype, so copying the
-            # bytes copies the whole value. Writing one in the as-block
-            # overrides this default; the member lookup above finds it first
-            # and never reaches here. `copy: null` strikes the default off,
-            # and a monomorphised instance inherits its template's decision.
-            cpOff: st.typing.copyOptOut.has item: bt
-            if (cpOff) == false then {
-                cpOrg: st.reg.genericOriginOf tid: bt
-                if cpOrg > 0 then cpOff = st.typing.copyOptOut.has item: cpOrg
-            }
-            if isValCp when (cpOff) == false then {
-                stampGate :st nid: dp.nodeid.u64 tid: bt
-                return bt
-            }
-            if cpOff then {
-                mOff: "type '\{btnCp}' has no '.copy': its `as` block defines `copy: null`, striking the default copy off the type"
-                (addError
-                    :st
-                    nodeid: dp.nodeid
-                    lineno: dp.lineno
-                    colno: dp.colno
-                    e: zast.err.typeError
-                    msg: mOff
-                )
-                return (ztypes.tid.create from: 0)
-            }
-            mCp: "type '\{btnCp}' has no '.copy': a reftype has no default copy -- define a 'copy' method on '\{btnCp}' saying what a duplicate means, or move with '.take'"
-
-            if bt == (builtinTidTc :ast :st base: "StringView") then {
-                mCp = "type 'StringView' has no '.copy': a view is copied by assignment; '.string' makes an owned String (allocates)".string
-            }
-            (addError
-                :st
-                nodeid: dp.nodeid
-                lineno: dp.lineno
-                colno: dp.colno
-                e: zast.err.typeError
-                msg: mCp
-            )
-            return (ztypes.tid.create from: 0)
-        }
-        # unknown member on a concrete user-defined type: hard error.
-        # Shells (no defining unit), stdlib/native types, and template
-        # walks stay silent -- their members resolve through later
-        # passes or per-instantiation.
-        bttMm: st.reg.typetypeOf typeId: bt
-        isConcMm: false
-        if bttMm == ztypes.ztypetype.recordType then isConcMm = true
-        if bttMm == ztypes.ztypetype.classType then isConcMm = true
-        if bttMm == ztypes.ztypetype.unionType then isConcMm = true
-        if bttMm == ztypes.ztypetype.variantType then isConcMm = true
-        if bttMm == ztypes.ztypetype.dataType then isConcMm = true
-        if isConcMm when (memberStrictType :st :bt) then {
-            if st.typing.suppressParamStamps == false then {
-                # demand-order safety: walk the type's methods once and
-                # re-probe before declaring the member unknown
-                btnMm0: st.reg.nameOf tid: bt
-                walkDefinitionById :st :ast tid: bt
-                (forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId)
-                moMm: st.typing.declChildOfId parentTypeId: bt nameId: cnId
-                stillMiss: true
-                match (
-                    moMm
-                ) case some then {
-                    stillMiss = false
-                } case none then null
-                # a numeric-type-named member on a numeric base is a width
-                # conversion; the identity form (x.T where x is already T) is
-                # not a declared child but is a valid (redundant) cast.
-                if stillMiss then {
-                    baseNum: false
-                    if (isNumericTypeName name: btnMm0.stringview) then baseNum = true
-                    if btnMm0.stringview == "literal_int" then baseNum = true
-                    if btnMm0.stringview == "literal_float" then baseNum = true
-                    if (isNumericTypeName name: cn.stringview) when baseNum then stillMiss = false
-                }
-                if stillMiss then {
-                    btnMm: st.reg.nameOf tid: bt
-                    mMm: "type '\{btnMm}' has no member '\{cn}'"
-                    sugMm: suggestSimilar :ast :st parentTypeId: bt name: cn.stringview
-                    hMm: String
-                    if sugMm.length > 0 then {
-                        hhMm: "did you mean '\{sugMm}'?"
-                        hMm = hhMm
-                    }
-                    if (declMemberIsPrivate
-                        :st
-
-                        tid: bt
-                        nameId: (ast.names.find s: cn.stringview)
-                    ) then {
-                        hpMm: "'\{cn}' is private (not in the public interface)"
-                        hMm = hpMm
-                    }
-                    cnidMm: nodeId n: (ast.nodes.get i: dp.child.u64)
-                    cnlnMm: nodeLine n: (ast.nodes.get i: dp.child.u64)
-                    cnclMm: nodeCol n: (ast.nodes.get i: dp.child.u64)
-                    (addErrorH
-                        :st
-                        nodeid: cnidMm
-                        lineno: cnlnMm
-                        colno: cnclMm
-                        e: zast.err.typeError
-                        msg: mMm
-                        note: "".string
-                        hint: hMm
-                        width: cn.length.u32.orPanic
-                    )
-                }
-            }
-        }
-        return (ztypes.tid.create from: 0)
+        return (checkUnresolvedMember :st :ast :dp :bt cn: cn.stringview :cnId)
     }
 }
 
