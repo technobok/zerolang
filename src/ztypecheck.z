@@ -4098,6 +4098,23 @@ paramIsThisReceiverId: function {ast: Ast.view opId: u32} out bool is {
 }
 
 # the base type name of parameter operation `op`.
+# paramTypeBaseNameId -- paramTypeBaseName's answer as the name's id.
+paramTypeBaseNameId: function {ast: Ast.view op: Node.view} out zast.nameid is {
+    match (
+        op
+    ) case atomid then {
+        return op.name
+    } case labelvalue then {
+        return op.name
+    } case expression then {
+        return (paramTypeBaseNameId :ast op: (ast.nodes.get i: op.expression.u64))
+    } case call then {
+        return (atomNameId :ast n: (ast.nodes.get i: op.callable.u64))
+    } else {
+        return (zast.nameid.create from: 0)
+    }
+}
+
 paramTypeBaseName: function {ast: Ast.view op: Node.view} out String is {
     match (
         op
@@ -5911,19 +5928,19 @@ recordIsTypedef: function {ast: Ast.view rnode: zast.ObjectDefData.view} out boo
 # typedefFieldBaseName -- the base type name of an `X.typedef` field's `X`
 # (e.g. `(List of: u8).typedef` -> "List"). Borrows the Node, never binds it (a
 # bare bind would move the type-expr out of the shared AST).
-typedefFieldBaseName: function {ast: Ast.view n: Node.view} out String is {
+typedefFieldBaseNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     match (
         n
     ) case dottedpath then {
-        return (paramTypeBaseName :ast op: (ast.nodes.get i: n.parent.u64))
+        return (paramTypeBaseNameId :ast op: (ast.nodes.get i: n.parent.u64))
     } else {
-        return "".string
+        return (zast.nameid.create from: 0)
     }
 }
 
 # objectTypedefBase -- the base type name of an objectdef's single `X.typedef`
 # field (the typedef wrapper base), or "" when the object is not a typedef.
-objectTypedefBase: function {ast: Ast.view onode: zast.ObjectDefData.view} out String is {
+objectTypedefBaseId: function {ast: Ast.view onode: zast.ObjectDefData.view} out zast.nameid is {
     fiter: onode.isItems.iterate
     for fmId: fiter loop {
         fm: ast.nodes.get i: fmId.u64
@@ -5933,13 +5950,13 @@ objectTypedefBase: function {ast: Ast.view onode: zast.ObjectDefData.view} out S
             if (isTypedefField
                 :ast
                 n: (ast.nodes.get i: fm.operation.u64)
-            ) then return (typedefFieldBaseName
+            ) then return (typedefFieldBaseNameId
                 :ast
                 n: (ast.nodes.get i: fm.operation.u64)
             )
         } else null
     }
-    return "".string
+    return (zast.nameid.create from: 0)
 }
 
 # typedefFieldBaseTid -- the type id of an `X.typedef` field's `X`. A
@@ -6734,8 +6751,8 @@ resolveRecord: function {
     }
     istd: recordIsTypedef :ast :rnode
     if istd then {
-        tdb: objectTypedefBase :ast onode: rnode
-        if tdb.length > 0 then {
+        tdb: objectTypedefBaseId :ast onode: rnode
+        if (tdb.isZero) == false then {
             tdk: rid
             st.typing.typedefBaseName.set key: tdk value: tdb
         }
@@ -8051,17 +8068,18 @@ resolveClass: function {
     }
     istd: recordIsTypedef :ast rnode: cnode
     if istd then {
-        tdbase: objectTypedefBase :ast onode: cnode
+        tdbase: objectTypedefBaseId :ast onode: cnode
+        tdbaseT: zast.nameTextAt :ast ref: tdbase
         if (fieldTypeNeedsCleanup
             :st
             :frame
 
             :ast
             :unitDecl
-            name: tdbase.stringview
+            name: tdbaseT.stringview
             isLock: false
         ) then needsDtor = true
-        if tdbase.length > 0 then {
+        if (tdbase.isZero) == false then {
             tdk3: cid
             st.typing.typedefBaseName.set key: tdk3 value: tdbase
         }

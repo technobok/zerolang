@@ -2024,6 +2024,7 @@ convSrcPathOf: function {symtab: zenv.ZSymbolTable srcTid: ztypes.tid} out Strin
 # byte compare, or the inline compare a record whose typedef chain ends at a
 # scalar gets instead.
 binopKeyOf: function {
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     owner: ztypes.tid
     isNative: bool
@@ -2052,7 +2053,7 @@ binopKeyOf: function {
         return k1
     }
     if tt == ztypes.ztypetype.recordType then {
-        bn: typedefChaseBaseName :symtab tid: owner
+        bn: typedefChaseBaseName :ast :symtab tid: owner
         if bn.length > 0 then {
             sc: (scalarCTypeFor
                 :symtab
@@ -7560,7 +7561,11 @@ argSlotList: function {
 # wants (`nameid` -> u32 ->
 # U). The name-based half of this is literalSuffixBase's, which answers the
 # same question starting from a suffix NAME rather than from a type.
-constSuffixForTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
+constSuffixForTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+} out String is {
     if tid.isZero then return "".string
     tn: regNameOf :symtab :tid
     if tn.length == 0 then return "".string
@@ -7578,7 +7583,9 @@ constSuffixForTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out
     match (
         bo
     ) case some then {
-        bn: bo.copy
+        boId: zast.nameid
+        boId = bo
+        bn: zast.poolTextAt pool: ast.names ref: boId
         return (numLitSuffix name: bn.stringview)
     } case none then null
     return "".string
@@ -7594,7 +7601,7 @@ cvalText: function {
     if v.kind.ivalKind then {
         iv: v.ival
         r: "\{iv}"
-        r.append (constSuffixForTid :symtab :tid)
+        r.append (constSuffixForTid :ast :symtab :tid)
         return r
     }
     if v.kind.fvalKind then {
@@ -9791,7 +9798,10 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
                 ) case some then {
                     # a String-typedef class (Path) shares the String
                     # struct: the empty value is the zero struct
-                    if ztb.stringview == "String" then return (emitExprStrZero :ctx)
+                    ztbId: zast.nameid
+                    ztbId = ztb
+                    ztbT: zast.poolTextAt pool: ast.names ref: ztbId
+                    if ztbT.stringview == "String" then return (emitExprStrZero :ctx)
                 } case none then null
                 zmono: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: brid.u64)
                 if zmono != brid then {
@@ -9899,7 +9909,10 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node.view} ou
             match (
                 dzb
             ) case some then {
-                if dzb.stringview == "String" then return (emitExprStrZero :ctx)
+                dzbId: zast.nameid
+                dzbId = dzb
+                dzbT: zast.poolTextAt pool: ast.names ref: dzbId
+                if dzbT.stringview == "String" then return (emitExprStrZero :ctx)
             } case none then null
             dzt: typedefChaseC :ast :symtab :ctx tid: (ztypes.tid.create from: izd.u64)
             if dzt.length > 0 then return "((\{dzt})0)"
@@ -11261,7 +11274,7 @@ emitBinop: function {
             return u2
         }
     }
-    key: binopKeyOf :symtab :owner isNative: isNat :op
+    key: binopKeyOf :ast :symtab :owner isNative: isNat :op
     body: nativeImplOf :ctx path: key.stringview
     if body.length == 0 then {
         emitFail :ctx what: "no native implementation for '\{key}'" line: binop.lineno
@@ -11314,7 +11327,7 @@ emitBinop: function {
     }
     # a typedef emits no helper of its own: the chain end owns it
     tcn: ctxCname :ctx tid: owner
-    tdb: typedefChaseBaseName :symtab tid: owner
+    tdb: typedefChaseBaseName :ast :symtab tid: owner
     if tdb.length > 0 then {
         tcn = ctxCname :ctx tid: (typedefChaseTid :symtab tid: owner)
     }
@@ -11614,7 +11627,7 @@ emitInterpPart: function {
             if msid > 0 then tn0 = regNameOf :symtab tid: msid
         }
         # a typedef part formats as its chain-end base
-        tnTd0: typedefChaseBaseName :symtab tid: (stampIdDeep :ast :symtab :n)
+        tnTd0: typedefChaseBaseName :ast :symtab tid: (stampIdDeep :ast :symtab :n)
         if tnTd0.length > 0 then tn0 = tnTd0.copy
         tn: numericFormatName :ast :symtab :ctx tn: tn0.stringview
         if di0.length > 0 then tn = di0
@@ -17954,15 +17967,19 @@ typedefChaseTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out z
 
 # typedefChaseBaseName -- the chain-end base NAME of a typedef, "" when tid
 # is not one.
-typedefChaseBaseName: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
+typedefChaseBaseName: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+} out String is {
     cur: tid
-    nm: String
+    nmId: zast.nameid
     for true loop {
         bn: symtab.typing.typedefBaseName.get key: cur
         match (
             bn
         ) case some then {
-            nm = bn.copy
+            nmId = bn
         } case none then null
         bo: symtab.typing.typedefBaseTid.get key: cur
         match (
@@ -17971,6 +17988,8 @@ typedefChaseBaseName: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} 
             cur = ztypes.tid.create from: (bo)
         } case none then break
     }
+    nm: String
+    if (nmId.isZero) == false then nm = zast.poolTextCopy pool: ast.names ref: nmId
     return nm
 }
 
@@ -17991,7 +18010,9 @@ typedefChaseC: function {
             bo
         ) case some then {
             hitB = true
-            bnX = bo.copy
+            boId: zast.nameid
+            boId = bo
+            bnX = zast.poolTextCopy pool: ast.names ref: boId
         } case none then null
     }
     if hitB then {
@@ -18734,9 +18755,11 @@ literalSuffixBase: function {
     match (
         bo
     ) case some then {
-        bn: bo.copy
+        boId: zast.nameid
+        boId = bo
+        bn: zast.poolTextAt pool: ast.names ref: boId
         bc: cTypeOf name: bn.stringview
-        if bc.length > 0 then return bn
+        if bc.length > 0 then return bn.copy
     } case none then null
     return "".string
 }
