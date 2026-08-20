@@ -23455,6 +23455,919 @@ checkMissingCallArgs: function {ast: Ast.view
         )
     }
 }
+# checkUntypedArgLabel -- an argument whose VALUE did not type still has its
+# label checked: whether the parameter exists, whether it was already given,
+# and whether a positional argument is even allowed there. Those answers come
+# from the parameter list alone, so they do not go down with the value.
+checkUntypedArgLabel: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    effId: ztypes.tid
+    funcId: ztypes.tid
+    isCtor: bool
+    reportUnknown: bool
+    argIdx: u64
+    boundArgIds: (ListVal u64)
+    recvImplicit: bool
+    arg: zast.NamedOperationData.view
+} is {
+        pnU: zast.nameTextCopy :ast ref: arg.name
+        if pnU.length > 0 when effId > 0 then {
+            if (st.typing.declMemberCount ownerTid: effId) > 0 then {
+                pcU: (optU64Or
+                    o: (st.typing.declChildOf
+                        pool: ast.names
+                        parentTypeId: effId
+                        name: pnU.stringview
+                    )
+                    d: 0
+                )
+                if pcU == 0 then {
+                    mU: "unknown argument '\{pnU}'"
+                    sugU: (suggestSimilar
+                        :ast
+                        :st
+                        parentTypeId: effId
+                        name: pnU.stringview
+                    )
+                    hU: String
+                    if sugU.length > 0 then {
+                        hhU: "did you mean '\{sugU}'?"
+                        hU = hhU
+                    }
+                    enU9b: String
+                    (addErrorH
+                        :st
+                        nodeid: arg.nodeid
+                        lineno: arg.lineno
+                        colno: arg.colno
+                        e: zast.err.callError
+                        msg: mU
+                        note: enU9b
+                        hint: hU
+                        width: pnU.length.u32.orPanic
+                    )
+                }
+            }
+        }
+        if reportUnknown when (isCtor) == false when pnU.length == 0 when funcId > 0 then {
+            if (st.typing.declMemberCount ownerTid: funcId) == 0 then {
+                if (st.reg.typetypeOf typeId: funcId) == ztypes.ztypetype.functionType then {
+                    tmU: "too many arguments: function takes no parameters".string
+                    (addError
+                        :st
+                        nodeid: arg.nodeid
+                        lineno: arg.lineno
+                        colno: arg.colno
+                        e: zast.err.callError
+                        msg: tmU
+                    )
+                }
+            }
+        }
+        if pnU.length == 0 then {
+            pnU = (positionalParamName
+                :ast
+                :st
+                funcId: effId
+                idx: argIdx
+                skipRecv: recvImplicit
+            )
+        }
+        if effId > 0 when pnU.length > 0 then {
+            dcnU: (zast.poolFind pool: ast.names text: pnU.stringview)
+            dupU: false
+            with bItU: boundArgIds.iterate do for bIdU: bItU loop {
+                if bIdU == dcnU.u64 then dupU = true
+            }
+            if dupU when reportUnknown then {
+                dmU: "argument '\{pnU}' specified more than once"
+                (addError
+                    :st
+                    nodeid: arg.nodeid
+                    lineno: arg.lineno
+                    colno: arg.colno
+                    e: zast.err.callError
+                    msg: dmU
+                )
+            } else {
+                boundArgIds.append dcnU.u64
+            }
+        }
+}
+# lockBorrowedArgPath -- a reftype argument passed to a locking parameter has
+# its whole value path locked for the call, not just its root: a write through
+# any prefix would move the storage the callee is reading.
+lockBorrowedArgPath: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: zast.NamedOperationData.view
+} is {
+    an: ast.nodes.get i: arg.operation.u64
+    src: (ListVal zast.nameid)
+    appendValueTuple :ast n: an dst: src
+    if src.length > 0 then {
+        rt: src.get i: 0
+        # residue left by an EARLIER argument of this call
+        # must not stand in for THIS argument's source:
+        # keep a pending path only when it is rooted at
+        # this argument's own base
+        if st.typing.pendingBorrowPath.length > 0 then {
+            if (st.typing.pendingBorrowPath.get i: 0) != rt then drainPendingBorrow :st
+        }
+        if st.typing.pendingBorrowPath.length == 0 then {
+            rvo: st.lookupVarId nameId: rt
+            match (
+                rvo
+            ) case some then {
+                drainPendingBorrow :st
+                with sit: src.iterate do for se: sit loop st.typing.pendingBorrowPath.append se
+            } case none then null
+        }
+    }
+}
+
+# lockNonTrivialArg -- an argument the call cannot hoist to a temp keeps its
+# source: take it, or lock the path it reads through for the call's duration.
+# Answers the lock root.
+lockNonTrivialArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: zast.CallData.view
+    vt: ztypes.tid
+    pt: u64
+    isTake: bool
+    isLockish: bool
+    isDeclLock: bool
+    isViewArg: bool
+    lockRootIn: zast.nameid
+    arg: zast.NamedOperationData.view
+} out zast.nameid is {
+    lockRoot: lockRootIn
+    # A construction or take parameter consumes the hoisted
+    # temp inside the call scope; a lock/borrow parameter
+    # locks it there.
+    consumes: false
+    if isTake then consumes = true
+    # a `.lock`-suffixed argument at a lock parameter locks
+    # its base and hoists a BORROWED view of it (the synth
+    # temp's origin is the base; the base's lock row lands
+    # in the call scope via the borrow-lock install).
+    if isLockish then {
+        lsb: lockSuffixBase :ast n: (ast.nodes.get i: arg.operation.u64)
+        if lsb.length > 0 then {
+            drainPendingBorrow :st
+            st.typing.pendingBorrowPath.append (nameIdOf :ast name: lsb.stringview)
+            if lockRoot.isZero then lockRoot = nameIdOf :ast name: lsb.stringview
+            if isDeclLock then st.typing.lastLockParamRoot = (nameIdOf
+                :ast
+                name: lsb.stringview
+            )
+        }
+    }
+    # a plain field-path argument behaves as its user-
+    # written hoist would: seed the borrow side channel with
+    # the real source tuple so the synth temp installs the
+    # spec's SHARED-prefix + EXCLUSIVE-leaf locks on it
+    if isLockish when (typeIsReftype
+        :st
+        tid: (ztypes.tid.create from: vt.u64)
+    ) then {
+        lockBorrowedArgPath :st :ast :arg
+    }
+    hadPending: false
+    if st.typing.pendingBorrowPath.length > 0 then hadPending = true
+    tnm: (hoistArg
+        :ast
+        :st
+        argNode: (ast.nodes.get i: arg.operation.u64)
+        argType: vt
+        paramType: pt
+        :consumes
+        viewParam: isViewArg
+    )
+    if (hadPending) == false then {
+        if isLockish when (typeIsReftype
+            :st
+            tid: (ztypes.tid.create from: vt.u64)
+        ) then {
+            (lockCallArg
+                :st
+                pool: ast.names
+                nameId: (nameIdOf :ast name: tnm.stringview)
+                callId: call.nodeid.u64
+                shared: isViewArg
+                nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
+                lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
+                colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
+            )
+        }
+    }
+    return lockRoot
+}
+# hoistTrivialArg -- an argument the call CAN hoist to a temp still locks its
+# source when the parameter borrows it: the temp aliases the same storage.
+# Answers the lock root.
+hoistTrivialArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: zast.CallData.view
+    vt: ztypes.tid
+    pt: u64
+    isTake: bool
+    isLockish: bool
+    isDeclLock: bool
+    isViewArg: bool
+    lockRootIn: zast.nameid
+    arg: zast.NamedOperationData.view
+} out zast.nameid is {
+    lockRoot: lockRootIn
+    # A trivial literal argument coerces in place at the
+    # parameter boundary (no hoist: restamp its bare node).
+    if pt > 0 then {
+        iid2: innermostNodeId :ast n: (ast.nodes.get i: arg.operation.u64)
+        if iid2 > 0 then {
+            seta2: pt
+            stampGate :st nid: iid2.u64 tid: (ztypes.tid.create from: seta2.u64)
+        }
+    }
+    # A bare-name reftype argument: a take parameter consumes
+    # it (the overlay propagates out on pop); a lock/borrow
+    # parameter locks it for the call. A `:name` shorthand
+    # argument is the same bare local read, so a take
+    # parameter consumes it identically; at lock/borrow
+    # parameters the shorthand takes no lock (see
+    # docs/typechecker.pdoc, `:name` at the argument site).
+    bn: bareAtomName :ast n: (ast.nodes.get i: arg.operation.u64)
+    if bn.length == 0 when isTake then {
+        bn = atomName :ast n: (ast.nodes.get i: arg.operation.u64)
+    }
+    if bn.length > 0 when (typeIsReftype
+        :st
+        tid: (ztypes.tid.create from: vt.u64)
+    ) then {
+        bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringview)
+        match (
+            bvo
+        ) case some then {
+            if isTake then {
+                (consumeBareArgOwnership
+                    :st
+                    :ast
+                    name: bn.stringview
+                    vid: bvo
+                    nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
+                    lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
+                    colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
+                )
+            } else {
+                if isLockish then {
+                    (lockCallArg
+                        :st
+                        pool: ast.names
+                        nameId: (nameIdOf :ast name: bn.stringview)
+                        callId: call.nodeid.u64
+                        shared: isViewArg
+                        nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
+                        lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
+                        colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
+                    )
+                    if lockRoot.isZero then lockRoot = (nameIdOf
+                        :ast
+                        name: bn.stringview
+                    )
+                    if isDeclLock then st.typing.lastLockParamRoot = (nameIdOf
+                        :ast
+                        name: bn.stringview
+                    )
+                }
+            }
+        } case none then null
+    }
+    return lockRoot
+}
+
+
+# hoistAndLockArg -- what the CALL does to the argument's source: hoist a
+# non-trivial value to a temp, take ownership of it, or place the lock a
+# borrowed parameter holds for the call's duration. Answers the lock root.
+hoistAndLockArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: zast.CallData.view
+    vt: ztypes.tid
+    pt: u64
+    isTake: bool
+    isLockish: bool
+    isDeclLock: bool
+    isViewArg: bool
+    lockRootIn: zast.nameid
+    arg: zast.NamedOperationData.view
+} out zast.nameid is {
+    lockRoot: lockRootIn
+    if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation.u64)) then {
+        lockRoot = (hoistTrivialArg
+            :st
+            :ast
+            :call
+            :vt
+            :pt
+            :isTake
+            :isLockish
+            :isDeclLock
+            :isViewArg
+            lockRootIn: lockRoot
+            :arg
+        )
+    } else {
+        lockRoot = (lockNonTrivialArg
+            :st
+            :ast
+            :call
+            :vt
+            :pt
+            :isTake
+            :isLockish
+            :isDeclLock
+            :isViewArg
+            lockRootIn: lockRoot
+            :arg
+        )
+    }
+    return lockRoot
+}
+# coercePositionalArg -- a positional argument takes the parameter at its own
+# index: check the value against that parameter's type, and coerce a literal to
+# the parameter's width rather than letting it keep its own default.
+coercePositionalArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    effId: ztypes.tid
+    vt: ztypes.tid
+    pn: StringView
+    arg: zast.NamedOperationData.view
+} is {
+    cpidP: (optU64Or
+        o: (st.typing.declChildOf
+            pool: ast.names
+            parentTypeId: effId
+            name: pn
+        )
+        d: 0
+    )
+    if cpidP > 0 then {
+        ptidP: cpidP
+        if ptidP > 0 when vt > 0 then {
+            if (typesCompatible
+                :ast
+                :st
+                a: vt
+                b: (ztypes.tid.create from: ptidP.u64)
+            ) == false then {
+                skipP: false
+                if (isNumericTid
+                    :st
+                    frame: st.curFrame
+                    :ast
+
+                    tid: (ztypes.tid.create from: vt.u64)
+                ) when (isNumericTid
+                    :st
+                    frame: st.curFrame
+                    :ast
+
+                    tid: (ztypes.tid.create from: ptidP.u64)
+                ) then skipP = true
+                pttP: st.reg.typetypeOf typeId: (ztypes.tid.create from: ptidP.u64)
+                if pttP == ztypes.ztypetype.protocolType then skipP = true
+                if pttP == ztypes.ztypetype.facetType then skipP = true
+                if pttP == ztypes.ztypetype.genericParam then skipP = true
+                if pttP == ztypes.ztypetype.functionType then skipP = true
+                if (skipP) == false then {
+                    enP: (st.reg.nameOf tid: (ztypes.tid.create from: ptidP.u64))
+                    anP: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
+                    emitP: true
+                    if anP.length == 0 then {
+                        # unresolved got-side: suppress the knock-on
+                        # when a prior error explains it, else name it
+                        if st.typing.errors.length > 0 then emitP = false
+                        anP = "an unresolved value".string
+                    }
+                    if emitP then {
+                        tmmP: "argument type mismatch: expected \{enP}, got \{anP}"
+                        enP9b: String
+                        ehP: String
+                        (addErrorH
+                            :st
+                            nodeid: arg.nodeid
+                            lineno: arg.lineno
+                            colno: arg.colno
+                            e: zast.err.callError
+                            msg: tmmP
+                            note: enP9b
+                            hint: ehP
+                            width: pn.length.u32.orPanic
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+# coerceArgToParam -- check a named argument against the parameter it binds to:
+# that the types are compatible, and that a literal coerces to the parameter's
+# width rather than carrying its own default.
+coerceArgToParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    effId: ztypes.tid
+    vt: ztypes.tid
+    pn: StringView
+    boundArgIds: (ListVal u64)
+    reportUnknown: bool
+    wasPos: bool
+    arg: zast.NamedOperationData.view
+} is {
+    if effId.isZero then return
+    if pn.length == 0 then return
+    # the parameter's pool id is identity enough: effId is
+    # fixed across this call's argument walk, so two args
+    # collide exactly when they name the same parameter
+    dcnid: (zast.poolFind pool: ast.names text: pn)
+    dupSeen: false
+    with bIt: boundArgIds.iterate do for bId: bIt loop {
+        if bId == dcnid.u64 then dupSeen = true
+    }
+    if dupSeen when reportUnknown then {
+        dmm: "argument '\{pn}' specified more than once"
+        (addError
+            :st
+            nodeid: arg.nodeid
+            lineno: arg.lineno
+            colno: arg.colno
+            e: zast.err.callError
+            msg: dmm
+        )
+    } else {
+        boundArgIds.append dcnid.u64
+    }
+    if wasPos then (coercePositionalArg :st :ast :effId :vt :pn :arg)
+}
+# checkNamedArgParam -- a labelled argument must name a parameter the callee
+# has, and must not name one an earlier argument already bound. Records the
+# binding so the positional walk and the missing-argument report agree.
+checkNamedArgParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    effId: ztypes.tid
+    pn: StringView
+    vt: ztypes.tid
+    arg: zast.NamedOperationData.view
+} is {
+    if pn.length > 0 when effId > 0 then {
+        if (st.typing.declMemberCount ownerTid: effId) > 0 then {
+            pco: (st.typing.declChildOf
+                pool: ast.names
+                parentTypeId: effId
+                name: pn
+            )
+            pcidX: optU64Or o: pco d: 0
+            if pcidX == 0 then {
+                m2: "unknown argument '\{pn}'"
+                anid: arg.nodeid
+                anln: arg.lineno
+                ancl: arg.colno
+                sug2: (suggestSimilar
+                    :ast
+                    :st
+                    parentTypeId: (ztypes.tid.create from: effId.u64)
+                    name: pn
+                )
+                h2: String
+                if sug2.length > 0 then {
+                    hh2: "did you mean '\{sug2}'?"
+                    h2 = hh2
+                }
+                en2: String
+                (addErrorH
+                    :st
+                    nodeid: anid
+                    lineno: anln
+                    colno: ancl
+                    e: zast.err.callError
+                    msg: m2
+                    note: en2
+                    hint: h2
+                    width: pn.length.u32.orPanic
+                )
+            } else {
+                ptid: pcidX
+                if ptid > 0 when vt > 0 then {
+                    if (typesCompatible
+                        :ast
+                        :st
+                        a: vt
+                        b: (ztypes.tid.create from: ptid.u64)
+                    ) == false then {
+                        skipMM: false
+                        if (isNumericTid
+                            :st
+                            frame: st.curFrame
+                            :ast
+
+                            tid: (ztypes.tid.create from: vt.u64)
+                        ) when (isNumericTid
+                            :st
+                            frame: st.curFrame
+                            :ast
+
+                            tid: (ztypes.tid.create from: ptid.u64)
+                        ) then skipMM = true
+                        ptt: st.reg.typetypeOf typeId: (ztypes.tid.create from: ptid.u64)
+                        if ptt == ztypes.ztypetype.protocolType then skipMM = true
+                        if ptt == ztypes.ztypetype.facetType then skipMM = true
+                        if ptt == ztypes.ztypetype.genericParam then skipMM = true
+                        if ptt == ztypes.ztypetype.functionType then skipMM = true
+                        if (skipMM) == false then {
+                            en7: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
+                            an7: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
+                            emit7: true
+                            if an7.length == 0 then {
+                                # unresolved got-side: suppress the knock-on
+                                # when a prior error explains it, else name it
+                                if st.typing.errors.length > 0 then emit7 = false
+                                an7 = "an unresolved value".string
+                            }
+                            # a literal got-side would have COERCED had the
+                            # expected type resolved, so its mismatch is a
+                            # knock-on whenever an earlier error explains it
+                            if (isLiteralTypeId
+                                :st
+                                tid: (ztypes.tid.create from: vt.u64)
+                            ) then {
+                                if st.typing.errors.length > 0 then emit7 = false
+                            }
+                            if emit7 then {
+                                mm7: "argument '\{pn}' type mismatch: expected \{en7}, got \{an7}"
+                                en7b: String
+                                eh7: String
+                                (addErrorH
+                                    :st
+                                    nodeid: arg.nodeid
+                                    lineno: arg.lineno
+                                    colno: arg.colno
+                                    e: zast.err.callError
+                                    msg: mm7
+                                    note: en7b
+                                    hint: eh7
+                                    width: pn.length.u32.orPanic
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+# checkTypedCallArg -- everything one typed argument goes through: the parameter
+# it binds to, coercion to that parameter's type, the ownership the call takes
+# on it, and the lock a borrowed argument places on its source. Answers the
+# lock root, which the call as a whole reports.
+# what a call does to one argument's source, read off the parameter it binds to.
+argownership: record {
+    isTake: bool
+    isLockish: bool
+    isDeclLock: bool
+    isViewArg: bool
+    pt: u64
+}
+# argOwnershipOf -- what the call does to this argument's source, read off the
+# parameter it binds to: take it, lock it, or read it through a view. A
+# constructor reads the FIELD's ownership instead, since a `.lock` field locks
+# the caller's argument where any other reftype field takes it.
+argOwnershipOf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    funcId: ztypes.tid
+    isCtor: bool
+    pn: StringView
+    vt: ztypes.tid
+} out argownership is {
+    isTake: false
+    isLockish: false
+    isDeclLock: false
+    isViewArg: false
+    pt: u64
+    if funcId > 0 when pn.length > 0 then {
+        if (isLiteralTypeId :st tid: (ztypes.tid.create from: vt.u64)) then {
+            po: (st.typing.declChildOf
+                pool: ast.names
+                parentTypeId: funcId
+                name: pn
+            )
+            match (
+                po
+            ) case some then {
+                pt = po
+            } case none then null
+        }
+        oo: (st.typing.declOwnershipOfId
+            parentTypeId: funcId
+            nameId: (zast.poolFind pool: ast.names text: pn)
+        )
+        match (
+            oo
+        ) case some then {
+            if oo == ztypes.zparamownership.takeMode then isTake = true
+            if oo == ztypes.zparamownership.takexMode then isTake = true
+            if oo == ztypes.zparamownership.borrowMode then isLockish = true
+            if oo == ztypes.zparamownership.viewMode then {
+                isLockish = true
+                isViewArg = true
+            }
+        } case none then {
+            # Unrecorded ownership: the effective default is
+            # borrow (ctor field params keep their recorded flow).
+            if (isCtor) == false then isLockish = true
+        }
+    if funcId > 0 when pn.length == 0 when isCtor then {
+        # a POSITIONAL constructor argument (a tagged-sum arm
+        # payload) transfers ownership exactly like its named
+        # form: the arm stores it owned
+        if (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64)) then isTake = true
+    }
+        if isCtor then {
+            # Field ownership flows to the constructor param:
+            # a `.lock` field locks the caller's argument, any
+            # other reftype field takes it.
+            if (st.typing.declIsLockField
+                pool: ast.names
+                parentTypeId: funcId
+                name: pn
+            ) then {
+                isLockish = true
+            } else {
+                if (typeIsReftype
+                    :st
+                    tid: (ztypes.tid.create from: vt.u64)
+                ) then isTake = true
+            }
+        }
+    }
+    return (argownership :isTake :isLockish :isDeclLock :isViewArg :pt)
+}
+# reportPositionalNotAllowed -- a call to a function whose parameters are all
+# named cannot pass one positionally; say so at the argument.
+reportPositionalNotAllowed: function {
+    st: zenv.ZSymbolTable
+    funcId: ztypes.tid
+    arg: zast.NamedOperationData.view
+} is {
+    if (st.typing.declMemberCount ownerTid: funcId) == 0 then {
+        if (st.reg.typetypeOf typeId: funcId) == ztypes.ztypetype.functionType then {
+            tmm: "too many arguments: function takes no parameters".string
+            (addError
+                :st
+                nodeid: arg.nodeid
+                lineno: arg.lineno
+                colno: arg.colno
+                e: zast.err.callError
+                msg: tmm
+            )
+        }
+    }
+}
+
+
+checkTypedCallArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: zast.CallData.view
+    effId: ztypes.tid
+    funcId: ztypes.tid
+    isCtor: bool
+    reportUnknown: bool
+    recvImplicit: bool
+    argIdx: u64
+    boundArgIds: (ListVal u64)
+    vt: ztypes.tid
+    lockRootIn: zast.nameid
+    arg: zast.NamedOperationData.view
+} out zast.nameid is {
+    lockRoot: lockRootIn
+    if vt.isZero then return lockRoot
+    pn: zast.nameTextCopy :ast ref: arg.name
+    (checkNamedArgParam
+        :st
+        :ast
+        :effId
+        pn: pn.stringview
+        :vt
+        :arg
+    )
+    if reportUnknown when (isCtor) == false when pn.length == 0 when funcId > 0 then {
+        reportPositionalNotAllowed :st :funcId :arg
+    }
+    wasPos: false
+    if pn.length == 0 then {
+        wasPos = true
+        pp: (positionalParamName
+            :ast
+            :st
+            funcId: effId
+            idx: argIdx
+            skipRecv: recvImplicit
+        )
+        pn = pp
+    }
+    (coerceArgToParam
+        :st
+        :ast
+        :effId
+        :vt
+        pn: pn.stringview
+        :boundArgIds
+        :reportUnknown
+        :wasPos
+        :arg
+    )
+    aow: argOwnershipOf :st :ast :funcId :isCtor pn: pn.stringview :vt
+    isTake: aow.isTake
+    isLockish: aow.isLockish
+    isDeclLock: aow.isDeclLock
+    isViewArg: aow.isViewArg
+    pt: aow.pt
+    dispHit: false
+    if isTake then dispHit = true
+    if isLockish then dispHit = true
+    if dispHit when (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64)) then {
+        dispVal: ztypes.zparamownership.borrowMode
+        if isTake then dispVal = ztypes.zparamownership.takeMode
+        dispNid: innermostNodeId :ast n: (ast.nodes.get i: arg.operation.u64)
+        if dispNid > 0 then {
+            st.typing.argDisposition.set key: dispNid.u64 value: dispVal
+        }
+    }
+    lockRoot = (hoistAndLockArg
+        :st
+        :ast
+        :call
+        :vt
+        :pt
+        :isTake
+        :isLockish
+        :isDeclLock
+        :isViewArg
+        lockRootIn: lockRoot
+        :arg
+    )
+    return lockRoot
+}
+# ctorEffectiveTid -- for a constructor call, the type whose FIELDS are the
+# parameter list: the type being built, reached through whatever shape the
+# callable took. The function's own id for anything else.
+ctorEffectiveTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: zast.CallData.view
+    funcId: ztypes.tid
+} out ztypes.tid is {
+    effId: funcId
+    isMetaC: false
+    {
+        mcbC: metaCreateBaseId :ast n: (ast.nodes.get i: call.callable.u64)
+        match (
+            mcbC
+        ) case some then {
+            isMetaC = true
+        } case none then null
+    }
+    if (isMetaC) == false then {
+        (forceMemberOf
+            :st
+            frame: st.curFrame
+
+            :ast
+            parentTypeId: funcId
+            nameId: zast.wkCreate
+        )
+        crEff: (optU64Or
+            o: (st.typing.declChildOfId parentTypeId: funcId nameId: zast.wkCreate)
+            d: 0
+        )
+        if crEff > 0 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: crEff.u64)) == ztypes.ztypetype.functionType then effId = ztypes.tid.create from: crEff.u64
+    }
+    return effId
+}
+# ctorArgTakesFnRef -- a FUNCTION-typed field takes a method REFERENCE, so its
+# constructor argument walks without the value-position auto-call coercion.
+ctorArgTakesFnRef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    effId: ztypes.tid
+    arg: zast.NamedOperationData.view
+} out bool is {
+    useNC: false
+    pn0: zast.nameTextAt :ast ref: arg.name
+    if pn0.length > 0 then {
+        fco: (st.typing.declChildOf
+            pool: ast.names
+            parentTypeId: effId
+            name: pn0.stringview
+        )
+        fcid: optU64Or o: fco d: 0
+        if fcid > 0 then {
+            if (st.reg.typetypeOf typeId: (ztypes.tid.create from: fcid.u64)) == ztypes.ztypetype.functionType then {
+                useNC = true
+            }
+        }
+    }
+    return useNC
+}
+
+# walkOneCallArg -- type one argument of a call and bind it to its parameter.
+# Answers the lock root, which the call reports as a whole.
+walkOneCallArg: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: zast.CallData.view
+    effId: ztypes.tid
+    funcId: ztypes.tid
+    isCtor: bool
+    reportUnknown: bool
+    recvImplicit: bool
+    argIdx: u64
+    boundArgIds: (ListVal u64)
+    lockRootIn: zast.nameid
+    argId: u32
+} out zast.nameid is {
+    lockRoot: lockRootIn
+    arg: ast.nodes.get i: argId.u64
+    match (
+        arg
+    ) case namedoperation then {
+        # a FUNCTION-typed field takes a method REFERENCE: its ctor
+        # argument walks without the value-position auto-call coercion.
+        useNC: false
+        if isCtor then useNC = (ctorArgTakesFnRef :st :ast :effId :arg)
+        vt: ztypes.tid
+        errV: st.typing.errors.length
+        if useNC then {
+            argOpNode: ast.nodes.get i: arg.operation.u64
+            vt = ztypes.tid.create from: (valueNoCoerce :st :unitDecl :ast n: argOpNode)
+        } else {
+            argOpNode: ast.nodes.get i: arg.operation.u64
+            vt = checkValue :st :unitDecl :ast node: argOpNode
+        }
+        if vt.u64 == 0 when st.typing.errors.length == errV then {
+            (reportUnresolvedValue
+                :st
+                :unitDecl
+                :ast
+                vnode: (ast.nodes.get i: arg.operation.u64)
+            )
+        }
+        # A value that did not type must not take its LABEL checks down
+        # with it: those answer from the parameter list alone. The block
+        # below is gated on the value's type only because the ownership
+        # and lock work there needs it, so the label-shaped checks run
+        # here for the arguments it would otherwise skip entirely.
+        if vt.u64 == 0 then {
+            (checkUntypedArgLabel
+                :st
+                :ast
+                :effId
+                :funcId
+                :isCtor
+                :reportUnknown
+                :argIdx
+                :boundArgIds
+                :recvImplicit
+                :arg
+            )
+        }
+        lockRoot = (checkTypedCallArg
+            :st
+            :ast
+            :call
+            :effId
+            :funcId
+            :isCtor
+            :reportUnknown
+            :recvImplicit
+            :argIdx
+            :boundArgIds
+            :vt
+            lockRootIn: lockRoot
+            :arg
+        )
+    } else null
+    return lockRoot
+}
 
 # hoist and typecheck each argument of a call.
 # walkCallArgsHoist -- the user-call argument walk: type each argument, then
@@ -23474,610 +24387,26 @@ walkCallArgsHoist: function {
     argIdx: u64
     boundArgIds: (ListVal u64)
     effId: funcId
-    if isCtor then {
-        isMetaC: false
-        {
-            mcbC: metaCreateBaseId :ast n: (ast.nodes.get i: call.callable.u64)
-            match (
-                mcbC
-            ) case some then {
-                isMetaC = true
-            } case none then null
-        }
-        if (isMetaC) == false then {
-            (forceMemberOf
-                :st
-                frame: st.curFrame
-
-                :ast
-                parentTypeId: funcId
-                nameId: zast.wkCreate
-            )
-            crEff: (optU64Or
-                o: (st.typing.declChildOfId parentTypeId: funcId nameId: zast.wkCreate)
-                d: 0
-            )
-            if crEff > 0 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: crEff.u64)) == ztypes.ztypetype.functionType then effId = ztypes.tid.create from: crEff.u64
-        }
-    }
+    if isCtor then effId = (ctorEffectiveTid :st :ast :call :funcId)
     forceAllMembers :st frame: st.curFrame :ast tid: effId
     aiter: call.arguments.iterate
     for argId: aiter loop {
-        arg: ast.nodes.get i: argId.u64
-        match (
-            arg
-        ) case namedoperation then {
-            # a FUNCTION-typed field takes a method REFERENCE: its ctor
-            # argument walks without the value-position auto-call coercion.
-            useNC: false
-            if isCtor then {
-                pn0: zast.nameTextAt :ast ref: arg.name
-                if pn0.length > 0 then {
-                    fco: (st.typing.declChildOf
-                        pool: ast.names
-                        parentTypeId: effId
-                        name: pn0.stringview
-                    )
-                    fcid: optU64Or o: fco d: 0
-                    if fcid > 0 then {
-                        if (st.reg.typetypeOf typeId: (ztypes.tid.create from: fcid.u64)) == ztypes.ztypetype.functionType then {
-                            useNC = true
-                        }
-                    }
-                }
-            }
-            vt: ztypes.tid
-            errV: st.typing.errors.length
-            if useNC then {
-                argOpNode: ast.nodes.get i: arg.operation.u64
-                vt = ztypes.tid.create from: (valueNoCoerce :st :unitDecl :ast n: argOpNode)
-            } else {
-                argOpNode: ast.nodes.get i: arg.operation.u64
-                vt = checkValue :st :unitDecl :ast node: argOpNode
-            }
-            if vt.u64 == 0 when st.typing.errors.length == errV then {
-                (reportUnresolvedValue
-                    :st
-                    :unitDecl
-                    :ast
-                    vnode: (ast.nodes.get i: arg.operation.u64)
-                )
-            }
-            # A value that did not type must not take its LABEL checks down
-            # with it: those answer from the parameter list alone. The block
-            # below is gated on the value's type only because the ownership
-            # and lock work there needs it, so the label-shaped checks run
-            # here for the arguments it would otherwise skip entirely.
-            if vt.u64 == 0 then {
-                pnU: zast.nameTextCopy :ast ref: arg.name
-                if pnU.length > 0 when effId > 0 then {
-                    if (st.typing.declMemberCount ownerTid: effId) > 0 then {
-                        pcU: (optU64Or
-                            o: (st.typing.declChildOf
-                                pool: ast.names
-                                parentTypeId: effId
-                                name: pnU.stringview
-                            )
-                            d: 0
-                        )
-                        if pcU == 0 then {
-                            mU: "unknown argument '\{pnU}'"
-                            sugU: (suggestSimilar
-                                :ast
-                                :st
-                                parentTypeId: effId
-                                name: pnU.stringview
-                            )
-                            hU: String
-                            if sugU.length > 0 then {
-                                hhU: "did you mean '\{sugU}'?"
-                                hU = hhU
-                            }
-                            enU9b: String
-                            (addErrorH
-                                :st
-                                nodeid: arg.nodeid
-                                lineno: arg.lineno
-                                colno: arg.colno
-                                e: zast.err.callError
-                                msg: mU
-                                note: enU9b
-                                hint: hU
-                                width: pnU.length.u32.orPanic
-                            )
-                        }
-                    }
-                }
-                if reportUnknown when (isCtor) == false when pnU.length == 0 when funcId > 0 then {
-                    if (st.typing.declMemberCount ownerTid: funcId) == 0 then {
-                        if (st.reg.typetypeOf typeId: funcId) == ztypes.ztypetype.functionType then {
-                            tmU: "too many arguments: function takes no parameters".string
-                            (addError
-                                :st
-                                nodeid: arg.nodeid
-                                lineno: arg.lineno
-                                colno: arg.colno
-                                e: zast.err.callError
-                                msg: tmU
-                            )
-                        }
-                    }
-                }
-                if pnU.length == 0 then {
-                    pnU = (positionalParamName
-                        :ast
-                        :st
-                        funcId: effId
-                        idx: argIdx
-                        skipRecv: recvImplicit
-                    )
-                }
-                if effId > 0 when pnU.length > 0 then {
-                    dcnU: (zast.poolFind pool: ast.names text: pnU.stringview)
-                    dupU: false
-                    with bItU: boundArgIds.iterate do for bIdU: bItU loop {
-                        if bIdU == dcnU.u64 then dupU = true
-                    }
-                    if dupU when reportUnknown then {
-                        dmU: "argument '\{pnU}' specified more than once"
-                        (addError
-                            :st
-                            nodeid: arg.nodeid
-                            lineno: arg.lineno
-                            colno: arg.colno
-                            e: zast.err.callError
-                            msg: dmU
-                        )
-                    } else {
-                        boundArgIds.append dcnU.u64
-                    }
-                }
-            }
-            if vt > 0 then {
-                pn: zast.nameTextCopy :ast ref: arg.name
-                if pn.length > 0 when effId > 0 then {
-                    if (st.typing.declMemberCount ownerTid: effId) > 0 then {
-                        pco: (st.typing.declChildOf
-                            pool: ast.names
-                            parentTypeId: effId
-                            name: pn.stringview
-                        )
-                        pcidX: optU64Or o: pco d: 0
-                        if pcidX == 0 then {
-                            m2: "unknown argument '\{pn}'"
-                            anid: arg.nodeid
-                            anln: arg.lineno
-                            ancl: arg.colno
-                            sug2: (suggestSimilar
-                                :ast
-                                :st
-                                parentTypeId: (ztypes.tid.create from: effId.u64)
-                                name: pn.stringview
-                            )
-                            h2: String
-                            if sug2.length > 0 then {
-                                hh2: "did you mean '\{sug2}'?"
-                                h2 = hh2
-                            }
-                            en2: String
-                            (addErrorH
-                                :st
-                                nodeid: anid
-                                lineno: anln
-                                colno: ancl
-                                e: zast.err.callError
-                                msg: m2
-                                note: en2
-                                hint: h2
-                                width: pn.length.u32.orPanic
-                            )
-                        } else {
-                            ptid: pcidX
-                            if ptid > 0 when vt > 0 then {
-                                if (typesCompatible
-                                    :ast
-                                    :st
-                                    a: vt
-                                    b: (ztypes.tid.create from: ptid.u64)
-                                ) == false then {
-                                    skipMM: false
-                                    if (isNumericTid
-                                        :st
-                                        frame: st.curFrame
-                                        :ast
-
-                                        tid: (ztypes.tid.create from: vt.u64)
-                                    ) when (isNumericTid
-                                        :st
-                                        frame: st.curFrame
-                                        :ast
-
-                                        tid: (ztypes.tid.create from: ptid.u64)
-                                    ) then skipMM = true
-                                    ptt: st.reg.typetypeOf typeId: (ztypes.tid.create from: ptid.u64)
-                                    if ptt == ztypes.ztypetype.protocolType then skipMM = true
-                                    if ptt == ztypes.ztypetype.facetType then skipMM = true
-                                    if ptt == ztypes.ztypetype.genericParam then skipMM = true
-                                    if ptt == ztypes.ztypetype.functionType then skipMM = true
-                                    if (skipMM) == false then {
-                                        en7: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
-                                        an7: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
-                                        emit7: true
-                                        if an7.length == 0 then {
-                                            # unresolved got-side: suppress the knock-on
-                                            # when a prior error explains it, else name it
-                                            if st.typing.errors.length > 0 then emit7 = false
-                                            an7 = "an unresolved value".string
-                                        }
-                                        # a literal got-side would have COERCED had the
-                                        # expected type resolved, so its mismatch is a
-                                        # knock-on whenever an earlier error explains it
-                                        if (isLiteralTypeId
-                                            :st
-                                            tid: (ztypes.tid.create from: vt.u64)
-                                        ) then {
-                                            if st.typing.errors.length > 0 then emit7 = false
-                                        }
-                                        if emit7 then {
-                                            mm7: "argument '\{pn}' type mismatch: expected \{en7}, got \{an7}"
-                                            en7b: String
-                                            eh7: String
-                                            (addErrorH
-                                                :st
-                                                nodeid: arg.nodeid
-                                                lineno: arg.lineno
-                                                colno: arg.colno
-                                                e: zast.err.callError
-                                                msg: mm7
-                                                note: en7b
-                                                hint: eh7
-                                                width: pn.length.u32.orPanic
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if reportUnknown when (isCtor) == false when pn.length == 0 when funcId > 0 then {
-                    if (st.typing.declMemberCount ownerTid: funcId) == 0 then {
-                        if (st.reg.typetypeOf typeId: funcId) == ztypes.ztypetype.functionType then {
-                            tmm: "too many arguments: function takes no parameters".string
-                            (addError
-                                :st
-                                nodeid: arg.nodeid
-                                lineno: arg.lineno
-                                colno: arg.colno
-                                e: zast.err.callError
-                                msg: tmm
-                            )
-                        }
-                    }
-                }
-                wasPos: false
-                if pn.length == 0 then {
-                    wasPos = true
-                    pp: (positionalParamName
-                        :ast
-                        :st
-                        funcId: effId
-                        idx: argIdx
-                        skipRecv: recvImplicit
-                    )
-                    pn = pp
-                }
-                if effId > 0 when pn.length > 0 then {
-                    # the parameter's pool id is identity enough: effId is
-                    # fixed across this call's argument walk, so two args
-                    # collide exactly when they name the same parameter
-                    dcnid: (zast.poolFind pool: ast.names text: pn.stringview)
-                    dupSeen: false
-                    with bIt: boundArgIds.iterate do for bId: bIt loop {
-                        if bId == dcnid.u64 then dupSeen = true
-                    }
-                    if dupSeen when reportUnknown then {
-                        dmm: "argument '\{pn}' specified more than once"
-                        (addError
-                            :st
-                            nodeid: arg.nodeid
-                            lineno: arg.lineno
-                            colno: arg.colno
-                            e: zast.err.callError
-                            msg: dmm
-                        )
-                    } else {
-                        boundArgIds.append dcnid.u64
-                    }
-                    if wasPos then {
-                        cpidP: (optU64Or
-                            o: (st.typing.declChildOf
-                                pool: ast.names
-                                parentTypeId: effId
-                                name: pn.stringview
-                            )
-                            d: 0
-                        )
-                        if cpidP > 0 then {
-                            ptidP: cpidP
-                            if ptidP > 0 when vt > 0 then {
-                                if (typesCompatible
-                                    :ast
-                                    :st
-                                    a: vt
-                                    b: (ztypes.tid.create from: ptidP.u64)
-                                ) == false then {
-                                    skipP: false
-                                    if (isNumericTid
-                                        :st
-                                        frame: st.curFrame
-                                        :ast
-
-                                        tid: (ztypes.tid.create from: vt.u64)
-                                    ) when (isNumericTid
-                                        :st
-                                        frame: st.curFrame
-                                        :ast
-
-                                        tid: (ztypes.tid.create from: ptidP.u64)
-                                    ) then skipP = true
-                                    pttP: st.reg.typetypeOf typeId: (ztypes.tid.create from: ptidP.u64)
-                                    if pttP == ztypes.ztypetype.protocolType then skipP = true
-                                    if pttP == ztypes.ztypetype.facetType then skipP = true
-                                    if pttP == ztypes.ztypetype.genericParam then skipP = true
-                                    if pttP == ztypes.ztypetype.functionType then skipP = true
-                                    if (skipP) == false then {
-                                        enP: (st.reg.nameOf tid: (ztypes.tid.create from: ptidP.u64))
-                                        anP: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
-                                        emitP: true
-                                        if anP.length == 0 then {
-                                            # unresolved got-side: suppress the knock-on
-                                            # when a prior error explains it, else name it
-                                            if st.typing.errors.length > 0 then emitP = false
-                                            anP = "an unresolved value".string
-                                        }
-                                        if emitP then {
-                                            tmmP: "argument type mismatch: expected \{enP}, got \{anP}"
-                                            enP9b: String
-                                            ehP: String
-                                            (addErrorH
-                                                :st
-                                                nodeid: arg.nodeid
-                                                lineno: arg.lineno
-                                                colno: arg.colno
-                                                e: zast.err.callError
-                                                msg: tmmP
-                                                note: enP9b
-                                                hint: ehP
-                                                width: pn.length.u32.orPanic
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                isTake: false
-                isLockish: false
-                isDeclLock: false
-                isViewArg: false
-                pt: u64
-                if funcId > 0 when pn.length > 0 then {
-                    if (isLiteralTypeId :st tid: (ztypes.tid.create from: vt.u64)) then {
-                        po: (st.typing.declChildOf
-                            pool: ast.names
-                            parentTypeId: funcId
-                            name: pn.stringview
-                        )
-                        match (
-                            po
-                        ) case some then {
-                            pt = po
-                        } case none then null
-                    }
-                    oo: (st.typing.declOwnershipOfId
-                        parentTypeId: funcId
-                        nameId: (zast.poolFind pool: ast.names text: pn.stringview)
-                    )
-                    match (
-                        oo
-                    ) case some then {
-                        if oo == ztypes.zparamownership.takeMode then isTake = true
-                        if oo == ztypes.zparamownership.takexMode then isTake = true
-                        if oo == ztypes.zparamownership.borrowMode then isLockish = true
-                        if oo == ztypes.zparamownership.viewMode then {
-                            isLockish = true
-                            isViewArg = true
-                        }
-                    } case none then {
-                        # Unrecorded ownership: the effective default is
-                        # borrow (ctor field params keep their recorded flow).
-                        if (isCtor) == false then isLockish = true
-                    }
-                if funcId > 0 when pn.length == 0 when isCtor then {
-                    # a POSITIONAL constructor argument (a tagged-sum arm
-                    # payload) transfers ownership exactly like its named
-                    # form: the arm stores it owned
-                    if (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64)) then isTake = true
-                }
-                    if isCtor then {
-                        # Field ownership flows to the constructor param:
-                        # a `.lock` field locks the caller's argument, any
-                        # other reftype field takes it.
-                        if (st.typing.declIsLockField
-                            pool: ast.names
-                            parentTypeId: funcId
-                            name: pn.stringview
-                        ) then {
-                            isLockish = true
-                        } else {
-                            if (typeIsReftype
-                                :st
-                                tid: (ztypes.tid.create from: vt.u64)
-                            ) then isTake = true
-                        }
-                    }
-                }
-                dispHit: false
-                if isTake then dispHit = true
-                if isLockish then dispHit = true
-                if dispHit when (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64)) then {
-                    dispVal: ztypes.zparamownership.borrowMode
-                    if isTake then dispVal = ztypes.zparamownership.takeMode
-                    dispNid: innermostNodeId :ast n: (ast.nodes.get i: arg.operation.u64)
-                    if dispNid > 0 then {
-                        st.typing.argDisposition.set key: dispNid.u64 value: dispVal
-                    }
-                }
-                if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation.u64)) then {
-                    # A trivial literal argument coerces in place at the
-                    # parameter boundary (no hoist: restamp its bare node).
-                    if pt > 0 then {
-                        iid2: innermostNodeId :ast n: (ast.nodes.get i: arg.operation.u64)
-                        if iid2 > 0 then {
-                            seta2: pt
-                            stampGate :st nid: iid2.u64 tid: (ztypes.tid.create from: seta2.u64)
-                        }
-                    }
-                    # A bare-name reftype argument: a take parameter consumes
-                    # it (the overlay propagates out on pop); a lock/borrow
-                    # parameter locks it for the call. A `:name` shorthand
-                    # argument is the same bare local read, so a take
-                    # parameter consumes it identically; at lock/borrow
-                    # parameters the shorthand takes no lock (see
-                    # docs/typechecker.pdoc, `:name` at the argument site).
-                    bn: bareAtomName :ast n: (ast.nodes.get i: arg.operation.u64)
-                    if bn.length == 0 when isTake then {
-                        bn = atomName :ast n: (ast.nodes.get i: arg.operation.u64)
-                    }
-                    if bn.length > 0 when (typeIsReftype
-                        :st
-                        tid: (ztypes.tid.create from: vt.u64)
-                    ) then {
-                        bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringview)
-                        match (
-                            bvo
-                        ) case some then {
-                            if isTake then {
-                                (consumeBareArgOwnership
-                                    :st
-                                    :ast
-                                    name: bn.stringview
-                                    vid: bvo
-                                    nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
-                                    lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
-                                    colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
-                                )
-                            } else {
-                                if isLockish then {
-                                    (lockCallArg
-                                        :st
-                                        pool: ast.names
-                                        nameId: (nameIdOf :ast name: bn.stringview)
-                                        callId: call.nodeid.u64
-                                        shared: isViewArg
-                                        nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
-                                        lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
-                                        colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
-                                    )
-                                    if lockRoot.isZero then lockRoot = (nameIdOf
-                                        :ast
-                                        name: bn.stringview
-                                    )
-                                    if isDeclLock then st.typing.lastLockParamRoot = (nameIdOf
-                                        :ast
-                                        name: bn.stringview
-                                    )
-                                }
-                            }
-                        } case none then null
-                    }
-                } else {
-                    # A construction or take parameter consumes the hoisted
-                    # temp inside the call scope; a lock/borrow parameter
-                    # locks it there.
-                    consumes: false
-                    if isTake then consumes = true
-                    # a `.lock`-suffixed argument at a lock parameter locks
-                    # its base and hoists a BORROWED view of it (the synth
-                    # temp's origin is the base; the base's lock row lands
-                    # in the call scope via the borrow-lock install).
-                    if isLockish then {
-                        lsb: lockSuffixBase :ast n: (ast.nodes.get i: arg.operation.u64)
-                        if lsb.length > 0 then {
-                            drainPendingBorrow :st
-                            st.typing.pendingBorrowPath.append (nameIdOf :ast name: lsb.stringview)
-                            if lockRoot.isZero then lockRoot = nameIdOf :ast name: lsb.stringview
-                            if isDeclLock then st.typing.lastLockParamRoot = (nameIdOf
-                                :ast
-                                name: lsb.stringview
-                            )
-                        }
-                    }
-                    # a plain field-path argument behaves as its user-
-                    # written hoist would: seed the borrow side channel with
-                    # the real source tuple so the synth temp installs the
-                    # spec's SHARED-prefix + EXCLUSIVE-leaf locks on it
-                    if isLockish when (typeIsReftype
-                        :st
-                        tid: (ztypes.tid.create from: vt.u64)
-                    ) then {
-                        an: ast.nodes.get i: arg.operation.u64
-                        src: (ListVal zast.nameid)
-                        appendValueTuple :ast n: an dst: src
-                        if src.length > 0 then {
-                            rt: src.get i: 0
-                            # residue left by an EARLIER argument of this call
-                            # must not stand in for THIS argument's source:
-                            # keep a pending path only when it is rooted at
-                            # this argument's own base
-                            if st.typing.pendingBorrowPath.length > 0 then {
-                                if (st.typing.pendingBorrowPath.get i: 0) != rt then drainPendingBorrow :st
-                            }
-                            if st.typing.pendingBorrowPath.length == 0 then {
-                                rvo: st.lookupVarId nameId: rt
-                                match (
-                                    rvo
-                                ) case some then {
-                                    drainPendingBorrow :st
-                                    with sit: src.iterate do for se: sit loop st.typing.pendingBorrowPath.append se
-                                } case none then null
-                            }
-                        }
-                    }
-                    hadPending: false
-                    if st.typing.pendingBorrowPath.length > 0 then hadPending = true
-                    tnm: (hoistArg
-                        :ast
-                        :st
-                        argNode: (ast.nodes.get i: arg.operation.u64)
-                        argType: vt
-                        paramType: pt
-                        :consumes
-                        viewParam: isViewArg
-                    )
-                    if (hadPending) == false then {
-                        if isLockish when (typeIsReftype
-                            :st
-                            tid: (ztypes.tid.create from: vt.u64)
-                        ) then {
-                            (lockCallArg
-                                :st
-                                pool: ast.names
-                                nameId: (nameIdOf :ast name: tnm.stringview)
-                                callId: call.nodeid.u64
-                                shared: isViewArg
-                                nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
-                                lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
-                                colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
-                            )
-                        }
-                    }
-                }
-            }
-            argIdx = argIdx + 1
-        } else null
+        lockRoot = (walkOneCallArg
+            :st
+            :unitDecl
+            :ast
+            :call
+            :effId
+            :funcId
+            :isCtor
+            :reportUnknown
+            :recvImplicit
+            :argIdx
+            :boundArgIds
+            lockRootIn: lockRoot
+            :argId
+        )
+        argIdx = argIdx + 1
     }
     return lockRoot
 }
