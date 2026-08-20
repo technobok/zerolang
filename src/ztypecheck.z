@@ -14656,302 +14656,323 @@ templateTypetypeOf: function {
     }
     return ztypes.ztypetype.recordType
 }
-
-# mintMono -- populate one generic-instance type: the template's typetype and
-# valtype flag, genericOriginId linking back, and the instance's children -- the template's children with generic-param targets
-# substituted (matched by arg name; fallbackArg substitutes every child, the
-# single-type-param call-site inference) -- plus the synthesized members: a
-# per-instance tag data type (variants and unions) and the autogen ==/!=
-# functions (variants). Childless templates (the collection classes) produce
-# no children; their cloned method children land with the class-mono slice.
-mintMono: function {
+# cloneGenericMemberInto -- a generic FUNCTION child of a template is cloned per
+# instance, with its own parameters and return substituted. True when the clone
+# landed, so the caller does not also write the member's template type.
+cloneGenericMemberInto: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    frame: ztypes.declid
-    name: StringView
+    rf: ztypes.declid
     templateId: ztypes.tid
+    mid: u64
+    chName: StringView
+    chId: u64
+    fallbackArg: u64
+    listRefTid: ztypes.tid
     subs: (IdMapV zast.nameid value: u64)
     idSubs: (IdMapV u64 value: u64)
-    fallbackArg: u64
-    monoTid: u64
-} is {
-    # a specialisation's members resolve in the TEMPLATE's frame, with the
-    # argument substitution -- lexical scoping; the instantiating unit is
-    # not where the template's names live
-    rf: frame
-    {
-        td: declOfTypeId :st tid: templateId
-        if (td.isZero) == false then rf = td
-    }
-    # the template's names -- a child's type, a constraint's type -- resolve
-    # in the TEMPLATE's unit (the frame is the template), not the
-    # instantiating unit's, which may shadow them
-    tplUnit: unitDeclOfTid :st tid: templateId
-    if tplUnit.isZero then tplUnit = unitDecl
-    tt: ztypes.ztypetype.recordType
-    vto: (optionval.none bool)
-    tplNative: false
-    if templateId < st.reg.typeById.length then {
-        tpl: st.reg.typeById.get i: templateId
-        tt = tpl.typetype
-        vto = tpl.isValtype
-        tplNative = tpl.isNative
-    }
-    mid: monoTid
-    match (
-        vto
-    ) case some then {
-        st.reg.setValtype typeId: (ztypes.tid.create from: mid.u64) value: vto
-    } case none then null
-    st.reg.setGenericOrigin typeId: (ztypes.tid.create from: mid.u64) value: templateId
-    declMonoType :st monoTid: mid :templateId
-    st.reg.setNative typeId: (ztypes.tid.create from: mid.u64) value: tplNative
-    if tt == ztypes.ztypetype.classType then st.reg.setIsHeapAllocated typeId: (ztypes.tid.create from: mid.u64)
-    # A heap-owning generic instance carries a destructor (so a holder/local
-    # frees it; the emitter builds the cname). Collections own native heap;
-    # Option/Result own a heap box. A user generic whose template already has a
-    # destructor inherits one. Map/Set own native heap too (freed via a `&`-less
-    # heap-pointer destroy), and IdMap/IdSet own their two arrays but not their
-    # header, so they free like a List does. Views (ListView/OptionView) own no
-    # heap -- excluded.
-    needsDtorM: false
-    if templateId == (builtinTidT :st frame: rf :ast base: "ListRef") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "ListVal") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "Option") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "Result") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "MapRR") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "MapRV") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "MapVR") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "MapVV") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "SetRef") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "SetVal") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "IdMapR") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "IdMapV") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "IdSet") then needsDtorM = true
-    if needsDtorM then {
-        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: mid.u64)
-    }
-    # An elided leading type argument stages under the empty name; rebind it
-    # to the template's primary generic parameter so the substituted children
-    # resolve (`(List String)` == `(List of: String)`).
-    {
-        emptyKey: zast.nameid
-        ev: subs.get key: emptyKey
-        match (
-            ev
-        ) case some then {
-            prnm: firstGenericParamId :st :templateId
-            if (prnm.isZero) == false then subs.set key: prnm value: ev
-        } case none then null
-    }
-    cNames: (List String)
-    cIds: (ListVal u64)
-    forceAllMembers :st frame: rf :ast tid: templateId
-    {
-        mmNms: (ListVal u64)
-        st.typing.declMemberList ownerTid: templateId names: mmNms tids: cIds
-        mmq: u64
-        mmn: mmNms.length
-        for mmq < mmn loop {
-            cnB1: ast.names.texts.get i: ((mmNms.get i: mmq)).u64
-            cn: cnB1.copy
-            cNames.append cn
-            mmq = mmq + 1
-        }
-    }
-    listRefTid: builtinTidT :st frame: rf :ast base: "ListRef"
-    monoNeedsDtor: false
-    ci: u64
-    cn3: cNames.length
-    for ci < cn3 loop {
-        chName: cNames.get i: ci
-        chId: cIds.get i: ci
-        target: chId
-        ido: idSubs.get key: chId
-        match (
-            ido
-        ) case some then {
-            target = ido
-        } case none then {
-            rsp: respecialize :st frame: rf :ast :unitDecl specTid: chId :idSubs
-            if rsp > 0 then target = rsp
-        }
-        ctnT: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
-        ctn: nameIdOf :ast name: ctnT.stringview
-        if target == chId then target = optU64Or o: (subs.get key: ctn) d: target
-        # THE BOX RULE at instantiation: a union arm whose substituted type
-        # is a builtin Box mono collapses to the ELEMENT, exactly as a
-        # declared (Box T) arm does. Every union arm is a malloc'd cell on
-        # the void* data slot, so the collapse keeps construction, match
-        # narrowing, the destructor cast and the native io fragments'
-        # layout on the element -- a Box value IS the cell pointer.
-        if tt == ztypes.ztypetype.unionType then {
-            bxg5: ztypes.tid
-            {
-                bxo5: st.reg.genericOriginOf tid: (ztypes.tid.create from: target.u64)
-                if bxo5 > 0 then bxg5 = bxo5
-            }
-            # the builtin-Box discriminator mirrors checkBoxConstruction's
-            # call gate (name + classType + empty body); comparing by name
-            # avoids RESOLVING Box here, which would mint its tid earlier
-            # than before and renumber every later type id.
-            isBoxed: false
-            if bxg5 > 0 then {
-                bxn5: st.reg.nameOf tid: (ztypes.tid.create from: bxg5.u64)
-                if bxn5.stringview == "Box" then {
-                    if (st.reg.typetypeOf typeId: bxg5) == ztypes.ztypetype.classType then {
-                        if (st.typing.declMemberCount ownerTid: bxg5) == 0 then isBoxed = true
+} out bool is {
+    deep5: false
+    isSynth: false
+    if chName == "create" then isSynth = true
+    if chName == "borrow" then isSynth = true
+    if chName == "==" then isSynth = true
+    if chName == "!=" then isSynth = true
+    if isSynth == false then {
+        skip5: false
+        # List's contains/sort exist only for eligible element
+        # kinds (use-site parity with the materializer gate).
+        if templateId == listRefTid when listRefTid > 0 then {
+            csM5: false
+            if chName == "contains" then csM5 = true
+            if chName == "sort" then csM5 = true
+            if csM5 then {
+                elemTid: optU64Or o: (subs.get key: (nameIdOf :ast name: "of")) d: 0
+                if elemTid == 0 then elemTid = fallbackArg
+                ok5: false
+                if elemTid > 0 then {
+                    csel5: false
+                    if chName == "contains" then {
+                        csel5 = (isContainsEligibleTid
+                            :st
+                            frame: rf
+                            :ast
+
+                            tid: (ztypes.tid.create from: elemTid.u64)
+                        )
+                    } else {
+                        csel5 = (isSortEligibleTid
+                            :st
+                            frame: rf
+                            :ast
+
+                            tid: (ztypes.tid.create from: elemTid.u64)
+                        )
                     }
+                    if csel5 then ok5 = true
                 }
-            }
-            if isBoxed then {
-                if (st.reg.genericArgCount specId: (ztypes.tid.create from: target.u64)) == 1 then {
-                    target = (st.reg.genericArgAt
-                        specId: (ztypes.tid.create from: target.u64)
-                        ordinal: 0
-                    )
-                }
+                if (ok5) == false then skip5 = true
             }
         }
-        # Generic FUNCTION children are clone candidates: the elided-arg
-        # fallback must not swallow them (a method child's dotted name never
-        # resolves, so the lookup-miss leg would replace the method with the
-        # element type).
-        childIsGeneric: false
-        if (st.reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) == ztypes.ztypetype.functionType then {
-            childIsGeneric = st.reg.isGenericOf tid: (ztypes.tid.create from: chId.u64)
-        }
-        if fallbackArg > 0 when (ctnT.stringview == "null") == false when target == chId when (childIsGeneric) == false then {
-            cko: (walkLookupTyperef
+        if skip5 then {
+            deep5 = true
+        } else {
+            (cloneMethodInto
                 :st
                 frame: rf
                 :ast
 
-                unitDecl: tplUnit
-                base: ctnT.stringview
+                :unitDecl
+                specId: (ztypes.tid.create from: mid.u64)
+                tplClassId: templateId
+                m: chName
+                tplFnId: chId
+                :idSubs
             )
-            match (
-                cko
-            ) case some then null case none then {
-                target = fallbackArg
-            }
+            deep5 = true
         }
-        deep5: false
-        if target == chId when childIsGeneric then {
-            isSynth: false
-            if chName.stringview == "create" then isSynth = true
-            if chName.stringview == "borrow" then isSynth = true
-            if chName.stringview == "==" then isSynth = true
-            if chName.stringview == "!=" then isSynth = true
-            if isSynth == false then {
-                skip5: false
-                # List's contains/sort exist only for eligible element
-                # kinds (use-site parity with the materializer gate).
-                if templateId == listRefTid when listRefTid > 0 then {
-                    csM5: false
-                    if chName.stringview == "contains" then csM5 = true
-                    if chName.stringview == "sort" then csM5 = true
-                    if csM5 then {
-                        elemTid: optU64Or o: (subs.get key: (nameIdOf :ast name: "of")) d: 0
-                        if elemTid == 0 then elemTid = fallbackArg
-                        ok5: false
-                        if elemTid > 0 then {
-                            csel5: false
-                            if chName.stringview == "contains" then {
-                                csel5 = (isContainsEligibleTid
-                                    :st
-                                    frame: rf
-                                    :ast
-
-                                    tid: (ztypes.tid.create from: elemTid.u64)
-                                )
-                            } else {
-                                csel5 = (isSortEligibleTid
-                                    :st
-                                    frame: rf
-                                    :ast
-
-                                    tid: (ztypes.tid.create from: elemTid.u64)
-                                )
-                            }
-                            if csel5 then ok5 = true
-                        }
-                        if (ok5) == false then skip5 = true
-                    }
-                }
-                if skip5 then {
-                    deep5 = true
-                } else {
-                    (cloneMethodInto
-                        :st
-                        frame: rf
-                        :ast
-
-                        :unitDecl
-                        specId: (ztypes.tid.create from: mid.u64)
-                        tplClassId: templateId
-                        m: chName.stringview
-                        tplFnId: chId
-                        :idSubs
-                    )
-                    deep5 = true
-                }
-            }
-        }
-        if deep5 == false then {
-            (st.typing.setMemberType
-                parentTypeId: (ztypes.tid.create from: mid.u64)
-                nameId: (zast.poolFind pool: ast.names text: chName.stringview)
-                childTypeId: target
-            )
-        }
-        if (st.reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) != ztypes.ztypetype.functionType then {
-            # A marker belongs to the MEMBER, and every use site asks the
-            # INSTANCE type about it -- so it has to be copied onto the clone
-            # or it is enforced on the template alone, which nothing checks.
-            cho: (st.typing.declOwnershipOfId
-                parentTypeId: templateId
-                nameId: (zast.poolFind pool: ast.names text: chName.stringview)
-            )
-            match (
-                cho
-            ) case some then {
-                (st.typing.setChildOwnership
-                    pool: ast.names
-                    parentTypeId: (ztypes.tid.create from: mid.u64)
-                    name: chName.stringview
-                    ownership: cho
-                )
-            } case none then null
-            if (st.typing.declIsLockField
-                pool: ast.names
-                parentTypeId: templateId
-                name: chName.stringview
-            ) then {
-                (st.typing.setChildLockField
-                    pool: ast.names
-                    parentTypeId: (ztypes.tid.create from: mid.u64)
-                    name: chName.stringview
-                )
-            } else {
-                if (st.reg.needsDestructor typeId: (ztypes.tid.create from: target.u64)) then monoNeedsDtor = true
-            }
-        }
-        ci = ci + 1
     }
-    # A user generic CLASS whose SUBSTITUTED fields are destructible carries
-    # an auto-destructor, exactly like its non-generic counterpart (the
-    # builtin-template list above cannot see through substitution; without
-    # this, `class { val: t }` with t=String leaks its payload).
-    if tt == ztypes.ztypetype.classType when monoNeedsDtor when (st.reg.needsDestructor typeId: (ztypes.tid.create from: mid.u64)) == false then {
-        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: mid.u64)
+    return deep5
+}
+# copyMemberMarkers -- a marker belongs to the MEMBER, and every use site asks
+# the INSTANCE about it, so ownership and lock-field marks are copied from the
+# template's member onto the mono's. True when the member's own type gives the
+# mono a destructor.
+copyMemberMarkers: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    mid: u64
+    templateId: ztypes.tid
+    chName: StringView
+    target: u64
+} out bool is {
+    monoNeedsDtor: false
+    # A marker belongs to the MEMBER, and every use site asks the
+    # INSTANCE type about it -- so it has to be copied onto the clone
+    # or it is enforced on the template alone, which nothing checks.
+    cho: (st.typing.declOwnershipOfId
+        parentTypeId: templateId
+        nameId: (zast.poolFind pool: ast.names text: chName)
+    )
+    match (
+        cho
+    ) case some then {
+        (st.typing.setChildOwnership
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: mid.u64)
+            name: chName
+            ownership: cho
+        )
+    } case none then null
+    if (st.typing.declIsLockField
+        pool: ast.names
+        parentTypeId: templateId
+        name: chName
+    ) then {
+        (st.typing.setChildLockField
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: mid.u64)
+            name: chName
+        )
+    } else {
+        if (st.reg.needsDestructor typeId: (ztypes.tid.create from: target.u64)) then monoNeedsDtor = true
     }
-    # RECORD instances: numeric-param fields synthesize from their declared
-    # constraint (size: u64.generic -> a u64 child) when no field references
-    # them; then the meta-create requalifies to the instance and ==/!=
-    # synthesize -- except str/array, whose branches own those members
-    # (their u64 `to` child comes from THIS synth; the branches add none).
+    return monoNeedsDtor
+}
+# collapseBoxArm -- THE BOX RULE at instantiation: a union arm whose substituted
+# type is a builtin Box mono collapses to the ELEMENT, exactly as a declared
+# `(Box T)` arm does. Every union arm is a malloc'd cell on the void* data
+# slot, so the collapse keeps construction, match narrowing, the destructor
+# cast and the native io fragments' layout on the element -- a Box value IS
+# the cell pointer. Answers the type the arm should carry.
+collapseBoxArm: function {
+    st: zenv.ZSymbolTable
+    tt: ztypes.ztypetype
+    argTid: u64
+} out u64 is {
+    target: argTid
+    if tt == ztypes.ztypetype.unionType then {
+        bxg5: ztypes.tid
+        {
+            bxo5: st.reg.genericOriginOf tid: (ztypes.tid.create from: target.u64)
+            if bxo5 > 0 then bxg5 = bxo5
+        }
+        # the builtin-Box discriminator mirrors checkBoxConstruction's
+        # call gate (name + classType + empty body); comparing by name
+        # avoids RESOLVING Box here, which would mint its tid earlier
+        # than before and renumber every later type id.
+        isBoxed: false
+        if bxg5 > 0 then {
+            bxn5: st.reg.nameOf tid: (ztypes.tid.create from: bxg5.u64)
+            if bxn5.stringview == "Box" then {
+                if (st.reg.typetypeOf typeId: bxg5) == ztypes.ztypetype.classType then {
+                    if (st.typing.declMemberCount ownerTid: bxg5) == 0 then isBoxed = true
+                }
+            }
+        }
+        if isBoxed then {
+            if (st.reg.genericArgCount specId: (ztypes.tid.create from: target.u64)) == 1 then {
+                target = (st.reg.genericArgAt
+                    specId: (ztypes.tid.create from: target.u64)
+                    ordinal: 0
+                )
+            }
+        }
+    }
+    return target
+}
+# elidedArgFallbackTid -- with the leading type argument elided, a member whose
+# own type still names the template parameter takes the single argument that
+# was given. Answers the type the member should carry.
+elidedArgFallbackTid: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    rf: ztypes.declid
+    tplUnit: ztypes.declid
+    fallbackArg: u64
+    ctnT: StringView
+    childIsGeneric: bool
+    chId: u64
+    argTid: u64
+} out u64 is {
+    target: argTid
+    if fallbackArg > 0 when (ctnT == "null") == false when target == chId when (childIsGeneric) == false then {
+        cko: (walkLookupTyperef
+            :st
+            frame: rf
+            :ast
+
+            unitDecl: tplUnit
+            base: ctnT
+        )
+        match (
+            cko
+        ) case some then null case none then {
+            target = fallbackArg
+        }
+    }
+    return target
+}
+# substitutedMemberTid -- the type a template member resolves to for this
+# instance: the id the argument map gives it, a respecialised nested generic,
+# or the substitution its own type name selects; the member's own type when
+# nothing substitutes.
+substitutedMemberTid: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    rf: ztypes.declid
+    chId: u64
+    subs: (IdMapV zast.nameid value: u64)
+    idSubs: (IdMapV u64 value: u64)
+} out u64 is {
+    target: chId
+    ido: idSubs.get key: chId
+    match (
+        ido
+    ) case some then {
+        target = ido
+    } case none then {
+        rsp: respecialize :st frame: rf :ast :unitDecl specTid: chId :idSubs
+        if rsp > 0 then target = rsp
+    }
+    ctnT: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
+    ctn: nameIdOf :ast name: ctnT.stringview
+    if target == chId then target = optU64Or o: (subs.get key: ctn) d: target
+    return target
+}
+
+# mintMonoMember -- give one member of a monomorphised type its substituted
+# type: the argument the template parameter resolved to, the mono of a nested
+# generic, or the member's own type when nothing substitutes. True when the
+# member's type gives the mono a destructor.
+mintMonoMember: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    rf: ztypes.declid
+    templateId: ztypes.tid
+    mid: u64
+    tt: ztypes.ztypetype
+    tplUnit: ztypes.declid
+    listRefTid: ztypes.tid
+    fallbackArg: u64
+    subs: (IdMapV zast.nameid value: u64)
+    idSubs: (IdMapV u64 value: u64)
+    chName: StringView
+    chId: u64
+} out bool is {
+    monoNeedsDtor: false
+    target: (substitutedMemberTid :ast :st :unitDecl :rf :chId :subs :idSubs)
+    ctnT: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
+    # THE BOX RULE at instantiation: a union arm whose substituted type
+    # is a builtin Box mono collapses to the ELEMENT, exactly as a
+    # declared (Box T) arm does. Every union arm is a malloc'd cell on
+    # the void* data slot, so the collapse keeps construction, match
+    # narrowing, the destructor cast and the native io fragments'
+    # layout on the element -- a Box value IS the cell pointer.
+    target = collapseBoxArm :st :tt argTid: target
+    # Generic FUNCTION children are clone candidates: the elided-arg
+    # fallback must not swallow them (a method child's dotted name never
+    # resolves, so the lookup-miss leg would replace the method with the
+    # element type).
+    childIsGeneric: false
+    if (st.reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) == ztypes.ztypetype.functionType then {
+        childIsGeneric = st.reg.isGenericOf tid: (ztypes.tid.create from: chId.u64)
+    }
+    target = (elidedArgFallbackTid
+        :ast
+        :st
+        :rf
+        :tplUnit
+        :fallbackArg
+        ctnT: ctnT.stringview
+        :childIsGeneric
+        :chId
+        argTid: target
+    )
+    deep5: false
+    if target == chId when childIsGeneric then {
+        if (cloneGenericMemberInto
+            :ast
+            :st
+            :unitDecl
+            :rf
+            :templateId
+            :mid
+            :chName
+            :chId
+            :fallbackArg
+            :listRefTid
+            :subs
+            :idSubs
+        ) then deep5 = true
+    }
+    if deep5 == false then {
+        (st.typing.setMemberType
+            parentTypeId: (ztypes.tid.create from: mid.u64)
+            nameId: (zast.poolFind pool: ast.names text: chName)
+            childTypeId: target
+        )
+    }
+    if (st.reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) != ztypes.ztypetype.functionType then {
+        if (copyMemberMarkers :ast :st :mid :templateId :chName :target) then monoNeedsDtor = true
+    }
+    return monoNeedsDtor
+}
+# mintMonoRecordShape -- give a monomorphised RECORD the shape its template
+# declares: the ordinal arms of a variant-like record, the tag width, and the
+# per-instance constructor the emitter fills.
+mintMonoRecordShape: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    rf: ztypes.declid
+    templateId: ztypes.tid
+    mid: u64
+    tt: ztypes.ztypetype
+    tplUnit: ztypes.declid
+} is {
     if tt == ztypes.ztypetype.recordType then {
         isSized: false
         if templateId == (builtinTidT :st frame: rf :ast base: "str") then isSized = true
@@ -15065,6 +15086,40 @@ mintMono: function {
             }
         }
     }
+}
+# templateNeedsMonoDtor -- whether a mono of this builtin template owns heap
+# its destructor must release. The list is the collection families that carry
+# one; a user template's answer comes from its substituted fields instead.
+templateNeedsMonoDtor: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    rf: ztypes.declid
+    templateId: ztypes.tid
+} out bool is {
+    needsDtorM: false
+    if templateId == (builtinTidT :st frame: rf :ast base: "ListRef") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "ListVal") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "Option") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "Result") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "MapRR") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "MapRV") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "MapVR") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "MapVV") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "SetRef") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "SetVal") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "IdMapR") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "IdMapV") then needsDtorM = true
+    if templateId == (builtinTidT :st frame: rf :ast base: "IdSet") then needsDtorM = true
+    return needsDtorM
+}
+# mintMonoTagShape -- give a monomorphised sum type its discriminator: the tag
+# width its template declares, and for a variant the ordinal each arm carries.
+mintMonoTagShape: function {
+    st: zenv.ZSymbolTable
+    mid: u64
+    tt: ztypes.ztypetype
+    name: StringView
+} is {
     wantTag: false
     if tt == ztypes.ztypetype.variantType then wantTag = true
     if tt == ztypes.ztypetype.unionType then wantTag = true
@@ -15106,6 +15161,167 @@ mintMono: function {
             childTypeId: neId
         )
     }
+}
+# mintMonoMembers -- give every member of a monomorphised type its substituted
+# type. True when any of them gives the mono a destructor.
+mintMonoMembers: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    rf: ztypes.declid
+    templateId: ztypes.tid
+    mid: u64
+    tt: ztypes.ztypetype
+    tplUnit: ztypes.declid
+    fallbackArg: u64
+    subs: (IdMapV zast.nameid value: u64)
+    idSubs: (IdMapV u64 value: u64)
+} out bool is {
+    cNames: (List String)
+    cIds: (ListVal u64)
+    forceAllMembers :st frame: rf :ast tid: templateId
+    {
+        mmNms: (ListVal u64)
+        st.typing.declMemberList ownerTid: templateId names: mmNms tids: cIds
+        mmq: u64
+        mmn: mmNms.length
+        for mmq < mmn loop {
+            cnB1: ast.names.texts.get i: ((mmNms.get i: mmq)).u64
+            cn: cnB1.copy
+            cNames.append cn
+            mmq = mmq + 1
+        }
+    }
+    listRefTid: builtinTidT :st frame: rf :ast base: "ListRef"
+    monoNeedsDtor: false
+    ci: u64
+    cn3: cNames.length
+    for ci < cn3 loop {
+        chNameC: cNames.get i: ci
+        if (mintMonoMember
+            :ast
+            :st
+            :unitDecl
+            :rf
+            :templateId
+            :mid
+            :tt
+            :tplUnit
+            :listRefTid
+            :fallbackArg
+            :subs
+            :idSubs
+            chName: chNameC.stringview
+            chId: (cIds.get i: ci)
+        ) then monoNeedsDtor = true
+        ci = ci + 1
+    }
+    return monoNeedsDtor
+}
+
+
+# mintMono -- populate one generic-instance type: the template's typetype and
+# valtype flag, genericOriginId linking back, and the instance's children -- the template's children with generic-param targets
+# substituted (matched by arg name; fallbackArg substitutes every child, the
+# single-type-param call-site inference) -- plus the synthesized members: a
+# per-instance tag data type (variants and unions) and the autogen ==/!=
+# functions (variants). Childless templates (the collection classes) produce
+# no children; their cloned method children land with the class-mono slice.
+mintMono: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    name: StringView
+    templateId: ztypes.tid
+    subs: (IdMapV zast.nameid value: u64)
+    idSubs: (IdMapV u64 value: u64)
+    fallbackArg: u64
+    monoTid: u64
+} is {
+    # a specialisation's members resolve in the TEMPLATE's frame, with the
+    # argument substitution -- lexical scoping; the instantiating unit is
+    # not where the template's names live
+    rf: frame
+    {
+        td: declOfTypeId :st tid: templateId
+        if (td.isZero) == false then rf = td
+    }
+    # the template's names -- a child's type, a constraint's type -- resolve
+    # in the TEMPLATE's unit (the frame is the template), not the
+    # instantiating unit's, which may shadow them
+    tplUnit: unitDeclOfTid :st tid: templateId
+    if tplUnit.isZero then tplUnit = unitDecl
+    tt: ztypes.ztypetype.recordType
+    vto: (optionval.none bool)
+    tplNative: false
+    if templateId < st.reg.typeById.length then {
+        tpl: st.reg.typeById.get i: templateId
+        tt = tpl.typetype
+        vto = tpl.isValtype
+        tplNative = tpl.isNative
+    }
+    mid: monoTid
+    match (
+        vto
+    ) case some then {
+        st.reg.setValtype typeId: (ztypes.tid.create from: mid.u64) value: vto
+    } case none then null
+    st.reg.setGenericOrigin typeId: (ztypes.tid.create from: mid.u64) value: templateId
+    declMonoType :st monoTid: mid :templateId
+    st.reg.setNative typeId: (ztypes.tid.create from: mid.u64) value: tplNative
+    if tt == ztypes.ztypetype.classType then st.reg.setIsHeapAllocated typeId: (ztypes.tid.create from: mid.u64)
+    # A heap-owning generic instance carries a destructor (so a holder/local
+    # frees it; the emitter builds the cname). Collections own native heap;
+    # Option/Result own a heap box. A user generic whose template already has a
+    # destructor inherits one. Map/Set own native heap too (freed via a `&`-less
+    # heap-pointer destroy), and IdMap/IdSet own their two arrays but not their
+    # header, so they free like a List does. Views (ListView/OptionView) own no
+    # heap -- excluded.
+    needsDtorM: templateNeedsMonoDtor :ast :st :rf :templateId
+    if needsDtorM then {
+        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: mid.u64)
+    }
+    # An elided leading type argument stages under the empty name; rebind it
+    # to the template's primary generic parameter so the substituted children
+    # resolve (`(List String)` == `(List of: String)`).
+    {
+        emptyKey: zast.nameid
+        ev: subs.get key: emptyKey
+        match (
+            ev
+        ) case some then {
+            prnm: firstGenericParamId :st :templateId
+            if (prnm.isZero) == false then subs.set key: prnm value: ev
+        } case none then null
+    }
+    monoNeedsDtor: (mintMonoMembers
+        :ast
+        :st
+        :unitDecl
+        :rf
+        :templateId
+        :mid
+        :tt
+        :tplUnit
+        :fallbackArg
+        :subs
+        :idSubs
+    )
+    # A user generic CLASS whose SUBSTITUTED fields are destructible carries
+    # an auto-destructor, exactly like its non-generic counterpart (the
+    # builtin-template list above cannot see through substitution; without
+    # this, `class { val: t }` with t=String leaks its payload).
+    if tt == ztypes.ztypetype.classType when monoNeedsDtor when (st.reg.needsDestructor typeId: (ztypes.tid.create from: mid.u64)) == false then {
+        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: mid.u64)
+    }
+    # RECORD instances: numeric-param fields synthesize from their declared
+    # constraint (size: u64.generic -> a u64 child) when no field references
+    # them; then the meta-create requalifies to the instance and ==/!=
+    # synthesize -- except str/array, whose branches own those members
+    # (their u64 `to` child comes from THIS synth; the branches add none).
+    (mintMonoRecordShape :ast :st :rf :templateId :mid :tt :tplUnit)
+    mintMonoTagShape :st :mid :tt :name
 }
 
 
