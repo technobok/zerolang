@@ -2614,6 +2614,194 @@ resolveMonoRefInline: function {
     } else null
     return 0
 }
+# monoRefArgTid -- resolve one mono type-reference argument to a tid. An unlabelled
+# argument is a dotted type-ref; a labelled one names a type in the enclosing
+# declaration's scope, its own unit, or a builtin. 0 with okOut false when it
+# names nothing resolvable.
+monoRefArgTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    thisName: StringView
+    enclDecl: ztypes.declid
+    arg: zast.NamedOperationData.view
+    an: StringView
+    okOut: (ListVal bool)
+} out ztypes.tid is {
+    aid: ztypes.tid
+    allOk: true
+    if an.length == 0 then {
+        argOpNode: ast.nodes.get i: arg.operation.u64
+        aid = ztypes.tid.create from: (resolveDottedArgTid
+            :st
+            :frame
+
+            :ast
+            dp: argOpNode
+        )
+        if aid.isZero then {
+            inner: (resolveMonoRefInline
+                :st
+                :frame
+
+                :ast
+                :unitDecl
+                :thisName
+                :enclDecl
+                op: (ast.nodes.get i: arg.operation.u64)
+                nid: 0
+            )
+            if inner > 0 then {
+                aid = ztypes.tid.create from: (inner)
+            } else {
+                allOk = false
+            }
+        }
+    } else {
+        anc: monoArgName :an :thisName
+        if anc.length == 0 then {
+            allOk = false
+        } else {
+            if enclDecl > 0 when (st.reg.isGenericParamOf
+                tdecl: enclDecl
+                name: (nameIdOf :ast name: anc.stringview)
+            ) then {
+                epo: (st.reg.genericParamTidOf
+                    tdecl: enclDecl
+                    paramName: (nameIdOf :ast name: anc.stringview)
+                )
+                match (
+                    epo
+                ) case some then {
+                    aid = ztypes.tid.create from: (epo)
+                } case none then {
+                    aid = (st.reg.newType
+                        name: anc.stringview
+                        typetype: ztypes.ztypetype.genericParam
+                    )
+                    (st.reg.setGenericParamTid
+                        tdecl: enclDecl
+                        paramName: (nameIdOf :ast name: anc.stringview)
+                        tid: aid
+                    )
+                }
+            }
+            # a name the CURRENT unit defines wins even when
+            # not yet declared -- the ladder walk sees only
+            # declared defs and would fall through to a
+            # same-named stdlib type (resolveAtomType's rule)
+            duo: (definingUnitFor
+                :st
+                :frame
+                :ast
+                :unitDecl
+                name: anc.stringview
+            )
+            if aid.isZero when duo == unitDecl then {
+                aid = (descendNamed
+                    :st
+                    :frame
+
+                    :ast
+                    unitDecl: duo
+                    name: anc.stringview
+                )
+            }
+            if aid.isZero then {
+                ao: (walkLookupTyperef
+                    :st
+                    :frame
+                    :ast
+
+                    :unitDecl
+                    base: anc.stringview
+                )
+                aid = ztypes.tid.create from: (optU64Or o: ao d: 0)
+            }
+            if aid.isZero then {
+                if (duo.isZero) == false then {
+                    aid = (descendNamed
+                        :st
+                        :frame
+
+                        :ast
+                        unitDecl: duo
+                        name: anc.stringview
+                    )
+                }
+            }
+            if aid.isZero then allOk = false
+        }
+    }
+    okOut.append allOk
+    return aid
+}
+
+# collectMonoRefArgs -- read a mono type-reference's arguments into the type and
+# value substitutions, building the mangled suffix that names the instance.
+# Answers false when an argument names nothing resolvable.
+collectMonoRefArgs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    thisName: StringView
+    enclDecl: ztypes.declid
+    arguments: (ListVal u32).view
+    sfx: String
+    typeSubs: (IdMapV zast.nameid value: u64)
+    valSubsR: (IdMapV zast.nameid value: u64)
+    firstOut: (ListVal u64)
+} out bool is {
+    allOk: true
+    firstA: ztypes.tid
+    aiter: arguments.iterate
+    for arg9Id: aiter loop {
+        arg: ast.nodes.get i: arg9Id.u64
+        match (
+            arg
+        ) case namedoperation then {
+            an: atomName :ast n: (ast.nodes.get i: arg.operation.u64)
+            if (isNumericLiteralName name: an.stringview) then {
+                sfx.append s: "_"
+                sfx.append s: an
+                pdv: parseDecimalU64 text: an.stringview
+                match (
+                    pdv
+                ) case some then {
+                    vsv: pdv
+                    valSubsR.set key: arg.name value: vsv
+                } case none then null
+            } else {
+                okOut: (ListVal bool)
+                aid: (monoRefArgTid
+                    :st
+                    :ast
+                    :unitDecl
+                    :frame
+                    :thisName
+                    :enclDecl
+                    :arg
+                    an: an.stringview
+                    :okOut
+                )
+                if (okOut.get i: 0) == false then allOk = false
+                if aid > 0 then {
+                    sfx.append s: "_"
+                    vn: monoValName :st :frame :ast tid: (ztypes.tid.create from: aid.u64)
+                    sfx.append s: vn
+                    if firstA.isZero then firstA = aid
+                    sv: aid
+                    typeSubs.set key: arg.name value: sv
+                }
+            }
+        } else null
+    }
+    firstOut.append firstA.u64
+    return allOk
+}
+
 
 # resolveMonoRefParts -- resolveMonoRefInline's call-shaped core, taking the
 # callable and argument list directly so narrowed call subjects can feed it.
@@ -2634,141 +2822,21 @@ resolveMonoRefParts: function {
         sfx: String
         typeSubs: (IdMapV zast.nameid value: u64)
         valSubsR: (IdMapV zast.nameid value: u64)
-        firstA: ztypes.tid
-        allOk: true
-        aiter: arguments.iterate
-        for arg9Id: aiter loop {
-            arg: ast.nodes.get i: arg9Id.u64
-            match (
-                arg
-            ) case namedoperation then {
-                an: atomName :ast n: (ast.nodes.get i: arg.operation.u64)
-                if (isNumericLiteralName name: an.stringview) then {
-                    sfx.append s: "_"
-                    sfx.append s: an
-                    pdv: parseDecimalU64 text: an.stringview
-                    match (
-                        pdv
-                    ) case some then {
-                        vsv: pdv
-                        valSubsR.set key: arg.name value: vsv
-                    } case none then null
-                } else {
-                    aid: ztypes.tid
-                    if an.length == 0 then {
-                        argOpNode: ast.nodes.get i: arg.operation.u64
-                        aid = ztypes.tid.create from: (resolveDottedArgTid
-                            :st
-                            :frame
-
-                            :ast
-                            dp: argOpNode
-                        )
-                        if aid.isZero then {
-                            inner: (resolveMonoRefInline
-                                :st
-                                :frame
-
-                                :ast
-                                :unitDecl
-                                :thisName
-                                :enclDecl
-                                op: (ast.nodes.get i: arg.operation.u64)
-                                nid: 0
-                            )
-                            if inner > 0 then {
-                                aid = ztypes.tid.create from: (inner)
-                            } else {
-                                allOk = false
-                            }
-                        }
-                    } else {
-                        anc: monoArgName an: an.stringview :thisName
-                        if anc.length == 0 then {
-                            allOk = false
-                        } else {
-                            if enclDecl > 0 when (st.reg.isGenericParamOf
-                                tdecl: enclDecl
-                                name: (nameIdOf :ast name: anc.stringview)
-                            ) then {
-                                epo: (st.reg.genericParamTidOf
-                                    tdecl: enclDecl
-                                    paramName: (nameIdOf :ast name: anc.stringview)
-                                )
-                                match (
-                                    epo
-                                ) case some then {
-                                    aid = ztypes.tid.create from: (epo)
-                                } case none then {
-                                    aid = (st.reg.newType
-                                        name: anc.stringview
-                                        typetype: ztypes.ztypetype.genericParam
-                                    )
-                                    (st.reg.setGenericParamTid
-                                        tdecl: enclDecl
-                                        paramName: (nameIdOf :ast name: anc.stringview)
-                                        tid: aid
-                                    )
-                                }
-                            }
-                            # a name the CURRENT unit defines wins even when
-                            # not yet declared -- the ladder walk sees only
-                            # declared defs and would fall through to a
-                            # same-named stdlib type (resolveAtomType's rule)
-                            duo: (definingUnitFor
-                                :st
-                                :frame
-                                :ast
-                                :unitDecl
-                                name: anc.stringview
-                            )
-                            if aid.isZero when duo == unitDecl then {
-                                aid = (descendNamed
-                                    :st
-                                    :frame
-
-                                    :ast
-                                    unitDecl: duo
-                                    name: anc.stringview
-                                )
-                            }
-                            if aid.isZero then {
-                                ao: (walkLookupTyperef
-                                    :st
-                                    :frame
-                                    :ast
-
-                                    :unitDecl
-                                    base: anc.stringview
-                                )
-                                aid = ztypes.tid.create from: (optU64Or o: ao d: 0)
-                            }
-                            if aid.isZero then {
-                                if (duo.isZero) == false then {
-                                    aid = (descendNamed
-                                        :st
-                                        :frame
-
-                                        :ast
-                                        unitDecl: duo
-                                        name: anc.stringview
-                                    )
-                                }
-                            }
-                            if aid.isZero then allOk = false
-                        }
-                    }
-                    if aid > 0 then {
-                        sfx.append s: "_"
-                        vn: monoValName :st :frame :ast tid: (ztypes.tid.create from: aid.u64)
-                        sfx.append s: vn
-                        if firstA.isZero then firstA = aid
-                        sv: aid
-                        typeSubs.set key: arg.name value: sv
-                    }
-                }
-            } else null
-        }
+        firstOut: (ListVal u64)
+        allOk: (collectMonoRefArgs
+            :st
+            :ast
+            :unitDecl
+            :frame
+            :thisName
+            :enclDecl
+            :arguments
+            :sfx
+            :typeSubs
+            :valSubsR
+            :firstOut
+        )
+        firstA: ztypes.tid.create from: (firstOut.get i: 0)
         if allOk == false then return 0
         if sfx.length == 0 then return 0
         tplId: ztypes.tid
@@ -16574,25 +16642,93 @@ monoValName: function {
     if bt > 0 when (bt == tid) == false then return ("\{tn}_\{tid}")
     return tn
 }
-
-# mint the per-instantiation member edges of a collection type.
-mintCollectionChildren: function {
+# mintEntryAndSizedChildren -- the members that depend on the instance's ARGUMENTS
+# rather than on the template's own methods: a map entry's key/value pair, and the
+# value-dependent members of the sized `str` and `array` records, which are
+# REPLACED in place (setMemberType keeps positions).
+mintEntryAndSizedChildren: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
-    frame: ztypes.declid
+    rf: ztypes.declid
     monoId: ztypes.tid
     templateId: ztypes.tid
     elemArg: u64
     valArg: ztypes.tid
+    u64id: u64
 } is {
-    # a specialisation's members resolve in the TEMPLATE's frame, with the
-    # argument substitution -- lexical scoping; the instantiating unit is
-    # not where the template's names live
-    rf: frame
-    {
-        td: declOfTypeId :st tid: templateId
-        if (td.isZero) == false then rf = td
+    mapEntryTid: builtinTidT :st frame: rf :ast base: "MapEntry"
+    mapEntryRVTid: builtinTidT :st frame: rf :ast base: "MapEntryRV"
+    mapEntryVRTid: builtinTidT :st frame: rf :ast base: "MapEntryVR"
+    mapEntryVVTid: builtinTidT :st frame: rf :ast base: "MapEntryVV"
+    idMapEntryRTid: builtinTidT :st frame: rf :ast base: "IdMapEntryR"
+    idMapEntryVTid: builtinTidT :st frame: rf :ast base: "IdMapEntryV"
+    strTid: builtinTidT :st frame: rf :ast base: "str"
+    arrayTid: builtinTidT :st frame: rf :ast base: "array"
+    boolid: u64
+    boolT: builtinTidT :st frame: rf :ast base: "bool"
+    bo: (optionval.none u64)
+    if (boolT.isZero) == false then bo = (optionval.some boolT.u64)
+    match (
+        bo
+    ) case some then {
+        boolid = bo
+    } case none then null
+    isEntryTpl: false
+    if templateId == mapEntryTid then isEntryTpl = true
+    if templateId == mapEntryRVTid then isEntryTpl = true
+    if templateId == mapEntryVRTid then isEntryTpl = true
+    if templateId == mapEntryVVTid then isEntryTpl = true
+    if templateId == idMapEntryRTid then isEntryTpl = true
+    if templateId == idMapEntryVTid then isEntryTpl = true
+    if isEntryTpl then {
+        kyId: mintCollectionMethod :st :ast :monoId m: "key"
+        st.reg.setReturnType typeId: (ztypes.tid.create from: kyId.u64) value: elemArg
+        vlId: mintCollectionMethod :st :ast :monoId m: "value"
+        if valArg > 0 then (st.reg.setReturnType
+            typeId: (ztypes.tid.create from: vlId.u64)
+            value: valArg
+        )
+        mintCollectionMethod :st :ast :monoId m: "create"
     }
+    if templateId == arrayTid then {
+        agId: mintCollectionMethod :st :ast :monoId m: "get"
+        st.reg.setReturnType typeId: (ztypes.tid.create from: agId.u64) value: elemArg
+        asId: mintCollectionMethod :st :ast :monoId m: "set"
+        st.reg.setReturnType typeId: (ztypes.tid.create from: asId.u64) value: elemArg
+        st.typing.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
+        mintCollectionMethod :st :ast :monoId m: "create"
+        aeqId: mintCollectionMethod :st :ast :monoId m: "=="
+        st.reg.setReturnType typeId: (ztypes.tid.create from: aeqId.u64) value: boolid
+        aneId: mintCollectionMethod :st :ast :monoId m: "!="
+        st.reg.setReturnType typeId: (ztypes.tid.create from: aneId.u64) value: boolid
+    }
+    if templateId == strTid then {
+        st.typing.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
+        st.typing.setMemberType parentTypeId: monoId nameId: zast.wkSize childTypeId: u64id
+        tstId: mintCollectionMethod :st :ast :monoId m: "string"
+        sgid: (builtinTidT :st frame: rf :ast base: "String").u64
+        if sgid > 0 then (st.reg.setReturnType
+            typeId: (ztypes.tid.create from: tstId.u64)
+            value: sgid
+        )
+        mintCollectionMethod :st :ast :monoId m: "create"
+        teqId: mintCollectionMethod :st :ast :monoId m: "=="
+        st.reg.setReturnType typeId: (ztypes.tid.create from: teqId.u64) value: boolid
+        tneId: mintCollectionMethod :st :ast :monoId m: "!="
+        st.reg.setReturnType typeId: (ztypes.tid.create from: tneId.u64) value: boolid
+    }
+}
+# templateIsCollection -- whether a template is one of the builtin collection
+# families, and (through iterOut) whether it is one of the ITERATOR families.
+# Comparing tids rather than names is what makes this shadow-proof: a user type
+# spelled `ListRef` is not this ListRef.
+templateIsCollection: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    rf: ztypes.declid
+    templateId: ztypes.tid
+    iterOut: (ListVal bool)
+} out bool is {
     listTid: builtinTidT :st frame: rf :ast base: "ListRef"
     listValTid: builtinTidT :st frame: rf :ast base: "ListVal"
     listViewTid: builtinTidT :st frame: rf :ast base: "ListView"
@@ -16667,40 +16803,34 @@ mintCollectionChildren: function {
     if templateId == mapEntryVVTid then isColl = true
     if templateId == strTid then isColl = true
     if templateId == arrayTid then isColl = true
-    if (isColl) == false then return
-    # List children come from the produced template methods cloned per
-    # instance (composite returns healed by respecialize); only the
-    # length/capacity u64 children materialize here. Runs on every naming.
-    isListTpl: false
-    if templateId == listTid then isListTpl = true
-    if templateId == listValTid then isListTpl = true
-    if isListTpl then {
-        # system's u64, whichever unit instantiates the collection: a user
-        # unit may shadow the name
-        u64L: (builtinTidT :st frame: rf :ast base: "u64").u64
-        if u64L > 0 then {
-            st.typing.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64L
-            st.typing.setMemberType parentTypeId: monoId nameId: zast.wkCapacity childTypeId: u64L
-        }
-        return
-    }
-    # One build per instance: a spec can reach this arm from several mint
-    # paths, and the str/array rebuild below would mint fresh member types
-    # per invocation (their instances copy template children at mint time,
-    # so a member count cannot signal "already built").
-    if (st.typing.collectionChildrenBuilt.has item: monoId) then return
-    bk0: monoId
-    st.typing.collectionChildrenBuilt.add item: bk0
-    u64id: (declareCanonicalType
-        :st
-        frame: rf
-        :ast
-
-        unitDecl: st.typing.systemUnitRoot
-        ownerNameId: zast.nameid
-        name: "u64"
-        typetype: ztypes.ztypetype.recordType
-    )
+    iterOut.append isIter
+    return isColl
+}
+# mintCollectionCounters -- the members a collection instance needs that its
+# template's own methods do not supply: the length/capacity counters (the
+# canonical u64) and the `create` child. Every other member is produced and
+# cloned from the template, its composite returns healed by respecialize.
+mintCollectionCounters: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    rf: ztypes.declid
+    monoId: ztypes.tid
+    templateId: ztypes.tid
+    valArg: ztypes.tid
+    u64id: u64
+    isIter: bool
+} is {
+    listViewTid: builtinTidT :st frame: rf :ast base: "ListView"
+    listViewValTid: builtinTidT :st frame: rf :ast base: "ListViewVal"
+    setTid: builtinTidT :st frame: rf :ast base: "SetRef"
+    setValTid: builtinTidT :st frame: rf :ast base: "SetVal"
+    mapTid: builtinTidT :st frame: rf :ast base: "MapRR"
+    mapRVTid: builtinTidT :st frame: rf :ast base: "MapRV"
+    mapVRTid: builtinTidT :st frame: rf :ast base: "MapVR"
+    mapVVTid: builtinTidT :st frame: rf :ast base: "MapVV"
+    idMapRTid: builtinTidT :st frame: rf :ast base: "IdMapR"
+    idMapVTid: builtinTidT :st frame: rf :ast base: "IdMapV"
+    idSetTid: builtinTidT :st frame: rf :ast base: "IdSet"
     # ListView children come from the produced template method (get); the
     # length field (the canonical u64) and the create child materialize here,
     # once per mono (post-memo: this arm mints).
@@ -16762,6 +16892,78 @@ mintCollectionChildren: function {
         st.typing.setMemberType parentTypeId: monoId nameId: zast.wkCapacity childTypeId: u64id
         return
     }
+}
+
+
+# mint the per-instantiation member edges of a collection type.
+mintCollectionChildren: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    monoId: ztypes.tid
+    templateId: ztypes.tid
+    elemArg: u64
+    valArg: ztypes.tid
+} is {
+    # a specialisation's members resolve in the TEMPLATE's frame, with the
+    # argument substitution -- lexical scoping; the instantiating unit is
+    # not where the template's names live
+    rf: frame
+    {
+        td: declOfTypeId :st tid: templateId
+        if (td.isZero) == false then rf = td
+    }
+    iterOut: (ListVal bool)
+    isColl: templateIsCollection :ast :st :rf :templateId :iterOut
+    isIter: iterOut.get i: 0
+    if (isColl) == false then return
+    listTid: builtinTidT :st frame: rf :ast base: "ListRef"
+    listValTid: builtinTidT :st frame: rf :ast base: "ListVal"
+    strTid: builtinTidT :st frame: rf :ast base: "str"
+    arrayTid: builtinTidT :st frame: rf :ast base: "array"
+    # List children come from the produced template methods cloned per
+    # instance (composite returns healed by respecialize); only the
+    # length/capacity u64 children materialize here. Runs on every naming.
+    isListTpl: false
+    if templateId == listTid then isListTpl = true
+    if templateId == listValTid then isListTpl = true
+    if isListTpl then {
+        # system's u64, whichever unit instantiates the collection: a user
+        # unit may shadow the name
+        u64L: (builtinTidT :st frame: rf :ast base: "u64").u64
+        if u64L > 0 then {
+            st.typing.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64L
+            st.typing.setMemberType parentTypeId: monoId nameId: zast.wkCapacity childTypeId: u64L
+        }
+        return
+    }
+    # One build per instance: a spec can reach this arm from several mint
+    # paths, and the str/array rebuild below would mint fresh member types
+    # per invocation (their instances copy template children at mint time,
+    # so a member count cannot signal "already built").
+    if (st.typing.collectionChildrenBuilt.has item: monoId) then return
+    bk0: monoId
+    st.typing.collectionChildrenBuilt.add item: bk0
+    u64id: (declareCanonicalType
+        :st
+        frame: rf
+        :ast
+
+        unitDecl: st.typing.systemUnitRoot
+        ownerNameId: zast.nameid
+        name: "u64"
+        typetype: ztypes.ztypetype.recordType
+    )
+    (mintCollectionCounters
+        :ast
+        :st
+        :rf
+        :monoId
+        :templateId
+        :valArg
+        :u64id
+        :isIter
+    )
     isSized: false
     if templateId == strTid then isSized = true
     if templateId == arrayTid then isSized = true
@@ -16780,59 +16982,16 @@ mintCollectionChildren: function {
     if (isSized) == false then {
         if (st.typing.declMemberCount ownerTid: monoId) > 0 then return
     }
-    boolid: u64
-    boolT: builtinTidT :st frame: rf :ast base: "bool"
-    bo: (optionval.none u64)
-    if (boolT.isZero) == false then bo = (optionval.some boolT.u64)
-    match (
-        bo
-    ) case some then {
-        boolid = bo
-    } case none then null
-    isEntryTpl: false
-    if templateId == mapEntryTid then isEntryTpl = true
-    if templateId == mapEntryRVTid then isEntryTpl = true
-    if templateId == mapEntryVRTid then isEntryTpl = true
-    if templateId == mapEntryVVTid then isEntryTpl = true
-    if templateId == idMapEntryRTid then isEntryTpl = true
-    if templateId == idMapEntryVTid then isEntryTpl = true
-    if isEntryTpl then {
-        kyId: mintCollectionMethod :st :ast :monoId m: "key"
-        st.reg.setReturnType typeId: (ztypes.tid.create from: kyId.u64) value: elemArg
-        vlId: mintCollectionMethod :st :ast :monoId m: "value"
-        if valArg > 0 then (st.reg.setReturnType
-            typeId: (ztypes.tid.create from: vlId.u64)
-            value: valArg
-        )
-        mintCollectionMethod :st :ast :monoId m: "create"
-    }
-    if templateId == arrayTid then {
-        agId: mintCollectionMethod :st :ast :monoId m: "get"
-        st.reg.setReturnType typeId: (ztypes.tid.create from: agId.u64) value: elemArg
-        asId: mintCollectionMethod :st :ast :monoId m: "set"
-        st.reg.setReturnType typeId: (ztypes.tid.create from: asId.u64) value: elemArg
-        st.typing.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
-        mintCollectionMethod :st :ast :monoId m: "create"
-        aeqId: mintCollectionMethod :st :ast :monoId m: "=="
-        st.reg.setReturnType typeId: (ztypes.tid.create from: aeqId.u64) value: boolid
-        aneId: mintCollectionMethod :st :ast :monoId m: "!="
-        st.reg.setReturnType typeId: (ztypes.tid.create from: aneId.u64) value: boolid
-    }
-    if templateId == strTid then {
-        st.typing.setMemberType parentTypeId: monoId nameId: zast.wkLength childTypeId: u64id
-        st.typing.setMemberType parentTypeId: monoId nameId: zast.wkSize childTypeId: u64id
-        tstId: mintCollectionMethod :st :ast :monoId m: "string"
-        sgid: (builtinTidT :st frame: rf :ast base: "String").u64
-        if sgid > 0 then (st.reg.setReturnType
-            typeId: (ztypes.tid.create from: tstId.u64)
-            value: sgid
-        )
-        mintCollectionMethod :st :ast :monoId m: "create"
-        teqId: mintCollectionMethod :st :ast :monoId m: "=="
-        st.reg.setReturnType typeId: (ztypes.tid.create from: teqId.u64) value: boolid
-        tneId: mintCollectionMethod :st :ast :monoId m: "!="
-        st.reg.setReturnType typeId: (ztypes.tid.create from: tneId.u64) value: boolid
-    }
+    (mintEntryAndSizedChildren
+        :ast
+        :st
+        :rf
+        :monoId
+        :templateId
+        :elemArg
+        :valArg
+        :u64id
+    )
 }
 
 
