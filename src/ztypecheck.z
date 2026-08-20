@@ -7125,8 +7125,7 @@ detectTagAccessor: function {
         )
         return
     }
-    man: mname.copy
-    st.typing.tagAccessorName.set key: ownerId value: man
+    st.typing.tagAccessorName.set key: ownerId value: am.name
     st.typing.tagAccessorTid.set key: (ztypes.tid.create from: ownerId.u64) value: nid
 }
 
@@ -7637,7 +7636,7 @@ unionCustomTagId: function {
                                         :st
                                         nameId: (nameIdOf :ast name: "system")
                                     )
-                                    name: (zast.poolFind pool: ast.names text: "tag")
+                                    name: zast.wkTag
                                 )
                                 match (
                                     tgo
@@ -7657,14 +7656,14 @@ unionCustomTagId: function {
                     } case none then {
                         # the tag base resolves later (demand order): record
                         # the demand and a pending fixup for the tag child.
+                        pnId: zast.poolFind pool: ast.names text: pn.stringview
                         (demandDefinition
                             :st
                             frame: (unitFrameOf :st declId: frame)
-                            nameId: (zast.poolFind pool: ast.names text: pn.stringview)
+                            nameId: pnId
                         )
                         uk: uid
-                        pv: pn.copy
-                        st.typing.pendingCustomTag.set key: uk value: pv
+                        st.typing.pendingCustomTag.set key: uk value: pnId
                         uk2: uid
                         pnid: innermostNodeId :ast n: (ast.nodes.get i: am.operation.u64)
                         pnv: pnid.u64
@@ -10292,19 +10291,17 @@ fixupCustomTags: function {
     frame: ztypes.declid
 } is {
     pend: (ListVal u64)
-    pnames: (List String)
+    pnames: (ListVal zast.nameid)
     with citer: st.typing.pendingCustomTag.iterateItems do for ce: citer loop {
         ck: ce.key
         pend.append ck
-        cvv: ce.value.stringview
-        cv: cvv.string
-        pnames.append cv
+        pnames.append ce.value
     }
     ci: u64
     cn: pend.length
     for ci < cn loop {
         cuid: pend.get i: ci
-        cnm: pnames.get i: ci
+        cnm: zast.nameTextAt :ast ref: (pnames.get i: ci)
         co: walkLookupTyperef :st :frame :ast :unitDecl base: cnm.stringview
         ctid: optU64Or o: co d: 0
         if ctid > 0 then {
@@ -10329,7 +10326,7 @@ fixupCustomTags: function {
                         :st
                         :ast
                         unitDecl: (unitDeclOfName :st nameId: (nameIdOf :ast name: "system"))
-                        name: (zast.poolFind pool: ast.names text: "tag")
+                        name: zast.wkTag
                     )
                     match (
                         tgo2
@@ -18594,7 +18591,7 @@ checkDotted: function {
             match (
                 tan5
             ) case some then {
-                if tan5.stringview == cn.stringview then tagHit = true
+                if tan5 == cnId then tagHit = true
             } case none then null
         }
         if tagHit then {
