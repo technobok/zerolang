@@ -8611,11 +8611,12 @@ outerBaseAtom: function {ast: Ast.view n: Node.view} out String is {
     }
 }
 
-# emitCrossUnitUnionCtor -- a three-segment qualified union-arm
-# construction (`json.Value.text s`): the in-unit form resolves the
-# union by bare name, so the qualified middle segment needs its own
-# leg, resolved through the defining unit's key like the create legs.
-emitCrossUnitUnionCtor: function {
+# emitCrossUnitSumCtor -- a three-segment qualified sum-arm construction
+# (`json.Value.text s`, `zvfs.dentry.file d`): the in-unit form resolves the
+# type by bare name, so the qualified middle segment needs its own leg,
+# resolved through the defining unit's key like the create legs. A variant is
+# a valtype and carries its payload inline; only a union boxes one.
+emitCrossUnitSumCtor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
@@ -8647,7 +8648,16 @@ emitCrossUnitUnionCtor: function {
         utid = ztypes.tid.create from: (go)
     } case none then null
     if utid.isZero then return "".string
-    if (symtab.reg.typetypeOf typeId: utid) != ztypes.ztypetype.unionType then return "".string
+    ttx: symtab.reg.typetypeOf typeId: utid
+    if ttx == ztypes.ztypetype.variantType then return (emitInlineVariantCtor
+        :ast
+        :symtab
+        :ctx
+        :call
+        tid: utid
+        arm: ctorArmName.stringview
+    )
+    if ttx != ztypes.ztypetype.unionType then return "".string
     vc: ctxCname :ctx tid: (ztypes.tid.create from: utid.u64)
     tg: variantTag :symtab tid: (ztypes.tid.create from: utid.u64) arm: ctorArmName.stringview
     payC: (armPayloadC
@@ -9329,7 +9339,7 @@ emitCallValue: function {
     if gfc.length > 0 then return gfc
     sam: emitStringArgMethod :ast :symtab :ctx :call
     if sam.length > 0 then return sam
-    xuc: emitCrossUnitUnionCtor :ast :symtab :ctx :call
+    xuc: emitCrossUnitSumCtor :ast :symtab :ctx :call
     if xuc.length > 0 then return xuc
     colc: emitCollectionMethodCall :ast :symtab :ctx :call
     if colc.length > 0 then return colc
