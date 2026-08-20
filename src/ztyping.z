@@ -555,17 +555,13 @@ ZTyping: class {
     # type-ref nodes a stamp pass could not stamp because their declaration
     # had not resolved yet; the next pass takes them first
     typerefRetry: (ListVal u64)
-    # canonical mints that predate the def index (their unit root Decl
-    # does not exist yet); drained into root-proxy links by indexUnitDefs
-    declProxyTids: (ListVal ztypes.tid)
-    declProxyUnits: (List String)
     # Member-type writes that found no declaration to land on. Generator
     # lowering pre-resolves system.optionval and system.Iterator, and the
     # never/null canonical pair is minted, before indexUnitDefs builds the
     # unit-root Decls, so those types' members are typed before anything
-    # declares them. The write is held here until the index exists and
-    # declStampPreIndexMembers can land it, and answers reads during the
-    # window. Keyed by (parent, name), last write wins, a handful of entries.
+    # declares them. The write is held here and answers member-type reads for
+    # the rest of the run. Keyed by (parent, name), last write wins, a handful
+    # of entries.
     pendParent: (ListVal u64)
     pendName: (ListVal u64)
     pendType: (ListVal u64)
@@ -927,32 +923,6 @@ ZTyping: class {
         }
     }
 
-    # declStampPreIndexMembers -- land the member-type writes a type held while
-    # it had no declaration. indexUnitDefs calls this once on each pre-index
-    # mint it drains; no other path needs it, because every other member is
-    # declared before its type is written.
-    declStampPreIndexMembers: function {:this parentTypeId: ztypes.tid declId: ztypes.declid} is {
-        nids: (ListVal u64)
-        tids: (ListVal u64)
-        this.declPendRows :parentTypeId names: nids :tids
-        i: u64
-        n: nids.length
-        for i < n loop {
-            nid: nids.get :i
-            mtid: tids.get :i
-            i = i + 1
-            if mtid > 0 then {
-                md: (this.declFindChild
-                    parentDeclId: declId
-                    nameId: (zast.nameid.create from: nid.u32.orPanic)
-                )
-                if (md.isZero) == false then {
-                    decl: this.decls.getMut i: md.u64
-                    decl.typeId = ztypes.tid.create from: mtid.u64
-                }
-            }
-        }
-    }
 
     # declFindChild -- the child declaration named nameId under parentDeclId
     # (0 when absent). A namespace binds each name once -- the parser rejects
@@ -2163,8 +2133,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         typerefsStamped: 0
         typerefPassRan: false
         typerefRetry: (ListVal u64)
-        declProxyTids: (ListVal ztypes.tid)
-        declProxyUnits: (List String)
         pendParent: (ListVal u64)
         pendName: (ListVal u64)
         pendType: (ListVal u64)
