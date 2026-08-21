@@ -435,7 +435,7 @@ GivesParts: class {
 }
 
 # the per-iteration gives/accepts shape derived from generator node `n`.
-givesParts: function {ast: Ast.view n: Node.view} out GivesParts is {
+givesParts: function {ast: Ast n: Node.view} out GivesParts is {
     result: (GivesParts base: (Option.none Node) leaf: "".string acceptsTy: (Option.none Node))
     match (
         n
@@ -446,68 +446,93 @@ givesParts: function {ast: Ast.view n: Node.view} out GivesParts is {
 }
 
 # fill `dst` with the gives/accepts shape of optional node `oId`.
-givesPartsOpt: function {ast: Ast.view oId: zast.nodeid dst: GivesParts} is {
+givesPartsOpt: function {ast: Ast oId: zast.nodeid dst: GivesParts} is {
     if oId.isZero then return
-    o: ast.nodes.get i: oId.u64
-    givesPartsOf :ast n: o :dst
-
+    givesPartsOf :ast nid: oId :dst
 }
 
 # fill `dst` with the gives/accepts shape of node `n`.
-givesPartsOf: function {ast: Ast.view n: Node.view dst: GivesParts} is {
-    match (
-        n
-    ) case expression then {
-        givesPartsOf :ast n: (ast.nodes.get i: n.expression.u64) :dst
-    } case call then {
-        aiter: n.arguments.iterate
-        for a0Id: aiter loop {
+givesPartsOf: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
+    innerId: zast.nodeid
+    argIds: (ListVal u32)
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case expression then {
+            innerId = n.expression
+        } case call then {
+            with ait: n.arguments.iterate do for a: ait loop argIds.append from: a
+        } else null
+    }
+    if (innerId.isZero) == false then {
+        givesPartsOf :ast nid: innerId :dst
+        return
+    }
+    with it: argIds.iterate do for a0Id: it loop {
+        # the argument row is read through a view scoped to this block: the
+        # gives/accepts readers clone, which lends ast exclusively
+        kind: u32
+        opId: zast.nodeid
+        {
             a0: ast.nodes.get i: a0Id.u64
             match (
                 a0
             ) case namedoperation then {
                 an: zast.nameTextAt :ast ref: a0.name
-                if an.stringview == "gives" then {
-                    givesFromOp :ast n: (ast.nodes.get i: a0.operation.u64) :dst
-                }
-                if an.stringview == "accepts" then {
-                    acceptsFromOp :ast n: (ast.nodes.get i: a0.operation.u64) :dst
-                }
+                if an.stringview == "gives" then kind = 1
+                if an.stringview == "accepts" then kind = 2
+                opId = a0.operation
             } else null
         }
-    } else null
+        if kind == 1 then givesFromOp :ast nid: opId :dst
+        if kind == 2 then acceptsFromOp :ast nid: opId :dst
+    }
 }
 
 # read the `gives` type from operation `n` into `dst`.
-givesFromOp: function {ast: Ast n: Node.view dst: GivesParts} is {
-    isExpr: false
-    match (
-        n
-    ) case expression then {
-        isExpr = true
-        givesFromOp :ast n: (ast.nodes.get i: n.expression.u64) :dst
-    } else null
-    if isExpr then return
-    lf: pathLeafName :ast :n
-    if lf.length > 0 then {
+givesFromOp: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
+    innerId: zast.nodeid
+    isDotted: false
+    parentId: zast.nodeid
+    lf: String
+    {
+        n: ast.nodes.get i: nid.u64
         match (
             n
-        ) case dottedpath then {
-            bc: clonePathAt :ast nid: n.parent
+        ) case expression then {
+            innerId = n.expression
+        } case dottedpath then {
+            isDotted = true
+            parentId = n.parent
+        } else null
+        if innerId.isZero then lf = pathLeafName :ast :n
+    }
+    if (innerId.isZero) == false then {
+        givesFromOp :ast nid: innerId :dst
+        return
+    }
+    if lf.length > 0 then {
+        if isDotted then {
+            bc: clonePathAt :ast nid: parentId
             dst.base = (Option.some bc)
             dst.leaf = lf
-        } else null
+        }
     } else {
-        bc2: clonePath :ast :n
+        bc2: clonePathAt :ast :nid
         dst.base = (Option.some bc2)
     }
 }
 
 # read the `accepts` type from operation `n` into `dst`.
-acceptsFromOp: function {ast: Ast n: Node.view dst: GivesParts} is {
-    nm0: leafAtomName :ast :n
+acceptsFromOp: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
+    nm0: String
+    {
+        n: ast.nodes.get i: nid.u64
+        nm0 = leafAtomName :ast :n
+    }
     if nm0.stringview != "null" then {
-        ac: clonePath :ast :n
+        ac: clonePathAt :ast :nid
         dst.acceptsTy = (Option.some ac)
     }
 }
