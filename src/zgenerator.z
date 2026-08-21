@@ -1237,60 +1237,69 @@ promoteFor: function {
         nconds: (ListVal u32)
         citer: n.conditions.iterate
         for c0Id: citer loop {
-            c0: ast.nodes.get i: c0Id.u64
+            # the condition is read through a view scoped to this block: the
+            # synth below mints, which lends ast exclusively
             doHoist: false
-            match (
-                c0
-            ) case namedoperation then {
-                cn0: zast.nameTextAt :ast ref: c0.name
-                if cn0.length > 0 when suspends then {
-                    if (condIsTrivial
-                        :ast
-                        n: (ast.nodes.get i: c0.operation.u64)
-                    ) == false then doHoist = true
-                }
-            } else null
-            if doHoist then {
+            opId: zast.nodeid
+            cnId: zast.nameid
+            hl0: u32
+            hc0: u32
+            {
+                c0: ast.nodes.get i: c0Id.u64
                 match (
                     c0
                 ) case namedoperation then {
-                    # synth nodes carry the ITERABLE's source position
-                    hp0: zast.posOf n: (ast.nodes.get i: c0.operation.u64)
-                    hl0: hp0.line
-                    hc0: hp0.col
-                    synthN: "_iter\{ctr.bump}"
-                    empty7: (MapRV String value: bool)
-                    rhs0: (rewriteToThis
-                        :ast
-                        n: (ast.nodes.get i: c0.operation.u64)
-                        promoted: empty7
-                    )
-                    rhsE: ensureExpr :ast line: hl0 col: hc0 n: rhs0
-                    snv0: synthN.stringview
-                    snid0: zast.poolSet pool: ast.names text: snv0
-                    sno1: snv0
-                    sa0: (Node.assignment (zast.AssignmentData
-                        nodeid: (zast.tableReserve :ast)
-                        lineno: hl0
-                        colno: hc0
-                        name: snid0
-                        value: (zast.tableAdd :ast n: rhsE))
-                    )
-                    sl0: (Node.statementline (zast.StatementLineData
-                        nodeid: (zast.tableReserve :ast)
-                        lineno: hl0
-                        colno: hc0
-                        statementline: (zast.tableAdd :ast n: sa0))
-                    )
-                    dst.append (zast.tableAdd :ast n: sl0)
-                    cn1: zast.nameTextAt :ast ref: c0.name
-                    na0: mkAtom :ast line: hl0 col: hc0 name: sno1
-                    nc0: mkNamedOp :ast line: hl0 col: hc0 name: cn1.stringview op: na0
-                    nconds.append (zast.tableAdd :ast n: nc0)
+                    cn0: zast.nameTextAt :ast ref: c0.name
+                    if cn0.length > 0 when suspends then {
+                        if (condIsTrivial
+                            :ast
+                            n: (ast.nodes.get i: c0.operation.u64)
+                        ) == false then doHoist = true
+                    }
+                    if doHoist then {
+                        # synth nodes carry the ITERABLE's source position
+                        hp0: zast.posOf n: (ast.nodes.get i: c0.operation.u64)
+                        hl0 = hp0.line
+                        hc0 = hp0.col
+                        opId = c0.operation
+                        cnId = c0.name
+                    }
                 } else null
+            }
+            if doHoist then {
+                synthN: "_iter\{ctr.bump}"
+                empty7: (MapRV String value: bool)
+                rhs0: (rewriteToThis
+                    :ast
+                    n: (ast.nodes.get i: opId.u64)
+                    promoted: empty7
+                )
+                rhsE: ensureExpr :ast line: hl0 col: hc0 n: rhs0
+                snv0: synthN.stringview
+                snid0: zast.poolSet pool: ast.names text: snv0
+                sno1: snv0
+                sa0: (Node.assignment (zast.AssignmentData
+                    nodeid: (zast.tableReserve :ast)
+                    lineno: hl0
+                    colno: hc0
+                    name: snid0
+                    value: (zast.tableAdd :ast n: rhsE))
+                )
+                sl0: (Node.statementline (zast.StatementLineData
+                    nodeid: (zast.tableReserve :ast)
+                    lineno: hl0
+                    colno: hc0
+                    statementline: (zast.tableAdd :ast n: sa0))
+                )
+                dst.append (zast.tableAdd :ast n: sl0)
+                # an owned copy: the name must outlive the mints below, which lend ast
+                cn1: zast.nameTextCopy :ast ref: cnId
+                na0: mkAtom :ast line: hl0 col: hc0 name: sno1
+                nc0: mkNamedOp :ast line: hl0 col: hc0 name: cn1.stringview op: na0
+                nconds.append (zast.tableAdd :ast n: nc0)
             } else {
                 empty6: (MapRV String value: bool)
-                cc0: rewriteToThis :ast n: c0 promoted: empty6
+                cc0: rewriteToThis :ast n: (ast.nodes.get i: c0Id.u64) promoted: empty6
                 nconds.append (zast.tableAdd :ast n: cc0)
             }
         }
