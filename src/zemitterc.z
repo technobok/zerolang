@@ -2337,16 +2337,16 @@ stampNameOf: function {symtab: zenv.ZSymbolTable.view nid: u64} out String is {
 # is the qualified lookup, for the builtins `core` does not re-export. Passing
 # "" is the unqualified form and the only other caller is builtinTid.
 builtinTidInU: function {
-    ast: Ast
-    symtab: zenv.ZSymbolTable
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
     unitName: StringView
     base: StringView
 } out u64 is {
     # every caller names the declared family form directly (ListRef, MapRR,
-    # ...); the memoized builtinTidT is not usable here -- its memo write
-    # needs an exclusive typing, and the emitter holds a view.
+    # ...) and consumes what resolution already minted: the read-only walk
+    # answers without the checker's mint legs.
     ud9: ztypecheck.unitDeclOfName st: symtab nameId: (zast.poolFind pool: ast.names text: unitName)
-    return (ztypecheck.optU64Or o: (ztypecheck.walkLookupTyperef
+    return (ztypecheck.optU64Or o: (ztypecheck.walkLookupTyperefRo
         frame: ztypes.declid
         :ast
         st: symtab
@@ -2357,7 +2357,7 @@ builtinTidInU: function {
 
 # builtinTid -- builtinTidInU with no unit named, so a user type of the same
 # name never shadows it. 0 when absent from the program.
-builtinTid: function {ast: Ast symtab: zenv.ZSymbolTable base: StringView} out u64 is {
+builtinTid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view base: StringView} out u64 is {
     return (builtinTidInU :ast :symtab unitName: "" :base)
 }
 
@@ -2366,7 +2366,7 @@ builtinTid: function {ast: Ast symtab: zenv.ZSymbolTable base: StringView} out u
 # `u64`). A runtime fragment's text still carries the mangled spelling, but the
 # identity comes off the spec trie. 0 when that instance was never demanded.
 specStemTid: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     base: StringView
     arg1: StringView
@@ -2730,7 +2730,7 @@ Ctx: class {
 # canonFnId -- userFnId, but a tid already carrying a generic origin is a
 # registered mono and inherently canonical: skip the name round-trip and use it.
 canonFnId: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     tid: ztypes.tid
@@ -2764,15 +2764,15 @@ canonTypeId: function {
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
 userFnId: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     name: StringView
 } out ztypes.tid is {
     uq0z: ctx.mainUnitId
     nameId9: (zast.poolFind pool: ast.names text: name)
-    go: (ztypecheck.resolveUnitChild
-        :ast
+    go: (ztypecheck.resolveUnitChildRo
+            :ast
         st: symtab
         unitDecl: uq0z
         nameId: nameId9
@@ -2788,14 +2788,14 @@ userFnId: function {
 
 # userFnIdById -- id-keyed userFnId: the child name is already an Ast.names id.
 userFnIdById: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     nameId: zast.nameid
 } out u64 is {
     uq1z: ctx.mainUnitId
-    go: (ztypecheck.resolveUnitChild
-        :ast
+    go: (ztypecheck.resolveUnitChildRo
+            :ast
         st: symtab
         unitDecl: uq1z
         :nameId
@@ -3804,7 +3804,7 @@ aliasChildName: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.v
 # routes both spellings to one emitter, and is what keeps a user unit's own
 # `print` out of it.
 stmtFormName: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     n: Node.view
@@ -3830,8 +3830,8 @@ stmtFormName: function {
     # pooled program-wide, so the unit probe answers either way
     baseAtom: dottedBaseAtom :ast :n
     uq2z: ctx.mainUnitId
-    sh: (ztypecheck.resolveUnitChild
-        :ast
+    sh: (ztypecheck.resolveUnitChildRo
+            :ast
         st: symtab
         unitDecl: uq2z
         nameId: (zast.poolFind pool: ast.names text: baseAtom.stringview)
@@ -5576,7 +5576,7 @@ fnReturnsRefBorrow: function {
 # NAMED bases keep their existing legs untouched (a destructor-less box's
 # field interp-free is load-bearing today).
 hoistExprIsBorrowRooted: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     n: Node.view
@@ -5604,7 +5604,7 @@ hoistExprIsBorrowRooted: function {
 # the receiver mono's method child -- fully signature-driven (List/ListView
 # element gets arrive here through their declared `out of.borrow`).
 callRhsIsBorrow: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     call: zast.CallData.view
@@ -5757,7 +5757,7 @@ refBorrowCalleeFid: function {
 
 # true when a binding's right-hand side is a borrow.
 bindingRhsIsBorrow: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     n: Node.view
@@ -6778,7 +6778,7 @@ emitTypedefCreateCall: function {
     if bn.length == 0 then return "".string
     tid: userFnId :ast :symtab :ctx name: bn.stringview
     if tid.isZero then {
-        so: (ztypecheck.resolveUnitChild
+        so: (ztypecheck.resolveUnitChildRo
             :ast
             st: symtab
             unitDecl: symtab.typing.systemUnitRoot
@@ -10922,7 +10922,7 @@ dottedAtomNumericBase: function {
 # dottedAtomConstCloneBase -- `Unit.CONST` where the base names a function-like
 # declaration carrying an `as`-const clone: the member reads as that constant.
 dottedAtomConstCloneBase: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     bn2: StringView
@@ -12228,7 +12228,7 @@ dataIndexElemName: function {
 # be appended inline (freeing the hoisted copy would double-free the bucket
 # key). All four entry forms project the same way.
 interpBaseIsMapEntry: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     n: Node.view
 } out bool is {
@@ -12931,7 +12931,7 @@ bindLitIndex: function {
 # stringviewOfBase -- the base name of `X.stringview` over a String local
 # ("" otherwise).
 stringviewOfBaseNid: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     n: Node.view
 } out u64 is {
@@ -12955,7 +12955,7 @@ stringviewOfBaseNid: function {
 # stringviewOfBase -- that base atom's text. Derived from the node above rather
 # than re-walked, so the name and the id can never describe different atoms.
 stringviewOfBase: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     n: Node.view
 } out String is {
@@ -14881,7 +14881,7 @@ typeIdByNameStages: function {
 } out u64 is {
     f: userFnIdById :ast :symtab :ctx :nameId
     if f > 0 then return f
-    mo: ztypecheck.resolveUnitChild :ast st: symtab unitDecl: symtab.typing.systemUnitRoot :nameId
+    mo: ztypecheck.resolveUnitChildRo :ast st: symtab unitDecl: symtab.typing.systemUnitRoot :nameId
     match (
         mo
     ) case some then {
@@ -16376,7 +16376,7 @@ objIterYieldTid: function {
 # iterator is emitted by emitOneMethod under its own cname id; native and
 # collection iterators keep the template's `{type}_call`.
 objIterCallC: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     cco: ztypes.tid
@@ -20396,7 +20396,7 @@ fillNeedsIn: function {
 # resolves to nothing native and gates no fragment, while a native reached
 # through any spelling is recorded under the unit that declares it.
 scanNativeNeed: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     unitName: StringView
@@ -20425,7 +20425,7 @@ scanNativeNeed: function {
             nameId: (zast.poolFind pool: ast.names text: unitName)
         )
         nameId92: (zast.poolFind pool: ast.names text: base)
-        sh: (ztypecheck.resolveUnitChild
+        sh: (ztypecheck.resolveUnitChildRo
             :ast
             st: symtab
             unitDecl: uq3z
@@ -20456,7 +20456,7 @@ scanNativeNeed: function {
             nameId: (zast.poolFind pool: ast.names text: unitName)
         )
         nameId93: (zast.poolFind pool: ast.names text: memb)
-        go: (ztypecheck.resolveUnitChild
+        go: (ztypecheck.resolveUnitChildRo
             :ast
             st: symtab
             unitDecl: uq4z
@@ -20483,7 +20483,7 @@ scanNativeNeed: function {
 # member name asks for, the native rows its callee resolves to, and then the
 # arguments, which are scanned like any other node.
 scanNeedsCall: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     unitName: StringView
@@ -20548,7 +20548,7 @@ scanNeedsCall: function {
 # scanNeedsDotted -- the needs a DOTTED READ declares: the float parses and the
 # no-argument view natives reached without a call, plus the base's own row.
 scanNeedsDotted: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     unitName: StringView
@@ -20599,7 +20599,7 @@ scanNeedsDotted: function {
 # `<unit>_<member>`; a callee that resolves to anything else registers
 # nothing, so a user unit named io or os gates no fragment.
 scanNeeds: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     unitName: StringView
@@ -24080,7 +24080,7 @@ emitIdSetMono: function {
 # SOURCE-named parts (Result over filestat and IoError), never by the mangled
 # spelling. 0 for a plain source-name stem (File, IoError, Reader), which keeps
 # the by-name path, and 0 when the instance was never demanded.
-ioCanonTid: function {ast: Ast symtab: zenv.ZSymbolTable canon: StringView} out u64 is {
+ioCanonTid: function {ast: Ast.view symtab: zenv.ZSymbolTable canon: StringView} out u64 is {
     if canon == "Option_StringView" then {
         return (specStemTid :ast :symtab base: "Option" arg1: "StringView" arg2: "")
     }
@@ -24228,7 +24228,7 @@ ioCanonTid: function {ast: Ast symtab: zenv.ZSymbolTable canon: StringView} out 
 # the "" miss) per program, mirroring resolveByNameC. Avoids re-running the
 # O(nextTypeId) registry scan in ioCanonCnameUncached ~30x per canon.
 ioCanonCname: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     canon: StringView
@@ -24255,7 +24255,7 @@ ioCanonCname: function {
 # trie, else a named system type (IoError/File/filestat/Reader/...) by registry
 # name. "" when the type is not in the (demand-driven) registry for this program.
 ioCanonTidAny: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     canon: StringView
@@ -24265,8 +24265,8 @@ ioCanonTidAny: function {
     # a plain source-name stem (File, IoError, Reader): the system unit first,
     # then the registry scan below for the io/cli units it does not cover.
     nameId94: (zast.poolFind pool: ast.names text: canon)
-    mo: (ztypecheck.resolveUnitChild
-        :ast
+    mo: (ztypecheck.resolveUnitChildRo
+            :ast
         st: symtab
         unitDecl: symtab.typing.systemUnitRoot
         nameId: nameId94
@@ -24300,7 +24300,7 @@ ioCanonTidAny: function {
 }
 
 ioCanonCnameUncached: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     canon: StringView
@@ -24316,7 +24316,7 @@ ioCanonCnameUncached: function {
 # resolves to nothing is fatal. Tags (Z_IOERROR_TAG_*) are name-based and
 # already match.
 loadIoFragment: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     path: StringView
@@ -24405,7 +24405,7 @@ ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out u64 is {
 # gate for emitting File's natives + Reader/Writer conformance: it is true
 # exactly when that emitted code's referenced monos have been demanded, so it
 # always compiles.
-ioFileLive: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx.view} out bool is {
+ioFileLive: function {ast: Ast.view symtab: zenv.ZSymbolTable ctx: Ctx.view} out bool is {
     calleeTid: ioFileId :symtab :ctx
     if calleeTid == 0 then return false
     listValU8Tid: specStemTid :ast :symtab base: "ListVal" arg1: "u8" arg2: ""
@@ -24527,7 +24527,7 @@ rowDemandFired: function {ctx: Ctx.view i: u64} out bool is {
 # already sorted. The per-unit skip lists are gone with them: a member the
 # runtime does not supply has no row to walk.
 emitRuntimeUnit: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     runtimeDir: StringView
@@ -24557,7 +24557,7 @@ emitRuntimeUnit: function {
 # natives.tbl rows is not in the compiler's list, and this is the slot it gets.
 # `prelude` is not one of them: emitC emits it into the header itself.
 emitUnorderedUnits: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     runtimeDir: StringView
@@ -24586,7 +24586,7 @@ emitUnorderedUnits: function {
 
 # ioFrag -- load + append an io runtime fragment unconditionally.
 ioFrag: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     runtimeDir: StringView
@@ -24650,7 +24650,7 @@ emitIoFileConformance: function {
 # emitIoStdStreams -- io.stdin/stdout/stderr: a borrowed Reader/Writer over a
 # static backing File on fd 0/1/2 (closed=true so RAII never closes it).
 emitIoStdStreams: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     buf: String.borrow
@@ -25523,7 +25523,7 @@ ensureFwdStruct: function {
 # forward-declarable as a by-value fnptr param/return (vtable fat pointers,
 # anonymous tagged-union structs); a function using one is never an fnptr value.
 isComplexFnptrParam: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     tid: ztypes.tid
@@ -26564,7 +26564,7 @@ emitRecordDefs: function {
 # emitDefMethods -- emit a record/class def's as-block methods (forward decls
 # when declOnly, bodies otherwise). Used by the method passes of emitRecordDefsIn.
 emitDefMethods: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     bm: Node.view
@@ -27388,7 +27388,7 @@ fileFromArgCoerce: function {
 # taking the receiver by pointer and collection args (Bytes/ByteView) by
 # pointer. "" for any non-File receiver.
 emitFileMethodCall: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     call: zast.CallData.view
@@ -27637,7 +27637,7 @@ emitIoWrapperCreate: function {
 # since name ids are pooled program-wide -- runs only once a native is in
 # hand.
 nativeNoArgOf: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     unitName: StringView
     baseId: zast.nameid
@@ -27676,8 +27676,8 @@ nativeNoArgOf: function {
         nameId: (zast.poolFind pool: ast.names text: unitName)
     )
     nameId95: (zast.poolFind pool: ast.names text: base)
-    sh: (ztypecheck.resolveUnitChild
-        :ast
+    sh: (ztypecheck.resolveUnitChildRo
+            :ast
         st: symtab
         unitDecl: uq5z
         nameId: nameId95
@@ -27702,7 +27702,7 @@ nativeNoArgOf: function {
 # auto-call (os.args / os.envNames return an owned List, so the binding's List
 # branch must emit the call, not a fresh empty list).
 noArgNativeRhs: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     unitName: StringView
     n: Node.view
@@ -27868,7 +27868,7 @@ emitNativeArg: function {
 # bodied siblings fall through to the id-cname route, methods to their own
 # legs, non-convention natives (stringJoin/print/panic) to theirs.
 emitNativeFreeFnCall: function {
-    ast: Ast
+    ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     call: zast.CallData.view

@@ -58,6 +58,8 @@ public: unit {
     :typecheck
     :walkLookupTyperef
     :walkLookupTyperefById
+    :walkLookupTyperefRo
+    :resolveUnitChildRo
 }
 
 Node: zast.Node
@@ -36162,6 +36164,102 @@ walkLookupTyperef: function {
     nid: zast.poolFind pool: ast.names text: base
     if nid.isZero then return (optionval.none u64)
     return (walkLookupTyperefById :st :frame :ast :unitDecl baseId: nid)
+}
+
+
+# probeFrameTyperefRo -- probeFrameTyperef's read half: the Decl child's
+# already-minted id, else the unit type's member index. Never mints; a name
+# whose id only a mint leg could produce answers 0.
+probeFrameTyperefRo: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    root: ztypes.declid
+    nameId: zast.nameid
+    depth: u64
+} out u64 is {
+    if nameId.isZero then return 0
+    if root.isZero then return 0
+    if depth > 8 then return 0
+    cid: st.typing.declFindChild parentDeclId: root :nameId
+    if (cid.isZero) == false then {
+        ctid: u64
+        isRx: false
+        {
+            decl: st.typing.decls.get i: cid.u64
+            ctid = decl.typeId
+            if decl.kind.reexportDecl then isRx = true
+        }
+        if ctid > 0 then return ctid
+        if isRx then {
+            # a re-export the walk never touched: follow the target by
+            # reading the ids off its def node -- never lay the edge
+            alTgt: reexportTargetIdsOf :st :ast declId: cid
+            if alTgt.unitName.u32 > 0 then {
+                return (probeFrameTyperefRo
+                    :ast
+                    :st
+                    root: (unitDeclOfName :st nameId: alTgt.unitName)
+                    nameId: alTgt.defName
+                    depth: depth + 1
+                )
+            }
+        }
+    }
+    rt: declTypeIdOf :st declId: root
+    if rt.isZero then return 0
+    co: st.typing.declChildOfId parentTypeId: rt :nameId
+    match (
+        co
+    ) case some then {
+        return co
+    } case none then null
+    return 0
+}
+
+# walkLookupTyperefRo -- the post-typecheck read-only environment walk:
+# enclosing unit frames, then core, answering only from what resolution
+# already minted. The emitter consumes and never demands, so the mint legs
+# (re-export aliases, const folds, pending waits) have nothing left to do
+# by the time it asks.
+walkLookupTyperefRo: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    base: StringView
+} out optionval u64 is {
+    baseId: zast.poolFind pool: ast.names text: base
+    if baseId.isZero then return (optionval.none u64)
+    cur: frameFor :st :frame :unitDecl
+    for cur > 0 loop {
+        if cur == st.typing.coreUnitRoot then {
+            cur = ztypes.declid
+        } else {
+            r: probeFrameTyperefRo :ast :st root: cur nameId: baseId depth: 0
+            if r > 0 then return (optionval.some r)
+            cur = unitFrameOf :st declId: (declParentIdOf :st declId: cur)
+        }
+    }
+    if base == "Any" then return (optionval.none u64)
+    if (st.typing.coreUnitRoot.isZero) == false then {
+        r5: probeFrameTyperefRo :ast :st root: st.typing.coreUnitRoot nameId: baseId depth: 0
+        if r5 > 0 then return (optionval.some r5)
+    }
+    return (optionval.none u64)
+}
+
+
+# resolveUnitChildRo -- resolveUnitChild's read half: the already-minted
+# Decl-tree answer, else the unit type's member index. Never mints.
+resolveUnitChildRo: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    unitDecl: ztypes.declid
+    nameId: zast.nameid
+} out optionval u64 is {
+    r: probeFrameTyperefRo :ast :st root: unitDecl :nameId depth: 0
+    if r > 0 then return (optionval.some r)
+    return (optionval.none u64)
 }
 
 # resolvedByIds / resolvedByIdsMember -- resolve a (unit, name[, member])
