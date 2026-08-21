@@ -12875,6 +12875,1392 @@ isDottedAutoCall: function {n: Node.view} out bool is {
         return false
     }
 }
+# emitCollectionBind -- binding a List, Set or Map: the mono's own create, the
+# capacity the construction asked for, and the cleanup entry the local earns.
+emitCollectionBind: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.AssignmentData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    nm: StringView
+    nameVid: ztypes.vid
+} out bool is {
+    handled: false
+    avn: ast.nodes.get i: n.value.u64
+    nbrw: bindingRhsIsBorrow :ast :symtab :ctx n: avn
+    ltid: stampIdOf :symtab nid: n.nodeid.u64
+    if ltid.isZero then ltid = stampIdOf :symtab nid: (interpPartNodeId n: avn)
+    ltid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: ltid)
+    if (isListOriginOf :symtab :ctx tid: ltid) then {
+        lcb: ctxCname :ctx tid: ltid
+        if (noArgNativeRhs :ast :symtab unitName: ctx.mainName.stringview n: avn) then {
+            # owned List returned by os.args / os.envNames: emit the call.
+            losr: emitExpr :ast :symtab :ctx n: avn
+            losb: "\{ind}\{lcb}_t \{nm} = \{losr};\n"
+            buf.append losb
+        } else {
+            if (forexprValue :ast n: avn) then {
+                # list comprehension: `xs: for ... loop { expr }` create + populate
+                lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
+                buf.append lc0
+                (emitListComprehension
+                    :ast
+                    :symtab
+                    :ctx
+                    forNode: avn
+                    listCb: lcb.stringview
+                    listVar: nm
+                    :ind
+                    :tmp
+                    :buf
+                )
+            } else {
+                if (collectionValueCallRhs :ast :symtab n: avn) then {
+                    lvr0: emitExpr :ast :symtab :ctx n: avn
+                    lb0: "\{ind}\{lcb}_t \{nm} = \{lvr0};\n"
+                    buf.append lb0
+                    emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
+                    # a binding from a bare owned local is a MOVE: zero the
+                    # source so its scope-exit free no-ops now that this
+                    # binding owns the buffer
+                    if (isBareNameValue :ast n: avn) then {
+                        lzs0: implicitTakeSource :ast :symtab :ctx n: avn
+                        if lzs0.length > 0 then {
+                            lzi0: "\{ind}\{lzs0} = (\{lcb}_t){0};\n"
+                            buf.append lzi0
+                        }
+                    }
+                } else {
+                    lcap: listCapArg :ast :symtab :ctx n: avn
+                    lb1: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
+                    buf.append lb1
+                }
+            }
+        }
+        # A field read aliases the holder's heap -- the struct copy above
+        # shares its buffer -- so the holder alone owns it. Registering a
+        # destructor here freed that buffer twice.
+        if (nbrw) == false then {
+            lfree: "    \{lcb}_destroy(&\{nm});\n"
+            lfsv: lfree.stringview
+            lfv: lfsv.string
+            tmp.listFrees.append lfv
+            tmp.listFreeVars.append nm.string
+            tmp.listFreeRaw.append nameVid
+        }
+        return true
+    }
+    if (isSetOriginOf :symtab :ctx tid: ltid) then {
+        scb: ctxCname :ctx tid: ltid
+        if (collectionValueCallRhs :ast :symtab n: avn) then {
+            svr: emitExpr :ast :symtab :ctx n: avn
+            sbc: "\{ind}\{scb}_t* \{nm} = \{svr};\n"
+            buf.append sbc
+            emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
+            # a heap collection binding from a bare owned local is a MOVE:
+            # clear the source so its scope-exit destroy no-ops now that
+            # this binding owns the allocation
+            if (isBareNameValue :ast n: avn) then {
+                hzs0: implicitTakeSource :ast :symtab :ctx n: avn
+                if hzs0.length > 0 then {
+                    hzi0: "\{ind}\{hzs0} = NULL;\n"
+                    buf.append hzi0
+                }
+            }
+        } else {
+            scap: listCapArg :ast :symtab :ctx n: avn
+            sb0: "\{ind}\{scb}_t* \{nm} = \{scb}_create((uint64_t)\{scap});\n"
+            buf.append sb0
+        }
+        # A field read aliases the holder's heap -- the struct copy above
+        # shares its buffer -- so the holder alone owns it. Registering a
+        # destructor here freed that buffer twice.
+        if (nbrw) == false then {
+            sfree: "    \{scb}_destroy(\{nm});\n"
+            sfsv: sfree.stringview
+            sfv: sfsv.string
+            tmp.listFrees.append sfv
+            tmp.listFreeVars.append nm.string
+            tmp.listFreeRaw.append nameVid
+        }
+        return true
+    }
+    if (isMapOriginOf :symtab :ctx tid: ltid) then {
+        mcb: ctxCname :ctx tid: ltid
+        if (collectionValueCallRhs :ast :symtab n: avn) then {
+            mvr: emitExpr :ast :symtab :ctx n: avn
+            mbc: "\{ind}\{mcb}_t* \{nm} = \{mvr};\n"
+            buf.append mbc
+            emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
+            # a heap collection binding from a bare owned local is a MOVE:
+            # clear the source so its scope-exit destroy no-ops now that
+            # this binding owns the allocation
+            if (isBareNameValue :ast n: avn) then {
+                hzs0: implicitTakeSource :ast :symtab :ctx n: avn
+                if hzs0.length > 0 then {
+                    hzi0: "\{ind}\{hzs0} = NULL;\n"
+                    buf.append hzi0
+                }
+            }
+        } else {
+            mcap: listCapArg :ast :symtab :ctx n: avn
+            mb0: "\{ind}\{mcb}_t* \{nm} = \{mcb}_create((uint64_t)\{mcap});\n"
+            buf.append mb0
+        }
+        # A field read aliases the holder's heap -- the struct copy above
+        # shares its buffer -- so the holder alone owns it. Registering a
+        # destructor here freed that buffer twice.
+        if (nbrw) == false then {
+            mfree: "    \{mcb}_destroy(\{nm});\n"
+            mfsv: mfree.stringview
+            mfv: mfsv.string
+            tmp.listFrees.append mfv
+            tmp.listFreeVars.append nm.string
+            tmp.listFreeRaw.append nameVid
+        }
+        return true
+    }
+    return handled
+}
+# emitStringBind -- binding a StringView or a String. A view aliases its source and
+# frees nothing; an owned String joins the scope's cleanup list unless the binding
+# is a borrow.
+emitStringBind: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.AssignmentData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    nm: StringView
+    nameVid: ztypes.vid
+    btid: ztypes.tid
+} out bool is {
+    handled: false
+    avn: ast.nodes.get i: n.value.u64
+    if btid == ctx.svTid then {
+        lvN: bindLitIndex :ast :symtab :ctx n: avn
+        if lvN > 0 then {
+            lsv2: "\{ind}\{ctx.svC}_t \{nm} = _zs\{lvN};\n"
+            buf.append lsv2
+            return true
+        }
+        svb: stringviewOfBase :ast :symtab n: avn
+        if svb.length > 0 then {
+            svacc4: ".".string
+            svbV: atomVid :symtab nid: (stringviewOfBaseNid :ast :symtab n: avn)
+            if (isPtrVid :ctx vid: svbV) then svacc4 = "->".string
+            svbR4: emitLocalAtomName :ctx name: svb.stringview vid: svbV
+            lsv4: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ .data = \{svbR4}\{svacc4}data, .size = \{svbR4}\{svacc4}size };\n"
+            buf.append lsv4
+            return true
+        }
+        vx: emitExpr :ast :symtab :ctx n: avn
+        flushArgHoists :ctx :ind :tmp :buf
+        if (vx.stringview.startsWith prefix: "/*") then {
+            emitFail :ctx what: "unhandled StringView binding \{nm}" line: n.lineno
+            lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
+            buf.append lsv3
+        } else {
+            lsv5: "\{ind}\{ctx.svC}_t \{nm} = \{vx};\n"
+            buf.append lsv5
+        }
+        return true
+    }
+    if btid == ctx.strTid then {
+        fvN: stringCopyLitIndex :ast :symtab :ctx n: avn
+        if fvN > 0 then {
+            lsc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_from_view(_zs\{fvN});\n"
+            buf.append lsc
+            nmc2: nm.string
+            tmp.frees.append nmc2
+            tmp.freeRaw.append nameVid
+            return true
+        }
+        did: (emitStringBindValue
+            :ast
+            :symtab
+            :ctx
+            n: avn
+            :nm
+            nmVid: nameVid
+            :ind
+            :tmp
+            :buf
+        )
+        if did then return true
+        sx: emitExpr :ast :symtab :ctx n: avn
+        flushArgHoists :ctx :ind :tmp :buf
+        if (sx.stringview.startsWith prefix: "/*") then {
+            emitFail :ctx what: "unhandled String binding \{nm}" line: n.lineno
+            lst2: "\{ind}/* zemitterc: unhandled String binding \{nm} */\n"
+            buf.append lst2
+        } else {
+            lst3: "\{ind}\{ctx.strC}_t \{nm} = \{sx};\n"
+            buf.append lst3
+            # the value may be a call that took ownership of an argument;
+            # the caller zeroes that source here, as every other binding
+            # branch does
+            emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
+            if (bindingRhsIsBorrow :ast :symtab :ctx n: avn) == false then {
+                nmc3: nm.string
+                tmp.frees.append nmc3
+                tmp.freeRaw.append nameVid
+                # a binding from a bare owned local is a MOVE, exactly as a
+                # reassignment from one is: zero the source so its scope-exit
+                # free no-ops now that this binding owns the buffer.
+                if (isBareNameValue :ast n: avn) then {
+                    szs: implicitTakeSource :ast :symtab :ctx n: avn
+                    if szs.length > 0 then {
+                        szi: "\{ind}\{szs} = (\{ctx.strC}_t){0};\n"
+                        buf.append szi
+                    }
+                }
+            }
+        }
+        return true
+    }
+    return handled
+}
+# emitTypedBind -- the general binding: a declared C type and a value, plus the
+# cleanup entry the local earns. A union or a heap-owning record registers its
+# destructor; a borrow registers nothing, since the source still owns the heap.
+emitTypedBind: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.AssignmentData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    nm: StringView
+    nameVid: ztypes.vid
+    ct: StringView
+    ltid: ztypes.tid
+    tn: StringView
+} is {
+    avn: ast.nodes.get i: n.value.u64
+    rv: emitExpr :ast :symtab :ctx n: avn
+    flushArgHoists :ctx :ind :tmp :buf
+    if ct.length > 0 then {
+        # a reference-returning callee hands back `T*`: the binding ALIASES
+        # the source, so it is declared as a pointer and registered so every
+        # later use emits `->`. Binding it by value would copy the struct and
+        # silently lose writes through it.
+        ctB8: "\{ct}"
+        {
+            rbf8: refBorrowCalleeFid :ast :symtab :ctx n: avn
+            if rbf8 > 0 when (fnReturnsRefBorrow
+                :ast
+                :symtab
+                :ctx
+                fid: (ztypes.tid.create from: rbf8.u64)
+                retTid: ltid
+            ) then {
+                ctB8 = "\{ct}*"
+                ctx.ptrVids.append nameVid
+            }
+            if (isSvAsStringNode :ast :symtab :ctx n: avn) then {
+                ctB8 = "const \{ct}*"
+                ctx.ptrVids.append nameVid
+            }
+        }
+        la: "\{ind}\{ctB8} \{nm} = \{rv};\n"
+        buf.append la
+        emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
+        ftFn: false
+        ftnid: interpPartNodeId n: avn
+        if ftnid > 0 then {
+            ftst: stampIdOf :symtab nid: ftnid
+            if ftst > 0 then {
+                if (symtab.reg.typetypeOf typeId: ftst) == ztypes.ztypetype.functionType then {
+                    # a function reference is POD: taking it moves nothing,
+                    # so the source (a unit fn symbol or an fnptr field)
+                    # is never zeroed
+                    ftFn = true
+                }
+            }
+        }
+        if (isFieldTake :ast n: avn) when ftFn == false then {
+            ftz: "\{ind}\{rv} = (\{ct}){0};\n"
+            buf.append ftz
+        } else {
+            bts: takeStringSource :ast :symtab :ctx n: avn
+            if bts.length > 0 then {
+                bzz: "\{ind}\{rv} = (\{ct}){0};\n"
+                buf.append bzz
+            } else {
+                # a binding from a bare owned local is a MOVE, exactly as a
+                # reassignment from one is: zero the source so its scope-exit
+                # free no-ops now that this binding owns the heap. A borrow
+                # binding owns nothing, so its source keeps its value.
+                # ownership is decided from the type BEFORE the source text
+                # is composed: a scalar binding moves nothing, and asking for
+                # the source costs a String.
+                if (isBareNameValue :ast n: avn) then {
+                    bzt: stampIdOf :symtab nid: (interpPartNodeId n: avn)
+                    bzp: isHeapPtrCollection :symtab :ctx tid: bzt
+                    bzo: bzp
+                    if (symtab.reg.needsDestructor typeId: bzt) then bzo = true
+                    if bzo when (bindingRhsIsBorrow
+                        :ast
+                        :symtab
+                        :ctx
+                        n: avn
+                    ) == false then {
+                        bzs: implicitTakeSource :ast :symtab :ctx n: avn
+                        if bzs.length > 0 then {
+                            if bzp then {
+                                bzh: "\{ind}\{bzs} = NULL;\n"
+                                buf.append bzh
+                            } else {
+                                bzc: (typeRefC
+                                    :ast
+                                    :symtab
+                                    :ctx
+                                    tid: bzt
+                                    thisTid: ztypes.tid
+                                )
+                                if bzc.length > 0 then {
+                                    bzi: "\{ind}\{bzs} = (\{bzc}){0};\n"
+                                    buf.append bzi
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        # an owned class/record local with heap fields is destroyed at scope
+        # exit (String/collection locals returned earlier; take-aliases too).
+        ltHasDtor: false
+        if (symtab.reg.needsDestructor typeId: ltid) then ltHasDtor = true
+        ltUorig: originTidOf :symtab tid: ltid
+        if ltUorig > 0 when (symtab.reg.typetypeOf typeId: ltid) == ztypes.ztypetype.unionType then {
+            ltHasDtor = true
+        }
+        if ltHasDtor then {
+            if (bindingRhsIsBorrow :ast :symtab :ctx n: avn) == false then {
+                ldcb: ctxCname :ctx tid: ltid
+                ldRef: "&\{nm}"
+                if (isBoxTid :symtab tid: ltid) then ldRef = "\{nm}"
+                ldf: "    \{ldcb}_destroy(\{ldRef});\n"
+                ldfs: ldf.copy
+                tmp.listFrees.append ldfs
+                tmp.listFreeVars.append nm.string
+                tmp.listFreeRaw.append nameVid
+            }
+        }
+    } else {
+        emitFail :ctx what: "unhandled binding type \{tn} for \{nm}" line: n.lineno
+        lb: "\{ind}/* zemitterc: unhandled binding type \{tn} for \{nm} */\n"
+        buf.append lb
+    }
+}
+# emitTakeAliasBind -- `x: <inst>.take` over a record or class is an ownership
+# ALIAS: record `x => inst` and emit no storage, so a later `x` resolves to
+# `inst`. A narrowed-subject take is the exception -- it MOVES the payload out of
+# the match arm's box, so it needs real storage and box zeroing.
+emitTakeAliasBind: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.AssignmentData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    nm: StringView
+    nameVid: ztypes.vid
+} out bool is {
+    handled: false
+    avn: ast.nodes.get i: n.value.u64
+    # `x: <inst>.take` over a record/class is an ownership alias: record
+    # `x => inst` and emit no storage (subsequent `x` resolves to `inst`).
+    tabA: takeAliasBase :ast :symtab n: avn
+    tabAV: atomVid :symtab nid: (takeAliasBaseNid :ast :symtab n: avn)
+    if tabA.length > 0 then {
+        # a narrowed-subject `.take` binding MOVES the payload out of
+        # the match arm's box: real storage from the narrowed cast plus
+        # box zeroing, so the subject's post-match destroy no-ops (a
+        # pure alias would re-resolve to the whole un-narrowed subject)
+        if (vvHas xs: ctx.narrowBox vid: tabAV) then {
+            ntO: vtGet xs: ctx.narrowTid vid: tabAV
+            match (
+                ntO
+            ) case some then {
+                ctB: (typeRefC
+                    :ast
+                    :symtab
+                    :ctx
+                    tid: (ztypes.tid.create from: ntO.u64)
+                    thisTid: ztypes.tid
+                )
+                valB: takeSourceResolve :ctx name: tabA.stringview vid: tabAV
+                lnB1: "\{ind}\{ctB} \{nm} = \{valB};\n"
+                buf.append lnB1
+                lnB2: "\{ind}\{valB} = (\{ctB}){0};\n"
+                buf.append lnB2
+                # a String payload is freed by the string runtime, which
+                # has no `_destroy`: it rides the scope's String free list
+                # like any other owned String local.
+                ldcbC: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
+                if ldcbC.stringview == ctx.strC.stringview then {
+                    nmcB: nm.string
+                    tmp.frees.append nmcB
+                    tmp.freeRaw.append nameVid
+                } else {
+                    if (symtab.reg.needsDestructor typeId: ntO) then {
+                        ldcbB: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
+                        ldfB: "    \{ldcbB}_destroy(&\{nm});\n"
+                        ldfsB: ldfB.copy
+                        tmp.listFrees.append ldfsB
+                        tmp.listFreeVars.append nm.string
+                        tmp.listFreeRaw.append nameVid
+                    }
+                }
+                return true
+            } case none then null
+        }
+        # the alias VALUE is C text, so it must be the source's emitted
+        # identifier -- its source name names nothing in the output
+        tabAE: emitLocalAtomName :ctx name: tabA.stringview vid: tabAV
+        lalA: "\{ind}/* alias: \{nm} => \{tabAE} */\n"
+        buf.append lalA
+        vvSet xs: ctx.aliases vid: nameVid val: tabAE.stringview
+        return true
+    }
+    return handled
+}
+# bindDeclaredCType -- the C type a binding declares. The NAME says scalar; the TID
+# says whether it is the BUILTIN one -- a shadow keeps the name and loses the C
+# scalar, so it emits its struct instead. An unnamed binding takes the stamped
+# type of the statement, or of the value when the statement carries none.
+bindDeclaredCType: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.AssignmentData.view
+    btid: ztypes.tid
+    tn: StringView
+} out String is {
+    # the NAME says scalar; the tid says whether it is the builtin one. A
+    # shadow keeps the name and loses the C scalar, so it emits its struct.
+    avn: ast.nodes.get i: n.value.u64
+    ct: cTypeOf name: tn
+    if ct.length > 0 when btid > 0 then {
+        if (scalarTidIsBuiltin :symtab tid: btid) == false then {
+            ct = typeRefC :ast :symtab :ctx tid: btid thisTid: ztypes.tid
+        }
+    }
+    if ct.length == 0 then {
+        tgo: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: n.nodeid.u64
+        if tgo > 0 then {
+            ct = (typeRefC
+                :ast
+                :symtab
+                :ctx
+                tid: (ztypes.tid.create from: tgo.u64)
+                thisTid: ztypes.tid
+            )
+        } else {
+            vgo: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (interpPartNodeId n: avn)
+            if vgo > 0 then {
+                ct = (typeRefC
+                    :ast
+                    :symtab
+                    :ctx
+                    tid: (ztypes.tid.create from: vgo.u64)
+                    thisTid: ztypes.tid
+                )
+            }
+        }
+    }
+    return ct
+}
+
+# emitAssignment -- a binding statement (`x: <value>`): the declaration, the value,
+# and the ownership bookkeeping the binding takes on -- a move zeroes its source,
+# a borrow records its origin, and an owned local joins the scope's cleanup list.
+emitAssignment: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.AssignmentData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    avn: ast.nodes.get i: n.value.u64
+    tn: stampNameOf :symtab nid: n.nodeid.u64
+    btid: stampIdOf :symtab nid: n.nodeid.u64
+    ct: bindDeclaredCType :ast :symtab :ctx :n :btid tn: tn.stringview
+    anmC: zast.poolTextAt pool: ast.names ref: n.name
+    nameVid: defVid :symtab nid: n.nodeid.u64
+    nm: varCName :ctx vid: nameVid name: anmC.stringview
+    # this statement introduces a fresh local: a borrow alias left by an
+    # earlier binding of the same name names a C variable that is out of
+    # scope here, so drop it before the legs below re-establish one.
+    {
+        sab: vvGet xs: ctx.aliases vid: nameVid
+        if sab.length > 0 when (sab.stringview.startsWith prefix: "(*__borrow_") then {
+            vvRemove xs: ctx.aliases vid: nameVid
+        }
+    }
+    nbrw: bindingRhsIsBorrow :ast :symtab :ctx n: avn
+    ctx.borrowedVars.set key: (defVid :symtab nid: n.nodeid.u64) value: nbrw
+    if ctx.genActive when (isYieldNode :ast n: avn) then {
+        (emitExprFormYield
+            :ast
+            :symtab
+            :ctx
+            value: avn
+            aid: n.nodeid.u64
+            nm: nm.stringview
+            nmVid: nameVid
+            :ind
+            :tmp
+            :buf
+        )
+        return
+    }
+    if (emitTakeAliasBind
+        :ast
+        :symtab
+        :ctx
+        :n
+        :ind
+        :tmp
+        :buf
+        nm: nm.stringview
+        :nameVid
+    ) then return
+    if (emitCollectionBind
+        :ast
+        :symtab
+        :ctx
+        :n
+        :ind
+        :tmp
+        :buf
+        nm: nm.stringview
+        :nameVid
+    ) then return
+    ltid: stampIdOf :symtab nid: n.nodeid.u64
+    if ltid.isZero then ltid = stampIdOf :symtab nid: (interpPartNodeId n: avn)
+    ltid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: ltid)
+    if (rhsIsBorrowGet :ast :symtab :ctx n: avn) then {
+        # a borrowed element get: bind the POINTER and alias the name to the
+        # deref, so every downstream use stays a value-shaped lvalue. No
+        # destructor and no take-invalidation: the container owns the element.
+        rvb: emitExpr :ast :symtab :ctx n: avn
+        flushArgHoists :ctx :ind :tmp :buf
+        bct: ct.copy
+        if bct.length == 0 then bct = "int64_t".string
+        lbg0: "\{ind}\{bct}* __borrow_\{nm} = &\{rvb};\n"
+        buf.append lbg0
+        lbg1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
+        buf.append lbg1
+        bga: "(*__borrow_\{nm})"
+        vvSet xs: ctx.aliases vid: nameVid val: bga.stringview
+        return
+    }
+    if (emitStringBind
+        :ast
+        :symtab
+        :ctx
+        :n
+        :ind
+        :tmp
+        :buf
+        nm: nm.stringview
+        :nameVid
+        :btid
+    ) then return
+    if ct.length > 0 then {
+        dm: (emitMatchBindValue
+            :ast
+            :symtab
+            :ctx
+            n: avn
+            nm: nm.stringview
+            ct: ct.stringview
+            :ind
+            :tmp
+            :buf
+        )
+        if dm then return
+        di: (emitIfBindValue
+            :ast
+            :symtab
+            :ctx
+            n: avn
+            nm: nm.stringview
+            ct: ct.stringview
+            :ind
+            :tmp
+            :buf
+        )
+        if di then return
+        dd: (emitDoBindValue
+            :ast
+            :symtab
+            :ctx
+            n: avn
+            nm: nm.stringview
+            nmVid: nameVid
+            ct: ct.stringview
+            tid: ltid
+            :ind
+            :tmp
+            :buf
+        )
+        if dd then return
+    }
+    (emitTypedBind
+        :ast
+        :symtab
+        :ctx
+        :n
+        :ind
+        :tmp
+        :buf
+        nm: nm.stringview
+        :nameVid
+        ct: ct.stringview
+        :ltid
+        tn: tn.stringview
+    )
+}
+# emitReturnStmt -- the statement shapes that are not one of the named node arms:
+# a `return` with its scope cleanup, `break` / `continue` with theirs, and a bare
+# expression statement.
+emitReturnStmt: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    # a no-arg method auto-call in statement position (this.accept,
+    # this.statepop) is a dotted path: emit the call expression as a statement.
+    if (isDottedAutoCall :n) then {
+        # `.release` on a protocol is a transfer marker (scope-exit destroy
+        # covers it) -- emit nothing, like emitCallStmt.
+        dct: dottedChildText :ast :n
+        if dct.stringview == "release" then {
+            rrid: dottedReceiverStampId :ast :symtab callable: n
+            rtt: symtab.reg.typetypeOf typeId: rrid
+            if rtt == ztypes.ztypetype.protocolType then return
+            rcvKey: atomVid :symtab nid: (dottedBaseNodeId :ast :n)
+            rbrw: false
+            bvg: ctx.borrowedVars.get key: rcvKey
+            match (
+                bvg
+            ) case some then {
+                rbrw = bvg
+            } case none then null
+            if rbrw then return
+            rcvV: emitDottedReceiver :ast :symtab :ctx callable: n
+            if rrid == ctx.strTid then {
+                rdf: "\{ind}\{ctx.strC}_free(&\{rcvV});\n"
+                buf.append rdf
+            } else {
+                if (symtab.reg.needsDestructor typeId: rrid) then {
+                    rdcb: ctxCname :ctx tid: (ztypes.tid.create from: rrid.u64)
+                    rdref: "&\{rcvV}"
+                    if (isBoxTid
+                        :symtab
+                        tid: (ztypes.tid.create from: rrid.u64)
+                    ) then rdref = "\{rcvV}"
+                    rdc: "\{ind}\{rdcb}_destroy(\{rdref});\n"
+                    buf.append rdc
+                }
+            }
+            rinv: false
+            if rrid == ctx.strTid then rinv = true
+            if rtt == ztypes.ztypetype.classType then rinv = true
+            if rtt == ztypes.ztypetype.unionType then rinv = true
+            if rinv then {
+                rci: (typeRefC
+                    :ast
+                    :symtab
+                    :ctx
+                    tid: (ztypes.tid.create from: rrid.u64)
+                    thisTid: ztypes.tid
+                )
+                riv: "\{ind}\{rcvV} = (\{rci}){0};\n"
+                buf.append riv
+            }
+            return
+        }
+        de: emitExpr :ast :symtab :ctx :n
+        if (de.stringview.startsWith prefix: "/*") then {
+            emitFail :ctx what: "unhandled statement".string line: (ztypecheck.nodeLine :n)
+            lud: "\{ind}/* zemitterc: unhandled statement */\n"
+            buf.append lud
+        } else {
+            drtid: stampIdOf :symtab nid: (interpPartNodeId :n)
+            (emitDiscardedResult
+                :ast
+                :symtab
+                :ctx
+                isBorrow: (bindingRhsIsBorrow :ast :symtab :ctx :n)
+                ce: de.stringview
+                rtid: drtid
+                :ind
+                :tmp
+                :buf
+            )
+        }
+        return
+    }
+    # a bare no-arg function call as a statement (`check_mode`): typecheck
+    # coerced the atom to a call; emit the call expression as a statement.
+    fcs: atomTextOf :ast :n
+    ffid: userFnId :ast :symtab :ctx name: fcs.stringview
+    if ffid > 0 when (symtab.reg.typetypeOf typeId: ffid) == ztypes.ztypetype.functionType then {
+        fce: emitExpr :ast :symtab :ctx :n
+        if (fce.stringview.startsWith prefix: "/*") == false then {
+            artid: stampIdOf :symtab nid: (interpPartNodeId :n)
+            (emitDiscardedResult
+                :ast
+                :symtab
+                :ctx
+                isBorrow: (bindingRhsIsBorrow :ast :symtab :ctx :n)
+                ce: fce.stringview
+                rtid: artid
+                :ind
+                :tmp
+                :buf
+            )
+            return
+        }
+    }
+    # bare control keywords parse as an AtomId reference (no value): a
+    # no-value `return` (goto L_done inside a generator), `break`, `continue`.
+    bkw: atomTextOf :ast :n
+    if bkw.stringview == "return" then {
+        if ctx.genActive then {
+            lgd: "\{ind}goto L_done;\n"
+            buf.append lgd
+        } else {
+            emitReturnCleanup :ctx :tmp retExpr: "" keepRefd: true :ind :buf
+            lrt: "\{ind}return;\n"
+            buf.append lrt
+        }
+    } else {
+        if bkw.stringview == "break" then {
+            emitBreakFrees :ctx :tmp :ind :buf
+            if ctx.breakLabels.length > 0 then {
+                bid: ctx.breakLabels.get i: (ctx.breakLabels.length - 1)
+                # an owned-payload loop's per-iteration dtor: the jump
+                # skips the fall-through line, so emit its copy here (a
+                # do-block entry carries an empty cleanup).
+                bcl: ctx.breakLabelCleanup.get i: (ctx.breakLabels.length - 1)
+                if bcl.length > 0 then {
+                    lbc: "\{ind}\{bcl}"
+                    buf.append lbc
+                }
+                lbkg: "\{ind}goto __zbrk_\{bid};\n"
+                buf.append lbkg
+                ubk: true
+                ctx.breakLabelUsed.set key: bid value: ubk
+            } else {
+                lbk: "\{ind}break;\n"
+                buf.append lbk
+            }
+        } else {
+            if bkw.stringview == "continue" then {
+                # inside a do{}while(0) block wrapper a C continue exits
+                # the wrapper, not the loop: jump to the nearest LOOP
+                # entry's __zcont label instead (frees since that loop).
+                inDo: false
+                loopIdx: u64
+                hasLoop: false
+                li: ctx.breakLabelIsDo.length
+                if li > 0 then {
+                    if (ctx.breakLabelIsDo.get i: (li - 1)) then inDo = true
+                    sj: li
+                    for sj > 0 loop {
+                        sj = sj - 1
+                        if (ctx.breakLabelIsDo.get i: sj) == false when (hasLoop) == false then {
+                            loopIdx = sj
+                            hasLoop = true
+                        }
+                    }
+                }
+                if inDo when hasLoop then {
+                    emitContinueFrees :ctx :tmp idx: loopIdx :ind :buf
+                    ccl: ctx.breakLabelCleanup.get i: loopIdx
+                    if ccl.length > 0 then {
+                        lcc: "\{ind}\{ccl}"
+                        buf.append lcc
+                    }
+                    cid: ctx.breakLabels.get i: loopIdx
+                    lcg: "\{ind}goto __zcont_\{cid};\n"
+                    buf.append lcg
+                    ucn: true
+                    ctx.contLabelUsed.set key: cid value: ucn
+                } else {
+                    emitBreakFrees :ctx :tmp :ind :buf
+                    if ctx.breakLabelCleanup.length > 0 then {
+                        pcl0: (ctx.breakLabelCleanup.get
+                            i: (ctx.breakLabelCleanup.length - 1)
+                        )
+                        if pcl0.length > 0 then {
+                            lpc: "\{ind}\{pcl0}"
+                            buf.append lpc
+                        }
+                    }
+                    lct: "\{ind}continue;\n"
+                    buf.append lct
+                }
+            } else {
+                ue: emitExpr :ast :symtab :ctx :n
+                if (ue.stringview.startsWith prefix: "/*") then {
+                    (emitFail
+                        :ctx
+                        what: "unhandled statement".string
+                        line: (ztypecheck.nodeLine :n)
+                    )
+                    lu: "\{ind}/* zemitterc: unhandled statement */\n"
+                    buf.append lu
+                } else {
+                    urtid: stampIdOf :symtab nid: (interpPartNodeId :n)
+                    (emitDiscardedResult
+                        :ast
+                        :symtab
+                        :ctx
+                        isBorrow: (bindingRhsIsBorrow :ast :symtab :ctx :n)
+                        ce: ue.stringview
+                        rtid: urtid
+                        :ind
+                        :tmp
+                        :buf
+                    )
+                }
+            }
+        }
+    }
+}
+# emitReassignStmt -- `x = <value>`: the old value is freed where the binding owns
+# heap, the new one is stored, and a move source is zeroed so its scope-exit free
+# becomes a no-op.
+emitReassignStmt: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.ReassignmentData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    topathNode: ast.nodes.get i: n.topath.u64
+    valueNode: ast.nodes.get i: n.value.u64
+    nm2: emitReassignLvalue :ast :symtab :ctx n: topathNode
+    rcph: copyRvalueHoist :ast :symtab :ctx n: valueNode :ind :buf
+    rv2: String
+    if rcph.length > 0 then {
+        rv2 = rcph
+    } else {
+        rvi: emitInterpStmtValue :ast :symtab :ctx n: valueNode :ind :tmp :buf
+        if rvi.length > 0 then {
+            rv2 = rvi
+        } else {
+            rv2 = emitExpr :ast :symtab :ctx n: valueNode
+        }
+    }
+    # the RHS walk may have recorded _ah arg hoists: declare them HERE,
+    # before the assignment line that uses them (they would otherwise
+    # flush at a later statement, after -- and outside -- this scope)
+    flushArgHoists :ctx :ind :tmp :buf
+    rtnid: interpPartNodeId n: topathNode
+    rtsid: stampIdOf :symtab nid: rtnid
+    # a collection-typedef lvalue (Bytes) stores and destroys as its
+    # chased underlying mono, exactly like the binding path
+    rtch: chaseColMono :symtab :ctx tid: rtsid
+    rtChased: false
+    if rtch != rtsid then {
+        rtsid = ztypes.tid.create from: (rtch)
+        rtChased = true
+    }
+    rdrop: false
+    if (stampIsStr :symtab :ctx nid: rtnid) then {
+        rdrop = true
+    } else {
+        if (symtab.reg.needsDestructor typeId: rtsid) then rdrop = true
+    }
+    if rdrop then {
+        if (isNonLvalueArg s: rv2.stringview) then {
+            rrt: "\{ctx.strC}_t"
+            if (stampIsStr :symtab :ctx nid: rtnid) == false then {
+                rrt = typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
+                if (isHeapPtrCollection :symtab :ctx tid: rtsid) then rrt = "\{rrt}*"
+            }
+            rrn: tmp.next
+            rrh: "\{ind}\{rrt} _rr\{rrn} = \{rv2};\n"
+            buf.append rrh
+            rv2 = "_rr\{rrn}"
+        }
+    }
+    if (stampIsStr :symtab :ctx nid: rtnid) then {
+        rdo: "\{ind}\{ctx.strC}_free(&\{nm2});\n"
+        buf.append rdo
+    } else {
+        if (symtab.reg.needsDestructor typeId: rtsid) then {
+            rdcb: ctxCname :ctx tid: rtsid
+            # the chased mono's registry cname is authoritative (the
+            # stamp name still says the typedef)
+            if rtChased then rdcb = ctxCname :ctx tid: rtsid
+            if (isHeapPtrCollection :symtab :ctx tid: rtsid) then {
+                rdoh: "\{ind}\{rdcb}_destroy(\{nm2});\n"
+                buf.append rdoh
+            } else {
+                rdov: "\{ind}\{rdcb}_destroy(&\{nm2});\n"
+                buf.append rdov
+            }
+        }
+    }
+    lc2: "\{ind}\{nm2} = \{rv2};\n"
+    buf.append lc2
+    # a `<obj>.field.take` RHS moved the field out as a shallow struct
+    # copy: zero the field lvalue so the owner's destructor does not
+    # double-free the payload (mirrors the binding case; fn-typed fields
+    # are POD references and move nothing).
+    rftFn: false
+    rftnid: interpPartNodeId n: valueNode
+    if rftnid > 0 then {
+        rftst: stampIdOf :symtab nid: rftnid
+        if rftst > 0 then {
+            if (symtab.reg.typetypeOf typeId: rftst) == ztypes.ztypetype.functionType then {
+                rftFn = true
+            }
+        }
+    }
+    if (isFieldTake :ast n: valueNode) when rftFn == false then {
+        if (isHeapPtrCollection :symtab :ctx tid: rtsid) then {
+            rftzh: "\{ind}\{rv2} = NULL;\n"
+            buf.append rftzh
+        } else {
+            rfct: "\{ctx.strC}_t"
+            if (stampIsStr :symtab :ctx nid: rtnid) == false then {
+                rfct = typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
+            }
+            rftz: "\{ind}\{rv2} = (\{rfct}){0};\n"
+            buf.append rftz
+        }
+    }
+    # args moved into a construction/call RHS (e.g. `v.f = Option.some bo`)
+    # are consumed by it -- invalidate each moved source so its scope-exit
+    # free no-ops (mirrors the binding case; disjoint from the bare-local
+    # move below, which a construction RHS never matches).
+    emitValueTakeInvalidations :ast :symtab :ctx n: valueNode :ind :buf
+    emitNarrowedTakeZero :ast :symtab :ctx n: valueNode :ind :buf
+    # a reassignment from a bare owned local is a MOVE: zero the source so its
+    # scope-exit free no-ops (the lvalue -- a local or a struct field appended
+    # into a container -- now owns the heap). Scalars/valtypes have no
+    # destructor and are left untouched.
+    zsrc: implicitTakeSource :ast :symtab :ctx n: valueNode
+    if zsrc.length == 0 then {
+        # an explicit `<local>.take` / `.hold` moves just as a bare name
+        # does; the marker form arrives as a dotted path, which
+        # implicitTakeSource (bare names only) does not see. Without this
+        # the source keeps its buffer and frees it again at scope exit,
+        # after the target has already freed it.
+        mmb: moveMarkerBase :ast n: valueNode
+        if mmb > 0 then {
+            zsrc = (implicitTakeSource
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: mmb.u64)
+            )
+        }
+    }
+    if zsrc.length > 0 then {
+        znid: interpPartNodeId n: valueNode
+        zid: stampIdOf :symtab nid: znid
+        if (isHeapPtrCollection :symtab :ctx tid: zid) then {
+            zinvh: "\{ind}\{zsrc} = NULL;\n"
+            buf.append zinvh
+        } else {
+            zct: String
+            if (stampIsStr :symtab :ctx nid: znid) then {
+                zct = "\{ctx.strC}_t"
+            } else {
+                if (symtab.reg.needsDestructor typeId: zid) then {
+                    zct = typeRefC :ast :symtab :ctx tid: zid thisTid: ztypes.tid
+                }
+            }
+            if zct.length > 0 then {
+                zinv: "\{ind}\{zsrc} = (\{zct}){0};\n"
+                buf.append zinv
+            }
+        }
+    }
+}
+# emitForStmt -- a `for` in statement position: the iteration form comes from what
+# the checker resolved its condition to -- an iterator object, a bare boolean
+# while, or a counted range.
+emitForStmt: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.ForData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    ctx.condDepth = ctx.condDepth + 1
+    if (emitObjIterFor :ast :symtab :ctx m: n :ind :tmp :buf) then {
+        ctx.condDepth = ctx.condDepth - 1
+        return
+    }
+    if (emitIntRangeFor :ast :symtab :ctx m: n :ind :tmp :buf) then {
+        ctx.condDepth = ctx.condDepth - 1
+        return
+    }
+    # do-while: no pre-conditions, a post-condition (`for loop {...} while C`).
+    if n.conditions.length == 0 when n.postconditions.length > 0 then {
+        lidDW: pushLoopLabel :ctx :tmp isDo: false
+        ldw: "\{ind}do {\n"
+        buf.append ldw
+        ind2d: "\{ind}    "
+        fLd: tmp.frees.length
+        lLd: tmp.listFrees.length
+        dvG: false
+        if n.body > 0 then {
+            fbd: ast.nodes.get i: n.body.u64
+            emitBodyNode :ast :symtab :ctx n: fbd ind: ind2d.stringview :tmp :buf
+            dvG = blockDiverges :ast :symtab :ctx n: fbd
+        }
+        flushBlockFrees :ctx :tmp fL: fLd lL: lLd diverged: dvG :buf
+        pcond: String
+        pkiter: n.postconditions.iterate
+        for pk: pkiter loop {
+            pkn: ast.nodes.get i: pk.u64
+            # the checker stamps the OPERATION node, so unwrap the same way
+            pkop: pk
+            match (
+                pkn
+            ) case namedoperation then {
+                pkop = pkn.operation
+            } else null
+            pcv: emitExpr :ast :symtab :ctx n: pkn
+            tw8: (truthyCondText
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: pkop.u64)
+                raw: pcv.stringview
+            )
+            if pcond.length > 0 then pcond.append " && "
+            if tw8.length > 0 then {
+                pcond.append tw8
+            } else {
+                pcond.append pcv
+            }
+        }
+        if pcond.length == 0 then pcond.append "0"
+        emitContLabel :ctx id: lidDW ind: ind2d.stringview :buf
+        cwP: condInParens cond: pcond.stringview
+        lpw: "\{ind}} while \{cwP};\n"
+        buf.append lpw
+        popLoopLabel :ctx id: lidDW :ind :buf
+        ctx.condDepth = ctx.condDepth - 1
+        return
+    }
+    cond: String
+    kiter: n.conditions.iterate
+    for kId: kiter loop {
+        k9r: ast.nodes.get i: kId.u64
+        emitForCond :ast :symtab :ctx n: k9r :cond :ind :buf
+    }
+    # `for loop { ... }` -- no conditions, no postconditions: an
+    # unconditional loop that exits via break/return.
+    if cond.length == 0 then cond.append "1"
+    lidW: pushLoopLabel :ctx :tmp isDo: false
+    cwW: condInParens cond: cond.stringview
+    lw: "\{ind}while \{cwW} {\n"
+    buf.append lw
+    ind2: "\{ind}    "
+    fLw: tmp.frees.length
+    lLw: tmp.listFrees.length
+    dvG: false
+    if n.body > 0 then {
+        fbw: ast.nodes.get i: n.body.u64
+        emitBodyNode :ast :symtab :ctx n: fbw ind: ind2.stringview :tmp :buf
+        dvG = blockDiverges :ast :symtab :ctx n: fbw
+    }
+    flushBlockFrees :ctx :tmp fL: fLw lL: lLw diverged: dvG :buf
+    emitContLabel :ctx id: lidW ind: ind2.stringview :buf
+    lwc: "\{ind}}\n"
+    buf.append lwc
+    popLoopLabel :ctx id: lidW :ind :buf
+    ctx.condDepth = ctx.condDepth - 1
+}
+# emitIfStmt -- an `if` in statement position. A chain whose conditions all fold
+# emits only the live branch: spec.pdoc promises the false branch is not emitted,
+# and that promise is not limited to expression position.
+emitIfStmt: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.IfData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    # constant guards: when every clause folds at emit time, only the
+    # winning body is emitted -- provably-dead branches (including dead
+    # `error` arms) are eliminated from the C.
+    efb: foldedBranchOf :symtab nid: n.nodeid.u64
+    if efb.known then {
+        ewb: efb.stmt
+        if (ewb.isZero) == false then {
+            lfo: "\{ind}{\n"
+            buf.append lfo
+            indE: "\{ind}    "
+            fLE: tmp.frees.length
+            lLE: tmp.listFrees.length
+            ewn: ast.nodes.get i: ewb.u64
+            emitBodyNode :ast :symtab :ctx n: ewn ind: indE.stringview :tmp :buf
+            dvF: blockDiverges :ast :symtab :ctx n: ewn
+            flushBlockFrees :ctx :tmp fL: fLE lL: lLE diverged: dvF :buf
+            lfc: "\{ind}}\n"
+            buf.append lfc
+        }
+        return
+    }
+    ctx.condDepth = ctx.condDepth + 1
+    ifAssign: String
+    first: true
+    with citer: n.clauses.iterate do for cId: citer loop {
+        isFirst: first
+        first = false
+        c: ast.nodes.get i: cId.u64
+        (emitIfClause
+            :ast
+            :symtab
+            :ctx
+            n: c
+            :isFirst
+            assignTo: ifAssign.stringview
+            :ind
+            :tmp
+            :buf
+        )
+    }
+    chS: (List String)
+    chV: (ListVal ztypes.vid)
+    chA: (List String)
+    chT: (ListVal u64)
+    chN: (ListVal bool)
+    chR: (List String)
+    (chainFactsOfClauses
+        :ast
+        :symtab
+        :ctx
+        clauses: n.clauses
+        subjects: chS
+        svids: chV
+        arms: chA
+        tids: chT
+        negs: chN
+        recvs: chR
+    )
+    (emitElse
+        :ast
+        :symtab
+        :ctx
+        oId: n.elseclause
+        assignTo: ifAssign.stringview
+        :ind
+        :tmp
+        chSubjects: chS
+        chSubjectVids: chV
+        chArms: chA
+        chTids: chT
+        chNegs: chN
+        chRecvs: chR
+        :buf
+    )
+    le: "\{ind}}\n"
+    buf.append le
+    ctx.condDepth = ctx.condDepth - 1
+}
+# emitWithStmt -- `with x: <value> do <body>`: the value is bound for the body's
+# duration and freed at its end, whatever exit the body takes.
+emitWithStmt: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.WithData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    wnmR: zast.nameTextAt :ast ref: n.name
+    wnm: varCName :ctx vid: (defVid :symtab nid: n.nodeid.u64) name: wnmR.stringview
+    wsid: stampIdDeep :ast :symtab n: (ast.nodes.get i: n.value.u64)
+    wct: String
+    if (originTidOf :symtab tid: (ztypes.tid.create from: wsid.u64)) > 0 then {
+        wct = (typeRefC
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: wsid.u64)
+            thisTid: ztypes.tid
+        )
+    } else {
+        wtn: stampNameDeep :ast :symtab n: (ast.nodes.get i: n.value.u64)
+        wct = cTypeForName :ast :symtab :ctx name: wtn.stringview
+    }
+    wv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64)
+    # a non-lvalue receiver (`with x: (mk).iterate do`) hoisted an _ahN temp
+    # while that expression was built; declare it before the line that reads
+    # it, as the plain-binding path does
+    flushArgHoists :ctx :ind :tmp :buf
+    # a reference-returning callee hands back `T*`, so a `with` binding
+    # ALIASES its source exactly as a plain binding does
+    {
+        wrb: refBorrowCalleeFid :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64)
+        if wrb > 0 when (fnReturnsRefBorrow
+            :ast
+            :symtab
+            :ctx
+            fid: (ztypes.tid.create from: wrb.u64)
+            retTid: (ztypes.tid.create from: wsid.u64)
+        ) then {
+            wct = "\{wct}*"
+            ctx.ptrVids.append (defVid :symtab nid: n.nodeid.u64)
+        }
+    }
+    if wct.length > 0 then {
+        lwv: "\{ind}\{wct} \{wnm} = \{wv};\n"
+        buf.append lwv
+    } else {
+        lwv2: "\{ind}int64_t \{wnm} = \{wv};\n"
+        buf.append lwv2
+    }
+    emitBodyNode :ast :symtab :ctx n: (ast.nodes.get i: n.body.u64) :ind :tmp :buf
+}
+# emitCaseStmt -- a `match` in statement position, delegated to the shared arm
+# emitter.
+emitCaseStmt: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.CaseData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    # constant subject over literal arms: emit only the matching arm, as
+    # the typechecker resolved it.
+    mfb: foldedBranchOf :symtab nid: n.nodeid.u64
+    if mfb.known then {
+        mwb: mfb.stmt
+        if (mwb.isZero) == false then {
+            lmo: "\{ind}{\n"
+            buf.append lmo
+            indM: "\{ind}    "
+            fLM: tmp.frees.length
+            lLM: tmp.listFrees.length
+            mwn: ast.nodes.get i: mwb.u64
+            emitBodyNode :ast :symtab :ctx n: mwn ind: indM.stringview :tmp :buf
+            dvF: blockDiverges :ast :symtab :ctx n: mwn
+            flushBlockFrees :ctx :tmp fL: fLM lL: lLM diverged: dvF :buf
+            lmc: "\{ind}}\n"
+            buf.append lmc
+        }
+        return
+    }
+    ctx.condDepth = ctx.condDepth + 1
+    emitMatchStmt :ast :symtab :ctx m: n assignTo: "" :ind :tmp :buf
+    ctx.condDepth = ctx.condDepth - 1
+}
+# emitSwapStmt -- `a >< b`: a three-step exchange through one temporary, so both
+# sides keep whatever ownership they held.
+emitSwapStmt: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.SwapStmtData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    lhn: ast.nodes.get i: n.lhs.u64
+    rhn: ast.nodes.get i: n.rhs.u64
+    lx: emitExpr :ast :symtab :ctx n: lhn
+    rx: emitExpr :ast :symtab :ctx n: rhn
+    lnid: interpPartNodeId n: lhn
+    lsid: stampIdOf :symtab nid: lnid
+    lct: typeRefC :ast :symtab :ctx tid: lsid thisTid: ztypes.tid
+    if lct.length == 0 then {
+        pmsg6: "zemitterc: unspellable swap operand type id \{lsid}"
+        panic pmsg6
+    }
+    sN: tmp.next
+    s0: "\{ind}{\n"
+    buf.append s0
+    s1: "\{ind}    \{lct} _sw\{sN} = \{lx};\n"
+    buf.append s1
+    s2: "\{ind}    \{lx} = \{rx};\n"
+    buf.append s2
+    s3: "\{ind}    \{rx} = _sw\{sN};\n"
+    buf.append s3
+    s4: "\{ind}}\n"
+    buf.append s4
+}
+# emitDoStmt -- a `do` block in statement position: its own C scope, so the locals
+# it binds are freed at its end.
+emitDoStmt: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.DoData.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    if (ztypecheck.blockHasBreak :ast n: (ast.nodes.get i: n.statement.u64)) then {
+        ldo: "\{ind}do {\n"
+        buf.append ldo
+        indd: "\{ind}    "
+        # the block is its own break target: a break inside frees the
+        # block's owned temps (since these marks) and lands after the
+        # block, not on an enclosing loop's label
+        sdoId: pushLoopLabel :ctx :tmp isDo: true
+        sfL: tmp.frees.length
+        slL: tmp.listFrees.length
+        dst: ast.nodes.get i: n.statement.u64
+        emitBodyNode :ast :symtab :ctx n: dst ind: indd.stringview :tmp :buf
+        dvF: blockDiverges :ast :symtab :ctx n: dst
+        flushBlockFrees :ctx :tmp fL: sfL lL: slL diverged: dvF :buf
+        lwh: "\{ind}} while (0);\n"
+        buf.append lwh
+        popLoopLabel :ctx id: sdoId :ind :buf
+    } else {
+        (emitBodyNode
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: n.statement.u64)
+            :ind
+            :tmp
+            :buf
+        )
+    }
+}
+
 
 # emitStmt -- one statement of a function body.
 emitStmt: function {
@@ -12899,1147 +14285,27 @@ emitStmt: function {
             emitStmt :ast :symtab :ctx n: (ast.nodes.get i: s9Id.u64) :ind :tmp :buf
         }
     } case doexpr then {
-        if (ztypecheck.blockHasBreak :ast n: (ast.nodes.get i: n.statement.u64)) then {
-            ldo: "\{ind}do {\n"
-            buf.append ldo
-            indd: "\{ind}    "
-            # the block is its own break target: a break inside frees the
-            # block's owned temps (since these marks) and lands after the
-            # block, not on an enclosing loop's label
-            sdoId: pushLoopLabel :ctx :tmp isDo: true
-            sfL: tmp.frees.length
-            slL: tmp.listFrees.length
-            dst: ast.nodes.get i: n.statement.u64
-            emitBodyNode :ast :symtab :ctx n: dst ind: indd.stringview :tmp :buf
-            dvF: blockDiverges :ast :symtab :ctx n: dst
-            flushBlockFrees :ctx :tmp fL: sfL lL: slL diverged: dvF :buf
-            lwh: "\{ind}} while (0);\n"
-            buf.append lwh
-            popLoopLabel :ctx id: sdoId :ind :buf
-        } else {
-            (emitBodyNode
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: n.statement.u64)
-                :ind
-                :tmp
-                :buf
-            )
-        }
+        emitDoStmt :ast :symtab :ctx :n :ind :tmp :buf
     } case call then {
         emitCallStmt :ast :symtab :ctx call: n :ind :tmp :buf
     } case assignment then {
-        avn: ast.nodes.get i: n.value.u64
-        tn: stampNameOf :symtab nid: n.nodeid.u64
-        btid: stampIdOf :symtab nid: n.nodeid.u64
-        # the NAME says scalar; the tid says whether it is the builtin one. A
-        # shadow keeps the name and loses the C scalar, so it emits its struct.
-        ct: cTypeOf name: tn.stringview
-        if ct.length > 0 when btid > 0 then {
-            if (scalarTidIsBuiltin :symtab tid: btid) == false then {
-                ct = typeRefC :ast :symtab :ctx tid: btid thisTid: ztypes.tid
-            }
-        }
-        if ct.length == 0 then {
-            tgo: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: n.nodeid.u64
-            if tgo > 0 then {
-                ct = (typeRefC
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: (ztypes.tid.create from: tgo.u64)
-                    thisTid: ztypes.tid
-                )
-            } else {
-                vgo: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (interpPartNodeId n: avn)
-                if vgo > 0 then {
-                    ct = (typeRefC
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: vgo.u64)
-                        thisTid: ztypes.tid
-                    )
-                }
-            }
-        }
-        anmC: zast.poolTextAt pool: ast.names ref: n.name
-        nameVid: defVid :symtab nid: n.nodeid.u64
-        nm: varCName :ctx vid: nameVid name: anmC.stringview
-        # this statement introduces a fresh local: a borrow alias left by an
-        # earlier binding of the same name names a C variable that is out of
-        # scope here, so drop it before the legs below re-establish one.
-        {
-            sab: vvGet xs: ctx.aliases vid: nameVid
-            if sab.length > 0 when (sab.stringview.startsWith prefix: "(*__borrow_") then {
-                vvRemove xs: ctx.aliases vid: nameVid
-            }
-        }
-        nbrw: bindingRhsIsBorrow :ast :symtab :ctx n: avn
-        ctx.borrowedVars.set key: (defVid :symtab nid: n.nodeid.u64) value: nbrw
-        if ctx.genActive when (isYieldNode :ast n: avn) then {
-            (emitExprFormYield
-                :ast
-                :symtab
-                :ctx
-                value: avn
-                aid: n.nodeid.u64
-                nm: nm.stringview
-                nmVid: nameVid
-                :ind
-                :tmp
-                :buf
-            )
-            return
-        }
-        # `x: <inst>.take` over a record/class is an ownership alias: record
-        # `x => inst` and emit no storage (subsequent `x` resolves to `inst`).
-        tabA: takeAliasBase :ast :symtab n: avn
-        tabAV: atomVid :symtab nid: (takeAliasBaseNid :ast :symtab n: avn)
-        if tabA.length > 0 then {
-            # a narrowed-subject `.take` binding MOVES the payload out of
-            # the match arm's box: real storage from the narrowed cast plus
-            # box zeroing, so the subject's post-match destroy no-ops (a
-            # pure alias would re-resolve to the whole un-narrowed subject)
-            if (vvHas xs: ctx.narrowBox vid: tabAV) then {
-                ntO: vtGet xs: ctx.narrowTid vid: tabAV
-                match (
-                    ntO
-                ) case some then {
-                    ctB: (typeRefC
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: ntO.u64)
-                        thisTid: ztypes.tid
-                    )
-                    valB: takeSourceResolve :ctx name: tabA.stringview vid: tabAV
-                    lnB1: "\{ind}\{ctB} \{nm} = \{valB};\n"
-                    buf.append lnB1
-                    lnB2: "\{ind}\{valB} = (\{ctB}){0};\n"
-                    buf.append lnB2
-                    # a String payload is freed by the string runtime, which
-                    # has no `_destroy`: it rides the scope's String free list
-                    # like any other owned String local.
-                    ldcbC: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
-                    if ldcbC.stringview == ctx.strC.stringview then {
-                        nmcB: nm.copy
-                        tmp.frees.append nmcB
-                        tmp.freeRaw.append nameVid
-                    } else {
-                        if (symtab.reg.needsDestructor typeId: ntO) then {
-                            ldcbB: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
-                            ldfB: "    \{ldcbB}_destroy(&\{nm});\n"
-                            ldfsB: ldfB.copy
-                            tmp.listFrees.append ldfsB
-                            tmp.listFreeVars.append nm.copy
-                            tmp.listFreeRaw.append nameVid
-                        }
-                    }
-                    return
-                } case none then null
-            }
-            # the alias VALUE is C text, so it must be the source's emitted
-            # identifier -- its source name names nothing in the output
-            tabAE: emitLocalAtomName :ctx name: tabA.stringview vid: tabAV
-            lalA: "\{ind}/* alias: \{nm} => \{tabAE} */\n"
-            buf.append lalA
-            vvSet xs: ctx.aliases vid: nameVid val: tabAE.stringview
-            return
-        }
-        ltid: stampIdOf :symtab nid: n.nodeid.u64
-        if ltid.isZero then ltid = stampIdOf :symtab nid: (interpPartNodeId n: avn)
-        ltid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: ltid)
-        if (isListOriginOf :symtab :ctx tid: ltid) then {
-            lcb: ctxCname :ctx tid: ltid
-            if (noArgNativeRhs :ast :symtab unitName: ctx.mainName.stringview n: avn) then {
-                # owned List returned by os.args / os.envNames: emit the call.
-                losr: emitExpr :ast :symtab :ctx n: avn
-                losb: "\{ind}\{lcb}_t \{nm} = \{losr};\n"
-                buf.append losb
-            } else {
-                if (forexprValue :ast n: avn) then {
-                    # list comprehension: `xs: for ... loop { expr }` create + populate
-                    lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
-                    buf.append lc0
-                    (emitListComprehension
-                        :ast
-                        :symtab
-                        :ctx
-                        forNode: avn
-                        listCb: lcb.stringview
-                        listVar: nm.stringview
-                        :ind
-                        :tmp
-                        :buf
-                    )
-                } else {
-                    if (collectionValueCallRhs :ast :symtab n: avn) then {
-                        lvr0: emitExpr :ast :symtab :ctx n: avn
-                        lb0: "\{ind}\{lcb}_t \{nm} = \{lvr0};\n"
-                        buf.append lb0
-                        emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
-                        # a binding from a bare owned local is a MOVE: zero the
-                        # source so its scope-exit free no-ops now that this
-                        # binding owns the buffer
-                        if (isBareNameValue :ast n: avn) then {
-                            lzs0: implicitTakeSource :ast :symtab :ctx n: avn
-                            if lzs0.length > 0 then {
-                                lzi0: "\{ind}\{lzs0} = (\{lcb}_t){0};\n"
-                                buf.append lzi0
-                            }
-                        }
-                    } else {
-                        lcap: listCapArg :ast :symtab :ctx n: avn
-                        lb1: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
-                        buf.append lb1
-                    }
-                }
-            }
-            # A field read aliases the holder's heap -- the struct copy above
-            # shares its buffer -- so the holder alone owns it. Registering a
-            # destructor here freed that buffer twice.
-            if (nbrw) == false then {
-                lfree: "    \{lcb}_destroy(&\{nm});\n"
-                lfsv: lfree.stringview
-                lfv: lfsv.string
-                tmp.listFrees.append lfv
-                tmp.listFreeVars.append nm.copy
-                tmp.listFreeRaw.append nameVid
-            }
-            return
-        }
-        if (isSetOriginOf :symtab :ctx tid: ltid) then {
-            scb: ctxCname :ctx tid: ltid
-            if (collectionValueCallRhs :ast :symtab n: avn) then {
-                svr: emitExpr :ast :symtab :ctx n: avn
-                sbc: "\{ind}\{scb}_t* \{nm} = \{svr};\n"
-                buf.append sbc
-                emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
-                # a heap collection binding from a bare owned local is a MOVE:
-                # clear the source so its scope-exit destroy no-ops now that
-                # this binding owns the allocation
-                if (isBareNameValue :ast n: avn) then {
-                    hzs0: implicitTakeSource :ast :symtab :ctx n: avn
-                    if hzs0.length > 0 then {
-                        hzi0: "\{ind}\{hzs0} = NULL;\n"
-                        buf.append hzi0
-                    }
-                }
-            } else {
-                scap: listCapArg :ast :symtab :ctx n: avn
-                sb0: "\{ind}\{scb}_t* \{nm} = \{scb}_create((uint64_t)\{scap});\n"
-                buf.append sb0
-            }
-            # A field read aliases the holder's heap -- the struct copy above
-            # shares its buffer -- so the holder alone owns it. Registering a
-            # destructor here freed that buffer twice.
-            if (nbrw) == false then {
-                sfree: "    \{scb}_destroy(\{nm});\n"
-                sfsv: sfree.stringview
-                sfv: sfsv.string
-                tmp.listFrees.append sfv
-                tmp.listFreeVars.append nm.copy
-                tmp.listFreeRaw.append nameVid
-            }
-            return
-        }
-        if (isMapOriginOf :symtab :ctx tid: ltid) then {
-            mcb: ctxCname :ctx tid: ltid
-            if (collectionValueCallRhs :ast :symtab n: avn) then {
-                mvr: emitExpr :ast :symtab :ctx n: avn
-                mbc: "\{ind}\{mcb}_t* \{nm} = \{mvr};\n"
-                buf.append mbc
-                emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
-                # a heap collection binding from a bare owned local is a MOVE:
-                # clear the source so its scope-exit destroy no-ops now that
-                # this binding owns the allocation
-                if (isBareNameValue :ast n: avn) then {
-                    hzs0: implicitTakeSource :ast :symtab :ctx n: avn
-                    if hzs0.length > 0 then {
-                        hzi0: "\{ind}\{hzs0} = NULL;\n"
-                        buf.append hzi0
-                    }
-                }
-            } else {
-                mcap: listCapArg :ast :symtab :ctx n: avn
-                mb0: "\{ind}\{mcb}_t* \{nm} = \{mcb}_create((uint64_t)\{mcap});\n"
-                buf.append mb0
-            }
-            # A field read aliases the holder's heap -- the struct copy above
-            # shares its buffer -- so the holder alone owns it. Registering a
-            # destructor here freed that buffer twice.
-            if (nbrw) == false then {
-                mfree: "    \{mcb}_destroy(\{nm});\n"
-                mfsv: mfree.stringview
-                mfv: mfsv.string
-                tmp.listFrees.append mfv
-                tmp.listFreeVars.append nm.copy
-                tmp.listFreeRaw.append nameVid
-            }
-            return
-        }
-        if (rhsIsBorrowGet :ast :symtab :ctx n: avn) then {
-            # a borrowed element get: bind the POINTER and alias the name to the
-            # deref, so every downstream use stays a value-shaped lvalue. No
-            # destructor and no take-invalidation: the container owns the element.
-            rvb: emitExpr :ast :symtab :ctx n: avn
-            flushArgHoists :ctx :ind :tmp :buf
-            bct: ct.copy
-            if bct.length == 0 then bct = "int64_t".string
-            lbg0: "\{ind}\{bct}* __borrow_\{nm} = &\{rvb};\n"
-            buf.append lbg0
-            lbg1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
-            buf.append lbg1
-            bga: "(*__borrow_\{nm})"
-            vvSet xs: ctx.aliases vid: nameVid val: bga.stringview
-            return
-        }
-        if btid == ctx.svTid then {
-            lvN: bindLitIndex :ast :symtab :ctx n: avn
-            if lvN > 0 then {
-                lsv2: "\{ind}\{ctx.svC}_t \{nm} = _zs\{lvN};\n"
-                buf.append lsv2
-                return
-            }
-            svb: stringviewOfBase :ast :symtab n: avn
-            if svb.length > 0 then {
-                svacc4: ".".string
-                svbV: atomVid :symtab nid: (stringviewOfBaseNid :ast :symtab n: avn)
-                if (isPtrVid :ctx vid: svbV) then svacc4 = "->".string
-                svbR4: emitLocalAtomName :ctx name: svb.stringview vid: svbV
-                lsv4: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ .data = \{svbR4}\{svacc4}data, .size = \{svbR4}\{svacc4}size };\n"
-                buf.append lsv4
-                return
-            }
-            vx: emitExpr :ast :symtab :ctx n: avn
-            flushArgHoists :ctx :ind :tmp :buf
-            if (vx.stringview.startsWith prefix: "/*") then {
-                emitFail :ctx what: "unhandled StringView binding \{nm}" line: n.lineno
-                lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
-                buf.append lsv3
-            } else {
-                lsv5: "\{ind}\{ctx.svC}_t \{nm} = \{vx};\n"
-                buf.append lsv5
-            }
-            return
-        }
-        if btid == ctx.strTid then {
-            fvN: stringCopyLitIndex :ast :symtab :ctx n: avn
-            if fvN > 0 then {
-                lsc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_from_view(_zs\{fvN});\n"
-                buf.append lsc
-                nmc2: nm.copy
-                tmp.frees.append nmc2
-                tmp.freeRaw.append nameVid
-                return
-            }
-            did: (emitStringBindValue
-                :ast
-                :symtab
-                :ctx
-                n: avn
-                nm: nm.stringview
-                nmVid: nameVid
-                :ind
-                :tmp
-                :buf
-            )
-            if did then return
-            sx: emitExpr :ast :symtab :ctx n: avn
-            flushArgHoists :ctx :ind :tmp :buf
-            if (sx.stringview.startsWith prefix: "/*") then {
-                emitFail :ctx what: "unhandled String binding \{nm}" line: n.lineno
-                lst2: "\{ind}/* zemitterc: unhandled String binding \{nm} */\n"
-                buf.append lst2
-            } else {
-                lst3: "\{ind}\{ctx.strC}_t \{nm} = \{sx};\n"
-                buf.append lst3
-                # the value may be a call that took ownership of an argument;
-                # the caller zeroes that source here, as every other binding
-                # branch does
-                emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
-                if (bindingRhsIsBorrow :ast :symtab :ctx n: avn) == false then {
-                    nmc3: nm.copy
-                    tmp.frees.append nmc3
-                    tmp.freeRaw.append nameVid
-                    # a binding from a bare owned local is a MOVE, exactly as a
-                    # reassignment from one is: zero the source so its scope-exit
-                    # free no-ops now that this binding owns the buffer.
-                    if (isBareNameValue :ast n: avn) then {
-                        szs: implicitTakeSource :ast :symtab :ctx n: avn
-                        if szs.length > 0 then {
-                            szi: "\{ind}\{szs} = (\{ctx.strC}_t){0};\n"
-                            buf.append szi
-                        }
-                    }
-                }
-            }
-            return
-        }
-        if ct.length > 0 then {
-            dm: (emitMatchBindValue
-                :ast
-                :symtab
-                :ctx
-                n: avn
-                nm: nm.stringview
-                ct: ct.stringview
-                :ind
-                :tmp
-                :buf
-            )
-            if dm then return
-            di: (emitIfBindValue
-                :ast
-                :symtab
-                :ctx
-                n: avn
-                nm: nm.stringview
-                ct: ct.stringview
-                :ind
-                :tmp
-                :buf
-            )
-            if di then return
-            dd: (emitDoBindValue
-                :ast
-                :symtab
-                :ctx
-                n: avn
-                nm: nm.stringview
-                nmVid: nameVid
-                ct: ct.stringview
-                tid: ltid
-                :ind
-                :tmp
-                :buf
-            )
-            if dd then return
-        }
-        rv: emitExpr :ast :symtab :ctx n: avn
-        flushArgHoists :ctx :ind :tmp :buf
-        if ct.length > 0 then {
-            # a reference-returning callee hands back `T*`: the binding ALIASES
-            # the source, so it is declared as a pointer and registered so every
-            # later use emits `->`. Binding it by value would copy the struct and
-            # silently lose writes through it.
-            ctB8: "\{ct}"
-            {
-                rbf8: refBorrowCalleeFid :ast :symtab :ctx n: avn
-                if rbf8 > 0 when (fnReturnsRefBorrow
-                    :ast
-                    :symtab
-                    :ctx
-                    fid: (ztypes.tid.create from: rbf8.u64)
-                    retTid: ltid
-                ) then {
-                    ctB8 = "\{ct}*"
-                    ctx.ptrVids.append nameVid
-                }
-                if (isSvAsStringNode :ast :symtab :ctx n: avn) then {
-                    ctB8 = "const \{ct}*"
-                    ctx.ptrVids.append nameVid
-                }
-            }
-            la: "\{ind}\{ctB8} \{nm} = \{rv};\n"
-            buf.append la
-            emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
-            ftFn: false
-            ftnid: interpPartNodeId n: avn
-            if ftnid > 0 then {
-                ftst: stampIdOf :symtab nid: ftnid
-                if ftst > 0 then {
-                    if (symtab.reg.typetypeOf typeId: ftst) == ztypes.ztypetype.functionType then {
-                        # a function reference is POD: taking it moves nothing,
-                        # so the source (a unit fn symbol or an fnptr field)
-                        # is never zeroed
-                        ftFn = true
-                    }
-                }
-            }
-            if (isFieldTake :ast n: avn) when ftFn == false then {
-                ftz: "\{ind}\{rv} = (\{ct}){0};\n"
-                buf.append ftz
-            } else {
-                bts: takeStringSource :ast :symtab :ctx n: avn
-                if bts.length > 0 then {
-                    bzz: "\{ind}\{rv} = (\{ct}){0};\n"
-                    buf.append bzz
-                } else {
-                    # a binding from a bare owned local is a MOVE, exactly as a
-                    # reassignment from one is: zero the source so its scope-exit
-                    # free no-ops now that this binding owns the heap. A borrow
-                    # binding owns nothing, so its source keeps its value.
-                    # ownership is decided from the type BEFORE the source text
-                    # is composed: a scalar binding moves nothing, and asking for
-                    # the source costs a String.
-                    if (isBareNameValue :ast n: avn) then {
-                        bzt: stampIdOf :symtab nid: (interpPartNodeId n: avn)
-                        bzp: isHeapPtrCollection :symtab :ctx tid: bzt
-                        bzo: bzp
-                        if (symtab.reg.needsDestructor typeId: bzt) then bzo = true
-                        if bzo when (bindingRhsIsBorrow
-                            :ast
-                            :symtab
-                            :ctx
-                            n: avn
-                        ) == false then {
-                            bzs: implicitTakeSource :ast :symtab :ctx n: avn
-                            if bzs.length > 0 then {
-                                if bzp then {
-                                    bzh: "\{ind}\{bzs} = NULL;\n"
-                                    buf.append bzh
-                                } else {
-                                    bzc: (typeRefC
-                                        :ast
-                                        :symtab
-                                        :ctx
-                                        tid: bzt
-                                        thisTid: ztypes.tid
-                                    )
-                                    if bzc.length > 0 then {
-                                        bzi: "\{ind}\{bzs} = (\{bzc}){0};\n"
-                                        buf.append bzi
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            # an owned class/record local with heap fields is destroyed at scope
-            # exit (String/collection locals returned earlier; take-aliases too).
-            ltHasDtor: false
-            if (symtab.reg.needsDestructor typeId: ltid) then ltHasDtor = true
-            ltUorig: originTidOf :symtab tid: ltid
-            if ltUorig > 0 when (symtab.reg.typetypeOf typeId: ltid) == ztypes.ztypetype.unionType then {
-                ltHasDtor = true
-            }
-            if ltHasDtor then {
-                if (bindingRhsIsBorrow :ast :symtab :ctx n: avn) == false then {
-                    ldcb: ctxCname :ctx tid: ltid
-                    ldRef: "&\{nm}"
-                    if (isBoxTid :symtab tid: ltid) then ldRef = "\{nm}"
-                    ldf: "    \{ldcb}_destroy(\{ldRef});\n"
-                    ldfs: ldf.copy
-                    tmp.listFrees.append ldfs
-                    tmp.listFreeVars.append nm.copy
-                    tmp.listFreeRaw.append nameVid
-                }
-            }
-        } else {
-            emitFail :ctx what: "unhandled binding type \{tn} for \{nm}" line: n.lineno
-            lb: "\{ind}/* zemitterc: unhandled binding type \{tn} for \{nm} */\n"
-            buf.append lb
-        }
+        emitAssignment :ast :symtab :ctx :n :ind :tmp :buf
     } case reassignment then {
-        topathNode: ast.nodes.get i: n.topath.u64
-        valueNode: ast.nodes.get i: n.value.u64
-        nm2: emitReassignLvalue :ast :symtab :ctx n: topathNode
-        rcph: copyRvalueHoist :ast :symtab :ctx n: valueNode :ind :buf
-        rv2: String
-        if rcph.length > 0 then {
-            rv2 = rcph
-        } else {
-            rvi: emitInterpStmtValue :ast :symtab :ctx n: valueNode :ind :tmp :buf
-            if rvi.length > 0 then {
-                rv2 = rvi
-            } else {
-                rv2 = emitExpr :ast :symtab :ctx n: valueNode
-            }
-        }
-        # the RHS walk may have recorded _ah arg hoists: declare them HERE,
-        # before the assignment line that uses them (they would otherwise
-        # flush at a later statement, after -- and outside -- this scope)
-        flushArgHoists :ctx :ind :tmp :buf
-        rtnid: interpPartNodeId n: topathNode
-        rtsid: stampIdOf :symtab nid: rtnid
-        # a collection-typedef lvalue (Bytes) stores and destroys as its
-        # chased underlying mono, exactly like the binding path
-        rtch: chaseColMono :symtab :ctx tid: rtsid
-        rtChased: false
-        if rtch != rtsid then {
-            rtsid = ztypes.tid.create from: (rtch)
-            rtChased = true
-        }
-        rdrop: false
-        if (stampIsStr :symtab :ctx nid: rtnid) then {
-            rdrop = true
-        } else {
-            if (symtab.reg.needsDestructor typeId: rtsid) then rdrop = true
-        }
-        if rdrop then {
-            if (isNonLvalueArg s: rv2.stringview) then {
-                rrt: "\{ctx.strC}_t"
-                if (stampIsStr :symtab :ctx nid: rtnid) == false then {
-                    rrt = typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
-                    if (isHeapPtrCollection :symtab :ctx tid: rtsid) then rrt = "\{rrt}*"
-                }
-                rrn: tmp.next
-                rrh: "\{ind}\{rrt} _rr\{rrn} = \{rv2};\n"
-                buf.append rrh
-                rv2 = "_rr\{rrn}"
-            }
-        }
-        if (stampIsStr :symtab :ctx nid: rtnid) then {
-            rdo: "\{ind}\{ctx.strC}_free(&\{nm2});\n"
-            buf.append rdo
-        } else {
-            if (symtab.reg.needsDestructor typeId: rtsid) then {
-                rdcb: ctxCname :ctx tid: rtsid
-                # the chased mono's registry cname is authoritative (the
-                # stamp name still says the typedef)
-                if rtChased then rdcb = ctxCname :ctx tid: rtsid
-                if (isHeapPtrCollection :symtab :ctx tid: rtsid) then {
-                    rdoh: "\{ind}\{rdcb}_destroy(\{nm2});\n"
-                    buf.append rdoh
-                } else {
-                    rdov: "\{ind}\{rdcb}_destroy(&\{nm2});\n"
-                    buf.append rdov
-                }
-            }
-        }
-        lc2: "\{ind}\{nm2} = \{rv2};\n"
-        buf.append lc2
-        # a `<obj>.field.take` RHS moved the field out as a shallow struct
-        # copy: zero the field lvalue so the owner's destructor does not
-        # double-free the payload (mirrors the binding case; fn-typed fields
-        # are POD references and move nothing).
-        rftFn: false
-        rftnid: interpPartNodeId n: valueNode
-        if rftnid > 0 then {
-            rftst: stampIdOf :symtab nid: rftnid
-            if rftst > 0 then {
-                if (symtab.reg.typetypeOf typeId: rftst) == ztypes.ztypetype.functionType then {
-                    rftFn = true
-                }
-            }
-        }
-        if (isFieldTake :ast n: valueNode) when rftFn == false then {
-            if (isHeapPtrCollection :symtab :ctx tid: rtsid) then {
-                rftzh: "\{ind}\{rv2} = NULL;\n"
-                buf.append rftzh
-            } else {
-                rfct: "\{ctx.strC}_t"
-                if (stampIsStr :symtab :ctx nid: rtnid) == false then {
-                    rfct = typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
-                }
-                rftz: "\{ind}\{rv2} = (\{rfct}){0};\n"
-                buf.append rftz
-            }
-        }
-        # args moved into a construction/call RHS (e.g. `v.f = Option.some bo`)
-        # are consumed by it -- invalidate each moved source so its scope-exit
-        # free no-ops (mirrors the binding case; disjoint from the bare-local
-        # move below, which a construction RHS never matches).
-        emitValueTakeInvalidations :ast :symtab :ctx n: valueNode :ind :buf
-        emitNarrowedTakeZero :ast :symtab :ctx n: valueNode :ind :buf
-        # a reassignment from a bare owned local is a MOVE: zero the source so its
-        # scope-exit free no-ops (the lvalue -- a local or a struct field appended
-        # into a container -- now owns the heap). Scalars/valtypes have no
-        # destructor and are left untouched.
-        zsrc: implicitTakeSource :ast :symtab :ctx n: valueNode
-        if zsrc.length == 0 then {
-            # an explicit `<local>.take` / `.hold` moves just as a bare name
-            # does; the marker form arrives as a dotted path, which
-            # implicitTakeSource (bare names only) does not see. Without this
-            # the source keeps its buffer and frees it again at scope exit,
-            # after the target has already freed it.
-            mmb: moveMarkerBase :ast n: valueNode
-            if mmb > 0 then {
-                zsrc = (implicitTakeSource
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: mmb.u64)
-                )
-            }
-        }
-        if zsrc.length > 0 then {
-            znid: interpPartNodeId n: valueNode
-            zid: stampIdOf :symtab nid: znid
-            if (isHeapPtrCollection :symtab :ctx tid: zid) then {
-                zinvh: "\{ind}\{zsrc} = NULL;\n"
-                buf.append zinvh
-            } else {
-                zct: String
-                if (stampIsStr :symtab :ctx nid: znid) then {
-                    zct = "\{ctx.strC}_t"
-                } else {
-                    if (symtab.reg.needsDestructor typeId: zid) then {
-                        zct = typeRefC :ast :symtab :ctx tid: zid thisTid: ztypes.tid
-                    }
-                }
-                if zct.length > 0 then {
-                    zinv: "\{ind}\{zsrc} = (\{zct}){0};\n"
-                    buf.append zinv
-                }
-            }
-        }
+        emitReassignStmt :ast :symtab :ctx :n :ind :tmp :buf
     } case swapstmt then {
-        lhn: ast.nodes.get i: n.lhs.u64
-        rhn: ast.nodes.get i: n.rhs.u64
-        lx: emitExpr :ast :symtab :ctx n: lhn
-        rx: emitExpr :ast :symtab :ctx n: rhn
-        lnid: interpPartNodeId n: lhn
-        lsid: stampIdOf :symtab nid: lnid
-        lct: typeRefC :ast :symtab :ctx tid: lsid thisTid: ztypes.tid
-        if lct.length == 0 then {
-            pmsg6: "zemitterc: unspellable swap operand type id \{lsid}"
-            panic pmsg6
-        }
-        sN: tmp.next
-        s0: "\{ind}{\n"
-        buf.append s0
-        s1: "\{ind}    \{lct} _sw\{sN} = \{lx};\n"
-        buf.append s1
-        s2: "\{ind}    \{lx} = \{rx};\n"
-        buf.append s2
-        s3: "\{ind}    \{rx} = _sw\{sN};\n"
-        buf.append s3
-        s4: "\{ind}}\n"
-        buf.append s4
+        emitSwapStmt :ast :symtab :ctx :n :ind :tmp :buf
     } case ifexpr then {
-        # constant guards: when every clause folds at emit time, only the
-        # winning body is emitted -- provably-dead branches (including dead
-        # `error` arms) are eliminated from the C.
-        efb: foldedBranchOf :symtab nid: n.nodeid.u64
-        if efb.known then {
-            ewb: efb.stmt
-            if (ewb.isZero) == false then {
-                lfo: "\{ind}{\n"
-                buf.append lfo
-                indE: "\{ind}    "
-                fLE: tmp.frees.length
-                lLE: tmp.listFrees.length
-                ewn: ast.nodes.get i: ewb.u64
-                emitBodyNode :ast :symtab :ctx n: ewn ind: indE.stringview :tmp :buf
-                dvF: blockDiverges :ast :symtab :ctx n: ewn
-                flushBlockFrees :ctx :tmp fL: fLE lL: lLE diverged: dvF :buf
-                lfc: "\{ind}}\n"
-                buf.append lfc
-            }
-            return
-        }
-        ctx.condDepth = ctx.condDepth + 1
-        ifAssign: String
-        first: true
-        with citer: n.clauses.iterate do for cId: citer loop {
-            isFirst: first
-            first = false
-            c: ast.nodes.get i: cId.u64
-            (emitIfClause
-                :ast
-                :symtab
-                :ctx
-                n: c
-                :isFirst
-                assignTo: ifAssign.stringview
-                :ind
-                :tmp
-                :buf
-            )
-        }
-        chS: (List String)
-        chV: (ListVal ztypes.vid)
-        chA: (List String)
-        chT: (ListVal u64)
-        chN: (ListVal bool)
-        chR: (List String)
-        (chainFactsOfClauses
-            :ast
-            :symtab
-            :ctx
-            clauses: n.clauses
-            subjects: chS
-            svids: chV
-            arms: chA
-            tids: chT
-            negs: chN
-            recvs: chR
-        )
-        (emitElse
-            :ast
-            :symtab
-            :ctx
-            oId: n.elseclause
-            assignTo: ifAssign.stringview
-            :ind
-            :tmp
-            chSubjects: chS
-            chSubjectVids: chV
-            chArms: chA
-            chTids: chT
-            chNegs: chN
-            chRecvs: chR
-            :buf
-        )
-        le: "\{ind}}\n"
-        buf.append le
-        ctx.condDepth = ctx.condDepth - 1
+        emitIfStmt :ast :symtab :ctx :n :ind :tmp :buf
     } case caseexpr then {
-        # constant subject over literal arms: emit only the matching arm, as
-        # the typechecker resolved it.
-        mfb: foldedBranchOf :symtab nid: n.nodeid.u64
-        if mfb.known then {
-            mwb: mfb.stmt
-            if (mwb.isZero) == false then {
-                lmo: "\{ind}{\n"
-                buf.append lmo
-                indM: "\{ind}    "
-                fLM: tmp.frees.length
-                lLM: tmp.listFrees.length
-                mwn: ast.nodes.get i: mwb.u64
-                emitBodyNode :ast :symtab :ctx n: mwn ind: indM.stringview :tmp :buf
-                dvF: blockDiverges :ast :symtab :ctx n: mwn
-                flushBlockFrees :ctx :tmp fL: fLM lL: lLM diverged: dvF :buf
-                lmc: "\{ind}}\n"
-                buf.append lmc
-            }
-            return
-        }
-        ctx.condDepth = ctx.condDepth + 1
-        emitMatchStmt :ast :symtab :ctx m: n assignTo: "" :ind :tmp :buf
-        ctx.condDepth = ctx.condDepth - 1
+        emitCaseStmt :ast :symtab :ctx :n :ind :tmp :buf
     } case withexpr then {
-        wnmR: zast.nameTextAt :ast ref: n.name
-        wnm: varCName :ctx vid: (defVid :symtab nid: n.nodeid.u64) name: wnmR.stringview
-        wsid: stampIdDeep :ast :symtab n: (ast.nodes.get i: n.value.u64)
-        wct: String
-        if (originTidOf :symtab tid: (ztypes.tid.create from: wsid.u64)) > 0 then {
-            wct = (typeRefC
-                :ast
-                :symtab
-                :ctx
-                tid: (ztypes.tid.create from: wsid.u64)
-                thisTid: ztypes.tid
-            )
-        } else {
-            wtn: stampNameDeep :ast :symtab n: (ast.nodes.get i: n.value.u64)
-            wct = cTypeForName :ast :symtab :ctx name: wtn.stringview
-        }
-        wv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64)
-        # a non-lvalue receiver (`with x: (mk).iterate do`) hoisted an _ahN temp
-        # while that expression was built; declare it before the line that reads
-        # it, as the plain-binding path does
-        flushArgHoists :ctx :ind :tmp :buf
-        # a reference-returning callee hands back `T*`, so a `with` binding
-        # ALIASES its source exactly as a plain binding does
-        {
-            wrb: refBorrowCalleeFid :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64)
-            if wrb > 0 when (fnReturnsRefBorrow
-                :ast
-                :symtab
-                :ctx
-                fid: (ztypes.tid.create from: wrb.u64)
-                retTid: (ztypes.tid.create from: wsid.u64)
-            ) then {
-                wct = "\{wct}*"
-                ctx.ptrVids.append (defVid :symtab nid: n.nodeid.u64)
-            }
-        }
-        if wct.length > 0 then {
-            lwv: "\{ind}\{wct} \{wnm} = \{wv};\n"
-            buf.append lwv
-        } else {
-            lwv2: "\{ind}int64_t \{wnm} = \{wv};\n"
-            buf.append lwv2
-        }
-        emitBodyNode :ast :symtab :ctx n: (ast.nodes.get i: n.body.u64) :ind :tmp :buf
+        emitWithStmt :ast :symtab :ctx :n :ind :tmp :buf
     } case forexpr then {
-        ctx.condDepth = ctx.condDepth + 1
-        if (emitObjIterFor :ast :symtab :ctx m: n :ind :tmp :buf) then {
-            ctx.condDepth = ctx.condDepth - 1
-            return
-        }
-        if (emitIntRangeFor :ast :symtab :ctx m: n :ind :tmp :buf) then {
-            ctx.condDepth = ctx.condDepth - 1
-            return
-        }
-        # do-while: no pre-conditions, a post-condition (`for loop {...} while C`).
-        if n.conditions.length == 0 when n.postconditions.length > 0 then {
-            lidDW: pushLoopLabel :ctx :tmp isDo: false
-            ldw: "\{ind}do {\n"
-            buf.append ldw
-            ind2d: "\{ind}    "
-            fLd: tmp.frees.length
-            lLd: tmp.listFrees.length
-            dvG: false
-            if n.body > 0 then {
-                fbd: ast.nodes.get i: n.body.u64
-                emitBodyNode :ast :symtab :ctx n: fbd ind: ind2d.stringview :tmp :buf
-                dvG = blockDiverges :ast :symtab :ctx n: fbd
-            }
-            flushBlockFrees :ctx :tmp fL: fLd lL: lLd diverged: dvG :buf
-            pcond: String
-            pkiter: n.postconditions.iterate
-            for pk: pkiter loop {
-                pkn: ast.nodes.get i: pk.u64
-                # the checker stamps the OPERATION node, so unwrap the same way
-                pkop: pk
-                match (
-                    pkn
-                ) case namedoperation then {
-                    pkop = pkn.operation
-                } else null
-                pcv: emitExpr :ast :symtab :ctx n: pkn
-                tw8: (truthyCondText
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: pkop.u64)
-                    raw: pcv.stringview
-                )
-                if pcond.length > 0 then pcond.append " && "
-                if tw8.length > 0 then {
-                    pcond.append tw8
-                } else {
-                    pcond.append pcv
-                }
-            }
-            if pcond.length == 0 then pcond.append "0"
-            emitContLabel :ctx id: lidDW ind: ind2d.stringview :buf
-            cwP: condInParens cond: pcond.stringview
-            lpw: "\{ind}} while \{cwP};\n"
-            buf.append lpw
-            popLoopLabel :ctx id: lidDW :ind :buf
-            ctx.condDepth = ctx.condDepth - 1
-            return
-        }
-        cond: String
-        kiter: n.conditions.iterate
-        for kId: kiter loop {
-            k9r: ast.nodes.get i: kId.u64
-            emitForCond :ast :symtab :ctx n: k9r :cond :ind :buf
-        }
-        # `for loop { ... }` -- no conditions, no postconditions: an
-        # unconditional loop that exits via break/return.
-        if cond.length == 0 then cond.append "1"
-        lidW: pushLoopLabel :ctx :tmp isDo: false
-        cwW: condInParens cond: cond.stringview
-        lw: "\{ind}while \{cwW} {\n"
-        buf.append lw
-        ind2: "\{ind}    "
-        fLw: tmp.frees.length
-        lLw: tmp.listFrees.length
-        dvG: false
-        if n.body > 0 then {
-            fbw: ast.nodes.get i: n.body.u64
-            emitBodyNode :ast :symtab :ctx n: fbw ind: ind2.stringview :tmp :buf
-            dvG = blockDiverges :ast :symtab :ctx n: fbw
-        }
-        flushBlockFrees :ctx :tmp fL: fLw lL: lLw diverged: dvG :buf
-        emitContLabel :ctx id: lidW ind: ind2.stringview :buf
-        lwc: "\{ind}}\n"
-        buf.append lwc
-        popLoopLabel :ctx id: lidW :ind :buf
-        ctx.condDepth = ctx.condDepth - 1
+        emitForStmt :ast :symtab :ctx :n :ind :tmp :buf
     } case yieldexpr then {
         emitYieldStmt :ast :symtab :ctx yd: n :ind :buf
     } else {
-        # a no-arg method auto-call in statement position (this.accept,
-        # this.statepop) is a dotted path: emit the call expression as a statement.
-        if (isDottedAutoCall :n) then {
-            # `.release` on a protocol is a transfer marker (scope-exit destroy
-            # covers it) -- emit nothing, like emitCallStmt.
-            dct: dottedChildText :ast :n
-            if dct.stringview == "release" then {
-                rrid: dottedReceiverStampId :ast :symtab callable: n
-                rtt: symtab.reg.typetypeOf typeId: rrid
-                if rtt == ztypes.ztypetype.protocolType then return
-                rcvKey: atomVid :symtab nid: (dottedBaseNodeId :ast :n)
-                rbrw: false
-                bvg: ctx.borrowedVars.get key: rcvKey
-                match (
-                    bvg
-                ) case some then {
-                    rbrw = bvg
-                } case none then null
-                if rbrw then return
-                rcvV: emitDottedReceiver :ast :symtab :ctx callable: n
-                if rrid == ctx.strTid then {
-                    rdf: "\{ind}\{ctx.strC}_free(&\{rcvV});\n"
-                    buf.append rdf
-                } else {
-                    if (symtab.reg.needsDestructor typeId: rrid) then {
-                        rdcb: ctxCname :ctx tid: (ztypes.tid.create from: rrid.u64)
-                        rdref: "&\{rcvV}"
-                        if (isBoxTid
-                            :symtab
-                            tid: (ztypes.tid.create from: rrid.u64)
-                        ) then rdref = "\{rcvV}"
-                        rdc: "\{ind}\{rdcb}_destroy(\{rdref});\n"
-                        buf.append rdc
-                    }
-                }
-                rinv: false
-                if rrid == ctx.strTid then rinv = true
-                if rtt == ztypes.ztypetype.classType then rinv = true
-                if rtt == ztypes.ztypetype.unionType then rinv = true
-                if rinv then {
-                    rci: (typeRefC
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: rrid.u64)
-                        thisTid: ztypes.tid
-                    )
-                    riv: "\{ind}\{rcvV} = (\{rci}){0};\n"
-                    buf.append riv
-                }
-                return
-            }
-            de: emitExpr :ast :symtab :ctx :n
-            if (de.stringview.startsWith prefix: "/*") then {
-                emitFail :ctx what: "unhandled statement".string line: (ztypecheck.nodeLine :n)
-                lud: "\{ind}/* zemitterc: unhandled statement */\n"
-                buf.append lud
-            } else {
-                drtid: stampIdOf :symtab nid: (interpPartNodeId :n)
-                (emitDiscardedResult
-                    :ast
-                    :symtab
-                    :ctx
-                    isBorrow: (bindingRhsIsBorrow :ast :symtab :ctx :n)
-                    ce: de.stringview
-                    rtid: drtid
-                    :ind
-                    :tmp
-                    :buf
-                )
-            }
-            return
-        }
-        # a bare no-arg function call as a statement (`check_mode`): typecheck
-        # coerced the atom to a call; emit the call expression as a statement.
-        fcs: atomTextOf :ast :n
-        ffid: userFnId :ast :symtab :ctx name: fcs.stringview
-        if ffid > 0 when (symtab.reg.typetypeOf typeId: ffid) == ztypes.ztypetype.functionType then {
-            fce: emitExpr :ast :symtab :ctx :n
-            if (fce.stringview.startsWith prefix: "/*") == false then {
-                artid: stampIdOf :symtab nid: (interpPartNodeId :n)
-                (emitDiscardedResult
-                    :ast
-                    :symtab
-                    :ctx
-                    isBorrow: (bindingRhsIsBorrow :ast :symtab :ctx :n)
-                    ce: fce.stringview
-                    rtid: artid
-                    :ind
-                    :tmp
-                    :buf
-                )
-                return
-            }
-        }
-        # bare control keywords parse as an AtomId reference (no value): a
-        # no-value `return` (goto L_done inside a generator), `break`, `continue`.
-        bkw: atomTextOf :ast :n
-        if bkw.stringview == "return" then {
-            if ctx.genActive then {
-                lgd: "\{ind}goto L_done;\n"
-                buf.append lgd
-            } else {
-                emitReturnCleanup :ctx :tmp retExpr: "" keepRefd: true :ind :buf
-                lrt: "\{ind}return;\n"
-                buf.append lrt
-            }
-        } else {
-            if bkw.stringview == "break" then {
-                emitBreakFrees :ctx :tmp :ind :buf
-                if ctx.breakLabels.length > 0 then {
-                    bid: ctx.breakLabels.get i: (ctx.breakLabels.length - 1)
-                    # an owned-payload loop's per-iteration dtor: the jump
-                    # skips the fall-through line, so emit its copy here (a
-                    # do-block entry carries an empty cleanup).
-                    bcl: ctx.breakLabelCleanup.get i: (ctx.breakLabels.length - 1)
-                    if bcl.length > 0 then {
-                        lbc: "\{ind}\{bcl}"
-                        buf.append lbc
-                    }
-                    lbkg: "\{ind}goto __zbrk_\{bid};\n"
-                    buf.append lbkg
-                    ubk: true
-                    ctx.breakLabelUsed.set key: bid value: ubk
-                } else {
-                    lbk: "\{ind}break;\n"
-                    buf.append lbk
-                }
-            } else {
-                if bkw.stringview == "continue" then {
-                    # inside a do{}while(0) block wrapper a C continue exits
-                    # the wrapper, not the loop: jump to the nearest LOOP
-                    # entry's __zcont label instead (frees since that loop).
-                    inDo: false
-                    loopIdx: u64
-                    hasLoop: false
-                    li: ctx.breakLabelIsDo.length
-                    if li > 0 then {
-                        if (ctx.breakLabelIsDo.get i: (li - 1)) then inDo = true
-                        sj: li
-                        for sj > 0 loop {
-                            sj = sj - 1
-                            if (ctx.breakLabelIsDo.get i: sj) == false when (hasLoop) == false then {
-                                loopIdx = sj
-                                hasLoop = true
-                            }
-                        }
-                    }
-                    if inDo when hasLoop then {
-                        emitContinueFrees :ctx :tmp idx: loopIdx :ind :buf
-                        ccl: ctx.breakLabelCleanup.get i: loopIdx
-                        if ccl.length > 0 then {
-                            lcc: "\{ind}\{ccl}"
-                            buf.append lcc
-                        }
-                        cid: ctx.breakLabels.get i: loopIdx
-                        lcg: "\{ind}goto __zcont_\{cid};\n"
-                        buf.append lcg
-                        ucn: true
-                        ctx.contLabelUsed.set key: cid value: ucn
-                    } else {
-                        emitBreakFrees :ctx :tmp :ind :buf
-                        if ctx.breakLabelCleanup.length > 0 then {
-                            pcl0: (ctx.breakLabelCleanup.get
-                                i: (ctx.breakLabelCleanup.length - 1)
-                            )
-                            if pcl0.length > 0 then {
-                                lpc: "\{ind}\{pcl0}"
-                                buf.append lpc
-                            }
-                        }
-                        lct: "\{ind}continue;\n"
-                        buf.append lct
-                    }
-                } else {
-                    ue: emitExpr :ast :symtab :ctx :n
-                    if (ue.stringview.startsWith prefix: "/*") then {
-                        (emitFail
-                            :ctx
-                            what: "unhandled statement".string
-                            line: (ztypecheck.nodeLine :n)
-                        )
-                        lu: "\{ind}/* zemitterc: unhandled statement */\n"
-                        buf.append lu
-                    } else {
-                        urtid: stampIdOf :symtab nid: (interpPartNodeId :n)
-                        (emitDiscardedResult
-                            :ast
-                            :symtab
-                            :ctx
-                            isBorrow: (bindingRhsIsBorrow :ast :symtab :ctx :n)
-                            ce: ue.stringview
-                            rtid: urtid
-                            :ind
-                            :tmp
-                            :buf
-                        )
-                    }
-                }
-            }
-        }
+        emitReturnStmt :ast :symtab :ctx :n :ind :tmp :buf
     }
 }
 
