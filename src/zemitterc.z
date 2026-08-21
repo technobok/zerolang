@@ -4851,6 +4851,268 @@ stringViewBinopOperand: function {
     r: "&\{vf}"
     return r
 }
+# emitInstanceMethodBody -- the call text for a resolved user-object method:
+# the receiver in the slot its definition names, then one argument per declared
+# parameter, each passed the way that parameter is declared to take it.
+emitInstanceMethodBody: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData.view
+    mco: ztypes.tid
+    recvExpr: StringView
+} out String is {
+    callableNode: ast.nodes.get i: call.callable.u64
+    rptr: dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode
+    mcn: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
+    pnames: (List String)
+    pids: (ListVal u64)
+    pidsNm: (ListVal u64)
+    (recFieldLists
+        :ast
+        :symtab
+        tid: (ztypes.tid.create from: mco.u64)
+        names: pnames
+        ids: pids
+        nameIds: pidsNm
+    )
+    # The receiver slot is identified by the method's receiver param name
+    # (`this` for the `:this` shorthand, or the spelled name for a
+    # `b: this.lock` receiver) -- matching how the definition site names
+    # it. Matching the literal "this" alone drops a renamed receiver.
+    recvNm: "this".string
+    {
+        tpnm: (zast.poolTextCopy
+            pool: ast.names
+            ref: (symtab.reg.thisParamNameIdOf tid: (ztypes.tid.create from: mco.u64))
+        )
+        if tpnm.length > 0 then recvNm = tpnm
+    }
+    args: String
+    positionalIdx: u64
+    pi: u64
+    pn: pnames.length
+    for pi < pn loop {
+        posParamName: pnames.get i: pi
+        posParamId: pids.get i: pi
+        if pi > 0 then args.append ", "
+        if posParamName.stringview == recvNm.stringview then {
+            if rptr then {
+                args.append recvExpr
+            } else {
+                ra: "&\{recvExpr}"
+                args.append ra
+            }
+        } else {
+            isLbl9b: ctorHasLabel :ast :call label: posParamName.stringview
+            iiVal: String
+            if isLbl9b then {
+                iiVal = (ctorInterpArgByLabel
+                    :ast
+                    :symtab
+                    :ctx
+                    :call
+                    label: posParamName.stringview
+                    fid: (ztypes.tid.create from: mco.u64)
+                    pname: posParamName.stringview
+                    pid: posParamId
+                )
+            } else {
+                iiVal = (ctorInterpArgByPosition
+                    :ast
+                    :symtab
+                    :ctx
+                    :call
+                    idx: positionalIdx
+                    fid: (ztypes.tid.create from: mco.u64)
+                    pname: posParamName.stringview
+                    pid: posParamId
+                )
+            }
+            atomVarId: String
+            avBor: false
+            usedInterp: false
+            # the argument's value node, so the pointer check below asks
+            # about the variable rather than the emitted text. An
+            # interpolated argument is a statement expression, never a
+            # variable, so it leaves this 0.
+            avNd: u64
+            if iiVal.length > 0 then {
+                atomVarId = iiVal
+                usedInterp = true
+                if (isLbl9b) == false then positionalIdx = positionalIdx + 1
+            } else {
+                atomVarId = (ctorArgByLabel
+                    :ast
+                    :symtab
+                    :ctx
+                    :call
+                    label: posParamName.stringview
+                )
+                avBor = (ctorArgIsBorrow
+                    :ast
+                    :symtab
+                    :ctx
+                    :call
+                    label: posParamName.stringview
+                )
+                avNd = ctorArgNodeByLabel :ast :call label: posParamName.stringview
+                if (isLbl9b) == false then {
+                    pv: ctorArgByPosition :ast :symtab :ctx :call idx: positionalIdx
+                    if pv.length > 0 then {
+                        atomVarId = pv
+                        avBor = (ctorArgIsBorrowPos
+                            :ast
+                            :symtab
+                            :ctx
+                            :call
+                            idx: positionalIdx
+                        )
+                        avNd = ctorArgNodeByPosition :ast :call idx: positionalIdx
+                    }
+                    positionalIdx = positionalIdx + 1
+                }
+            }
+            avq: ztypes.vid
+            if avNd > 0 then {
+                avq = (atomVidIfPlain
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: avNd)
+                    text: atomVarId.stringview
+                )
+            }
+            ptra: false
+            isStrBorrow: false
+            # a non-TAKE class arg passes by pointer (mirrors the method
+            # signature); isReftypeParam resolves a cross-unit class shell that
+            # a bare typetypeOf==CLASS check misses.
+            pTake: (symtab.typing.declOwnershipIs
+                pool: ast.names
+                parentTypeId: (ztypes.tid.create from: mco.u64)
+                name: posParamName.stringview
+                own: ztypes.zparamownership.takeMode
+            )
+            isRef: false
+            if pTake == false then {
+                if (isReftypeParam
+                    :ast
+                    :symtab
+                    :ctx
+                    tid: (ztypes.tid.create from: posParamId.u64)
+                ) then isRef = true
+            }
+            if isRef then {
+                ptra = true
+            } else {
+                if (isBorrowStringParam
+                    :ast
+                    :symtab
+                    fid: (ztypes.tid.create from: mco.u64)
+                    pname: posParamName.stringview
+                    pid: (ztypes.tid.create from: posParamId.u64)
+                ) then {
+                    ptra = true
+                    isStrBorrow = true
+                }
+            }
+            if (ptra) == false then {
+                if (isListPtrParam
+                    :ast
+                    :symtab
+                    :ctx
+                    fid: (ztypes.tid.create from: mco.u64)
+                    pname: posParamName.stringview
+                    tid: (ztypes.tid.create from: posParamId.u64)
+                ) then ptra = true
+            }
+            if usedInterp then ptra = false
+            byref: false
+            if ptra then {
+                if (isPtrVid :ctx vid: avq) == false then byref = true
+            }
+            if byref then {
+                if (isNonLvalueArg s: atomVarId.stringview) then {
+                    # `&` of a non-lvalue (a call result) is invalid C: hoist
+                    # to a typed temp + destroy at block exit
+                    # (`T _t = expr; f(&_t); T_destroy(&_t)`).
+                    hn: ctx.argHoistCtr
+                    ctx.argHoistCtr = ctx.argHoistCtr + 1
+                    nmH: "_ah\{hn}"
+                    hcty: (typeRefC
+                        :ast
+                        :symtab
+                        :ctx
+                        tid: (ztypes.tid.create from: posParamId.u64)
+                        thisTid: ztypes.tid
+                    )
+                    htyc: hcty.copy
+                    hdt: String
+                    if isStrBorrow when (avBor) == false then {
+                        hdt = "    \{ctx.strC}_free(&\{nmH});\n"
+                    } else if (avBor) == false then {
+                        hrid: posParamId
+                        hduo: (definedInUnitOf
+                            :symtab
+                            tid: (ztypes.tid.create from: posParamId.u64)
+                        )
+                        match (
+                            hduo
+                        ) case none then {
+                            htn: (regNameOf
+                                :symtab
+                                tid: (ztypes.tid.create from: posParamId.u64)
+                            )
+                            hrr: (resolveTypeIdByName
+                                :ast
+                                :symtab
+                                :ctx
+                                name: htn.stringview
+                            )
+                            if hrr > 0 then hrid = hrr
+                        } case some then null
+                        if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: hrid.u64)) then {
+                            hcb: ctxCname :ctx tid: (ztypes.tid.create from: hrid.u64)
+                            hdt = "    \{hcb}_destroy(&\{nmH});\n"
+                        }
+                    }
+                    abh: "&\{nmH}"
+                    args.append abh
+                    ctx.argHoistVals.append atomVarId
+                    ctx.argHoistTypes.append htyc
+                    ctx.argHoistDtors.append hdt
+                    ctx.argHoistNames.append nmH
+                } else {
+                    ab: "&\{atomVarId}"
+                    args.append ab
+                }
+            } else {
+                vbhm: String
+                if (ptra) == false when (usedInterp) == false then {
+                    vbhm = (hoistBorrowValArg
+                        :ast
+                        :symtab
+                        :ctx
+                        av: atomVarId.stringview
+                        pid: (ztypes.tid.create from: posParamId.u64)
+                        paramTake: pTake
+                        isBorrow: avBor
+                    )
+                }
+                if vbhm.length > 0 then {
+                    args.append vbhm
+                } else {
+                    args.append atomVarId
+                }
+            }
+        }
+        pi = pi + 1
+    }
+    r: "\{mcn}(\{args})"
+    return r
+}
+
 
 # emit a call to an instance method.
 emitInstanceMethodCall: function {
@@ -4907,255 +5169,14 @@ emitInstanceMethodCall: function {
         mco
     ) case some then {
         if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)) == ztypes.ztypetype.functionType then {
-            callableNode: ast.nodes.get i: call.callable.u64
-            rptr: dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode
-            mcn: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
-            pnames: (List String)
-            pids: (ListVal u64)
-            pidsNm: (ListVal u64)
-            (recFieldLists
+            return (emitInstanceMethodBody
                 :ast
                 :symtab
-                tid: (ztypes.tid.create from: mco.u64)
-                names: pnames
-                ids: pids
-                nameIds: pidsNm
+                :ctx
+                :call
+                mco: (ztypes.tid.create from: mco.u64)
+                recvExpr: recvExpr.stringview
             )
-            # The receiver slot is identified by the method's receiver param name
-            # (`this` for the `:this` shorthand, or the spelled name for a
-            # `b: this.lock` receiver) -- matching how the definition site names
-            # it. Matching the literal "this" alone drops a renamed receiver.
-            recvNm: "this".string
-            {
-                tpnm: (zast.poolTextCopy
-                    pool: ast.names
-                    ref: (symtab.reg.thisParamNameIdOf tid: (ztypes.tid.create from: mco.u64))
-                )
-                if tpnm.length > 0 then recvNm = tpnm
-            }
-            args: String
-            positionalIdx: u64
-            pi: u64
-            pn: pnames.length
-            for pi < pn loop {
-                posParamName: pnames.get i: pi
-                posParamId: pids.get i: pi
-                if pi > 0 then args.append ", "
-                if posParamName.stringview == recvNm.stringview then {
-                    if rptr then {
-                        args.append recvExpr
-                    } else {
-                        ra: "&\{recvExpr}"
-                        args.append ra
-                    }
-                } else {
-                    isLbl9b: ctorHasLabel :ast :call label: posParamName.stringview
-                    iiVal: String
-                    if isLbl9b then {
-                        iiVal = (ctorInterpArgByLabel
-                            :ast
-                            :symtab
-                            :ctx
-                            :call
-                            label: posParamName.stringview
-                            fid: (ztypes.tid.create from: mco.u64)
-                            pname: posParamName.stringview
-                            pid: posParamId
-                        )
-                    } else {
-                        iiVal = (ctorInterpArgByPosition
-                            :ast
-                            :symtab
-                            :ctx
-                            :call
-                            idx: positionalIdx
-                            fid: (ztypes.tid.create from: mco.u64)
-                            pname: posParamName.stringview
-                            pid: posParamId
-                        )
-                    }
-                    atomVarId: String
-                    avBor: false
-                    usedInterp: false
-                    # the argument's value node, so the pointer check below asks
-                    # about the variable rather than the emitted text. An
-                    # interpolated argument is a statement expression, never a
-                    # variable, so it leaves this 0.
-                    avNd: u64
-                    if iiVal.length > 0 then {
-                        atomVarId = iiVal
-                        usedInterp = true
-                        if (isLbl9b) == false then positionalIdx = positionalIdx + 1
-                    } else {
-                        atomVarId = (ctorArgByLabel
-                            :ast
-                            :symtab
-                            :ctx
-                            :call
-                            label: posParamName.stringview
-                        )
-                        avBor = (ctorArgIsBorrow
-                            :ast
-                            :symtab
-                            :ctx
-                            :call
-                            label: posParamName.stringview
-                        )
-                        avNd = ctorArgNodeByLabel :ast :call label: posParamName.stringview
-                        if (isLbl9b) == false then {
-                            pv: ctorArgByPosition :ast :symtab :ctx :call idx: positionalIdx
-                            if pv.length > 0 then {
-                                atomVarId = pv
-                                avBor = (ctorArgIsBorrowPos
-                                    :ast
-                                    :symtab
-                                    :ctx
-                                    :call
-                                    idx: positionalIdx
-                                )
-                                avNd = ctorArgNodeByPosition :ast :call idx: positionalIdx
-                            }
-                            positionalIdx = positionalIdx + 1
-                        }
-                    }
-                    avq: ztypes.vid
-                    if avNd > 0 then {
-                        avq = (atomVidIfPlain
-                            :ast
-                            :symtab
-                            :ctx
-                            n: (ast.nodes.get i: avNd)
-                            text: atomVarId.stringview
-                        )
-                    }
-                    ptra: false
-                    isStrBorrow: false
-                    # a non-TAKE class arg passes by pointer (mirrors the method
-                    # signature); isReftypeParam resolves a cross-unit class shell that
-                    # a bare typetypeOf==CLASS check misses.
-                    pTake: (symtab.typing.declOwnershipIs
-                        pool: ast.names
-                        parentTypeId: (ztypes.tid.create from: mco.u64)
-                        name: posParamName.stringview
-                        own: ztypes.zparamownership.takeMode
-                    )
-                    isRef: false
-                    if pTake == false then {
-                        if (isReftypeParam
-                            :ast
-                            :symtab
-                            :ctx
-                            tid: (ztypes.tid.create from: posParamId.u64)
-                        ) then isRef = true
-                    }
-                    if isRef then {
-                        ptra = true
-                    } else {
-                        if (isBorrowStringParam
-                            :ast
-                            :symtab
-                            fid: (ztypes.tid.create from: mco.u64)
-                            pname: posParamName.stringview
-                            pid: (ztypes.tid.create from: posParamId.u64)
-                        ) then {
-                            ptra = true
-                            isStrBorrow = true
-                        }
-                    }
-                    if (ptra) == false then {
-                        if (isListPtrParam
-                            :ast
-                            :symtab
-                            :ctx
-                            fid: (ztypes.tid.create from: mco.u64)
-                            pname: posParamName.stringview
-                            tid: (ztypes.tid.create from: posParamId.u64)
-                        ) then ptra = true
-                    }
-                    if usedInterp then ptra = false
-                    byref: false
-                    if ptra then {
-                        if (isPtrVid :ctx vid: avq) == false then byref = true
-                    }
-                    if byref then {
-                        if (isNonLvalueArg s: atomVarId.stringview) then {
-                            # `&` of a non-lvalue (a call result) is invalid C: hoist
-                            # to a typed temp + destroy at block exit
-                            # (`T _t = expr; f(&_t); T_destroy(&_t)`).
-                            hn: ctx.argHoistCtr
-                            ctx.argHoistCtr = ctx.argHoistCtr + 1
-                            nmH: "_ah\{hn}"
-                            hcty: (typeRefC
-                                :ast
-                                :symtab
-                                :ctx
-                                tid: (ztypes.tid.create from: posParamId.u64)
-                                thisTid: ztypes.tid
-                            )
-                            htyc: hcty.copy
-                            hdt: String
-                            if isStrBorrow when (avBor) == false then {
-                                hdt = "    \{ctx.strC}_free(&\{nmH});\n"
-                            } else if (avBor) == false then {
-                                hrid: posParamId
-                                hduo: (definedInUnitOf
-                                    :symtab
-                                    tid: (ztypes.tid.create from: posParamId.u64)
-                                )
-                                match (
-                                    hduo
-                                ) case none then {
-                                    htn: (regNameOf
-                                        :symtab
-                                        tid: (ztypes.tid.create from: posParamId.u64)
-                                    )
-                                    hrr: (resolveTypeIdByName
-                                        :ast
-                                        :symtab
-                                        :ctx
-                                        name: htn.stringview
-                                    )
-                                    if hrr > 0 then hrid = hrr
-                                } case some then null
-                                if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: hrid.u64)) then {
-                                    hcb: ctxCname :ctx tid: (ztypes.tid.create from: hrid.u64)
-                                    hdt = "    \{hcb}_destroy(&\{nmH});\n"
-                                }
-                            }
-                            abh: "&\{nmH}"
-                            args.append abh
-                            ctx.argHoistVals.append atomVarId
-                            ctx.argHoistTypes.append htyc
-                            ctx.argHoistDtors.append hdt
-                            ctx.argHoistNames.append nmH
-                        } else {
-                            ab: "&\{atomVarId}"
-                            args.append ab
-                        }
-                    } else {
-                        vbhm: String
-                        if (ptra) == false when (usedInterp) == false then {
-                            vbhm = (hoistBorrowValArg
-                                :ast
-                                :symtab
-                                :ctx
-                                av: atomVarId.stringview
-                                pid: (ztypes.tid.create from: posParamId.u64)
-                                paramTake: pTake
-                                isBorrow: avBor
-                            )
-                        }
-                        if vbhm.length > 0 then {
-                            args.append vbhm
-                        } else {
-                            args.append atomVarId
-                        }
-                    }
-                }
-                pi = pi + 1
-            }
-            r: "\{mcn}(\{args})"
-            return r
         }
     } case none then null
     return "".string
