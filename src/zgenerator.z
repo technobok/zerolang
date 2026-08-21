@@ -1911,44 +1911,66 @@ mkThisDotted: function {
 # The rewritten spine carries the supplied position (the function's start).
 cloneWithThisHead: function {
     ast: Ast
-    n: Node.view
+    nid: zast.nodeid
     receiverType: StringView
     line: u32
     col: u32
 } out Node is {
-    match (
-        n
-    ) case atomid then {
-        if n.name.u32 == zast.wkThis then {
-            return (mkAtom :ast :line :col name: receiverType)
-        } else {
-            return (Node.atomid (zast.AtomIdData
-                nodeid: (zast.tableReserve :ast)
-                lineno: line
-                colno: col
-                name: n.name)
-            )
-        }
-    } case labelvalue then {
-        if n.name.u32 == zast.wkThis then {
-            return (mkAtom :ast :line :col name: receiverType)
-        } else {
-            return (Node.labelvalue (zast.LabelValueData
-                nodeid: (zast.tableReserve :ast)
-                lineno: line
-                colno: col
-                name: n.name)
-            )
-        }
-    } case dottedpath then {
-        np: (cloneWithThisHead
-            :ast
-            n: (ast.nodes.get i: n.parent.u64)
-            :receiverType
-            :line
-            :col
+    # 1 = the atom `this`, 2 = another atom, 3 = the label `this`, 4 = another
+    # label, 5 = a dotted path, 6 = an expression, 0 = any other shape (a
+    # plain clone)
+    shape: u32
+    nameId: zast.nameid
+    headId: zast.nodeid
+    childId: zast.nodeid
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case atomid then {
+            nameId = n.name
+            if n.name.u32 == zast.wkThis then {
+                shape = 1
+            } else {
+                shape = 2
+            }
+        } case labelvalue then {
+            nameId = n.name
+            if n.name.u32 == zast.wkThis then {
+                shape = 3
+            } else {
+                shape = 4
+            }
+        } case dottedpath then {
+            shape = 5
+            headId = n.parent
+            childId = n.child
+        } case expression then {
+            shape = 6
+            headId = n.expression
+        } else null
+    }
+    if shape == 1 then return (mkAtom :ast :line :col name: receiverType)
+    if shape == 2 then {
+        return (Node.atomid (zast.AtomIdData
+            nodeid: (zast.tableReserve :ast)
+            lineno: line
+            colno: col
+            name: nameId)
         )
-        nc: clonePathAt :ast nid: n.child
+    }
+    if shape == 3 then return (mkAtom :ast :line :col name: receiverType)
+    if shape == 4 then {
+        return (Node.labelvalue (zast.LabelValueData
+            nodeid: (zast.tableReserve :ast)
+            lineno: line
+            colno: col
+            name: nameId)
+        )
+    }
+    if shape == 5 then {
+        np: cloneWithThisHead :ast nid: headId :receiverType :line :col
+        nc: clonePathAt :ast nid: childId
         return (Node.dottedpath (zast.DottedPathData
             nodeid: (zast.tableReserve :ast)
             lineno: line
@@ -1956,18 +1978,17 @@ cloneWithThisHead: function {
             parent: (zast.tableAdd :ast n: np)
             child: (zast.tableAdd :ast n: nc))
         )
-    } case expression then {
-        iex: ast.nodes.get i: n.expression.u64
-        ne: cloneWithThisHead :ast n: iex :receiverType :line :col
+    }
+    if shape == 6 then {
+        ne: cloneWithThisHead :ast nid: headId :receiverType :line :col
         return (Node.expression (zast.ExpressionData
             nodeid: (zast.tableReserve :ast)
             lineno: line
             colno: col
             expression: (zast.tableAdd :ast n: ne))
         )
-    } else {
-        return (clonePath :ast :n)
     }
+    return (clonePathAt :ast :nid)
 }
 
 # isThisPrivateLock -- the `this.private.lock` friend-access receiver form.
@@ -2008,29 +2029,37 @@ isThisPrivate: function {ast: Ast.view n: Node.view} out bool is {
 # capture as receiver-type lock fields.
 paramFieldPath: function {
     ast: Ast
-    n: Node.view
+    nid: zast.nodeid
     receiverType: StringView
 } out Node is {
-    if receiverType.length > 0 then {
-        if (pathHeadIsThis :ast :n) then {
-            fp0: zast.posOf :n
-            fl0: fp0.line
-            fc0: fp0.col
-            return (cloneWithThisHead :ast :n :receiverType line: fl0 col: fc0)
+    headIsThis: false
+    fl0: u32
+    fc0: u32
+    takeParentId: zast.nodeid
+    {
+        n: ast.nodes.get i: nid.u64
+        if receiverType.length > 0 then {
+            headIsThis = pathHeadIsThis :ast :n
+            if headIsThis then {
+                fp0: zast.posOf :n
+                fl0 = fp0.line
+                fc0 = fp0.col
+            }
+        }
+        if (headIsThis) == false then {
+            lf: pathLeafName :ast :n
+            if lf.stringview == "take" then {
+                match (
+                    n
+                ) case dottedpath then {
+                    takeParentId = n.parent
+                } else null
+            }
         }
     }
-    lf: pathLeafName :ast :n
-    if lf.stringview == "take" then {
-        match (
-            n
-        ) case dottedpath then {
-            return (clonePathAt :ast nid: n.parent)
-        } else {
-            return (clonePath :ast :n)
-        }
-    } else {
-        return (clonePath :ast :n)
-    }
+    if headIsThis then return (cloneWithThisHead :ast :nid :receiverType line: fl0 col: fc0)
+    if (takeParentId.isZero) == false then return (clonePathAt :ast nid: takeParentId)
+    return (clonePathAt :ast :nid)
 }
 
 # cloneCreateParam -- the synth create's parameter: a clone with any
@@ -2038,50 +2067,46 @@ paramFieldPath: function {
 # `this` is the iterator, not the original receiver).
 cloneCreateParam: function {
     ast: Ast
-    n: Node.view
+    nid: zast.nodeid
     receiverType: StringView
     fnLine: u32
     fnCol: u32
 } out Node is {
-    match (
-        n
-    ) case namedoperation then {
-        ln0: n.lineno
-        co0: n.colno
-        nnm: n.name
-        isTh0: false
-        if receiverType.length > 0 then {
-            nOpNode: ast.nodes.get i: n.operation.u64
-            isTh0 = pathHeadIsThis :ast n: nOpNode
-        }
-        if isTh0 then {
-            nop1: (cloneWithThisHead
-                :ast
-                n: (ast.nodes.get i: n.operation.u64)
-                :receiverType
-                line: fnLine
-                col: fnCol
-            )
-            return (Node.namedoperation (zast.NamedOperationData
-                nodeid: (zast.tableReserve :ast)
-                lineno: ln0
-                colno: co0
-                name: nnm
-                operation: (zast.tableAdd :ast n: nop1))
-            )
-        } else {
-            nop: clonePathAt :ast nid: n.operation
-            return (Node.namedoperation (zast.NamedOperationData
-                nodeid: (zast.tableReserve :ast)
-                lineno: ln0
-                colno: co0
-                name: nnm
-                operation: (zast.tableAdd :ast n: nop))
-            )
-        }
-    } else {
-        return (clonePath :ast :n)
+    isNamed: false
+    ln0: u32
+    co0: u32
+    nnm: zast.nameid
+    opId: zast.nodeid
+    isTh0: false
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case namedoperation then {
+            isNamed = true
+            ln0 = n.lineno
+            co0 = n.colno
+            nnm = n.name
+            opId = n.operation
+            if receiverType.length > 0 then {
+                isTh0 = pathHeadIsThis :ast n: (ast.nodes.get i: n.operation.u64)
+            }
+        } else null
     }
+    if (isNamed) == false then return (clonePathAt :ast :nid)
+    nop: Node.placeholder
+    if isTh0 then {
+        nop = cloneWithThisHead :ast nid: opId :receiverType line: fnLine col: fnCol
+    } else {
+        nop = clonePathAt :ast nid: opId
+    }
+    return (Node.namedoperation (zast.NamedOperationData
+        nodeid: (zast.tableReserve :ast)
+        lineno: ln0
+        colno: co0
+        name: nnm
+        operation: (zast.tableAdd :ast n: nop))
+    )
 }
 
 # cloneFactoryParam -- the factory's parameter: `this.private.lock`
@@ -2089,47 +2114,57 @@ cloneCreateParam: function {
 # forwarding); everything else clones as-is.
 cloneFactoryParam: function {
     ast: Ast
-    n: Node.view
+    nid: zast.nodeid
     fnLine: u32
     fnCol: u32
 } out Node is {
-    match (
-        n
-    ) case namedoperation then {
-        ln0: n.lineno
-        co0: n.colno
-        nnm: n.name
-        if (isThisPrivateLock :ast n: (ast.nodes.get i: n.operation.u64)) then {
-            # the public this.lock replacement carries the function's start
-            ta0: mkAtom :ast line: fnLine col: fnCol name: "this"
-            la0: mkAtom :ast line: fnLine col: fnCol name: "borrow"
-            nop2: (Node.dottedpath (zast.DottedPathData
-                nodeid: (zast.tableReserve :ast)
-                lineno: fnLine
-                colno: fnCol
-                parent: (zast.tableAdd :ast n: ta0)
-                child: (zast.tableAdd :ast n: la0))
-            )
-            return (Node.namedoperation (zast.NamedOperationData
-                nodeid: (zast.tableReserve :ast)
-                lineno: ln0
-                colno: co0
-                name: nnm
-                operation: (zast.tableAdd :ast n: nop2))
-            )
-        } else {
-            nop: clonePathAt :ast nid: n.operation
-            return (Node.namedoperation (zast.NamedOperationData
-                nodeid: (zast.tableReserve :ast)
-                lineno: ln0
-                colno: co0
-                name: nnm
-                operation: (zast.tableAdd :ast n: nop))
-            )
-        }
-    } else {
-        return (clonePath :ast :n)
+    isNamed: false
+    ln0: u32
+    co0: u32
+    nnm: zast.nameid
+    opId: zast.nodeid
+    isPriv: false
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case namedoperation then {
+            isNamed = true
+            ln0 = n.lineno
+            co0 = n.colno
+            nnm = n.name
+            opId = n.operation
+            isPriv = isThisPrivateLock :ast n: (ast.nodes.get i: n.operation.u64)
+        } else null
     }
+    if (isNamed) == false then return (clonePathAt :ast :nid)
+    if isPriv then {
+        # the public this.lock replacement carries the function's start
+        ta0: mkAtom :ast line: fnLine col: fnCol name: "this"
+        la0: mkAtom :ast line: fnLine col: fnCol name: "borrow"
+        nop2: (Node.dottedpath (zast.DottedPathData
+            nodeid: (zast.tableReserve :ast)
+            lineno: fnLine
+            colno: fnCol
+            parent: (zast.tableAdd :ast n: ta0)
+            child: (zast.tableAdd :ast n: la0))
+        )
+        return (Node.namedoperation (zast.NamedOperationData
+            nodeid: (zast.tableReserve :ast)
+            lineno: ln0
+            colno: co0
+            name: nnm
+            operation: (zast.tableAdd :ast n: nop2))
+        )
+    }
+    nop: clonePathAt :ast nid: opId
+    return (Node.namedoperation (zast.NamedOperationData
+        nodeid: (zast.tableReserve :ast)
+        lineno: ln0
+        colno: co0
+        name: nnm
+        operation: (zast.tableAdd :ast n: nop))
+    )
 }
 
 # canLowerNow -- pre-surgery shape gate on the borrowed definition: a
@@ -2245,33 +2280,40 @@ lowerOne: function {
             privNames: (MapRV String value: bool)
             piter: fn.parameters.iterate
             for p0Id: piter loop {
-                p0: ast.nodes.get i: p0Id.u64
-                cp0: cloneCreateParam :ast n: p0 :receiverType fnLine: line fnCol: col
-                isThP: paramHeadIsThis :ast n: p0
+                # the parameter row is read through a view scoped to this
+                # block: the clones below mint
+                p0Nid: zast.nodeid.create from: p0Id
+                isNamedP: false
+                pNameId: zast.nameid
+                pOpId: zast.nodeid
+                isThP: false
+                {
+                    p0: ast.nodes.get i: p0Id.u64
+                    isThP = paramHeadIsThis :ast n: p0
+                    match (
+                        p0
+                    ) case namedoperation then {
+                        isNamedP = true
+                        pNameId = p0.name
+                        pOpId = p0.operation
+                    } else null
+                }
+                cp0: cloneCreateParam :ast nid: p0Nid :receiverType fnLine: line fnCol: col
                 cpid0: paramOpId :ast n: cp0
                 if cpid0 > 0 when isThP then {} else {
                     if cpid0 > 0 then noStamp.append cpid0
                 }
-                fp0: cloneFactoryParam :ast n: p0 fnLine: line fnCol: col
-                match (
-                    p0
-                ) case namedoperation then {
-                    pn0: zast.nameTextCopy :ast ref: p0.name
+                fp0: cloneFactoryParam :ast nid: p0Nid fnLine: line fnCol: col
+                if isNamedP then {
+                    pn0: zast.nameTextCopy :ast ref: pNameId
                     if pn0.length > 0 then {
-                        if (isThisPrivateLock
-                            :ast
-                            n: (ast.nodes.get i: p0.operation.u64)
-                        ) then {
+                        if (isThisPrivateLock :ast n: (ast.nodes.get i: pOpId.u64)) then {
                             pnv1: pn0.stringview
                             pk1: pnv1.string
                             pv1: true
                             privNames.set key: pk1 value: pv1
                         }
-                        pf0: (paramFieldPath
-                            :ast
-                            n: (ast.nodes.get i: p0.operation.u64)
-                            :receiverType
-                        )
+                        pf0: paramFieldPath :ast nid: pOpId :receiverType
                         pFields.append pf0
                         createParams.append (zast.tableAdd :ast n: cp0)
                         factoryParams.append (zast.tableAdd :ast n: fp0)
@@ -2279,7 +2321,7 @@ lowerOne: function {
                         tf0: isThP
                         thisFlags.append tf0
                     }
-                } else null
+                }
             }
             # the suspending-iterable promotion runs first; the analyses and
             # the this-rewrite read the promoted body.
