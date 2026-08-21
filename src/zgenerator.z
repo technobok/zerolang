@@ -15,7 +15,6 @@ public: unit {
     :lowerOne
     :mkNamedOp
     :returnHeadName
-    :rewriteOptToThisAt
 }
 
 Node: zast.Node
@@ -1326,11 +1325,7 @@ promoteFor: function {
             if doHoist then {
                 synthN: "_iter\{ctr.bump}"
                 empty7: (MapRV String value: bool)
-                rhs0: (rewriteToThis
-                    :ast
-                    n: (ast.nodes.get i: opId.u64)
-                    promoted: empty7
-                )
+                rhs0: rewriteToThisAt :ast nid: opId promoted: empty7
                 rhsE: ensureExpr :ast line: hl0 col: hc0 n: rhs0
                 snv0: synthN.stringview
                 snid0: zast.poolSet pool: ast.names text: snv0
@@ -1356,7 +1351,7 @@ promoteFor: function {
                 nconds.append (zast.tableAdd :ast n: nc0)
             } else {
                 empty6: (MapRV String value: bool)
-                cc0: rewriteToThis :ast n: (ast.nodes.get i: c0Id.u64) promoted: empty6
+                cc0: rewriteToThisAt :ast nid: (zast.nodeid.create from: c0Id) promoted: empty6
                 nconds.append (zast.tableAdd :ast n: cc0)
             }
         }
@@ -1364,7 +1359,7 @@ promoteFor: function {
         piter: n.postconditions.iterate
         for p0Id: piter loop {
             empty5: (MapRV String value: bool)
-            pp0: rewriteToThis :ast n: (ast.nodes.get i: p0Id.u64) promoted: empty5
+            pp0: rewriteToThisAt :ast nid: (zast.nodeid.create from: p0Id) promoted: empty5
             nposts.append (zast.tableAdd :ast n: pp0)
         }
         return (Node.forexpr (zast.ForData
@@ -1434,358 +1429,404 @@ ensureExpr: function {
     }
 }
 
+# rwplan -- what rewriting one row needs once its view is gone. mode: 0 =
+# not a rewrite shape (clonePath copies it whole), 1 = rewrite every child,
+# 2 = dottedpath (the child is a field label: it clones), 3 = binop (the
+# operator clones), 4 = caseclause (the arm pattern clones). special: 0 =
+# none, 1 = atomid, 2 = labelvalue, 3 = assignment; promotedName says the
+# special arm names a promoted local (nameId, at ln:co).
+rwplan: record {
+    mode: u32
+    special: u32
+    promotedName: bool
+    nameId: zast.nameid
+    ln: u32
+    co: u32
+}
+
+# rewritePlan -- read-only: the plan for `n`, and its child ids (canonical
+# order) appended to `kids` when it is a rewrite shape.
+rewritePlan: function {
+    ast: Ast.view
+    n: Node.view
+    promoted: (MapRV String value: bool)
+    kids: ListVal u32
+} out rwplan is {
+    mode: 1.u32
+    special: u32
+    isP: false
+    nameId: zast.nameid
+    ln: u32
+    co: u32
+    match (
+        n
+    ) case atomid then {
+        special = 1
+        nameId = n.name
+        ln = n.lineno
+        co = n.colno
+        anvC: zast.nameTextAt :ast ref: n.name
+        anv: anvC.stringview
+        isP = boolOrDefault o: (promoted.get key: anv.string) d: false
+    } case labelvalue then {
+        special = 2
+        nameId = n.name
+        ln = n.lineno
+        co = n.colno
+        lnvC: zast.nameTextAt :ast ref: n.name
+        lnv: lnvC.stringview
+        isP = boolOrDefault o: (promoted.get key: lnv.string) d: false
+    } case assignment then {
+        special = 3
+        nameId = n.name
+        ln = n.lineno
+        co = n.colno
+        anvC: zast.nameTextAt :ast ref: n.name
+        anv: anvC.stringview
+        isP = boolOrDefault o: (promoted.get key: anv.string) d: false
+    } case dottedpath then {
+        mode = 2
+    } case binop then {
+        mode = 3
+    } case caseclause then {
+        mode = 4
+    } case error then {
+        mode = 0
+    } case typeofexpr then {
+        mode = 0
+    } case datablock then {
+        mode = 0
+    } case functiondef then {
+        mode = 0
+    } case objectdef then {
+        mode = 0
+    } case unitdef then {
+        mode = 0
+    } case program then {
+        mode = 0
+    } case placeholder then {
+        mode = 0
+    } else null
+    if mode > 0 then {
+        ids: zast.childIds :ast :n
+        with it: ids.iterate do for i: it loop kids.append from: i
+    }
+    return (rwplan :mode :special promotedName: isP :nameId :ln :co)
+}
+
+# rewriteKids -- rewrite (or, at the plan's clone-only positions, copy) each
+# child by id and intern the results, in order.
+rewriteKids: function {
+    ast: Ast
+    kids: (ListVal u32).view
+    mode: u32
+    promoted: (MapRV String value: bool)
+} out (ListVal u32) is {
+    cloned: (ListVal u32)
+    ki: u64
+    kn: kids.length
+    for ki < kn loop {
+        kid: zast.nodeid.create from: (kids.get i: ki)
+        cloneOnly: false
+        if mode == 2 when ki == 1 then cloneOnly = true
+        if mode == 3 when ki == 1 then cloneOnly = true
+        if mode == 4 when ki == 0 then cloneOnly = true
+        if cloneOnly then {
+            c0: clonePathAt :ast nid: kid
+            cloned.append (zast.tableAdd :ast n: c0)
+        } else {
+            r0: rewriteToThisAt :ast nid: kid :promoted
+            cloned.append (zast.tableAdd :ast n: r0)
+        }
+        ki = ki + 1
+    }
+    return cloned
+}
+
+# rewritePromoted -- the promoted-name rewrite when the plan names one (an
+# atom/labelvalue becomes `this.<name>`; an assignment a reassignment
+# through it, its value the already-interned child), else the placeholder
+# arm. Mints.
+rewritePromoted: function {
+    ast: Ast
+    plan: rwplan
+    cloned: (ListVal u32).view
+} out Node is {
+    if (plan.promotedName) == false then return Node.placeholder
+    nm: zast.nameTextCopy :ast ref: plan.nameId
+    if plan.special == 3 then {
+        topath: mkThisDotted :ast line: plan.ln col: plan.co name: nm.stringview
+        return (Node.reassignment (zast.ReassignmentData
+            nodeid: (zast.tableReserve :ast)
+            lineno: plan.ln
+            colno: plan.co
+            topath: (zast.tableAdd :ast n: topath)
+            value: (zast.nodeid.create from: (cloned.get i: 0)))
+        )
+    }
+    return (mkThisDotted :ast line: plan.ln col: plan.co name: nm.stringview)
+}
+
+# rewriteArm -- the rewrite of `n`'s arm under `myId`, its children the
+# interned results in `cloned` (canonical childIds order; an absent optional
+# child is simply not there). Reads the view only.
+rewriteArm: function {
+    n: Node.view
+    myId: zast.nodeid
+    cloned: (ListVal u32).view
+} out Node is {
+    match (
+        n
+    ) case atomid then {
+        return (Node.atomid (zast.AtomIdData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name)
+        )
+    } case labelvalue then {
+        return (Node.labelvalue (zast.LabelValueData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name)
+        )
+    } case dottedpath then {
+        return (Node.dottedpath (zast.DottedPathData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            parent: (zast.nodeid.create from: (cloned.get i: 0))
+            child: (zast.nodeid.create from: (cloned.get i: 1)))
+        )
+    } case expression then {
+        return (Node.expression (zast.ExpressionData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            expression: (zast.nodeid.create from: (cloned.get i: 0)))
+        )
+    } case call then {
+        return (Node.call (zast.CallData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            callable: (zast.nodeid.create from: (cloned.get i: 0))
+            arguments: (idsSlice :cloned lo: 1 hi: cloned.length))
+        )
+    } case namedoperation then {
+        return (Node.namedoperation (zast.NamedOperationData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name
+            operation: (zast.nodeid.create from: (cloned.get i: 0)))
+        )
+    } case binop then {
+        return (Node.binop (zast.BinOpData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            lhs: (zast.nodeid.create from: (cloned.get i: 0))
+            operator: (zast.nodeid.create from: (cloned.get i: 1))
+            rhs: (zast.nodeid.create from: (cloned.get i: 2)))
+        )
+    } case statement then {
+        return (Node.statement (zast.StatementData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            statements: (idsSlice :cloned lo: 0 hi: cloned.length))
+        )
+    } case statementline then {
+        return (Node.statementline (zast.StatementLineData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            statementline: (zast.nodeid.create from: (cloned.get i: 0)))
+        )
+    } case assignment then {
+        return (Node.assignment (zast.AssignmentData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name
+            value: (zast.nodeid.create from: (cloned.get i: 0)))
+        )
+    } case reassignment then {
+        return (Node.reassignment (zast.ReassignmentData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            topath: (zast.nodeid.create from: (cloned.get i: 0))
+            value: (zast.nodeid.create from: (cloned.get i: 1)))
+        )
+    } case swapstmt then {
+        return (Node.swapstmt (zast.SwapStmtData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            lhs: (zast.nodeid.create from: (cloned.get i: 0))
+            rhs: (zast.nodeid.create from: (cloned.get i: 1)))
+        )
+    } case ifexpr then {
+        k: n.clauses.length
+        els: zast.nodeid
+        if n.elseclause > 0 then els = zast.nodeid.create from: (cloned.get i: k)
+        return (Node.ifexpr (zast.IfData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            clauses: (idsSlice :cloned lo: 0 hi: k)
+            elseclause: els)
+        )
+    } case ifclause then {
+        k: n.conditions.length
+        return (Node.ifclause (zast.IfClauseData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            conditions: (idsSlice :cloned lo: 0 hi: k)
+            statement: (zast.nodeid.create from: (cloned.get i: k)))
+        )
+    } case forexpr then {
+        k: n.conditions.length
+        bodyId: zast.nodeid
+        postsAt: k
+        if n.body > 0 then {
+            bodyId = zast.nodeid.create from: (cloned.get i: k)
+            postsAt = k + 1
+        }
+        return (Node.forexpr (zast.ForData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            conditions: (idsSlice :cloned lo: 0 hi: k)
+            body: bodyId
+            postconditions: (idsSlice :cloned lo: postsAt hi: cloned.length))
+        )
+    } case doexpr then {
+        return (Node.doexpr (zast.DoData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            statement: (zast.nodeid.create from: (cloned.get i: 0)))
+        )
+    } case withexpr then {
+        return (Node.withexpr (zast.WithData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name
+            value: (zast.nodeid.create from: (cloned.get i: 0))
+            body: (zast.nodeid.create from: (cloned.get i: 1)))
+        )
+    } case caseexpr then {
+        k: n.clauses.length
+        els: zast.nodeid
+        if n.elseclause > 0 then els = zast.nodeid.create from: (cloned.get i: (k + 1))
+        return (Node.caseexpr (zast.CaseData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            subject: (zast.nodeid.create from: (cloned.get i: 0))
+            clauses: (idsSlice :cloned lo: 1 hi: (k + 1))
+            elseclause: els)
+        )
+    } case caseclause then {
+        return (Node.caseclause (zast.CaseClauseData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name
+            matcharm: (zast.nodeid.create from: (cloned.get i: 0))
+            statement: (zast.nodeid.create from: (cloned.get i: 1)))
+        )
+    } case yieldexpr then {
+        return (Node.yieldexpr (zast.YieldExprData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            expr: (zast.nodeid.create from: (cloned.get i: 0)))
+        )
+    } case atomstring then {
+        return (Node.atomstring (zast.AtomStringData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            stringparts: (idsSlice :cloned lo: 0 hi: cloned.length))
+        )
+    } case stringchunk then {
+        tvL: n.text.stringview
+        tcL: tvL.string
+        ckL: n.chunkKind
+        return (Node.stringchunk (zast.StringChunkData
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            text: tcL
+            chunkKind: ckL)
+        )
+    } else {
+        return Node.placeholder
+    }
+}
+
 # rewriteToThis -- deep-clone the body, rewriting every promoted-name
 # reference to `this.<name>`: atoms and labelvalues in value position
 # become the dotted path, dotted HEADS rewrite (children are field
 # labels), and an assignment to a promoted name becomes a reassignment
-# through `this` (the field was reserved at create time).
+# through `this` (the field was reserved at create time). `n` may be a
+# detached node; its children are table rows, rewritten and interned by
+# id (rewriteToThisAt) before the clone's own slot is reserved, so nothing
+# lends ast while a row view is live.
 rewriteToThis: function {
     ast: Ast
     n: Node.view
     promoted: (MapRV String value: bool)
 } out Node is {
-    match (
-        n
-    ) case atomid then {
-        ln0: n.lineno
-        co0: n.colno
-        anvC: zast.nameTextAt :ast ref: n.name
-        anv: anvC.stringview
-        isP: boolOrDefault o: (promoted.get key: anv.string) d: false
-        if isP then {
-            return (mkThisDotted :ast line: ln0 col: co0 name: anv)
-        } else {
-            return (Node.atomid (zast.AtomIdData
-                nodeid: (zast.tableReserve :ast)
-                lineno: ln0
-                colno: co0
-                name: n.name)
-            )
-        }
-    } case labelvalue then {
-        ln1: n.lineno
-        co1: n.colno
-        lnvC: zast.nameTextAt :ast ref: n.name
-        lnv: lnvC.stringview
-        isP1: boolOrDefault o: (promoted.get key: lnv.string) d: false
-        if isP1 then {
-            return (mkThisDotted :ast line: ln1 col: co1 name: lnv)
-        } else {
-            return (Node.labelvalue (zast.LabelValueData
-                nodeid: (zast.tableReserve :ast)
-                lineno: ln1
-                colno: co1
-                name: n.name)
-            )
-        }
-    } case dottedpath then {
-        ln2: n.lineno
-        co2: n.colno
-        np: rewriteToThis :ast n: (ast.nodes.get i: n.parent.u64) :promoted
-        nc: clonePathAt :ast nid: n.child
-        return (Node.dottedpath (zast.DottedPathData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln2
-            colno: co2
-            parent: (zast.tableAdd :ast n: np)
-            child: (zast.tableAdd :ast n: nc))
-        )
-    } case expression then {
-        ln3: n.lineno
-        co3: n.colno
-        ne: rewriteToThis :ast n: (ast.nodes.get i: n.expression.u64) :promoted
-        return (Node.expression (zast.ExpressionData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln3
-            colno: co3
-            expression: (zast.tableAdd :ast n: ne))
-        )
-    } case call then {
-        ln4: n.lineno
-        co4: n.colno
-        ncal: rewriteToThis :ast n: (ast.nodes.get i: n.callable.u64) :promoted
-        nargs: (ListVal u32)
-        aiter: n.arguments.iterate
-        for a0Id: aiter loop {
-            na0: rewriteToThis :ast n: (ast.nodes.get i: a0Id.u64) :promoted
-            nargs.append (zast.tableAdd :ast n: na0)
-        }
-        return (Node.call (zast.CallData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln4
-            colno: co4
-            callable: (zast.tableAdd :ast n: ncal)
-            arguments: nargs)
-        )
-    } case namedoperation then {
-        ln5: n.lineno
-        co5: n.colno
-        nop: rewriteToThis :ast n: (ast.nodes.get i: n.operation.u64) :promoted
-        nnm: n.name
-        return (Node.namedoperation (zast.NamedOperationData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln5
-            colno: co5
-            name: nnm
-            operation: (zast.tableAdd :ast n: nop))
-        )
-    } case binop then {
-        ln6: n.lineno
-        co6: n.colno
-        nl6: rewriteToThis :ast n: (ast.nodes.get i: n.lhs.u64) :promoted
-        no6: clonePathAt :ast nid: n.operator
-        nr6: rewriteToThis :ast n: (ast.nodes.get i: n.rhs.u64) :promoted
-        return (Node.binop (zast.BinOpData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln6
-            colno: co6
-            lhs: (zast.tableAdd :ast n: nl6)
-            operator: (zast.tableAdd :ast n: no6)
-            rhs: (zast.tableAdd :ast n: nr6))
-        )
-    } case statement then {
-        ln7: n.lineno
-        co7: n.colno
-        nstmts: (ListVal u32)
-        siter: n.statements.iterate
-        for s0Id: siter loop {
-            ns0: rewriteToThis :ast n: (ast.nodes.get i: s0Id.u64) :promoted
-            nstmts.append (zast.tableAdd :ast n: ns0)
-        }
-        return (Node.statement (zast.StatementData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln7
-            colno: co7
-            statements: nstmts)
-        )
-    } case statementline then {
-        ln8: n.lineno
-        co8: n.colno
-        ni8: rewriteToThis :ast n: (ast.nodes.get i: n.statementline.u64) :promoted
-        return (Node.statementline (zast.StatementLineData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln8
-            colno: co8
-            statementline: (zast.tableAdd :ast n: ni8))
-        )
-    } case assignment then {
-        ln9c: n.lineno
-        co9c: n.colno
-        nval: rewriteToThis :ast n: (ast.nodes.get i: n.value.u64) :promoted
-        nvalId: zast.tableAdd :ast n: nval
-        anvC: zast.poolTextAt pool: ast.names ref: n.name
-        anv: anvC.stringview
-        isP: boolOrDefault o: (promoted.get key: anv.string) d: false
-        if isP then {
-            topath: mkThisDotted :ast line: ln9c col: co9c name: anv
-            return (Node.reassignment (zast.ReassignmentData
-                nodeid: (zast.tableReserve :ast)
-                lineno: ln9c
-                colno: co9c
-                topath: (zast.tableAdd :ast n: topath)
-                value: nvalId)
-            )
-        } else {
-            return (Node.assignment (zast.AssignmentData
-                nodeid: (zast.tableReserve :ast)
-                lineno: ln9c
-                colno: co9c
-                name: n.name
-                value: nvalId)
-            )
-        }
-    } case reassignment then {
-        lnA: n.lineno
-        coA: n.colno
-        ntp: rewriteToThis :ast n: (ast.nodes.get i: n.topath.u64) :promoted
-        nvA: rewriteToThis :ast n: (ast.nodes.get i: n.value.u64) :promoted
-        return (Node.reassignment (zast.ReassignmentData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnA
-            colno: coA
-            topath: (zast.tableAdd :ast n: ntp)
-            value: (zast.tableAdd :ast n: nvA))
-        )
-    } case swapstmt then {
-        lnB: n.lineno
-        coB: n.colno
-        nlB: rewriteToThis :ast n: (ast.nodes.get i: n.lhs.u64) :promoted
-        nrB: rewriteToThis :ast n: (ast.nodes.get i: n.rhs.u64) :promoted
-        return (Node.swapstmt (zast.SwapStmtData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnB
-            colno: coB
-            lhs: (zast.tableAdd :ast n: nlB)
-            rhs: (zast.tableAdd :ast n: nrB))
-        )
-    } case ifexpr then {
-        lnC: n.lineno
-        coC: n.colno
-        ncls: (ListVal u32)
-        cliter: n.clauses.iterate
-        for cl0Id: cliter loop {
-            ncl0: rewriteToThis :ast n: (ast.nodes.get i: cl0Id.u64) :promoted
-            ncls.append (zast.tableAdd :ast n: ncl0)
-        }
-        nels: rewriteOptToThisAt :ast oId: n.elseclause :promoted
-        return (Node.ifexpr (zast.IfData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnC
-            colno: coC
-            clauses: ncls
-            elseclause: (zast.nodeid.create from: nels))
-        )
-    } case ifclause then {
-        lnD: n.lineno
-        coD: n.colno
-        nconds: (ListVal u32)
-        coiter: n.conditions.iterate
-        for c0Id: coiter loop {
-            nc0: rewriteToThis :ast n: (ast.nodes.get i: c0Id.u64) :promoted
-            nconds.append (zast.tableAdd :ast n: nc0)
-        }
-        nst: rewriteToThis :ast n: (ast.nodes.get i: n.statement.u64) :promoted
-        return (Node.ifclause (zast.IfClauseData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnD
-            colno: coD
-            conditions: nconds
-            statement: (zast.tableAdd :ast n: nst))
-        )
-    } case forexpr then {
-        lnE: n.lineno
-        coE: n.colno
-        nfconds: (ListVal u32)
-        fiter: n.conditions.iterate
-        for f0Id: fiter loop {
-            nf0: rewriteToThis :ast n: (ast.nodes.get i: f0Id.u64) :promoted
-            nfconds.append (zast.tableAdd :ast n: nf0)
-        }
-        nbody: rewriteOptToThisAt :ast oId: n.body :promoted
-        nposts: (ListVal u32)
-        piter: n.postconditions.iterate
-        for p0Id: piter loop {
-            np0: rewriteToThis :ast n: (ast.nodes.get i: p0Id.u64) :promoted
-            nposts.append (zast.tableAdd :ast n: np0)
-        }
-        return (Node.forexpr (zast.ForData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnE
-            colno: coE
-            conditions: nfconds
-            body: (zast.nodeid.create from: nbody)
-            postconditions: nposts)
-        )
-    } case doexpr then {
-        lnF: n.lineno
-        coF: n.colno
-        nstF: rewriteToThis :ast n: (ast.nodes.get i: n.statement.u64) :promoted
-        nstFId: zast.tableAdd :ast n: nstF
-        return (Node.doexpr (zast.DoData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnF
-            colno: coF
-            statement: nstFId
-        ))
-    } case withexpr then {
-        lnG: n.lineno
-        coG: n.colno
-        nvG: rewriteToThis :ast n: (ast.nodes.get i: n.value.u64) :promoted
-        nbG: rewriteToThis :ast n: (ast.nodes.get i: n.body.u64) :promoted
-        return (Node.withexpr (zast.WithData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnG
-            colno: coG
-            name: n.name
-            value: (zast.tableAdd :ast n: nvG)
-            body: (zast.tableAdd :ast n: nbG))
-        )
-    } case caseexpr then {
-        lnH: n.lineno
-        coH: n.colno
-        nsubH: rewriteToThis :ast n: (ast.nodes.get i: n.subject.u64) :promoted
-        nclsH: (ListVal u32)
-        mliter: n.clauses.iterate
-        for m0Id: mliter loop {
-            nm0: rewriteToThis :ast n: (ast.nodes.get i: m0Id.u64) :promoted
-            nclsH.append (zast.tableAdd :ast n: nm0)
-        }
-        nelsH: rewriteOptToThisAt :ast oId: n.elseclause :promoted
-        return (Node.caseexpr (zast.CaseData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnH
-            colno: coH
-            subject: (zast.tableAdd :ast n: nsubH)
-            clauses: nclsH
-            elseclause: (zast.nodeid.create from: nelsH))
-        )
-    } case caseclause then {
-        lnI: n.lineno
-        coI: n.colno
-        nma: clonePathAt :ast nid: n.matcharm
-        nstI: rewriteToThis :ast n: (ast.nodes.get i: n.statement.u64) :promoted
-        return (Node.caseclause (zast.CaseClauseData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnI
-            colno: coI
-            name: n.name
-            matcharm: (zast.tableAdd :ast n: nma)
-            statement: (zast.tableAdd :ast n: nstI))
-        )
-    } case yieldexpr then {
-        lnJ: n.lineno
-        coJ: n.colno
-        nxJ: rewriteToThis :ast n: (ast.nodes.get i: n.expr.u64) :promoted
-        return (Node.yieldexpr (zast.YieldExprData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnJ
-            colno: coJ
-            expr: (zast.tableAdd :ast n: nxJ))
-        )
-    } case atomstring then {
-        lnK: n.lineno
-        coK: n.colno
-        npartsK: (ListVal u32)
-        spiter: n.stringparts.iterate
-        for sp0Id: spiter loop {
-            nsp0: rewriteToThis :ast n: (ast.nodes.get i: sp0Id.u64) :promoted
-            npartsK.append (zast.tableAdd :ast n: nsp0)
-        }
-        return (Node.atomstring (zast.AtomStringData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnK
-            colno: coK
-            stringparts: npartsK)
-        )
-    } case stringchunk then {
-        lnL: n.lineno
-        coL: n.colno
-        tvL: n.text.stringview
-        tcL: tvL.string
-        ckL: n.chunkKind
-        return (Node.stringchunk (zast.StringChunkData
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnL
-            colno: coL
-            text: tcL
-            chunkKind: ckL)
-        )
-    } else {
-        return (clonePath :ast :n)
-    }
+    kids: (ListVal u32)
+    plan: rewritePlan :ast :n :promoted :kids
+    if plan.mode == 0 then return (clonePath :ast :n)
+    cloned: rewriteKids :ast :kids mode: plan.mode :promoted
+    special: rewritePromoted :ast :plan :cloned
+    if (special.placeholder) == false then return special
+    myId: zast.tableReserve :ast
+    return (rewriteArm :n :myId :cloned)
 }
 
-# rewriteOptToThisAt -- rewrite a child named by id and intern the result,
-# returning its id (0 = absent). The clone's own id is the one it carries.
-rewriteOptToThisAt: function {
-    ast: Ast.view
-    oId: zast.nodeid
+# rewriteToThisAt -- rewriteToThis of the row `nid` names. Each row view is
+# scoped to a block that lends nothing: the plan is read first, the children
+# go next (by id), then the clone's slot, then the arm is built from the row.
+rewriteToThisAt: function {
+    ast: Ast
+    nid: zast.nodeid
     promoted: (MapRV String value: bool)
-} out u32 is {
-    if oId.isZero then return 0
-    o: ast.nodes.get i: oId.u64
-    r: rewriteToThis :ast n: o :promoted
-    return (zast.tableAdd :ast n: r)
+} out Node is {
+    kids: (ListVal u32)
+    plan: (rwplan
+        mode: 0
+        special: 0
+        promotedName: false
+        nameId: (zast.nameid.create from: 0)
+        ln: 0
+        co: 0
+    )
+    {
+        n: ast.nodes.get i: nid.u64
+        plan = rewritePlan :ast :n :promoted :kids
+    }
+    if plan.mode == 0 then return (clonePathAt :ast :nid)
+    cloned: rewriteKids :ast :kids mode: plan.mode :promoted
+    special: rewritePromoted :ast :plan :cloned
+    if (special.placeholder) == false then return special
+    myId: zast.tableReserve :ast
+    built: Node.placeholder
+    {
+        n: ast.nodes.get i: nid.u64
+        built = rewriteArm :n :myId :cloned
+    }
+    return built
 }
 
 # rewrite an optional node's local references to `this.<field>` for the lowered class.
