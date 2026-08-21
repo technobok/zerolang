@@ -133,7 +133,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc mode-parity ci-corpus
+ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard strict-locks-guard case-guard user-native-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -906,6 +906,26 @@ eager-guard: bin/zc
 	  exit 1; \
 	fi; \
 	echo "eager-guard OK: examples + corpus clean under --eager"
+
+# strict-locks-guard -- the `:name` shorthand lock rule is behind
+# --strict-call-locks while the tree's E0200 surface drains to zero. The
+# baseline is the scoreboard: a commit that moves the surface edits
+# tests/fixtures/strict_locks_baseline.txt with it, and a rising count is a
+# regression. The flag, this guard and the baseline all go when the surface
+# reaches zero and the rule becomes unconditional.
+strict-locks-guard: bin/zc
+	@tmp=$$(mktemp); \
+	for d in zc zl zls; do \
+	  n=$$(bin/zc $$d --src src --system lib/system --fast-hash --strict-call-locks --emit-c /dev/null 2>&1 | grep -c '^error\[E0200\]'); \
+	  echo "$$d $$n" >> "$$tmp"; \
+	done; \
+	if ! diff -u tests/fixtures/strict_locks_baseline.txt "$$tmp"; then \
+	  rm -f "$$tmp"; \
+	  echo "strict-locks-guard FAIL: strict E0200 surface moved -- the commit that moves it edits tests/fixtures/strict_locks_baseline.txt"; \
+	  exit 1; \
+	fi; \
+	rm -f "$$tmp"; \
+	echo "strict-locks-guard OK: strict E0200 surface matches the baseline"
 
 # member-guard -- ratchet against declaration-bypassing member special-cases in
 # the type checker. The sanctioned string-keyed markers: ownership (lock / borrow /
