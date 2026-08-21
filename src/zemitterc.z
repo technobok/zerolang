@@ -10798,22 +10798,16 @@ emitCollectionMemberRead: function {
     if icm.length > 0 then return icm
     return "".string
 }
-# emitDottedAtomBase -- a read whose base is a bare ATOM with a stamped type: the
-# native families (String / StringView / the collections / the id-keyed pair),
-# then the user-type field and method legs. A base that is itself a path has no
-# stamped atom and goes to emitDottedNestedBase instead.
-emitDottedAtomBase: function {
+# dottedAtomNumericBase -- `3.u64`: a typed numeric literal, whose "member" is
+# the suffix and whose base text is the C literal. `0cA` is decoded first --
+# the 0c lexeme is not a C token.
+dottedAtomNumericBase: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: zast.DottedPathData.view
-    mn2: StringView
     bn2: StringView
-    bn2r: StringView
-    bn2v: ztypes.vid
-    baseAtomVid: ztypes.vid
+    mn2: StringView
 } out String is {
-    # typed numeric literal (3.u64): the base text is the C literal
     b1: bn2.byteAt i: 0
     match (
         b1
@@ -10836,7 +10830,18 @@ emitDottedAtomBase: function {
             }
         }
     } case none then null
-    bnid2: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
+    return "".string
+}
+
+# dottedAtomConstCloneBase -- `Unit.CONST` where the base names a function-like
+# declaration carrying an `as`-const clone: the member reads as that constant.
+dottedAtomConstCloneBase: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    bn2: StringView
+    mn2: StringView
+} out String is {
     btC12: userFnId :ast :symtab :ctx name: bn2
     if btC12 > 0 then {
         ccoC12: (symtab.typing.declChildOf
@@ -10852,17 +10857,19 @@ emitDottedAtomBase: function {
             }
         } case none then null
     }
-    bareTid: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid2)
-    bareSv: bareTid == ctx.svTid
-    bareStr: bareTid == ctx.strTid
-    if bareStr when (isSvNoArgNative name: mn2) then {
-        # String receivers project to a view for the no-arg SV
-        # natives, mirroring the chained/auto-call legs
-        needsAddM :ctx uname: "system" memb: mn2
-        svfb: svValueForm :ctx expr: bn2 isStr: true vid: bn2v
-        efb: "\{ctx.svC}_\{mn2}(&\{svfb})"
-        return efb
-    }
+    return "".string
+}
+
+# emitSvAtomBase -- a StringView base: `.length`, the pointer/one-past ends, the
+# parse members, and the simple view natives, each a direct field or call on the
+# view value rather than a dispatch.
+emitSvAtomBase: function {
+    ctx: Ctx
+    bn2: StringView
+    mn2: StringView
+    bn2v: ztypes.vid
+    bareSv: bool
+} out String is {
     if bareSv then {
         if mn2 == "length" then {
             e2: "\{bn2}.size"
@@ -10923,18 +10930,21 @@ emitDottedAtomBase: function {
             return eln2
         }
     }
-    if bareTid == ctx.strTid then {
-        if mn2 == "length" then {
-            sacc3: ".".string
-            if (isPtrVid :ctx vid: bn2v) then sacc3 = "->".string
-            e3: "\{bn2}\{sacc3}size"
-            return e3
-        }
-    }
-    # `toktype.dotTok` -- a bare TYPE name carrying the arm. The base is
-    # asked by its SOURCE name, and only when no local answers to it: a
-    # local shadows, and its emitted C identifier is not a name this
-    # registry can be asked about at all.
+    return "".string
+}
+
+# dottedAtomTaggedBase -- `toktype.dotTok`: a bare TYPE name carrying the arm.
+# The base is asked by its SOURCE name, and only when no local answers to it --
+# a local shadows, and its emitted C identifier is not a name the registry can
+# be asked about at all. Declines when the arm has a payload.
+dottedAtomTaggedBase: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    mn2: StringView
+    bn2r: StringView
+    baseAtomVid: ztypes.vid
+} out String is {
     vtid2: u64
     if baseAtomVid.isZero then vtid2 = (resolveTypeIdByName
         :ast
@@ -10973,6 +10983,100 @@ emitDottedAtomBase: function {
             return e8
         }
     }
+    return "".string
+}
+
+# dottedAtomRecClsBase -- a user record or class base. Array and str monos are
+# RECORD typetype and collection monos are CLASS typetype, but both keep their
+# own legs, so both are excluded by origin here.
+dottedAtomRecClsBase: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    bn2: StringView
+    mn2: StringView
+    bn2v: ztypes.vid
+    bstamp: ztypes.tid
+    rtt: ztypes.ztypetype
+} out String is {
+    isRecOrCls: false
+    if rtt == ztypes.ztypetype.recordType then {
+        # array/str monos are RECORD typetype but keep their own legs
+        # below (a.0 -> a.data[0]; str .length -> .len etc.).
+        if (originIsTid
+            :symtab
+            tid: bstamp
+            originTid: (ctx.origins.get i: ogArray)
+        ) == false when (originIsTid
+            :symtab
+            tid: bstamp
+            originTid: (ctx.origins.get i: ogStr)
+        ) == false then isRecOrCls = true
+    }
+    if rtt == ztypes.ztypetype.classType then {
+        # user classes only -- collection monos (List/Set/Map, with a
+        # generic origin) keep their own dottedpath legs below.
+        baseStampOrigin: originTidOf :symtab tid: bstamp
+        if baseStampOrigin.isZero then isRecOrCls = true
+    }
+    if isRecOrCls then {
+        utm: (emitUserTypeMemberRead
+            :ast
+            :symtab
+            :ctx
+            :mn2
+            :bn2
+            :bn2v
+            :bstamp
+        )
+        if utm.length > 0 then return utm
+    }
+    return "".string
+}
+
+# emitDottedAtomBase -- a read whose base is a bare ATOM with a stamped type: the
+# native families (String / StringView / the collections / the id-keyed pair),
+# then the user-type field and method legs. A base that is itself a path has no
+# stamped atom and goes to emitDottedNestedBase instead.
+emitDottedAtomBase: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.DottedPathData.view
+    mn2: StringView
+    bn2: StringView
+    bn2r: StringView
+    bn2v: ztypes.vid
+    baseAtomVid: ztypes.vid
+} out String is {
+    eNum: dottedAtomNumericBase :ast :symtab :ctx :bn2 :mn2
+    if eNum.length > 0 then return eNum
+    bnid2: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
+    eCc: dottedAtomConstCloneBase :ast :symtab :ctx :bn2 :mn2
+    if eCc.length > 0 then return eCc
+    bareTid: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid2)
+    bareSv: bareTid == ctx.svTid
+    bareStr: bareTid == ctx.strTid
+    if bareStr when (isSvNoArgNative name: mn2) then {
+        # String receivers project to a view for the no-arg SV
+        # natives, mirroring the chained/auto-call legs
+        needsAddM :ctx uname: "system" memb: mn2
+        svfb: svValueForm :ctx expr: bn2 isStr: true vid: bn2v
+        efb: "\{ctx.svC}_\{mn2}(&\{svfb})"
+        return efb
+    }
+    eSv: emitSvAtomBase :ctx :bn2 :mn2 :bn2v :bareSv
+    if eSv.length > 0 then return eSv
+    if bareTid == ctx.strTid then {
+        if mn2 == "length" then {
+            sacc3: ".".string
+            if (isPtrVid :ctx vid: bn2v) then sacc3 = "->".string
+            e3: "\{bn2}\{sacc3}size"
+            return e3
+        }
+    }
+    eTg: dottedAtomTaggedBase :ast :symtab :ctx :mn2 :bn2r :baseAtomVid
+    if eTg.length > 0 then return eTg
     bstamp0: stampIdOf :symtab nid: bnid2
     bstamp: bstamp0
     bsn0: regNameOf :symtab tid: bstamp0
@@ -11007,38 +11111,8 @@ emitDottedAtomBase: function {
             )
         }
     }
-    isRecOrCls: false
-    if rtt == ztypes.ztypetype.recordType then {
-        # array/str monos are RECORD typetype but keep their own legs
-        # below (a.0 -> a.data[0]; str .length -> .len etc.).
-        if (originIsTid
-            :symtab
-            tid: bstamp
-            originTid: (ctx.origins.get i: ogArray)
-        ) == false when (originIsTid
-            :symtab
-            tid: bstamp
-            originTid: (ctx.origins.get i: ogStr)
-        ) == false then isRecOrCls = true
-    }
-    if rtt == ztypes.ztypetype.classType then {
-        # user classes only -- collection monos (List/Set/Map, with a
-        # generic origin) keep their own dottedpath legs below.
-        baseStampOrigin: originTidOf :symtab tid: bstamp
-        if baseStampOrigin.isZero then isRecOrCls = true
-    }
-    if isRecOrCls then {
-        utm: (emitUserTypeMemberRead
-            :ast
-            :symtab
-            :ctx
-            :mn2
-            :bn2
-            :bn2v
-            :bstamp
-        )
-        if utm.length > 0 then return utm
-    }
+    eRc: dottedAtomRecClsBase :ast :symtab :ctx :bn2 :mn2 :bn2v :bstamp :rtt
+    if eRc.length > 0 then return eRc
     if rtt == ztypes.ztypetype.variantType then {
         e: "\{bn2}.data.\{mn2}"
         return e
