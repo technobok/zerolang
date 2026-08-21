@@ -20654,7 +20654,7 @@ emitUnitMonoInstances: function {
                                     } else {
                                         lo: "\{sig} {\n"
                                         buf.append lo
-                                                                                ctx.ptrVids = (ListVal ztypes.vid)
+                                        ctx.ptrVids = (ListVal ztypes.vid)
                                         ctx.aliases = (List VidVal)
                                         ctx.narrowBox = (List VidVal)
                                         ctx.narrowTid = (List VidTid)
@@ -20809,7 +20809,7 @@ emitFnMonoInstances: function {
             } else {
                 lo: "\{sig} {\n"
                 buf.append lo
-                                ctx.ptrVids = (ListVal ztypes.vid)
+                ctx.ptrVids = (ListVal ztypes.vid)
                 ctx.aliases = (List VidVal)
                 ctx.narrowBox = (List VidVal)
                 ctx.narrowTid = (List VidTid)
@@ -21006,7 +21006,7 @@ emitFnsIn: function {
                     } else {
                         lo: "\{sig} {\n"
                         buf.append lo
-                                                ctx.ptrVids = (ListVal ztypes.vid)
+                        ctx.ptrVids = (ListVal ztypes.vid)
                         ctx.aliases = (List VidVal)
                         ctx.narrowBox = (List VidVal)
                         ctx.narrowTid = (List VidTid)
@@ -29013,7 +29013,7 @@ emitClassMonoMethods: function {
                                     } else {
                                         lo8: "\{sg8} {\n"
                                         buf.append lo8
-                                                                                ctx.ptrVids = (ListVal ztypes.vid)
+                                        ctx.ptrVids = (ListVal ztypes.vid)
                                         ctx.aliases = (List VidVal)
                                         ctx.narrowBox = (List VidVal)
                                         ctx.narrowTid = (List VidTid)
@@ -29079,7 +29079,7 @@ emitClassMonoMethods: function {
                                     } else {
                                         lo8b: "\{sg8b} {\n"
                                         buf.append lo8b
-                                                                                ctx.ptrVids = (ListVal ztypes.vid)
+                                        ctx.ptrVids = (ListVal ztypes.vid)
                                         ctx.aliases = (List VidVal)
                                         ctx.narrowBox = (List VidVal)
                                         ctx.narrowTid = (List VidTid)
@@ -29511,19 +29511,19 @@ emitYieldStmt: function {
     ll: "L_resume_\{k}:;\n"
     buf.append ll
 }
-
-# emit one method.
-emitOneMethod: function {
+# methodReturnC -- a method's C return type. The registry knows it for a plain
+# return; a generic-mono return (optionval/Option/resultval) carries no
+# returnTypeId and resolves through the return-node stamp; a `void` that is
+# really a constructor answers the receiver; and a heap-pointer collection or a
+# borrowed-reference return takes a `*` the declared type does not carry.
+methodReturnC: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     mid: ztypes.tid
     thisTid: ztypes.tid
     op: Node.view
-    declOnly: bool
-    buf: String.borrow
-} is {
-    mc: ctxCname :ctx tid: mid
+} out String is {
     ret: "void".string
     {
         rto: fnReturnTidOf :symtab tid: mid
@@ -29604,22 +29604,25 @@ emitOneMethod: function {
             retTid: (ztypes.tid.create from: retColId.u64)
         ) then ret = "\{ret}*"
     }
-    params: String
-    pnames: (List String)
-    pids: (ListVal u64)
-    pidsNm: (ListVal u64)
-    recFieldLists :ast :symtab tid: mid names: pnames ids: pids nameIds: pidsNm
-    # a CLASS method takes its `this` receiver by pointer (reference semantics):
-    # the receiver param gets a `*` and its name is recorded so the body emits
-    # `c->field`. Reset for this method (names must not leak into other bodies).
-        ctx.ptrVids = (ListVal ztypes.vid)
-    ctx.aliases = (List VidVal)
-    ctx.narrowBox = (List VidVal)
-    ctx.narrowTid = (List VidTid)
-    ctx.exclArms = (List VidVal)
-    ctx.exclTids = (List VidTid)
-    encIsClass: false
-    if (symtab.reg.typetypeOf typeId: thisTid) == ztypes.ztypetype.classType then encIsClass = true
+    return ret
+}
+
+# emitMethodParams -- one C parameter per declared field, in declaration order:
+# the receiver by pointer for a class, then each parameter passed the way its
+# declaration says it is taken. Appends to `params`.
+emitMethodParams: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    mid: ztypes.tid
+    thisTid: ztypes.tid
+    encIsClass: bool
+    pnames: (List String).view
+    pids: (ListVal u64).view
+    pidsNm: (ListVal u64).view
+    op: Node.view
+    params: String.borrow
+} is {
     pi: u64
     pn: pnames.length
     for pi < pn loop {
@@ -29738,6 +29741,52 @@ emitOneMethod: function {
         params.append pmnDecl
         pi = pi + 1
     }
+}
+
+
+# emit one method.
+emitOneMethod: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    mid: ztypes.tid
+    thisTid: ztypes.tid
+    op: Node.view
+    declOnly: bool
+    buf: String.borrow
+} is {
+    mc: ctxCname :ctx tid: mid
+    ret: methodReturnC :ast :symtab :ctx :mid :thisTid :op
+    params: String
+    pnames: (List String)
+    pids: (ListVal u64)
+    pidsNm: (ListVal u64)
+    recFieldLists :ast :symtab tid: mid names: pnames ids: pids nameIds: pidsNm
+    # a CLASS method takes its `this` receiver by pointer (reference semantics):
+    # the receiver param gets a `*` and its name is recorded so the body emits
+    # `c->field`. Reset for this method (names must not leak into other bodies).
+    ctx.ptrVids = (ListVal ztypes.vid)
+    ctx.aliases = (List VidVal)
+    ctx.narrowBox = (List VidVal)
+    ctx.narrowTid = (List VidTid)
+    ctx.exclArms = (List VidVal)
+    ctx.exclTids = (List VidTid)
+    encIsClass: false
+    if (symtab.reg.typetypeOf typeId: thisTid) == ztypes.ztypetype.classType then encIsClass = true
+    (emitMethodParams
+        :ast
+        :symtab
+        :ctx
+        :mid
+        :thisTid
+        :encIsClass
+        :pnames
+        :pids
+        :pidsNm
+        :op
+        :params
+    )
+    pn: pnames.length
     if pn == 0 then params.append "void"
     if declOnly then {
         ld: "static \{ret} \{mc}(\{params});\n"
@@ -29756,7 +29805,7 @@ emitOneMethod: function {
         }
         buf.append "}\n\n"
     }
-        ctx.ptrVids = (ListVal ztypes.vid)
+    ctx.ptrVids = (ListVal ztypes.vid)
     ctx.aliases = (List VidVal)
     ctx.narrowBox = (List VidVal)
     ctx.narrowTid = (List VidTid)
