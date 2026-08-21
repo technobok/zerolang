@@ -2485,52 +2485,66 @@ ogOptionView: 37.u64
 ogResult: 38.u64
 ogOptionval: 39.u64
 ogResultval: 40.u64
+# ogNone -- one past the last row: both the count and the "not one of ours"
+# answer, so no real index can be mistaken for it.
+ogNone: 41.u64
 
 # originBaseNames -- those templates by name, in ogXxx order. This list and the
 # constants above are the same table read two ways; nothing else may reorder it,
 # because the index is the identity.
+# ogPut -- place one row AT its own constant. Writing the index and the name
+# together is what keeps the two halves of the table in step; a row that drifts
+# fails here rather than silently renaming a family.
+ogPut: function {acc: List String at: u64 name: StringView} is {
+    if acc.length != at then {
+        m: "zemitterc: origin table out of order at \{at} (\{name})"
+        panic msg: m
+    }
+    acc.append name.string
+}
+
 originBaseNames: function {acc: List String} is {
-    acc.append "str".string
-    acc.append "array".string
-    acc.append "ListRef".string
-    acc.append "ListVal".string
-    acc.append "ListView".string
-    acc.append "ListViewVal".string
-    acc.append "MapRR".string
-    acc.append "MapRV".string
-    acc.append "MapVR".string
-    acc.append "MapVV".string
-    acc.append "SetRef".string
-    acc.append "SetVal".string
-    acc.append "IdMapR".string
-    acc.append "IdMapV".string
-    acc.append "IdSet".string
-    acc.append "IdSetIter".string
-    acc.append "IdMapItemIterR".string
-    acc.append "IdMapItemIterV".string
-    acc.append "IdMapEntryR".string
-    acc.append "IdMapEntryV".string
-    acc.append "MapEntry".string
-    acc.append "ListIter".string
-    acc.append "ListIterVal".string
-    acc.append "SetIter".string
-    acc.append "SetIterVal".string
-    acc.append "MapKeyIter".string
-    acc.append "MapItemIter".string
-    acc.append "MapKeyIterRV".string
-    acc.append "MapKeyIterVR".string
-    acc.append "MapKeyIterVV".string
-    acc.append "MapItemIterRV".string
-    acc.append "MapItemIterVR".string
-    acc.append "MapItemIterVV".string
-    acc.append "MapEntryRV".string
-    acc.append "MapEntryVR".string
-    acc.append "MapEntryVV".string
-    acc.append "Option".string
-    acc.append "OptionView".string
-    acc.append "Result".string
-    acc.append "optionval".string
-    acc.append "resultval".string
+    ogPut :acc at: ogStr name: "str"
+    ogPut :acc at: ogArray name: "array"
+    ogPut :acc at: ogList name: "ListRef"
+    ogPut :acc at: ogListVal name: "ListVal"
+    ogPut :acc at: ogListView name: "ListView"
+    ogPut :acc at: ogListViewVal name: "ListViewVal"
+    ogPut :acc at: ogMap name: "MapRR"
+    ogPut :acc at: ogMapRV name: "MapRV"
+    ogPut :acc at: ogMapVR name: "MapVR"
+    ogPut :acc at: ogMapVV name: "MapVV"
+    ogPut :acc at: ogSet name: "SetRef"
+    ogPut :acc at: ogSetVal name: "SetVal"
+    ogPut :acc at: ogIdMapR name: "IdMapR"
+    ogPut :acc at: ogIdMapV name: "IdMapV"
+    ogPut :acc at: ogIdSet name: "IdSet"
+    ogPut :acc at: ogIdSetIter name: "IdSetIter"
+    ogPut :acc at: ogIdMapItemIterR name: "IdMapItemIterR"
+    ogPut :acc at: ogIdMapItemIterV name: "IdMapItemIterV"
+    ogPut :acc at: ogIdMapEntryR name: "IdMapEntryR"
+    ogPut :acc at: ogIdMapEntryV name: "IdMapEntryV"
+    ogPut :acc at: ogMapEntry name: "MapEntry"
+    ogPut :acc at: ogListIter name: "ListIter"
+    ogPut :acc at: ogListIterVal name: "ListIterVal"
+    ogPut :acc at: ogSetIter name: "SetIter"
+    ogPut :acc at: ogSetIterVal name: "SetIterVal"
+    ogPut :acc at: ogMapKeyIter name: "MapKeyIter"
+    ogPut :acc at: ogMapItemIter name: "MapItemIter"
+    ogPut :acc at: ogMapKeyIterRV name: "MapKeyIterRV"
+    ogPut :acc at: ogMapKeyIterVR name: "MapKeyIterVR"
+    ogPut :acc at: ogMapKeyIterVV name: "MapKeyIterVV"
+    ogPut :acc at: ogMapItemIterRV name: "MapItemIterRV"
+    ogPut :acc at: ogMapItemIterVR name: "MapItemIterVR"
+    ogPut :acc at: ogMapItemIterVV name: "MapItemIterVV"
+    ogPut :acc at: ogMapEntryRV name: "MapEntryRV"
+    ogPut :acc at: ogMapEntryVR name: "MapEntryVR"
+    ogPut :acc at: ogMapEntryVV name: "MapEntryVV"
+    ogPut :acc at: ogOption name: "Option"
+    ogPut :acc at: ogOptionView name: "OptionView"
+    ogPut :acc at: ogResult name: "Result"
+    ogPut :acc at: ogOptionval name: "optionval"
+    ogPut :acc at: ogResultval name: "resultval"
 }
 
 # buildOriginTids -- resolve every row in one pass. A unit with no program node
@@ -19081,6 +19095,31 @@ nodeIsAtomBox: function {
     }
 }
 
+# originFamilyOf -- the origins table read backwards: which ogXxx family an
+# ORIGIN tid names, or ogNone. Zero is no family -- a builtin the program never
+# registers leaves its row 0, and matching that would make every origin-less
+# type a List.
+originFamilyOf: function {ctx: Ctx.view originTid: ztypes.tid} out u64 is {
+    if originTid.isZero then return ogNone
+    i: u64
+    for i < ogNone loop {
+        if originTid == (ctx.origins.get :i) then return i
+        i = i + 1
+    }
+    return ogNone
+}
+
+# monoFamilyOf -- the family a MONO was minted from, or ogNone. Every predicate
+# below asks exactly this and differs only in which answers it accepts.
+monoFamilyOf: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out u64 is {
+    ot: originTidOf :symtab :tid
+    return (originFamilyOf :ctx originTid: ot)
+}
+
 # isListOriginOf -- the type is a List of EITHER family. The two templates
 # differ in what they DECLARE (a valtype element copies out, a reftype element
 # hands back a view) and not at all in the C the emitter builds from them, so
@@ -19090,8 +19129,9 @@ isListOriginOf: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogList)) then return true
-    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogListVal))
+    f: monoFamilyOf :symtab :ctx :tid
+    if f == ogList then return true
+    return f == ogListVal
 }
 
 # isSetOriginOf -- the type is a Set of EITHER family. The two templates differ
@@ -19099,133 +19139,111 @@ isListOriginOf: function {
 # reftype element is taken and viewed) and not at all in the C the emitter
 # builds from them, so every site that just means "is this a Set" asks this
 # rather than naming one.
-isSetOriginOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogSet)) then return true
-    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogSetVal))
+isSetOriginOf: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out bool is {
+    f: monoFamilyOf :symtab :ctx :tid
+    if f == ogSet then return true
+    return f == ogSetVal
 }
 
 # isMapOriginOf -- the type is a Map of ANY of the four key/value families.
-# They differ in what they DECLARE (what is taken, what is viewed, and whether
-# a lookup copies out or hands back a view) and not at all in the C the emitter
-# builds from them, so every site that just means "is this a Map" asks this
-# rather than naming one.
-isMapOriginOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMap)) then return true
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMapRV)) then return true
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMapVR)) then return true
-    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMapVV))
+isMapOriginOf: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out bool is {
+    f: monoFamilyOf :symtab :ctx :tid
+    if f == ogMap then return true
+    if f == ogMapRV then return true
+    if f == ogMapVR then return true
+    return f == ogMapVV
 }
 
-# isIdMapOriginOf -- the type is an IdMap of either value family. As with the
-# Map forms they differ in what they DECLARE (a reftype value hands back a
-# view, a valtype value copies out) and not in the C built from them.
+# isIdMapOriginOf -- the type is an IdMap of either value family.
 isIdMapOriginOf: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdMapR)) then return true
-    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdMapV))
+    f: monoFamilyOf :symtab :ctx :tid
+    if f == ogIdMapR then return true
+    return f == ogIdMapV
 }
 
-# isIdSetOriginOf -- the type is an IdSet. One form only: an id is a valtype,
-# so there is no reference/value split to make.
+# isIdSetOriginOf -- the type is an IdSet.
 isIdSetOriginOf: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdSet))
+    f: monoFamilyOf :symtab :ctx :tid
+    return f == ogIdSet
 }
 
-# isIdCollectionOriginOf -- an IdMap or an IdSet. They share a struct shape
-# (stack header, two counters, two heap arrays), and every site that means
-# "is this one of the id-keyed containers" asks this rather than naming one.
+# isIdCollectionOriginOf -- the type is an IdMap or an IdSet: the id-keyed
+# containers, which share a representation the general ones do not.
 isIdCollectionOriginOf: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    if (isIdMapOriginOf :symtab :ctx :tid) then return true
-    return (isIdSetOriginOf :symtab :ctx :tid)
+    f: monoFamilyOf :symtab :ctx :tid
+    if f == ogIdMapR then return true
+    if f == ogIdMapV then return true
+    return f == ogIdSet
 }
 
-# isListViewOriginOf -- the type is a List window of EITHER family. The two
-# templates differ in what `get` DECLARES (a valtype element copies out, a
-# reference element hands back a view) and not at all in the C built from them.
+# isListViewOriginOf -- the type is a ListView of either element family.
 isListViewOriginOf: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogListView)) then return true
-    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogListViewVal))
+    f: monoFamilyOf :symtab :ctx :tid
+    if f == ogListView then return true
+    return f == ogListViewVal
 }
 
-# isMapEntryOriginOf -- the type is the borrowed entry projection of any of
-# the four Map forms. key/value project struct fields identically in all four.
+# isMapEntryOriginOf -- the type is a MapEntry of any of the four families.
 isMapEntryOriginOf: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMapEntry)) then return true
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMapEntryRV)) then return true
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMapEntryVR)) then return true
-    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMapEntryVV))
+    f: monoFamilyOf :symtab :ctx :tid
+    if f == ogMapEntry then return true
+    if f == ogMapEntryRV then return true
+    if f == ogMapEntryVR then return true
+    return f == ogMapEntryVV
 }
 
-# isIdMapEntryOriginOf -- the borrowed entry projection of either IdMap form.
-# key/value project the same struct fields in both.
+# isIdMapEntryOriginOf -- the type is an IdMapEntry of either value family.
 isIdMapEntryOriginOf: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdMapEntryR)) then return true
-    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdMapEntryV))
+    f: monoFamilyOf :symtab :ctx :tid
+    if f == ogIdMapEntryR then return true
+    return f == ogIdMapEntryV
 }
 
-# isCollectionOriginTid -- originTid (a genericOriginId) is one of the
-# cached collection/iterator origin ids, i.e. a template that mints a C struct
-# type (List/ListView/Set/Map/MapEntry and the iterators).
+# isCollectionOriginTid -- originTid (a genericOriginId) is one of the cached
+# collection/iterator origins, i.e. a template that mints a C struct type
+# (List/ListView/Set/Map/MapEntry and the iterators).
+#
+# The table has three zones and this is the MIDDLE one: ogStr and ogArray
+# precede it, the option/result families follow it. Moving a row across either
+# bound changes what counts as a collection, silently -- which is why the two
+# bounds are named here rather than a membership list being written out again.
 isCollectionOriginTid: function {ctx: Ctx.view originTid: ztypes.tid} out bool is {
-    if originTid.isZero then return false
-    if originTid == (ctx.origins.get i: ogList) then return true
-    if originTid == (ctx.origins.get i: ogListVal) then return true
-    if originTid == (ctx.origins.get i: ogListView) then return true
-    if originTid == (ctx.origins.get i: ogListViewVal) then return true
-    if originTid == (ctx.origins.get i: ogSet) then return true
-    if originTid == (ctx.origins.get i: ogSetVal) then return true
-    if originTid == (ctx.origins.get i: ogIdMapR) then return true
-    if originTid == (ctx.origins.get i: ogIdMapV) then return true
-    if originTid == (ctx.origins.get i: ogIdSet) then return true
-    if originTid == (ctx.origins.get i: ogIdSetIter) then return true
-    if originTid == (ctx.origins.get i: ogIdMapItemIterR) then return true
-    if originTid == (ctx.origins.get i: ogIdMapItemIterV) then return true
-    if originTid == (ctx.origins.get i: ogIdMapEntryR) then return true
-    if originTid == (ctx.origins.get i: ogIdMapEntryV) then return true
-    if originTid == (ctx.origins.get i: ogMap) then return true
-    if originTid == (ctx.origins.get i: ogMapRV) then return true
-    if originTid == (ctx.origins.get i: ogMapVR) then return true
-    if originTid == (ctx.origins.get i: ogMapVV) then return true
-    if originTid == (ctx.origins.get i: ogMapEntry) then return true
-    if originTid == (ctx.origins.get i: ogListIter) then return true
-    if originTid == (ctx.origins.get i: ogListIterVal) then return true
-    if originTid == (ctx.origins.get i: ogSetIter) then return true
-    if originTid == (ctx.origins.get i: ogSetIterVal) then return true
-    if originTid == (ctx.origins.get i: ogMapKeyIter) then return true
-    if originTid == (ctx.origins.get i: ogMapItemIter) then return true
-    if originTid == (ctx.origins.get i: ogMapKeyIterRV) then return true
-    if originTid == (ctx.origins.get i: ogMapKeyIterVR) then return true
-    if originTid == (ctx.origins.get i: ogMapKeyIterVV) then return true
-    if originTid == (ctx.origins.get i: ogMapItemIterRV) then return true
-    if originTid == (ctx.origins.get i: ogMapItemIterVR) then return true
-    if originTid == (ctx.origins.get i: ogMapItemIterVV) then return true
-    if originTid == (ctx.origins.get i: ogMapEntryRV) then return true
-    if originTid == (ctx.origins.get i: ogMapEntryVR) then return true
-    if originTid == (ctx.origins.get i: ogMapEntryVV) then return true
-    return false
+    f: originFamilyOf :ctx :originTid
+    if f == ogNone then return false
+    if f < ogList then return false
+    return f < ogOption
 }
 
 # cTypeForNameTid -- like cTypeForName, for a site that holds the tid: a
