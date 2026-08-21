@@ -245,127 +245,184 @@ pathLeafName: function {ast: Ast.view n: Node.view} out String is {
 # clonePath -- deep-copy a type-path subtree (atom / labelvalue / dotted /
 # expression / call / namedoperation shapes), minting fresh nodeids. The
 # synth wrapper and field types embed clones because a node owns exactly
-# one parent.
+# one parent. `n` may be a detached node; its children are table rows,
+# cloned and interned by id (clonePathAt) before the clone's own slot is
+# reserved, so nothing lends ast while a row view is live.
 clonePath: function {ast: Ast n: Node.view} out Node is {
+    kids: (ListVal u32)
+    if (pathShape :n) then kids = zast.childIds :ast :n
+    cloned: clonePathKids :ast :kids
+    myId: zast.tableReserve :ast
+    built: clonePathArm :n :myId :cloned
+    if built.placeholder then return (clonePathUnsupported :ast :myId)
+    return built
+}
+
+# clonePathAt -- clonePath of the row `nid` names. Each row view is scoped
+# to a block that lends nothing: the children go first (by id), then the
+# clone's slot, then the arm is built from the row's scalars.
+clonePathAt: function {ast: Ast nid: zast.nodeid} out Node is {
+    kids: (ListVal u32)
+    {
+        n: ast.nodes.get i: nid.u64
+        if (pathShape :n) then kids = zast.childIds :ast :n
+    }
+    cloned: clonePathKids :ast :kids
+    myId: zast.tableReserve :ast
+    built: Node.placeholder
+    {
+        n: ast.nodes.get i: nid.u64
+        built = clonePathArm :n :myId :cloned
+    }
+    if built.placeholder then return (clonePathUnsupported :ast :myId)
+    return built
+}
+
+# pathShape -- `n` is a shape clonePath copies structurally.
+pathShape: function {n: Node.view} out bool is {
+    match (
+        n
+    ) case atomid then {
+        return true
+    } case labelvalue then {
+        return true
+    } case dottedpath then {
+        return true
+    } case expression then {
+        return true
+    } case call then {
+        return true
+    } case namedoperation then {
+        return true
+    } case binop then {
+        return true
+    } case atomstring then {
+        return true
+    } case stringchunk then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# clonePathKids -- clone each child by id and intern the clones, in order.
+clonePathKids: function {ast: Ast kids: (ListVal u32).view} out (ListVal u32) is {
+    cloned: (ListVal u32)
+    with it: kids.iterate do for k: it loop {
+        c0: clonePathAt :ast nid: (zast.nodeid.create from: k)
+        cloned.append (zast.tableAdd :ast n: c0)
+    }
+    return cloned
+}
+
+# idsSlice -- the ids `cloned` holds from index `lo` up to `hi`.
+idsSlice: function {cloned: (ListVal u32).view lo: u64 hi: u64} out (ListVal u32) is {
+    acc: (ListVal u32)
+    i: lo
+    for i < hi loop {
+        acc.append from: (cloned.get :i)
+        i = i + 1
+    }
+    return acc
+}
+
+# clonePathArm -- the clone of `n`'s arm under `myId`, its children the
+# interned clones in `cloned` (canonical childIds order); the placeholder
+# arm for any shape clonePath does not copy. Reads the view only.
+clonePathArm: function {
+    n: Node.view
+    myId: zast.nodeid
+    cloned: (ListVal u32).view
+} out Node is {
     match (
         n
     ) case atomid then {
         # interned name: the clone shares the pool id
         return (Node.atomid (zast.AtomIdData
-            nodeid: (zast.tableReserve :ast)
+            nodeid: myId
             lineno: n.lineno
             colno: n.colno
             name: n.name)
         )
     } case labelvalue then {
         return (Node.labelvalue (zast.LabelValueData
-            nodeid: (zast.tableReserve :ast)
+            nodeid: myId
             lineno: n.lineno
             colno: n.colno
             name: n.name)
         )
     } case dottedpath then {
-        ln2: n.lineno
-        co2: n.colno
-        np: clonePath :ast n: (ast.nodes.get i: n.parent.u64)
-        nc: clonePath :ast n: (ast.nodes.get i: n.child.u64)
         return (Node.dottedpath (zast.DottedPathData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln2
-            colno: co2
-            parent: (zast.tableAdd :ast n: np)
-            child: (zast.tableAdd :ast n: nc))
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            parent: (zast.nodeid.create from: (cloned.get i: 0))
+            child: (zast.nodeid.create from: (cloned.get i: 1)))
         )
     } case expression then {
-        ln3: n.lineno
-        co3: n.colno
-        ne: clonePath :ast n: (ast.nodes.get i: n.expression.u64)
         return (Node.expression (zast.ExpressionData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln3
-            colno: co3
-            expression: (zast.tableAdd :ast n: ne))
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            expression: (zast.nodeid.create from: (cloned.get i: 0)))
         )
     } case call then {
-        ln4: n.lineno
-        co4: n.colno
-        ncal: clonePath :ast n: (ast.nodes.get i: n.callable.u64)
-        nargs: (ListVal u32)
-        aiter: n.arguments.iterate
-        for a0Id: aiter loop {
-            na0: clonePath :ast n: (ast.nodes.get i: a0Id.u64)
-            nargs.append (zast.tableAdd :ast n: na0)
-        }
         return (Node.call (zast.CallData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln4
-            colno: co4
-            callable: (zast.tableAdd :ast n: ncal)
-            arguments: nargs)
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            callable: (zast.nodeid.create from: (cloned.get i: 0))
+            arguments: (idsSlice :cloned lo: 1 hi: cloned.length))
         )
     } case namedoperation then {
-        ln5: n.lineno
-        co5: n.colno
-        nop: clonePath :ast n: (ast.nodes.get i: n.operation.u64)
-        nnm: n.name
         return (Node.namedoperation (zast.NamedOperationData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln5
-            colno: co5
-            name: nnm
-            operation: (zast.tableAdd :ast n: nop))
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name
+            operation: (zast.nodeid.create from: (cloned.get i: 0)))
         )
     } case binop then {
-        ln6: n.lineno
-        co6: n.colno
-        nl6: clonePath :ast n: (ast.nodes.get i: n.lhs.u64)
-        no6: clonePath :ast n: (ast.nodes.get i: n.operator.u64)
-        nr6: clonePath :ast n: (ast.nodes.get i: n.rhs.u64)
         return (Node.binop (zast.BinOpData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln6
-            colno: co6
-            lhs: (zast.tableAdd :ast n: nl6)
-            operator: (zast.tableAdd :ast n: no6)
-            rhs: (zast.tableAdd :ast n: nr6))
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            lhs: (zast.nodeid.create from: (cloned.get i: 0))
+            operator: (zast.nodeid.create from: (cloned.get i: 1))
+            rhs: (zast.nodeid.create from: (cloned.get i: 2)))
         )
     } case atomstring then {
-        ln7: n.lineno
-        co7: n.colno
-        nparts: (ListVal u32)
-        spiter: n.stringparts.iterate
-        for sp0Id: spiter loop {
-            np0: clonePath :ast n: (ast.nodes.get i: sp0Id.u64)
-            nparts.append (zast.tableAdd :ast n: np0)
-        }
         return (Node.atomstring (zast.AtomStringData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln7
-            colno: co7
-            stringparts: nparts)
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            stringparts: (idsSlice :cloned lo: 0 hi: cloned.length))
         )
     } case stringchunk then {
-        ln8: n.lineno
-        co8: n.colno
         tv8: n.text.stringview
         tc8: tv8.string
         ck8: n.chunkKind
         return (Node.stringchunk (zast.StringChunkData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln8
-            colno: co8
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
             text: tc8
             chunkKind: ck8)
         )
     } else {
-        # unsupported path shape -- an error atom keeps the tree total
-        return (Node.atomid (zast.AtomIdData
-            nodeid: (zast.tableReserve :ast)
-            lineno: 0
-            colno: 0
-            name: (internSynthName :ast text: "?"))
-        )
+        return Node.placeholder
     }
+}
+
+# clonePathUnsupported -- an unsupported path shape clones to an error
+# atom, which keeps the tree total.
+clonePathUnsupported: function {ast: Ast myId: zast.nodeid} out Node is {
+    return (Node.atomid (zast.AtomIdData
+        nodeid: myId
+        lineno: 0
+        colno: 0
+        name: (internSynthName :ast text: "?"))
+    )
 }
 
 
@@ -437,7 +494,7 @@ givesFromOp: function {ast: Ast n: Node.view dst: GivesParts} is {
         match (
             n
         ) case dottedpath then {
-            bc: clonePath :ast n: (ast.nodes.get i: n.parent.u64)
+            bc: clonePathAt :ast nid: n.parent
             dst.base = (Option.some bc)
             dst.leaf = lf
         } else null
@@ -491,7 +548,7 @@ cloneDottedParent: function {ast: Ast n: Node.view} out Option Node is {
     match (
         n
     ) case dottedpath then {
-        c: clonePath :ast n: (ast.nodes.get i: n.parent.u64)
+        c: clonePathAt :ast nid: n.parent
         return (Option.some c)
     } else {
         return (Option.none Node)
@@ -1087,7 +1144,7 @@ cloneInner: function {ast: Ast nid: zast.nodeid} out Node is {
             inner = n.expression
         } else null
     }
-    if inner == nid then return (clonePath :ast n: (ast.nodes.get i: nid.u64))
+    if inner == nid then return (clonePathAt :ast :nid)
     return (cloneInner :ast nid: inner)
 }
 
@@ -1425,7 +1482,7 @@ rewriteToThis: function {
         ln2: n.lineno
         co2: n.colno
         np: rewriteToThis :ast n: (ast.nodes.get i: n.parent.u64) :promoted
-        nc: clonePath :ast n: (ast.nodes.get i: n.child.u64)
+        nc: clonePathAt :ast nid: n.child
         return (Node.dottedpath (zast.DottedPathData
             nodeid: (zast.tableReserve :ast)
             lineno: ln2
@@ -1476,7 +1533,7 @@ rewriteToThis: function {
         ln6: n.lineno
         co6: n.colno
         nl6: rewriteToThis :ast n: (ast.nodes.get i: n.lhs.u64) :promoted
-        no6: clonePath :ast n: (ast.nodes.get i: n.operator.u64)
+        no6: clonePathAt :ast nid: n.operator
         nr6: rewriteToThis :ast n: (ast.nodes.get i: n.rhs.u64) :promoted
         return (Node.binop (zast.BinOpData
             nodeid: (zast.tableReserve :ast)
@@ -1665,7 +1722,7 @@ rewriteToThis: function {
     } case caseclause then {
         lnI: n.lineno
         coI: n.colno
-        nma: clonePath :ast n: (ast.nodes.get i: n.matcharm.u64)
+        nma: clonePathAt :ast nid: n.matcharm
         nstI: rewriteToThis :ast n: (ast.nodes.get i: n.statement.u64) :promoted
         return (Node.caseclause (zast.CaseClauseData
             nodeid: (zast.tableReserve :ast)
@@ -1807,7 +1864,7 @@ cloneWithThisHead: function {
             :line
             :col
         )
-        nc: clonePath :ast n: (ast.nodes.get i: n.child.u64)
+        nc: clonePathAt :ast nid: n.child
         return (Node.dottedpath (zast.DottedPathData
             nodeid: (zast.tableReserve :ast)
             lineno: line
@@ -1883,7 +1940,7 @@ paramFieldPath: function {
         match (
             n
         ) case dottedpath then {
-            return (clonePath :ast n: (ast.nodes.get i: n.parent.u64))
+            return (clonePathAt :ast nid: n.parent)
         } else {
             return (clonePath :ast :n)
         }
@@ -1929,7 +1986,7 @@ cloneCreateParam: function {
                 operation: (zast.tableAdd :ast n: nop1))
             )
         } else {
-            nop: clonePath :ast n: (ast.nodes.get i: n.operation.u64)
+            nop: clonePathAt :ast nid: n.operation
             return (Node.namedoperation (zast.NamedOperationData
                 nodeid: (zast.tableReserve :ast)
                 lineno: ln0
@@ -1977,7 +2034,7 @@ cloneFactoryParam: function {
                 operation: (zast.tableAdd :ast n: nop2))
             )
         } else {
-            nop: clonePath :ast n: (ast.nodes.get i: n.operation.u64)
+            nop: clonePathAt :ast nid: n.operation
             return (Node.namedoperation (zast.NamedOperationData
                 nodeid: (zast.tableReserve :ast)
                 lineno: ln0
