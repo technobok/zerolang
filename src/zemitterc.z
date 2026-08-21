@@ -13910,6 +13910,204 @@ emitAssignment: function {
         tn: tn.stringview
     )
 }
+# emitDottedAutoCallStmt -- a no-argument METHOD auto-call in statement position
+# (`this.accept`, `this.statepop`) parses as a dotted path. Emits the call as a
+# statement, or nothing at all for a `.release` transfer marker, whose destroy
+# the scope exit already covers. ALWAYS handles the statement -- the four legs
+# inside it were `return`s out of emitReturnStmt, so the caller returns too.
+emitDottedAutoCallStmt: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    # `.release` on a protocol is a transfer marker (scope-exit destroy
+    # covers it) -- emit nothing, like emitCallStmt.
+    dct: dottedChildText :ast :n
+    if dct.stringview == "release" then {
+        rrid: dottedReceiverStampId :ast :symtab callable: n
+        rtt: symtab.reg.typetypeOf typeId: rrid
+        if rtt == ztypes.ztypetype.protocolType then return
+        rcvKey: atomVid :symtab nid: (dottedBaseNodeId :ast :n)
+        rbrw: false
+        bvg: ctx.borrowedVars.get key: rcvKey
+        match (
+            bvg
+        ) case some then {
+            rbrw = bvg
+        } case none then null
+        if rbrw then return
+        rcvV: emitDottedReceiver :ast :symtab :ctx callable: n
+        if rrid == ctx.strTid then {
+            rdf: "\{ind}\{ctx.strC}_free(&\{rcvV});\n"
+            buf.append rdf
+        } else {
+            if (symtab.reg.needsDestructor typeId: rrid) then {
+                rdcb: ctxCname :ctx tid: (ztypes.tid.create from: rrid.u64)
+                rdref: "&\{rcvV}"
+                if (isBoxTid
+                    :symtab
+                    tid: (ztypes.tid.create from: rrid.u64)
+                ) then rdref = "\{rcvV}"
+                rdc: "\{ind}\{rdcb}_destroy(\{rdref});\n"
+                buf.append rdc
+            }
+        }
+        rinv: false
+        if rrid == ctx.strTid then rinv = true
+        if rtt == ztypes.ztypetype.classType then rinv = true
+        if rtt == ztypes.ztypetype.unionType then rinv = true
+        if rinv then {
+            rci: (typeRefC
+                :ast
+                :symtab
+                :ctx
+                tid: (ztypes.tid.create from: rrid.u64)
+                thisTid: ztypes.tid
+            )
+            riv: "\{ind}\{rcvV} = (\{rci}){0};\n"
+            buf.append riv
+        }
+        return
+    }
+    de: emitExpr :ast :symtab :ctx :n
+    if (de.stringview.startsWith prefix: "/*") then {
+        emitFail :ctx what: "unhandled statement".string line: (ztypecheck.nodeLine :n)
+        lud: "\{ind}/* zemitterc: unhandled statement */\n"
+        buf.append lud
+    } else {
+        drtid: stampIdOf :symtab nid: (interpPartNodeId :n)
+        (emitDiscardedResult
+            :ast
+            :symtab
+            :ctx
+            isBorrow: (bindingRhsIsBorrow :ast :symtab :ctx :n)
+            ce: de.stringview
+            rtid: drtid
+            :ind
+            :tmp
+            :buf
+        )
+    }
+    return
+}
+
+# emitBreakStmt -- `break`: the block frees, then the owned-payload dtor the
+# jump would skip, then the goto. A do-block entry carries an empty cleanup.
+emitBreakStmt: function {
+    ctx: Ctx
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    emitBreakFrees :ctx :tmp :ind :buf
+    if ctx.breakLabels.length > 0 then {
+        bid: ctx.breakLabels.get i: (ctx.breakLabels.length - 1)
+        # an owned-payload loop's per-iteration dtor: the jump
+        # skips the fall-through line, so emit its copy here (a
+        # do-block entry carries an empty cleanup).
+        bcl: ctx.breakLabelCleanup.get i: (ctx.breakLabels.length - 1)
+        if bcl.length > 0 then {
+            lbc: "\{ind}\{bcl}"
+            buf.append lbc
+        }
+        lbkg: "\{ind}goto __zbrk_\{bid};\n"
+        buf.append lbkg
+        ubk: true
+        ctx.breakLabelUsed.set key: bid value: ubk
+    } else {
+        lbk: "\{ind}break;\n"
+        buf.append lbk
+    }
+}
+
+# emitContinueStmt -- `continue`, and the bare atom that is neither `break` nor
+# `continue` and so is a statement whose value is discarded.
+emitContinueStmt: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node.view
+    bkw: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    if bkw == "continue" then {
+        # inside a do{}while(0) block wrapper a C continue exits
+        # the wrapper, not the loop: jump to the nearest LOOP
+        # entry's __zcont label instead (frees since that loop).
+        inDo: false
+        loopIdx: u64
+        hasLoop: false
+        li: ctx.breakLabelIsDo.length
+        if li > 0 then {
+            if (ctx.breakLabelIsDo.get i: (li - 1)) then inDo = true
+            sj: li
+            for sj > 0 loop {
+                sj = sj - 1
+                if (ctx.breakLabelIsDo.get i: sj) == false when (hasLoop) == false then {
+                    loopIdx = sj
+                    hasLoop = true
+                }
+            }
+        }
+        if inDo when hasLoop then {
+            emitContinueFrees :ctx :tmp idx: loopIdx :ind :buf
+            ccl: ctx.breakLabelCleanup.get i: loopIdx
+            if ccl.length > 0 then {
+                lcc: "\{ind}\{ccl}"
+                buf.append lcc
+            }
+            cid: ctx.breakLabels.get i: loopIdx
+            lcg: "\{ind}goto __zcont_\{cid};\n"
+            buf.append lcg
+            ucn: true
+            ctx.contLabelUsed.set key: cid value: ucn
+        } else {
+            emitBreakFrees :ctx :tmp :ind :buf
+            if ctx.breakLabelCleanup.length > 0 then {
+                pcl0: (ctx.breakLabelCleanup.get
+                    i: (ctx.breakLabelCleanup.length - 1)
+                )
+                if pcl0.length > 0 then {
+                    lpc: "\{ind}\{pcl0}"
+                    buf.append lpc
+                }
+            }
+            lct: "\{ind}continue;\n"
+            buf.append lct
+        }
+    } else {
+        ue: emitExpr :ast :symtab :ctx :n
+        if (ue.stringview.startsWith prefix: "/*") then {
+            (emitFail
+                :ctx
+                what: "unhandled statement".string
+                line: (ztypecheck.nodeLine :n)
+            )
+            lu: "\{ind}/* zemitterc: unhandled statement */\n"
+            buf.append lu
+        } else {
+            urtid: stampIdOf :symtab nid: (interpPartNodeId :n)
+            (emitDiscardedResult
+                :ast
+                :symtab
+                :ctx
+                isBorrow: (bindingRhsIsBorrow :ast :symtab :ctx :n)
+                ce: ue.stringview
+                rtid: urtid
+                :ind
+                :tmp
+                :buf
+            )
+        }
+    }
+}
+
 # emitReturnStmt -- the statement shapes that are not one of the named node arms:
 # a `return` with its scope cleanup, `break` / `continue` with theirs, and a bare
 # expression statement.
@@ -13925,74 +14123,7 @@ emitReturnStmt: function {
     # a no-arg method auto-call in statement position (this.accept,
     # this.statepop) is a dotted path: emit the call expression as a statement.
     if (isDottedAutoCall :n) then {
-        # `.release` on a protocol is a transfer marker (scope-exit destroy
-        # covers it) -- emit nothing, like emitCallStmt.
-        dct: dottedChildText :ast :n
-        if dct.stringview == "release" then {
-            rrid: dottedReceiverStampId :ast :symtab callable: n
-            rtt: symtab.reg.typetypeOf typeId: rrid
-            if rtt == ztypes.ztypetype.protocolType then return
-            rcvKey: atomVid :symtab nid: (dottedBaseNodeId :ast :n)
-            rbrw: false
-            bvg: ctx.borrowedVars.get key: rcvKey
-            match (
-                bvg
-            ) case some then {
-                rbrw = bvg
-            } case none then null
-            if rbrw then return
-            rcvV: emitDottedReceiver :ast :symtab :ctx callable: n
-            if rrid == ctx.strTid then {
-                rdf: "\{ind}\{ctx.strC}_free(&\{rcvV});\n"
-                buf.append rdf
-            } else {
-                if (symtab.reg.needsDestructor typeId: rrid) then {
-                    rdcb: ctxCname :ctx tid: (ztypes.tid.create from: rrid.u64)
-                    rdref: "&\{rcvV}"
-                    if (isBoxTid
-                        :symtab
-                        tid: (ztypes.tid.create from: rrid.u64)
-                    ) then rdref = "\{rcvV}"
-                    rdc: "\{ind}\{rdcb}_destroy(\{rdref});\n"
-                    buf.append rdc
-                }
-            }
-            rinv: false
-            if rrid == ctx.strTid then rinv = true
-            if rtt == ztypes.ztypetype.classType then rinv = true
-            if rtt == ztypes.ztypetype.unionType then rinv = true
-            if rinv then {
-                rci: (typeRefC
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: (ztypes.tid.create from: rrid.u64)
-                    thisTid: ztypes.tid
-                )
-                riv: "\{ind}\{rcvV} = (\{rci}){0};\n"
-                buf.append riv
-            }
-            return
-        }
-        de: emitExpr :ast :symtab :ctx :n
-        if (de.stringview.startsWith prefix: "/*") then {
-            emitFail :ctx what: "unhandled statement".string line: (ztypecheck.nodeLine :n)
-            lud: "\{ind}/* zemitterc: unhandled statement */\n"
-            buf.append lud
-        } else {
-            drtid: stampIdOf :symtab nid: (interpPartNodeId :n)
-            (emitDiscardedResult
-                :ast
-                :symtab
-                :ctx
-                isBorrow: (bindingRhsIsBorrow :ast :symtab :ctx :n)
-                ce: de.stringview
-                rtid: drtid
-                :ind
-                :tmp
-                :buf
-            )
-        }
+        emitDottedAutoCallStmt :ast :symtab :ctx :n :ind :tmp :buf
         return
     }
     # a bare no-arg function call as a statement (`check_mode`): typecheck
@@ -14031,96 +14162,9 @@ emitReturnStmt: function {
         }
     } else {
         if bkw.stringview == "break" then {
-            emitBreakFrees :ctx :tmp :ind :buf
-            if ctx.breakLabels.length > 0 then {
-                bid: ctx.breakLabels.get i: (ctx.breakLabels.length - 1)
-                # an owned-payload loop's per-iteration dtor: the jump
-                # skips the fall-through line, so emit its copy here (a
-                # do-block entry carries an empty cleanup).
-                bcl: ctx.breakLabelCleanup.get i: (ctx.breakLabels.length - 1)
-                if bcl.length > 0 then {
-                    lbc: "\{ind}\{bcl}"
-                    buf.append lbc
-                }
-                lbkg: "\{ind}goto __zbrk_\{bid};\n"
-                buf.append lbkg
-                ubk: true
-                ctx.breakLabelUsed.set key: bid value: ubk
-            } else {
-                lbk: "\{ind}break;\n"
-                buf.append lbk
-            }
+            emitBreakStmt :ctx :ind :tmp :buf
         } else {
-            if bkw.stringview == "continue" then {
-                # inside a do{}while(0) block wrapper a C continue exits
-                # the wrapper, not the loop: jump to the nearest LOOP
-                # entry's __zcont label instead (frees since that loop).
-                inDo: false
-                loopIdx: u64
-                hasLoop: false
-                li: ctx.breakLabelIsDo.length
-                if li > 0 then {
-                    if (ctx.breakLabelIsDo.get i: (li - 1)) then inDo = true
-                    sj: li
-                    for sj > 0 loop {
-                        sj = sj - 1
-                        if (ctx.breakLabelIsDo.get i: sj) == false when (hasLoop) == false then {
-                            loopIdx = sj
-                            hasLoop = true
-                        }
-                    }
-                }
-                if inDo when hasLoop then {
-                    emitContinueFrees :ctx :tmp idx: loopIdx :ind :buf
-                    ccl: ctx.breakLabelCleanup.get i: loopIdx
-                    if ccl.length > 0 then {
-                        lcc: "\{ind}\{ccl}"
-                        buf.append lcc
-                    }
-                    cid: ctx.breakLabels.get i: loopIdx
-                    lcg: "\{ind}goto __zcont_\{cid};\n"
-                    buf.append lcg
-                    ucn: true
-                    ctx.contLabelUsed.set key: cid value: ucn
-                } else {
-                    emitBreakFrees :ctx :tmp :ind :buf
-                    if ctx.breakLabelCleanup.length > 0 then {
-                        pcl0: (ctx.breakLabelCleanup.get
-                            i: (ctx.breakLabelCleanup.length - 1)
-                        )
-                        if pcl0.length > 0 then {
-                            lpc: "\{ind}\{pcl0}"
-                            buf.append lpc
-                        }
-                    }
-                    lct: "\{ind}continue;\n"
-                    buf.append lct
-                }
-            } else {
-                ue: emitExpr :ast :symtab :ctx :n
-                if (ue.stringview.startsWith prefix: "/*") then {
-                    (emitFail
-                        :ctx
-                        what: "unhandled statement".string
-                        line: (ztypecheck.nodeLine :n)
-                    )
-                    lu: "\{ind}/* zemitterc: unhandled statement */\n"
-                    buf.append lu
-                } else {
-                    urtid: stampIdOf :symtab nid: (interpPartNodeId :n)
-                    (emitDiscardedResult
-                        :ast
-                        :symtab
-                        :ctx
-                        isBorrow: (bindingRhsIsBorrow :ast :symtab :ctx :n)
-                        ce: ue.stringview
-                        rtid: urtid
-                        :ind
-                        :tmp
-                        :buf
-                    )
-                }
-            }
+            emitContinueStmt :ast :symtab :ctx :n bkw: bkw.stringview :ind :tmp :buf
         }
     }
 }
@@ -20320,6 +20364,116 @@ scanNativeNeed: function {
         needsAddM :ctx uname: duo.stringview :memb
     } case none then null
 }
+# scanNeedsCall -- the needs a CALL declares: the string/view natives its
+# member name asks for, the native rows its callee resolves to, and then the
+# arguments, which are scanned like any other node.
+scanNeedsCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    unitName: StringView
+    n: zast.CallData.view
+} is {
+    mn0: dottedChildText :ast n: (ast.nodes.get i: n.callable.u64)
+    cbi0: dottedBaseAtomId :ast n: (ast.nodes.get i: n.callable.u64)
+    cbt0: dottedBaseAtom :ast n: (ast.nodes.get i: n.callable.u64)
+    cmb0: mn0.copy
+    if cbi0.isZero then {
+        cmb0 = atomTextOf :ast n: (ast.nodes.get i: n.callable.u64)
+    }
+    (scanNativeNeed
+        :ast
+        :symtab
+        :ctx
+        :unitName
+        baseId: cbi0
+        base: cbt0.stringview
+        membId: (dottedChildNameIdOf :ast n: (ast.nodes.get i: n.callable.u64))
+        memb: cmb0.stringview
+    )
+    if (isSvArgNative name: mn0.stringview) then (needsAddM
+        :ctx
+        uname: "system"
+        memb: mn0.stringview
+    )
+    if (isSvSimpleNative name: mn0.stringview) then (needsAddM
+        :ctx
+        uname: "system"
+        memb: mn0.stringview
+    )
+    # substring emits through its own leg (recv/from/to), so the arg-native
+    # table cannot carry it; the need still must pre-register for method
+    # bodies, which emit after the runtime pass runs
+    if mn0.stringview == "substring" then needsAddM :ctx uname: "system" memb: "substring"
+    if (isSvParseNative name: mn0.stringview) then (needsAddM
+        :ctx
+        uname: "system"
+        memb: mn0.stringview
+    )
+    if (isSvNoArgNative name: mn0.stringview) then (needsAddM
+        :ctx
+        uname: "system"
+        memb: mn0.stringview
+    )
+    # split/lines emit through the iterator fragments (Splitter/LinesIter),
+    # so the native tables cannot carry them; the sv_* needs still must
+    # pre-register for method bodies, which emit after the runtime pass runs
+    if mn0.stringview == "split" then needsAddM :ctx uname: "sviter" memb: "sv_split"
+    if mn0.stringview == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
+    cjn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.callable.u64))
+    if cjn0.stringview == "stringJoin" then (needsAddM
+        :ctx
+        uname: "collections"
+        memb: "coll_join"
+    )
+    argIter: n.arguments.iterate
+    for a: argIter loop scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: a.u64)
+}
+
+# scanNeedsDotted -- the needs a DOTTED READ declares: the float parses and the
+# no-argument view natives reached without a call, plus the base's own row.
+scanNeedsDotted: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    unitName: StringView
+    n: zast.DottedPathData.view
+} is {
+    pdm: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+    if pdm.stringview == "parseF64" then needsAddM :ctx uname: "system" memb: "parseF64"
+    if pdm.stringview == "parseF16" then needsAddM :ctx uname: "system" memb: "parseF16"
+    if pdm.stringview == "parseF128" then needsAddM :ctx uname: "system" memb: "parseF128"
+    if pdm.stringview == "parseI64" then needsAddM :ctx uname: "system" memb: "parseI64"
+    if pdm.stringview == "parseU64" then needsAddM :ctx uname: "system" memb: "parseU64"
+    if (isSvNoArgNative name: pdm.stringview) then (needsAddM
+        :ctx
+        uname: "system"
+        memb: pdm.stringview
+    )
+    # a no-paren member read auto-calls, so the simple natives (trim,
+    # isEmpty, ...) arrive as dottedpath too -- same parity the call arm has
+    if (isSvSimpleNative name: pdm.stringview) then (needsAddM
+        :ctx
+        uname: "system"
+        memb: pdm.stringview
+    )
+    if pdm.stringview == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
+    # a no-paren member read auto-calls, so a zero-parameter native (os.pid,
+    # io.stdout) arrives here rather than at the call arm
+    pdb: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
+    (scanNativeNeed
+        :ast
+        :symtab
+        :ctx
+        :unitName
+        baseId: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
+        base: pdb.stringview
+        membId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+        memb: pdm.stringview
+    )
+    scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.parent.u64)
+}
+
 
 # scanNeeds -- recursively register io/os native needs for every call in a
 # def/body. Structurally mirrors collectLiterals; emitFns registers free-fn
@@ -20379,94 +20533,9 @@ scanNeeds: function {
     } case namedoperation then {
         scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.operation.u64)
     } case call then {
-        mn0: dottedChildText :ast n: (ast.nodes.get i: n.callable.u64)
-        cbi0: dottedBaseAtomId :ast n: (ast.nodes.get i: n.callable.u64)
-        cbt0: dottedBaseAtom :ast n: (ast.nodes.get i: n.callable.u64)
-        cmb0: mn0.copy
-        if cbi0.isZero then {
-            cmb0 = atomTextOf :ast n: (ast.nodes.get i: n.callable.u64)
-        }
-        (scanNativeNeed
-            :ast
-            :symtab
-            :ctx
-            :unitName
-            baseId: cbi0
-            base: cbt0.stringview
-            membId: (dottedChildNameIdOf :ast n: (ast.nodes.get i: n.callable.u64))
-            memb: cmb0.stringview
-        )
-        if (isSvArgNative name: mn0.stringview) then (needsAddM
-            :ctx
-            uname: "system"
-            memb: mn0.stringview
-        )
-        if (isSvSimpleNative name: mn0.stringview) then (needsAddM
-            :ctx
-            uname: "system"
-            memb: mn0.stringview
-        )
-        # substring emits through its own leg (recv/from/to), so the arg-native
-        # table cannot carry it; the need still must pre-register for method
-        # bodies, which emit after the runtime pass runs
-        if mn0.stringview == "substring" then needsAddM :ctx uname: "system" memb: "substring"
-        if (isSvParseNative name: mn0.stringview) then (needsAddM
-            :ctx
-            uname: "system"
-            memb: mn0.stringview
-        )
-        if (isSvNoArgNative name: mn0.stringview) then (needsAddM
-            :ctx
-            uname: "system"
-            memb: mn0.stringview
-        )
-        # split/lines emit through the iterator fragments (Splitter/LinesIter),
-        # so the native tables cannot carry them; the sv_* needs still must
-        # pre-register for method bodies, which emit after the runtime pass runs
-        if mn0.stringview == "split" then needsAddM :ctx uname: "sviter" memb: "sv_split"
-        if mn0.stringview == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
-        cjn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.callable.u64))
-        if cjn0.stringview == "stringJoin" then (needsAddM
-            :ctx
-            uname: "collections"
-            memb: "coll_join"
-        )
-        argIter: n.arguments.iterate
-        for a: argIter loop scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: a.u64)
+        scanNeedsCall :ast :symtab :ctx :unitName :n
     } case dottedpath then {
-        pdm: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if pdm.stringview == "parseF64" then needsAddM :ctx uname: "system" memb: "parseF64"
-        if pdm.stringview == "parseF16" then needsAddM :ctx uname: "system" memb: "parseF16"
-        if pdm.stringview == "parseF128" then needsAddM :ctx uname: "system" memb: "parseF128"
-        if pdm.stringview == "parseI64" then needsAddM :ctx uname: "system" memb: "parseI64"
-        if pdm.stringview == "parseU64" then needsAddM :ctx uname: "system" memb: "parseU64"
-        if (isSvNoArgNative name: pdm.stringview) then (needsAddM
-            :ctx
-            uname: "system"
-            memb: pdm.stringview
-        )
-        # a no-paren member read auto-calls, so the simple natives (trim,
-        # isEmpty, ...) arrive as dottedpath too -- same parity the call arm has
-        if (isSvSimpleNative name: pdm.stringview) then (needsAddM
-            :ctx
-            uname: "system"
-            memb: pdm.stringview
-        )
-        if pdm.stringview == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
-        # a no-paren member read auto-calls, so a zero-parameter native (os.pid,
-        # io.stdout) arrives here rather than at the call arm
-        pdb: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-        (scanNativeNeed
-            :ast
-            :symtab
-            :ctx
-            :unitName
-            baseId: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-            base: pdb.stringview
-            membId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-            memb: pdm.stringview
-        )
-        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.parent.u64)
+        scanNeedsDotted :ast :symtab :ctx :unitName :n
     } case binop then {
         scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.lhs.u64)
         scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.rhs.u64)
