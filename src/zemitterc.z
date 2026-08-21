@@ -25056,19 +25056,15 @@ emitFnptrTypedefs: function {
         t0 = ztypes.tid.create from: (t0 + 1)
     }
 }
-
-# emit the user struct definitions in dependency order.
-emitUserStructsOrdered: function {
+# emitUserProtocols -- user PROTOCOLs upfront: a protocol value is a fat pointer,
+# so nothing embeds one by value and it can precede every struct that names it.
+emitUserProtocols: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
-    runtimeDir: StringView
+    last: u64
     buf: String.borrow
 } is {
-    last: symtab.reg.nextTypeId
-    userList: (ListVal u64)
-    buildUserTypeList :symtab :ctx acc: userList
-    # user PROTOCOLs upfront (fat pointer; no by-value user embedding)
     tp: ztypes.tid
     for tp < last loop {
         if (symtab.reg.typetypeOf typeId: tp) == ztypes.ztypetype.protocolType then {
@@ -25093,145 +25089,63 @@ emitUserStructsOrdered: function {
         }
         tp = ztypes.tid.create from: (tp + 1)
     }
-    # late collection/variant monos (the by-value kinds embedding a user type)
-    lateGroup: (ListVal u64)
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.optionvalOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.resultvalOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.listViewOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.listViewValOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.listOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.listValOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.setOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.setValOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.mapOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.mapRVOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.idSetOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.idMapROriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.idMapVOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.mapVROriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    (collectLateMonosKind
-        :ast
-        :symtab
-        :ctx
-        originTid: ctx.mapVVOriginTid
-        :userList
-        acc: lateGroup
-        :last
-    )
-    # membership id-set mirroring lateGroup (the list keeps emission order)
-    lateSet: (IdSet u64)
+}
+
+# collectLateGroup -- the late collection/variant monos: the by-value kinds that
+# embed a user type, and so must follow the user structs. One pass per family.
+# The LIST ORDER is the emission order of the group, so it is the order the
+# fifteen open-coded calls stood in.
+collectLateGroup: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    userList: (ListVal u64).view
+    acc: ListVal u64
+    last: u64
+} is {
+    fams: (ListVal u64)
+    fams.append ctx.optionvalOriginTid.u64
+    fams.append ctx.resultvalOriginTid.u64
+    fams.append ctx.listViewOriginTid.u64
+    fams.append ctx.listViewValOriginTid.u64
+    fams.append ctx.listOriginTid.u64
+    fams.append ctx.listValOriginTid.u64
+    fams.append ctx.setOriginTid.u64
+    fams.append ctx.setValOriginTid.u64
+    fams.append ctx.mapOriginTid.u64
+    fams.append ctx.mapRVOriginTid.u64
+    fams.append ctx.idSetOriginTid.u64
+    fams.append ctx.idMapROriginTid.u64
+    fams.append ctx.idMapVOriginTid.u64
+    fams.append ctx.mapVROriginTid.u64
+    fams.append ctx.mapVVOriginTid.u64
+    fi: u64
+    fn: fams.length
+    for fi < fn loop {
+        (collectLateMonosKind
+            :ast
+            :symtab
+            :ctx
+            originTid: (ztypes.tid.create from: (fams.get i: fi))
+            :userList
+            :acc
+            :last
+        )
+        fi = fi + 1
+    }
+}
+
+# closeLateGroup -- the membership id-set mirroring lateGroup (the list keeps
+# emission order), then the closure: a user struct embedding a late-group
+# member by value is late too, to a fixpoint.
+closeLateGroup: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    userList: (ListVal u64).view
+    lateGroup: ListVal u64
+    lateSet: IdSet u64
+} is {
     li0: u64
     ln0: lateGroup.length
     for li0 < ln0 loop {
@@ -25265,8 +25179,18 @@ emitUserStructsOrdered: function {
             ui = ui + 1
         }
     }
-    # early-user structs: users not in the late group, in type-id order
-    # (preEmitEmbeddedTypes inside each emitter fixes intra-pass user->user order)
+}
+
+# emitEarlyUserStructs -- users not in the late group, in type-id order
+# (preEmitEmbeddedTypes inside each emitter fixes intra-pass user->user order).
+emitEarlyUserStructs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    userList: (ListVal u64).view
+    lateSet: IdSet u64
+    buf: String.borrow
+} is {
     e0: u64
     n0: userList.length
     for e0 < n0 loop {
@@ -25280,7 +25204,20 @@ emitUserStructsOrdered: function {
         )
         e0 = e0 + 1
     }
-    # fixpoint: emit late monos + late-user structs in dependency order
+}
+
+# emitLateGroupOrdered -- the late monos and late-user structs in dependency
+# order, by fixpoint; whatever the fixpoint cannot place is emitted in list
+# order rather than dropped.
+emitLateGroupOrdered: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    runtimeDir: StringView
+    lateGroup: (ListVal u64).view
+    lateSet: IdSet u64
+    buf: String.borrow
+} is {
     emittedSet: (IdSet u64)
     totalPend: lateGroup.length
     emittedCount: u64
@@ -25368,6 +25305,27 @@ emitUserStructsOrdered: function {
             f0 = f0 + 1
         }
     }
+}
+
+
+# emit the user struct definitions in dependency order.
+emitUserStructsOrdered: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    runtimeDir: StringView
+    buf: String.borrow
+} is {
+    last: symtab.reg.nextTypeId
+    userList: (ListVal u64)
+    buildUserTypeList :symtab :ctx acc: userList
+    emitUserProtocols :ast :symtab :ctx :last :buf
+    lateGroup: (ListVal u64)
+    collectLateGroup :ast :symtab :ctx :userList acc: lateGroup :last
+    lateSet: (IdSet u64)
+    closeLateGroup :ast :symtab :ctx :userList :lateGroup :lateSet
+    emitEarlyUserStructs :ast :symtab :ctx :userList :lateSet :buf
+    emitLateGroupOrdered :ast :symtab :ctx :runtimeDir :lateGroup :lateSet :buf
 }
 # classifyCollectionMono -- the option / result / view families and the seven
 # collection families, each keyed on the ORIGIN tid its mono was minted from. An
