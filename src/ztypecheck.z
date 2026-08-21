@@ -60,6 +60,7 @@ public: unit {
     :walkLookupTyperefById
     :walkLookupTyperefRo
     :resolveUnitChildRo
+    :resolvedByIdsRo
 }
 
 Node: zast.Node
@@ -36350,6 +36351,48 @@ resolvedByIds: function {
                     childTypeId: tgo
                 )
             }
+            return (optionval.some tgo)
+        } case none then null
+    }
+    return (optionval.none u64)
+}
+
+
+# resolvedByIdsRo -- resolvedByIds minus its one write (the re-export member
+# memo): the member-index walk, the public-block surface, then the re-export
+# target read. The post-typecheck readers hold views and never lay the edge.
+resolvedByIdsRo: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    unitDecl: ztypes.declid
+    name: zast.nameid
+} out optionval u64 is {
+    wo: childOfWalkIds :st :unitDecl :name
+    match (
+        wo
+    ) case some then {
+        return (optionval.some wo)
+    } case none then null
+    alDecl: declOfUnitDefIds :st :unitDecl nameId: name
+    {
+        alT: declTypeIdOf :st declId: alDecl
+        alP: declParentIdOf :st declId: alDecl
+        alRoot: ztypes.declid
+        if (unitDecl.isZero) == false then alRoot = unitDecl
+        if (alT.isZero) == false when (alP.isZero) == false when alP != alRoot then {
+            return (optionval.some alT.u64)
+        }
+    }
+    alTgt: reexportTargetIdsOf :st :ast declId: alDecl
+    if alTgt.unitName.u32 > 0 then {
+        tgo: (childOfWalkIds
+            :st
+            unitDecl: (unitDeclOfName :st nameId: alTgt.unitName)
+            name: alTgt.defName
+        )
+        match (
+            tgo
+        ) case some then {
             return (optionval.some tgo)
         } case none then null
     }
