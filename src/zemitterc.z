@@ -15022,45 +15022,51 @@ matchSubjectCore: function {ast: Ast.view nid: u64} out u64 is {
         return nid
     }
 }
-
-# emit a match as a C switch.
-emitMatchStmt: function {
+# matchOrdinalPairRoute -- an ordinal-pair subject (two ordinal variants matched
+# together) has its own emitter. True when it took the match.
+matchOrdinalPairRoute: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     m: zast.CaseData.view
+    subj: StringView
     assignTo: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
-} is {
-    sx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: m.subject.u64)
-    stn: stampNameDeep :ast :symtab n: (ast.nodes.get i: m.subject.u64)
-    {
-        sTid: stampIdDeep :ast :symtab n: (ast.nodes.get i: m.subject.u64)
-        if (isOrdinalPair :symtab tid: (ztypes.tid.create from: sTid.u64)) then {
-            (emitOrdinalPairMatch
-                :ast
-                :symtab
-                :ctx
-                :m
-                subj: sx.stringview
-                tid: (ztypes.tid.create from: sTid.u64)
-                :assignTo
-                :ind
-                :tmp
-                :buf
-            )
-            return
-        }
+} out bool is {
+    sTid: stampIdDeep :ast :symtab n: (ast.nodes.get i: m.subject.u64)
+    if (isOrdinalPair :symtab tid: (ztypes.tid.create from: sTid.u64)) then {
+        (emitOrdinalPairMatch
+            :ast
+            :symtab
+            :ctx
+            :m
+            :subj
+            tid: (ztypes.tid.create from: sTid.u64)
+            :assignTo
+            :ind
+            :tmp
+            :buf
+        )
+        return true
     }
-    vtid: (canonTypeId
-        :ast
-        :symtab
-        :ctx
-        tid: (stampIdDeep :ast :symtab n: (ast.nodes.get i: m.subject.u64))
-        name: stn.stringview
-    )
+    return false
+}
+
+# matchGenericRoute -- a subject whose type is a GENERIC PARAMETER, named either
+# bare or through a dotted path, dissects instead of switching: there is no
+# tag to switch on until the parameter is bound. True when it took the match.
+matchGenericRoute: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    m: zast.CaseData.view
+    stn: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
     subjSid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: m.subject.u64))
     if subjSid > 0 then {
         if (symtab.reg.typetypeOf typeId: subjSid) == ztypes.ztypetype.genericParam then {
@@ -15070,12 +15076,12 @@ emitMatchStmt: function {
                 :ctx
                 :m
                 ownerTid: ctx.curThisTid
-                paramName: (zast.poolFind pool: ast.names text: stn.stringview)
+                paramName: (zast.poolFind pool: ast.names text: stn)
                 :ind
                 :tmp
                 :buf
             )
-            return
+            return true
         }
     }
     dcore: matchSubjectCore :ast nid: m.subject.u64
@@ -15104,11 +15110,120 @@ emitMatchStmt: function {
                         :tmp
                         :buf
                     )
-                    return
+                    return true
                 }
             }
         }
     } else null
+    return false
+}
+
+# matchelse -- the residual narrowing an else arm inherits: when exactly ONE arm
+# is uncovered, the else branch KNOWS the subject is that arm.
+matchelse: record {
+    meT: ztypes.tid
+    meSeed: bool
+}
+
+# matchElseNarrowing -- work out that residual arm and the alias text for it.
+# Answers seeded=false when the else covers more than one arm, when the subject
+# has no name to narrow, or when the else body reassigns it.
+matchElseNarrowing: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    m: zast.CaseData.view
+    vtid: ztypes.tid
+    sname: StringView
+    covA: (List String).view
+    mN: u64
+    meV: String.borrow
+} out matchelse is {
+    meT: ztypes.tid
+    meSeed: false
+    if (m.elseclause > 0) == false then return (matchelse :meT :meSeed)
+    if sname.length == 0 then return (matchelse :meT :meSeed)
+    allME: (List String)
+    sumArmNamesInto :ast :symtab tid: (ztypes.tid.create from: vtid.u64) names: allME
+    remME: u64
+    armME: String
+    with mit: allME.iterate do for ma: mit loop {
+        cov: false
+        with cvi: covA.iterate do for cv: cvi loop {
+            if cv.stringview == ma.stringview then cov = true
+        }
+        if (cov) == false then {
+            remME = remME + 1
+            mv: ma.copy
+            armME = mv
+        }
+    }
+    if remME == 1 then {
+        mre: false
+        if m.elseclause > 0 then {
+            mec: ast.nodes.get i: m.elseclause.u64
+            mre = bodyReassigns :ast n: mec name: sname
+        }
+        if (mre) == false then {
+            mrecv: "_m\{mN}"
+            aliasText: (armAliasText
+                :ast
+                :symtab
+                :ctx
+                tid: (ztypes.tid.create from: vtid.u64)
+                arm: armME.stringview
+                recv: mrecv.stringview
+                acc: "."
+            )
+            if aliasText.length > 0 then {
+                meV.append aliasText
+                meT = ztypes.tid.create from: (ztypecheck.optU64Or
+                    o: (symtab.typing.declChildOf
+                        pool: ast.names
+                        parentTypeId: (ztypes.tid.create from: vtid.u64)
+                        name: armME.stringview
+                    ) d: 0
+                )
+                meSeed = true
+            }
+        }
+    }
+    return (matchelse :meT :meSeed)
+}
+
+
+# emit a match as a C switch.
+emitMatchStmt: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    m: zast.CaseData.view
+    assignTo: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    sx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: m.subject.u64)
+    stn: stampNameDeep :ast :symtab n: (ast.nodes.get i: m.subject.u64)
+    if (matchOrdinalPairRoute
+        :ast
+        :symtab
+        :ctx
+        :m
+        subj: sx.stringview
+        :assignTo
+        :ind
+        :tmp
+        :buf
+    ) then return
+    vtid: (canonTypeId
+        :ast
+        :symtab
+        :ctx
+        tid: (stampIdDeep :ast :symtab n: (ast.nodes.get i: m.subject.u64))
+        name: stn.stringview
+    )
+    if (matchGenericRoute :ast :symtab :ctx :m stn: stn.stringview :ind :tmp :buf) then return
     isVar: false
     isUni: false
     if vtid > 0 then {
@@ -15176,57 +15291,19 @@ emitMatchStmt: function {
         } else null
     }
     meV: String
-    meT: ztypes.tid
-    meSeed: false
-    if m.elseclause > 0 then {
-        if sname.length > 0 then {
-            allME: (List String)
-            sumArmNamesInto :ast :symtab tid: (ztypes.tid.create from: vtid.u64) names: allME
-            remME: u64
-            armME: String
-            with mit: allME.iterate do for ma: mit loop {
-                cov: false
-                with cvi: covA.iterate do for cv: cvi loop {
-                    if cv.stringview == ma.stringview then cov = true
-                }
-                if (cov) == false then {
-                    remME = remME + 1
-                    mv: ma.copy
-                    armME = mv
-                }
-            }
-            if remME == 1 then {
-                mre: false
-                if m.elseclause > 0 then {
-                    mec: ast.nodes.get i: m.elseclause.u64
-                    mre = bodyReassigns :ast n: mec name: sname.stringview
-                }
-                if (mre) == false then {
-                    mrecv: "_m\{mN}"
-                    aliasText: (armAliasText
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: vtid.u64)
-                        arm: armME.stringview
-                        recv: mrecv.stringview
-                        acc: "."
-                    )
-                    if aliasText.length > 0 then {
-                        meV = aliasText.copy
-                        meT = ztypes.tid.create from: (ztypecheck.optU64Or
-                            o: (symtab.typing.declChildOf
-                                pool: ast.names
-                                parentTypeId: (ztypes.tid.create from: vtid.u64)
-                                name: armME.stringview
-                            ) d: 0
-                        )
-                        meSeed = true
-                    }
-                }
-            }
-        }
-    }
+    men: (matchElseNarrowing
+        :ast
+        :symtab
+        :ctx
+        :m
+        vtid: (ztypes.tid.create from: vtid.u64)
+        sname: sname.stringview
+        :covA
+        :mN
+        :meV
+    )
+    meT: men.meT
+    meSeed: men.meSeed
     mePrevV: String
     mePrevT: ztypes.tid
     if meSeed then {
