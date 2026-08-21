@@ -10179,19 +10179,16 @@ emitAtom: function {
     return (emitLocalAtomName :ctx name: av vid: (atomVid :symtab nid: n.nodeid.u64))
     return "".string
 }
-# emitDottedNestedBase -- a read whose base is itself a path (`it.target.a`,
-# `this.field.pop`): emit the base expression, then chain `.` or `->` by whether
-# the base resolves to a pointer. The collection legs repeat here because the
-# atom-base ones key off a stamped ATOM, which a nested path does not have.
-emitDottedNestedBase: function {
+# emitNestedStringViewBase -- `.stringview` on a nested String/StringView base
+# projects an inline VIEW rather than reading a field, matching what the simple
+# base does through svValueForm.
+emitNestedStringViewBase: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     n: zast.DottedPathData.view
     mn2: StringView
 } out String is {
-    # `.stringview` on a String/StringView projects an inline view, not a
-    # field access (matches the simple-base svValueForm path).
     if mn2 == "stringview" then {
         ppid: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
         parentStampTid: stampIdOf :symtab nid: ppid
@@ -10211,6 +10208,163 @@ emitDottedNestedBase: function {
             return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
         }
     }
+    return "".string
+}
+
+# emitNestedCollectionBase -- a str or collection mono reached through a FIELD.
+# Set and Map are heap pointers and pass directly; the id-keyed pair are stack
+# structs and go by address.
+emitNestedCollectionBase: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    mn2: StringView
+    nlid: ztypes.tid
+    baseAtom: StringView
+    bs9vid: ztypes.vid
+} out String is {
+    if (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: ogStr)) then {
+        nstrcb: ctxCname :ctx tid: nlid
+        if mn2 == "length" then return "\{baseAtom}.len"
+        if mn2 == "size" then return "\{nstrcb}_size"
+        if mn2 == "string" then return "\{nstrcb}_string(\{baseAtom})"
+        if mn2 == "stringview" then {
+            return "(\{ctx.svC}_t){ .data = \{baseAtom}.data, .size = \{baseAtom}.len }"
+        }
+    }
+    if (isListOriginOf :symtab :ctx tid: nlid) then {
+        nlcb: ctxCname :ctx tid: nlid
+        recvB: colRecvRef :ctx bn: baseAtom vid: bs9vid
+        if mn2 == "pop" then return "\{nlcb}_pop(\{recvB})"
+        if mn2 == "sort" then return "\{nlcb}_sort(\{recvB})"
+        if mn2 == "listview" then return "\{nlcb}_listview(\{recvB})"
+        if mn2 == "iterate" then return "\{nlcb}_iterate(\{recvB})"
+        if mn2 == "iterateMut" then return "\{nlcb}_iterateMut(\{recvB})"
+    }
+    # Set/Map are heap-pointer collections; their methods are emitted by the
+    # collection template (not registry children), so a CLASS-dispatch
+    # methodOwnerId scan would mis-resolve to a duplicate same-named mono. The
+    # receiver field is already a pointer, so it is passed directly (no `&`).
+    if (isSetOriginOf :symtab :ctx tid: nlid) then {
+        nscb: ctxCname :ctx tid: nlid
+        if mn2 == "iterate" then return "\{nscb}_iterate(\{baseAtom})"
+    }
+    if (isMapOriginOf :symtab :ctx tid: nlid) then {
+        nmpcb: ctxCname :ctx tid: nlid
+        if mn2 == "iterate" then return "\{nmpcb}_iterate(\{baseAtom})"
+        if mn2 == "iterateItems" then return "\{nmpcb}_iterateItems(\{baseAtom})"
+    }
+    # the id-keyed pair reached through a FIELD. They are stack structs, so
+    # the receiver goes by address where a Map's field is already a pointer.
+    if (isIdCollectionOriginOf :symtab :ctx tid: nlid) then {
+        nidcb: ctxCname :ctx tid: nlid
+        nidrv: colRecvRef :ctx bn: baseAtom vid: bs9vid
+        if mn2 == "iterate" then return "\{nidcb}_iterate(\{nidrv})"
+        if mn2 == "iterateItems" then return "\{nidcb}_iterateItems(\{nidrv})"
+    }
+    return "".string
+}
+
+# emitNestedMonoMethodBase -- a no-argument METHOD on a nested receiver whose
+# type is a registered mono: protocol dispatch, the view natives, then the
+# owner's own method, taking the receiver by address where its signature says.
+emitNestedMonoMethodBase: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.DottedPathData.view
+    mn2: StringView
+    nlid: ztypes.tid
+    baseAtom: StringView
+    bs9vid: ztypes.vid
+} out String is {
+    if nlid > 0 then {
+        nrtt: symtab.reg.typetypeOf typeId: nlid
+        # a protocol/facet-typed base reached through a FIELD dispatches
+        # exactly as a bare one does; without this the member read falls
+        # through to the struct-field leg below and gcc rejects it
+        if (isDispatchableTid :symtab tid: nlid) then {
+            if (vtableAutoCallName name: mn2) then {
+                nacc: ".".string
+                if (pathIsPointer
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: n.parent.u64)
+                ) then nacc = "->".string
+                return (vtableAutoCallC
+                    recv: baseAtom
+                    acc: nacc.stringview
+                    mn: mn2
+                    isFacet: nrtt == ztypes.ztypetype.facetType
+                )
+            }
+        }
+        nDisp: false
+        if nrtt == ztypes.ztypetype.classType then nDisp = true
+        if nrtt == ztypes.ztypetype.recordType then nDisp = true
+        if nDisp then {
+            nlidM: methodOwnerId :ast :symtab rtid: nlid mn: mn2
+            nmco: (symtab.typing.declChildOf
+                pool: ast.names
+                parentTypeId: (ztypes.tid.create from: nlidM.u64)
+                name: mn2
+            )
+            match (
+                nmco
+            ) case some then {
+                if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: nmco.u64)) == ztypes.ztypetype.functionType then {
+                    # no-arg SV natives on a nested stringy base: the
+                    # canonical native symbol, not the method-id cname
+                    if (isSvNoArgNative name: mn2) when (isStringyTid
+                        :ctx
+                        tid: nlid
+                    ) then {
+                        needsAddM :ctx uname: "system" memb: mn2
+                        svfn: (svValueForm
+                            :ctx
+                            expr: baseAtom
+                            isStr: nlid == ctx.strTid
+                            vid: bs9vid
+                        )
+                        return "\{ctx.svC}_\{mn2}(&\{svfn})"
+                    }
+                    nmc: ctxCname :ctx tid: (ztypes.tid.create from: nmco.u64)
+                    # a receiver-taking method takes it by pointer in both
+                    # families, so address it unless it already is one
+                    nmrecv: "\{baseAtom}"
+                    if (calleeTakesReceiverByPtr
+                        :ast
+                        :symtab
+                        fid: (ztypes.tid.create from: nmco.u64)
+                    ) then {
+                        dpu: ast.nodes.get i: n.parent.u64
+                        if (pathIsPointer :ast :symtab :ctx n: dpu) == false then {
+                            nmrecv = "&\{baseAtom}"
+                        }
+                    }
+                    return "\{nmc}(\{nmrecv})"
+                }
+            } case none then null
+        }
+    }
+    return "".string
+}
+
+# emitDottedNestedBase -- a read whose base is itself a path (`it.target.a`,
+# `this.field.pop`): emit the base expression, then chain `.` or `->` by whether
+# the base resolves to a pointer. The collection legs repeat here because the
+# atom-base ones key off a stamped ATOM, which a nested path does not have.
+emitDottedNestedBase: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.DottedPathData.view
+    mn2: StringView
+} out String is {
+    # `.stringview` on a String/StringView projects an inline view, not a
+    # field access (matches the simple-base svValueForm path).
+    eSv: emitNestedStringViewBase :ast :symtab :ctx :n :mn2
+    if eSv.length > 0 then return eSv
     # a nested base (e.g. it.target.a): emit the base expression, then chain
     # `.`/`->` by whether the base resolves to a pointer (ptrVar / lock field).
     baseAtom: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
@@ -10259,115 +10413,26 @@ emitDottedNestedBase: function {
     # path). Resolve the List mono from the base node and emit the call.
     nlid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
     nlid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: nlid)
-    if (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: ogStr)) then {
-        nstrcb: ctxCname :ctx tid: nlid
-        if mn2 == "length" then return "\{baseAtom}.len"
-        if mn2 == "size" then return "\{nstrcb}_size"
-        if mn2 == "string" then return "\{nstrcb}_string(\{baseAtom})"
-        if mn2 == "stringview" then {
-            return "(\{ctx.svC}_t){ .data = \{baseAtom}.data, .size = \{baseAtom}.len }"
-        }
-    }
-    if (isListOriginOf :symtab :ctx tid: nlid) then {
-        nlcb: ctxCname :ctx tid: nlid
-        recvB: colRecvRef :ctx bn: baseAtom.stringview vid: bs9vid
-        if mn2 == "pop" then return "\{nlcb}_pop(\{recvB})"
-        if mn2 == "sort" then return "\{nlcb}_sort(\{recvB})"
-        if mn2 == "listview" then return "\{nlcb}_listview(\{recvB})"
-        if mn2 == "iterate" then return "\{nlcb}_iterate(\{recvB})"
-        if mn2 == "iterateMut" then return "\{nlcb}_iterateMut(\{recvB})"
-    }
-    # Set/Map are heap-pointer collections; their methods are emitted by the
-    # collection template (not registry children), so a CLASS-dispatch
-    # methodOwnerId scan would mis-resolve to a duplicate same-named mono. The
-    # receiver field is already a pointer, so it is passed directly (no `&`).
-    if (isSetOriginOf :symtab :ctx tid: nlid) then {
-        nscb: ctxCname :ctx tid: nlid
-        if mn2 == "iterate" then return "\{nscb}_iterate(\{baseAtom})"
-    }
-    if (isMapOriginOf :symtab :ctx tid: nlid) then {
-        nmpcb: ctxCname :ctx tid: nlid
-        if mn2 == "iterate" then return "\{nmpcb}_iterate(\{baseAtom})"
-        if mn2 == "iterateItems" then return "\{nmpcb}_iterateItems(\{baseAtom})"
-    }
-    # the id-keyed pair reached through a FIELD. They are stack structs, so
-    # the receiver goes by address where a Map's field is already a pointer.
-    if (isIdCollectionOriginOf :symtab :ctx tid: nlid) then {
-        nidcb: ctxCname :ctx tid: nlid
-        nidrv: colRecvRef :ctx bn: baseAtom.stringview vid: bs9vid
-        if mn2 == "iterate" then return "\{nidcb}_iterate(\{nidrv})"
-        if mn2 == "iterateItems" then return "\{nidcb}_iterateItems(\{nidrv})"
-    }
-    if nlid > 0 then {
-        nrtt: symtab.reg.typetypeOf typeId: nlid
-        # a protocol/facet-typed base reached through a FIELD dispatches
-        # exactly as a bare one does; without this the member read falls
-        # through to the struct-field leg below and gcc rejects it
-        if (isDispatchableTid :symtab tid: nlid) then {
-            if (vtableAutoCallName name: mn2) then {
-                nacc: ".".string
-                if (pathIsPointer
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: n.parent.u64)
-                ) then nacc = "->".string
-                return (vtableAutoCallC
-                    recv: baseAtom.stringview
-                    acc: nacc.stringview
-                    mn: mn2
-                    isFacet: nrtt == ztypes.ztypetype.facetType
-                )
-            }
-        }
-        nDisp: false
-        if nrtt == ztypes.ztypetype.classType then nDisp = true
-        if nrtt == ztypes.ztypetype.recordType then nDisp = true
-        if nDisp then {
-            nlidM: methodOwnerId :ast :symtab rtid: nlid mn: mn2
-            nmco: (symtab.typing.declChildOf
-                pool: ast.names
-                parentTypeId: (ztypes.tid.create from: nlidM.u64)
-                name: mn2
-            )
-            match (
-                nmco
-            ) case some then {
-                if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: nmco.u64)) == ztypes.ztypetype.functionType then {
-                    # no-arg SV natives on a nested stringy base: the
-                    # canonical native symbol, not the method-id cname
-                    if (isSvNoArgNative name: mn2) when (isStringyTid
-                        :ctx
-                        tid: nlid
-                    ) then {
-                        needsAddM :ctx uname: "system" memb: mn2
-                        svfn: (svValueForm
-                            :ctx
-                            expr: baseAtom.stringview
-                            isStr: nlid == ctx.strTid
-                            vid: bs9vid
-                        )
-                        return "\{ctx.svC}_\{mn2}(&\{svfn})"
-                    }
-                    nmc: ctxCname :ctx tid: (ztypes.tid.create from: nmco.u64)
-                    # a receiver-taking method takes it by pointer in both
-                    # families, so address it unless it already is one
-                    nmrecv: "\{baseAtom}"
-                    if (calleeTakesReceiverByPtr
-                        :ast
-                        :symtab
-                        fid: (ztypes.tid.create from: nmco.u64)
-                    ) then {
-                        dpu: ast.nodes.get i: n.parent.u64
-                        if (pathIsPointer :ast :symtab :ctx n: dpu) == false then {
-                            nmrecv = "&\{baseAtom}"
-                        }
-                    }
-                    return "\{nmc}(\{nmrecv})"
-                }
-            } case none then null
-        }
-    }
+    eCo: (emitNestedCollectionBase
+        :symtab
+        :ctx
+        :mn2
+        :nlid
+        baseAtom: baseAtom.stringview
+        :bs9vid
+    )
+    if eCo.length > 0 then return eCo
+    eMo: (emitNestedMonoMethodBase
+        :ast
+        :symtab
+        :ctx
+        :n
+        :mn2
+        :nlid
+        baseAtom: baseAtom.stringview
+        :bs9vid
+    )
+    if eMo.length > 0 then return eMo
     # a Map/Set-typed base is a heap pointer regardless of how it was
     # reached (a field path fails pathIsPointer's lock-field test)
     nstPtr: pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
@@ -20984,6 +21049,222 @@ emitFnMonoInstances: function {
         t = ztypes.tid.create from: (t + 1)
     }
 }
+# emitNestedUnitFns -- a nested unit's own functions and mono instances, which
+# are children of IT rather than of the file unit, so they are emitted by
+# recursing with the nested namespace as the owner.
+emitNestedUnitFns: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    bodyIds: (ListVal u32).view
+    ownerTid: ztypes.tid
+    declOnly: bool
+    buf: String.borrow
+} is {
+    with iuit: bodyIds.iterate do for ium9Id: iuit loop {
+        ium: ast.nodes.get i: ium9Id.u64
+        if ium.namedoperation then {
+            iuOpId: ium.operation
+            if (isGenericTemplateUnitOp :ast opId: iuOpId) then {
+                iunm: zast.nameTextAt :ast ref: ium.name
+                (emitUnitMonoInstances
+                    :symtab
+                    :ast
+                    :ctx
+                    templateName: iunm.stringview
+                    templateUnitOpId: iuOpId
+                    :declOnly
+                    :buf
+                )
+            }
+            isNs: false
+            if (zast.unitOpDeclaresUnit :ast opId: iuOpId) then isNs = true
+            # a `public:` block that DEFINES no function of its own has
+            # nothing to emit here (its entries name the unit's siblings)
+            if isNs when (zast.unitOpKindIs
+                :ast
+                opId: iuOpId
+                k: zast.unitkind.publicNs
+            ) then {
+                if (unitOpHasBodiedFn :ast opId: iuOpId) == false then isNs = false
+            }
+            if isNs then {
+                nsTid: ztypes.tid
+                {
+                    ownr: ownerTid
+                    if ownr.isZero then {
+                        ownr = unitTidOf :ast :symtab unitName: ctx.mainName.stringview
+                    }
+                    no: symtab.typing.declChildOfId parentTypeId: ownr nameId: ium.name
+                    match (
+                        no
+                    ) case some then {
+                        nsTid = ztypes.tid.create from: (no)
+                    } case none then null
+                }
+                if (nsTid.isZero) == false then {
+                    sns: ctx.nsTid
+                    ctx.nsTid = nsTid
+                    (emitFnsIn
+                        :ast
+                        :symtab
+                        :ctx
+                        mainOpId: (zast.nodeid.create from: iuOpId)
+                        ownerTid: nsTid
+                        :declOnly
+                        :buf
+                    )
+                    ctx.nsTid = sns
+                }
+            }
+        }
+    }
+}
+
+# collectFnDecls -- the bodied, demanded function declarations of this unit, in
+# source order: their body-list indices and their names.
+collectFnDecls: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    bodyIds: (ListVal u32).view
+    ownerTid: ztypes.tid
+    idxs: ListVal u64
+    names: List String
+} is {
+    di: u64
+    with biter: bodyIds.iterate do for bmId: biter loop {
+        bm: ast.nodes.get i: bmId.u64
+        match (
+            bm
+        ) case namedoperation then {
+            if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: bm.operation.u64)) then {
+                nm: zast.nameTextCopy :ast ref: bm.name
+                skipDepMain: false
+                # a runtime-backed unit's bodied fn only emits when the
+                # program referenced it (undemanded bodies carry no stamps)
+                if (stdFnUndemanded
+                    :ast
+                    :symtab
+                    unitName: ctx.mainName.stringview
+                    fnName: nm.stringview
+                    :ownerTid
+                    wantWalked: true
+                ) then skipDepMain = true
+                if nm.stringview == "main" then {
+                    if ctx.mainName.stringview != ctx.realMain.stringview then skipDepMain = true
+                }
+                if (skipDepMain) == false then {
+                    dv: di
+                    idxs.append dv
+                    names.append nm
+                }
+            }
+        } else null
+        di = di + 1
+    }
+}
+
+# emitFnDeclsInOrder -- one C function per collected declaration: its mono
+# instances first, then the signature, then the body unless this is the
+# declaration-only pass.
+emitFnDeclsInOrder: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    bodyIds: (ListVal u32).view
+    ownerTid: ztypes.tid
+    idxs: (ListVal u64).view
+    names: (List String).view
+    declOnly: bool
+    buf: String.borrow
+} is {
+    wn: idxs.length
+    wi: u64
+    for wi < wn loop {
+        nm2: names.get i: wi
+        didx: idxs.get i: wi
+        dm2Id: bodyIds.get i: didx
+        dm2: ast.nodes.get i: dm2Id.u64
+        match (
+            dm2
+        ) case namedoperation then {
+            fid: ztypes.tid
+            if ownerTid.isZero then {
+                fid = userFnId :ast :symtab :ctx name: nm2.stringview
+            } else {
+                fo: (symtab.typing.declChildOfId
+                    parentTypeId: ownerTid
+                    nameId: (zast.poolFind pool: ast.names text: nm2.stringview)
+                )
+                match (
+                    fo
+                ) case some then {
+                    fid = ztypes.tid.create from: (fo)
+                } case none then null
+            }
+            isGenFn: false
+            if fid > 0 then {
+                if (isGenericType :symtab tid: fid) then {
+                    if (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.functionType then {
+                        isGenFn = true
+                    }
+                }
+            }
+            if isGenFn then {
+                (emitFnMonoInstances
+                    :ast
+                    :symtab
+                    :ctx
+                    templateFnId: fid
+                    templateFnOp: (ast.nodes.get i: dm2.operation.u64)
+                    :declOnly
+                    :buf
+                )
+            } else {
+                sig: (fnSignature
+                    :ast
+                    :symtab
+                    :ctx
+                    name: nm2.stringview
+                    :fid
+                    op: (ast.nodes.get i: dm2.operation.u64)
+                )
+                if declOnly then {
+                    ld: "\{sig};\n"
+                    buf.append ld
+                } else {
+                    lo: "\{sig} {\n"
+                    buf.append lo
+                    ctx.ptrVids = (ListVal ztypes.vid)
+                    ctx.aliases = (List VidVal)
+                    ctx.narrowBox = (List VidVal)
+                    ctx.narrowTid = (List VidTid)
+                    ctx.exclArms = (List VidVal)
+                    ctx.exclTids = (List VidTid)
+                    (registerReftypeParams
+                        :ast
+                        :symtab
+                        :ctx
+                        :fid
+                        op: (ast.nodes.get i: dm2.operation.u64)
+                    )
+                    (emitFnBody
+                        :ast
+                        :symtab
+                        :ctx
+                        op: (ast.nodes.get i: dm2.operation.u64)
+                        :fid
+                        :buf
+                    )
+                    buf.append "}\n\n"
+                }
+            }
+        } else null
+        wi = wi + 1
+    }
+}
+
 
 # emit a unit's function definitions.
 emitFnsIn: function {
@@ -21002,183 +21283,21 @@ emitFnsIn: function {
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
     {
-        with iuit: bodyIds.iterate do for ium9Id: iuit loop {
-            ium: ast.nodes.get i: ium9Id.u64
-            if ium.namedoperation then {
-                iuOpId: ium.operation
-                if (isGenericTemplateUnitOp :ast opId: iuOpId) then {
-                    iunm: zast.nameTextAt :ast ref: ium.name
-                    (emitUnitMonoInstances
-                        :symtab
-                        :ast
-                        :ctx
-                        templateName: iunm.stringview
-                        templateUnitOpId: iuOpId
-                        :declOnly
-                        :buf
-                    )
-                }
-                isNs: false
-                if (zast.unitOpDeclaresUnit :ast opId: iuOpId) then isNs = true
-                # a `public:` block that DEFINES no function of its own has
-                # nothing to emit here (its entries name the unit's siblings)
-                if isNs when (zast.unitOpKindIs
-                    :ast
-                    opId: iuOpId
-                    k: zast.unitkind.publicNs
-                ) then {
-                    if (unitOpHasBodiedFn :ast opId: iuOpId) == false then isNs = false
-                }
-                if isNs then {
-                    nsTid: ztypes.tid
-                    {
-                        ownr: ownerTid
-                        if ownr.isZero then {
-                            ownr = unitTidOf :ast :symtab unitName: ctx.mainName.stringview
-                        }
-                        no: symtab.typing.declChildOfId parentTypeId: ownr nameId: ium.name
-                        match (
-                            no
-                        ) case some then {
-                            nsTid = ztypes.tid.create from: (no)
-                        } case none then null
-                    }
-                    if (nsTid.isZero) == false then {
-                        sns: ctx.nsTid
-                        ctx.nsTid = nsTid
-                        (emitFnsIn
-                            :ast
-                            :symtab
-                            :ctx
-                            mainOpId: (zast.nodeid.create from: iuOpId)
-                            ownerTid: nsTid
-                            :declOnly
-                            :buf
-                        )
-                        ctx.nsTid = sns
-                    }
-                }
-            }
-        }
+        emitNestedUnitFns :ast :symtab :ctx :bodyIds :ownerTid :declOnly :buf
         idxs: (ListVal u64)
         names: (List String)
-        di: u64
-        with biter: bodyIds.iterate do for bmId: biter loop {
-            bm: ast.nodes.get i: bmId.u64
-            match (
-                bm
-            ) case namedoperation then {
-                if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: bm.operation.u64)) then {
-                    nm: zast.nameTextCopy :ast ref: bm.name
-                    skipDepMain: false
-                    # a runtime-backed unit's bodied fn only emits when the
-                    # program referenced it (undemanded bodies carry no stamps)
-                    if (stdFnUndemanded
-                        :ast
-                        :symtab
-                        unitName: ctx.mainName.stringview
-                        fnName: nm.stringview
-                        :ownerTid
-                        wantWalked: true
-                    ) then skipDepMain = true
-                    if nm.stringview == "main" then {
-                        if ctx.mainName.stringview != ctx.realMain.stringview then {
-                            skipDepMain = true
-                        }
-                    }
-                    if (skipDepMain) == false then {
-                        dv: di
-                        idxs.append dv
-                        names.append nm
-                    }
-                }
-            } else null
-            di = di + 1
-        }
-        wn: idxs.length
-        wi: u64
-        for wi < wn loop {
-            nm2: names.get i: wi
-            didx: idxs.get i: wi
-            dm2Id: bodyIds.get i: didx
-            dm2: ast.nodes.get i: dm2Id.u64
-            match (
-                dm2
-            ) case namedoperation then {
-                fid: ztypes.tid
-                if ownerTid.isZero then {
-                    fid = userFnId :ast :symtab :ctx name: nm2.stringview
-                } else {
-                    fo: (symtab.typing.declChildOfId
-                        parentTypeId: ownerTid
-                        nameId: (zast.poolFind pool: ast.names text: nm2.stringview)
-                    )
-                    match (
-                        fo
-                    ) case some then {
-                        fid = ztypes.tid.create from: (fo)
-                    } case none then null
-                }
-                isGenFn: false
-                if fid > 0 then {
-                    if (isGenericType :symtab tid: fid) then {
-                        if (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.functionType then {
-                            isGenFn = true
-                        }
-                    }
-                }
-                if isGenFn then {
-                    (emitFnMonoInstances
-                        :ast
-                        :symtab
-                        :ctx
-                        templateFnId: fid
-                        templateFnOp: (ast.nodes.get i: dm2.operation.u64)
-                        :declOnly
-                        :buf
-                    )
-                } else {
-                    sig: (fnSignature
-                        :ast
-                        :symtab
-                        :ctx
-                        name: nm2.stringview
-                        :fid
-                        op: (ast.nodes.get i: dm2.operation.u64)
-                    )
-                    if declOnly then {
-                        ld: "\{sig};\n"
-                        buf.append ld
-                    } else {
-                        lo: "\{sig} {\n"
-                        buf.append lo
-                        ctx.ptrVids = (ListVal ztypes.vid)
-                        ctx.aliases = (List VidVal)
-                        ctx.narrowBox = (List VidVal)
-                        ctx.narrowTid = (List VidTid)
-                        ctx.exclArms = (List VidVal)
-                        ctx.exclTids = (List VidTid)
-                        (registerReftypeParams
-                            :ast
-                            :symtab
-                            :ctx
-                            :fid
-                            op: (ast.nodes.get i: dm2.operation.u64)
-                        )
-                        (emitFnBody
-                            :ast
-                            :symtab
-                            :ctx
-                            op: (ast.nodes.get i: dm2.operation.u64)
-                            :fid
-                            :buf
-                        )
-                        buf.append "}\n\n"
-                    }
-                }
-            } else null
-            wi = wi + 1
-        }
+        collectFnDecls :ast :symtab :ctx :bodyIds :ownerTid :idxs :names
+        (emitFnDeclsInOrder
+            :ast
+            :symtab
+            :ctx
+            :bodyIds
+            :ownerTid
+            :idxs
+            :names
+            :declOnly
+            :buf
+        )
         if declOnly then buf.append "\n"
     }
 }
