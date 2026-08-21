@@ -3992,54 +3992,25 @@ svArgAddr: function {
         return "".string
     }
 }
-
-# emitDottedCall -- a method call on a stamped String/StringView base:
-# the simple native set emits {svC}_{member}(&base, &args...).
-emitDottedCall: function {
+# emitSvCompareCall -- `a.compare b` on a stamped String/StringView base:
+# the by-value cmp in the base fragment, both sides projected to a view.
+emitSvCompareCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     call: zast.CallData.view
-} out String is {
-    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
-    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    bnv: StringView
+    mnv: StringView
     btid: ztypes.tid
+    btIsStr: bool
     dcbV: ztypes.vid
-    if bn.length == 0 then {
-        # nested/projected base (el.text.stringview.stripPrefix): no base atom, but
-        # the base is a stamped String/StringView -- emit it as an expression (a
-        # compound-literal lvalue, so the `&base` SV-native legs stay valid C).
-        rsid: (dottedReceiverStampId
-            :ast
-            :symtab
-            callable: (ast.nodes.get i: call.callable.u64)
-        )
-        if (isStringyTid :ctx tid: (ztypes.tid.create from: rsid.u64)) then {
-            callableNode: ast.nodes.get i: call.callable.u64
-            bn = emitDottedReceiver :ast :symtab :ctx callable: callableNode
-            btid = ztypes.tid.create from: (rsid)
-        } else {
-            return "".string
-        }
-    } else {
-        bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
-        btid = stampIdOf :symtab nid: bnid
-        # the simple-atom receiver becomes its own identifier (the bn.length==0
-        # leg already routes through emitDottedReceiver). An alias or narrowing
-        # in scope substitutes for it, and then no variable is being read -- so
-        # the pointer question below has nothing to ask about.
-        baseVid: atomVid :symtab nid: bnid
-        bnA: aliasResolve :ctx name: bn.stringview vid: baseVid
-        if bnA.stringview == bn.stringview then dcbV = (atomVid :symtab nid: bnid)
-        bn = emitLocalAtomName :ctx name: bn.stringview vid: baseVid
-    }
-    btIsStr: btid == ctx.strTid
+} out String is {
     if (isStringyTid
         :ctx
         tid: (ztypes.tid.create from: btid.u64)
-    ) when mn.stringview == "compare" then {
+    ) when mnv == "compare" then {
         # compare maps to the by-value cmp in the base fragment
-        bf: svValueForm :ctx expr: bn.stringview isStr: btIsStr vid: dcbV
+        bf: svValueForm :ctx expr: bnv isStr: btIsStr vid: dcbV
         cargs: String
         citer: call.arguments.iterate
         for caId: citer loop {
@@ -4064,20 +4035,36 @@ emitDottedCall: function {
         ce: "\{ctx.svC}_cmp(\{bf}, \{cargs})"
         return ce
     }
-    if mn.stringview == "substring" then {
+    return "".string
+}
+
+# emitSvSubstringCall -- `s.substring from: F to: T`. Declines (and falls to the
+# arg-native leg) unless BOTH labels are present.
+emitSvSubstringCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    call: zast.CallData.view
+    bnv: StringView
+    mnv: StringView
+    btid: ztypes.tid
+    btIsStr: bool
+    dcbV: ztypes.vid
+} out String is {
+    if mnv == "substring" then {
         fromA: ctorArgByLabel :ast :symtab :ctx :call label: "from"
         toA: ctorArgByLabel :ast :symtab :ctx :call label: "to"
         if fromA.length > 0 when toA.length > 0 then {
             recvp: String
             if btid == ctx.svTid then {
-                recvp = bn.copy
+                recvp = bnv.string
             } else { if btIsStr then {
-                bfs: svValueForm :ctx expr: bn.stringview isStr: true vid: dcbV
+                bfs: svValueForm :ctx expr: bnv isStr: true vid: dcbV
                 recvp = bfs.copy
             } else {
                 sacc: ".".string
                 if (isPtrVid :ctx vid: dcbV) then sacc = "->".string
-                recvp = "((\{ctx.svC}_t){ .data = \{bn}\{sacc}data, .size = \{bn}\{sacc}len })"
+                recvp = "((\{ctx.svC}_t){ .data = \{bnv}\{sacc}data, .size = \{bnv}\{sacc}len })"
             } }
             if recvp.length > 0 then {
                 needsAddM :ctx uname: "system" memb: "substring"
@@ -4092,10 +4079,23 @@ emitDottedCall: function {
             }
         }
     }
+    return "".string
+}
+
+# emitSvSplitCall -- `s.split sep`, the separator passed by address.
+emitSvSplitCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    call: zast.CallData.view
+    bnv: StringView
+    mnv: StringView
+    btid: ztypes.tid
+} out String is {
     if (isStringyTid
         :ctx
         tid: (ztypes.tid.create from: btid.u64)
-    ) when mn.stringview == "split" then {
+    ) when mnv == "split" then {
         needsAddM :ctx uname: "sviter" memb: "sv_split"
         sepx: String
         with siter: call.arguments.iterate do for sa9Id: siter loop {
@@ -4152,31 +4152,68 @@ emitDottedCall: function {
                 }
             } else null
         }
-        es: "\{ctx.svC}_split(&\{bn}, \{sepx})"
+        es: "\{ctx.svC}_split(&\{bnv}, \{sepx})"
         return es
     }
+    return "".string
+}
+
+# emitSvLinesCall -- `s.lines`, the no-argument view iterator.
+emitSvLinesCall: function {
+    ctx: Ctx.view
+    bnv: StringView
+    mnv: StringView
+    btid: ztypes.tid
+} out String is {
     if (isStringyTid
         :ctx
         tid: (ztypes.tid.create from: btid.u64)
-    ) when mn.stringview == "lines" then {
+    ) when mnv == "lines" then {
         needsAddM :ctx uname: "sviter" memb: "sv_lines"
-        el: "\{ctx.svC}_lines(&\{bn})"
+        el: "\{ctx.svC}_lines(&\{bnv})"
         return el
     }
+    return "".string
+}
+
+# emitSvParseCall -- `s.toU64` and friends: a no-argument parse native on a
+# receiver projected to a view value.
+emitSvParseCall: function {
+    ctx: Ctx.view
+    bnv: StringView
+    mnv: StringView
+    btid: ztypes.tid
+    btIsStr: bool
+    dcbV: ztypes.vid
+} out String is {
     if (isStringyTid
         :ctx
         tid: (ztypes.tid.create from: btid.u64)
-    ) when (isSvParseNative name: mn.stringview) then {
-        bfp: svValueForm :ctx expr: bn.stringview isStr: btIsStr vid: dcbV
-        needsAddM :ctx uname: "system" memb: mn.stringview
-        epn: "\{ctx.svC}_\{mn}(&\{bfp})"
+    ) when (isSvParseNative name: mnv) then {
+        bfp: svValueForm :ctx expr: bnv isStr: btIsStr vid: dcbV
+        needsAddM :ctx uname: "system" memb: mnv
+        epn: "\{ctx.svC}_\{mnv}(&\{bfp})"
         return epn
     }
+    return "".string
+}
+
+# emitSvArgNativeCall -- the one-argument view natives (`startsWith`, `indexOf`,
+# ...), plus `byteAt`, whose argument is an index and not a view.
+emitSvArgNativeCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    call: zast.CallData.view
+    bnv: StringView
+    mnv: StringView
+    btid: ztypes.tid
+} out String is {
     if (isStringyTid
         :ctx
         tid: (ztypes.tid.create from: btid.u64)
-    ) when (isSvArgNative name: mn.stringview) then {
-        needsAddM :ctx uname: "system" memb: mn.stringview
+    ) when (isSvArgNative name: mnv) then {
+        needsAddM :ctx uname: "system" memb: mnv
         argx: String
         with aiter: call.arguments.iterate do for a9Id: aiter loop {
             a: ast.nodes.get i: a9Id.u64
@@ -4227,7 +4264,7 @@ emitDottedCall: function {
                 }
             } else null
         }
-        if mn.stringview == "byteAt" then {
+        if mnv == "byteAt" then {
             barg: String
             with biter: call.arguments.iterate do for baId: biter loop {
                 ba: ast.nodes.get i: baId.u64
@@ -4244,7 +4281,7 @@ emitDottedCall: function {
             eb: (svNativeCall
                 :ctx
                 m: "byteAt"
-                recv: bn.stringview
+                recv: bnv
                 args: bargs.stringview
             )
             return eb
@@ -4252,23 +4289,39 @@ emitDottedCall: function {
         aargs: ", \{argx}"
         ea: (svNativeCall
             :ctx
-            m: mn.stringview
-            recv: bn.stringview
+            m: mnv
+            recv: bnv
             args: aargs.stringview
         )
         return ea
     }
+    return "".string
+}
+
+# emitSvSimpleCall -- the remaining view natives on a String or StringView
+# receiver: every argument that is a String projects to a view address.
+emitSvSimpleCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    call: zast.CallData.view
+    bnv: StringView
+    mnv: StringView
+    btid: ztypes.tid
+    btIsStr: bool
+    dcbV: ztypes.vid
+} out String is {
     svRecvOk: false
     if btid == ctx.svTid then svRecvOk = true
     if btIsStr then svRecvOk = true
     if svRecvOk then {
-        if (isSvSimpleNative name: mn.stringview) then {
-            needsAddM :ctx uname: "system" memb: mn.stringview
+        if (isSvSimpleNative name: mnv) then {
+            needsAddM :ctx uname: "system" memb: mnv
             # a String receiver projects to a view value, like the
             # substring/parse legs (a StringView receiver is one already)
-            recvS: bn.copy
+            recvS: bnv.string
             if btIsStr then {
-                bfs2: svValueForm :ctx expr: bn.stringview isStr: true vid: dcbV
+                bfs2: svValueForm :ctx expr: bnv isStr: true vid: dcbV
                 recvS = bfs2.copy
             }
             args: String
@@ -4324,7 +4377,7 @@ emitDottedCall: function {
             }
             e1: (svNativeCall
                 :ctx
-                m: mn.stringview
+                m: mnv
                 recv: recvS.stringview
                 args: args.stringview
             )
@@ -4332,6 +4385,65 @@ emitDottedCall: function {
         }
     }
     return "".string
+}
+
+
+# emitDottedCall -- a method call on a stamped String/StringView base:
+# the simple native set emits {svC}_{member}(&base, &args...).
+emitDottedCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    call: zast.CallData.view
+} out String is {
+    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    btid: ztypes.tid
+    dcbV: ztypes.vid
+    if bn.length == 0 then {
+        # nested/projected base (el.text.stringview.stripPrefix): no base atom, but
+        # the base is a stamped String/StringView -- emit it as an expression (a
+        # compound-literal lvalue, so the `&base` SV-native legs stay valid C).
+        rsid: (dottedReceiverStampId
+            :ast
+            :symtab
+            callable: (ast.nodes.get i: call.callable.u64)
+        )
+        if (isStringyTid :ctx tid: (ztypes.tid.create from: rsid.u64)) then {
+            callableNode: ast.nodes.get i: call.callable.u64
+            bn = emitDottedReceiver :ast :symtab :ctx callable: callableNode
+            btid = ztypes.tid.create from: (rsid)
+        } else {
+            return "".string
+        }
+    } else {
+        bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
+        btid = stampIdOf :symtab nid: bnid
+        # the simple-atom receiver becomes its own identifier (the bn.length==0
+        # leg already routes through emitDottedReceiver). An alias or narrowing
+        # in scope substitutes for it, and then no variable is being read -- so
+        # the pointer question below has nothing to ask about.
+        baseVid: atomVid :symtab nid: bnid
+        bnA: aliasResolve :ctx name: bn.stringview vid: baseVid
+        if bnA.stringview == bn.stringview then dcbV = (atomVid :symtab nid: bnid)
+        bn = emitLocalAtomName :ctx name: bn.stringview vid: baseVid
+    }
+    btIsStr: btid == ctx.strTid
+    bnv: bn.stringview
+    mnv: mn.stringview
+    eCmp: emitSvCompareCall :ast :symtab :ctx :call :bnv :mnv :btid :btIsStr :dcbV
+    if eCmp.length > 0 then return eCmp
+    eSub: emitSvSubstringCall :ast :symtab :ctx :call :bnv :mnv :btid :btIsStr :dcbV
+    if eSub.length > 0 then return eSub
+    eSpl: emitSvSplitCall :ast :symtab :ctx :call :bnv :mnv :btid
+    if eSpl.length > 0 then return eSpl
+    eLin: emitSvLinesCall :ctx :bnv :mnv :btid
+    if eLin.length > 0 then return eLin
+    ePar: emitSvParseCall :ctx :bnv :mnv :btid :btIsStr :dcbV
+    if ePar.length > 0 then return ePar
+    eArg: emitSvArgNativeCall :ast :symtab :ctx :call :bnv :mnv :btid
+    if eArg.length > 0 then return eArg
+    return (emitSvSimpleCall :ast :symtab :ctx :call :bnv :mnv :btid :btIsStr :dcbV)
 }
 
 # emitDataIndexCall -- `primes.index i`: a data-block element read,
