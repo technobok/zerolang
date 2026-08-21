@@ -25588,6 +25588,33 @@ emitUserStructsOrdered: function {
     emitEarlyUserStructs :ast :symtab :ctx :userList :lateSet :buf
     emitLateGroupOrdered :ast :symtab :ctx :runtimeDir :lateGroup :lateSet :buf
 }
+# MonoWork -- the nineteen mono worklists that one classification sweep fills
+# and the emitters drain. They were nineteen parameters threaded through five
+# functions, which is what made those signatures unreadable. The categories stay
+# NAMED rather than becoming rows of an indexed table: the emission order is
+# made of them, and a nested generic container is not available anyway.
+MonoWork: class {
+    wStr: (ListVal u64)
+    wBox: (ListVal u64)
+    wIoUnion: (ListVal u64)
+    wCliLeaf: (ListVal u64)
+    wSysVar: (ListVal u64)
+    wSysRec: (ListVal u64)
+    wValMono: (ListVal u64)
+    wOptRes: (ListVal u64)
+    wUgUnion: (ListVal u64)
+    wOptView: (ListVal u64)
+    wArr: (ListVal u64)
+    wListView: (ListVal u64)
+    wList: (ListVal u64)
+    wSet: (ListVal u64)
+    wMap: (ListVal u64)
+    wIdSet: (ListVal u64)
+    wIdMap: (ListVal u64)
+    wProto: (ListVal u64)
+    wUgRec: (ListVal u64)
+}
+
 # classifyCollectionMono -- the option / result / view families and the seven
 # collection families, each keyed on the ORIGIN tid its mono was minted from. An
 # id compare is what makes this shadow-proof: a user type spelled `ListRef` is not
@@ -25602,22 +25629,13 @@ classifyCollectionMono: function {
     tt: ztypes.ztypetype
     isMono: bool
     isValMono: bool
-    wOptRes: (ListVal u64)
-    wUgUnion: (ListVal u64)
-    wOptView: (ListVal u64)
-    wArr: (ListVal u64)
-    wListView: (ListVal u64)
-    wList: (ListVal u64)
-    wSet: (ListVal u64)
-    wMap: (ListVal u64)
-    wIdSet: (ListVal u64)
-    wIdMap: (ListVal u64)
+    work: MonoWork
 } out bool is {
     isColKind: false
     isOptRes: false
     if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogOption)) then isOptRes = true
     if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogResult)) then isOptRes = true
-    if isOptRes then wOptRes.append tv
+    if isOptRes then work.wOptRes.append tv
     if isMono when tt == ztypes.ztypetype.unionType then {
         ugu: true
         if isOptRes then ugu = false
@@ -25631,13 +25649,13 @@ classifyCollectionMono: function {
             :ctx
             originTid: (originTidOf :symtab tid: tcl)
         ) then ugu = false
-        if ugu then wUgUnion.append tv
+        if ugu then work.wUgUnion.append tv
     }
     if (originIsTid
         :symtab
         tid: tcl
         originTid: (ctx.origins.get i: ogOptionView)
-    ) then wOptView.append tv
+    ) then work.wOptView.append tv
     colDst: u64
     if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogArray)) then {
         isColKind = true
@@ -25675,13 +25693,13 @@ classifyCollectionMono: function {
             monoId: (ztypes.tid.create from: tcl.u64)
             userList: userListM
         ) == false then {
-            if colDst == 1 then wArr.append tv
-            if colDst == 2 then wListView.append tv
-            if colDst == 3 then wList.append tv
-            if colDst == 4 then wSet.append tv
-            if colDst == 5 then wMap.append tv
-            if colDst == 6 then wIdSet.append tv
-            if colDst == 7 then wIdMap.append tv
+            if colDst == 1 then work.wArr.append tv
+            if colDst == 2 then work.wListView.append tv
+            if colDst == 3 then work.wList.append tv
+            if colDst == 4 then work.wSet.append tv
+            if colDst == 5 then work.wMap.append tv
+            if colDst == 6 then work.wIdSet.append tv
+            if colDst == 7 then work.wIdMap.append tv
         }
     }
     return isColKind
@@ -25696,25 +25714,7 @@ classifyMonos: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     userListM: (ListVal u64)
-    wStr: (ListVal u64)
-    wBox: (ListVal u64)
-    wIoUnion: (ListVal u64)
-    wCliLeaf: (ListVal u64)
-    wSysVar: (ListVal u64)
-    wSysRec: (ListVal u64)
-    wValMono: (ListVal u64)
-    wOptRes: (ListVal u64)
-    wUgUnion: (ListVal u64)
-    wOptView: (ListVal u64)
-    wArr: (ListVal u64)
-    wListView: (ListVal u64)
-    wList: (ListVal u64)
-    wSet: (ListVal u64)
-    wMap: (ListVal u64)
-    wIdSet: (ListVal u64)
-    wIdMap: (ListVal u64)
-    wProto: (ListVal u64)
-    wUgRec: (ListVal u64)
+    work: MonoWork
 } is {
     last: symtab.reg.nextTypeId
     tcl: ztypes.tid
@@ -25739,10 +25739,14 @@ classifyMonos: function {
                 }
             } case none then null
         }
-        if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogStr)) then wStr.append tv
-        if (isBoxTid :symtab tid: tcl) then wBox.append tv
+        if (originIsTid
+            :symtab
+            tid: tcl
+            originTid: (ctx.origins.get i: ogStr)
+        ) then work.wStr.append tv
+        if (isBoxTid :symtab tid: tcl) then work.wBox.append tv
         if tt == ztypes.ztypetype.unionType then {
-            if isMono == false when gen == false when inIo then wIoUnion.append tv
+            if isMono == false when gen == false when inIo then work.wIoUnion.append tv
         }
         if tt == ztypes.ztypetype.classType then {
             if isMono == false when gen == false then {
@@ -25751,16 +25755,16 @@ classifyMonos: function {
                     :symtab
                     :ctx
                     tid: tcl
-                ) == false then wCliLeaf.append tv
+                ) == false then work.wCliLeaf.append tv
             }
         }
         if tt == ztypes.ztypetype.variantType then {
             if isMono == false when gen == false then {
-                if (definedInNonMain :symtab :ctx tid: tcl) then wSysVar.append tv
+                if (definedInNonMain :symtab :ctx tid: tcl) then work.wSysVar.append tv
             }
         }
         if tt == ztypes.ztypetype.recordType then {
-            if isMono == false when gen == false when inIo then wSysRec.append tv
+            if isMono == false when gen == false when inIo then work.wSysRec.append tv
         }
         isValMono: false
         if (originIsTid
@@ -25781,7 +25785,7 @@ classifyMonos: function {
                 monoId: (ztypes.tid.create from: tcl.u64)
                 userList: userListM
             )
-            if (mil) == false then wValMono.append tv
+            if (mil) == false then work.wValMono.append tv
         }
         (classifyCollectionMono
             :ast
@@ -25793,20 +25797,11 @@ classifyMonos: function {
             :tt
             :isMono
             :isValMono
-            :wOptRes
-            :wUgUnion
-            :wOptView
-            :wArr
-            :wListView
-            :wList
-            :wSet
-            :wMap
-            :wIdSet
-            :wIdMap
+        :work
         )
         if tt == ztypes.ztypetype.protocolType then {
             if gen == false then {
-                if (definedInNonMain :symtab :ctx tid: tcl) then wProto.append tv
+                if (definedInNonMain :symtab :ctx tid: tcl) then work.wProto.append tv
             }
         }
         if isMono then {
@@ -25828,7 +25823,7 @@ classifyMonos: function {
                 originTid: (ctx.origins.get i: ogStr)
             ) then ugr = false
             if ugr when (isBoxTid :symtab tid: tcl) then ugr = false
-            if ugr then wUgRec.append tv
+            if ugr then work.wUgRec.append tv
         }
         tcl = ztypes.tid.create from: (tcl + 1)
     }
@@ -25844,21 +25839,13 @@ emitCollectionMonos: function {
     ctx: Ctx.view
     runtimeDir: StringView
     buf: String.borrow
-    wArr: (ListVal u64).view
-    wListView: (ListVal u64).view
-    wList: (ListVal u64).view
-    wSet: (ListVal u64).view
-    wMap: (ListVal u64).view
-    wIdSet: (ListVal u64).view
-    wIdMap: (ListVal u64).view
-    wProto: (ListVal u64).view
-    wUgRec: (ListVal u64).view
+    work: MonoWork.view
 } is {
     # ListView structs next -- a List's listview companion references
     # the ListView struct by value.
     tarr: u64
-    for tarr < wArr.length loop {
-        arrId: wArr.get i: tarr
+    for tarr < work.wArr.length loop {
+        arrId: work.wArr.get i: tarr
         (emitArrayMono
             :ast
             :symtab
@@ -25870,8 +25857,8 @@ emitCollectionMonos: function {
         tarr = tarr + 1
     }
     tid: ztypes.tid
-    for tid < wListView.length loop {
-        lvId: wListView.get i: tid
+    for tid < work.wListView.length loop {
+        lvId: work.wListView.get i: tid
         (emitListViewMono
             :ast
             :symtab
@@ -25883,32 +25870,32 @@ emitCollectionMonos: function {
         tid = ztypes.tid.create from: (tid + 1)
     }
     tid2: u64
-    for tid2 < wList.length loop {
-        liId: wList.get i: tid2
+    for tid2 < work.wList.length loop {
+        liId: work.wList.get i: tid2
         emitListMono :ast :symtab :ctx :runtimeDir monoId: (ztypes.tid.create from: liId.u64) :buf
         tid2 = tid2 + 1
     }
     # Set monos last -- the compact-dict + SetIter; needs its element's
     # OptionView (above) already defined.
     tset: u64
-    for tset < wSet.length loop {
-        seId: wSet.get i: tset
+    for tset < work.wSet.length loop {
+        seId: work.wSet.get i: tset
         emitSetMono :ast :symtab :ctx :runtimeDir monoId: (ztypes.tid.create from: seId.u64) :buf
         tset = tset + 1
     }
     # Map monos -- the compact-dict over key+value; get's return optionval
     # (emitted above) supplies the value type.
     tmap: u64
-    for tmap < wMap.length loop {
-        maId: wMap.get i: tmap
+    for tmap < work.wMap.length loop {
+        maId: work.wMap.get i: tmap
         emitMapMono :ast :symtab :ctx :runtimeDir monoId: (ztypes.tid.create from: maId.u64) :buf
         tmap = tmap + 1
     }
     # the id-keyed pair, after the hashed ones for the same reason: an IdMap's
     # `get` returns an optionval / OptionView emitted above.
     tidset: u64
-    for tidset < wIdSet.length loop {
-        isId: wIdSet.get i: tidset
+    for tidset < work.wIdSet.length loop {
+        isId: work.wIdSet.get i: tidset
         (emitIdSetMono
             :ast
             :symtab
@@ -25920,8 +25907,8 @@ emitCollectionMonos: function {
         tidset = tidset + 1
     }
     tidmap: u64
-    for tidmap < wIdMap.length loop {
-        imId: wIdMap.get i: tidmap
+    for tidmap < work.wIdMap.length loop {
+        imId: work.wIdMap.get i: tidmap
         (emitIdMapMono
             :ast
             :symtab
@@ -25935,8 +25922,8 @@ emitCollectionMonos: function {
     # reachable system PROTOCOLs (Reader/Writer/Closer/Seeker) -- emitted after
     # the collection monos their vtable function-pointer signatures reference.
     tsp: u64
-    for tsp < wProto.length loop {
-        spId: wProto.get i: tsp
+    for tsp < work.wProto.length loop {
+        spId: work.wProto.get i: tsp
         spn: regNameOf :symtab tid: (ztypes.tid.create from: spId.u64)
         (emitOneProtocol
             :ast
@@ -25952,8 +25939,8 @@ emitCollectionMonos: function {
     # origin is a user generic type. The collection / array / str / option / box
     # monos are handled by their own worklists; emit the rest via emitOneRecord.
     tug: u64
-    for tug < wUgRec.length loop {
-        ugId: wUgRec.get i: tug
+    for tug < work.wUgRec.length loop {
+        ugId: work.wUgRec.get i: tug
         emitOneRecord :ast :symtab :ctx tid: (ztypes.tid.create from: ugId.u64) :buf
         tug = tug + 1
     }
@@ -25966,41 +25953,38 @@ emitOptionMonos: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     buf: String.borrow
-    wValMono: (ListVal u64).view
-    wOptRes: (ListVal u64).view
-    wUgUnion: (ListVal u64).view
-    wOptView: (ListVal u64).view
+    work: MonoWork.view
 } is {
     # optionval + resultval variant monos -- iterators/collection-gets /
     # parsers return them by value (payloads now resolvable).
     tido: u64
-    for tido < wValMono.length loop {
-        vmId: wValMono.get i: tido
+    for tido < work.wValMono.length loop {
+        vmId: work.wValMono.get i: tido
         emitOneVariant :ast :symtab :ctx tid: (ztypes.tid.create from: vmId.u64) :buf
         tido = tido + 1
     }
     # Option union monos (tag + void* data heap payload) -- reftype
     # option returns (string strip/split, map get over reftype).
     tiu: u64
-    for tiu < wOptRes.length loop {
-        orId: wOptRes.get i: tiu
+    for tiu < work.wOptRes.length loop {
+        orId: work.wOptRes.get i: tiu
         emitUnionMono :ast :symtab :ctx tid: (ztypes.tid.create from: orId.u64) :buf
         tiu = tiu + 1
     }
     # user generic UNION monos (e.g. MyOption<i64>): struct + tags via
-    # emitUnionMono. The wUgRec list handles only RECORD/CLASS; system
+    # emitUnionMono. The work.wUgRec list handles only RECORD/CLASS; system
     # option/result monos are handled above.
     tugu: u64
-    for tugu < wUgUnion.length loop {
-        uguId: wUgUnion.get i: tugu
+    for tugu < work.wUgUnion.length loop {
+        uguId: work.wUgUnion.get i: tugu
         emitUnionMono :ast :symtab :ctx tid: (ztypes.tid.create from: uguId.u64) :buf
         tugu = tugu + 1
     }
     # OptionView structs -- the borrowed-view option every collection
     # iterator yields; emitted before the collections that reference it.
     tiov: u64
-    for tiov < wOptView.length loop {
-        ovId: wOptView.get i: tiov
+    for tiov < work.wOptView.length loop {
+        ovId: work.wOptView.get i: tiov
         emitOptionViewMono :ctx :symtab monoId: (ztypes.tid.create from: ovId.u64) :buf
         tiov = tiov + 1
     }
@@ -26022,70 +26006,54 @@ emitMonos: function {
     # worklists; the category loops below emit in the original sequence.
     # Every predicate reads only registry/typing state (immutable during
     # emission); the io-wrapper demand gate stays at emission time.
-    wStr: (ListVal u64)
-    wBox: (ListVal u64)
-    wIoUnion: (ListVal u64)
-    wCliLeaf: (ListVal u64)
-    wSysVar: (ListVal u64)
-    wSysRec: (ListVal u64)
-    wValMono: (ListVal u64)
-    wOptRes: (ListVal u64)
-    wUgUnion: (ListVal u64)
-    wOptView: (ListVal u64)
-    wArr: (ListVal u64)
-    wListView: (ListVal u64)
-    wList: (ListVal u64)
-    wSet: (ListVal u64)
-    wMap: (ListVal u64)
-    wIdSet: (ListVal u64)
-    wIdMap: (ListVal u64)
-    wProto: (ListVal u64)
-    wUgRec: (ListVal u64)
+    work: (MonoWork
+        wStr: (ListVal u64)
+        wBox: (ListVal u64)
+        wIoUnion: (ListVal u64)
+        wCliLeaf: (ListVal u64)
+        wSysVar: (ListVal u64)
+        wSysRec: (ListVal u64)
+        wValMono: (ListVal u64)
+        wOptRes: (ListVal u64)
+        wUgUnion: (ListVal u64)
+        wOptView: (ListVal u64)
+        wArr: (ListVal u64)
+        wListView: (ListVal u64)
+        wList: (ListVal u64)
+        wSet: (ListVal u64)
+        wMap: (ListVal u64)
+        wIdSet: (ListVal u64)
+        wIdMap: (ListVal u64)
+        wProto: (ListVal u64)
+        wUgRec: (ListVal u64)
+    )
     (classifyMonos
         :ast
         :symtab
         :ctx
         :userListM
-        :wStr
-        :wBox
-        :wIoUnion
-        :wCliLeaf
-        :wSysVar
-        :wSysRec
-        :wValMono
-        :wOptRes
-        :wUgUnion
-        :wOptView
-        :wArr
-        :wListView
-        :wList
-        :wSet
-        :wMap
-        :wIdSet
-        :wIdMap
-        :wProto
-        :wUgRec
+        :work
     )
     # str valtype monos are leaf PODs that user records embed by value, so emit
     # them first (before any user struct / collection mono that references them).
     tstr: u64
-    for tstr < wStr.length loop {
-        strId: wStr.get i: tstr
+    for tstr < work.wStr.length loop {
+        strId: work.wStr.get i: tstr
         emitStrMono :symtab :ctx :runtimeDir monoId: (ztypes.tid.create from: strId.u64) :buf
         tstr = tstr + 1
     }
     # builtin Box monos (heap pointers): destructor-only, leaf -- emit early.
     tbox: u64
-    for tbox < wBox.length loop {
-        boxId: wBox.get i: tbox
+    for tbox < work.wBox.length loop {
+        boxId: work.wBox.get i: tbox
         emitBoxMono :ast :symtab :ctx monoId: (ztypes.tid.create from: boxId.u64) :buf
         tbox = tbox + 1
     }
     # reachable non-mono system UNIONs (IoError) -- the error payload of the
     # Result monos; emit before them so the mono destructors can call IoError's.
     tsu: u64
-    for tsu < wIoUnion.length loop {
-        iuId: wIoUnion.get i: tsu
+    for tsu < work.wIoUnion.length loop {
+        iuId: work.wIoUnion.get i: tsu
         emitUnionMono :ast :symtab :ctx tid: (ztypes.tid.create from: iuId.u64) :buf
         tsu = tsu + 1
     }
@@ -26094,24 +26062,24 @@ emitMonos: function {
     # reachable cli LEAF classes (FlagDef/OptionDef/PositionalDef) -- pure-string
     # classes the List monos below embed; emitted before those monos.
     tclf: u64
-    for tclf < wCliLeaf.length loop {
-        clfId: wCliLeaf.get i: tclf
+    for tclf < work.wCliLeaf.length loop {
+        clfId: work.wCliLeaf.get i: tclf
         emitOneRecord :ast :symtab :ctx tid: (ztypes.tid.create from: clfId.u64) :buf
         tclf = tclf + 1
     }
     # reachable non-mono system VARIANTs (parseerror, seekorigin, ...) --
     # payloads of the variant monos / used directly.
     tsv: u64
-    for tsv < wSysVar.length loop {
-        svId: wSysVar.get i: tsv
+    for tsv < work.wSysVar.length loop {
+        svId: work.wSysVar.get i: tsv
         emitOneVariant :ast :symtab :ctx tid: (ztypes.tid.create from: svId.u64) :buf
         tsv = tsv + 1
     }
     # reachable non-mono system RECORDs (filestat) -- the ok payload of a Result
     # mono; after its filekind variant, before the Result monos that box it.
     tsr: u64
-    for tsr < wSysRec.length loop {
-        srId: wSysRec.get i: tsr
+    for tsr < work.wSysRec.length loop {
+        srId: work.wSysRec.get i: tsr
         emitOneRecord :ast :symtab :ctx tid: (ztypes.tid.create from: srId.u64) :buf
         tsr = tsr + 1
     }
@@ -26119,27 +26087,16 @@ emitMonos: function {
         :ast
         :symtab
         :ctx
+        :work
         :buf
-        :wValMono
-        :wOptRes
-        :wUgUnion
-        :wOptView
     )
     (emitCollectionMonos
         :ast
         :symtab
         :ctx
         :runtimeDir
+        :work
         :buf
-        :wArr
-        :wListView
-        :wList
-        :wSet
-        :wMap
-        :wIdSet
-        :wIdMap
-        :wProto
-        :wUgRec
     )
 }
 
