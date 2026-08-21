@@ -9145,226 +9145,16 @@ emitUserFnCall: function {
     e8: "\{fc}(\{args})"
     return e8
 }
-
-emitCallValue: function {
+# emitNamedCalleeChain -- the probe legs that need the callee's NAME or its resolved
+# function id: the constructor shapes, the user function call, and the fn-pointer
+# local. The name is consulted only after the checker's stamps have declined, and
+# never for a callee the checker stamped as a local.
+emitNamedCalleeChain: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx.view
     call: zast.CallData.view
 } out String is {
-    # stamped-kind dispatch head: a call whose kind names its owning handler
-    # routes there directly; an empty result or an unstamped / chain-owned
-    # kind falls through to the probe chain below.
-    ckh: symtab.typing.callKind.get key: call.nodeid.u64
-    match (
-        ckh
-    ) case some then {
-        isTdk: false
-        if ckh == zast.callkind.typedefCreate then isTdk = true
-        if ckh == zast.callkind.typedefBorrow then isTdk = true
-        if isTdk then {
-            tdh: emitTypedefCreateCall :ast :symtab :ctx :call
-            if tdh.length > 0 then return tdh
-        }
-        if ckh == zast.callkind.boxCreate then {
-            bxh: emitBoxCreate :ast :symtab :ctx :call
-            if bxh.length > 0 then return bxh
-        }
-        isPjk: false
-        if ckh == zast.callkind.protocolCreate then isPjk = true
-        if ckh == zast.callkind.protocolBorrow then isPjk = true
-        if ckh == zast.callkind.facetCreate then isPjk = true
-        if ckh == zast.callkind.facetBorrow then isPjk = true
-        if isPjk then {
-            pch: emitProtocolCreateCall :ast :symtab :ctx :call
-            if pch.length > 0 then return pch
-        }
-    } case none then null
-    # route by the callee's DECLARATION: its kind and its owner's family
-    # name the handler outright
-    rdo: symtab.typing.refDecl.get key: call.callable.u64
-    match (
-        rdo
-    ) case some then {
-        rdecl: symtab.typing.decls.get i: rdo.u64
-        rkind: rdecl.kind
-        rtid: rdecl.typeId
-        ownerTid: ztypes.tid
-        if (rdecl.parent.isZero) == false then ownerTid = (symtab.typing.decls.get i: rdecl.parent.u64).typeId
-        if rkind.methodDecl when (ownerTid.isZero) == false then {
-            # the owner is the TEMPLATE for a native collection's method (the
-            # mono's methods are the template's); its family is its own id
-            ownerFam: originTidOf :symtab tid: ownerTid
-            if ownerFam.isZero then ownerFam = ownerTid
-            isCol: false
-            if ownerFam == ctx.listOriginTid then isCol = true
-            if ownerFam == ctx.listValOriginTid then isCol = true
-            if ownerFam == ctx.listViewOriginTid then isCol = true
-            if ownerFam == ctx.listViewValOriginTid then isCol = true
-            if ownerFam == ctx.setOriginTid then isCol = true
-            if ownerFam == ctx.setValOriginTid then isCol = true
-            if ownerFam == ctx.mapOriginTid then isCol = true
-            if ownerFam == ctx.mapRVOriginTid then isCol = true
-            if ownerFam == ctx.mapVROriginTid then isCol = true
-            if ownerFam == ctx.mapVVOriginTid then isCol = true
-            if ownerFam == ctx.idMapROriginTid then isCol = true
-            if ownerFam == ctx.idMapVOriginTid then isCol = true
-            if ownerFam == ctx.idSetOriginTid then isCol = true
-            if ownerFam == ctx.arrayOriginTid then isCol = true
-            if isCol then {
-                rcol: emitCollectionMethodCall :ast :symtab :ctx :call
-                if rcol.length > 0 then return rcol
-            }
-            if ownerTid == ctx.strTid then {
-                rsa: emitStringArgMethod :ast :symtab :ctx :call
-                if rsa.length > 0 then return rsa
-                rsd: emitDottedCall :ast :symtab :ctx :call
-                if rsd.length > 0 then return rsd
-            }
-            if ownerTid == ctx.svTid then {
-                rsv: emitDottedCall :ast :symtab :ctx :call
-                if rsv.length > 0 then return rsv
-            }
-            ott: symtab.reg.typetypeOf typeId: ownerTid
-            isSpec: false
-            if ott == ztypes.ztypetype.protocolType then isSpec = true
-            if ott == ztypes.ztypetype.facetType then isSpec = true
-            if isSpec then {
-                rpd: emitProtocolDispatch :ast :symtab :ctx :call
-                if rpd.length > 0 then return rpd
-            }
-            isIoNat: false
-            if ownerTid.u64 == ctx.ioFileTid then isIoNat = true
-            if ownerTid.u64 == ctx.netListenerTid then isIoNat = true
-            if ownerTid.u64 == ctx.netConnTid then isIoNat = true
-            isCreate: (zast.nameid.create from: rdecl.name) == zast.wkCreate
-            if (symtab.reg.isNativeOf tid: ownerTid) == false when (isSpec) == false when (isIoNat) == false when (isCreate) == false then {
-                ruic: emitUserIterCall :ast :symtab :ctx :call
-                if ruic.length > 0 then return ruic
-                rtq: emitTypeQualCall :ast :symtab :ctx :call
-                if rtq.length > 0 then return rtq
-                if rdecl.fnptrField then {
-                    rfp: emitFnptrFieldCall :ast :symtab :ctx :call
-                    if rfp.length > 0 then return rfp
-                }
-                rim: emitInstanceMethodCall :ast :symtab :ctx :call
-                if rim.length > 0 then return rim
-            }
-        }
-        if rkind.funcDecl then {
-            if rtid > 0 when (symtab.reg.isNativeOf tid: rtid) then {
-                rnf: emitNativeFreeFnCall :ast :symtab :ctx :call
-                if rnf.length > 0 then return rnf
-            } else {
-                if rtid > 0 when (isGenericType :symtab tid: rtid) then {
-                    rgf: emitGenericFnCall :ast :symtab :ctx :call
-                    if rgf.length > 0 then return rgf
-                }
-                rcu: emitCrossUnitFnCall :ast :symtab :ctx :call
-                if rcu.length > 0 then return rcu
-                # a bare call of a function declared in the unit at hand; a
-                # fn-typed LOCAL's atom carries its variable id and calls
-                # through the pointer instead
-                if rtid > 0 when (isGenericType :symtab tid: rtid) == false then {
-                    rcal: ast.nodes.get i: call.callable.u64
-                    if rcal.atomid when (symtab.typing.atomVariableId.has key: call.callable.u64) == false then {
-                        # inside a template instance's body the sibling is the
-                        # instance's own function, on the per-mono stamp
-                        mfid: monoStampIdOf :symtab :ctx nid: call.callable.u64
-                        if mfid.isZero then mfid = rtid
-                        return (emitUserFnCall :ast :symtab :ctx :call fid: mfid)
-                    }
-                }
-            }
-        }
-        if rkind.armDecl then {
-            rvc: emitVariantCtorCall :ast :symtab :ctx :call
-            if rvc.length > 0 then return rvc
-            ruc: emitUnionCtor :ast :symtab :ctx :call
-            if ruc.length > 0 then return ruc
-        }
-        if rkind.typeDecl then {
-            rxc: emitCrossUnitCtor :ast :symtab :ctx :call
-            if rxc.length > 0 then return rxc
-        }
-    } case none then null
-    # a construction by bare type name: the call's type is the type built
-    match (
-        ckh
-    ) case some then {
-        isCtorKind: false
-        if ckh == zast.callkind.recordCreate then isCtorKind = true
-        if ckh == zast.callkind.classCreate then isCtorKind = true
-        if isCtorKind then {
-            ccal: ast.nodes.get i: call.callable.u64
-            if ccal.atomid when (symtab.typing.refDecl.has key: call.callable.u64) == false then {
-                ctid: stampIdOf :symtab nid: call.nodeid.u64
-                cnm: (zast.nameTextAt
-                    :ast
-                    ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
-                )
-                cec: emitEmptyColCreate :ast :symtab :ctx :call cn0: cnm.stringview
-                if cec.length > 0 then return cec
-                ctt: symtab.reg.typetypeOf typeId: ctid
-                if ctt == ztypes.ztypetype.recordType then return (emitRecordCtor
-                    :ast
-                    :symtab
-                    :ctx
-                    :call
-                    tid: ctid
-                )
-                if ctt == ztypes.ztypetype.classType then return (emitRecordCtor
-                    :ast
-                    :symtab
-                    :ctx
-                    :call
-                    tid: ctid
-                )
-            }
-        }
-    } case none then null
-    mcc: emitMetaCreateCall :ast :symtab :ctx :call
-    if mcc.length > 0 then return mcc
-    pdc: emitProtocolDispatch :ast :symtab :ctx :call
-    if pdc.length > 0 then return pdc
-    nfc: emitNativeFreeFnCall :ast :symtab :ctx :call
-    if nfc.length > 0 then return nfc
-    fmc: emitFileMethodCall :ast :symtab :ctx :call
-    if fmc.length > 0 then return fmc
-    clisc: emitCliSpecCreate :ast :symtab :ctx :call
-    if clisc.length > 0 then return clisc
-    rcc: emitResultCombinator :ast :symtab :ctx :call
-    if rcc.length > 0 then return rcc
-    pmc: emitParsedMethodCall :ast :symtab :ctx :call
-    if pmc.length > 0 then return pmc
-    uic: emitUserIterCall :ast :symtab :ctx :call
-    if uic.length > 0 then return uic
-    scv: emitStrConvCall :ast :symtab :ctx :call
-    if scv.length > 0 then return scv
-    dc: emitDottedCall :ast :symtab :ctx :call
-    if dc.length > 0 then return dc
-    umc: emitUnitMethodCall :ast :symtab :ctx :call
-    if umc.length > 0 then return umc
-    gfc: emitGenericFnCall :ast :symtab :ctx :call
-    if gfc.length > 0 then return gfc
-    sam: emitStringArgMethod :ast :symtab :ctx :call
-    if sam.length > 0 then return sam
-    xuc: emitCrossUnitSumCtor :ast :symtab :ctx :call
-    if xuc.length > 0 then return xuc
-    colc: emitCollectionMethodCall :ast :symtab :ctx :call
-    if colc.length > 0 then return colc
-    tdq: emitTypedefCreateCall :ast :symtab :ctx :call
-    if tdq.length > 0 then return tdq
-    pcc: emitProtocolCreateCall :ast :symtab :ctx :call
-    if pcc.length > 0 then return pcc
-    ddq: emitDataIndexCall :ast :symtab :ctx :call
-    if ddq.length > 0 then return ddq
-    cufc: emitCrossUnitFnCall :ast :symtab :ctx :call
-    if cufc.length > 0 then return cufc
-    cuct: emitCrossUnitCtor :ast :symtab :ctx :call
-    if cuct.length > 0 then return cuct
-    bxc: emitBoxCreate :ast :symtab :ctx :call
-    if bxc.length > 0 then return bxc
     cn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
     ecc: emitEmptyColCreate :ast :symtab :ctx :call cn0: cn0.stringview
     if ecc.length > 0 then return ecc
@@ -9495,6 +9285,254 @@ emitCallValue: function {
     emitFail :ctx what: "unhandled callee \{cn0}" line: call.lineno
     m8: "/* zemitterc: unhandled callee \{cn0} */0"
     return m8
+}
+
+# emitCallProbeChain -- the residual probe chain: every handler that the stamped
+# routes above did not claim, asked in order until one answers. Phase 3.2 retires
+# it leg by leg as each becomes reachable from a callKind arm instead.
+emitCallProbeChain: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    call: zast.CallData.view
+} out String is {
+    mcc: emitMetaCreateCall :ast :symtab :ctx :call
+    if mcc.length > 0 then return mcc
+    pdc: emitProtocolDispatch :ast :symtab :ctx :call
+    if pdc.length > 0 then return pdc
+    nfc: emitNativeFreeFnCall :ast :symtab :ctx :call
+    if nfc.length > 0 then return nfc
+    fmc: emitFileMethodCall :ast :symtab :ctx :call
+    if fmc.length > 0 then return fmc
+    clisc: emitCliSpecCreate :ast :symtab :ctx :call
+    if clisc.length > 0 then return clisc
+    rcc: emitResultCombinator :ast :symtab :ctx :call
+    if rcc.length > 0 then return rcc
+    pmc: emitParsedMethodCall :ast :symtab :ctx :call
+    if pmc.length > 0 then return pmc
+    uic: emitUserIterCall :ast :symtab :ctx :call
+    if uic.length > 0 then return uic
+    scv: emitStrConvCall :ast :symtab :ctx :call
+    if scv.length > 0 then return scv
+    dc: emitDottedCall :ast :symtab :ctx :call
+    if dc.length > 0 then return dc
+    umc: emitUnitMethodCall :ast :symtab :ctx :call
+    if umc.length > 0 then return umc
+    gfc: emitGenericFnCall :ast :symtab :ctx :call
+    if gfc.length > 0 then return gfc
+    sam: emitStringArgMethod :ast :symtab :ctx :call
+    if sam.length > 0 then return sam
+    xuc: emitCrossUnitSumCtor :ast :symtab :ctx :call
+    if xuc.length > 0 then return xuc
+    colc: emitCollectionMethodCall :ast :symtab :ctx :call
+    if colc.length > 0 then return colc
+    tdq: emitTypedefCreateCall :ast :symtab :ctx :call
+    if tdq.length > 0 then return tdq
+    pcc: emitProtocolCreateCall :ast :symtab :ctx :call
+    if pcc.length > 0 then return pcc
+    ddq: emitDataIndexCall :ast :symtab :ctx :call
+    if ddq.length > 0 then return ddq
+    cufc: emitCrossUnitFnCall :ast :symtab :ctx :call
+    if cufc.length > 0 then return cufc
+    cuct: emitCrossUnitCtor :ast :symtab :ctx :call
+    if cuct.length > 0 then return cuct
+    bxc: emitBoxCreate :ast :symtab :ctx :call
+    if bxc.length > 0 then return bxc
+    return (emitNamedCalleeChain :ast :symtab :ctx :call)
+}
+# emitCallByDecl -- route by the callee's DECLARATION: its kind and its owner's
+# family name the handler outright, with no name lookup and no probe. The owner of
+# a native collection's method is the TEMPLATE (a mono's methods are the
+# template's), so its family is its own id.
+emitCallByDecl: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    call: zast.CallData.view
+} out String is {
+    # route by the callee's DECLARATION: its kind and its owner's family
+    # name the handler outright
+    rdo: symtab.typing.refDecl.get key: call.callable.u64
+    match (
+        rdo
+    ) case some then {
+        rdecl: symtab.typing.decls.get i: rdo.u64
+        rkind: rdecl.kind
+        rtid: rdecl.typeId
+        ownerTid: ztypes.tid
+        if (rdecl.parent.isZero) == false then ownerTid = (symtab.typing.decls.get i: rdecl.parent.u64).typeId
+        if rkind.methodDecl when (ownerTid.isZero) == false then {
+            # the owner is the TEMPLATE for a native collection's method (the
+            # mono's methods are the template's); its family is its own id
+            ownerFam: originTidOf :symtab tid: ownerTid
+            if ownerFam.isZero then ownerFam = ownerTid
+            isCol: false
+            if ownerFam == ctx.listOriginTid then isCol = true
+            if ownerFam == ctx.listValOriginTid then isCol = true
+            if ownerFam == ctx.listViewOriginTid then isCol = true
+            if ownerFam == ctx.listViewValOriginTid then isCol = true
+            if ownerFam == ctx.setOriginTid then isCol = true
+            if ownerFam == ctx.setValOriginTid then isCol = true
+            if ownerFam == ctx.mapOriginTid then isCol = true
+            if ownerFam == ctx.mapRVOriginTid then isCol = true
+            if ownerFam == ctx.mapVROriginTid then isCol = true
+            if ownerFam == ctx.mapVVOriginTid then isCol = true
+            if ownerFam == ctx.idMapROriginTid then isCol = true
+            if ownerFam == ctx.idMapVOriginTid then isCol = true
+            if ownerFam == ctx.idSetOriginTid then isCol = true
+            if ownerFam == ctx.arrayOriginTid then isCol = true
+            if isCol then {
+                rcol: emitCollectionMethodCall :ast :symtab :ctx :call
+                if rcol.length > 0 then return rcol
+            }
+            if ownerTid == ctx.strTid then {
+                rsa: emitStringArgMethod :ast :symtab :ctx :call
+                if rsa.length > 0 then return rsa
+                rsd: emitDottedCall :ast :symtab :ctx :call
+                if rsd.length > 0 then return rsd
+            }
+            if ownerTid == ctx.svTid then {
+                rsv: emitDottedCall :ast :symtab :ctx :call
+                if rsv.length > 0 then return rsv
+            }
+            ott: symtab.reg.typetypeOf typeId: ownerTid
+            isSpec: false
+            if ott == ztypes.ztypetype.protocolType then isSpec = true
+            if ott == ztypes.ztypetype.facetType then isSpec = true
+            if isSpec then {
+                rpd: emitProtocolDispatch :ast :symtab :ctx :call
+                if rpd.length > 0 then return rpd
+            }
+            isIoNat: false
+            if ownerTid.u64 == ctx.ioFileTid then isIoNat = true
+            if ownerTid.u64 == ctx.netListenerTid then isIoNat = true
+            if ownerTid.u64 == ctx.netConnTid then isIoNat = true
+            isCreate: (zast.nameid.create from: rdecl.name) == zast.wkCreate
+            if (symtab.reg.isNativeOf tid: ownerTid) == false when (isSpec) == false when (isIoNat) == false when (isCreate) == false then {
+                ruic: emitUserIterCall :ast :symtab :ctx :call
+                if ruic.length > 0 then return ruic
+                rtq: emitTypeQualCall :ast :symtab :ctx :call
+                if rtq.length > 0 then return rtq
+                if rdecl.fnptrField then {
+                    rfp: emitFnptrFieldCall :ast :symtab :ctx :call
+                    if rfp.length > 0 then return rfp
+                }
+                rim: emitInstanceMethodCall :ast :symtab :ctx :call
+                if rim.length > 0 then return rim
+            }
+        }
+        if rkind.funcDecl then {
+            if rtid > 0 when (symtab.reg.isNativeOf tid: rtid) then {
+                rnf: emitNativeFreeFnCall :ast :symtab :ctx :call
+                if rnf.length > 0 then return rnf
+            } else {
+                if rtid > 0 when (isGenericType :symtab tid: rtid) then {
+                    rgf: emitGenericFnCall :ast :symtab :ctx :call
+                    if rgf.length > 0 then return rgf
+                }
+                rcu: emitCrossUnitFnCall :ast :symtab :ctx :call
+                if rcu.length > 0 then return rcu
+                # a bare call of a function declared in the unit at hand; a
+                # fn-typed LOCAL's atom carries its variable id and calls
+                # through the pointer instead
+                if rtid > 0 when (isGenericType :symtab tid: rtid) == false then {
+                    rcal: ast.nodes.get i: call.callable.u64
+                    if rcal.atomid when (symtab.typing.atomVariableId.has key: call.callable.u64) == false then {
+                        # inside a template instance's body the sibling is the
+                        # instance's own function, on the per-mono stamp
+                        mfid: monoStampIdOf :symtab :ctx nid: call.callable.u64
+                        if mfid.isZero then mfid = rtid
+                        return (emitUserFnCall :ast :symtab :ctx :call fid: mfid)
+                    }
+                }
+            }
+        }
+        if rkind.armDecl then {
+            rvc: emitVariantCtorCall :ast :symtab :ctx :call
+            if rvc.length > 0 then return rvc
+            ruc: emitUnionCtor :ast :symtab :ctx :call
+            if ruc.length > 0 then return ruc
+        }
+        if rkind.typeDecl then {
+            rxc: emitCrossUnitCtor :ast :symtab :ctx :call
+            if rxc.length > 0 then return rxc
+        }
+    } case none then null
+    return "".string
+}
+
+emitCallValue: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx.view
+    call: zast.CallData.view
+} out String is {
+    # stamped-kind dispatch head: a call whose kind names its owning handler
+    # routes there directly; an empty result or an unstamped / chain-owned
+    # kind falls through to the probe chain below.
+    ckh: symtab.typing.callKind.get key: call.nodeid.u64
+    match (
+        ckh
+    ) case some then {
+        isTdk: false
+        if ckh == zast.callkind.typedefCreate then isTdk = true
+        if ckh == zast.callkind.typedefBorrow then isTdk = true
+        if isTdk then {
+            tdh: emitTypedefCreateCall :ast :symtab :ctx :call
+            if tdh.length > 0 then return tdh
+        }
+        if ckh == zast.callkind.boxCreate then {
+            bxh: emitBoxCreate :ast :symtab :ctx :call
+            if bxh.length > 0 then return bxh
+        }
+        isPjk: false
+        if ckh == zast.callkind.protocolCreate then isPjk = true
+        if ckh == zast.callkind.protocolBorrow then isPjk = true
+        if ckh == zast.callkind.facetCreate then isPjk = true
+        if ckh == zast.callkind.facetBorrow then isPjk = true
+        if isPjk then {
+            pch: emitProtocolCreateCall :ast :symtab :ctx :call
+            if pch.length > 0 then return pch
+        }
+    } case none then null
+    cbd: emitCallByDecl :ast :symtab :ctx :call
+    if cbd.length > 0 then return cbd
+    # a construction by bare type name: the call's type is the type built
+    match (
+        ckh
+    ) case some then {
+        isCtorKind: false
+        if ckh == zast.callkind.recordCreate then isCtorKind = true
+        if ckh == zast.callkind.classCreate then isCtorKind = true
+        if isCtorKind then {
+            ccal: ast.nodes.get i: call.callable.u64
+            if ccal.atomid when (symtab.typing.refDecl.has key: call.callable.u64) == false then {
+                ctid: stampIdOf :symtab nid: call.nodeid.u64
+                cnm: (zast.nameTextAt
+                    :ast
+                    ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
+                )
+                cec: emitEmptyColCreate :ast :symtab :ctx :call cn0: cnm.stringview
+                if cec.length > 0 then return cec
+                ctt: symtab.reg.typetypeOf typeId: ctid
+                if ctt == ztypes.ztypetype.recordType then return (emitRecordCtor
+                    :ast
+                    :symtab
+                    :ctx
+                    :call
+                    tid: ctid
+                )
+                if ctt == ztypes.ztypetype.classType then return (emitRecordCtor
+                    :ast
+                    :symtab
+                    :ctx
+                    :call
+                    tid: ctid
+                )
+            }
+        }
+    } case none then null
+    return (emitCallProbeChain :ast :symtab :ctx :call)
 }
 # emitStringMethod -- a String value-context method call. String is a native
 # singleton whose struct + methods emit once under ctx.strC; dispatch by name so
