@@ -6687,30 +6687,6 @@ emitVariantCtorCall: function {
     return (emitInlineVariantCtor :ast :symtab :ctx :call tid: vtid arm: mn.stringview)
 }
 
-# emitColTypedefCall -- `ByteView.borrow from: X` / `Bytes.create from: X` on a
-# collection-typedef-class (Bytes/ByteView): the typedef is a zero-overhead
-# alias, so the borrow/create is transparent -- emit the underlying arg. ""
-# for any non-collection-typedef base.
-emitColTypedefCall: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    call: zast.CallData.view
-} out String is {
-    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
-    if bn.length == 0 then return "".string
-    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    isBC: false
-    if mn.stringview == "borrow" then isBC = true
-    if mn.stringview == "create" then isBC = true
-    if (isBC) == false then return "".string
-    bid: resolveTypeIdByName :ast :symtab :ctx name: bn.stringview
-    if bid == 0 then return "".string
-    mid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: bid.u64)
-    if mid.u64 == bid then return "".string
-    return (ctorArgByLabel :ast :symtab :ctx :call label: "from")
-}
-
 # emitTypeQualCall -- `point.add a: x b: y`: a dotted callee whose base
 # resolves to a record type and whose member is a FUNCTION child; args
 # reorder to the method's param order by label.
@@ -9225,18 +9201,10 @@ emitNamedCalleeChain: function {
     if iwc.length > 0 then return iwc
     xcc: emitCrossUnitExplicitCreate :ast :symtab :ctx :call
     if xcc.length > 0 then return xcc
-    ctc: emitColTypedefCall :ast :symtab :ctx :call
-    if ctc.length > 0 then return ctc
     tq: emitTypeQualCall :ast :symtab :ctx :call
     if tq.length > 0 then return tq
-    vq: emitVariantCtorCall :ast :symtab :ctx :call
-    if vq.length > 0 then return vq
-    uq: emitUnionCtor :ast :symtab :ctx :call
-    if uq.length > 0 then return uq
     fpfc: emitFnptrFieldCall :ast :symtab :ctx :call
     if fpfc.length > 0 then return fpfc
-    imc: emitInstanceMethodCall :ast :symtab :ctx :call
-    if imc.length > 0 then return imc
     if fid > 0 then return (emitUserFnCall :ast :symtab :ctx :call :fid)
     if cn0.stringview == "stringJoin" then {
         needsAddM :ctx uname: "collections" memb: "coll_join"
@@ -9298,10 +9266,6 @@ emitCallProbeChain: function {
 } out String is {
     mcc: emitMetaCreateCall :ast :symtab :ctx :call
     if mcc.length > 0 then return mcc
-    pdc: emitProtocolDispatch :ast :symtab :ctx :call
-    if pdc.length > 0 then return pdc
-    nfc: emitNativeFreeFnCall :ast :symtab :ctx :call
-    if nfc.length > 0 then return nfc
     fmc: emitFileMethodCall :ast :symtab :ctx :call
     if fmc.length > 0 then return fmc
     clisc: emitCliSpecCreate :ast :symtab :ctx :call
@@ -9310,8 +9274,6 @@ emitCallProbeChain: function {
     if rcc.length > 0 then return rcc
     pmc: emitParsedMethodCall :ast :symtab :ctx :call
     if pmc.length > 0 then return pmc
-    uic: emitUserIterCall :ast :symtab :ctx :call
-    if uic.length > 0 then return uic
     scv: emitStrConvCall :ast :symtab :ctx :call
     if scv.length > 0 then return scv
     dc: emitDottedCall :ast :symtab :ctx :call
@@ -9320,24 +9282,14 @@ emitCallProbeChain: function {
     if umc.length > 0 then return umc
     gfc: emitGenericFnCall :ast :symtab :ctx :call
     if gfc.length > 0 then return gfc
-    sam: emitStringArgMethod :ast :symtab :ctx :call
-    if sam.length > 0 then return sam
     xuc: emitCrossUnitSumCtor :ast :symtab :ctx :call
     if xuc.length > 0 then return xuc
-    colc: emitCollectionMethodCall :ast :symtab :ctx :call
-    if colc.length > 0 then return colc
-    tdq: emitTypedefCreateCall :ast :symtab :ctx :call
-    if tdq.length > 0 then return tdq
-    pcc: emitProtocolCreateCall :ast :symtab :ctx :call
-    if pcc.length > 0 then return pcc
     ddq: emitDataIndexCall :ast :symtab :ctx :call
     if ddq.length > 0 then return ddq
     cufc: emitCrossUnitFnCall :ast :symtab :ctx :call
     if cufc.length > 0 then return cufc
     cuct: emitCrossUnitCtor :ast :symtab :ctx :call
     if cuct.length > 0 then return cuct
-    bxc: emitBoxCreate :ast :symtab :ctx :call
-    if bxc.length > 0 then return bxc
     return (emitNamedCalleeChain :ast :symtab :ctx :call)
 }
 # emitCallByDecl -- route by the callee's DECLARATION: its kind and its owner's
