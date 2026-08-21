@@ -958,16 +958,91 @@ crossingLocals: function {gc: GenCross dst: List String} is {
 }
 
 # firstRhsOf -- the first `name: <rhs>` assignment's INNER rhs (a clone),
-# feeding the promoted local's typeof field.
+# feeding the promoted local's typeof field. The root may be a detached
+# node (a promoted body not yet interned); its children are table rows and
+# the search continues by id.
 firstRhsOf: function {
     ast: Ast
     n: Node.view
     name: StringView
     dst: GivesParts
 } is {
+    kids: (ListVal u32)
+    rhsId: firstRhsScan :ast :n :name :kids
+    firstRhsDescend :ast :rhsId :kids :name :dst
+}
+
+# firstRhsOfAt -- the id-taking search: the row view is this frame's and
+# dies at the block close, before the clone or the recursion lends `ast`.
+firstRhsOfAt: function {
+    ast: Ast
+    nid: zast.nodeid
+    name: StringView
+    dst: GivesParts
+} is {
+    kids: (ListVal u32)
+    rhsId: zast.nodeid
+    {
+        n: ast.nodes.get i: nid.u64
+        rhsId = firstRhsScan :ast :n :name :kids
+    }
+    firstRhsDescend :ast :rhsId :kids :name :dst
+}
+
+# firstRhsScan -- read-only: the assignment's value id when `n` is
+# `name: <rhs>` (zero otherwise), and the children the search descends
+# into. A function body is opaque, an assignment's value is not searched,
+# and a for/with descends into its body only.
+firstRhsScan: function {
+    ast: Ast.view
+    n: Node.view
+    name: StringView
+    kids: ListVal u32
+} out zast.nodeid is {
+    rhs: zast.nodeid
     match (
         n
     ) case functiondef then null case assignment then {
+        if (zast.nameTextEq :ast ref: n.name s: name) then rhs = n.value
+    } case statement then {
+        siter: n.statements.iterate
+        for s0Id: siter loop kids.append from: s0Id
+    } case statementline then {
+        kids.append from: n.statementline.u32
+    } case expression then {
+        kids.append from: n.expression.u32
+    } case ifexpr then {
+        cliter: n.clauses.iterate
+        for cl0Id: cliter loop kids.append from: cl0Id
+        if n.elseclause > 0 then kids.append from: n.elseclause.u32
+    } case ifclause then {
+        kids.append from: n.statement.u32
+    } case forexpr then {
+        if n.body > 0 then kids.append from: n.body.u32
+    } case doexpr then {
+        kids.append from: n.statement.u32
+    } case withexpr then {
+        kids.append from: n.body.u32
+    } case caseexpr then {
+        mliter: n.clauses.iterate
+        for m0: mliter loop kids.append from: m0
+        if n.elseclause > 0 then kids.append from: n.elseclause.u32
+    } case caseclause then {
+        kids.append from: n.statement.u32
+    } else null
+    return rhs
+}
+
+# firstRhsDescend -- clone the found rhs into `dst` (the first match wins),
+# otherwise continue the search by id through `kids`.
+firstRhsDescend: function {
+    ast: Ast
+    rhsId: zast.nodeid
+    kids: (ListVal u32).view
+    name: StringView
+    dst: GivesParts
+} is {
+    if (rhsId.isZero) == false then {
         already: false
         match (
             dst.base
@@ -975,52 +1050,14 @@ firstRhsOf: function {
             already = true
         } case none then null
         if (already) == false then {
-            if (zast.nameTextEq :ast ref: n.name s: name) then {
-                rc: cloneInner :ast n: (ast.nodes.get i: n.value.u64)
-                dst.base = (Option.some rc)
-            }
+            rc: cloneInner :ast nid: rhsId
+            dst.base = (Option.some rc)
         }
-    } case statement then {
-        siter: n.statements.iterate
-        for s0Id: siter loop {
-            firstRhsOf :ast n: (ast.nodes.get i: s0Id.u64) :name :dst
-        }
-    } case statementline then {
-        firstRhsOf :ast n: (ast.nodes.get i: n.statementline.u64) :name :dst
-    } case expression then {
-        firstRhsOf :ast n: (ast.nodes.get i: n.expression.u64) :name :dst
-    } case ifexpr then {
-        cliter: n.clauses.iterate
-        for cl0Id: cliter loop {
-            firstRhsOf :ast n: (ast.nodes.get i: cl0Id.u64) :name :dst
-        }
-        if n.elseclause > 0 then {
-            ec: ast.nodes.get i: n.elseclause.u64
-            firstRhsOf :ast n: ec :name :dst
-        }
-    } case ifclause then {
-        firstRhsOf :ast n: (ast.nodes.get i: n.statement.u64) :name :dst
-    } case forexpr then {
-        if n.body > 0 then {
-            fb: ast.nodes.get i: n.body.u64
-            firstRhsOf :ast n: fb :name :dst
-        }
-    } case doexpr then {
-        firstRhsOf :ast n: (ast.nodes.get i: n.statement.u64) :name :dst
-    } case withexpr then {
-        firstRhsOf :ast n: (ast.nodes.get i: n.body.u64) :name :dst
-    } case caseexpr then {
-        mliter: n.clauses.iterate
-        for m0: mliter loop {
-            firstRhsOf :ast n: (ast.nodes.get i: m0.u64) :name :dst
-        }
-        if n.elseclause > 0 then {
-            elseclauseNode: ast.nodes.get i: n.elseclause.u64
-            firstRhsOf :ast n: elseclauseNode :name :dst
-        }
-    } case caseclause then {
-        firstRhsOf :ast n: (ast.nodes.get i: n.statement.u64) :name :dst
-    } else null
+        return
+    }
+    with it: kids.iterate do for k: it loop {
+        firstRhsOfAt :ast nid: (zast.nodeid.create from: k) :name :dst
+    }
 }
 
 # the first right-hand-side node under an optional node (for promotion).
@@ -1038,15 +1075,20 @@ firstRhsOfOpt: function {
 }
 
 # cloneInner -- clone the inside of an expression wrapper (the typeof
-# field embeds the bare operation).
-cloneInner: function {ast: Ast n: Node.view} out Node is {
-    match (
-        n
-    ) case expression then {
-        return (cloneInner :ast n: (ast.nodes.get i: n.expression.u64))
-    } else {
-        return (clonePath :ast :n)
+# field embeds the bare operation). The unwrap continues by id; the view
+# dies before the clone lends `ast`.
+cloneInner: function {ast: Ast nid: zast.nodeid} out Node is {
+    inner: nid
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case expression then {
+            inner = n.expression
+        } else null
     }
+    if inner == nid then return (clonePath :ast n: (ast.nodes.get i: nid.u64))
+    return (cloneInner :ast nid: inner)
 }
 
 # promoteIterables -- clone the body, and for each top-level `for` whose
