@@ -18601,6 +18601,85 @@ typedefBaseOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.
 typedefBaseTidOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
     return (optTidOr o: (st.typing.typedefBaseTid.get key: tid) d: ztypes.tid)
 }
+# reportUnresolvedCastArg -- a typedef cast's from-argument that resolved to
+# nothing and raised nothing is an unknown reference, as at a read. Without this
+# the value types to 0, every check on that argument is skipped, and the emitter
+# writes the bare name into the C: zc exits 0 and only the C compiler catches
+# it. The named / positional / constructor / method argument forms were fixed
+# for exactly this (tests/fixtures/errors/arg_value_unresolved.z); the two
+# typedef legs never got it, because a cast is not a call.
+reportUnresolvedCastArg: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast.view
+    argNode: Node.view
+    vt: ztypes.tid
+    errMark: u64
+} is {
+    if (vt.isZero) == false then return
+    if st.typing.errors.length != errMark then return
+    ub: unresolvedBareCallable :ast :st :unitDecl n: argNode
+    if ub.length == 0 then return
+    um: "Unknown reference '\{ub}'"
+    en: String
+    eh: String
+    (addErrorH
+        :st
+        nodeid: (nodeId n: argNode)
+        lineno: (nodeLine n: argNode)
+        colno: (nodeCol n: argNode)
+        e: zast.err.badReference
+        msg: um
+        note: en
+        hint: eh
+        width: ub.length.u32.orPanic
+    )
+}
+# consumeCastFromArg -- a typedef cast CONSUMES its from-argument. A trivial
+# argument invalidates the source name; a non-trivial one hoists to the current
+# scope. Only a REFTYPE source transfers -- a valtype owns no heap, so the cast
+# takes a copy and the name stays live.
+consumeCastFromArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    aOp: Node.view
+    vt: ztypes.tid
+} is {
+    if (argIsTrivial :ast op: aOp) then {
+        bn: (zast.nameTextAt
+            :ast
+            ref: (bareAtomNameId :ast n: aOp)
+        )
+        if bn.length > 0 then {
+            bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringview)
+            match (
+                bvo
+            ) case some then {
+                # only a REFTYPE source transfers. A
+                # valtype owns no heap, so the typedef
+                # takes a copy and the name stays live --
+                # the same guard a returned owned local
+                # carries before it records a move.
+                if (typeIsReftype :st tid: vt) then {
+                    (st.invalidate
+                        nameId: (nameIdOf :ast name: bn.stringview)
+                        loc: (optionval.none ztypes.zsrcpos)
+                    )
+                }
+            } case none then null
+        }
+    } else {
+        (hoistArg
+            :ast
+            :st
+            argNode: aOp
+            argType: vt
+            paramType: 0
+            consumes: true
+            viewParam: false
+        )
+    }
+}
 
 # checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef:
 # an owned cast, not a call. No CALL scope; the from-argument walks in the
@@ -18630,48 +18709,23 @@ checkTypedefCreate: function {
                 }
                 if isFrom then {
                     found = true
+                    aOp: ast.nodes.get i: arg.operation.u64
+                    errT0: st.typing.errors.length
                     vt: (checkValue
                         :st
                         :unitDecl
                         :ast
-                        node: (ast.nodes.get i: arg.operation.u64)
+                        node: aOp
                     )
-                    if vt > 0 then {
-                        if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation.u64)) then {
-                            bn: (zast.nameTextAt
-                                :ast
-                                ref: (bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
-                            )
-                            if bn.length > 0 then {
-                                bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringview)
-                                match (
-                                    bvo
-                                ) case some then {
-                                    # only a REFTYPE source transfers. A
-                                    # valtype owns no heap, so the typedef
-                                    # takes a copy and the name stays live --
-                                    # the same guard a returned owned local
-                                    # carries before it records a move.
-                                    if (typeIsReftype :st tid: vt) then {
-                                        (st.invalidate
-                                            nameId: (nameIdOf :ast name: bn.stringview)
-                                            loc: (optionval.none ztypes.zsrcpos)
-                                        )
-                                    }
-                                } case none then null
-                            }
-                        } else {
-                            (hoistArg
-                                :ast
-                                :st
-                                argNode: (ast.nodes.get i: arg.operation.u64)
-                                argType: vt
-                                paramType: 0
-                                consumes: true
-                                viewParam: false
-                            )
-                        }
-                    }
+                    (reportUnresolvedCastArg
+                        :st
+                        :unitDecl
+                        :ast
+                        argNode: aOp
+                        :vt
+                        errMark: errT0
+                    )
+                    if vt > 0 then (consumeCastFromArg :st :ast :aOp :vt)
                 }
             }
         } else null
@@ -18711,11 +18765,20 @@ checkTypedefBorrow: function {
                 }
                 if isFrom then {
                     found = true
+                    errT0: st.typing.errors.length
                     vt: (checkValue
                         :st
                         :unitDecl
                         :ast
                         node: (ast.nodes.get i: arg.operation.u64)
+                    )
+                    (reportUnresolvedCastArg
+                        :st
+                        :unitDecl
+                        :ast
+                        argNode: (ast.nodes.get i: arg.operation.u64)
+                        :vt
+                        errMark: errT0
                     )
                     if vt > 0 then {
                         if st.typing.pendingBorrowPath.length <= 0 then {
