@@ -15854,6 +15854,452 @@ isForIterCall: function {ast: Ast.view n: Node.view} out bool is {
         return false
     }
 }
+# objitertids -- what the iterable resolves to: the iterator class, and the
+# generator function to call for it when the iterable was a bare fn name.
+# A zero itid means the iterable names no iterator at all.
+objitertids: record {
+    itid: ztypes.tid
+    bareFnId: ztypes.tid
+}
+
+# objIterIterableTid -- the iterator class behind `for x: <iterable> loop`. A
+# bare generator fn resolves through its return type and is auto-called; every
+# other iterable resolves through its canonical origin, so a shadowed or
+# re-exported name still finds the template that declares `.call`.
+objIterIterableTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    cOp: zast.nodeid
+} out objitertids is {
+    oeid: iterableNodeId :ast n: (ast.nodes.get i: cOp.u64)
+    itid0: stampIdOf :symtab nid: oeid
+    if itid0.isZero then {
+        oeidF: exprNodeId n: (ast.nodes.get i: cOp.u64)
+        itid0 = stampIdOf :symtab nid: oeidF
+    }
+    itid: itid0
+    # bare generator-fn iterable (`for x: counter loop`): itid0 is the
+    # generator function itself; resolve via its return type (the iterator
+    # class) and auto-call it below.
+    bareFnId: ztypes.tid
+    if (symtab.reg.typetypeOf typeId: itid0) == ztypes.ztypetype.functionType then {
+        brt: u64
+        brt = fnReturnTidOf :symtab tid: itid0
+        if brt == 0 then {
+            mro: ztypecheck.methodReturnOf st: symtab mid: (ztypes.tid.create from: itid0.u64)
+            match (
+                mro
+            ) case some then {
+                brt = mro
+            } case none then null
+        }
+        hasCall: (symtab.typing.declHasMemberId
+            parentTypeId: (ztypes.tid.create from: brt.u64)
+            nameId: zast.wkCall
+        )
+        if brt > 0 when hasCall then {
+            itid = ztypes.tid.create from: (brt)
+            bareFnId = itid0
+        }
+    }
+    if itid.isZero then return (objitertids :itid :bareFnId)
+    if bareFnId.isZero then {
+        canoT: u64
+        if (originTidOf :symtab tid: itid0) > 0 then {
+            canoT = itid0
+        } else {
+            itn0: regNameOf :symtab tid: itid0
+            cano: (ztypecheck.walkLookupTyperef
+                frame: ztypes.declid
+                :ast
+                st: symtab
+                unitDecl: ctx.mainUnitId
+                base: itn0.stringview
+            )
+            match (
+                cano
+            ) case some then {
+                canoT = cano
+            } case none then null
+        }
+        hasCallC: (symtab.typing.declHasMemberId
+            parentTypeId: (ztypes.tid.create from: canoT.u64)
+            nameId: zast.wkCall
+        )
+        if canoT > 0 when hasCallC then itid = ztypes.tid.create from: canoT.u64
+    }
+    return (objitertids :itid :bareFnId)
+}
+# objIterYieldTid -- the type the iterator YIELDS. The registry knows it for a
+# native iterator; a user-class one leaves returnTypeId unset and carries the
+# stamp on the `.call` return node instead. Zero when neither names one.
+objIterYieldTid: function {
+    symtab: zenv.ZSymbolTable
+    cco: ztypes.tid
+} out ztypes.tid is {
+    ovid: ztypes.tid
+    {
+        rto: symtab.reg.returnTypeOf tid: (ztypes.tid.create from: cco.u64)
+        if rto > 0 then ovid = rto
+    }
+    if ovid.isZero then {
+        # user-class iterator: returnTypeId unset, but the .call return
+        # node carries the mono stamp.
+        mro: ztypecheck.methodReturnOf st: symtab mid: (ztypes.tid.create from: cco.u64)
+        match (
+            mro
+        ) case some then {
+            ovid = mro
+        } case none then null
+    }
+    return ovid
+}
+
+# objIterCallC -- the C name of the iterator's `.call`. A main-unit user-class
+# iterator is emitted by emitOneMethod under its own cname id; native and
+# collection iterators keep the template's `{type}_call`.
+objIterCallC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    cco: ztypes.tid
+    itid: ztypes.tid
+} out String is {
+    itn: regNameOf :symtab tid: itid
+    # a main-unit user-class iterator's .call is emitted by emitOneMethod
+    # (its own cname id); native/collection iterators (CpIter, SetIter,
+    # emitted with the type-id cname) keep the template's `{type}_call`.
+    callC: String
+    itUfn: canonFnId :ast :symtab :ctx tid: itid name: itn.stringview
+    isUserCls: false
+    if itUfn > 0 when (symtab.reg.typetypeOf typeId: itid) == ztypes.ztypetype.classType then {
+        # exclude collection monos (SetIter etc., which have a generic origin)
+        itorig: originTidOf :symtab tid: itid
+        if itorig.isZero then isUserCls = true
+    }
+    if isUserCls then {
+        callC = ctxCname :ctx tid: (ztypes.tid.create from: cco.u64)
+    } else {
+        itc: ctxCname :ctx tid: itid
+        callC = "\{itc}_call"
+    }
+    return callC
+}
+
+# emitObjIterRecv -- the iterator instance the loop calls into. A bare generator
+# fn and an explicit `.iterate` call both produce a temporary the loop OWNS, so
+# its destroy is registered for the enclosing block BEFORE the loop label --
+# break and continue inside the loop must not free the live instance.
+emitObjIterRecv: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    cOp: zast.nodeid
+    itid: ztypes.tid
+    bareFnId: ztypes.tid
+    itCb: StringView
+    mN: u64
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out String is {
+    iterRecv: String
+    ownGit: false
+    if bareFnId > 0 then {
+        bcn: ctxCname :ctx tid: (ztypes.tid.create from: bareFnId.u64)
+        lgh: "\{ind}\{itCb}_t _git\{mN} = \{bcn}();\n"
+        buf.append lgh
+        iterRecv = "_git\{mN}"
+        ownGit = true
+    } else {
+        ivex: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: cOp.u64)
+        if (isForIterCall :ast n: (ast.nodes.get i: cOp.u64)) then {
+            lgi: "\{ind}\{itCb}_t _git\{mN} = \{ivex};\n"
+            buf.append lgi
+            iterRecv = "_git\{mN}"
+            ownGit = true
+        } else {
+            iterRecv = ivex
+        }
+    }
+    # the loop owns the iterator instance: register its destroy for the
+    # enclosing block's flush (and the return path), freeing owned
+    # captured params. Registered BEFORE the loop label so break /
+    # continue inside the loop never free the live instance.
+    if ownGit then {
+        if (symtab.reg.needsDestructor typeId: itid) when (structDestroyNontrivial
+            :ast
+            :symtab
+            :ctx
+            tid: itid
+        ) then {
+            gdt: "    \{itCb}_destroy(&_git\{mN});\n"
+            tmp.listFrees.append gdt
+            gdn: "_git\{mN}"
+            tmp.listFreeVars.append gdn
+            tmp.listFreeRaw.append (ztypes.vid.create from: 0)
+        }
+    }
+    return iterRecv
+}
+
+# emitObjIterPayload -- binding the yielded payload to the loop variable, in the
+# three shapes a yield takes: a borrowed view (scalars copy, aggregates alias),
+# an owned heap box (move the payload out, free the box), and a plain value.
+emitObjIterPayload: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    ovid: ztypes.tid
+    ovn: String
+    oovorig: StringView
+    payC: StringView
+    lbl: StringView
+    lblV: ztypes.vid
+    mN: u64
+    ind: StringView
+    buf: String.borrow
+} is {
+    if (originIsTid
+        :symtab
+        tid: (ztypes.tid.create from: ovid.u64)
+        originTid: ctx.optionViewOriginTid
+    ) then {
+        # borrowed-view yield: scalar payloads copy by value; aggregate
+        # payloads bind a borrowed pointer (no copy -> the shared fields
+        # are never double-freed).
+        payElemPfx: oovorig.length + 1
+        payElemName: monoElemName full: ovn prefixLen: payElemPfx
+        payElemTid: ztypecheck.optU64Or o: (symtab.typing.declChildOfId
+            parentTypeId: ovid
+            nameId: zast.wkSome
+        ) d: 0
+        payScalarC: (cTypeForNameTid
+            :ast
+            :symtab
+            :ctx
+            name: payElemName.stringview
+            tid: (ztypes.tid.create from: payElemTid.u64)
+        )
+        # A REFTYPE payload must alias. Copying its struct duplicates
+        # a pointer the container still owns, so a write through the
+        # copy reallocs and frees under the container -- silently for a
+        # valtype field, as a use-after-free for a reftype one. A
+        # valtype or scalar payload is self-contained and copies safely.
+        payRef: false
+        if payElemTid > 0 then payRef = symtab.reg.isReftypeOf tid: (ztypes.tid.create from: payElemTid.u64)
+        if payScalarC.length > 0 when (payRef) == false then {
+            l3v: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
+            buf.append l3v
+        } else {
+            l3p: "\{ind}    \{payC}* __borrow_\{lbl} = (\{payC}*)_iter\{mN}.data;\n"
+            buf.append l3p
+            l3pa: "\{ind}    /* alias: \{lbl} => (*__borrow_\{lbl}) */\n"
+            buf.append l3pa
+            av3p: "(*__borrow_\{lbl})"
+            vvSet xs: ctx.aliases vid: lblV val: av3p.stringview
+        }
+    } else if (originIsTid
+        :symtab
+        tid: (ztypes.tid.create from: ovid.u64)
+        originTid: ctx.optionOriginTid
+    ) then {
+        # owned heap yield: move the payload out, free just the box; the
+        # loop var owns it and is freed at the end of each iteration.
+        l3op: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
+        buf.append l3op
+        l3of: "\{ind}    free(_iter\{mN}.data);\n"
+        buf.append l3of
+    } else {
+        l3: "\{ind}    \{payC} \{lbl} = _iter\{mN}.data.some;\n"
+        buf.append l3
+    }
+}
+# objIterPayCleanup -- an owned payload needs a per-iteration destroy. The
+# fall-through copy is emitted at the end of the loop body; continue, break and
+# return jump PAST that line, so the jump sites need their own copy -- which is
+# what the break-label cleanup slot carries. Returns the line, "" when the yield
+# owns nothing.
+objIterPayCleanup: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    ovid: ztypes.tid
+    lbl: StringView
+    lblV: ztypes.vid
+} out String is {
+    payCleanup: String
+    if (originIsTid
+        :symtab
+        tid: (ztypes.tid.create from: ovid.u64)
+        originTid: ctx.optionOriginTid
+    ) then {
+        pfree: (payloadDestructor
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: ovid.u64)
+            arm: "some"
+        )
+        if pfree.length > 0 then payCleanup = "\{pfree}(&\{lbl});\n"
+    }
+    if payCleanup.length > 0 then {
+        ctx.breakLabelCleanup.pop
+        pcl: payCleanup.copy
+        ctx.breakLabelCleanup.append pcl
+        ctx.breakLabelCleanupVar.pop
+        ctx.breakLabelCleanupRaw.pop
+        pcv: lbl.string
+        ctx.breakLabelCleanupVar.append pcv
+        ctx.breakLabelCleanupRaw.append lblV
+    }
+    return payCleanup
+}
+
+# emitObjIterLoop -- the `while (1) { T _iter = C_call(&recv); ... }` an object
+# iterator becomes: the yield type, the receiver, its destroy registration, the
+# per-iteration payload bind, the body, and the loop labels.
+emitObjIterLoop: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    m: zast.ForData.view
+    cOp: zast.nodeid
+    cco: ztypes.tid
+    itid: ztypes.tid
+    bareFnId: ztypes.tid
+    lbl: StringView
+    lblV: ztypes.vid
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    ovid: objIterYieldTid :symtab :cco
+    # neither the registered return nor the .call stamp names a yield
+    # type: there is no iterator to emit against.
+    if ovid.isZero then return false
+    callC: objIterCallC :ast :symtab :ctx :cco :itid
+    ovn: regNameOf :symtab tid: (ztypes.tid.create from: ovid.u64)
+    ovc: ctxCname :ctx tid: (ztypes.tid.create from: ovid.u64)
+    ovu: cUpperOf text: ovn.stringview
+    payC: armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: ovid.u64) arm: "some"
+    oovorig: monoOriginName :symtab tid: (ztypes.tid.create from: ovid.u64)
+    mN: tmp.next
+    itCb: ctxCname :ctx tid: itid
+    iterRecv: (emitObjIterRecv
+        :ast
+        :symtab
+        :ctx
+        :cOp
+        :itid
+        :bareFnId
+        itCb: itCb.stringview
+        :mN
+        :ind
+        :tmp
+        :buf
+    )
+    lidO: pushLoopLabel :ctx :tmp isDo: false
+    payCleanup: objIterPayCleanup :ast :symtab :ctx :ovid :lbl :lblV
+    l0: "\{ind}while (1) {\n"
+    buf.append l0
+    l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv});\n"
+    buf.append l1
+    if (originIsTid
+        :symtab
+        tid: (ztypes.tid.create from: ovid.u64)
+        originTid: ctx.optionOriginTid
+    ) then {
+        # owned heap-payload union: destroy the box on the NONE arm too.
+        l2o: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) { \{ovc}_destroy(&_iter\{mN}); break; }\n"
+        buf.append l2o
+    } else {
+        l2: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) break;\n"
+        buf.append l2
+    }
+    (emitObjIterPayload
+        :ast
+        :symtab
+        :ctx
+        :ovid
+        :ovn
+        oovorig: oovorig.stringview
+        payC: payC.stringview
+        :lbl
+        :lblV
+        :mN
+        :ind
+        :buf
+    )
+    ind2: "\{ind}    "
+    fLO: tmp.frees.length
+    lLO: tmp.listFrees.length
+    dvG: false
+    if m.body > 0 then {
+        mb: ast.nodes.get i: m.body.u64
+        emitBodyNode :ast :symtab :ctx n: mb ind: ind2.stringview :tmp :buf
+        dvG = blockDiverges :ast :symtab :ctx n: mb
+    }
+    if payCleanup.length > 0 then {
+        l3od: "\{ind}    \{payCleanup}"
+        buf.append l3od
+    }
+    flushBlockFrees :ctx :tmp fL: fLO lL: lLO diverged: dvG :buf
+    indO: "\{ind}    "
+    emitContLabel :ctx id: lidO ind: indO.stringview :buf
+    l: "\{ind}}\n"
+    buf.append l
+    popLoopLabel :ctx id: lidO :ind :buf
+    return true
+}
+
+# objIterForNamed -- the single `name: iterable` condition of an object-iterator
+# for-loop. False when the iterable resolves to no iterator, so the caller can
+# try the other for-loop shapes.
+objIterForNamed: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    m: zast.ForData.view
+    cName: zast.nameid
+    cOp: zast.nodeid
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    lblR: zast.nameTextAt :ast ref: cName
+    if lblR.length == 0 then return false
+    lblV: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: cOp.u64))
+    lbl: varCName :ctx vid: lblV name: lblR.stringview
+    tids: objIterIterableTid :ast :symtab :ctx :cOp
+    if tids.itid.isZero then return false
+    itid: tids.itid
+    bareFnId: tids.bareFnId
+    cco: symtab.typing.declChildOfId parentTypeId: itid nameId: zast.wkCall
+    match (
+        cco
+    ) case some then {
+        return (emitObjIterLoop
+            :ast
+            :symtab
+            :ctx
+            :m
+            :cOp
+            cco: (ztypes.tid.create from: cco.u64)
+            :itid
+            :bareFnId
+            lbl: lbl.stringview
+            :lblV
+            :ind
+            :tmp
+            :buf
+        )
+    } case none then {
+        return false
+    }
+}
+
 
 # emit a for-loop over an object iterator.
 emitObjIterFor: function {
@@ -15871,273 +16317,17 @@ emitObjIterFor: function {
     match (
         c0
     ) case namedoperation then {
-        lblR: zast.nameTextAt :ast ref: c0.name
-        if lblR.length == 0 then return false
-        lblV: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: c0.operation.u64))
-        lbl: varCName :ctx vid: lblV name: lblR.stringview
-        oeid: iterableNodeId :ast n: (ast.nodes.get i: c0.operation.u64)
-        itid0: stampIdOf :symtab nid: oeid
-        if itid0.isZero then {
-            oeidF: exprNodeId n: (ast.nodes.get i: c0.operation.u64)
-            itid0 = stampIdOf :symtab nid: oeidF
-        }
-        itid: itid0
-        # bare generator-fn iterable (`for x: counter loop`): itid0 is the
-        # generator function itself; resolve via its return type (the iterator
-        # class) and auto-call it below.
-        bareFnId: ztypes.tid
-        if (symtab.reg.typetypeOf typeId: itid0) == ztypes.ztypetype.functionType then {
-            brt: u64
-            brt = fnReturnTidOf :symtab tid: itid0
-            if brt == 0 then {
-                mro: ztypecheck.methodReturnOf st: symtab mid: (ztypes.tid.create from: itid0.u64)
-                match (
-                    mro
-                ) case some then {
-                    brt = mro
-                } case none then null
-            }
-            hasCall: (symtab.typing.declHasMemberId
-                parentTypeId: (ztypes.tid.create from: brt.u64)
-                nameId: zast.wkCall
-            )
-            if brt > 0 when hasCall then {
-                itid = ztypes.tid.create from: (brt)
-                bareFnId = itid0
-            }
-        }
-        if itid.isZero then return false
-        if bareFnId.isZero then {
-            canoT: u64
-            if (originTidOf :symtab tid: itid0) > 0 then {
-                canoT = itid0
-            } else {
-                itn0: regNameOf :symtab tid: itid0
-                cano: (ztypecheck.walkLookupTyperef
-        frame: ztypes.declid
-                    :ast
-                    st: symtab
-                    unitDecl: ctx.mainUnitId
-                    base: itn0.stringview
-                )
-                match (
-                    cano
-                ) case some then {
-                    canoT = cano
-                } case none then null
-            }
-            hasCallC: (symtab.typing.declHasMemberId
-                parentTypeId: (ztypes.tid.create from: canoT.u64)
-                nameId: zast.wkCall
-            )
-            if canoT > 0 when hasCallC then itid = ztypes.tid.create from: canoT.u64
-        }
-        cco: symtab.typing.declChildOfId parentTypeId: itid nameId: zast.wkCall
-        match (
-            cco
-        ) case some then {
-            ovid: ztypes.tid
-            {
-                rto: symtab.reg.returnTypeOf tid: (ztypes.tid.create from: cco.u64)
-                if rto > 0 then ovid = rto
-            }
-            if ovid.isZero then {
-                # user-class iterator: returnTypeId unset, but the .call return
-                # node carries the mono stamp.
-                mro: ztypecheck.methodReturnOf st: symtab mid: (ztypes.tid.create from: cco.u64)
-                match (
-                    mro
-                ) case some then {
-                    ovid = mro
-                } case none then null
-            }
-            # neither the registered return nor the .call stamp names a yield
-            # type: there is no iterator to emit against.
-            if ovid.isZero then return false
-            itn: regNameOf :symtab tid: itid
-            # a main-unit user-class iterator's .call is emitted by emitOneMethod
-            # (its own cname id); native/collection iterators (CpIter, SetIter,
-            # emitted with the type-id cname) keep the template's `{type}_call`.
-            callC: String
-            itUfn: canonFnId :ast :symtab :ctx tid: itid name: itn.stringview
-            isUserCls: false
-            if itUfn > 0 when (symtab.reg.typetypeOf typeId: itid) == ztypes.ztypetype.classType then {
-                # exclude collection monos (SetIter etc., which have a generic origin)
-                itorig: originTidOf :symtab tid: itid
-                if itorig.isZero then isUserCls = true
-            }
-            if isUserCls then {
-                callC = ctxCname :ctx tid: (ztypes.tid.create from: cco.u64)
-            } else {
-                itc: ctxCname :ctx tid: itid
-                callC = "\{itc}_call"
-            }
-            ovn: regNameOf :symtab tid: (ztypes.tid.create from: ovid.u64)
-            ovc: ctxCname :ctx tid: (ztypes.tid.create from: ovid.u64)
-            ovu: cUpperOf text: ovn.stringview
-            payC: armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: ovid.u64) arm: "some"
-            oovorig: monoOriginName :symtab tid: (ztypes.tid.create from: ovid.u64)
-            mN: tmp.next
-            itCb: ctxCname :ctx tid: itid
-            iterRecv: String
-            ownGit: false
-            if bareFnId > 0 then {
-                bcn: ctxCname :ctx tid: (ztypes.tid.create from: bareFnId.u64)
-                lgh: "\{ind}\{itCb}_t _git\{mN} = \{bcn}();\n"
-                buf.append lgh
-                iterRecv = "_git\{mN}"
-                ownGit = true
-            } else {
-                ivex: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: c0.operation.u64)
-                if (isForIterCall :ast n: (ast.nodes.get i: c0.operation.u64)) then {
-                    lgi: "\{ind}\{itCb}_t _git\{mN} = \{ivex};\n"
-                    buf.append lgi
-                    iterRecv = "_git\{mN}"
-                    ownGit = true
-                } else {
-                    iterRecv = ivex
-                }
-            }
-            # the loop owns the iterator instance: register its destroy for the
-            # enclosing block's flush (and the return path), freeing owned
-            # captured params. Registered BEFORE the loop label so break /
-            # continue inside the loop never free the live instance.
-            if ownGit then {
-                if (symtab.reg.needsDestructor typeId: itid) when (structDestroyNontrivial
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: itid
-                ) then {
-                    gdt: "    \{itCb}_destroy(&_git\{mN});\n"
-                    tmp.listFrees.append gdt
-                    gdn: "_git\{mN}"
-                    tmp.listFreeVars.append gdn
-                    tmp.listFreeRaw.append (ztypes.vid.create from: 0)
-                }
-            }
-            lidO: pushLoopLabel :ctx :tmp isDo: false
-            # owned payloads register a per-iteration cleanup line with the
-            # loop entry: continue/break/return jump past the fall-through
-            # dtor line below, so the jump sites emit this copy instead.
-            payCleanup: String
-            if (originIsTid
-                :symtab
-                tid: (ztypes.tid.create from: ovid.u64)
-                originTid: ctx.optionOriginTid
-            ) then {
-                pfree: (payloadDestructor
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: (ztypes.tid.create from: ovid.u64)
-                    arm: "some"
-                )
-                if pfree.length > 0 then payCleanup = "\{pfree}(&\{lbl});\n"
-            }
-            if payCleanup.length > 0 then {
-                ctx.breakLabelCleanup.pop
-                pcl: payCleanup.copy
-                ctx.breakLabelCleanup.append pcl
-                ctx.breakLabelCleanupVar.pop
-                ctx.breakLabelCleanupRaw.pop
-                pcv: lbl.copy
-                ctx.breakLabelCleanupVar.append pcv
-                ctx.breakLabelCleanupRaw.append lblV
-            }
-            l0: "\{ind}while (1) {\n"
-            buf.append l0
-            l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv});\n"
-            buf.append l1
-            if (originIsTid
-                :symtab
-                tid: (ztypes.tid.create from: ovid.u64)
-                originTid: ctx.optionOriginTid
-            ) then {
-                # owned heap-payload union: destroy the box on the NONE arm too.
-                l2o: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) { \{ovc}_destroy(&_iter\{mN}); break; }\n"
-                buf.append l2o
-            } else {
-                l2: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) break;\n"
-                buf.append l2
-            }
-            if (originIsTid
-                :symtab
-                tid: (ztypes.tid.create from: ovid.u64)
-                originTid: ctx.optionViewOriginTid
-            ) then {
-                # borrowed-view yield: scalar payloads copy by value; aggregate
-                # payloads bind a borrowed pointer (no copy -> the shared fields
-                # are never double-freed).
-                payElemPfx: oovorig.length + 1
-                payElemName: monoElemName full: ovn prefixLen: payElemPfx
-                payElemTid: ztypecheck.optU64Or o: (symtab.typing.declChildOfId
-                    parentTypeId: ovid
-                    nameId: zast.wkSome
-                ) d: 0
-                payScalarC: (cTypeForNameTid
-                    :ast
-                    :symtab
-                    :ctx
-                    name: payElemName.stringview
-                    tid: (ztypes.tid.create from: payElemTid.u64)
-                )
-                # A REFTYPE payload must alias. Copying its struct duplicates
-                # a pointer the container still owns, so a write through the
-                # copy reallocs and frees under the container -- silently for a
-                # valtype field, as a use-after-free for a reftype one. A
-                # valtype or scalar payload is self-contained and copies safely.
-                payRef: false
-                if payElemTid > 0 then payRef = symtab.reg.isReftypeOf tid: (ztypes.tid.create from: payElemTid.u64)
-                if payScalarC.length > 0 when (payRef) == false then {
-                    l3v: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
-                    buf.append l3v
-                } else {
-                    l3p: "\{ind}    \{payC}* __borrow_\{lbl} = (\{payC}*)_iter\{mN}.data;\n"
-                    buf.append l3p
-                    l3pa: "\{ind}    /* alias: \{lbl} => (*__borrow_\{lbl}) */\n"
-                    buf.append l3pa
-                    av3p: "(*__borrow_\{lbl})"
-                    vvSet xs: ctx.aliases vid: lblV val: av3p.stringview
-                }
-            } else if (originIsTid
-                :symtab
-                tid: (ztypes.tid.create from: ovid.u64)
-                originTid: ctx.optionOriginTid
-            ) then {
-                # owned heap yield: move the payload out, free just the box; the
-                # loop var owns it and is freed at the end of each iteration.
-                l3op: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
-                buf.append l3op
-                l3of: "\{ind}    free(_iter\{mN}.data);\n"
-                buf.append l3of
-            } else {
-                l3: "\{ind}    \{payC} \{lbl} = _iter\{mN}.data.some;\n"
-                buf.append l3
-            }
-            ind2: "\{ind}    "
-            fLO: tmp.frees.length
-            lLO: tmp.listFrees.length
-            dvG: false
-            if m.body > 0 then {
-                mb: ast.nodes.get i: m.body.u64
-                emitBodyNode :ast :symtab :ctx n: mb ind: ind2.stringview :tmp :buf
-                dvG = blockDiverges :ast :symtab :ctx n: mb
-            }
-            if payCleanup.length > 0 then {
-                l3od: "\{ind}    \{payCleanup}"
-                buf.append l3od
-            }
-            flushBlockFrees :ctx :tmp fL: fLO lL: lLO diverged: dvG :buf
-            indO: "\{ind}    "
-            emitContLabel :ctx id: lidO ind: indO.stringview :buf
-            l: "\{ind}}\n"
-            buf.append l
-            popLoopLabel :ctx id: lidO :ind :buf
-            return true
-        } case none then {
-            return false
-        }
+        return (objIterForNamed
+            :ast
+            :symtab
+            :ctx
+            :m
+            cName: c0.name
+            cOp: c0.operation
+            :ind
+            :tmp
+            :buf
+        )
     } else {
         return false
     }
