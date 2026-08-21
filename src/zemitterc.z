@@ -4081,6 +4081,45 @@ emitSvSubstringCall: function {
     }
     return "".string
 }
+# svNativeArgFrag -- one argument of a view native, as the C text that passes it.
+# An atom whose address can be taken passes as that address; a String-stamped
+# expression projects to a view value and passes by address; anything else
+# passes as the expression. `split` addresses its separator even in that last
+# case, and that is the only thing `addrAlways` selects.
+svNativeArgFrag: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    n: Node.view
+    addrAlways: bool
+} out String is {
+    sav: svArgAddr :ast :symtab :ctx :n
+    if sav.length > 0 then return sav
+    sx: emitExpr :ast :symtab :ctx :n
+    stampTid: stampIdOf :symtab nid: (interpPartNodeId :n)
+    if stampTid == ctx.strTid then {
+        sxh: (hoistBorrowValArg
+            :ast
+            :symtab
+            :ctx
+            isBorrow: (hoistExprIsBorrowRooted :ast :symtab :ctx :n)
+            av: sx.stringview
+            pid: ctx.strTid
+            paramTake: false
+        )
+        if sxh.length > 0 then sx = sxh
+        sxq: atomVidIfPlain :ast :symtab :ctx :n text: sx.stringview
+        svx: svValueForm :ctx expr: sx.stringview isStr: true vid: sxq
+        r: "&\{svx}"
+        return r
+    }
+    if addrAlways then {
+        ra: "&\{sx}"
+        return ra
+    }
+    return sx
+}
+
 
 # emitSvSplitCall -- `s.split sep`, the separator passed by address.
 emitSvSplitCall: function {
@@ -4105,50 +4144,8 @@ emitSvSplitCall: function {
             ) case namedoperation then {
                 saOpNode: ast.nodes.get i: sa.operation.u64
                 if sepx.length == 0 then {
-                    sav: svArgAddr :ast :symtab :ctx n: (ast.nodes.get i: sa.operation.u64)
-                    if sav.length > 0 then {
-                        sepx.append sav
-                    } else {
-                        sxe: (emitExpr
-                            :ast
-                            :symtab
-                            :ctx
-                            n: (ast.nodes.get i: sa.operation.u64)
-                        )
-                        sepx.append "&"
-                        stampTid: (stampIdOf
-                            :symtab
-                            nid: (interpPartNodeId n: (ast.nodes.get i: sa.operation.u64))
-                        )
-                        if stampTid == ctx.strTid then {
-                            sph: (hoistBorrowValArg
-                                :ast
-                                :symtab
-                                :ctx
-                                isBorrow: (hoistExprIsBorrowRooted :ast :symtab :ctx n: saOpNode)
-                                av: sxe.stringview
-                                pid: ctx.strTid
-                                paramTake: false
-                            )
-                            if sph.length > 0 then sxe = sph
-                            sxv: (atomVidIfPlain
-                                :ast
-                                :symtab
-                                :ctx
-                                n: (ast.nodes.get i: sa.operation.u64)
-                                text: sxe.stringview
-                            )
-                            svsp: (svValueForm
-                                :ctx
-                                expr: sxe.stringview
-                                isStr: true
-                                vid: sxv
-                            )
-                            sepx.append svsp
-                        } else {
-                            sepx.append sxe
-                        }
-                    }
+                    sfrag: svNativeArgFrag :ast :symtab :ctx n: saOpNode addrAlways: true
+                    sepx.append sfrag
                 }
             } else null
         }
@@ -4222,45 +4219,8 @@ emitSvArgNativeCall: function {
             ) case namedoperation then {
                 aOpNode: ast.nodes.get i: a.operation.u64
                 if argx.length == 0 then {
-                    atomVarId: svArgAddr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
-                    if atomVarId.length > 0 then {
-                        argx.append atomVarId
-                    } else {
-                        sx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
-                        stampTid: (stampIdOf
-                            :symtab
-                            nid: (interpPartNodeId n: (ast.nodes.get i: a.operation.u64))
-                        )
-                        if stampTid == ctx.strTid then {
-                            sxh: (hoistBorrowValArg
-                                :ast
-                                :symtab
-                                :ctx
-                                isBorrow: (hoistExprIsBorrowRooted :ast :symtab :ctx n: aOpNode)
-                                av: sx.stringview
-                                pid: ctx.strTid
-                                paramTake: false
-                            )
-                            if sxh.length > 0 then sx = sxh
-                            sxq: (atomVidIfPlain
-                                :ast
-                                :symtab
-                                :ctx
-                                n: (ast.nodes.get i: a.operation.u64)
-                                text: sx.stringview
-                            )
-                            svx: (svValueForm
-                                :ctx
-                                expr: sx.stringview
-                                isStr: true
-                                vid: sxq
-                            )
-                            argx.append "&"
-                            argx.append svx
-                        } else {
-                            argx.append sx
-                        }
-                    }
+                    afrag: svNativeArgFrag :ast :symtab :ctx n: aOpNode addrAlways: false
+                    argx.append afrag
                 }
             } else null
         }
@@ -4332,47 +4292,9 @@ emitSvSimpleCall: function {
                     a
                 ) case namedoperation then {
                     aOpNode: ast.nodes.get i: a.operation.u64
-                    av: svArgAddr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
-                    if av.length > 0 then {
-                        args.append ", "
-                        args.append av
-                    } else {
-                        sv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
-                        args.append ", "
-                        stampTid: (stampIdOf
-                            :symtab
-                            nid: (interpPartNodeId n: (ast.nodes.get i: a.operation.u64))
-                        )
-                        if stampTid == ctx.strTid then {
-                            svh: (hoistBorrowValArg
-                                :ast
-                                :symtab
-                                :ctx
-                                isBorrow: (hoistExprIsBorrowRooted :ast :symtab :ctx n: aOpNode)
-                                av: sv.stringview
-                                pid: ctx.strTid
-                                paramTake: false
-                            )
-                            if svh.length > 0 then sv = svh
-                            svq: (atomVidIfPlain
-                                :ast
-                                :symtab
-                                :ctx
-                                n: (ast.nodes.get i: a.operation.u64)
-                                text: sv.stringview
-                            )
-                            svv: (svValueForm
-                                :ctx
-                                expr: sv.stringview
-                                isStr: true
-                                vid: svq
-                            )
-                            args.append "&"
-                            args.append svv
-                        } else {
-                            args.append sv
-                        }
-                    }
+                    args.append ", "
+                    cfrag: svNativeArgFrag :ast :symtab :ctx n: aOpNode addrAlways: false
+                    args.append cfrag
                 } else null
             }
             e1: (svNativeCall
