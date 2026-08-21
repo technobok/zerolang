@@ -17,6 +17,7 @@ public: unit {
     :blockHasBreak
     :bodyEndsInReturn
     :builtinTidT
+    :builtinTidTRo
     :dataFieldNames
     :descendNamed
     :fnReturnBaseNameOf
@@ -14496,6 +14497,53 @@ builtinTidTc: function {
     return (builtinTidT :st frame: st.curFrame :ast :base)
 }
 
+# builtinTidTRo -- builtinTidT's read half: the memoised or already-resolved
+# registry id of a stdlib builtin by base name, 0 when it has not been
+# resolved. Never mints, so it lends ast as a view; a comparison against a
+# tid that already exists is exact, because the builtin it could equal is
+# resolved whenever that tid is.
+builtinTidTRo: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    base: StringView
+} out ztypes.tid is {
+    bk: (zast.poolFind pool: ast.names text: base)
+    if bk > 0 then {
+        m: st.typing.builtinTidMemo.get key: bk.u64
+        match (
+            m
+        ) case some then {
+            return m
+        } case none then null
+    }
+    r: (ztypes.tid.create from: (optU64Or
+        o: (walkLookupTyperefRo :ast :st unitDecl: ztypes.declid :frame :base)
+        d: 0
+    ))
+    if r.isZero then {
+        alt: aliasedContainerTwin name: base
+        if alt.length > 0 then {
+            r = ztypes.tid.create from: (optU64Or
+                o: (walkLookupTyperefRo :ast :st unitDecl: ztypes.declid :frame base: alt)
+                d: 0
+            )
+        }
+    }
+    if r.isZero then return r
+    if bk > 0 then st.typing.builtinTidMemo.set key: bk.u64 value: r
+    return r
+}
+
+# builtinTidTcRo -- builtinTidTc's read half (the current frame; never mints).
+builtinTidTcRo: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    base: StringView
+} out ztypes.tid is {
+    return (builtinTidTRo :st frame: st.curFrame :ast :base)
+}
+
 # stampTyperefs -- post-demand pass: stamp every recorded type-ref node with its real
 # resolved type. Runs after the demand descent, so system + forward refs are present
 # in childOf. pendingTyperef is a sibling field of nodeType (no lock
@@ -28283,14 +28331,14 @@ checkWrappedCall: function {
             if wgi > 0 then wgix = wgi
         }
         if wgix > 0 then {
-            if wgix == (builtinTidTc :ast :st base: "ListRef") then isWType = false
-            if wgix == (builtinTidTc :ast :st base: "ListVal") then isWType = false
-            if wgix == (builtinTidTc :ast :st base: "MapRR") then isWType = false
-            if wgix == (builtinTidTc :ast :st base: "MapRV") then isWType = false
-            if wgix == (builtinTidTc :ast :st base: "MapVR") then isWType = false
-            if wgix == (builtinTidTc :ast :st base: "MapVV") then isWType = false
-            if wgix == (builtinTidTc :ast :st base: "SetRef") then isWType = false
-            if wgix == (builtinTidTc :ast :st base: "SetVal") then isWType = false
+            if wgix == (builtinTidTcRo :ast :st base: "ListRef") then isWType = false
+            if wgix == (builtinTidTcRo :ast :st base: "ListVal") then isWType = false
+            if wgix == (builtinTidTcRo :ast :st base: "MapRR") then isWType = false
+            if wgix == (builtinTidTcRo :ast :st base: "MapRV") then isWType = false
+            if wgix == (builtinTidTcRo :ast :st base: "MapVR") then isWType = false
+            if wgix == (builtinTidTcRo :ast :st base: "MapVV") then isWType = false
+            if wgix == (builtinTidTcRo :ast :st base: "SetRef") then isWType = false
+            if wgix == (builtinTidTcRo :ast :st base: "SetVal") then isWType = false
         }
         if isWType when call.arguments.length > 0 then {
             wcm: st.pushCall
