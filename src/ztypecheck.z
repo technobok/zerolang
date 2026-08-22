@@ -3999,7 +3999,8 @@ nameIsInUnitReftype: function {
     unitDecl: ztypes.declid
     name: StringView
 } out bool is {
-    rr: resolveUnitChild :st :ast :unitDecl nameId: (zast.poolFind pool: ast.names text: name)
+    rrId: zast.poolFind pool: ast.names text: name
+    rr: resolveUnitChild :st :ast :unitDecl nameId: rrId
     match (
         rr
     ) case some then {
@@ -5397,16 +5398,13 @@ stampForcedTyperef: function {
         rootN: zast.nameTextCopy :ast ref: (rootNameIdOf :ast n: (ast.nodes.get i: tnid))
         childN: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: tnid))
         if childN.length > 0 when rootN.length > 0 then {
+            hUnitDecl: unitDeclOfNameOrOwn :st :frame nameId: (nameIdOf :ast name: rootN.stringview)
             dd: (descendNamed
                 :st
                 :frame
 
                 :ast
-                unitDecl: (unitDeclOfNameOrOwn
-                    :st
-                    :frame
-                    nameId: (nameIdOf :ast name: rootN.stringview)
-                )
+                unitDecl: hUnitDecl
                 name: childN.stringview
             )
             if dd > 0 then {
@@ -8071,13 +8069,11 @@ unionCustomTagId: function {
                             # only the main unit's custom-tag items stamp
                             # (system variants resolve standalone, unstamped).
                             if unitDecl == st.typing.mainUnitRoot then {
+                                hUnitDecl: unitDeclOfName :st nameId: (nameIdOf :ast name: "system")
                                 tgo: (resolvedByIds
                                     :st
                                     :ast
-                                    unitDecl: (unitDeclOfName
-                                        :st
-                                        nameId: (nameIdOf :ast name: "system")
-                                    )
+                                    unitDecl: hUnitDecl
                                     name: zast.wkTag
                                 )
                                 match (
@@ -8937,13 +8933,14 @@ resolveClassFieldEntry: function {
         if fieldLock == ztypes.zparamownership.takexMode then fOwned = true
         if fOwned == false then lockField = true
     } case none then null
+    hNameId: zast.poolFind pool: ast.names text: ftn.stringview
     (forceMemberOf
         :st
         :frame
 
         :ast
         parentTypeId: (ztypes.tid.create from: cid.u64)
-        nameId: (zast.poolFind pool: ast.names text: ftn.stringview)
+        nameId: hNameId
     )
     mref: (resolvedByIdsMember
         :st
@@ -9871,7 +9868,8 @@ resolveAliasKey: function {
     declId: ztypes.declid
 } out u64 is {
     # an alias resolves in the frame it is written in
-    r: resolveAliasKeyIn :st frame: (declParentIdOf :st :declId) :ast :declId
+    aframe: declParentIdOf :st :declId
+    r: resolveAliasKeyIn :st frame: aframe :ast :declId
     # an alias to a CONSTANT carries a VALUE as well as a type, and that value
     # is a member of the unit the ALIAS is written in. Folded here rather than
     # at a lookup because the Decl caches the type: the second reader finds an
@@ -9905,16 +9903,13 @@ aliasTargetTid: function {
         # type, the member one of its value arms -- the alias denotes a VALUE
         # of the root type, so the edge binds the ROOT's tid
         nameId92: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
+        hUnitDecl3: unitDeclOfNameOrOwn :st :frame nameId: nameId92
         rto: (walkLookupTyperef
             :st
             :frame
             :ast
 
-            unitDecl: (unitDeclOfNameOrOwn
-                :st
-                :frame
-                nameId: nameId92
-            )
+            unitDecl: hUnitDecl3
             base: tu
         )
         if rto.none then {
@@ -9923,16 +9918,13 @@ aliasTargetTid: function {
             # the arm test below. resolveAtomType is the current-unit-relative
             # resolver that sees it.
             nameId93: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
+            hUnitDecl2: unitDeclOfNameOrOwn :st :frame nameId: nameId93
             rtb: (resolveAtomType
                 :st
                 :frame
 
                 :ast
-                unitDecl: (unitDeclOfNameOrOwn
-                    :st
-                    :frame
-                    nameId: nameId93
-                )
+                unitDecl: hUnitDecl2
                 nm: tu
                 thisName: ""
             )
@@ -9985,16 +9977,13 @@ aliasTargetTid: function {
             }
             st.typing.declSetResolving declId: adecl mark: true
             nameId94: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
+            hUnitDecl: unitDeclOfNameOrOwn :st :frame nameId: nameId94
             bat: (resolveAtomType
                 :st
                 :frame
 
                 :ast
-                unitDecl: (unitDeclOfNameOrOwn
-                    :st
-                    :frame
-                    nameId: nameId94
-                )
+                unitDecl: hUnitDecl
                 nm: tn
                 thisName: ""
             )
@@ -10069,12 +10058,13 @@ resolveAliasKeyIn: function {
         nestedNameId: altK.unitName
         defName: altK.defName
     )
+    hUnitDecl: unitDeclOfNameOrOwn :st :frame nameId: altK.unitName
     if atid.isZero then atid = (descendNamed
         :st
         :frame
 
         :ast
-        unitDecl: (unitDeclOfNameOrOwn :st :frame nameId: altK.unitName)
+        unitDecl: hUnitDecl
         name: tn.stringview
     )
     st.typing.declSetResolving declId: adecl mark: false
@@ -10255,7 +10245,8 @@ descendNamed: function {
         )
     }
     if classified == false then {
-        ro: resolveUnitChild :st :ast :unitDecl nameId: (zast.poolFind pool: ast.names text: name)
+        roId: zast.poolFind pool: ast.names text: name
+        ro: resolveUnitChild :st :ast :unitDecl nameId: roId
         return (ztypes.tid.create from: (optU64Or o: ro d: 0))
     }
     return (ztypes.tid.create from: tid)
@@ -11021,12 +11012,13 @@ enterUnitOnce: function {
             with biter: bodyIds.iterate do for bm: biter loop {
                 bmNode: ast.nodes.get i: bm.u64
                 if bmNode.namedoperation then {
+                    hDeclId: st.typing.declFindChild parentDeclId: ro nameId: bmNode.name
                     if (declaresConformance
                         :ast
                         op: (ast.nodes.get i: bmNode.operation.u64)
                     ) then (demandDecl
                         :st
-                        declId: (st.typing.declFindChild parentDeclId: ro nameId: bmNode.name)
+                        declId: hDeclId
                     )
                 }
             }
@@ -11425,14 +11417,12 @@ ensureUnitRequire: function {
                     ref: (zast.nameid.create from: enm)
                 )
                 nameId95: (zast.nameid.create from: (st.typing.declNameOf declId: own))
+                hUnitDecl: unitDeclOfName :st nameId: nameId95
                 (constValueOfMemberAt
                     :st
                     :ast
 
-                    unitDecl: (unitDeclOfName
-                        :st
-                        nameId: nameId95
-                    )
+                    unitDecl: hUnitDecl
                     ownerDecl: rq
                     nameId: (zast.nameid.create from: enm)
                     defNodeId: enode
@@ -31351,13 +31341,14 @@ checkMethodBodies: function {
                 {
                     # about to check this body, so its signature is needed:
                     # `this` binds from the resolved receiver
+                    hDefId2: nameIdOf :ast name: typeName
                     (forceUnitDefMember
                         :st
                         :frame
 
                         :ast
                         :unitDecl
-                        defId: (nameIdOf :ast name: typeName)
+                        defId: hDefId2
                         memberId: imName
                     )
                     qn: "\{typeName}.\{mname}"
@@ -31397,13 +31388,14 @@ checkMethodBodies: function {
             }
             if amIsFn then {
                 {
+                    hDefId: nameIdOf :ast name: typeName
                     (forceUnitDefMember
                         :st
                         :frame
 
                         :ast
                         :unitDecl
-                        defId: (nameIdOf :ast name: typeName)
+                        defId: hDefId
                         memberId: amName
                     )
                     qn2: "\{typeName}.\{monoName}"
@@ -32011,15 +32003,16 @@ walkGenericUnitTemplates: function {st: zenv.ZSymbolTable frame: ztypes.declid p
             }
             if uop > 0 then {
                 if (unitDefIsGeneric ast: program.ast oId: uop) then {
+                    hUnitDecl2: (unitDeclOfNameOrOwn
+                        :st
+                        :frame
+                        nameId: (nameIdOf ast: program.ast name: un.stringview)
+                    )
                     (walkUnitTemplateBodies
                         :st
                         :frame
                         ast: program.ast
-                        unitDecl: (unitDeclOfNameOrOwn
-                            :st
-                            :frame
-                            nameId: (nameIdOf ast: program.ast name: un.stringview)
-                            )
+                        unitDecl: hUnitDecl2
                         unitdefId: uop
                     )
                 }
@@ -32045,15 +32038,16 @@ walkGenericUnitTemplates: function {st: zenv.ZSymbolTable frame: ztypes.declid p
                         # it is written in -- its own name is no file unit, and
                         # naming it only ever meant "the frame of the walk",
                         # which is this unit
+                        hUnitDecl: (unitDeclOfNameOrOwn
+                            :st
+                            :frame
+                            nameId: (nameIdOf ast: program.ast name: un.stringview)
+                        )
                         (walkUnitTemplateBodies
                             :st
                             :frame
                             ast: program.ast
-                            unitDecl: (unitDeclOfNameOrOwn
-                                :st
-                                :frame
-                                nameId: (nameIdOf ast: program.ast name: un.stringview)
-                                )
+                            unitDecl: hUnitDecl
                             unitdefId: bop
                         )
                     }
@@ -32149,6 +32143,7 @@ checkUnitBodies: function {
                     op: (ast.nodes.get i: mm.operation.u64)
                 ) then {
                     foundMain = true
+                    hDeclId2: declOfUnitDefIds :st :unitDecl nameId: mm.name
                     (checkFunctionBody
                         :st
                         :frame
@@ -32158,11 +32153,7 @@ checkUnitBodies: function {
                         thisName: ""
                         thisTid: ztypes.tid
                         :ast
-                        declId: (declOfUnitDefIds
-                            :st
-                            :unitDecl
-                            nameId: mm.name
-                        )
+                        declId: hDeclId2
                     )
                 }
             }
@@ -32220,6 +32211,7 @@ checkUnitBodies: function {
                         unitdefId: bm.operation
                     )
                 } else if defName.stringview != "main" then {
+                    hDeclId: declOfUnitDefIds :st :unitDecl nameId: bm.name
                     (checkFunctionBody
                         :st
                         :frame
@@ -32229,11 +32221,7 @@ checkUnitBodies: function {
                         thisName: ""
                         thisTid: ztypes.tid
                         :ast
-                        declId: (declOfUnitDefIds
-                            :st
-                            :unitDecl
-                            nameId: bm.name
-                        )
+                        declId: hDeclId
                     )
                 }
             }
