@@ -2511,6 +2511,13 @@ mnLock: 3.u64
 mnMeta: 4.u64
 mnOption: 5.u64
 mnResult: 6.u64
+mnRelease: 7.u64
+mnPrint: 8.u64
+mnPanic: 9.u64
+mnError: 10.u64
+mnAppend: 11.u64
+mnInsert: 12.u64
+mnPush: 13.u64
 
 # originBaseNames -- those templates by name, in ogXxx order. This list and the
 # constants above are the same table read two ways; nothing else may reorder it,
@@ -2545,6 +2552,22 @@ memberDispatchNames: function {acc: List String} is {
     mnPut :acc at: mnMeta name: "meta"
     mnPut :acc at: mnOption name: "Option"
     mnPut :acc at: mnResult name: "Result"
+    mnPut :acc at: mnRelease name: "release"
+    mnPut :acc at: mnPrint name: "print"
+    mnPut :acc at: mnPanic name: "panic"
+    mnPut :acc at: mnError name: "error"
+    mnPut :acc at: mnAppend name: "append"
+    mnPut :acc at: mnInsert name: "insert"
+    mnPut :acc at: mnPush name: "push"
+}
+
+# mnIs -- is `id` the dispatch name at index `at`? TWO zeros meet here and they
+# are not the same zero: a node with no member name answers 0, and a name this
+# program never interned is 0 in the table. Comparing them directly would say
+# yes to every nameless callable, so a zero id is no name at all and answers no.
+mnIs: function {ctx: Ctx.view id: zast.nameid at: u64} out bool is {
+    if id.isZero then return false
+    return id == (ctx.mnames.get i: at)
 }
 
 # buildMemberNameIds -- those names as pool ids for the program being emitted,
@@ -3381,22 +3404,25 @@ implicitTakeFnId: function {
     ctx: Ctx
     call: zast.CallData.view
 } out u64 is {
-    cn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
-    ct: userFnId :ast :symtab :ctx name: cn0.stringview
+    ct: (ztypes.tid.create from: (userFnIdById
+        :ast
+        :symtab
+        :ctx
+        nameId: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
+    ))
     if ct.isZero then {
         # A dotted method call resolves the method through the receiver's type,
         # not a bare-name lookup: a free function sharing the method's name
         # (zast.mkNamedOp vs the Parser.mkNamedOp method) otherwise wins below,
         # and its mismatched param names leave a moved-in owned arg un-zeroed.
-        mdch0: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-        if mdch0.length > 0 then {
+        mdch0Id: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+        if (mdch0Id.isZero) == false then {
             callableNode: ast.nodes.get i: call.callable.u64
             mrcv0: dottedReceiverStampId :ast :symtab callable: callableNode
             if mrcv0 > 0 then {
-                mmco0: (symtab.typing.declChildOf
-                    pool: ast.names
+                mmco0: (symtab.typing.declChildOfId
                     parentTypeId: mrcv0
-                    name: mdch0.stringview
+                    nameId: mdch0Id
                 )
                 match (
                     mmco0
@@ -3467,17 +3493,17 @@ isCtorOwnerCall: function {
     smidO: stampIdOf :symtab nid: call.nodeid.u64
     bnOId: dottedBaseAtomId :ast n: (ast.nodes.get i: call.callable.u64)
     mcOId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if bnOId == (ctx.mnames.get i: mnMeta) when mcOId == zast.wkCreate then return true
+    if (mnIs :ctx id: bnOId at: mnMeta) when mcOId == zast.wkCreate then return true
     if (originIsTid
         :symtab
         tid: smidO
         originTid: (ctx.origins.get i: ogOption)
-    ) when bnOId == (ctx.mnames.get i: mnOption) then return true
+    ) when (mnIs :ctx id: bnOId at: mnOption) then return true
     if (originIsTid
         :symtab
         tid: smidO
         originTid: (ctx.origins.get i: ogResult)
-    ) when bnOId == (ctx.mnames.get i: mnResult) then return true
+    ) when (mnIs :ctx id: bnOId at: mnResult) then return true
     # user-defined union arm construction `MyUnion.arm <payload>`: the base atom
     # is the union TYPE (the child is the arm selector, not a type), so the
     # child-name resolution below misses it. The arm MOVES its payload into the
@@ -3491,8 +3517,12 @@ isCtorOwnerCall: function {
             }
         }
     }
-    cn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
-    ct: userFnId :ast :symtab :ctx name: cn0.stringview
+    ct: (ztypes.tid.create from: (userFnIdById
+        :ast
+        :symtab
+        :ctx
+        nameId: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
+    ))
     if ct.isZero then {
         # cross-unit construction (dotted callable, e.g. `zast.UnitData`):
         # resolve the constructed type by its child name so an owned arg moved
@@ -3521,11 +3551,11 @@ emitCallTakeInvalidations: function {
 } is {
     takeFnTid: implicitTakeFnId :ast :symtab :ctx :call
     ctorOwner: isCtorOwnerCall :ast :symtab :ctx :call
-    mmn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    mmnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     collMove: false
-    if mmn.stringview == "append" then collMove = true
-    if mmn.stringview == "insert" then collMove = true
-    if mmn.stringview == "push" then collMove = true
+    if (mnIs :ctx id: mmnId at: mnAppend) then collMove = true
+    if (mnIs :ctx id: mmnId at: mnInsert) then collMove = true
+    if (mnIs :ctx id: mmnId at: mnPush) then collMove = true
     if collMove then {
         # The collection-move rule is for container elements; String.append
         # borrows its StringLike arg (byte copy), it never moves it.
@@ -3876,44 +3906,43 @@ aliasChildName: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.v
 # emitted the mono's own cname as a function. Asking the resolved declaration
 # routes both spellings to one emitter, and is what keeps a user unit's own
 # `print` out of it.
-stmtFormName: function {
+stmtFormNameId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     n: Node.view
-} out String is {
-    # the child's pooled text, BORROWED: this runs for every dotted callee in
-    # statement position, and four string compares do not need a copy of a name
+} out zast.nameid is {
+    # the child's name as an ID: this runs for every dotted callee in statement
+    # position, and four compares against the four forms need no text at all
     cid: dottedChildNameIdOf :ast :n
-    if cid.isZero then return "".string
-    mv: zast.nameTextAt :ast ref: cid
+    zid: zast.nameid
+    if cid.isZero then return zid
     isSf: false
-    if mv.stringview == "print" then isSf = true
-    if mv.stringview == "panic" then isSf = true
-    if mv.stringview == "error" then isSf = true
-    if mv.stringview == "return" then isSf = true
-    if (isSf) == false then return "".string
+    if (mnIs :ctx id: cid at: mnPrint) then isSf = true
+    if (mnIs :ctx id: cid at: mnPanic) then isSf = true
+    if (mnIs :ctx id: cid at: mnError) then isSf = true
+    if cid == zast.wkReturn then isSf = true
+    if (isSf) == false then return zid
     bid: dottedBaseAtomId :ast :n
-    if bid.isZero then return "".string
+    if bid.isZero then return zid
     if (ztypecheck.isUnitNameDecl
         st: symtab
         nameId: bid
-) == false then return "".string
+) == false then return zid
     # ... and a DECLARATION of that name here shadows the unit: name ids are
     # pooled program-wide, so the unit probe answers either way
-    baseAtom: dottedBaseAtom :ast :n
     uq2z: ctx.mainUnitId
     sh: (ztypecheck.resolveUnitChildRo
             :ast
         st: symtab
         unitDecl: uq2z
-        nameId: (zast.poolFind pool: ast.names text: baseAtom.stringview)
+        nameId: bid
     )
     match (
         sh
     ) case some then {
         shT: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: sh)
-        if shT != ztypes.ztypetype.unitType then return "".string
+        if shT != ztypes.ztypetype.unitType then return zid
     } case none then null
     ud0x: ztypecheck.unitDeclOfName st: symtab nameId: bid
     fo: (ztypecheck.resolvedByIdsRo
@@ -3927,11 +3956,11 @@ stmtFormName: function {
     ) case some then {
         calleeTid: ztypes.tid.create from: (fo)
         tt: symtab.reg.typetypeOf typeId: calleeTid
-        if tt != ztypes.ztypetype.functionType then return "".string
-        if (fnIsNativeId :symtab fid: calleeTid) == false then return "".string
-        return mv.stringview.string
+        if tt != ztypes.ztypetype.functionType then return zid
+        if (fnIsNativeId :symtab fid: calleeTid) == false then return zid
+        return cid
     } case none then null
-    return "".string
+    return zid
 }
 
 # the child member name id of dotted-path node `n` (0 when not one).
@@ -5696,19 +5725,18 @@ callRhsIsBorrow: function {
 } out bool is {
     cstid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
     if (funcBorrowFlag :symtab tid: cstid) then return true
-    cnm: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
-    if cnm.length > 0 then {
-        ufid: userFnId :ast :symtab :ctx name: cnm.stringview
-        if (funcBorrowFlag :symtab tid: ufid) then return true
+    cnmId: atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64)
+    if (cnmId.isZero) == false then {
+        ufid: userFnIdById :ast :symtab :ctx nameId: cnmId
+        if (funcBorrowFlag :symtab tid: (ztypes.tid.create from: ufid)) then return true
     }
-    ch: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if ch.length == 0 then return false
+    chId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    if chId.isZero then return false
     rid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
     rid = chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rid.u64)
-    mfid: ztypecheck.optU64Or o: (symtab.typing.declChildOf
-        pool: ast.names
+    mfid: ztypecheck.optU64Or o: (symtab.typing.declChildOfId
         parentTypeId: rid
-        name: ch.stringview
+        nameId: chId
     ) d: 0
     return (funcBorrowFlag :symtab tid: (ztypes.tid.create from: mfid.u64))
 }
@@ -11480,7 +11508,7 @@ emitDottedConversionRead: function {
     dps: ast.nodes.get i: n.parent.u64
     ccbc: emitCrossUnitBareCreate :ctx :ast :symtab parent: dps childId: mnc0Id
     if ccbc.length > 0 then return ccbc
-    if mnc0Id == (ctx.mnames.get i: mnCopy) then {
+    if (mnIs :ctx id: mnc0Id at: mnCopy) then {
         # `.copy` on a generic-param field inside a clone body: the node
         # carries no concrete stamp, so resolve the field's SUBSTITUTED
         # type through the current receiver mono. Only the clone-resolved
@@ -11770,12 +11798,12 @@ emitDottedNativeMarker: function {
         return "z_\{nnu}_\{mn2n}()"
     }
     # `.private` is a compile-time friend marker -- it emits the receiver itself.
-    if mn2Id == (ctx.mnames.get i: mnPrivate) then {
+    if (mnIs :ctx id: mn2Id at: mnPrivate) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
     # `.lock` on a value is a borrow marker (no type has a literal `lock`
     # field); emit the base, which the borrow param then addresses.
-    if mn2Id == (ctx.mnames.get i: mnLock) then {
+    if (mnIs :ctx id: mn2Id at: mnLock) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
     # `.take` on a heap reftype (String / union / by-value class) is an
@@ -11870,7 +11898,7 @@ emitDottedRead: function {
     # is handled by emitResultCombinator in the call dispatch instead.
     # the member is asked by ID: the legs below lend ast, and an id is a scalar
     dcMnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
-    if dcMnId == (ctx.mnames.get i: mnOrPanic) then {
+    if (mnIs :ctx id: dcMnId at: mnOrPanic) then {
         pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
         pMono: chaseColMono :symtab :ctx tid: pStamp
         pOrig: monoOriginName :symtab tid: (ztypes.tid.create from: pMono.u64)
@@ -13399,37 +13427,37 @@ emitCallStmt: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    relmn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if relmn.stringview == "release" then {
+    relmnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    if (mnIs :ctx id: relmnId at: mnRelease) then {
         relbnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
         reltid: stampIdOf :symtab nid: relbnid
         if (symtab.reg.typetypeOf typeId: reltid) == ztypes.ztypetype.protocolType then return
     }
-    cn0: atomTextOf :ast n: (ast.nodes.get i: call.callable.u64)
+    cn0Id: atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64)
     # a statement form arrives either as its core alias (an atom) or spelled
-    # qualified (a dotted path, whose atom text is empty)
-    sfn: cn0.copy
-    if cn0.length == 0 then {
-        sfn = (stmtFormName
+    # qualified (a dotted path, whose atom carries no name)
+    sfnId: cn0Id
+    if cn0Id.isZero then {
+        sfnId = (stmtFormNameId
             :ast
             :symtab
             :ctx
             n: (ast.nodes.get i: call.callable.u64)
         )
     }
-    if sfn.stringview == "print" then {
+    if (mnIs :ctx id: sfnId at: mnPrint) then {
         emitPrintStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
-    if sfn.stringview == "panic" then {
+    if (mnIs :ctx id: sfnId at: mnPanic) then {
         emitPanicStmt :ast :symtab :ctx :call :ind :buf
         return
     }
-    if sfn.stringview == "error" then {
+    if (mnIs :ctx id: sfnId at: mnError) then {
         emitErrorStmt :ast :symtab :ctx :call :ind :buf
         return
     }
-    if sfn.stringview == "return" then {
+    if sfnId == zast.wkReturn then {
         hasArg: false
         aiter: call.arguments.iterate
         for aId: aiter loop {
