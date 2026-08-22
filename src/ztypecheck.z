@@ -18712,7 +18712,7 @@ reportUnresolvedCastArg: function {
 } is {
     if (vt.isZero) == false then return
     if st.typing.errors.length != errMark then return
-    ub: unresolvedBareCallable :ast :st :unitDecl n: argNode
+    ub: unresolvedBareCallable :ast :st :unitDecl nid: (zast.nodeIdOf n: argNode)
     if ub.length == 0 then return
     um: "Unknown reference '\{ub}'"
     en: String
@@ -22514,7 +22514,7 @@ checkReassignment: function {
     # root name is an unknown reference, as at a read -- a local is not in
     # scope before the line that binds it
     if lvt.isZero when st.typing.errors.length == errL0 then {
-        ubnL0: unresolvedBareCallable :ast :st :unitDecl n: tpn
+        ubnL0: unresolvedBareCallable :ast :st :unitDecl nid: rasgn.topath
         if ubnL0.length > 0 then {
             umL0: "Unknown reference '\{ubnL0}'"
             enL0: String
@@ -22560,7 +22560,7 @@ checkReassignment: function {
     # a value that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a binding
     if rvt.isZero when st.typing.errors.length == errR0 then {
-        ubnR0: unresolvedBareCallable :ast :st :unitDecl n: rvn
+        ubnR0: unresolvedBareCallable :ast :st :unitDecl nid: rasgn.value
         if ubnR0.length > 0 then {
             umR0: "Unknown reference '\{ubnR0}'"
             enR0: String
@@ -26678,52 +26678,77 @@ isDottedValue: function {ast: Ast.view n: Node.view} out bool is {
 }
 
 # report an unresolved bare callee (E0023).
-unresolvedBareCallable: function {ast: Ast
+unresolvedBareCallable: function {
+    ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    n: Node.view
+    nid: zast.nodeid
 } out String is {
-    match (
-        n
-    ) case expression then {
-        return (unresolvedBareCallable
-            :ast
-            :st
-            :unitDecl
-            n: (ast.nodes.get i: n.expression.u64)
-        )
-    } case call then {
-        cnode: ast.nodes.get i: n.callable.u64
-        ubc: zast.nameTextAt :ast ref: (atomNameId :ast n: cnode)
+    # the row is read through a view scoped to this block (1 expression,
+    # 2 call, 3 binop, 4 atomid, 5 dottedpath, 0 anything else): the name
+    # probe below lends ast exclusively
+    arm: u32
+    innerId: zast.nodeid
+    callableId: zast.nodeid
+    lhsId: zast.nodeid
+    rhsId: zast.nodeid
+    parentId: zast.nodeid
+    nameId: zast.nameid
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case expression then {
+            arm = 1
+            innerId = n.expression
+        } case call then {
+            arm = 2
+            callableId = n.callable
+        } case binop then {
+            arm = 3
+            lhsId = n.lhs
+            rhsId = n.rhs
+        } case atomid then {
+            arm = 4
+            nameId = n.name
+        } case dottedpath then {
+            arm = 5
+            parentId = n.parent
+        } else null
+    }
+    if arm == 1 then return (unresolvedBareCallable :ast :st :unitDecl nid: innerId)
+    if arm == 2 then {
+        ubc: String
+        ubr0: String
+        {
+            cnode: ast.nodes.get i: callableId.u64
+            ubc = zast.nameTextCopy :ast ref: (atomNameId :ast n: cnode)
+            ubr0 = dottedRootName :ast n: cnode
+        }
         if ubc.length > 0 then return (unresolvedBareName :ast :st :unitDecl name: ubc.stringview)
-        ubr0: dottedRootName :ast n: cnode
         return (unresolvedBareName :ast :st :unitDecl name: ubr0.stringview)
-    } case binop then {
+    }
+    if arm == 3 then {
         # an operand may carry the unresolvable name (`ghost + 1`)
-        ubl: (unresolvedBareCallable
-            :ast
-            :st
-            :unitDecl
-            n: (ast.nodes.get i: n.lhs.u64)
-        )
+        ubl: unresolvedBareCallable :ast :st :unitDecl nid: lhsId
         if ubl.length > 0 then return ubl
-        return (unresolvedBareCallable
-            :ast
-            :st
-            :unitDecl
-            n: (ast.nodes.get i: n.rhs.u64)
-        )
-    } case atomid then {
-        uba: zast.nameTextAt :ast ref: n.name
+        return (unresolvedBareCallable :ast :st :unitDecl nid: rhsId)
+    }
+    if arm == 4 then {
+        uba: zast.nameTextCopy :ast ref: nameId
         return (unresolvedBareName :ast :st :unitDecl name: uba.stringview)
-    } case dottedpath then {
+    }
+    if arm == 5 then {
         # a path is no better than its root (`b.n` with no `b`)
-        ubd: dottedRootName :ast n: (ast.nodes.get i: n.parent.u64)
+        ubd: String
+        {
+            pn: ast.nodes.get i: parentId.u64
+            ubd = dottedRootName :ast n: pn
+        }
         if ubd.length == 0 then return "".string
         return (unresolvedBareName :ast :st :unitDecl name: ubd.stringview)
-    } else {
-        return "".string
     }
+    return "".string
 }
 
 # reportUnresolvedValue -- a value that typed to nothing and raised nothing is
@@ -26736,7 +26761,7 @@ reportUnresolvedValue: function {
     ast: Ast
     vnode: Node.view
 } is {
-    ubU: unresolvedBareCallable :ast :st :unitDecl n: vnode
+    ubU: unresolvedBareCallable :ast :st :unitDecl nid: (zast.nodeIdOf n: vnode)
     if ubU.length == 0 then {
         # the ROOT of a dotted VALUE carries the name (`ghost.field`) -- the
         # callee leg already makes this check for `ghost.method`. It stays
@@ -28180,12 +28205,7 @@ checkNonUserCall: function {
             # reference -- without this the emitter's fallback turns a
             # misspelled call into a constant 0 (mirrors the assignment
             # path's unresolved-value report)
-            ubcn: (unresolvedBareCallable
-                :ast
-                :st
-                :unitDecl
-                n: (ast.nodes.get i: call.nodeid.u64)
-            )
+            ubcn: unresolvedBareCallable :ast :st :unitDecl nid: call.nodeid
             if ubcn.length > 0 then {
                 ubm0: "Unknown reference '\{ubcn}'"
                 (addError
@@ -30116,17 +30136,27 @@ checkStmtInner: function {
             unkn0: true
             if eto0 > 0 then unkn0 = false
             if unkn0 then {
-                einv0: ast.nodes.get i: inner.expression.u64
-                ubn1: unresolvedBareCallable :ast :st :unitDecl n: einv0
+                # the inner row's position, read through a view scoped to this block:
+                # the name probe below lends ast
+                eNid: zast.nodeid
+                eLn: u32
+                eCo: u32
+                {
+                    einv0: ast.nodes.get i: inner.expression.u64
+                    eNid = nodeId n: einv0
+                    eLn = nodeLine n: einv0
+                    eCo = nodeCol n: einv0
+                }
+                ubn1: unresolvedBareCallable :ast :st :unitDecl nid: inner.expression
                 if ubn1.length > 0 then {
                     um1: "Unknown reference '\{ubn1}'"
                     en1u: String
                     eh1u: String
                     (addErrorH
                         :st
-                        nodeid: (nodeId n: einv0)
-                        lineno: (nodeLine n: einv0)
-                        colno: (nodeCol n: einv0)
+                        nodeid: eNid
+                        lineno: eLn
+                        colno: eCo
                         e: zast.err.badReference
                         msg: um1
                         note: en1u
