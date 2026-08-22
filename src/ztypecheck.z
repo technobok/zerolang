@@ -15207,7 +15207,7 @@ checkString: function {
             en0: st.typing.errors.length
             ptid: checkValue :st :unitDecl :ast node: part
             if ptid.isZero when st.typing.errors.length == en0 then {
-                reportUnresolvedValue :st :unitDecl :ast vnode: part
+                reportUnresolvedValue :st :unitDecl :ast nid: (zast.nodeIdOf n: part)
             }
             if st.typing.errors.length == en0 when (printableInterpTid
                 :ast
@@ -21994,7 +21994,7 @@ checkClause: function {
                         :st
                         :unitDecl
                         :ast
-                        vnode: (ast.nodes.get i: cond.operation.u64)
+                        nid: cond.operation
                     )
                 }
                 # An if-condition must be a boolean. A non-bool value (a
@@ -22276,7 +22276,7 @@ checkAssignment: function {
     mvt: materialiseLiteral :ast :st :unitDecl t: vt
     vt = mvt
     if vt.isZero when st.typing.errors.length == errA0 then {
-        reportUnresolvedValue :st :unitDecl :ast vnode: av
+        reportUnresolvedValue :st :unitDecl :ast nid: (zast.nodeIdOf n: av)
     }
     if vt > 0 when (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.nullType then {
         m1: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
@@ -22875,7 +22875,7 @@ checkWith: function {
             :st
             :unitDecl
             :ast
-            vnode: (ast.nodes.get i: withnode.value.u64)
+            nid: withnode.value
         )
     }
     # a value that failed still binds its name, typeless, so the body's reads
@@ -23439,7 +23439,7 @@ checkForCondition: function {
                 :st
                 :unitDecl
                 :ast
-                vnode: (ast.nodes.get i: cond.operation.u64)
+                nid: cond.operation
             )
         }
         # an owned copy: the binding below lends ast
@@ -23549,7 +23549,7 @@ checkForPostcondition: function {
     errP: st.typing.errors.length
     pcVt: checkValue :st :unitDecl :ast node: pcNd
     if pcVt.isZero when st.typing.errors.length == errP then {
-        reportUnresolvedValue :st :unitDecl :ast vnode: pcNd
+        reportUnresolvedValue :st :unitDecl :ast nid: (zast.nodeIdOf n: pcNd)
     }
     # A `for loop { ... } while <cond>` post-condition must be boolean, the
     # same rule the pre-condition carries above: a non-bool value is a type
@@ -24219,7 +24219,7 @@ checkBinop: function {
             :st
             :unitDecl
             :ast
-            vnode: (ast.nodes.get i: binop.lhs.u64)
+            nid: binop.lhs
         )
     }
     errR: st.typing.errors.length
@@ -24229,7 +24229,7 @@ checkBinop: function {
             :st
             :unitDecl
             :ast
-            vnode: (ast.nodes.get i: binop.rhs.u64)
+            nid: binop.rhs
         )
     }
     opn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: binop.operator.u64))
@@ -26419,7 +26419,7 @@ walkOneCallArg: function {
                 :st
                 :unitDecl
                 :ast
-                vnode: (ast.nodes.get i: arg.operation.u64)
+                nid: arg.operation
             )
         }
         # A value that did not type must not take its LABEL checks down
@@ -26942,9 +26942,22 @@ reportUnresolvedValue: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    vnode: Node.view
+    nid: zast.nodeid
 } is {
-    ubU: unresolvedBareCallable :ast :st :unitDecl nid: (zast.nodeIdOf n: vnode)
+    # the row's shape, root name and position are read through a view scoped
+    # to this block: the name probes below lend ast
+    isDotted: false
+    ubD: String
+    eLn: u32
+    eCo: u32
+    {
+        vnode: ast.nodes.get i: nid.u64
+        isDotted = isDottedValue :ast n: vnode
+        if isDotted then ubD = dottedRootName :ast n: vnode
+        eLn = nodeLine n: vnode
+        eCo = nodeCol n: vnode
+    }
+    ubU: unresolvedBareCallable :ast :st :unitDecl :nid
     if ubU.length == 0 then {
         # the ROOT of a dotted VALUE carries the name (`ghost.field`) -- the
         # callee leg already makes this check for `ghost.method`. It stays
@@ -26952,10 +26965,7 @@ reportUnresolvedValue: function {
         # binding sites share that helper and reach bodies whose locals are
         # absent from the scope table, where the negative proof would reject
         # a real name (`lx.advance` in zlexer's Lexer).
-        if (isDottedValue :ast n: vnode) then {
-            ubD: dottedRootName :ast n: vnode
-            ubU = unresolvedBareName :ast :st :unitDecl name: ubD.stringview
-        }
+        if isDotted then ubU = unresolvedBareName :ast :st :unitDecl name: ubD.stringview
     }
     if ubU.length == 0 then return
     umU: "Unknown reference '\{ubU}'"
@@ -26963,9 +26973,9 @@ reportUnresolvedValue: function {
     ehU: String
     (addErrorH
         :st
-        nodeid: (nodeId n: vnode)
-        lineno: (nodeLine n: vnode)
-        colno: (nodeCol n: vnode)
+        nodeid: nid
+        lineno: eLn
+        colno: eCo
         e: zast.err.badReference
         msg: umU
         note: enU
@@ -27085,7 +27095,7 @@ checkControlBuiltinCall: function {
                             :st
                             :unitDecl
                             :ast
-                            vnode: (ast.nodes.get i: arg.operation.u64)
+                            nid: arg.operation
                         )
                     }
                 }
@@ -28531,7 +28541,7 @@ checkWrappedCall: function {
     errX: st.typing.errors.length
     wcv: checkValue :st :unitDecl :ast node: callableNode
     if wcv.u64 == 0 when st.typing.errors.length == errX then {
-        reportUnresolvedValue :st :unitDecl :ast vnode: callableNode
+        reportUnresolvedValue :st :unitDecl :ast nid: (zast.nodeIdOf n: callableNode)
     }
     if wcv > 0 then {
         # A non-FUNCTION wrapped callee is the paren-mono construction
