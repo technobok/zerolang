@@ -2585,24 +2585,41 @@ resolveMonoRefInline: function {
     frame: ztypes.declid
     thisName: StringView
     enclDecl: ztypes.declid
-    op: Node.view
+    opNid: zast.nodeid
     nid: u32
 } out u64 is {
-    match (
-        op
-    ) case expression then {
+    # the row is read through a view scoped to this block (1 expression,
+    # 2 call, 0 anything else): the resolution below lends ast exclusively
+    arm: u32
+    innerId: zast.nodeid
+    callableId: zast.nodeid
+    argIds: (ListVal u32)
+    {
+        op: ast.nodes.get i: opNid.u64
+        match (
+            op
+        ) case expression then {
+            arm = 1
+            innerId = op.expression
+        } case call then {
+            arm = 2
+            callableId = op.callable
+            with ait: op.arguments.iterate do for a: ait loop argIds.append from: a
+        } else null
+    }
+    if arm == 1 then {
         return (resolveMonoRefInline
             :st
             :frame
-
             :ast
             :unitDecl
             :thisName
             :enclDecl
-            op: (ast.nodes.get i: op.expression.u64)
+            opNid: innerId
             :nid
         )
-    } case call then {
+    }
+    if arm == 2 then {
         return (resolveMonoRefParts
             :st
             :frame
@@ -2611,11 +2628,11 @@ resolveMonoRefInline: function {
             :unitDecl
             :thisName
             :enclDecl
-            callable: (ast.nodes.get i: op.callable.u64)
-            arguments: op.arguments
+            callableNid: callableId
+            arguments: argIds
             :nid
         )
-    } else null
+    }
     return 0
 }
 # monoRefArgTid -- resolve one mono type-reference argument to a tid. An unlabelled
@@ -2653,7 +2670,7 @@ monoRefArgTid: function {
                 :unitDecl
                 :thisName
                 :enclDecl
-                op: (ast.nodes.get i: arg.operation.u64)
+                opNid: arg.operation
                 nid: 0
             )
             if inner > 0 then {
@@ -2816,13 +2833,18 @@ resolveMonoRefParts: function {
     frame: ztypes.declid
     thisName: StringView
     enclDecl: ztypes.declid
-    callable: Node.view
+    callableNid: zast.nodeid
     arguments: (ListVal u32).view
     nid: u32
 } out u64 is {
     {
-        # an owned copy: the lookups below lend ast
-        tname: zast.nameTextCopy :ast ref: (atomNameId :ast n: callable)
+        # the callee's name, an owned copy read through a view scoped to this
+        # block: the lookups below lend ast
+        tname: String
+        {
+            callable: ast.nodes.get i: callableNid.u64
+            tname = zast.nameTextCopy :ast ref: (atomNameId :ast n: callable)
+        }
         if tname.length == 0 then return 0
         sfx: String
         typeSubs: (IdMapV zast.nameid value: u64)
@@ -2959,15 +2981,39 @@ recordDottedTyperef: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     thisName: StringView
-    node: zast.DottedPathData.view
+    nid: zast.nodeid
 } is {
     # Ownership/access strip marker (this.lock / StringView.borrow / Container.private):
     # record the dotted node with its peeled base AND recurse on the parent so the
     # stripped inner atom is stamped too.
     # A `.typedef` marker only recurses -- the dotted node itself resolves to a
     # NULL-defined typedef wrapper the dump filters out.
-    cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.child.u64))
-    pn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
+    # the row and its parent/child names are read through views scoped to
+    # blocks (owned copies): the recordings below lend ast exclusively
+    parentId: zast.nodeid
+    childId: zast.nodeid
+    {
+        node: ast.nodes.get i: nid.u64
+        match (
+            node
+        ) case dottedpath then {
+            parentId = node.parent
+            childId = node.child
+        } else null
+    }
+    if parentId.isZero then return
+    cn: String
+    pn: String
+    cnId: zast.nameid
+    pnId: zast.nameid
+    {
+        cNode: ast.nodes.get i: childId.u64
+        cnId = atomNameId :ast n: cNode
+        cn = zast.nameTextCopy :ast ref: cnId
+        pNode: ast.nodes.get i: parentId.u64
+        pnId = atomNameId :ast n: pNode
+        pn = zast.nameTextCopy :ast ref: pnId
+    }
     if (nameDenotesUnit :st :frame nameId: (nameIdOf :ast name: pn.stringview)) then {
         # cross-unit qualified type ref (zlexer.Token): record the MEMBER under
         # its DEFINING unit (the parent) so stampTyperefs bridges this node.
@@ -2980,24 +3026,21 @@ recordDottedTyperef: function {
             )
             if (qro.isZero) == false then qfr = qro
         }
+        udQ: unitDeclOfNameOrOwn :st :frame nameId: (nameIdOf :ast name: pn.stringview)
         (recordResolvedName
             :st
             :frame
 
             :ast
-            unitDecl: (unitDeclOfNameOrOwn
-                :st
-                :frame
-                nameId: (nameIdOf :ast name: pn.stringview)
-            )
+            unitDecl: udQ
             :thisName
             name: cn.stringview
-            nid: node.nodeid.u64
+            nid: nid.u64
             recFrame: qfr
         )
     } else {
         if (isStripMarker name: cn.stringview) then {
-            bn: baseTypeName :ast n: (ast.nodes.get i: node.parent.u64)
+            bn: baseTypeName :ast n: (ast.nodes.get i: parentId.u64)
             (recordResolvedName
                 :st
                 :frame
@@ -3006,7 +3049,7 @@ recordDottedTyperef: function {
                 :unitDecl
                 :thisName
                 name: bn.stringview
-                nid: node.nodeid.u64
+                nid: nid.u64
                 recFrame: frame
             )
             # a parameterized parent ((List of: String).take) has no base
@@ -3020,22 +3063,20 @@ recordDottedTyperef: function {
                     :unitDecl
                     :thisName
                     enclDecl: ztypes.declid
-                    op: (ast.nodes.get i: node.parent.u64)
-                    nid: node.nodeid
+                    opNid: parentId
+                    nid: nid.u32
                 )
             }
             # Ownership markers peel and stamp the inner ref; `.private` /
             # `.public` resolve the pair atomically (no base-atom stamp).
             if cn.stringview != "private" then {
                 if cn.stringview != "public" then {
-                    dpp: ast.nodes.get i: node.parent.u64
-                    recordTyperef :st :frame :ast :unitDecl :thisName node: dpp
+                    recordTyperef :st :frame :ast :unitDecl :thisName nid: parentId
                 }
             }
         } else {
             if cn.stringview == "typedef" then {
-                dpp: ast.nodes.get i: node.parent.u64
-                recordTyperef :st :frame :ast :unitDecl :thisName node: dpp
+                recordTyperef :st :frame :ast :unitDecl :thisName nid: parentId
             } else {
                 (stampNestedTyperef
                     :st
@@ -3043,9 +3084,9 @@ recordDottedTyperef: function {
 
                     :ast
                     :unitDecl
-                    unitId: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
-                    memberId: (atomNameId :ast n: (ast.nodes.get i: node.child.u64))
-                    nid: node.nodeid
+                    unitId: pnId
+                    memberId: cnId
+                    :nid
                 )
             }
         }
@@ -3058,17 +3099,103 @@ recordDottedTyperef: function {
 # type may be unresolved here (system / forward refs), so the base name is resolved to its
 # real type later by stampTyperefs. Recurses parameterized args and strip-marker dotted
 # paths; `this`/`type` record as the enclosing type (thisName).
+# recordTyperefArgs -- a parameterized type `(T arg: U ...)`: the outer node
+# resolves to a NULL-defined mono (filtered out); record each argument's
+# inner TYPE-ref (e.g. the `u32` in `(optionval t: u32)`), but skip
+# numeric-literal size args (the `16` in `(str to: 16)`) -- they are const
+# values, not type references -- then the head atom, so go-to-definition /
+# hover resolve the template (the wrapper expression carries the instance
+# stamp, recorded by the enclosing expression arm).
+recordTyperefArgs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    thisName: StringView
+    callableId: zast.nodeid
+    argIds: (ListVal u32).view
+} is {
+    with ait: argIds.iterate do for argId: ait loop {
+        # the argument is read through a view scoped to this block
+        isNamedArg: false
+        opId: zast.nodeid
+        an: String
+        {
+            arg: ast.nodes.get i: argId.u64
+            match (
+                arg
+            ) case namedoperation then {
+                isNamedArg = true
+                opId = arg.operation
+                an = (zast.nameTextCopy
+                    :ast
+                    ref: (atomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
+                )
+            } else {
+                an = zast.nameTextCopy :ast ref: (atomNameId :ast n: arg)
+            }
+        }
+        if (isNumericLiteralName name: an.stringview) == false then {
+            if isNamedArg then {
+                recordTyperef :st :frame :ast :unitDecl :thisName nid: opId
+            } else {
+                # a bare (label-less) type argument records directly, with
+                # the same numeric-size-arg skip as the labeled form
+                (recordTyperef
+                    :st
+                    :frame
+                    :ast
+                    :unitDecl
+                    :thisName
+                    nid: (zast.nodeid.create from: argId)
+                )
+            }
+        }
+    }
+    # the head atom is itself a type reference: record it so
+    # go-to-definition / hover resolve the template (the wrapper
+    # expression still carries the instance stamp)
+    recordTyperef :st :frame :ast :unitDecl :thisName nid: callableId
+}
+
 recordTyperef: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     thisName: StringView
-    node: Node.view
+    nid: zast.nodeid
 } is {
-    match (
-        node
-    ) case expression then {
+    # the row is read through a view scoped to this block (1 expression,
+    # 2 call, 3 dottedpath, 4 atomid, 5 labelvalue, 0 anything else): the
+    # recordings below lend ast exclusively
+    arm: u32
+    innerId: zast.nodeid
+    callableId: zast.nodeid
+    argIds: (ListVal u32)
+    nameId: zast.nameid
+    {
+        node: ast.nodes.get i: nid.u64
+        match (
+            node
+        ) case expression then {
+            arm = 1
+            innerId = node.expression
+        } case call then {
+            arm = 2
+            callableId = node.callable
+            with ait: node.arguments.iterate do for a: ait loop argIds.append from: a
+        } case dottedpath then {
+            arm = 3
+        } case atomid then {
+            arm = 4
+            nameId = node.name
+        } case labelvalue then {
+            arm = 5
+            nameId = node.name
+        } else null
+    }
+    if arm == 1 then {
         (resolveMonoRefInline
             :st
             :frame
@@ -3077,71 +3204,22 @@ recordTyperef: function {
             :unitDecl
             :thisName
             enclDecl: ztypes.declid
-            op: (ast.nodes.get i: node.expression.u64)
-            nid: node.nodeid
+            opNid: innerId
+            nid: nid.u32
         )
-        iex: ast.nodes.get i: node.expression.u64
-        recordTyperef :st :frame :ast :unitDecl :thisName node: iex
-    } case call then {
-        # Parameterized type `(T arg: U ...)`: the outer node resolves to a NULL-defined
-        # mono (filtered out); record each argument's inner TYPE-ref (e.g. the `u32` in
-        # `(optionval t: u32)`), but skip numeric-literal size args (the `16` in
-        # `(str to: 16)`) -- they are const values, not type references. The pending
-        # instantiation is recorded by the enclosing expression arm (the wrapper node
-        # carries the instance stamp).
-        aiter: node.arguments.iterate
-        for argId: aiter loop {
-            arg: ast.nodes.get i: argId.u64
-            match (
-                arg
-            ) case namedoperation then {
-                an: (zast.nameTextAt
-                    :ast
-                    ref: (atomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
-                )
-                if (isNumericLiteralName name: an.stringview) == false then {
-                    (recordTyperef
-                        :st
-                        :frame
-
-                        :ast
-                        :unitDecl
-                        :thisName
-                        node: (ast.nodes.get i: arg.operation.u64)
-                    )
-                }
-            } else {
-                # a bare (label-less) type argument records directly, with
-                # the same numeric-size-arg skip as the labeled form
-                anB: zast.nameTextAt :ast ref: (atomNameId :ast n: arg)
-                if (isNumericLiteralName name: anB.stringview) == false then {
-                    recordTyperef :st :frame :ast :unitDecl :thisName node: arg
-                }
-            }
-        }
-        # the head atom is itself a type reference: record it so
-        # go-to-definition / hover resolve the template (the wrapper
-        # expression still carries the instance stamp)
-        (recordTyperef
-            :st
-            :frame
-
-            :ast
-            :unitDecl
-            :thisName
-            node: (ast.nodes.get i: node.callable.u64)
-        )
-    } case dottedpath then {
-        (recordDottedTyperef
-            :st
-            :ast
-            :unitDecl
-            :frame
-            :thisName
-            :node
-        )
-    } case atomid then {
-        rrA: ast.names.texts.get i: node.name.u64
+        recordTyperef :st :frame :ast :unitDecl :thisName nid: innerId
+        return
+    }
+    if arm == 2 then {
+        recordTyperefArgs :st :frame :ast :unitDecl :thisName :callableId :argIds
+        return
+    }
+    if arm == 3 then {
+        recordDottedTyperef :st :ast :unitDecl :frame :thisName :nid
+        return
+    }
+    if arm == 4 then {
+        rrA: ast.names.texts.get i: nameId.u64
         (recordResolvedName
             :st
             :frame
@@ -3150,11 +3228,13 @@ recordTyperef: function {
             :unitDecl
             :thisName
             name: rrA.stringview
-            nid: node.nodeid.u64
+            nid: nid.u64
             recFrame: frame
         )
-    } case labelvalue then {
-        rrA: ast.names.texts.get i: node.name.u64
+        return
+    }
+    if arm == 5 then {
+        rrA: ast.names.texts.get i: nameId.u64
         (recordResolvedName
             :st
             :frame
@@ -3163,10 +3243,10 @@ recordTyperef: function {
             :unitDecl
             :thisName
             name: rrA.stringview
-            nid: node.nodeid.u64
+            nid: nid.u64
             recFrame: frame
         )
-    } else null
+    }
 }
 
 # returnParamTid -- when a return typeref names one of the enclosing
@@ -3259,7 +3339,7 @@ partialTyperefTid: function {
             :unitDecl
             thisName: ""
             :enclDecl
-            callable: (ast.nodes.get i: n.callable.u64)
+            callableNid: n.callable
             arguments: n.arguments
             nid: 0
         )
@@ -3422,15 +3502,14 @@ recordFuncReturnNode: function {
 # bare base name and is skipped (its mono is NULL-defined, filtered out anyway).
 recordReturnType: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     thisName: StringView
     oId: zast.nodeid
 } is {
     if oId.isZero then return
-    o: ast.nodes.get i: oId.u64
-    recordTyperef :st :frame :ast :unitDecl :thisName node: o
+    recordTyperef :st :frame :ast :unitDecl :thisName nid: oId
 
 }
 
@@ -3687,7 +3766,7 @@ resolveTyperefShell: function {
             :unitDecl
             :thisName
             enclDecl: ztypes.declid
-            callable: (ast.nodes.get i: typeExpr.callable.u64)
+            callableNid: typeExpr.callable
             arguments: typeExpr.arguments
             nid: 0
         )
@@ -4324,7 +4403,7 @@ registerValueParam: function {
         :ast
         :unitDecl
         :thisName
-        node: (ast.nodes.get i: pm.operation.u64)
+        nid: pm.operation
     )
     pown: pathOwnership :ast n: (ast.nodes.get i: pm.operation.u64)
     match (
@@ -4654,7 +4733,7 @@ recordFunctionReturn: function {
 # mark the declaration resolved.
 finishFunctionSignature: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
     rf: ztypes.declid
     fid: u64
@@ -5109,7 +5188,7 @@ forceMemberDecl: function {
 
             unitDecl: unD
             :ast
-            op: (ast.nodes.get i: opId.u64)
+            opNid: (zast.nodeid.create from: opId)
         )
     }
     st.typing.declSetResolving declId: memberDeclId mark: false
@@ -5539,9 +5618,13 @@ markerTargetId: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     ast: Ast
-    op: Node.view
+    opNid: zast.nodeid
 } out optionval u64 is {
-    nameId: atomNameId :ast n: op
+    nameId: zast.nameid
+    {
+        op: ast.nodes.get i: opNid.u64
+        nameId = atomNameId :ast n: op
+    }
     if nameId.isZero then return (optionval.none u64)
     {
         mnm: zast.poolTextAt pool: ast.names ref: nameId
@@ -5827,7 +5910,7 @@ attachMarkers: function {
                     :ast
                     :unitDecl
                     thisName: ""
-                    node: (ast.nodes.get i: mm.operation.u64)
+                    nid: mm.operation
                 )
             }
             mtid: (optionval.none u64)
@@ -5837,7 +5920,7 @@ attachMarkers: function {
 
                 :unitDecl
                 :ast
-                op: (ast.nodes.get i: mm.operation.u64)
+                opNid: mm.operation
             )
             match (
                 mtid
@@ -6113,7 +6196,7 @@ typedefFieldBaseTid: function {
             :unitDecl
             thisName: ""
             enclDecl: ztypes.declid
-            op: bn
+            opNid: n.parent
             nid: 0
         )
         if memberIdAt > 0 then return memberIdAt
@@ -6918,7 +7001,7 @@ attachRecordField: function {
             :ast
             :unitDecl
             thisName: ""
-            node: (ast.nodes.get i: fm.operation.u64)
+            nid: fm.operation
         )
         dcn1: (zast.nameTextAt
             :ast
@@ -7597,7 +7680,7 @@ resolveVariant: function {
                 :ast
                 :unitDecl
                 thisName: ""
-                node: (ast.nodes.get i: fm.operation.u64)
+                nid: fm.operation
             )
         } else null
     }
@@ -8096,7 +8179,7 @@ attachUnionArm: function {
         :ast
         :unitDecl
         thisName: ""
-        node: (ast.nodes.get i: armTe.u64)
+        nid: armTe
     )
 }
 # attachUnionMethods -- a union's asItems are its methods. A name that collides
@@ -8599,7 +8682,7 @@ resolveNamedFieldSlot: function {
         :ast
         :unitDecl
         thisName: ""
-        node: (ast.nodes.get i: fm.operation.u64)
+        nid: fm.operation
     )
     recordFieldDefault :st :ast :frame :cid :cidf :fname :fm
     return needsDtor
@@ -8631,7 +8714,7 @@ resolveClassFieldSlot: function {
             :ast
             :unitDecl
             thisName: ""
-            node: (ast.nodes.get i: fm.operation.u64)
+            nid: fm.operation
         )
     } else {
         if (resolveNamedFieldSlot
