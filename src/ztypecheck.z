@@ -3564,16 +3564,13 @@ dottedTyperefShell: function {
             unitNameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
             nameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
         )
+        ud8: unitDeclOfNameOrOwn :st :frame nameId: (nameIdOf :ast name: pNm.stringview)
         did8: (descendNamed
             :st
             :frame
 
             :ast
-            unitDecl: (unitDeclOfNameOrOwn
-                :st
-                :frame
-                nameId: (nameIdOf :ast name: pNm.stringview)
-            )
+            unitDecl: ud8
             name: cNm.stringview
         )
         if did8 > 0 then return did8
@@ -3607,14 +3604,16 @@ dottedTyperefShell: function {
             nsro: unitDecl
             if (nsro.isZero) == false then nsRoot = nsro
         }
+        nsParentNm: atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64)
+        nsChildNm: atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64)
         nsTid: (nestedUnitMemberTid
             :st
             :frame
 
             :ast
             ownerDeclId: nsRoot
-            nestedNameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
-            defName: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
+            nestedNameId: nsParentNm
+            defName: nsChildNm
         )
         if (nsTid.isZero) == false then return nsTid.u64
         return (resolveTyperefShell
@@ -10074,10 +10073,11 @@ resolveDottedDef: function {
     # ref to a (shell) type id and register it under the unit's name, so bare-alias
     # return types and value uses resolve. Replicates resolveTyperefShell's
     # cross-unit leg.
-    apNm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.parent.u64))
+    # owned copies: the resolutions below lend ast
+    apNm: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.parent.u64))
     apId: atomNameId :ast n: (ast.nodes.get i: defn.parent.u64)
     if (nameDenotesUnit :st frame: rf nameId: apId) then {
-        acNm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.child.u64))
+        acNm: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.child.u64))
         acId: atomNameId :ast n: (ast.nodes.get i: defn.child.u64)
         demandUnitMember :st unitNameId: apId nameId: acId
         # The alias target is read off the re-export Decl's node on demand
@@ -10093,19 +10093,17 @@ resolveDottedDef: function {
             aem: "alias cycle: '\{unitNameTextOf :st :ast :unitDecl}.\{defName}' aliases '\{apNm}.\{acNm}' which is still resolving"
             addResolveError :st e: zast.err.typeError msg: aem
         }
+        udA: unitDeclOfNameOrOwn :st frame: rf nameId: (nameIdOf :ast name: apNm.stringview)
         (descendNamed
             :st
             frame: rf
 
             :ast
-            unitDecl: (unitDeclOfNameOrOwn
-                :st
-                frame: rf
-                nameId: (nameIdOf :ast name: apNm.stringview)
-            )
+            unitDecl: udA
             name: acNm.stringview
         )
-        tgo: resolvedByIds :st :ast unitDecl: (unitDeclOfName :st nameId: apId) name: acId
+        udB: unitDeclOfName :st nameId: apId
+        tgo: resolvedByIds :st :ast unitDecl: udB name: acId
         aid: u64
         match (
             tgo
@@ -11549,6 +11547,8 @@ scanCallsInNode: function {
     node: Node.view
 } is {
     kids: zast.childIds :ast n: node
+    # the unit frame once: the demands below lend st
+    uFr: unitFrameOf :st declId: frame
     match (
         node
     ) case call then {
@@ -11564,7 +11564,7 @@ scanCallsInNode: function {
         } else {
             if cn.length > 0 then (demandDefinition
                 :st
-                frame: (unitFrameOf :st declId: frame)
+                frame: uFr
                 nameId: (atomNameId :ast n: (ast.nodes.get i: node.callable.u64))
             )
         }
@@ -11576,7 +11576,7 @@ scanCallsInNode: function {
         if (isNumericLiteralName name: scN.stringview) == false then {
             (demandDefinition
                 :st
-                frame: (unitFrameOf :st declId: frame)
+                frame: uFr
                 nameId: node.name
             )
         }
@@ -11600,7 +11600,7 @@ scanCallsInNode: function {
     } case forexpr then {
         (demandDefinition
             :st
-            frame: (unitFrameOf :st declId: frame)
+            frame: uFr
             nameId: (zast.poolFind pool: ast.names text: "never")
         )
         scanCallsIn :st :frame :ast ids: kids
@@ -11624,7 +11624,7 @@ scanCallsInNode: function {
         if bn.length > 0 then {
             (demandDefinition
                 :st
-                frame: (unitFrameOf :st declId: frame)
+                frame: uFr
                 nameId: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
             )
             # a unit-qualified member (io.stdout) demands exactly that member
@@ -17410,7 +17410,7 @@ firstGenericParamId: function {
 inferConstructionSubs: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     call: zast.CallData.view
     primaryName: zast.nameid
     fNames: (ListVal zast.nameid).view
@@ -17427,16 +17427,27 @@ inferConstructionSubs: function {
     # an explicit `.take` arg otherwise collides with its own inference pass.
     st.pushDryRun
     with aiter: call.arguments.iterate do for argId: aiter loop {
-        arg: ast.nodes.get i: argId.u64
-        match (
-            arg
-        ) case namedoperation then {
-            pk: arg.name
+        # the argument is read through a view scoped to this block: the
+        # lookups and the value walk below lend ast exclusively
+        isNamedArg: false
+        pk: zast.nameid
+        opId: zast.nodeid
+        {
+            arg: ast.nodes.get i: argId.u64
+            match (
+                arg
+            ) case namedoperation then {
+                isNamedArg = true
+                pk = arg.name
+                opId = arg.operation
+            } else null
+        }
+        if isNamedArg then {
             # elided leading type arg: an unnamed first arg naming a type
             # binds the primary generic param (`(List String)`); a value
             # first arg (`(box 5)`) is left for value inference.
             if pk.isZero when argIdx == 0 then {
-                anE: paramTypeBaseName :ast op: (ast.nodes.get i: arg.operation.u64)
+                anE: paramTypeBaseName :ast op: (ast.nodes.get i: opId.u64)
                 if (isNumericLiteralName name: anE.stringview) == false then {
                     teo: (walkLookupTyperef
                         :st
@@ -17458,7 +17469,7 @@ inferConstructionSubs: function {
                 isP = st.reg.isGenericParamOf tdecl: tk name: pk
             }
             if isP then {
-                an: paramTypeBaseName :ast op: (ast.nodes.get i: arg.operation.u64)
+                an: paramTypeBaseName :ast op: (ast.nodes.get i: opId.u64)
                 if (isNumericLiteralName name: an.stringview) then {
                     sfx.append s: "_"
                     sfx.append s: an
@@ -17494,7 +17505,7 @@ inferConstructionSubs: function {
                     :st
                     :unitDecl
                     :ast
-                    node: (ast.nodes.get i: arg.operation.u64)
+                    node: (ast.nodes.get i: opId.u64)
                 )
                 gidx: u64
                 gfound: false
@@ -17512,7 +17523,7 @@ inferConstructionSubs: function {
                 if gfound when vt0 > 0 then {
                     mv0: materialiseLiteral :ast :st :unitDecl t: vt0
                     if mv0 != vt0 then {
-                        iid0: innermostNodeId :ast n: (ast.nodes.get i: arg.operation.u64)
+                        iid0: innermostNodeId :ast n: (ast.nodes.get i: opId.u64)
                         if iid0 > 0 then {
                             setm0: mv0
                             stampGate :st nid: iid0.u64 tid: setm0
@@ -17530,7 +17541,7 @@ inferConstructionSubs: function {
                     }
                 }
             }
-        } else null
+        }
         argIdx = argIdx + 1
     }
 }
@@ -37016,12 +37027,28 @@ canonicalizeShellNodeStamps: function {
     }
     dnids: (ListVal u64)
     dvals: (ListVal u64)
+    # the table's rows are copied out first: canonicalising lends st
+    dKeys: (ListVal u64)
+    dIns: (ListVal u64)
     with dt: st.typing.dpTaggedParent.iterateItems do for d: dt loop {
-        rid3: canonShellTid :ast :st :frame :cache tid: (ztypes.tid.create from: d.value) :unitDecl
+        dKeys.append d.key
+        dIns.append d.value
+    }
+    di: u64
+    for di < dKeys.length loop {
+        rid3: (canonShellTid
+            :ast
+            :st
+            :frame
+            :cache
+            tid: (ztypes.tid.create from: (dIns.get i: di))
+            :unitDecl
+        )
         if rid3 > 0 then {
-            dnids.append d.key
+            dnids.append (dKeys.get i: di)
             dvals.append rid3
         }
+        di = di + 1
     }
     l: u64
     for l < dnids.length loop {
@@ -37032,12 +37059,28 @@ canonicalizeShellNodeStamps: function {
     }
     pnids: (ListVal u64)
     pvals: (ListVal u64)
+    # the table's rows are copied out first: canonicalising lends st
+    pKeys: (ListVal u64)
+    pIns: (ListVal u64)
     with pt: st.typing.dpArmPredicate.iterateItems do for p: pt loop {
-        rid4: canonShellTid :ast :st :frame :cache tid: (ztypes.tid.create from: p.value) :unitDecl
+        pKeys.append p.key
+        pIns.append p.value
+    }
+    pi: u64
+    for pi < pKeys.length loop {
+        rid4: (canonShellTid
+            :ast
+            :st
+            :frame
+            :cache
+            tid: (ztypes.tid.create from: (pIns.get i: pi))
+            :unitDecl
+        )
         if rid4 > 0 then {
-            pnids.append p.key
+            pnids.append (pKeys.get i: pi)
             pvals.append rid4
         }
+        pi = pi + 1
     }
     q: u64
     for q < pnids.length loop {
@@ -37048,12 +37091,28 @@ canonicalizeShellNodeStamps: function {
     }
     tnids: (ListVal u64)
     tvals: (ListVal u64)
+    # the table's rows are copied out first: canonicalising lends st
+    tKeys: (ListVal u64)
+    tIns: (ListVal u64)
     with tt: st.typing.dpTagRead.iterateItems do for t: tt loop {
-        rid5: canonShellTid :ast :st :frame :cache tid: (ztypes.tid.create from: t.value) :unitDecl
+        tKeys.append t.key
+        tIns.append t.value
+    }
+    ti: u64
+    for ti < tKeys.length loop {
+        rid5: (canonShellTid
+            :ast
+            :st
+            :frame
+            :cache
+            tid: (ztypes.tid.create from: (tIns.get i: ti))
+            :unitDecl
+        )
         if rid5 > 0 then {
-            tnids.append t.key
+            tnids.append (tKeys.get i: ti)
             tvals.append rid5
         }
+        ti = ti + 1
     }
     r: u64
     for r < tnids.length loop {
@@ -37064,12 +37123,28 @@ canonicalizeShellNodeStamps: function {
     }
     gnids: (ListVal u64)
     gvals: (ListVal u64)
+    # the table's rows are copied out first: canonicalising lends st
+    gKeys: (ListVal u64)
+    gIns: (ListVal u64)
     with gt: st.typing.postGuardTid.iterateItems do for g: gt loop {
-        rid7: canonShellTid :ast :st :frame :cache tid: (ztypes.tid.create from: g.value) :unitDecl
+        gKeys.append g.key
+        gIns.append g.value
+    }
+    gi: u64
+    for gi < gKeys.length loop {
+        rid7: (canonShellTid
+            :ast
+            :st
+            :frame
+            :cache
+            tid: (ztypes.tid.create from: (gIns.get i: gi))
+            :unitDecl
+        )
         if rid7 > 0 then {
-            gnids.append g.key
+            gnids.append (gKeys.get i: gi)
             gvals.append rid7
         }
+        gi = gi + 1
     }
     y: u64
     for y < gnids.length loop {
@@ -37080,12 +37155,28 @@ canonicalizeShellNodeStamps: function {
     }
     anids: (ListVal u64)
     avals: (ListVal u64)
+    # the table's rows are copied out first: canonicalising lends st
+    aKeys: (ListVal u64)
+    aIns: (ListVal u64)
     with at: st.typing.tagAccessorTid.iterateItems do for a: at loop {
-        rid6: canonShellTid :ast :st :frame :cache tid: (ztypes.tid.create from: a.value) :unitDecl
+        aKeys.append a.key
+        aIns.append a.value
+    }
+    ai: u64
+    for ai < aKeys.length loop {
+        rid6: (canonShellTid
+            :ast
+            :st
+            :frame
+            :cache
+            tid: (ztypes.tid.create from: (aIns.get i: ai))
+            :unitDecl
+        )
         if rid6 > 0 then {
-            anids.append a.key
+            anids.append (aKeys.get i: ai)
             avals.append rid6
         }
+        ai = ai + 1
     }
     w: u64
     for w < anids.length loop {
