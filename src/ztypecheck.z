@@ -22409,13 +22409,12 @@ checkAssignment: function {
 invalidateMovedSource: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    rasgn: zast.ReassignmentData.view
-    rvn: Node.view
+    rasgn: reasgref
     rvt: ztypes.tid
 } is {
     # A bare-name reftype RHS is a move: the source invalidates (the symtab
     # appends its taken overlay entry).
-    rn: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: rvn)
+    rn: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: rasgn.value.u64))
     if rn.length > 0 when rvt > 0 when (typeIsReftype :st tid: rvt) then {
         vo: st.lookupVarId nameId: (nameIdOf :ast name: rn.stringview)
         match (
@@ -22424,7 +22423,7 @@ invalidateMovedSource: function {
             if (nameIsReadonly :st :ast name: rn.stringview) then {
                 (readonlyMoveError
                     :st
-                    nodeid: rasgn.nodeid
+                    nodeid: rasgn.nid
                     lineno: rasgn.lineno
                     colno: rasgn.colno
                     name: rn.stringview
@@ -22434,7 +22433,7 @@ invalidateMovedSource: function {
                 rpin: (pinnedMoveError
                     :st
                     :ast
-                    nodeid: rasgn.nodeid
+                    nodeid: rasgn.nid
                     lineno: rasgn.lineno
                     colno: rasgn.colno
                     name: rn.stringview
@@ -22444,7 +22443,7 @@ invalidateMovedSource: function {
                     mc: "Cannot move borrowed variable '\{rn}' by reassignment — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
                     (addError
                         :st
-                        nodeid: rasgn.nodeid
+                        nodeid: rasgn.nid
                         lineno: rasgn.lineno
                         colno: rasgn.colno
                         e: zast.err.ownerError
@@ -22465,11 +22464,13 @@ invalidateMovedSource: function {
 checkMethodRefTarget: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    rasgn: zast.ReassignmentData.view
-    tpn: Node.view
+    rasgn: reasgref
 } is {
-    targetRoot: methodReceiverRoot :ast n: tpn
-    targetFnName: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: tpn)
+    targetRoot: methodReceiverRoot :ast n: (ast.nodes.get i: rasgn.topath.u64)
+    targetFnName: (zast.nameTextAt
+        :ast
+        ref: (dottedChildNameId :ast n: (ast.nodes.get i: rasgn.topath.u64))
+    )
     if targetRoot.length > 0 when targetFnName.length > 0 then {
         tto: st.lookup nameId: (nameIdOf :ast name: targetRoot.stringview)
         match (
@@ -22496,7 +22497,7 @@ checkMethodRefTarget: function {
                 md: "Cannot reassign '.\{tmk}' field '\{targetFnName}' — a non-owned field is set at construction time and immutable"
                 (addError
                     :st
-                    nodeid: rasgn.nodeid
+                    nodeid: rasgn.nid
                     lineno: rasgn.lineno
                     colno: rasgn.colno
                     e: zast.err.ownerError
@@ -22514,8 +22515,7 @@ checkMethodRefTarget: function {
 checkReassignedType: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    rasgn: zast.ReassignmentData.view
-    tpn: Node.view
+    rasgn: reasgref
     lvt: ztypes.tid
     rvt: ztypes.tid
 } is {
@@ -22530,9 +22530,9 @@ checkReassignedType: function {
         # narrowing). A field target has no bare name and keeps lvt.
         chkT: lvt
         {
-            nmC: zast.nameTextAt :ast ref: (atomNameId :ast n: tpn)
-            if nmC.length > 0 then {
-                dtoC: st.declaredTypeOf nameId: (nameIdOf :ast name: nmC.stringview)
+            nmId: atomNameId :ast n: (ast.nodes.get i: rasgn.topath.u64)
+            if (nmId.isZero) == false then {
+                dtoC: st.declaredTypeOf nameId: nmId
                 match (
                     dtoC
                 ) case some then {
@@ -22562,7 +22562,7 @@ checkReassignedType: function {
                 mmR: "cannot assign value of type '\{anR}' to '\{enR}' target"
                 (addError
                     :st
-                    nodeid: rasgn.nodeid
+                    nodeid: rasgn.nid
                     lineno: rasgn.lineno
                     colno: rasgn.colno
                     e: zast.err.callError
@@ -22578,10 +22578,9 @@ checkReassignedType: function {
 checkNarrowedTargetWrite: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    rasgn: zast.ReassignmentData.view
-    tpn: Node.view
+    rasgn: reasgref
 } is {
-    nm: zast.nameTextAt :ast ref: (atomNameId :ast n: tpn)
+    nm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: rasgn.topath.u64))
     if nm.length > 0 then {
         st.resetNarrowing nameId: (nameIdOf :ast name: nm.stringview)
         nvo: st.lookupVarId nameId: (nameIdOf :ast name: nm.stringview)
@@ -22594,7 +22593,7 @@ checkNarrowedTargetWrite: function {
                 ena: String
                 (addErrorH
                     :st
-                    nodeid: rasgn.nodeid
+                    nodeid: rasgn.nid
                     lineno: rasgn.lineno
                     colno: rasgn.colno
                     e: zast.err.ownerError
@@ -22613,7 +22612,7 @@ resolveTypeofTarget: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    tpn: Node.view
+    rasgn: reasgref
     lvt: ztypes.tid
     rvt: ztypes.tid
 } is {
@@ -22624,26 +22623,25 @@ resolveTypeofTarget: function {
         match (
             tso
         ) case some then {
-            troot: methodReceiverRoot :ast n: tpn
+            troot: methodReceiverRoot :ast n: (ast.nodes.get i: rasgn.topath.u64)
             if troot.length > 0 then {
                 tto: st.lookup nameId: (nameIdOf :ast name: troot.stringview)
                 match (
                     tto
                 ) case some then {
-                    tfn: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: tpn)
-                    if tfn.length > 0 then {
+                    tfnId: dottedChildNameId :ast n: (ast.nodes.get i: rasgn.topath.u64)
+                    if (tfnId.isZero) == false then {
                         mrvt: materialiseLiteral :ast :st :unitDecl t: rvt
                         (st.typing.setMemberType
                             parentTypeId: (ztypes.tid.create from: tto.u64)
-                            nameId: (zast.poolFind pool: ast.names text: tfn.stringview)
+                            nameId: tfnId
                             childTypeId: mrvt
                         )
                         settof: mrvt
                         stampGate :st nid: tso.u64 tid: settof
-                        tpid: nodeId n: tpn
-                        if tpid > 0 then {
+                        if (rasgn.topath.isZero) == false then {
                             settp: mrvt
-                            stampGate :st nid: tpid.u64 tid: settp
+                            stampGate :st nid: rasgn.topath.u64 tid: settp
                         }
                     }
                 } case none then null
@@ -22656,12 +22654,12 @@ resolveTypeofTarget: function {
 retakeHoldLock: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    rasgn: zast.ReassignmentData.view
+    rasgn: reasgref
     hbVid: u64
-    hbNm: StringView
+    hbNmId: zast.nameid
 } is {
     hrp: (ListVal zast.nameid)
-    hrp.append (nameIdOf :ast name: hbNm)
+    hrp.append hbNmId
     hrh: (ztypes.zlockholder
         kind: ztypes.zlockholderkind.varKind
         id: hbVid
@@ -22676,7 +22674,7 @@ retakeHoldLock: function {
     if hrr.length > 0 then {
         (addError
             :st
-            nodeid: rasgn.nodeid
+            nodeid: rasgn.nid
             lineno: rasgn.lineno
             colno: rasgn.colno
             e: zast.err.ownerError
@@ -22692,48 +22690,39 @@ checkReassignment: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    rasgn: zast.ReassignmentData.view
+    rasgn: reasgref
 } is {
     st.typing.inAssignTarget = true
-    tpn: ast.nodes.get i: rasgn.topath.u64
-    rvn: ast.nodes.get i: rasgn.value.u64
     errL0: st.typing.errors.length
-    lvt: checkValue :st :unitDecl :ast node: tpn
+    lvt: checkValueAt :st :unitDecl :ast nid: rasgn.topath
     st.typing.inAssignTarget = false
     # a target that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a read -- a local is not in
     # scope before the line that binds it
     if lvt.isZero when st.typing.errors.length == errL0 then {
         ubnL0: unresolvedBareCallable :ast :st :unitDecl nid: rasgn.topath
-        if ubnL0.length > 0 then {
-            umL0: "Unknown reference '\{ubnL0}'"
-            enL0: String
-            ehL0: String
-            (addErrorH
-                :st
-                nodeid: (nodeId n: tpn)
-                lineno: (nodeLine n: tpn)
-                colno: (nodeCol n: tpn)
-                e: zast.err.badReference
-                msg: umL0
-                note: enL0
-                hint: ehL0
-                width: ubnL0.length.u32.orPanic
-            )
-        }
+        if ubnL0.length > 0 then reportUnknownNameAt :st :ast nid: rasgn.topath name: ubnL0
     }
     # `h = y.hold`: a hold binding rebinds only when the marker is written
     # again, so its readonly self-lock steps aside for this assignment and is
     # retaken over the new value. Without the marker the lock stands and the
     # write is rejected -- there is no implicit downgrade at a reassignment.
+    # The target's bare name and the value's shape are read through views
+    # scoped to this block: the walks below lend ast.
     hbVid: u64
-    hbNm: zast.nameTextAt :ast ref: (atomNameId :ast n: tpn)
-    if hbNm.length > 0 when (valueIsHold :ast n: rvn) then {
-        hbo: st.lookupVarId nameId: (nameIdOf :ast name: hbNm.stringview)
+    hbNmId: zast.nameid
+    rvIsHold: false
+    {
+        tpn: ast.nodes.get i: rasgn.topath.u64
+        hbNmId = atomNameId :ast n: tpn
+        rvIsHold = valueIsHold :ast n: (ast.nodes.get i: rasgn.value.u64)
+    }
+    if (hbNmId.isZero) == false when rvIsHold then {
+        hbo: st.lookupVarId nameId: hbNmId
         match (
             hbo
         ) case some then {
-            hlh: st.findLockHolder nameId: (nameIdOf :ast name: hbNm.stringview)
+            hlh: st.findLockHolder nameId: hbNmId
             match (
                 hlh
             ) case some then {
@@ -22744,42 +22733,31 @@ checkReassignment: function {
             } case none then null
         } case none then null
     }
-    checkWriteLock :st :ast n: tpn verb: "assign to"
+    checkWriteLock :st :ast n: (ast.nodes.get i: rasgn.topath.u64) verb: "assign to"
     errR0: st.typing.errors.length
-    rvt: checkValue :st :unitDecl :ast node: rvn
+    rvt: checkValueAt :st :unitDecl :ast nid: rasgn.value
     # a value that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a binding
     if rvt.isZero when st.typing.errors.length == errR0 then {
         ubnR0: unresolvedBareCallable :ast :st :unitDecl nid: rasgn.value
-        if ubnR0.length > 0 then {
-            umR0: "Unknown reference '\{ubnR0}'"
-            enR0: String
-            ehR0: String
-            (addErrorH
-                :st
-                nodeid: (nodeId n: rvn)
-                lineno: (nodeLine n: rvn)
-                colno: (nodeCol n: rvn)
-                e: zast.err.badReference
-                msg: umR0
-                note: enR0
-                hint: ehR0
-                width: ubnR0.length.u32.orPanic
-            )
-        }
+        if ubnR0.length > 0 then reportUnknownNameAt :st :ast nid: rasgn.value name: ubnR0
     }
-    if hbVid > 0 then retakeHoldLock :st :ast :rasgn :hbVid hbNm: hbNm.stringview
+    if hbVid > 0 then retakeHoldLock :st :ast :rasgn :hbVid :hbNmId
     mrv0: materialiseLiteral :ast :st :unitDecl t: rvt
     if mrv0 > 0 when (st.reg.typetypeOf typeId: mrv0) == ztypes.ztypetype.nullType then {
         m0n: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
-        vln0: nodeLine n: rvn
-        vcl0: nodeCol n: rvn
-        vid0: nodeId n: rvn
+        vln0: u32
+        vcl0: u32
+        {
+            rvn: ast.nodes.get i: rasgn.value.u64
+            vln0 = nodeLine n: rvn
+            vcl0 = nodeCol n: rvn
+        }
         en0: String
         eh0: String
         (addErrorH
             :st
-            nodeid: vid0
+            nodeid: rasgn.value
             lineno: vln0
             colno: vcl0
             e: zast.err.typeError
@@ -22790,30 +22768,23 @@ checkReassignment: function {
         )
         return
     }
-    resolveTypeofTarget :st :unitDecl :ast :tpn :lvt :rvt
+    resolveTypeofTarget :st :unitDecl :ast :rasgn :lvt :rvt
     # A literal RHS at a concretely-typed target coerces: restamp the RHS's
     # innermost node (wrappers derive through the dump's descent). A
     # literal-typed target (a literal-init loop binding) keeps the pseudo.
     if lvt > 0 when rvt > 0 when (isLiteralTypeId :st tid: rvt) then {
         if (isLiteralTypeId :st tid: lvt) == false then {
-            iid: innermostNodeId :ast n: rvn
+            iid: innermostNodeId :ast n: (ast.nodes.get i: rasgn.value.u64)
             if iid > 0 then {
                 setc: lvt
                 stampGate :st nid: iid.u64 tid: setc
             }
         }
     }
-    (checkReassignedType
-        :st
-        :ast
-        :rasgn
-        :tpn
-        :lvt
-        :rvt
-    )
-    checkNarrowedTargetWrite :st :ast :rasgn :tpn
-    checkMethodRefTarget :st :ast :rasgn :tpn
-    invalidateMovedSource :st :ast :rasgn :rvn :rvt
+    checkReassignedType :st :ast :rasgn :lvt :rvt
+    checkNarrowedTargetWrite :st :ast :rasgn
+    checkMethodRefTarget :st :ast :rasgn
+    invalidateMovedSource :st :ast :rasgn :rvt
 }
 
 # checkSwap -- `lhs swap rhs`: resolve both operand paths (stamping them). The swap
@@ -30355,6 +30326,54 @@ argRefAt: function {ast: Ast.view nid: zast.nodeid} out argref is {
     return (argref nid: zn name: zm operation: zn lineno: 0 colno: 0)
 }
 
+# reasgref -- what the reassignment walk reads of its row: the target and
+# value ids and the position, as plain values.
+reasgref: record {
+    nid: zast.nodeid
+    topath: zast.nodeid
+    value: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# reasgRefAt -- the reassignment row `nid` as plain values (all zero for any
+# other arm).
+reasgRefAt: function {ast: Ast.view nid: zast.nodeid} out reasgref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case reassignment then {
+        return (reasgref :nid topath: n.topath value: n.value lineno: n.lineno colno: n.colno)
+    } else null
+    zn: zast.nodeid
+    return (reasgref nid: zn topath: zn value: zn lineno: 0 colno: 0)
+}
+
+# reportUnknownNameAt -- `name` is an unknown reference at row `nid`: the
+# report the binding, statement and reassignment sites share.
+reportUnknownNameAt: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    name: String
+} is {
+    vn: ast.nodes.get i: nid.u64
+    um: "Unknown reference '\{name}'"
+    en: String
+    eh: String
+    (addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine n: vn)
+        colno: (nodeCol n: vn)
+        e: zast.err.badReference
+        msg: um
+        note: en
+        hint: eh
+        width: name.length.u32.orPanic
+    )
+}
+
 # checkValueAt -- type the value row `nid`, dispatching by arm. A handler
 # that takes its row as plain values is reached with no row view held; every
 # other arm is walked by checkValue through the row view fetched here.
@@ -30377,6 +30396,10 @@ checkValueAt: function {
     } case doexpr then {
         dr: doRefAt :ast :nid
         return (checkDo :st :unitDecl :ast donode: dr)
+    } case reassignment then {
+        rr: reasgRefAt :ast :nid
+        checkReassignment :st :unitDecl :ast rasgn: rr
+        return (ztypes.tid.create from: 0)
     } else {
         node: ast.nodes.get i: nid.u64
         return (checkValue :st :unitDecl :ast :node)
@@ -30470,8 +30493,7 @@ checkValue: function {
     } case withexpr then {
         return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case reassignment then {
-        checkReassignment :st :unitDecl :ast rasgn: node
-        return (ztypes.tid.create from: 0)
+        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case swapstmt then {
         return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case expression then {
@@ -30555,7 +30577,7 @@ checkStmtInner: function {
         }
         return false
     } case reassignment then {
-        checkReassignment :st :unitDecl :ast rasgn: inner
+        checkValueAt :st :unitDecl :ast nid: inner.nodeid
         return false
     } else {
         return false
