@@ -26,6 +26,7 @@ public: unit {
     :nsbody
     :declkind
     :declkindName
+    :declrow
     :ZTyping
     :newTyping
     :armside
@@ -59,6 +60,16 @@ pendwrite: record {
     parent: ztypes.tid
     name: zast.nameid
     type: ztypes.tid
+}
+
+# One row of a declChildWalk, read by slot instead of accumulated into a
+# list. `keep` IS the walk filter -- the kind narrowing and the `typeId > 0`
+# rule -- so a caller that loops slots and skips the rows it says no to is
+# running the same walk the list form runs, not a restatement of it.
+declrow: record {
+    name: u64
+    tid: u64
+    keep: bool
 }
 
 SynthNode: class {
@@ -916,28 +927,6 @@ ZTyping: class {
         return c
     }
 
-    # declPendRows -- one parent's pended writes, in write order.
-    declPendRows: function {
-        this: this.view
-        parentTypeId: ztypes.tid
-        names: ListVal u64
-        tids: ListVal u64
-    } is {
-        i: u64
-        n: this.pendWrites.length
-        for i < n loop {
-            w: this.pendWrites.get :i
-            if w.parent == parentTypeId then {
-                nv: w.name.u64
-                names.append nv
-                tv: w.type.u64
-                tids.append tv
-            }
-            i = i + 1
-        }
-    }
-
-
     # declFindChild -- the child declaration named nameId under parentDeclId
     # (0 when absent). A namespace binds each name once -- the parser rejects
     # a repeated definition in any one body, registerUnitRoots a repeated unit
@@ -1339,14 +1328,81 @@ ZTyping: class {
         return po.children.length
     }
 
+    # declPendRowAt -- the slot-th pended pre-index write for this parent. A
+    # pended row carries no kind and no type filter: the window it covers is
+    # before anything declared the owner, so there is no kind to filter on and
+    # the write IS the type. Every such row therefore answers `keep`.
+    declPendRowAt: function {this: this.view parentTypeId: ztypes.tid slot: u64} out declrow is {
+        c: u64
+        i: u64
+        n: this.pendWrites.length
+        for i < n loop {
+            w: this.pendWrites.get :i
+            if w.parent == parentTypeId then {
+                if c == slot then return (declrow name: w.name.u64 tid: w.type.u64 keep: true)
+                c = c + 1
+            }
+            i = i + 1
+        }
+        return (declrow name: 0 tid: 0 keep: false)
+    }
+
+    # declRowSlots -- how many slots a declChildWalk over `ownerTid` reads.
+    # NOT how many rows it yields: a slot whose row answers `keep` false is
+    # still a slot. When the type has no declaration of its own the pended
+    # pre-index writes answer, exactly as the walk does.
+    declRowSlots: function {this: this.view ownerTid: ztypes.tid} out u64 is {
+        od: this.declIdOfType typeId: ownerTid
+        if od.isZero then return (this.declPendCount parentTypeId: ownerTid)
+        return (this.declChildSlots declId: od)
+    }
+
+    # declRowAt -- the slot-th row of a declChildWalk over `ownerTid`.
+    # `membersOnly` narrows `keep` to the field / method / arm / param
+    # children. The owner is re-read per slot rather than staged into a row
+    # list: the per-child probe is a `:this` call, which cannot run under a
+    # live children borrow, and a map probe is cheaper than a staged list.
+    declRowAt: function {
+        this: this.view
+        ownerTid: ztypes.tid
+        membersOnly: bool
+        slot: u64
+    } out declrow is {
+        od: this.declIdOfType typeId: ownerTid
+        if od.isZero then return (this.declPendRowAt parentTypeId: ownerTid :slot)
+        nid: u64
+        did: ztypes.declid
+        {
+            oo: this.decls.get i: od.u64
+            nid = (oo.children.keyAt i: slot).u64
+            vo: oo.children.valueAt i: slot
+            match (
+                vo
+            ) case some then {
+                did = vo
+            } case none then null
+        }
+        keep: (membersOnly) == false
+        mt: u64
+        {
+            ko: this.decls.get i: did.u64
+            if membersOnly then {
+                if ko.kind.fieldDecl then keep = true
+                if ko.kind.methodDecl then keep = true
+                if ko.kind.paramDecl then keep = true
+                if ko.kind.armDecl then keep = true
+            }
+            mt = ko.typeId
+        }
+        if mt == 0 then keep = false
+        return (declrow name: nid tid: mt :keep)
+    }
+
     # declChildWalk -- the shared walk behind declMemberList and declChildRows:
     # every child of the type's own declaration that carries a type, in
-    # declaration order, as (name pool id, type id). `membersOnly` narrows to
-    # the field / method / arm / param children. When the type has no
-    # declaration of its own the pended pre-index writes answer instead.
-    # The owner is re-read per index rather than staged into a row list: the
-    # per-child probe is a `:this` call, which cannot run under a live children
-    # borrow, and a map probe is cheaper than a staged row list.
+    # declaration order, as (name pool id, type id). It is the row accessors
+    # collected, so a caller that loops the slots instead of taking the list
+    # cannot disagree with it about what a child is.
     declChildWalk: function {
         this: this.view
         ownerTid: ztypes.tid
@@ -1354,42 +1410,14 @@ ZTyping: class {
         names: ListVal u64
         tids: ListVal u64
     } is {
-        od: this.declIdOfType typeId: ownerTid
-        if od.isZero then {
-            this.declPendRows parentTypeId: ownerTid :names :tids
-            return
-        }
-        n: this.declChildSlots declId: od
+        n: this.declRowSlots :ownerTid
         i: u64
         for i < n loop {
-            nid: u64
-            did: ztypes.declid
-            {
-                oo: this.decls.get i: od.u64
-                nid = (oo.children.keyAt :i).u64
-                vo: oo.children.valueAt :i
-                match (
-                    vo
-                ) case some then {
-                    did = vo
-                } case none then null
-            }
+            r: this.declRowAt :ownerTid :membersOnly slot: i
             i = i + 1
-            keep: (membersOnly) == false
-            mt: u64
-            {
-                ko: this.decls.get i: did.u64
-                if membersOnly then {
-                    if ko.kind.fieldDecl then keep = true
-                    if ko.kind.methodDecl then keep = true
-                    if ko.kind.paramDecl then keep = true
-                    if ko.kind.armDecl then keep = true
-                }
-                mt = ko.typeId
-            }
-            if keep when mt > 0 then {
-                names.append nid
-                tids.append mt
+            if r.keep then {
+                names.append r.name
+                tids.append r.tid
             }
         }
     }

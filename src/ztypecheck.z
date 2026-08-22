@@ -4310,15 +4310,13 @@ fnHasLockParam: function {ast: Ast.view fnode: fnref} out bool is {
 # instance is only sound while whatever it points at outlives it.
 typeHasNonOwnedField: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
-    fn: (ListVal u64)
-    ft: (ListVal u64)
-    st.typing.declMemberList ownerTid: tid names: fn tids: ft
     i: u64
-    n: fn.length
+    n: st.typing.declRowSlots ownerTid: tid
     found: false
     for i < n loop {
-        if (found) == false then {
-            nid: (fn.get :i).u32.orPanic
+        frow: st.typing.declRowAt ownerTid: tid membersOnly: true slot: i
+        if frow.keep when (found) == false then {
+            nid: frow.name.u32.orPanic
             if (st.typing.declIsLockFieldId
                 parentTypeId: tid
                 nameId: (zast.nameid.create from: nid.u32)
@@ -17105,18 +17103,16 @@ heapOwningValtypeTid: function {
     if tt == ztypes.ztypetype.recordType then isVR = true
     if tt == ztypes.ztypetype.variantType then isVR = true
     if isVR == false then return false
-    hNms: (ListVal u64)
-    hTds: (ListVal u64)
-    st.typing.declMemberList ownerTid: tid names: hNms tids: hTds
-    hcn: hNms.length
+    hcn: st.typing.declRowSlots ownerTid: tid
     hci: u64
     for hci < hcn loop {
-        hnid: hNms.get i: hci
-        hcto: hTds.get i: hci
+        hrow: st.typing.declRowAt ownerTid: tid membersOnly: true slot: hci
         hci = hci + 1
+        hnid: hrow.name
+        hcto: hrow.tid
         hctt: st.reg.typetypeOf typeId: (ztypes.tid.create from: hcto.u64)
         hnB: ast.names.texts.get i: hnid.u64
-        if hctt != ztypes.ztypetype.functionType when hnB.stringview != "tag" then {
+        if hrow.keep when hctt != ztypes.ztypetype.functionType when hnB.stringview != "tag" then {
             if hctt == ztypes.ztypetype.classType then return true
             if hctt == ztypes.ztypetype.unionType then return true
             if (st.reg.needsDestructor typeId: (ztypes.tid.create from: hcto.u64)) then return true
@@ -19551,17 +19547,14 @@ fnAutoCallable: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out bool i
     # thisParamNameIdOf already answers in pool ids; viewing the text to look
     # the same id up again is the identity.
     thisPnId: (st.reg.thisParamNameIdOf tid: mid).u64
-    pnIds: (ListVal u64)
-    {
-        pdT: (ListVal u64)
-        st.typing.declChildRows ownerTid: mid names: pnIds tids: pdT
-    }
     userSeen: false
-    n: pnIds.length
+    n: st.typing.declRowSlots ownerTid: mid
     i: u64
     for i < n loop {
-        pnameId: pnIds.get :i
+        row: st.typing.declRowAt ownerTid: mid membersOnly: false slot: i
         i = i + 1
+        if row.keep then {
+        pnameId: row.name
         isRecv: false
         if pnameId == zast.wkThis.u64 then isRecv = true
         if thisPnId > 0 when pnameId == thisPnId then isRecv = true
@@ -19572,6 +19565,7 @@ fnAutoCallable: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out bool i
                 nameId: (zast.nameid.create from: pnameId.u32.orPanic)
             )
             if (hd) == false then return false
+        }
         }
     }
     return userSeen
@@ -24822,15 +24816,13 @@ positionalParamName: function {
     result: String
     found: false
     seen: u64
-    ppN: (ListVal u64)
-    ppT: (ListVal u64)
-    st.typing.declChildRows ownerTid: funcId names: ppN tids: ppT
     ppi: u64
-    ppn: ppN.length
+    ppn: st.typing.declRowSlots ownerTid: funcId
     for ppi < ppn loop {
-        ppnid: ppN.get i: ppi
+        prow: st.typing.declRowAt ownerTid: funcId membersOnly: false slot: ppi
         ppi = ppi + 1
-        if (found) == false then {
+        ppnid: prow.name
+        if prow.keep when (found) == false then {
             tnB: ast.names.texts.get i: ppnid.u64
             isRecv: false
             if skipRecv then {

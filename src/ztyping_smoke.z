@@ -172,6 +172,64 @@ main: function is {
     ty.conformance.append cf
     dumpConformance :ty
     print "isError -> \{boolText ty.isError}"
+
+    print "=== declChildWalk both ways ==="
+    verifyBothWays :ty tid: pid membersOnly: false label: "declared"
+    verifyBothWays :ty tid: pid membersOnly: true label: "declared-members"
+    # a member type written for a type that has no declaration of its own lands
+    # in the pended pre-index writes -- the edge the walk falls back to, where
+    # the two forms run different code and a forgotten fallback would answer
+    # "no members" for a type whose members are merely not declared yet
+    ty.setMemberType parentTypeId: lid nameId: (pool.set s: "elem") childTypeId: tInt
+    verifyBothWays :ty tid: lid membersOnly: false label: "pended"
+    verifyBothWays :ty tid: lid membersOnly: true label: "pended-members"
+}
+
+# smoke-test: the list form of declChildWalk and the slot form must agree row
+# for row. The `agree` word alone proves little -- the walk IS the row
+# accessors collected, so breaking an accessor breaks both sides the same
+# way. The GOLDEN is the oracle: the row count and the id checksum pin what
+# the walk yields, so a fallback that stops answering (the pended path, which
+# reaches declPendCount and declPendRowAt rather than the namespace) shows up
+# as rows=0 against a golden that says otherwise.
+verifyBothWays: function {
+    ty: ztyping.ZTyping.view
+    tid: ztypes.tid
+    membersOnly: bool
+    label: StringView
+} is {
+    ln: (ListVal u64)
+    lt: (ListVal u64)
+    ty.declChildWalk ownerTid: tid :membersOnly names: ln tids: lt
+    sn: (ListVal u64)
+    stds: (ListVal u64)
+    slots: ty.declRowSlots ownerTid: tid
+    si: u64
+    for si < slots loop {
+        row: ty.declRowAt ownerTid: tid :membersOnly slot: si
+        si = si + 1
+        if row.keep then {
+            sn.append row.name
+            stds.append row.tid
+        }
+    }
+    ok: ln.length == sn.length
+    ci: u64
+    cn: ln.length
+    for ci < cn loop {
+        if ok then {
+            if (ln.get i: ci) != (sn.get i: ci) then ok = false
+            if (lt.get i: ci) != (stds.get i: ci) then ok = false
+        }
+        ci = ci + 1
+    }
+    sum: u64
+    di: u64
+    for di < sn.length loop {
+        sum = sum + (sn.get i: di) + (stds.get i: di)
+        di = di + 1
+    }
+    if ok then print "  bothways \{label} agree rows=\{ln.length} sum=\{sum}" else print "  bothways \{label} DISAGREE"
 }
 
 # smoke-test: print whether type `pid` has a child named `name`.
