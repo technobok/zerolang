@@ -2518,6 +2518,13 @@ mnError: 10.u64
 mnAppend: 11.u64
 mnInsert: 12.u64
 mnPush: 13.u64
+mnGetMut: 14.u64
+mnPop: 15.u64
+mnExtend: 16.u64
+mnHas: 17.u64
+mnDelete: 18.u64
+mnKeyAt: 19.u64
+mnValueAt: 20.u64
 
 # originBaseNames -- those templates by name, in ogXxx order. This list and the
 # constants above are the same table read two ways; nothing else may reorder it,
@@ -2559,6 +2566,13 @@ memberDispatchNames: function {acc: List String} is {
     mnPut :acc at: mnAppend name: "append"
     mnPut :acc at: mnInsert name: "insert"
     mnPut :acc at: mnPush name: "push"
+    mnPut :acc at: mnGetMut name: "getMut"
+    mnPut :acc at: mnPop name: "pop"
+    mnPut :acc at: mnExtend name: "extend"
+    mnPut :acc at: mnHas name: "has"
+    mnPut :acc at: mnDelete name: "delete"
+    mnPut :acc at: mnKeyAt name: "keyAt"
+    mnPut :acc at: mnValueAt name: "valueAt"
 }
 
 # mnIs -- is `id` the dispatch name at index `at`? TWO zeros meet here and they
@@ -6139,7 +6153,7 @@ emitCollectionMethodCall: function {
         n: (ast.nodes.get i: call.callable.u64)
         text: bn.stringview
     )
-    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     brid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
     bt: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: brid.u64)
     # classify by the mono's ORIGIN NAME (the graph-independent identity):
@@ -6147,7 +6161,7 @@ emitCollectionMethodCall: function {
     # genericOriginId when extra units register their own List/Map shells
     originName: monoOriginName :symtab tid: (ztypes.tid.create from: bt.u64)
     ov: originName.stringview
-    if ov == "array" then return (emitArrayMethodCall :ast :symtab :ctx :call :mn :bn :bt :bvid)
+    if ov == "array" then return (emitArrayMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
     isList: false
     if ov == "ListRef" then isList = true
     if ov == "ListVal" then isList = true
@@ -6158,7 +6172,7 @@ emitCollectionMethodCall: function {
         :symtab
         :ctx
         :call
-        :mn
+        :mnId
         :bn
         bt: (ztypes.tid.create from: bt.u64)
         :bvid
@@ -6166,18 +6180,18 @@ emitCollectionMethodCall: function {
     isSet: false
     if ov == "SetRef" then isSet = true
     if ov == "SetVal" then isSet = true
-    if isSet then return (emitSetMethodCall :ast :symtab :ctx :call :mn :bn :bt)
+    if isSet then return (emitSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
     isMap: false
     if ov == "MapRR" then isMap = true
     if ov == "MapRV" then isMap = true
     if ov == "MapVR" then isMap = true
     if ov == "MapVV" then isMap = true
-    if isMap then return (emitMapMethodCall :ast :symtab :ctx :call :mn :bn :bt)
+    if isMap then return (emitMapMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
     isIdMap: false
     if ov == "IdMapR" then isIdMap = true
     if ov == "IdMapV" then isIdMap = true
-    if isIdMap then return (emitIdMapMethodCall :ast :symtab :ctx :call :mn :bn :bt :bvid)
-    if ov == "IdSet" then return (emitIdSetMethodCall :ast :symtab :ctx :call :mn :bn :bt :bvid)
+    if isIdMap then return (emitIdMapMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+    if ov == "IdSet" then return (emitIdSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
     return "".string
 }
 
@@ -6187,19 +6201,19 @@ emitListMethodCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.CallData.view
-    mn: String
+    mnId: zast.nameid
     bn: String
     bt: ztypes.tid
     bvid: ztypes.vid
 } out String is {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringview vid: bvid
-    if mn.stringview == "append" then {
+    if (mnIs :ctx id: mnId at: mnAppend) then {
         v: colArg :ast :symtab :ctx :call label: "from" consumes: true
         e0: "\{cb}_append(\{recvR}, \{v})"
         return e0
     }
-    if mn.stringview == "get" then {
+    if mnId == zast.wkGet then {
         v: listArg :ast :symtab :ctx :call label: "i"
         e1: "\{cb}_get(\{recvR}, \{v})"
         if (listGetIsPtr
@@ -6210,7 +6224,7 @@ emitListMethodCall: function {
         ) then return "(*\{e1})"
         return e1
     }
-    if mn.stringview == "getMut" then {
+    if (mnIs :ctx id: mnId at: mnGetMut) then {
         vm: listArg :ast :symtab :ctx :call label: "i"
         e1m: "\{cb}_getMut(\{recvR}, \{vm})"
         if (listGetIsPtr
@@ -6221,35 +6235,35 @@ emitListMethodCall: function {
         ) then return "(*\{e1m})"
         return e1m
     }
-    if mn.stringview == "set" then {
+    if mnId == zast.wkSet then {
         vi: listArg :ast :symtab :ctx :call label: "i"
         vv: listArg :ast :symtab :ctx :call label: "val"
         e2: "\{cb}_set(\{recvR}, \{vi}, \{vv})"
         return e2
     }
-    if mn.stringview == "pop" then {
+    if (mnIs :ctx id: mnId at: mnPop) then {
         e3: "\{cb}_pop(\{recvR})"
         return e3
     }
-    if mn.stringview == "insert" then {
+    if (mnIs :ctx id: mnId at: mnInsert) then {
         vf: listArg :ast :symtab :ctx :call label: "from"
         va: listArg :ast :symtab :ctx :call label: "at"
         e4: "\{cb}_insert(\{recvR}, \{vf}, \{va})"
         return e4
     }
-    if mn.stringview == "extend" then {
+    if (mnIs :ctx id: mnId at: mnExtend) then {
         eaa: listTakeArgBase :ast :call label: "from"
         eaV: atomVid :symtab nid: (listTakeArgBaseNid :ast :call label: "from")
         ea: emitLocalAtomName :ctx name: eaa.stringview vid: eaV
         e5: "\{cb}_extend(\{recvR}, &\{ea})"
         return e5
     }
-    if mn.stringview == "contains" then {
+    if mnId == zast.wkContains then {
         vc: listArg :ast :symtab :ctx :call label: "item"
         e6: "\{cb}_contains(\{recvR}, \{vc})"
         return e6
     }
-    if mn.stringview == "sort" then {
+    if mnId == zast.wkSort then {
         e7: "\{cb}_sort(\{recvR})"
         return e7
     }
@@ -6266,21 +6280,21 @@ emitArrayMethodCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.CallData.view
-    mn: String
+    mnId: zast.nameid
     bn: String
     bt: ztypes.tid
     bvid: ztypes.vid
 } out String is {
     cb: ctxCname :ctx tid: (ztypes.tid.create from: bt.u64)
-    if mn.stringview == "get" then {
+    if mnId == zast.wkGet then {
         vi: listArg :ast :symtab :ctx :call label: "i"
         return "\{cb}_get(\{bn}, \{vi})"
     }
-    if mn.stringview == "getMut" then {
+    if (mnIs :ctx id: mnId at: mnGetMut) then {
         viM: listArg :ast :symtab :ctx :call label: "i"
         return "\{cb}_getMut(\{bn}, \{viM})"
     }
-    if mn.stringview == "set" then {
+    if mnId == zast.wkSet then {
         vi: listArg :ast :symtab :ctx :call label: "i"
         vv: listArg :ast :symtab :ctx :call label: "item"
         recvR: colRecvRef :ctx bn: bn.stringview vid: bvid
@@ -6375,17 +6389,17 @@ emitSetMethodCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.CallData.view
-    mn: String
+    mnId: zast.nameid
     bn: String
     bt: ztypes.tid
 } out String is {
     cb: ctxCname :ctx tid: (ztypes.tid.create from: bt.u64)
-    if mn.stringview == "add" then {
+    if mnId == zast.wkAdd then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: true
         e0: "\{cb}_add(\{bn}, \{v})"
         return e0
     }
-    if mn.stringview == "has" then {
+    if (mnIs :ctx id: mnId at: mnHas) then {
         viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
         if viv.length > 0 then return "\{cb}_hasv(\{bn}, \{viv})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
@@ -6395,7 +6409,7 @@ emitSetMethodCall: function {
         e1: "\{cb}_has(\{bn}, \{v})"
         return e1
     }
-    if mn.stringview == "delete" then {
+    if (mnIs :ctx id: mnId at: mnDelete) then {
         viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
         if viv.length > 0 then return "\{cb}_deletev(\{bn}, \{viv})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
@@ -6416,18 +6430,18 @@ emitMapMethodCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.CallData.view
-    mn: String
+    mnId: zast.nameid
     bn: String
     bt: ztypes.tid
 } out String is {
     cb: ctxCname :ctx tid: (ztypes.tid.create from: bt.u64)
-    if mn.stringview == "set" then {
+    if mnId == zast.wkSet then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: true
         vv: colArg :ast :symtab :ctx :call label: "value" consumes: true
         e0: "\{cb}_set(\{bn}, \{vk}, \{vv})"
         return e0
     }
-    if mn.stringview == "get" then {
+    if mnId == zast.wkGet then {
         vkv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
         if vkv.length > 0 then return "\{cb}_getv(\{bn}, \{vkv})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
@@ -6437,7 +6451,7 @@ emitMapMethodCall: function {
         e1: "\{cb}_get(\{bn}, \{vk})"
         return e1
     }
-    if mn.stringview == "has" then {
+    if (mnIs :ctx id: mnId at: mnHas) then {
         vkv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
         if vkv.length > 0 then return "\{cb}_hasv(\{bn}, \{vkv})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
@@ -6447,7 +6461,7 @@ emitMapMethodCall: function {
         e2: "\{cb}_has(\{bn}, \{vk})"
         return e2
     }
-    if mn.stringview == "remove" then {
+    if mnId == zast.wkRemove then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         if (mapKeyIsString :symtab :ctx monoId: bt) then {
             return "\{cb}_remove(\{bn}, \{stringKeyArgPointer :ctx expr: vk.stringview})"
@@ -6468,40 +6482,40 @@ emitIdMapMethodCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.CallData.view
-    mn: String
+    mnId: zast.nameid
     bn: String
     bt: ztypes.tid
     bvid: ztypes.vid
 } out String is {
     cb: ctxCname :ctx tid: (ztypes.tid.create from: bt.u64)
     recvR: colRecvRef :ctx bn: bn.stringview vid: bvid
-    if mn.stringview == "set" then {
+    if mnId == zast.wkSet then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         vv: colArg :ast :symtab :ctx :call label: "value" consumes: true
         e0: "\{cb}_set(\{recvR}, \{vk}, \{vv})"
         return e0
     }
-    if mn.stringview == "get" then {
+    if mnId == zast.wkGet then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e1: "\{cb}_get(\{recvR}, \{vk})"
         return e1
     }
-    if mn.stringview == "getMut" then {
+    if (mnIs :ctx id: mnId at: mnGetMut) then {
         vkm: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e1m: "\{cb}_getMut(\{recvR}, \{vkm})"
         return e1m
     }
-    if mn.stringview == "has" then {
+    if (mnIs :ctx id: mnId at: mnHas) then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e2: "\{cb}_has(\{recvR}, \{vk})"
         return e2
     }
-    if mn.stringview == "keyAt" then {
+    if (mnIs :ctx id: mnId at: mnKeyAt) then {
         vi: colArg :ast :symtab :ctx :call label: "i" consumes: false
         e3: "\{cb}_keyAt(\{recvR}, \{vi})"
         return e3
     }
-    if mn.stringview == "valueAt" then {
+    if (mnIs :ctx id: mnId at: mnValueAt) then {
         vi2: colArg :ast :symtab :ctx :call label: "i" consumes: false
         e4: "\{cb}_valueAt(\{recvR}, \{vi2})"
         return e4
@@ -6515,19 +6529,19 @@ emitIdSetMethodCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.CallData.view
-    mn: String
+    mnId: zast.nameid
     bn: String
     bt: ztypes.tid
     bvid: ztypes.vid
 } out String is {
     cb: ctxCname :ctx tid: (ztypes.tid.create from: bt.u64)
     recvR: colRecvRef :ctx bn: bn.stringview vid: bvid
-    if mn.stringview == "add" then {
+    if mnId == zast.wkAdd then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         e0: "\{cb}_add(\{recvR}, \{v})"
         return e0
     }
-    if mn.stringview == "has" then {
+    if (mnIs :ctx id: mnId at: mnHas) then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         e1: "\{cb}_has(\{recvR}, \{v})"
         return e1
