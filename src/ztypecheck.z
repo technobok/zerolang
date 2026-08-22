@@ -1868,17 +1868,30 @@ resolveAtomType: function {
     nm: StringView
     thisName: StringView
 } out u64 is {
-    if nm == "this" then return (resolveNamedType
-        :st
-        :frame
-        :ast
-        :unitDecl
-        name: thisName
-        :thisName
-    )
+    if nm == "this" then {
+        # the receiver's name is both the name and the receiver: the second
+        # role reads an owned copy
+        tnOwn: thisName.string
+        return (resolveNamedType
+            :st
+            :frame
+            :ast
+            :unitDecl
+            name: thisName
+            thisName: tnOwn.stringview
+        )
+    }
     if nm == "type" then {
         if thisName.length != 0 then {
-            return (resolveNamedType :st :frame :ast :unitDecl name: thisName :thisName)
+            tnOwnT: thisName.string
+            return (resolveNamedType
+                :st
+                :frame
+                :ast
+                :unitDecl
+                name: thisName
+                thisName: tnOwnT.stringview
+            )
         }
     }
     return (resolveNamedType :st :frame :ast :unitDecl name: nm :thisName)
@@ -4681,7 +4694,8 @@ resolveFunctionParam: function {
         genParam: false
         fnParam: false
         ptn: atomNameId :ast n: (ast.nodes.get i: pm.operation.u64)
-        ptnT: zast.nameTextAt :ast ref: ptn
+        # an owned copy: the walks below lend ast
+        ptnT: zast.nameTextCopy :ast ref: ptn
         # A MARKED receiver is an alias, so its type is `this.view` rather
         # than the bare `this` an atom name reports. Ask the shared
         # predicate, which knows every marker form.
@@ -5193,18 +5207,25 @@ stampMemberSignature: function {
     rn: optU64Or o: (st.typing.funcReturnNode.get key: (ztypes.tid.create from: mid.u64)) d: 0
     stampForcedTyperef :st frame: rf :ast :unitDecl :thisName nid: rn
     if fnNodeId == 0 then return
-    fnN: ast.nodes.get i: fnNodeId.u64
-    match (
-        fnN
-    ) case functiondef then {
-        with pit: fnN.parameters.iterate do for pId: pit loop {
-            pn: ast.nodes.get i: pId.u64
-            if pn.namedoperation then {
-                pRoot: (zast.nameTextAt
-                    :ast
-                    ref: (rootNameIdOf :ast n: (ast.nodes.get i: pn.operation.u64))
-                )
-                if pRoot.stringview == "this" then {
+    fr: fnRefAt :ast nid: (zast.nodeid.create from: fnNodeId.u32)
+    if (fr.nid.isZero) == false then {
+        kP: u64
+        for kP < fr.nparams loop {
+            pId: (zast.fnParamAt :ast nid: fr.nid i: kP).u32
+            kP = kP + 1
+            pn: argRefAt :ast nid: (zast.nodeid.create from: pId.u32)
+            if (pn.nid.isZero) == false then {
+                # the parameter's root name is read through a view scoped to
+                # this block: the stamp below lends ast
+                isThisRoot: false
+                {
+                    pRoot: (zast.nameTextAt
+                        :ast
+                        ref: (rootNameIdOf :ast n: (ast.nodes.get i: pn.operation.u64))
+                    )
+                    isThisRoot = pRoot.stringview == "this"
+                }
+                if isThisRoot then {
                     (ztyping.nodeTypeSet
                         tbl: st.typing.nodeType
                         nid: pn.operation.u64
@@ -5223,7 +5244,7 @@ stampMemberSignature: function {
                 }
             }
         }
-    } else null
+    }
 }
 
 
@@ -5396,7 +5417,8 @@ stampForcedTyperef: function {
     {
         # an owned copy: the walks below lend ast
         rootN: zast.nameTextCopy :ast ref: (rootNameIdOf :ast n: (ast.nodes.get i: tnid))
-        childN: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: tnid))
+        # an owned copy: the walks below lend ast
+        childN: zast.nameTextCopy :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: tnid))
         if childN.length > 0 when rootN.length > 0 then {
             hUnitDecl: unitDeclOfNameOrOwn :st :frame nameId: (nameIdOf :ast name: rootN.stringview)
             dd: (descendNamed
@@ -6302,7 +6324,7 @@ objectTypedefBaseId: function {ast: Ast.view onode: zast.ObjectDefData.view} out
 # does not resolve.
 typedefFieldBaseTid: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     n: Node.view
@@ -6310,7 +6332,6 @@ typedefFieldBaseTid: function {
     match (
         n
     ) case dottedpath then {
-        bn: ast.nodes.get i: n.parent.u64
         memberIdAt: (resolveMonoRefInline
             :st
             :frame
@@ -6323,7 +6344,7 @@ typedefFieldBaseTid: function {
             nid: 0
         )
         if memberIdAt > 0 then return memberIdAt
-        an: paramTypeBaseName :ast op: bn
+        an: paramTypeBaseName :ast op: (ast.nodes.get i: n.parent.u64)
         if an.length == 0 then return 0
         return (resolveAtomType :st :frame :ast :unitDecl nm: an.stringview thisName: "")
     } else {
@@ -7462,7 +7483,8 @@ detectTagAccessor: function {
     tc: zast.nameTextCopy :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: am.operation.u64))
     if tc.stringview != "tag" then return
     if (isNumericTypeName name: tp.stringview) == false then return
-    mname: zast.nameTextAt :ast ref: am.name
+    # an owned copy: the walks below lend ast
+    mname: zast.nameTextCopy :ast ref: am.name
     nid: (resolveTyperefShellMarked
         :st
         :frame
@@ -7878,7 +7900,7 @@ resolveVariant: function {
 # discriminator as a C `enum` ignores it: an enum is `int`, so `tag: u8.tag`
 # silently became four bytes.
 variantTagBaseTid: function {
-    ast: Ast.view
+    ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
@@ -7892,19 +7914,24 @@ variantTagBaseTid: function {
     with iter: asItems.iterate do for amId: iter loop {
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
-            opNode: ast.nodes.get i: am.operation.u64
+            # the member's operation is read through a view scoped to this
+            # block: the lookup below lends ast
             isTagRef: false
-            match (
-                opNode
-            ) case dottedpath then {
-                if (atomNameId
-                    :ast
-                    n: (ast.nodes.get i: opNode.child.u64)
-                ) == zast.wkTag then isTagRef = true
-            } else null
+            bn: String
+            {
+                opNode: ast.nodes.get i: am.operation.u64
+                match (
+                    opNode
+                ) case dottedpath then {
+                    if (atomNameId
+                        :ast
+                        n: (ast.nodes.get i: opNode.child.u64)
+                    ) == zast.wkTag then isTagRef = true
+                } else null
+                if isTagRef then bn = dottedParentName :ast n: opNode
+            }
             if isTagRef then {
                 sawTag = true
-                bn: dottedParentName :ast n: opNode
                 if bn.length > 0 then {
                     rr: (walkLookupTyperef
                         :st
@@ -7936,7 +7963,7 @@ variantTagBaseTid: function {
 }
 
 variantTagIsOrdinalPlain: function {
-    ast: Ast.view
+    ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
@@ -7946,18 +7973,23 @@ variantTagIsOrdinalPlain: function {
     with iter: asItems.iterate do for amId: iter loop {
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
-            opNode: ast.nodes.get i: am.operation.u64
+            # the member's operation is read through a view scoped to this
+            # block: the lookup below lends ast
             isTagRef: false
-            match (
-                opNode
-            ) case dottedpath then {
-                if (atomNameId
-                    :ast
-                    n: (ast.nodes.get i: opNode.child.u64)
-                ) == zast.wkTag then isTagRef = true
-            } else null
+            bn: String
+            {
+                opNode: ast.nodes.get i: am.operation.u64
+                match (
+                    opNode
+                ) case dottedpath then {
+                    if (atomNameId
+                        :ast
+                        n: (ast.nodes.get i: opNode.child.u64)
+                    ) == zast.wkTag then isTagRef = true
+                } else null
+                if isTagRef then bn = dottedParentName :ast n: opNode
+            }
             if isTagRef then {
-                bn: dottedParentName :ast n: opNode
                 if bn.length == 0 then {
                     result = false
                 } else {
@@ -8177,7 +8209,8 @@ attachUnionArm: function {
         )
     }
     ordinalArmNames.add item: fm.name.u64
-    an: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation.u64))
+    # an owned copy: the walks below lend ast
+    an: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation.u64))
     # A `(Box T)` arm collapses to T: the arm child IS the boxed
     # valtype. A union arm is heap-celled whichever family it holds,
     # so the spelling changes no emitted C; it exists so the
@@ -8199,36 +8232,34 @@ attachUnionArm: function {
             } else null
         }
     }
-    {
-        acn: ast.nodes.get i: armOpId.u64
-        match (
-            acn
-        ) case call then {
-            bxh: (zast.nameTextAt
-                :ast
-                ref: (atomNameId :ast n: (ast.nodes.get i: acn.callable.u64))
-            )
-            if bxh.stringview == "Box" then {
-                bxt: (optU64Or
-                    o: (walkLookupTyperef :st :frame :ast :unitDecl base: "Box")
-                    d: 0)
-                isBx: false
-                if bxt > 0 then {
-                    if (st.reg.typetypeOf typeId: (ztypes.tid.create from: bxt.u64)) == ztypes.ztypetype.classType then {
-                        if (st.typing.declMemberCount ownerTid: (ztypes.tid.create from: bxt.u64)) == 0 then isBx = true
-                    }
-                }
-                if isBx then {
-                    baiter: acn.arguments.iterate
-                    for baId: baiter loop {
-                        ba: argRefAt :ast nid: (zast.nodeid.create from: baId.u32)
-                        if (ba.nid.isZero) == false then {
-                            if armTe == fm.operation then armTe = ba.operation
-                        }
-                    }
+    # the arm's call shape is read as plain values: the lookup below lends ast
+    isBoxCall: false
+    acr: callRefAt :ast nid: armOpId
+    if (acr.nid.isZero) == false then {
+        bxh: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: acr.callable.u64))
+        isBoxCall = bxh.stringview == "Box"
+    }
+    if isBoxCall then {
+        bxt: (optU64Or
+            o: (walkLookupTyperef :st :frame :ast :unitDecl base: "Box")
+            d: 0)
+        isBx: false
+        if bxt > 0 then {
+            if (st.reg.typetypeOf typeId: (ztypes.tid.create from: bxt.u64)) == ztypes.ztypetype.classType then {
+                if (st.typing.declMemberCount ownerTid: (ztypes.tid.create from: bxt.u64)) == 0 then isBx = true
+            }
+        }
+        if isBx then {
+            kB: u64
+            for kB < acr.nargs loop {
+                baId: (zast.callArgAt :ast nid: acr.nid i: kB).u32
+                kB = kB + 1
+                ba: argRefAt :ast nid: (zast.nodeid.create from: baId.u32)
+                if (ba.nid.isZero) == false then {
+                    if armTe == fm.operation then armTe = ba.operation
                 }
             }
-        } else null
+        }
     }
     cid: (resolveTyperefShellMarked
         :st
@@ -10122,13 +10153,16 @@ resolveAliasKeyIn: function {
 # template that plainly has parameters, which costs it the trie. `addGenericParam`
 # already refuses a name it holds, so re-registering is a no-op.
 ensureDefGenericParams: function {
-    st: zenv.ZSymbolTable.view
+    st: zenv.ZSymbolTable
     ast: Ast.view
     declId: ztypes.declid
 } is {
     if declId.isZero then return
-    dgG: st.typing.decls.get i: declId.u64
-    dnG: dgG.node.u64
+    dnG: u64
+    {
+        dgG: st.typing.decls.get i: declId.u64
+        dnG = dgG.node.u64
+    }
     if dnG == 0 then return
     bmG: ast.nodes.get i: dnG
     if bmG.namedoperation then {
@@ -10232,8 +10266,8 @@ descendNamed: function {
         dnode = dgo.node.u64
     }
     if dnode == 0 then return (ztypes.tid.create from: tid.u64)
-    bm: ast.nodes.get i: dnode
-    if bm.namedoperation then {
+    bmr: argRefAt :ast nid: (zast.nodeid.create from: dnode.u32.orPanic)
+    if (bmr.nid.isZero) == false then {
         (resolveDef
             :st
             frame: rf
@@ -10241,7 +10275,7 @@ descendNamed: function {
             :ast
             :unitDecl
             defName: name
-            defnId: (zast.nodeid.create from: bm.operation.u32)
+            defnId: bmr.operation
         )
     }
     if classified == false then {
@@ -12405,7 +12439,7 @@ scanMainForInstantiations: function {
     st: zenv.ZSymbolTable.view
     frame: ztypes.declid
     program: Node
-    reqs: (List InstReq).view
+    reqs: List InstReq
 } is {
     match (
         program
@@ -16593,9 +16627,12 @@ checkConstraintSat: function {
 # itself define `Any` reports the standard unknown-type error. system.z
 # defines `Any`, so its residual bounds pass; a user unit passes only by
 # defining its own `Any`.
-checkAnyBounds: function {ast: Ast.view st: zenv.ZSymbolTable.view} is {
+checkAnyBounds: function {ast: Ast.view st: zenv.ZSymbolTable} is {
     anyNid: zast.poolFind pool: ast.names text: "Any"
     if anyNid.isZero then return
+    # the declaration nodes to report, collected while the parameter table is
+    # read and reported after: the report lends st
+    anyNodes: (ListVal u32)
     with git: st.reg.genericParams.iterateItems do for ge: git loop {
         hasAny: false
         with pit: ge.value.params.iterate do for pd: pit loop {
@@ -16629,21 +16666,22 @@ checkAnyBounds: function {ast: Ast.view st: zenv.ZSymbolTable.view} is {
                 defined = true
             }
             if (defined) == false then {
-                if declNode > 0 then {
-                    tn: ast.nodes.get i: declNode.u64
-                    m: "Unknown type 'Any'".string
-                    (addResolveErrorH
-                        :st
-                        nodeid: (nodeId n: tn)
-                        lineno: (nodeLine n: tn)
-                        colno: (nodeCol n: tn)
-                        e: zast.err.badReference
-                        msg: m
-                        width: 3
-                    )
-                }
+                if declNode > 0 then anyNodes.append from: declNode
             }
         }
+    }
+    with rit: anyNodes.iterate do for dn: rit loop {
+        tn: ast.nodes.get i: dn.u64
+        m: "Unknown type 'Any'".string
+        (addResolveErrorH
+            :st
+            nodeid: (nodeId n: tn)
+            lineno: (nodeLine n: tn)
+            colno: (nodeCol n: tn)
+            e: zast.err.badReference
+            msg: m
+            width: 3
+        )
     }
 }
 
@@ -18999,7 +19037,8 @@ checkTypedefCreate: function {
         arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
         if (arg.nid.isZero) == false then {
             if (found) == false then {
-                an: zast.nameTextAt :ast ref: arg.name
+                # an owned copy: the walks below lend ast
+                an: zast.nameTextCopy :ast ref: arg.name
                 isFrom: false
                 if an.length == 0 then {
                     isFrom = true
@@ -30993,12 +31032,17 @@ scanTypeNameOpt: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     oId: zast.nodeid
 } is {
     if oId.isZero then return
-    o: ast.nodes.get i: oId.u64
-    bn: baseTypeName :ast n: o
+    # the row is read through a view scoped to this block: the walk below
+    # lends ast
+    bn: String
+    {
+        o: ast.nodes.get i: oId.u64
+        bn = baseTypeName :ast n: o
+    }
     if bn.length > 0 then maybeWalkMethods :st :frame :unitDecl :ast name: bn.stringview
 
 }
@@ -31042,51 +31086,48 @@ scanMemberSignatures: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     ast: Ast
-    op: Node.view
+    opId: zast.nodeid
 } is {
-    if (nodeIsFunctiondef o: op) then {
-        scanFnSig :st :frame :unitDecl :ast opId: (nodeId n: op)
-    } else {
-        match (
-            op
-        ) case objectdef then {
-            with fiter: op.isItems.iterate do for fmId: fiter loop {
-                fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
-                if (fm.nid.isZero) == false then {
-                    if (nodeIsFunctiondef o: (ast.nodes.get i: fm.operation.u64)) == false then {
-                        bn: baseTypeName :ast n: (ast.nodes.get i: fm.operation.u64)
-                        if bn.length > 0 then {
-                            maybeWalkMethods :st :frame :unitDecl :ast name: bn.stringview
-                        }
+    arm: rowArmAt :ast nid: opId
+    match (
+        arm
+    ) case functiondef then {
+        scanFnSig :st :frame :unitDecl :ast :opId
+    } case objectdef then {
+        orf: objRefAt :ast nid: opId
+        kF: u64
+        for kF < orf.nis loop {
+            fmId: (zast.objIsItemAt :ast nid: opId i: kF).u32
+            kF = kF + 1
+            fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
+            if (fm.nid.isZero) == false then {
+                if (nodeIsFunctiondef o: (ast.nodes.get i: fm.operation.u64)) == false then {
+                    bn: baseTypeName :ast n: (ast.nodes.get i: fm.operation.u64)
+                    if bn.length > 0 then {
+                        maybeWalkMethods :st :frame :unitDecl :ast name: bn.stringview
                     }
                 }
             }
-            with iiter: op.isItems.iterate do for imId: iiter loop {
-                im: argRefAt :ast nid: (zast.nodeid.create from: imId.u32)
-                if (im.nid.isZero) == false then {
-                    (scanFnSig
-                        :st
-                        :frame
-                        :unitDecl
-                        :ast
-                        opId: im.operation
-                    )
-                }
+        }
+        kI: u64
+        for kI < orf.nis loop {
+            imId: (zast.objIsItemAt :ast nid: opId i: kI).u32
+            kI = kI + 1
+            im: argRefAt :ast nid: (zast.nodeid.create from: imId.u32)
+            if (im.nid.isZero) == false then {
+                scanFnSig :st :frame :unitDecl :ast opId: im.operation
             }
-            with aiter: op.asItems.iterate do for amId: aiter loop {
-                am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
-                if (am.nid.isZero) == false then {
-                    (scanFnSig
-                        :st
-                        :frame
-                        :unitDecl
-                        :ast
-                        opId: am.operation
-                    )
-                }
+        }
+        kA: u64
+        for kA < orf.nas loop {
+            amId: (zast.objAsItemAt :ast nid: opId i: kA).u32
+            kA = kA + 1
+            am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
+            if (am.nid.isZero) == false then {
+                scanFnSig :st :frame :unitDecl :ast opId: am.operation
             }
-        } else null
-    }
+        }
+    } else null
 }
 
 # maybeWalkMethods -- the resolution-time method-walk trigger: the first time
@@ -31291,7 +31332,7 @@ walkOwnerMethods: function {
             :frame
             :unitDecl
             :ast
-            op: (ast.nodes.get i: mem.operation.u64)
+            opId: mem.operation
         )
         canWalk: objectdefHasMethodBodies :ast op: (ast.nodes.get i: mem.operation.u64)
         # an owner that will not resolve is not walked at all: its own
@@ -31529,7 +31570,7 @@ checkReceiverOwnership: function {
     isLockP: bool
     isGenP: bool
     mkn: StringView
-    pname: StringView
+    pnameId: zast.nameid
 } is {
     # A receiver may be `borrow` (the default) or `view` only:
     # an object cannot own itself. Family-independent -- the
@@ -31568,6 +31609,7 @@ checkReceiverOwnership: function {
         ptn: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
         plln: nodeLine n: (ast.nodes.get i: pm.operation.u64)
         plcl: nodeCol n: (ast.nodes.get i: pm.operation.u64)
+        pname: zast.nameTextAt :ast ref: pnameId
         ml: "Cannot use '.\{mkn}' on valtype parameter '\{pname}' (type '\{ptn}') — locking requires identity (use a class)"
         (addError
             :st
@@ -31647,17 +31689,12 @@ bindFunctionParam: function {
 } is {
     rgot: (optionval.none u64)
     if (fnTid.isZero) == false then rgot = (optionval.some fnTid.u64)
-    pname: zast.nameTextAt :ast ref: pm.name
     pnid: nodeId n: (ast.nodes.get i: pm.operation.u64)
     ptid: paramTypeId :st :ast :unitDecl opNid: pm.operation
     if st.typing.curMonoFnTid > 0 then {
         # per-mono instance walk: the mono FUNCTION child
         # carries the substituted param type
-        mpo: (st.typing.declChildOf
-            pool: ast.names
-            parentTypeId: st.typing.curMonoFnTid
-            name: pname.stringview
-        )
+        mpo: st.typing.declChildOfId parentTypeId: st.typing.curMonoFnTid nameId: pm.name
         match (
             mpo
         ) case some then {
@@ -31672,10 +31709,9 @@ bindFunctionParam: function {
         match (
             fgo3
         ) case some then {
-            fco3: (st.typing.declChildOf
-                pool: ast.names
+            fco3: (st.typing.declChildOfId
                 parentTypeId: (ztypes.tid.create from: fgo3.u64)
-                name: pname.stringview
+                nameId: pm.name
             )
             match (
                 fco3
@@ -31749,7 +31785,7 @@ bindFunctionParam: function {
         :isLockP
         :isGenP
         mkn: mkn.stringview
-        pname: pname.stringview
+        pnameId: pm.name
     )
     own: ownershipOfParam o: (pathOwnership
         :ast
@@ -31991,7 +32027,7 @@ checkFunctionBody: function {
 # so it never holds the iterator lock while passing unitBody).
 walkUnitTemplateBodies: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     unitdefId: zast.nodeid
@@ -32024,10 +32060,11 @@ walkUnitTemplateBodies: function {
     for bi < bn loop {
         bmId: bodyIds.get i: bi
         bi = bi + 1
-        bm: ast.nodes.get i: bmId.u64
-        if bm.namedoperation then {
+        bm: argRefAt :ast nid: (zast.nodeid.create from: bmId.u32)
+        if (bm.nid.isZero) == false then {
             if (isFunctionDefOp op: (ast.nodes.get i: bm.operation.u64)) then {
-                dn: zast.nameTextAt :ast ref: bm.name
+                # an owned copy: the body walk below lends ast
+                dn: zast.nameTextCopy :ast ref: bm.name
                 fdecl: ztypes.declid
                 if (tdecl.isZero) == false then fdecl = (st.typing.declFindChild
                     parentDeclId: tdecl
@@ -32136,7 +32173,7 @@ walkGenericUnitTemplates: function {st: zenv.ZSymbolTable frame: ztypes.declid p
 # namespace's signatures reach the emitter with unstamped nodes, which surfaces
 # as a loud E0500 rather than a diagnostic.
 checkNamespaceBodies: function {
-    ast: Ast.view
+    ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
@@ -32164,8 +32201,8 @@ checkNamespaceBodies: function {
     for bi < bn loop {
         bmId: bodyIds.get i: bi
         bi = bi + 1
-        bm: ast.nodes.get i: bmId.u64
-        if bm.namedoperation then {
+        bm: argRefAt :ast nid: (zast.nodeid.create from: bmId.u32)
+        if (bm.nid.isZero) == false then {
             if (zast.unitOpDeclaresUnit :ast opId: bm.operation) then {
                 (checkNamespaceBodies
                     :ast
@@ -32175,7 +32212,8 @@ checkNamespaceBodies: function {
                     unitdefId: bm.operation
                 )
             } else {
-                defNameText: zast.nameTextAt :ast ref: bm.name
+                # an owned copy: the body walk below lends ast
+                defNameText: zast.nameTextCopy :ast ref: bm.name
                 bmDecl9: st.typing.declFindChild parentDeclId: nsDecl nameId: bm.name
                 cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: bm.operation.u32)
                 (checkFunctionBody
@@ -32195,7 +32233,7 @@ checkNamespaceBodies: function {
 }
 
 checkUnitBodies: function {
-    ast: Ast.view
+    ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
@@ -32209,9 +32247,10 @@ checkUnitBodies: function {
         for mi < mn loop {
             mmId: bodyIds.get i: mi
             mi = mi + 1
-            mm: ast.nodes.get i: mmId.u64
-            if mm.namedoperation then {
-                memberName: zast.nameTextAt :ast ref: mm.name
+            mm: argRefAt :ast nid: (zast.nodeid.create from: mmId.u32)
+            if (mm.nid.isZero) == false then {
+                # an owned copy: the body walk below lends ast
+                memberName: zast.nameTextCopy :ast ref: mm.name
                 if memberName.stringview == "main" when (isFunctionDefOp
                     op: (ast.nodes.get i: mm.operation.u64)
                 ) then {
@@ -32253,9 +32292,10 @@ checkUnitBodies: function {
         for bi < bn loop {
             bmId: bodyIds.get i: bi
             bi = bi + 1
-            bm: ast.nodes.get i: bmId.u64
-            if bm.namedoperation then {
-                defName: zast.nameTextAt :ast ref: bm.name
+            bm: argRefAt :ast nid: (zast.nodeid.create from: bmId.u32)
+            if (bm.nid.isZero) == false then {
+                # an owned copy: the body walk below lends ast
+                defName: zast.nameTextCopy :ast ref: bm.name
                 # the target unit's own definitions are walked because something
                 # DEMANDED them, exactly as a dependency's are. Walking every one
                 # regardless is what made the root the one unit in the program
@@ -32412,7 +32452,7 @@ walkOwedNamespaceBodies: function {st: zenv.ZSymbolTable frame: ztypes.declid as
 #
 # Template owners are skipped: their bodies check per instantiation.
 # Deterministic: unit load order, declaration order.
-walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast: Ast.view} is {
+walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast: Ast} is {
     swN: ast.units.length
     swI: u64
     for swI < swN loop {
@@ -32441,13 +32481,22 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
                     )
                     swWalked: st.typing.declIsWalked declId: swd
                     if swWalked == false then {
-                        swop: ast.nodes.get i: swm.operation.u64
+                        # the owner's definition row is read through a view
+                        # scoped to this block: the walks below lend ast
                         swDo: false
-                        match (
-                            swop
-                        ) case objectdef then {
-                            if (hasGenericParam :ast items: swop.asItems) == false then swDo = true
-                        } else null
+                        swHasBodies: false
+                        {
+                            swop: ast.nodes.get i: swm.operation.u64
+                            match (
+                                swop
+                            ) case objectdef then {
+                                if (hasGenericParam
+                                    :ast
+                                    items: swop.asItems
+                                ) == false then swDo = true
+                            } else null
+                            swHasBodies = objectdefHasMethodBodies :ast op: swop
+                        }
                         # Whose dead code it is decides whether this compile
                         # cares. An owner in the program's OWN unit is worth
                         # reporting on: the author wrote it and can fix it. A
@@ -32461,10 +32510,7 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
                         # Asked HERE, not per member: resolvedByIds RESOLVES as
                         # it walks, so probing every member of every unit
                         # settles types this compile never needed.
-                        if swDo when (objectdefHasMethodBodies
-                            :ast
-                            op: swop
-                        ) then {
+                        if swDo when swHasBodies then {
                             swKeep: st.typing.eagerAll
                             if (swKeep) == false then {
                                 uq9z: (unitDeclOfName
@@ -32486,7 +32532,7 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
                             }
                             if (swKeep) == false then swDo = false
                         }
-                        if swDo when (objectdefHasMethodBodies :ast op: swop) then {
+                        if swDo when swHasBodies then {
                             # the walked mark is what emission reads, so it is
                             # earned by a walk that can happen: resolve first,
                             # and a miss marks nothing.
@@ -32501,7 +32547,7 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
                             )
                             if swTid == 0 then swDo = false
                         }
-                        if swDo when (objectdefHasMethodBodies :ast op: swop) then {
+                        if swDo when swHasBodies then {
                             st.typing.declSetWalked declId: swd
                             unitDecl911: (unitDeclOfNameOrOwn :st :frame nameId: swu.name)
                             (walkOwnerMethods
@@ -34441,10 +34487,8 @@ foldCaseArm: function {
     cliter: n.clauses.iterate
     for clId: cliter loop {
         if known then {
-            cl: ast.nodes.get i: clId.u64
-            match (
-                cl
-            ) case caseclause then {
+            cl: caseClauseRefAt :ast nid: (zast.nodeid.create from: clId.u32)
+            if (cl.nid.isZero) == false then {
                 if cl.name != 0 then {
                     known = false
                 } else {
@@ -35483,13 +35527,13 @@ resolveBinopConstantDef: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    defn: Node.view
+    defnId: zast.nodeid
 } is {
     # A constant expression (`COMBINED: OFFSET + SCALE`): the operand
     # walk stamps the refs and the binop; a literal result materialises
     # to its default, a concrete one (an already-materialised constant)
     # keeps it.
-    bt: constantOperandType :st :frame :ast :unitDecl nid: (zast.nodeIdOf n: defn)
+    bt: constantOperandType :st :frame :ast :unitDecl nid: defnId
     base2: ""
     if bt == st.reg.literalIntTid then base2 = "i64"
     if bt == st.reg.literalFloatTid then base2 = "f64"
@@ -35729,14 +35773,13 @@ resolveConstantDef: function {
             defn: cdr
         )
     } case binop then {
-        bn: ast.nodes.getMut i: defnId.u64
         (resolveBinopConstantDef
             :ast
             :st
             :unitDecl
             :frame
             :defName
-            defn: bn
+            :defnId
         )
     } else null
 }
