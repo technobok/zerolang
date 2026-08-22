@@ -3619,29 +3619,43 @@ dottedTyperefShell: function {
     ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    typeExpr: zast.DottedPathData.view
+    nid: zast.nodeid
     thisName: StringView
 } out u64 is {
+    # the dotted row's parent and child ids, read through a view scoped to
+    # this block: the resolutions below lend ast
+    parentId: zast.nodeid
+    childId: zast.nodeid
+    {
+        typeExpr: ast.nodes.get i: nid.u64
+        match (
+            typeExpr
+        ) case dottedpath then {
+            parentId = typeExpr.parent
+            childId = typeExpr.child
+        } else null
+    }
+    if parentId.isZero then return 0
     # A cross-unit qualified type ref (zlexer.Token) names the MEMBER in the
     # referenced unit -- resolve the child like a bare atom. Otherwise a dotted
     # type-expr peels to its parent: an ownership/access strip marker
     # (Container.private.lock) or a variant/union subtype default where the arm
     # is the default value and the type is the parent (direction.north).
     # owned copies: the resolutions below lend ast
-    pNm: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
+    pNm: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: parentId.u64))
     if (nameDenotesUnit
         :frame
         :st
-        nameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
+        nameId: (atomNameId :ast n: (ast.nodes.get i: parentId.u64))
     ) then {
         cNm: (zast.nameTextCopy
             :ast
-            ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
+            ref: (atomNameId :ast n: (ast.nodes.get i: childId.u64))
         )
         (demandUnitMember
             :st
-            unitNameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64))
-            nameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
+            unitNameId: (atomNameId :ast n: (ast.nodes.get i: parentId.u64))
+            nameId: (atomNameId :ast n: (ast.nodes.get i: childId.u64))
         )
         ud8: unitDeclOfNameOrOwn :st :frame nameId: (nameIdOf :ast name: pNm.stringview)
         did8: (descendNamed
@@ -3660,7 +3674,7 @@ dottedTyperefShell: function {
         # literal default (i64/f64), silently mistyping the slot
         nSfx: (zast.nameTextCopy
             :ast
-            ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64))
+            ref: (atomNameId :ast n: (ast.nodes.get i: childId.u64))
         )
         isSfx: isNumericTypeName name: nSfx.stringview
         if (isNumericLiteralName name: pNm.stringview) when isSfx then {
@@ -3683,8 +3697,8 @@ dottedTyperefShell: function {
             nsro: unitDecl
             if (nsro.isZero) == false then nsRoot = nsro
         }
-        nsParentNm: atomNameId :ast n: (ast.nodes.get i: typeExpr.parent.u64)
-        nsChildNm: atomNameId :ast n: (ast.nodes.get i: typeExpr.child.u64)
+        nsParentNm: atomNameId :ast n: (ast.nodes.get i: parentId.u64)
+        nsChildNm: atomNameId :ast n: (ast.nodes.get i: childId.u64)
         nsTid: (nestedUnitMemberTid
             :st
             :frame
@@ -3695,121 +3709,179 @@ dottedTyperefShell: function {
             defName: nsChildNm
         )
         if (nsTid.isZero) == false then return nsTid.u64
-        return (resolveTyperefShell
-            :st
-            :frame
-
-            :ast
-            :unitDecl
-            typeExpr: (ast.nodes.get i: typeExpr.parent.u64)
-            :thisName
-        )
+        return (resolveTyperefShell :st :frame :ast :unitDecl nid: parentId :thisName)
     }
 }
 
 
 # resolve a type reference to its shell type id, deferring member resolution.
+# resolveTyperefAtomShell -- a bare atom (or label) type ref: the name
+# resolves as an atom type; an atom also demands the definition it names.
+resolveTyperefAtomShell: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nameId: zast.nameid
+    thisName: StringView
+    demand: bool
+} out u64 is {
+    # an owned copy: the resolution below lends ast
+    teR: zast.nameTextCopy :ast ref: nameId
+    if demand then {
+        frame93: (frameFor :st :frame :unitDecl)
+        (demandDefinition
+            :st
+            frame: frame93
+            :nameId
+        )
+    }
+    return (resolveAtomType
+        :st
+        :frame
+
+        :ast
+        :unitDecl
+        nm: teR.stringview
+        :thisName
+    )
+}
+
 resolveTyperefShell: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    typeExpr: Node.view
+    nid: zast.nodeid
     thisName: StringView
 } out u64 is {
-    match (
-        typeExpr
-    ) case atomid then {
-        # an owned copy: the resolution below lends ast
-        teR: zast.nameTextCopy :ast ref: typeExpr.name
-        frame93: (frameFor :st :frame :unitDecl)
-        (demandDefinition
-            :st
-            frame: frame93
-            nameId: typeExpr.name
-        )
-        return (resolveAtomType
-            :st
-            :frame
-
-            :ast
-            :unitDecl
-            nm: teR.stringview
-            :thisName
-        )
-    } case labelvalue then {
-        teL: zast.nameTextCopy :ast ref: typeExpr.name
-        return (resolveAtomType
-            :st
-            :frame
-
-            :ast
-            :unitDecl
-            nm: teL.stringview
-            :thisName
-        )
-    } case expression then {
-        return (resolveTyperefShell
-            :st
-            :frame
-
-            :ast
-            :unitDecl
-            typeExpr: (ast.nodes.get i: typeExpr.expression.u64)
-            :thisName
-        )
-    } case call then {
-        imid8: (resolveMonoRefParts
-            :st
-            :frame
-
-            :ast
-            :unitDecl
-            :thisName
-            enclDecl: ztypes.declid
-            callableNid: typeExpr.callable
-            arguments: typeExpr.arguments
-            nid: 0
-        )
-        if imid8 > 0 then return imid8
-        suffix: atomName :ast n: (ast.nodes.get i: typeExpr.callable.u64)
-        frame94: (frameFor :st :frame :unitDecl)
-        (demandDefinition
-            :st
-            frame: frame94
-            nameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.callable.u64))
-        )
-        aiter: typeExpr.arguments.iterate
-        for argId: aiter loop {
-            arg: ast.nodes.get i: argId.u64
-            match (
-                arg
-            ) case namedoperation then {
-                an: typeArgSuffixName :st :frame :ast op: (ast.nodes.get i: arg.operation.u64)
-                suffix.append "_"
-                suffix.append an
-                (demandTyperefNames
-                    :st
-                    :frame
-                    :ast
-                    :unitDecl
-                    typeExpr: (ast.nodes.get i: arg.operation.u64)
-                )
-            } else null
-        }
-        return (st.reg.newType name: suffix.stringview typetype: ztypes.ztypetype.recordType)
-    } case dottedpath then {
+    # the row is read through a view scoped to this block (1 atomid,
+    # 2 labelvalue, 3 expression, 4 call, 5 dottedpath, 0 anything else): the
+    # resolutions below lend ast exclusively
+    arm: u32
+    nameId: zast.nameid
+    innerId: zast.nodeid
+    callableId: zast.nodeid
+    argIds: (ListVal u32)
+    {
+        typeExpr: ast.nodes.get i: nid.u64
+        match (
+            typeExpr
+        ) case atomid then {
+            arm = 1
+            nameId = typeExpr.name
+        } case labelvalue then {
+            arm = 2
+            nameId = typeExpr.name
+        } case expression then {
+            arm = 3
+            innerId = typeExpr.expression
+        } case call then {
+            arm = 4
+            callableId = typeExpr.callable
+            with ait: typeExpr.arguments.iterate do for a: ait loop argIds.append from: a
+        } case dottedpath then {
+            arm = 5
+        } else null
+    }
+    if arm == 1 then return (resolveTyperefAtomShell
+        :st
+        :frame
+        :ast
+        :unitDecl
+        :nameId
+        :thisName
+        demand: true
+    )
+    if arm == 2 then return (resolveTyperefAtomShell
+        :st
+        :frame
+        :ast
+        :unitDecl
+        :nameId
+        :thisName
+        demand: false
+    )
+    if arm == 3 then return (resolveTyperefShell :st :frame :ast :unitDecl nid: innerId :thisName)
+    if arm == 4 then return (resolveTyperefCallShell
+        :st
+        :frame
+        :ast
+        :unitDecl
+        :thisName
+        :callableId
+        :argIds
+    )
+    if arm == 5 then {
         return (dottedTyperefShell
             :st
             :ast
             :unitDecl
             :frame
-            :typeExpr
+            :nid
             :thisName
         )
-    } else {
-        return (st.reg.newType name: "?" typetype: ztypes.ztypetype.recordType)
     }
+    return (st.reg.newType name: "?" typetype: ztypes.ztypetype.recordType)
+}
+
+# resolveTyperefCallShell -- a parameterized type ref: the mono it names
+# when resolution knows one, else a fresh record shell named by the head
+# and its argument suffixes, each argument's type names demanded on the way.
+resolveTyperefCallShell: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    thisName: StringView
+    callableId: zast.nodeid
+    argIds: (ListVal u32).view
+} out u64 is {
+    imid8: (resolveMonoRefParts
+        :st
+        :frame
+
+        :ast
+        :unitDecl
+        :thisName
+        enclDecl: ztypes.declid
+        callableNid: callableId
+        arguments: argIds
+        nid: 0
+    )
+    if imid8 > 0 then return imid8
+    suffix: atomName :ast n: (ast.nodes.get i: callableId.u64)
+    frame94: (frameFor :st :frame :unitDecl)
+    (demandDefinition
+        :st
+        frame: frame94
+        nameId: (atomNameId :ast n: (ast.nodes.get i: callableId.u64))
+    )
+    with ait: argIds.iterate do for argId: ait loop {
+        # the argument is read through a view scoped to this block
+        opId: zast.nodeid
+        {
+            arg: ast.nodes.get i: argId.u64
+            match (
+                arg
+            ) case namedoperation then {
+                opId = arg.operation
+            } else null
+        }
+        if (opId.isZero) == false then {
+            an: typeArgSuffixName :st :frame :ast op: (ast.nodes.get i: opId.u64)
+            suffix.append "_"
+            suffix.append an
+            (demandTyperefNames
+                :st
+                :frame
+                :ast
+                :unitDecl
+                typeExpr: (ast.nodes.get i: opId.u64)
+            )
+        }
+    }
+    return (st.reg.newType name: suffix.stringview typetype: ztypes.ztypetype.recordType)
 }
 
 # typeofSourceType -- resolve a typeof field's SOURCE without a body walk: a
@@ -3875,42 +3947,50 @@ resolveTyperefShellMarked: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     ownerId: u64
-    typeExpr: Node.view
+    nid: zast.nodeid
     thisName: StringView
 } out ztypes.tid is {
+    # the row is read through a view scoped to this block: the resolutions
+    # below lend ast exclusively
     isTof: false
-    match (
-        typeExpr
-    ) case typeofexpr then {
-        isTof = true
-        tsx: ast.nodes.get i: typeExpr.source.u64
-        rid: typeofSourceType :st :frame :ast :unitDecl :ownerId n: tsx
+    sourceId: zast.nodeid
+    {
+        typeExpr: ast.nodes.get i: nid.u64
+        match (
+            typeExpr
+        ) case typeofexpr then {
+            isTof = true
+            sourceId = typeExpr.source
+        } else null
+    }
+    if isTof then {
+        rid: u64
+        {
+            tsx: ast.nodes.get i: sourceId.u64
+            rid = typeofSourceType :st :frame :ast :unitDecl :ownerId n: tsx
+        }
         if rid > 0 then {
             # the node's stamp defers to the post-demand pass so it lands
             # on the globally-resolved type, not an early shell
             tnm: st.reg.nameOf tid: (ztypes.tid.create from: rid.u64)
             if tnm.length > 0 then {
                 (st.typing.pendingTyperef.set
-                    key: typeExpr.nodeid.u64
+                    key: nid.u64
                     value: (nameIdOf :ast name: tnm.stringview)
                 )
-                st.typing.pendingTyperefFrame.set key: typeExpr.nodeid.u64 value: frame
+                st.typing.pendingTyperefFrame.set key: nid.u64 value: frame
             }
             return (ztypes.tid.create from: rid)
         }
-    } else null
+    }
     prevCE: st.typing.inContainmentEdge
     st.typing.inContainmentEdge = true
-    cid: resolveTyperefShell :st :frame :ast :unitDecl :typeExpr :thisName
+    cid: resolveTyperefShell :st :frame :ast :unitDecl :nid :thisName
     st.typing.inContainmentEdge = prevCE
     if isTof then {
-        match (
-            typeExpr
-        ) case typeofexpr then {
-            tk: cid
-            tv: typeExpr.nodeid
-            st.typing.typeofShell.set key: tk value: tv
-        } else null
+        tk: cid
+        tv: nid
+        st.typing.typeofShell.set key: tk value: tv
     }
     return (ztypes.tid.create from: cid)
 }
@@ -4363,7 +4443,7 @@ registerValueParam: function {
 
         :ast
         :unitDecl
-        typeExpr: (ast.nodes.get i: pm.operation.u64)
+        nid: pm.operation
         :thisName
     )
     (st.typing.setMemberType
@@ -5272,7 +5352,7 @@ stampForcedTyperef: function {
 
             :ast
             :unitDecl
-            typeExpr: (ast.nodes.get i: tnid)
+            nid: (zast.nodeid.create from: tnid.u32.orPanic)
             :thisName
         )
         if rs > 0 then {
@@ -6996,7 +7076,7 @@ attachRecordField: function {
             :ast
             :unitDecl
             ownerId: 0
-            typeExpr: (ast.nodes.get i: fm.operation.u64)
+            nid: fm.operation
             thisName: defName
         )
         (st.typing.setMemberType
@@ -7363,7 +7443,7 @@ detectTagAccessor: function {
         :ast
         :unitDecl
         ownerId: 0
-        typeExpr: (ast.nodes.get i: am.operation.u64)
+        nid: am.operation
         thisName: defName
     )
     if nid.isZero then return
@@ -7682,7 +7762,7 @@ resolveVariant: function {
                 :ast
                 :unitDecl
                 ownerId: 0
-                typeExpr: (ast.nodes.get i: fm.operation.u64)
+                nid: fm.operation
                 thisName: defName
             )
             (st.typing.setMemberType
@@ -8140,7 +8220,7 @@ attachUnionArm: function {
         :ast
         :unitDecl
         ownerId: 0
-        typeExpr: (ast.nodes.get i: armTe.u64)
+        nid: armTe
         thisName: defName
     )
     if armTe != fm.operation then {
@@ -8660,7 +8740,7 @@ resolveNamedFieldSlot: function {
         :ast
         :unitDecl
         ownerId: cid
-        typeExpr: (ast.nodes.get i: fm.operation.u64)
+        nid: fm.operation
         thisName: defName
     )
     (st.typing.setMemberType
@@ -14277,7 +14357,7 @@ instArgTypeOf: function {
 
                 :ast
                 unitDecl: r.declUnit
-                typeExpr: (ast.nodes.get i: nid)
+                nid: (zast.nodeid.create from: nid.u32.orPanic)
                 thisName: ""
             )
         }
