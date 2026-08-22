@@ -21106,23 +21106,29 @@ checkNumericSuffixCast: function {
 dottedBaseTid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     dp: zast.DottedPathData.view
 } out ztypes.tid is {
     # the base of a dotted path is a reference, not a bare value: a type
     # name there must not construct (Counter.create, unit.Type.arm). Only
     # name-shaped bases suppress -- an expression base walks normally so
-    # atoms inside its args still stamp.
+    # atoms inside its args still stamp. A `.take` child makes the base a
+    # function REFERENCE: the base walk must not auto-call it. Both shapes
+    # are read through views scoped to this block: the base walk lends ast.
+    baseIsName: false
+    childIsTake: false
+    {
+        dpkN: ast.nodes.get i: dp.parent.u64
+        if dpkN.atomid then baseIsName = true
+        if dpkN.dottedpath then baseIsName = true
+        tknm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.child.u64))
+        if tknm.stringview == "take" then childIsTake = true
+    }
     supPrev: st.typing.suppressBareCtor
-    dpkN: ast.nodes.get i: dp.parent.u64
-    if dpkN.atomid then st.typing.suppressBareCtor = true
-    if dpkN.dottedpath then st.typing.suppressBareCtor = true
-    # a `.take` child makes the base a function REFERENCE: the base walk
-    # must not auto-call it
+    if baseIsName then st.typing.suppressBareCtor = true
     supFnPrev: st.typing.suppressFnAutoCall
-    tknm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.child.u64))
-    if tknm.stringview == "take" then st.typing.suppressFnAutoCall = true
-    bt: checkValue :st :unitDecl :ast node: (ast.nodes.get i: dp.parent.u64)
+    if childIsTake then st.typing.suppressFnAutoCall = true
+    bt: checkValueAt :st :unitDecl :ast nid: dp.parent
     st.typing.suppressFnAutoCall = supFnPrev
     st.typing.suppressBareCtor = supPrev
     if bt.isZero then {
@@ -21139,7 +21145,7 @@ dottedBaseTid: function {
             )
             if (ubo.isZero) == false then {
                 bt = ztypes.tid.create from: ubo.u64
-                ubp: nodeId n: (ast.nodes.get i: dp.parent.u64)
+                ubp: dp.parent
                 if ubp > 0 then {
                     setub: ubo
                     stampGate :st nid: ubp.u64 tid: (ztypes.tid.create from: setub.u64)
@@ -21154,7 +21160,7 @@ dottedBaseTid: function {
         mbt: materialiseLiteral :ast :st :unitDecl t: bt
         if mbt != bt then {
             bt = mbt
-            pid: nodeId n: (ast.nodes.get i: dp.parent.u64)
+            pid: dp.parent
             if pid > 0 then {
                 setp: mbt
                 stampGate :st nid: pid.u64 tid: setp
@@ -22817,10 +22823,10 @@ checkSwap: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    swapnode: zast.SwapStmtData.view
+    swapnode: swapref
 } is {
-    checkValue :st :unitDecl :ast node: (ast.nodes.get i: swapnode.lhs.u64)
-    checkValue :st :unitDecl :ast node: (ast.nodes.get i: swapnode.rhs.u64)
+    checkValueAt :st :unitDecl :ast nid: swapnode.lhs
+    checkValueAt :st :unitDecl :ast nid: swapnode.rhs
     checkWriteLock :st :ast n: (ast.nodes.get i: swapnode.lhs.u64) verb: "swap"
     checkWriteLock :st :ast n: (ast.nodes.get i: swapnode.rhs.u64) verb: "swap"
 }
@@ -22868,11 +22874,11 @@ checkWith: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    withnode: zast.WithData.view
+    withnode: withref
 } out ztypes.tid is {
     withMarker: st.pushBlock name: "with"
     errW: st.typing.errors.length
-    vt: checkValue :st :unitDecl :ast node: (ast.nodes.get i: withnode.value.u64)
+    vt: checkValueAt :st :unitDecl :ast nid: withnode.value
     if vt.u64 == 0 when st.typing.errors.length == errW then {
         (reportUnresolvedValue
             :st
@@ -22910,7 +22916,7 @@ checkWith: function {
         if btgt.length > 0 then st.reg.setVariableBorrowOrigin id: vid origin: (btgt.get i: 0)
         st.defineVar nameId: withnode.name :vid
         vid2: vid
-        st.typing.defVariableId.set key: withnode.nodeid.u64 value: vid2
+        st.typing.defVariableId.set key: withnode.nid.u64 value: vid2
         if (typeIsReftype :st tid: vt) then {
             lfsW: isViewFamilyTid :ast :st tid: vt
             if st.typing.pendingBorrowShared then lfsW = true
@@ -22921,15 +22927,15 @@ checkWith: function {
                 src: btgt
                 :vid
                 leafShared: lfsW
-                nodeid: withnode.nodeid
+                nodeid: withnode.nid
                 lineno: withnode.lineno
                 colno: withnode.colno
             )
         }
         setk: vt
-        stampGate :st nid: withnode.nodeid.u64 tid: setk
+        stampGate :st nid: withnode.nid.u64 tid: setk
     }
-    dt: checkValue :st :unitDecl :ast node: (ast.nodes.get i: withnode.body.u64)
+    dt: checkValueAt :st :unitDecl :ast nid: withnode.body
     st.popTo marker: withMarker
     return dt
 }
@@ -22996,7 +23002,7 @@ checkDo: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    donode: zast.DoData.view
+    donode: doref
 } out ztypes.tid is {
     doMarker: st.pushBlock name: "block"
     dbk: st.reg.ctlPlaceholder
@@ -23055,7 +23061,7 @@ checkDo: function {
     }
     if result > 0 then {
         setk: result
-        stampGate :st nid: donode.nodeid.u64 tid: (ztypes.tid.create from: setk.u64)
+        stampGate :st nid: donode.nid.u64 tid: (ztypes.tid.create from: setk.u64)
     }
     return (ztypes.tid.create from: result)
 }
@@ -23078,7 +23084,7 @@ isCallNode: function {ast: Ast.view n: Node.view} out bool is {
 bindForBorrowedElement: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    cond: zast.NamedOperationData.view
+    cond: argref
     vt: ztypes.tid
     elem: u64
     nm: StringView
@@ -23198,7 +23204,7 @@ bindForIteration: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    cond: zast.NamedOperationData.view
+    cond: argref
     vt: ztypes.tid
     nm: StringView
 } is {
@@ -23340,7 +23346,7 @@ checkBareForCondition: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    cond: zast.NamedOperationData.view
+    cond: argref
     vt: ztypes.tid
 } is {
     fbId: builtinTidTc :ast :st base: "bool"
@@ -23400,72 +23406,70 @@ checkForCondition: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    cond: Node.view
+    condId: zast.nodeid
 } is {
-    match (
-        cond
-    ) case namedoperation then {
-        # A bare 0-arg function returning an iterator class auto-invokes:
-        # its walk runs in a call scope and the atom keeps the FUNCTION
-        # stamp rather than the auto-call's coerced return.
-        # an owned copy: the walks below lend ast
-        fbn: (zast.nameTextCopy
+    # the condition is a namedoperation row, read as plain values: the
+    # walks below lend ast
+    cond: argRefAt :ast nid: condId
+    if cond.nid.isZero then return
+    # A bare 0-arg function returning an iterator class auto-invokes:
+    # its walk runs in a call scope and the atom keeps the FUNCTION
+    # stamp rather than the auto-call's coerced return.
+    # an owned copy: the walks below lend ast
+    fbn: (zast.nameTextCopy
+        :ast
+        ref: (bareAtomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
+    )
+    facId: forFactoryTid :st :unitDecl :ast fbn: fbn.stringview
+    vt: ztypes.tid
+    errC: st.typing.errors.length
+    if facId > 0 then {
+        # the factory's lazy walks (its body + the iterator class's
+        # methods via return-first transitivity) fire before the
+        # synthetic invocation's call scope opens.
+        maybeWalkMethods :st frame: st.curFrame :unitDecl :ast name: fbn.stringview
+        fcm: st.pushCall
+        vt = checkValueAt :st :unitDecl :ast nid: cond.operation
+        st.popTo marker: fcm
+        fiid: innermostNodeId :ast n: (ast.nodes.get i: cond.operation.u64)
+        if fiid > 0 then {
+            setff: facId
+            stampGate :st nid: fiid.u64 tid: (ztypes.tid.create from: setff.u64)
+        }
+    } else {
+        vt = checkValueAt :st :unitDecl :ast nid: cond.operation
+    }
+    # a condition that typed to nothing and raised nothing is an
+    # unresolvable name -- the same rule the binding and operand sites
+    # follow. Without it the emitter writes the bare name into the C.
+    if vt.isZero when st.typing.errors.length == errC then {
+        (reportUnresolvedValue
+            :st
+            :unitDecl
             :ast
-            ref: (bareAtomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
+            nid: cond.operation
         )
-        facId: forFactoryTid :st :unitDecl :ast fbn: fbn.stringview
-        vt: ztypes.tid
-        errC: st.typing.errors.length
-        if facId > 0 then {
-            # the factory's lazy walks (its body + the iterator class's
-            # methods via return-first transitivity) fire before the
-            # synthetic invocation's call scope opens.
-            maybeWalkMethods :st frame: st.curFrame :unitDecl :ast name: fbn.stringview
-            fcm: st.pushCall
-            condOpNode: ast.nodes.get i: cond.operation.u64
-            vt = checkValue :st :unitDecl :ast node: condOpNode
-            st.popTo marker: fcm
-            fiid: innermostNodeId :ast n: (ast.nodes.get i: cond.operation.u64)
-            if fiid > 0 then {
-                setff: facId
-                stampGate :st nid: fiid.u64 tid: (ztypes.tid.create from: setff.u64)
-            }
-        } else {
-            condOpNode: ast.nodes.get i: cond.operation.u64
-            vt = checkValue :st :unitDecl :ast node: condOpNode
-        }
-        # a condition that typed to nothing and raised nothing is an
-        # unresolvable name -- the same rule the binding and operand sites
-        # follow. Without it the emitter writes the bare name into the C.
-        if vt.isZero when st.typing.errors.length == errC then {
-            (reportUnresolvedValue
-                :st
-                :unitDecl
-                :ast
-                nid: cond.operation
-            )
-        }
-        # an owned copy: the binding below lends ast
-        nm: zast.nameTextCopy :ast ref: cond.name
-        # A bare `for while <cond> loop` (no binding, no iterator factory)
-        # must be boolean; a non-bool, non-iterable value is a type error
-        # rather than invalid C. Iterator bindings (`for e: it`) carry a
-        # name; iterable inits expose an element wrapper or a `call` child.
-        if nm.length == 0 when vt > 0 when facId == 0 then {
-            checkBareForCondition :st :unitDecl :ast :cond :vt
-        }
-        if nm.length > 0 when vt > 0 then {
-            bindForIteration :st :unitDecl :ast :cond :vt nm: nm.stringview
-        }
-        # an iterable that failed still binds its loop name, typeless, so
-        # the body's reads of it are not each an unknown reference
-        if nm.length > 0 when vt.isZero then {
-            (st.define
-                nameId: cond.name
-                ztypeId: ztypes.tid
-            )
-        }
-    } else null
+    }
+    # an owned copy: the binding below lends ast
+    nm: zast.nameTextCopy :ast ref: cond.name
+    # A bare `for while <cond> loop` (no binding, no iterator factory)
+    # must be boolean; a non-bool, non-iterable value is a type error
+    # rather than invalid C. Iterator bindings (`for e: it`) carry a
+    # name; iterable inits expose an element wrapper or a `call` child.
+    if nm.length == 0 when vt > 0 when facId == 0 then {
+        checkBareForCondition :st :unitDecl :ast :cond :vt
+    }
+    if nm.length > 0 when vt > 0 then {
+        bindForIteration :st :unitDecl :ast :cond :vt nm: nm.stringview
+    }
+    # an iterable that failed still binds its loop name, typeless, so
+    # the body's reads of it are not each an unknown reference
+    if nm.length > 0 when vt.isZero then {
+        (st.define
+            nameId: cond.name
+            ztypeId: ztypes.tid
+        )
+    }
 }
 # forComprehensionTid -- the type a `for` used as an expression produces: a
 # List of the body's value type, and 0 when the body produces no value.
@@ -23604,7 +23608,7 @@ checkFor: function {
     )
     citer: fornode.conditions.iterate
     for condId: citer loop {
-        checkForCondition :st :unitDecl :ast cond: (ast.nodes.get i: condId.u64)
+        checkForCondition :st :unitDecl :ast condId: (zast.nodeid.create from: condId)
     }
     piter: fornode.postconditions.iterate
     for pcId: piter loop {
@@ -24216,7 +24220,7 @@ checkBinop: function {
     # silently disables the dispatch's own checks and the emitter writes the
     # bare name into the C -- the same rule the argument and return legs follow.
     errL: st.typing.errors.length
-    lt: checkValue :st :unitDecl :ast node: (ast.nodes.get i: binop.lhs.u64)
+    lt: checkValueAt :st :unitDecl :ast nid: binop.lhs
     if lt.u64 == 0 when st.typing.errors.length == errL then {
         (reportUnresolvedValue
             :st
@@ -24226,7 +24230,7 @@ checkBinop: function {
         )
     }
     errR: st.typing.errors.length
-    rt: checkValue :st :unitDecl :ast node: (ast.nodes.get i: binop.rhs.u64)
+    rt: checkValueAt :st :unitDecl :ast nid: binop.rhs
     if rt.u64 == 0 when st.typing.errors.length == errR then {
         (reportUnresolvedValue
             :st
@@ -30126,12 +30130,7 @@ checkCase: function {
     foldCaseArm :st :ast :unitDecl n: casenode
     constFailClear :st
     matchMarker: st.pushBlock name: "match"
-    subjT: (checkValue
-        :st
-        :unitDecl
-        :ast
-        node: (ast.nodes.get i: casenode.subject.u64)
-    )
+    subjT: checkValueAt :st :unitDecl :ast nid: casenode.subject
     if subjT.isZero then subjT = (caseGenericSubjectTid :st :unitDecl :ast :casenode)
     # per-mono instance walk: a subject that is a bare TYPE name (resolved
     # by the instance's scope define, not a value) is a compile-time
@@ -30194,6 +30193,194 @@ checkCase: function {
         )
     }
     return (checkCaseArms :st :unitDecl :ast :casenode :subjT :isSum :matchMarker)
+}
+
+# valuearm -- which arm a value-position row holds: the dispatch tag that
+# checkValueAt reads without keeping the row view.
+valuearm: variant {
+    call: null
+    binop: null
+    atomid: null
+    atomstring: null
+    dottedpath: null
+    caseexpr: null
+    ifexpr: null
+    forexpr: null
+    labelvalue: null
+    yieldexpr: null
+    doexpr: null
+    withexpr: null
+    reassignment: null
+    swapstmt: null
+    expression: null
+    other: null
+}
+
+# valueArmAt -- the arm tag of row `nid`; the row view is this frame's and
+# dies here.
+valueArmAt: function {ast: Ast.view nid: zast.nodeid} out valuearm is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case call then {
+        return valuearm.call
+    } case binop then {
+        return valuearm.binop
+    } case atomid then {
+        return valuearm.atomid
+    } case atomstring then {
+        return valuearm.atomstring
+    } case dottedpath then {
+        return valuearm.dottedpath
+    } case caseexpr then {
+        return valuearm.caseexpr
+    } case ifexpr then {
+        return valuearm.ifexpr
+    } case forexpr then {
+        return valuearm.forexpr
+    } case labelvalue then {
+        return valuearm.labelvalue
+    } case yieldexpr then {
+        return valuearm.yieldexpr
+    } case doexpr then {
+        return valuearm.doexpr
+    } case withexpr then {
+        return valuearm.withexpr
+    } case reassignment then {
+        return valuearm.reassignment
+    } case swapstmt then {
+        return valuearm.swapstmt
+    } case expression then {
+        return valuearm.expression
+    } else {
+        return valuearm.other
+    }
+}
+
+# swapref -- what the swap walk reads of its row: the operand ids and the
+# position, as plain values.
+swapref: record {
+    nid: zast.nodeid
+    lhs: zast.nodeid
+    rhs: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# swapRefAt -- the swap row `nid` as plain values (all zero for any other arm).
+swapRefAt: function {ast: Ast.view nid: zast.nodeid} out swapref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case swapstmt then {
+        return (swapref :nid lhs: n.lhs rhs: n.rhs lineno: n.lineno colno: n.colno)
+    } else null
+    zn: zast.nodeid
+    return (swapref nid: zn lhs: zn rhs: zn lineno: 0 colno: 0)
+}
+
+# withref -- what the with walk reads of its row: the bound name, the value
+# and body ids and the position, as plain values.
+withref: record {
+    nid: zast.nodeid
+    name: zast.nameid
+    value: zast.nodeid
+    body: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# withRefAt -- the with row `nid` as plain values (all zero for any other arm).
+withRefAt: function {ast: Ast.view nid: zast.nodeid} out withref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case withexpr then {
+        return (withref
+            :nid
+            name: n.name
+            value: n.value
+            body: n.body
+            lineno: n.lineno
+            colno: n.colno
+        )
+    } else null
+    zn: zast.nodeid
+    zm: zast.nameid
+    return (withref nid: zn name: zm value: zn body: zn lineno: 0 colno: 0)
+}
+
+# doref -- what the do walk reads of its row: the statement id and the
+# position, as plain values.
+doref: record {
+    nid: zast.nodeid
+    statement: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# doRefAt -- the do row `nid` as plain values (all zero for any other arm).
+doRefAt: function {ast: Ast.view nid: zast.nodeid} out doref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case doexpr then {
+        return (doref :nid statement: n.statement lineno: n.lineno colno: n.colno)
+    } else null
+    zn: zast.nodeid
+    return (doref nid: zn statement: zn lineno: 0 colno: 0)
+}
+
+# argref -- what an argument or member walk reads of a namedoperation row:
+# the label, the operation id and the position, as plain values.
+argref: record {
+    nid: zast.nodeid
+    name: zast.nameid
+    operation: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# argRefAt -- the namedoperation row `nid` as plain values (all zero for any
+# other arm).
+argRefAt: function {ast: Ast.view nid: zast.nodeid} out argref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case namedoperation then {
+        return (argref :nid name: n.name operation: n.operation lineno: n.lineno colno: n.colno)
+    } else null
+    zn: zast.nodeid
+    zm: zast.nameid
+    return (argref nid: zn name: zm operation: zn lineno: 0 colno: 0)
+}
+
+# checkValueAt -- type the value row `nid`, dispatching by arm. A handler
+# that takes its row as plain values is reached with no row view held; every
+# other arm is walked by checkValue through the row view fetched here.
+checkValueAt: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    nid: zast.nodeid
+} out ztypes.tid is {
+    arm: valueArmAt :ast :nid
+    match (
+        arm
+    ) case swapstmt then {
+        sr: swapRefAt :ast :nid
+        checkSwap :st :unitDecl :ast swapnode: sr
+        return (ztypes.tid.create from: 0)
+    } case withexpr then {
+        wr: withRefAt :ast :nid
+        return (checkWith :st :unitDecl :ast withnode: wr)
+    } case doexpr then {
+        dr: doRefAt :ast :nid
+        return (checkDo :st :unitDecl :ast donode: dr)
+    } else {
+        node: ast.nodes.get i: nid.u64
+        return (checkValue :st :unitDecl :ast :node)
+    }
 }
 
 # checkValue -- type an expression-value node, dispatching by kind. Returns the
@@ -30264,7 +30451,7 @@ checkValue: function {
         # unstamped; the expression wrapper takes the type). A reftype
         # resume value is a borrow into the caller's argument: the
         # surrounding binding becomes BORROWED origin value.
-        checkValue :st :unitDecl :ast node: (ast.nodes.get i: node.expr.u64)
+        checkValueAt :st :unitDecl :ast nid: node.expr
         yvn: nameIdOf :ast name: "value"
         yvo: st.lookup nameId: yvn
         match (
@@ -30279,22 +30466,16 @@ checkValue: function {
             return (ztypes.tid.create from: 0)
         }
     } case doexpr then {
-        return (checkDo :st :unitDecl :ast donode: node)
+        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case withexpr then {
-        return (checkWith :st :unitDecl :ast withnode: node)
+        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case reassignment then {
         checkReassignment :st :unitDecl :ast rasgn: node
         return (ztypes.tid.create from: 0)
     } case swapstmt then {
-        checkSwap :st :unitDecl :ast swapnode: node
-        return (ztypes.tid.create from: 0)
+        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case expression then {
-        t: (checkValue
-            :st
-            :unitDecl
-            :ast
-            node: (ast.nodes.get i: node.expression.u64)
-        )
+        t: checkValueAt :st :unitDecl :ast nid: node.expression
         if t > 0 then stampGate :st nid: node.nodeid.u64 tid: t
         return t
     } else {
@@ -30313,7 +30494,7 @@ checkStmtInner: function {
         inner
     ) case expression then {
         errE0: st.typing.errors.length
-        et0: checkValue :st :unitDecl :ast node: (ast.nodes.get i: inner.expression.u64)
+        et0: checkValueAt :st :unitDecl :ast nid: inner.expression
         if et0 > 0 then stampGate :st nid: inner.nodeid.u64 tid: et0
         eNid0: nodeId n: (ast.nodes.get i: inner.expression.u64)
         ckOpt0: st.typing.callKind.get key: eNid0.u64
