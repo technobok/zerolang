@@ -2549,7 +2549,8 @@ resolveDottedArgTid: function {
     match (
         dp
     ) case dottedpath then {
-        pq: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
+        # an owned copy: the walks below lend ast
+        pq: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
         cq: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.child.u64))
         if pq.length > 0 when cq.length > 0 then {
             if (nameDenotesUnit
@@ -4234,9 +4235,12 @@ demandReturnType: function {
 # fnHasLockParam -- does any parameter (including a marked receiver) carry a
 # non-owned marker? A `.borrow` return must borrow from a non-owned parameter
 # so the returned view has a pinned parent to live in (docs/ownership.pdoc).
-fnHasLockParam: function {ast: Ast.view fnode: zast.FunctionData.view} out bool is {
+fnHasLockParam: function {ast: Ast.view fnode: fnref} out bool is {
     found: false
-    with pit: fnode.parameters.iterate do for pmId: pit loop {
+    kP: u64
+    for kP < fnode.nparams loop {
+        pmId: (zast.fnParamAt :ast nid: fnode.nid i: kP).u32
+        kP = kP + 1
         if (found) == false then {
             pm: ast.nodes.get i: pmId.u64
             match (
@@ -4300,7 +4304,7 @@ returnNamesThis: function {ast: Ast.view oId: zast.nodeid} out bool is {
 checkTakexHonesty: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    fnode: zast.FunctionData.view
+    fnode: fnref
     thisTid: ztypes.tid
     defName: StringView
 } is {
@@ -4312,7 +4316,7 @@ checkTakexHonesty: function {
     if (typeHasNonOwnedField :st tid: (ztypes.tid.create from: thisTid.u64)) == false then return
     (addResolveErrorH
         :st
-        nodeid: fnode.nodeid
+        nodeid: fnode.nid
         lineno: fnode.lineno
         colno: fnode.colno
         e: zast.err.ownerError
@@ -4327,14 +4331,14 @@ checkTakexHonesty: function {
 checkBorrowReturnLock: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
-    fnode: zast.FunctionData.view
+    fnode: fnref
     defName: StringView
 } is {
     if (returnHasBorrowMarker :ast oId: fnode.returntype) then {
         if (fnHasLockParam :ast :fnode) == false then {
             (addResolveErrorH
                 :st
-                nodeid: fnode.nodeid
+                nodeid: fnode.nid
                 lineno: fnode.lineno
                 colno: fnode.colno
                 e: zast.err.ownerError
@@ -4763,7 +4767,7 @@ recordFunctionReturn: function {
     isgen: bool
     fnDecl: ztypes.declid
     receiverEnclDecl: ztypes.declid
-    fnode: zast.FunctionData.view
+    fnode: fnref
 } is {
     rpt4: u64
     frOpt: fnode.returntype
@@ -4827,7 +4831,7 @@ finishFunctionSignature: function {
     receiverEnclDecl: ztypes.declid
     defName: StringView
     thisName: StringView
-    fnode: zast.FunctionData.view
+    fnode: fnref
 } is {
     demandReturnType :st frame: rf :ast :unitDecl oId: fnode.returntype
     (recordReturnType
@@ -4881,12 +4885,20 @@ registerFnGenericParams: function {
     ast: Ast.view
     fnDecl: ztypes.declid
     fid: u64
-    fnode: zast.FunctionData.view
+    fnode: fnref
 } is {
     st.reg.setGeneric typeId: (ztypes.tid.create from: fid.u64) value: true
     # Function templates register their param constraints like type
     # templates do (checkGenericCall checks satisfaction per call).
-    registerGenericParams :st :ast tdecl: fnDecl items: fnode.asItems
+    # the as-items are read through a view scoped to this block
+    {
+        fn: ast.nodes.get i: fnode.nid.u64
+        match (
+            fn
+        ) case functiondef then {
+            registerGenericParams :st :ast tdecl: fnDecl items: fn.asItems
+        } else null
+    }
     hasB: fnode.body > 0
     if hasB then {
         dvg: bodyEndsInReturn :ast bodyId: fnode.body
@@ -4899,7 +4911,7 @@ registerFnGenericParams: function {
 recordFnBodyPresence: function {
     st: zenv.ZSymbolTable
     fid: u64
-    fnode: zast.FunctionData.view
+    fnode: fnref
 } is {
     {
         fhbV: fnode.body > 0
@@ -4963,7 +4975,7 @@ resolveFunction: function {
     # a method's owner, by interned name id; 0 for a free function
     ownerNameId: zast.nameid
     defName: StringView
-    fnode: zast.FunctionData
+    fnId: zast.nodeid
     thisName: StringView
     skipThisType: bool
 } out u64 is {
@@ -4979,11 +4991,22 @@ resolveFunction: function {
         name: defName
         typetype: ztypes.ztypetype.functionType
     )
+    fnode: fnRefAt :ast nid: fnId
     st.reg.setNative typeId: (ztypes.tid.create from: fid.u64) value: fnode.isNative
     recordFnBodyPresence :st :fid :fnode
     dfid: fid
     rfid: fid
-    isgen: hasGenericParam :ast items: fnode.asItems
+    # the as-items are read through a view scoped to this block: the walks
+    # below lend ast
+    isgen: false
+    {
+        fn: ast.nodes.get i: fnId.u64
+        match (
+            fn
+        ) case functiondef then {
+            isgen = hasGenericParam :ast items: fn.asItems
+        } else null
+    }
     fnDecl: declOfFnDef :st frame: rf :ast :unitDecl :ownerNameId :defName :thisName
     # link the declaration to its type up front: the parameter loop below
     # records ownership and defaults on member declarations, which needs the
@@ -4998,8 +5021,10 @@ resolveFunction: function {
     receiverEnclDecl: (receiverOwnerDecl :st :ast :unitDecl :rf :thisName)
     sgkPrev: st.typing.sigGenericDecl
     if isgen then st.typing.sigGenericDecl = fnDecl
-    piter: fnode.parameters.iterate
-    for pmId: piter loop {
+    kP: u64
+    for kP < fnode.nparams loop {
+        pmId: (zast.fnParamAt :ast nid: fnId i: kP).u32
+        kP = kP + 1
         (resolveFunctionParam
             :st
             :ast
@@ -5043,7 +5068,8 @@ paramIsBorrowReftype: function {ast: Ast
     thisName: StringView
     op: Node.view
 } out bool is {
-    tn: zast.nameTextAt :ast ref: (atomNameId :ast n: op)
+    # an owned copy: the walks below lend ast
+    tn: zast.nameTextCopy :ast ref: (atomNameId :ast n: op)
     isref: false
     if tn.stringview == "this" then {
         isref = nameIsInUnitReftype :st :ast :unitDecl name: thisName
@@ -5087,10 +5113,11 @@ resolveMethodFn: function {
     ownerNameId: zast.nameid
     mname: StringView
     thisName: StringView
-    op: Node
+    opId: zast.nodeid
 } out optionval u64 is {
+    arm: rowArmAt :ast nid: opId
     match (
-        op
+        arm
     ) case functiondef then {
         mid: (resolveFunction
             :st
@@ -5100,13 +5127,13 @@ resolveMethodFn: function {
             :unitDecl
             :ownerNameId
             defName: mname
-            fnode: op
+            fnId: opId
             :thisName
             skipThisType: false
         )
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
-            nid: op.nodeid.u64
+            nid: opId.u64
             tid: (ztypes.tid.create from: mid.u64)
         )
         return (optionval.some mid)
@@ -5128,12 +5155,19 @@ resolveMethodFnLazy: function {
     ownerNameId: zast.nameid
     mname: StringView
     thisName: StringView
-    op: Node
+    opId: zast.nodeid
     lazyOk: bool
 } out optionval u64 is {
-    if lazyOk when (st.typing.eagerAll) == false when (isFunctionDefOp :op) then {
-        return (optionval.some 0.u64)
+    isFnDef: false
+    {
+        arm: rowArmAt :ast nid: opId
+        match (
+            arm
+        ) case functiondef then {
+            isFnDef = true
+        } else null
     }
+    if lazyOk when (st.typing.eagerAll) == false when isFnDef then return (optionval.some 0.u64)
     return (resolveMethodFn
         :st
         :frame
@@ -5142,7 +5176,7 @@ resolveMethodFnLazy: function {
         :ownerNameId
         :mname
         :thisName
-        :op
+        :opId
     )
 }
 
@@ -5262,7 +5296,7 @@ forceMemberDecl: function {
             ownerNameId: (zast.nameid.create from: onm)
             mname: mn.stringview
             thisName: tn.stringview
-            op: (ast.nodes.get i: opId.u64)
+            opId: (zast.nodeid.create from: opId)
         )
     } else {
         # an as-block MARKER designates a type rather than declaring a field
@@ -5371,7 +5405,8 @@ stampForcedTyperef: function {
     # a DOTTED return (`out zast.nodeid`) names its type in another unit, which
     # no single base name reaches
     {
-        rootN: zast.nameTextAt :ast ref: (rootNameIdOf :ast n: (ast.nodes.get i: tnid))
+        # an owned copy: the walks below lend ast
+        rootN: zast.nameTextCopy :ast ref: (rootNameIdOf :ast n: (ast.nodes.get i: tnid))
         childN: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: tnid))
         if childN.length > 0 when rootN.length > 0 then {
             dd: (descendNamed
@@ -5662,11 +5697,12 @@ resolveSpecFn: function {
     ownerNameId: zast.nameid
     mname: StringView
     thisName: StringView
-    op: Node
+    opId: zast.nodeid
     skipThis: bool
 } out optionval u64 is {
+    arm: rowArmAt :ast nid: opId
     match (
-        op
+        arm
     ) case functiondef then {
         sid: (resolveFunction
             :st
@@ -5676,13 +5712,13 @@ resolveSpecFn: function {
             :unitDecl
             :ownerNameId
             defName: mname
-            fnode: op
+            fnId: opId
             :thisName
             skipThisType: skipThis
         )
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
-            nid: op.nodeid.u64
+            nid: opId.u64
             tid: (ztypes.tid.create from: sid.u64)
         )
         return (optionval.some sid)
@@ -5846,33 +5882,36 @@ attachMethods: function {
     for amId: aiter loop {
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
-            mname: zast.nameTextAt :ast ref: am.name
+            # an owned copy: the walks below lend ast
+            mname: zast.nameTextCopy :ast ref: am.name
             if am.name == zast.wkCreate then hasCreate = true
             {
                 mop: ast.nodes.get i: am.operation.u64
                 match (
                     mop
                 ) case functiondef then {
-                    checkBorrowReturnLock :st :ast fnode: mop defName: mname.stringview
+                    mr: fnRefOf fnode: mop
+                    checkBorrowReturnLock :st :ast fnode: mr defName: mname.stringview
                     (checkTakexHonesty
                         :st
                         :ast
-                        fnode: mop
+                        fnode: mr
                         thisTid: (ztypes.tid.create from: parentId.u64)
                         defName: mname.stringview
                     )
                 } else null
             }
+            ownerNmId: nameIdOf :ast name: defName
             mido: (resolveMethodFnLazy
                 :st
                 :frame
 
                 :ast
                 :unitDecl
-                ownerNameId: (nameIdOf :ast name: defName)
+                ownerNameId: ownerNmId
                 mname: mname.stringview
                 thisName: defName
-                op: (ast.nodes.get i: am.operation.u64)
+                opId: am.operation
                 lazyOk: (agen) == false
             )
             match (
@@ -5914,7 +5953,7 @@ attachMethods: function {
                 :unitDecl
                 fnName: gfn.stringview
                 thisName: defName
-                op: (ast.nodes.get i: am.operation.u64)
+                opId: am.operation
             )
         }
     }
@@ -7321,17 +7360,19 @@ resolveRecord: function {
         for fmId: fiter loop {
             fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
             if (fm.nid.isZero) == false then {
-                fname: zast.nameTextAt :ast ref: fm.name
+                # an owned copy: the walks below lend ast
+                fname: zast.nameTextCopy :ast ref: fm.name
+                ownerNmId: nameIdOf :ast name: defName
                 mido: (resolveMethodFnLazy
                     :st
                     :frame
 
                     :ast
                     :unitDecl
-                    ownerNameId: (nameIdOf :ast name: defName)
+                    ownerNameId: ownerNmId
                     mname: fname.stringview
                     thisName: defName
-                    op: (ast.nodes.get i: fm.operation.u64)
+                    opId: fm.operation
                     lazyOk: (isgen) == false
                 )
                 match (
@@ -7431,7 +7472,8 @@ detectTagAccessor: function {
     am: argref
 } is {
     tp: dottedParentName :ast n: (ast.nodes.get i: am.operation.u64)
-    tc: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: am.operation.u64))
+    # an owned copy: the walks below lend ast
+    tc: zast.nameTextCopy :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: am.operation.u64))
     if tc.stringview != "tag" then return
     if (isNumericTypeName name: tp.stringview) == false then return
     mname: zast.nameTextAt :ast ref: am.name
@@ -7542,17 +7584,19 @@ attachVariantMethods: function {
     for amId: aiter loop {
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
-            mname: zast.nameTextAt :ast ref: am.name
+            # an owned copy: the walks below lend ast
+            mname: zast.nameTextCopy :ast ref: am.name
+            ownerNmId: nameIdOf :ast name: defName
             mido: (resolveMethodFnLazy
                 :st
                 :frame
 
                 :ast
                 :unitDecl
-                ownerNameId: (nameIdOf :ast name: defName)
+                ownerNameId: ownerNmId
                 mname: mname.stringview
                 thisName: defName
-                op: (ast.nodes.get i: am.operation.u64)
+                opId: am.operation
                 lazyOk: (isgen) == false
             )
             match (
@@ -8017,7 +8061,8 @@ unionCustomTagId: function {
     for amId: iter loop {
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
-            nm: zast.nameTextAt :ast ref: am.name
+            # an owned copy: the walks below lend ast
+            nm: zast.nameTextCopy :ast ref: am.name
             if nm.stringview == "tag" then {
                 pn: dottedParentName :ast n: (ast.nodes.get i: am.operation.u64)
                 if pn.length != 0 then {
@@ -8133,7 +8178,8 @@ attachUnionArm: function {
     fm: argref
     ordinalArmNames: (IdSet u64)
 } is {
-    aname: zast.nameTextAt :ast ref: fm.name
+    # an owned copy: the walks below lend ast
+    aname: zast.nameTextCopy :ast ref: fm.name
     if fm.name == zast.wkTag then {
         mt: "'tag' is a reserved member name".string
         (addResolveErrorH
@@ -8284,17 +8330,19 @@ attachUnionMethods: function {
     for amId: aiter loop {
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
-            mname: zast.nameTextAt :ast ref: am.name
+            # an owned copy: the walks below lend ast
+            mname: zast.nameTextCopy :ast ref: am.name
+            ownerNmId: nameIdOf :ast name: defName
             mido: (resolveMethodFnLazy
                 :st
                 :frame
 
                 :ast
                 :unitDecl
-                ownerNameId: (nameIdOf :ast name: defName)
+                ownerNameId: ownerNmId
                 mname: mname.stringview
                 thisName: defName
-                op: (ast.nodes.get i: am.operation.u64)
+                opId: am.operation
                 lazyOk: (isgen) == false
             )
             match (
@@ -8402,7 +8450,8 @@ resolveUnion: function {
             armCountU = armCountU + 1
             if armCountU == 1 then firstArmU = fm.name.u64
             if armCountU == 2 then secondArmU = fm.name.u64
-            anU: (zast.nameTextAt
+            # an owned copy: the walks below lend ast
+            anU: (zast.nameTextCopy
                 :ast
                 ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation.u64))
             )
@@ -8569,7 +8618,8 @@ resolveClassMethodDecl: function {
     fm: argref
 } is {
     if (isFunctionDefOp op: (ast.nodes.get i: fm.operation.u64)) then {
-        fname: zast.nameTextAt :ast ref: fm.name
+        # an owned copy: the walks below lend ast
+        fname: zast.nameTextCopy :ast ref: fm.name
         prodM4: false
         if (isgen) == false then {
             prodM4 = true
@@ -8591,16 +8641,17 @@ resolveClassMethodDecl: function {
             }
         }
         if prodM4 then {
+            ownerNmId: nameIdOf :ast name: defName
             mido: (resolveMethodFnLazy
                 :st
                 :frame
 
                 :ast
                 :unitDecl
-                ownerNameId: (nameIdOf :ast name: defName)
+                ownerNameId: ownerNmId
                 mname: fname.stringview
                 thisName: defName
-                op: (ast.nodes.get i: fm.operation.u64)
+                opId: fm.operation
                 lazyOk: (isgen) == false
             )
             match (
@@ -8875,7 +8926,8 @@ resolveClassFieldEntry: function {
     fm: argref
 } out bool is {
     needsDtor: false
-    fname: zast.nameTextAt :ast ref: fm.name
+    # an owned copy: the walks below lend ast
+    fname: zast.nameTextCopy :ast ref: fm.name
     ftn: fieldHeadName :ast n: (ast.nodes.get i: fm.operation.u64)
     # A NON-OWNED field marker (lock / borrow / view) makes the
     # slot static: it is set in the constructor, never reassigned,
@@ -8992,7 +9044,8 @@ resolveClassAsMethods: function {
         amP4: argRefAt :ast nid: (zast.nodeid.create from: amP4Id.u32)
         if (amP4.nid.isZero) == false then {
             if (isFunctionDefOp op: (ast.nodes.get i: amP4.operation.u64)) then {
-                afnP4: zast.nameTextAt :ast ref: amP4.name
+                # an owned copy: the walks below lend ast
+                afnP4: zast.nameTextCopy :ast ref: amP4.name
                 prodA4: false
                 fnNativeP4: functiondefIsNative op: (ast.nodes.get i: amP4.operation.u64)
                 if isgen then {
@@ -9009,16 +9062,17 @@ resolveClassAsMethods: function {
                     }
                 }
                 if prodA4 then {
+                    ownerNmId: nameIdOf :ast name: defName
                     amidP4: (resolveMethodFn
                         :st
                         :frame
 
                         :ast
                         :unitDecl
-                        ownerNameId: (nameIdOf :ast name: defName)
+                        ownerNameId: ownerNmId
                         mname: afnP4.stringview
                         thisName: defName
-                        op: (ast.nodes.get i: amP4.operation.u64)
+                        opId: amP4.operation
                     )
                     match (
                         amidP4
@@ -9133,7 +9187,8 @@ resolveClassTypedefBase: function {
 } out bool is {
     needsDtor: false
     tdbase: objectTypedefBaseId :ast onode: cnode
-    tdbaseT: zast.nameTextAt :ast ref: tdbase
+    # an owned copy: the walks below lend ast
+    tdbaseT: zast.nameTextCopy :ast ref: tdbase
     if (fieldTypeNeedsCleanup
         :st
         :frame
@@ -9289,17 +9344,19 @@ resolveFacet: function {
     for smId: siter loop {
         sm: argRefAt :ast nid: (zast.nodeid.create from: smId.u32)
         if (sm.nid.isZero) == false then {
-            mname: zast.nameTextAt :ast ref: sm.name
+            # an owned copy: the walks below lend ast
+            mname: zast.nameTextCopy :ast ref: sm.name
+            ownerNmId: nameIdOf :ast name: defName
             sido: (resolveSpecFn
                 :st
                 :frame
 
                 :ast
                 :unitDecl
-                ownerNameId: (nameIdOf :ast name: defName)
+                ownerNameId: ownerNmId
                 mname: mname.stringview
                 thisName: specThisStr.stringview
-                op: (ast.nodes.get i: sm.operation.u64)
+                opId: sm.operation
                 skipThis: dropThis
             )
             match (
@@ -9407,17 +9464,19 @@ resolveProtocol: function {
     for smId: siter loop {
         sm: argRefAt :ast nid: (zast.nodeid.create from: smId.u32)
         if (sm.nid.isZero) == false then {
-            mname: zast.nameTextAt :ast ref: sm.name
+            # an owned copy: the walks below lend ast
+            mname: zast.nameTextCopy :ast ref: sm.name
+            ownerNmId: nameIdOf :ast name: defName
             sido: (resolveSpecFn
                 :st
                 :frame
 
                 :ast
                 :unitDecl
-                ownerNameId: (nameIdOf :ast name: defName)
+                ownerNameId: ownerNmId
                 mname: mname.stringview
                 thisName: specThisStr.stringview
-                op: (ast.nodes.get i: sm.operation.u64)
+                opId: sm.operation
                 skipThis: dropThis
             )
             match (
@@ -10417,7 +10476,7 @@ resolveDef: function {
             :unitDecl
             ownerNameId: zast.nameid
             :defName
-            fnode: defn
+            fnId: defn.nodeid
             thisName: ""
             skipThisType: false
         )
@@ -10427,6 +10486,7 @@ resolveDef: function {
             tid: (ztypes.tid.create from: fid.u64)
         )
         if (isGeneratorReturn :ast oId: defn.returntype) then {
+            dfr: fnRefOf fnode: defn
             (synthGeneratorIterClass
                 :st
                 frame: rf
@@ -10435,7 +10495,7 @@ resolveDef: function {
                 :unitDecl
                 fnName: defName
                 thisName: ""
-                fnode: defn
+                fnode: dfr
             )
         }
     } case expression then {
@@ -11078,7 +11138,8 @@ fixupCustomTags: function {
     cn: pend.length
     for ci < cn loop {
         cuid: pend.get i: ci
-        cnm: zast.nameTextAt :ast ref: (pnames.get i: ci)
+        # an owned copy: the walks below lend ast
+        cnm: zast.nameTextCopy :ast ref: (pnames.get i: ci)
         co: walkLookupTyperef :st :frame :ast :unitDecl base: cnm.stringview
         ctid: optU64Or o: co d: 0
         if ctid > 0 then {
@@ -12644,7 +12705,8 @@ addResumeInputExpr: function {
         for argId: aiter loop {
             arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
             if (arg.nid.isZero) == false then {
-                an: zast.nameTextAt :ast ref: arg.name
+                # an owned copy: the walks below lend ast
+                an: zast.nameTextCopy :ast ref: arg.name
                 if an.stringview == "accepts" then {
                     tn: baseTypeName :ast n: (ast.nodes.get i: arg.operation.u64)
                     rf: (resolveAtomType
@@ -12796,15 +12858,13 @@ synthGeneratorForMethod: function {
     frame: ztypes.declid
     fnName: StringView
     thisName: StringView
-    op: Node.view
+    opId: zast.nodeid
 } is {
-    match (
-        op
-    ) case functiondef then {
-        if (isGeneratorReturn :ast oId: op.returntype) then {
-            synthGeneratorIterClass :st :frame :ast :unitDecl :fnName :thisName fnode: op
-        }
-    } else null
+    fr: fnRefAt :ast nid: opId
+    if fr.nid.isZero then return
+    if (isGeneratorReturn :ast oId: fr.returntype) then {
+        synthGeneratorIterClass :st :frame :ast :unitDecl :fnName :thisName fnode: fr
+    }
 }
 
 # synthesise the iterator class that lowers a generator function.
@@ -12815,7 +12875,7 @@ synthGeneratorIterClass: function {
     frame: ztypes.declid
     fnName: StringView
     thisName: StringView
-    fnode: zast.FunctionData.view
+    fnode: fnref
 } is {
     iterName: "\{fnName}_iter"
     iterId: st.reg.newType name: iterName.stringview typetype: ztypes.ztypetype.classType
@@ -12837,11 +12897,14 @@ synthGeneratorIterClass: function {
         nameId: zast.wkThis
         ownership: ztypes.zparamownership.borrowMode
     )
-    piter: fnode.parameters.iterate
-    for pmId: piter loop {
+    kP: u64
+    for kP < fnode.nparams loop {
+        pmId: (zast.fnParamAt :ast nid: fnode.nid i: kP).u32
+        kP = kP + 1
         pm: argRefAt :ast nid: (zast.nodeid.create from: pmId.u32)
         if (pm.nid.isZero) == false then {
-            pn: zast.nameTextAt :ast ref: pm.name
+            # an owned copy: the walks below lend ast
+            pn: zast.nameTextCopy :ast ref: pm.name
             ptn: baseTypeName :ast n: (ast.nodes.get i: pm.operation.u64)
             f1: resolveAtomType :st :frame :ast :unitDecl nm: ptn.stringview :thisName
             (st.typing.setMemberType
@@ -13203,17 +13266,19 @@ resolveInlineGenericUnit: function {
         for bm: biter loop {
             bmNode: argRefAt :ast nid: (zast.nodeid.create from: bm.u32)
             if (bmNode.nid.isZero) == false then {
-                fn: zast.nameTextAt :ast ref: bmNode.name
+                # an owned copy: the walks below lend ast
+                fn: zast.nameTextCopy :ast ref: bmNode.name
+                ownerNmId: nameIdOf :ast name: defName
                 mido: (resolveMethodFn
                     :st
                     frame: rf
 
                     :ast
                     :unitDecl
-                    ownerNameId: (nameIdOf :ast name: defName)
+                    ownerNameId: ownerNmId
                     mname: fn.stringview
                     thisName: ""
-                    op: (ast.nodes.get i: bmNode.operation.u64)
+                    opId: bmNode.operation
                 )
                 match (
                     mido
@@ -13447,7 +13512,8 @@ buildUnitMonoMember: function {
     gpNames: (IdMapV zast.nameid value: bool)
 } is {
     if (isFunctionDefOp op: (ast.nodes.get i: fmNode.operation.u64)) then {
-        fn: zast.nameTextAt :ast ref: fmNode.name
+        # an owned copy: the walks below lend ast
+        fn: zast.nameTextCopy :ast ref: fmNode.name
         srcId: u64
         tfo: (st.typing.declChildOf
             pool: ast.names
@@ -13468,7 +13534,7 @@ buildUnitMonoMember: function {
                 ownerNameId: tmplNameId
                 mname: fn.stringview
                 thisName: ""
-                op: (ast.nodes.get i: fmNode.operation.u64)
+                opId: fmNode.operation
             )
             {
                 mo0v: optU64Or o: mo0 d: 0
@@ -14853,7 +14919,8 @@ stampOnePendingTyperef: function {
                 st.typing.typerefRetry.append from: uk
                 return
             }
-            pvalT: zast.nameTextAt :ast ref: pval
+            # an owned copy: the walks below lend ast
+            pvalT: zast.nameTextCopy :ast ref: pval
             urHit: (nameClaimedByScope
                 :st
                 frame: rf
@@ -18735,7 +18802,8 @@ checkProjectionCreate: function {
         arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
         if (arg.nid.isZero) == false then {
             if (found) == false then {
-                an: zast.nameTextAt :ast ref: arg.name
+                # an owned copy: the walks below lend ast
+                an: zast.nameTextCopy :ast ref: arg.name
                 isFrom: false
                 if an.length == 0 then {
                     isFrom = true
@@ -19005,7 +19073,8 @@ checkTypedefBorrow: function {
         arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
         if (arg.nid.isZero) == false then {
             if (found) == false then {
-                an: zast.nameTextAt :ast ref: arg.name
+                # an owned copy: the walks below lend ast
+                an: zast.nameTextCopy :ast ref: arg.name
                 isFrom: false
                 if an.length == 0 then {
                     isFrom = true
@@ -26477,7 +26546,8 @@ boxArgumentTid: function {
         arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
         if (arg.nid.isZero) == false then {
             if (fnd) == false then {
-                an: zast.nameTextAt :ast ref: arg.name
+                # an owned copy: the walks below lend ast
+                an: zast.nameTextCopy :ast ref: arg.name
                 if an.stringview != "t" then {
                     if an.stringview != "from" then {
                         mbx7: "the builtin Box constructs with 'from:'; unknown argument '\{an}'"
@@ -27073,12 +27143,9 @@ checkControlBuiltinCall: function {
                 }
                 # a returned owned local is CONSUMED: record the
                 # transfer so L022 does not offer a view for it
-                rbn: (zast.nameTextAt
-                    :ast
-                    ref: (bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
-                )
-                if rbn.length > 0 when argT > 0 when (typeIsReftype :st tid: argT) then {
-                    rvv: st.lookupVarId nameId: (nameIdOf :ast name: rbn.stringview)
+                rbnId: bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
+                if (rbnId.isZero) == false when argT > 0 when (typeIsReftype :st tid: argT) then {
+                    rvv: st.lookupVarId nameId: rbnId
                     match (
                         rvv
                     ) case some then {
@@ -27753,7 +27820,8 @@ checkTaggedCtorArg: function {
 } is {
     arg2: argRefAt :ast nid: (zast.nodeid.create from: arg2Id.u32)
     if (arg2.nid.isZero) == false then {
-        uan: zast.nameTextAt :ast ref: arg2.name
+        # an owned copy: the walks below lend ast
+        uan: zast.nameTextCopy :ast ref: arg2.name
         if uan.length > 0 when uan.stringview != "from" then {
             uum: "unknown argument '\{uan}'"
             (addError
@@ -28890,7 +28958,8 @@ inferGenericCallSubs: function {
                 if an2 == gp2 then isTypeArg = true
             }
             if isTypeArg then {
-                tn3: (zast.nameTextAt
+                # an owned copy: the walks below lend ast
+                tn3: (zast.nameTextCopy
                     :ast
                     ref: (atomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
                 )
@@ -28999,7 +29068,8 @@ substituteGenericReturn: function {
             ) case some then {
                 st.reg.setReturnType typeId: mid value: rgot2
             } case none then {
-                rk2T: zast.nameTextAt :ast ref: rk2
+                # an owned copy: the walks below lend ast
+                rk2T: zast.nameTextCopy :ast ref: rk2
                 rconc: (walkLookupTyperef
                     :st
                     frame: st.curFrame
@@ -30105,6 +30175,7 @@ rowarm: variant {
     expression: null
     assignment: null
     stringchunk: null
+    functiondef: null
     other: null
 }
 
@@ -30148,6 +30219,8 @@ rowArmAt: function {ast: Ast.view nid: zast.nodeid} out rowarm is {
         return rowarm.assignment
     } case stringchunk then {
         return rowarm.stringchunk
+    } case functiondef then {
+        return rowarm.functiondef
     } else {
         return rowarm.other
     }
@@ -30547,6 +30620,53 @@ callRefAt: function {ast: Ast.view nid: zast.nodeid} out callref is {
     } else null
     zn: zast.nodeid
     return (callref nid: zn callable: zn nargs: 0 lineno: 0 colno: 0)
+}
+
+# fnref -- what a function walk reads of its definition row: the return-type
+# id, the parameter count, the body id, the native flag and the position, as
+# plain values. Parameters are read by index through zast.fnParamAt.
+fnref: record {
+    nid: zast.nodeid
+    returntype: zast.nodeid
+    nparams: u64
+    body: zast.nodeid
+    isNative: bool
+    lineno: u32
+    colno: u32
+}
+
+# fnRefOf -- the function row `fnode` as plain values.
+fnRefOf: function {fnode: zast.FunctionData.view} out fnref is {
+    return (fnref
+        nid: fnode.nodeid
+        returntype: fnode.returntype
+        nparams: fnode.parameters.length
+        body: fnode.body
+        isNative: fnode.isNative
+        lineno: fnode.lineno
+        colno: fnode.colno
+    )
+}
+
+# fnRefAt -- the function row `nid` as plain values (all zero for any other
+# arm).
+fnRefAt: function {ast: Ast.view nid: zast.nodeid} out fnref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case functiondef then {
+        return (fnRefOf fnode: n)
+    } else null
+    zn: zast.nodeid
+    return (fnref
+        nid: zn
+        returntype: zn
+        nparams: 0
+        body: zn
+        isNative: false
+        lineno: 0
+        colno: 0
+    )
 }
 
 # checkValueAt -- type the value row `nid`, dispatching by arm. A handler
@@ -31619,7 +31739,7 @@ bindFunctionParam: function {
 coerceImplicitReturn: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    defn: zast.FunctionData.view
+    defn: fnref
     fnTid: ztypes.tid
 } is {
     # Implicit-return coercion: a literal-typed last statement takes
@@ -31808,10 +31928,11 @@ checkFunctionBody: function {
             walkBodyAt :st :unitDecl :ast bodyId: defn.body
             st.typing.currentReturnTypeId = prevRet
             st.typing.currentReturnsBorrow = prevRb
+            cfr: fnRefOf fnode: defn
             (coerceImplicitReturn
                 :st
                 :ast
-                :defn
+                defn: cfr
                 fnTid: (ztypes.tid.create from: (optU64Or o: rgot d: ztypes.tid))
             )
             st.pop
@@ -32923,7 +33044,8 @@ stampOneUnitMono: function {
         bmId2: bodyIds.get i: bidx
         bm2: argRefAt :ast nid: (zast.nodeid.create from: bmId2.u32)
         if (bm2.nid.isZero) == false then {
-            mnm: zast.nameTextAt :ast ref: bm2.name
+            # an owned copy: the walks below lend ast
+            mnm: zast.nameTextCopy :ast ref: bm2.name
             q: "\{monoNm}.\{mnm}"
             mfo: (st.typing.declChildOf
                 pool: ast.names
@@ -35777,7 +35899,8 @@ resolveConstantDefsIn: function {
         for bm: biter loop {
             bmNode: argRefAt :ast nid: (zast.nodeid.create from: bm.u32)
             if (bmNode.nid.isZero) == false then {
-                defName: zast.nameTextAt :ast ref: bmNode.name
+                # an owned copy: the walks below lend ast
+                defName: zast.nameTextCopy :ast ref: bmNode.name
                 isNs: false
                 if (zast.unitOpKindIs
                     :ast
@@ -36156,7 +36279,8 @@ resolveNamedDefsIn: function {
         for bm: biter loop {
             bmNode: argRefAt :ast nid: (zast.nodeid.create from: bm.u32)
             if (bmNode.nid.isZero) == false then {
-                dn: zast.nameTextAt :ast ref: bmNode.name
+                # an owned copy: the walks below lend ast
+                dn: zast.nameTextCopy :ast ref: bmNode.name
                 hit: false
                 if dn.stringview == wantA then hit = true
                 if dn.stringview == wantB then hit = true
@@ -36428,7 +36552,8 @@ lowerGeneratorsInUnit: function {
             oelId: bodyIds.get i: ogi
             oel: argRefAt :ast nid: (zast.nodeid.create from: oelId.u32)
             if (oel.nid.isZero) == false then {
-                tnm: zast.nameTextAt :ast ref: oel.name
+                # an owned copy: the walks below lend ast
+                tnm: zast.nameTextCopy :ast ref: oel.name
                 if tnm.length > 0 then {
                     (lowerGeneratorMethods
                         :st
