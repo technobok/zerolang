@@ -23535,7 +23535,7 @@ forComprehensionTid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    fornode: zast.ForData.view
+    fornode: forref
     elemT: ztypes.tid
 } out ztypes.tid is {
     # for-as-expression: a value-producing body makes the loop a List of
@@ -23585,7 +23585,7 @@ forComprehensionTid: function {
                 )
                 if lmid > 0 then {
                     setf: lmid
-                    stampGate :st nid: fornode.nodeid.u64 tid: setf
+                    stampGate :st nid: fornode.nid.u64 tid: setf
                     return lmid
                 }
             } case none then null
@@ -23646,7 +23646,7 @@ checkFor: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    fornode: zast.ForData.view
+    fornode: forref
 } out ztypes.tid is {
     forMarker: st.pushBlock name: "for"
     bk: st.reg.ctlPlaceholder
@@ -23659,12 +23659,16 @@ checkFor: function {
         nameId: zast.wkContinue
         ztypeId: (ztypes.tid.create from: ct.u64)
     )
-    citer: fornode.conditions.iterate
-    for condId: citer loop {
-        checkForCondition :st :unitDecl :ast condId: (zast.nodeid.create from: condId)
+    kC: u64
+    for kC < fornode.nconds loop {
+        condId: zast.forCondAt :ast nid: fornode.nid i: kC
+        kC = kC + 1
+        checkForCondition :st :unitDecl :ast :condId
     }
-    piter: fornode.postconditions.iterate
-    for pcId: piter loop {
+    kP: u64
+    for kP < fornode.nposts loop {
+        pcId: (zast.forPostAt :ast nid: fornode.nid i: kP).u32
+        kP = kP + 1
         checkForPostcondition :st :unitDecl :ast :pcId
     }
     drainPendingBorrow :st
@@ -23713,7 +23717,7 @@ invalidateTakenAcross: function {st: zenv.ZSymbolTable names: IdSet u32} is {
 # nothing.
 ifExpressionType: function {
     st: zenv.ZSymbolTable
-    ifnode: zast.IfData.view
+    ifnode: ifref
     branchTypes: (ListVal u64).view
     allDiverge: bool
     hasElse: bool
@@ -23726,7 +23730,7 @@ ifExpressionType: function {
         if nvId > 0 then {
             result = ztypes.tid.create from: nvId.u64
             setk: result
-            stampGate :st nid: ifnode.nodeid.u64 tid: setk
+            stampGate :st nid: ifnode.nid.u64 tid: setk
         }
     } else {
         # An exhaustive (else-carrying) if is a value: the first completing
@@ -23737,7 +23741,7 @@ ifExpressionType: function {
             if nullId > 0 then {
                 result = ztypes.tid.create from: nullId.u64
                 stampedTid: result
-                stampGate :st nid: ifnode.nodeid.u64 tid: stampedTid
+                stampGate :st nid: ifnode.nid.u64 tid: stampedTid
             }
         }
         if hasElse when (anyEmpty) == false then {
@@ -23749,7 +23753,7 @@ ifExpressionType: function {
                     if bt2 > 0 then {
                         result = ztypes.tid.create from: bt2.u64
                         setv: result
-                        stampGate :st nid: ifnode.nodeid.u64 tid: setv
+                        stampGate :st nid: ifnode.nid.u64 tid: setv
                         ti = tn
                     } else {
                         ti = tn
@@ -23770,7 +23774,7 @@ checkIfClauses: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    ifnode: zast.IfData.view
+    ifnode: ifref
     accFacts: (List ArmPredFact)
     guardFacts: (List ArmPredFact)
     branchTypes: (ListVal u64)
@@ -23783,9 +23787,11 @@ checkIfClauses: function {
 } is {
     allDiverge: true
     anyEmpty: false
-    cliter: ifnode.clauses.iterate
-    for clauseId: cliter loop {
-        clause: ifClauseRefAt :ast nid: (zast.nodeid.create from: clauseId)
+    kC: u64
+    for kC < ifnode.nclauses loop {
+        clauseId: zast.ifClauseAt :ast nid: ifnode.nid i: kC
+        kC = kC + 1
+        clause: ifClauseRefAt :ast nid: clauseId
         dead: false
         if (clause.nid.isZero) == false then {
             if (isEmptyBody n: (ast.nodes.get i: clause.statement.u64)) then anyEmpty = true
@@ -23840,14 +23846,14 @@ checkIf: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    ifnode: zast.IfData.view
+    ifnode: ifref
 } out ztypes.tid is {
     # Which clause a constant condition selects, recorded for the emitter. Most
     # body conditions name a local and do not fold at all, and the stamp says
     # so -- `known: false` means "emit a runtime if", which is the answer for
     # every ordinary branch. Only a condition made of constants decides
     # anything here.
-    fbr: foldIfBranch :st frame: st.curFrame :ast :unitDecl nid: ifnode.nodeid
+    fbr: foldIfBranch :st frame: st.curFrame :ast :unitDecl nid: ifnode.nid
     constFailClear :st
     # A clause the fold proved dead is reached by no use site, and the language
     # does not promise to resolve names or check types inside it. NOT walking it
@@ -23950,7 +23956,7 @@ if ifnode.elseclause > 0 then {
         pgTid = gf2.fullTid
         pgApplied = pgApplied + 1
     }
-    if elseDvg when ifnode.clauses.length == 1 when accFacts.length == 1 then {
+    if elseDvg when ifnode.nclauses == 1 when accFacts.length == 1 then {
         af0: accFacts.get i: 0
         applyPredFact :ast :st f: af0 holds: true
         pgSubj = af0.subject
@@ -23960,7 +23966,7 @@ if ifnode.elseclause > 0 then {
     if pgApplied == 1 when (pgSubj.isZero) == false then {
         (postGuardRecord
             :st
-            stmtNid: ifnode.nodeid
+            stmtNid: ifnode.nid
             subject: pgSubj
             fullTid: (ztypes.tid.create from: pgTid.u64)
         )
@@ -29350,7 +29356,7 @@ isEmptyBody: function {n: Node.view} out bool is {
 genericParamSubjectTid: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    casenode: zast.CaseData.view
+    casenode: caseref
     gdecl: ztypes.declid
     gsn: StringView
 } out ztypes.tid is {
@@ -29433,7 +29439,7 @@ caseGenericSubjectTid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast.view
-    casenode: zast.CaseData.view
+    casenode: caseref
 } out ztypes.tid is {
     subjT: ztypes.tid
     gsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject.u64)
@@ -29648,7 +29654,7 @@ checkCaseClause: function {
 caseIsExhaustive: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    casenode: zast.CaseData.view
+    casenode: caseref
     subjT: ztypes.tid
     isSum: bool
     targetName: StringView
@@ -29712,7 +29718,7 @@ caseIsExhaustive: function {
             }
             (addErrorH
                 :st
-                nodeid: casenode.nodeid
+                nodeid: casenode.nid
                 lineno: casenode.lineno
                 colno: casenode.colno
                 e: zast.err.nonExhaustive
@@ -29730,7 +29736,7 @@ caseIsExhaustive: function {
 # that is not exhaustive produces no value at all.
 caseResultTid: function {
     st: zenv.ZSymbolTable
-    casenode: zast.CaseData.view
+    casenode: caseref
     exhaustive: bool
     allDiverge: bool
     anyEmpty: bool
@@ -29739,9 +29745,9 @@ caseResultTid: function {
     armTypes: (ListVal u64).view
 } out ztypes.tid is {
     if exhaustive when allDiverge when neverId > 0 then {
-        if casenode.clauses.length > 0 then {
+        if casenode.nclauses > 0 then {
             setn2: neverId
-            stampGate :st nid: casenode.nodeid.u64 tid: (ztypes.tid.create from: setn2.u64)
+            stampGate :st nid: casenode.nid.u64 tid: (ztypes.tid.create from: setn2.u64)
             return (ztypes.tid.create from: neverId)
         } else {
             return (ztypes.tid.create from: 0)
@@ -29752,7 +29758,7 @@ caseResultTid: function {
         # null so consuming the match as a value is rejected.
         if nullId > 0 then {
             nullStampId: nullId
-            stampGate :st nid: casenode.nodeid.u64 tid: (ztypes.tid.create from: nullStampId.u64)
+            stampGate :st nid: casenode.nid.u64 tid: (ztypes.tid.create from: nullStampId.u64)
             return (ztypes.tid.create from: nullId)
         }
         return (ztypes.tid.create from: 0)
@@ -29767,7 +29773,7 @@ caseResultTid: function {
             if at2 != neverId then {
                 if at2 > 0 then {
                     setc3: at2
-                    stampGate :st nid: casenode.nodeid.u64 tid: (ztypes.tid.create from: setc3.u64)
+                    stampGate :st nid: casenode.nid.u64 tid: (ztypes.tid.create from: setc3.u64)
                     return (ztypes.tid.create from: at2)
                 } else {
                     return (ztypes.tid.create from: 0)
@@ -29790,7 +29796,7 @@ applyCaseExclusions: function {
     targetName: StringView
     subjT: ztypes.tid
     diverging: (List String).view
-    casenode: zast.CaseData.view
+    casenode: caseref
 } is {
     with diter: diverging.iterate do for dn2: diter loop {
         (st.exclude
@@ -29808,7 +29814,7 @@ applyCaseExclusions: function {
         )
         (postGuardRecord
             :st
-            stmtNid: casenode.nodeid
+            stmtNid: casenode.nid
             subject: (nameIdOf :ast name: targetName)
             fullTid: subjT
         )
@@ -29821,7 +29827,7 @@ checkCaseElse: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    casenode: zast.CaseData.view
+    casenode: caseref
     subjT: ztypes.tid
     targetName: StringView
     neverId: u64
@@ -29867,7 +29873,7 @@ walkCaseClauses: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    casenode: zast.CaseData.view
+    casenode: caseref
     subjT: ztypes.tid
     isSum: bool
     targetName: StringView
@@ -29878,9 +29884,11 @@ walkCaseClauses: function {
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
-    cliter: casenode.clauses.iterate
-    for clauseId: cliter loop {
-        clause: caseClauseRefAt :ast nid: (zast.nodeid.create from: clauseId)
+    kC: u64
+    for kC < casenode.nclauses loop {
+        clauseId: zast.caseClauseAt :ast nid: casenode.nid i: kC
+        kC = kC + 1
+        clause: caseClauseRefAt :ast nid: clauseId
         if (clause.nid.isZero) == false then {
             cf: (checkCaseClause
                 :st
@@ -29907,7 +29915,7 @@ walkCaseClauses: function {
 finishCaseMatch: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    casenode: zast.CaseData.view
+    casenode: caseref
     subjT: ztypes.tid
     isSum: bool
     targetName: StringView
@@ -29963,7 +29971,7 @@ checkCaseArms: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    casenode: zast.CaseData.view
+    casenode: caseref
     subjT: ztypes.tid
     isSum: bool
     matchMarker: u64
@@ -30052,7 +30060,7 @@ checkCaseArms: function {
 rejectGenericValueMatch: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    casenode: zast.CaseData.view
+    casenode: caseref
     subjT: ztypes.tid
 } out bool is {
     # `match t` dissects the TYPE parameter at monomorphisation. A match
@@ -30093,7 +30101,7 @@ rejectGenericValueMatch: function {
 monoDissectionHandled: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    casenode: zast.CaseData.view
+    casenode: caseref
     matchMarker: u64
 } out bool is {
     dsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject.u64)
@@ -30114,7 +30122,7 @@ checkCase: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    casenode: zast.CaseData.view
+    casenode: caseref
 } out ztypes.tid is {
     foldCaseArm :st :ast :unitDecl n: casenode
     constFailClear :st
@@ -30754,9 +30762,205 @@ objRefAt: function {ast: Ast.view nid: zast.nodeid} out objref is {
     )
 }
 
-# checkValueAt -- type the value row `nid`, dispatching by arm. A handler
-# that takes its row as plain values is reached with no row view held; every
-# other arm is walked by checkValue through the row view fetched here.
+# caseref -- what the match walk reads of its row: the subject id, the clause
+# count, the else id and the position, as plain values. Clauses are read by
+# index through zast.caseClauseAt.
+caseref: record {
+    nid: zast.nodeid
+    subject: zast.nodeid
+    nclauses: u64
+    elseclause: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# caseRefAt -- the match row `nid` as plain values (all zero for any other arm).
+caseRefAt: function {ast: Ast.view nid: zast.nodeid} out caseref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case caseexpr then {
+        return (caseref
+            :nid
+            subject: n.subject
+            nclauses: n.clauses.length
+            elseclause: n.elseclause
+            lineno: n.lineno
+            colno: n.colno
+        )
+    } else null
+    zn: zast.nodeid
+    return (caseref nid: zn subject: zn nclauses: 0 elseclause: zn lineno: 0 colno: 0)
+}
+
+# ifref -- what the if walk reads of its row: the clause count, the else id
+# and the position, as plain values. Clauses are read by index through
+# zast.ifClauseAt.
+ifref: record {
+    nid: zast.nodeid
+    nclauses: u64
+    elseclause: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# ifRefAt -- the if row `nid` as plain values (all zero for any other arm).
+ifRefAt: function {ast: Ast.view nid: zast.nodeid} out ifref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case ifexpr then {
+        return (ifref
+            :nid
+            nclauses: n.clauses.length
+            elseclause: n.elseclause
+            lineno: n.lineno
+            colno: n.colno
+        )
+    } else null
+    zn: zast.nodeid
+    return (ifref nid: zn nclauses: 0 elseclause: zn lineno: 0 colno: 0)
+}
+
+# forref -- what the for walk reads of its row: the condition and
+# postcondition counts, the body id and the position, as plain values.
+# Conditions and postconditions are read by index through zast.forCondAt /
+# forPostAt.
+forref: record {
+    nid: zast.nodeid
+    nconds: u64
+    body: zast.nodeid
+    nposts: u64
+    lineno: u32
+    colno: u32
+}
+
+# forRefAt -- the for row `nid` as plain values (all zero for any other arm).
+forRefAt: function {ast: Ast.view nid: zast.nodeid} out forref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case forexpr then {
+        return (forref
+            :nid
+            nconds: n.conditions.length
+            body: n.body
+            nposts: n.postconditions.length
+            lineno: n.lineno
+            colno: n.colno
+        )
+    } else null
+    zn: zast.nodeid
+    return (forref nid: zn nconds: 0 body: zn nposts: 0 lineno: 0 colno: 0)
+}
+
+# labelRefAt -- the labelvalue row `nid` as plain values: the same shape as an
+# atom (name id and position), all zero for any other arm.
+labelRefAt: function {ast: Ast.view nid: zast.nodeid} out atomref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case labelvalue then {
+        return (atomref :nid name: n.name lineno: n.lineno colno: n.colno)
+    } else null
+    zn: zast.nodeid
+    zm: zast.nameid
+    return (atomref nid: zn name: zm lineno: 0 colno: 0)
+}
+
+# yieldref -- what the yield walk reads of its row: the yielded value id and
+# the position, as plain values.
+yieldref: record {
+    nid: zast.nodeid
+    expr: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# yieldRefAt -- the yield row `nid` as plain values (all zero for any other arm).
+yieldRefAt: function {ast: Ast.view nid: zast.nodeid} out yieldref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case yieldexpr then {
+        return (yieldref :nid expr: n.expr lineno: n.lineno colno: n.colno)
+    } else null
+    zn: zast.nodeid
+    return (yieldref nid: zn expr: zn lineno: 0 colno: 0)
+}
+
+# checkLabelValueAt -- the `:x` shorthand in value position reads the local x
+# -- and only a local: it resolves through no other scope, so a miss is
+# unresolvable.
+checkLabelValueAt: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    lv: atomref
+} out ztypes.tid is {
+    lvo: st.lookup nameId: lv.name
+    match (
+        lvo
+    ) case some then {
+        setlv: lvo
+        stampGate :st nid: lv.nid.u64 tid: (ztypes.tid.create from: setlv.u64)
+        lvv: st.lookupVarId nameId: lv.name
+        match (
+            lvv
+        ) case some then {
+            setlvv: lvv
+            st.typing.atomVariableId.set key: lv.nid.u64 value: setlvv
+        } case none then null
+        return (ztypes.tid.create from: lvo)
+    } case none then {
+        lvNm: zast.nameTextAt :ast ref: lv.name
+        lvm: "Unknown reference '\{lvNm}'"
+        lvn: String
+        lvh: "the ':name' shorthand reads a local named '\{lvNm}'; write the argument in full to pass something else"
+        (addErrorH
+            :st
+            nodeid: lv.nid
+            lineno: lv.lineno
+            colno: lv.colno
+            e: zast.err.badReference
+            msg: lvm
+            note: lvn
+            hint: lvh
+            width: lvNm.length.u32.orPanic
+        )
+        return (ztypes.tid.create from: 0)
+    }
+}
+
+# checkYieldAt -- a suspension point: the yielded value walks for diagnostics.
+# A bidirectional generator's yield carries the resumed value -- the synth
+# `.call`'s `value` parameter's type (the node itself stays unstamped; the
+# expression wrapper takes the type). A reftype resume value is a borrow into
+# the caller's argument: the surrounding binding becomes BORROWED origin value.
+checkYieldAt: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    yr: yieldref
+} out ztypes.tid is {
+    checkValueAt :st :unitDecl :ast nid: yr.expr
+    yvn: nameIdOf :ast name: "value"
+    yvo: st.lookup nameId: yvn
+    match (
+        yvo
+    ) case some then {
+        if (typeIsReftype :st tid: (ztypes.tid.create from: yvo.u64)) then {
+            drainPendingBorrow :st
+            st.typing.pendingBorrowPath.append yvn
+        }
+        return (ztypes.tid.create from: yvo)
+    } case none then {
+        return (ztypes.tid.create from: 0)
+    }
+}
+
+# checkValueAt -- type the value row `nid`, dispatching by arm: each handler
+# takes its row as plain values, so no row view is held across the walk.
+# Returns the resolved type id, or 0 when unhandled.
 checkValueAt: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -30795,110 +30999,31 @@ checkValueAt: function {
         rr: reasgRefAt :ast :nid
         checkReassignment :st :unitDecl :ast rasgn: rr
         return (ztypes.tid.create from: 0)
-    } else {
-        node: ast.nodes.get i: nid.u64
-        return (checkValue :st :unitDecl :ast :node)
-    }
-}
-
-# checkValue -- type an expression-value node, dispatching by kind. Returns the
-# resolved type id, or 0 when unhandled.
-checkValue: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    node: Node.view
-} out ztypes.tid is {
-    match (
-        node
-    ) case call then {
-        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
-    } case binop then {
-        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
-    } case atomid then {
-        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
-    } case atomstring then {
-        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
-    } case dottedpath then {
-        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case caseexpr then {
-        return (checkCase :st :unitDecl :ast casenode: node)
+        csr: caseRefAt :ast :nid
+        return (checkCase :st :unitDecl :ast casenode: csr)
     } case ifexpr then {
-        return (checkIf :st :unitDecl :ast ifnode: node)
+        ifr: ifRefAt :ast :nid
+        return (checkIf :st :unitDecl :ast ifnode: ifr)
     } case forexpr then {
-        return (checkFor :st :unitDecl :ast fornode: node)
+        frr: forRefAt :ast :nid
+        return (checkFor :st :unitDecl :ast fornode: frr)
     } case labelvalue then {
-        # the `:x` shorthand in value position reads the local x -- and only a
-        # local: it resolves through no other scope, so a miss is unresolvable
-        lvNm: ast.names.texts.get i: node.name.u64
-        lvo: st.lookup nameId: (nameIdOf :ast name: lvNm.stringview)
-        match (
-            lvo
-        ) case some then {
-            setlv: lvo
-            stampGate :st nid: node.nodeid.u64 tid: (ztypes.tid.create from: setlv.u64)
-            lvv: st.lookupVarId nameId: (nameIdOf :ast name: lvNm.stringview)
-            match (
-                lvv
-            ) case some then {
-                setlvv: lvv
-                st.typing.atomVariableId.set key: node.nodeid.u64 value: setlvv
-            } case none then null
-            return (ztypes.tid.create from: lvo)
-        } case none then {
-            lvm: "Unknown reference '\{lvNm}'"
-            lvn: String
-            lvh: "the ':name' shorthand reads a local named '\{lvNm}'; write the argument in full to pass something else"
-            (addErrorH
-                :st
-                nodeid: node.nodeid
-                lineno: node.lineno
-                colno: node.colno
-                e: zast.err.badReference
-                msg: lvm
-                note: lvn
-                hint: lvh
-                width: lvNm.length.u32.orPanic
-            )
-            return (ztypes.tid.create from: 0)
-        }
+        lvr: labelRefAt :ast :nid
+        return (checkLabelValueAt :st :ast lv: lvr)
     } case yieldexpr then {
-        # a suspension point: the yielded value walks for diagnostics. A
-        # bidirectional generator's yield carries the resumed value -- the
-        # synth `.call`'s `value` parameter's type (the node itself stays
-        # unstamped; the expression wrapper takes the type). A reftype
-        # resume value is a borrow into the caller's argument: the
-        # surrounding binding becomes BORROWED origin value.
-        checkValueAt :st :unitDecl :ast nid: node.expr
-        yvn: nameIdOf :ast name: "value"
-        yvo: st.lookup nameId: yvn
-        match (
-            yvo
-        ) case some then {
-            if (typeIsReftype :st tid: (ztypes.tid.create from: yvo.u64)) then {
-                drainPendingBorrow :st
-                st.typing.pendingBorrowPath.append yvn
-            }
-            return (ztypes.tid.create from: yvo)
-        } case none then {
-            return (ztypes.tid.create from: 0)
-        }
-    } case doexpr then {
-        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
-    } case withexpr then {
-        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
-    } case reassignment then {
-        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
-    } case swapstmt then {
-        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
+        yr: yieldRefAt :ast :nid
+        return (checkYieldAt :st :unitDecl :ast :yr)
     } case expression then {
-        t: checkValueAt :st :unitDecl :ast nid: node.expression
-        if t > 0 then stampGate :st nid: node.nodeid.u64 tid: t
+        wrap: exprRefAt :ast :nid
+        t: checkValueAt :st :unitDecl :ast nid: wrap.expression
+        if t > 0 then stampGate :st nid: wrap.nid.u64 tid: t
         return t
     } else {
         return (ztypes.tid.create from: 0)
     }
 }
+
 
 # checkStmtExpression -- an expression statement line: walk the value, stamp
 # the wrapper, and answer whether the line diverges (a return call or a
@@ -34484,7 +34609,7 @@ foldCaseArm: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    n: zast.CaseData.view
+    n: caseref
 } is {
     sv: (evalConstNode
         :st
@@ -34498,8 +34623,10 @@ foldCaseArm: function {
     known: true
     stmt: zast.nodeid
     decided: false
-    cliter: n.clauses.iterate
-    for clId: cliter loop {
+    kC: u64
+    for kC < n.nclauses loop {
+        clId: (zast.caseClauseAt :ast nid: n.nid i: kC).u32
+        kC = kC + 1
         if known then {
             cl: caseClauseRefAt :ast nid: (zast.nodeid.create from: clId.u32)
             if (cl.nid.isZero) == false then {
@@ -34531,7 +34658,7 @@ foldCaseArm: function {
     }
     if known == false then return
     if decided == false then stmt = n.elseclause
-    st.typing.foldedBranch.set key: n.nodeid.u64 value: (ztyping.foldedbranch known: true :stmt)
+    st.typing.foldedBranch.set key: n.nid.u64 value: (ztyping.foldedbranch known: true :stmt)
 }
 
 # constStrArgAt -- one argument of a static string method, found by LABEL or by
