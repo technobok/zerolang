@@ -26110,14 +26110,6 @@ lockNonTrivialArg: function {
     }
     return lockRoot
 }
-# whether a `:name` shorthand argument resolves at this parameter: a take
-# always consumes it; a lock/borrow parameter locks it only under
-# --strict-call-locks.
-shorthandArgResolves: function {st: zenv.ZSymbolTable.view isTake: bool} out bool is {
-    if isTake then return true
-    return st.typing.strictCallLocks
-}
-
 # hoistTrivialArg -- an argument the call CAN hoist to a temp still locks its
 # source when the parameter borrows it: the temp aliases the same storage.
 # Answers the lock root.
@@ -26147,14 +26139,12 @@ hoistTrivialArg: function {
     # A bare-name reftype argument: a take parameter consumes
     # it (the overlay propagates out on pop); a lock/borrow
     # parameter locks it for the call. A `:name` shorthand
-    # argument is the same bare local read, so a take
-    # parameter consumes it identically; at lock/borrow
-    # parameters the shorthand takes a lock only under
-    # --strict-call-locks, the default-off strict rule the
-    # tree is being drained toward (see docs/typechecker.pdoc,
-    # `:name` at the argument site).
+    # argument is the same bare local read and resolves
+    # identically: a take parameter consumes it, a lock/borrow
+    # parameter locks it (see docs/typechecker.pdoc, `:name` at
+    # the argument site).
     bn: bareAtomName :ast n: (ast.nodes.get i: arg.operation.u64)
-    if bn.length == 0 when (shorthandArgResolves :st :isTake) then {
+    if bn.length == 0 then {
         bn = atomName :ast n: (ast.nodes.get i: arg.operation.u64)
     }
     if bn.length > 0 when (typeIsReftype
@@ -38814,7 +38804,6 @@ typecheck: function {
     program: Node
     reg: ztypes.ZTypeRegistry.take
     eager: bool
-    strictLocks: bool
     requireMain: bool
     dumpRows: bool
     ccPath: StringView
@@ -38829,7 +38818,6 @@ typecheck: function {
     } else null
     ty: ztyping.newTyping nodeEst: nodeEstT
     ty.eagerAll = eager
-    ty.strictCallLocks = strictLocks
     ty.requireMain = requireMain
     ty.dumpRows = dumpRows
     ty.ccPath = ccPath.string
