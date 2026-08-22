@@ -20566,12 +20566,10 @@ scanNativeNeed: function {
     ctx: Ctx
     unitName: StringView
     baseId: zast.nameid
-    base: StringView
     membId: zast.nameid
-    memb: StringView
 } is {
     calleeTid: ztypes.tid
-    if baseId.isZero == false when memb.length > 0 then {
+    if baseId.isZero == false when (membId.isZero) == false then {
         # a qualified path names a unit only when the base IS one: a program
         # may declare a TYPE with a runtime unit's name (a variant `io` with a
         # `stdout` arm), and `io.stdout` there constructs an arm rather than
@@ -20589,12 +20587,11 @@ scanNativeNeed: function {
             st: symtab
             nameId: (zast.poolFind pool: ast.names text: unitName)
         )
-        nameId92: (zast.poolFind pool: ast.names text: base)
         sh: (ztypecheck.resolveUnitChildRo
             :ast
             st: symtab
             unitDecl: uq3z
-            nameId: nameId92
+            nameId: baseId
         )
         match (
             sh
@@ -20615,17 +20612,16 @@ scanNativeNeed: function {
             calleeTid = ztypes.tid.create from: (fo)
         } case none then return
     } else {
-        if memb.length == 0 then return
+        if membId.isZero then return
         uq4z: (ztypecheck.unitDeclOfName
             st: symtab
             nameId: (zast.poolFind pool: ast.names text: unitName)
         )
-        nameId93: (zast.poolFind pool: ast.names text: memb)
         go: (ztypecheck.resolveUnitChildRo
             :ast
             st: symtab
             unitDecl: uq4z
-            nameId: nameId93
+            nameId: membId
         )
         match (
             go
@@ -20640,8 +20636,11 @@ scanNativeNeed: function {
     match (
         duo
     ) case some then {
+        # the need LISTS the member, so this leg -- and only this leg, which a
+        # resolved native reaches -- spells it
+        membT: zast.nameTextCopy :ast ref: membId
         needsAddM :ctx uname: duo.stringview memb: "@unit"
-        needsAddM :ctx uname: duo.stringview :memb
+        needsAddM :ctx uname: duo.stringview memb: membT.stringview
     } case none then null
 }
 # scanNeedsCall -- the needs a CALL declares: the string/view natives its
@@ -20656,10 +20655,11 @@ scanNeedsCall: function {
 } is {
     mn0: dottedChildText :ast n: (ast.nodes.get i: n.callable.u64)
     cbi0: dottedBaseAtomId :ast n: (ast.nodes.get i: n.callable.u64)
-    cbt0: dottedBaseAtom :ast n: (ast.nodes.get i: n.callable.u64)
-    cmb0: mn0.copy
+    # the member as an id, by the same rule the text followed: the dotted
+    # child, or the bare atom when the callable is not a path
+    cmbId: dottedChildNameIdOf :ast n: (ast.nodes.get i: n.callable.u64)
     if cbi0.isZero then {
-        cmb0 = atomTextOf :ast n: (ast.nodes.get i: n.callable.u64)
+        cmbId = atomNameIdOf :ast n: (ast.nodes.get i: n.callable.u64)
     }
     (scanNativeNeed
         :ast
@@ -20667,9 +20667,7 @@ scanNeedsCall: function {
         :ctx
         :unitName
         baseId: cbi0
-        base: cbt0.stringview
-        membId: (dottedChildNameIdOf :ast n: (ast.nodes.get i: n.callable.u64))
-        memb: cmb0.stringview
+        membId: cmbId
     )
     if (isSvArgNative name: mn0.stringview) then (needsAddM
         :ctx
@@ -20740,16 +20738,13 @@ scanNeedsDotted: function {
     if pdm.stringview == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
     # a no-paren member read auto-calls, so a zero-parameter native (os.pid,
     # io.stdout) arrives here rather than at the call arm
-    pdb: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
     (scanNativeNeed
         :ast
         :symtab
         :ctx
         :unitName
         baseId: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-        base: pdb.stringview
         membId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        memb: pdm.stringview
     )
     scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.parent.u64)
 }
