@@ -6033,6 +6033,7 @@ recordConformance: function {
     implTypeId: u64
     specTypeId: u64
     label: StringView
+    labelNameId: u64
 } is {
     tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: specTypeId.u64)
     recordIt: false
@@ -6046,7 +6047,7 @@ recordConformance: function {
         recordIt = true
     } else null
     if recordIt then {
-        cf: st.reg.newConformance :implTypeId :specTypeId :label isFacet: isFacetC
+        cf: (st.reg.newConformance :implTypeId :specTypeId :label :labelNameId isFacet: isFacetC)
         st.typing.conformance.append cf
         # the vtable wrapper names every member the spec names, and it is
         # emitted from the conformance row rather than from a use site, so
@@ -6138,6 +6139,7 @@ attachMarkers: function {
                     implTypeId: parentId
                     specTypeId: mtid
                     label: mlbl.stringview
+                    labelNameId: mmName.u64
                 )
             } case none then {
                 if (isLabelValue op: (ast.nodes.get i: mmOp.u64)) then {
@@ -6160,6 +6162,7 @@ attachMarkers: function {
                         implTypeId: parentId
                         specTypeId: amlid
                         label: amlbl.stringview
+                        labelNameId: mmName.u64
                         isFacet: false
                     )
                     st.typing.conformance.append acf
@@ -6495,9 +6498,9 @@ materializeCreateParams: function {
     # every field edge is written by now -- only the synthesized borrow / == /
     # != follow this call -- so settle the type here rather than waiting for
     # resolveDef's settle, which lands after the parameter order is decided
-    mkNames8: (List String)
+    mkIds8: (ListVal u64)
     with cfit8: st.typing.conformance.iterate do for crow8: cfit8 loop {
-        if crow8.implTypeId == typeTid then mkNames8.append crow8.label.copy
+        if crow8.implTypeId == typeTid then mkIds8.append crow8.labelNameId
     }
     fnameIds: (ListVal u64)
     ftypeIds: (ListVal u64)
@@ -6533,12 +6536,11 @@ materializeCreateParams: function {
                             isC = aco
                         } case none then null
                         isMk8: false
-                        cnBm8: ast.names.texts.get i: tcNameId.u64
                         mi8: u64
-                        mn8: mkNames8.length
+                        mn8: mkIds8.length
                         for mi8 < mn8 loop {
-                            mv8: mkNames8.get i: mi8
-                            if mv8.stringview == cnBm8.stringview then isMk8 = true
+                            mv8: mkIds8.get i: mi8
+                            if mv8 > 0 when mv8 == tcNameId then isMk8 = true
                             mi8 = mi8 + 1
                         }
                         if isC == false when isMk8 == false then inc = true
@@ -25704,7 +25706,6 @@ hoistArg: function {ast: Ast
 # so what counts as a data field is decided in one place; a caller that only
 # needs the ids takes this one and pays for no text at all.
 dataFieldIds: function {
-    ast: Ast.view
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
     ids: ListVal u64
@@ -25712,12 +25713,12 @@ dataFieldIds: function {
 } is {
     isFn: false
     if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType then isFn = true
-    # this type's conformance-marker labels, collected once (the per-field
-    # probe below is a scan over these few names, not the whole table)
-    mkNames8: (List String)
+    # this type's conformance-marker label ids, collected once (the per-field
+    # probe below is a scan over these few ids, not the whole table)
+    mkIds8: (ListVal u64)
     if isFn == false then {
         with cfit8: st.typing.conformance.iterate do for crow8: cfit8 loop {
-            if crow8.implTypeId == tid then mkNames8.append crow8.label.copy
+            if crow8.implTypeId == tid then mkIds8.append crow8.labelNameId
         }
     }
     # collect the rows first: the fnptr probe below resolves a member
@@ -25754,11 +25755,10 @@ dataFieldIds: function {
                         } case none then null
                         isMk8: false
                         mi8: u64
-                        cnBm8: ast.names.texts.get i: tcNameId.u64
-                        mn8: mkNames8.length
+                        mn8: mkIds8.length
                         for mi8 < mn8 loop {
-                            mv8: mkNames8.get i: mi8
-                            if mv8.stringview == cnBm8.stringview then isMk8 = true
+                            mv8: mkIds8.get i: mi8
+                            if mv8 > 0 when mv8 == tcNameId then isMk8 = true
                             mi8 = mi8 + 1
                         }
                         if isC == false when isMk8 == false then inc = true
@@ -25787,7 +25787,7 @@ dataFieldNames: function {
     ids: ListVal u64
     nameIds: ListVal u64
 } is {
-    dataFieldIds :ast :st :tid :ids :nameIds
+    dataFieldIds :st :tid :ids :nameIds
     ni: u64
     nn: nameIds.length
     for ni < nn loop {
