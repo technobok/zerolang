@@ -1011,7 +1011,7 @@ indexUnitDefs: function {st: zenv.ZSymbolTable frame: ztypes.declid program: Nod
 # indexUnitBody -- index one unit's top-level defs, in body order.
 indexUnitBody: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     unitopId: u32
     unitDeclId: ztypes.declid
 } is {
@@ -1020,19 +1020,19 @@ indexUnitBody: function {
         publicDeclId: ztypes.declid
         publicOpId: u32
         with bit: bodyIds.iterate do for bmId: bit loop {
-            bm: ast.nodes.get i: bmId.u64
-            if bm.namedoperation then {
+            bm: argRefAt :ast nid: (zast.nodeid.create from: bmId.u32)
+            if (bm.nid.isZero) == false then {
                 ddid0: (indexDeclDef
                     :st
                     :ast
                     parentDeclId: unitDeclId
                     nameRef: bm.name
-                    nopNodeId: bm.nodeid
-                    opNodeId: bm.operation
+                    nopNodeId: bm.nid.u32
+                    opNodeId: bm.operation.u32
                 )
-                if (zast.unitOpKindIs :ast opId: bm.operation k: zast.unitkind.publicNs) then {
+                if (zast.unitOpKindIs :ast opId: bm.operation.u32 k: zast.unitkind.publicNs) then {
                     publicDeclId = ddid0
-                    publicOpId = bm.operation
+                    publicOpId = bm.operation.u32
                 }
             }
         }
@@ -1054,25 +1054,35 @@ indexUnitBody: function {
 # Returns the new DeclId.
 indexDeclDef: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     parentDeclId: ztypes.declid
     nameRef: zast.nameid
     nopNodeId: u32
     opNodeId: u32
 } out ztypes.declid is {
-    opNode: ast.nodes.get i: opNodeId.u64
     did0: ztypes.declid
+    opNid: zast.nodeid.create from: opNodeId
+    opArm: rowArmAt :ast nid: opNid
     match (
-        opNode
-    ) case expression then {
+        opArm
+    ) case datablock then {
+        did0 = (st.typing.declNew
+            name: nameRef
+            parent: parentDeclId
+            kind: ztyping.declkind.dataDecl
+            node: nopNodeId
+        )
+        indexDeclDataInner :st :ast declId: did0 dataNodeId: opNodeId
+    } case expression then {
         # unwrap: dispatch on the inner node, keep this def's name/node
+        wrap: exprRefAt :ast nid: opNid
         return (indexDeclDef
             :st
             :ast
             :parentDeclId
             :nameRef
             :nopNodeId
-            opNodeId: opNode.expression
+            opNodeId: wrap.expression.u32
         )
     } case functiondef then {
         did0 = (st.typing.declNew
@@ -1091,7 +1101,7 @@ indexDeclDef: function {
         )
         indexDeclObjInner :st :ast declId: did0 objNodeId: opNodeId
     } case unitdef then {
-        if opNode.kind.publicNs then {
+        if (zast.unitOpKindIs :ast opId: opNodeId k: zast.unitkind.publicNs) then {
             # the exported-namespace block: entries become name -> sibling
             # edges, filled by indexDeclPublicEntries after the unit walk.
             # Any block anywhere -- a nested unit's, a hidden subunit's --
@@ -1123,24 +1133,25 @@ indexDeclDef: function {
             ) then st.typing.declSetUnitFrame declId: did0
             npub: ztypes.declid
             npubOp: u32
-            with nbit: opNode.body.iterate do for nmId: nbit loop {
-                nmNode: ast.nodes.get i: nmId.u64
-                if nmNode.namedoperation then {
+            bodyIds: zast.unitBodyIdsAt :ast unitId: opNodeId
+            with nbit: bodyIds.iterate do for nmId: nbit loop {
+                nm: argRefAt :ast nid: (zast.nodeid.create from: nmId.u32)
+                if (nm.nid.isZero) == false then {
                     nd: (indexDeclDef
                         :st
                         :ast
                         parentDeclId: did0
-                        nameRef: nmNode.name
-                        nopNodeId: nmNode.nodeid
-                        opNodeId: nmNode.operation
+                        nameRef: nm.name
+                        nopNodeId: nm.nid.u32
+                        opNodeId: nm.operation.u32
                     )
                     if (zast.unitOpKindIs
                         :ast
-                        opId: nmNode.operation
+                        opId: nm.operation.u32
                         k: zast.unitkind.publicNs
                     ) then {
                         npub = nd
-                        npubOp = nmNode.operation
+                        npubOp = nm.operation.u32
                     }
                 }
             }
@@ -1156,14 +1167,6 @@ indexDeclDef: function {
                 )
             }
         }
-    } case datablock then {
-        did0 = (st.typing.declNew
-            name: nameRef
-            parent: parentDeclId
-            kind: ztyping.declkind.dataDecl
-            node: nopNodeId
-        )
-        indexDeclDataInner :st :ast declId: did0 dataNodeId: opNodeId
     } case dottedpath then {
         # a cross-unit re-export alias: its own Decl and node; shares the
         # target's type id once minting routes through the Decl layer
@@ -1178,7 +1181,8 @@ indexDeclDef: function {
         # does -- the target just lives in THIS unit, so the alias-follow reads
         # the enclosing unit for the missing segment. A numeric literal is the
         # unit-constant shape and keeps its constDecl.
-        anm: zast.nameTextAt :ast ref: opNode.name
+        ar: atomRefAt :ast nid: opNid
+        anm: zast.nameTextAt :ast ref: ar.name
         akind: ztyping.declkind.reexportDecl
         if (isNumericLiteralName name: anm.stringview) then akind = ztyping.declkind.constDecl
         did0 = (st.typing.declNew
@@ -1414,7 +1418,7 @@ indexDeclAsMember: function {
 # siblings bind.
 indexDeclPublicEntries: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     ownerDeclId: ztypes.declid
     pubDeclId: ztypes.declid
     pubOpId: u32
@@ -1424,15 +1428,23 @@ indexDeclPublicEntries: function {
         pop
     ) case unitdef then {
         with bit: pop.body.iterate do for mId: bit loop {
-            m: ast.nodes.get i: mId.u64
-            if m.namedoperation then {
+            m: argRefAt :ast nid: (zast.nodeid.create from: mId.u32)
+            if (m.nid.isZero) == false then {
+                # the entry's value row is read through a view scoped to this
+                # block: the index walk below lends ast
                 iref: m.name
-                mop: ast.nodes.get i: m.operation.u64
                 isRef: false
-                if mop.labelvalue then isRef = true
-                if mop.atomid then {
-                    iref = mop.name
-                    isRef = true
+                isLabel: false
+                {
+                    mop: ast.nodes.get i: m.operation.u64
+                    if mop.labelvalue then {
+                        isRef = true
+                        isLabel = true
+                    }
+                    if mop.atomid then {
+                        iref = mop.name
+                        isRef = true
+                    }
                 }
                 tgt: ztypes.declid
                 if isRef then tgt = st.typing.declFindChild parentDeclId: ownerDeclId nameId: iref
@@ -1445,14 +1457,14 @@ indexDeclPublicEntries: function {
                     # the entry's value node (`:m` labelvalue / `alias: m`
                     # atom) is a navigable reference to the sibling def
                     stampRefDecl :st nid: m.operation.u64 declId: tgt
-                } else if (mop.labelvalue) == false then {
+                } else if isLabel == false then {
                     (indexDeclDef
                         :st
                         :ast
                         parentDeclId: pubDeclId
                         nameRef: m.name
-                        nopNodeId: m.nodeid
-                        opNodeId: m.operation
+                        nopNodeId: m.nid.u32
+                        opNodeId: m.operation.u32
                     )
                 }
             }
@@ -6327,11 +6339,10 @@ typedefFieldBaseTid: function {
     ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    n: Node.view
+    nid: zast.nodeid
 } out u64 is {
-    match (
-        n
-    ) case dottedpath then {
+    dr: dpRefAt :ast :nid
+    if (dr.nid.isZero) == false then {
         memberIdAt: (resolveMonoRefInline
             :st
             :frame
@@ -6340,11 +6351,11 @@ typedefFieldBaseTid: function {
             :unitDecl
             thisName: ""
             enclDecl: ztypes.declid
-            opNid: n.parent
+            opNid: dr.parent
             nid: 0
         )
         if memberIdAt > 0 then return memberIdAt
-        an: paramTypeBaseName :ast op: (ast.nodes.get i: n.parent.u64)
+        an: paramTypeBaseName :ast op: (ast.nodes.get i: dr.parent.u64)
         if an.length == 0 then return 0
         return (resolveAtomType :st :frame :ast :unitDecl nm: an.stringview thisName: "")
     } else {
@@ -6356,17 +6367,15 @@ typedefFieldBaseTid: function {
 # field, or 0 when the object is not a typedef.
 objectTypedefBaseTid: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     onode: zast.ObjectDefData.view
 } out u64 is {
     fiter: onode.isItems.iterate
     for fmId: fiter loop {
-        fm: ast.nodes.get i: fmId.u64
-        match (
-            fm
-        ) case namedoperation then {
+        fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
+        if (fm.nid.isZero) == false then {
             if (isTypedefField :ast n: (ast.nodes.get i: fm.operation.u64)) then {
                 return (typedefFieldBaseTid
                     :st
@@ -6374,10 +6383,10 @@ objectTypedefBaseTid: function {
 
                     :ast
                     :unitDecl
-                    n: (ast.nodes.get i: fm.operation.u64)
+                    nid: fm.operation
                 )
             }
-        } else null
+        }
     }
     return 0
 }
@@ -7290,7 +7299,7 @@ synthRecordMembers: function {
 recordTypedefBase: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
     rnode: zast.ObjectDefData.view
     rid: u64
@@ -30198,6 +30207,7 @@ rowarm: variant {
     functiondef: null
     objectdef: null
     datablock: null
+    unitdef: null
     other: null
 }
 
@@ -30247,6 +30257,8 @@ rowArmAt: function {ast: Ast.view nid: zast.nodeid} out rowarm is {
         return rowarm.objectdef
     } case datablock then {
         return rowarm.datablock
+    } case unitdef then {
+        return rowarm.unitdef
     } else {
         return rowarm.other
     }
@@ -32460,7 +32472,8 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
         swI = swI + 1
         swu: argRefAt :ast nid: (zast.nodeid.create from: swuId.u32)
         if (swu.nid.isZero) == false then {
-            swun: zast.nameTextAt :ast ref: swu.name
+            # an owned copy: the walks below lend ast
+            swun: zast.nameTextCopy :ast ref: swu.name
             swBody: zast.unitBodyIdsAt :ast unitId: swu.operation
             swbi: u64
             swbn: swBody.length
@@ -32469,7 +32482,8 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
                 swbi = swbi + 1
                 swm: argRefAt :ast nid: (zast.nodeid.create from: swmId.u32)
                 if (swm.nid.isZero) == false then {
-                    swmn: zast.nameTextAt :ast ref: swm.name
+                    # an owned copy: the walks below lend ast
+                    swmn: zast.nameTextCopy :ast ref: swm.name
                     uq8z: (unitDeclOfName
                         :st
                         nameId: (nameIdOf :ast name: swun.stringview)
@@ -36684,15 +36698,15 @@ lowerGeneratorsInUnit: function {
             for ii < count loop {
                 nid: bodyIds.get i: ii
                 ii = ii + 1
-                nop: ast.nodes.get i: nid.u64
-                if nop.namedoperation then {
+                nop: argRefAt :ast nid: (zast.nodeid.create from: nid.u32)
+                if (nop.nid.isZero) == false then {
                     (indexDeclDef
                         :st
                         :ast
                         parentDeclId: uro
                         nameRef: nop.name
-                        nopNodeId: nop.nodeid
-                        opNodeId: nop.operation
+                        nopNodeId: nop.nid.u32
+                        opNodeId: nop.operation.u32
                     )
                 }
             }

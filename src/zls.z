@@ -1291,7 +1291,8 @@ useVarId: function {o: (Option zenv.ZSymbolTable) nid: u64} out ztypes.vid is {
 # the unit-definition type id referenced at node `nid` (the referenced
 # declaration's minted tid via refDecl), or 0.
 useUnitDef: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
-    return (declTypeIdOf :o declId: (refDeclOf :o :nid))
+    rd: refDeclOf :o :nid
+    return (declTypeIdOf :o declId: rd)
 }
 
 # the declaration id referenced at node `nid` (typing.refDecl), or 0.
@@ -2619,7 +2620,7 @@ navAnswer: function {
     if bestIdx < 0 then return Value.nul
     bi: bestIdx.u64.orPanic
     hit: sp.rows.get i: bi
-    hname: (sp.names.get i: bi)
+    hname: (sp.names.get i: bi).copy
     w: hit.colHi - hit.colLo
     hnid: hit.nodeid.u64
 
@@ -3762,15 +3763,16 @@ addMemberCompletions: function {
         }
         return
     }
-    firstSeg: (base.substring from: 0 to: dotPos)
+    # an owned copy: the scans below lend the base
+    firstSeg: (base.substring from: 0 to: dotPos).string
     cur: u64
     startSeg: dotPos + 1
-    if (unitFsnoByName :snap name: firstSeg) > 0 then {
+    if (unitFsnoByName :snap name: firstSeg.stringview) > 0 then {
         nextDot: dotFrom :base start: dotPos + 1
         secondSeg: base.substring from: dotPos + 1 to: nextDot
         cur = (descendUnitType
             prog: snap.prog
-            unitName: firstSeg
+            unitName: firstSeg.stringview
             name: secondSeg
             o: snap.st
         )
@@ -3779,7 +3781,7 @@ addMemberCompletions: function {
         docUnit: zsource.unitNameOf path: docRel
         throwaway: (MapRV String value: u8)
         ds: enclosingDefStart prog: snap.prog unitName: docUnit.stringview :l1u sink: throwaway
-        cur = baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u base: firstSeg
+        cur = baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u base: firstSeg.stringview
     }
     if cur == 0 then return
     pos: startSeg
@@ -3988,13 +3990,13 @@ resolveCalleeFuncId: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 i
 # arg-label lookup and signature help.
 leafFuncIdAt: function {
     snap: zcheck.CheckResult
-    o: (Option zenv.ZSymbolTable)
     sp: Spans
     docRel: StringView
     srcDir: StringView
     line1u: u32
     idCol: u32
 } out u64 is {
+    o: snap.st
     leafNid: u32
     bk: u8
     found: false
@@ -4528,7 +4530,7 @@ signatureHelpAnswer: function {
         lastPos: 0
     )
     sp.walkProgram prog: snap.prog
-    funcId: leafFuncIdAt :snap o: snap.st :sp :docRel :srcDir line1u: headLine :idCol
+    funcId: leafFuncIdAt :snap :sp :docRel :srcDir line1u: headLine :idCol
     if funcId == 0 then return Value.nul
     label: (fnSigTextOpt
         vfs: snap.vfs
@@ -4657,7 +4659,8 @@ completionAnswer: function {
             }
         } case none then null
     }
-    prefix: (ltv.substring from: ps to: cur)
+    # an owned copy: the completers below lend the line
+    prefix: (ltv.substring from: ps to: cur).string
 
     if (memberMode) == false then {
         curPos: (l1u.u64 * 1048576) + cp1.u64
@@ -4667,7 +4670,7 @@ completionAnswer: function {
             prog: snap.prog
             :ltv
             :ps
-            :prefix
+            prefix: prefix.stringview
             cursorPos: curPos
         )
         if handledCA then return (Value.array arr)
@@ -4677,7 +4680,7 @@ completionAnswer: function {
             prog: snap.prog
             :ltv
             :ps
-            :prefix
+            prefix: prefix.stringview
             cursorPos: curPos
         )
         if handledAL then return (Value.array arr)
@@ -4687,7 +4690,7 @@ completionAnswer: function {
 
     labels: (List String)
     with cit: cands.iterateItems do for ce: cit loop {
-        pv: prefix
+        pv: prefix.stringview
         if pv.length == 0 then {
             lc: ce.key.copy
             labels.append lc
