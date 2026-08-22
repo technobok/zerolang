@@ -15050,63 +15050,55 @@ paramTypeId: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    op: Node.view
+    opNid: zast.nodeid
 } out u64 is {
     # A parameter type carrying an ownership marker (ztypes.ZTypeRegistry.take)
     # resolves through its peeled base: the marker node is recorded under the
     # current unit and left unstamped, so read the inner cross-unit ref that
-    # stampTyperefs resolved.
-    match (
-        op
-    ) case dottedpath then {
-        ocn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: op.child.u64))
-        if (isStripMarker name: ocn.stringview) then {
-            dpr: ast.nodes.get i: op.parent.u64
-            return (paramTypeId :st :ast :unitDecl op: dpr)
-        }
-    } else null
-    onid: nodeId n: op
+    # stampTyperefs resolved. The row is read through a view scoped to this
+    # block (owned name copies): the lookups below lend ast.
+    peelTo: zast.nodeid
+    onid: zast.nodeid
+    an: String
+    bn: String
+    dcn: String
+    {
+        op: ast.nodes.get i: opNid.u64
+        match (
+            op
+        ) case dottedpath then {
+            ocn: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: op.child.u64))
+            if (isStripMarker name: ocn.stringview) then peelTo = op.parent
+        } else null
+        onid = nodeId n: op
+        an = zast.nameTextCopy :ast ref: (atomNameId :ast n: op)
+        bn = zast.nameTextCopy :ast ref: (rootNameIdOf :ast n: op)
+        dcn = zast.nameTextCopy :ast ref: (dottedChildNameId :ast n: op)
+    }
+    if (peelTo.isZero) == false then return (paramTypeId :st :ast :unitDecl opNid: peelTo)
     r: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: onid.u64
-    if r > 0 then {
-        return r
-    } else {
-        an: zast.nameTextAt :ast ref: (atomNameId :ast n: op)
-        ano: walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: an.stringview
-        anid: optU64Or o: ano d: 0
-        if anid > 0 then return anid
-        # a dotted typeref naming a variant/union ARM is an arm DEFAULT:
-        # the parameter's type is the tagged parent.
-        bn: zast.nameTextAt :ast ref: (rootNameIdOf :ast n: op)
-        if bn.length > 0 then {
-            # a dotted numeric literal (0.u64) declares the SUFFIX type: the
-            # body read must carry it, not fall to 0 (untyped/permissive)
-            dcn: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: op)
-            isSfx: isNumericTypeName name: dcn.stringview
-            if (isNumericLiteralName name: bn.stringview) when isSfx then {
-                return (optU64Or
-                    o: (walkLookupTyperef
-                        :st
-                        frame: st.curFrame
-                        :ast
-                        :unitDecl
-                        base: dcn.stringview
-                    )
-                    d: 0
-                )
-            }
+    if r > 0 then return r
+    ano: walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: an.stringview
+    anid: optU64Or o: ano d: 0
+    if anid > 0 then return anid
+    # a dotted typeref naming a variant/union ARM is an arm DEFAULT:
+    # the parameter's type is the tagged parent.
+    if bn.length > 0 then {
+        # a dotted numeric literal (0.u64) declares the SUFFIX type: the
+        # body read must carry it, not fall to 0 (untyped/permissive)
+        isSfx: isNumericTypeName name: dcn.stringview
+        if (isNumericLiteralName name: bn.stringview) when isSfx then {
             return (optU64Or
-                o: (walkLookupTyperef
-                    :st
-                    frame: st.curFrame
-                    :ast
-                    :unitDecl
-                    base: bn.stringview
-                )
+                o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: dcn.stringview)
                 d: 0
             )
         }
-        return 0
+        return (optU64Or
+            o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: bn.stringview)
+            d: 0
+        )
     }
+    return 0
 }
 
 # isReturnCallKind -- true iff the stamped call-kind is a diverging control
@@ -31105,12 +31097,7 @@ bindFunctionParam: function {
     if (fnTid.isZero) == false then rgot = (optionval.some fnTid.u64)
     pname: zast.nameTextAt :ast ref: pm.name
     pnid: nodeId n: (ast.nodes.get i: pm.operation.u64)
-    ptid: (paramTypeId
-        :st
-        :ast
-        :unitDecl
-        op: (ast.nodes.get i: pm.operation.u64)
-    )
+    ptid: paramTypeId :st :ast :unitDecl opNid: pm.operation
     if st.typing.curMonoFnTid > 0 then {
         # per-mono instance walk: the mono FUNCTION child
         # carries the substituted param type
