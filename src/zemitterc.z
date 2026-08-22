@@ -5445,7 +5445,16 @@ emitInstanceMethodBody: function {
             if rptr then {
                 args.append recvExpr
             } else {
-                ra: "&\{recvExpr}"
+                # same rule as the auto-call base: a receiver that IS a call
+                # has no address, so emitByrefArg hoists it into a temp
+                ra: (emitByrefArg
+                    :ast
+                    :symtab
+                    :ctx
+                    av: recvExpr
+                    pid: (ztypes.tid.create from: posParamId.u64)
+                    isBorrow: false
+                )
                 args.append ra
             }
         } else {
@@ -10491,7 +10500,19 @@ emitNestedMonoMethodBase: function {
                     ) then {
                         dpu: ast.nodes.get i: n.parent.u64
                         if (pathIsPointer :ast :symtab :ctx n: dpu) == false then {
-                            nmrecv = "&\{baseAtom}"
+                            # the receiver is passed by address, and a base
+                            # that IS a call is not an lvalue -- `&f(x)` is C
+                            # the compiler rejects. emitByrefArg hoists such a
+                            # value into the `_ahN` temp an argument gets; a
+                            # plain name still emits as `&name`.
+                            nmrecv = (emitByrefArg
+                                :ast
+                                :symtab
+                                :ctx
+                                av: baseAtom
+                                pid: nlid
+                                isBorrow: false
+                            )
                         }
                     }
                     return "\{nmc}(\{nmrecv})"
