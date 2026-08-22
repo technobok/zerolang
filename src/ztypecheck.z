@@ -10254,7 +10254,7 @@ resolveDottedDef: function {
     unitDecl: ztypes.declid
     rf: ztypes.declid
     defName: StringView
-    defn: zast.DottedPathData.view
+    defn: dpref
 } is {
     # A unit-level type alias (`Node: zast.Node`): resolve the cross-unit dotted
     # ref to a (shell) type id and register it under the unit's name, so bare-alias
@@ -10310,7 +10310,7 @@ resolveDottedDef: function {
         sda: aid
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
-            nid: defn.nodeid.u64
+            nid: defn.nid.u64
             tid: (ztypes.tid.create from: sda.u64)
         )
         # a cross-unit `unit.Type` alias records its target's declaration
@@ -10318,7 +10318,7 @@ resolveDottedDef: function {
         declId9: (declOfTypeId :st tid: (ztypes.tid.create from: sda.u64))
         (stampRefDecl
             :st
-            nid: defn.nodeid.u64
+            nid: defn.nid.u64
             declId: declId9
         )
     }
@@ -10515,13 +10515,14 @@ resolveDef: function {
             :defn
         )
     } case dottedpath then {
+        ddr: dpRefOf dp: defn
         (resolveDottedDef
             :st
             :ast
             :unitDecl
             :rf
             :defName
-            :defn
+            defn: ddr
         )
     } else null
     # Unit -> def childOf edges are built at mint (declareCanonicalType) for real
@@ -18730,28 +18731,41 @@ borrowDottedBaseId: function {ast: Ast.view n: Node.view} out optionval u32 is {
     return (optionval.none u32)
 }
 
-# valueNoCoerce -- checkValue minus the value-position auto-call coercion
+# valueNoCoerceAt -- checkValueAt minus the value-position auto-call coercion
 # (construction arguments take method REFERENCES for function-typed fields).
+valueNoCoerceAt: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    nid: zast.nodeid
+} out u64 is {
+    arm: rowArmAt :ast :nid
+    match (
+        arm
+    ) case expression then {
+        wrap: exprRefAt :ast :nid
+        ev: valueNoCoerceAt :st :unitDecl :ast nid: wrap.expression
+        if ev > 0 then {
+            sete: ev
+            stampGate :st nid: wrap.nid.u64 tid: (ztypes.tid.create from: sete.u64)
+        }
+        return ev
+    } case dottedpath then {
+        dr: dpRefAt :ast :nid
+        return (checkDotted :st :unitDecl :ast dp: dr coerce: false)
+    } else {
+        return (checkValueAt :st :unitDecl :ast :nid)
+    }
+}
+
+# valueNoCoerce -- valueNoCoerceAt for a row already in view.
 valueNoCoerce: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     n: Node.view
 } out u64 is {
-    match (
-        n
-    ) case expression then {
-        ev: valueNoCoerce :st :unitDecl :ast n: (ast.nodes.get i: n.expression.u64)
-        if ev > 0 then {
-            sete: ev
-            stampGate :st nid: n.nodeid.u64 tid: (ztypes.tid.create from: sete.u64)
-        }
-        return ev
-    } case dottedpath then {
-        return (checkDotted :st :unitDecl :ast dp: n coerce: false)
-    } else {
-        return (checkValue :st :unitDecl :ast node: n)
-    }
+    return (valueNoCoerceAt :st :unitDecl :ast nid: (nodeId :n))
 }
 
 # checkProjectionCreate -- `F.create from: expr` / `P.borrow from: expr` on a
@@ -19134,7 +19148,7 @@ methodHasNoUserArgs: function {
 lockAutoCallReceiver: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     shared: bool
 } is {
@@ -19150,9 +19164,9 @@ lockAutoCallReceiver: function {
             :st
             pool: ast.names
             nameId: (atup.get i: 0)
-            callId: dp.nodeid.u64
+            callId: dp.nid.u64
             shared: ashr
-            nodeid: dp.nodeid
+            nodeid: dp.nid
             lineno: dp.lineno
             colno: dp.colno
         )
@@ -19162,16 +19176,16 @@ lockAutoCallReceiver: function {
             :ast
             pool: ast.names
             path: atup
-            callId: dp.nodeid.u64
+            callId: dp.nid.u64
             shared: ashr
-            nodeid: dp.nodeid
+            nodeid: dp.nid
             lineno: dp.lineno
             colno: dp.colno
         )
     }
     ahl: (ztypes.zlockholder
         kind: ztypes.zlockholderkind.callKind
-        id: dp.nodeid.u64
+        id: dp.nid.u64
     )
     st.releaseHeldLocks holder: ahl
 }
@@ -19533,7 +19547,7 @@ unitMemberTypeOf: function {
 reportUnknownMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
     cnId: zast.nameid
@@ -19615,7 +19629,7 @@ reportUnknownMember: function {
 checkCopyMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
 } out callleg is {
@@ -19640,7 +19654,7 @@ checkCopyMember: function {
             }
             if bt == (builtinTidTc :ast :st base: "StringView") then isRefIw = false
             if (isRefIw) == false then {
-                stampGate :st nid: dp.nodeid.u64 tid: bt
+                stampGate :st nid: dp.nid.u64 tid: bt
                 return (callleg handled: true tid: bt)
             }
         }
@@ -19662,14 +19676,14 @@ checkCopyMember: function {
             if cpOrg > 0 then cpOff = st.typing.copyOptOut.has item: cpOrg
         }
         if isValCp when (cpOff) == false then {
-            stampGate :st nid: dp.nodeid.u64 tid: bt
+            stampGate :st nid: dp.nid.u64 tid: bt
             return (callleg handled: true tid: bt)
         }
         if cpOff then {
             mOff: "type '\{btnCp}' has no '.copy': its `as` block defines `copy: null`, striking the default copy off the type"
             (addError
                 :st
-                nodeid: dp.nodeid
+                nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
                 e: zast.err.typeError
@@ -19684,7 +19698,7 @@ checkCopyMember: function {
         }
         (addError
             :st
-            nodeid: dp.nodeid
+            nodeid: dp.nid
             lineno: dp.lineno
             colno: dp.colno
             e: zast.err.typeError
@@ -19699,7 +19713,7 @@ checkCopyMember: function {
 reportPrivateMember: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
     aliasViaX: bool
@@ -19737,7 +19751,7 @@ reportPrivateMember: function {
 checkMemberAutoCall: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
     mo: u64
@@ -19828,7 +19842,7 @@ checkMemberAutoCall: function {
 checkMemberProjections: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
     cnId: zast.nameid
@@ -19848,14 +19862,14 @@ checkMemberProjections: function {
         (checkBareTypeValueAt
             :ast
             :st
-            nodeid: dp.nodeid
+            nodeid: dp.nid
             lineno: dp.lineno
             colno: dp.colno
             width: cn.length.u32.orPanic
             tid: bt
         )
         setcr: bt
-        stampGate :st nid: dp.nodeid.u64 tid: setcr
+        stampGate :st nid: dp.nid.u64 tid: setcr
         return (callleg handled: true tid: bt)
     }
     # Reading a protocol-typed conformance member projects a borrow of
@@ -19898,7 +19912,7 @@ checkMemberProjections: function {
             mE3: "function-pointer field '\{cn}' takes arguments; call it, or reference it with '.take'"
             (addError
                 :st
-                nodeid: dp.nodeid
+                nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
                 e: zast.err.callError
@@ -19916,7 +19930,7 @@ checkTaggedMemberPath: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
     mo: u64
@@ -19973,11 +19987,11 @@ checkTaggedMemberPath: function {
                     )
                     return (callleg handled: true tid: (ztypes.tid.create from: 0))
                 }
-                dpk0: dp.nodeid.u64
+                dpk0: dp.nid.u64
                 dpv0: bt
                 st.typing.dpTaggedParent.set key: dpk0 value: dpv0
                 stampedTid: bt
-                stampGate :st nid: dp.nodeid.u64 tid: stampedTid
+                stampGate :st nid: dp.nid.u64 tid: stampedTid
                 return (callleg handled: true tid: bt)
             }
             isArm: true
@@ -20000,8 +20014,8 @@ checkTaggedMemberPath: function {
                     d: 0
                 )
                 if boolId > 0 then {
-                    st.typing.dpArmPredicate.set key: dp.nodeid.u64 value: bt
-                    stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: boolId.u64)
+                    st.typing.dpArmPredicate.set key: dp.nid.u64 value: bt
+                    stampGate :st nid: dp.nid.u64 tid: (ztypes.tid.create from: boolId.u64)
                     return (callleg handled: true tid: (ztypes.tid.create from: boolId))
                 }
             }
@@ -20015,7 +20029,7 @@ checkTaggedMemberPath: function {
 checkTagAccessor: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
     cnId: zast.nameid
@@ -20044,7 +20058,7 @@ checkTagAccessor: function {
                 eh5: String
                 (addErrorH
                     :st
-                    nodeid: dp.nodeid
+                    nodeid: dp.nid
                     lineno: dp.lineno
                     colno: dp.colno
                     e: zast.err.typeError
@@ -20057,15 +20071,15 @@ checkTagAccessor: function {
             }
             tat5: optTidOr o: (st.typing.tagAccessorTid.get key: bt) d: ztypes.tid
             if tat5 > 0 then {
-                st.typing.dpTagRead.set key: dp.nodeid.u64 value: bt
+                st.typing.dpTagRead.set key: dp.nid.u64 value: bt
                 mD5: (declMemberOf
                     :st
 
                     ownerTid: bt
                     nameId: cnId
                 )
-                stampRefDecl :st nid: dp.nodeid.u64 declId: mD5
-                stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: tat5.u64)
+                stampRefDecl :st nid: dp.nid.u64 declId: mD5
+                stampGate :st nid: dp.nid.u64 tid: (ztypes.tid.create from: tat5.u64)
                 return (callleg handled: true tid: (ztypes.tid.create from: tat5))
             }
         }
@@ -20076,7 +20090,7 @@ checkTagAccessor: function {
             eh6: String
             (addErrorH
                 :st
-                nodeid: dp.nodeid
+                nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
                 e: zast.err.typeError
@@ -20098,7 +20112,7 @@ unitMemberEffectiveName: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
     un: StringView
@@ -20123,7 +20137,7 @@ unitMemberEffectiveName: function {
             )
             if intU.length > 0 then {
                 (st.typing.setAliasInternalName
-                    nodeid: dp.nodeid
+                    nodeid: dp.nid
                     internalName: intU.stringview
                 )
                 effUcn = intU.copy
@@ -20161,7 +20175,7 @@ unitMemberEffectiveName: function {
 reportUnknownUnitMember: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
     un: StringView
@@ -20205,7 +20219,7 @@ reportUnknownUnitMember: function {
 checkUnitMemberValue: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     cn: StringView
     un: StringView
     memberDecl: u64
@@ -20228,7 +20242,7 @@ checkUnitMemberValue: function {
             (bareFnRefError
                 :ast
                 :st
-                nodeid: dp.nodeid
+                nodeid: dp.nid
                 lineno: ufl
                 colno: ufc
                 width: cn.length.u32.orPanic
@@ -20266,12 +20280,12 @@ checkUnitMemberValue: function {
                     tid: (ztypes.tid.create from: memberDecl.u64)
                 ) then {
                     icd: memberDecl
-                    st.typing.implicitCreate.set key: dp.nodeid.u64 value: icd
+                    st.typing.implicitCreate.set key: dp.nid.u64 value: icd
                 } else {
                     (checkBareTypeValueAt
                         :ast
                         :st
-                        nodeid: dp.nodeid
+                        nodeid: dp.nid
                         lineno: cdl
                         colno: cdc
                         width: cn.length.u32.orPanic
@@ -20282,7 +20296,7 @@ checkUnitMemberValue: function {
         }
     }
     setu: result
-    stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: setu.u64)
+    stampGate :st nid: dp.nid.u64 tid: (ztypes.tid.create from: setu.u64)
     # record the resolved declaration so go-to-definition on a
     # unit-qualified `unit.member` can locate its defining unit.
     udD: ztypes.declid
@@ -20298,7 +20312,7 @@ checkUnitMemberValue: function {
         :st
         tid: (ztypes.tid.create from: memberDecl.u64)
     )
-    stampRefDecl :st nid: dp.nodeid.u64 declId: udD
+    stampRefDecl :st nid: dp.nid.u64 declId: udD
     return (ztypes.tid.create from: result)
 }
 # checkUnitQualifiedMember -- `io.stdout`: the member resolves in that unit's
@@ -20308,7 +20322,7 @@ checkUnitQualifiedMember: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
     coerce: bool
@@ -20390,7 +20404,7 @@ checkDataBlockMember: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
 } out callleg is {
@@ -20401,7 +20415,7 @@ checkDataBlockMember: function {
             markDataRuntimeIndexed :st tid: bt
             sedi: dataElemTypeOf :ast :st :unitDecl dataTid: bt
             if sedi > 0 then {
-                stampGate :st nid: dp.nodeid.u64 tid: sedi
+                stampGate :st nid: dp.nid.u64 tid: sedi
                 return (callleg handled: true tid: sedi)
             }
         }
@@ -20475,7 +20489,7 @@ checkDataBlockMember: function {
                                 valArg: ztypes.tid
                             )
                             setar: amid
-                            stampGate :st nid: dp.nodeid.u64 tid: setar
+                            stampGate :st nid: dp.nid.u64 tid: setar
                             return (callleg handled: true tid: amid)
                         } case none then null
                     } case none then null
@@ -20490,7 +20504,7 @@ checkDataBlockMember: function {
 checkArrayIndexMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
 } out callleg is {
@@ -20518,7 +20532,7 @@ checkArrayIndexMember: function {
                     ro8
                 ) case some then {
                     seta8: ro8
-                    stampGate :st nid: dp.nodeid.u64 tid: seta8
+                    stampGate :st nid: dp.nid.u64 tid: seta8
                     return (callleg handled: true tid: ro8)
                 } case none then null
             } case none then null
@@ -20532,7 +20546,7 @@ checkArrayIndexMember: function {
 checkReleaseMarkerVar: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    dp: zast.DottedPathData.view
+    dp: dpref
     cn: StringView
     mkRoot: StringView
     blocked: bool
@@ -20584,7 +20598,7 @@ checkReleaseMarkerVar: function {
             mrel: "Cannot release '\{mkRoot}': \{lsn} lock held by '\{rhn}'"
             (addError
                 :st
-                nodeid: dp.nodeid
+                nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
                 e: zast.err.ownerError
@@ -20600,7 +20614,7 @@ checkReleaseMarkerVar: function {
 checkMoveMarkerVar: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    dp: zast.DottedPathData.view
+    dp: dpref
     cn: StringView
     mkRoot: StringView
     mvo: ztypes.vid
@@ -20616,7 +20630,7 @@ checkMoveMarkerVar: function {
             tvb: "with '.\{cn}'"
             (readonlyMoveError
                 :st
-                nodeid: dp.nodeid
+                nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
                 name: mkRoot
@@ -20628,7 +20642,7 @@ checkMoveMarkerVar: function {
             if (pinnedMoveError
                 :st
                 :ast
-                nodeid: dp.nodeid
+                nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
                 name: mkRoot
@@ -20640,7 +20654,7 @@ checkMoveMarkerVar: function {
             mtb: "Cannot move borrowed variable '\{mkRoot}' with '.take' — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
             (addError
                 :st
-                nodeid: dp.nodeid
+                nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
                 e: zast.err.ownerError
@@ -20656,7 +20670,7 @@ checkMoveMarkerVar: function {
 checkUnresolvedMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
     cnId: zast.nameid
@@ -20666,14 +20680,14 @@ checkUnresolvedMember: function {
         # every instantiation copies, so a generic-param receiver types
         # it t -> t (the per-instance clone emits the concrete copy).
         if cn == "copy" then {
-            stampGate :st nid: dp.nodeid.u64 tid: bt
+            stampGate :st nid: dp.nid.u64 tid: bt
             return bt
         }
         btn9x: st.reg.nameOf tid: bt
         mgp: "type parameter '\{btn9x}' has no member '\{cn}' (its constraint provides none)"
         (addError
             :st
-            nodeid: dp.nodeid
+            nodeid: dp.nid
             lineno: dp.lineno
             colno: dp.colno
             e: zast.err.genericError
@@ -20716,7 +20730,7 @@ checkResolvedMember: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
     cnId: zast.nameid
@@ -20729,14 +20743,14 @@ checkResolvedMember: function {
     # declaration for go-to-definition; the emitter derives the owner
     # from it to gate the numeric-cast leg (a scalar-named member of a
     # user type is not a conversion).
-    if dp.nodeid > 0 when bt > 0 then {
+    if dp.nid > 0 when bt > 0 then {
         mD: (declMemberOf
             :st
 
             ownerTid: bt
             nameId: cnId
         )
-        stampRefDecl :st nid: dp.nodeid.u64 declId: mD
+        stampRefDecl :st nid: dp.nid.u64 declId: mD
     }
     tgleg: (checkTaggedMemberPath
         :st
@@ -20751,7 +20765,7 @@ checkResolvedMember: function {
     if tgleg.handled then return tgleg.tid
     if (st.typing.isAsConstClone typeId: (ztypes.tid.create from: mo.u64)) then {
         setcc: mo
-        stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: setcc.u64)
+        stampGate :st nid: dp.nid.u64 tid: (ztypes.tid.create from: setcc.u64)
         return (ztypes.tid.create from: mo)
     }
     rm: mo
@@ -20797,7 +20811,7 @@ checkResolvedMember: function {
         result0: result
     )
     reportPrivateMember :st :ast :dp :bt :cn :aliasViaX
-    stampGate :st nid: dp.nodeid.u64 tid: result
+    stampGate :st nid: dp.nid.u64 tid: result
     return result
 }
 # checkMarkerMember -- the access and conversion markers a dotted path can name
@@ -20809,7 +20823,7 @@ checkMarkerMember: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
 } out callleg is {
@@ -20842,17 +20856,17 @@ checkMarkerMember: function {
             )
         }
         setpv: bt
-        stampGate :st nid: dp.nodeid.u64 tid: setpv
+        stampGate :st nid: dp.nid.u64 tid: setpv
         return (callleg handled: true tid: bt)
     }
     if cn == "public" then {
         setpb: bt
-        stampGate :st nid: dp.nodeid.u64 tid: setpb
+        stampGate :st nid: dp.nid.u64 tid: setpb
         return (callleg handled: true tid: bt)
     }
     if cn == "lock" then {
         setlk: bt
-        stampGate :st nid: dp.nodeid.u64 tid: setlk
+        stampGate :st nid: dp.nid.u64 tid: setlk
         return (callleg handled: true tid: bt)
     }
     # `.stringview` on a StringView is an identity no-op and is rejected --
@@ -20864,7 +20878,7 @@ checkMarkerMember: function {
             hsv: "drop '.stringview'".string
             (addErrorH
                 :st
-                nodeid: dp.nodeid
+                nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
                 e: zast.err.typeError
@@ -20925,7 +20939,7 @@ checkMarkerMember: function {
         }
         if isMk then {
             setbw: bt
-            stampGate :st nid: dp.nodeid.u64 tid: setbw
+            stampGate :st nid: dp.nid.u64 tid: setbw
             return (callleg handled: true tid: bt)
         }
     }
@@ -20938,7 +20952,7 @@ checkTransferMarker: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     bt: ztypes.tid
     cn: StringView
 } out callleg is {
@@ -20949,23 +20963,24 @@ checkTransferMarker: function {
     if (isMoveMarker name: cn) then isXferMarker = true
     if cn == "release" then isXferMarker = true
     if isXferMarker then {
-        mkRoot: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
-        if cn == "release" when mkRoot.length == 0 then {
+        mkRootId: bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64)
+        if cn == "release" when mkRootId.isZero then {
             mrv: "'.release' can only be applied to a variable name".string
             (addError
                 :st
-                nodeid: dp.nodeid
+                nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
                 e: zast.err.ownerError
                 msg: mrv
             )
         }
-        if mkRoot.length > 0 then {
-            mvo: st.lookupVarId nameId: (nameIdOf :ast name: mkRoot.stringview)
+        if (mkRootId.isZero) == false then {
+            mvo: st.lookupVarId nameId: mkRootId
             match (
                 mvo
             ) case some then {
+                mkRoot: zast.nameTextAt :ast ref: mkRootId
                 relBlocked: (checkMoveMarkerVar
                     :st
                     :ast
@@ -20985,25 +21000,25 @@ checkTransferMarker: function {
                 if (relBlocked) == false then {
                     mh: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: mvo)
                     st.releaseHeldLocks holder: mh
-                    st.invalidate nameId: (nameIdOf :ast name: mkRoot.stringview) loc: takenHere
+                    st.invalidate nameId: mkRootId loc: takenHere
                 }
             } case none then {
                 if cn == "release" then {
-                    dfo: (walkLookupTyperef
+                    dfo: (walkLookupTyperefById
                         :st
                         frame: st.curFrame
                         :ast
-
                         :unitDecl
-                        base: mkRoot.stringview
+                        baseId: mkRootId
                     )
                     match (
                         dfo
                     ) case some then {
+                        mkRoot: zast.nameTextAt :ast ref: mkRootId
                         mtl: "Cannot release top-level definition '\{mkRoot}'"
                         (addError
                             :st
-                            nodeid: dp.nodeid
+                            nodeid: dp.nid
                             lineno: dp.lineno
                             colno: dp.colno
                             e: zast.err.ownerError
@@ -21014,7 +21029,7 @@ checkTransferMarker: function {
             }
         }
         setmk: bt
-        stampGate :st nid: dp.nodeid.u64 tid: setmk
+        stampGate :st nid: dp.nid.u64 tid: setmk
         return (callleg handled: true tid: bt)
     }
     return (callleg handled: false tid: (ztypes.tid.create from: 0))
@@ -21026,7 +21041,7 @@ checkNumericSuffixCast: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
 } out callleg is {
     # Numeric dotted suffix (`1.u8`, `(2.5).f32`): when the child names a
     # non-function type, the path is a typed-literal cast -- the parent atom
@@ -21041,18 +21056,12 @@ checkNumericSuffixCast: function {
     }
     castBase: atomName :ast n: (ast.nodes.get i: castBaseId.u64)
     if (isNumericLiteralName name: castBase.stringview) then {
-        castChild: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.child.u64))
-        castOpt: (walkLookupTyperef
-            :st
-            frame: st.curFrame
-            :ast
-
-            :unitDecl
-            base: castChild.stringview
-        )
+        castChildId: atomNameId :ast n: (ast.nodes.get i: dp.child.u64)
+        castOpt: walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: castChildId
         match (
             castOpt
         ) case some then {
+            castChild: zast.nameTextAt :ast ref: castChildId
             if (st.reg.typetypeOf typeId: (ztypes.tid.create from: castOpt.u64)) != ztypes.ztypetype.functionType then {
                 # a compile-time-constant conversion is checked statically: a
                 # lossy literal cast is an error (300.u8, 3.5.u8, an int beyond
@@ -21066,7 +21075,7 @@ checkNumericSuffixCast: function {
                         if pn9c.err.length > 0 then {
                             (addError
                                 :st
-                                nodeid: dp.nodeid
+                                nodeid: dp.nid
                                 lineno: dp.lineno
                                 colno: dp.colno
                                 e: zast.err.typeError
@@ -21093,7 +21102,7 @@ checkNumericSuffixCast: function {
                                     em9c: "Value \{castBase.stringview} not exactly representable as \{castChild.stringview}"
                                     (addError
                                         :st
-                                        nodeid: dp.nodeid
+                                        nodeid: dp.nid
                                         lineno: dp.lineno
                                         colno: dp.colno
                                         e: zast.err.typeError
@@ -21104,11 +21113,10 @@ checkNumericSuffixCast: function {
                         }
                     }
                 }
-                castPid: nodeId n: (ast.nodes.get i: dp.parent.u64)
                 setcp: castOpt
-                stampGate :st nid: castPid.u64 tid: (ztypes.tid.create from: setcp.u64)
+                stampGate :st nid: dp.parent.u64 tid: (ztypes.tid.create from: setcp.u64)
                 setcd: castOpt
-                stampGate :st nid: dp.nodeid.u64 tid: (ztypes.tid.create from: setcd.u64)
+                stampGate :st nid: dp.nid.u64 tid: (ztypes.tid.create from: setcd.u64)
                 return (callleg handled: true tid: (ztypes.tid.create from: castOpt))
             }
         } case none then null
@@ -21123,7 +21131,7 @@ dottedBaseTid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
 } out ztypes.tid is {
     # the base of a dotted path is a reference, not a bare value: a type
     # name there must not construct (Counter.create, unit.Type.arm). Only
@@ -21191,7 +21199,7 @@ checkDotted: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    dp: zast.DottedPathData.view
+    dp: dpref
     coerce: bool
 } out ztypes.tid is {
     nsc: checkNumericSuffixCast :st :unitDecl :ast :dp
@@ -21235,7 +21243,7 @@ checkDotted: function {
         }
     }
     if intNmX.length > 0 then {
-        st.typing.setAliasInternalName nodeid: dp.nodeid internalName: intNmX.stringview
+        st.typing.setAliasInternalName nodeid: dp.nid internalName: intNmX.stringview
         cnId = ast.names.find s: intNmX.stringview
         cn = intNmX.copy
         aliasViaX = true
@@ -26745,7 +26753,8 @@ callableDottedResult: function {
     match (
         n
     ) case dottedpath then {
-        r: checkDotted :st :unitDecl :ast dp: n coerce: false
+        dr: dpRefOf dp: n
+        r: checkDotted :st :unitDecl :ast dp: dr coerce: false
         return (optionval.some r)
     } else {
         return (optionval.none ztypes.tid)
@@ -30600,6 +30609,40 @@ strRefAt: function {ast: Ast.view nid: zast.nodeid} out strref is {
     return (strref nid: zn nparts: 0 lineno: 0 colno: 0)
 }
 
+# dpref -- what the dotted-path walk reads of its row: the parent and child
+# ids and the position, as plain values.
+dpref: record {
+    nid: zast.nodeid
+    parent: zast.nodeid
+    child: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# dpRefOf -- the dotted-path row `dp` as plain values.
+dpRefOf: function {dp: zast.DottedPathData.view} out dpref is {
+    return (dpref
+        nid: dp.nodeid
+        parent: dp.parent
+        child: dp.child
+        lineno: dp.lineno
+        colno: dp.colno
+    )
+}
+
+# dpRefAt -- the dotted-path row `nid` as plain values (all zero for any other
+# arm).
+dpRefAt: function {ast: Ast.view nid: zast.nodeid} out dpref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case dottedpath then {
+        return (dpRefOf dp: n)
+    } else null
+    zn: zast.nodeid
+    return (dpref nid: zn parent: zn child: zn lineno: 0 colno: 0)
+}
+
 # checkValueAt -- type the value row `nid`, dispatching by arm. A handler
 # that takes its row as plain values is reached with no row view held; every
 # other arm is walked by checkValue through the row view fetched here.
@@ -30612,7 +30655,10 @@ checkValueAt: function {
     arm: rowArmAt :ast :nid
     match (
         arm
-    ) case binop then {
+    ) case dottedpath then {
+        dr: dpRefAt :ast :nid
+        return (checkDotted :st :unitDecl :ast dp: dr coerce: true)
+    } case binop then {
         br: binRefAt :ast :nid
         return (checkBinop :st :unitDecl :ast binop: br)
     } case atomid then {
@@ -30660,7 +30706,7 @@ checkValue: function {
     } case atomstring then {
         return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case dottedpath then {
-        return (checkDotted :st :unitDecl :ast dp: node coerce: true)
+        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case caseexpr then {
         return (checkCase :st :unitDecl :ast casenode: node)
     } case ifexpr then {
@@ -35245,7 +35291,7 @@ resolveDottedConstantDef: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    defn: zast.DottedPathData.view
+    defn: dpref
     sfLit: StringView
     sfTy: StringView
 } is {
@@ -35338,7 +35384,7 @@ resolveDottedConstantDef: function {
             dh: "construct it inside a function, or make '\{defName}' a function that returns the value"
             (reportUnitConstantShape
                 :st
-                nodeid: defn.nodeid
+                nodeid: defn.nid
                 lineno: defn.lineno
                 colno: defn.colno
                 width: sfLit.length.u32.orPanic
@@ -35574,13 +35620,14 @@ resolveConstantDef: function {
             if sfC.atomid then sfTy = zast.nameTextCopy :ast ref: sfC.name
         }
         if sfLit.length > 0 when sfTy.length > 0 then {
+            ddr: dpRefOf dp: defn
             (resolveDottedConstantDef
                 :ast
                 :st
                 :unitDecl
                 :frame
                 :defName
-                :defn
+                defn: ddr
                 sfLit: sfLit.stringview
                 sfTy: sfTy.stringview
             )
