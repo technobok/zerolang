@@ -2544,36 +2544,20 @@ resolveDottedArgTid: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
     ast: Ast
-    dp: Node.view
+    nid: zast.nodeid
 } out u64 is {
-    match (
-        dp
-    ) case dottedpath then {
-        # an owned copy: the walks below lend ast
-        pq: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
-        cq: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.child.u64))
-        if pq.length > 0 when cq.length > 0 then {
-            if (nameDenotesUnit
-    :frame
-    :st nameId: (atomNameId
-                :ast
-                n: (ast.nodes.get i: dp.parent.u64)
-            )) then {
-                return (descendNamed
-                    :st
-                    :frame
-
-                    :ast
-                    unitDecl: (unitDeclOfNameOrOwn
-                        :st
-                        :frame
-                        nameId: (nameIdOf :ast name: pq.stringview)
-                    )
-                    name: cq.stringview
-                )
-            }
+    dr: dpRefAt :ast :nid
+    if dr.nid.isZero then return 0
+    # owned copies: the walks below lend ast
+    pq: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: dr.parent.u64))
+    cq: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: dr.child.u64))
+    if pq.length > 0 when cq.length > 0 then {
+        pqId: atomNameId :ast n: (ast.nodes.get i: dr.parent.u64)
+        if (nameDenotesUnit :frame :st nameId: pqId) then {
+            ud: unitDeclOfNameOrOwn :st :frame nameId: pqId
+            return (descendNamed :st :frame :ast unitDecl: ud name: cq.stringview)
         }
-    } else null
+    }
     return 0
 }
 
@@ -2660,14 +2644,7 @@ monoRefArgTid: function {
     aid: ztypes.tid
     allOk: true
     if an.length == 0 then {
-        argOpNode: ast.nodes.get i: arg.operation.u64
-        aid = ztypes.tid.create from: (resolveDottedArgTid
-            :st
-            :frame
-
-            :ast
-            dp: argOpNode
-        )
+        aid = ztypes.tid.create from: (resolveDottedArgTid :st :frame :ast nid: arg.operation)
         if aid.isZero then {
             inner: (resolveMonoRefInline
                 :st
@@ -3321,21 +3298,41 @@ partialTyperefTid: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     enclDecl: ztypes.declid
-    n: Node.view
+    nid: zast.nodeid
 } out u64 is {
+    arm: rowArmAt :ast :nid
     match (
-        n
+        arm
     ) case expression then {
-        iexM: ast.nodes.get i: n.expression.u64
-        return (partialTyperefTid :st :frame :ast :unitDecl :enclDecl n: iexM)
+        wrap: exprRefAt :ast :nid
+        return (partialTyperefTid :st :frame :ast :unitDecl :enclDecl nid: wrap.expression)
     } case dottedpath then {
-        dcn6: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
-        if (isStripMarker name: dcn6.stringview) then {
-            dpq: ast.nodes.get i: n.parent.u64
-            return (partialTyperefTid :st :frame :ast :unitDecl :enclDecl n: dpq)
+        dr: dpRefAt :ast :nid
+        # the child's name is read through a view scoped to this block: the
+        # walk below lends ast
+        isStrip: false
+        {
+            dcn6: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dr.child.u64))
+            isStrip = isStripMarker name: dcn6.stringview
         }
+        if isStrip then return (partialTyperefTid
+            :st
+            :frame
+            :ast
+            :unitDecl
+            :enclDecl
+            nid: dr.parent
+        )
         return 0
     } case call then {
+        # the arguments as an owned list: the resolver below lends ast
+        cr: callRefAt :ast :nid
+        args6: (ListVal u32)
+        k6: u64
+        for k6 < cr.nargs loop {
+            args6.append from: (zast.callArgAt :ast nid: cr.nid i: k6).u32
+            k6 = k6 + 1
+        }
         rmp6: (resolveMonoRefParts
             :st
             :frame
@@ -3344,8 +3341,8 @@ partialTyperefTid: function {
             :unitDecl
             thisName: ""
             :enclDecl
-            callableNid: n.callable
-            arguments: n.arguments
+            callableNid: cr.callable
+            arguments: args6
             nid: 0
         )
         if rmp6 > 0 then {
@@ -3359,15 +3356,14 @@ partialTyperefTid: function {
 # partialReturnTid -- partialTyperefTid over a function's return typeref.
 partialReturnTid: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     enclDecl: ztypes.declid
     oId: zast.nodeid
 } out u64 is {
     if oId.isZero then return 0
-    o: ast.nodes.get i: oId.u64
-    return (partialTyperefTid :st :frame :ast :unitDecl :enclDecl n: o)
+    return (partialTyperefTid :st :frame :ast :unitDecl :enclDecl nid: oId)
 
     return 0
 }
@@ -3897,25 +3893,20 @@ typeofSourceType: function {ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     ownerId: u64
-    n: Node.view
+    nid: zast.nodeid
 } out u64 is {
+    arm: rowArmAt :ast :nid
     match (
-        n
+        arm
     ) case expression then {
-        return (typeofSourceType
-            :st
-            :frame
-            :ast
-
-            :unitDecl
-            :ownerId
-            n: (ast.nodes.get i: n.expression.u64)
-        )
+        wrap: exprRefAt :ast :nid
+        return (typeofSourceType :st :frame :ast :unitDecl :ownerId nid: wrap.expression)
     } case atomid then {
         if ownerId == 0 then return 0
+        ar: atomRefAt :ast :nid
         co: (st.typing.declChildOfId
             parentTypeId: (ztypes.tid.create from: ownerId.u64)
-            nameId: n.name
+            nameId: ar.name
         )
         match (
             co
@@ -3970,10 +3961,7 @@ resolveTyperefShellMarked: function {
     }
     if isTof then {
         rid: u64
-        {
-            tsx: ast.nodes.get i: sourceId.u64
-            rid = typeofSourceType :st :frame :ast :unitDecl :ownerId n: tsx
-        }
+        rid = typeofSourceType :st :frame :ast :unitDecl :ownerId nid: sourceId
         if rid > 0 then {
             # the node's stamp defers to the post-demand pass so it lands
             # on the globally-resolved type, not an early shell
@@ -4760,7 +4748,7 @@ resolveFunctionParam: function {
 # instead, and the borrow or takex marker the return carries.
 recordFunctionReturn: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
     rf: ztypes.declid
     fid: u64
@@ -12629,7 +12617,7 @@ addPromotedLocals: function {
     bodyId: zast.nodeid
 } is {
     if bodyId > 0 then {
-        addPromotedLocalsBlk :st :frame :ast :iterId blk: (ast.nodes.get i: bodyId.u64)
+        addPromotedLocalsBlk :st :frame :ast :iterId blkId: bodyId
     }
 }
 # add generator-promoted locals as fields of the synthesised iterator.
@@ -12638,32 +12626,31 @@ addPromotedLocalsBlk: function {
     frame: ztypes.declid
     ast: Ast
     iterId: u64
-    blk: Node.view
+    blkId: zast.nodeid
 } is {
-    match (
-        blk
-    ) case statement then {
-        siter: blk.statements.iterate
-        for stId: siter loop {
-            nm: assignmentLocalName :ast line: (ast.nodes.get i: stId.u64)
-            if nm != 0 then {
-                lf: (resolveAtomType
-                    :st
-                    :frame
+    nL: zast.stmtLineCount :ast nid: blkId
+    k: u64
+    for k < nL loop {
+        stId: (zast.stmtLineAt :ast nid: blkId i: k).u32
+        k = k + 1
+        nm: assignmentLocalName :ast line: (ast.nodes.get i: stId.u64)
+        if nm != 0 then {
+            lf: (resolveAtomType
+                :st
+                :frame
 
-                    :ast
-                    unitDecl: ztypes.declid
-                    nm: "i64"
-                    thisName: ""
-                )
-                (st.typing.setMemberType
-                    parentTypeId: (ztypes.tid.create from: iterId.u64)
-                    nameId: nm
-                    childTypeId: lf
-                )
-            }
+                :ast
+                unitDecl: ztypes.declid
+                nm: "i64"
+                thisName: ""
+            )
+            (st.typing.setMemberType
+                parentTypeId: (ztypes.tid.create from: iterId.u64)
+                nameId: nm
+                childTypeId: lf
+            )
         }
-    } else null
+    }
 }
 
 # synthGeneratorIterClass -- synthesize the `<fn>_iter` CLASS a generator lowers
@@ -12676,14 +12663,13 @@ addPromotedLocalsBlk: function {
 addResumeInput: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     iterId: u64
     callId: u64
     returntypeId: zast.nodeid
 } is {
     if returntypeId.isZero then return
-    returntype: ast.nodes.get i: returntypeId.u64
-    addResumeInputExpr :st :frame :ast :iterId :callId rt: returntype
+    addResumeInputExpr :st :frame :ast :iterId :callId rtId: returntypeId
 
 }
 # add the resume-input expression to a generator's step body.
@@ -12693,16 +12679,20 @@ addResumeInputExpr: function {
     ast: Ast
     iterId: u64
     callId: u64
-    rt: Node.view
+    rtId: zast.nodeid
 } is {
+    arm: rowArmAt :ast nid: rtId
     match (
-        rt
+        arm
     ) case expression then {
-        rtx: ast.nodes.get i: rt.expression.u64
-        addResumeInputExpr :st :frame :ast :iterId :callId rt: rtx
+        wrap: exprRefAt :ast nid: rtId
+        addResumeInputExpr :st :frame :ast :iterId :callId rtId: wrap.expression
     } case call then {
-        aiter: rt.arguments.iterate
-        for argId: aiter loop {
+        cr: callRefAt :ast nid: rtId
+        kA: u64
+        for kA < cr.nargs loop {
+            argId: (zast.callArgAt :ast nid: cr.nid i: kA).u32
+            kA = kA + 1
             arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
             if (arg.nid.isZero) == false then {
                 # an owned copy: the walks below lend ast
@@ -12807,7 +12797,7 @@ addInlineIterFields: function {
     bodyId: zast.nodeid
 } is {
     if bodyId > 0 then {
-        addInlineIterFieldsBlk :st :frame :ast :iterId blk: (ast.nodes.get i: bodyId.u64)
+        addInlineIterFieldsBlk :st :frame :ast :iterId blkId: bodyId
     }
 }
 # add inline iterator-state fields for a block.
@@ -12816,36 +12806,35 @@ addInlineIterFieldsBlk: function {
     frame: ztypes.declid
     ast: Ast
     iterId: u64
-    blk: Node.view
+    blkId: zast.nodeid
 } is {
-    match (
-        blk
-    ) case statement then {
-        n: u64
-        siter: blk.statements.iterate
-        for stId: siter loop {
-            cb: forIterableCallable :ast e: (ast.nodes.get i: stId.u64)
-            if cb.length != 0 then {
-                fieldName: "_iter\{n}"
-                fieldType: "\{cb.stringview}_iter"
-                ft: (resolveAtomType
-                    :st
-                    :frame
+    n: u64
+    nL: zast.stmtLineCount :ast nid: blkId
+    k: u64
+    for k < nL loop {
+        stId: (zast.stmtLineAt :ast nid: blkId i: k).u32
+        k = k + 1
+        cb: forIterableCallable :ast e: (ast.nodes.get i: stId.u64)
+        if cb.length != 0 then {
+            fieldName: "_iter\{n}"
+            fieldType: "\{cb.stringview}_iter"
+            ft: (resolveAtomType
+                :st
+                :frame
 
-                    :ast
-                    unitDecl: ztypes.declid
-                    nm: fieldType.stringview
-                    thisName: ""
-                )
-                (st.typing.setMemberType
-                    parentTypeId: (ztypes.tid.create from: iterId.u64)
-                    nameId: (ast.internString text: fieldName.stringview)
-                    childTypeId: ft
-                )
-                n = n + 1
-            }
+                :ast
+                unitDecl: ztypes.declid
+                nm: fieldType.stringview
+                thisName: ""
+            )
+            (st.typing.setMemberType
+                parentTypeId: (ztypes.tid.create from: iterId.u64)
+                nameId: (ast.internString text: fieldName.stringview)
+                childTypeId: ft
+            )
+            n = n + 1
         }
-    } else null
+    }
 }
 
 # synthGeneratorForMethod -- synthesize the iter class for a generator METHOD (an
@@ -17711,12 +17700,7 @@ inferConstructionSubs: function {
                     } case none then null
                 }
             } else {
-                vt0: (checkValue
-                    :st
-                    :unitDecl
-                    :ast
-                    node: (ast.nodes.get i: opId.u64)
-                )
+                vt0: checkValueAt :st :unitDecl :ast nid: opId
                 gidx: u64
                 gfound: false
                 fi: u64
@@ -17998,12 +17982,7 @@ skipCapacityArg: function {
     # a skipped capacity: arg is still a value: check it so its
     # atoms stamp (atomVariableId / refDecl) like any arg
     if skipCr then {
-        (checkValue
-            :st
-            :unitDecl
-            :ast
-            node: (ast.nodes.get i: argOpId.u64)
-        )
+        checkValueAt :st :unitDecl :ast nid: argOpId
     }
     return skipCr
 }
@@ -18857,7 +18836,7 @@ checkProjectionCreate: function {
                                 (hoistArg
                                     :ast
                                     :st
-                                    argNode: (ast.nodes.get i: arg.operation.u64)
+                                    argId: arg.operation
                                     argType: pvt
                                     paramType: 0
                                     :consumes
@@ -18929,22 +18908,22 @@ reportUnresolvedCastArg: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    argNode: Node.view
+    argId: zast.nodeid
     vt: ztypes.tid
     errMark: u64
 } is {
     if (vt.isZero) == false then return
     if st.typing.errors.length != errMark then return
-    ub: unresolvedBareCallable :ast :st :unitDecl nid: (zast.nodeIdOf n: argNode)
+    ub: unresolvedBareCallable :ast :st :unitDecl nid: argId
     if ub.length == 0 then return
     um: "Unknown reference '\{ub}'"
     en: String
     eh: String
     (addErrorH
         :st
-        nodeid: (nodeId n: argNode)
-        lineno: (nodeLine n: argNode)
-        colno: (nodeCol n: argNode)
+        nodeid: argId
+        lineno: (nodeLine n: (ast.nodes.get i: argId.u64))
+        colno: (nodeCol n: (ast.nodes.get i: argId.u64))
         e: zast.err.badReference
         msg: um
         note: en
@@ -18959,13 +18938,13 @@ reportUnresolvedCastArg: function {
 consumeCastFromArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    aOp: Node.view
+    aOpId: zast.nodeid
     vt: ztypes.tid
 } is {
-    if (argIsTrivial :ast op: aOp) then {
+    if (argIsTrivial :ast op: (ast.nodes.get i: aOpId.u64)) then {
         bn: (zast.nameTextAt
             :ast
-            ref: (bareAtomNameId :ast n: aOp)
+            ref: (bareAtomNameId :ast n: (ast.nodes.get i: aOpId.u64))
         )
         if bn.length > 0 then {
             bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringview)
@@ -18989,7 +18968,7 @@ consumeCastFromArg: function {
         (hoistArg
             :ast
             :st
-            argNode: aOp
+            argId: aOpId
             argType: vt
             paramType: 0
             consumes: true
@@ -19026,23 +19005,17 @@ checkTypedefCreate: function {
                 }
                 if isFrom then {
                     found = true
-                    aOp: ast.nodes.get i: arg.operation.u64
                     errT0: st.typing.errors.length
-                    vt: (checkValue
-                        :st
-                        :unitDecl
-                        :ast
-                        node: aOp
-                    )
+                    vt: checkValueAt :st :unitDecl :ast nid: arg.operation
                     (reportUnresolvedCastArg
                         :st
                         :unitDecl
                         :ast
-                        argNode: aOp
+                        argId: arg.operation
                         :vt
                         errMark: errT0
                     )
-                    if vt > 0 then (consumeCastFromArg :st :ast :aOp :vt)
+                    if vt > 0 then (consumeCastFromArg :st :ast aOpId: arg.operation :vt)
                 }
             }
         }
@@ -19089,7 +19062,7 @@ checkTypedefBorrow: function {
                         :st
                         :unitDecl
                         :ast
-                        argNode: (ast.nodes.get i: arg.operation.u64)
+                        argId: arg.operation
                         :vt
                         errMark: errT0
                     )
@@ -25223,7 +25196,7 @@ isLiteralTypeId: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool 
 # hoist a call argument into a temporary, recording its ownership.
 hoistArg: function {ast: Ast
     st: zenv.ZSymbolTable
-    argNode: Node.view
+    argId: zast.nodeid
     argType: ztypes.tid
     paramType: u64
     consumes: bool
@@ -25232,8 +25205,15 @@ hoistArg: function {ast: Ast
     tn: st.typing.nextTempId
     st.typing.nextTempId = tn + 1
     tname: "_t\{tn}"
-    ln: nodeLine n: argNode
-    co: nodeCol n: argNode
+    # the argument's position, read through a view scoped to this block:
+    # the hoist below lends ast
+    ln: u32
+    co: u32
+    {
+        argNode: ast.nodes.get i: argId.u64
+        ln = nodeLine n: argNode
+        co = nodeCol n: argNode
+    }
     assignId: zast.tableReserve :ast
     exprId: zast.tableReserve :ast
     atomId: zast.tableReserve :ast
@@ -25297,7 +25277,7 @@ hoistArg: function {ast: Ast
     # must stay drained-without-locks, or it would double the call's own
     # receiver locks under a temp holder
     if hown == ztypes.zownership.borrowed then {
-        hrt: rootNameIdOf :ast n: argNode
+        hrt: rootNameIdOf :ast n: (ast.nodes.get i: argId.u64)
         okInstall: false
         if (hrt.isZero) == false when hbsrc.length > 0 then {
             if (hbsrc.get i: 0) == hrt then okInstall = true
@@ -25317,9 +25297,9 @@ hoistArg: function {ast: Ast
                 src: hbsrc
                 :vid
                 leafShared: hlfs
-                nodeid: (nodeId n: argNode)
-                lineno: (nodeLine n: argNode)
-                colno: (nodeCol n: argNode)
+                nodeid: argId
+                lineno: ln
+                colno: co
             )
         }
     }
@@ -25751,7 +25731,7 @@ lockNonTrivialArg: function {
     tnm: (hoistArg
         :ast
         :st
-        argNode: (ast.nodes.get i: arg.operation.u64)
+        argId: arg.operation
         argType: vt
         paramType: pt
         :consumes
@@ -26638,7 +26618,7 @@ boxArgumentTid: function {
                             (hoistArg
                                 :ast
                                 :st
-                                argNode: (ast.nodes.get i: arg.operation.u64)
+                                argId: arg.operation
                                 argType: vt
                                 paramType: 0
                                 consumes: true
@@ -26768,19 +26748,21 @@ callableDottedResultAt: function {
 returnedBareFieldName: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    n: Node.view
+    nid: zast.nodeid
 } out String is {
+    arm: rowArmAt :ast :nid
     match (
-        n
+        arm
     ) case expression then {
-        return (returnedBareFieldName :ast :st n: (ast.nodes.get i: n.expression.u64))
+        wrap: exprRefAt :ast :nid
+        return (returnedBareFieldName :ast :st nid: wrap.expression)
     } case dottedpath then {
-        bfc: atomName :ast n: (ast.nodes.get i: n.child.u64)
-        bfcId: atomNameId :ast n: (ast.nodes.get i: n.child.u64)
+        dr: dpRefAt :ast :nid
+        bfc: atomName :ast n: (ast.nodes.get i: dr.child.u64)
+        bfcId: atomNameId :ast n: (ast.nodes.get i: dr.child.u64)
         if bfc.length == 0 then return "".string
         if (isStripMarker name: bfc.stringview) then return "".string
-        bfp: nodeId n: (ast.nodes.get i: n.parent.u64)
-        bft: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: bfp.u64
+        bft: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: dr.parent.u64
         if bft.isZero then return "".string
         (forceMemberOf
             :st
@@ -27121,11 +27103,7 @@ checkControlBuiltinCall: function {
                         )
                     }
                 }
-                bfn: (returnedBareFieldName
-                    :ast
-                    :st
-                    n: (ast.nodes.get i: arg.operation.u64)
-                )
+                bfn: returnedBareFieldName :ast :st nid: arg.operation
                 if st.typing.currentReturnsBorrow then bfn = "".string
                 if bfn.length > 0 then {
                     mbf: "Cannot return field '\{bfn}' as a bare read — the owner still frees it; return '\{bfn}.copy' (duplicate) or '\{bfn}.take' (move out)"
