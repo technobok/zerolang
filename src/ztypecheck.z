@@ -395,18 +395,24 @@ bareCtorError: function {
 # types -- each get a targeted diagnostic.
 checkBareTypeConstruction: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
-    node: zast.AtomIdData.view
+    ast: Ast
+    node: atomref
     tid: ztypes.tid
 } is {
-    cbW: ast.names.texts.get i: node.name.u64
+    # the atom's width is read through a view scoped to this block: the
+    # check below lends ast
+    wdt: u32
+    {
+        cbW: zast.nameTextAt :ast ref: node.name
+        wdt = cbW.length.u32.orPanic
+    }
     (checkBareTypeValueAt
         :ast
         :st
-        nodeid: node.nodeid
+        nodeid: node.nid
         lineno: node.lineno
         colno: node.colno
-        width: cbW.length.u32.orPanic
+        width: wdt
         :tid
     )
 }
@@ -15186,20 +15192,23 @@ checkString: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    node: zast.AtomStringData.view
+    node: strref
 } out ztypes.tid is {
     result: ztypes.tid
     hasInterp: false
-    for partId: node.stringparts.iterate loop {
-        part: ast.nodes.get i: partId.u64
+    k: u64
+    for k < node.nparts loop {
+        partId: zast.stringPartAt :ast nid: node.nid i: k
+        k = k + 1
+        arm: rowArmAt :ast nid: partId
         match (
-            part
+            arm
         ) case stringchunk then null else {
             hasInterp = true
             en0: st.typing.errors.length
-            ptid: checkValue :st :unitDecl :ast node: part
+            ptid: checkValueAt :st :unitDecl :ast nid: partId
             if ptid.isZero when st.typing.errors.length == en0 then {
-                reportUnresolvedValue :st :unitDecl :ast nid: (zast.nodeIdOf n: part)
+                reportUnresolvedValue :st :unitDecl :ast nid: partId
             }
             if st.typing.errors.length == en0 when (printableInterpTid
                 :ast
@@ -15207,13 +15216,20 @@ checkString: function {
                 :unitDecl
                 tid: ptid
             ) == false then {
+                pLn: u32
+                pCo: u32
+                {
+                    part: ast.nodes.get i: partId.u64
+                    pLn = nodeLine n: part
+                    pCo = nodeCol n: part
+                }
                 ptn: st.reg.nameOf tid: ptid
                 pm: "type '\{ptn}' is not printable in an interpolation"
                 (addErrorH
                     :st
-                    nodeid: (nodeId n: part)
-                    lineno: (nodeLine n: part)
-                    colno: (nodeCol n: part)
+                    nodeid: partId
+                    lineno: pLn
+                    colno: pCo
                     e: zast.err.typeError
                     msg: pm
                     note: "an interpolated value must be numeric, bool, String or StringView".string
@@ -15251,7 +15267,7 @@ checkString: function {
     ) case some then {
         result = ztypes.tid.create from: tyOpt.u64
         setk: result
-        stampGate :st nid: node.nodeid.u64 tid: setk
+        stampGate :st nid: node.nid.u64 tid: setk
     } case none then null
     drainPendingBorrow :st
     return result
@@ -21288,8 +21304,7 @@ checkBareTypeValue: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    node: zast.AtomIdData.view
-    ndNm: StringView
+    node: atomref
     fo: u64
 } is {
     # only an atom NAMING the type is a bare construction; a
@@ -21297,54 +21312,62 @@ checkBareTypeValue: function {
     # The renamed-twin aliases name their type without
     # matching its registry name; a general typeref retry
     # cannot stand here because a VALUE alias also resolves
-    # to its type's tid (`true` -> bool).
+    # to its type's tid (`true` -> bool). The atom's text is
+    # read through a view scoped to this block: the alias
+    # test and the evaluator below lend ast.
     tnq: st.reg.nameOf tid: (ztypes.tid.create from: fo.u64)
-    isTypeAtom: tnq.stringview == ndNm
+    isTypeAtom: false
+    {
+        ndNm: zast.nameTextAt :ast ref: node.name
+        isTypeAtom = tnq.stringview == ndNm.stringview
+        if (isTypeAtom) == false then {
+            twn: aliasedContainerTwin name: ndNm.stringview
+            if twn.length > 0 when twn == tnq.stringview then isTypeAtom = true
+        }
+    }
     if (isTypeAtom) == false then {
-        twn: aliasedContainerTwin name: ndNm
-        if twn.length > 0 when twn == tnq.stringview then isTypeAtom = true
         # an atom naming a TYPE alias constructs exactly as the
         # type's own name does. The tid cannot say so -- a VALUE
         # alias resolves to its root type's tid too -- but the
         # alias's own shape can. Without this the atom stays
         # unstamped and the emitter writes the alias name into
         # the C.
-        if (isTypeAtom) == false then {
-            aad: (declOfUnitDef
+        aad: (declOfUnitDef
+            :st
+            frame: st.curFrame
+            :unitDecl
+            nameId: node.name
+        )
+        if (aliasNamesType
+            :st
+
+            :ast
+            declId: aad
+        ) then {
+            # The alias test says TYPE; the CONSTANT gets to
+            # overrule it. `ECHO: LIB` names a string
+            # constant whose own type is StringView, so the
+            # test above sees a decl carrying a type -- and a
+            # bare StringView is an unconstructible view. A
+            # definition with a compile-time value is a VALUE
+            # alias, the case this leg's own comment names
+            # for `true: bool.true`.
+            # Asked SECOND, not first: the answer only
+            # matters when the alias test said yes, and a
+            # pull in front of it runs the evaluator for
+            # every bare atom in every body. An owned copy of
+            # the name: the evaluator lends ast.
+            dn: zast.nameTextCopy :ast ref: node.name
+            ecv: (constValueOfMember
                 :st
                 frame: st.curFrame
-                :unitDecl
-                nameId: (nameIdOf :ast name: ndNm)
-            )
-            if (aliasNamesType
-                :st
-
                 :ast
-                declId: aad
-            ) then {
-                # The alias test says TYPE; the CONSTANT gets to
-                # overrule it. `ECHO: LIB` names a string
-                # constant whose own type is StringView, so the
-                # test above sees a decl carrying a type -- and a
-                # bare StringView is an unconstructible view. A
-                # definition with a compile-time value is a VALUE
-                # alias, the case this leg's own comment names
-                # for `true: bool.true`.
-                # Asked SECOND, not first: the answer only
-                # matters when the alias test said yes, and a
-                # pull in front of it runs the evaluator for
-                # every bare atom in every body.
-                ecv: (constValueOfMember
-                    :st
-                    frame: st.curFrame
-                    :ast
 
-                    :unitDecl
-                    defName: ndNm
-                )
-                constFailClear :st
-                if ecv.kind.none then isTypeAtom = true
-            }
+                :unitDecl
+                defName: dn.stringview
+            )
+            constFailClear :st
+            if ecv.kind.none then isTypeAtom = true
         }
     }
     if isTypeAtom then {
@@ -21354,7 +21377,7 @@ checkBareTypeValue: function {
             tid: (ztypes.tid.create from: fo.u64)
         ) then {
             icv: fo
-            st.typing.implicitCreate.set key: node.nodeid.u64 value: icv
+            st.typing.implicitCreate.set key: node.nid.u64 value: icv
         } else {
             (checkBareTypeConstruction
                 :st
@@ -21373,18 +21396,10 @@ typeOfBareName: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    node: zast.AtomIdData.view
-    ndNm: StringView
+    node: atomref
 } out ztypes.tid is {
     result: ztypes.tid
-    fo: (walkLookupTyperef
-        :st
-        frame: st.curFrame
-        :ast
-
-        :unitDecl
-        base: ndNm
-    )
+    fo: walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: node.name
     match (
         fo
     ) case some then {
@@ -21405,13 +21420,20 @@ typeOfBareName: function {
                 mid: (ztypes.tid.create from: fo.u64)
             ) == false then {
                 isAutoFn = false
+                # the atom's width is read through a view scoped to this
+                # block: the report below lends ast
+                wdt: u32
+                {
+                    nm: zast.nameTextAt :ast ref: node.name
+                    wdt = nm.length.u32.orPanic
+                }
                 (bareFnRefError
                     :ast
                     :st
-                    nodeid: node.nodeid
+                    nodeid: node.nid
                     lineno: node.lineno
                     colno: node.colno
-                    width: ndNm.length.u32.orPanic
+                    width: wdt
                     fid: (ztypes.tid.create from: fo.u64)
                 )
             }
@@ -21434,12 +21456,11 @@ typeOfBareName: function {
                 :unitDecl
                 :ast
                 :node
-                :ndNm
                 :fo
             )
         }
         setu: result
-        stampGate :st nid: node.nodeid.u64 tid: setu
+        stampGate :st nid: node.nid.u64 tid: setu
         # atom-use def reference: the DEF's declaration (nodeType
         # carries the auto-call RETURN type above, not the referent)
         sfF: (declSurfaceOfName
@@ -21450,23 +21471,126 @@ typeOfBareName: function {
             nameId: node.name
             tid: (ztypes.tid.create from: fo.u64)
         )
-        stampRefDecl :st nid: node.nodeid.u64 declId: sfF
-        maybeWalkMethods :st frame: st.curFrame :unitDecl :ast name: ndNm
+        stampRefDecl :st nid: node.nid.u64 declId: sfF
+        maybeWalkMethodsById :st frame: st.curFrame :unitDecl :ast nameId: node.name
     } case none then null
     return result
 }
 
 
-# typecheck a bare identifier reference.
+# reportMissingReturnValue -- a bare `return` in a function that declares a
+# value: reported at the atom.
+reportMissingReturnValue: function {st: zenv.ZSymbolTable node: atomref} is {
+    mrt: st.typing.currentReturnTypeId
+    if mrt > 0 then {
+        mtt: st.reg.typetypeOf typeId: mrt
+        isVoidRet: false
+        if mtt == ztypes.ztypetype.nullType then isVoidRet = true
+        if mtt == ztypes.ztypetype.neverType then isVoidRet = true
+        if (isVoidRet) == false then {
+            rtn: st.reg.nameOf tid: mrt
+            mm: "missing return value: function expects '\{rtn}'"
+            en6: String
+            eh6: String
+            (addErrorH
+                :st
+                nodeid: node.nid
+                lineno: node.lineno
+                colno: node.colno
+                e: zast.err.typeError
+                msg: mm
+                note: en6
+                hint: eh6
+                width: 6
+            )
+        }
+    }
+}
+
+# reportTakenNameUse -- a read of a name whose value was moved out earlier.
+reportTakenNameUse: function {st: zenv.ZSymbolTable ast: Ast.view node: atomref} is {
+    ndNm: zast.nameTextAt :ast ref: node.name
+    eh5: String
+    m5: "cannot use '\{ndNm}' after ownership transfer"
+    nt5: "this name no longer owns a value; it was moved earlier".string
+    (addErrorH
+        :st
+        nodeid: node.nid
+        lineno: node.lineno
+        colno: node.colno
+        e: zast.err.ownerError
+        msg: m5
+        note: nt5
+        hint: eh5
+        width: ndNm.length.u32.orPanic
+    )
+}
+
+# checkLiteralAtom -- a numeric literal atom types as its literal pseudo-type.
+# An INLINE type suffix (`65u8`, `2.5f32`) is not zerolang syntax: a
+# conversion applies to a complete literal (`(65).u8`). Exempt 0x lexemes
+# whose tail is hex-digit text (0x1f32, 0xac8) and 0c char literals (0c8 ends
+# in a c8-shaped tail).
+checkLiteralAtom: function {st: zenv.ZSymbolTable ast: Ast.view node: atomref} out ztypes.tid is {
+    ndNm: zast.nameTextAt :ast ref: node.name
+    sfR: ztypes.suffixInfoOf numstr: ndNm.stringview
+    rejS: false
+    if sfR.has then {
+        rejS = true
+        if (ndNm.stringview.startsWith prefix: "0x") then {
+            sb: ndNm.stringview.byteAt (ndNm.length - sfR.len)
+            match (
+                sb
+            ) case some then {
+                if sb == 102 then rejS = false
+                if sb == 99 then rejS = false
+            } case none then null
+        }
+        if (ndNm.stringview.startsWith prefix: "0c") then rejS = false
+    }
+    if rejS then {
+        core8: ndNm.stringview.substring from: 0 to: (ndNm.length - sfR.len)
+        sfx8: (ndNm.stringview.substring
+            from: (ndNm.length - sfR.len)
+            to: ndNm.length
+        )
+        m8: "Unknown reference '\{ndNm}'"
+        h8: "a numeric conversion applies to a complete literal: write (\{core8}).\{sfx8}"
+        en8: String
+        (addErrorH
+            :st
+            nodeid: node.nid
+            lineno: node.lineno
+            colno: node.colno
+            e: zast.err.badReference
+            msg: m8
+            note: en8
+            hint: h8
+            width: ndNm.length.u32.orPanic
+        )
+        return (ztypes.tid.create from: 0)
+    }
+    result: ztypes.tid
+    if (isFloatLiteralName name: ndNm.stringview) then {
+        result = st.reg.literalFloatTid
+    } else {
+        result = st.reg.literalIntTid
+    }
+    setl: result
+    stampGate :st nid: node.nid.u64 tid: setl
+    return result
+}
+
+# checkAtomid -- type a bare name: a scope entry (break/continue diverge),
+# else a numeric literal, else a definition looked up by name.
 checkAtomid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
-    node: zast.AtomIdData.view
+    ast: Ast
+    node: atomref
 } out ztypes.tid is {
-    ndNm: ast.names.texts.get i: node.name.u64
     result: ztypes.tid
-    vtOpt: st.lookup nameId: (nameIdOf :ast name: ndNm.stringview)
+    vtOpt: st.lookup nameId: node.name
     match (
         vtOpt
     ) case some then {
@@ -21489,112 +21613,31 @@ checkAtomid: function {
                 d: result.u64
             )
         }
-        stampGate :st nid: node.nodeid.u64 tid: result
+        stampGate :st nid: node.nid.u64 tid: result
         # atom-use variable id: stamped even during template walks (variable
         # ids are valid there; stampGate only gates GENERIC_PARAM types)
-        avo: st.lookupVarId nameId: (nameIdOf :ast name: ndNm.stringview)
+        avo: st.lookupVarId nameId: node.name
         match (
             avo
         ) case some then {
             setav: avo
-            st.typing.atomVariableId.set key: node.nodeid.u64 value: setav
+            st.typing.atomVariableId.set key: node.nid.u64 value: setav
         } case none then null
     } case none then {
-        if node.name.u32 == zast.wkReturn then {
-            mrt: st.typing.currentReturnTypeId
-            if mrt > 0 then {
-                mtt: st.reg.typetypeOf typeId: mrt
-                isVoidRet: false
-                if mtt == ztypes.ztypetype.nullType then isVoidRet = true
-                if mtt == ztypes.ztypetype.neverType then isVoidRet = true
-                if (isVoidRet) == false then {
-                    rtn: st.reg.nameOf tid: mrt
-                    mm: "missing return value: function expects '\{rtn}'"
-                    en6: String
-                    eh6: String
-                    (addErrorH
-                        :st
-                        nodeid: node.nodeid
-                        lineno: node.lineno
-                        colno: node.colno
-                        e: zast.err.typeError
-                        msg: mm
-                        note: en6
-                        hint: eh6
-                        width: 6
-                    )
-                }
-            }
-        }
-        if (st.isTakenName nameId: (nameIdOf :ast name: ndNm.stringview)) then {
-            eh5: String
-            m5: "cannot use '\{ndNm}' after ownership transfer"
-            nt5: "this name no longer owns a value; it was moved earlier".string
-            (addErrorH
-                :st
-                nodeid: node.nodeid
-                lineno: node.lineno
-                colno: node.colno
-                e: zast.err.ownerError
-                msg: m5
-                note: nt5
-                hint: eh5
-                width: ndNm.length.u32.orPanic
-            )
+        if node.name.u32 == zast.wkReturn then reportMissingReturnValue :st :node
+        if (st.isTakenName nameId: node.name) then {
+            reportTakenNameUse :st :ast :node
             return (ztypes.tid.create from: 0)
         }
-        if (isNumericLiteralName name: ndNm.stringview) then {
-            # an INLINE type suffix (`65u8`, `2.5f32`) is not zerolang syntax:
-            # a conversion applies to a complete literal (`(65).u8`). Exempt
-            # 0x lexemes whose tail is hex-digit text (0x1f32, 0xac8) and 0c
-            # char literals (0c8 ends in a c8-shaped tail).
-            sfR: ztypes.suffixInfoOf numstr: ndNm.stringview
-            rejS: false
-            if sfR.has then {
-                rejS = true
-                if (ndNm.stringview.startsWith prefix: "0x") then {
-                    sb: ndNm.stringview.byteAt (ndNm.length - sfR.len)
-                    match (
-                        sb
-                    ) case some then {
-                        if sb == 102 then rejS = false
-                        if sb == 99 then rejS = false
-                    } case none then null
-                }
-                if (ndNm.stringview.startsWith prefix: "0c") then rejS = false
-            }
-            if rejS then {
-                core8: ndNm.stringview.substring from: 0 to: (ndNm.length - sfR.len)
-                sfx8: (ndNm.stringview.substring
-                    from: (ndNm.length - sfR.len)
-                    to: ndNm.length
-                )
-                m8: "Unknown reference '\{ndNm}'"
-                h8: "a numeric conversion applies to a complete literal: write (\{core8}).\{sfx8}"
-                en8: String
-                (addErrorH
-                    :st
-                    nodeid: node.nodeid
-                    lineno: node.lineno
-                    colno: node.colno
-                    e: zast.err.badReference
-                    msg: m8
-                    note: en8
-                    hint: h8
-                    width: ndNm.length.u32.orPanic
-                )
-                return (ztypes.tid.create from: 0)
-            }
-            if (isFloatLiteralName name: ndNm.stringview) then {
-                result = st.reg.literalFloatTid
-            } else {
-                result = st.reg.literalIntTid
-            }
-            setl: result
-            stampGate :st nid: node.nodeid.u64 tid: setl
-        } else {
-            result = typeOfBareName :st :unitDecl :ast :node ndNm: ndNm.stringview
+        # a numeric literal is told by its text, read through a view scoped
+        # to this block: the bare-name walk below lends ast
+        isLit: false
+        {
+            ndNm: zast.nameTextAt :ast ref: node.name
+            isLit = isNumericLiteralName name: ndNm.stringview
         }
+        if isLit then return (checkLiteralAtom :st :ast :node)
+        result = typeOfBareName :st :unitDecl :ast :node
     }
     return result
 }
@@ -23900,12 +23943,14 @@ if ifnode.elseclause > 0 then {
 reportMissingBinopMethod: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    binop: zast.BinOpData.view
-    opn: StringView
+    binop: binref
+    opnId: zast.nameid
     lt: ztypes.tid
     dt: ztypes.tid
     isCmp: bool
 } out ztypes.tid is {
+    # an owned copy: the lookups below lend ast
+    opn: zast.nameTextCopy :ast ref: opnId
     if isCmp then {
         # `!=` derives from `==`: only error when `==` is also unavailable.
         if opn == "!=" then {
@@ -23938,7 +23983,7 @@ reportMissingBinopMethod: function {
             mgOr: "type '\{lnOr}' has no '\{opn}' method"
             (addError
                 :st
-                nodeid: binop.nodeid
+                nodeid: binop.nid
                 lineno: binop.lineno
                 colno: binop.colno
                 e: zast.err.typeError
@@ -23954,7 +23999,7 @@ reportMissingBinopMethod: function {
             mgc: "type '\{lnc}' has no '\{opn}' method"
             (addError
                 :st
-                nodeid: binop.nodeid
+                nodeid: binop.nid
                 lineno: binop.lineno
                 colno: binop.colno
                 e: zast.err.typeError
@@ -23981,7 +24026,7 @@ reportMissingBinopMethod: function {
         noMethodMsg: "type '\{ln}' has no '\{opn}' method"
         (addError
             :st
-            nodeid: binop.nodeid
+            nodeid: binop.nid
             lineno: binop.lineno
             colno: binop.colno
             e: zast.err.typeError
@@ -23996,7 +24041,7 @@ reportMissingBinopMethod: function {
 checkBinopMethodArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    binop: zast.BinOpData.view
+    binop: binref
     lt: ztypes.tid
     rt: ztypes.tid
     opo: u64
@@ -24052,7 +24097,7 @@ checkBinopMethodArg: function {
                 mma: "argument type mismatch: expected \{ea}, got \{aa}"
                 (addError
                     :st
-                    nodeid: binop.nodeid
+                    nodeid: binop.nid
                     lineno: binop.lineno
                     colno: binop.colno
                     e: zast.err.callError
@@ -24089,8 +24134,7 @@ checkBinopMethodDispatch: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    binop: zast.BinOpData.view
-    opn: StringView
+    binop: binref
     opnId: zast.nameid
     lt: ztypes.tid
     rt: ztypes.tid
@@ -24148,7 +24192,7 @@ checkBinopMethodDispatch: function {
     ) case some then {
         bmid = ztypes.tid.create from: opo.u64
     } case none then null
-    stampBinopOp :st nid: binop.nodeid.u64 owner: dt method: bmid
+    stampBinopOp :st nid: binop.nid.u64 owner: dt method: bmid
     match (
         opo
     ) case some then {
@@ -24167,7 +24211,7 @@ checkBinopMethodDispatch: function {
             :st
             :ast
             :binop
-            :opn
+            :opnId
             :lt
             :dt
             :isCmp
@@ -24183,7 +24227,7 @@ checkBinop: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    binop: zast.BinOpData.view
+    binop: binref
 } out ztypes.tid is {
     result: ztypes.tid
     # an operand that typed to nothing and raised nothing is an unresolvable
@@ -24210,19 +24254,16 @@ checkBinop: function {
             nid: binop.rhs
         )
     }
-    opn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: binop.operator.u64))
-    opnId: atomNameId :ast n: (ast.nodes.get i: binop.operator.u64)
-    result = (checkBinopMethodDispatch
-        :st
-        :unitDecl
-        :ast
-        :binop
-        opn: opn.stringview
-        :opnId
-        :lt
-        :rt
-        isCmp: (isComparisonOp name: opn.stringview)
-    )
+    # the operator's name id and comparison shape are read through a view
+    # scoped to this block: the dispatch below lends ast
+    opnId: zast.nameid
+    isCmp: false
+    {
+        opnId = atomNameId :ast n: (ast.nodes.get i: binop.operator.u64)
+        opn: zast.nameTextAt :ast ref: opnId
+        isCmp = isComparisonOp name: opn.stringview
+    }
+    result = checkBinopMethodDispatch :st :unitDecl :ast :binop :opnId :lt :rt :isCmp
     tdb2: typedefBaseOf :st tid: result
     if tdb2 > 0 then result = tdb2
     if result > 0 when (st.reg.typetypeOf typeId: result) == ztypes.ztypetype.genericParam then {
@@ -24231,7 +24272,7 @@ checkBinop: function {
         # the arithmetic backstop); mixed operands stay untyped.
         if (result == rt) == false then return (ztypes.tid.create from: 0)
     }
-    if result > 0 then stampGate :st nid: binop.nodeid.u64 tid: result
+    if result > 0 then stampGate :st nid: binop.nid.u64 tid: result
     return result
 }
 
@@ -30182,6 +30223,7 @@ rowarm: variant {
     swapstmt: null
     expression: null
     assignment: null
+    stringchunk: null
     other: null
 }
 
@@ -30223,6 +30265,8 @@ rowArmAt: function {ast: Ast.view nid: zast.nodeid} out rowarm is {
         return rowarm.expression
     } case assignment then {
         return rowarm.assignment
+    } case stringchunk then {
+        return rowarm.stringchunk
     } else {
         return rowarm.other
     }
@@ -30481,6 +30525,81 @@ caseClauseRefAt: function {ast: Ast.view nid: zast.nodeid} out caseclauseref is 
     return (caseclauseref nid: zn name: zm matcharm: zn statement: zn lineno: 0 colno: 0)
 }
 
+# binref -- what the binary-operator walk reads of its row: the operand and
+# operator ids and the position, as plain values.
+binref: record {
+    nid: zast.nodeid
+    lhs: zast.nodeid
+    operator: zast.nodeid
+    rhs: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# binRefAt -- the binop row `nid` as plain values (all zero for any other arm).
+binRefAt: function {ast: Ast.view nid: zast.nodeid} out binref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case binop then {
+        return (binref
+            :nid
+            lhs: n.lhs
+            operator: n.operator
+            rhs: n.rhs
+            lineno: n.lineno
+            colno: n.colno
+        )
+    } else null
+    zn: zast.nodeid
+    return (binref nid: zn lhs: zn operator: zn rhs: zn lineno: 0 colno: 0)
+}
+
+# atomref -- what the bare-name walk reads of its row: the name id and the
+# position, as plain values.
+atomref: record {
+    nid: zast.nodeid
+    name: zast.nameid
+    lineno: u32
+    colno: u32
+}
+
+# atomRefAt -- the atomid row `nid` as plain values (all zero for any other
+# arm).
+atomRefAt: function {ast: Ast.view nid: zast.nodeid} out atomref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case atomid then {
+        return (atomref :nid name: n.name lineno: n.lineno colno: n.colno)
+    } else null
+    zn: zast.nodeid
+    zm: zast.nameid
+    return (atomref nid: zn name: zm lineno: 0 colno: 0)
+}
+
+# strref -- what the string-literal walk reads of its row: the part count and
+# the position, as plain values.
+strref: record {
+    nid: zast.nodeid
+    nparts: u64
+    lineno: u32
+    colno: u32
+}
+
+# strRefAt -- the atomstring row `nid` as plain values (all zero for any other
+# arm).
+strRefAt: function {ast: Ast.view nid: zast.nodeid} out strref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case atomstring then {
+        return (strref :nid nparts: n.stringparts.length lineno: n.lineno colno: n.colno)
+    } else null
+    zn: zast.nodeid
+    return (strref nid: zn nparts: 0 lineno: 0 colno: 0)
+}
+
 # checkValueAt -- type the value row `nid`, dispatching by arm. A handler
 # that takes its row as plain values is reached with no row view held; every
 # other arm is walked by checkValue through the row view fetched here.
@@ -30493,7 +30612,16 @@ checkValueAt: function {
     arm: rowArmAt :ast :nid
     match (
         arm
-    ) case swapstmt then {
+    ) case binop then {
+        br: binRefAt :ast :nid
+        return (checkBinop :st :unitDecl :ast binop: br)
+    } case atomid then {
+        ar: atomRefAt :ast :nid
+        return (checkAtomid :st :unitDecl :ast node: ar)
+    } case atomstring then {
+        str: strRefAt :ast :nid
+        return (checkString :st :unitDecl :ast node: str)
+    } case swapstmt then {
         sr: swapRefAt :ast :nid
         checkSwap :st :unitDecl :ast swapnode: sr
         return (ztypes.tid.create from: 0)
@@ -30526,11 +30654,11 @@ checkValue: function {
     ) case call then {
         return (checkCall :st :unitDecl :ast call: node)
     } case binop then {
-        return (checkBinop :st :unitDecl :ast binop: node)
+        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case atomid then {
-        return (checkAtomid :st :unitDecl :ast :node)
+        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case atomstring then {
-        return (checkString :st :unitDecl :ast :node)
+        return (checkValueAt :st :unitDecl :ast nid: node.nodeid)
     } case dottedpath then {
         return (checkDotted :st :unitDecl :ast dp: node coerce: true)
     } case caseexpr then {
@@ -30872,19 +31000,33 @@ maybeWalkMethods: function {
     ast: Ast
     name: StringView
 } is {
-    # The declaring node comes from the DECL, which is keyed by (unit, name)
-    # and records the node that declared it, so any unit's definition can be
-    # walked at the point something demands it.
     nmId: zast.poolFind pool: ast.names text: name
-    if nmId.isZero then return
+    maybeWalkMethodsById :st :unitDecl :frame :ast nameId: nmId
+}
+
+# maybeWalkMethodsById -- maybeWalkMethods for a name already interned. The
+# declaring node comes from the DECL, which is keyed by (unit, name) and
+# records the node that declared it, so any unit's definition can be walked
+# at the point something demands it.
+maybeWalkMethodsById: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    ast: Ast
+    nameId: zast.nameid
+} is {
+    if nameId.isZero then return
     dd: (declOfUnitDefIds
         :st
         :unitDecl
-        nameId: nmId
+        :nameId
     )
     if dd.isZero then return
     if (st.typing.declIsWalked declId: dd) then return
-    walkDeclaredDef :st :frame :ast :unitDecl :name declId: dd
+    # an owned copy of the name: the walk lends ast, and it runs once per
+    # definition
+    nm: zast.nameTextCopy :ast ref: nameId
+    walkDeclaredDef :st :frame :ast :unitDecl name: nm.stringview declId: dd
 }
 
 # walkDefinitionById -- walk the definition a RESOLVED ID names, wherever it
