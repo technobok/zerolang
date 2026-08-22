@@ -15153,12 +15153,33 @@ definedInUnitOf: function {
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
 } out (Option of: String) is {
+    duO: definedInUnitTid :symtab :tid
+    if duO.isZero then return (Option.none String)
     nm: (ztypecheck.unitNameOfTid
         st: symtab
         tid: (ztypes.tid.create from: tid.u64)
     )
     if nm.length == 0 then return (Option.none String)
     return (Option.some nm)
+}
+
+# definedInUnitTid -- the id of the unit a type is DEFINED in, 0 when none (a
+# shell, a builtin, a mono minted outside any unit). The same question
+# definedInUnitOf answers, without the name: asking whether a type has a
+# defining unit at all is what most callers want, and the name form costs a
+# registry copy and a boxed Option to say yes.
+definedInUnitTid: function {
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+} out ztypes.tid is {
+    ud: ztypecheck.unitDeclOfTid st: symtab tid: (ztypes.tid.create from: tid.u64)
+    if ud.isZero then return ztypes.tid
+    r: ztypes.tid
+    {
+        decl: symtab.typing.decls.get i: ud.u64
+        r = decl.typeId
+    }
+    return r
 }
 
 # emitReassignLvalue -- the C lvalue for a reassignment target. A `got.field`
@@ -18949,13 +18970,8 @@ isReftypeParam: function {
     tid: ztypes.tid
 } out bool is {
     cid: tid
-    rduo0: definedInUnitOf :symtab :tid
-    isShell: true
-    match (
-        rduo0
-    ) case some then {
-        isShell = false
-    } case none then null
+    duT: definedInUnitTid :symtab :tid
+    isShell: duT.isZero
     if isShell then {
         rtn0: regNameOf :symtab :tid
         rrid0: canonTypeId :ast :symtab :ctx :tid name: rtn0.stringview
