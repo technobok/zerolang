@@ -32414,201 +32414,288 @@ isBinopNode: function {n: Node.view} out bool is {
 # visible default later), a name reads an already-materialised constant from
 # resolved (body order), and a binop takes the first concretely-typed operand
 # (else the literal pseudo). 0 = not a constant shape.
-constantOperandType: function {ast: Ast
+constantOperandType: function {
+    ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    n: Node.view
+    nid: zast.nodeid
 } out u64 is {
-    match (
-        n
-    ) case expression then {
-        return (constantOperandType
-            :st
-            :frame
-            :ast
-
-            :unitDecl
-            n: (ast.nodes.get i: n.expression.u64)
-        )
-    } case atomid then {
-        result: u64
-        trN: ast.names.texts.get i: n.name.u64
-        if (isNumericLiteralName name: trN.stringview) then {
-            if (isFloatLiteralName name: trN.stringview) then {
-                result = st.reg.literalFloatTid
-            } else {
-                result = st.reg.literalIntTid
-            }
-        } else {
-            ro: walkLookupTyperef :st :frame :ast :unitDecl base: trN.stringview
-            match (
-                ro
-            ) case some then {
-                result = ro
-            } case none then null
-        }
-        if result > 0 then {
-            (ztyping.nodeTypeSet
-                tbl: st.typing.nodeType
-                nid: n.nodeid.u64
-                tid: (ztypes.tid.create from: result.u64)
-            )
-        }
-        return result
-    } case binop then {
-        lt: constantOperandType :st :frame :ast :unitDecl n: (ast.nodes.get i: n.lhs.u64)
-        rt: constantOperandType :st :frame :ast :unitDecl n: (ast.nodes.get i: n.rhs.u64)
-        opn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.operator.u64))
-        if (isComparisonOp name: opn.stringview) then {
-            # A comparison condition: the result is bool and a literal
-            # operand coerces (restamps) at the concrete side's type.
-            lLit: false
-            if lt == st.reg.literalIntTid then lLit = true
-            if lt == st.reg.literalFloatTid then lLit = true
-            rLit: false
-            if rt == st.reg.literalIntTid then rLit = true
-            if rt == st.reg.literalFloatTid then rLit = true
-            conc: u64
-            if (lLit) == false then {
-                if lt > 0 then conc = lt
-            }
-            if conc == 0 then {
-                if (rLit) == false then {
-                    if rt > 0 then conc = rt
-                }
-            }
-            if lLit when conc > 0 then {
-                lid: innermostNodeId :ast n: (ast.nodes.get i: n.lhs.u64)
-                if lid > 0 then {
-                    (ztyping.nodeTypeSet
-                        tbl: st.typing.nodeType
-                        nid: lid.u64
-                        tid: (ztypes.tid.create from: conc.u64)
-                    )
-                }
-            }
-            if rLit when conc > 0 then {
-                rid: innermostNodeId :ast n: (ast.nodes.get i: n.rhs.u64)
-                if rid > 0 then {
-                    setr: conc
-                    (ztyping.nodeTypeSet
-                        tbl: st.typing.nodeType
-                        nid: rid.u64
-                        tid: (ztypes.tid.create from: setr.u64)
-                    )
-                }
-            }
-            bres: u64
-            bo: walkLookupTyperef :st :frame :ast :unitDecl base: "bool"
-            match (
-                bo
-            ) case some then {
-                bres = bo
-                (ztyping.nodeTypeSet
-                    tbl: st.typing.nodeType
-                    nid: n.nodeid.u64
-                    tid: (ztypes.tid.create from: bres.u64)
-                )
-            } case none then null
-            return bres
-        }
-        result: lt
-        if lt == 0 then result = rt
-        if lt == st.reg.literalIntTid then {
-            if rt > 0 when rt != st.reg.literalIntTid when rt != st.reg.literalFloatTid then result = rt
-        }
-        if lt == st.reg.literalFloatTid then {
-            if rt > 0 when rt != st.reg.literalIntTid when rt != st.reg.literalFloatTid then result = rt
-        }
-        if result > 0 then {
-            (ztyping.nodeTypeSet
-                tbl: st.typing.nodeType
-                nid: n.nodeid.u64
-                tid: (ztypes.tid.create from: result.u64)
-            )
-        }
-        return result
-    } else {
-        return 0
+    # the row is read through a view scoped to this block (1 expression,
+    # 2 atomid, 3 binop, 0 anything else): the lookups and operand walks
+    # below lend ast exclusively
+    arm: u32
+    innerId: zast.nodeid
+    nameId: zast.nameid
+    lhsId: zast.nodeid
+    rhsId: zast.nodeid
+    opId: zast.nodeid
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case expression then {
+            arm = 1
+            innerId = n.expression
+        } case atomid then {
+            arm = 2
+            nameId = n.name
+        } case binop then {
+            arm = 3
+            lhsId = n.lhs
+            rhsId = n.rhs
+            opId = n.operator
+        } else null
     }
+    if arm == 1 then return (constantOperandType :st :frame :ast :unitDecl nid: innerId)
+    if arm == 2 then return (constantAtomType :st :frame :ast :unitDecl :nid :nameId)
+    if arm == 3 then return (constantBinopType :st :frame :ast :unitDecl :nid :lhsId :rhsId :opId)
+    return 0
+}
+
+# constantAtomType -- a bare atom's constant type: a numeric literal's
+# literal type, else the type the name resolves to; stamped on the atom.
+constantAtomType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+    nameId: zast.nameid
+} out u64 is {
+    result: u64
+    # an owned copy: the lookup below lends ast
+    trN: zast.nameTextCopy :ast ref: nameId
+    if (isNumericLiteralName name: trN.stringview) then {
+        if (isFloatLiteralName name: trN.stringview) then {
+            result = st.reg.literalFloatTid
+        } else {
+            result = st.reg.literalIntTid
+        }
+    } else {
+        ro: walkLookupTyperef :st :frame :ast :unitDecl base: trN.stringview
+        match (
+            ro
+        ) case some then {
+            result = ro
+        } case none then null
+    }
+    if result > 0 then {
+        (ztyping.nodeTypeSet
+            tbl: st.typing.nodeType
+            nid: nid.u64
+            tid: (ztypes.tid.create from: result.u64)
+        )
+    }
+    return result
+}
+
+# constantBinopType -- a binop's constant type: a comparison is bool and a
+# literal operand coerces (restamps) at the concrete side's type; otherwise
+# the operands' type, a concrete side winning over a literal one.
+constantBinopType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+    lhsId: zast.nodeid
+    rhsId: zast.nodeid
+    opId: zast.nodeid
+} out u64 is {
+    lt: constantOperandType :st :frame :ast :unitDecl nid: lhsId
+    rt: constantOperandType :st :frame :ast :unitDecl nid: rhsId
+    # an owned copy: the bool lookup below lends ast
+    opn: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: opId.u64))
+    if (isComparisonOp name: opn.stringview) then {
+        return (constantCompareType :st :frame :ast :unitDecl :nid :lhsId :rhsId :lt :rt)
+    }
+    result: lt
+    if lt == 0 then result = rt
+    if lt == st.reg.literalIntTid then {
+        if rt > 0 when rt != st.reg.literalIntTid when rt != st.reg.literalFloatTid then result = rt
+    }
+    if lt == st.reg.literalFloatTid then {
+        if rt > 0 when rt != st.reg.literalIntTid when rt != st.reg.literalFloatTid then result = rt
+    }
+    if result > 0 then {
+        (ztyping.nodeTypeSet
+            tbl: st.typing.nodeType
+            nid: nid.u64
+            tid: (ztypes.tid.create from: result.u64)
+        )
+    }
+    return result
+}
+
+# constantCompareType -- a comparison condition: the result is bool and a
+# literal operand coerces (restamps) at the concrete side's type.
+constantCompareType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+    lhsId: zast.nodeid
+    rhsId: zast.nodeid
+    lt: u64
+    rt: u64
+} out u64 is {
+    lLit: false
+    if lt == st.reg.literalIntTid then lLit = true
+    if lt == st.reg.literalFloatTid then lLit = true
+    rLit: false
+    if rt == st.reg.literalIntTid then rLit = true
+    if rt == st.reg.literalFloatTid then rLit = true
+    conc: u64
+    if (lLit) == false then {
+        if lt > 0 then conc = lt
+    }
+    if conc == 0 then {
+        if (rLit) == false then {
+            if rt > 0 then conc = rt
+        }
+    }
+    if lLit when conc > 0 then {
+        lid: innermostNodeId :ast n: (ast.nodes.get i: lhsId.u64)
+        if lid > 0 then {
+            (ztyping.nodeTypeSet
+                tbl: st.typing.nodeType
+                nid: lid.u64
+                tid: (ztypes.tid.create from: conc.u64)
+            )
+        }
+    }
+    if rLit when conc > 0 then {
+        rid: innermostNodeId :ast n: (ast.nodes.get i: rhsId.u64)
+        if rid > 0 then {
+            setr: conc
+            (ztyping.nodeTypeSet
+                tbl: st.typing.nodeType
+                nid: rid.u64
+                tid: (ztypes.tid.create from: setr.u64)
+            )
+        }
+    }
+    bres: u64
+    bo: walkLookupTyperef :st :frame :ast :unitDecl base: "bool"
+    match (
+        bo
+    ) case some then {
+        bres = bo
+        (ztyping.nodeTypeSet
+            tbl: st.typing.nodeType
+            nid: nid.u64
+            tid: (ztypes.tid.create from: bres.u64)
+        )
+    } case none then null
+    return bres
 }
 
 # constantBranchWalk -- walk one unit-level-if branch block: each statement's
 # expression types through the constant walk; literal results materialise to
 # their defaults (i64/f64) on the statement, its expression wrapper, and the
 # atom. Returns the (materialised) last-statement type.
-constantBranchWalk: function {
+# constantLineType -- one statement line of a unit-level-if branch: the
+# expression's constant type, stamped on the line, its expression wrapper
+# and its atom; a literal result materialises to its default (i64/f64).
+# 0 when the line has no constant type.
+constantLineType: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    block: Node.view
+    s9Id: u32
+    innerId: zast.nodeid
 } out u64 is {
-    match (
-        block
-    ) case statement then {
-        result: u64
-        siter: block.statements.iterate
-        for s9Id: siter loop {
+    bt0: constantOperandType :st :frame :ast :unitDecl nid: innerId
+    mt0: u64
+    if bt0 == st.reg.literalIntTid then {
+        mt0 = (optU64Or
+            o: (walkLookupTyperef :st :frame :ast :unitDecl base: "i64")
+            d: 0
+        )
+    }
+    if bt0 == st.reg.literalFloatTid then {
+        mt0 = (optU64Or
+            o: (walkLookupTyperef :st :frame :ast :unitDecl base: "f64")
+            d: 0
+        )
+    }
+    if mt0 > 0 then {
+        (ztyping.nodeTypeSet
+            tbl: st.typing.nodeType
+            nid: s9Id.u64
+            tid: (ztypes.tid.create from: mt0.u64)
+        )
+        eid0: nodeId n: (ast.nodes.get i: innerId.u64)
+        if eid0 > 0 then {
+            (ztyping.nodeTypeSet
+                tbl: st.typing.nodeType
+                nid: eid0.u64
+                tid: (ztypes.tid.create from: mt0.u64)
+            )
+        }
+        iid0: innermostNodeId :ast n: (ast.nodes.get i: innerId.u64)
+        if iid0 > 0 then {
+            (ztyping.nodeTypeSet
+                tbl: st.typing.nodeType
+                nid: iid0.u64
+                tid: (ztypes.tid.create from: mt0.u64)
+            )
+        }
+        return mt0
+    } else {
+        if bt0 > 0 then {
+            (ztyping.nodeTypeSet
+                tbl: st.typing.nodeType
+                nid: s9Id.u64
+                tid: (ztypes.tid.create from: bt0.u64)
+            )
+            return bt0
+        }
+    }
+    return 0
+}
+
+constantBranchWalk: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+} out u64 is {
+    # the block's line ids are read through views scoped to blocks: the
+    # operand walk and the literal-default lookups lend ast exclusively
+    isStmt: false
+    lineIds: (ListVal u32)
+    {
+        block: ast.nodes.get i: nid.u64
+        match (
+            block
+        ) case statement then {
+            isStmt = true
+            with sit: block.statements.iterate do for s: sit loop lineIds.append from: s
+        } else null
+    }
+    if (isStmt) == false then return 0
+    result: u64
+    with lit: lineIds.iterate do for s9Id: lit loop {
+        innerId: zast.nodeid
+        {
             s: ast.nodes.get i: s9Id.u64
             match (
                 s
             ) case statementline then {
-                sInner: ast.nodes.get i: s.statementline.u64
-                bt0: constantOperandType :st :frame :ast :unitDecl n: sInner
-                mt0: u64
-                if bt0 == st.reg.literalIntTid then {
-                    mt0 = (optU64Or
-                        o: (walkLookupTyperef :st :frame :ast :unitDecl base: "i64")
-                        d: 0
-                    )
-                }
-                if bt0 == st.reg.literalFloatTid then {
-                    mt0 = (optU64Or
-                        o: (walkLookupTyperef :st :frame :ast :unitDecl base: "f64")
-                        d: 0
-                    )
-                }
-                if mt0 > 0 then {
-                    (ztyping.nodeTypeSet
-                        tbl: st.typing.nodeType
-                        nid: s.nodeid.u64
-                        tid: (ztypes.tid.create from: mt0.u64)
-                    )
-                    eid0: nodeId n: sInner
-                    if eid0 > 0 then {
-                        (ztyping.nodeTypeSet
-                            tbl: st.typing.nodeType
-                            nid: eid0.u64
-                            tid: (ztypes.tid.create from: mt0.u64)
-                        )
-                    }
-                    iid0: innermostNodeId :ast n: sInner
-                    if iid0 > 0 then {
-                        (ztyping.nodeTypeSet
-                            tbl: st.typing.nodeType
-                            nid: iid0.u64
-                            tid: (ztypes.tid.create from: mt0.u64)
-                        )
-                    }
-                    result = mt0
-                } else {
-                    if bt0 > 0 then {
-                        (ztyping.nodeTypeSet
-                            tbl: st.typing.nodeType
-                            nid: s.nodeid.u64
-                            tid: (ztypes.tid.create from: bt0.u64)
-                        )
-                        result = bt0
-                    }
-                }
+                innerId = s.statementline
             } else null
         }
-        return result
-    } else {
-        return 0
+        if (innerId.isZero) == false then {
+            lt: constantLineType :st :frame :ast :unitDecl :s9Id :innerId
+            if lt > 0 then result = lt
+        }
     }
+    return result
 }
 
 # resolveUnitIfDef -- a unit-level `if` definition (compile-time conditional):
@@ -32638,47 +32725,43 @@ resolveUnitIfDef: function {
         fb: foldIfBranch :st :frame :ast :unitDecl nid: n.nodeid
         cliter: n.clauses.iterate
         for clauseId: cliter loop {
-            clause: ast.nodes.get i: clauseId.u64
-            match (
-                clause
-            ) case ifclause then {
-                coiter: clause.conditions.iterate
-                for condId: coiter loop {
-                    cond: ast.nodes.get i: condId.u64
-                    match (
-                        cond
-                    ) case namedoperation then {
-                        (constantOperandType
-                            :st
-                            :frame
-                            :ast
-
-                            :unitDecl
-                            n: (ast.nodes.get i: cond.operation.u64)
-                        )
-                    } else null
+            # the clause and its conditions are read through views scoped to
+            # blocks: the operand walks lend ast exclusively
+            isClause: false
+            condIds: (ListVal u32)
+            stmtId: zast.nodeid
+            {
+                clause: ast.nodes.get i: clauseId.u64
+                match (
+                    clause
+                ) case ifclause then {
+                    isClause = true
+                    with coit: clause.conditions.iterate do for c: coit loop condIds.append from: c
+                    stmtId = clause.statement
+                } else null
+            }
+            if isClause then {
+                with coiter: condIds.iterate do for condId: coiter loop {
+                    opId: zast.nodeid
+                    {
+                        cond: ast.nodes.get i: condId.u64
+                        match (
+                            cond
+                        ) case namedoperation then {
+                            opId = cond.operation
+                        } else null
+                    }
+                    if (opId.isZero) == false then {
+                        constantOperandType :st :frame :ast :unitDecl nid: opId
+                    }
                 }
-                bt: (constantBranchWalk
-                    :st
-                    :frame
-
-                    :ast
-                    :unitDecl
-                    block: (ast.nodes.get i: clause.statement.u64)
-                )
+                bt: constantBranchWalk :st :frame :ast :unitDecl nid: stmtId
                 if t == 0 then t = bt
-                if fb.known when clause.statement == fb.stmt then w = bt
-            } else null
+                if fb.known when stmtId == fb.stmt then w = bt
+            }
         }
         if n.elseclause > 0 then {
-            et: (constantBranchWalk
-                :st
-                :frame
-
-                :ast
-                :unitDecl
-                block: (ast.nodes.get i: n.elseclause.u64)
-            )
+            et: constantBranchWalk :st :frame :ast :unitDecl nid: n.elseclause
             if t == 0 then t = et
             if fb.known when n.elseclause == fb.stmt then w = et
         }
@@ -34597,7 +34680,7 @@ resolveBinopConstantDef: function {
     # walk stamps the refs and the binop; a literal result materialises
     # to its default, a concrete one (an already-materialised constant)
     # keeps it.
-    bt: constantOperandType :st :frame :ast :unitDecl n: defn
+    bt: constantOperandType :st :frame :ast :unitDecl nid: (zast.nodeIdOf n: defn)
     base2: ""
     if bt == st.reg.literalIntTid then base2 = "i64"
     if bt == st.reg.literalFloatTid then base2 = "f64"
