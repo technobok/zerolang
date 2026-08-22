@@ -17873,7 +17873,7 @@ skipCapacityArg: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    arg: zast.NamedOperationData.view
+    argOpId: zast.nodeid
     tplId: ztypes.tid
     pk0: zast.nameid
     isP0: bool
@@ -17965,7 +17965,7 @@ skipCapacityArg: function {
             :st
             :unitDecl
             :ast
-            node: (ast.nodes.get i: arg.operation.u64)
+            node: (ast.nodes.get i: argOpId.u64)
         )
     }
     return skipCr
@@ -17975,7 +17975,7 @@ skipCapacityArg: function {
 # collectGenericTypeArgs -- read one generic construction's arguments into the type
 # and value substitutions, building the mangled suffix that names the instance.
 collectGenericTypeArgs: function {
-    ast: Ast.view
+    ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     call: zast.CallData.view
@@ -17994,13 +17994,24 @@ collectGenericTypeArgs: function {
     argIdx: u64
     aiter: call.arguments.iterate
     for argId: aiter loop {
-        arg: ast.nodes.get i: argId.u64
-        match (
-            arg
-        ) case namedoperation then {
+        # the argument is read through a view scoped to this block: the
+        # lookups below lend ast
+        isNamedArg: false
+        pk0: zast.nameid
+        opId: zast.nodeid
+        {
+            arg: ast.nodes.get i: argId.u64
+            match (
+                arg
+            ) case namedoperation then {
+                isNamedArg = true
+                pk0 = arg.name
+                opId = arg.operation
+            } else null
+        }
+        if isNamedArg then {
             # only generic-param labels construct here; a value arg means
             # the field-bound inference leg owns the call.
-            pk0: arg.name
             # An elided leading type argument (`(List zvfs.ProviderBox)`) binds
             # the primary generic param: probe the unnamed first arg as a type
             # (atom via walkLookupTyperef, cross-unit dotted via dottedTyperefId).
@@ -18008,7 +18019,7 @@ collectGenericTypeArgs: function {
             # empty label so the field-bound inference leg owns the call.
             if pk0.isZero when argIdx == 0 then {
                 if (primaryName.isZero) == false then {
-                    anP: paramTypeBaseName :ast op: (ast.nodes.get i: arg.operation.u64)
+                    anP: paramTypeBaseName :ast op: (ast.nodes.get i: opId.u64)
                     pid0: u64
                     if (isNumericLiteralName name: anP.stringview) == false then {
                         pao0: (walkLookupTyperef
@@ -18021,7 +18032,7 @@ collectGenericTypeArgs: function {
                         )
                         pid0 = optU64Or o: pao0 d: 0
                         if pid0 == 0 then {
-                            dop: ast.nodes.get i: arg.operation.u64
+                            dop: ast.nodes.get i: opId.u64
                             pid0 = dottedTyperefId :ast :st op: dop
                         }
                     }
@@ -18036,19 +18047,19 @@ collectGenericTypeArgs: function {
                 :ast
                 :st
                 :unitDecl
-                :arg
+                argOpId: opId
                 :tplId
                 :pk0
                 :isP0
             )
             if (isP0) == false when skipCr == false then anyMiss = true
-            an: paramTypeBaseName :ast op: (ast.nodes.get i: arg.operation.u64)
+            an: paramTypeBaseName :ast op: (ast.nodes.get i: opId.u64)
             if (anyMiss) == false when skipCr == false then { if (isNumericLiteralName name: an.stringview) then {
                 asfx2: "_\{an}"
                 sfx.append s: asfx2
                 if (pk0.isZero) == false then {
                     numParamNames.append pk0
-                    numParamNodes.append arg.operation
+                    numParamNodes.append opId
                     pdv0: parseDecimalU64 text: an.stringview
                     match (
                         pdv0
@@ -18068,7 +18079,7 @@ collectGenericTypeArgs: function {
                 )
                 aid: optU64Or o: ao d: 0
                 if aid == 0 then {
-                    argOpNode: ast.nodes.get i: arg.operation.u64
+                    argOpNode: ast.nodes.get i: opId.u64
                     aid = dottedTyperefId :ast :st op: argOpNode
                 }
                 if aid > 0 then {
@@ -18090,7 +18101,7 @@ collectGenericTypeArgs: function {
                     anyMiss = true
                 }
             } }
-        } else null
+        }
         argIdx = argIdx + 1
     }
     firstOut.append firstA
