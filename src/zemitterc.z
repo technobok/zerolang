@@ -7343,18 +7343,16 @@ emitAllDefaultedCall: function {
     fnTid: ztypes.tid
     fcn: StringView
 } out String is {
-    pn: (List String)
     pidl: (ListVal u64)
     pidlNm: (ListVal u64)
-    (recFieldLists
+    (recFieldIds
         :ast
         :symtab
         tid: (ztypes.tid.create from: fnTid.u64)
-        names: pn
         ids: pidl
         nameIds: pidlNm
     )
-    m: pn.length
+    m: pidl.length
     if m == 0 then return "".string
     j: u64
     allDef: true
@@ -7470,20 +7468,18 @@ emitCtorDefaultsFill: function {
                 crB = true
             } case none then null
             if crB then {
-                cpn: (List String)
                 cpi: (ListVal u64)
                 cpiNm: (ListVal u64)
-                (recFieldLists
+                (recFieldIds
                     :ast
                     :symtab
                     tid: (ztypes.tid.create from: cco.u64)
-                    names: cpn
                     ids: cpi
                     nameIds: cpiNm
                 )
                 cargs: String
                 ci: u64
-                ccn: cpn.length
+                ccn: cpi.length
                 for ci < ccn loop {
                     cpid: cpi.get i: ci
                     cpnameId: cpiNm.get i: ci
@@ -7513,13 +7509,12 @@ emitCtorDefaultsFill: function {
             }
         }
     } case none then null
-    fnames: (List String)
     fids: (ListVal u64)
     fidsNm: (ListVal u64)
-    recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
+    recFieldIds :ast :symtab :tid ids: fids nameIds: fidsNm
     args: String
     fi: u64
-    fn0: fnames.length
+    fn0: fids.length
     for fi < fn0 loop {
         ffid: fids.get i: fi
         fnameId: fidsNm.get i: fi
@@ -10242,18 +10237,16 @@ emitDefRefAtom: function {
         # the fn name -> emit the local instead.
         adCo: emitAllDefaultedCall :ast :symtab :ctx fnTid: brid fcn: fbcn.stringview
         if adCo.length > 0 then return adCo
-        fpn: (List String)
         fpi: (ListVal u64)
         fpi9Nm: (ListVal u64)
-        (recFieldLists
+        (recFieldIds
             :ast
             :symtab
             tid: (ztypes.tid.create from: brid.u64)
-            names: fpn
             ids: fpi
             nameIds: fpi9Nm
         )
-        if fpn.length == 0 then return "\{fbcn}()"
+        if fpi.length == 0 then return "\{fbcn}()"
     }
     return "".string
 }
@@ -19995,11 +19988,11 @@ typeRefC: function {
 
 # variantArms -- a variant's arm names and payload ids in order
 # (non-FUNCTION children, the tag child excluded).
-variantArms: function {
-    ast: Ast.view
+# variantArmIds -- variantArms without the names: the arm payload ids and name
+# ids, for the callers that never spell an arm.
+variantArmIds: function {
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    names: List String
     ids: ListVal u64
     nameIds: ListVal u64
 } is {
@@ -20014,15 +20007,32 @@ variantArms: function {
         vi1 = vi1 + 1
         if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: vtid1.u64)) != ztypes.ztypetype.functionType then {
             if vnid1 != zast.wkTag.u64 then {
-                cnBe1: ast.names.texts.get i: vnid1.u64
-                cn0: cnBe1.copy
-                names.append cn0
                 cid0: vtid1
                 ids.append cid0
                 nid0: vnid1
                 nameIds.append nid0
             }
         }
+    }
+}
+
+variantArms: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    names: List String
+    ids: ListVal u64
+    nameIds: ListVal u64
+} is {
+    variantArmIds :symtab :tid :ids :nameIds
+    ai0: u64
+    an0: nameIds.length
+    for ai0 < an0 loop {
+        anx: nameIds.get i: ai0
+        cnBv: ast.names.texts.get i: anx
+        cnv: cnBv.copy
+        names.append cnv
+        ai0 = ai0 + 1
     }
 }
 
@@ -20081,6 +20091,24 @@ armPayloadC: function {
     } case none then {
         return "".string
     }
+}
+
+# recFieldIds -- recFieldLists without the names: the same fields, for the
+# callers that walk the type ids and the name ids and never spell a field.
+recFieldIds: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    ids: ListVal u64
+    nameIds: ListVal u64
+} is {
+    (ztypecheck.dataFieldIds
+        :ast
+        st: symtab
+        tid: (ztypes.tid.create from: tid.u64)
+        :ids
+        :nameIds
+    )
 }
 
 # recFieldLists -- a record type's field names and type ids in order
@@ -24727,12 +24755,11 @@ cliClassIsComposite: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    fnames: (List String)
     fids: (ListVal u64)
     fidsNm: (ListVal u64)
-    recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
+    recFieldIds :ast :symtab :tid ids: fids nameIds: fidsNm
     fi: u64
-    fn0: fnames.length
+    fn0: fids.length
     for fi < fn0 loop {
         fid: fids.get i: fi
         cm: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
@@ -25325,10 +25352,9 @@ monoElemIdsOf: function {
         originTid: (ctx.origins.get i: ogOptionView)
     ) then isWrap = true
     if isWrap then {
-        anames: (List String)
         aids: (ListVal u64)
         aidsNm: (ListVal u64)
-        variantArms :ast :symtab tid: monoId names: anames ids: aids nameIds: aidsNm
+        variantArmIds :symtab tid: monoId ids: aids nameIds: aidsNm
         ai: u64
         an: aids.length
         for ai < an loop {
@@ -25338,10 +25364,9 @@ monoElemIdsOf: function {
         }
         return
     }
-    fnames: (List String)
     fids: (ListVal u64)
     fidsNm: (ListVal u64)
-    recFieldLists :ast :symtab tid: monoId names: fnames ids: fids nameIds: fidsNm
+    recFieldIds :ast :symtab tid: monoId ids: fids nameIds: fidsNm
     fi: u64
     fn: fids.length
     for fi < fn loop {
@@ -25454,18 +25479,17 @@ userDefnRefsUnemitted: function {
 } out bool is {
     tt: symtab.reg.typetypeOf :typeId
     if tt == ztypes.ztypetype.unionType then return false
-    fnames: (List String)
     fids: (ListVal u64)
     if tt == ztypes.ztypetype.variantType then {
         fidsNm: (ListVal u64)
-        variantArms :ast :symtab tid: typeId names: fnames ids: fids nameIds: fidsNm
+        variantArmIds :symtab tid: typeId ids: fids nameIds: fidsNm
     } else if tt == ztypes.ztypetype.facetType then {
         # a facet's ordering edges are its conforming impls (embedded by
         # value in the data union), not record fields
         facetImplTids :symtab tid: typeId acc: fids
     } else {
         fidsNm: (ListVal u64)
-        recFieldLists :ast :symtab tid: typeId names: fnames ids: fids nameIds: fidsNm
+        recFieldIds :ast :symtab tid: typeId ids: fids nameIds: fidsNm
     }
     fi: u64
     fn: fids.length
@@ -27964,11 +27988,10 @@ nativeNoArgOf: function {
     }
     if (symtab.reg.typetypeOf typeId: calleeTid) != ztypes.ztypetype.functionType then return "".string
     if (fnIsNativeId :symtab fid: calleeTid) == false then return "".string
-    pn: (List String)
     pi: (ListVal u64)
     pnm: (ListVal u64)
-    recFieldLists :ast :symtab tid: calleeTid names: pn ids: pi nameIds: pnm
-    if pn.length > 0 then return "".string
+    recFieldIds :ast :symtab tid: calleeTid ids: pi nameIds: pnm
+    if pi.length > 0 then return "".string
     uq5z: (ztypecheck.unitDeclOfName
         st: symtab
         nameId: (zast.poolFind pool: ast.names text: unitName)
@@ -29259,12 +29282,11 @@ structDestroyNontrivial: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    fnames: (List String)
     fids: (ListVal u64)
     fidsNm: (ListVal u64)
-    recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
+    recFieldIds :ast :symtab :tid ids: fids nameIds: fidsNm
     fi: u64
-    fn0: fnames.length
+    fn0: fids.length
     for fi < fn0 loop {
         fid: fids.get i: fi
         fnameId: fidsNm.get i: fi

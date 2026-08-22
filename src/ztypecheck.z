@@ -18,6 +18,7 @@ public: unit {
     :bodyEndsInReturn
     :builtinTidT
     :builtinTidTRo
+    :dataFieldIds
     :dataFieldNames
     :descendNamed
     :fnReturnBaseNameOf
@@ -25696,16 +25697,16 @@ hoistArg: function {ast: Ast
     return tname
 }
 
-# dataFieldNames -- a type's user-supplied data fields/params in order: for a
-# FUNCTION, all params; for a record/class, fnptr fields plus non-FUNCTION
-# fields, excluding as-block constants (asConstClone) and conformance markers.
-# The emitter's recFieldLists is this function, so a record's C struct and its
-# checked field list cannot drift apart.
-dataFieldNames: function {
+# dataFieldIds -- a type's user-supplied data fields/params in order, as the
+# (name pool id, type id) pairs: for a FUNCTION, all params; for a record/class,
+# fnptr fields plus non-FUNCTION fields, excluding as-block constants
+# (asConstClone) and conformance markers. dataFieldNames is this plus the texts,
+# so what counts as a data field is decided in one place; a caller that only
+# needs the ids takes this one and pays for no text at all.
+dataFieldIds: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    names: List String
     ids: ListVal u64
     nameIds: ListVal u64
 } is {
@@ -25765,9 +25766,6 @@ dataFieldNames: function {
                 }
             }
             if inc then {
-                cnBx: ast.names.texts.get i: tcNameId.u64
-                cnx: cnBx.copy
-                names.append cnx
                 idx0: cto
                 ids.append idx0
                 nid0: tcNameId
@@ -25775,6 +25773,29 @@ dataFieldNames: function {
             }
             }
         }
+    }
+}
+
+# dataFieldNames -- dataFieldIds with each field's text alongside its ids. The
+# emitter's recFieldLists is this function, so a record's C struct and its
+# checked field list cannot drift apart.
+dataFieldNames: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    names: List String
+    ids: ListVal u64
+    nameIds: ListVal u64
+} is {
+    dataFieldIds :ast :st :tid :ids :nameIds
+    ni: u64
+    nn: nameIds.length
+    for ni < nn loop {
+        nidx: nameIds.get i: ni
+        cnBn: ast.names.texts.get i: nidx
+        cnn: cnBn.copy
+        names.append cnn
+        ni = ni + 1
     }
 }
 
