@@ -21968,105 +21968,107 @@ postGuardRecord: function {
     } case none then null
 }
 
-# checkClause -- walk one if-clause: its condition(s) (namedoperation-wrapped),
-# then this clause's predicate facts as condition-true knowledge (appended to
-# factsOut), then its then-statement block.
+# checkClauseCondition -- walk one if-clause condition: an unresolved value
+# is an unknown reference, and the value must be a bool or a 2-arm sum type.
+checkClauseCondition: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    cond: argref
+    boolId: u64
+} is {
+    errC: st.typing.errors.length
+    ctv: checkValueAt :st :unitDecl :ast nid: cond.operation
+    # a condition that typed to nothing and raised nothing is an
+    # unresolvable name, exactly as in a binding or an operand: the
+    # 0 disables the bool check below, and the emitter would write
+    # the bare name into the C.
+    if ctv.isZero when st.typing.errors.length == errC then {
+        (reportUnresolvedValue
+            :st
+            :unitDecl
+            :ast
+            nid: cond.operation
+        )
+    }
+    # An if-condition must be a boolean. A non-bool value (a
+    # resultval, an aggregate, a raw numeric) is a type error rather
+    # than invalid C. Bare arm predicates (`o.none`, `b.false`) type
+    # as bool already; a diverging never-typed condition is allowed.
+    # ... and so is any other 2-arm sum type: it has a falsy arm
+    # and a truthy one, which is all a condition needs. Which arm
+    # is which comes from the order the author wrote them.
+    if ctv > 0 when boolId > 0 when ctv != boolId then {
+        ctt: st.reg.typetypeOf typeId: ctv
+        isPair: ztyping.isSumPair ty: st.typing reg: st.reg tid: ctv
+        if isPair then {
+            (stampTruthyCond
+                :st
+                n: (ast.nodes.get i: cond.operation.u64)
+                tid: ctv
+            )
+        }
+        if ctt != ztypes.ztypetype.neverType when (isPair) == false then {
+            conode: ast.nodes.get i: cond.operation.u64
+            ctnm: st.reg.nameOf tid: ctv
+            cmsg: "condition must be bool or a 2-arm sum type, got '\{ctnm}'"
+            (addError
+                :st
+                nodeid: cond.operation
+                lineno: (nodeLine n: conode)
+                colno: (nodeCol n: conode)
+                e: zast.err.typeError
+                msg: cmsg
+            )
+        }
+    }
+}
+
+# checkClause -- walk one if-clause: its conditions (each must be bool or a
+# 2-arm sum type), the predicate facts they establish, then its statement
+# block. Answers the block's last statement type, 0 for a row that is no
+# if-clause.
 checkClause: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
-    clause: Node.view
+    ast: Ast
+    clause: ifclauseref
     factsOut: List ArmPredFact
     boolId: u64
 } out u64 is {
-    match (
-        clause
-    ) case ifclause then {
-        with coiter: clause.conditions.iterate do for condId: coiter loop {
-            cond: ast.nodes.get i: condId.u64
-            match (
-                cond
-            ) case namedoperation then {
-                errC: st.typing.errors.length
-                ctv: (checkValue
-                    :st
-                    :unitDecl
-                    :ast
-                    node: (ast.nodes.get i: cond.operation.u64)
-                )
-                # a condition that typed to nothing and raised nothing is an
-                # unresolvable name, exactly as in a binding or an operand: the
-                # 0 disables the bool check below, and the emitter would write
-                # the bare name into the C.
-                if ctv.isZero when st.typing.errors.length == errC then {
-                    (reportUnresolvedValue
-                        :st
-                        :unitDecl
-                        :ast
-                        nid: cond.operation
-                    )
-                }
-                # An if-condition must be a boolean. A non-bool value (a
-                # resultval, an aggregate, a raw numeric) is a type error rather
-                # than invalid C. Bare arm predicates (`o.none`, `b.false`) type
-                # as bool already; a diverging never-typed condition is allowed.
-                # ... and so is any other 2-arm sum type: it has a falsy arm
-                # and a truthy one, which is all a condition needs. Which arm
-                # is which comes from the order the author wrote them.
-                if ctv > 0 when boolId > 0 when ctv != boolId then {
-                    ctt: st.reg.typetypeOf typeId: ctv
-                    isPair: ztyping.isSumPair ty: st.typing reg: st.reg tid: ctv
-                    if isPair then {
-                        (stampTruthyCond
-                            :st
-                            n: (ast.nodes.get i: cond.operation.u64)
-                            tid: ctv
-                        )
-                    }
-                    if ctt != ztypes.ztypetype.neverType when (isPair) == false then {
-                        conode: ast.nodes.get i: cond.operation.u64
-                        ctnm: st.reg.nameOf tid: ctv
-                        cmsg: "condition must be bool or a 2-arm sum type, got '\{ctnm}'"
-                        (addError
-                            :st
-                            nodeid: (nodeId n: conode)
-                            lineno: (nodeLine n: conode)
-                            colno: (nodeCol n: conode)
-                            e: zast.err.typeError
-                            msg: cmsg
-                        )
-                    }
-                }
-            } else null
-        }
-        with cfit: clause.conditions.iterate do for cnd9Id: cfit loop {
-            cnd: ast.nodes.get i: cnd9Id.u64
-            match (
-                cnd
-            ) case namedoperation then {
-                fo: predFactOf :ast :st n: (ast.nodes.get i: cnd.operation.u64) :boolId
-                match (
-                    fo
-                ) case some then {
-                    factsOut.append fo.take
-                } case none then null
-            } else null
-        }
-        with afit: factsOut.iterate do for af: afit loop (applyPredFact
-            :ast
-            :st
-            f: af
-            holds: true
-        )
-        cs: ast.nodes.get i: clause.statement.u64
-        # a condition's borrow residue is dead once the condition value is
-        # consumed -- it must not leak into the block's argument lock seeds
-        drainPendingBorrow :st
-        checkStatement :st :unitDecl :ast block: cs
-        return (lastStmtType :st :ast block: cs)
-    } else {
-        return 0
+    if clause.nid.isZero then return 0
+    k: u64
+    for k < clause.nconds loop {
+        condId: zast.ifCondAt :ast nid: clause.nid i: k
+        k = k + 1
+        cond: argRefAt :ast nid: condId
+        if (cond.nid.isZero) == false then checkClauseCondition :st :unitDecl :ast :cond :boolId
     }
+    k2: u64
+    for k2 < clause.nconds loop {
+        cndId: zast.ifCondAt :ast nid: clause.nid i: k2
+        k2 = k2 + 1
+        cnd: argRefAt :ast nid: cndId
+        if (cnd.nid.isZero) == false then {
+            fo: predFactOf :ast :st n: (ast.nodes.get i: cnd.operation.u64) :boolId
+            match (
+                fo
+            ) case some then {
+                factsOut.append fo.take
+            } case none then null
+        }
+    }
+    with afit: factsOut.iterate do for af: afit loop (applyPredFact
+        :ast
+        :st
+        f: af
+        holds: true
+    )
+    # a condition's borrow residue is dead once the condition value is
+    # consumed -- it must not leak into the block's argument lock seeds
+    drainPendingBorrow :st
+    checkStatement :st :unitDecl :ast blockId: clause.statement
+    return (lastStmtType :st :ast block: (ast.nodes.get i: clause.statement.u64))
 }
 
 # lastStmtType -- the resolved type id of a statement block's last statement
@@ -22139,8 +22141,7 @@ materialiseLiteral: function {
 checkReadonlyBindSource: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    asgn: zast.AssignmentData.view
-    av: Node.view
+    asgn: asgnref
     vt: ztypes.tid
     vid2: ztypes.vid
 } is {
@@ -22148,14 +22149,14 @@ checkReadonlyBindSource: function {
     # binding may not be moved out of whether or not its type owns heap,
     # and without a destructor the emitter builds a value from a pointer
     # and gcc rejects the C.
-    rn5: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: av)
+    rn5: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: asgn.value.u64))
     roMv5: false
     if rn5.length > 0 when (typeIsReftype :st tid: vt) then {
         if (nameIsReadonly :st :ast name: rn5.stringview) then {
             roMv5 = true
             (readonlyMoveError
                 :st
-                nodeid: asgn.nodeid
+                nodeid: asgn.nid
                 lineno: asgn.lineno
                 colno: asgn.colno
                 name: rn5.stringview
@@ -22165,7 +22166,7 @@ checkReadonlyBindSource: function {
             if (pinnedMoveError
                 :st
                 :ast
-                nodeid: asgn.nodeid
+                nodeid: asgn.nid
                 lineno: asgn.lineno
                 colno: asgn.colno
                 name: rn5.stringview
@@ -22185,7 +22186,7 @@ checkReadonlyBindSource: function {
                 mb5: "Cannot move borrowed variable '\{rn5}' into an owned binding — borrowed names stay bound to their source for the full scope"
                 (addError
                     :st
-                    nodeid: asgn.nodeid
+                    nodeid: asgn.nid
                     lineno: asgn.lineno
                     colno: asgn.colno
                     e: zast.err.ownerError
@@ -22204,14 +22205,14 @@ checkReadonlyBindSource: function {
     # a laundering step -- `i: c.sub` off a `view` receiver would hand back
     # a freely mutable name.
     roPath: (ListVal zast.nameid)
-    appendValueTuple :ast n: av dst: roPath
+    appendValueTuple :ast n: (ast.nodes.get i: asgn.value.u64) dst: roPath
     roDeep: false
     if roPath.length > 1 when (typeIsReftype :st tid: vt) then {
         if (pathLeafIsMethod :st path: roPath) == false then {
             if (pathIsReadonly :st path: roPath) then roDeep = true
         }
     }
-    if roDeep when (valueIsHold :ast n: av) == false then {
+    if roDeep when (valueIsHold :ast n: (ast.nodes.get i: asgn.value.u64)) == false then {
         rop: (ListVal zast.nameid)
         rop.append asgn.name
         roh: (ztypes.zlockholder
@@ -22228,7 +22229,7 @@ checkReadonlyBindSource: function {
         if ror.length > 0 then {
             (addError
                 :st
-                nodeid: asgn.nodeid
+                nodeid: asgn.nid
                 lineno: asgn.lineno
                 colno: asgn.colno
                 e: zast.err.ownerError
@@ -22236,7 +22237,10 @@ checkReadonlyBindSource: function {
             )
         }
     }
-    if (valueIsHold :ast n: av) when (typeIsReftype :st tid: vt) then {
+    if (valueIsHold
+        :ast
+        n: (ast.nodes.get i: asgn.value.u64)
+    ) when (typeIsReftype :st tid: vt) then {
         # Owned but frozen: the same readonly self-lock a `view` parameter
         # takes, so writes, mutating receivers and re-passing to a mutable
         # parameter are all caught by the ordinary lock rules. Ownership is
@@ -22257,7 +22261,7 @@ checkReadonlyBindSource: function {
         if hpr.length > 0 then {
             (addError
                 :st
-                nodeid: asgn.nodeid
+                nodeid: asgn.nid
                 lineno: asgn.lineno
                 colno: asgn.colno
                 e: zast.err.ownerError
@@ -22275,23 +22279,27 @@ checkReadonlyBindSource: function {
 checkAssignment: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
-    asgn: zast.AssignmentData.view
+    ast: Ast
+    asgn: asgnref
 } is {
     drainPendingBorrow :st
-    av: ast.nodes.get i: asgn.value.u64
     errA0: st.typing.errors.length
-    vt: checkValue :st :unitDecl :ast node: av
+    vt: checkValueAt :st :unitDecl :ast nid: asgn.value
     mvt: materialiseLiteral :ast :st :unitDecl t: vt
     vt = mvt
     if vt.isZero when st.typing.errors.length == errA0 then {
-        reportUnresolvedValue :st :unitDecl :ast nid: (zast.nodeIdOf n: av)
+        reportUnresolvedValue :st :unitDecl :ast nid: asgn.value
     }
     if vt > 0 when (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.nullType then {
         m1: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
-        vln1: nodeLine n: av
-        vcl1: nodeCol n: av
-        vid1: nodeId n: av
+        vln1: u32
+        vcl1: u32
+        {
+            av: ast.nodes.get i: asgn.value.u64
+            vln1 = nodeLine n: av
+            vcl1 = nodeCol n: av
+        }
+        vid1: asgn.value
         en1: String
         eh1: String
         (addErrorH
@@ -22336,7 +22344,7 @@ checkAssignment: function {
             dlm: "duplicate definition of '\{dnm}': this block already binds that name -- rebinding it here is a redefinition, and only a NESTED block shadows"
             (addError
                 :st
-                nodeid: asgn.nodeid
+                nodeid: asgn.nid
                 lineno: asgn.lineno
                 colno: asgn.colno
                 e: zast.err.duplicateDef
@@ -22345,17 +22353,17 @@ checkAssignment: function {
         }
         st.defineVar nameId: asgn.name :vid
         vid2: vid
-        st.typing.defVariableId.set key: asgn.nodeid.u64 value: vid2
+        st.typing.defVariableId.set key: asgn.nid.u64 value: vid2
         st.reg.setVariableOrigin id: vid2 origin: ztypes.zvarorigin.local
         setk: vt
-        stampGate :st nid: asgn.nodeid.u64 tid: setk
+        stampGate :st nid: asgn.nid.u64 tid: setk
         if roRef then {
             rrn: (ast.names.texts.get i: asgn.name.u64).stringview
             rrr: readonlySelfLock :st :ast name: rrn vid: vid2
             if rrr.length > 0 then {
                 (addError
                     :st
-                    nodeid: asgn.nodeid
+                    nodeid: asgn.nid
                     lineno: asgn.lineno
                     colno: asgn.colno
                     e: zast.err.ownerError
@@ -22367,7 +22375,6 @@ checkAssignment: function {
             :st
             :ast
             :asgn
-            :av
             :vt
             :vid2
         )
@@ -22385,7 +22392,7 @@ checkAssignment: function {
                 src: bsrc
                 :vid
                 leafShared: lfsA
-                nodeid: asgn.nodeid
+                nodeid: asgn.nid
                 lineno: asgn.lineno
                 colno: asgn.colno
             )
@@ -22393,7 +22400,7 @@ checkAssignment: function {
         # Binding a tagged-subtype construction narrows the name to the
         # constructed arm (assignment-based narrowing: the overlay keeps the
         # subject's type and records the narrowed subtype).
-        ucArm: unionCreateArmName :ast :st n: av
+        ucArm: unionCreateArmName :ast :st n: (ast.nodes.get i: asgn.value.u64)
         if ucArm.length > 0 then {
             (st.narrow
                 nameId: asgn.name
@@ -22982,7 +22989,7 @@ checkDo: function {
         ztypeId: (ztypes.tid.create from: dbk.u64)
     )
     drainPendingBorrow :st
-    checkStatement :st :unitDecl :ast block: (ast.nodes.get i: donode.statement.u64)
+    checkStatement :st :unitDecl :ast blockId: donode.statement
     result: lastStmtType :st :ast block: (ast.nodes.get i: donode.statement.u64)
     st.popTo marker: doMarker
     # A break-carrying do-block's value wraps in optionval (early exit =
@@ -23687,7 +23694,7 @@ ifExpressionType: function {
 checkIfClauses: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     ifnode: zast.IfData.view
     accFacts: (List ArmPredFact)
     guardFacts: (List ArmPredFact)
@@ -23703,14 +23710,12 @@ checkIfClauses: function {
     anyEmpty: false
     cliter: ifnode.clauses.iterate
     for clauseId: cliter loop {
-        clause: ast.nodes.get i: clauseId.u64
+        clause: ifClauseRefAt :ast nid: (zast.nodeid.create from: clauseId)
         dead: false
-        match (
-            clause
-        ) case ifclause then {
+        if (clause.nid.isZero) == false then {
             if (isEmptyBody n: (ast.nodes.get i: clause.statement.u64)) then anyEmpty = true
             if skipDead when clause.statement != fbr.stmt then dead = true
-        } else null
+        }
         if dead then continue
         bm: st.pushBlock name: "if_branch"
         with pfit: accFacts.iterate do for pf: pfit loop (applyPredFact
@@ -23735,12 +23740,7 @@ checkIfClauses: function {
             restoreTakenArm :st :liveBefore taken: takenAcross
         }
         st.popTo marker: bm
-        cn1c: u64
-        match (
-            clause
-        ) case ifclause then {
-            cn1c = clause.conditions.length
-        } else null
+        cn1c: clause.nconds
         if cn1c == 1 when cfacts.length == 1 then {
             mvf: cfacts.pop
             if dvgC then {
@@ -29521,7 +29521,7 @@ narrowCaseArmSubject: function {
 checkSumArmName: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    clause: zast.CaseClauseData.view
+    clause: caseclauseref
     subjT: ztypes.tid
     armName: StringView
     armTid: u64
@@ -29550,7 +29550,7 @@ checkCaseClause: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    clause: zast.CaseClauseData.view
+    clause: caseclauseref
     subjT: ztypes.tid
     isSum: bool
     targetName: StringView
@@ -29604,9 +29604,8 @@ checkCaseClause: function {
             :subjT
         )
     }
-    cstC: ast.nodes.get i: clause.statement.u64
-    checkStatement :st :unitDecl :ast block: cstC
-    at: lastStmtType :st :ast block: cstC
+    checkStatement :st :unitDecl :ast blockId: clause.statement
+    at: lastStmtType :st :ast block: (ast.nodes.get i: clause.statement.u64)
     atc: at
     armTypes.append atc
     if at > 0 when at == neverId then {
@@ -29800,7 +29799,7 @@ applyCaseExclusions: function {
 checkCaseElse: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     casenode: zast.CaseData.view
     subjT: ztypes.tid
     targetName: StringView
@@ -29846,7 +29845,7 @@ checkCaseElse: function {
 walkCaseClauses: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     casenode: zast.CaseData.view
     subjT: ztypes.tid
     isSum: bool
@@ -29860,10 +29859,8 @@ walkCaseClauses: function {
     allDiverge: true
     cliter: casenode.clauses.iterate
     for clauseId: cliter loop {
-        clause: ast.nodes.get i: clauseId.u64
-        match (
-            clause
-        ) case caseclause then {
+        clause: caseClauseRefAt :ast nid: (zast.nodeid.create from: clauseId)
+        if (clause.nid.isZero) == false then {
             cf: (checkCaseClause
                 :st
                 :unitDecl
@@ -29879,7 +29876,7 @@ walkCaseClauses: function {
             )
             if cf.empty then anyEmpty = true
             if (cf.diverges) == false then allDiverge = false
-        } else null
+        }
     }
     return (casearmfacts empty: anyEmpty diverges: allDiverge)
 }
@@ -30166,9 +30163,9 @@ checkCase: function {
     return (checkCaseArms :st :unitDecl :ast :casenode :subjT :isSum :matchMarker)
 }
 
-# valuearm -- which arm a value-position row holds: the dispatch tag that
-# checkValueAt reads without keeping the row view.
-valuearm: variant {
+# rowarm -- which arm a value or statement row holds: the dispatch tag that
+# checkValueAt and checkStmtInner read without keeping the row view.
+rowarm: variant {
     call: null
     binop: null
     atomid: null
@@ -30184,47 +30181,50 @@ valuearm: variant {
     reassignment: null
     swapstmt: null
     expression: null
+    assignment: null
     other: null
 }
 
-# valueArmAt -- the arm tag of row `nid`; the row view is this frame's and
+# rowArmAt -- the arm tag of row `nid`; the row view is this frame's and
 # dies here.
-valueArmAt: function {ast: Ast.view nid: zast.nodeid} out valuearm is {
+rowArmAt: function {ast: Ast.view nid: zast.nodeid} out rowarm is {
     n: ast.nodes.get i: nid.u64
     match (
         n
     ) case call then {
-        return valuearm.call
+        return rowarm.call
     } case binop then {
-        return valuearm.binop
+        return rowarm.binop
     } case atomid then {
-        return valuearm.atomid
+        return rowarm.atomid
     } case atomstring then {
-        return valuearm.atomstring
+        return rowarm.atomstring
     } case dottedpath then {
-        return valuearm.dottedpath
+        return rowarm.dottedpath
     } case caseexpr then {
-        return valuearm.caseexpr
+        return rowarm.caseexpr
     } case ifexpr then {
-        return valuearm.ifexpr
+        return rowarm.ifexpr
     } case forexpr then {
-        return valuearm.forexpr
+        return rowarm.forexpr
     } case labelvalue then {
-        return valuearm.labelvalue
+        return rowarm.labelvalue
     } case yieldexpr then {
-        return valuearm.yieldexpr
+        return rowarm.yieldexpr
     } case doexpr then {
-        return valuearm.doexpr
+        return rowarm.doexpr
     } case withexpr then {
-        return valuearm.withexpr
+        return rowarm.withexpr
     } case reassignment then {
-        return valuearm.reassignment
+        return rowarm.reassignment
     } case swapstmt then {
-        return valuearm.swapstmt
+        return rowarm.swapstmt
     } case expression then {
-        return valuearm.expression
+        return rowarm.expression
+    } case assignment then {
+        return rowarm.assignment
     } else {
-        return valuearm.other
+        return rowarm.other
     }
 }
 
@@ -30374,6 +30374,113 @@ reportUnknownNameAt: function {
     )
 }
 
+# exprref -- what a walk reads of an expression wrapper row: the wrapped
+# value id and the position, as plain values.
+exprref: record {
+    nid: zast.nodeid
+    expression: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# exprRefAt -- the expression row `nid` as plain values (all zero for any
+# other arm).
+exprRefAt: function {ast: Ast.view nid: zast.nodeid} out exprref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case expression then {
+        return (exprref :nid expression: n.expression lineno: n.lineno colno: n.colno)
+    } else null
+    zn: zast.nodeid
+    return (exprref nid: zn expression: zn lineno: 0 colno: 0)
+}
+
+# asgnref -- what the binding walk reads of its row: the bound name, the
+# value id and the position, as plain values.
+asgnref: record {
+    nid: zast.nodeid
+    name: zast.nameid
+    value: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# asgnRefAt -- the assignment row `nid` as plain values (all zero for any
+# other arm).
+asgnRefAt: function {ast: Ast.view nid: zast.nodeid} out asgnref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case assignment then {
+        return (asgnref :nid name: n.name value: n.value lineno: n.lineno colno: n.colno)
+    } else null
+    zn: zast.nodeid
+    zm: zast.nameid
+    return (asgnref nid: zn name: zm value: zn lineno: 0 colno: 0)
+}
+
+# ifclauseref -- what the if-clause walk reads of its row: the condition
+# count, the statement id and the position, as plain values.
+ifclauseref: record {
+    nid: zast.nodeid
+    nconds: u64
+    statement: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# ifClauseRefAt -- the if-clause row `nid` as plain values (all zero for any
+# other arm).
+ifClauseRefAt: function {ast: Ast.view nid: zast.nodeid} out ifclauseref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case ifclause then {
+        return (ifclauseref
+            :nid
+            nconds: n.conditions.length
+            statement: n.statement
+            lineno: n.lineno
+            colno: n.colno
+        )
+    } else null
+    zn: zast.nodeid
+    return (ifclauseref nid: zn nconds: 0 statement: zn lineno: 0 colno: 0)
+}
+
+# caseclauseref -- what the match-arm walk reads of its row: the binding
+# name, the matched arm id, the statement id and the position.
+caseclauseref: record {
+    nid: zast.nodeid
+    name: zast.nameid
+    matcharm: zast.nodeid
+    statement: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# caseClauseRefAt -- the match-arm row `nid` as plain values (all zero for
+# any other arm).
+caseClauseRefAt: function {ast: Ast.view nid: zast.nodeid} out caseclauseref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case caseclause then {
+        return (caseclauseref
+            :nid
+            name: n.name
+            matcharm: n.matcharm
+            statement: n.statement
+            lineno: n.lineno
+            colno: n.colno
+        )
+    } else null
+    zn: zast.nodeid
+    zm: zast.nameid
+    return (caseclauseref nid: zn name: zm matcharm: zn statement: zn lineno: 0 colno: 0)
+}
+
 # checkValueAt -- type the value row `nid`, dispatching by arm. A handler
 # that takes its row as plain values is reached with no row view held; every
 # other arm is walked by checkValue through the row view fetched here.
@@ -30383,7 +30490,7 @@ checkValueAt: function {
     ast: Ast
     nid: zast.nodeid
 } out ztypes.tid is {
-    arm: valueArmAt :ast :nid
+    arm: rowArmAt :ast :nid
     match (
         arm
     ) case swapstmt then {
@@ -30505,79 +30612,68 @@ checkValue: function {
     }
 }
 
-# checkStmtInner -- dispatch a statement line's inner node (C1: expressions).
+# checkStmtExpression -- an expression statement line: walk the value, stamp
+# the wrapper, and answer whether the line diverges (a return call or a
+# control builtin).
+checkStmtExpression: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    wrap: exprref
+} out bool is {
+    errE0: st.typing.errors.length
+    et0: checkValueAt :st :unitDecl :ast nid: wrap.expression
+    if et0 > 0 then stampGate :st nid: wrap.nid.u64 tid: et0
+    ckOpt0: st.typing.callKind.get key: wrap.expression.u64
+    isR0: isReturnCallKind o: ckOpt0
+    bn0: bareAtomNameId :ast n: (ast.nodes.get i: wrap.expression.u64)
+    ctl0: false
+    if bn0 == zast.wkBreak then ctl0 = true
+    if bn0 == zast.wkContinue then ctl0 = true
+    if bn0 == zast.wkReturn then ctl0 = true
+    if ctl0 then isR0 = true
+    # a statement whose value resolved to nothing and raised nothing:
+    # an unresolvable root name is an unknown reference (the emitter
+    # would otherwise hit its unhandled-callee backstop)
+    if st.typing.errors.length == errE0 when ctl0 == false then {
+        eto0: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: wrap.nid.u64
+        unkn0: true
+        if eto0 > 0 then unkn0 = false
+        if unkn0 then {
+            ubn1: unresolvedBareCallable :ast :st :unitDecl nid: wrap.expression
+            if ubn1.length > 0 then reportUnknownNameAt :st :ast nid: wrap.expression name: ubn1
+        }
+    }
+    return isR0
+}
+
+# checkStmtInner -- dispatch a statement line's inner row by arm. Answers
+# true when the line diverges (a return call or a control builtin).
 checkStmtInner: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    inner: Node.view
+    innerId: zast.nodeid
 } out bool is {
+    arm: rowArmAt :ast nid: innerId
     match (
-        inner
+        arm
     ) case expression then {
-        errE0: st.typing.errors.length
-        et0: checkValueAt :st :unitDecl :ast nid: inner.expression
-        if et0 > 0 then stampGate :st nid: inner.nodeid.u64 tid: et0
-        eNid0: nodeId n: (ast.nodes.get i: inner.expression.u64)
-        ckOpt0: st.typing.callKind.get key: eNid0.u64
-        isR0: isReturnCallKind o: ckOpt0
-        bn0: bareAtomNameId :ast n: (ast.nodes.get i: inner.expression.u64)
-        ctl0: false
-        if bn0 == zast.wkBreak then ctl0 = true
-        if bn0 == zast.wkContinue then ctl0 = true
-        if bn0 == zast.wkReturn then ctl0 = true
-        if ctl0 then isR0 = true
-        # a statement whose value resolved to nothing and raised nothing:
-        # an unresolvable root name is an unknown reference (the emitter
-        # would otherwise hit its unhandled-callee backstop)
-        if st.typing.errors.length == errE0 when ctl0 == false then {
-            eto0: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: inner.nodeid.u64
-            unkn0: true
-            if eto0 > 0 then unkn0 = false
-            if unkn0 then {
-                # the inner row's position, read through a view scoped to this block:
-                # the name probe below lends ast
-                eNid: zast.nodeid
-                eLn: u32
-                eCo: u32
-                {
-                    einv0: ast.nodes.get i: inner.expression.u64
-                    eNid = nodeId n: einv0
-                    eLn = nodeLine n: einv0
-                    eCo = nodeCol n: einv0
-                }
-                ubn1: unresolvedBareCallable :ast :st :unitDecl nid: inner.expression
-                if ubn1.length > 0 then {
-                    um1: "Unknown reference '\{ubn1}'"
-                    en1u: String
-                    eh1u: String
-                    (addErrorH
-                        :st
-                        nodeid: eNid
-                        lineno: eLn
-                        colno: eCo
-                        e: zast.err.badReference
-                        msg: um1
-                        note: en1u
-                        hint: eh1u
-                        width: ubn1.length.u32.orPanic
-                    )
-                }
-            }
-        }
-        return isR0
+        wrap: exprRefAt :ast nid: innerId
+        return (checkStmtExpression :st :unitDecl :ast :wrap)
     } case assignment then {
-        checkAssignment :st :unitDecl :ast asgn: inner
+        ar: asgnRefAt :ast nid: innerId
+        checkAssignment :st :unitDecl :ast asgn: ar
         # a binding whose value failed still binds its name, typeless: the
         # failure is reported once, at the value, and a later read of the name
         # is not a second unknown reference
-        if (st.frameBindsHere nameId: inner.name) == false then {
+        if (st.frameBindsHere nameId: ar.name) == false then {
             vh: st.reg.newVariable ztypeId: ztypes.tid ownership: ztypes.zownership.owned
-            st.defineVar nameId: inner.name vid: vh
+            st.defineVar nameId: ar.name vid: vh
         }
         return false
     } case reassignment then {
-        checkValueAt :st :unitDecl :ast nid: inner.nodeid
+        checkValueAt :st :unitDecl :ast nid: innerId
         return false
     } else {
         return false
@@ -30589,49 +30685,46 @@ checkStmtInner: function {
 checkStatement: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
-    block: Node.view
+    ast: Ast
+    blockId: zast.nodeid
 } is {
-    match (
-        block
-    ) case statement then {
-        siter: block.statements.iterate
-        for slnId: siter loop {
+    nLines: zast.stmtLineCount :ast nid: blockId
+    k: u64
+    for k < nLines loop {
+        slnId: zast.stmtLineAt :ast nid: blockId i: k
+        k = k + 1
+        # the line wrapper carries its inner node's type; the wrapper row is
+        # read through a view scoped to this block: the inner walk lends ast
+        innerId: zast.nodeid
+        {
             sline: ast.nodes.get i: slnId.u64
-            isRet: false
             match (
                 sline
             ) case statementline then {
-                # the line wrapper carries its inner node's type
-                isRet = (checkStmtInner
-                    :st
-                    :unitDecl
-                    :ast
-                    inner: (ast.nodes.get i: sline.statementline.u64)
-                )
-                inid: nodeId n: (ast.nodes.get i: sline.statementline.u64)
-                itOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: inid.u64
-                if itOpt > 0 then {
-                    stampGate :st nid: sline.nodeid.u64 tid: (ztypes.tid.create from: itOpt.u64)
-                }
+                innerId = sline.statementline
             } else null
-            drainPendingBorrow :st
-            if isRet then st.markUnreachable
         }
-    } else null
+        isRet: false
+        if (innerId.isZero) == false then {
+            isRet = checkStmtInner :st :unitDecl :ast :innerId
+            itOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: innerId.u64
+            if itOpt > 0 then {
+                stampGate :st nid: slnId.u64 tid: (ztypes.tid.create from: itOpt.u64)
+            }
+        }
+        drainPendingBorrow :st
+        if isRet then st.markUnreachable
+    }
 }
 
 # walkBodyAt -- walk a function body by its table id (0 = a spec method, no body).
 walkBodyAt: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     bodyId: zast.nodeid
 } is {
-    if bodyId > 0 then {
-        b: ast.nodes.get i: bodyId.u64
-        checkStatement :st :unitDecl :ast block: b
-    }
+    if bodyId > 0 then checkStatement :st :unitDecl :ast blockId: bodyId
 }
 
 # nodeIsFunctiondef -- kind test that keeps the caller's un-narrowed handle.
