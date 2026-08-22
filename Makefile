@@ -69,6 +69,11 @@ BUILDDATE := $(if $(BUILDID),$(shell git show -s --format=%cs HEAD 2>/dev/null))
 # toolchain is the only requirement to build and test zerolang.
 ZC      := $(BUILDDIR)/zc-seed
 ZC_DEP  := $(BUILDDIR)/zc-seed
+# The hand-written runtime the emitter inlines into every file it emits
+# (fragments, per-family templates and the native table). An edit here changes
+# emitted C exactly as a source edit does, so the emitted artifacts depend on
+# it -- without that, a fragment change quietly does not reach the binaries.
+RT_DEP  := $(wildcard src/runtime/*.inc) $(wildcard src/runtime/*.c.tmpl) $(wildcard src/runtime/natives/*.inc) src/runtime/natives.tbl
 
 # install tree (GOROOT-style). Override e.g. ROOT=/opt/zerolang BINDIR=/usr/local/bin.
 ROOT     ?= $(HOME)/.local/lib/zerolang
@@ -299,7 +304,7 @@ $(BUILDDIR)/zc-seed: bootstrap/zc.c
 # bin/zc -- the self-hosted compiler, bootstrapped by the seed. Persistent +
 # git-ignored; rebuilt when the compiler sources change. The dev bin/zc
 # self-locates to this repo (lib/system here; runtime falls back to src/runtime).
-bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(ZC_DEP)
+bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(ZC_DEP) $(RT_DEP)
 	@mkdir -p bin
 	$(ZC) zc --src src --system lib/system $(ZCHASH) --emit-c bin/zc.c
 
@@ -318,7 +323,7 @@ zc: bin/zc
 # front-end via the compiler. A separate binary from zc so the compiler stays
 # lean; zl links the front-end + typecheck (for --full's suffix rule), but never
 # the emitter.
-out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) | bin/zc
+out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(RT_DEP) | bin/zc
 	@mkdir -p out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
 
@@ -333,7 +338,7 @@ bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
 # lsp test kind in ztestrunner builds its own copy; this rule is the
 # editor-facing binary.
-out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) | bin/zc
+out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(RT_DEP) | bin/zc
 	@mkdir -p out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
 

@@ -26,6 +26,11 @@ static z_@String@_t z_@String@_from_view(z_@StringView@_t sv) {
     z_@String@_t z = {0};
     z.size = sv.size;
     z.capacity = sv.size;
+    /* an empty view needs no buffer: the zero struct IS an empty String -- the
+       shape z_@String@_create(0) has always handed back -- and every read goes
+       through `size`, never through a terminator. Without this, `"".string`
+       mallocs one byte per call, which is the commonest allocation there is. */
+    if (sv.size == 0) return z;
     z.data = (char*)z_xmalloc(sv.size + 1);
     memcpy(z.data, sv.data, sv.size);
     z.data[sv.size] = '\0';
