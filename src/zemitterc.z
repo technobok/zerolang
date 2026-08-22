@@ -2497,6 +2497,15 @@ ogResultval: 40.u64
 # answer, so no real index can be mistaken for it.
 ogNone: 41.u64
 
+# The member names the emitter DISPATCHES on, interned once per program. The
+# constant IS the index into `ctx.mnames`, exactly as `ogXxx` indexes
+# `ctx.origins` -- and an id compare is what the text compare was reaching for,
+# without copying the name out of the pool to make it. A name this program
+# never interned answers 0, and no member's name id is 0, so the miss is the
+# right answer by construction.
+mnOrPanic: 0.u64
+mnCopy: 1.u64
+
 # originBaseNames -- those templates by name, in ogXxx order. This list and the
 # constants above are the same table read two ways; nothing else may reorder it,
 # because the index is the identity.
@@ -2509,6 +2518,46 @@ ogPut: function {acc: List String at: u64 name: StringView} is {
         panic msg: m
     }
     acc.append name.string
+}
+
+# mnPut / memberDispatchNames -- ogPut's twin for the member-name table: the
+# list and the mnXxx constants are one table written twice, so the filler
+# checks the row it is about to write is the row the constant names.
+mnPut: function {acc: List String at: u64 name: StringView} is {
+    if acc.length != at then {
+        m: "zemitterc: member-name table out of order at \{at} (\{name})"
+        panic msg: m
+    }
+    acc.append name.string
+}
+
+memberDispatchNames: function {acc: List String} is {
+    mnPut :acc at: mnOrPanic name: "orPanic"
+    mnPut :acc at: mnCopy name: "copy"
+}
+
+# buildMemberNameIds -- those names as pool ids for the program being emitted,
+# in mnXxx order. A carrier with no program answers zeros, which match nothing.
+buildMemberNameIds: function {program: Node.view acc: ListVal zast.nameid} is {
+    names: (List String)
+    memberDispatchNames acc: names
+    mn9: names.length
+    mi9: u64
+    match (
+        program
+    ) case program then {
+        for mi9 < mn9 loop {
+            nm9: names.get i: mi9
+            acc.append (zast.poolFind pool: program.ast.names text: nm9.stringview)
+            mi9 = mi9 + 1
+        }
+    } else {
+        mz9: zast.nameid
+        for mi9 < mn9 loop {
+            acc.append mz9
+            mi9 = mi9 + 1
+        }
+    }
 }
 
 originBaseNames: function {acc: List String} is {
@@ -2660,6 +2709,8 @@ Ctx: class {
     unitTidsC: (ListVal ztypes.tid)
     unitKeysC: (List String)
     unitCacheBuilt: bool
+    # the member names this program interned, indexed by the mnXxx constants
+    mnames: (ListVal zast.nameid)
     # name-id -> resolved tid (misses cached as 0): the typed model is
     # frozen during emission, so resolution per name id is emit-stable
     resolveByNameC: (IdMapV u64 value: u64)
@@ -3907,14 +3958,25 @@ aliasChildNameId: function {
     match (
         n
     ) case dottedpath then {
-        if symtab.typing.renameSeen then {
-            ai: symtab.typing.aliasInternalNameOf nodeid: n.nodeid
-            if ai.length > 0 then return (zast.poolFind pool: ast.names text: ai.stringview)
-        }
-        return (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+        return (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
     } else {
         return (zast.nameid.create from: 0)
     }
+}
+
+# aliasOrChildId -- aliasOrChild's id twin: the same answer as a pool id, for
+# the sites that only need to know WHICH member this is.
+aliasOrChildId: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    aliasId: zast.nodeid
+    childId: u32
+} out zast.nameid is {
+    if symtab.typing.renameSeen then {
+        ai: symtab.typing.aliasInternalNameOf nodeid: aliasId
+        if ai.length > 0 then return (zast.poolFind pool: ast.names text: ai.stringview)
+    }
+    return (atomNameIdOf :ast n: (ast.nodes.get i: childId.u64))
 }
 
 # the base node id of dotted-path node `n`.
@@ -8791,9 +8853,9 @@ emitCrossUnitBareCreate: function {ctx: Ctx.view
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     parent: Node.view
-    child: StringView
+    childId: zast.nameid
 } out String is {
-    if child != "create" then return "".string
+    if childId != zast.wkCreate then return "".string
     pbId: dottedBaseAtomId :ast n: parent
     ptId: dottedChildNameIdOf :ast n: parent
     if pbId.isZero then return "".string
@@ -11404,11 +11466,11 @@ emitDottedConversionRead: function {
     ctx: Ctx
     n: zast.DottedPathData.view
 } out String is {
-    mnc0: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
+    mnc0Id: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     dps: ast.nodes.get i: n.parent.u64
-    ccbc: emitCrossUnitBareCreate :ctx :ast :symtab parent: dps child: mnc0.stringview
+    ccbc: emitCrossUnitBareCreate :ctx :ast :symtab parent: dps childId: mnc0Id
     if ccbc.length > 0 then return ccbc
-    if mnc0.stringview == "copy" then {
+    if mnc0Id == (ctx.mnames.get i: mnCopy) then {
         # `.copy` on a generic-param field inside a clone body: the node
         # carries no concrete stamp, so resolve the field's SUBSTITUTED
         # type through the current receiver mono. Only the clone-resolved
@@ -11507,7 +11569,7 @@ emitDottedConversionRead: function {
             return "/* zemitterc: unhandled copy */0".string
         }
     }
-    if mnc0.stringview == "string" then {
+    if mnc0Id == zast.wkString then {
         scl: bindLitIndex :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
         if scl > 0 then {
             se0: "\{ctx.strC}_from_view(_zs\{scl})"
@@ -11542,7 +11604,10 @@ emitDottedTagRead: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.DottedPathData.view
-    mnc0: StringView
+    # the member, as an id: the two legs that SPELL an arm name copy it there,
+    # and the common path -- a dotted read that is neither a tagged
+    # construction nor an arm predicate -- copies nothing
+    mnc0Id: zast.nameid
 } out String is {
     # tagged-construction stamp: the typechecker resolved this path as
     # `Type.arm`, so member emission wins over the name-matched legs
@@ -11551,6 +11616,7 @@ emitDottedTagRead: function {
     # (construction calls and inference are handled by later legs).
     dtp: dottedTaggedTid :symtab nid: n.nodeid.u64
     if dtp > 0 then {
+        mnc0: zast.nameTextCopy :ast ref: mnc0Id
         dtg: false
         if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dtp.u64)) == ztypes.ztypetype.variantType then dtg = true
         if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dtp.u64)) == ztypes.ztypetype.unionType then dtg = true
@@ -11565,18 +11631,18 @@ emitDottedTagRead: function {
                     :symtab
                     :ctx
                     tid: (ztypes.tid.create from: dtp.u64)
-                    arm: mnc0
+                    arm: mnc0.stringview
                 )
                 if pcH.length == 0 then {
                     tgH: (variantTag
                         :symtab
                         tid: (ztypes.tid.create from: dtp.u64)
-                        arm: mnc0
+                        arm: mnc0.stringview
                     )
                     avh: (armValueC
                         :symtab
                         tid: (ztypes.tid.create from: dtp.u64)
-                        arm: mnc0
+                        arm: mnc0.stringview
                     )
                     if avh.length > 0 then return avh
                     eH: "((\{vcH}_t){ .tag = \{tgH} })"
@@ -11598,8 +11664,7 @@ emitDottedTagRead: function {
                 tid: (ztypes.tid.create from: dap.u64)
             )
             # the arm NAME resolved through any alias, as an id
-            mid: zast.poolFind pool: ast.names text: mnc0
-            if fa > 0 when mid.u64 == fa then return "(!(\{recvP}))"
+            if fa > 0 when mnc0Id.u64 == fa then return "(!(\{recvP}))"
             return "(\{recvP})"
         }
         accP: ".".string
@@ -11608,7 +11673,8 @@ emitDottedTagRead: function {
             rpn: atomNodeId n: (ast.nodes.get i: n.parent.u64)
             if (isPtrVid :ctx vid: (atomVid :symtab nid: rpn)) then accP = "->".string
         }
-        tgP: variantTag :symtab tid: (ztypes.tid.create from: dap.u64) arm: mnc0
+        mnc0P: zast.nameTextCopy :ast ref: mnc0Id
+        tgP: variantTag :symtab tid: (ztypes.tid.create from: dap.u64) arm: mnc0P.stringview
         # an ordinal IS its discriminator: compare the value, not a field
         if (isOrdinalVariant
             :symtab
@@ -11778,9 +11844,9 @@ emitDottedRead: function {
     # (a bound var, or a chained call/conversion), emitted via emitExpr so
     # the receiver value is materialized once. `.or d:` is a call node and
     # is handled by emitResultCombinator in the call dispatch instead.
-    # owned copies: the dotted-read legs below lend ast
-    dcMn: zast.nameTextCopy :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-    if dcMn.stringview == "orPanic" then {
+    # the member is asked by ID: the legs below lend ast, and an id is a scalar
+    dcMnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
+    if dcMnId == (ctx.mnames.get i: mnOrPanic) then {
         pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
         pMono: chaseColMono :symtab :ctx tid: pStamp
         pOrig: monoOriginName :symtab tid: (ztypes.tid.create from: pMono.u64)
@@ -11797,8 +11863,13 @@ emitDottedRead: function {
     if dur.length > 0 then return dur
     dcr: emitDottedConversionRead :ast :symtab :ctx :n
     if dcr.length > 0 then return dcr
-    mnc0: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
-    dtg: emitDottedTagRead :ast :symtab :ctx :n mnc0: mnc0.stringview
+    dtg: (emitDottedTagRead
+        :ast
+        :symtab
+        :ctx
+        :n
+        mnc0Id: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
+    )
     if dtg.length > 0 then return dtg
     bn2r: zast.nameTextCopy :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
     baseAtomVid: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
@@ -22288,6 +22359,8 @@ emitC: function {
     if svId.isZero then svC = "z_StringView".string
     origins: (ListVal ztypes.tid)
     buildOriginTids :program :symtab acc: origins
+    mnames: (ListVal zast.nameid)
+    buildMemberNameIds :program acc: mnames
     (emitStringFragments
         :symtab
         :runtimeDir
@@ -22330,6 +22403,7 @@ emitC: function {
         unitTidsC: (ListVal ztypes.tid)
         unitKeysC: (List String)
         unitCacheBuilt: false
+        :mnames
         resolveByNameC: (IdMapV u64 value: u64)
         mainUnitId: ztypes.declid
         condDepth: 0
