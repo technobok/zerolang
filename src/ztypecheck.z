@@ -23598,7 +23598,7 @@ checkIf: function {
     # so -- `known: false` means "emit a runtime if", which is the answer for
     # every ordinary branch. Only a condition made of constants decides
     # anything here.
-    fbr: foldIfBranch :st frame: st.curFrame :ast :unitDecl n: ifnode
+    fbr: foldIfBranch :st frame: st.curFrame :ast :unitDecl nid: ifnode.nodeid
     constFailClear :st
     # A clause the fold proved dead is reached by no use site, and the language
     # does not promise to resolve names or check types inside it. NOT walking it
@@ -32617,7 +32617,7 @@ constantBranchWalk: function {
 # resolves to the first branch's type -- stamped on the If, its Expression
 # wrapper, and resolved[unit.name].
 resolveUnitIfDef: function {
-    ast: Ast.view
+    ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
@@ -32635,7 +32635,7 @@ resolveUnitIfDef: function {
         # condition is true". `w` is that type; `t` stays the first-typed
         # fallback for an `if` whose conditions did not fold.
         w: u64
-        fb: foldIfBranch :st :frame :ast :unitDecl :n
+        fb: foldIfBranch :st :frame :ast :unitDecl nid: n.nodeid
         cliter: n.clauses.iterate
         for clauseId: cliter loop {
             clause: ast.nodes.get i: clauseId.u64
@@ -33268,7 +33268,7 @@ constValueOfMemberAt: function {
         frame: ownerDecl
         :ast
         :unitDecl
-        n: (ast.nodes.get i: opid.u64)
+        nid: (zast.nodeid.create from: opid)
     )
     st.typing.constEvalState.set key: k value: 2.u8
     if (valFound.kind.none) == false then {
@@ -33280,36 +33280,40 @@ constValueOfMemberAt: function {
 # constBlockValue -- the value a branch block yields: its LAST statement's,
 # the way constantBranchWalk takes the block's type from the last statement.
 constBlockValue: function {
-    ast: Ast.view
+    ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    block: Node.view
+    nid: zast.nodeid
 } out ztypes.cval is {
-    match (
-        block
-    ) case statement then {
-        r: ztypes.noConst
-        siter: block.statements.iterate
-        for sId: siter loop {
+    # the block's line ids are read through views scoped to blocks: each
+    # line's evaluation lends ast exclusively
+    isStmt: false
+    lineIds: (ListVal u32)
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case statement then {
+            isStmt = true
+            with sit: n.statements.iterate do for s: sit loop lineIds.append from: s
+        } else null
+    }
+    if (isStmt) == false then return ztypes.noConst
+    r: ztypes.noConst
+    with lit: lineIds.iterate do for sId: lit loop {
+        innerId: zast.nodeid
+        {
             s: ast.nodes.get i: sId.u64
             match (
                 s
             ) case statementline then {
-                r = (evalConstNode
-                    :st
-                    :frame
-                    :ast
-
-                    :unitDecl
-                    n: (ast.nodes.get i: s.statementline.u64)
-                )
+                innerId = s.statementline
             } else null
         }
-        return r
-    } else {
-        return ztypes.noConst
+        if (innerId.isZero) == false then r = evalConstNode :st :frame :ast :unitDecl nid: innerId
     }
+    return r
 }
 
 # foldIfBranch -- which clause of an `if` the constant fold selects, stamped on
@@ -33317,87 +33321,121 @@ constBlockValue: function {
 # Every condition of a clause must fold and be true for that clause to win; the
 # first winner takes it and the else clause is the fallback. `known` false means
 # a condition did not fold: this is a runtime `if` and nothing may be elided.
-foldIfBranch: function {
-    ast: Ast.view
+# foldIfCond -- one condition of a folding `if`: 1 = a plain guard that
+# folds true, 2 = folds false, 0 = undecided (a labelled condition other
+# than `when`, or a guard whose value is not a known truth arm), 3 = not a
+# named condition at all (it says nothing).
+foldIfCond: function {
+    ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    n: zast.IfData.view
-} out ztyping.foldedbranch is {
+    condId: u32
+} out u32 is {
+    isGuard: false
+    isOther: false
+    opId: zast.nodeid
     {
-        known: true
-        stmt: zast.nodeid
-        decided: false
-        cliter: n.clauses.iterate
-        for clauseId: cliter loop {
-            if decided == false then {
+        cond: ast.nodes.get i: condId.u64
+        match (
+            cond
+        ) case namedoperation then {
+            # a labelled condition other than `when` is not a plain guard, and
+            # this fold does not speak for it
+            cl: zast.nameTextAt :ast ref: cond.name
+            if cl.length > 0 when cl.stringview != "when" then {
+                isOther = true
+            } else {
+                isGuard = true
+                opId = cond.operation
+            }
+        } else null
+    }
+    if isOther then return 0
+    if (isGuard) == false then return 3
+    cv: evalConstNode :st :frame :ast :unitDecl nid: opId
+    # by the DISCRIMINATOR, not by arm position: a data-sourced tag names its
+    # own values.
+    fa: (ztyping.sumPairFalsyArmOf
+        ty: st.typing
+        reg: st.reg
+        tid: cv.armTid
+    )
+    ta: (ztyping.sumPairTruthyArmOf
+        ty: st.typing
+        reg: st.reg
+        tid: cv.armTid
+    )
+    if fa > 0 when cv.armName.u64 == fa then return 2
+    if ta > 0 when cv.armName.u64 == ta then return 1
+    return 0
+}
+
+foldIfBranch: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+} out ztyping.foldedbranch is {
+    # the clause and statement ids are read through views scoped to blocks:
+    # the condition folds lend ast exclusively
+    isIf: false
+    clauseIds: (ListVal u32)
+    elseId: zast.nodeid
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case ifexpr then {
+            isIf = true
+            with cit: n.clauses.iterate do for c: cit loop clauseIds.append from: c
+            elseId = n.elseclause
+        } else null
+    }
+    known: true
+    stmt: zast.nodeid
+    if (isIf) == false then return (ztyping.foldedbranch known: false :stmt)
+    decided: false
+    with cliter: clauseIds.iterate do for clauseId: cliter loop {
+        if decided == false then {
+            isClause: false
+            condIds: (ListVal u32)
+            stmtId: zast.nodeid
+            {
                 clause: ast.nodes.get i: clauseId.u64
                 match (
                     clause
                 ) case ifclause then {
-                    allTrue: true
-                    undecided: false
-                    coiter: clause.conditions.iterate
-                    for condId: coiter loop {
-                        cond: ast.nodes.get i: condId.u64
-                        match (
-                            cond
-                        ) case namedoperation then {
-                            # a labelled condition other than `when` is not a
-                            # plain guard, and this fold does not speak for it
-                            cl: zast.nameTextAt :ast ref: cond.name
-                            if cl.length > 0 when cl.stringview != "when" then {
-                                undecided = true
-                            } else {
-                                cv: (evalConstNode
-                                    :st
-                                    :frame
-                                    :ast
-
-                                    :unitDecl
-                                    n: (ast.nodes.get i: cond.operation.u64)
-                                )
-                                # by the DISCRIMINATOR, not by arm position: a
-                                # data-sourced tag names its own values.
-                                fa: (ztyping.sumPairFalsyArmOf
-                                    ty: st.typing
-                                    reg: st.reg
-                                    tid: cv.armTid
-                                )
-                                ta: (ztyping.sumPairTruthyArmOf
-                                    ty: st.typing
-                                    reg: st.reg
-                                    tid: cv.armTid
-                                )
-                                isF: false
-                                if fa > 0 when cv.armName.u64 == fa then isF = true
-                                isT: false
-                                if ta > 0 when cv.armName.u64 == ta then isT = true
-                                if isF then {
-                                    allTrue = false
-                                } else {
-                                    if (isT) == false then undecided = true
-                                }
-                            }
-                        } else null
-                    }
-                    if undecided then {
-                        known = false
-                        decided = true
-                    } else {
-                        if allTrue then {
-                            stmt = clause.statement
-                            decided = true
-                        }
-                    }
+                    isClause = true
+                    with coit: clause.conditions.iterate do for c: coit loop condIds.append from: c
+                    stmtId = clause.statement
                 } else null
             }
+            if isClause then {
+                allTrue: true
+                undecided: false
+                with coiter: condIds.iterate do for condId: coiter loop {
+                    v: foldIfCond :st :frame :ast :unitDecl :condId
+                    if v == 0 then undecided = true
+                    if v == 2 then allTrue = false
+                }
+                if undecided then {
+                    known = false
+                    decided = true
+                } else {
+                    if allTrue then {
+                        stmt = stmtId
+                        decided = true
+                    }
+                }
+            }
         }
-        if decided == false then stmt = n.elseclause
-        fb: ztyping.foldedbranch :known :stmt
-        st.typing.foldedBranch.set key: n.nodeid.u64 value: fb
-        return fb
     }
+    if decided == false then stmt = elseId
+    fb: ztyping.foldedbranch :known :stmt
+    st.typing.foldedBranch.set key: nid.u64 value: fb
+    return fb
 }
 
 # constArmRead -- `<typeName>.<armName>` looked up from `lookupUnit`, as a
@@ -33500,7 +33538,7 @@ foldCaseArm: function {
         :ast
 
         :unitDecl
-        n: (ast.nodes.get i: n.subject.u64)
+        nid: n.subject
     )
     if sv.kind.none then return
     known: true
@@ -33522,7 +33560,7 @@ foldCaseArm: function {
                         :ast
 
                         :unitDecl
-                        n: (ast.nodes.get i: cl.matcharm.u64)
+                        nid: cl.matcharm
                     )
                     eq: constValEq :st a: av b: sv
                     if eq.has then {
@@ -33579,7 +33617,7 @@ constStrArgAt: function {
                         :ast
 
                         :unitDecl
-                        n: (ast.nodes.get i: an.operation.u64)
+                        nid: an.operation
                     )
                     found = true
                 }
@@ -33704,27 +33742,28 @@ constStringMethod: function {
 # constOfBinop -- fold a binary operator over two constant operands. Two tags
 # compare by ARM IDENTITY (owning type plus name-pool id), never by rendered
 # text, and only equality is defined -- arms have no order.
-constOfBinop: function {
+# constOfBinopFold -- the folded value of `lv <op> rv`: two tags compare by
+# ARM IDENTITY, two strings by interned text (and `+` joins), integers and
+# floats by value. noConst for anything else.
+constOfBinopFold: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
     ast: Ast
-    unitDecl: ztypes.declid
-    n: zast.BinOpData.view
+    lv: ztypes.cval
+    rv: ztypes.cval
+    op: StringView
+    nid: zast.nodeid
+    ln: u32
+    co: u32
 } out ztypes.cval is {
-    lv: evalConstNode :st :frame :ast :unitDecl n: (ast.nodes.get i: n.lhs.u64)
-    if lv.kind.none then return ztypes.noConst
-    rv: evalConstNode :st :frame :ast :unitDecl n: (ast.nodes.get i: n.rhs.u64)
-    if rv.kind.none then return ztypes.noConst
-    opNode: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.operator.u64))
-    if opNode.length == 0 then return ztypes.noConst
     # two tags compare by ARM IDENTITY -- the owning type and the arm's
     # name-pool id -- never by rendered text. Only equality is defined:
     # arms have no order.
     if lv.kind.armKind when rv.kind.armKind then {
         same: false
         if lv.armTid == rv.armTid when lv.armName == rv.armName then same = true
-        if opNode.stringview == "==" then return (boolConst :st :frame :ast v: same)
-        if opNode.stringview == "!=" then return (boolConst
+        if op == "==" then return (boolConst :st :frame :ast v: same)
+        if op == "!=" then return (boolConst
             :st
             :frame
             :ast
@@ -33739,27 +33778,27 @@ constOfBinop: function {
         ls: constStringAt :st id: lv.strId
         rs: constStringAt :st id: rv.strId
         eq: ls.stringview == rs.stringview
-        if opNode.stringview == "==" then return (boolConst :st :frame :ast v: eq)
-        if opNode.stringview == "!=" then return (boolConst :st :frame :ast v: ((eq) == false))
+        if op == "==" then return (boolConst :st :frame :ast v: eq)
+        if op == "!=" then return (boolConst :st :frame :ast v: ((eq) == false))
         # `+` BUILDS, so the folded value is the joined text, interned like
         # any other. `A + B + C` folds left to right through this leg with
         # no runtime temporary at any step.
-        if opNode.stringview == "+" then {
+        if op == "+" then {
             ls.append rs
             return (ztypes.makeStrConst (constInternString :st text: ls.stringview))
         }
         return ztypes.noConst
     }
     if lv.kind.ivalKind when rv.kind.ivalKind then {
-        if (isComparisonOp name: opNode.stringview) then {
-            return (constCompareInt :st :frame :ast op: opNode.stringview a: lv.ival b: rv.ival)
+        if (isComparisonOp name: op) then {
+            return (constCompareInt :st :frame :ast :op a: lv.ival b: rv.ival)
         }
         return (constArithInt
             :st
-            nodeid: n.nodeid
-            lineno: n.lineno
-            colno: n.colno
-            op: opNode.stringview
+            nodeid: nid
+            lineno: ln
+            colno: co
+            :op
             a: lv.ival
             b: rv.ival
         )
@@ -33767,25 +33806,131 @@ constOfBinop: function {
     lf: constFloatOf v: lv
     rf: constFloatOf v: rv
     if lf.has when rf.has then {
-        if (isComparisonOp name: opNode.stringview) then {
-            return (constCompareFloat :st :frame :ast op: opNode.stringview a: lf.val b: rf.val)
+        if (isComparisonOp name: op) then {
+            return (constCompareFloat :st :frame :ast :op a: lf.val b: rf.val)
         }
-        return (constArithFloat op: opNode.stringview a: lf.val b: rf.val)
+        return (constArithFloat :op a: lf.val b: rf.val)
     }
     return ztypes.noConst
-    return ztypes.noConst
+}
+
+constOfBinop: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out ztypes.cval is {
+    # the operand and operator ids are read through a view scoped to this
+    # block: the operand evaluations lend ast exclusively
+    isBinop: false
+    lhsId: zast.nodeid
+    rhsId: zast.nodeid
+    opId: zast.nodeid
+    ln: u32
+    co: u32
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case binop then {
+            isBinop = true
+            lhsId = n.lhs
+            rhsId = n.rhs
+            opId = n.operator
+            ln = n.lineno
+            co = n.colno
+        } else null
+    }
+    if (isBinop) == false then return ztypes.noConst
+    lv: evalConstNode :st :frame :ast :unitDecl nid: lhsId
+    if lv.kind.none then return ztypes.noConst
+    rv: evalConstNode :st :frame :ast :unitDecl nid: rhsId
+    if rv.kind.none then return ztypes.noConst
+    # an owned copy: the name must outlive the folds below, which lend ast
+    opNode: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: opId.u64))
+    if opNode.length == 0 then return ztypes.noConst
+    return (constOfBinopFold :st :frame :ast :lv :rv op: opNode.stringview :nid :ln :co)
 }
 # constOfCall -- a call in constant position. `error "..."` is the program
 # asserting: only the WINNING branch of a fold is ever evaluated, so an `error`
 # in a dead one is never visited, which is why it lives here and not in a tree
 # walk. A static method on a string constant folds here too.
+# constOfStringMethodCall -- a static method on a string constant
+# (`"abcd".length`) is a CALL whose callable is a dotted path: the receiver
+# folds to a string and the child names the method. noConst when the call
+# is not that shape or its receiver does not fold.
+constOfStringMethodCall: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    callableId: zast.nodeid
+    args: (ListVal u32).view
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    recvId: zast.nodeid
+    methodId: zast.nodeid
+    {
+        cnode: ast.nodes.get i: callableId.u64
+        if cnode.dottedpath then {
+            recvId = cnode.parent
+            methodId = cnode.child
+        }
+    }
+    if recvId.isZero then return ztypes.noConst
+    rcv: evalConstNode :st :frame :ast :unitDecl nid: recvId
+    if (rcv.kind.svalKind) == false then return ztypes.noConst
+    mnc: String
+    {
+        mnode: ast.nodes.get i: methodId.u64
+        mnc = zast.nameTextCopy :ast ref: (atomNameId :ast n: mnode)
+    }
+    if mnc.length == 0 then return ztypes.noConst
+    return (constStringMethod
+        :st
+        :frame
+        :ast
+
+        :unitDecl
+        :args
+        recv: rcv
+        name: mnc.stringview
+        nodeid: nid
+        lineno: ln
+        colno: co
+    )
+}
+
 constOfCall: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
-    n: zast.CallData.view
+    nid: zast.nodeid
 } out ztypes.cval is {
+    # the call's callable and argument ids are read through views scoped to
+    # blocks: every evaluation below lends ast exclusively
+    isCall: false
+    callableId: zast.nodeid
+    argIds: (ListVal u32)
+    ln: u32
+    co: u32
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case call then {
+            isCall = true
+            callableId = n.callable
+            with ait: n.arguments.iterate do for a: ait loop argIds.append from: a
+            ln = n.lineno
+            co = n.colno
+        } else null
+    }
+    if (isCall) == false then return ztypes.noConst
     # `error "..."` in constant position is the program asserting. Only the
     # WINNING branch of a fold is ever evaluated, so an `error` in a dead
     # one is never visited -- which is why this lives in the evaluator and
@@ -33794,70 +33939,41 @@ constOfCall: function {
     # A static method on a string constant is a CALL whose callable is a
     # dotted path, so atomName is "" for it and the `error` test below would
     # bail before ever looking at the receiver. Intercept first.
+    sm: constOfStringMethodCall :st :frame :ast :unitDecl :nid :callableId args: argIds :ln :co
+    if (sm.kind.none) == false then return sm
+    isError: false
     {
-        cnode: ast.nodes.get i: n.callable.u64
-        if cnode.dottedpath then {
-            rcv: (evalConstNode
-                :st
-                :frame
-                :ast
-
-                :unitDecl
-                n: (ast.nodes.get i: cnode.parent.u64)
-            )
-            if rcv.kind.svalKind then {
-                mnc: (zast.nameTextAt
-                    :ast
-                    ref: (atomNameId :ast n: (ast.nodes.get i: cnode.child.u64))
-                )
-                if mnc.length > 0 then {
-                    return (constStringMethod
-                        :st
-                        :frame
-                        :ast
-
-                        :unitDecl
-                        args: n.arguments
-                        recv: rcv
-                        name: mnc.stringview
-                        nodeid: n.nodeid
-                        lineno: n.lineno
-                        colno: n.colno
-                    )
-                }
-            }
-        }
+        cnode: ast.nodes.get i: callableId.u64
+        cbn: zast.nameTextAt :ast ref: (atomNameId :ast n: cnode)
+        if cbn.stringview == "error" then isError = true
     }
-    cbn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.callable.u64))
-    if cbn.stringview != "error" then return ztypes.noConst
+    if (isError) == false then return ztypes.noConst
     umsg: "compile-time error".string
-    with ait: n.arguments.iterate do for aId: ait loop {
-        an: ast.nodes.get i: aId.u64
-        match (
-            an
-        ) case namedoperation then {
-            av: (evalConstNode
-                :st
-                :frame
-                :ast
-
-                :unitDecl
-                n: (ast.nodes.get i: an.operation.u64)
-            )
+    with it: argIds.iterate do for aId: it loop {
+        opId: zast.nodeid
+        {
+            an: ast.nodes.get i: aId.u64
+            match (
+                an
+            ) case namedoperation then {
+                opId = an.operation
+            } else null
+        }
+        if (opId.isZero) == false then {
+            av: evalConstNode :st :frame :ast :unitDecl nid: opId
             if av.kind.svalKind then umsg = constStringAt :st id: av.strId
-        } else null
+        }
     }
     strId93: (constInternString :st text: umsg.stringview)
     (constFailRecord
         :st
         kind: ztypes.constfailkind.reachedError
-        nodeid: n.nodeid
-        lineno: n.lineno
-        colno: n.colno
+        nodeid: nid
+        lineno: ln
+        colno: co
         width: 5
         strId: strId93
     )
-    return ztypes.noConst
     return ztypes.noConst
 }
 # constOfNamedBase -- a dotted path whose base is a bare atom. The base can name a
@@ -33869,7 +33985,9 @@ constOfNamedBase: function {
     frame: ztypes.declid
     unitDecl: ztypes.declid
     ast: Ast
-    n: zast.DottedPathData.view
+    atNid: zast.nodeid
+    atLine: u32
+    atCol: u32
     pt: StringView
     nameCount: StringView
 } out ztypes.cval is {
@@ -33880,16 +33998,13 @@ constOfNamedBase: function {
         # `unit.CONST` reads a constant out of another unit.
         if (nameDenotesUnit :st :frame nameId: (nameIdOf :ast name: pt)) then {
             nameId98: (nameIdOf :ast name: pt)
+            unitDecl98: unitDeclOfNameOrOwn :st :frame nameId: nameId98
             return (constValueOfMember
                 :st
                 :frame
                 :ast
 
-                unitDecl: (unitDeclOfNameOrOwn
-                    :st
-                    :frame
-                    nameId: nameId98
-                )
+                unitDecl: unitDecl98
                 defName: nameCount
             )
         }
@@ -33964,9 +34079,9 @@ constOfNamedBase: function {
                 :st
                 v: pcv
                 name: nameCount
-                nodeid: n.nodeid
-                lineno: n.lineno
-                colno: n.colno
+                nodeid: atNid
+                lineno: atLine
+                colno: atCol
             )
         }
         return (constArmRead
@@ -33990,149 +34105,280 @@ constOfNamedBase: function {
 # error, because this walk also runs over definitions that are not constants at
 # all. The E0600s below are the cases where a value was genuinely required and
 # the operands were there.
+# constplan -- what evaluating one row needs once its view is gone: the arm
+# (1 expression, 2 atomid, 3 atomstring, 4 dottedpath, 5 binop, 6 call,
+# 7 ifexpr, 0 anything else) and the ids and scalars that arm reads.
+constplan: record {
+    arm: u32
+    innerId: zast.nodeid
+    nameId: zast.nameid
+    parts: u64
+    parentId: zast.nodeid
+    childId: zast.nodeid
+    ln: u32
+    co: u32
+}
+
+# evalConstPlan -- read-only: the plan for row `nid`; the row view is this
+# frame's and dies here.
+evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
+    arm: u32
+    innerId: zast.nodeid
+    nameId: zast.nameid
+    parts: u64
+    parentId: zast.nodeid
+    childId: zast.nodeid
+    ln: u32
+    co: u32
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case expression then {
+            arm = 1
+            innerId = n.expression
+        } case atomid then {
+            arm = 2
+            nameId = n.name
+        } case atomstring then {
+            arm = 3
+            parts = n.stringparts.length
+            if parts == 1 then innerId = zast.nodeid.create from: (n.stringparts.get i: 0)
+            ln = n.lineno
+            co = n.colno
+        } case dottedpath then {
+            arm = 4
+            parentId = n.parent
+            childId = n.child
+            ln = n.lineno
+            co = n.colno
+        } case binop then {
+            arm = 5
+        } case call then {
+            arm = 6
+        } case ifexpr then {
+            arm = 7
+        } else null
+    }
+    return (constplan :arm :innerId :nameId :parts :parentId :childId :ln :co)
+}
+
+# evalConstString -- a string literal's value: one chunk and nothing else is
+# a plain literal. An INTERPOLATION has a value only at run time, and a
+# unit-level definition is required to be a compile-time constant, so this is
+# a case where the value was genuinely required and could not be produced --
+# it reports rather than falling silent the way an unrecognised shape does.
+evalConstString: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    parts: u64
+    partId: zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    if parts == 1 then {
+        firstPartNode: ast.nodes.get i: partId.u64
+        match (
+            firstPartNode
+        ) case stringchunk then {
+            return (ztypes.makeStrConst (constInternString
+                :st
+                text: firstPartNode.text.stringview
+            ))
+        } else null
+    }
+    if parts == 0 then return (ztypes.makeStrConst (constInternString :st text: ""))
+    (constFailRecord
+        :st
+        kind: ztypes.constfailkind.interp
+        nodeid: nid
+        lineno: ln
+        colno: co
+        width: 1
+    )
+    return ztypes.noConst
+}
+
+# evalConstArmViaUnit -- `platform.oskind.linux`: an arm of a type reached
+# THROUGH its unit. The parent is a dotted path of its own (`gpId.gcId`), so
+# the type is looked up from that unit rather than from the one being
+# evaluated. noConst when the path is not that shape.
+evalConstArmViaUnit: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    gpId: zast.nodeid
+    gcId: zast.nodeid
+    nameCount: StringView
+} out ztypes.cval is {
+    gpt: String
+    gct: String
+    gpNameId: zast.nameid
+    {
+        gp: ast.nodes.get i: gpId.u64
+        gc: ast.nodes.get i: gcId.u64
+        if gp.atomid when gc.atomid then {
+            gpt = zast.nameTextCopy :ast ref: gp.name
+            gct = zast.nameTextCopy :ast ref: gc.name
+            gpNameId = gp.name
+        }
+    }
+    if gpt.length > 0 when gct.length > 0 then {
+        if (nameDenotesUnit
+            :st
+            :frame
+
+            nameId: (nameIdOf :ast name: gpt.stringview)
+        ) then {
+            lookupUnit9: (unitDeclOfNameOrOwn :st :frame nameId: gpNameId)
+            qa: (constArmRead
+                :st
+                :frame
+                :ast
+
+                lookupUnit: lookupUnit9
+                typeName: gct.stringview
+                armName: nameCount
+            )
+            if (qa.kind.none) == false then return qa
+        }
+    }
+    return ztypes.noConst
+}
+
+# evalConstDotted -- a dotted path's value: a member read off a named base
+# (a unit, a nested namespace, a constant, a type's arm), the arm predicate
+# of a constant whose type is a variant, a method on a string constant, or
+# an arm reached through a unit.
+evalConstDotted: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    parentId: zast.nodeid
+    childId: zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    nameCount: String
+    {
+        chn: ast.nodes.get i: childId.u64
+        if chn.atomid then nameCount = zast.nameTextCopy :ast ref: chn.name
+    }
+    if nameCount.length == 0 then return ztypes.noConst
+    pt: String
+    parentIsDotted: false
+    gpId: zast.nodeid
+    gcId: zast.nodeid
+    {
+        pn: ast.nodes.get i: parentId.u64
+        if pn.atomid then pt = zast.nameTextCopy :ast ref: pn.name
+        if pn.dottedpath then {
+            parentIsDotted = true
+            gpId = pn.parent
+            gcId = pn.child
+        }
+    }
+    if pt.length > 0 then {
+        pbv: (constOfNamedBase
+            :st
+            :frame
+            :unitDecl
+            :ast
+            atNid: nid
+            atLine: ln
+            atCol: co
+            pt: pt.stringview
+            nameCount: nameCount.stringview
+        )
+        if (pbv.kind.none) == false then return pbv
+    }
+    # `platform.os.linux` -- the ARM-PREDICATE form, asked FIRST for the
+    # same reason the atomid case asks the constant first: `tsrc.os` is a
+    # constant whose TYPE is a variant, so reading it as a qualified type
+    # name would find that variant and answer with an arm where the
+    # question was "does it hold this one".
+    pv: evalConstNode :st :frame :ast :unitDecl nid: parentId
+    if pv.kind.armKind then {
+        cnid: zast.poolFind pool: ast.names text: nameCount.stringview
+        if cnid.isZero then return ztypes.noConst
+        return (boolConst :st :frame :ast v: (pv.armName == cnid))
+    }
+    # a literal receiver (`"abcd".length`) or a qualified constant
+    # (`quadfloat.LIB.length`): the parent is not a bare atom, so its value
+    # comes from the recursive walk above rather than from a member read.
+    if pv.kind.svalKind then {
+        return (constStringDotted
+            :st
+            v: pv
+            name: nameCount.stringview
+            nodeid: nid
+            lineno: ln
+            colno: co
+        )
+    }
+    # `platform.oskind.linux` -- an arm of a type reached THROUGH its unit.
+    # The parent is a dotted path of its own, so the type must be looked up
+    # from that unit rather than from the one being evaluated.
+    if parentIsDotted then {
+        qa: evalConstArmViaUnit :st :frame :ast :gpId :gcId nameCount: nameCount.stringview
+        if (qa.kind.none) == false then return qa
+    }
+    return ztypes.noConst
+}
+
 evalConstNode: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    n: Node.view
+    nid: zast.nodeid
 } out ztypes.cval is {
-    match (
-        n
-    ) case expression then {
-        return (evalConstNode :st :frame :ast :unitDecl n: (ast.nodes.get i: n.expression.u64))
-    } case atomid then {
-        an: zast.nameTextCopy :ast ref: n.name
+    plan: evalConstPlan :ast :nid
+    if plan.arm == 1 then return (evalConstNode :st :frame :ast :unitDecl nid: plan.innerId)
+    if plan.arm == 2 then {
+        an: zast.nameTextCopy :ast ref: plan.nameId
         if an.length == 0 then return ztypes.noConst
         if (isNumericLiteralName name: an.stringview) then {
             return (constLiteralValue name: an.stringview)
         }
         return (constValueOfMember :st :frame :ast :unitDecl defName: an.stringview)
-    } case atomstring then {
-        # one chunk and nothing else is a plain literal. An INTERPOLATION has a
-        # value only at run time, and a unit-level definition is required to be
-        # a compile-time constant, so this is a case where the value was
-        # genuinely required and could not be produced -- it reports rather
-        # than falling silent the way an unrecognised shape does.
-        parts: n.stringparts.length
-        if parts == 1 then {
-            firstPartNode: ast.nodes.get i: (n.stringparts.get i: 0).u64
-            match (
-                firstPartNode
-            ) case stringchunk then {
-                return (ztypes.makeStrConst (constInternString
-                    :st
-                    text: firstPartNode.text.stringview
-                ))
-            } else null
-        }
-        if parts == 0 then return (ztypes.makeStrConst (constInternString :st text: ""))
-        (constFailRecord
+    }
+    if plan.arm == 3 then {
+        return (evalConstString
             :st
-            kind: ztypes.constfailkind.interp
-            nodeid: n.nodeid
-            lineno: n.lineno
-            colno: n.colno
-            width: 1
+            :ast
+            :nid
+            parts: plan.parts
+            partId: plan.innerId
+            ln: plan.ln
+            co: plan.co
         )
-        return ztypes.noConst
-    } case dottedpath then {
-        nameCount: String
-        {
-            chn: ast.nodes.get i: n.child.u64
-            if chn.atomid then nameCount = zast.nameTextCopy :ast ref: chn.name
-        }
-        if nameCount.length == 0 then return ztypes.noConst
-        pn: ast.nodes.get i: n.parent.u64
-        pt: String
-        if pn.atomid then pt = zast.nameTextCopy :ast ref: pn.name
-        if pt.length > 0 then {
-            pbv: (constOfNamedBase
-                :st
-                :frame
-                :unitDecl
-                :ast
-                :n
-                pt: pt.stringview
-                nameCount: nameCount.stringview
-            )
-            if (pbv.kind.none) == false then return pbv
-        }
-        # `platform.os.linux` -- the ARM-PREDICATE form, asked FIRST for the
-        # same reason the atomid case asks the constant first: `tsrc.os` is a
-        # constant whose TYPE is a variant, so reading it as a qualified type
-        # name would find that variant and answer with an arm where the
-        # question was "does it hold this one".
-        pv: evalConstNode :st :frame :ast :unitDecl n: pn
-        if pv.kind.armKind then {
-            cnid: zast.poolFind pool: ast.names text: nameCount.stringview
-            if cnid.isZero then return ztypes.noConst
-            return (boolConst :st :frame :ast v: (pv.armName == cnid))
-        }
-        # a literal receiver (`"abcd".length`) or a qualified constant
-        # (`quadfloat.LIB.length`): the parent is not a bare atom, so its value
-        # comes from the recursive walk above rather than from a member read.
-        if pv.kind.svalKind then {
-            return (constStringDotted
-                :st
-                v: pv
-                name: nameCount.stringview
-                nodeid: n.nodeid
-                lineno: n.lineno
-                colno: n.colno
-            )
-        }
-        # `platform.oskind.linux` -- an arm of a type reached THROUGH its unit.
-        # The parent is a dotted path of its own, so the type must be looked up
-        # from that unit rather than from the one being evaluated.
-        if pn.dottedpath then {
-            gp: ast.nodes.get i: pn.parent.u64
-            gc: ast.nodes.get i: pn.child.u64
-            if gp.atomid when gc.atomid then {
-                gpt: zast.nameTextCopy :ast ref: gp.name
-                gct: zast.nameTextCopy :ast ref: gc.name
-                if gpt.length > 0 when gct.length > 0 then {
-                    if (nameDenotesUnit
-                        :st
-                        :frame
-
-                        nameId: (nameIdOf :ast name: gpt.stringview)
-                    ) then {
-                        lookupUnit9: (unitDeclOfNameOrOwn :st :frame nameId: gp.name)
-                        qa: (constArmRead
-                            :st
-                            :frame
-                            :ast
-
-                            lookupUnit: lookupUnit9
-                            typeName: gct.stringview
-                            armName: nameCount.stringview
-                        )
-                        if (qa.kind.none) == false then return qa
-                    }
-                }
-            }
-        }
-        return ztypes.noConst
-    } case binop then {
-        return (constOfBinop :st :frame :ast :unitDecl :n)
-    } case call then {
-        return (constOfCall :st :frame :ast :unitDecl :n)
-    } case ifexpr then {
-        fb: foldIfBranch :st :frame :ast :unitDecl :n
-        if (fb.known) == false then return ztypes.noConst
-        if fb.stmt.isZero then return ztypes.noConst
-        return (constBlockValue
+    }
+    if plan.arm == 4 then {
+        return (evalConstDotted
             :st
             :frame
             :ast
-
             :unitDecl
-            block: (ast.nodes.get i: fb.stmt.u64)
+            :nid
+            parentId: plan.parentId
+            childId: plan.childId
+            ln: plan.ln
+            co: plan.co
         )
-    } else {
-        return ztypes.noConst
     }
+    if plan.arm == 5 then return (constOfBinop :st :frame :ast :unitDecl :nid)
+    if plan.arm == 6 then return (constOfCall :st :frame :ast :unitDecl :nid)
+    if plan.arm == 7 then {
+        fb: foldIfBranch :st :frame :ast :unitDecl :nid
+        if (fb.known) == false then return ztypes.noConst
+        if fb.stmt.isZero then return ztypes.noConst
+        return (constBlockValue :st :frame :ast :unitDecl nid: fb.stmt)
+    }
+    return ztypes.noConst
 }
 
 # reportUnitConstantShape -- the diagnostic for a unit-level definition whose
