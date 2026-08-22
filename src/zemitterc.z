@@ -1514,6 +1514,14 @@ nativeIsConvOf: function {ctx: Ctx.view srcPath: StringView memb: StringView} ou
         } case none then null
     }
     if (s) == false then return false
+    return (nativeIsConvMembOf :ctx :memb)
+}
+
+# nativeIsConvMembOf -- the MEMBER half of that question on its own: whether
+# `memb` is one of the conversion names every convertible type declares. It
+# asks nothing of the source type, so a caller can rule the conversion legs out
+# before building a source path for them.
+nativeIsConvMembOf: function {ctx: Ctx.view memb: StringView} out bool is {
     m: false
     {
         h: ctx.nativeConvMemb.get key: memb.asString
@@ -11716,17 +11724,23 @@ emitDottedNativeMarker: function {
     # no separate shadow test to keep in step. A typedef converts as its
     # chain end, which is where the declaration lives. Folded literal
     # conversions return earlier via nodeConstText.
-    ncChase: (typedefChaseTid
-        :symtab
-        tid: (stampIdOf
-            :symtab
-            nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64)).u64
-        )
-    )
-    ncSrcP: convSrcPathOf :symtab srcTid: ncChase
+    # the member half of the conversion question first: it needs neither the
+    # source type nor the path built from it, and a member that names no
+    # conversion is what nearly every dotted marker carries
+    ncSrcP: String
     ncHas: false
-    if ncSrcP.length > 0 then {
-        ncHas = nativeIsConvOf :ctx srcPath: ncSrcP.stringview memb: mn2.stringview
+    if (nativeIsConvMembOf :ctx memb: mn2.stringview) then {
+        ncChase: (typedefChaseTid
+            :symtab
+            tid: (stampIdOf
+                :symtab
+                nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64)).u64
+            )
+        )
+        ncSrcP = convSrcPathOf :symtab srcTid: ncChase
+        if ncSrcP.length > 0 then {
+            ncHas = nativeIsConvOf :ctx srcPath: ncSrcP.stringview memb: mn2.stringview
+        }
     }
     if ncHas then {
         ncKey: "\{ncSrcP}.\{mn2}"
