@@ -4502,7 +4502,7 @@ registerValueParam: function {
 
             :unitDecl
             :thisName
-            op: (ast.nodes.get i: pm.operation.u64)
+            opId: pm.operation
         )
         if isref then {
             (st.typing.setChildOwnership
@@ -5055,10 +5055,10 @@ paramIsBorrowReftype: function {ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     thisName: StringView
-    op: Node.view
+    opId: zast.nodeid
 } out bool is {
     # an owned copy: the walks below lend ast
-    tn: zast.nameTextCopy :ast ref: (atomNameId :ast n: op)
+    tn: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: opId.u64))
     isref: false
     if tn.stringview == "this" then {
         isref = nameIsInUnitReftype :st :ast :unitDecl name: thisName
@@ -5074,7 +5074,7 @@ paramIsBorrowReftype: function {ast: Ast
         if (isNativeValueView name: thisName) then isref = false
     } else {
         if tn.length == 0 then {
-            base: paramTypeBaseName :ast :op
+            base: paramTypeBaseName :ast op: (ast.nodes.get i: opId.u64)
             isref = isBorrowReftypeCollection name: base.stringview
         } else {
             isref = nameIsInUnitReftype :st :ast :unitDecl name: tn.stringview
@@ -5552,7 +5552,7 @@ forceUnitDef: function {
         :ast
         :unitDecl
         defName: dn.stringview
-        defn: (ast.nodes.get i: opId.u64)
+        defnId: (zast.nodeid.create from: opId.u32)
     )
     ro: resolvedByIds :st :ast unitDecl: uDecl9b name: nmId
     match (
@@ -10241,7 +10241,7 @@ descendNamed: function {
             :ast
             :unitDecl
             defName: name
-            defn: (ast.nodes.get i: bm.operation.u64)
+            defnId: (zast.nodeid.create from: bm.operation.u32)
         )
     }
     if classified == false then {
@@ -10411,7 +10411,7 @@ resolveDef: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    defn: Node
+    defnId: zast.nodeid
 } is {
     # a definition resolves in the frame it is written in, whatever path
     # asked for it. A definition the name index cannot place keeps the
@@ -10437,16 +10437,18 @@ resolveDef: function {
     # resolveDef: the demand drain, the descent, and the conformance pass. The
     # scan only queues declarations that are not yet pending, resolving or
     # resolved, so a repeat visit costs a walk and queues nothing.
-    scanDefCalls :st frame: rf :ast op: defn
+    scanDefCalls :st frame: rf :ast op: (ast.nodes.get i: defnId.u64)
     st.typing.declSetResolving declId: resolvedDecl mark: true
     # A containment edge is ONE hop: this def's own resolution starts a
     # fresh context (its field/arm legs re-arm the flag), so an outer field
     # bracket never taints nested param/return resolution.
     prevContainmentEdge: st.typing.inContainmentEdge
     st.typing.inContainmentEdge = false
+    arm: rowArmAt :ast nid: defnId
     match (
-        defn
+        arm
     ) case functiondef then {
+        fr: fnRefAt :ast nid: defnId
         fid: (resolveFunction
             :st
             frame: rf
@@ -10455,17 +10457,16 @@ resolveDef: function {
             :unitDecl
             ownerNameId: zast.nameid
             :defName
-            fnId: defn.nodeid
+            fnId: defnId
             thisName: ""
             skipThisType: false
         )
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
-            nid: defn.nodeid.u64
+            nid: defnId.u64
             tid: (ztypes.tid.create from: fid.u64)
         )
-        if (isGeneratorReturn :ast oId: defn.returntype) then {
-            dfr: fnRefOf fnode: defn
+        if (isGeneratorReturn :ast oId: fr.returntype) then {
             (synthGeneratorIterClass
                 :st
                 frame: rf
@@ -10474,12 +10475,12 @@ resolveDef: function {
                 :unitDecl
                 fnName: defName
                 thisName: ""
-                fnode: dfr
+                fnode: fr
             )
         }
     } case expression then {
-        dfx: ast.nodes.getMut i: defn.expression.u64
-        resolveDef :st frame: rf :ast :unitDecl :defName defn: dfx
+        wrap: exprRefAt :ast nid: defnId
+        resolveDef :st frame: rf :ast :unitDecl :defName defnId: wrap.expression
         exprid: (resolvedByIds
             :st
             :ast
@@ -10491,12 +10492,19 @@ resolveDef: function {
         ) case some then {
             (ztyping.nodeTypeSet
                 tbl: st.typing.nodeType
-                nid: defn.nodeid.u64
+                nid: defnId.u64
                 tid: (ztypes.tid.create from: exprid.u64)
             )
         } case none then null
     } case datablock then {
-        resolveData :st frame: rf :ast :unitDecl :defName dnode: defn
+        {
+            dn: ast.nodes.get i: defnId.u64
+            match (
+                dn
+            ) case datablock then {
+                resolveData :st frame: rf :ast :unitDecl :defName dnode: dn
+            } else null
+        }
         dbrid: (resolvedByIds
             :st
             :ast
@@ -10508,21 +10516,26 @@ resolveDef: function {
         ) case some then {
             (ztyping.nodeTypeSet
                 tbl: st.typing.nodeType
-                nid: defn.nodeid.u64
+                nid: defnId.u64
                 tid: (ztypes.tid.create from: dbrid.u64)
             )
         } case none then null
     } case objectdef then {
-        (resolveObjectDef
-            :st
-            :ast
-            :unitDecl
-            :rf
-            :defName
-            :defn
-        )
+        od: ast.nodes.getMut i: defnId.u64
+        match (
+            od
+        ) case objectdef then {
+            (resolveObjectDef
+                :st
+                :ast
+                :unitDecl
+                :rf
+                :defName
+                defn: od
+            )
+        } else null
     } case dottedpath then {
-        ddr: dpRefOf dp: defn
+        ddr: dpRefAt :ast nid: defnId
         (resolveDottedDef
             :st
             :ast
@@ -11468,7 +11481,7 @@ resolveDemandedReexport: function {
             :ast
             unitDecl: puDecl
             defName: defNameText
-            defn: (ast.nodes.get i: opId.u64)
+            defnId: (zast.nodeid.create from: opId.u32)
         )
     }
     # A unit-level CONSTANT is a definition like any other, and resolveDef
@@ -11485,7 +11498,7 @@ resolveDemandedReexport: function {
         :ast
         unitDecl: puDecl
         defName: defNameText
-        defn: (ast.nodes.get i: opId.u64)
+        defnId: (zast.nodeid.create from: opId.u32)
     )
 }
 # resolveDemandedNamespace -- a demanded `unit { … }` resolves as the namespace it
@@ -13059,7 +13072,7 @@ resolveUnitMembers: function {
                                 :ast
                                 :unitDecl
                                 defName: mName.stringview
-                                defn: (ast.nodes.get i: bmNode.operation.u64)
+                                defnId: (zast.nodeid.create from: bmNode.operation.u32)
                             )
                         }
                         if (md.isZero) == false when (speculative) == false then {
@@ -30144,6 +30157,8 @@ rowarm: variant {
     assignment: null
     stringchunk: null
     functiondef: null
+    objectdef: null
+    datablock: null
     other: null
 }
 
@@ -30189,6 +30204,10 @@ rowArmAt: function {ast: Ast.view nid: zast.nodeid} out rowarm is {
         return rowarm.stringchunk
     } case functiondef then {
         return rowarm.functiondef
+    } case objectdef then {
+        return rowarm.objectdef
+    } case datablock then {
+        return rowarm.datablock
     } else {
         return rowarm.other
     }
@@ -30637,6 +30656,53 @@ fnRefAt: function {ast: Ast.view nid: zast.nodeid} out fnref is {
     )
 }
 
+# objref -- what a definition walk reads of an object-definition row: the
+# kind, the is/as item counts, the native flag and the position, as plain
+# values. Items are read by index through zast.objIsItemAt / objAsItemAt.
+objref: record {
+    nid: zast.nodeid
+    kind: zast.objectkind
+    nis: u64
+    nas: u64
+    isNative: bool
+    lineno: u32
+    colno: u32
+}
+
+# objRefOf -- the object-definition row `o` as plain values.
+objRefOf: function {o: zast.ObjectDefData.view} out objref is {
+    return (objref
+        nid: o.nodeid
+        kind: o.kind
+        nis: o.isItems.length
+        nas: o.asItems.length
+        isNative: o.isNative
+        lineno: o.lineno
+        colno: o.colno
+    )
+}
+
+# objRefAt -- the object-definition row `nid` as plain values (all zero for
+# any other arm).
+objRefAt: function {ast: Ast.view nid: zast.nodeid} out objref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case objectdef then {
+        return (objRefOf o: n)
+    } else null
+    zn: zast.nodeid
+    return (objref
+        nid: zn
+        kind: zast.objectkind.recordDef
+        nis: 0
+        nas: 0
+        isNative: false
+        lineno: 0
+        colno: 0
+    )
+}
+
 # checkValueAt -- type the value row `nid`, dispatching by arm. A handler
 # that takes its row as plain values is reached with no row view held; every
 # other arm is walked by checkValue through the row view fetched here.
@@ -30944,27 +31010,27 @@ scanFnSig: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     ast: Ast
-    op: Node.view
+    opId: zast.nodeid
 } is {
-    match (
-        op
-    ) case functiondef then {
-        scanTypeNameOpt :st :frame :unitDecl :ast oId: op.returntype
-        piter: op.parameters.iterate
-        for pmId: piter loop {
-            pm: argRefAt :ast nid: (zast.nodeid.create from: pmId.u32)
-            if (pm.nid.isZero) == false then {
-                bn: baseTypeName :ast n: (ast.nodes.get i: pm.operation.u64)
-                if bn.length > 0 then (maybeWalkMethods
-                    :st
-                    :frame
-                    :unitDecl
-                    :ast
-                    name: bn.stringview
-                )
-            }
+    fr: fnRefAt :ast nid: opId
+    if fr.nid.isZero then return
+    scanTypeNameOpt :st :frame :unitDecl :ast oId: fr.returntype
+    kP: u64
+    for kP < fr.nparams loop {
+        pmId: (zast.fnParamAt :ast nid: fr.nid i: kP).u32
+        kP = kP + 1
+        pm: argRefAt :ast nid: (zast.nodeid.create from: pmId.u32)
+        if (pm.nid.isZero) == false then {
+            bn: baseTypeName :ast n: (ast.nodes.get i: pm.operation.u64)
+            if bn.length > 0 then (maybeWalkMethods
+                :st
+                :frame
+                :unitDecl
+                :ast
+                name: bn.stringview
+            )
         }
-    } else null
+    }
 }
 
 # scanMemberSignatures -- replay one definition's signature-resolution order:
@@ -30979,7 +31045,7 @@ scanMemberSignatures: function {
     op: Node.view
 } is {
     if (nodeIsFunctiondef o: op) then {
-        scanFnSig :st :frame :unitDecl :ast :op
+        scanFnSig :st :frame :unitDecl :ast opId: (nodeId n: op)
     } else {
         match (
             op
@@ -31003,7 +31069,7 @@ scanMemberSignatures: function {
                         :frame
                         :unitDecl
                         :ast
-                        op: (ast.nodes.get i: im.operation.u64)
+                        opId: im.operation
                     )
                 }
             }
@@ -31015,7 +31081,7 @@ scanMemberSignatures: function {
                         :frame
                         :unitDecl
                         :ast
-                        op: (ast.nodes.get i: am.operation.u64)
+                        opId: am.operation
                     )
                 }
             }
@@ -31166,12 +31232,13 @@ walkDeclaredDef: function {
         prevL9U: st.typing.synthOwnerUnit
         prevL9N: st.typing.synthOwnerName
         prevT: st.typing.currentThisTid
+        cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: mopId.u32)
         (checkFunctionBody
             :st
             frame: rf
             :unitDecl
             defName: name
-            defn: (ast.nodes.get i: mopId.u64)
+            fn: cfbFr
             thisName: ""
             thisTid: ztypes.tid
             :ast
@@ -31243,7 +31310,7 @@ walkOwnerMethods: function {
                 :ast
                 typeName: name
                 typeTid: (ztypes.tid.create from: owTid)
-                op: (ast.nodes.get i: mem.operation.u64)
+                opId: mem.operation
             )
             st.typing.synthLabel = prev
             st.typing.synthOwnerUnit = prevU
@@ -31313,13 +31380,14 @@ checkMethodBodies: function {
     ast: Ast
     typeName: StringView
     typeTid: ztypes.tid
-    op: Node.view
+    opId: zast.nodeid
 } is {
-    match (
-        op
-    ) case objectdef then {
-        iiter: op.isItems.iterate
-        for imId: iiter loop {
+    orf: objRefAt :ast nid: opId
+    if (orf.nid.isZero) == false then {
+        kI: u64
+        for kI < orf.nis loop {
+            imId: (zast.objIsItemAt :ast nid: opId i: kI).u32
+            kI = kI + 1
             # the member is read through a view scoped to this block: the
             # body check below lends ast
             imIsFn: false
@@ -31353,12 +31421,13 @@ checkMethodBodies: function {
                     )
                     qn: "\{typeName}.\{mname}"
                     declId93: (methodDeclOf :st :ast :unitDecl :typeName memberId: imName)
+                    imFr: fnRefAt :ast nid: imOp
                     (checkFunctionBody
                         :st
                         :frame
                         :unitDecl
                         defName: qn.stringview
-                        defn: (ast.nodes.get i: imOp.u64)
+                        fn: imFr
                         thisName: typeName
                         thisTid: typeTid
                         :ast
@@ -31367,8 +31436,10 @@ checkMethodBodies: function {
                 }
             }
         }
-        aiter: op.asItems.iterate
-        for amId: aiter loop {
+        kA: u64
+        for kA < orf.nas loop {
+            amId: (zast.objAsItemAt :ast nid: opId i: kA).u32
+            kA = kA + 1
             # the member is read through a view scoped to this block: the
             # body check below lends ast
             amIsFn: false
@@ -31400,12 +31471,13 @@ checkMethodBodies: function {
                     )
                     qn2: "\{typeName}.\{monoName}"
                     declId94: (methodDeclOf :st :ast :unitDecl :typeName memberId: amName)
+                    amFr: fnRefAt :ast nid: amOp
                     (checkFunctionBody
                         :st
                         :frame
                         :unitDecl
                         defName: qn2.stringview
-                        defn: (ast.nodes.get i: amOp.u64)
+                        fn: amFr
                         thisName: typeName
                         thisTid: typeTid
                         :ast
@@ -31414,7 +31486,7 @@ checkMethodBodies: function {
                 }
             }
         }
-    } else null
+    }
 }
 
 # lastStmtLineId / lastStmtLineIdAt -- the node id of a function body's last
@@ -31775,7 +31847,7 @@ checkFunctionBody: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    defn: Node.view
+    fn: fnref
     thisName: StringView
     thisTid: ztypes.tid
     ast: Ast
@@ -31786,9 +31858,7 @@ checkFunctionBody: function {
     # instance walk) keeps the frame it was given.
     rf: frame
     if (declId.isZero) == false then rf = declId
-    match (
-        defn
-    ) case functiondef then {
+    if (fn.nid.isZero) == false then {
         # the function's own declaration, when the caller passed one whose
         # type IS this function (a free function, a namespace member, a
         # method), is its identity: a namespace member is not found by the
@@ -31834,13 +31904,13 @@ checkFunctionBody: function {
                         frame: rf
                         :unitDecl
                         :ast
-                        op: (ast.nodes.get i: defn.nodeid.u64)
+                        opId: fn.nid
                     )
                 }
             }
         }
         maybeWalkMethods :st frame: rf :unitDecl :ast name: defName
-        hasBody: defn.body > 0
+        hasBody: fn.body > 0
         isGenDef: false
         # the function's own tid, off the Decl the caller passed; a defName is
         # display only (a mono walk's owner is a registry label such as
@@ -31864,8 +31934,10 @@ checkFunctionBody: function {
             if isGenDef then st.typing.suppressParamStamps = true
             sname: "function:\{defName}"
             st.push name: sname.stringview parent: rf
-            piter: defn.parameters.iterate
-            for pmId: piter loop {
+            kP: u64
+            for kP < fn.nparams loop {
+                pmId: (zast.fnParamAt :ast nid: fn.nid i: kP).u32
+                kP = kP + 1
                 pm: argRefAt :ast nid: (zast.nodeid.create from: pmId.u32)
                 if (pm.nid.isZero) == false then {
                     (bindFunctionParam
@@ -31895,20 +31967,19 @@ checkFunctionBody: function {
                 o: (st.typing.funcReturnsBorrow.get key: fitid)
                 d: false
             )
-            walkBodyAt :st :unitDecl :ast bodyId: defn.body
+            walkBodyAt :st :unitDecl :ast bodyId: fn.body
             st.typing.currentReturnTypeId = prevRet
             st.typing.currentReturnsBorrow = prevRb
-            cfr: fnRefOf fnode: defn
             (coerceImplicitReturn
                 :st
                 :ast
-                defn: cfr
+                defn: fn
                 fnTid: (ztypes.tid.create from: (optU64Or o: rgot d: ztypes.tid))
             )
             st.pop
             st.typing.suppressParamStamps = prevSup
         }
-    } else null
+    }
 }
 
 
@@ -31962,12 +32033,13 @@ walkUnitTemplateBodies: function {
                     parentDeclId: tdecl
                     nameId: bm.name
                 )
+                cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: bm.operation.u32)
                 (checkFunctionBody
                     :st
                     :frame
                     :unitDecl
                     defName: dn.stringview
-                    defn: (ast.nodes.get i: bm.operation.u64)
+                    fn: cfbFr
                     thisName: ""
                     thisTid: ztypes.tid
                     :ast
@@ -32105,12 +32177,13 @@ checkNamespaceBodies: function {
             } else {
                 defNameText: zast.nameTextAt :ast ref: bm.name
                 bmDecl9: st.typing.declFindChild parentDeclId: nsDecl nameId: bm.name
+                cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: bm.operation.u32)
                 (checkFunctionBody
                     :st
                     frame: rf
                     :unitDecl
                     defName: defNameText.stringview
-                    defn: (ast.nodes.get i: bm.operation.u64)
+                    fn: cfbFr
                     thisName: ""
                     thisTid: ztypes.tid
                     :ast
@@ -32144,12 +32217,13 @@ checkUnitBodies: function {
                 ) then {
                     foundMain = true
                     hDeclId2: declOfUnitDefIds :st :unitDecl nameId: mm.name
+                    cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: mm.operation.u32)
                     (checkFunctionBody
                         :st
                         :frame
                         :unitDecl
                         defName: memberName.stringview
-                        defn: (ast.nodes.get i: mm.operation.u64)
+                        fn: cfbFr
                         thisName: ""
                         thisTid: ztypes.tid
                         :ast
@@ -32212,12 +32286,13 @@ checkUnitBodies: function {
                     )
                 } else if defName.stringview != "main" then {
                     hDeclId: declOfUnitDefIds :st :unitDecl nameId: bm.name
+                    cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: bm.operation.u32)
                     (checkFunctionBody
                         :st
                         :frame
                         :unitDecl
                         defName: defName.stringview
-                        defn: (ast.nodes.get i: bm.operation.u64)
+                        fn: cfbFr
                         thisName: ""
                         thisTid: ztypes.tid
                         :ast
@@ -32550,12 +32625,13 @@ stampOneFnMono: function {
     prevT: st.typing.currentThisTid
     tplDecl29Org: st.reg.genericOriginOf tid: monoId
     fnTemplateDecl: declOfTypeId :st tid: tplDecl29Org
+    cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: fnOpId.u32)
     (checkFunctionBody
         :st
         :frame
         :unitDecl
         defName: monoNm.stringview
-        defn: (ast.nodes.get i: fnOpId.u64)
+        fn: cfbFr
         thisName: ""
         thisTid: ztypes.tid
         :ast
@@ -32703,12 +32779,13 @@ stampOneClassMono: function {
         q: "\{monoNm}.\{mnm}"
         tplDecl39Org: st.reg.genericOriginOf tid: monoId
         classTemplateDecl: declOfTypeId :st tid: tplDecl39Org
+        cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: mop.u32)
         (checkFunctionBody
             :st
             :frame
             :unitDecl
             defName: q.stringview
-            defn: (ast.nodes.get i: mop.u64)
+            fn: cfbFr
             thisName: monoNm.stringview
             thisTid: monoId
             :ast
@@ -33027,12 +33104,13 @@ stampOneUnitMono: function {
             }
             tplDecl49Org: st.reg.genericOriginOf tid: monoId
             unitTemplateDecl: declOfTypeId :st tid: tplDecl49Org
+            cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: bm2.operation.u32)
             (checkFunctionBody
                 :st
                 :frame
                 :unitDecl
                 defName: q.stringview
-                defn: (ast.nodes.get i: bm2.operation.u64)
+                fn: cfbFr
                 thisName: ""
                 thisTid: ztypes.tid
                 :ast
@@ -35565,11 +35643,13 @@ resolveConstantDef: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    defn: Node.view
+    defnId: zast.nodeid
 } is {
+    arm: rowArmAt :ast nid: defnId
     match (
-        defn
+        arm
     ) case expression then {
+        wrap: exprRefAt :ast nid: defnId
         (resolveUnitIfDef
             :st
             :frame
@@ -35577,40 +35657,40 @@ resolveConstantDef: function {
 
             :unitDecl
             :defName
-            wrapperId: defn.nodeid
-            nid: defn.expression
+            wrapperId: defnId
+            nid: wrap.expression
         )
-        iexL: ast.nodes.get i: defn.expression.u64
-        resolveConstantDef :st :frame :ast :unitDecl :defName defn: iexL
+        resolveConstantDef :st :frame :ast :unitDecl :defName defnId: wrap.expression
     } case dottedpath then {
         # a width-suffixed numeric literal (`1.u32`) is a dotted path over the
         # literal, not an atom: the child names the constant's type
+        dr: dpRefAt :ast nid: defnId
         sfLit: String
         sfTy: String
         {
-            sfB: ast.nodes.get i: defn.parent.u64
+            sfB: ast.nodes.get i: dr.parent.u64
             if sfB.atomid then sfLit = zast.nameTextCopy :ast ref: sfB.name
         }
         {
-            sfC: ast.nodes.get i: defn.child.u64
+            sfC: ast.nodes.get i: dr.child.u64
             if sfC.atomid then sfTy = zast.nameTextCopy :ast ref: sfC.name
         }
         if sfLit.length > 0 when sfTy.length > 0 then {
-            ddr: dpRefOf dp: defn
             (resolveDottedConstantDef
                 :ast
                 :st
                 :unitDecl
                 :frame
                 :defName
-                defn: ddr
+                defn: dr
                 sfLit: sfLit.stringview
                 sfTy: sfTy.stringview
             )
         }
     } case atomid then {
+        ar: atomRefAt :ast nid: defnId
         # an owned copy: the lookup below lends ast
-        dfN: zast.nameTextCopy :ast ref: defn.name
+        dfN: zast.nameTextCopy :ast ref: ar.name
         if (isNumericLiteralName name: dfN.stringview) then {
             base: "i64"
             if (isFloatLiteralName name: dfN.stringview) then base = "f64"
@@ -35633,36 +35713,32 @@ resolveConstantDef: function {
         }
         # a NON-numeric bare name is the unit-level alias form (`Same: Holder`),
         # which resolveDef registers -- it is not this pass's business.
-    } else {
+    } case call then {
         # A construction is not a literal. The PARENTHESISED call is the
         # generic-unit instantiation form (`intmath: (genmath t: i64)`) and
         # stays legal -- its callee names a UNIT, which is the test here; the
         # definition arms (functiondef, objectdef, unitdef, datablock) reach
         # this leg too and must never be reported.
-        match (
-            defn
-        ) case call then {
-            cdr: callRefOf call: defn
-            (resolveCalledConstantDef
-                :ast
-                :st
-                :unitDecl
-                :frame
-                :defName
-                defn: cdr
-            )
-        } else null
-        if (isBinopNode n: defn) then {
-            (resolveBinopConstantDef
-                :ast
-                :st
-                :unitDecl
-                :frame
-                :defName
-                :defn
-            )
-        }
-    }
+        cdr: callRefAt :ast nid: defnId
+        (resolveCalledConstantDef
+            :ast
+            :st
+            :unitDecl
+            :frame
+            :defName
+            defn: cdr
+        )
+    } case binop then {
+        bn: ast.nodes.getMut i: defnId.u64
+        (resolveBinopConstantDef
+            :ast
+            :st
+            :unitDecl
+            :frame
+            :defName
+            defn: bn
+        )
+    } else null
 }
 
 # constRegisterValueType -- give a constant the type of its VALUE, for the
@@ -35810,10 +35886,10 @@ resolveConstantMember: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    defn: Node
+    defnId: zast.nodeid
 } is {
     constFailClear :st
-    resolveConstantDef :st :frame :ast :unitDecl :defName :defn
+    resolveConstantDef :st :frame :ast :unitDecl :defName :defnId
     cvv: constValueOfMember :st :frame :ast :unitDecl :defName
     constRegisterValueType :st :frame :ast :unitDecl :defName v: cvv
     reportPendingConstFail :st
@@ -35939,7 +36015,7 @@ resolveConstantDefsIn: function {
 
                             :unitDecl
                             defName: defName.stringview
-                            defn: (ast.nodes.get i: bmNode.operation.u64)
+                            defnId: (zast.nodeid.create from: bmNode.operation.u32)
                         )
                     }
                 }
@@ -36264,7 +36340,7 @@ resolveNamedDefsIn: function {
                             :ast
                             :unitDecl
                             defName: dn.stringview
-                            defn: (ast.nodes.get i: bmNode.operation.u64)
+                            defnId: (zast.nodeid.create from: bmNode.operation.u32)
                         )
                     }
                 }
@@ -36525,7 +36601,7 @@ lowerGeneratorsInUnit: function {
                         :st
                         :ast
                         typeName: tnm.stringview
-                        defn: (ast.nodes.get i: oel.operation.u64)
+                        defnId: (zast.nodeid.create from: oel.operation.u32)
                         dst: pendingCls
                     )
                 }
@@ -36588,15 +36664,13 @@ lowerGeneratorMethods: function {
     ast: Ast
     st: zenv.ZSymbolTable
     typeName: StringView
-    defn: Node.view
-    dst: (List Node).view
+    defnId: zast.nodeid
+    dst: List Node
 } is {
-    match (
-        defn
-    ) case objectdef then {
-        lowerGeneratorItems :st :ast :typeName items: defn.asItems :dst
-        lowerGeneratorItems :st :ast :typeName items: defn.isItems :dst
-    } else null
+    orf: objRefAt :ast nid: defnId
+    if orf.nid.isZero then return
+    lowerGeneratorItems :st :ast :typeName objId: defnId asBlock: true :dst
+    lowerGeneratorItems :st :ast :typeName objId: defnId asBlock: false :dst
 }
 
 # lower every generator function in a unit to its iterator class.
@@ -36604,11 +36678,14 @@ lowerGeneratorItems: function {
     ast: Ast
     st: zenv.ZSymbolTable
     typeName: StringView
-    items: (ListVal u32).view
+    objId: zast.nodeid
+    asBlock: bool
     dst: List Node
 } is {
+    orf: objRefAt :ast nid: objId
     bi: u64
-    bn: items.length
+    bn: orf.nis
+    if asBlock then bn = orf.nas
     for bi < bn loop {
         isCand: false
         # The candidacy read is scoped so it ENDS before the mutable re-read
@@ -36616,7 +36693,12 @@ lowerGeneratorItems: function {
         # `bm2` -- the same element, taken to write through -- needs it
         # exclusively. One mutable element reference at a time.
         {
-            bmId: items.get i: bi
+            bmId: u32
+            if asBlock then {
+                bmId = (zast.objAsItemAt :ast nid: objId i: bi).u32
+            } else {
+                bmId = (zast.objIsItemAt :ast nid: objId i: bi).u32
+            }
             bm: ast.nodes.get i: bmId.u64
             match (
                 bm
@@ -36637,7 +36719,12 @@ lowerGeneratorItems: function {
             } else null
         }
         if isCand then {
-            bm2Id: items.get i: bi
+            bm2Id: u32
+            if asBlock then {
+                bm2Id = (zast.objAsItemAt :ast nid: objId i: bi).u32
+            } else {
+                bm2Id = (zast.objIsItemAt :ast nid: objId i: bi).u32
+            }
             # the candidate's operation and name are read through a view scoped
             # to this block (an owned name copy): the lowering below lends ast,
             # and the rewritten operation is written back through its own
