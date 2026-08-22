@@ -2007,6 +2007,18 @@ isNumericLiteralName: function {name: StringView} out bool is {
     return false
 }
 
+# isNumericLiteralNameAt -- the same question asked of an interned name id.
+# The text is read through a borrow scoped to the block, so a caller that wants
+# only the answer copies nothing; a zero ref reads the sentinel empty text.
+isNumericLiteralNameAt: function {ast: Ast.view ref: zast.nameid} out bool is {
+    r9nl: false
+    {
+        t9nl: zast.nameTextAt :ast :ref
+        r9nl = isNumericLiteralName name: t9nl.stringview
+    }
+    return r9nl
+}
+
 # markerText -- a field or parameter marker's source spelling, for diagnostics.
 markerText: function {o: ztypes.zparamownership} out String is {
     match (
@@ -15414,12 +15426,13 @@ paramTypeId: function {
     # resolves through its peeled base: the marker node is recorded under the
     # current unit and left unstamped, so read the inner cross-unit ref that
     # stampTyperefs resolved. The row is read through a view scoped to this
-    # block (owned name copies): the lookups below lend ast.
+    # block, and what leaves the block are NAME IDS: an id is a scalar, so it
+    # holds no lock on ast, and the lookups below lend ast.
     peelTo: zast.nodeid
     onid: zast.nodeid
-    an: String
-    bn: String
-    dcn: String
+    anId: zast.nameid
+    bnId: zast.nameid
+    dcnId: zast.nameid
     {
         op: ast.nodes.get i: opNid.u64
         match (
@@ -15429,30 +15442,34 @@ paramTypeId: function {
             if (isStripMarker name: ocn.stringview) then peelTo = op.parent
         } else null
         onid = nodeId n: op
-        an = zast.nameTextCopy :ast ref: (atomNameId :ast n: op)
-        bn = zast.nameTextCopy :ast ref: (rootNameIdOf :ast n: op)
-        dcn = zast.nameTextCopy :ast ref: (dottedChildNameId :ast n: op)
+        anId = atomNameId :ast n: op
+        bnId = rootNameIdOf :ast n: op
+        dcnId = dottedChildNameId :ast n: op
     }
     if (peelTo.isZero) == false then return (paramTypeId :st :ast :unitDecl opNid: peelTo)
     r: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: onid.u64
     if r > 0 then return r
-    ano: walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: an.stringview
+    ano: walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: anId
     anid: optU64Or o: ano d: 0
     if anid > 0 then return anid
     # a dotted typeref naming a variant/union ARM is an arm DEFAULT:
     # the parameter's type is the tagged parent.
-    if bn.length > 0 then {
+    if (bnId.isZero) == false then {
         # a dotted numeric literal (0.u64) declares the SUFFIX type: the
-        # body read must carry it, not fall to 0 (untyped/permissive)
+        # body read must carry it, not fall to 0 (untyped/permissive). The two
+        # shape questions are asked of the text, so it is copied HERE -- the
+        # early returns above are the common answer and pay nothing for it.
+        bn: zast.nameTextCopy :ast ref: bnId
+        dcn: zast.nameTextCopy :ast ref: dcnId
         isSfx: isNumericTypeName name: dcn.stringview
         if (isNumericLiteralName name: bn.stringview) when isSfx then {
             return (optU64Or
-                o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: dcn.stringview)
+                o: (walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: dcnId)
                 d: 0
             )
         }
         return (optU64Or
-            o: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: bn.stringview)
+            o: (walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: bnId)
             d: 0
         )
     }
@@ -21380,8 +21397,9 @@ checkNumericSuffixCast: function {
         if cbn.expression then castBaseId = cbn.expression
         pw9c = pw9c + 1
     }
-    castBase: atomName :ast n: (ast.nodes.get i: castBaseId.u64)
-    if (isNumericLiteralName name: castBase.stringview) then {
+    castBaseNm: atomNameId :ast n: (ast.nodes.get i: castBaseId.u64)
+    if (isNumericLiteralNameAt :ast ref: castBaseNm) then {
+        castBase: zast.nameTextCopy :ast ref: castBaseNm
         castChildId: atomNameId :ast n: (ast.nodes.get i: dp.child.u64)
         castOpt: walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: castChildId
         match (
@@ -26143,23 +26161,26 @@ hoistTrivialArg: function {
     # identically: a take parameter consumes it, a lock/borrow
     # parameter locks it (see docs/typechecker.pdoc, `:name` at
     # the argument site).
-    bn: bareAtomName :ast n: (ast.nodes.get i: arg.operation.u64)
-    if bn.length == 0 then {
-        bn = atomName :ast n: (ast.nodes.get i: arg.operation.u64)
+    bnId: bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
+    if bnId.isZero then {
+        bnId = atomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
     }
-    if bn.length > 0 when (typeIsReftype
+    if (bnId.isZero) == false when (typeIsReftype
         :st
         tid: (ztypes.tid.create from: vt.u64)
     ) then {
-        bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringview)
+        bvo: st.lookupVarId nameId: bnId
         match (
             bvo
         ) case some then {
             if isTake then {
+                # the only leg that spells the name: the diagnostics it may
+                # raise are written from the text
+                bnT: zast.nameTextCopy :ast ref: bnId
                 (consumeBareArgOwnership
                     :st
                     :ast
-                    name: bn.stringview
+                    name: bnT.stringview
                     vid: bvo
                     nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
                     lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
@@ -26170,21 +26191,15 @@ hoistTrivialArg: function {
                     (lockCallArg
                         :st
                         pool: ast.names
-                        nameId: (nameIdOf :ast name: bn.stringview)
+                        nameId: bnId
                         callId: call.nid.u64
                         shared: isViewArg
                         nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
                         lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
                         colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
                     )
-                    if lockRoot.isZero then lockRoot = (nameIdOf
-                        :ast
-                        name: bn.stringview
-                    )
-                    if isDeclLock then st.typing.lastLockParamRoot = (nameIdOf
-                        :ast
-                        name: bn.stringview
-                    )
+                    if lockRoot.isZero then lockRoot = bnId
+                    if isDeclLock then st.typing.lastLockParamRoot = bnId
                 }
             }
         } case none then null
