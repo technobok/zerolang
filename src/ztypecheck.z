@@ -5880,7 +5880,7 @@ recordConformance: function {
 # attach the ownership/lock markers stamped during resolution to a definition.
 attachMarkers: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     parentId: u64
@@ -5889,18 +5889,34 @@ attachMarkers: function {
     needsDtor: false
     miter: asItems.iterate
     for mmId: miter loop {
-        mm: ast.nodes.get i: mmId.u64
-        match (
-            mm
-        ) case namedoperation then {
-            cnm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: mm.operation.u64))
+        # the marker is read through a view scoped to this block (an owned
+        # copy of its operation's name): the recordings below lend ast
+        isMarker: false
+        mmOp: zast.nodeid
+        mmName: zast.nameid
+        cnm: String
+        {
+            mm: ast.nodes.get i: mmId.u64
+            match (
+                mm
+            ) case namedoperation then {
+                isMarker = true
+                mmOp = mm.operation
+                mmName = mm.name
+                cnm = (zast.nameTextCopy
+                    :ast
+                    ref: (atomNameId :ast n: (ast.nodes.get i: mm.operation.u64))
+                )
+            } else null
+        }
+        if isMarker then {
             # `tag: tag` is not a field of the numeric record that carries it:
             # it designates the discriminator STORAGE type so a sum type can
             # spell `u8.tag`. A program declaring no sum type never names it,
             # so it resolves when something does -- forceMemberDecl.
             lazyTag: false
             if (st.typing.eagerAll) == false when cnm.stringview == "tag" then {
-                mlbT: zast.nameTextAt :ast ref: mm.name
+                mlbT: zast.nameTextCopy :ast ref: mmName
                 if mlbT.stringview == "tag" then lazyTag = true
             }
             if (isNumericLiteralName name: cnm.stringview) == false when (lazyTag) == false then {
@@ -5911,7 +5927,7 @@ attachMarkers: function {
                     :ast
                     :unitDecl
                     thisName: ""
-                    nid: mm.operation
+                    nid: mmOp
                 )
             }
             mtid: (optionval.none u64)
@@ -5921,15 +5937,15 @@ attachMarkers: function {
 
                 :unitDecl
                 :ast
-                opNid: mm.operation
+                opNid: mmOp
             )
             match (
                 mtid
             ) case some then {
-                mlbl: zast.nameTextAt :ast ref: mm.name
+                mlbl: zast.nameTextCopy :ast ref: mmName
                 (st.typing.setMemberType
                     parentTypeId: (ztypes.tid.create from: parentId.u64)
-                    nameId: mm.name
+                    nameId: mmName
                     childTypeId: mtid
                 )
                 if (st.reg.needsDestructor typeId: (ztypes.tid.create from: mtid.u64)) then needsDtor = true
@@ -5943,8 +5959,8 @@ attachMarkers: function {
                     label: mlbl.stringview
                 )
             } case none then {
-                if (isLabelValue op: (ast.nodes.get i: mm.operation.u64)) then {
-                    amlbl: zast.nameTextAt :ast ref: mm.name
+                if (isLabelValue op: (ast.nodes.get i: mmOp.u64)) then {
+                    amlbl: zast.nameTextCopy :ast ref: mmName
                     amlid: (resolveAtomType
                         :st
                         :frame
@@ -5956,7 +5972,7 @@ attachMarkers: function {
                     )
                     (st.typing.setMemberType
                         parentTypeId: (ztypes.tid.create from: parentId.u64)
-                        nameId: mm.name
+                        nameId: mmName
                         childTypeId: amlid
                     )
                     acf: (st.reg.newConformance
@@ -5977,7 +5993,7 @@ attachMarkers: function {
                     )
                 }
             }
-        } else null
+        }
     }
     return needsDtor
 }
