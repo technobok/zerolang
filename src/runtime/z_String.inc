@@ -47,7 +47,8 @@ static void z_@String@_free(z_@String@_t* s) {
 
 static bool z_@String@_eq(z_@String@_t* a, z_@String@_t* b) {
     if (a == b) return true;
-    return a->size == b->size && memcmp(a->data, b->data, a->size) == 0;
+    if (a->size != b->size) return false;
+    return a->size == 0 || memcmp(a->data, b->data, a->size) == 0;
 }
 
 /* byte-wise lexicographic compare: returns -1 / 0 / 1. Shorter
@@ -72,6 +73,7 @@ static void z_@String@_reserve(z_@String@_t* s, uint64_t additional) {
 }
 
 static void z_@String@_append(z_@String@_t* s, const char* data, uint64_t len) {
+    if (len == 0) return;
     z_@String@_reserve(s, len);
     memcpy(s->data + s->size, data, len);
     s->size += len;
