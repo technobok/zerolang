@@ -3720,7 +3720,8 @@ resolveTyperefShell: function {
     match (
         typeExpr
     ) case atomid then {
-        teR: ast.names.texts.get i: typeExpr.name.u64
+        # an owned copy: the resolution below lends ast
+        teR: zast.nameTextCopy :ast ref: typeExpr.name
         frame93: (frameFor :st :frame :unitDecl)
         (demandDefinition
             :st
@@ -3737,7 +3738,7 @@ resolveTyperefShell: function {
             :thisName
         )
     } case labelvalue then {
-        teL: ast.names.texts.get i: typeExpr.name.u64
+        teL: zast.nameTextCopy :ast ref: typeExpr.name
         return (resolveAtomType
             :st
             :frame
@@ -32836,11 +32837,24 @@ resolveUnitIfDef: function {
     frame: ztypes.declid
     defName: StringView
     wrapperId: u32
-    n: Node.view
+    nid: zast.nodeid
 } is {
-    match (
-        n
-    ) case ifexpr then {
+    # the row is read through a view scoped to this block: the clause walks
+    # and the fold below lend ast exclusively
+    isIf: false
+    clauseIds: (ListVal u32)
+    elseId: zast.nodeid
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case ifexpr then {
+            isIf = true
+            with cit: n.clauses.iterate do for c: cit loop clauseIds.append from: c
+            elseId = n.elseclause
+        } else null
+    }
+    if isIf then {
         t: u64
         # every clause is still walked and typed -- a dead branch's type errors
         # are still type errors -- but the definition takes the type of the
@@ -32848,9 +32862,8 @@ resolveUnitIfDef: function {
         # condition is true". `w` is that type; `t` stays the first-typed
         # fallback for an `if` whose conditions did not fold.
         w: u64
-        fb: foldIfBranch :st :frame :ast :unitDecl nid: n.nodeid
-        cliter: n.clauses.iterate
-        for clauseId: cliter loop {
+        fb: foldIfBranch :st :frame :ast :unitDecl :nid
+        with cliter: clauseIds.iterate do for clauseId: cliter loop {
             # the clause and its conditions are read through views scoped to
             # blocks: the operand walks lend ast exclusively
             isClause: false
@@ -32886,10 +32899,10 @@ resolveUnitIfDef: function {
                 if fb.known when stmtId == fb.stmt then w = bt
             }
         }
-        if n.elseclause > 0 then {
-            et: constantBranchWalk :st :frame :ast :unitDecl nid: n.elseclause
+        if elseId > 0 then {
+            et: constantBranchWalk :st :frame :ast :unitDecl nid: elseId
             if t == 0 then t = et
-            if fb.known when n.elseclause == fb.stmt then w = et
+            if fb.known when elseId == fb.stmt then w = et
         }
         if fb.known when w > 0 then t = w
         if t > 0 then {
@@ -32900,7 +32913,7 @@ resolveUnitIfDef: function {
             )
             (ztyping.nodeTypeSet
                 tbl: st.typing.nodeType
-                nid: n.nodeid.u64
+                nid: nid.u64
                 tid: (ztypes.tid.create from: t.u64)
             )
             cu: (declTypeIdOf
@@ -32915,7 +32928,7 @@ resolveUnitIfDef: function {
                 )
             }
         }
-    } else null
+    }
 }
 
 # --- compile-time constant evaluation ---
@@ -34968,7 +34981,7 @@ resolveConstantDef: function {
             :unitDecl
             :defName
             wrapperId: defn.nodeid
-            n: (ast.nodes.get i: defn.expression.u64)
+            nid: defn.expression
         )
         iexL: ast.nodes.get i: defn.expression.u64
         resolveConstantDef :st :frame :ast :unitDecl :defName defn: iexL
@@ -34998,7 +35011,8 @@ resolveConstantDef: function {
             )
         }
     } case atomid then {
-        dfN: zast.nameTextAt :ast ref: defn.name
+        # an owned copy: the lookup below lends ast
+        dfN: zast.nameTextCopy :ast ref: defn.name
         if (isNumericLiteralName name: dfN.stringview) then {
             base: "i64"
             if (isFloatLiteralName name: dfN.stringview) then base = "f64"
@@ -35440,15 +35454,17 @@ seedPlatformConsts: function {
     # the mode needs no classifier: it arrives as an arm name already, having
     # been validated at the flag. An unset one seeds nothing, leaving the
     # on-disk default -- which is `spawn`, the same answer.
+    ccModeC: st.typing.ccMode.copy # copied out first: seeding lends st
+    tripleC: st.typing.targetTriple.copy
     (seedPlatformArm
         :st
         :frame
         :ast :ptid
         member: "ccmode"
         typeName: "ccmodekind"
-        armName: st.typing.ccMode.stringview
+        armName: ccModeC.stringview
     )
-    value9: (ztypes.makeStrConst (constInternString :st text: st.typing.targetTriple.stringview))
+    value9: (ztypes.makeStrConst (constInternString :st text: tripleC.stringview))
     (seedPlatformValue
         :st
         :ptid
