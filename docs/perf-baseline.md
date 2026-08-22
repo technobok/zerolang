@@ -152,6 +152,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-08-22 | 07c16e90 | [Phase 5: the `:name` shorthand lock rule made unconditional](#r-07c16e90) | 0.45s | 0.54s | 93MB / 81MB | 105 / 180 / 173 (total 458, medians of 5) | 7,412,765 | 355MB | 35.2s (1118 cases, load 1–3.6) | 105,671 |
 | 2026-08-22 | 457f609a | [allocation recovery: the walkers, the resolvers and the readable-names collision](#r-457f609a) | 0.45s | 0.54s | 94MB / 81MB | 98 / 175 / 172 (total 444, medians of 5) | 6,720,484 | 346MB | 34.9s (1119 cases, load 1.7–2.9) | 105,814 |
 | 2026-08-22 | a47a444c | [an empty view owns no buffer](#r-a47a444c) | 0.44s | 0.54s | 93MB / 81MB | 101 / 177 / 168 (total 447, medians of 5) | 5,701,889 | 346MB | 35.0s (1119 cases, load ~2.0) | 105,814 |
+| 2026-08-22 | 2f83d269 | [...and so does an empty copy](#r-a47a444c) | 0.44s | 0.54s | 93MB / 81MB | 101 / 177 / 168 (total 447, medians of 5) | 5,621,131 | 345MB | 35.0s (1120 cases, load ~2.0) | 105,830 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -1602,8 +1603,17 @@ one byte holding a terminator that nothing reads: a String is read through its `
 String as a sentinel. An empty view now yields the zero struct, which is not a new state at all:
 `z_String_create(0)` has always produced it (data NULL, capacity 0), `_free` guards it, `_reserve`
 reallocs from NULL on the first append, and `from_view` already set `capacity = sv.size`, so length
-and capacity read 0 either way. `_copy` is deliberately untouched -- an empty copy's `capacity`
-would move 1 -> 0, and that is observable.
+and capacity read 0 either way.
+
+**`_copy` took the same guard in `2f83d269`, and that one IS a visible change:** copying an empty
+String answered `capacity` 1 where `create(0)` and `from_view` answer 0 -- the value was never
+consistent between the three producers, so nothing could rely on it meaning more than ">= size",
+and all three now agree. Worth **another −80,560 allocations** (`make perf` 5,701,889 ->
+5,621,131), more than the census's 38,033: that figure counts only the program points whose blocks
+are ALL two bytes, and empty copies also ride in points of mixed size.
+`tests/fixtures/emitc_corpus/empty_string_copy` pins all three producers' length and capacity --
+recorded against the old behaviour it failed on the change, and it was the only case of 1,120 that
+noticed.
 
 **Rigorous A/B, both gcc -O1 series binaries on IDENTICAL input** (current `src` + `lib/system`,
 `perf stat -r 7`): **allocations 6,720,706 -> 5,701,889, −1,018,817 (−15.16%)**; instructions
