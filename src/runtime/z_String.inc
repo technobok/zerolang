@@ -104,9 +104,14 @@ static z_@String@_t z_@String@_create(uint64_t cap) {
 static z_@String@_t z_@String@_copy(const z_@String@_t* s) {
     z_@String@_t z = {0};
     z.size = s->size;
+    /* an empty source needs no buffer, exactly as an empty view needs none:
+       the zero struct IS an empty String. Its capacity then reads 0, which is
+       what the other two producers -- create(0) and from_view -- have always
+       answered for one. */
+    if (s->size == 0) return z;
     z.capacity = s->size + 1;
     z.data = (char*)z_xmalloc(z.capacity + 1);
-    if (s->size > 0) memcpy(z.data, s->data, s->size);
+    memcpy(z.data, s->data, s->size);
     z.data[z.size] = '\0';
     return z;
 }
