@@ -4436,7 +4436,8 @@ registerValueParam: function {
     ptnT: StringView
     pm: zast.NamedOperationData.view
 } is {
-    pname: zast.nameTextAt :ast ref: pm.name
+    # an owned copy: the registrations below lend ast
+    pname: zast.nameTextCopy :ast ref: pm.name
     cid: (resolveTyperefShell
         :st
         frame: rf
@@ -22681,7 +22682,7 @@ retakeHoldLock: function {
 checkReassignment: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     rasgn: zast.ReassignmentData.view
 } is {
     st.typing.inAssignTarget = true
@@ -23404,7 +23405,8 @@ checkForCondition: function {
         # A bare 0-arg function returning an iterator class auto-invokes:
         # its walk runs in a call scope and the atom keeps the FUNCTION
         # stamp rather than the auto-call's coerced return.
-        fbn: (zast.nameTextAt
+        # an owned copy: the walks below lend ast
+        fbn: (zast.nameTextCopy
             :ast
             ref: (bareAtomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
         )
@@ -30823,7 +30825,7 @@ checkMethodBodies: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    ast: Ast.view
+    ast: Ast
     typeName: StringView
     typeTid: ztypes.tid
     op: Node.view
@@ -30833,12 +30835,27 @@ checkMethodBodies: function {
     ) case objectdef then {
         iiter: op.isItems.iterate
         for imId: iiter loop {
-            im: ast.nodes.get i: imId.u64
-            match (
-                im
-            ) case namedoperation then {
-                if (isFunctionDefWithBody o: (ast.nodes.get i: im.operation.u64)) then {
-                    mname: zast.nameTextAt :ast ref: im.name
+            # the member is read through a view scoped to this block: the
+            # body check below lends ast
+            imIsFn: false
+            imOp: zast.nodeid
+            imName: zast.nameid
+            mname: String
+            {
+                im: ast.nodes.get i: imId.u64
+                match (
+                    im
+                ) case namedoperation then {
+                    if (isFunctionDefWithBody o: (ast.nodes.get i: im.operation.u64)) then {
+                        imIsFn = true
+                        imOp = im.operation
+                        imName = im.name
+                        mname = zast.nameTextCopy :ast ref: im.name
+                    }
+                } else null
+            }
+            if imIsFn then {
+                {
                     # about to check this body, so its signature is needed:
                     # `this` binds from the resolved receiver
                     (forceUnitDefMember
@@ -30848,32 +30865,47 @@ checkMethodBodies: function {
                         :ast
                         :unitDecl
                         defId: (nameIdOf :ast name: typeName)
-                        memberId: im.name
+                        memberId: imName
                     )
                     qn: "\{typeName}.\{mname}"
-                    declId93: (methodDeclOf :st :ast :unitDecl :typeName memberId: im.name)
+                    declId93: (methodDeclOf :st :ast :unitDecl :typeName memberId: imName)
                     (checkFunctionBody
                         :st
                         :frame
                         :unitDecl
                         defName: qn.stringview
-                        defn: (ast.nodes.get i: im.operation.u64)
+                        defn: (ast.nodes.get i: imOp.u64)
                         thisName: typeName
                         thisTid: typeTid
                         :ast
                         declId: declId93
                     )
                 }
-            } else null
+            }
         }
         aiter: op.asItems.iterate
         for amId: aiter loop {
-            am: ast.nodes.get i: amId.u64
-            match (
-                am
-            ) case namedoperation then {
-                if (isFunctionDefWithBody o: (ast.nodes.get i: am.operation.u64)) then {
-                    monoName: zast.nameTextAt :ast ref: am.name
+            # the member is read through a view scoped to this block: the
+            # body check below lends ast
+            amIsFn: false
+            amOp: zast.nodeid
+            amName: zast.nameid
+            monoName: String
+            {
+                am: ast.nodes.get i: amId.u64
+                match (
+                    am
+                ) case namedoperation then {
+                    if (isFunctionDefWithBody o: (ast.nodes.get i: am.operation.u64)) then {
+                        amIsFn = true
+                        amOp = am.operation
+                        amName = am.name
+                        monoName = zast.nameTextCopy :ast ref: am.name
+                    }
+                } else null
+            }
+            if amIsFn then {
+                {
                     (forceUnitDefMember
                         :st
                         :frame
@@ -30881,23 +30913,23 @@ checkMethodBodies: function {
                         :ast
                         :unitDecl
                         defId: (nameIdOf :ast name: typeName)
-                        memberId: am.name
+                        memberId: amName
                     )
                     qn2: "\{typeName}.\{monoName}"
-                    declId94: (methodDeclOf :st :ast :unitDecl :typeName memberId: am.name)
+                    declId94: (methodDeclOf :st :ast :unitDecl :typeName memberId: amName)
                     (checkFunctionBody
                         :st
                         :frame
                         :unitDecl
                         defName: qn2.stringview
-                        defn: (ast.nodes.get i: am.operation.u64)
+                        defn: (ast.nodes.get i: amOp.u64)
                         thisName: typeName
                         thisTid: typeTid
                         :ast
                         declId: declId94
                     )
                 }
-            } else null
+            }
         }
     } else null
 }
@@ -36140,13 +36172,24 @@ lowerGeneratorItems: function {
         }
         if isCand then {
             bm2Id: items.get i: bi
-            bm2: ast.nodes.getMut i: bm2Id.u64
-            match (
-                bm2
-            ) case namedoperation then {
-                mnm: zast.nameTextAt :ast ref: bm2.name
+            # the candidate's operation and name are read through a view scoped
+            # to this block (an owned name copy): the lowering below lends ast,
+            # and the rewritten operation is written back through its own
+            # mutable view at the end
+            bmOp: zast.nodeid
+            mnm: String
+            {
+                bm2: ast.nodes.get i: bm2Id.u64
+                match (
+                    bm2
+                ) case namedoperation then {
+                    bmOp = bm2.operation
+                    mnm = zast.nameTextCopy :ast ref: bm2.name
+                } else null
+            }
+            if (bmOp.isZero) == false then {
                 sname: "\{typeName}_\{mnm}_iter"
-                fnNode: zast.tableTake :ast id: bm2.operation
+                fnNode: zast.tableTake :ast id: bmOp.u32
                 lowOpt: (zgenerator.lowerOne :ast
                     fn: fnNode
                     synthName: sname.stringview
@@ -36168,7 +36211,15 @@ lowerGeneratorItems: function {
                         nsi = nsi + 1
                     }
                     fac: lowOpt.factory.take
-                    bm2.operation = zast.tableAdd :ast n: fac
+                    facId: zast.tableAdd :ast n: fac
+                    {
+                        bm3: ast.nodes.getMut i: bm2Id.u64
+                        match (
+                            bm3
+                        ) case namedoperation then {
+                            bm3.operation = facId
+                        } else null
+                    }
                     cls: lowOpt.synthClass.take
                     clsN: (zgenerator.mkNamedOp
                         :ast
@@ -36179,7 +36230,7 @@ lowerGeneratorItems: function {
                     )
                     dst.append clsN
                 } case none then null
-            } else null
+            }
         }
         bi = bi + 1
     }
