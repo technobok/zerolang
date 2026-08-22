@@ -320,6 +320,13 @@ Tokenizer: class {
     # Mode stack for string + interpolation contexts. Empty means the
     # implicit FILE state (see `statecurrent`).
     statestack: (ListVal tokstatetype)
+    # Whether whitespace and comment tokens carry their source text.
+    # They are the only tokens whose text no reader of THIS tokenizer
+    # needs -- `scan` hands the full stream to a caller that may want it,
+    # so the public default is true, and Lexer clears it because its own
+    # advance drops both kinds before the parser ever sees them. An empty
+    # String owns no buffer, so a token that skips its text costs nothing.
+    keepTrivia: bool
 } as {
     create: function {source: String.take fsno: zvfs.fsno} out this is {
         return (meta.create
@@ -340,6 +347,7 @@ Tokenizer: class {
                 tokenid: 0
             )
             statestack: (ListVal tokstatetype)
+            keepTrivia: true
         )
     }
 
@@ -869,9 +877,11 @@ Tokenizer: class {
 
         if (isws b: c) then {
             for (isws b: this.atchar) loop this.accept
+            wsText: String
+            if this.keepTrivia then wsText = this.tokSpan s: s0 e: this.tokpos
             return (Token
                 toktype: toktype.wsTok
-                tokstr: (this.tokSpan s: s0 e: this.tokpos)
+                tokstr: wsText
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -881,9 +891,11 @@ Tokenizer: class {
 
         if c == ascii.hash then {
             for (iscommentbody b: this.atchar) loop this.accept
+            cmText: String
+            if this.keepTrivia then cmText = this.tokSpan s: s0 e: this.tokpos
             return (Token
                 toktype: toktype.commentTok
-                tokstr: (this.tokSpan s: s0 e: this.tokpos)
+                tokstr: cmText
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1261,6 +1273,10 @@ Lexer: class {
     filterEol: bool
 } as {
     create: function {lexer: Tokenizer.take} out this is {
+        # advance drops ws and comment tokens unconditionally, so their text
+        # is read by nobody on this path and is the tokenizer largest
+        # allocation.
+        lexer.keepTrivia = false
         placeholder: (Token
             toktype: toktype.bofTok
             tokstr: "".string
