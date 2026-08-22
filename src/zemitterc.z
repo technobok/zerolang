@@ -2497,7 +2497,8 @@ ogResultval: 40.u64
 # answer, so no real index can be mistaken for it.
 ogNone: 41.u64
 
-# The member names the emitter DISPATCHES on, interned once per program. The
+# The names the emitter DISPATCHES on -- a member selector, or the base atom of
+# a path it recognises -- interned once per program. The
 # constant IS the index into `ctx.mnames`, exactly as `ogXxx` indexes
 # `ctx.origins` -- and an id compare is what the text compare was reaching for,
 # without copying the name out of the pool to make it. A name this program
@@ -2505,6 +2506,11 @@ ogNone: 41.u64
 # right answer by construction.
 mnOrPanic: 0.u64
 mnCopy: 1.u64
+mnPrivate: 2.u64
+mnLock: 3.u64
+mnMeta: 4.u64
+mnOption: 5.u64
+mnResult: 6.u64
 
 # originBaseNames -- those templates by name, in ogXxx order. This list and the
 # constants above are the same table read two ways; nothing else may reorder it,
@@ -2534,6 +2540,11 @@ mnPut: function {acc: List String at: u64 name: StringView} is {
 memberDispatchNames: function {acc: List String} is {
     mnPut :acc at: mnOrPanic name: "orPanic"
     mnPut :acc at: mnCopy name: "copy"
+    mnPut :acc at: mnPrivate name: "private"
+    mnPut :acc at: mnLock name: "lock"
+    mnPut :acc at: mnMeta name: "meta"
+    mnPut :acc at: mnOption name: "Option"
+    mnPut :acc at: mnResult name: "Result"
 }
 
 # buildMemberNameIds -- those names as pool ids for the program being emitted,
@@ -3454,25 +3465,25 @@ isCtorOwnerCall: function {
     call: zast.CallData.view
 } out bool is {
     smidO: stampIdOf :symtab nid: call.nodeid.u64
-    bnO: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
-    mcO: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if bnO.stringview == "meta" when mcO.stringview == "create" then return true
+    bnOId: dottedBaseAtomId :ast n: (ast.nodes.get i: call.callable.u64)
+    mcOId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    if bnOId == (ctx.mnames.get i: mnMeta) when mcOId == zast.wkCreate then return true
     if (originIsTid
         :symtab
         tid: smidO
         originTid: (ctx.origins.get i: ogOption)
-    ) when bnO.stringview == "Option" then return true
+    ) when bnOId == (ctx.mnames.get i: mnOption) then return true
     if (originIsTid
         :symtab
         tid: smidO
         originTid: (ctx.origins.get i: ogResult)
-    ) when bnO.stringview == "Result" then return true
+    ) when bnOId == (ctx.mnames.get i: mnResult) then return true
     # user-defined union arm construction `MyUnion.arm <payload>`: the base atom
     # is the union TYPE (the child is the arm selector, not a type), so the
     # child-name resolution below misses it. The arm MOVES its payload into the
     # heap box, so the source must be zeroed.
-    if bnO.length > 0 then {
-        uctO: resolveTypeIdByName :ast :symtab :ctx name: bnO.stringview
+    if (bnOId.isZero) == false then {
+        uctO: resolveTypeIdByNameId :ast :symtab :ctx nameId: bnOId
         if uctO > 0 then {
             if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: uctO.u64)) == ztypes.ztypetype.unionType then {
                 monoOrigin: originTidOf :symtab tid: (ztypes.tid.create from: uctO.u64)
@@ -3486,9 +3497,8 @@ isCtorOwnerCall: function {
         # cross-unit construction (dotted callable, e.g. `zast.UnitData`):
         # resolve the constructed type by its child name so an owned arg moved
         # into a record/variant/class/union field is zeroed (else double free).
-        dn0: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-        if dn0.length > 0 then {
-            rt0: resolveTypeIdByName :ast :symtab :ctx name: dn0.stringview
+        if (mcOId.isZero) == false then {
+            rt0: resolveTypeIdByNameId :ast :symtab :ctx nameId: mcOId
             if rt0 > 0 then ct = ztypes.tid.create from: rt0.u64
         }
     }
@@ -11730,14 +11740,15 @@ emitDottedNativeMarker: function {
     n: zast.DottedPathData.view
     bn2r: StringView
 } out String is {
-    mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
+    mn2Id: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     # a data block's element read (`codes.ht`, `consts.codes.ht`, `primes.0`):
     # the block is the base's stamped type, whatever shape the base takes;
     # no base is emitted
     dpbT: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
     if dpbT > 0 then {
         if (symtab.reg.typetypeOf typeId: dpbT) == ztypes.ztypetype.dataType then {
-            dres0: emitDataMember :ast :symtab :ctx :n dbt: dpbT :mn2
+            mn2d: zast.nameTextCopy :ast ref: mn2Id
+            dres0: emitDataMember :ast :symtab :ctx :n dbt: dpbT mn2: mn2d
             if dres0.length > 0 then return dres0
         }
     }
@@ -11753,24 +11764,30 @@ emitDottedNativeMarker: function {
         membId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
     )
     if nnu.length > 0 then {
+        mn2n: zast.nameTextCopy :ast ref: mn2Id
         needsAddM :ctx uname: nnu.stringview memb: "@unit"
-        needsAddM :ctx uname: nnu.stringview memb: mn2.stringview
-        return "z_\{nnu}_\{mn2}()"
+        needsAddM :ctx uname: nnu.stringview memb: mn2n.stringview
+        return "z_\{nnu}_\{mn2n}()"
     }
     # `.private` is a compile-time friend marker -- it emits the receiver itself.
-    if mn2.stringview == "private" then {
+    if mn2Id == (ctx.mnames.get i: mnPrivate) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
     # `.lock` on a value is a borrow marker (no type has a literal `lock`
     # field); emit the base, which the borrow param then addresses.
-    if mn2.stringview == "lock" then {
+    if mn2Id == (ctx.mnames.get i: mnLock) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
     # `.take` on a heap reftype (String / union / by-value class) is an
     # ownership MOVE: emit the base value. The statement-level emitter zeroes
     # the source after the call so its scope-exit free is a no-op (the callee
     # now owns the heap). A borrowed pointer-param class is not a move source.
-    if (ztypecheck.isMoveMarker name: mn2.stringview) then {
+    isMoveM: false
+    {
+        mn2b: zast.nameTextAt :ast ref: mn2Id
+        isMoveM = ztypecheck.isMoveMarker name: mn2b.stringview
+    }
+    if isMoveM then {
         tknid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
         if tknid == 0 then tknid = n.parent.u64
         tkt: stampIdOf :symtab nid: tknid
@@ -11795,7 +11812,12 @@ emitDottedNativeMarker: function {
     # conversion is what nearly every dotted marker carries
     ncSrcP: String
     ncHas: false
-    if (nativeIsConvMembOf :ctx memb: mn2.stringview) then {
+    isConvM: false
+    {
+        mn2c: zast.nameTextAt :ast ref: mn2Id
+        isConvM = nativeIsConvMembOf :ctx memb: mn2c.stringview
+    }
+    if isConvM then {
         ncChase: (typedefChaseTid
             :symtab
             tid: (stampIdOf
@@ -11805,11 +11827,13 @@ emitDottedNativeMarker: function {
         )
         ncSrcP = convSrcPathOf :symtab srcTid: ncChase
         if ncSrcP.length > 0 then {
-            ncHas = nativeIsConvOf :ctx srcPath: ncSrcP.stringview memb: mn2.stringview
+            mn2v: zast.nameTextAt :ast ref: mn2Id
+            ncHas = nativeIsConvOf :ctx srcPath: ncSrcP.stringview memb: mn2v.stringview
         }
     }
     if ncHas then {
-        ncKey: "\{ncSrcP}.\{mn2}"
+        mn2k: zast.nameTextCopy :ast ref: mn2Id
+        ncKey: "\{ncSrcP}.\{mn2k}"
         ncVal: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
         if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)) then {
             ncDeref: "(*\{ncVal})"
@@ -11819,7 +11843,7 @@ emitDottedNativeMarker: function {
         ncRetM: chaseColMono :symtab :ctx tid: ncRet
         return (emitNumericCast
             :ctx
-            dstName: mn2.stringview
+            dstName: mn2k.stringview
             val: ncVal.stringview
             :symtab
             retTid: (ztypes.tid.create from: ncRetM.u64)
