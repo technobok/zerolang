@@ -2634,6 +2634,10 @@ Ctx: class {
     curThisTid: ztypes.tid
     fastHash: bool
     readableNames: bool
+    # under --readable-names, the variables that may be spelled by their source
+    # name alone: the first binding of a name in a function. Empty under the
+    # default scheme, which asks no such question -- an id is unique already.
+    rnBareVids: (IdSet ztypes.vid)
     tailRetActive: bool
     defUnitId: (IdMapV u64 value: u64)
     # the four stdlib units the emitter names outright, resolved once
@@ -9848,10 +9852,22 @@ emitStringMethod: function {
 }
 
 # varCName -- a local's emitted C identifier. Its variable id already names it
-# uniquely, so no C-keyword mangling is needed; --readable-names, and any site
-# no id reached, fall back to the mangled source name.
+# uniquely, so no C-keyword mangling is needed; a site no id reached falls back
+# to the mangled source name. --readable-names spells a local by that source
+# name instead, and a source name is unique only inside the frame that binds
+# it: a bare block is flattened into its enclosing C block, so a name a second
+# frame of the same function binds would redefine the first one's C identifier.
+# ctx.rnBareVids names the bindings that may keep the bare spelling; every
+# other variable carries its id.
 varCName: function {ctx: Ctx.view vid: ztypes.vid name: StringView} out String is {
-    if ctx.readableNames then return (ztypes.mangleVarName :name)
+    if ctx.readableNames then {
+        rn: ztypes.mangleVarName :name
+        if vid.isZero then return rn
+        if (ctx.rnBareVids.has item: vid) then return rn
+        vsfx: "_\{vid}"
+        rn.append vsfx
+        return rn
+    }
     if vid.isZero then return (ztypes.mangleVarName :name)
     return "z_v\{vid}"
 }
@@ -22059,6 +22075,40 @@ resolveRuntimeTids: function {
     } case none then null
     return (runtimetids str: strId sv: svId cerr: cerrId)
 }
+# collectRnBareVids -- the variables --readable-names may spell by their source
+# name alone. Every runtime variable is a declaration row carrying its name,
+# the frame that binds it and its variable id, and frames chain up to the
+# function they belong to: the FIRST row a (function, name) pair produces keeps
+# the bare spelling, and every later one is spelled with its id. A variable no
+# declaration row names -- one a lowering mints outside any frame -- is absent
+# here and is spelled with its id too, which is what makes the scheme unique by
+# construction rather than by enumeration.
+collectRnBareVids: function {symtab: zenv.ZSymbolTable.view bare: (IdSet ztypes.vid)} is {
+    seenKeys: (IdSet u64)
+    dn: symtab.typing.decls.length
+    di: u64
+    for di < dn loop {
+        rvid: ztypes.vid
+        rnm: u64
+        rpar: ztypes.declid
+        {
+            d9r: symtab.typing.decls.get i: di
+            rvid = d9r.varId
+            rnm = d9r.name.u64
+            rpar = d9r.parent
+        }
+        di = di + 1
+        if (rvid.isZero) == false when rnm > 0 then {
+            fnd: rpar
+            for (symtab.typing.declIsFrame declId: fnd) loop {
+                fnd = symtab.typing.declParentOf declId: fnd
+            }
+            rkey: (fnd.u64 * 4294967296) + rnm
+            if (seenKeys.add item: rkey) then bare.add item: rvid
+        }
+    }
+}
+
 # buildTypeCnames -- the C name of every registered type, indexed by tid, built
 # once so no later emission has to ask the registry by name.
 buildTypeCnames: function {
@@ -22234,12 +22284,15 @@ emitC: function {
     litTexts: (List String)
     collectUnitLiterals :program :symtab ids: litIds texts: litTexts
     rm: mn.copy
+    rnBare: (IdSet ztypes.vid)
+    if readableNames then collectRnBareVids :symtab bare: rnBare
     ctx: (Ctx
         mainName: mn
         nsTid: ztypes.tid
         realMain: rm
         :fastHash
         :readableNames
+        rnBareVids: rnBare
         :strC
         :svC
         cnames: typeCnames

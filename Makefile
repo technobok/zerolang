@@ -169,14 +169,18 @@ test-tcc: bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 # readable-check -- --readable-names is a debug affordance, so nothing else
 # exercises it; without this it would rot unnoticed. The two schemes differ
 # only in identifier spelling, so the built programs must behave identically.
-# Cases are `name:srcdir`. `shadow_unit_const` is here rather than in the
-# corpus alone because the scheme is what the case is about: readable names
-# spell a local by its SOURCE name, so a local shadowing another unit's
-# constant only diverges under this flag.
-readable-check: bin/zc
+# Cases are `name:srcdir`. `shadow_unit_const` and `rn_sibling_shadow` are here
+# rather than in the corpus alone because the scheme is what the cases are
+# about: readable names spell a local by its SOURCE name, so a local shadowing
+# another unit's constant, or two sibling blocks binding one name, only diverge
+# under this flag. The COMPILER leg below is the one that matters most: the
+# small programs exercise a handful of locals each, and a naming scheme is only
+# proven by a program with tens of thousands of them.
+readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	@mkdir -p $(BUILDDIR)/rn
 	@for c in hello:examples vector:examples records:examples fibonacci:examples \
-	          typedefs:examples shadow_unit_const:tests/fixtures/emitc_corpus; do \
+	          typedefs:examples shadow_unit_const:tests/fixtures/emitc_corpus \
+	          rn_sibling_shadow:tests/fixtures/emitc_corpus; do \
 	  n=$${c%%:*}; d=$$(echo $$c | sed 's/^[^:]*://'); \
 	  bin/zc $$n --src $$d --system lib/system --emit-c $(BUILDDIR)/rn/$$n-id.c || exit 1; \
 	  bin/zc $$n --src $$d --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/$$n-rn.c || exit 1; \
@@ -187,7 +191,15 @@ readable-check: bin/zc
 	  diff -q $(BUILDDIR)/rn/$$n-id.out $(BUILDDIR)/rn/$$n-rn.out > /dev/null \
 	    || { echo "readable-check FAIL: $$n differs between naming schemes"; exit 1; }; \
 	done
-	@echo "readable-check OK: --readable-names builds and runs identically"
+	bin/zc zc --src src --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/zc-rn.c
+	$(CC) $(CFLAGS) -c $(BUILDDIR)/rn/zc-rn.c -o $(BUILDDIR)/rn/zc-rn.o
+	$(CC) -o $(BUILDDIR)/rn/zc-rn $(BUILDDIR)/rn/zc-rn.o $(BUILDDIR)/buildstamp.o \
+	  $(call ZLINKOF,$(BUILDDIR)/rn/zc-rn.c) -lpthread -lm
+	@$(BUILDDIR)/rn/zc-rn hello --src examples --system lib/system --emit-c $(BUILDDIR)/rn/hello-by-rn.c
+	@bin/zc hello --src examples --system lib/system --emit-c $(BUILDDIR)/rn/hello-by-id.c
+	@cmp $(BUILDDIR)/rn/hello-by-id.c $(BUILDDIR)/rn/hello-by-rn.c \
+	  || { echo "readable-check FAIL: the readable-named compiler emits different C"; exit 1; }
+	@echo "readable-check OK: --readable-names builds and runs identically (the compiler included)"
 
 # compile all examples: .z -> .c -> binary, one pattern-rule chain per example
 # so -j fans out the emits and gcc's. Binaries land in $(BUILDDIR)/ex/.
