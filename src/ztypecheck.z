@@ -1294,26 +1294,27 @@ indexDeclDataInner: function {
 # entries (fields; arms for variant/union kinds) and as-block members.
 indexDeclObjInner: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     declId: ztypes.declid
     objNodeId: u32
 } is {
-    ob: ast.nodes.get i: objNodeId.u64
-    match (
-        ob
-    ) case objectdef then {
+    ob: objRefAt :ast nid: (zast.nodeid.create from: objNodeId)
+    if (ob.nid.isZero) == false then {
         isArm: false
         if ob.kind.variantDef then isArm = true
         if ob.kind.unionDef then isArm = true
-        with iit: ob.isItems.iterate do for iId: iit loop {
-            itemNode: ast.nodes.get i: iId.u64
-            if itemNode.namedoperation then {
+        kIit: u64
+        for kIit < ob.nis loop {
+            iId: (zast.objIsItemAt :ast nid: ob.nid i: kIit).u32
+            kIit = kIit + 1
+            itemNode: argRefAt :ast nid: (zast.nodeid.create from: iId.u32)
+            if (itemNode.nid.isZero) == false then {
                 if isArm then {
                     (st.typing.declNew
                         name: itemNode.name
                         parent: declId
                         kind: ztyping.declkind.armDecl
-                        node: itemNode.nodeid
+                        node: itemNode.nid.u32
                     )
                 } else {
                     (indexDeclAsMember
@@ -1321,18 +1322,21 @@ indexDeclObjInner: function {
                         :ast
                         parentDeclId: declId
                         nameRef: itemNode.name
-                        nopNodeId: itemNode.nodeid
-                        opNodeId: itemNode.operation
+                        nopNodeId: itemNode.nid.u32
+                        opNodeId: itemNode.operation.u32
                     )
                 }
             }
         }
         publicDeclId: ztypes.declid
         publicOpId: u32
-        with ait: ob.asItems.iterate do for aId: ait loop {
-            an: ast.nodes.get i: aId.u64
-            if an.namedoperation then {
-                if (zast.unitOpKindIs :ast opId: an.operation k: zast.unitkind.publicNs) then {
+        kAit: u64
+        for kAit < ob.nas loop {
+            aId: (zast.objAsItemAt :ast nid: ob.nid i: kAit).u32
+            kAit = kAit + 1
+            an: argRefAt :ast nid: (zast.nodeid.create from: aId.u32)
+            if (an.nid.isZero) == false then {
+                if (zast.unitOpKindIs :ast opId: an.operation.u32 k: zast.unitkind.publicNs) then {
                     # the type's exported-namespace block: a publicNs Decl whose
                     # edges (public name -> internal member Decl) are filled after
                     # all members are indexed. Mirrors the unit `public:` block.
@@ -1340,17 +1344,17 @@ indexDeclObjInner: function {
                         name: an.name
                         parent: declId
                         kind: ztyping.declkind.publicNs
-                        node: an.nodeid
+                        node: an.nid.u32
                     )
-                    publicOpId = an.operation
+                    publicOpId = an.operation.u32
                 } else {
                     (indexDeclAsMember
                         :st
                         :ast
                         parentDeclId: declId
                         nameRef: an.name
-                        nopNodeId: an.nodeid
-                        opNodeId: an.operation
+                        nopNodeId: an.nid.u32
+                        opNodeId: an.operation.u32
                     )
                 }
             }
@@ -1364,7 +1368,7 @@ indexDeclObjInner: function {
                 pubOpId: publicOpId
             )
         }
-    } else null
+    }
 }
 
 # indexDeclAsMember -- one as-block member Decl: a method when the member
@@ -1423,11 +1427,20 @@ indexDeclPublicEntries: function {
     pubDeclId: ztypes.declid
     pubOpId: u32
 } is {
-    pop: ast.nodes.get i: pubOpId.u64
-    match (
-        pop
-    ) case unitdef then {
-        with bit: pop.body.iterate do for mId: bit loop {
+    # the block's arm and entries are read as plain values: the index walk
+    # below lends ast
+    isUnit: false
+    {
+        popArm: rowArmAt :ast nid: (zast.nodeid.create from: pubOpId)
+        match (
+            popArm
+        ) case unitdef then {
+            isUnit = true
+        } else null
+    }
+    if isUnit then {
+        bodyIds: zast.unitBodyIdsAt :ast unitId: pubOpId
+        with bit: bodyIds.iterate do for mId: bit loop {
             m: argRefAt :ast nid: (zast.nodeid.create from: mId.u32)
             if (m.nid.isZero) == false then {
                 # the entry's value row is read through a view scoped to this
@@ -1469,7 +1482,7 @@ indexDeclPublicEntries: function {
                 }
             }
         }
-    } else null
+    }
 }
 
 # linkDeclType -- record the canonical id on the indexed Decl and the Decl on
@@ -5892,14 +5905,25 @@ attachMethods: function {
     frame: ztypes.declid
     defName: StringView
     parentId: ztypes.tid
-    asItems: (ListVal u32).view
+    objId: zast.nodeid
 } out bool is {
     hasCreate: false
     # a generic template's methods are cloned BY ID into every instance
     # (mintMono reads a member list), so a template's signatures resolve eagerly
-    agen: hasGenericParam :ast items: asItems
-    aiter: asItems.iterate
-    for amId: aiter loop {
+    agen: false
+    {
+        onA: ast.nodes.get i: objId.u64
+        match (
+            onA
+        ) case objectdef then {
+            agen = hasGenericParam :ast items: onA.asItems
+        } else null
+    }
+    orf: objRefAt :ast nid: objId
+    kAiter: u64
+    for kAiter < orf.nas loop {
+        amId: (zast.objAsItemAt :ast nid: objId i: kAiter).u32
+        kAiter = kAiter + 1
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
             # an owned copy: the walks below lend ast
@@ -6024,11 +6048,14 @@ attachMarkers: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     parentId: u64
-    asItems: (ListVal u32).view
+    objId: zast.nodeid
 } out bool is {
     needsDtor: false
-    miter: asItems.iterate
-    for mmId: miter loop {
+    orf: objRefAt :ast nid: objId
+    kMiter: u64
+    for kMiter < orf.nas loop {
+        mmId: (zast.objAsItemAt :ast nid: objId i: kMiter).u32
+        kMiter = kMiter + 1
         # the marker is read through a view scoped to this block (an owned
         # copy of its operation's name): the recordings below lend ast
         isMarker: false
@@ -6158,7 +6185,7 @@ resolveData: function {ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    dnode: zast.DataBlockData.view
+    dnode: dataref
 } is {
     did: (declareCanonicalType
         :st
@@ -6173,8 +6200,10 @@ resolveData: function {ast: Ast
     st.reg.setValtype typeId: (ztypes.tid.create from: did.u64) value: false
     litId: st.reg.literalIntTid
     ordinal: u64
-    eiter: dnode.elements.iterate
-    for elId: eiter loop {
+    kE: u64
+    for kE < dnode.nelems loop {
+        elId: (zast.dataElemAt :ast nid: dnode.nid i: kE).u32
+        kE = kE + 1
         nmRef: zast.nameid
         isNo: false
         opRef: u32
@@ -6282,9 +6311,11 @@ isTypedefField: function {ast: Ast.view n: Node.view} out bool is {
 # recordIsTypedef -- true when a record's `is` body carries a single `X.typedef`
 # field. Such a record gets no field child and synthesizes `create`+`borrow`
 # instead of `create`/`==`/`!=`.
-recordIsTypedef: function {ast: Ast.view rnode: zast.ObjectDefData.view} out bool is {
-    fiter: rnode.isItems.iterate
-    for fmId: fiter loop {
+recordIsTypedef: function {ast: Ast.view rnode: objref} out bool is {
+    kFiter: u64
+    for kFiter < rnode.nis loop {
+        fmId: (zast.objIsItemAt :ast nid: rnode.nid i: kFiter).u32
+        kFiter = kFiter + 1
         fm: ast.nodes.get i: fmId.u64
         match (
             fm
@@ -6310,9 +6341,11 @@ typedefFieldBaseNameId: function {ast: Ast.view n: Node.view} out zast.nameid is
 
 # objectTypedefBase -- the base type name of an objectdef's single `X.typedef`
 # field (the typedef wrapper base), or "" when the object is not a typedef.
-objectTypedefBaseId: function {ast: Ast.view onode: zast.ObjectDefData.view} out zast.nameid is {
-    fiter: onode.isItems.iterate
-    for fmId: fiter loop {
+objectTypedefBaseId: function {ast: Ast.view onode: objref} out zast.nameid is {
+    kFiter: u64
+    for kFiter < onode.nis loop {
+        fmId: (zast.objIsItemAt :ast nid: onode.nid i: kFiter).u32
+        kFiter = kFiter + 1
         fm: ast.nodes.get i: fmId.u64
         match (
             fm
@@ -6370,10 +6403,12 @@ objectTypedefBaseTid: function {
     ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    onode: zast.ObjectDefData.view
+    onode: objref
 } out u64 is {
-    fiter: onode.isItems.iterate
-    for fmId: fiter loop {
+    kFiter: u64
+    for kFiter < onode.nis loop {
+        fmId: (zast.objIsItemAt :ast nid: onode.nid i: kFiter).u32
+        kFiter = kFiter + 1
         fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
         if (fm.nid.isZero) == false then {
             if (isTypedefField :ast n: (ast.nodes.get i: fm.operation.u64)) then {
@@ -6522,7 +6557,7 @@ materializeCreateParams: function {
 scanVisibility: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    onode: zast.ObjectDefData.view
+    onode: objref
     excl: (ListVal u64)
     grants: (ListVal u64)
 } is {
@@ -6534,7 +6569,10 @@ scanVisibility: function {
     aliasCol: (ListVal u32)
     aliasNode: (ListVal u32)
     pubFound: false
-    with aiter: onode.asItems.iterate do for aId: aiter loop {
+    kAiter: u64
+    for kAiter < onode.nas loop {
+        aId: (zast.objAsItemAt :ast nid: onode.nid i: kAiter).u32
+        kAiter = kAiter + 1
         an: ast.nodes.get i: aId.u64
         match (
             an
@@ -6592,7 +6630,10 @@ scanVisibility: function {
             }
         } else null
     }
-    with fiter: onode.isItems.iterate do for fId: fiter loop {
+    kFiter: u64
+    for kFiter < onode.nis loop {
+        fId: (zast.objIsItemAt :ast nid: onode.nid i: kFiter).u32
+        kFiter = kFiter + 1
         fm: ast.nodes.get i: fId.u64
         match (
             fm
@@ -6609,7 +6650,10 @@ scanVisibility: function {
         } else null
     }
     if (pubFound) == false then return
-    with a2iter: onode.asItems.iterate do for a2Id: a2iter loop {
+    kA2iter: u64
+    for kA2iter < onode.nas loop {
+        a2Id: (zast.objAsItemAt :ast nid: onode.nid i: kA2iter).u32
+        kA2iter = kA2iter + 1
         am: ast.nodes.get i: a2Id.u64
         match (
             am
@@ -7209,10 +7253,55 @@ attachRecordField: function {
 # declares its own `==` (every numeric does) still hashes by its bytes -- and a
 # heap-owning value has no byte range to hash, so it gets none and is not
 # Hashable.
+# synthRecordHash -- `hash` is INDEPENDENT of whether `==` was synthesised -- a
+# type that declares its own `==` (every numeric does) still hashes by its
+# bytes. It exists unless the author struck it off with a null shell or wrote
+# their own, and a heap-owning value has no byte range to hash, so it gets
+# none and is simply not Hashable.
+synthRecordHash: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    rnode: objref
+    rid: u64
+    isgen: bool
+} is {
+    hshOptR: false
+    {
+        onHshOptR: ast.nodes.get i: rnode.nid.u64
+        match (
+            onHshOptR
+        ) case objectdef then {
+            hshOptR = memberNullOptOut :ast asItems: onHshOptR.asItems member: "hash"
+        } else null
+    }
+    hshAsR: false
+    {
+        onHshAsR: ast.nodes.get i: rnode.nid.u64
+        match (
+            onHshAsR
+        ) case objectdef then {
+            hshAsR = asDeclaresMember :ast asItems: onHshAsR.asItems member: "hash"
+        } else null
+    }
+    if (isgen) == false when hshOptR == false when hshAsR == false then {
+        hshR: st.reg.newType name: "hash" ownerTid: rid typetype: ztypes.ztypetype.functionType
+        (st.typing.declSynthMember
+            parentTypeId: (ztypes.tid.create from: rid.u64)
+            nameId: zast.wkHash
+            kind: ztyping.declkind.methodDecl
+        )
+        (st.typing.setMemberType
+            parentTypeId: (ztypes.tid.create from: rid.u64)
+            nameId: zast.wkHash
+            childTypeId: hshR
+        )
+    }
+}
+
 synthRecordMembers: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    rnode: zast.ObjectDefData.view
+    rnode: objref
     rid: u64
     istd: bool
     isgen: bool
@@ -7272,26 +7361,7 @@ synthRecordMembers: function {
             }
         }
     }
-    # `hash` is INDEPENDENT of whether `==` was synthesised -- a type that
-    # declares its own `==` (every numeric does) still hashes by its bytes.
-    # It exists unless the author struck it off with a null shell or wrote
-    # their own, and a heap-owning value has no byte range to hash, so it gets
-    # none and is simply not Hashable.
-    hshOptR: memberNullOptOut :ast asItems: rnode.asItems member: "hash"
-    hshAsR: asDeclaresMember :ast asItems: rnode.asItems member: "hash"
-    if (isgen) == false when hshOptR == false when hshAsR == false then {
-        hshR: st.reg.newType name: "hash" ownerTid: rid typetype: ztypes.ztypetype.functionType
-        (st.typing.declSynthMember
-            parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.wkHash
-            kind: ztyping.declkind.methodDecl
-        )
-        (st.typing.setMemberType
-            parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.wkHash
-            childTypeId: hshR
-        )
-    }
+    synthRecordHash :st :ast :rnode :rid :isgen
 }
 # recordTypedefBase -- `X: T.typedef` records the base it wraps by BOTH channels:
 # the declaration's name id and, when it resolves here, its tid. The two are not
@@ -7301,7 +7371,7 @@ recordTypedefBase: function {
     frame: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
-    rnode: zast.ObjectDefData.view
+    rnode: objref
     rid: u64
 } is {
     tdb: objectTypedefBaseId :ast onode: rnode
@@ -7327,7 +7397,7 @@ resolveRecord: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    rnode: zast.ObjectDefData
+    rnode: objref
 } is {
     rid: (declareCanonicalType
         :st
@@ -7348,32 +7418,78 @@ resolveRecord: function {
     pvGrants_rrid: (ListVal u64)
     scanVisibility :st :ast onode: rnode excl: pvExcl_rrid grants: pvGrants_rrid
     st.reg.setValtype typeId: (ztypes.tid.create from: rid.u64) value: true
-    isgen: hasGenericParam :ast items: rnode.asItems
-    eqOptR: eqNullOptOut :ast asItems: rnode.asItems
-    eqAsR: asDeclaresMember :ast asItems: rnode.asItems member: "=="
+    isgen: false
+    {
+        onIsgen: ast.nodes.get i: rnode.nid.u64
+        match (
+            onIsgen
+        ) case objectdef then {
+            isgen = hasGenericParam :ast items: onIsgen.asItems
+        } else null
+    }
+    eqOptR: false
+    {
+        onEqOptR: ast.nodes.get i: rnode.nid.u64
+        match (
+            onEqOptR
+        ) case objectdef then {
+            eqOptR = eqNullOptOut :ast asItems: onEqOptR.asItems
+        } else null
+    }
+    eqAsR: false
+    {
+        onEqAsR: ast.nodes.get i: rnode.nid.u64
+        match (
+            onEqAsR
+        ) case objectdef then {
+            eqAsR = asDeclaresMember :ast asItems: onEqAsR.asItems member: "=="
+        } else null
+    }
     # `copy: null` strikes the default byte copy off this type. It is recorded
     # as a member carrying the null shell so the use site can tell it from a
     # type that simply never mentioned `copy`.
-    if (memberNullOptOut :ast asItems: rnode.asItems member: "copy") then {
+    hasMemberNullOptOut33: false
+    {
+        onhasMemberNullOptOut33: ast.nodes.get i: rnode.nid.u64
+        match (
+            onhasMemberNullOptOut33
+        ) case objectdef then {
+            hasMemberNullOptOut33 = (memberNullOptOut
+                :ast
+                asItems: onhasMemberNullOptOut33.asItems
+                member: "copy"
+            )
+        } else null
+    }
+    if hasMemberNullOptOut33 then {
         st.typing.copyOptOut.add item: rid
     }
     if isgen then {
         st.reg.setGeneric typeId: (ztypes.tid.create from: rid.u64) value: true
         tdecl9: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
-        (registerGenericParams
-            :st
-            :ast
-            tdecl: tdecl9
-            items: rnode.asItems
-        )
+        {
+            onRg: ast.nodes.get i: rnode.nid.u64
+            match (
+                onRg
+            ) case objectdef then {
+                (registerGenericParams
+                    :st
+                    :ast
+                    tdecl: tdecl9
+                    items: onRg.asItems
+                )
+            } else null
+        }
     }
     istd: recordIsTypedef :ast :rnode
     if istd then recordTypedefBase :st :frame :ast :unitDecl :rnode :rid
     hasCreateIs: false
     hasEqIs: false
     if (istd) == false then {
-        fiter: rnode.isItems.iterate
-        for fmId: fiter loop {
+        kFiter: u64
+        for kFiter < rnode.nis loop {
+            fmId: (zast.objIsItemAt :ast nid: rnode.nid i: kFiter).u32
+            kFiter = kFiter + 1
             fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
             if (fm.nid.isZero) == false then {
                 # an owned copy: the walks below lend ast
@@ -7431,11 +7547,11 @@ resolveRecord: function {
         :unitDecl
         :defName
         parentId: (ztypes.tid.create from: rid.u64)
-        asItems: rnode.asItems
+        objId: rnode.nid
     )
     hasCreate: hasCreateIs
     if hasCreateAs then hasCreate = true
-    attachMarkers :st :frame :ast :unitDecl parentId: rid asItems: rnode.asItems
+    attachMarkers :st :frame :ast :unitDecl parentId: rid objId: rnode.nid
     if (hasCreate) == false then {
         createId: (st.reg.newType
             name: "create"
@@ -7530,7 +7646,7 @@ detectTagAccessor: function {
 synthVariantEqHash: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    vnode: zast.ObjectDefData.view
+    vnode: objref
     vid: u64
     isgen: bool
     eqOptV: bool
@@ -7567,8 +7683,24 @@ synthVariantEqHash: function {
         )
     }
     # `hash` on the same terms as `==` above (see resolveRecord).
-    hshOptV: memberNullOptOut :ast asItems: vnode.asItems member: "hash"
-    hshAsV: asDeclaresMember :ast asItems: vnode.asItems member: "hash"
+    hshOptV: false
+    {
+        onHshOptV: ast.nodes.get i: vnode.nid.u64
+        match (
+            onHshOptV
+        ) case objectdef then {
+            hshOptV = memberNullOptOut :ast asItems: onHshOptV.asItems member: "hash"
+        } else null
+    }
+    hshAsV: false
+    {
+        onHshAsV: ast.nodes.get i: vnode.nid.u64
+        match (
+            onHshAsV
+        ) case objectdef then {
+            hshAsV = asDeclaresMember :ast asItems: onHshAsV.asItems member: "hash"
+        } else null
+    }
     if (isgen) == false when hshOptV == false when hshAsV == false then {
         hshV: st.reg.newType name: "hash" ownerTid: vid typetype: ztypes.ztypetype.functionType
         (st.typing.declSynthMember
@@ -7592,13 +7724,15 @@ attachVariantMethods: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    vnode: zast.ObjectDefData.view
+    vnode: objref
     vid: u64
     isgen: bool
     ordinalArmNames: (IdSet u64)
 } is {
-    aiter: vnode.asItems.iterate
-    for amId: aiter loop {
+    kAiter: u64
+    for kAiter < vnode.nas loop {
+        amId: (zast.objAsItemAt :ast nid: vnode.nid i: kAiter).u32
+        kAiter = kAiter + 1
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
             # an owned copy: the walks below lend ast
@@ -7675,12 +7809,12 @@ attachVariantTag: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    vnode: zast.ObjectDefData.view
+    vnode: objref
     vid: u64
     armCountV: u64
     allNullV: bool
 } is {
-    customTagV: unionCustomTagId :st :frame :ast :unitDecl uid: vid asItems: vnode.asItems
+    customTagV: unionCustomTagId :st :frame :ast :unitDecl uid: vid objId: vnode.nid
     tagId: u64
     match (
         customTagV
@@ -7708,7 +7842,7 @@ attachVariantTag: function {
             :ast
 
             :unitDecl
-            asItems: vnode.asItems
+            objId: vnode.nid
         )
         if tbV != 18446744073709551615.u64 then (st.typing.variantTagBase.set
             key: vid.u64
@@ -7725,7 +7859,7 @@ attachVariantTag: function {
             :ast
 
             :unitDecl
-            asItems: vnode.asItems
+            objId: vnode.nid
         ) then {
             st.typing.ordinalVariant.set key: vid.u64 value: armCountV
         }
@@ -7740,7 +7874,7 @@ resolveVariant: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    vnode: zast.ObjectDefData
+    vnode: objref
 } is {
     vid: (declareCanonicalType
         :st
@@ -7761,21 +7895,65 @@ resolveVariant: function {
     pvGrants_vvid: (ListVal u64)
     scanVisibility :st :ast onode: vnode excl: pvExcl_vvid grants: pvGrants_vvid
     st.reg.setValtype typeId: (ztypes.tid.create from: vid.u64) value: true
-    isgen: hasGenericParam :ast items: vnode.asItems
-    eqOptV: eqNullOptOut :ast asItems: vnode.asItems
-    eqAsV: asDeclaresMember :ast asItems: vnode.asItems member: "=="
-    if (memberNullOptOut :ast asItems: vnode.asItems member: "copy") then {
+    isgen: false
+    {
+        onIsgen: ast.nodes.get i: vnode.nid.u64
+        match (
+            onIsgen
+        ) case objectdef then {
+            isgen = hasGenericParam :ast items: onIsgen.asItems
+        } else null
+    }
+    eqOptV: false
+    {
+        onEqOptV: ast.nodes.get i: vnode.nid.u64
+        match (
+            onEqOptV
+        ) case objectdef then {
+            eqOptV = eqNullOptOut :ast asItems: onEqOptV.asItems
+        } else null
+    }
+    eqAsV: false
+    {
+        onEqAsV: ast.nodes.get i: vnode.nid.u64
+        match (
+            onEqAsV
+        ) case objectdef then {
+            eqAsV = asDeclaresMember :ast asItems: onEqAsV.asItems member: "=="
+        } else null
+    }
+    hasMemberNullOptOut30: false
+    {
+        onhasMemberNullOptOut30: ast.nodes.get i: vnode.nid.u64
+        match (
+            onhasMemberNullOptOut30
+        ) case objectdef then {
+            hasMemberNullOptOut30 = (memberNullOptOut
+                :ast
+                asItems: onhasMemberNullOptOut30.asItems
+                member: "copy"
+            )
+        } else null
+    }
+    if hasMemberNullOptOut30 then {
         st.typing.copyOptOut.add item: vid
     }
     if isgen then {
         st.reg.setGeneric typeId: (ztypes.tid.create from: vid.u64) value: true
         tdecl92: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
-        (registerGenericParams
-            :st
-            :ast
-            tdecl: tdecl92
-            items: vnode.asItems
-        )
+        {
+            onRg: ast.nodes.get i: vnode.nid.u64
+            match (
+                onRg
+            ) case objectdef then {
+                (registerGenericParams
+                    :st
+                    :ast
+                    tdecl: tdecl92
+                    items: onRg.asItems
+                )
+            } else null
+        }
     }
     ordinalArmNames: (IdSet u64)
     # an ORDINAL variant: every arm written `null`, so nothing distinguishes one
@@ -7784,8 +7962,10 @@ resolveVariant: function {
     armCountV: u64
     firstArmV: u64
     secondArmV: u64
-    fiter: vnode.isItems.iterate
-    for fmId: fiter loop {
+    kFiter: u64
+    for kFiter < vnode.nis loop {
+        fmId: (zast.objIsItemAt :ast nid: vnode.nid i: kFiter).u32
+        kFiter = kFiter + 1
         fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
         if (fm.nid.isZero) == false then {
             armCountV = armCountV + 1
@@ -7913,14 +8093,18 @@ variantTagBaseTid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    asItems: (ListVal u32).view
+    objId: zast.nodeid
 } out u64 is {
     # the "no entry" signal, distinct from 0 (a data-sourced tag, whose
     # constants set their own width and whose enum must stay the storage)
     notRecorded: 18446744073709551615.u64
     declared: u64
     sawTag: false
-    with iter: asItems.iterate do for amId: iter loop {
+    orf: objRefAt :ast nid: objId
+    kIter: u64
+    for kIter < orf.nas loop {
+        amId: (zast.objAsItemAt :ast nid: objId i: kIter).u32
+        kIter = kIter + 1
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
             # the member's operation is read through a view scoped to this
@@ -7976,10 +8160,14 @@ variantTagIsOrdinalPlain: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    asItems: (ListVal u32).view
+    objId: zast.nodeid
 } out bool is {
     result: true
-    with iter: asItems.iterate do for amId: iter loop {
+    orf: objRefAt :ast nid: objId
+    kIter: u64
+    for kIter < orf.nas loop {
+        amId: (zast.objAsItemAt :ast nid: objId i: kIter).u32
+        kIter = kIter + 1
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
             # the member's operation is read through a view scoped to this
@@ -8076,81 +8264,104 @@ dottedTyperefId: function {ast: Ast.view st: zenv.ZSymbolTable op: Node.view} ou
 # unionCustomTagId -- a union's custom DATA tag, if any: an `as { tag: <data>.tag }`
 # item whose `<data>` resolves to an in-unit DATA type. Returns that DATA's type id;
 # none when absent or not a DATA (the union then synthesizes its own tag wrapper).
+# unionCustomTagOfArm -- one as-item of a union: a `tag` member naming a data
+# block answers that block's type; a tag whose base resolves later records the
+# demand and a pending fixup; anything else answers none.
+unionCustomTagOfArm: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    uid: u64
+    am: argref
+} out optionval u64 is {
+    # an owned copy: the walks below lend ast
+    nm: zast.nameTextCopy :ast ref: am.name
+    if nm.stringview == "tag" then {
+        pn: dottedParentName :ast n: (ast.nodes.get i: am.operation.u64)
+        if pn.length != 0 then {
+            rr: walkLookupTyperef :st :frame :ast :unitDecl base: pn.stringview
+            match (
+                rr
+            ) case some then {
+                tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rr.u64)
+                isdata: false
+                match (
+                    tt
+                ) case dataType then {
+                    isdata = true
+                } else null
+                if isdata then {
+                    return (optionval.some rr)
+                } else {
+                    # only the main unit's custom-tag items stamp
+                    # (system variants resolve standalone, unstamped).
+                    if unitDecl == st.typing.mainUnitRoot then {
+                        hUnitDecl: unitDeclOfName :st nameId: (nameIdOf :ast name: "system")
+                        tgo: (resolvedByIds
+                            :st
+                            :ast
+                            unitDecl: hUnitDecl
+                            name: zast.wkTag
+                        )
+                        match (
+                            tgo
+                        ) case some then {
+                            tnid0: (innermostNodeId
+                                :ast
+                                n: (ast.nodes.get i: am.operation.u64)
+                            )
+                            (ztyping.nodeTypeSet
+                                tbl: st.typing.nodeType
+                                nid: tnid0.u64
+                                tid: (ztypes.tid.create from: tgo.u64)
+                            )
+                        } case none then null
+                    }
+                }
+            } case none then {
+                # the tag base resolves later (demand order): record
+                # the demand and a pending fixup for the tag child.
+                pnId: zast.poolFind pool: ast.names text: pn.stringview
+                frame95: (unitFrameOf :st declId: frame)
+                (demandDefinition
+                    :st
+                    frame: frame95
+                    nameId: pnId
+                )
+                uk: uid
+                st.typing.pendingCustomTag.set key: uk value: pnId
+                uk2: uid
+                pnid: innermostNodeId :ast n: (ast.nodes.get i: am.operation.u64)
+                pnv: pnid.u64
+                st.typing.pendingCustomTagNode.set key: uk2 value: pnv
+            }
+        }
+    }
+    return (optionval.none u64)
+}
+
 unionCustomTagId: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
     uid: u64
-    asItems: (ListVal u32).view
+    objId: zast.nodeid
 } out optionval u64 is {
-    iter: asItems.iterate
-    for amId: iter loop {
+    orf: objRefAt :ast nid: objId
+    kIter: u64
+    for kIter < orf.nas loop {
+        amId: (zast.objAsItemAt :ast nid: objId i: kIter).u32
+        kIter = kIter + 1
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
-            # an owned copy: the walks below lend ast
-            nm: zast.nameTextCopy :ast ref: am.name
-            if nm.stringview == "tag" then {
-                pn: dottedParentName :ast n: (ast.nodes.get i: am.operation.u64)
-                if pn.length != 0 then {
-                    rr: walkLookupTyperef :st :frame :ast :unitDecl base: pn.stringview
-                    match (
-                        rr
-                    ) case some then {
-                        tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rr.u64)
-                        isdata: false
-                        match (
-                            tt
-                        ) case dataType then {
-                            isdata = true
-                        } else null
-                        if isdata then {
-                            return (optionval.some rr)
-                        } else {
-                            # only the main unit's custom-tag items stamp
-                            # (system variants resolve standalone, unstamped).
-                            if unitDecl == st.typing.mainUnitRoot then {
-                                hUnitDecl: unitDeclOfName :st nameId: (nameIdOf :ast name: "system")
-                                tgo: (resolvedByIds
-                                    :st
-                                    :ast
-                                    unitDecl: hUnitDecl
-                                    name: zast.wkTag
-                                )
-                                match (
-                                    tgo
-                                ) case some then {
-                                    tnid0: (innermostNodeId
-                                        :ast
-                                        n: (ast.nodes.get i: am.operation.u64)
-                                    )
-                                    (ztyping.nodeTypeSet
-                                        tbl: st.typing.nodeType
-                                        nid: tnid0.u64
-                                        tid: (ztypes.tid.create from: tgo.u64)
-                                    )
-                                } case none then null
-                            }
-                        }
-                    } case none then {
-                        # the tag base resolves later (demand order): record
-                        # the demand and a pending fixup for the tag child.
-                        pnId: zast.poolFind pool: ast.names text: pn.stringview
-                        frame95: (unitFrameOf :st declId: frame)
-                        (demandDefinition
-                            :st
-                            frame: frame95
-                            nameId: pnId
-                        )
-                        uk: uid
-                        st.typing.pendingCustomTag.set key: uk value: pnId
-                        uk2: uid
-                        pnid: innermostNodeId :ast n: (ast.nodes.get i: am.operation.u64)
-                        pnv: pnid.u64
-                        st.typing.pendingCustomTagNode.set key: uk2 value: pnv
-                    }
-                }
-            }
+            r: unionCustomTagOfArm :st :frame :ast :unitDecl :uid :am
+            match (
+                r
+            ) case some then {
+                return (optionval.some r)
+            } case none then null
         }
     }
     return (optionval.none u64)
@@ -8345,13 +8556,15 @@ attachUnionMethods: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    vnode: zast.ObjectDefData.view
+    vnode: objref
     uid: u64
     isgen: bool
     ordinalArmNames: (IdSet u64)
 } is {
-    aiter: vnode.asItems.iterate
-    for amId: aiter loop {
+    kAiter: u64
+    for kAiter < vnode.nas loop {
+        amId: (zast.objAsItemAt :ast nid: vnode.nid i: kAiter).u32
+        kAiter = kAiter + 1
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
         if (am.nid.isZero) == false then {
             # an owned copy: the walks below lend ast
@@ -8434,7 +8647,7 @@ resolveUnion: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    vnode: zast.ObjectDefData
+    vnode: objref
 } is {
     uid: (declareCanonicalType
         :st
@@ -8451,24 +8664,41 @@ resolveUnion: function {
     pvGrants_uuid: (ListVal u64)
     scanVisibility :st :ast onode: vnode excl: pvExcl_uuid grants: pvGrants_uuid
     st.reg.setValtype typeId: (ztypes.tid.create from: uid.u64) value: false
-    isgen: hasGenericParam :ast items: vnode.asItems
+    isgen: false
+    {
+        onIsgen: ast.nodes.get i: vnode.nid.u64
+        match (
+            onIsgen
+        ) case objectdef then {
+            isgen = hasGenericParam :ast items: onIsgen.asItems
+        } else null
+    }
     if isgen then {
         st.reg.setGeneric typeId: (ztypes.tid.create from: uid.u64) value: true
         tdecl93: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
-        (registerGenericParams
-            :st
-            :ast
-            tdecl: tdecl93
-            items: vnode.asItems
-        )
+        {
+            onRg: ast.nodes.get i: vnode.nid.u64
+            match (
+                onRg
+            ) case objectdef then {
+                (registerGenericParams
+                    :st
+                    :ast
+                    tdecl: tdecl93
+                    items: onRg.asItems
+                )
+            } else null
+        }
     }
     allNull: true
     armCountU: u64
     firstArmU: u64
     secondArmU: u64
     ordinalArmNames: (IdSet u64)
-    fiter: vnode.isItems.iterate
-    for fmId: fiter loop {
+    kFiter: u64
+    for kFiter < vnode.nis loop {
+        fmId: (zast.objIsItemAt :ast nid: vnode.nid i: kFiter).u32
+        kFiter = kFiter + 1
         fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
         if (fm.nid.isZero) == false then {
             armCountU = armCountU + 1
@@ -8507,14 +8737,14 @@ resolveUnion: function {
                 :ast
 
                 :unitDecl
-                asItems: vnode.asItems
+                objId: vnode.nid
             )
             if tbU != 18446744073709551615.u64 then (st.typing.variantTagBase.set
                 key: uid.u64
                 value: tbU
             )
         }
-        customTag: unionCustomTagId :st :frame :ast :unitDecl :uid asItems: vnode.asItems
+        customTag: unionCustomTagId :st :frame :ast :unitDecl :uid objId: vnode.nid
         tagId: u64
         match (
             customTag
@@ -9063,9 +9293,12 @@ resolveClassAsMethods: function {
     defName: StringView
     cid: u64
     isgen: bool
-    cnode: zast.ObjectDefData.view
+    cnode: objref
 } is {
-    with aiterP4: cnode.asItems.iterate do for amP4Id: aiterP4 loop {
+    kAiterP4: u64
+    for kAiterP4 < cnode.nas loop {
+        amP4Id: (zast.objAsItemAt :ast nid: cnode.nid i: kAiterP4).u32
+        kAiterP4 = kAiterP4 + 1
         amP4: argRefAt :ast nid: (zast.nodeid.create from: amP4Id.u32)
         if (amP4.nid.isZero) == false then {
             if (isFunctionDefOp op: (ast.nodes.get i: amP4.operation.u64)) then {
@@ -9133,7 +9366,7 @@ resolveClassCreate: function {
     cid: u64
     isgen: bool
     istd: bool
-    cnode: zast.ObjectDefData.view
+    cnode: objref
 } out bool is {
     needsDtor: false
     hasCreate: false
@@ -9146,7 +9379,7 @@ resolveClassCreate: function {
             :unitDecl
             :defName
             parentId: (ztypes.tid.create from: cid.u64)
-            asItems: cnode.asItems
+            objId: cnode.nid
         )
         if hcAs then hasCreate = true
         mNeedsDtor: (attachMarkers
@@ -9156,7 +9389,7 @@ resolveClassCreate: function {
             :ast
             :unitDecl
             parentId: cid
-            asItems: cnode.asItems
+            objId: cnode.nid
         )
         if mNeedsDtor then needsDtor = true
     }
@@ -9208,7 +9441,7 @@ resolveClassTypedefBase: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     cid: u64
-    cnode: zast.ObjectDefData.view
+    cnode: objref
 } out bool is {
     needsDtor: false
     tdbase: objectTypedefBaseId :ast onode: cnode
@@ -9246,13 +9479,52 @@ resolveClassTypedefBase: function {
 # `X.typedef` field) gets no field child, synth `create`+`borrow`, and inherits
 # needs_destructor from the wrapped base (List -> yes, ListView -> no). Custom /
 # `null` create, generics + protocols come later.
+# finishClassDef -- the class walk's tail: the as-block methods, the create
+# path (which may require a destructor), the destructor flag, and the privacy
+# exclusions and grants.
+finishClassDef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    cid: u64
+    ccid: u64
+    isgen: bool
+    istd: bool
+    cnode: objref
+    needsDtorIn: bool
+    pvExcl: (ListVal u64).view
+    pvGrants: ListVal u64
+} is {
+    needsDtor: needsDtorIn
+    (resolveClassAsMethods :st :ast :unitDecl :frame :defName :cid :isgen :cnode)
+    if (resolveClassCreate
+        :st
+        :ast
+        :unitDecl
+        :frame
+        :defName
+        :cid
+        :isgen
+        :istd
+        :cnode
+    ) then needsDtor = true
+    if defName == "String" then needsDtor = true
+    if needsDtor then {
+        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: cid.u64)
+    }
+    if pvExcl.length > 0 then st.typing.privacySeen = true
+    applyGrantsPrivate :st parentId: ccid grants: pvGrants
+}
+
 resolveClass: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    cnode: zast.ObjectDefData
+    cnode: objref
 } is {
     cid: (declareCanonicalType
         :st
@@ -9275,23 +9547,40 @@ resolveClass: function {
     scanVisibility :st :ast onode: cnode excl: pvExcl_ccid grants: pvGrants_ccid
     st.reg.setValtype typeId: (ztypes.tid.create from: cid.u64) value: false
     needsDtor: false
-    isgen: hasGenericParam :ast items: cnode.asItems
+    isgen: false
+    {
+        onIsgen: ast.nodes.get i: cnode.nid.u64
+        match (
+            onIsgen
+        ) case objectdef then {
+            isgen = hasGenericParam :ast items: onIsgen.asItems
+        } else null
+    }
     if isgen then {
         st.reg.setGeneric typeId: (ztypes.tid.create from: cid.u64) value: true
         tdecl94: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
-        (registerGenericParams
-            :st
-            :ast
-            tdecl: tdecl94
-            items: cnode.asItems
-        )
+        {
+            onRg: ast.nodes.get i: cnode.nid.u64
+            match (
+                onRg
+            ) case objectdef then {
+                (registerGenericParams
+                    :st
+                    :ast
+                    tdecl: tdecl94
+                    items: onRg.asItems
+                )
+            } else null
+        }
     }
     istd: recordIsTypedef :ast rnode: cnode
     if istd then {
         if (resolveClassTypedefBase :st :ast :unitDecl :frame :cid :cnode) then needsDtor = true
     }
-    fiter: cnode.isItems.iterate
-    for fmId: fiter loop {
+    kFiter: u64
+    for kFiter < cnode.nis loop {
+        fmId: (zast.objIsItemAt :ast nid: cnode.nid i: kFiter).u32
+        kFiter = kFiter + 1
         if (resolveClassField :st :ast :unitDecl :frame :defName :cid :isgen :fmId) then {
             needsDtor = true
         }
@@ -9300,24 +9589,21 @@ resolveClass: function {
     # the as-block; produce it like the isItems loop does. attachMethods
     # stays non-generic-only (it also handles const-clone members and
     # generator synthesis, which native decls never need).
-    (resolveClassAsMethods :st :ast :unitDecl :frame :defName :cid :isgen :cnode)
-    if (resolveClassCreate
+    (finishClassDef
         :st
         :ast
         :unitDecl
         :frame
         :defName
         :cid
+        :ccid
         :isgen
         :istd
         :cnode
-    ) then needsDtor = true
-    if defName == "String" then needsDtor = true
-    if needsDtor then {
-        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: cid.u64)
-    }
-    if pvExcl_ccid.length > 0 then st.typing.privacySeen = true
-    applyGrantsPrivate :st parentId: ccid grants: pvGrants_ccid
+        needsDtorIn: needsDtor
+        pvExcl: pvExcl_ccid
+        pvGrants: pvGrants_ccid
+    )
 }
 
 # resolveFacet -- resolve a facet ObjectDef into a FACET valtype: a child per
@@ -9330,7 +9616,7 @@ resolveFacet: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    fnode: zast.ObjectDefData
+    fnode: objref
 } is {
     fid: (declareCanonicalType
         :st
@@ -9347,7 +9633,15 @@ resolveFacet: function {
     pvGrants_ffid: (ListVal u64)
     scanVisibility :st :ast onode: fnode excl: pvExcl_ffid grants: pvGrants_ffid
     st.reg.setValtype typeId: (ztypes.tid.create from: fid.u64) value: true
-    isgen: hasGenericParam :ast items: fnode.isItems
+    isgen: false
+    {
+        onIsgen: ast.nodes.get i: fnode.nid.u64
+        match (
+            onIsgen
+        ) case objectdef then {
+            isgen = hasGenericParam :ast items: onIsgen.isItems
+        } else null
+    }
     if isgen then st.reg.setGeneric typeId: (ztypes.tid.create from: fid.u64) value: true
     specThisStr: defName.string
     dropThis: true
@@ -9365,8 +9659,10 @@ resolveFacet: function {
             dropThis = false
         }
     }
-    siter: fnode.isItems.iterate
-    for smId: siter loop {
+    kSiter: u64
+    for kSiter < fnode.nis loop {
+        smId: (zast.objIsItemAt :ast nid: fnode.nid i: kSiter).u32
+        kSiter = kSiter + 1
         sm: argRefAt :ast nid: (zast.nodeid.create from: smId.u32)
         if (sm.nid.isZero) == false then {
             # an owned copy: the walks below lend ast
@@ -9441,7 +9737,7 @@ resolveProtocol: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    fnode: zast.ObjectDefData
+    fnode: objref
 } is {
     pid: (declareCanonicalType
         :st
@@ -9458,7 +9754,15 @@ resolveProtocol: function {
     pvGrants_ppid: (ListVal u64)
     scanVisibility :st :ast onode: fnode excl: pvExcl_ppid grants: pvGrants_ppid
     st.reg.setValtype typeId: (ztypes.tid.create from: pid.u64) value: false
-    isgen: hasGenericParam :ast items: fnode.isItems
+    isgen: false
+    {
+        onIsgen: ast.nodes.get i: fnode.nid.u64
+        match (
+            onIsgen
+        ) case objectdef then {
+            isgen = hasGenericParam :ast items: onIsgen.isItems
+        } else null
+    }
     if isgen then st.reg.setGeneric typeId: (ztypes.tid.create from: pid.u64) value: true
     # A protocol spec receiver is normally dropped (resolves to nothing). The reference
     # resolves Text NESTED inside String's `:Text` marker, so Text's spec `:this` binds
@@ -9485,8 +9789,10 @@ resolveProtocol: function {
             dropThis = false
         }
     }
-    siter: fnode.isItems.iterate
-    for smId: siter loop {
+    kSiter: u64
+    for kSiter < fnode.nis loop {
+        smId: (zast.objIsItemAt :ast nid: fnode.nid i: kSiter).u32
+        kSiter = kSiter + 1
         sm: argRefAt :ast nid: (zast.nodeid.create from: smId.u32)
         if (sm.nid.isZero) == false then {
             # an owned copy: the walks below lend ast
@@ -10381,7 +10687,7 @@ resolveObjectDef: function {
     unitDecl: ztypes.declid
     rf: ztypes.declid
     defName: StringView
-    defn: zast.ObjectDefData
+    defn: objref
 } is {
     match (
         defn.kind
@@ -10408,7 +10714,7 @@ resolveObjectDef: function {
                 )
                 (ztyping.nodeTypeSet
                     tbl: st.typing.nodeType
-                    nid: defn.nodeid.u64
+                    nid: defn.nid.u64
                     tid: (ztypes.tid.create from: nvid.u64)
                 )
             } else {
@@ -10437,7 +10743,7 @@ resolveObjectDef: function {
     ) case some then {
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
-            nid: defn.nodeid.u64
+            nid: defn.nid.u64
             tid: (ztypes.tid.create from: objrid.u64)
         )
     } case none then null
@@ -10540,14 +10846,8 @@ resolveDef: function {
             )
         } case none then null
     } case datablock then {
-        {
-            dn: ast.nodes.get i: defnId.u64
-            match (
-                dn
-            ) case datablock then {
-                resolveData :st frame: rf :ast :unitDecl :defName dnode: dn
-            } else null
-        }
+        dr: dataRefAt :ast nid: defnId
+        resolveData :st frame: rf :ast :unitDecl :defName dnode: dr
         dbrid: (resolvedByIds
             :st
             :ast
@@ -10564,19 +10864,15 @@ resolveDef: function {
             )
         } case none then null
     } case objectdef then {
-        od: ast.nodes.getMut i: defnId.u64
-        match (
-            od
-        ) case objectdef then {
-            (resolveObjectDef
-                :st
-                :ast
-                :unitDecl
-                :rf
-                :defName
-                defn: od
-            )
-        } else null
+        orf: objRefAt :ast nid: defnId
+        (resolveObjectDef
+            :st
+            :ast
+            :unitDecl
+            :rf
+            :defName
+            defn: orf
+        )
     } case dottedpath then {
         ddr: dpRefAt :ast nid: defnId
         (resolveDottedDef
@@ -30956,6 +31252,36 @@ checkYieldAt: function {
     } case none then {
         return (ztypes.tid.create from: 0)
     }
+}
+
+# dataref -- what the data-block walk reads of its row: the element count,
+# the out-type id and the position, as plain values. Elements are read by
+# index through zast.dataElemAt.
+dataref: record {
+    nid: zast.nodeid
+    nelems: u64
+    outType: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
+# dataRefAt -- the data-block row `nid` as plain values (all zero for any
+# other arm).
+dataRefAt: function {ast: Ast.view nid: zast.nodeid} out dataref is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case datablock then {
+        return (dataref
+            :nid
+            nelems: n.elements.length
+            outType: n.outType
+            lineno: n.lineno
+            colno: n.colno
+        )
+    } else null
+    zn: zast.nodeid
+    return (dataref nid: zn nelems: 0 outType: zn lineno: 0 colno: 0)
 }
 
 # checkValueAt -- type the value row `nid`, dispatching by arm: each handler
