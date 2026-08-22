@@ -149,6 +149,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-08-18 | fcc1bf25 | [one-unit arc phases 5-7, plus two arcs](#r-fcc1bf25) | 0.53s | 0.63s | 120MB / 100MB | 93 / 234 / 207 (total 534) | 8,366,482 | 458MB | 14.1s (1095 cases) | 99,056 |
 | 2026-08-18 | f4a6ed00 | [the emitter's unit lookups](#r-f4a6ed00) | 0.53s | 0.64s | 118MB / 100MB | 93 / 230 / 203 (total 526) | 8,365,699 | 460MB | 35.8s (load ~2.5, 1095 cases) | 99,100 |
 | 2026-08-21 | d8cebf3a | [design-review consolidation, phases 2.5-2.8](#r-d8cebf3a) | 0.46s | 0.54s | 92MB / 79MB | 128 / 181 / 173 (total 482) | 6,722,550 | 348MB | 15.5s (1115 cases) | 101,530 |
+| 2026-08-22 | 07c16e90 | [Phase 5: the `:name` shorthand lock rule made unconditional](#r-07c16e90) | 0.45s | 0.54s | 93MB / 81MB | 105 / 180 / 173 (total 458, medians of 5) | 7,412,765 | 355MB | 35.2s (1118 cases, load 1–3.6) | 105,671 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -1586,3 +1587,52 @@ Three commits closing out family C, each with its own oracle. **(1) The last thr
 **Three defects surfaced and were fixed inside the arc**, each pinned: a bare name used as a truthiness condition (`if ghost then`, `when ghost`, `for ghost loop`, `} while ghost`) was never name-resolved and reached the emitter as a raw C identifier (`75dbe93c`); `checkWrappedCall` and `checkMetaCreateCall` fell off the end of the function with no return, and their callers read the indeterminate value as a resolved type (`19c42e19`); and a fn-typed LOCAL shadowing a function of the same name was called BY NAME, so `addit: mulit.take` then `addit a: 3 b: 4` ran the shadowed body and answered 7 instead of 12 (`83603309`).
 
 **Machine quiet for the timed columns** (load < 0.5 throughout; the glibc best-of-5 held 0.54-0.55s and `make test` 15.5s against the previous row's 35.8s at load ~2.5 -- that row's wall columns are the anomaly, not this one's). Own-source LOC rose 99,100 -> 101,530: the split adds function headers, and the arc adds the stamps. Peak RSS 118MB -> 92MB (mimalloc) and 100MB -> 79MB (glibc).
+
+<a id="r-07c16e90"></a>
+### Phase 5: the `:name` shorthand lock rule made unconditional
+
+**2026-08-22 · 07c16e90** (the following commit `a8d86669`, L020 promoted to a warning with 165
+parameters turned `.view`, emits byte-identical C for `zc` and `zls` and differs in `zl` only by the
+rule's severity constant, so this row describes both)
+
+**Phase 5 closed the `:name` shorthand lock gap.** A `:name` argument at a lock/borrow parameter
+took no lock, so a readonly binding could be handed to a mutable-borrow callee without a
+diagnostic. The rule that closes it reported 3,313 E0200 rows against the compiler's own tree when
+first measured, 998 at the start of this arc, and 0 at `88007d62`; the landing (`07c16e90`) deleted
+the `--strict-call-locks` flag, the ratchet and the baseline. The cost of the drain is what this row
+records: ~50 commits of signature honesty (`ast`/`symtab`/`ctx`/`st` views, records of ids into
+the checkValue family, read-only lookups) plus the copies and hoists the strict rule forced where a
+borrowed name or a nested read used to ride through a call.
+
+**Rigorous A/B, both gcc -O1 series binaries on IDENTICAL input** (the `d8cebf3a` compiler accepts
+this tree, so the common input is the current `src` + `lib/system`, `--fast-hash --emit-c
+/dev/null`, `perf stat -r 7`): **instructions 5,926,763,745 -> 5,819,175,877, −107,587,868
+(−1.82%)** (±0.01% both), cycles 2.424G -> 2.328G (−3.9%), task-clock 483.8ms -> 461.2ms (−4.7%).
+**Allocations 6,941,032 -> 7,415,073, +474,041 (+6.83%); bytes 352.74MB -> 355.52MB, +2.78MB
+(+0.79%)**; `allocs == frees` on both sides; peak RSS 93.3MB -> 93.7MB. The old side on its own
+tree reproduces its row (6,722,550) to within the input's growth (LOC 101,530 -> 105,671, +4.1%,
+worth +218,482 allocations on the old binary), which is what makes the pair comparable.
+
+**Verdict: CPU did not regress — instructions −1.8% and cycles −3.9% on identical input — and
+allocations did: +6.8% on identical input, +10.3% row to row.** Where the +474k comes from, by
+the own-tree series: 6,722,550 (`d8cebf3a`) -> 7,227,939 (`e7260096`, the first drain session,
+3,313 -> 998: pool-text copies where a `String.borrow` of the name pool used to be held across a
+call, and argument hoists) -> 7,359,797 (`88007d62`, this arc's 22 commits: `nameTextCopy` on the
+definition-side resolvers, the emitter's iteration copies of unit and fragment names) -> 7,412,765
+(`07c16e90`: the shorthand locks themselves, now installed — inherent to the rule). The bytes
+column moves far less (+0.79%) because the copies are short names. **Recovery path, recorded:**
+name ids through the definition resolvers instead of `nameTextCopy` (the checker's value-side
+already did this — the `*Ref` records carry ids), and the emitter's per-unit copies read by index.
+
+**Machine NOT quiet for the timed columns** (load 1.0–3.6 from other users; the `make test` column
+is at load, as the `f4a6ed00` row's 35.8s was — compare it with `d8cebf3a`'s 15.5s only with that
+in mind). The glibc best-of-5 held 0.54s, the mimalloc best-of-5 0.44–0.45s; `perf stat`'s
+instruction counts are load-independent and are the comparison to trust.
+
+**Also in this span, not perf:** the emitter's mutable `ast`/`symtab` signatures were borrowed
+from four checker lookups (`walkLookupTyperef` ×3, `walkLookupTyperefById`) — read-only forms of
+those let one directed descent flip the whole cluster; `tests/unit/zast_smoke.z` carried seven
+nested `:ast` readers the three-surface sweep did not cover and the harness caught at landing;
+L020 `unmutated-mutable-parameter` lost its reason to be advisory (its "mutated" record is the
+lock record the gap used to skip) and is a gate-failing warning as of `a8d86669`, with the
+compiler and tool sources clean under it.
