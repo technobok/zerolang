@@ -153,6 +153,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-08-22 | 457f609a | [allocation recovery: the walkers, the resolvers and the readable-names collision](#r-457f609a) | 0.45s | 0.54s | 94MB / 81MB | 98 / 175 / 172 (total 444, medians of 5) | 6,720,484 | 346MB | 34.9s (1119 cases, load 1.7–2.9) | 105,814 |
 | 2026-08-22 | a47a444c | [an empty view owns no buffer](#r-a47a444c) | 0.44s | 0.54s | 93MB / 81MB | 101 / 177 / 168 (total 447, medians of 5) | 5,701,889 | 346MB | 35.0s (1119 cases, load ~2.0) | 105,814 |
 | 2026-08-22 | 2f83d269 | [...and so does an empty copy](#r-a47a444c) | 0.44s | 0.54s | 93MB / 81MB | 101 / 177 / 168 (total 447, medians of 5) | 5,621,131 | 345MB | 35.0s (1120 cases, load ~2.0) | 105,830 |
+| 2026-08-23 | e2c867af | [member names, the row accessors and the tokenizer's trivia](#r-e2c867af) | 0.43s | 0.50s | 91MB / 78MB | 113 / 172 / 162 (total 447, medians of 5) | 4,820,294 | 306MB | 35.9s (1124 cases, load ~5.6) | 106,213 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -1737,3 +1738,69 @@ nested `:ast` readers the three-surface sweep did not cover and the harness caug
 L020 `unmutated-mutable-parameter` lost its reason to be advisory (its "mutated" record is the
 lock record the gap used to skip) and is a gate-failing warning as of `a8d86669`, with the
 compiler and tool sources clean under it.
+
+<a id="r-e2c867af"></a>
+### Member names, the row accessors and the tokenizer's trivia
+
+**2026-08-23 · e2c867af** (seventeen commits since the last row: `a0f4bfad`..`a39ccfa6` unrowed,
+then `051a4167`..`e2c867af`)
+
+**5,621,131 -> 4,820,294 allocations over the whole span, and 4,820,294 is -387,578 (-7.44%) on
+this arc's own nine commits from `a39ccfa6`'s 5,207,872.** Bytes 345MB -> 306MB. The wall barely
+moves, as it does not for allocation work at this size; the phase split is flat.
+
+**Two defect fixes first, and they cost rather than paid.** A record or class field named for a C
+reserved word emitted `int64_t default;` -- a legal zerolang program the compiler miscompiled, the
+same class as `620db166`'s `&f(x)`. The fix is a PREFIX rather than a mangled copy, and that choice
+was measured, not assumed: `mangleMemberName` handing back a String cost **+19,343** allocations
+because every caller is already building the C text around the name, while
+`mangleMemberPrefix` + `"\{prefix}\{name}"` costs **+2,945**. Twenty-two emission sites move
+together -- the declaration, the reads and writes, the constructor parameters, the destructor, the
+generated `_eq`, the variant arm payloads -- and `cSlotName` takes the prefix, which covers the four
+spellings of an interface vtable slot at once. The oracle that mattered: no member in the tree is
+named for a reserved word, so the frozen A/B AND all 455 corpus programs had to emit
+**byte-identically**, and a diff would have meant a natives.tbl lookup key got mangled.
+
+Writing that prefix uncovered a **segfault of its own** (`051a4167`): `s: String` then
+`s.append ""`. An empty String owns no buffer since `a47a444c`, `reserve(s, 0)` correctly allocates
+nothing, and `append` then wrote the terminator through the null. The guard is `if (len == 0)
+return;`, deliberately not a reserve that allocates -- appending nothing is a no-op, and making the
+buffer appear would undo `a47a444c` at exactly the sites that earned it.
+
+**The largest structural item: ZTyping's walk became row accessors** (`aadc537a`, **-109,329
+blocks, -28.9MB**). `declChildWalk` fills two caller-supplied lists, so its 278,774 blocks are its
+callers' -- and four of them wanted a scalar. `fnAutoCallable` alone was 96,016 blocks to answer
+"is there a non-receiver parameter". The lever was NOT a new predicate restating the filter: that
+drift is already in this file, where `declMemberCount` and `declLastChildNameId` are hand-inlined
+copies of the walk and disagree about the pended path. Instead `declRowSlots`/`declRowAt` return a
+`declrow` whose `keep` IS the filter, and `declChildWalk` is those accessors collected -- one
+implementation, so a caller that loops the slots is running the same walk. `ztyping_smoke` walks a
+declared type and a pended one both ways; the `agree` word is tautological once the list form is
+derived, so **the golden's row count and id checksum are the oracle** -- a fallback that stops
+answering turns pended `rows=1` into `rows=0`.
+
+**The largest single item: trivia tokens stopped owning text nobody reads** (`e2c867af`,
+**-265,696, -5.2%**). `Tokenizer_tokSpan` is 15% of a self-compile because every token owns its
+source bytes, whitespace and comments included -- 42.8% of all tokens, all dropped by
+`Lexer.advance` before the parser sees one. `keepTrivia` defaults TRUE, so `tokenize.scan` and the
+lexer goldens are exact; `Lexer.create` clears it on the tokenizer it takes. Scoped to WS and
+COMMENT: EOL survives into the parser when `filterEol` is off, and `peekPos` derives a diagnostic's
+width from `tokstr.length`.
+
+**The token arc, measured for whoever takes it next** (974,566 tokens dumped through `out/zlexer`).
+Of the ~512,879 `tokSpan` copies left, **279,729 (55%) are a CONSTANT of the token type** -- a
+COLON is always `":"` -- and need no text, no pool and no interning, just a `textOfType` table for
+readers that want the spelling. The other 277,431 carry real text over only **27,213 distinct**, of
+which REFID and LABEL (23,226) are names the parser interns anyway: **the pool-pollution worry
+about interning at tokenize time is not real**, ~3,987 rows are genuinely new. So the order is
+`Token.width` first (allocation-neutral, and a token with no text still owes diagnostics a width),
+then the fixed-text kinds, then interning, then `Token` as a record to retire `Lexer_accept`'s
+327,093 Option boxes.
+
+**Measured and deliberately not done:** `dataFieldNames` still holds 187,761 blocks behind its
+twenty-four name-comparing call sites (`missingCtorFields` 52,672, `emitUserFnCall` 36,166,
+`fnSignature` 29,247), which is a signature chain through `argSlotList`, `ctorArgByLabel` and
+`paramTypeIsPointer` -- the worst effort-to-reward left. `varCName` 135,690 is unchanged.
+
+**`make test` is at load ~5.6 here** (other users on the machine); compare the 35.9s column with
+`2f83d269`'s 35.0s only with that in mind.
