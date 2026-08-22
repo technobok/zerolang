@@ -151,6 +151,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-08-21 | d8cebf3a | [design-review consolidation, phases 2.5-2.8](#r-d8cebf3a) | 0.46s | 0.54s | 92MB / 79MB | 128 / 181 / 173 (total 482) | 6,722,550 | 348MB | 15.5s (1115 cases) | 101,530 |
 | 2026-08-22 | 07c16e90 | [Phase 5: the `:name` shorthand lock rule made unconditional](#r-07c16e90) | 0.45s | 0.54s | 93MB / 81MB | 105 / 180 / 173 (total 458, medians of 5) | 7,412,765 | 355MB | 35.2s (1118 cases, load 1–3.6) | 105,671 |
 | 2026-08-22 | 457f609a | [allocation recovery: the walkers, the resolvers and the readable-names collision](#r-457f609a) | 0.45s | 0.54s | 94MB / 81MB | 98 / 175 / 172 (total 444, medians of 5) | 6,720,484 | 346MB | 34.9s (1119 cases, load 1.7–2.9) | 105,814 |
+| 2026-08-22 | a47a444c | [an empty view owns no buffer](#r-a47a444c) | 0.44s | 0.54s | 93MB / 81MB | 101 / 177 / 168 (total 447, medians of 5) | 5,701,889 | 346MB | 35.0s (1119 cases, load ~2.0) | 105,814 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -1588,6 +1589,41 @@ Three commits closing out family C, each with its own oracle. **(1) The last thr
 **Three defects surfaced and were fixed inside the arc**, each pinned: a bare name used as a truthiness condition (`if ghost then`, `when ghost`, `for ghost loop`, `} while ghost`) was never name-resolved and reached the emitter as a raw C identifier (`75dbe93c`); `checkWrappedCall` and `checkMetaCreateCall` fell off the end of the function with no return, and their callers read the indeterminate value as a resolved type (`19c42e19`); and a fn-typed LOCAL shadowing a function of the same name was called BY NAME, so `addit: mulit.take` then `addit a: 3 b: 4` ran the shadowed body and answered 7 instead of 12 (`83603309`).
 
 **Machine quiet for the timed columns** (load < 0.5 throughout; the glibc best-of-5 held 0.54-0.55s and `make test` 15.5s against the previous row's 35.8s at load ~2.5 -- that row's wall columns are the anomaly, not this one's). Own-source LOC rose 99,100 -> 101,530: the split adds function headers, and the arc adds the stamps. Peak RSS 118MB -> 92MB (mimalloc) and 100MB -> 79MB (glibc).
+
+<a id="r-a47a444c"></a>
+### An empty view owns no buffer
+
+**2026-08-22 · a47a444c** (one runtime guard plus the Makefile dependency that was hiding it)
+
+**`z_String_from_view` malloc'd `size + 1` unconditionally**, so every `"".string` -- the idiom
+this compiler uses for "nothing to say", 479 `return "".string` sites in `src/` alone -- allocated
+one byte holding a terminator that nothing reads: a String is read through its `size`. Those were
+**1,016,288 blocks, 15% of the self-compile**, and the same share of any program that uses an empty
+String as a sentinel. An empty view now yields the zero struct, which is not a new state at all:
+`z_String_create(0)` has always produced it (data NULL, capacity 0), `_free` guards it, `_reserve`
+reallocs from NULL on the first append, and `from_view` already set `capacity = sv.size`, so length
+and capacity read 0 either way. `_copy` is deliberately untouched -- an empty copy's `capacity`
+would move 1 -> 0, and that is observable.
+
+**Rigorous A/B, both gcc -O1 series binaries on IDENTICAL input** (current `src` + `lib/system`,
+`perf stat -r 7`): **allocations 6,720,706 -> 5,701,889, −1,018,817 (−15.16%)**; instructions
+5,667,880,950 -> 5,594,939,972, −72,940,978 (−1.29%) (±0.02% both) -- a malloc/free pair per empty
+string is not free; cycles −0.61% and task-clock −1.8%, both inside the noise floor. Bytes
+346.65MB -> 345.57MB (−0.31%): one byte per allocation, exactly as predicted. `make test` 1119 with
+453 leak-clean ASan runs, ci green.
+
+**The Makefile could not see the change.** `bin/zc.c`, `out/zl.c` and `out/zls.c` listed the `.z`
+sources as prerequisites but not the hand-written runtime the emitter inlines into them, so a
+fragment edit left every artifact stale -- **the first measurement of this commit read as +1
+allocation**, because nothing had been re-emitted. `RT_DEP` is that missing dependency, and the
+lesson is the same one this file records about `tail` and `grep`: a measurement that reads as "no
+change" is first a question about whether the change was built.
+
+**What the census holds now** (5,701,684 blocks; text copies 2.66M): `Tokenizer_tokSpan` 776,543
+(every token's text an owned String -- a view into the source plus intern-on-demand is the
+standing proposal), `Lexer_accept` 326,277, `dataFieldNames` 291,867, `ZTyping_declChildWalk`
+278,198, `atomTextOf` 216,711, `unitNameOfTid` / `definedInUnitOf` 157,213, `hoistArg` 144,069,
+`varCName` 135,358. `String_copy` is now the largest operation at 1,537,645.
 
 <a id="r-457f609a"></a>
 ### Allocation recovery: the walkers, the resolvers and the readable-names collision
