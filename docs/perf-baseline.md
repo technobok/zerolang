@@ -150,6 +150,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-08-18 | f4a6ed00 | [the emitter's unit lookups](#r-f4a6ed00) | 0.53s | 0.64s | 118MB / 100MB | 93 / 230 / 203 (total 526) | 8,365,699 | 460MB | 35.8s (load ~2.5, 1095 cases) | 99,100 |
 | 2026-08-21 | d8cebf3a | [design-review consolidation, phases 2.5-2.8](#r-d8cebf3a) | 0.46s | 0.54s | 92MB / 79MB | 128 / 181 / 173 (total 482) | 6,722,550 | 348MB | 15.5s (1115 cases) | 101,530 |
 | 2026-08-22 | 07c16e90 | [Phase 5: the `:name` shorthand lock rule made unconditional](#r-07c16e90) | 0.45s | 0.54s | 93MB / 81MB | 105 / 180 / 173 (total 458, medians of 5) | 7,412,765 | 355MB | 35.2s (1118 cases, load 1–3.6) | 105,671 |
+| 2026-08-22 | 457f609a | [allocation recovery: the walkers, the resolvers and the readable-names collision](#r-457f609a) | 0.45s | 0.54s | 94MB / 81MB | 98 / 175 / 172 (total 444, medians of 5) | 6,720,484 | 346MB | 34.9s (1119 cases, load 1.7–2.9) | 105,814 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -1587,6 +1588,60 @@ Three commits closing out family C, each with its own oracle. **(1) The last thr
 **Three defects surfaced and were fixed inside the arc**, each pinned: a bare name used as a truthiness condition (`if ghost then`, `when ghost`, `for ghost loop`, `} while ghost`) was never name-resolved and reached the emitter as a raw C identifier (`75dbe93c`); `checkWrappedCall` and `checkMetaCreateCall` fell off the end of the function with no return, and their callers read the indeterminate value as a resolved type (`19c42e19`); and a fn-typed LOCAL shadowing a function of the same name was called BY NAME, so `addit: mulit.take` then `addit a: 3 b: 4` ran the shadowed body and answered 7 instead of 12 (`83603309`).
 
 **Machine quiet for the timed columns** (load < 0.5 throughout; the glibc best-of-5 held 0.54-0.55s and `make test` 15.5s against the previous row's 35.8s at load ~2.5 -- that row's wall columns are the anomaly, not this one's). Own-source LOC rose 99,100 -> 101,530: the split adds function headers, and the arc adds the stamps. Peak RSS 118MB -> 92MB (mimalloc) and 100MB -> 79MB (glibc).
+
+<a id="r-457f609a"></a>
+### Allocation recovery: the walkers, the resolvers and the readable-names collision
+
+**2026-08-22 · 457f609a** (six commits from `5bd50a3f`: `ee24fb29` the `--readable-names` fix,
+`7119894e` argument/typeref resolvers by name id, `f492b258` borrowed String params by tid,
+`7c63883b` the conversion legs, `35c1a4f1` the lock answer, `457f609a` the walkers)
+
+**The previous row recorded +474,041 allocations on identical input and named the recovery path;
+this row is that recovery, measured the same way.** The census that drove it (valgrind dhat, the
+compiler compiling itself) said the +474k was text copies on top of a much larger pre-existing
+budget, and it named the biggest single program point nobody had looked at: `zast.childIds`, at
+481,033 blocks -- a freshly built list of a node's children for every node two whole-tree walks
+visited. What the arc removed, by operation: `ListVal` appends −428,899, `String_copy` −161,458,
+`String_from_view` −76,010, `String_create` −16,610.
+
+**Rigorous A/B, both gcc -O1 series binaries on IDENTICAL input** (the `5bd50a3f` compiler accepts
+this tree, so the common input is the current `src` + `lib/system`, default hash, `--emit-c
+/dev/null`, `perf stat -r 7`): **instructions 5,831,570,591 -> 5,665,978,238, −165,592,353
+(−2.84%)** (±0.05% / ±0.02%), cycles 2.359G -> 2.294G (−2.79%), task-clock 466.0ms -> 458.1ms
+(−1.7%, inside this setup's noise floor). **Allocations 7,429,618 -> 6,720,484, −709,134
+(−9.54%); bytes 355.98MB -> 346.59MB, −9.39MB (−2.64%)**; `allocs == frees` on both sides.
+
+**The Phase 5 cost is repaid with interest: 6,720,484 against the pre-Phase-5 6,941,032, on a tree
+4.2% larger.** Where it came from, largest first. The two whole-tree walks stopped building child
+lists (−430k): `scanCallsInNode` built one before its `match`, so every atom and every definition
+arm paid for a list it ignores, and the block shapes now descend through their own fields;
+`ewWalk`'s generic arm was where nearly every node landed, and the nine shapes a program is mostly
+made of now spell their children in `childIds`' canonical order -- for the list-shaped ones that
+means walking the node's OWN list and copying nothing. Three argument and typeref resolvers stopped
+copying interned names to hand them back as lookup keys (−120k: `paramTypeId` carried four copies
+per parameter type for a function that usually returns at the stamp one line later). The
+conversion legs ask which member before building a `<unit>.<Type>` path for it (−72k). A borrowed
+String parameter is recognised by type id instead of by copying its type's name (−42k). A lock
+that conflicts with nothing answers with a String that owns no buffer instead of `"".string`
+(−44k).
+
+**A pre-existing defect the arc surfaced and fixed first** (`ee24fb29`): `--readable-names` spelled
+every local by its source name, which is unique only inside the frame that binds it -- and a bare
+block is flattened into its enclosing C block, so two sibling frames binding `n` emitted
+`int64_t n` twice. gcc rejected the file, the compiler's own sources carried the shape, and ci
+never saw it because `readable-check` compiled six small programs and never the compiler. The
+scheme now suffixes every binding after the first with its variable id, and `readable-check`
+compiles, links and runs the readable-named compiler.
+
+**What the census still holds, unspent** (the same run, after this arc): text copies are 3.68M of
+6.72M blocks. `Tokenizer_tokSpan` 775,787 (every token's text an owned String), `atomTextOf`
+240,595 (157k of it behind one emitter helper), `dataFieldNames` 291,499,
+`ZTyping_declChildWalk` 277,772, `unitNameOfTid` 164,029, `nodeConstText` 142,897, `varCName`
+135,197. Separately, **1,055,727 blocks are one-byte buffers behind `"".string`** -- a `String`
+constructed bare owns none, which is what the lock commit above used.
+
+**Machine at load 1.7–2.9 for the timed columns** (other users); `perf stat`'s instruction counts
+are load-independent and are the comparison to trust. Own-source LOC 105,671 -> 105,814.
 
 <a id="r-07c16e90"></a>
 ### Phase 5: the `:name` shorthand lock rule made unconditional
