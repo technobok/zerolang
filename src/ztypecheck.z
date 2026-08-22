@@ -12106,7 +12106,6 @@ scanCallsInNode: function {
     ast: Ast.view
     node: Node.view
 } is {
-    kids: zast.childIds :ast n: node
     # the unit frame once: the demands below lend st
     uFr: unitFrameOf :st declId: frame
     match (
@@ -12128,7 +12127,7 @@ scanCallsInNode: function {
                 nameId: (atomNameId :ast n: (ast.nodes.get i: node.callable.u64))
             )
         }
-        scanCallsIn :st :frame :ast ids: kids
+        scanCallsIn :st :frame :ast ids: (zast.childIdsAt :ast id: node.nodeid.u32)
     } case atomid then {
         # bare body identifiers demand main-unit definitions (unit constants,
         # data blocks); non-definition names never match a demanded def.
@@ -12144,6 +12143,17 @@ scanCallsInNode: function {
         # the operator atom names a method, never a definition to demand
         scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.lhs.u64)
         scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.rhs.u64)
+    } case statement then {
+        # the block shapes descend through their OWN child lists: the generic
+        # arm below builds one per node visited, and these four are most of
+        # the nodes there are
+        scanCallsIn :st :frame :ast ids: node.statements
+    } case statementline then {
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.statementline.u64)
+    } case expression then {
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.expression.u64)
+    } case assignment then {
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.value.u64)
     } case ifexpr then {
         # Deliberately branch-blind. This pass runs before resolveConstantDefs,
         # so no fold exists yet and a dead clause's names are demanded anyway.
@@ -12163,7 +12173,7 @@ scanCallsInNode: function {
             frame: uFr
             nameId: (zast.poolFind pool: ast.names text: "never")
         )
-        scanCallsIn :st :frame :ast ids: kids
+        scanCallsIn :st :frame :ast ids: (zast.childIdsAt :ast id: node.nodeid.u32)
     } case doexpr then {
         doFr: unitFrameOf :st declId: frame
         (demandDefinition
@@ -12210,7 +12220,7 @@ scanCallsInNode: function {
         # the arm pattern is never a definition to demand
         scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.statement.u64)
     } case functiondef then null case objectdef then null case unitdef then null case program then null case datablock then null case labelvalue then null else {
-        scanCallsIn :st :frame :ast ids: kids
+        scanCallsIn :st :frame :ast ids: (zast.childIds :ast n: node)
     }
 }
 
