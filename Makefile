@@ -630,6 +630,7 @@ emitter-guard:
 	e7=$$(grep -c 'ztypes.mangleVarName' src/zemitterc.z); \
 	e8=$$(grep -cF 'io.readText' src/zemitterc.z); \
 	e9=$$(grep -c 'monoOriginName' src/zemitterc.z); \
+	e10=$$(grep -c 'ztypes.mangleMemberPrefix' src/zemitterc.z); \
 	g1=$$(grep -c 'composeCname' src/ztypes.z); \
 	g2=$$(grep -cF 'z_t\{' src/zemitterc.z); \
 	fail=0; \
@@ -639,20 +640,21 @@ emitter-guard:
 	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
-	chk "resolveTypeIdByName" "$$e3" 22; \
+	chk "resolveTypeIdByName" "$$e3" 21; \
 	chk "userFnId" "$$e4" 32; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 98; \
+	chk "regNameOf" "$$e6" 97; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 4; \
 	chk "monoOriginName" "$$e9" 8; \
+	chk "ztypes.mangleMemberPrefix (inside memberCPrefix)" "$$e10" 1; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
 	  echo "  ctxCname instead of resolving by name."; \
 	  exit 1; \
 	fi; \
-	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9"
+	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 mangleMember=$$e10"
 
 # deadcode-guard -- emitted statements that no path can reach. clang's
 # -Wunreachable-code family is the oracle; gcc accepts the flag but never warns.

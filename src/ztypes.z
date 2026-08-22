@@ -27,6 +27,7 @@ public: unit {
     :makeFloatConst
     :makeIntConst
     :makeStrConst
+    :mangleMemberPrefix
     :mangleVarName
     :newRegistry
     :noConst
@@ -1452,8 +1453,9 @@ makeArmConst: function {armTid: tid armName: zast.nameid} out cval is {
 
 # --- C name mangling ---
 
-# C reserved words a local variable name must not collide with. A
-# variable whose zerolang name is one of these is emitted as `v_<name>`.
+# C reserved words an emitted identifier must not collide with. A local
+# variable or a struct member whose zerolang name is one of these is
+# emitted as `v_<name>`.
 isCReserved: function {name: StringView} out bool is {
     if name == "main" then return true
     if name == "break" then return true
@@ -1497,6 +1499,21 @@ isCReserved: function {name: StringView} out bool is {
 mangleVarName: function {name: StringView} out String is {
     if isCReserved name then return ("v_".concat name)
     return name.string
+}
+
+# The prefix `name` needs to be a C-safe struct member identifier: `v_` for a
+# C reserved word and empty for every other name, which is nearly all of them.
+# A member shares the local scheme and its residual -- a member literally named
+# `v_default` collides with a member named `default`. It is a prefix rather
+# than a mangled copy because every caller is already building the C text
+# around the name, so `\{prefix}\{name}` costs no allocation where handing back
+# a mangled String would cost one per member spelling. It is separate from
+# mangleVarName because the emitter-guard ratchet pins mangleVarName's call
+# sites at the two inside varCName: locals are named in exactly one place, and
+# so are members, in memberCPrefix.
+mangleMemberPrefix: function {name: StringView} out StringView is {
+    if isCReserved name then return "v_"
+    return ""
 }
 
 # --- numeric classification and range ---

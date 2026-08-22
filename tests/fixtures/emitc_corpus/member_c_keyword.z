@@ -1,0 +1,68 @@
+# member_c_keyword.z -- record, class and variant MEMBERS named after C reserved
+# words. A member has no id space of its own, so it keeps its source spelling:
+# a field named `default` emitted `int64_t default;` and the C compiler rejected
+# the file. Every spelling of a member goes through memberCName and they must
+# agree -- a mangler at the declaration but not at a read emits `b.v_default`
+# against a field named `default`. Each member below reaches a distinct path:
+#   box.default        struct field decl + meta_create param + read + write
+#   box == box2        the generated `_eq` over the fields
+#   wrap.inner.const   the nested dotted base
+#   Held.default       a String field, so the destructor frees it by name
+#   pick.default 7     a variant arm: union member, tagged init, match bind
+#   pick.short         a payload-less arm (no union member; the tag is upcased)
+#   Ops.register       a function-pointer field's typedef and its call
+
+box: record {
+    default: i64
+    register: i64
+    const: i64
+    struct: i64
+}
+
+wrap: record {
+    inner: box
+}
+
+pick: variant {
+    default: i64
+    short: null
+}
+
+Held: class {
+    default: String
+}
+
+Ops: class {
+    register: function {a: i64} out i64
+}
+
+twice: function {a: i64} out i64 is {
+    return a + a
+}
+
+main: function is {
+    b: box default: 1 register: 2 const: 3 struct: 4
+    b.default = 11
+    print "box=\{b.default},\{b.register},\{b.const},\{b.struct}"
+
+    b2: box default: 11 register: 2 const: 3 struct: 4
+    if b == b2 then print "eq=yes" else print "eq=no"
+
+    w: wrap inner: b2
+    print "nested=\{w.inner.const}"
+
+    h: Held default: "held".string
+    print "held=\{h.default}"
+
+    p: pick.default 7
+    match (
+        p
+    ) case default then {
+        print "arm=\{p}"
+    } case short then {
+        print "arm=short"
+    }
+
+    o: Ops register: twice.take
+    print "fnptr=\{o.register a: 21}"
+}

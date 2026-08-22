@@ -6975,7 +6975,8 @@ emitInlineVariantCtor: function {
                 }
             } else null
         }
-        e0: "((\{vc}_t){ .tag = \{tg}, .data.\{arm} = (\{av}) })"
+        armCiP: memberCPrefix name: arm
+        e0: "((\{vc}_t){ .tag = \{tg}, .data.\{armCiP}\{arm} = (\{av}) })"
         return e0
     } else {
         armValue: armValueC :symtab :tid :arm
@@ -9314,7 +9315,8 @@ emitFnptrFieldCall: function {
             ai = ai + 1
         } else null
     }
-    r: "\{recvExpr}\{acc}\{mn}(\{args})"
+    mnFfP: memberCPrefix name: mn.stringview
+    r: "\{recvExpr}\{acc}\{mnFfP}\{mn}(\{args})"
     return r
 }
 
@@ -10008,6 +10010,20 @@ varCName: function {ctx: Ctx.view vid: ztypes.vid name: StringView} out String i
     return "z_v\{vid}"
 }
 
+# memberCPrefix -- what a struct member's name needs in front of it to be a C
+# identifier. A member keeps its source spelling: it has no id space of its
+# own, and its namespace is the struct, so nothing but a C reserved word can
+# collide. A field named `default` would emit `int64_t default;`, which the C
+# compiler rejects, so the name carries the same `v_` a local does -- empty
+# for every other name. Every spelling of a member -- the declaration, the
+# reads and writes, the constructor parameters, the destructor, the generated
+# `_eq` and the vtable slots cSlotName keeps in step -- puts this in front of
+# it, because a prefix applied at the declaration and not at a read emits
+# `b.v_default` against a field named `default`.
+memberCPrefix: function {name: StringView} out StringView is {
+    return (ztypes.mangleMemberPrefix :name)
+}
+
 # emitLocalAtomName -- a local variable's C spelling: the alias or narrowing
 # cast in scope for it, else its own identifier. Shared by the atomid and
 # labelvalue (:name shorthand) value legs.
@@ -10624,11 +10640,12 @@ emitDottedNestedBase: function {
     # reached (a field path fails pathIsPointer's lock-field test)
     nstPtr: pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
     if nstPtr == false then nstPtr = isHeapPtrCollection :symtab :ctx tid: nlid
+    mnNbP: memberCPrefix name: mn2
     if nstPtr then {
-        ep: "\{baseAtom}->\{mn2}"
+        ep: "\{baseAtom}->\{mnNbP}\{mn2}"
         return ep
     } else {
-        ed: "\{baseAtom}.\{mn2}"
+        ed: "\{baseAtom}.\{mnNbP}\{mn2}"
         return ed
     }
 }
@@ -10755,7 +10772,8 @@ emitResolvedMemberRead: function {
                 accFp = "->".string
                 rcvFp = "\{bn2}"
             }
-            return "\{bn2}\{accFp}\{mn2}(\{rcvFp})"
+            mnFpP: memberCPrefix name: mn2
+            return "\{bn2}\{accFp}\{mnFpP}\{mn2}(\{rcvFp})"
         }
     }
     return "".string
@@ -10842,11 +10860,12 @@ emitUserTypeMemberRead: function {
         )
         if rmr.length > 0 then return rmr
     } case none then null
+    mnUtP: memberCPrefix name: mn2
     if (isPtrVid :ctx vid: bn2v) then {
-        e5p: "\{bn2}->\{mn2}"
+        e5p: "\{bn2}->\{mnUtP}\{mn2}"
         return e5p
     }
-    e5: "\{bn2}.\{mn2}"
+    e5: "\{bn2}.\{mnUtP}\{mn2}"
     return e5
     return "".string
 }
@@ -11366,7 +11385,8 @@ emitDottedAtomBase: function {
     eRc: dottedAtomRecClsBase :ast :symtab :ctx :bn2 :mn2 :bn2v :bstamp :rtt
     if eRc.length > 0 then return eRc
     if rtt == ztypes.ztypetype.variantType then {
-        e: "\{bn2}.data.\{mn2}"
+        armDaP: memberCPrefix name: mn2
+        e: "\{bn2}.data.\{armDaP}\{mn2}"
         return e
     }
     cmr: (emitCollectionMemberRead
@@ -15236,7 +15256,8 @@ emitReassignLvalue: function {
             nbo: vvGet xs: ctx.narrowBox vid: ba9V
             if nbo.length > 0 then {
                 mem: atomTextOf :ast n: (ast.nodes.get i: n.child.u64)
-                lvx: "\{nbo}.\{mem}"
+                memP: memberCPrefix name: mem.stringview
+                lvx: "\{nbo}.\{memP}\{mem}"
                 return lvx
             }
         }
@@ -15258,7 +15279,8 @@ emitReassignLvalue: function {
             accFpL: ".".string
             if (isPtrVid :ctx vid: rfv) then accFpL = "->".string
             recvFpC: emitLocalAtomName :ctx name: recvFp.stringview vid: rfv
-            return "\{recvFpC}\{accFpL}\{memFp}"
+            memFpP: memberCPrefix name: memFp.stringview
+            return "\{recvFpC}\{accFpL}\{memFpP}\{memFp}"
         }
     } else null
     return (emitExpr :ast :symtab :ctx :n)
@@ -16033,7 +16055,8 @@ emitMatchClause: function {
                 didSeed = true
             } else {
                 snE: varCName :ctx vid: snameVid name: sname
-                l3: "\{ind}    \{pc} \{snE} = _m\{mN}.data.\{arm};\n"
+                armMP: memberCPrefix name: arm
+                l3: "\{ind}    \{pc} \{snE} = _m\{mN}.data.\{armMP}\{arm};\n"
                 buf.append l3
                 l4: "\{ind}    (void)\{snE};\n"
                 buf.append l4
@@ -17188,7 +17211,8 @@ armAliasText: function {
     if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType then {
         return "(*(\{pc}*)\{recv}\{acc}data)"
     }
-    return "\{recv}\{acc}data.\{arm}"
+    armAtP: memberCPrefix name: arm
+    return "\{recv}\{acc}data.\{armAtP}\{arm}"
 }
 
 # remainingArm -- the single arm of `tid` left after removing the
@@ -21620,7 +21644,10 @@ isBareCName: function {s: StringView} out bool is {
 # The fallback is byte-wise so any operator the table misses still yields a
 # unique, deterministic identifier rather than colliding with another one.
 cSlotName: function {name: StringView} out String is {
-    if (isBareCName s: name) then return name.string
+    if (isBareCName s: name) then {
+        sp: memberCPrefix :name
+        return "\{sp}\{name}"
+    }
     op: opCnameOf :name
     if op.length > 0 then return op
     result: "op".string
@@ -27248,11 +27275,14 @@ emitProtocolImpl: function {
                     pid: (ztypes.tid.create from: pid.u64)
                     thisTid: (ztypes.tid.create from: protoTid.u64)
                 )
+                pnmP: memberCPrefix name: pnm.stringview
                 wparams.append ", "
                 wparams.append pct
                 wparams.append " "
+                wparams.append pnmP
                 wparams.append pnm
                 cargs.append ", "
+                cargs.append pnmP
                 cargs.append pnm
             }
             pi = pi + 1
@@ -27400,11 +27430,14 @@ emitFacetImpl: function {
                     pid: (ztypes.tid.create from: pid.u64)
                     thisTid: (ztypes.tid.create from: facetTid.u64)
                 )
+                pnmFP: memberCPrefix name: pnm.stringview
                 wparams.append ", "
                 wparams.append pct
                 wparams.append " "
+                wparams.append pnmFP
                 wparams.append pnm
                 cargs.append ", "
+                cargs.append pnmFP
                 cargs.append pnm
             }
             pi = pi + 1
@@ -29121,7 +29154,8 @@ emitOneVariant: function {
                 haveP = true
                 buf.append "    union {\n"
             }
-            lp: "        \{pc} \{pname};\n"
+            pnameP: memberCPrefix name: pname.stringview
+            lp: "        \{pc} \{pnameP}\{pname};\n"
             buf.append lp
         }
         pj = pj + 1
@@ -29159,14 +29193,16 @@ emitOneVariant: function {
                             if qtt == ztypes.ztypetype.variantType then isAgg = true
                             if isAgg then {
                                 qrc: ctxCname :ctx tid: (ztypes.tid.create from: qrid.u64)
-                                qe: "\{qrc}_eq(a.data.\{qname}, b.data.\{qname})"
+                                qnameP: memberCPrefix name: qname.stringview
+                                qe: "\{qrc}_eq(a.data.\{qnameP}\{qname}, b.data.\{qnameP}\{qname})"
                                 qeq.append qe
                             }
                         }
                     }
                 } case none then null
                 if qeq.length == 0 then {
-                    qe2: "a.data.\{qname} == b.data.\{qname}"
+                    qname2P: memberCPrefix name: qname.stringview
+                    qe2: "a.data.\{qname2P}\{qname} == b.data.\{qname2P}\{qname}"
                     qeq.append qe2
                 }
                 lr: "        case \{qtg}: return \{qeq};\n"
@@ -29281,7 +29317,8 @@ emitStructDestructor: function {
             name: fname.stringview
         ) == false then {
             if fid == ctx.strTid then {
-                ds: "    \{ctx.strC}_free(&p->\{fname});\n"
+                dsP: memberCPrefix name: fname.stringview
+                ds: "    \{ctx.strC}_free(&p->\{dsP}\{fname});\n"
                 buf.append ds
             } else {
                 fmid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
@@ -29299,10 +29336,12 @@ emitStructDestructor: function {
                         :ctx
                         tid: (ztypes.tid.create from: fid.u64)
                     ) then {
-                        df: "    \{fcb}_destroy(p->\{fname});\n"
+                        dfP: memberCPrefix name: fname.stringview
+                        df: "    \{fcb}_destroy(p->\{dfP}\{fname});\n"
                         buf.append df
                     } else {
-                        df2: "    \{fcb}_destroy(&p->\{fname});\n"
+                        df2P: memberCPrefix name: fname.stringview
+                        df2: "    \{fcb}_destroy(&p->\{df2P}\{fname});\n"
                         buf.append df2
                     }
                 }
@@ -29386,7 +29425,8 @@ emitOneRecord: function {
             :ctx
             tid: (ztypes.tid.create from: fid.u64)
         ) then fct = "\{fct}*"
-        l1: "    \{fct} \{fname};\n"
+        fnameP: memberCPrefix name: fname.stringview
+        l1: "    \{fct} \{fnameP}\{fname};\n"
         buf.append l1
         fi = fi + 1
     }
@@ -29426,9 +29466,12 @@ emitOneRecord: function {
             params.append ", "
             inits.append ", "
         }
+        fname2P: memberCPrefix name: fname2.stringview
         params.append fct2
         params.append " "
+        params.append fname2P
         params.append fname2
+        inits.append fname2P
         inits.append fname2
         fj = fj + 1
     }
@@ -29471,14 +29514,16 @@ emitOneRecord: function {
                     if ftt == ztypes.ztypetype.variantType then isAggF = true
                     if isAggF then {
                         frc: ctxCname :ctx tid: (ztypes.tid.create from: frid.u64)
-                        fe: "\{frc}_eq(a.\{fkn}, b.\{fkn})"
+                        fknP: memberCPrefix name: fkn.stringview
+                        fe: "\{frc}_eq(a.\{fknP}\{fkn}, b.\{fknP}\{fkn})"
                         eqx.append fe
                         fdone = true
                     }
                 }
             }
             if (fdone) == false then {
-                fe2: "a.\{fkn} == b.\{fkn}"
+                fkn2P: memberCPrefix name: fkn.stringview
+                fe2: "a.\{fkn2P}\{fkn} == b.\{fkn2P}\{fkn}"
                 eqx.append fe2
             }
             fk = fk + 1
