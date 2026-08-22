@@ -820,12 +820,16 @@ ZSymbolTable: class {
     # Try to acquire a lock on `path` (segments; root is a variable name);
     # returns "" on success or an error message.
     tryLock: function {:this pool: zast.StringPool.view path: (ListVal zast.nameid).view lockType: ztypes.zlockstate lockScope: ztypes.zlockscope holder: ztypes.zlockholder} out String is {
-        if path.length == 0 then return "".string
+        # every acquisition that CONFLICTS is spelled out; every other one
+        # answers with this empty message, and an empty String constructed
+        # bare owns no buffer, where `"".string` allocates one for each.
+        ok: String
+        if path.length == 0 then return ok
         d: this.findLocal nameId: (path.get i: 0)
-        if d.isZero then return "".string
-        if (this.isTakenDecl declId: d) then return "".string
+        if d.isZero then return ok
+        if (this.isTakenDecl declId: d) then return ok
         dv: this.typing.declLocalVarOf declId: d
-        if dv.isZero then return "".string
+        if dv.isZero then return ok
 
         idempotent: false
         conflictAt: u64
@@ -898,7 +902,7 @@ ZSymbolTable: class {
                 existingHolder: cHolder
             )
         }
-        if idempotent then return "".string
+        if idempotent then return ok
 
         le: this.reg.newEntry ztypeId: (this.typing.declLocalTypeOf declId: d)
         ro: this.rowOf declId: d
@@ -920,7 +924,7 @@ ZSymbolTable: class {
         le.lockHolder = holder
         with lpit: path.iterate do for seg: lpit loop le.lockPath.append seg
         this.appendRow row: le declId: d
-        return "".string
+        return ok
     }
 
     findLock: function {this: this.view nameId: zast.nameid} out optionval ztypes.zlockstate is {
