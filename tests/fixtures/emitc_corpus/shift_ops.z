@@ -1,0 +1,61 @@
+# `<<` and `>>`, with the two rules that make them total.
+#
+# OVER-WIDE COUNTS ARE DEFINED, not UB: a count at or above the type's width
+# yields 0 for `<<` and for unsigned `>>`, and 0 or -1 by the sign of the left
+# operand for signed `>>`. C leaves that shift undefined, so the templates
+# guard it rather than inherit it.
+#
+# THE COUNT IS COMPARED AS UNSIGNED. It is the same type as the left operand,
+# like every other binop, so on a signed type it can be NEGATIVE -- and a
+# negative count is UB in C too. Comparing it as unsigned folds negatives into
+# the over-wide case, where they answer 0 or the sign fill.
+main: function is {
+    a: 12.u64
+    print "u64: \{a << 2} \{a >> 2}"
+    print "u64 at width: \{a << 64} \{a >> 64}"
+    print "u64 above width: \{a << 65} \{a >> 65}"
+
+    # `>>` is ARITHMETIC on the signed types: it fills with the sign
+    b: (0.i64 - 8.i64)
+    print "i64 -8: \{b << 1} \{b >> 1}"
+    print "i64 -8 at width: \{b << 64} \{b >> 64}"
+    p: 8.i64
+    print "i64 8 at width: \{p << 64} \{p >> 64}"
+
+    # a LOGICAL right shift is `x.bits >> n` -- this is the whole reason
+    # `bits` exists, and the pattern C gives for (uint64_t)(int64_t)-8 >> 1
+    print "logical: \{b.bits >> 1}"
+
+    # a negative count on a signed type
+    n1: (0.i64 - 1.i64)
+    print "i64 negative count: \{b >> n1} \{b << n1} \{p >> n1}"
+
+    # the narrow types, where the width is smallest and overshift is easiest
+    c: 200.u8
+    print "u8: \{c << 1} \{c >> 1} \{c << 8} \{c >> 8}"
+    d: (0.i8 - 8.i8)
+    print "i8 -8: \{d << 1} \{d >> 1} \{d >> 8} \{d << 8}"
+    e: 12.u16
+    print "u16: \{e << 4} \{e >> 2} \{e << 16}"
+    f: (0.i32 - 12.i32)
+    print "i32 -12: \{f >> 2} \{f << 2} \{f >> 32}"
+
+    # shifting by zero is the identity, and the character types shift too
+    print "zero count: \{a << 0} \{b >> 0}"
+    g: 12.c8
+    print "c8: \{g << 2} \{g >> 2}"
+
+    # THE OPERANDS ARE BOUND ONCE. natives.tbl holes fill VERBATIM, so a
+    # template naming @R@ twice would paste the operand expression twice and
+    # evaluate a call on the right-hand side twice. The rows bind each operand
+    # into a GNU statement expression first, which is how the 159 rows that
+    # already needed this do it. `noisy` prints once, not twice.
+    print "call operand: \{(twelve) << (noisy)}"
+}
+
+twelve: function out u64 is { return 12 }
+
+noisy: function out u64 is {
+    print "  (rhs evaluated)"
+    return 2
+}
