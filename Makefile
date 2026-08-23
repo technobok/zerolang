@@ -2,11 +2,11 @@ CC       := gcc
 # -Wdiscarded-qualifiers is the GCC spelling; clang groups the same
 # diagnostic under -Wincompatible-pointer-types-discards-qualifiers.
 QUALWERR := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),-Werror=incompatible-pointer-types-discards-qualifiers,-Werror=discarded-qualifiers)
-CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
+CFLAGS_BASE := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
             -Werror=implicit-function-declaration -Werror=implicit-int \
             -Werror=int-conversion -Werror=incompatible-pointer-types \
-            -Werror=unused-but-set-variable \
-            $(QUALWERR)
+            -Werror=unused-but-set-variable
+CFLAGS   := $(CFLAGS_BASE) $(QUALWERR)
 
 # Parallel by default: make fans out independent targets and the corpus runner
 # fans out its per-case pipelines (--jobs). `make NPROC=1` forces everything
@@ -500,17 +500,56 @@ docs:
 	$(MAKE) -C docs
 	@echo "rendered docs/ -- commit the regenerated .html"
 
-# warn-check -- compile every emitted C file with each warning as an error.
-# All FOUR, because they are not the same program: zl and zls carry units zc
-# does not, so a dead store reachable only from one of them shows up only
+# WARN_CCS -- the compilers warn-check gates. Same reasoning as
+# CI_BOOTSTRAP_CCS: a compiler named here but missing is an error, because a
+# shorter list is a smaller claim.
+WARN_CCS ?= $(CC) clang $(BUILDDIR)/tcc
+
+# WARNSET_* -- the warnings each family actually IMPLEMENTS. QUALWERR's
+# gcc/clang split, generalised: clang rejects gcc's -Werror=discarded-qualifiers
+# outright, and tcc implements exactly six warnings (`tcc -hh`) and silently
+# accepts every other -W it is handed. Passing tcc gcc's set would be the same
+# defect as passing it -fsanitize=address -- the gate would report checks it had
+# not run. -Wunsupported is tcc's own version of this rule, and is on
+# deliberately: it makes tcc say when it is ignoring something.
+WARNSET_gcc   := $(CFLAGS_BASE) -Werror=discarded-qualifiers $(OPTFLAGS)
+WARNSET_clang := $(CFLAGS_BASE) -Werror=incompatible-pointer-types-discards-qualifiers $(OPTFLAGS)
+WARNSET_tcc   := -B $(TCCLIB) -Wall -Wunsupported \
+                 -Werror=implicit-function-declaration -Werror=discarded-qualifiers
+
+# warn-check -- compile every emitted C file with each warning as an error, with
+# every compiler that has to build it.
+#
+# All FOUR files, because they are not the same program: zl and zls carry units
+# zc does not, so a dead store reachable only from one of them shows up only
 # there -- and the committed SEED is what a fresh clone compiles first, so a
 # warning left in it greets every new checkout no matter how clean src/ is.
-warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -Werror -c bootstrap/zc.c -o /dev/null
-	$(CC) $(CFLAGS) $(OPTFLAGS) -Werror -c bin/zc.c -o /dev/null
-	$(CC) $(CFLAGS) $(OPTFLAGS) -Werror -c $(BUILDDIR)/zl.c -o /dev/null
-	$(CC) $(CFLAGS) $(OPTFLAGS) -Werror -c $(BUILDDIR)/zls.c -o /dev/null
-	@echo "warn-check OK: zero compiler warnings (seed + zc + zl + zls)"
+#
+# All THREE compilers, because they do not see the same things. tcc's "function
+# might return no value" is the one diagnostic that points at a genuinely
+# missing tail return, which surfaces at runtime as `zpanic: out of memory` and
+# nowhere else; gcc and clang never report it. The residue is zero on all three.
+warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c $(BUILDDIR)/tcc
+	@set -e; \
+	for cc in $(WARN_CCS); do \
+	  tag=$$(basename $$cc); \
+	  case "$$tag" in \
+	    *tcc*)   w='$(WARNSET_tcc)';; \
+	    *clang*) w='$(WARNSET_clang)';; \
+	    *)       w='$(WARNSET_gcc)';; \
+	  esac; \
+	  if ! command -v $$cc >/dev/null 2>&1 && [ ! -x $$cc ]; then \
+	    echo "warn-check FAIL: '$$cc' is not available"; \
+	    echo "  WARN_CCS names the compilers this gate speaks for; install it, or"; \
+	    echo "  narrow the list deliberately: make warn-check WARN_CCS='gcc'"; \
+	    exit 1; \
+	  fi; \
+	  for f in bootstrap/zc.c bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c; do \
+	    $$cc $$w -Werror -c $$f -o /dev/null; \
+	  done; \
+	  echo "  $$tag: clean on seed + zc + zl + zls"; \
+	done
+	@echo "warn-check OK: zero warnings from $(words $(WARN_CCS)) compiler(s) on all four emitted files"
 
 # perf -- self-compile performance snapshot for docs/perf-baseline.md, measured the
 # same way as the rows there (default hash, --emit-c /dev/null): the zerolang line

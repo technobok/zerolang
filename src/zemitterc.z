@@ -22214,7 +22214,14 @@ emitCHeader: function {
     buf.append "    fprintf(stderr, \"zpanic: %s\\n\", msg);\n"
     buf.append "    exit(1);\n"
     buf.append "}\n"
-    buf.append "static _Noreturn void z_unreachable(void) { z_panic(\"unreachable\"); }\n"
+    # `__attribute__((noreturn))` and not `_Noreturn`: tcc parses the C11
+    # keyword but does not propagate it through a CALL, so every function whose
+    # body ends in `default: z_unreachable();` -- 120 of them in bin/zc.c alone
+    # -- drew "function might return no value". It does propagate the GNU
+    # attribute. gcc and clang accept both and are unaffected. The emitted C
+    # already requires GNU C for statement expressions, so this costs no
+    # portability, and it is what lets warn-check gate all three compilers.
+    buf.append "__attribute__((noreturn)) static void z_unreachable(void) { z_panic(\"unreachable\"); }\n"
     buf.append "static void* z_xmalloc(size_t n) {\n"
     buf.append "    void* p = malloc(n);\n"
     buf.append "    if (!p) z_panic(\"out of memory\");\n"

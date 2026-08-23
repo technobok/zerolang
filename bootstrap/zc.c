@@ -39,7 +39,7 @@ static _Noreturn void z_panic(const char* msg) {
     fprintf(stderr, "zpanic: %s\n", msg);
     exit(1);
 }
-static _Noreturn void z_unreachable(void) { z_panic("unreachable"); }
+__attribute__((noreturn)) static void z_unreachable(void) { z_panic("unreachable"); }
 static void* z_xmalloc(size_t n) {
     void* p = malloc(n);
     if (!p) z_panic("out of memory");
@@ -3562,8 +3562,8 @@ static const char _zs1569_d[] = "    exit(1);\n";
 static const z_t52_t _zs1569 = { .data = _zs1569_d, .size = 13 };
 static const char _zs1570_d[] = "}\n";
 static const z_t52_t _zs1570 = { .data = _zs1570_d, .size = 2 };
-static const char _zs1571_d[] = "static _Noreturn void z_unreachable(void) { z_panic(\"unreachable\"); }\n";
-static const z_t52_t _zs1571 = { .data = _zs1571_d, .size = 70 };
+static const char _zs1571_d[] = "__attribute__((noreturn)) static void z_unreachable(void) { z_panic(\"unreachable\"); }\n";
+static const z_t52_t _zs1571 = { .data = _zs1571_d, .size = 86 };
 static const char _zs1572_d[] = "static void* z_xmalloc(size_t n) {\n";
 static const z_t52_t _zs1572 = { .data = _zs1572_d, .size = 35 };
 static const char _zs1573_d[] = "    void* p = malloc(n);\n";
