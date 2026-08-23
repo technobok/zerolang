@@ -35,7 +35,13 @@ BUILDDIR := out
 # the -l flags a driver's own emitted C declares on its fixed second line.
 # bin/zc reaches lib/system/tcc.z and so needs -ldl; zl and zls do not. Read
 # off the artifact rather than hardcoded, exactly as $(EXDIR)/%.bin does.
-ZLINKOF = $$(sed -n '2s|^/\* zlink: \(.*\) \*/$$|\1|p' $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|')
+# ZLINKSED lifts the names out of an emitted C file's `zlink:` header; ZLINKOF
+# turns them into -l flags. SEARCHED in the first few lines rather than pinned
+# to line 2: an emitter change that inserted a line above it would otherwise
+# yield NO libraries, silently and with no error anywhere. One definition, so
+# the three readers cannot drift.
+ZLINKSED = sed -n '1,8s|^/\* zlink: \(.*\) \*/$$|\1|p'
+ZLINKOF = $$($(ZLINKSED) $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|')
 MIMALLOC ?= 1
 ifeq ($(MIMALLOC),1)
 MIMALLOC_OBJ := $(BUILDDIR)/mimalloc.o
@@ -84,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard refusal-guard test-tcc mode-parity readable-check user-native-guard perf-strict perf-elision
+.PHONY: emit-set ident-set natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc mode-parity readable-check user-native-guard perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -124,7 +130,7 @@ style-lint: bin/zl
 $(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c $(call ZLINKOF,$(BUILDDIR)/ztestrunner.c) -lm
 
 # test -- build the compiler + the corpus runner, then run the fast corpus gate
 # (run/leak/error/dump/smoke/differential kinds, all driven via os.spawn; no
@@ -138,7 +144,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc mode-parity ci-corpus
+ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -189,8 +195,8 @@ readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	  n=$${c%%:*}; d=$$(echo $$c | sed 's/^[^:]*://'); \
 	  bin/zc $$n --src $$d --system lib/system --emit-c $(BUILDDIR)/rn/$$n-id.c || exit 1; \
 	  bin/zc $$n --src $$d --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/$$n-rn.c || exit 1; \
-	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-id $(BUILDDIR)/rn/$$n-id.c -lm || exit 1; \
-	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-rn $(BUILDDIR)/rn/$$n-rn.c -lm || exit 1; \
+	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-id $(BUILDDIR)/rn/$$n-id.c $(call ZLINKOF,$(BUILDDIR)/rn/$$n-id.c) -lm || exit 1; \
+	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-rn $(BUILDDIR)/rn/$$n-rn.c $(call ZLINKOF,$(BUILDDIR)/rn/$$n-rn.c) -lm || exit 1; \
 	  $(BUILDDIR)/rn/$$n-id > $(BUILDDIR)/rn/$$n-id.out 2>&1; \
 	  $(BUILDDIR)/rn/$$n-rn > $(BUILDDIR)/rn/$$n-rn.out 2>&1; \
 	  diff -q $(BUILDDIR)/rn/$$n-id.out $(BUILDDIR)/rn/$$n-rn.out > /dev/null \
@@ -219,7 +225,7 @@ $(EXDIR)/%.c: examples/%.z bin/zc
 # second line, so the link follows the program rather than a blanket flag.
 $(EXDIR)/%.bin: $(EXDIR)/%.c
 	$(CC) $(CFLAGS) -o $@ $< \
-	  $$(sed -n '2s|^/\* zlink: \(.*\) \*/$$|\1|p' $< | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|') -lm
+	  $(call ZLINKOF,$<) -lm
 
 build: $(EXBINS)
 	@echo "$(words $(EXBINS)) examples built ($(EXDIR)/)"
@@ -299,7 +305,7 @@ tcc: $(BUILDDIR)/tcc $(TCCLIB)/libtcc.so
 # seed (bootstrap/zc.c). See bootstrap/README.md and `make test-bootstrap`.
 $(BUILDDIR)/zc-seed: bootstrap/zc.c
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c -lm
+	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c $(call ZLINKOF,bootstrap/zc.c) -lm
 
 # bin/zc -- the self-hosted compiler, bootstrapped by the seed. Persistent +
 # git-ignored; rebuilt when the compiler sources change. The dev bin/zc
@@ -360,12 +366,12 @@ zls: bin/zls
 out/zlexer: bin/zc tests/unit/zlexer_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zlexer_dump --src tests/unit --system lib/system --emit-c $(BUILDDIR)/zlexer.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c $(call ZLINKOF,$(BUILDDIR)/zlexer.c) -lm
 
 out/zparser: bin/zc tests/unit/zparser_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zparser_dump --src tests/unit --system lib/system --emit-c $(BUILDDIR)/zparser.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c $(call ZLINKOF,$(BUILDDIR)/zparser.c) -lm
 
 # Regenerate the lexer / parser / whole-program goldens from the dump tools.
 # Always review the resulting diff before committing.
@@ -397,11 +403,11 @@ bump-seed: bin/zc
 # Slow (3 zc.c compiles).
 test-bootstrap:
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-seed bootstrap/zc.c -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-seed bootstrap/zc.c $(call ZLINKOF,bootstrap/zc.c) -lm
 	$(BUILDDIR)/zc-seed zc --src src --system lib/system --emit-c $(BUILDDIR)/b1.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b1 $(BUILDDIR)/b1.c -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b1 $(BUILDDIR)/b1.c $(call ZLINKOF,$(BUILDDIR)/b1.c) -lm
 	$(BUILDDIR)/zc-b1 zc --src src --system lib/system --emit-c $(BUILDDIR)/b2.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b2 $(BUILDDIR)/b2.c -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b2 $(BUILDDIR)/b2.c $(call ZLINKOF,$(BUILDDIR)/b2.c) -lm
 	$(BUILDDIR)/zc-b2 zc --src src --system lib/system --emit-c $(BUILDDIR)/b3.c
 	@diff $(BUILDDIR)/b2.c $(BUILDDIR)/b3.c \
 		&& echo "fixpoint OK (b2 == b3)" \
@@ -410,7 +416,7 @@ test-bootstrap:
 		&& echo "seed is current (b1 == committed seed)" \
 		|| echo "note: seed has lagged (b1 != committed seed) -- run 'make bump-seed' when convenient"
 	$(BUILDDIR)/zc-b1 ztypes_smoke --src src --system lib/system --emit-c $(BUILDDIR)/zt.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zt $(BUILDDIR)/zt.c -lm
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zt $(BUILDDIR)/zt.c $(call ZLINKOF,$(BUILDDIR)/zt.c) -lm
 	$(BUILDDIR)/zt | diff - tests/fixtures/ztypes_smoke_z/smoke.expected \
 		&& echo "correctness OK (seed-built zc compiles the ztypes smoke to golden)"
 	@echo "bootstrap seed OK: 'cc bootstrap/zc.c' builds a correct self-hosting zc (no Python)"
@@ -466,7 +472,7 @@ PERFRUN  := $(PERFBIN) $(PERFARGS)
 # level by the series compiler. Depends on bin/zc because that rule is what
 # emits bin/zc.c.
 $(PERFBIN): bin/zc.c $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o
-	@$(PERFCC) -std=c17 -w $(PERFOPT) -o $@ $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o bin/zc.c -lpthread -lm
+	@$(PERFCC) -std=c17 -w $(PERFOPT) -o $@ $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o bin/zc.c $(call ZLINKOF,bin/zc.c) -lpthread -lm
 
 perf: $(PERFBIN)
 	@echo "== zerolang line count (.z) =="
@@ -523,8 +529,8 @@ perf-elision: bin/zc.c
 	@command -v valgrind >/dev/null 2>&1 || { echo "perf-elision: valgrind not installed -- skipping"; exit 0; }
 	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
 	  echo "== perf-elision @ $$sha ($$dirty), $(ELIDECC) A/B over bin/zc.c =="
-	@$(ELIDECC) -std=c17 -w $(PERFOPT) -o $(BUILDDIR)/zc-elide bin/zc.c -lpthread -lm
-	@$(ELIDECC) -std=c17 -w $(PERFOPT) $(NOBUILTIN) -o $(BUILDDIR)/zc-noelide bin/zc.c -lpthread -lm
+	@$(ELIDECC) -std=c17 -w $(PERFOPT) -o $(BUILDDIR)/zc-elide bin/zc.c $(call ZLINKOF,bin/zc.c) -lpthread -lm
+	@$(ELIDECC) -std=c17 -w $(PERFOPT) $(NOBUILTIN) -o $(BUILDDIR)/zc-noelide bin/zc.c $(call ZLINKOF,bin/zc.c) -lpthread -lm
 	@blocks() { valgrind --tool=memcheck $$1 $(PERFARGS) 2>&1 \
 	    | grep 'total heap usage' | sed 's/.*usage: //;s/ allocs.*//;s/,//g'; }; \
 	  kept=$$(blocks $(BUILDDIR)/zc-noelide); left=$$(blocks $(BUILDDIR)/zc-elide); \
@@ -684,7 +690,7 @@ user-native-guard: bin/zc
 	  --runtime $$d/rt --emit-c $$d/mystery.c > $$d/emit.log 2>&1 \
 	  || { echo "user-native-guard FAIL: emit"; sed -n 1,5p $$d/emit.log; fail=1; }; \
 	if [ $$fail -eq 0 ]; then \
-	  $(CC) $(CFLAGS) -o $$d/mystery $$d/mystery.c -lm > $$d/cc.log 2>&1 \
+	  $(CC) $(CFLAGS) -o $$d/mystery $$d/mystery.c $(call ZLINKOF,$$d/mystery.c) -lm > $$d/cc.log 2>&1 \
 	    || { echo "user-native-guard FAIL: the unit's fragment did not load (link)"; \
 	         grep -m1 error $$d/cc.log; fail=1; }; \
 	fi; \
@@ -819,6 +825,31 @@ mode-parity: bin/zc $(BUILDDIR)/tcc
 	fi; \
 	echo "mode-parity OK: --ldflags honoured under spawn, refused under inproc (a deliberate asymmetry, not a parity row)"
 
+# zlink-rules-guard -- every rule that LINKS a zerolang-emitted C file takes its
+# -l set from that file's own `zlink:` header, rather than hardcoding one.
+#
+# The seed rules did not. bootstrap/zc.c declares `dl` and makes two dlopen
+# calls, and the rules that build it asked for -lm alone -- latent only because
+# glibc >= 2.34 folded dlopen into libc, and load-bearing below that and on
+# musl. Nothing noticed for as long as the rule existed, because a missing -l
+# that the libc happens to supply looks exactly like a correct build.
+#
+# A grep, because a grep is the thing that would have caught it: a recipe line
+# that names a .c and passes an -l is linking, and it must go through ZLINKOF.
+# Compile-only lines carry -c and are not linking; `zc emit -o foo.c` lines
+# pass no -l. Both fall out without an exemption list.
+zlink-rules-guard:
+	@off=$$(grep -n -- '-l' Makefile | grep -v '^[0-9]*:#' | grep -vE ' -c ' \
+	         | grep -E '\.c\b' | grep -v ZLINKOF); \
+	if [ -n "$$off" ]; then \
+	  echo "zlink-rules-guard FAIL: these rules link emitted C with a hardcoded -l set:"; \
+	  echo "$$off"; \
+	  echo "  take the libraries from the artifact: \$$(call ZLINKOF,<the .c>)"; \
+	  exit 1; \
+	fi; \
+	echo "zlink-rules-guard OK: every rule linking emitted C reads its -l set from the artifact"
+
+
 # refusal-guard -- zc says so and exits non-zero when it cannot honour what it
 # was asked for. Each pair below pins a REFUSAL together with the DELIVERY that
 # makes the refusal meaningful: a flag zc rejects in one mode has to be doing
@@ -922,7 +953,7 @@ zlink-guard: bin/zc
 	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
 	  b=$$(basename $$f .z); \
 	  l=$$(bin/zc emit $$f --system lib/system 2>/dev/null \
-	        | sed -n '2s|^/\* zlink: \(.*\) \*/$$|\1|p'); \
+	        | $(ZLINKSED)); \
 	  if [ -n "$$l" ]; then n=$$(($$n + 1)); rep="$$rep  $$b: $$l\n"; fi; \
 	done; \
 	if [ "$$n" -ne $(ZLINK_BASELINE) ]; then \

@@ -211,10 +211,15 @@ dumpArgv: function {
     return a
 }
 
-# zlinkArgs -- the `-l` flags the emitted C declares on its fixed second line,
+# zlinkArgs -- the `-l` flags the emitted C declares in its `zlink:` header,
 # `/* zlink: name name */`. The generated file states its own link
 # requirements, so the harness reads them off the artifact rather than being
 # told separately. Only the header is parsed: these files reach 5.8 MB.
+#
+# The marker is SEARCHED for in that header, not read off a fixed line number.
+# Pinning it to line 2 meant any emitter change that inserted a line above it
+# would drop every -l flag with no error -- and the reader would go on linking,
+# because a missing library the libc happens to supply looks like success.
 zlinkArgs: function {csrc: StringView} out List String is {
     flags9k: (List String)
     txt9k: slurp path: csrc
@@ -222,9 +227,8 @@ zlinkArgs: function {csrc: StringView} out List String is {
     end9k: txt9k.length
     if end9k > 512 then end9k = 512
     head9k: txt9k.stringview.substring from: 0 to: end9k
-    idx9k: u64
     with lit9k: (head9k.split sep: "\n") do for line9k: lit9k loop {
-        if idx9k == 1 then {
+        if (line9k.startsWith prefix: "/* zlink:") then {
             seen9k: false
             with tit9k: (line9k.split sep: " ") do for tok9k: tit9k loop {
                 if tok9k == "*/" then seen9k = false
@@ -236,7 +240,6 @@ zlinkArgs: function {csrc: StringView} out List String is {
                 if tok9k == "zlink:" then seen9k = true
             }
         }
-        idx9k = idx9k + 1
     }
     return flags9k
 }
