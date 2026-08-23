@@ -34,5 +34,18 @@ Python: it `cc`s the seed, double-bootstraps to the byte-identical self-host
 fixpoint, and compiles a locked-in unit to its smoke golden. It also reports
 whether the seed is current or has lagged (a hint to run `make bump-seed`).
 
+It runs that chain once per compiler in `BOOTSTRAP_CCS` (default `$(CC)`; `make
+ci` passes gcc, clang and the vendored tcc), and then asserts something the
+per-compiler chains cannot: that `b1` is **byte-identical across all of them**.
+Three toolchains each producing *a* working `zc` would still permit three
+different `zc`s. Byte-identical emission is what says they are the same
+compiler, and it is the assertion that would catch an emission depending on
+codegen — an uninitialised read, a pointer that reached the output, an
+iteration order that follows allocation layout.
+
+A compiler named in `BOOTSTRAP_CCS` but missing is an error, not a skip: a
+narrower list is a narrower claim, and it has to be asked for
+(`make test-bootstrap BOOTSTRAP_CCS='gcc'`).
+
 This file is a build artifact, not hand-edited source. Do not edit `zc.c` by
 hand — change `src/*.z` and run `make bump-seed`.

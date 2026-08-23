@@ -145,7 +145,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
 ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc mode-parity ci-corpus
-	$(MAKE) --no-print-directory test-bootstrap
+	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
 ci-corpus: bin/zc $(BUILDDIR)/ztestrunner
@@ -397,28 +397,83 @@ bump-seed: bin/zc
 	bin/zc zc --src src --system lib/system --emit-c bootstrap/zc.c
 	@echo "regenerated bootstrap/zc.c -- review the diff and commit"
 
+# BOOTSTRAP_CCS -- the compilers test-bootstrap proves the seed against. The
+# default is whatever $(CC) names, which keeps the local loop to one chain;
+# `ci` passes all three, because "no Python, any C compiler" is a claim about a
+# SET of compilers and gcc alone cannot support it.
+BOOTSTRAP_CCS ?= $(CC)
+
+# CI_BOOTSTRAP_CCS -- what `ci` proves the seed against. Overridable, but a
+# narrower list is a narrower CLAIM: test-bootstrap refuses a compiler it
+# cannot run rather than quietly proving less than the banner says.
+CI_BOOTSTRAP_CCS ?= $(CC) clang $(BUILDDIR)/tcc
+
 # test-bootstrap -- prove the committed seed bootstraps a correct compiler with
 # NO Python: cc the seed, double-bootstrap and assert the fixpoint (b2 == b3),
 # plus a correctness check (a seed-built compiler builds ztypes to its golden).
-# Slow (3 zc.c compiles).
+# Slow (3 zc.c compiles per compiler; tcc's whole chain is ~0.4s, clang's is the
+# expensive one).
+#
+# Run per compiler in BOOTSTRAP_CCS, and then across them: the emitted C must be
+# BYTE-IDENTICAL whichever compiler built the compiler that emitted it. That is
+# the real content of the claim. Three toolchains each producing *a* working zc
+# would still allow three different zcs; b1(gcc) == b1(clang) == b1(tcc) says
+# they are the same compiler, and it is the assertion that would catch a
+# codegen-dependent emission -- an uninitialised read, a pointer printed, an
+# iteration order that depends on layout.
+#
+# gcc and clang get the project's CFLAGS. The vendored tcc gets -B, which it
+# cannot resolve its own headers without, and NONE of the -Werror= pins, which
+# it accepts and does not implement: a harness never hands a compiler a flag
+# whose effect it has not established.
 test-bootstrap:
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-seed bootstrap/zc.c $(call ZLINKOF,bootstrap/zc.c) -lm
-	$(BUILDDIR)/zc-seed zc --src src --system lib/system --emit-c $(BUILDDIR)/b1.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b1 $(BUILDDIR)/b1.c $(call ZLINKOF,$(BUILDDIR)/b1.c) -lm
-	$(BUILDDIR)/zc-b1 zc --src src --system lib/system --emit-c $(BUILDDIR)/b2.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b2 $(BUILDDIR)/b2.c $(call ZLINKOF,$(BUILDDIR)/b2.c) -lm
-	$(BUILDDIR)/zc-b2 zc --src src --system lib/system --emit-c $(BUILDDIR)/b3.c
-	@diff $(BUILDDIR)/b2.c $(BUILDDIR)/b3.c \
-		&& echo "fixpoint OK (b2 == b3)" \
-		|| { echo "FAIL: seed-built compiler does not converge"; exit 1; }
-	@cmp -s $(BUILDDIR)/b1.c bootstrap/zc.c \
-		&& echo "seed is current (b1 == committed seed)" \
-		|| echo "note: seed has lagged (b1 != committed seed) -- run 'make bump-seed' when convenient"
-	$(BUILDDIR)/zc-b1 ztypes_smoke --src src --system lib/system --emit-c $(BUILDDIR)/zt.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zt $(BUILDDIR)/zt.c $(call ZLINKOF,$(BUILDDIR)/zt.c) -lm
-	$(BUILDDIR)/zt | diff - tests/fixtures/ztypes_smoke_z/smoke.expected \
-		&& echo "correctness OK (seed-built zc compiles the ztypes smoke to golden)"
+	@set -e; \
+	for cc in $(BOOTSTRAP_CCS); do \
+	  tag=$$(basename $$cc); \
+	  case "$$cc" in *tcc*) f="-B $(TCCLIB)";; *) f="$(CFLAGS)";; esac; \
+	  if ! command -v $$cc >/dev/null 2>&1 && [ ! -x $$cc ]; then \
+	    echo "test-bootstrap FAIL: '$$cc' is not available"; \
+	    echo "  BOOTSTRAP_CCS names the toolchains this claim is proved against, so a"; \
+	    echo "  missing one is a smaller claim, not a smaller run. Install it, or narrow"; \
+	    echo "  the list deliberately: make test-bootstrap BOOTSTRAP_CCS='gcc'"; \
+	    exit 1; \
+	  fi; \
+	  echo "== bootstrap chain: $$cc =="; \
+	  $$cc $$f -o $(BUILDDIR)/zc-seed-$$tag bootstrap/zc.c $(call ZLINKOF,bootstrap/zc.c) -lm; \
+	  $(BUILDDIR)/zc-seed-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b1-$$tag.c; \
+	  $$cc $$f -o $(BUILDDIR)/zc-b1-$$tag $(BUILDDIR)/b1-$$tag.c $(call ZLINKOF,$(BUILDDIR)/b1-$$tag.c) -lm; \
+	  $(BUILDDIR)/zc-b1-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b2-$$tag.c; \
+	  $$cc $$f -o $(BUILDDIR)/zc-b2-$$tag $(BUILDDIR)/b2-$$tag.c $(call ZLINKOF,$(BUILDDIR)/b2-$$tag.c) -lm; \
+	  $(BUILDDIR)/zc-b2-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b3-$$tag.c; \
+	  if cmp -s $(BUILDDIR)/b2-$$tag.c $(BUILDDIR)/b3-$$tag.c; then \
+	    echo "  fixpoint OK (b2 == b3) under $$tag"; \
+	  else \
+	    echo "FAIL: seed-built compiler does not converge under $$tag"; \
+	    diff $(BUILDDIR)/b2-$$tag.c $(BUILDDIR)/b3-$$tag.c | head -6; exit 1; \
+	  fi; \
+	  $(BUILDDIR)/zc-b1-$$tag ztypes_smoke --src src --system lib/system --emit-c $(BUILDDIR)/zt-$$tag.c; \
+	  $$cc $$f -o $(BUILDDIR)/zt-$$tag $(BUILDDIR)/zt-$$tag.c $(call ZLINKOF,$(BUILDDIR)/zt-$$tag.c) -lm; \
+	  $(BUILDDIR)/zt-$$tag | diff - tests/fixtures/ztypes_smoke_z/smoke.expected; \
+	  echo "  correctness OK (seed-built zc compiles the ztypes smoke to golden) under $$tag"; \
+	done
+	@set -e; first=""; n=0; \
+	for cc in $(BOOTSTRAP_CCS); do \
+	  tag=$$(basename $$cc); n=$$(($$n + 1)); \
+	  if [ -z "$$first" ]; then first=$$tag; else \
+	    if ! cmp -s $(BUILDDIR)/b1-$$first.c $(BUILDDIR)/b1-$$tag.c; then \
+	      echo "FAIL: the emitted C depends on which compiler built zc ($$first vs $$tag)"; \
+	      diff $(BUILDDIR)/b1-$$first.c $(BUILDDIR)/b1-$$tag.c | head -6; exit 1; \
+	    fi; \
+	  fi; \
+	done; \
+	echo "agreement OK: $$n toolchain(s) emit byte-identical C"; \
+	cp $(BUILDDIR)/b1-$$first.c $(BUILDDIR)/b1.c; \
+	if cmp -s $(BUILDDIR)/b1.c bootstrap/zc.c; then \
+	  echo "seed is current (b1 == committed seed)"; \
+	else \
+	  echo "note: seed has lagged (b1 != committed seed) -- run 'make bump-seed' when convenient"; \
+	fi
 	@echo "bootstrap seed OK: 'cc bootstrap/zc.c' builds a correct self-hosting zc (no Python)"
 
 # install -- a self-contained tree at $(ROOT) + a $(BINDIR)/zc symlink.

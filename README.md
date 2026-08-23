@@ -144,6 +144,7 @@ make check             # fast style lint (zl) over src + front-end
 make test              # compile + run the example/corpus programs, check output
 make ci                # full gate: style-lint + corpus (--heavy) + seed bootstrap
 make test-bootstrap    # rebuild the compiler from the seed, check the fixpoint
+                       #   (BOOTSTRAP_CCS="gcc clang out/tcc" for all three)
 ```
 
 ### Write and run a program
