@@ -259,7 +259,9 @@ type: <code>65.u8</code>, <code>1.5.f32</code>, <code>0xff.u32</code>. Do <stron
 float types <code>%</code> is the C <code>fmod</code> family, exact in-format. Only
 the integer types declare the bitwise set <code>&amp;</code> (AND), <code>|</code> (OR)
 and <code>^</code> (XOR); a float has no bit pattern to combine, and an
-operator that typechecks has to emit code that compiles.
+operator that typechecks has to emit code that compiles. The
+complement is <code>not</code>, a <strong>method</strong> and not an operator, because
+zerolang has no unary operators at all.
 Operators resolve as ordinary declared methods -- the system
 units are the single source of truth -- so an operator on a type
 that declares none
@@ -287,6 +289,26 @@ runtime for the full rule.</p>
   z: (1000.u64).u8.orPanic  # u64 -&gt; u8 is lossy: resultval, abort on overflow
   f: 3.14.f64
   n: f.i32.orPanic    # f64 -&gt; i32 is lossy: resultval, abort if inexact/out of range</code></pre>
+<p><strong>Representation.</strong> <code>bits</code> reinterprets the receiver as the
+same-width <strong>unsigned</strong> integer. It is the one member here that is
+<strong>not</strong> a conversion: every conversion above is a checked VALUE
+conversion that can fail, and <code>bits</code> is a representation view that
+cannot -- which is the whole reason both exist. <code>(0.i64 - 8.i64).u64</code>
+panics, because -8 is not a u64; <code>(0.i64 - 8.i64).bits</code> is the
+pattern -8 is stored as. A logical right shift is spelled
+<code>x.bits &gt;&gt; n</code>, since <code>&gt;&gt;</code> is arithmetic on the signed types.</p>
+<p>It is declared on the five signed integers (<code>i8</code> <code>i16</code> <code>i32</code>
+<code>i64</code> <code>i128</code>) and the four floats (<code>f16</code> -&gt; <code>u16</code>, <code>f32</code> -&gt;
+<code>u32</code>, <code>f64</code> -&gt; <code>u64</code>, <code>f128</code> -&gt; <code>u128</code>), and nowhere else.
+It is width-preserving, because sending every type to <code>u64</code> would
+sign-extend first and an <code>i8</code> of -8 would read as
+<code>0xFFFFFFFFFFFFFFF8</code>. It is one-directional, so the name is
+unambiguous: <code>i64.bits</code> can only mean <code>u64</code>. Nothing is added to
+the unsigned types, where it would be the identity.</p>
+<pre><code class="language-zerolang">  a: (0.i64 - 8.i64)
+  b: a.bits           # 18446744073709551608 -- cannot fail
+  z: (-0.0.f32).bits  # 2147483648: +0.0 and -0.0 compare EQUAL and
+                      # differ in bits, so no value conversion sees it</code></pre>
 <p><strong>Ranges:</strong></p>
 <ul>
 <li><code>i8</code>: -128 .. 127</li>

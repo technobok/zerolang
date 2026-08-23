@@ -1382,11 +1382,15 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                     if key.length > 0 then {
                     kk: key.copy
                     ctx.nativeKeys.set key: kk value: true
-                        # a conversion path is <unit>.<type>.<type>: three segments whose last
-                        # is an identifier, AND it carries a body. A fragment-backed row has
-                        # three segments too -- io.File.close -- and must not make `close` read
-                        # as a conversion member, which is what routed a File close through the
-                        # numeric cast.
+                        # a receiver-only path is <unit>.<type>.<member>: three segments whose
+                        # last is an identifier, AND it carries a body. A fragment-backed row
+                        # has three segments too -- io.File.close -- and must not make `close`
+                        # read as one, which is what routed a File close through the numeric
+                        # cast. Only the member NAME is collected: it is the cheap filter the
+                        # dotted-read leg asks first, and the row named by the source path is
+                        # what actually answers. Pairing them here instead would be a CROSS
+                        # PRODUCT -- every conv source crossed with every conv member -- which
+                        # said yes to `u8.bits` on the strength of `bits` existing on i8.
                         if body.length > 0 then {
                             firstDot: key.stringview.indexOf needle: "."
                             match (
@@ -1400,17 +1404,11 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                                 match (
                                     secondDot
                                 ) case some then {
-                                    pre: (key.stringview.substring
-                                        from: 0
-                                        to: ((firstDot + 1) + secondDot)
-                                    )
                                     mem: (afterFirstDot.substring
                                         from: (secondDot + 1)
                                         to: afterFirstDot.length
                                     )
                                     if (isBareCName s: mem) then {
-                                        pk: pre.string
-                                        ctx.nativeConvSrc.set key: pk value: true
                                         mk: mem.string
                                         ctx.nativeConvMemb.set key: mk value: true
                                     }
@@ -1498,29 +1496,12 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
     }
 }
 
-# nativeIsConvOf -- whether `<srcPath>.<memb>` is a numeric CONVERSION, asked
-# of the table's shape rather than of the member's spelling: srcPath must be a
-# type the table gives conversions for, and memb must be one every such type
-# declares. Separating this from the body lookup is what lets a missing row be
-# an error instead of quietly meaning "not a conversion".
-nativeIsConvOf: function {ctx: Ctx.view srcPath: StringView memb: StringView} out bool is {
-    s: false
-    {
-        g: ctx.nativeConvSrc.get key: srcPath.asString
-        match (
-            g
-        ) case some then {
-            s = g
-        } case none then null
-    }
-    if (s) == false then return false
-    return (nativeIsConvMembOf :ctx :memb)
-}
-
-# nativeIsConvMembOf -- the MEMBER half of that question on its own: whether
-# `memb` is one of the conversion names every convertible type declares. It
-# asks nothing of the source type, so a caller can rule the conversion legs out
-# before building a source path for them.
+# nativeIsConvMembOf -- whether `memb` is the member name of ANY receiver-only
+# row: a conversion, or `bits` / `not`. It asks nothing of the source type, so
+# a caller can rule the receiver-only legs out before building a source path
+# for them -- which is nearly every dotted marker. It is a FILTER and not the
+# answer: the row named by `<srcPath>.<memb>` is what decides, so a name in
+# this set on a type with no such row is a miss, not a conversion.
 nativeIsConvMembOf: function {ctx: Ctx.view memb: StringView} out bool is {
     m: false
     {
@@ -2788,7 +2769,6 @@ Ctx: class {
     # the paths a FRAGMENT implements: a native whose C the runtime supplies
     # under the `z_<unit>_<name>` convention, whoever declares it
     nativeFragPaths: (MapRV String value: bool)
-    nativeConvSrc: (MapRV String value: bool)
     nativeConvMemb: (MapRV String value: bool)
     # the fragment-backed rows, as the (unit, demand) PAIR each is reached by
     # plus the fragments it needs. Parallel lists because the demand is a pair
@@ -11884,6 +11864,7 @@ emitDottedNativeMarker: function {
     # source type nor the path built from it, and a member that names no
     # conversion is what nearly every dotted marker carries
     ncSrcP: String
+    ncKey: String
     ncHas: false
     isConvM: false
     {
@@ -11921,12 +11902,12 @@ emitDottedNativeMarker: function {
         ncSrcP = convSrcPathOf :symtab srcTid: ncChase
         if ncSrcP.length > 0 then {
             mn2v: zast.nameTextAt :ast ref: mn2Id
-            ncHas = nativeIsConvOf :ctx srcPath: ncSrcP.stringview memb: mn2v.stringview
+            ncKey = "\{ncSrcP}.\{mn2v}"
+            ncHas = nativeHasRow :ctx path: ncKey.stringview
         }
     }
     if ncHas then {
         mn2k: zast.nameTextCopy :ast ref: mn2Id
-        ncKey: "\{ncSrcP}.\{mn2k}"
         ncVal: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
         if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)) then {
             ncDeref: "(*\{ncVal})"
@@ -22626,8 +22607,7 @@ emitC: function {
         nativePtrArgs: (MapRV String value: bool)
         nativeKeys: (MapRV String value: bool)
         nativeFragPaths: (MapRV String value: bool)
-        nativeConvSrc: (MapRV String value: bool)
-        nativeConvMemb: (MapRV String value: bool)
+            nativeConvMemb: (MapRV String value: bool)
         fragUnits: (List String)
         fragMembs: (List String)
         fragNames: (List String)

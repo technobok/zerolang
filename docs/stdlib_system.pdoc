@@ -174,7 +174,9 @@ type: #~"65.u8", #~"1.5.f32", #~"0xff.u32". Do #b:"not" write
 float types #~"%" is the C #~"fmod" family, exact in-format. Only
 the integer types declare the bitwise set #~"&" (AND), #~"|" (OR)
 and #~"^" (XOR); a float has no bit pattern to combine, and an
-operator that typechecks has to emit code that compiles.
+operator that typechecks has to emit code that compiles. The
+complement is #~"not", a #b:"method" and not an operator, because
+zerolang has no unary operators at all.
 Operators resolve as ordinary declared methods -- the system
 units are the single source of truth -- so an operator on a type
 that declares none
@@ -206,6 +208,31 @@ runtime" for the full rule.
   z: (1000.u64).u8.orPanic  # u64 -> u8 is lossy: resultval, abort on overflow
   f: 3.14.f64
   n: f.i32.orPanic    # f64 -> i32 is lossy: resultval, abort if inexact/out of range
+"""
+
+#b:"Representation." #~"bits" reinterprets the receiver as the
+same-width #b:"unsigned" integer. It is the one member here that is
+#b:"not" a conversion: every conversion above is a checked VALUE
+conversion that can fail, and #~"bits" is a representation view that
+cannot -- which is the whole reason both exist. #~"(0.i64 - 8.i64).u64"
+panics, because -8 is not a u64; #~"(0.i64 - 8.i64).bits" is the
+pattern -8 is stored as. A logical right shift is spelled
+#~"x.bits >> n", since #~">>" is arithmetic on the signed types.
+
+It is declared on the five signed integers (#~"i8" #~"i16" #~"i32"
+#~"i64" #~"i128") and the four floats (#~"f16" -> #~"u16", #~"f32" ->
+#~"u32", #~"f64" -> #~"u64", #~"f128" -> #~"u128"), and nowhere else.
+It is width-preserving, because sending every type to #~"u64" would
+sign-extend first and an #~"i8" of -8 would read as
+#~"0xFFFFFFFFFFFFFFF8". It is one-directional, so the name is
+unambiguous: #~"i64.bits" can only mean #~"u64". Nothing is added to
+the unsigned types, where it would be the identity.
+
+#code language=zerolang: """
+  a: (0.i64 - 8.i64)
+  b: a.bits           # 18446744073709551608 -- cannot fail
+  z: (-0.0.f32).bits  # 2147483648: +0.0 and -0.0 compare EQUAL and
+                      # differ in bits, so no value conversion sees it
 """
 
 #b:"Ranges:"
