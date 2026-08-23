@@ -1417,7 +1417,15 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                                     )
                                     if (isBareCName s: mem) then {
                                         mk: mem.string
-                                        ctx.nativeConvMemb.set key: mk value: true
+                                        # a row naming an ARGUMENT hole is not a
+                                        # receiver-only conversion, and must not
+                                        # be offered to the leg that fills @V@
+                                        # and nothing else
+                                        if (body.contains needle: "@A1@") then {
+                                            ctx.nativeArgMemb.set key: mk value: true
+                                        } else {
+                                            ctx.nativeConvMemb.set key: mk value: true
+                                        }
                                     }
                                 } case none then null
                             } case none then null
@@ -1515,6 +1523,21 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
 # for them -- which is nearly every dotted marker. It is a FILTER and not the
 # answer: the row named by `<srcPath>.<memb>` is what decides, so a name in
 # this set on a type with no such row is a miss, not a conversion.
+# nativeIsArgMembOf -- whether `memb` names ANY row that takes arguments. Like
+# nativeIsConvMembOf it is a FILTER and not the answer: the row named by the
+# receiver's own path is what decides, and this only says the question is worth
+# asking. It exists because the alternative is composing a path per call.
+nativeIsArgMembOf: function {ctx: Ctx.view memb: StringView} out bool is {
+    g: ctx.nativeArgMemb.get key: memb.asString
+    match (
+        g
+    ) case some then {
+        return g
+    } case none then {
+        return false
+    }
+}
+
 nativeIsConvMembOf: function {ctx: Ctx.view memb: StringView} out bool is {
     m: false
     {
@@ -2060,14 +2083,13 @@ binopMethodAt: function {
 # the receiver's source path and the member name. Built in one place because
 # two places building it would be two spellings of one key, and the table
 # answers only the spelling it was given.
-nativeMemberKey: function {
-    symtab: zenv.ZSymbolTable.view
-    srcTid: ztypes.tid
-    memb: StringView
-} out String is {
-    p: convSrcPathOf :symtab :srcTid
-    if p.length == 0 then return "".string
-    return "\{p}.\{memb}"
+#
+# It takes the PATH and not the tid on purpose. Deriving the path here would
+# read well and cost a second convSrcPathOf on the conversion leg, which
+# already holds one -- measured at 4,617 needless copies per self-compile.
+nativeMemberKey: function {srcPath: StringView memb: StringView} out String is {
+    if srcPath.length == 0 then return "".string
+    return "\{srcPath}.\{memb}"
 }
 
 convSrcPathOf: function {symtab: zenv.ZSymbolTable.view srcTid: ztypes.tid} out String is {
@@ -2859,6 +2881,11 @@ Ctx: class {
     # under the `z_<unit>_<name>` convention, whoever declares it
     nativeFragPaths: (MapRV String value: bool)
     nativeConvMemb: (MapRV String value: bool)
+    # the member NAMES of rows that take ARGUMENTS -- the cheap filter that
+    # nativeConvMemb is for the receiver-only rows. A call asks this before it
+    # builds a path, because building one per call on a native receiver is an
+    # allocation for every such call in the program just to be told no.
+    nativeArgMemb: (MapRV String value: bool)
     # the fragment-backed rows, as the (unit, demand) PAIR each is reached by
     # plus the fragments it needs. Parallel lists because the demand is a pair
     # and stays one: nothing here joins the halves, and nothing splits them.
@@ -4812,9 +4839,21 @@ emitNativeArgMethod: function {
     call: zast.CallData.view
     ownerTid: ztypes.tid
 } out String is {
+    if call.arguments.length == 0 then return "".string
+    # the member name decides whether to look at all, and it is read through a
+    # BORROWED view: an owned copy here is one allocation per call in the
+    # program, paid to discover that almost none of them are this
+    isArgM: false
+    {
+        mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+        mnv: zast.nameTextAt :ast ref: mnId
+        isArgM = nativeIsArgMembOf :ctx memb: mnv.stringview
+    }
+    if (isArgM) == false then return "".string
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn.length == 0 then return "".string
-    key: nativeMemberKey :symtab srcTid: ownerTid memb: mn.stringview
+    srcP: convSrcPathOf :symtab srcTid: ownerTid
+    key: nativeMemberKey srcPath: srcP.stringview memb: mn.stringview
     if key.length == 0 then return "".string
     body: nativeImplOf :ctx path: key.stringview
     if body.length == 0 then return "".string
@@ -4835,13 +4874,45 @@ emitNativeArgMethod: function {
         d: 0
     )
     if mtid.isZero then return "".string
+    rn: (List String)
+    rv: (List String)
+    rn.append from: "V".string
+    rv.append from: recv.copy
+    if (nativeArgHoles :ast :symtab :ctx :call fid: mtid names: rn vals: rv) == false then {
+        return "".string
+    }
+    bn: (List String)
+    bv: (List String)
+    return (fillHolesForCtx
+        :ctx
+        text: body
+        path: key.stringview
+        bindNames: bn
+        bindVals: bv
+        rawNames: rn
+        rawVals: rv
+    )
+}
+
+# nativeArgHoles -- append @A1@, @A2@, ... and their values to a hole list, in
+# DECLARED order. The receiver is the first parameter, so a parameter's slot
+# index IS its hole number: slot 0 is the receiver and fills @V@, slot 1 fills
+# @A1@. False when a slot has no argument, which leaves the caller on its
+# ordinary path rather than emitting a body with a hole still in it.
+nativeArgHoles: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.CallData.view
+    fid: ztypes.tid
+    names: (List String)
+    vals: (List String)
+} out bool is {
     pNames: (List String)
     pIds: (ListVal u64)
     pNameIds: (ListVal u64)
-    (recFieldLists :ast :symtab tid: mtid names: pNames ids: pIds nameIds: pNameIds)
-    # the receiver is the FIRST parameter, so a parameter's slot index IS its
-    # hole number: slot 0 is `this` and fills @V@, slot 1 fills @A1@
-    if pNames.length < 2 then return "".string
+    (recFieldLists :ast :symtab tid: fid names: pNames ids: pIds nameIds: pNameIds)
+    if pNames.length < 2 then return false
     slots: argSlotList :ast :call fpNames: pNames
     valBySlot: (IdMapR u64 value: String)
     ai: u64
@@ -4858,10 +4929,6 @@ emitNativeArgMethod: function {
         } else null
         ai = ai + 1
     }
-    rn: (List String)
-    rv: (List String)
-    rn.append from: "V".string
-    rv.append from: recv.copy
     missing: false
     hi: 1.u64
     for hi < pNames.length loop {
@@ -4870,25 +4937,14 @@ emitNativeArgMethod: function {
             g
         ) case some then {
             hn: "A\{hi}"
-            rn.append hn
-            rv.append g.copy
+            names.append hn
+            vals.append g.copy
         } case none then {
             missing = true
         }
         hi = hi + 1
     }
-    if missing then return "".string
-    bn: (List String)
-    bv: (List String)
-    return (fillHolesForCtx
-        :ctx
-        text: body
-        path: key.stringview
-        bindNames: bn
-        bindVals: bv
-        rawNames: rn
-        rawVals: rv
-    )
+    return (missing) == false
 }
 
 # emitStringArgMethod -- a String mutating method WITH an arg (appendByte /
@@ -12112,7 +12168,7 @@ emitDottedNativeMarker: function {
         ncSrcP = convSrcPathOf :symtab srcTid: ncChase
         if ncSrcP.length > 0 then {
             mn2v: zast.nameTextAt :ast ref: mn2Id
-            ncKey = nativeMemberKey :symtab srcTid: ncChase memb: mn2v.stringview
+            ncKey = nativeMemberKey srcPath: ncSrcP.stringview memb: mn2v.stringview
             ncHas = nativeHasRow :ctx path: ncKey.stringview
         }
     }
@@ -22834,6 +22890,7 @@ emitC: function {
         nativeKeys: (MapRV String value: bool)
         nativeFragPaths: (MapRV String value: bool)
             nativeConvMemb: (MapRV String value: bool)
+            nativeArgMemb: (MapRV String value: bool)
         fragUnits: (List String)
         fragMembs: (List String)
         fragNames: (List String)
