@@ -84,7 +84,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard test-tcc mode-parity readable-check user-native-guard perf-strict perf-elision
+.PHONY: emit-set ident-set natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard refusal-guard test-tcc mode-parity readable-check user-native-guard perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -138,7 +138,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard require-guard static-tcc-guard readable-check test-tcc mode-parity ci-corpus
+ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -758,6 +758,13 @@ require-guard: bin/zc
 # os_platform is the one exclusion, and it is not an exception to the rule: it
 # PRINTS platform.ccmode, so its output is supposed to differ. A program that
 # reports which mode built it is the one program that cannot be mode-invariant.
+#
+# --ldflags is the one flag whose meaning is deliberately NOT mode-invariant,
+# so it cannot be a parity row: spawn hands it to a linker and inproc has no
+# linker to hand it to, and zc refuses rather than dropping it. The stanza at
+# the end asserts that asymmetry directly -- both halves, so a regression in
+# either direction reds this gate. Without it the loop above passes --ldflags
+# nowhere and the whole class is invisible to CI.
 mode-parity: bin/zc $(BUILDDIR)/tcc
 	@mkdir -p $(BUILDDIR)/parity; n=0; bad=0; \
 	while read -r name dir rest; do \
@@ -793,6 +800,57 @@ mode-parity: bin/zc $(BUILDDIR)/tcc
 	  exit 1; \
 	fi; \
 	echo "mode-parity OK: $$n run cases identical under --cc-mode spawn and inproc (output and exit code, not bytes)"
+	@p=$(BUILDDIR)/parity; rm -f $$p/ldf.spawn $$p/ldf.inproc; \
+	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
+	  --ldflags "-Wl,--as-needed" -o $$p/ldf.spawn > $$p/ldf.spawn.log 2>&1; sp=$$?; \
+	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode inproc \
+	  --ldflags "-Wl,--as-needed" -o $$p/ldf.inproc > $$p/ldf.inproc.log 2>&1; ip=$$?; \
+	if [ $$sp -ne 0 ] || [ ! -x $$p/ldf.spawn ] || [ "$$($$p/ldf.spawn)" != "Hello, World!" ]; then \
+	  echo "mode-parity FAIL: --ldflags did not reach the linker under spawn (exit $$sp)"; \
+	  cat $$p/ldf.spawn.log; exit 1; \
+	fi; \
+	if [ $$ip -ne 2 ] || [ -e $$p/ldf.inproc ]; then \
+	  echo "mode-parity FAIL: --ldflags under inproc must be refused with exit 2, got $$ip"; \
+	  cat $$p/ldf.inproc.log; exit 1; \
+	fi; \
+	if ! grep -q -- '--ldflags' $$p/ldf.inproc.log || ! grep -q inproc $$p/ldf.inproc.log; then \
+	  echo "mode-parity FAIL: the inproc --ldflags refusal must name the flag and the mode"; \
+	  cat $$p/ldf.inproc.log; exit 1; \
+	fi; \
+	echo "mode-parity OK: --ldflags honoured under spawn, refused under inproc (a deliberate asymmetry, not a parity row)"
+
+# refusal-guard -- zc says so and exits non-zero when it cannot honour what it
+# was asked for. Each pair below pins a REFUSAL together with the DELIVERY that
+# makes the refusal meaningful: a flag zc rejects in one mode has to be doing
+# something in the other, or the refusal is a missing feature wearing an error
+# message. Both halves, so a regression in either direction reds this gate.
+#
+# These cannot be errors/ fixtures. That runner's command always ends in
+# --emit-c (zcArgv, src/ztestrunner.z), so it never enters the compile/link
+# branch where the mode and the compiler are resolved and these refusals live.
+refusal-guard: bin/zc $(BUILDDIR)/tcc
+	@d=$(BUILDDIR)/refusal; rm -rf $$d; mkdir -p $$d; bad=0; \
+	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
+	  --ldflags "-Wl,--nonsense-flag" -o $$d/a > $$d/a.log 2>&1; rc=$$?; \
+	if [ $$rc -eq 0 ] || [ -e $$d/a ]; then \
+	  echo "refusal-guard FAIL: --ldflags is not reaching the linker under spawn (exit $$rc)"; \
+	  cat $$d/a.log; bad=1; \
+	fi; \
+	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode inproc \
+	  --ldflags "-Wl,--nonsense-flag" -o $$d/b > $$d/b.log 2>&1; rc=$$?; \
+	if [ $$rc -ne 2 ] || [ -e $$d/b ]; then \
+	  echo "refusal-guard FAIL: --ldflags under --cc-mode inproc must exit 2, got $$rc"; \
+	  cat $$d/b.log; bad=1; \
+	elif ! grep -q -- '--ldflags' $$d/b.log || ! grep -q inproc $$d/b.log; then \
+	  echo "refusal-guard FAIL: the --ldflags refusal must name the flag and the resolved mode"; \
+	  cat $$d/b.log; bad=1; \
+	fi; \
+	if [ $$bad -ne 0 ]; then \
+	  echo "  zc never accepts a flag it will ignore: it names what it resolved and exits 2."; \
+	  exit 1; \
+	fi; \
+	echo "refusal-guard OK: every unhonourable flag combination is refused, and its honoured counterpart still works"
+
 
 # static-tcc-guard -- the vendored tinycc is LGPL-2.1 inside a dual MIT/Apache
 # tree, so it may be reached by dlopen and by nothing else: linking it, static

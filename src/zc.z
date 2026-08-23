@@ -362,8 +362,10 @@ buildExe: function {
     inproc: bool
 } out i32 is {
     if inproc then {
-        # ldflags has no in-process counterpart: libtcc links through the
-        # same state that compiled, and what it accepts arrives via cflags.
+        # There is no ldflags parameter read here: libtcc links through the
+        # same state that compiled, so there is no link step to pass them to.
+        # The caller REFUSES a non-empty --ldflags under inproc rather than
+        # dropping it, so this branch never has any to drop.
         return (tcc.compileToExe
             csrc: tempC
             :exe
@@ -931,6 +933,15 @@ main: function is {
                 if ccTcc.length == 0 then {
                     nd: "zc: --cc-mode inproc found no tcc runtime payload at '\{tccDir.stringview}'; set --tcc-lib or ZEROLANG_TCC"
                     io.eprintln nd
+                    os.exit code: 2
+                }
+                # --ldflags reaches a linker and inproc has none. Dropping
+                # them would make the SAME command fail under spawn and
+                # succeed here; that divergence is what this refusal stops.
+                if ldflags.length > 0 then {
+                    nf: "zc: --ldflags '\{ldflags.stringview}' cannot be honoured under --cc-mode inproc"
+                    io.eprintln nf
+                    io.eprintln "  libtcc links through the state that compiled, so there is no link step to pass them to; use --cc-mode spawn"
                     os.exit code: 2
                 }
             }
