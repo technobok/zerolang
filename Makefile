@@ -151,6 +151,9 @@ ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-gu
 ci-corpus: bin/zc $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
 
+# what a corpus run under the vendored tcc needs built before it starts.
+TCC_RUN_DEPS := bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
+
 # test-tcc -- the vendored tcc compiles the corpus. --cc-forward is what makes
 # this a test of the tcc BACKEND and not merely of tcc-the-C-compiler: zc folds
 # `platform.cc` during type checking, so quadfloat's `require:` guard fires and
@@ -170,7 +173,7 @@ TCC_KNOWN := tests/tcc-known-failures.txt
 # empty for the fast tier; test-tcc-heavy overrides it.
 TCC_TIER ?=
 
-test-tcc: bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
+test-tcc: $(TCC_RUN_DEPS)
 	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(BUILDDIR)/tcc --cc-forward \
 	   --ccflags "-B $(TCCLIB)" --root . $(TCC_TIER) --jobs $(NPROC) \
 	   > $(BUILDDIR)/tcc-run.log 2>&1; \
@@ -189,7 +192,21 @@ test-tcc: bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 
 # test-tcc-heavy -- the same corpus and the same ratchet, plus the self-host and
 # fixpoint kinds. In ci, not in the edit loop: 6m23s against test-tcc's 4s.
-test-tcc-heavy:
+#
+# IT CARRIES test-tcc's PREREQUISITES EVEN THOUGH THE SUB-MAKE WOULD BUILD
+# THEM. A recursive make is a SECOND SCHEDULER: it decides for itself what is
+# out of date, and it cannot see what the parent is already building. With no
+# prerequisites of its own this target was eligible immediately, so `make ci -j`
+# ran it beside the guards -- and the parent linked bin/zc for them while the
+# sub-make linked bin/zc for this one. Two processes writing the binary that
+# every guard was executing. Measured: `make -j8 test-tcc-heavy require-guard`
+# after touching a source linked bin/zc TWICE.
+#
+# Naming them here makes the parent build them once, in order, before the
+# sub-make starts; the sub-make then finds everything current and only runs the
+# recipe. ONE list, shared with test-tcc, so the two cannot drift apart -- a
+# copy that fell behind would put the race back without changing a line here.
+test-tcc-heavy: $(TCC_RUN_DEPS)
 	@$(MAKE) --no-print-directory test-tcc TCC_TIER=--heavy
 
 # readable-check -- --readable-names is a debug affordance, so nothing else
