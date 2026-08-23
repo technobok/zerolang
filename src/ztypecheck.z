@@ -14,6 +14,9 @@ public: unit {
     :truthyCondArmOf
     :blockEndsInReturn
     :ccKindArm
+    :targetIsHost
+    :targetExeSuffix
+    :targetTripleError
     :blockHasBreak
     :bodyEndsInReturn
     :builtinTidT
@@ -36580,6 +36583,172 @@ ccKindArm: function {ccPath: StringView} out String is {
     return "other".string
 }
 
+# namesArm -- whether `comp`, one `-` separated component of a --target
+# triple, is one of the space-separated `spellings` that name a single
+# platform arm. The vocabulary is DATA passed in rather than a chain of
+# comparisons in the caller: the spelling is the datum for external text --
+# there is no name id for "mingw32" -- so the whole parser gets by on the one
+# literal compare made here.
+namesArm: function {spellings: StringView comp: StringView} out bool is {
+    with it9n: (spellings.split sep: " ") do for s9n: it9n loop {
+        if s9n == comp then return true
+    }
+    return false
+}
+
+# tripleOsNames -- the DISTINCT `oskind` arm names a --target triple asks for,
+# space-separated. Empty when it names none, two words when it names two --
+# both of which are errors, not a fall back to the host and not last-write-wins.
+#
+# Components are matched WHOLE, split on `-`, never as substrings. A
+# `contains needle: "linux"` test cannot fail, so it cannot report failure: it
+# read the host into every unknown triple, and `x86_64-linux-windows` resolved
+# to whichever test happened to run last. Several spellings name one arm
+# (`apple` and `darwin`; `mingw32` and `windows`), so what is counted here is
+# the resolved VALUES and not the hits -- `x86_64-apple-darwin` names one.
+tripleOsNames: function {triple: StringView} out String is {
+    hasLinux: false
+    hasDarwin: false
+    hasWindows: false
+    with it9t: (triple.split sep: "-") do for c9t: it9t loop {
+        if (namesArm spellings: "linux" comp: c9t) then hasLinux = true
+        if (namesArm spellings: "darwin apple macos" comp: c9t) then hasDarwin = true
+        if (namesArm spellings: "windows mingw32 mingw msvc" comp: c9t) then hasWindows = true
+    }
+    r: String
+    if hasLinux then r.append "linux"
+    if hasDarwin then {
+        if r.length > 0 then r.append " "
+        r.append "darwin"
+    }
+    if hasWindows then {
+        if r.length > 0 then r.append " "
+        r.append "windows"
+    }
+    return r
+}
+
+# tripleArchNames -- the DISTINCT `archkind` arm names a --target triple asks
+# for, on the same contract as tripleOsNames.
+tripleArchNames: function {triple: StringView} out String is {
+    hasX86: false
+    hasArm: false
+    with it9a: (triple.split sep: "-") do for c9a: it9a loop {
+        if (namesArm spellings: "x86_64 amd64" comp: c9a) then hasX86 = true
+        if (namesArm spellings: "aarch64 arm64" comp: c9a) then hasArm = true
+    }
+    r: String
+    if hasX86 then r.append "x86_64"
+    if hasArm then {
+        if r.length > 0 then r.append " "
+        r.append "aarch64"
+    }
+    return r
+}
+
+# oneNameOf -- the single name in a tripleOsNames/tripleArchNames answer, or ""
+# when it named none or several. The two failures read the same here because
+# both mean "no arm to seed"; targetTripleError tells them apart for the user.
+oneNameOf: function {names: StringView} out String is {
+    if names.length == 0 then return "".string
+    if (names.contains needle: " ") then return "".string
+    return names.string
+}
+
+# targetTripleError -- "" when `--target <triple>` names exactly one operating
+# system and exactly one architecture zc models, else the message to print.
+# Multi-line: the first line says what is wrong with the triple given, the rest
+# list the vocabulary, which lives here beside the tables rather than at the
+# flag so the two cannot drift.
+#
+# An empty triple is not an error -- it means a native build.
+targetTripleError: function {triple: StringView} out String is {
+    if triple.length == 0 then return "".string
+    osn: tripleOsNames :triple
+    arn: tripleArchNames :triple
+    osv: osn.stringview
+    arv: arn.stringview
+    bad: String
+    if osn.length == 0 then {
+        bad.append "--target '\{triple}' names no operating system zc can build for"
+    } else if (osv.contains needle: " ") then {
+        bad.append "--target '\{triple}' names more than one operating system (\{osv})"
+    } else if arn.length == 0 then {
+        bad.append "--target '\{triple}' names no architecture zc can build for"
+    } else if (arv.contains needle: " ") then {
+        bad.append "--target '\{triple}' names more than one architecture (\{arv})"
+    } else {
+        return "".string
+    }
+    bad.append "\n  operating systems: linux, windows (also mingw32, mingw, msvc), darwin (also apple, macos)"
+    bad.append "\n  architectures: x86_64 (also amd64), aarch64 (also arm64)"
+    return bad
+}
+
+# targetOsName / targetArchName -- the single arm name a --target triple asks
+# for, or "" when it names none or several (both of which zc refuses at the
+# flag) and for an empty triple. Everything that needs to ASK about the target
+# comes through these rather than through a substring of the triple.
+targetOsName: function {triple: StringView} out String is {
+    if triple.length == 0 then return "".string
+    osn: tripleOsNames :triple
+    return (oneNameOf names: osn.stringview)
+}
+
+targetArchName: function {triple: StringView} out String is {
+    if triple.length == 0 then return "".string
+    arn: tripleArchNames :triple
+    return (oneNameOf names: arn.stringview)
+}
+
+# targetOrHostOs / targetOrHostArch -- what the build is FOR: the --target
+# triple decides when one is given, and the host the compiler runs on
+# otherwise. A cross --cc used WITHOUT --target therefore leaves these
+# describing the host, which the docs say plainly. An unresolved half also
+# keeps the host value: zc refuses such a triple at the flag, and a front end
+# that never validated one is better served by the host than by a guess.
+targetOrHostOs: function {triple: StringView} out String is {
+    o9r: targetOsName :triple
+    if o9r.length > 0 then return o9r
+    return os.hostOsName
+}
+
+targetOrHostArch: function {triple: StringView} out String is {
+    a9r: targetArchName :triple
+    if a9r.length > 0 then return a9r
+    return os.hostArchName
+}
+
+# targetExeSuffix -- the extension an executable built for this target carries.
+# It lives beside the vocabulary because it IS a question about the vocabulary:
+# no real mingw triple spells "windows", so asking the triple for the substring
+# left `x86_64-w64-mingw32` -- the example the docs give -- without a suffix.
+targetExeSuffix: function {triple: StringView} out String is {
+    osn: targetOsName :triple
+    if (namesArm spellings: "windows" comp: osn.stringview) then return ".exe".string
+    return "".string
+}
+
+# targetIsHost -- true when `--target <triple>` names the machine zc is running
+# on, and for an empty triple. The build path refuses a CROSS target its
+# resolved compiler cannot evidently reach; a host target needs no such check.
+# An unresolvable triple answers true, because targetTripleError has already
+# refused it and a second complaint about the same string helps nobody.
+targetIsHost: function {triple: StringView} out bool is {
+    if triple.length == 0 then return true
+    osn: tripleOsNames :triple
+    arn: tripleArchNames :triple
+    o9h: oneNameOf names: osn.stringview
+    a9h: oneNameOf names: arn.stringview
+    if o9h.length == 0 then return true
+    if a9h.length == 0 then return true
+    ho: os.hostOsName
+    ha: os.hostArchName
+    if (o9h.stringview == ho.stringview) == false then return false
+    if (a9h.stringview == ha.stringview) == false then return false
+    return true
+}
+
 # seedPlatformConsts -- fill the `platform` unit in for THIS build.
 #
 # The file on disk carries defaults so the seed compiler can build a working
@@ -36611,21 +36780,8 @@ seedPlatformConsts: function {
         )
         if (pro.isZero) == false then rf = pro
     }
-    # os/arch describe what the build is FOR: the --target triple decides when
-    # one is given, and the host the compiler runs on otherwise. A cross --cc
-    # used WITHOUT --target therefore leaves these describing the host, which
-    # the docs say plainly.
-    osn: os.hostOsName
-    arn: os.hostArchName
-    if st.typing.targetTriple.length > 0 then {
-        tv: st.typing.targetTriple.stringview
-        if (tv.contains needle: "linux") then osn = "linux".string
-        if (tv.contains needle: "darwin") then osn = "darwin".string
-        if (tv.contains needle: "apple") then osn = "darwin".string
-        if (tv.contains needle: "windows") then osn = "windows".string
-        if (tv.contains needle: "x86_64") then arn = "x86_64".string
-        if (tv.contains needle: "aarch64") then arn = "aarch64".string
-    }
+    osn: targetOrHostOs triple: st.typing.targetTriple.stringview
+    arn: targetOrHostArch triple: st.typing.targetTriple.stringview
     (seedPlatformArm
         :st
         frame: rf

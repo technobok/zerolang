@@ -712,6 +712,19 @@ main: function is {
         i = i + 1
     }
 
+    # validated here, not at the flag, because `--target` and `--cc` are order
+    # independent and this is the first point where both are known. It runs for
+    # every subcommand: `zc env --target <garbage>` reported a cross compiler
+    # for a triple that means nothing, and `zc emit` folded the host into it.
+    {
+        te: ztypecheck.targetTripleError triple: targetTriple.stringview
+        if te.length > 0 then {
+            tm: "zc: \{te.stringview}"
+            io.eprintln tm
+            os.exit code: 2
+        }
+    }
+
     if sub.stringview == "env" then {
         (printEnv
             systemFlag: systemFlag.stringview
@@ -906,7 +919,7 @@ main: function is {
                 } else {
                     e2: "./".string
                     e2.append unitname
-                    if (targetTriple.stringview.contains needle: "windows") then e2.append ".exe"
+                    e2.append (ztypecheck.targetExeSuffix triple: targetTriple.stringview)
                     exe = e2
                 }
             }
@@ -918,6 +931,32 @@ main: function is {
             isTcc: cka.stringview == "tcc"
             if isTcc then {
                 if (io.exists path: tccDir) then ccTcc = tccDir.copy
+            }
+            # A cross target is only as real as the compiler resolved for it.
+            # `--cc` wins over the triple in pickCc, which is right for picking
+            # but meant nobody ever asked whether the two AGREE: --cc tcc
+            # --target x86_64-windows built a Linux ELF that printed
+            # `platform=windows`. The evidence accepted is the compiler's own
+            # name -- a `<triple>-` prefixed driver, which is exactly what
+            # pickCc synthesises when no --cc is given, so the documented cross
+            # path passes unchanged.
+            if (ztypecheck.targetIsHost triple: targetTriple.stringview) == false then {
+                cb: baseName p: cc.stringview
+                tp: targetTriple.copy
+                tp.append "-"
+                if (cb.stringview.startsWith prefix: tp) == false then {
+                    if isTcc then {
+                        tt: "zc: --cc tcc cannot build for --target '\{targetTriple.stringview}'"
+                        io.eprintln tt
+                        io.eprintln "  the vendored tinycc is a host-only linux-x86_64 build: one backend, one config triple"
+                    } else {
+                        tc: "zc: '\{cc.stringview}' cannot build for --target '\{targetTriple.stringview}'"
+                        io.eprintln tc
+                        th: "  a cross build needs a compiler named '\{tp.stringview}gcc' or '\{tp.stringview}clang'"
+                        io.eprintln th
+                    }
+                    os.exit code: 2
+                }
             }
             # `--cc-mode inproc` means libtcc, so it means tcc. Rejecting the
             # combination here rather than letting the mode quietly apply to a

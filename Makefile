@@ -845,6 +845,40 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	  echo "refusal-guard FAIL: the --ldflags refusal must name the flag and the resolved mode"; \
 	  cat $$d/b.log; bad=1; \
 	fi; \
+	bin/zc build os_platform --src examples --system lib/system --cc gcc \
+	  --target sparc-solaris-nonsense -o $$d/c > $$d/c.log 2>&1; rc=$$?; \
+	if [ $$rc -ne 2 ] || ! grep -q "names no operating system" $$d/c.log; then \
+	  echo "refusal-guard FAIL: an unrecognised --target must exit 2, got $$rc"; \
+	  cat $$d/c.log; bad=1; \
+	elif ! grep -q "operating systems: linux" $$d/c.log; then \
+	  echo "refusal-guard FAIL: the --target refusal must list the vocabulary it accepts"; \
+	  cat $$d/c.log; bad=1; \
+	fi; \
+	bin/zc build os_platform --src examples --system lib/system --cc tcc \
+	  --target x86_64-linux-windows -o $$d/e > $$d/e.log 2>&1; rc=$$?; \
+	if [ $$rc -ne 2 ] || ! grep -q "more than one operating system" $$d/e.log; then \
+	  echo "refusal-guard FAIL: an ambiguous --target must exit 2, not resolve to whichever test ran last (got $$rc)"; \
+	  cat $$d/e.log; bad=1; \
+	fi; \
+	bin/zc build os_platform --src examples --system lib/system --cc tcc \
+	  --target aarch64-linux -o $$d/f > $$d/f.log 2>&1; rc=$$?; \
+	if [ $$rc -ne 2 ] || [ -e $$d/f ]; then \
+	  echo "refusal-guard FAIL: --cc tcc with a non-host --target must exit 2, got $$rc"; \
+	  cat $$d/f.log; bad=1; \
+	elif ! grep -q "host-only linux-x86_64" $$d/f.log; then \
+	  echo "refusal-guard FAIL: the tcc cross refusal must say why tcc cannot"; \
+	  cat $$d/f.log; bad=1; \
+	fi; \
+	if ! bin/zc env --target x86_64-w64-mingw32 | grep -q '^ZC_CC=x86_64-w64-mingw32-gcc$$'; then \
+	  echo "refusal-guard FAIL: the documented <triple>-gcc cross path stopped resolving"; \
+	  bin/zc env --target x86_64-w64-mingw32; bad=1; \
+	fi; \
+	bin/zc build os_platform --src examples --system lib/system --cc gcc \
+	  --target x86_64-linux -o $$d/g > $$d/g.log 2>&1; rc=$$?; \
+	if [ $$rc -ne 0 ] || [ "$$($$d/g | head -1)" != "platform=linux" ]; then \
+	  echo "refusal-guard FAIL: a HOST --target must still build and fold to the host (exit $$rc)"; \
+	  cat $$d/g.log; bad=1; \
+	fi; \
 	if [ $$bad -ne 0 ]; then \
 	  echo "  zc never accepts a flag it will ignore: it names what it resolved and exits 2."; \
 	  exit 1; \
