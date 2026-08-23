@@ -25413,7 +25413,6 @@ maybePreEmitElem: function {
             :symtab
             :ctx
             tid: (ztypes.tid.create from: cid.u64)
-            name: nm.stringview
             :buf
         )
     }
@@ -25893,7 +25892,7 @@ emitUserTypeById: function {
         :buf
     )
     if tt == ztypes.ztypetype.protocolType then {
-        emitOneProtocol :ast :symtab :ctx :tid name: nm.stringview :buf
+        emitOneProtocol :ast :symtab :ctx :tid :buf
     }
     if tt == ztypes.ztypetype.facetType then {
         emitOneFacet :ast :symtab :ctx :tid :buf
@@ -26933,13 +26932,11 @@ emitCollectionMonos: function {
     tsp: u64
     for tsp < work.wProto.length loop {
         spId: work.wProto.get i: tsp
-        spn: regNameOf :symtab tid: (ztypes.tid.create from: spId.u64)
         (emitOneProtocol
             :ast
             :symtab
             :ctx
             tid: (ztypes.tid.create from: spId.u64)
-            name: spn.stringview
             :buf
         )
         tsp = tsp + 1
@@ -27327,6 +27324,39 @@ facetImplTids: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid acc: Lis
 
 # emitOneFacet -- the facet value representation: a vtable typedef (one fn
 # pointer per spec, void* receiver), an inline data union over the conforming
+# specMemberIsSelfTyped -- a spec member with a parameter of the INTERFACE's
+# OWN type, the receiver excluded. `type` inside an interface means the
+# interface, so `near: function {:this rhs: type}` asks for a
+# conformer-to-conformer call, and a vtable cannot type one: the slot would
+# have to name a single implementation's argument and there may be many. Such a
+# member is NOT part of the dispatchable surface -- no slot, no wrapper -- and
+# calling it through the interface is refused where the call is written.
+#
+# It is the same test that used to read as "this parameter IS the receiver",
+# which is how a self-typed argument came to be silently swallowed.
+specMemberIsSelfTyped: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ifaceTid: ztypes.tid
+    smid: ztypes.tid
+} out bool is {
+    pnames: (List String)
+    pids: (ListVal u64)
+    pidsNm: (ListVal u64)
+    (recFieldLists :ast :symtab tid: smid names: pnames ids: pids nameIds: pidsNm)
+    rpn: symtab.reg.thisParamNameIdOf tid: smid
+    found: false
+    pi: u64
+    for pi < pnames.length loop {
+        isRecv: false
+        if (pidsNm.get i: pi) == zast.wkThis.u64 then isRecv = true
+        if rpn != 0 when (pidsNm.get i: pi) == rpn.u64 then isRecv = true
+        if (isRecv) == false when (pids.get i: pi) == ifaceTid.u64 then found = true
+        pi = pi + 1
+    }
+    return found
+}
+
 # impls (copied by value -- facets are valtype existentials), and the
 # {vtable*, data} struct. No destroy helper: impls are valtypes. The impl
 # structs are pre-emitted first because the union embeds them by value.
@@ -27353,6 +27383,17 @@ emitOneFacet: function {
     for mi < mn loop {
         mname: mnames.get i: mi
         smid: mids.get i: mi
+        # a member whose signature mentions the interface's own type is not
+        # dispatchable: no slot, and no wrapper below either
+        if (specMemberIsSelfTyped
+            :ast
+            :symtab
+            ifaceTid: tid
+            smid: (ztypes.tid.create from: smid.u64)
+        ) then {
+            mi = mi + 1
+            continue
+        }
         mroP: ztypecheck.methodReturnOf st: symtab mid: (ztypes.tid.create from: smid.u64)
         match (
             mroP
@@ -27378,11 +27419,12 @@ emitOneFacet: function {
         for pi < pn loop {
             pnm: pnames.get i: pi
             pid: pids.get i: pi
-            # spec receivers are dropped by resolveSpecFn; the name and id
-            # legs cover a self-typed param without a by-name resolution
+            # spec receivers are dropped by resolveSpecFn; a MARKED one is
+            # found by the registry below. A parameter of the interface's OWN
+            # type is not the receiver -- reading it as one is what dropped it
+            # from the slot while the wrapper still passed it.
             isThis: false
             if pnm.stringview == "this" then isThis = true
-            if pid == tid then isThis = true
             # a marked receiver is an alias, so ask the registry which
             # parameter IS the receiver rather than matching on `this`
             {
@@ -27428,7 +27470,6 @@ emitOneProtocol: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
-    name: StringView
     buf: String.borrow
 } is {
     if (ctx.emittedUserTypes.has item: tid) then return
@@ -27444,6 +27485,17 @@ emitOneProtocol: function {
     for mi < mn loop {
         mname: mnames.get i: mi
         smid: mids.get i: mi
+        # a member whose signature mentions the interface's own type is not
+        # dispatchable: no slot, and no wrapper below either
+        if (specMemberIsSelfTyped
+            :ast
+            :symtab
+            ifaceTid: tid
+            smid: (ztypes.tid.create from: smid.u64)
+        ) then {
+            mi = mi + 1
+            continue
+        }
         mroP: ztypecheck.methodReturnOf st: symtab mid: (ztypes.tid.create from: smid.u64)
         match (
             mroP
@@ -27473,8 +27525,6 @@ emitOneProtocol: function {
             isThis: false
             if pnm.stringview == "this" then isThis = true
             if ptn.stringview == "this" then isThis = true
-            if ptn.stringview == name then isThis = true
-            if pid == tid then isThis = true
             # a marked receiver is an alias, so ask the registry which
             # parameter IS the receiver rather than matching on `this`
             {
@@ -27517,7 +27567,6 @@ emitProtocolImpl: function {
     ctx: Ctx
     implTid: ztypes.tid
     protoTid: ztypes.tid
-    protoName: StringView
     label: StringView
     buf: String.borrow
 } is {
@@ -27539,6 +27588,17 @@ emitProtocolImpl: function {
         mname: mnames.get i: mi
         mnameId: (zast.nameid.create from: (midsNm.get i: mi))
         smid: mids.get i: mi
+        # the slot this wrapper would fill was omitted: a member naming the
+        # interface's own type is not dispatchable
+        if (specMemberIsSelfTyped
+            :ast
+            :symtab
+            ifaceTid: protoTid
+            smid: (ztypes.tid.create from: smid.u64)
+        ) then {
+            mi = mi + 1
+            continue
+        }
         ret: (methodRetCtype
             :ast
             :symtab
@@ -27569,8 +27629,6 @@ emitProtocolImpl: function {
             isThis: false
             if pnm.stringview == "this" then isThis = true
             if ptn.stringview == "this" then isThis = true
-            if ptn.stringview == protoName then isThis = true
-            if pid == protoTid then isThis = true
             # A marked receiver is an ALIAS (`{t: this.view}`), so neither its
             # name nor its type says `this`. The registry records which
             # parameter IS the receiver; that is the question to ask, and it is
@@ -27648,6 +27706,16 @@ emitProtocolImpl: function {
     mj: u64
     for mj < mn loop {
         mname2: mnames.get i: mj
+        # the row for a member with no slot: there is nothing to point at
+        if (specMemberIsSelfTyped
+            :ast
+            :symtab
+            ifaceTid: protoTid
+            smid: (ztypes.tid.create from: (mids.get i: mj))
+        ) then {
+            mj = mj + 1
+            continue
+        }
         rslot: cSlotName name: mname2.stringview
         vrow: "    .\{rslot} = \{wbase}_\{rslot}_wrapper,\n"
         buf.append vrow
@@ -27698,6 +27766,17 @@ emitFacetImpl: function {
         mname: mnames.get i: mi
         mnameId: (zast.nameid.create from: (midsNm.get i: mi))
         smid: mids.get i: mi
+        # the slot this wrapper would fill was omitted: a member naming the
+        # interface's own type is not dispatchable
+        if (specMemberIsSelfTyped
+            :ast
+            :symtab
+            ifaceTid: facetTid
+            smid: (ztypes.tid.create from: smid.u64)
+        ) then {
+            mi = mi + 1
+            continue
+        }
         ret: (methodRetCtype
             :ast
             :symtab
@@ -27725,7 +27804,6 @@ emitFacetImpl: function {
             pid: pids.get i: pi
             isThis: false
             if pnm.stringview == "this" then isThis = true
-            if pid == facetTid then isThis = true
             # A marked receiver is an ALIAS (`{t: this.view}`), so neither its
             # name nor its type says `this`. The registry records which
             # parameter IS the receiver; that is the question to ask, and it is
@@ -27803,6 +27881,16 @@ emitFacetImpl: function {
     mj: u64
     for mj < mn loop {
         mname2: mnames.get i: mj
+        # the row for a member with no slot: there is nothing to point at
+        if (specMemberIsSelfTyped
+            :ast
+            :symtab
+            ifaceTid: facetTid
+            smid: (ztypes.tid.create from: (mids.get i: mj))
+        ) then {
+            mj = mj + 1
+            continue
+        }
         rslot: cSlotName name: mname2.stringview
         vrow: "    .\{rslot} = \{wbase}_\{rslot}_wrapper,\n"
         buf.append vrow
@@ -27894,14 +27982,12 @@ emitProtocolImplsForType: function {
             typeId: (ztypes.tid.create from: ptid.u64)
         ) == ztypes.ztypetype.protocolType when (pdone) == false then {
             conformanceRowMark :ctx row: (prows.get i: pi)
-            pname: regNameOf :symtab tid: (ztypes.tid.create from: ptid.u64)
             (emitProtocolImpl
                 :ast
                 :symtab
                 :ctx
                 :implTid
                 protoTid: (ztypes.tid.create from: ptid.u64)
-                protoName: pname.stringview
                 label: plabel.stringview
                 :buf
             )

@@ -9660,22 +9660,19 @@ resolveFacet: function {
         } else null
     }
     if isgen then st.reg.setGeneric typeId: (ztypes.tid.create from: fid.u64) value: true
+    # `type` INSIDE AN INTERFACE IS THE INTERFACE. It used to be the first
+    # recorded CONFORMER, which made a spec member's parameter concrete: the
+    # vtable slot came out typed `bool (*op_eq)(void*, pt)` and there was no
+    # uniform signature to emit at all once a second type conformed. Which
+    # conformer won depended on which one the unit's `main` happened to
+    # mention first, so the layout of an interface depended on source order.
+    #
+    # A member that mentions it is not part of the dispatchable surface -- the
+    # emitters omit its slot and the checker refuses the call -- but that is a
+    # decision about the MEMBER, taken where the member is used, rather than a
+    # rewriting of what its type means.
     specThisStr: defName.string
     dropThis: true
-    {
-        fcn: (st.typing.declConformerOf
-            declId: (declOfUnitDef
-                :st
-                :frame
-                :unitDecl
-                nameId: (zast.poolFind pool: ast.names text: defName)
-            )
-        )
-        if fcn > 0 then {
-            specThisStr = (zast.nameTextCopy :ast ref: (zast.nameid.create from: fcn))
-            dropThis = false
-        }
-    }
     kSiter: u64
     for kSiter < fnode.nis loop {
         smId: (zast.objIsItemAt :ast nid: fnode.nid i: kSiter).u32
@@ -9792,20 +9789,9 @@ resolveProtocol: function {
             dropThis = false
         }
     }
-    if dropThis then {
-        nameCount: (st.typing.declConformerOf
-            declId: (declOfUnitDef
-                :st
-                :frame
-                :unitDecl
-                nameId: (zast.poolFind pool: ast.names text: defName)
-            )
-        )
-        if nameCount > 0 then {
-            specThisStr = (zast.nameTextCopy :ast ref: (zast.nameid.create from: nameCount))
-            dropThis = false
-        }
-    }
+    # `type` inside a protocol is the protocol, for the reason resolveFacet
+    # states at length. `Text` keeps its exception: it is the one interface the
+    # system unit declares whose spec receiver IS a concrete type.
     kSiter: u64
     for kSiter < fnode.nis loop {
         smId: (zast.objIsItemAt :ast nid: fnode.nid i: kSiter).u32
@@ -21548,6 +21534,18 @@ checkDotted: function {
     cn: atomName :ast n: (ast.nodes.get i: dp.child.u64)
     if cn.length == 0 then return (ztypes.tid.create from: 0)
     cnId: atomNameId :ast n: (ast.nodes.get i: dp.child.u64)
+    # a member of an INTERFACE that names the interface in a parameter has no
+    # vtable slot, so this is where reaching for it is refused -- with the rule
+    # rather than with whatever a conformer happened to be called
+    if (refuseSelfTypedMember
+        :st
+        :ast
+        recvTid: bt
+        nameId: cnId
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+    ) then return (ztypes.tid.create from: 0)
     mkm: checkMarkerMember :st :unitDecl :ast :dp :bt cn: cn.stringview
     if mkm.handled then return mkm.tid
     xfm: checkTransferMarker :st :unitDecl :ast :dp :bt cn: cn.stringview
@@ -24538,6 +24536,20 @@ checkBinopMethodDispatch: function {
     ) case some then {
         bmid = ztypes.tid.create from: opo.u64
     } case none then null
+    # the same refusal checkDotted makes for the named call form. An operator
+    # is the call form for a one-argument method, so an operator declared
+    # `{:this rhs: type}` on an interface is the self-typed case every time --
+    # which is why every operator on a facet hit this and no named method did
+    # until one was written to.
+    if (refuseSelfTypedMember
+        :st
+        :ast
+        recvTid: dt
+        nameId: opnId
+        nodeid: binop.nid
+        lineno: binop.lineno
+        colno: binop.colno
+    ) then return (ztypes.tid.create from: 0)
     stampBinopOp :st nid: binop.nid.u64 owner: dt method: bmid
     match (
         opo
@@ -24804,6 +24816,117 @@ dottedParentNodeId: function {ast: Ast.view n: Node.view} out zast.nodeid is {
 # skipRecv, receiver rows (`this` or the fn's thisParamName) are excluded
 # from the count: a dotted method call supplies the receiver implicitly, so
 # its positional args map onto the remaining params.
+# memberIsSelfTyped -- a member of `ifaceTid` with a parameter of the
+# INTERFACE'S OWN type, the receiver excluded. `type` inside an interface means
+# the interface, so `near: function {:this rhs: type}` asks for a
+# conformer-to-conformer call -- and a vtable cannot type one, because the slot
+# would have to name a single implementation's argument and there may be many.
+# The emitter omits the slot and the wrapper for such a member; this is the
+# same question, asked where a call to it can still be refused with something
+# better than a C compiler's opinion.
+memberIsSelfTyped: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    ifaceTid: ztypes.tid
+    memberTid: ztypes.tid
+} out bool is {
+    found: false
+    ppi: u64
+    ppn: st.typing.declRowSlots ownerTid: memberTid
+    for ppi < ppn loop {
+        prow: st.typing.declRowAt ownerTid: memberTid membersOnly: false slot: ppi
+        ppi = ppi + 1
+        if prow.keep then {
+            pnid: prow.name
+            isRecv: false
+            if pnid == zast.wkThis.u64 then isRecv = true
+            if (st.reg.thisParamNameIs
+                tid: memberTid
+                nameId: (zast.nameid.create from: pnid.u32.orPanic)
+            ) then isRecv = true
+            tnB: ast.names.texts.get i: pnid.u64
+            if (isRecv) == false then {
+                pto: (st.typing.declChildOf
+                    pool: ast.names
+                    parentTypeId: memberTid
+                    name: tnB.stringview
+                )
+                match (
+                    pto
+                ) case some then {
+                    if pto == ifaceTid.u64 then found = true
+                } case none then null
+            }
+        }
+    }
+    return found
+}
+
+# refuseSelfTypedMember -- report and answer true when `nameId` names a member
+# of an interface-typed receiver that cannot be dispatched. Both call forms ask
+# it: a dotted call reaches it through checkDotted, an operator through
+# checkBinopMethodDispatch, and neither should be deciding this for itself.
+refuseSelfTypedMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    recvTid: ztypes.tid
+    nameId: zast.nameid
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} out bool is {
+    btt: st.reg.typetypeOf typeId: recvTid
+    isIface: false
+    if btt == ztypes.ztypetype.protocolType then isIface = true
+    if btt == ztypes.ztypetype.facetType then isIface = true
+    if (isIface) == false then return false
+    mo: st.typing.declChildOfId parentTypeId: recvTid :nameId
+    match (
+        mo
+    ) case some then {
+        mtid: ztypes.tid.create from: mo
+        if (memberIsSelfTyped :ast :st ifaceTid: recvTid memberTid: mtid) then {
+            iname: st.reg.nameOf tid: recvTid
+            # the member's own spelling, read only HERE: this is the one path
+            # that renders it, and every call in the program reaches the test
+            mtxt: zast.nameTextCopy :ast ref: nameId
+            (reportSelfTypedDispatch
+                :st
+                ifaceName: iname.stringview
+                memberName: mtxt.stringview
+                :nodeid
+                :lineno
+                :colno
+            )
+            return true
+        }
+    } case none then null
+    return false
+}
+
+# reportSelfTypedDispatch -- the refusal, said once and in the interface's own
+# terms. E0300 because it is a call that cannot be made, not a type that does
+# not exist: the member is declared, the conformer implements it, and what is
+# missing is any single signature a vtable slot could carry.
+reportSelfTypedDispatch: function {
+    st: zenv.ZSymbolTable
+    ifaceName: StringView
+    memberName: StringView
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    ms: "'\{memberName}' takes a parameter of type '\{ifaceName}' itself, so it cannot be called through the interface"
+    (addError
+        :st
+        :nodeid
+        :lineno
+        :colno
+        e: zast.err.callError
+        msg: ms
+    )
+}
+
 positionalParamName: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
