@@ -343,8 +343,8 @@ writeString: function {sv: StringView buf: String} is {
                 buf.appendByte b: 0cf
             } else if b < 32 then {
                 buf.append "\\u00"
-                buf.appendByte b: (hexDigit n: b / 16)
-                buf.appendByte b: (hexDigit n: b % 16)
+                buf.appendByte b: (hexDigit n: b >> 4)
+                buf.appendByte b: (hexDigit n: b & 15)
             } else {
                 buf.appendByte :b
             }
@@ -372,23 +372,28 @@ isWs: function {b: u8} out bool is {
 }
 
 # appendCodepoint -- UTF-8 encode `cp` onto `buf`. Codepoints beyond
-# U+10FFFF and unpaired surrogates are the caller's problem; this is
-# pure arithmetic encoding.
+# U+10FFFF and unpaired surrogates are the caller's problem.
+#
+# UTF-8 is defined on BIT FIELDS: each continuation byte carries six bits of
+# the scalar under a two-bit tag, and the lead byte carries what is left under
+# a tag of its own. `cp >> 6` and `cp & 63` are that definition; the divisions
+# and remainders this used to be written with were the same thing said in a
+# language that had no way to say it.
 appendCodepoint: function {buf: String cp: u32} is {
     if cp < 128 then {
         buf.appendByte b: cp.u8.orPanic
     } else if cp < 2048 then {
-        buf.appendByte b: ((cp / 64) + 192).u8.orPanic
-        buf.appendByte b: ((cp % 64) + 128).u8.orPanic
+        buf.appendByte b: ((cp >> 6) + 192).u8.orPanic
+        buf.appendByte b: ((cp & 63) + 128).u8.orPanic
     } else if cp < 65536 then {
-        buf.appendByte b: ((cp / 4096) + 224).u8.orPanic
-        buf.appendByte b: (((cp / 64) % 64) + 128).u8.orPanic
-        buf.appendByte b: ((cp % 64) + 128).u8.orPanic
+        buf.appendByte b: ((cp >> 12) + 224).u8.orPanic
+        buf.appendByte b: (((cp >> 6) & 63) + 128).u8.orPanic
+        buf.appendByte b: ((cp & 63) + 128).u8.orPanic
     } else {
-        buf.appendByte b: ((cp / 262144) + 240).u8.orPanic
-        buf.appendByte b: (((cp / 4096) % 64) + 128).u8.orPanic
-        buf.appendByte b: (((cp / 64) % 64) + 128).u8.orPanic
-        buf.appendByte b: ((cp % 64) + 128).u8.orPanic
+        buf.appendByte b: ((cp >> 18) + 240).u8.orPanic
+        buf.appendByte b: (((cp >> 12) & 63) + 128).u8.orPanic
+        buf.appendByte b: (((cp >> 6) & 63) + 128).u8.orPanic
+        buf.appendByte b: ((cp & 63) + 128).u8.orPanic
     }
 }
 
@@ -605,7 +610,7 @@ Cursor: class {
                         lo: this.hex4
                         if this.failed then return buf
                         if lo >= 56320 when lo <= 57343 then {
-                            full: ((cp - 55296) * 1024) + (lo - 56320) + 65536
+                            full: ((cp - 55296) << 10) + (lo - 56320) + 65536
                             appendCodepoint :buf cp: full
                         } else {
                             this.fail msg: "unpaired surrogate"
