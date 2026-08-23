@@ -1693,10 +1693,10 @@ natives-tbl-guard: bin/zc
 	@fail=0; d=$$(mktemp -d); \
 	for f in lib/system/system.z lib/system/system/*.z; do \
 	  awk -v U=system '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
-	    o != "" && /^    [-+*\/%&<>=!]+: function .*is native/ {op=$$1; sub(/:$$/,"",op); print U"."o"."op}' \
+	    o != "" && /^    [-+*\/%&<>=!|^]+: function .*is native/ {op=$$1; sub(/:$$/,"",op); print U"."o"."op}' \
 	    $$f; \
 	done | LC_ALL=C sort -u > $$d/decl; \
-	grep -oE '^\[[a-z]+\.[A-Za-z0-9_]+\.[-+*/%&<>=!]+' src/runtime/natives.tbl \
+	grep -oE '^\[[a-z]+\.[A-Za-z0-9_]+\.[-+*/%&<>=!|^]+' src/runtime/natives.tbl \
 	  | sed 's/^\[//' | LC_ALL=C sort -u > $$d/rows; \
 	miss=$$(LC_ALL=C comm -23 $$d/decl $$d/rows); \
 	orph=$$(LC_ALL=C comm -13 $$d/decl $$d/rows); \
