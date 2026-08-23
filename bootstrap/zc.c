@@ -75538,6 +75538,12 @@ void z_t2604(z_t533_t* z_v32547, z_t894_t* z_v32548, z_t2039_t* z_v32549, uint64
     z_t729_t z_v32554 = z_t729_create((uint64_t)0);
     z_t729_t z_v32555 = z_t729_create((uint64_t)0);
     (void)(z_t2800(z_v32547, z_v32548, z_v32550, &z_v32553, &z_v32554, &z_v32555));
+    if (z_v32553.length == 0) {
+    z_t104_destroy(&z_v32553);
+    z_t729_destroy(&z_v32554);
+    z_t729_destroy(&z_v32555);
+        return;
+    }
     (void)(z_t2801(z_v32548, z_v32549, z_v32550));
     z_t29_t z_v32578 = z_t2627(z_v32549, z_v32550);
     (void)(z_t29_append(z_v32551, (_zs1713).data, (_zs1713).size));
