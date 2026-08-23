@@ -264,8 +264,6 @@ hexvalue: function {b: u8} out u8 is {
 # Encode a Unicode codepoint as 1-4 UTF-8 bytes appended to `dst`.
 # Caller is responsible for ensuring cp <= 0x10FFFF -- the \uHHHHHH
 # decoder rejects out-of-range values before invoking this helper.
-# Division and modulo stand in for the usual >>6 / &0x3F bit ops since
-# zerolang has no shift / bitwise operators.
 utf8_encode_append: function {cp: u64 dst: String} is {
     if cp < 128 then {
         dst.appendByte cp.u8.orPanic
@@ -273,34 +271,31 @@ utf8_encode_append: function {cp: u64 dst: String} is {
     }
     if cp < 2048 then {
         # 110xxxxx 10xxxxxx  (5 + 6 payload bits)
-        hi: cp / 64
-        lo: cp - (hi * 64)
-        dst.appendByte (hi + 192).u8.orPanic
-        dst.appendByte (lo + 128).u8.orPanic
+        hi: cp >> 6
+        lo: cp & 63
+        dst.appendByte (hi | 192).u8.orPanic
+        dst.appendByte (lo | 128).u8.orPanic
         return
     }
     if cp < 65536 then {
         # 1110xxxx 10xxxxxx 10xxxxxx  (4 + 6 + 6 payload bits)
-        hi: cp / 4096
-        rest1: cp - (hi * 4096)
-        mid: rest1 / 64
-        lo: rest1 - (mid * 64)
-        dst.appendByte (hi + 224).u8.orPanic
-        dst.appendByte (mid + 128).u8.orPanic
-        dst.appendByte (lo + 128).u8.orPanic
+        hi: cp >> 12
+        mid: (cp >> 6) & 63
+        lo: cp & 63
+        dst.appendByte (hi | 224).u8.orPanic
+        dst.appendByte (mid | 128).u8.orPanic
+        dst.appendByte (lo | 128).u8.orPanic
         return
     }
     # 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx  (3 + 6 + 6 + 6 payload bits)
-    hi: cp / 262144
-    rest1: cp - (hi * 262144)
-    mid2: rest1 / 4096
-    rest2: rest1 - (mid2 * 4096)
-    mid1: rest2 / 64
-    lo: rest2 - (mid1 * 64)
-    dst.appendByte (hi + 240).u8.orPanic
-    dst.appendByte (mid2 + 128).u8.orPanic
-    dst.appendByte (mid1 + 128).u8.orPanic
-    dst.appendByte (lo + 128).u8.orPanic
+    hi: cp >> 18
+    mid2: (cp >> 12) & 63
+    mid1: (cp >> 6) & 63
+    lo: cp & 63
+    dst.appendByte (hi | 240).u8.orPanic
+    dst.appendByte (mid2 | 128).u8.orPanic
+    dst.appendByte (mid1 | 128).u8.orPanic
+    dst.appendByte (lo | 128).u8.orPanic
 }
 
 # the raw scanner: walks a source buffer and emits Tokens, whitespace and comments retained.
@@ -701,7 +696,7 @@ Tokenizer: class {
             ) case some then {
                 err.appendByte db
                 hv: hexvalue b: db
-                val = val * 16 + hv.u64
+                val = (val << 4) | hv.u64
             } case none then {
                 j = dlen
             }
