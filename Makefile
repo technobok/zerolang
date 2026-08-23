@@ -1172,21 +1172,69 @@ deadcode-guard: bin/zc
 # ones a use site demands, so an error inside a definition nothing references is
 # still reported. Nothing else exercises the mode; without this it would rot.
 # Every corpus program must be clean in BOTH modes.
+#
+# IT COMPILES WHAT IT EMITS. It used to write the C to /dev/null and judge by
+# zc's exit status, which is not the same question: zc emitted happily for
+# every program in the corpus while the C it produced did not compile for ANY
+# of them -- `Any` and `AnyRef` are arm-less generic bounds, and an empty C
+# enum is invalid. A gate that never reads its own output cannot see that, and
+# this one printed "clean under --eager" for as long as it existed.
+#
+# Judged on its own, never against a non-eager run: `--eager` does not require
+# a `main` (it is not asking what a root reaches), so a library fixture emits
+# here and is E0039 without it. The two sides are not comparable and the
+# difference is not the signal.
+# EAGER_KNOWN -- the programs still bad under `--eager`, named because the
+# cause is known and is NOT about eager resolution. A mono's registered name is
+# built from the template name as WRITTEN (instMonoLabel, ztypecheck.z), and
+# lib/system/core.z gives one type two names -- `List` and `ListRef` both mean
+# collections.ListRef, as do `Map`/`MapRR` and `Set`/`SetRef`. Whichever alias
+# mints the instance first names it, so `Result (List String)` is
+# Result_List_String_IoError when only that spelling is reached and
+# Result_ListRef_String_IoError when both are. `--eager` reaches both.
+#
+# src/runtime/natives/_Z_IO_LIST_DIR.inc then hardcodes one of the two tag
+# spellings and no longer matches. Roughly 140 such spellings sit in 40-odd
+# fragments; this is the only one over an aliased type, so it is the only one
+# that can break. Making the label canonical renames monos in the ORDINARY
+# build too and cascades into ioCanonTid's stems and the @List_String@ holes,
+# so it is its own arc rather than a patch here.
+#
+# Movement in EITHER direction fails: a new name means a regression, a lost one
+# means the arc landed and the row must go in the same commit.
+EAGER_KNOWN := bare_stdlib_fnref io_removetree
+
 eager-guard: bin/zc
-	@n=0; rep=""; \
+	@d=$$(mktemp -d); bad=""; \
 	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	  b=$$(basename $$f .z); \
-	  if ! bin/zc emit $$f --eager -o /dev/null >/dev/null 2>&1; then \
-	    n=$$(($$n + 1)); rep="$$rep  $$b\n"; \
+	  b=$$(basename $$f .z); em=$$d/$$b.c; \
+	  if ! bin/zc emit $$f --eager -o $$em >/dev/null 2>&1; then \
+	    bad="$$bad $$b"; continue; \
+	  fi; \
+	  if ! $(CC) -std=c17 -w -Werror=implicit-function-declaration \
+	       -fsyntax-only $$em >/dev/null 2>&1; then \
+	    bad="$$bad $$b"; \
 	  fi; \
 	done; \
-	if [ "$$n" -gt 0 ]; then \
-	  echo "eager-guard FAIL: $$n program(s) error under --eager"; \
-	  printf "$$rep"; \
-	  echo "  An error inside a definition nothing references -- fix it, do not drop the guard."; \
+	rm -rf $$d; \
+	new=""; for b in $$bad; do \
+	  case " $(EAGER_KNOWN) " in *" $$b "*) ;; *) new="$$new $$b";; esac; \
+	done; \
+	gone=""; for k in $(EAGER_KNOWN); do \
+	  case " $$bad " in *" $$k "*) ;; *) gone="$$gone $$k";; esac; \
+	done; \
+	if [ -n "$$new" ]; then \
+	  echo "eager-guard FAIL: bad under --eager and not known:$$new"; \
+	  echo "  A definition nothing references reached the emitter and it wrote"; \
+	  echo "  C that does not compile. Fix it, do not add it to EAGER_KNOWN."; \
 	  exit 1; \
 	fi; \
-	echo "eager-guard OK: examples + corpus clean under --eager"
+	if [ -n "$$gone" ]; then \
+	  echo "eager-guard FAIL: known-bad now clean:$$gone"; \
+	  echo "  Delete the row from EAGER_KNOWN in the same commit that fixed it."; \
+	  exit 1; \
+	fi; \
+	echo "eager-guard OK: examples + corpus emit AND compile under --eager ($(words $(EAGER_KNOWN)) known)"
 
 # member-guard -- ratchet against declaration-bypassing member special-cases in
 # the type checker. The sanctioned string-keyed markers: ownership (lock / borrow /
