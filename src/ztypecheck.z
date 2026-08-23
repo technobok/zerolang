@@ -11781,10 +11781,6 @@ ensureUnitRequire: function {
                     ed: st.typing.decls.get i: ec.u64
                     enode = ed.node
                 }
-                etx: (zast.poolTextAt
-                    pool: ast.names
-                    ref: (zast.nameid.create from: enm)
-                )
                 nameId95: (zast.nameid.create from: (st.typing.declNameOf declId: own))
                 hUnitDecl: unitDeclOfName :st nameId: nameId95
                 (constValueOfMemberAt
@@ -11795,7 +11791,6 @@ ensureUnitRequire: function {
                     ownerDecl: rq
                     nameId: (zast.nameid.create from: enm)
                     defNodeId: enode
-                    defName: etx.stringview
                 )
             }
         }
@@ -31307,10 +31302,25 @@ dataRefAt: function {ast: Ast.view nid: zast.nodeid} out dataref is {
     return (dataref nid: zn nelems: 0 outType: zn lineno: 0 colno: 0)
 }
 
-# checkValueAt -- type the value row `nid`, dispatching by arm: each handler
-# takes its row as plain values, so no row view is held across the walk.
-# Returns the resolved type id, or 0 when unhandled.
+# checkValueAt -- type the value row `nid`, then record what it evaluates to.
+# The two channels are written in that order because the value channel renders
+# through the type one: a node with no type stamp has nothing to render a
+# constant AS.
 checkValueAt: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    nid: zast.nodeid
+} out ztypes.tid is {
+    t: checkValueArmAt :st :unitDecl :ast :nid
+    stampConstAt :st :unitDecl :ast :nid
+    return t
+}
+
+# checkValueArmAt -- the arm dispatch: each handler takes its row as plain
+# values, so no row view is held across the walk. Returns the resolved type id,
+# or 0 when unhandled.
+checkValueArmAt: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
@@ -34516,11 +34526,24 @@ constOwnerDeclFor: function {
     frame: ztypes.declid
     defName: StringView
 } out ztypes.declid is {
+    dn9: zast.poolFind pool: ast.names text: defName
+    return (constOwnerDeclForId :st :frame :unitDecl nameId: dn9)
+}
+
+# constOwnerDeclForId -- the walk itself, asked BY ID. A caller that already
+# holds the name id -- a use site does, the atom carries it -- would otherwise
+# pay a pool search to hand over text this reduces straight back to an id.
+constOwnerDeclForId: function {
+    st: zenv.ZSymbolTable.view
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.declid is {
     # the frames innermost outward from `frame`: a constant written inside
     # a unit is keyed on THAT unit, and on each unit enclosing it before the
     # file unit. Asking only the innermost left a constant of an enclosing
     # inline unit unreachable from a unit nested inside it.
-    dnm: zast.poolFind pool: ast.names text: defName
+    dnm: nameId
     cur: frameFor :st :frame :unitDecl
     for cur > 0 loop {
         if cur == st.typing.coreUnitRoot then {
@@ -34598,10 +34621,25 @@ constValueOfMember: function {
     frame: ztypes.declid
     defName: StringView
 } out ztypes.cval is {
-    od: constOwnerDeclFor :st :frame :ast :unitDecl :defName
-    if od.isZero then return ztypes.noConst
-    nid: zast.poolFind pool: ast.names text: defName
+    dn9: zast.poolFind pool: ast.names text: defName
+    return (constValueOfMemberId :st :frame :ast :unitDecl nameId: dn9)
+}
+
+# constValueOfMemberId -- the same pull, asked BY ID. The name is a pool id
+# everywhere it matters: the owner walk compares ids, the child lookup compares
+# ids, and the memo is keyed on one. Only a cycle diagnostic ever wants the
+# text, and it reads it where it reports.
+constValueOfMemberId: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.cval is {
+    nid: nameId
     if nid.isZero then return ztypes.noConst
+    od: constOwnerDeclForId :st :frame :unitDecl :nameId
+    if od.isZero then return ztypes.noConst
     # the constant's own declaration is the owner's child of that name, so the
     # def node comes off the same walk that found the owner
     dnode: 0
@@ -34620,7 +34658,6 @@ constValueOfMember: function {
         ownerDecl: od
         nameId: nid
         defNodeId: dnode
-        :defName
     )
 }
 
@@ -34636,7 +34673,6 @@ constValueOfMemberAt: function {
     ownerDecl: ztypes.declid
     nameId: zast.nameid
     defNodeId: u32
-    defName: StringView
 } out ztypes.cval is {
     utid: declTypeIdOf :st declId: ownerDecl
     nid: nameId
@@ -34675,14 +34711,17 @@ constValueOfMemberAt: function {
             st.typing.constEvalState.set key: k value: 2.u8
             return ztypes.noConst
         }
-        strId9: (constInternString :st text: defName)
+        # the only place the NAME's text is wanted: a cycle names itself in
+        # its own diagnostic. Everywhere else the id is the whole answer.
+        cycName: zast.nameTextCopy :ast ref: nid
+        strId9: (constInternString :st text: cycName.stringview)
         (constFailRecord
             :st
             kind: ztypes.constfailkind.cycle
             nodeid: dnode
             lineno: dline
             colno: dcol
-            width: defName.length.u32.orPanic
+            width: cycName.length.u32.orPanic
             strId: strId9
         )
         st.typing.constEvalState.set key: k value: 2.u8
@@ -35763,14 +35802,32 @@ evalConstNode: function {
     nid: zast.nodeid
 } out ztypes.cval is {
     plan: evalConstPlan :ast :nid
+    # A NAME THAT READS A LOCAL IS NOT A CONSTANT, whatever a unit definition
+    # of the same name says. This evaluator was written for unit-level
+    # definitions, where there is no local scope to shadow one; asked about a
+    # USE SITE inside a body it would resolve the unit member and quietly
+    # answer for the wrong binding. The checker has already recorded which
+    # atoms read a variable -- the two guards below are that record, one for a
+    # bare name and one for the root of a path.
     if plan.arm == 1 then return (evalConstNode :st :frame :ast :unitDecl nid: plan.innerId)
     if plan.arm == 2 then {
-        an: zast.nameTextCopy :ast ref: plan.nameId
-        if an.length == 0 then return ztypes.noConst
-        if (isNumericLiteralName name: an.stringview) then {
-            return (constLiteralValue name: an.stringview)
+        if (st.typing.atomVariableId.has key: nid.u64) then return ztypes.noConst
+        # a literal never needs an OWNED name, and every numeric literal in the
+        # program reaches this arm. The member pull below takes the id.
+        isLit: false
+        litVal: ztypes.noConst
+        noName: false
+        {
+            nv: zast.nameTextAt :ast ref: plan.nameId
+            if nv.length == 0 then noName = true
+            if (noName) == false then {
+                isLit = isNumericLiteralName name: nv.stringview
+                if isLit then litVal = constLiteralValue name: nv.stringview
+            }
         }
-        return (constValueOfMember :st :frame :ast :unitDecl defName: an.stringview)
+        if noName then return ztypes.noConst
+        if isLit then return litVal
+        return (constValueOfMemberId :st :frame :ast :unitDecl nameId: plan.nameId)
     }
     if plan.arm == 3 then {
         return (evalConstString
@@ -35784,6 +35841,7 @@ evalConstNode: function {
         )
     }
     if plan.arm == 4 then {
+        if (st.typing.atomVariableId.has key: plan.parentId.u64) then return ztypes.noConst
         return (evalConstDotted
             :st
             :frame
@@ -35805,6 +35863,62 @@ evalConstNode: function {
         return (constBlockValue :st :frame :ast :unitDecl nid: fb.stmt)
     }
     return ztypes.noConst
+}
+
+# stampConstAt -- record what a USE SITE evaluates to, when it evaluates to
+# anything. The value walk asks this of every row the evaluator recognises, so
+# the ask is SPECULATIVE: a row that does not fold is an ordinary run-time
+# expression, not a mistake. The pending failure the evaluator records on the
+# way is therefore restored rather than rendered -- only a caller that REQUIRED
+# a value renders one, and a fold is an optimisation that must never turn a
+# legal program into an error.
+stampConstAt: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    nid: zast.nodeid
+} is {
+    if nid.isZero then return
+    plan: evalConstPlan :ast :nid
+    if plan.arm == 0 then return
+    # A BINOP FOLDS ONLY IF BOTH OPERANDS DO, and the walk reached both of them
+    # before it reached this. Asking the stamps rather than re-walking the
+    # subtree is what keeps the cost linear in the tree instead of linear in
+    # its depth at every node.
+    if plan.arm == 5 then {
+        br: binRefAt :ast :nid
+        if (st.typing.nodeConst.has key: br.lhs.u64) == false then return
+        if (st.typing.nodeConst.has key: br.rhs.u64) == false then return
+    }
+    if plan.arm == 1 then {
+        if (st.typing.nodeConst.has key: plan.innerId.u64) == false then return
+    }
+    # A CALL AND AN `if` ARE NOT ASKED AT A USE SITE. The call arm folds string
+    # static methods and records a reached `error`; the first changes nothing a
+    # body emits and the second is a diagnostic this walk must never raise. The
+    # `if` arm folds a branch the emitter already reads its own channel for.
+    # Measured on a self-compile, the two together allocate for every call and
+    # every `if` in the program and move not one byte of emitted C.
+    if plan.arm == 6 then return
+    if plan.arm == 7 then return
+    # A PATH IS ASKED ONLY WHERE IT CAN BE A LITERAL. `1.u32` is a dotted path
+    # and its value is the point of this walk; `zast.nodeid` is a dotted path
+    # too, and asking costs two owned name copies to be told there is no value.
+    # A unit constant reached through a path is inlined by memberConst already.
+    if plan.arm == 4 then {
+        pnLit: false
+        {
+            pv: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: plan.parentId.u64))
+            pnLit = isNumericLiteralName name: pv.stringview
+        }
+        if (pnLit) == false then return
+    }
+    held: st.typing.constFail
+    constFailClear :st
+    cv: evalConstNode :st :unitDecl frame: st.curFrame :ast :nid
+    st.typing.constFail = held
+    if cv.kind.none then return
+    st.typing.setNodeConst :nid value: cv
 }
 
 # reportUnitConstantShape -- the diagnostic for a unit-level definition whose
@@ -36373,11 +36487,8 @@ constFoldDecl: function {
         dnode = decl.node
     }
     if dnode == 0 then return
-    # both names are COPIED: the fold takes an exclusive lock on ast.names,
-    # which a live view into the pool would hold open
     unm: unitRootOfDecl :st :declId
     if unm.isZero then return
-    nmt: zast.poolTextCopy pool: ast.names ref: nmNode
     constFailClear :st
     valFound: (constValueOfMemberAt
         :st
@@ -36387,7 +36498,6 @@ constFoldDecl: function {
         ownerDecl: own
         nameId: nmNode
         defNodeId: dnode
-        defName: nmt.stringview
     )
     (constRegisterValueTypeAt
         :st

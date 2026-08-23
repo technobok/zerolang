@@ -8007,6 +8007,13 @@ cvalText: function {
 } out String is {
     if v.kind.ivalKind then {
         iv: v.ival
+        # C HAS NO NEGATIVE LITERALS. A leading `-` is an operator applied to a
+        # POSITIVE constant, and the magnitude of the most negative i64 is one
+        # past what a signed constant can hold -- so `-9223372036854775808`
+        # reads as unsigned and the value arrives with the wrong type. It is
+        # the one value that cannot be written directly; C spells it by
+        # subtracting from the one below it, and so does this.
+        if iv == ((0 - 9223372036854775807) - 1) then return "(-9223372036854775807LL - 1)".string
         r: "\{iv}"
         r.append (constSuffixForTid :ast :symtab :tid)
         return r
@@ -8077,8 +8084,17 @@ foldedBranchOf: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztyping.f
     }
 }
 
-# nodeConstText -- the C literal for a node carrying a compile-time
-# const stamp (folded .LABEL data access, unit constants); "" otherwise.
+# nodeConstText -- the C literal for a node carrying a compile-time const
+# stamp; "" otherwise, which leaves the caller on its ordinary emit path.
+#
+# A FLOAT VALUE IS REFUSED HERE. The stamp says what a node evaluates to, and
+# for a float the evaluator answers in f64 while the node may be f16, f32 or
+# f128 -- `1.0e300.f128 * 1.0e50.f128` is finite as f128 and INFINITE as f64.
+# The decimal rendering is not faithful either: it cannot spell a negative
+# zero, and there is no literal for a non-finite value at all. Refusing is the
+# whole of it -- the ordinary path emits the arithmetic and the program keeps
+# its own precision. The integer, string and arm domains are exact and are
+# rendered.
 nodeConstText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -8090,6 +8106,7 @@ nodeConstText: function {
     match (
         g
     ) case some then {
+        if g.kind.fvalKind then return "".string
         tv: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: nid.u64
         sc: cvalText :ast :symtab :ctx tid: tv v: g
         if sc.length > 0 then return sc
