@@ -2056,6 +2056,20 @@ binopMethodAt: function {
 # is where the declaration lives. "" when the source names no declaring unit,
 # which is how a member that merely LOOKS like a type name -- a user record's
 # field called `u32` -- fails to find a row and is not treated as a conversion.
+# nativeMemberKey -- the natives.tbl path of a MEMBER on a native receiver:
+# the receiver's source path and the member name. Built in one place because
+# two places building it would be two spellings of one key, and the table
+# answers only the spelling it was given.
+nativeMemberKey: function {
+    symtab: zenv.ZSymbolTable.view
+    srcTid: ztypes.tid
+    memb: StringView
+} out String is {
+    p: convSrcPathOf :symtab :srcTid
+    if p.length == 0 then return "".string
+    return "\{p}.\{memb}"
+}
+
 convSrcPathOf: function {symtab: zenv.ZSymbolTable.view srcTid: ztypes.tid} out String is {
     if srcTid.isZero then return "".string
     uo: definedInUnitOf :symtab tid: srcTid
@@ -4775,6 +4789,106 @@ dottedReceiverIsPtr: function {
     } else {
         return false
     }
+}
+
+# emitNativeArgMethod -- a native method that takes ARGUMENTS, emitted from its
+# own natives.tbl row. The receiver-only rows reach `emitNumericCast`, which
+# binds one hole and knows nothing of arguments; the operator rows reach
+# `emitBinop`, which binds two and is spelled for a binop. A row that names an
+# argument hole had no way in at all, and every bodied row on a scalar was a
+# conversion, `bits` or `not` because of it.
+#
+# @V@ is the receiver and @A1@, @A2@, ... the arguments -- 1-BASED WITH THE
+# RECEIVER EXCLUDED, the same numbering `const=` uses, so one convention
+# answers for both. Arguments fill in DECLARED order, not written order:
+# argSlotList maps the labels the way every other call form does.
+#
+# The row is the authority. Nothing here compares a member name, so a native
+# gaining an argument is a declaration and a row, as it should be.
+emitNativeArgMethod: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.CallData.view
+    ownerTid: ztypes.tid
+} out String is {
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    if mn.length == 0 then return "".string
+    key: nativeMemberKey :symtab srcTid: ownerTid memb: mn.stringview
+    if key.length == 0 then return "".string
+    body: nativeImplOf :ctx path: key.stringview
+    if body.length == 0 then return "".string
+    if (body.stringview.contains needle: "@A1@") == false then return "".string
+    recv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable.u64)
+    if recv.length == 0 then return "".string
+    if (dottedReceiverIsPtr
+        :ast
+        :symtab
+        :ctx
+        callable: (ast.nodes.get i: call.callable.u64)
+    ) then {
+        rd: "(*\{recv})"
+        recv = rd.copy
+    }
+    mtid: ztypes.tid.create from: (ztypecheck.optU64Or
+        o: (symtab.typing.declChildOf pool: ast.names parentTypeId: ownerTid name: mn.stringview)
+        d: 0
+    )
+    if mtid.isZero then return "".string
+    pNames: (List String)
+    pIds: (ListVal u64)
+    pNameIds: (ListVal u64)
+    (recFieldLists :ast :symtab tid: mtid names: pNames ids: pIds nameIds: pNameIds)
+    # the receiver is the FIRST parameter, so a parameter's slot index IS its
+    # hole number: slot 0 is `this` and fills @V@, slot 1 fills @A1@
+    if pNames.length < 2 then return "".string
+    slots: argSlotList :ast :call fpNames: pNames
+    valBySlot: (IdMapR u64 value: String)
+    ai: u64
+    with ait: call.arguments.iterate do for aId: ait loop {
+        a: ast.nodes.get i: aId.u64
+        match (
+            a
+        ) case namedoperation then {
+            slot: slots.get i: ai
+            if slot < pNames.length then {
+                av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
+                valBySlot.set key: slot value: av
+            }
+        } else null
+        ai = ai + 1
+    }
+    rn: (List String)
+    rv: (List String)
+    rn.append from: "V".string
+    rv.append from: recv.copy
+    missing: false
+    hi: 1.u64
+    for hi < pNames.length loop {
+        g: valBySlot.get key: hi
+        match (
+            g
+        ) case some then {
+            hn: "A\{hi}"
+            rn.append hn
+            rv.append g.copy
+        } case none then {
+            missing = true
+        }
+        hi = hi + 1
+    }
+    if missing then return "".string
+    bn: (List String)
+    bv: (List String)
+    return (fillHolesForCtx
+        :ctx
+        text: body
+        path: key.stringview
+        bindNames: bn
+        bindVals: bv
+        rawNames: rn
+        rawVals: rv
+    )
 }
 
 # emitStringArgMethod -- a String mutating method WITH an arg (appendByte /
@@ -9884,6 +9998,10 @@ emitCallByDecl: function {
                 rsv: emitDottedCall :ast :symtab :ctx :call
                 if rsv.length > 0 then return rsv
             }
+            # a native that takes arguments answers from its own row, before
+            # the receiver-only and operator legs get a chance to not know it
+            rnam: emitNativeArgMethod :ast :symtab :ctx :call :ownerTid
+            if rnam.length > 0 then return rnam
             ott: symtab.reg.typetypeOf typeId: ownerTid
             isSpec: false
             if ott == ztypes.ztypetype.protocolType then isSpec = true
@@ -11994,7 +12112,7 @@ emitDottedNativeMarker: function {
         ncSrcP = convSrcPathOf :symtab srcTid: ncChase
         if ncSrcP.length > 0 then {
             mn2v: zast.nameTextAt :ast ref: mn2Id
-            ncKey = "\{ncSrcP}.\{mn2v}"
+            ncKey = nativeMemberKey :symtab srcTid: ncChase memb: mn2v.stringview
             ncHas = nativeHasRow :ctx path: ncKey.stringview
         }
     }
