@@ -18,6 +18,7 @@
 #   --heavy adds the self-host ASan run and the byte-identity fixpoint.
 #
 # Usage: ztestrunner --zc <zc> --cc gcc --root <repo> [--jobs N] [--heavy] [--report]
+#   --jobs defaults to os.cpuCount, so it follows the machine it runs on.
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
@@ -1915,6 +1916,61 @@ runSmokeCases: function {r: Runner} is {
     }
 }
 
+# addSelfhostJob -- one pooled invocation of the sanitized compiler over one
+# unit in one mode. ONE job per (unit, mode) and not one job with two steps,
+# because runJobs reports a job's status as its LAST step's exit and the leak
+# arm's precondition needs each invocation's own.
+#
+# `allowFail: true` throughout: a non-zero exit is data here, not a harness
+# failure -- selfhostVerdict decides what it means.
+addSelfhostJob: function {
+    r: Runner
+    pool: (List PoolJob).borrow
+    names: (List String).borrow
+    modes: (List String).borrow
+    errs: (List String).borrow
+    zcaB: StringView
+    name: StringView
+    srcdir: StringView
+    dumpMode: bool
+} is {
+    # the mode arrives as a bool and the spellings are produced from it, never
+    # compared against it: a literal compare here would cost the A001 ratchet,
+    # and one composed path would cost A002.
+    ep9s: "\{r.tmp.stringview}/SA1_\{name}.err"
+    if dumpMode then ep9s = "\{r.tmp.stringview}/SA2_\{name}.err"
+    mn9s: "emit-c".string
+    if dumpMode then mn9s = "dump-sql".string
+    a9s: (List String)
+    a9s.append from: zcaB.string
+    a9s.append from: name.string
+    a9s.append from: "--src".string
+    a9s.append from: srcdir.string
+    a9s.append from: "--system".string
+    a9s.append from: r.sys.copy
+    if dumpMode then {
+        a9s.append from: "--dump-sql".string
+        a9s.append from: "-".string
+    } else {
+        a9s.append from: "--emit-c".string
+        a9s.append from: "/dev/null".string
+    }
+    st9s: (List PoolStep)
+    st9s.append (mkStep
+        argv: a9s
+        cwd: ""
+        outPath: "/dev/null"
+        errPath: ep9s.stringview
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    pool.append (mkJob :name steps: st9s)
+    names.append from: name.string
+    modes.append from: mn9s
+    errs.append from: ep9s
+}
+
 # selfhostVerdict -- judge one sanitized run of the compiler over one unit.
 #
 # The leak arm has a PRECONDITION the others do not: allocation balance is only
@@ -2017,9 +2073,10 @@ runSelfhostAsan: function {r: Runner} is {
             r.fails = r.fails + 1
         }
         if zcaOk then {
-            saek: sanEnvKey bounds: sabounds
-            saev: sanEnvValue bounds: sabounds
-            os.setEnv key: saek.stringview value: saev.stringview
+            saPool: (List PoolJob)
+            saNames: (List String)
+            saModes: (List String)
+            saErrs: (List String)
             saDirs: (List String)
             saDirs.append from: r.examplesDir.copy
             saDirs.append from: r.corpusDir.copy
@@ -2038,57 +2095,27 @@ runSelfhostAsan: function {r: Runner} is {
                             ssfx
                         ) case some then {
                             snm: ssfx
-                            saerr1: "\{r.tmp}/SA1_\{snm}.err"
-                            m1: (List String)
-                            m1.append from: zcaB.copy
-                            m1.append from: snm.string
-                            m1.append from: "--src".string
-                            m1.append from: sad.copy
-                            m1.append from: "--system".string
-                            m1.append from: r.sys.copy
-                            m1.append from: "--emit-c".string
-                            m1.append from: "/dev/null".string
-                            sc1: (os.spawn
-                                argv: m1
-                                cwd: ""
-                                outPath: "/dev/null"
-                                errPath: saerr1.stringview
-                                timeoutSecs: r.timeoutSecs
-                            )
-                            e1C: slurp path: saerr1.stringview
-                            (selfhostVerdict
+                            (addSelfhostJob
                                 :r
-                                :sabounds
+                                pool: saPool
+                                names: saNames
+                                modes: saModes
+                                errs: saErrs
+                                zcaB: zcaB.stringview
                                 name: snm
-                                mode: "emit-c"
-                                status: sc1
-                                err: e1C.stringview
+                                srcdir: sad.stringview
+                                dumpMode: false
                             )
-                            saerr2: "\{r.tmp}/SA2_\{snm}.err"
-                            m2: (List String)
-                            m2.append from: zcaB.copy
-                            m2.append from: snm.string
-                            m2.append from: "--src".string
-                            m2.append from: sad.copy
-                            m2.append from: "--system".string
-                            m2.append from: r.sys.copy
-                            m2.append from: "--dump-sql".string
-                            m2.append from: "-".string
-                            sc2: (os.spawn
-                                argv: m2
-                                cwd: ""
-                                outPath: "/dev/null"
-                                errPath: saerr2.stringview
-                                timeoutSecs: r.timeoutSecs
-                            )
-                            e2C: slurp path: saerr2.stringview
-                            (selfhostVerdict
+                            (addSelfhostJob
                                 :r
-                                :sabounds
+                                pool: saPool
+                                names: saNames
+                                modes: saModes
+                                errs: saErrs
+                                zcaB: zcaB.stringview
                                 name: snm
-                                mode: "dump-sql"
-                                status: sc2
-                                err: e2C.stringview
+                                srcdir: sad.stringview
+                                dumpMode: true
                             )
                         } case none then null
                         sai = sai + 1
@@ -2096,7 +2123,33 @@ runSelfhostAsan: function {r: Runner} is {
                 } case err then null
                 sdi = sdi + 1
             }
+            # pooled, like every other kind: this leg used to spawn serially,
+            # which cost nothing visible under ASan (~0.085s a run, hidden in a
+            # parallel corpus) and dominated everything under tcc's bounds
+            # checker (~0.328s a run x 998 = over five minutes, serial).
+            # Concurrency is r.jobsMax, which --jobs carries from the caller;
+            # the Makefile derives it from nproc, so it follows the machine.
+            saStatuses: (ListVal i32)
+            saFailSteps: (ListVal i64)
+            saek: sanEnvKey bounds: sabounds
+            saev: sanEnvValue bounds: sabounds
+            os.setEnv key: saek.stringview value: saev.stringview
+            runJobs jobs: saPool maxJobs: r.jobsMax statuses: saStatuses failSteps: saFailSteps
             os.unsetEnv key: saek.stringview
+            svi: u64
+            for svi < saPool.length loop {
+                epv: (saErrs.get i: svi)
+                evc: slurp path: epv.stringview
+                (selfhostVerdict
+                    :r
+                    :sabounds
+                    name: (saNames.get i: svi).stringview
+                    mode: (saModes.get i: svi).stringview
+                    status: (saStatuses.get i: svi)
+                    err: evc.stringview
+                )
+                svi = svi + 1
+            }
         }
     }
 }
@@ -2185,7 +2238,10 @@ main: function is {
     heavy: false
     saveTemps: false
     timeoutSecs: 60.i32
-    jobsMax: 1.u64
+    # the machine, not a number someone typed. --jobs still overrides, and the
+    # Makefile passes nproc explicitly; this is what a direct invocation gets,
+    # which used to be 1 -- silently serial on a 24-core box.
+    jobsMax: (os.cpuCount).u64.orPanic
     i: 1.u64
     for i < n loop {
         a: argv.get :i
