@@ -1645,19 +1645,25 @@ floatFitsFloat: function {value: f64 k: numkind} out bool is {
             return false
         }
     } case f16Type then {
-        # exact binary16 representability, in f64 arithmetic only (the
-        # bootstrap seed has no .f16 conversion): find the value's binade,
-        # derive the f16 ulp there (subnormal floor 2^-24), and require the
-        # value to be an exact multiple of that ulp within range.
+        # exact binary16 representability, computed in f64 ARITHMETIC ONLY.
+        # Not because the seed cannot convert -- it can -- but because
+        # halffloat's `require:` block refuses `_Float16` under tcc and
+        # test-bootstrap builds the compiler WITH tcc, so a `.f16` in this file
+        # would make the compiler unbuildable. The f64-only arithmetic is
+        # load-bearing.
+        #
+        # Find the value's binade, derive the f16 ulp there, and require the
+        # value to be an exact multiple of it within range.
         av: value
         if av < 0.0 then av = 0.0 - av
         if av == 0.0 then return true
         if av > 65504.0 then return false
-        p: 1.0
-        for p > av loop p = p / 2.0
-        for (p * 2.0) <= av loop p = p * 2.0
-        ulp: p / 1024.0
-        minUlp: 1.0 / 16777216.0
+        # f16 keeps ten stored mantissa bits, so the spacing in binade e is
+        # 2^(e-10) -- the exponent from logB, the power of two from scaleB,
+        # which is what those two exist for. Below the smallest normal the
+        # spacing stops shrinking and stays at 2^-24: the subnormal floor.
+        ulp: 1.0.scaleB n: (av.logB - 10)
+        minUlp: 1.0.scaleB n: (0 - 24)
         if ulp < minUlp then ulp = minUlp
         q: av / ulp
         # q < 2048 by construction; the checked u64 conversion errs on a
