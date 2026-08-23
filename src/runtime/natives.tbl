@@ -19,6 +19,18 @@
 #   needs=<n>  the body calls a demand-gated runtime fragment; without this the
 #              fragment never reaches the output and the C does not compile
 #   args=ptr   the body takes its operands by pointer, so they must be lvalues
+#   const=<p>  a VARIANT row, chosen over the plain one for the same path only
+#              when the argument positions <p> -- comma-separated, 1-based,
+#              RECEIVER EXCLUDED, so a binop's one argument is 1 -- are all
+#              compile-time constants. Such a position fills with a LITERAL,
+#              which is the one case where a body may name a hole MORE THAN
+#              ONCE: the usual ban exists because holes fill verbatim and a call
+#              operand would then be evaluated twice, and a literal cannot be.
+#              Naming it twice is what puts a constant expression in a guard's
+#              condition, which is what lets a C compiler fold the guard away --
+#              gcc and clang do that at -O2 for the bound form too, but -O0 does
+#              not and tcc never does, and --cc tcc is a first-class path.
+#              make const-row-guard pins both directions.
 #
 # A path beginning `@` is a SYNTHESISED structural case -- a record's or a
 # variant's `==`/`!=`, which no unit declares. The sigil is what keeps those out
@@ -36,7 +48,9 @@
 [system.u8.&]                  (@L@ & @R@)
 [system.u8.|]                  (@L@ | @R@)
 [system.u8.<<]                 ({ uint8_t _l = @L@; uint8_t _r = @R@; (uint8_t)(_r >= 8 ? 0 : (uint8_t)(_l << _r)); })
+[system.u8.<< const=1]         ({ uint8_t _l = @L@; (uint8_t)((uint8_t)(@R@) >= 8 ? 0 : (uint8_t)(_l << (uint8_t)(@R@))); })
 [system.u8.>>]                 ({ uint8_t _l = @L@; uint8_t _r = @R@; (uint8_t)(_r >= 8 ? 0 : (_l >> _r)); })
+[system.u8.>> const=1]         ({ uint8_t _l = @L@; (uint8_t)((uint8_t)(@R@) >= 8 ? 0 : (_l >> (uint8_t)(@R@))); })
 [system.u8.^]                  (@L@ ^ @R@)
 [system.u8.not]                ((uint8_t)(~(@V@)))
 [system.u8.<=]                 (@L@ <= @R@)
@@ -55,7 +69,9 @@
 [system.c8.&]                  (@L@ & @R@)
 [system.c8.|]                  (@L@ | @R@)
 [system.c8.<<]                 ({ uint8_t _l = @L@; uint8_t _r = @R@; (uint8_t)(_r >= 8 ? 0 : (uint8_t)(_l << _r)); })
+[system.c8.<< const=1]         ({ uint8_t _l = @L@; (uint8_t)((uint8_t)(@R@) >= 8 ? 0 : (uint8_t)(_l << (uint8_t)(@R@))); })
 [system.c8.>>]                 ({ uint8_t _l = @L@; uint8_t _r = @R@; (uint8_t)(_r >= 8 ? 0 : (_l >> _r)); })
+[system.c8.>> const=1]         ({ uint8_t _l = @L@; (uint8_t)((uint8_t)(@R@) >= 8 ? 0 : (_l >> (uint8_t)(@R@))); })
 [system.c8.^]                  (@L@ ^ @R@)
 [system.c8.not]                ((uint8_t)(~(@V@)))
 [system.c8.<=]                 (@L@ <= @R@)
@@ -74,7 +90,9 @@
 [system.c32.&]                 (@L@ & @R@)
 [system.c32.|]                 (@L@ | @R@)
 [system.c32.<<]                ({ uint32_t _l = @L@; uint32_t _r = @R@; (uint32_t)(_r >= 32 ? 0 : (uint32_t)(_l << _r)); })
+[system.c32.<< const=1]        ({ uint32_t _l = @L@; (uint32_t)((uint32_t)(@R@) >= 32 ? 0 : (uint32_t)(_l << (uint32_t)(@R@))); })
 [system.c32.>>]                ({ uint32_t _l = @L@; uint32_t _r = @R@; (uint32_t)(_r >= 32 ? 0 : (_l >> _r)); })
+[system.c32.>> const=1]        ({ uint32_t _l = @L@; (uint32_t)((uint32_t)(@R@) >= 32 ? 0 : (_l >> (uint32_t)(@R@))); })
 [system.c32.^]                 (@L@ ^ @R@)
 [system.c32.not]               ((uint32_t)(~(@V@)))
 [system.c32.<=]                (@L@ <= @R@)
@@ -93,7 +111,9 @@
 [system.i8.&]                  (@L@ & @R@)
 [system.i8.|]                  (@L@ | @R@)
 [system.i8.<<]                 ({ int8_t _l = @L@; int8_t _r = @R@; (int8_t)((uint8_t)_r >= 8 ? 0 : (int8_t)((uint8_t)_l << (uint8_t)_r)); })
+[system.i8.<< const=1]         ({ int8_t _l = @L@; (int8_t)((uint8_t)(int8_t)(@R@) >= 8 ? 0 : (int8_t)((uint8_t)_l << (uint8_t)(int8_t)(@R@))); })
 [system.i8.>>]                 ({ int8_t _l = @L@; int8_t _r = @R@; (int8_t)((uint8_t)_r >= 8 ? (_l < 0 ? -1 : 0) : (_l >> (uint8_t)_r)); })
+[system.i8.>> const=1]         ({ int8_t _l = @L@; (int8_t)((uint8_t)(int8_t)(@R@) >= 8 ? (_l < 0 ? -1 : 0) : (_l >> (uint8_t)(int8_t)(@R@))); })
 [system.i8.^]                  (@L@ ^ @R@)
 [system.i8.not]                ((int8_t)(~(@V@)))
 [system.i8.bits]               ((uint8_t)(@V@))
@@ -113,7 +133,9 @@
 [system.i16.&]                 (@L@ & @R@)
 [system.i16.|]                 (@L@ | @R@)
 [system.i16.<<]                ({ int16_t _l = @L@; int16_t _r = @R@; (int16_t)((uint16_t)_r >= 16 ? 0 : (int16_t)((uint16_t)_l << (uint16_t)_r)); })
+[system.i16.<< const=1]        ({ int16_t _l = @L@; (int16_t)((uint16_t)(int16_t)(@R@) >= 16 ? 0 : (int16_t)((uint16_t)_l << (uint16_t)(int16_t)(@R@))); })
 [system.i16.>>]                ({ int16_t _l = @L@; int16_t _r = @R@; (int16_t)((uint16_t)_r >= 16 ? (_l < 0 ? -1 : 0) : (_l >> (uint16_t)_r)); })
+[system.i16.>> const=1]        ({ int16_t _l = @L@; (int16_t)((uint16_t)(int16_t)(@R@) >= 16 ? (_l < 0 ? -1 : 0) : (_l >> (uint16_t)(int16_t)(@R@))); })
 [system.i16.^]                 (@L@ ^ @R@)
 [system.i16.not]               ((int16_t)(~(@V@)))
 [system.i16.bits]              ((uint16_t)(@V@))
@@ -133,7 +155,9 @@
 [system.i32.&]                 (@L@ & @R@)
 [system.i32.|]                 (@L@ | @R@)
 [system.i32.<<]                ({ int32_t _l = @L@; int32_t _r = @R@; (int32_t)((uint32_t)_r >= 32 ? 0 : (int32_t)((uint32_t)_l << (uint32_t)_r)); })
+[system.i32.<< const=1]        ({ int32_t _l = @L@; (int32_t)((uint32_t)(int32_t)(@R@) >= 32 ? 0 : (int32_t)((uint32_t)_l << (uint32_t)(int32_t)(@R@))); })
 [system.i32.>>]                ({ int32_t _l = @L@; int32_t _r = @R@; (int32_t)((uint32_t)_r >= 32 ? (_l < 0 ? -1 : 0) : (_l >> (uint32_t)_r)); })
+[system.i32.>> const=1]        ({ int32_t _l = @L@; (int32_t)((uint32_t)(int32_t)(@R@) >= 32 ? (_l < 0 ? -1 : 0) : (_l >> (uint32_t)(int32_t)(@R@))); })
 [system.i32.^]                 (@L@ ^ @R@)
 [system.i32.not]               ((int32_t)(~(@V@)))
 [system.i32.bits]              ((uint32_t)(@V@))
@@ -153,7 +177,9 @@
 [system.i64.&]                 (@L@ & @R@)
 [system.i64.|]                 (@L@ | @R@)
 [system.i64.<<]                ({ int64_t _l = @L@; int64_t _r = @R@; (int64_t)((uint64_t)_r >= 64 ? 0 : (int64_t)((uint64_t)_l << (uint64_t)_r)); })
+[system.i64.<< const=1]        ({ int64_t _l = @L@; (int64_t)((uint64_t)(int64_t)(@R@) >= 64 ? 0 : (int64_t)((uint64_t)_l << (uint64_t)(int64_t)(@R@))); })
 [system.i64.>>]                ({ int64_t _l = @L@; int64_t _r = @R@; (int64_t)((uint64_t)_r >= 64 ? (_l < 0 ? -1 : 0) : (_l >> (uint64_t)_r)); })
+[system.i64.>> const=1]        ({ int64_t _l = @L@; (int64_t)((uint64_t)(int64_t)(@R@) >= 64 ? (_l < 0 ? -1 : 0) : (_l >> (uint64_t)(int64_t)(@R@))); })
 [system.i64.^]                 (@L@ ^ @R@)
 [system.i64.not]               ((int64_t)(~(@V@)))
 [system.i64.bits]              ((uint64_t)(@V@))
@@ -173,7 +199,9 @@
 [system.u16.&]                 (@L@ & @R@)
 [system.u16.|]                 (@L@ | @R@)
 [system.u16.<<]                ({ uint16_t _l = @L@; uint16_t _r = @R@; (uint16_t)(_r >= 16 ? 0 : (uint16_t)(_l << _r)); })
+[system.u16.<< const=1]        ({ uint16_t _l = @L@; (uint16_t)((uint16_t)(@R@) >= 16 ? 0 : (uint16_t)(_l << (uint16_t)(@R@))); })
 [system.u16.>>]                ({ uint16_t _l = @L@; uint16_t _r = @R@; (uint16_t)(_r >= 16 ? 0 : (_l >> _r)); })
+[system.u16.>> const=1]        ({ uint16_t _l = @L@; (uint16_t)((uint16_t)(@R@) >= 16 ? 0 : (_l >> (uint16_t)(@R@))); })
 [system.u16.^]                 (@L@ ^ @R@)
 [system.u16.not]               ((uint16_t)(~(@V@)))
 [system.u16.<=]                (@L@ <= @R@)
@@ -192,7 +220,9 @@
 [system.u32.&]                 (@L@ & @R@)
 [system.u32.|]                 (@L@ | @R@)
 [system.u32.<<]                ({ uint32_t _l = @L@; uint32_t _r = @R@; (uint32_t)(_r >= 32 ? 0 : (uint32_t)(_l << _r)); })
+[system.u32.<< const=1]        ({ uint32_t _l = @L@; (uint32_t)((uint32_t)(@R@) >= 32 ? 0 : (uint32_t)(_l << (uint32_t)(@R@))); })
 [system.u32.>>]                ({ uint32_t _l = @L@; uint32_t _r = @R@; (uint32_t)(_r >= 32 ? 0 : (_l >> _r)); })
+[system.u32.>> const=1]        ({ uint32_t _l = @L@; (uint32_t)((uint32_t)(@R@) >= 32 ? 0 : (_l >> (uint32_t)(@R@))); })
 [system.u32.^]                 (@L@ ^ @R@)
 [system.u32.not]               ((uint32_t)(~(@V@)))
 [system.u32.<=]                (@L@ <= @R@)
@@ -211,7 +241,9 @@
 [system.u64.&]                 (@L@ & @R@)
 [system.u64.|]                 (@L@ | @R@)
 [system.u64.<<]                ({ uint64_t _l = @L@; uint64_t _r = @R@; (uint64_t)(_r >= 64 ? 0 : (uint64_t)(_l << _r)); })
+[system.u64.<< const=1]        ({ uint64_t _l = @L@; (uint64_t)((uint64_t)(@R@) >= 64 ? 0 : (uint64_t)(_l << (uint64_t)(@R@))); })
 [system.u64.>>]                ({ uint64_t _l = @L@; uint64_t _r = @R@; (uint64_t)(_r >= 64 ? 0 : (_l >> _r)); })
+[system.u64.>> const=1]        ({ uint64_t _l = @L@; (uint64_t)((uint64_t)(@R@) >= 64 ? 0 : (_l >> (uint64_t)(@R@))); })
 [system.u64.^]                 (@L@ ^ @R@)
 [system.u64.not]               ((uint64_t)(~(@V@)))
 [system.u64.<=]                (@L@ <= @R@)
@@ -284,7 +316,9 @@
 [system.i128.&]                (@L@ & @R@)
 [system.i128.|]                (@L@ | @R@)
 [system.i128.<<]               ({ __int128 _l = @L@; __int128 _r = @R@; (__int128)((unsigned __int128)_r >= 128 ? 0 : (__int128)((unsigned __int128)_l << (unsigned __int128)_r)); })
+[system.i128.<< const=1]       ({ __int128 _l = @L@; (__int128)((unsigned __int128)(__int128)(@R@) >= 128 ? 0 : (__int128)((unsigned __int128)_l << (unsigned __int128)(__int128)(@R@))); })
 [system.i128.>>]               ({ __int128 _l = @L@; __int128 _r = @R@; (__int128)((unsigned __int128)_r >= 128 ? (_l < 0 ? -1 : 0) : (_l >> (unsigned __int128)_r)); })
+[system.i128.>> const=1]       ({ __int128 _l = @L@; (__int128)((unsigned __int128)(__int128)(@R@) >= 128 ? (_l < 0 ? -1 : 0) : (_l >> (unsigned __int128)(__int128)(@R@))); })
 [system.i128.^]                (@L@ ^ @R@)
 [system.i128.not]              ((__int128)(~(@V@)))
 [system.i128.bits]             ((unsigned __int128)(@V@))
@@ -304,7 +338,9 @@
 [system.u128.&]                (@L@ & @R@)
 [system.u128.|]                (@L@ | @R@)
 [system.u128.<<]               ({ unsigned __int128 _l = @L@; unsigned __int128 _r = @R@; (unsigned __int128)(_r >= 128 ? 0 : (unsigned __int128)(_l << _r)); })
+[system.u128.<< const=1]       ({ unsigned __int128 _l = @L@; (unsigned __int128)((unsigned __int128)(@R@) >= 128 ? 0 : (unsigned __int128)(_l << (unsigned __int128)(@R@))); })
 [system.u128.>>]               ({ unsigned __int128 _l = @L@; unsigned __int128 _r = @R@; (unsigned __int128)(_r >= 128 ? 0 : (_l >> _r)); })
+[system.u128.>> const=1]       ({ unsigned __int128 _l = @L@; (unsigned __int128)((unsigned __int128)(@R@) >= 128 ? 0 : (_l >> (unsigned __int128)(@R@))); })
 [system.u128.^]                (@L@ ^ @R@)
 [system.u128.not]              ((unsigned __int128)(~(@V@)))
 [system.u128.<=]               (@L@ <= @R@)

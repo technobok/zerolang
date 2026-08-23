@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision
+.PHONY: emit-set ident-set natives-tbl-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -144,7 +144,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
+ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -1110,6 +1110,36 @@ ident-set:
 	  echo "ident-set: $$(grep -c . "$$rep") file(s) differ after normalisation ($$raw raw):"; \
 	  sed 's/^/  /' "$$rep" | head -60; rm -rf "$$na" "$$nb" "$$rep"; exit 1; \
 	fi
+
+# const-row-guard -- a natives.tbl row carrying `const=<positions>` answers only
+# when those ARGUMENT positions are compile-time constants; the ordinary row
+# answers otherwise. Both directions are checked, because either failure is
+# silent. A variant that stops being selected costs nothing visible -- the
+# guarded form is still correct, just branchier, and no golden would move. A
+# variant selected for a RUNTIME operand is worse and just as quiet: the
+# variant names its hole more than once, and holes fill VERBATIM, so a call on
+# the right would be evaluated once per mention. Binding the operand into `_l`
+# / `_r` is what the ordinary rows do to prevent exactly that, so the presence
+# of an `_r` binding is what tells the two forms apart in the emitted C.
+#
+# const_shift_form is the sample: six constant counts, which must bind no `_r`,
+# and three that are not constant -- two locals and a CALL -- which must each
+# bind one. The fixture answers for the values; this answers for the form.
+CONST_ROW_VARIABLE := 3
+
+const-row-guard: bin/zc
+	@d=$$(mktemp -d); em=$$d/emitted.c; \
+	bin/zc emit tests/fixtures/emitc_corpus/const_shift_form.z -o $$em || { \
+	  echo "const-row-guard FAIL: const_shift_form did not emit"; rm -rf $$d; exit 1; }; \
+	n=$$(grep -o '_r = ' $$em | wc -l); rm -rf $$d; \
+	if [ "$$n" -ne $(CONST_ROW_VARIABLE) ]; then \
+	  echo "const-row-guard FAIL: $$n operand bindings, expected $(CONST_ROW_VARIABLE)"; \
+	  echo "  More means a constant count stopped selecting the const= row."; \
+	  echo "  Fewer means a NON-constant one selected it, and the variant names"; \
+	  echo "  its hole more than once -- a call operand would be evaluated twice."; \
+	  exit 1; \
+	fi; \
+	echo "const-row-guard OK: $$n non-constant shift operands bound, the rest fold"
 
 # Lower the baseline as each folder gap is closed. Skipped when clang is absent -- clang is
 # not a build requirement.

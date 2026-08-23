@@ -1338,6 +1338,7 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                     frag: String
                     dem: String
                     ord: String
+                    cst: String
                     ptr: false
                     with fit: (head.split sep: " ") do for f: fit loop {
                         if f.length > 0 then {
@@ -1369,6 +1370,12 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                                 ) case some then {
                                     ord = oo.string
                                 } case none then null
+                                co: f.stripPrefix p: "const="
+                                match (
+                                    co
+                                ) case some then {
+                                    cst = co.string
+                                } case none then null
                             }
                         }
                     }
@@ -1391,7 +1398,7 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                         # what actually answers. Pairing them here instead would be a CROSS
                         # PRODUCT -- every conv source crossed with every conv member -- which
                         # said yes to `u8.bits` on the strength of `bits` existing on i8.
-                        if body.length > 0 then {
+                        if body.length > 0 when cst.length == 0 then {
                             firstDot: key.stringview.indexOf needle: "."
                             match (
                                 firstDot
@@ -1479,7 +1486,13 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                         }
                         if body.length > 0 then {
                             kb: key.copy
-                            ctx.nativeTbl.set key: kb value: body.string
+                            if cst.length > 0 then {
+                                ctx.nativeConstBody.set key: kb value: body.string
+                                kc: key.copy
+                                ctx.nativeConstPos.set key: kc value: cst.copy
+                            } else {
+                                ctx.nativeTbl.set key: kb value: body.string
+                            }
                         }
                         if need.length > 0 then {
                             kn: key.copy
@@ -1562,6 +1575,60 @@ nativeImplOf: function {ctx: Ctx.view path: StringView} out String is {
         } case none then null
     }
     return result
+}
+
+# nativeConstImplOf -- the body of the row that answers only when the argument
+# positions it names are COMPILE-TIME CONSTANTS; "" when the path has no such
+# row. A row like `[system.u64.<< const=1]` gets to name its hole twice --
+# normally forbidden, because holes fill verbatim and a call operand would be
+# evaluated twice -- precisely because a constant position fills with a
+# LITERAL. That is what puts a constant expression in the guard's condition,
+# which is what a C compiler needs to see to fold it away: measured on the
+# vendored tcc, the guarded form keeps a compare and two jumps and the const
+# form is a single `shl $0x3,%rax`.
+nativeConstImplOf: function {ctx: Ctx.view path: StringView} out String is {
+    result: String
+    {
+        g: ctx.nativeConstBody.get key: path.asString
+        match (
+            g
+        ) case some then {
+            result = g.copy
+        } case none then null
+    }
+    return result
+}
+
+# nativeConstPosOf -- the argument positions that row requires to be constant,
+# 1-based with the receiver excluded, so the attribute reads the same for a
+# binop (which has exactly one argument) and for an N-argument call later.
+nativeConstPosOf: function {ctx: Ctx.view path: StringView} out String is {
+    result: String
+    {
+        g: ctx.nativeConstPos.get key: path.asString
+        match (
+            g
+        ) case some then {
+            result = g.copy
+        } case none then null
+    }
+    return result
+}
+
+# constPosIsFirstOnly -- the position list names argument 1 and nothing else.
+# A binop HAS only argument 1, so a row asking for any other position cannot be
+# satisfied by one and is not selected; the list form is what lets a call ask
+# for two. Asked with stripPrefix rather than a literal compare, the way the
+# loader reads every other attribute -- the architecture lint counts a `==`
+# against a spelling, and it is right to.
+constPosIsFirstOnly: function {pos: StringView} out bool is {
+    o: pos.stripPrefix p: "1"
+    match (
+        o
+    ) case some then {
+        return o.length == 0
+    } case none then null
+    return false
 }
 
 # nativeNeedOf -- the runtime fragment a row's body calls, "" when it calls
@@ -2758,6 +2825,14 @@ Ctx: class {
     nativeTbl: (Map String value: String)
     nativeNeed: (Map String value: String)
     nativePtrArgs: (MapRV String value: bool)
+    # a row that answers only when named ARGUMENTS are compile-time constants,
+    # kept beside the ordinary body rather than in it: `nativeTbl` is keyed by
+    # path alone, so a second row of the same path would overwrite the first
+    # and the guarded form would simply vanish. The body and the positions it
+    # requires are two maps rather than one composed key for the same reason
+    # the rest of this table is: the path IS the key.
+    nativeConstBody: (Map String value: String)
+    nativeConstPos: (Map String value: String)
     # the conversion rows, split so the two questions stay separate: is this
     # member a CONVERSION at all (a type that converts, and a member every
     # converting type declares), and if so what C does this pair emit. Asking
@@ -12249,6 +12324,20 @@ emitBinop: function {
     if body.length == 0 then {
         emitFail :ctx what: "no native implementation for '\{key}'" line: binop.lineno
         return "/* zemitterc: no native implementation */0".string
+    }
+    # A CONSTANT ARGUMENT MAY SELECT A DIFFERENT ROW. The table says which
+    # positions a variant needs to be constant and the checker's value channel
+    # says whether they are; neither the operator's spelling nor its meaning is
+    # consulted here, so the C stays in the table where f34ecd07 put it.
+    # the stamp is asked FIRST: it is a plain id lookup, where reaching the
+    # table means building a key from a view. Most operands are not constants,
+    # and those never touch the table at all.
+    if (symtab.typing.nodeConst.has key: binop.rhs.u64) then {
+        cbody: nativeConstImplOf :ctx path: key.stringview
+        if cbody.length > 0 then {
+            cpos: nativeConstPosOf :ctx path: key.stringview
+            if (constPosIsFirstOnly pos: cpos.stringview) then body = cbody.copy
+        }
     }
     nd: nativeNeedOf :ctx path: key.stringview
     if nd.length > 0 then needsAddM :ctx uname: "system" memb: nd.stringview
@@ -22620,6 +22709,8 @@ emitC: function {
         tmplCache: (Map String value: String)
         ioCanonC: (Map String value: String)
         nativeTbl: (Map String value: String)
+        nativeConstBody: (Map String value: String)
+        nativeConstPos: (Map String value: String)
         nativeNeed: (Map String value: String)
         nativePtrArgs: (MapRV String value: bool)
         nativeKeys: (MapRV String value: bool)
