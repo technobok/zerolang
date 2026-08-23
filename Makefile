@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc mode-parity readable-check user-native-guard perf-strict perf-elision
+.PHONY: emit-set ident-set natives-tbl-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -144,7 +144,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc mode-parity ci-corpus
+ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -157,12 +157,22 @@ ci-corpus: bin/zc $(BUILDDIR)/ztestrunner
 # its two programs are rejected by name instead of dying in tcc's parser.
 # tests/tcc-known-failures.txt records the split, program and stage; a move in
 # EITHER direction fails, so gaining a guard is a deliberate edit there.
-# Cheap enough to be unconditional -- tcc does the corpus in ~3s.
+#
+# TWO TIERS, the same split `test` and `ci-corpus` already use for gcc, and for
+# the same reason: the fast one is 4s and belongs in the edit loop, the heavy
+# one is 6m23s and belongs in ci. `test-tcc-heavy` adds the self-host and
+# fixpoint kinds, and that is where it earns its keep -- the self-host leg
+# builds zc ITSELF under the sanitizer and runs it over every unit, and tcc's
+# bounds checker reports every block still LIVE at exit where ASan reports only
+# what is definitely LOST. The gcc heavy leg cannot see what that one sees.
+# One recipe and one ratchet serve both; only the flag differs.
 TCC_KNOWN := tests/tcc-known-failures.txt
+# empty for the fast tier; test-tcc-heavy overrides it.
+TCC_TIER ?=
 
 test-tcc: bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(BUILDDIR)/tcc --cc-forward \
-	   --ccflags "-B $(TCCLIB)" --root . --jobs $(NPROC) \
+	   --ccflags "-B $(TCCLIB)" --root . $(TCC_TIER) --jobs $(NPROC) \
 	   > $(BUILDDIR)/tcc-run.log 2>&1; \
 	awk '/^FAIL/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
 	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/tcc-run.log \
@@ -175,7 +185,12 @@ test-tcc: bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 	  echo "  in the same commit. Full log: $(BUILDDIR)/tcc-run.log"; \
 	  exit 1; \
 	fi; \
-	echo "test-tcc OK: $$(grep -c . $(BUILDDIR)/tcc-fails.txt) known failures, none new"
+	echo "test-tcc$(TCC_TIER:--heavy=-heavy) OK: $$(grep -c . $(BUILDDIR)/tcc-fails.txt) known failures, none new"
+
+# test-tcc-heavy -- the same corpus and the same ratchet, plus the self-host and
+# fixpoint kinds. In ci, not in the edit loop: 6m23s against test-tcc's 4s.
+test-tcc-heavy:
+	@$(MAKE) --no-print-directory test-tcc TCC_TIER=--heavy
 
 # readable-check -- --readable-names is a debug affordance, so nothing else
 # exercises it; without this it would rot unnoticed. The two schemes differ
