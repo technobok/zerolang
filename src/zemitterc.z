@@ -12455,6 +12455,24 @@ emitBinop: function {
     }
     if call > 0 when (isNat == false) then {
         if (isSyn) == false then {
+            # AN INTERFACE RECEIVER DISPATCHES. A binop is the call form for a
+            # one-argument method, and this leg used to take the C name of the
+            # method it resolved to -- which for an interface is the SPEC
+            # member, a declaration with no body. The named call form on the
+            # same facet was emitting `f.vtable->near(&f.data, a)` while this
+            # one emitted a call to a symbol that does not exist.
+            vd: (emitBinopVtableCall
+                :ast
+                :symtab
+                :ctx
+                :binop
+                :owner
+                :callName
+                lhs: l.stringview
+                rhs: r.stringview
+                :neg
+            )
+            if vd.length > 0 then return vd
             # a body the author wrote. Its receiver is a pointer like every
             # other method's, so address the lhs unless it already is one.
             cn: ctxCname :ctx tid: call
@@ -28996,8 +29014,80 @@ vtableAutoCallC: function {
     mn: StringView
     isFacet: bool
 } out String is {
+    return (vtableCallC :recv :acc :mn :isFacet argTail: "")
+}
+
+# emitBinopVtableCall -- a binary operator whose RECEIVER is an interface,
+# dispatched through the vtable. "" when the receiver is not one, which leaves
+# emitBinop on its ordinary leg.
+#
+# The receiver's spelling is inverted from that leg: there `pathIsPointer`
+# decides whether to ADD an `&`, here it decides `.` against `->`, and
+# vtableDataArg puts the `&` back for a facet -- whose impl is inline in a
+# union rather than behind a pointer. The lvalue hoist is kept for the same
+# reason it exists there: `&someCall().data` is not an lvalue either.
+#
+# The slot comes from callName, not from the operator as written: a `!=` the
+# checker derived resolves to `==` and is negated here, so the name that
+# resolved is the name that must be dispatched.
+emitBinopVtableCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    binop: zast.BinOpData.view
+    owner: ztypes.tid
+    callName: zast.nameid
+    lhs: StringView
+    rhs: StringView
+    neg: bool
+} out String is {
+    if (isDispatchableTid :symtab tid: owner) == false then return "".string
+    isFacet: (symtab.reg.typetypeOf typeId: owner) == ztypes.ztypetype.facetType
+    acc: ".".string
+    recvText: lhs.string
+    if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: binop.lhs.u64)) then {
+        acc = "->".string
+    } else {
+        needsTemp: isNonLvalueArg s: lhs
+        if (lhs.startsWith prefix: "((") then needsTemp = false
+        if needsTemp then {
+            t: hoistLvalue :ast :symtab :ctx av: lhs tid: owner
+            if t.length > 0 then recvText = t.copy
+        }
+    }
+    mn: zast.nameTextCopy :ast ref: callName
+    if mn.length == 0 then return "".string
+    tail: ", \{rhs}"
+    d: (vtableCallC
+        recv: recvText.stringview
+        acc: acc.stringview
+        mn: mn.stringview
+        :isFacet
+        argTail: tail.stringview
+    )
+    if neg then {
+        nd: "!\{d}"
+        return nd
+    }
+    return d
+}
+
+# vtableCallC -- the dispatch itself: `recv.vtable->slot(dataArg, args...)`.
+# Four plain values and a ready-made argument tail, so every call form can
+# reach it. emitProtocolDispatch builds a tail out of a CallData's arguments; a
+# binop's one operand is already emitted by the time emitBinop runs, so it
+# passes that. A binop is the call form for a one-argument method and it now
+# dispatches through the same three spellings the slot, the wrapper and the
+# vtable row come from.
+vtableCallC: function {
+    recv: StringView
+    acc: StringView
+    mn: StringView
+    isFacet: bool
+    argTail: StringView
+} out String is {
     dargs: vtableDataArg :recv :acc :isFacet
-    return "\{recv}\{acc}vtable->\{(cSlotName name: mn)}(\{dargs})"
+    return "\{recv}\{acc}vtable->\{(cSlotName name: mn)}(\{dargs}\{argTail})"
 }
 
 # emit a protocol method dispatch.

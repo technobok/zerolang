@@ -1,15 +1,20 @@
-# A facet spec may declare an OPERATOR member, and it dispatches through the
-# vtable. Two things had to be true for this to work: the slot needs a C-safe
-# name (`==` is not an identifier), and the impl's receiver must be a pointer
-# like every other method's -- an operator's was emitted by value, so the
-# wrapper handed it a pointer and gcc refused.
+# An OPERATOR member on an interface dispatches through the vtable, from the
+# binop call form as well as the named one. A binop IS the call form for a
+# one-argument method, and it used to emit a direct call to the SPEC member --
+# a declaration with no body -- while `f.hash` on the same facet dispatched
+# correctly. Three things had to be true: the slot needs a C-safe name (`==` is
+# not an identifier), the impl's receiver must be a pointer like every other
+# method's, and the binop form has to reach the same slot the named form does.
 #
-# The operator's argument is a CONCRETE type on purpose. An interface member
-# that names the interface in a parameter -- which `rhs: type` does, since
-# `type` inside a facet is the facet -- asks for a conformer-to-conformer call,
-# and no single vtable slot can carry one. Such a member has no slot and no
-# wrapper, and calling it is refused; tests/fixtures/errors/facet_self_typed
-# pins that. This one is dispatchable, and says so by being dispatched.
+# The argument is a CONCRETE type on purpose. `type` inside an interface is the
+# interface, so `rhs: type` would ask for a conformer-to-conformer call that no
+# single slot can carry; tests/fixtures/errors/facet_self_typed pins that
+# refusal. This member is dispatchable, and is dispatched below.
+#
+# A FACET and a PROTOCOL take their receiver differently -- a facet's impl is
+# INLINE in a union so the slot takes its address, a protocol's `data` is
+# already a pointer -- and a derived `!=` is the declared `==` negated at the
+# dispatch site. All three are exercised.
 comparable: facet {
     hash: function {:this} out u64
     ==: function {:this rhs: u64} out bool
@@ -27,10 +32,31 @@ pt: record {
     }
 }
 
+Sized: protocol {
+    ==: function {:this rhs: u64} out bool
+}
+
+Box: class {
+    n: u64
+} as {
+    s: Sized
+    ==: function {b: this rhs: u64} out bool is {
+        return b.n == rhs
+    }
+}
+
 main: function is {
     a: pt x: 3
     print "direct eq: \{a == 3} \{a == 4}"
     print "direct hash: \{a.hash}"
+
     f: comparable.create from: a
     print "through facet hash: \{f.hash}"
+    print "through facet eq: \{f == 3} \{f == 4}"
+    print "through facet ne: \{f != 3} \{f != 4}"
+
+    b: Box n: 7
+    p: b.s
+    print "through protocol eq: \{p == 7} \{p == 8}"
+    print "through protocol ne: \{p != 7} \{p != 8}"
 }
