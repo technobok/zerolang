@@ -4,8 +4,12 @@
 #   run      run_cases.txt -> emit -> cc -> run; stdout matches
 #            run_golden/<n>.out, exit code matches <n>.exit (0 default)
 #   lsp      framed JSON-RPC transcripts replayed through zls
-#   leak     every buildable example + emitc_corpus program under ASan with
-#            detect_leaks=1: no use-after-free, no double free, 0 bytes leaked
+#   leak     every buildable example + emitc_corpus program under the
+#            SANITIZER ITS COMPILER HAS -- ASan with detect_leaks=1 for gcc and
+#            clang, `-b` with TCC_BOUNDS_PRINT_HEAP for tcc, which has no ASan
+#            at all. No use-after-free, no double free, nothing held at exit
+#            outside tests/known-leaks.txt. The spelling is proved to work on a
+#            deliberate leak before any verdict is trusted (proveSanitizer).
 #   error    errors/<n>.z must fail with the error[Exxxx] lines of <n>.err
 #   dump     dump_cases.txt -> `zc dump --canon` matches dump_golden/<n>.canon
 #   lexer / parser / program goldens for every example
@@ -73,8 +77,71 @@ normErr: function {content: StringView} out String is {
     return buf
 }
 
-# isUnsafe -- ASan reported a memory-safety violation (not a mere leak).
-isUnsafe: function {s: StringView} out bool is {
+# ccBasename -- the last path component of a resolved compiler path.
+ccBasename: function {ccPath: StringView} out StringView is {
+    b: ccPath
+    i: ccPath.length
+    for i > 0 loop {
+        i = i - 1
+        ch: ccPath.byteAt i
+        match (
+            ch
+        ) case some then {
+            if ch == 47 then {
+                b = ccPath.substring from: (i + 1) to: ccPath.length
+                i = 0
+            }
+        } case none then null
+    }
+    return b
+}
+
+# ccKind -- the compiler family a resolved path names, by basename. A local
+# twin of ztypecheck.ccKindArm, deliberately not a call to it: ztestrunner
+# reaches for `os` and `io` and nothing else, and naming the type checker here
+# would drag all of it into out/ztestrunner, which the Makefile builds on its
+# own. Keep the two in agreement -- same order, same spellings, same answers.
+# Used where the family NAME is the datum: the known-leaks key, and messages.
+ccKind: function {ccPath: StringView} out String is {
+    b: ccBasename :ccPath
+    if (b.contains needle: "tcc") then return "tcc".string
+    if (b.contains needle: "clang") then return "clang".string
+    if (b.contains needle: "gcc") then return "gcc".string
+    return "other".string
+}
+
+# usesBoundsChecker -- whether this compiler's sanitizer is tcc's `-b` bounds
+# checker rather than ASan. Everything that has to BRANCH asks this rather than
+# comparing a family name, so the question is asked once and in one spelling.
+usesBoundsChecker: function {ccPath: StringView} out bool is {
+    b: ccBasename :ccPath
+    return (b.contains needle: "tcc")
+}
+
+# sanEnvKey / sanEnvValue -- the environment a sanitized run needs. ASan wants
+# leak detection turned on; tcc's bounds checker wants its heap report turned
+# on (bcheck.c reads the name's PRESENCE, so any value will do).
+sanEnvKey: function {bounds: bool} out String is {
+    if bounds then return "TCC_BOUNDS_PRINT_HEAP".string
+    return "ASAN_OPTIONS".string
+}
+
+sanEnvValue: function {bounds: bool} out String is {
+    if bounds then return "1".string
+    return "detect_leaks=1".string
+}
+
+# isUnsafe -- the sanitizer reported a memory-safety violation, not a leak.
+# Two spellings because they are two different tools: gcc and clang have ASan,
+# tcc has its own bounds checker (`-b`) and no ASan at all -- it ACCEPTS
+# -fsanitize=address and ignores it, which is how 453 cases were once reported
+# leak-clean by a check that never ran.
+isUnsafe: function {bounds: bool s: StringView} out bool is {
+    if bounds then {
+        if (s.contains needle: "BCHECK: ") then return true
+        if (s.contains needle: "RUNTIME ERROR: invalid memory access") then return true
+        return false
+    }
     if (s.contains needle: "ERROR: AddressSanitizer: heap-use-after-free") then return true
     if (s.contains needle: "ERROR: AddressSanitizer: attempting double-free") then return true
     if (s.contains needle: "ERROR: AddressSanitizer: heap-buffer-overflow") then return true
@@ -82,8 +149,16 @@ isUnsafe: function {s: StringView} out bool is {
     return false
 }
 
-# isLeak -- ASan reported leaked bytes.
-isLeak: function {s: StringView} out bool is {
+# isLeak -- the sanitizer reported memory still held at exit.
+#
+# The two tools do NOT measure the same thing, and the difference is visible in
+# the corpus. ASan reports what is definitely LOST; tcc's bounds checker prints
+# every block still live at exit, reachable or not. So a program that ends in
+# `os.exit` -- which skips zerolang's destructors by design -- is clean under
+# ASan and reports blocks under tcc. That is why the known-leak set is keyed by
+# family and not by name alone.
+isLeak: function {bounds: bool s: StringView} out bool is {
+    if bounds then return (s.contains needle: "__bound_exit(): malloc found size")
     if (s.contains needle: "SUMMARY: AddressSanitizer:") == false then return false
     return (s.contains needle: " byte")
 }
@@ -193,11 +268,18 @@ withExtraArgs: function {argv: (List String).take file: StringView} out List Str
     return argv
 }
 
-# gccArgv -- the C build command argv; `asan` selects the ASan flags
-# (-fsanitize=address -g -O0 -std=c17 -w) over the strict CF set. `ccflags`
-# carries what the harness cannot infer about the compiler -- tcc needs
-# `-B <payload>` or it cannot resolve its own stddef.h, since the directory it
-# was configured with is not the one it is running from.
+# gccArgv -- the C build command argv; `asan` selects the SANITIZED build over
+# the strict CF set. `ccflags` carries what the harness cannot infer about the
+# compiler -- tcc needs `-B <payload>` or it cannot resolve its own stddef.h,
+# since the directory it was configured with is not the one it is running from.
+#
+# The sanitizer flags are chosen by compiler family, because there is no one
+# spelling: gcc and clang have ASan, tcc has `-b` and no ASan. Appending
+# -fsanitize=address to tcc is worse than useless -- tcc accepts it, warns
+# nothing, and produces a binary with no instrumentation, so the harness went
+# on reporting a leak verdict it had not measured. Nothing is appended here
+# whose effect the runner has not established; runLeakCases proves the chosen
+# spelling really reports a leak before it trusts a single verdict.
 gccArgv: function {
     cc: StringView
     ccflags: StringView
@@ -211,11 +293,17 @@ gccArgv: function {
         if cf9g.length > 0 then a.append from: cf9g.string
     }
     if asan then {
-        a.append from: "-fsanitize=address".string
-        a.append from: "-g".string
-        a.append from: "-O0".string
-        a.append from: "-std=c17".string
-        a.append from: "-w".string
+        if (usesBoundsChecker ccPath: cc) then {
+            a.append from: "-b".string
+            a.append from: "-g".string
+            a.append from: "-w".string
+        } else {
+            a.append from: "-fsanitize=address".string
+            a.append from: "-g".string
+            a.append from: "-O0".string
+            a.append from: "-std=c17".string
+            a.append from: "-w".string
+        }
     } else {
         a.append from: "-std=c17".string
         a.append from: "-Wall".string
@@ -922,9 +1010,163 @@ runLspCases: function {r: Runner} is {
     } case err then null
 }
 
+# knownLeakers -- the programs recorded in tests/known-leaks.txt as expected to
+# hold memory at exit under a given compiler family, one "<name> (<kind>)" per
+# line. Keyed by family and not by name alone because the two sanitizers do not
+# measure the same thing: see isLeak.
+knownLeakers: function {root: StringView kind: StringView} out (List String) is {
+    out9k: (List String)
+    p9k: "\{root}/tests/known-leaks.txt"
+    txt9k: slurp path: p9k.stringview
+    suffix9k: " (\{kind})"
+    with it9k: txt9k.stringview.lines do for ln9k: it9k loop {
+        if ln9k.length > 0 then {
+            if (ln9k.startsWith prefix: "#") == false then {
+                if (ln9k.endsWith suffix: suffix9k) then {
+                    nm9k: ln9k.substring from: 0 to: (ln9k.length - suffix9k.length)
+                    out9k.append from: nm9k.string
+                }
+            }
+        }
+    }
+    return out9k
+}
+
+# listHas -- whether `names` contains `n`.
+listHas: function {names: (List String).view n: StringView} out bool is {
+    with it9h: names.iterate do for e9h: it9h loop {
+        if e9h.stringview == n then return true
+    }
+    return false
+}
+
+# buildAndRunProbe -- build one probe program with this run's sanitizer
+# spelling and run it, leaving whatever it said on stderr in `err`. False when
+# the COMPILE failed, which is a refusal to measure rather than a measurement.
+buildAndRunProbe: function {
+    r: Runner
+    csrc: StringView
+    bin: StringView
+    err: StringView
+} out bool is {
+    ga9b: (gccArgv
+        cc: r.cc.stringview
+        ccflags: r.ccflags.stringview
+        :bin
+        :csrc
+        asan: true
+    )
+    bc9b: (os.spawn
+        argv: ga9b
+        cwd: ""
+        outPath: "/dev/null"
+        errPath: err
+        timeoutSecs: 0
+    )
+    if bc9b != 0 then {
+        ce9b: slurp path: err
+        print "FAIL(leak) sanitizer-probe: '\{r.cc.stringview}' cannot build a sanitized program"
+        print "\{ce9b.stringview}"
+        return false
+    }
+    ra9b: (List String)
+    ra9b.append from: bin.string
+    (os.spawn
+        argv: ra9b
+        cwd: r.tmp.stringview
+        outPath: "/dev/null"
+        errPath: err
+        timeoutSecs: r.timeoutSecs
+    )
+    return true
+}
+
+# proveSanitizer -- establish that this run's sanitizer spelling really reports
+# a leak, BEFORE a single leak verdict is trusted. It builds a program that
+# leaks 1 KB on purpose and one that does not, runs both under the environment
+# the leak pool will use, and requires the first to report and the second to
+# stay silent.
+#
+# This is the check the leak dimension never had. `leak-clean=453` was printed
+# by every tcc run of a harness that had appended -fsanitize=address to a
+# compiler which accepts the flag and ignores it -- a green number nobody had
+# ever seen go red. A test that cannot fail cannot report success either, so
+# the harness now falsifies its own instrument once per run.
+proveSanitizer: function {r: Runner bounds: bool kind: StringView} out bool is {
+    lcp: "\{r.tmp.stringview}/S_leak.c"
+    ccp: "\{r.tmp.stringview}/S_clean.c"
+    lbp: "\{r.tmp.stringview}/S_leak.bin"
+    cbp: "\{r.tmp.stringview}/S_clean.bin"
+    lep: "\{r.tmp.stringview}/S_leak.err"
+    cep: "\{r.tmp.stringview}/S_clean.err"
+    # the pointer leaves through a file-scope sink and is then cleared, so the
+    # block is unreachable at exit however the stack happens to be laid out.
+    head9p: "#include <stdlib.h>\nstatic void *sink;\n"
+    leakSrc: "\{head9p}static void bleed(void) { void *p = malloc(1024); sink = p; }\nint main(void) { bleed(); sink = 0; return 0; }\n"
+    cleanSrc: "\{head9p}static void hold(void) { void *p = malloc(1024); sink = p; }\nint main(void) { hold(); free(sink); sink = 0; return 0; }\n"
+    w0: io.writeText path: lcp content: leakSrc
+    match (
+        w0
+    ) case ok then null case err then {
+        print "FAIL(leak) sanitizer-probe (write)"
+        return false
+    }
+    w1: io.writeText path: ccp content: cleanSrc
+    match (
+        w1
+    ) case ok then null case err then {
+        print "FAIL(leak) sanitizer-probe (write)"
+        return false
+    }
+    # the probe has to run under the SAME environment the pool will, or it
+     # measures a differently-configured tool than the one it is vouching for.
+    ek9p: sanEnvKey :bounds
+    ev9p: sanEnvValue :bounds
+    os.setEnv key: ek9p.stringview value: ev9p.stringview
+    ok9p: true
+    if (buildAndRunProbe
+        :r
+        csrc: lcp.stringview
+        bin: lbp.stringview
+        err: lep.stringview
+    ) == false then {
+        os.unsetEnv key: ek9p.stringview
+        return false
+    }
+    if (buildAndRunProbe
+        :r
+        csrc: ccp.stringview
+        bin: cbp.stringview
+        err: cep.stringview
+    ) == false then {
+        os.unsetEnv key: ek9p.stringview
+        return false
+    }
+    os.unsetEnv key: ek9p.stringview
+    dirty9p: slurp path: lep.stringview
+    clean9p: slurp path: cep.stringview
+    if (isLeak :bounds s: dirty9p.stringview) == false then {
+        print "FAIL(leak) sanitizer-probe: '\{r.cc.stringview}' (\{kind}) did not report a deliberate 1 KB leak"
+        print "  the leak verdicts below would have been about a check that never ran"
+        ok9p = false
+    }
+    if (isLeak :bounds s: clean9p.stringview) then {
+        print "FAIL(leak) sanitizer-probe: '\{r.cc.stringview}' (\{kind}) reports a leak for a program with none"
+        ok9p = false
+    }
+    return ok9p
+}
+
 # runLeakCases -- the LEAK cases kind.
 runLeakCases: function {r: Runner} is {
     # ---------------- LEAK cases ----------------
+    kind: ccKind ccPath: r.cc.stringview
+    bounds: usesBoundsChecker ccPath: r.cc.stringview
+    if (proveSanitizer :r :bounds kind: kind.stringview) == false then {
+        r.fails = r.fails + 1
+        return
+    }
+    known: knownLeakers root: r.root.stringview kind: kind.stringview
     leakDirs: (List String)
     leakDirs.append from: r.examplesDir.copy
     leakDirs.append from: r.corpusDir.copy
@@ -952,6 +1194,10 @@ runLeakCases: function {r: Runner} is {
                     lc: "\{r.tmp}/L_\{nm}.c"
                     lb: "\{r.tmp}/L_\{nm}.bin"
                     lerr: "\{r.tmp}/L_\{nm}.err"
+                    # the sanitized COMPILE's stderr, kept rather than dropped:
+                    # discarding it is what let a compiler reject -- or ignore --
+                    # the sanitizer flag with nobody the wiser.
+                    lcerr: "\{r.tmp}/L_\{nm}.cerr"
                     rdir2: "\{r.tmp}/leak_\{nm}"
                     io.mkdirp path: rdir2
                     argsFile2: "\{r.rungold}/\{nm}.args"
@@ -984,7 +1230,7 @@ runLeakCases: function {r: Runner} is {
                         argv: ga2
                         cwd: ""
                         outPath: "/dev/null"
-                        errPath: "/dev/null"
+                        errPath: lcerr.stringview
                         timeoutSecs: 0
                         allowFail: false
                         zlinkFrom: lc.stringview
@@ -1008,9 +1254,11 @@ runLeakCases: function {r: Runner} is {
     }
     leakStatuses: (ListVal i32)
     leakFailSteps: (ListVal i64)
-    os.setEnv key: "ASAN_OPTIONS" value: "detect_leaks=1"
+    ek: sanEnvKey :bounds
+    ev: sanEnvValue :bounds
+    os.setEnv key: ek.stringview value: ev.stringview
     runJobs jobs: leakPool maxJobs: r.jobsMax statuses: leakStatuses failSteps: leakFailSteps
-    os.unsetEnv key: "ASAN_OPTIONS"
+    os.unsetEnv key: ek.stringview
     lji: u64
     for lji < leakPool.length loop {
         ljob: leakPool.get i: lji
@@ -1019,11 +1267,11 @@ runLeakCases: function {r: Runner} is {
         if lfail == -1 then {
             lerr: "\{r.tmp.stringview}/L_\{lnm}.err"
             errC: slurp path: lerr.stringview
-            isKnown: false
-            if (isUnsafe s: errC.stringview) then {
+            isKnown: listHas names: known n: lnm
+            if (isUnsafe :bounds s: errC.stringview) then {
                 print "FAIL(unsafe) \{lnm}"
                 r.fails = r.fails + 1
-            } else if (isLeak s: errC.stringview) then {
+            } else if (isLeak :bounds s: errC.stringview) then {
                 if isKnown then {
                     r.xleak = r.xleak + 1
                 } else {
@@ -1032,11 +1280,31 @@ runLeakCases: function {r: Runner} is {
                 }
             } else {
                 if isKnown then {
-                    print "FAIL(ratchet) \{lnm} now leak-CLEAN"
+                    print "FAIL(ratchet) \{lnm} (leak-clean)"
                     r.fails = r.fails + 1
                 } else {
                     r.leakclean = r.leakclean + 1
                 }
+            }
+        } else {
+            # A job whose emit or sanitized compile died used to be counted as
+            # NOTHING -- no failure, no skip, no clean -- so a compiler that
+            # rejected every sanitized build made the whole leak dimension
+            # evaporate in silence. The two step failures are not the same
+            # thing, though: zc refusing to emit is usually a `require:` guard
+            # doing its job, and the run kind already reports that program by
+            # name, so this dimension has nothing to add and says so. A
+            # SANITIZED COMPILE that fails is the silent-evaporation case, and
+            # it fails hard, with the stderr that used to go to /dev/null.
+            if lfail == 0 then {
+                print "SKIP(leak) \{lnm} (zc)"
+                r.skip = r.skip + 1
+            } else {
+                lce: "\{r.tmp.stringview}/L_\{lnm}.cerr"
+                cerrC: slurp path: lce.stringview
+                print "FAIL(leak) \{lnm} (cc)"
+                if cerrC.length > 0 then print "\{cerrC.stringview}"
+                r.fails = r.fails + 1
             }
         }
         lji = lji + 1
@@ -1651,6 +1919,10 @@ runSelfhostAsan: function {r: Runner} is {
     # and corpus unit in both --emit-c and --dump-sql modes; the COMPILER must
     # be UAF-/leak-free. Heavy (one ASan gcc of r.zc.c + two runs per unit).
     if r.heavy then {
+        # the same per-family sanitizer the leak pool uses: gccArgv picks the
+        # spelling, sanEnvKey the environment. Under tcc this is the bounds
+        # checker, not ASan, so the kind travels with every verdict below.
+        sabounds: usesBoundsChecker ccPath: r.cc.stringview
         zcaC: "\{r.tmp.stringview}/zca.c"
         zcaB: "\{r.tmp.stringview}/zca.bin"
         zcaOk: false
@@ -1692,7 +1964,9 @@ runSelfhostAsan: function {r: Runner} is {
             r.fails = r.fails + 1
         }
         if zcaOk then {
-            os.setEnv key: "ASAN_OPTIONS" value: "detect_leaks=1"
+            saek: sanEnvKey bounds: sabounds
+            saev: sanEnvValue bounds: sabounds
+            os.setEnv key: saek.stringview value: saev.stringview
             saDirs: (List String)
             saDirs.append from: r.examplesDir.copy
             saDirs.append from: r.corpusDir.copy
@@ -1729,10 +2003,10 @@ runSelfhostAsan: function {r: Runner} is {
                                 timeoutSecs: r.timeoutSecs
                             )
                             e1C: slurp path: saerr1.stringview
-                            if (isUnsafe s: e1C.stringview) then {
+                            if (isUnsafe bounds: sabounds s: e1C.stringview) then {
                                 print "FAIL(selfhost-asan) \{snm} emit-c unsafe"
                                 r.fails = r.fails + 1
-                            } else if (isLeak s: e1C.stringview) then {
+                            } else if (isLeak bounds: sabounds s: e1C.stringview) then {
                                 print "FAIL(selfhost-asan) \{snm} emit-c leak"
                                 r.fails = r.fails + 1
                             } else {
@@ -1756,10 +2030,10 @@ runSelfhostAsan: function {r: Runner} is {
                                 timeoutSecs: r.timeoutSecs
                             )
                             e2C: slurp path: saerr2.stringview
-                            if (isUnsafe s: e2C.stringview) then {
+                            if (isUnsafe bounds: sabounds s: e2C.stringview) then {
                                 print "FAIL(selfhost-asan) \{snm} dump-sql unsafe"
                                 r.fails = r.fails + 1
-                            } else if (isLeak s: e2C.stringview) then {
+                            } else if (isLeak bounds: sabounds s: e2C.stringview) then {
                                 print "FAIL(selfhost-asan) \{snm} dump-sql leak"
                                 r.fails = r.fails + 1
                             } else {
@@ -1771,7 +2045,7 @@ runSelfhostAsan: function {r: Runner} is {
                 } case err then null
                 sdi = sdi + 1
             }
-            os.unsetEnv key: "ASAN_OPTIONS"
+            os.unsetEnv key: saek.stringview
         }
     }
 }
