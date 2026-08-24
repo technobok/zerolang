@@ -1340,12 +1340,24 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                     ord: String
                     cst: String
                     ptr: false
+                    isFold: false
                     with fit: (head.split sep: " ") do for f: fit loop {
                         if f.length > 0 then {
                             if key.length == 0 then {
                                 key = f.string
                             } else {
                                 if f == "args=ptr" then ptr = true
+                                # a BARE attribute, like args=ptr. Matched by
+                                # STRIPPING rather than comparing: the keyed
+                                # attributes below already ask that way, and a
+                                # spelling compare is what the architecture
+                                # rules count against this file.
+                                fdo: f.stripPrefix p: "fold"
+                                match (
+                                    fdo
+                                ) case some then {
+                                    if fdo.length == 0 then isFold = true
+                                } case none then null
                                 fo: f.stripPrefix p: "frag="
                                 match (
                                     fo
@@ -1510,6 +1522,10 @@ loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
                             kp: key.copy
                             ctx.nativePtrArgs.set key: kp value: true
                         }
+                        if isFold then {
+                            kf: key.copy
+                            ctx.nativeFold.set key: kf value: true
+                        }
                     }
                 } case none then null
             }
@@ -1575,6 +1591,23 @@ nativeHasRow: function {ctx: Ctx.view path: StringView} out bool is {
     result: false
     {
         g: ctx.nativeKeys.get key: path.asString
+        match (
+            g
+        ) case some then {
+            result = g
+        } case none then null
+    }
+    return result
+}
+
+# nativeIsFoldRow -- the row marks the path `fold`: the compiler answers it at
+# compile time and emits nothing. Asked wherever a native would otherwise be
+# lowered to C, so a fold that did not happen is reported as itself rather
+# than as a missing implementation.
+nativeIsFoldRow: function {ctx: Ctx.view path: StringView} out bool is {
+    result: false
+    {
+        g: ctx.nativeFold.get key: path.asString
         match (
             g
         ) case some then {
@@ -2877,6 +2910,10 @@ Ctx: class {
     # every row's path, whatever the row carries: the check at the declaration
     # asks only whether one exists
     nativeKeys: (MapRV String v: bool)
+    # the paths a `fold` row marks: the compiler answers them at COMPILE TIME
+    # and there is no implementation to call. A call reaching emission is a
+    # defect in the fold, not a missing body, and says so.
+    nativeFold: (MapRV String v: bool)
     # the paths a FRAGMENT implements: a native whose C the runtime supplies
     # under the `z_<unit>_<name>` convention, whoever declares it
     nativeFragPaths: (MapRV String v: bool)
@@ -11726,6 +11763,29 @@ emitDottedUnitRead: function {
         match (
             dpUfo
         ) case some then {
+            # a `fold` native has no implementation to call: the compiler was to
+            # have answered it while type checking. Reaching here means the read
+            # sat where the constant evaluator never visited, and the leg below
+            # would emit the plain cname with parens -- which is how this failed
+            # before it was checked: `implicit declaration of function 'z_t12'`,
+            # a mangled name that never mentions the declaration.
+            {
+                dpCn: (zast.nameTextAt
+                    :ast
+                    ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+                )
+                dpFp: dpUb.copy
+                dpFp.append "."
+                dpFp.append dpCn
+                if (nativeIsFoldRow :ctx path: dpFp.stringview) then {
+                    (emitFail
+                        :ctx
+                        what: "'\{dpFp}' is a fold native: nothing folded it, and there is no implementation to call"
+                        line: n.lineno
+                    )
+                    return "".string
+                }
+            }
             dpOk: isEmittableFileUnit name: dpUb.stringview
             if (dpOk) == false then {
                 # runtime-backed units: only a bodied+demanded free fn
@@ -20685,55 +20745,63 @@ literalSuffixBase: function {
     return "".string
 }
 
-# checkMainNatives -- drive checkNativesResolve over the main unit. This rode
-# inside fillMethodReturns until that table turned out to be unreadable; the
-# CHECK was never part of the table's job and stays.
-checkMainNatives: function {program: Node.view ctx: Ctx} is {
+# checkLoadedNatives -- drive checkNativesResolve over EVERY loaded unit. This
+# rode inside fillMethodReturns until that table turned out to be unreadable;
+# the CHECK was never part of the table's job and stays.
+#
+# The unit's own name is read PER UNIT and not hoisted, because it builds the
+# lookup key. Hoisting it -- which is what the main-unit filter left behind --
+# resolves every unit's natives under the main unit's name, so every row misses
+# and every declaration in the program reads as unimplemented at once.
+checkLoadedNatives: function {program: Node.view ctx: Ctx} is {
     match (
         program
     ) case program then {
-        mainName: program.mainUnitName.stringview
-        unitName: mainName
         uCnt9c: program.ast.units.length
         uIdx9c: u64
         for uIdx9c < uCnt9c loop {
             uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9c))
             uIdx9c = uIdx9c + 1
             opId: zast.nodeid
+            unitName: String
             {
                 u: program.ast.nodes.get i: uId.u64
                 if u.namedoperation then {
                     un: zast.poolTextAt pool: program.ast.names ref: u.name
-                    if un.stringview == mainName then opId = u.operation
+                    opId = u.operation
+                    unitName = un.copy
                 }
             }
             if opId > 0 then {
                 (checkNativesResolve
                     ast: program.ast
                     :ctx
-                    mainOpId: opId
-                    :unitName
+                    unitOpId: opId
+                    unitName: unitName.stringview
                 )
             }
         }
     } else null
 }
 
-# checkNativesResolve -- every `is native` declaration in the MAIN unit must
+# checkNativesResolve -- every `is native` declaration in a loaded unit must
 # name a row in natives.tbl. `is native` says the compiler supplies the body, and
 # this is where that claim is checked: at the declaration, whether or not anyone
 # calls it. Without it an uncalled one is accepted in silence and a called one
 # is only found at the call, as an emitter gap rather than as the missing
-# implementation it is. The system units are checked whole by
-# natives-tbl-guard, which can read every declaration at once; a program can
-# only see its own.
+# implementation it is.
+#
+# EVERY loaded unit, not only the program's own. A program that loads
+# collections.z sees its native declarations exactly as it sees the ones it
+# wrote, so a standard library with a hole in it breaks the build that USES it
+# and not only the build that ships it.
 checkNativesResolve: function {
     ast: Ast.view
     ctx: Ctx
-    mainOpId: zast.nodeid
+    unitOpId: zast.nodeid
     unitName: StringView
 } is {
-    bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
+    bodyIds: zast.unitBodyIdsAt :ast unitId: unitOpId
     with biter: bodyIds.iterate do for bm: biter loop {
         bn: ast.nodes.get i: bm.u64
         if bn.namedoperation then {
@@ -20774,6 +20842,19 @@ checkNativesResolve: function {
                         } else null
                     }
                 }
+            } case unitdef then {
+                # a SUBUNIT -- lib/system/system/wideint.z and its siblings are
+                # this shape. Its declarations are not in the program's unit
+                # table, so nothing above reaches them, and they are keyed under
+                # the PARENT unit's name: i128's operators are `system.i128.+`,
+                # declared in wideint.z. So the name does NOT change on the way
+                # down, and the path a call site builds is the path checked here.
+                (checkNativesResolve
+                    :ast
+                    :ctx
+                    unitOpId: bn.operation
+                    :unitName
+                )
             } else null
         }
     }
@@ -22906,6 +22987,7 @@ emitC: function {
         nativeNeed: (Map String V: String)
         nativePtrArgs: (MapRV String v: bool)
         nativeKeys: (MapRV String v: bool)
+        nativeFold: (MapRV String v: bool)
         nativeFragPaths: (MapRV String v: bool)
             nativeConvMemb: (MapRV String v: bool)
             nativeArgMemb: (MapRV String v: bool)
@@ -22962,7 +23044,7 @@ emitC: function {
             unitDecl: (unitDeclByName :symtab ast: program.ast name: rmn.stringview)
         )
     } else null
-    checkMainNatives :program :ctx
+    checkLoadedNatives :program :ctx
     fillDataElems :program :symtab :ctx
     fillNeeds :program :symtab :ctx
     nodeEstE: u64

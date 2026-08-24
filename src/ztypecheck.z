@@ -11796,6 +11796,7 @@ ensureUnitRequire: function {
     if (st.typing.platformSeeded) == false then {
         st.typing.platformSeeded = true
         seedPlatformConsts :st :frame :ast
+        seedFoldNatives :st :frame :ast
     }
     prevFail: st.typing.constFail
     constFailClear :st
@@ -37268,58 +37269,213 @@ seedPlatformConsts: function {
         )
         if (pro.isZero) == false then rf = pro
     }
-    osn: targetOrHostOs triple: st.typing.targetTriple.stringview
-    arn: targetOrHostArch triple: st.typing.targetTriple.stringview
-    (seedPlatformArm
-        :st
-        frame: rf
-        :ast
+    pi9: 1
+    for pi9 <= foldProviderCount loop {
+        (applyFoldProvider
+            :st
+            :frame
+            unitFrame: rf
+            :ast
+            :ptid
+            prov: pi9
+        )
+        pi9 = pi9 + 1
+    }
+}
 
-        :ptid
-        member: "os"
-        typeName: "oskind"
-        armName: osn.stringview
-    )
-    (seedPlatformArm
-        :st
-        frame: rf
-        :ast
+# seedFoldNatives -- answer the compile-time values THIS TABLE names.
+#
+# natives.tbl is what says which paths the compiler answers; this walks its
+# `fold` rows and asks foldProviderOf for each one. A row the compiler has no
+# answer for is an error here: the table would otherwise promise a value that
+# nothing supplies, which is the shape a bodyless native had before any of this
+# was checked. The other direction -- a native declaration with no row -- is
+# checkNativesResolve's, at the declaration.
+#
+# Silent for a unit this program never loads. A row is a fact about the
+# compiler; a SEED is a fact about a program, and there is no member table to
+# write onto for a unit that is not here.
+seedFoldNatives: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+} is {
+    # copied out first: every lookup below lends st, and the list is its field
+    paths9: (List String)
+    with fpit: st.typing.foldPaths.iterate do for fp: fpit loop paths9.append from: fp.copy
+    with pit9: paths9.iterate do for pth9: pit9 loop {
+        pv9: pth9.stringview
+        dotp9: pv9.indexOf needle: "."
+        match (
+            dotp9
+        ) case some then {
+            un9: pv9.substring from: 0 to: dotp9
+            mem9: pv9.substring from: (dotp9 + 1) to: pv9.length
+            if (mem9.contains needle: ".") then {
+                mf9: "natives.tbl: `fold` row '\{pv9}' is not a free function <unit>.<name>"
+                (addError
+                    :st
+                    nodeid: (zast.nodeid.create from: 0)
+                    lineno: 0
+                    colno: 0
+                    e: zast.err.compilerError
+                    msg: mf9
+                )
+            } else {
+                unm9: nameIdOf :ast name: un9
+                mnm9: nameIdOf :ast name: mem9
+                if (unm9.isZero) == false then {
+                    ud9: unitDeclOfNameOrOwn :st :frame nameId: unm9
+                    ptid9: (ztypes.tid.create from: (declTypeIdOf :st declId: ud9).u64)
+                    if (ptid9.isZero) == false then {
+                        # the answers are that unit's own definitions, so they
+                        # resolve in its frame where it has one
+                        rf9: frame
+                        {
+                            pro9: (st.typing.declFindChild
+                                parentDeclId: st.typing.programRoot
+                                nameId: unm9
+                            )
+                            if (pro9.isZero) == false then rf9 = pro9
+                        }
+                        prov9: foldProviderOf :ast unitNm: unm9 memberNm: mnm9
+                        if prov9 == 0 then {
+                            mp9: "natives.tbl marks '\{pv9}' `fold`, but this compiler answers no such value"
+                            (addError
+                                :st
+                                nodeid: (zast.nodeid.create from: 0)
+                                lineno: 0
+                                colno: 0
+                                e: zast.err.compilerError
+                                msg: mp9
+                            )
+                        } else {
+                            (applyFoldProvider
+                                :st
+                                :frame
+                                unitFrame: rf9
+                                :ast
+                                ptid: ptid9
+                                prov: prov9
+                            )
+                        }
+                    }
+                }
+            }
+        } case none then null
+    }
+}
 
-        :ptid
-        member: "arch"
-        typeName: "archkind"
-        armName: arn.stringview
-    )
-    cka: ccKindArm ccPath: st.typing.ccPath.stringview
-    (seedPlatformArm
-        :st
-        :frame
-        :ast :ptid
-        member: "cc"
-        typeName: "cckind"
-        armName: cka.stringview
-    )
-    # the mode needs no classifier: it arrives as an arm name already, having
-    # been validated at the flag. An unset one seeds nothing, leaving the
-    # on-disk default -- which is `spawn`, the same answer.
-    ccModeC: st.typing.ccMode.copy # copied out first: seeding lends st
-    tripleC: st.typing.targetTriple.copy
-    (seedPlatformArm
-        :st
-        :frame
-        :ast :ptid
-        member: "ccmode"
-        typeName: "ccmodekind"
-        armName: ccModeC.stringview
-    )
-    value9: (ztypes.makeStrConst (constInternString :st text: tripleC.stringview))
-    (seedPlatformValue
-        :st
-        :ptid
-        :ast
-        member: "target"
-        value: value9
-    )
+# foldProviderCount -- how many compile-time values this compiler answers.
+foldProviderCount: 5
+
+# foldProviderOf -- which of those answers a path names, as foldProviderCount's
+# 1-based index; 0 for a path this compiler cannot answer.
+#
+# Keyed by NAME IDS, not by the spelling: the ids are what every other table
+# here compares, and routing by a literal is what the architecture rules count.
+# BOTH zeros are refused first. A name the program never mentions is not in the
+# pool and answers 0, and a nameless node answers 0 too -- so an unguarded
+# compare would match every path at once in exactly the programs that never
+# name the unit.
+foldProviderOf: function {
+    ast: Ast.view
+    unitNm: zast.nameid
+    memberNm: zast.nameid
+} out u64 is {
+    if unitNm.isZero then return 0
+    if memberNm.isZero then return 0
+    pun: nameIdOf :ast name: "platform"
+    if pun.isZero then return 0
+    if (unitNm == pun) == false then return 0
+    if memberNm == (nameIdOf :ast name: "os") then return 1
+    if memberNm == (nameIdOf :ast name: "arch") then return 2
+    if memberNm == (nameIdOf :ast name: "cc") then return 3
+    if memberNm == (nameIdOf :ast name: "ccmode") then return 4
+    if memberNm == (nameIdOf :ast name: "target") then return 5
+    return 0
+}
+
+# applyFoldProvider -- write one compile-time answer onto the member-constant
+# table. Takes foldProviderOf's INDEX rather than a name: the path is resolved
+# once, at the lookup, and everything downstream of it compares integers.
+#
+# os and arch resolve their arm in the platform unit's own frame; cc and ccmode
+# in the caller's. That difference is the seeding this replaced, kept as it was.
+applyFoldProvider: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    unitFrame: ztypes.declid
+    ptid: ztypes.tid
+    prov: u64
+} is {
+    if prov == 1 then {
+        osn: targetOrHostOs triple: st.typing.targetTriple.stringview
+        (seedPlatformArm
+            :st
+            frame: unitFrame
+            :ast
+
+            :ptid
+            member: "os"
+            typeName: "oskind"
+            armName: osn.stringview
+        )
+        return
+    }
+    if prov == 2 then {
+        arn: targetOrHostArch triple: st.typing.targetTriple.stringview
+        (seedPlatformArm
+            :st
+            frame: unitFrame
+            :ast
+
+            :ptid
+            member: "arch"
+            typeName: "archkind"
+            armName: arn.stringview
+        )
+        return
+    }
+    if prov == 3 then {
+        cka: ccKindArm ccPath: st.typing.ccPath.stringview
+        (seedPlatformArm
+            :st
+            :frame
+            :ast :ptid
+            member: "cc"
+            typeName: "cckind"
+            armName: cka.stringview
+        )
+        return
+    }
+    if prov == 4 then {
+        # the mode needs no classifier: it arrives as an arm name already,
+        # having been validated at the flag.
+        ccModeC: st.typing.ccMode.copy # copied out first: seeding lends st
+        (seedPlatformArm
+            :st
+            :frame
+            :ast :ptid
+            member: "ccmode"
+            typeName: "ccmodekind"
+            armName: ccModeC.stringview
+        )
+        return
+    }
+    if prov == 5 then {
+        tripleC: st.typing.targetTriple.copy
+        value9: (ztypes.makeStrConst (constInternString :st text: tripleC.stringview))
+        (seedPlatformValue
+            :st
+            :ptid
+            :ast
+            member: "target"
+            value: value9
+        )
+        return
+    }
 }
 
 # seedPlatformArm -- one platform member, as an arm of one of its kinds.
@@ -39482,6 +39638,7 @@ typecheck: function {
     ccPath: StringView
     ccMode: StringView
     target: StringView
+    foldPaths: (List String)
 } out zenv.ZSymbolTable is {
     nodeEstT: u64
     match (
@@ -39496,6 +39653,7 @@ typecheck: function {
     ty.ccPath = ccPath.string
     ty.ccMode = ccMode.string
     ty.targetTriple = target.string
+    with fpit: foldPaths.iterate do for fp: fpit loop ty.foldPaths.append from: fp.copy
     match (
         program
     ) case program then {
@@ -39567,6 +39725,7 @@ typecheck: function {
         program
     ) case program then {
         seedPlatformConsts :st frame: rf ast: program.ast
+        seedFoldNatives :st frame: rf ast: program.ast
     } else null
     resolveConstantDefs :st frame: rf :program
     completeUnitInstantiations :st frame: rf :program

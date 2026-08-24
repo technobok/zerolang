@@ -20,6 +20,7 @@ public: unit {
     :joinPath
     :pickCc
     :pickCcMode
+    :foldNativePaths
     :resolveRuntimeDir
     :resolveSystemDir
     :resolveTccDir
@@ -116,6 +117,13 @@ check: function {
     # same way a flagless build would: same answer, same folded guards.
     ccPath: pickCc ccFlag: "" targetTriple: ""
     ccMode: pickCcMode modeFlag: ""
+    # and the fold paths by the same default resolution. An unreadable table
+    # leaves the set empty, which is not silence: the checker answers a path
+    # only when a row names it, so every compile-time value it knows becomes
+    # an error naming itself, reported here as any other diagnostic is.
+    foldPaths: (List String)
+    rtd9: resolveRuntimeDir flagVal: ""
+    (foldNativePaths runtimeDir: rtd9.stringview into: foldPaths)
     st: (ztypecheck.typecheck
         program: prog
         :reg
@@ -125,6 +133,7 @@ check: function {
         ccPath: ccPath.stringview
         ccMode: ccMode.stringview
         target: ""
+        :foldPaths
     )
     nerr: st.typing.errors.length
     return (CheckResult
@@ -396,6 +405,63 @@ resolveRuntimeDir: function {flagVal: StringView} out String is {
         if (io.exists path: rd) then return rd
     }
     return "src/runtime".string
+}
+
+# foldNativePaths -- the qualified paths natives.tbl marks `fold`: the values
+# the compiler answers itself, at compile time. The type checker needs that
+# SET -- it folds those paths and refuses to fold any other -- and the checker
+# reads no files at all, by design: what it decides must not depend on what is
+# on a machine beyond the program it was handed. So the read happens here,
+# beside the rest of the project-layout resolution, and the paths are handed in.
+#
+# A minimal scan of the row HEADS. The emitter's loadNativeTbl parses the rest
+# of every row and the two are separate readers, which they can afford to be:
+# the checker errors on a `fold` row it cannot answer AND on an answer with no
+# row, so a disagreement between the two is reported rather than silently
+# splitting the difference.
+#
+# false when the table could not be READ. That is a broken install, not a table
+# with no fold rows, and the two must not read the same to a caller.
+foldNativePaths: function {runtimeDir: StringView into: (List String)} out bool is {
+    tp: "\{runtimeDir}/natives.tbl"
+    rd: io.readText path: tp
+    txt: String
+    match (
+        rd
+    ) case ok then {
+        txt = rd.take
+    } case err then {
+        return false
+    }
+    with lit: txt.stringview.lines do for ln: lit loop {
+        t: ln.trim
+        if (t.startsWith prefix: "[") then {
+            cb: t.indexOf needle: "]"
+            match (
+                cb
+            ) case some then {
+                head: t.substring from: 1 to: cb
+                key: String
+                isFold: false
+                with fit: (head.split sep: " ") do for f: fit loop {
+                    if f.length > 0 then {
+                        if key.length == 0 then {
+                            key = f.string
+                        } else {
+                            fdo: f.stripPrefix p: "fold"
+                            match (
+                                fdo
+                            ) case some then {
+                                if fdo.length == 0 then isFold = true
+                            } case none then null
+                        }
+                    }
+                }
+                if isFold when key.length > 0 then into.append from: key.copy
+            } case none then null
+        }
+    }
+    return true
 }
 
 # resolveTccDir -- tcc's runtime payload (libtcc1.a, include/, libtcc.so) by

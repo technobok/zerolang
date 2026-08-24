@@ -1734,10 +1734,19 @@ view-guard:
 # own comment line or inline as `= /* ... */0`. Matching on the literal (not
 # on a helper's C name) keeps the leg working whichever naming scheme
 # --readable-names selects. Leg 3: a source ratchet on the
-# emitFail line count in src/zemitterc.z -- it may only DECREASE as fallback
-# legs are resolved; lower the baseline in the same commit that removes a leg.
+# emitFail line count in src/zemitterc.z.
+#
+# Two kinds of leg share that count, and they move in opposite directions. A
+# FALLBACK leg is a construct the emitter cannot render: it may only DECREASE,
+# and the baseline drops in the same commit that resolves one. A REFUSAL leg is
+# the emitter declining to emit something that must never have reached it -- the
+# `is native` declaration with no row, and the `fold` native nothing folded --
+# which is the opposite of a silent degradation and is legitimately ADDED. A
+# raise is therefore allowed only for a refusal, only with the leg named in the
+# commit message, and the guard cannot tell the two apart: the prose is the
+# check, so say which one it is.
 FALLBACK_BASELINE :=
-EMITFAIL_BASELINE := 29
+EMITFAIL_BASELINE := 30
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	@fail=0; \
