@@ -1401,10 +1401,9 @@ VIEW_GUARD_BACKS := StringView.eq===,!= StringView.cmp=compare,<,<=,>,>=
 VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp \
   StringView.print StringView.indexOfRaw StringView.replaceImpl \
   ListRef.destroy ListRef.grow MapRR.destroy MapRR.grow MapRR.find \
-  SetRef.destroy SetRef.grow SetRef.find MapEntry.key MapEntry.value \
+  SetRef.destroy SetRef.grow SetRef.find \
   IdMapR.destroy IdMapR.grow IdMapR.find IdMapR.slot IdMapR.entries_cap \
-  IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap \
-  IdMapEntryR.key IdMapEntryR.value
+  IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap
 VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   StringView.asString:inline \
   ListVal.append:ListRef.append ListVal.insert:ListRef.insert \
@@ -1419,6 +1418,10 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   SetVal.add:SetRef.add SetVal.has:SetRef.has SetVal.delete:SetRef.delete \
   SetVal.iterate:SetRef.iterate SetIterVal.call:SetIter.call \
   SetVal.length:inline SetVal.capacity:inline \
+  MapEntryRV.key:MapEntry.key MapEntryRV.value:MapEntry.value \
+  MapEntryVR.key:MapEntry.key MapEntryVR.value:MapEntry.value \
+  MapEntryVV.key:MapEntry.key MapEntryVV.value:MapEntry.value \
+  IdMapEntryV.key:IdMapEntryR.key IdMapEntryV.value:IdMapEntryR.value \
   MapRV.get:MapRR.get MapRV.set:MapRR.set MapRV.has:MapRR.has \
   MapRV.remove:MapRR.remove MapRV.iterate:MapRR.iterate \
   MapRV.iterateItems:MapRR.iterateItems \
