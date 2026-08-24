@@ -154,6 +154,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-08-22 | a47a444c | [an empty view owns no buffer](#r-a47a444c) | 0.44s | 0.54s | 93MB / 81MB | 101 / 177 / 168 (total 447, medians of 5) | 5,701,889 | 346MB | 35.0s (1119 cases, load ~2.0) | 105,814 |
 | 2026-08-22 | 2f83d269 | [...and so does an empty copy](#r-a47a444c) | 0.44s | 0.54s | 93MB / 81MB | 101 / 177 / 168 (total 447, medians of 5) | 5,621,131 | 345MB | 35.0s (1120 cases, load ~2.0) | 105,830 |
 | 2026-08-23 | e2c867af | [member names, the row accessors and the tokenizer's trivia](#r-e2c867af) | 0.43s | 0.50s | 91MB / 78MB | 113 / 172 / 162 (total 447, medians of 5) | 4,820,294 | 306MB | 35.9s (1124 cases, load ~5.6) | 106,213 |
+| 2026-08-24 | 48e5f08d | [the type-alias mechanism](#r-48e5f08d) | 0.45s | -- | 92MB / -- | 134 / 182 / 166 (total 482, medians of 5) | 4,863,437 | 310MB | -- | 107,829 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -1194,6 +1195,36 @@ struct assignment doing real work.
 One section per baseline-table row, in table order. The table's
 `change` cell links here; this is where the reasoning, the oracle and
 the caveats for that row live.
+
+<a id="r-48e5f08d"></a>
+### The type-alias mechanism
+
+**2026-08-24 · `99bf159c`..`48e5f08d`**
+
+A CORRECTNESS arc, rowed so it is on record that it did not cost anything. An
+alias of a renaming re-export resolved to a shell instead of the type; a
+unit-level alias could not name an instantiated generic; and a mono's label
+head came from the spelling a use site reached the template by, so whichever
+mint site ran first decided what the type was called.
+
+The label is now composed at the mint funnel from the template's DECLARED name.
+Measured against the arc's own base (`7e521f94`) on identical input -- the
+frozen tree, so the two compilers do the same work:
+
+| | allocs | bytes |
+|---|---|---|
+| `7e521f94` | 4,858,784 | 310,280,004 |
+| after the funnel change | 4,864,320 | 310,372,943 |
+| composing past the trie | **4,856,108** | **310,201,302** |
+
+Composing the label at entry cost +5,536 allocations, because a trie HIT -- the
+common case -- returns without ever reading it. Composed past the trie it is
+-2,676 (-0.06%) against the base: callers now build only the argument suffix,
+which is shorter than the whole label they used to build.
+
+The table row above is the standard `make perf` self-compile, which is a
+different workload from the frozen-tree A/B and is not comparable to it
+line-for-line; the A/B is the attribution.
 
 <a id="r-4f10844"></a>
 ### GROUND — post emitter-completeness arc
