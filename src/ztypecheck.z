@@ -16058,7 +16058,10 @@ cloneGenericMemberInto: function {
             if chName == "contains" then csM5 = true
             if chName == "sort" then csM5 = true
             if csM5 then {
-                elemTid: optU64Or o: (subs.get key: (nameIdOf :ast name: "of")) d: 0
+                elemTid: (optU64Or
+                    o: (subs.get key: (firstGenericParamId :st :templateId))
+                    d: 0
+                )
                 if elemTid == 0 then elemTid = fallbackArg
                 ok5: false
                 if elemTid > 0 then {
@@ -20831,11 +20834,30 @@ checkDataBlockMember: function {
                             ato
                         ) case some then {
                             amn: "_\{den}_\{ecnt}"
+                            # `array` declares its element parameter then its
+                            # count; asking the template for both names keeps
+                            # this site correct across a rename. Two names or
+                            # the leg declines: a zero key is the ELIDED key,
+                            # and getOrMintSpec rebinds that to the FIRST
+                            # parameter -- which would bind the count to the
+                            # element slot.
+                            aNames: (st.reg.genericParamNamesOf
+                                tdecl: (declOfTypeId
+                                    :st
+                                    tid: (ztypes.tid.create from: ato.u64)
+                                )
+                            )
+                            if aNames.length < 2 then {
+                                return (callleg
+                                    handled: false
+                                    tid: (ztypes.tid.create from: 0)
+                                )
+                            }
                             asubs: (IdMapV zast.nameid value: u64)
                             sv0: elo
-                            asubs.set key: (nameIdOf :ast name: "of") value: sv0
+                            asubs.set key: (aNames.get i: 0) value: sv0
                             vsE: (IdMapV zast.nameid value: u64)
-                            vsE.set key: (nameIdOf :ast name: "to") value: ecnt
+                            vsE.set key: (aNames.get i: 1) value: ecnt
                             amid: (getOrMintSpec
                                 :st
                                 frame: st.curFrame
@@ -23451,7 +23473,17 @@ checkDo: function {
             ) case some then {
                 optionSubs: (IdMapV zast.nameid value: u64)
                 ov0: payloadTid
-                optionSubs.set key: (nameIdOf :ast name: "t") value: ov0
+                # `ovo0` is whichever of Option / optionval the payload's
+                # family selected, and each names its own parameter. A zero
+                # id stages under the elided key, which getOrMintSpec rebinds
+                # to that same first parameter.
+                (optionSubs.set
+                    key: (firstGenericParamId
+                        :st
+                        templateId: (ztypes.tid.create from: ovo0.u64)
+                    )
+                    value: ov0
+                )
                 omn0: "_\{vtn0}"
                 vsF: (IdMapV zast.nameid value: u64)
                 omid0: (getOrMintSpec
@@ -23919,7 +23951,15 @@ forComprehensionTid: function {
             ) case some then {
                 lsubs: (IdMapV zast.nameid value: u64)
                 lv: elemT
-                lsubs.set key: (nameIdOf :ast name: "of") value: lv
+                # `lto` is whichever of ListRef / ListVal the element's family
+                # selected above; each names its own element parameter.
+                (lsubs.set
+                    key: (firstGenericParamId
+                        :st
+                        templateId: (ztypes.tid.create from: lto.u64)
+                    )
+                    value: lv
+                )
                 lsfx: "_\{en}"
                 vsG: (IdMapV zast.nameid value: u64)
                 lmid: (getOrMintSpec
@@ -27055,7 +27095,13 @@ boxArgumentTid: function {
     unitDecl: ztypes.declid
     ast: Ast
     call: callref
+    tplId: ztypes.tid
 } out ztypes.tid is {
+    # Box names its own type parameter; asking the template for it keeps this
+    # site correct across a rename. An id compare has two zeros -- a template
+    # that declared none, and an unlabelled argument -- so the compare is
+    # guarded rather than trusted.
+    boxParam: firstGenericParamId :st templateId: tplId
     fnd: false
     vt: ztypes.tid
     kAiter: u64
@@ -27067,7 +27113,9 @@ boxArgumentTid: function {
             if (fnd) == false then {
                 # an owned copy: the walks below lend ast
                 an: zast.nameTextCopy :ast ref: arg.name
-                if an.stringview != "t" then {
+                isTypeArg: false
+                if (boxParam.isZero) == false when arg.name == boxParam then isTypeArg = true
+                if (isTypeArg) == false then {
                     if an.stringview != "from" then {
                         mbx7: "the builtin Box constructs with 'from:'; unknown argument '\{an}'"
                         bxid7: nodeId n: (ast.nodes.get i: arg.operation.u64)
@@ -27185,13 +27233,13 @@ checkBoxConstruction: function {
     call: callref
     tplId: ztypes.tid
 } out ztypes.tid is {
-    vt: boxArgumentTid :st :unitDecl :ast :call
+    vt: boxArgumentTid :st :unitDecl :ast :call :tplId
     if vt.isZero then return (ztypes.tid.create from: 0)
     tn: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
     mname: "_\{tn}"
     subs: (IdMapV zast.nameid value: u64)
     sv: vt
-    subs.set key: (nameIdOf :ast name: "t") value: sv
+    subs.set key: (firstGenericParamId :st templateId: tplId) value: sv
     vsJ: (IdMapV zast.nameid value: u64)
     mid: (getOrMintSpec
         :st
