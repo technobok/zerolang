@@ -1554,29 +1554,49 @@ defTypetypeOf: function {
     }
 }
 
-# definingUnitFor -- the unit that defines `name` for a reference in
+# defsite -- where a name is defined: the unit to look it up in, and the
+# re-export Decl that binds it when one does. Zero unit on a miss.
+defsite: record {
+    defUnit: ztypes.declid
+    aliasDecl: ztypes.declid
+}
+
+# noDefSite -- the absent site.
+noDefSite: function {} out defsite is {
+    return (defsite
+        defUnit: (ztypes.declid.create from: 0)
+        aliasDecl: (ztypes.declid.create from: 0)
+    )
+}
+
+# definingSiteFor -- the site that defines `name` for a reference in
 # `unitDecl`: the environment walk over the unit's own frame, then the
 # prelude, where a hit is a re-export and the defining unit is the one its
-# dotted value names. "" when neither frame indexes it (generic params,
-# this/numerics, forward refs to a nonexistent type) -- the caller then mints
-# a shell exactly as before.
-definingUnitFor: function {
+# dotted value names. The Decl the walk hit rides along because a re-export
+# may RENAME its target -- `List: collections.ListRef` puts no `List` in
+# `collections`, so the unit alone cannot resolve it and only the alias Decl
+# knows what it stands for. An absent site means neither frame indexes the
+# name (generic params, this/numerics, forward refs to a nonexistent type) --
+# the caller then mints a shell exactly as before.
+definingSiteFor: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
     unitDecl: ztypes.declid
     frame: ztypes.declid
     name: StringView
-} out ztypes.declid is {
+} out defsite is {
     hit: (envLookup
         :st
         frame: (frameFor :st :frame :unitDecl)
         nameId: (zast.poolFind pool: ast.names text: name)
     )
-    if hit.declId.isZero then return (ztypes.declid.create from: 0)
-    if hit.frame == unitDecl then return unitDecl
+    if hit.declId.isZero then return noDefSite
+    if hit.frame == unitDecl then {
+        return (defsite defUnit: unitDecl aliasDecl: (ztypes.declid.create from: 0))
+    }
     ru: reexportUnitOf :st :ast declId: hit.declId
-    if ru.isZero then return (ztypes.declid.create from: 0)
-    return (unitDeclOfName :st nameId: ru)
+    if ru.isZero then return noDefSite
+    return (defsite defUnit: (unitDeclOfName :st nameId: ru) aliasDecl: hit.declId)
 }
 
 # declareCanonicalType -- get-or-declare the ONE canonical id for `unit.name` as a
@@ -1841,7 +1861,8 @@ resolveNamedType: function {
             return ptid7
         }
     }
-    duo7: definingUnitFor :st :frame :ast :unitDecl :name
+    site7: definingSiteFor :st :frame :ast :unitDecl :name
+    duo7: site7.defUnit
     if (duo7.isZero) == false then {
         tto7: (optionval.none ztypes.ztypetype)
         dd7: declOfUnitDef :st :frame unitDecl: duo7 nameId: (nameIdOf :ast :name)
@@ -1875,6 +1896,14 @@ resolveNamedType: function {
             } case none then null
             al7: resolveAliasKey :st :ast declId: dd7
             if al7 > 0 then return al7
+            # the alias RENAMES its target, so its own name is no member of the
+            # target's unit and dd7 found nothing there. The Decl the
+            # environment walk hit IS the binding; following it is what
+            # resolveAliasKey is for.
+            if (site7.aliasDecl.isZero) == false when dd7.isZero then {
+                al8: resolveAliasKey :st :ast declId: site7.aliasDecl
+                if al8 > 0 then return al8
+            }
             return (st.reg.newType :name typetype: ztypes.ztypetype.recordType)
         }
     } else {
@@ -2751,13 +2780,13 @@ monoRefArgTid: function {
             # not yet declared -- the ladder walk sees only
             # declared defs and would fall through to a
             # same-named stdlib type (resolveAtomType's rule)
-            duo: (definingUnitFor
+            duo: (definingSiteFor
                 :st
                 :frame
                 :ast
                 :unitDecl
                 name: anc.stringview
-            )
+            ).defUnit
             if aid.isZero when duo == unitDecl then {
                 aid = (descendNamed
                     :st
@@ -2904,7 +2933,7 @@ resolveMonoRefParts: function {
         if allOk == false then return 0
         if sfx.length == 0 then return 0
         tplId: ztypes.tid
-        tduo: definingUnitFor :st :frame :ast :unitDecl name: tname.stringview
+        tduo: (definingSiteFor :st :frame :ast :unitDecl name: tname.stringview).defUnit
         if tduo == unitDecl then {
             tplId = (descendNamed
                 :st
@@ -5132,7 +5161,7 @@ paramIsBorrowReftype: function {ast: Ast
             isref = isBorrowReftypeCollection name: base.stringview
         } else {
             isref = nameIsInUnitReftype :st :ast :unitDecl name: tn.stringview
-            tdu: definingUnitFor :st :frame :ast :unitDecl name: tn.stringview
+            tdu: (definingSiteFor :st :frame :ast :unitDecl name: tn.stringview).defUnit
             if (isBorrowNativeReftype name: tn.stringview) when tdu == st.typing.systemUnitRoot then {
                 isref = true
             }
@@ -5796,7 +5825,7 @@ markerTargetId: function {
     if nameId.isZero then return (optionval.none u64)
     {
         mnm: zast.poolTextAt pool: ast.names ref: nameId
-        duo: definingUnitFor :st :frame :ast :unitDecl name: mnm.stringview
+        duo: (definingSiteFor :st :frame :ast :unitDecl name: mnm.stringview).defUnit
         if (duo.isZero) == false then {
             descendNamed :st :frame :ast unitDecl: duo name: mnm.stringview
         }
@@ -8836,7 +8865,7 @@ fieldTypeNeedsCleanup: function {
     if name == "IdSet" then return true
     if name == "Option" then return true
     if name == "Result" then return true
-    duo8: definingUnitFor :st :frame :ast :unitDecl :name
+    duo8: (definingSiteFor :st :frame :ast :unitDecl :name).defUnit
     if (duo8.isZero) == false then {
         tto8: (optionval.none ztypes.ztypetype)
         {
