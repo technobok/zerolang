@@ -1896,6 +1896,18 @@ resolveNamedType: function {
             } case none then null
             al7: resolveAliasKey :st :ast declId: dd7
             if al7 > 0 then return al7
+            # `Strs: (List String)` names a TYPE through a call-shaped value.
+            # It declares itself when READ, the same door a constant takes in
+            # descendNamed -- a signature mentioning it may be resolved before
+            # the pass that walks its definition.
+            if (dd7.isZero) == false when (instantiatedAliasFold
+                :ast
+                :st
+                declId: dd7
+            ) then {
+                it7: declTypeIdOf :st declId: dd7
+                if (it7.isZero) == false then return it7.u64
+            }
             # the alias RENAMES its target, so its own name is no member of the
             # target's unit and dd7 found nothing there. The Decl the
             # environment walk hit IS the binding; following it is what
@@ -36332,6 +36344,50 @@ resolveBinopConstantDef: function {
 # a UNIT, which is the test here. A unit declared in THIS file has no registry
 # entry yet and a generic-unit binding is no file unit at all, so the Decl tree
 # answers both.
+# resolveInstantiatedAlias -- `Strs: (List String)`: a unit-level definition
+# whose value INSTANTIATES a generic template NAMES the resulting mono, exactly
+# as the bare (`Same: Holder`) and dotted (`Nd: zast.Node`) forms name a type.
+# The alias shares the mono's canonical id and mints nothing of its own, so the
+# id is recorded on the Decl and on the unit's member index the way
+# resolveAliasKeyIn records the other two forms. false when the instantiation
+# does not resolve, which leaves the caller's diagnostic to fire.
+resolveInstantiatedAlias: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    defn: callref
+} out bool is {
+    mt: (resolveMonoRefInline
+        :st
+        :frame
+        :ast
+
+        :unitDecl
+        thisName: ""
+        enclDecl: ztypes.declid
+        opNid: defn.nid
+        nid: 0
+    )
+    if mt == 0 then return false
+    mtid: ztypes.tid.create from: mt
+    adecl: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName)
+    if (adecl.isZero) == false then st.typing.declSetType declId: adecl typeId: mtid
+    cu: (declTypeIdOf
+        :st
+        declId: (constOwnerDeclFor :st :frame :ast :unitDecl :defName)
+    )
+    if (cu.isZero) == false then {
+        (st.typing.setMemberType
+            parentTypeId: cu
+            nameId: (zast.poolFind pool: ast.names text: defName)
+            childTypeId: mtid
+        )
+    }
+    return true
+}
+
 resolveCalledConstantDef: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -36388,6 +36444,7 @@ resolveCalledConstantDef: function {
         }
         if (cbu) == false then {
             ckn: false
+            ctpl: u64
             {
                 cko: (walkLookupTyperef
                     :st
@@ -36401,7 +36458,28 @@ resolveCalledConstantDef: function {
                     cko
                 ) case some then {
                     ckn = true
+                    ctpl = cko
                 } case none then null
+            }
+            # a GENERIC template is the one callee shape that can be
+            # INSTANTIATED rather than constructed, so `Strs: (List String)`
+            # is a type alias while `origin: Point.create x: 0` stays a
+            # construction: `create` is a member of a concrete type and is not
+            # generic.
+            if ctpl > 0 then {
+                cgen: false
+                if ctpl < st.reg.typeById.length then {
+                    ctr: st.reg.typeById.get i: ctpl
+                    cgen = ctr.isgeneric
+                }
+                if cgen when (resolveInstantiatedAlias
+                    :ast
+                    :st
+                    :unitDecl
+                    :frame
+                    :defName
+                    :defn
+                ) then cbu = true
             }
             if (ckn) == false then {
                 crm: "Unknown reference '\{cbn}'"
@@ -36618,6 +36696,60 @@ constRegisterValueTypeAt: function {
     if bo > 0 then st.typing.setMemberType parentTypeId: utid nameId: nid childTypeId: bo.u64
 }
 
+# instantiatedAliasFold -- the alias-shaped door into constFoldDecl. A
+# unit-level definition whose value INSTANTIATES a generic template declares a
+# TYPE, not a constant, and like a constant it declares itself when it is first
+# READ: a signature mentioning `Strs` may be resolved before the eager pass
+# reaches `Strs: (List String)`, and without this door it would resolve to a
+# shell of that name while the values carry the mono. false when the definition
+# is not that shape, which leaves the fold to the constant channel.
+instantiatedAliasFold: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    declId: ztypes.declid
+} out bool is {
+    dnode: u32
+    {
+        decl: st.typing.decls.get i: declId.u64
+        dnode = decl.node
+    }
+    if dnode == 0 then return false
+    opId: zast.nodeid
+    {
+        nop: ast.nodes.get i: dnode.u64
+        if nop.namedoperation then opId = nop.operation
+    }
+    if opId.isZero then return false
+    {
+        o: ast.nodes.get i: opId.u64
+        match (
+            o
+        ) case expression then opId = o.expression else null
+    }
+    if opId.isZero then return false
+    isCall: false
+    {
+        arm: rowArmAt :ast nid: opId
+        if arm.call then isCall = true
+    }
+    if (isCall) == false then return false
+    own: declParentIdOf :st :declId
+    if own.isZero then return false
+    unm: unitRootOfDecl :st :declId
+    if unm.isZero then return false
+    dnm: zast.poolTextAt pool: ast.names ref: (declNameIdOf :st :declId)
+    if dnm.length == 0 then return false
+    cdr: callRefAt :ast nid: opId
+    return (resolveInstantiatedAlias
+        :ast
+        :st
+        unitDecl: unm
+        frame: own
+        defName: dnm.stringview
+        defn: cdr
+    )
+}
+
 # constFoldDecl -- fold the constant `declId` declares and register the type its
 # value carries, addressed by the DECLARATION alone. This is the door a lookup
 # takes when it finds a constant that has not folded yet: a constant's TYPE
@@ -36629,6 +36761,7 @@ constFoldDecl: function {
     declId: ztypes.declid
 } is {
     if declId.isZero then return
+    if (instantiatedAliasFold :ast :st :declId) then return
     own: declParentIdOf :st :declId
     if own.isZero then return
     nmNode: declNameIdOf :st :declId
