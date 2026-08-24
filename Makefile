@@ -1812,6 +1812,15 @@ CONVENTION_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.args
 # TABLE_TODO -- natives that do not yet resolve through natives.tbl. Empty: as
 # of the io/net wiring every `is native` declaration in lib/system has a row, so
 # the guard below is the static half of the check at the declaration.
+#
+# THE STATIC HALF IS NOT REDUNDANT, and this leg was going to be retired on the
+# assumption that it is. The compiler's own check reads every unit a program
+# LOADS, so it covers a declaration only if something compiles the unit holding
+# it -- and `net` (9 natives), `cli` (9) and `tcc` (2) are loaded by nothing in
+# this tree: no example, no corpus program, and not the compiler's own source.
+# Retiring this leg would have left those twenty declarations with no check at
+# all, which is the silence the declaration check exists to end. It stays until
+# something compiles those three units; then it can go.
 TABLE_TODO :=
 native-guard:
 	@fail=0; conv=""; \

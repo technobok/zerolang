@@ -11795,7 +11795,6 @@ ensureUnitRequire: function {
     # place before it folds -- earlier than the main pass seeds them. Once.
     if (st.typing.platformSeeded) == false then {
         st.typing.platformSeeded = true
-        seedPlatformConsts :st :frame :ast
         seedFoldNatives :st :frame :ast
     }
     prevFail: st.typing.constFail
@@ -37238,51 +37237,6 @@ targetIsHost: function {triple: StringView} out bool is {
     return true
 }
 
-# seedPlatformConsts -- fill the `platform` unit in for THIS build.
-#
-# The file on disk carries defaults so the seed compiler can build a working
-# zc from a clean checkout; those defaults describe nothing in particular. The
-# real values are known only here, so they are written straight onto the
-# member-constant table and the definitions on disk are marked evaluated so
-# nothing reads them back.
-#
-# A no-op when the unit was never loaded, which is every program that does not
-# mention `platform`.
-seedPlatformConsts: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    frame: ztypes.declid
-} is {
-    ptid: (ztypes.tid.create
-        from: (declTypeIdOf
-            :st
-            declId: (unitDeclOfNameOrOwn :st :frame nameId: (nameIdOf :ast name: "platform"))
-        ).u64
-    )
-    if ptid.isZero then return
-    # the seeds are platform's own definitions, so they resolve in its frame
-    rf: frame
-    {
-        pro: (st.typing.declFindChild
-            parentDeclId: st.typing.programRoot
-            nameId: (nameIdOf :ast name: "platform")
-        )
-        if (pro.isZero) == false then rf = pro
-    }
-    pi9: 1
-    for pi9 <= foldProviderCount loop {
-        (applyFoldProvider
-            :st
-            :frame
-            unitFrame: rf
-            :ast
-            :ptid
-            prov: pi9
-        )
-        pi9 = pi9 + 1
-    }
-}
-
 # seedFoldNatives -- answer the compile-time values THIS TABLE names.
 #
 # natives.tbl is what says which paths the compiler answers; this walks its
@@ -37366,11 +37320,8 @@ seedFoldNatives: function {
     }
 }
 
-# foldProviderCount -- how many compile-time values this compiler answers.
-foldProviderCount: 5
-
-# foldProviderOf -- which of those answers a path names, as foldProviderCount's
-# 1-based index; 0 for a path this compiler cannot answer.
+# foldProviderOf -- which compile-time answer a path names, as a 1-based index
+# into applyFoldProvider's arms; 0 for a path this compiler cannot answer.
 #
 # Keyed by NAME IDS, not by the spelling: the ids are what every other table
 # here compares, and routing by a literal is what the architecture rules count.
@@ -37452,8 +37403,12 @@ applyFoldProvider: function {
     }
     if prov == 4 then {
         # the mode needs no classifier: it arrives as an arm name already,
-        # having been validated at the flag.
+        # having been validated at the flag. An unset one is answered `spawn`
+        # HERE, in the open. It used to answer by seeding nothing and leaving
+        # the on-disk default, which was `spawn` too -- the same answer, arrived
+        # at by luck, and there is no file to fall back to now.
         ccModeC: st.typing.ccMode.copy # copied out first: seeding lends st
+        if ccModeC.length == 0 then ccModeC = "spawn".string
         (seedPlatformArm
             :st
             :frame
@@ -39724,7 +39679,6 @@ typecheck: function {
     match (
         program
     ) case program then {
-        seedPlatformConsts :st frame: rf ast: program.ast
         seedFoldNatives :st frame: rf ast: program.ast
     } else null
     resolveConstantDefs :st frame: rf :program
