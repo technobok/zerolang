@@ -21345,6 +21345,17 @@ checkMarkerMember: function {
     }
     return (callleg handled: false tid: (ztypes.tid.create from: 0))
 }
+# isNativeFnTid -- the tid is a FUNCTION type whose body the compiler supplies.
+# Two questions, not one: a native TYPE (String, a container) is not a native
+# function, and a bodied function is not native.
+isNativeFnTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType then {
+        return (st.reg.isNativeOf :tid)
+    }
+    return false
+}
+
 # checkTransferMarker -- `.take` / `.release` are ownership transfer markers, not
 # members. The path carries the base's type; a bare-name source releases its held
 # locks and invalidates (the taken overlay propagates out of popped scopes).
@@ -21363,6 +21374,28 @@ checkTransferMarker: function {
     if (isMoveMarker name: cn) then isXferMarker = true
     if cn == "release" then isXferMarker = true
     if isXferMarker then {
+        # a native has no reference form. The compiler supplies the body, and an
+        # inlined one -- a binop, a conversion -- has no C function whose address
+        # there is to take; even a fragment-backed one was not referenced but
+        # CALLED, and typed by a function typedef that was never written. That
+        # left the C compiler reporting a mangled name for a mistake in the path.
+        if (isMoveMarker name: cn) when (isNativeFnTid :st tid: bt) then {
+            pth: dottedRootName :ast n: (ast.nodes.get i: dp.parent.u64)
+            mnm: dottedChildName :ast n: (ast.nodes.get i: dp.parent.u64)
+            pth.append "."
+            pth.append mnm
+            mnr: "'\{pth.stringview}' is native and has no reference form"
+            (addError
+                :st
+                nodeid: dp.nid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.callError
+                msg: mnr
+            )
+            stampGate :st nid: dp.nid.u64 tid: bt
+            return (callleg handled: true tid: bt)
+        }
         mkRootId: bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64)
         if cn == "release" when mkRootId.isZero then {
             mrv: "'.release' can only be applied to a variable name".string
