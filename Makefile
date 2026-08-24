@@ -144,7 +144,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint warn-check shadow-guard emitter-guard native-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
+ci: style-lint warn-check shadow-guard emitter-guard native-guard alias-label-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -775,7 +775,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 21; \
 	chk "userFnId" "$$e4" 32; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 97; \
+	chk "regNameOf" "$$e6" 95; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 4; \
 	chk "monoOriginName" "$$e9" 8; \
@@ -1201,25 +1201,47 @@ deadcode-guard: bin/zc
 # a `main` (it is not asking what a root reaches), so a library fixture emits
 # here and is E0039 without it. The two sides are not comparable and the
 # difference is not the signal.
-# EAGER_KNOWN -- the programs still bad under `--eager`, named because the
-# cause is known and is NOT about eager resolution. A mono's registered name is
-# built from the template name as WRITTEN (instMonoLabel, ztypecheck.z), and
-# lib/system/core.z gives one type two names -- `List` and `ListRef` both mean
-# collections.ListRef, as do `Map`/`MapRR` and `Set`/`SetRef`. Whichever alias
-# mints the instance first names it, so `Result (List String)` is
-# Result_List_String_IoError when only that spelling is reached and
-# Result_ListRef_String_IoError when both are. `--eager` reaches both.
+# alias-label-guard -- one type, ONE label. A mono's label head is its
+# TEMPLATE'S DECLARED name, never the alias a use site reached it by.
+# lib/system/core.z binds collections.ListRef under both `List` and `ListRef`
+# (likewise Map/MapRR and Set/SetRef), and a user may alias anything; while the
+# head came from the source text, whichever mint site ran first decided the
+# spelling. That is what made the two modes disagree and broke the hardcoded
+# tag in src/runtime/natives/_Z_IO_LIST_DIR.inc under --eager. Composing the
+# head at the mint funnel (getOrMintSpec) took this corpus from 7811
+# alias-headed labels to 0.
 #
-# src/runtime/natives/_Z_IO_LIST_DIR.inc then hardcodes one of the two tag
-# spellings and no longer matches. Roughly 140 such spellings sit in 40-odd
-# fragments; this is the only one over an aliased type, so it is the only one
-# that can break. Making the label canonical renames monos in the ORDINARY
-# build too and cascades into ioCanonTid's stems and the @List_String@ holes,
-# so it is its own arc rather than a patch here.
+# A program that DECLARES its own List/Map/Set -- usershadow.z does -- keeps
+# that head legitimately, because then it IS the declared name. The check reads
+# each program's source for such a declaration rather than carrying a skip
+# list, so a new shadow fixture needs no edit here and cannot silently weaken
+# it.
+alias-label-guard: bin/zc
+	@d=$$(mktemp -d); bad=""; \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	  if grep -qE '^(List|Map|Set): *(class|record|union|variant|protocol|facet)' $$f; then continue; fi; \
+	  b=$$(basename $$f .z); \
+	  for m in "" "--eager"; do \
+	    bin/zc emit $$f $$m --readable-names -o $$d/x.c >/dev/null 2>&1 || continue; \
+	    if grep -qE 'z_t[0-9]+_(List|Map|Set)_' $$d/x.c; then bad="$$bad $$b$$m"; fi; \
+	  done; \
+	done; \
+	rm -rf $$d; \
+	if [ -n "$$bad" ]; then \
+	  echo "alias-label-guard FAIL: a mono is labelled with an ALIAS head:$$bad"; \
+	  echo "  The label head must be the template's DECLARED name. A caller that"; \
+	  echo "  composes its own head reintroduces the path-dependence -- pass only"; \
+	  echo "  the argument suffix to getOrMintSpec."; \
+	  exit 1; \
+	fi; \
+	echo "alias-label-guard OK: no mono carries an alias head (both modes, examples + corpus)"
+
+# EAGER_KNOWN -- the programs still bad under `--eager`. Empty, and a name
+# added here needs the cause written beside it.
 #
 # Movement in EITHER direction fails: a new name means a regression, a lost one
-# means the arc landed and the row must go in the same commit.
-EAGER_KNOWN := bare_stdlib_fnref io_removetree
+# means it was fixed and the row must go in the same commit.
+EAGER_KNOWN :=
 
 eager-guard: bin/zc
 	@d=$$(mktemp -d); bad=""; \

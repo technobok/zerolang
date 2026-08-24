@@ -3009,7 +3009,7 @@ resolveMonoRefParts: function {
             }
         }
     mainName: st.typing.mainUnitRoot
-        mname: "\{tn}\{sfx}"
+
         # firstA rides as the fallback: when a template's param name differs
         # from the call label (Option's `t` vs the conventional `of:`), the
         # clone fallback leg types native-union arms from it -- a spec first
@@ -3020,7 +3020,7 @@ resolveMonoRefParts: function {
             :ast
 
             unitDecl: mainName
-            name: mname.stringview
+            sfx: sfx.stringview
             templateId: (ztypes.tid.create from: tplId.u64)
             subs: typeSubs
             valSubs: valSubsR
@@ -15977,7 +15977,6 @@ respecialize: function {
     typeSubs: (IdMapV zast.nameid value: u64)
     rvSubs: (IdMapV zast.nameid value: u64)
     sfx: String
-    originName: st.reg.nameOf tid: origin
     mi: u64
     for mi < an loop {
         mp: pn.get i: mi
@@ -15999,14 +15998,13 @@ respecialize: function {
         }
         mi = mi + 1
     }
-    mn: "\{originName}\{sfx}"
     return (getOrMintSpec
         :st
         :frame
         :ast
 
         :unitDecl
-        name: mn.stringview
+        sfx: sfx.stringview
         templateId: (ztypes.tid.create from: origin.u64)
         subs: typeSubs
         valSubs: rvSubs
@@ -17471,12 +17469,19 @@ getOrMintSpec: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    name: StringView
+    sfx: StringView
     templateId: ztypes.tid
     subs: (IdMapV zast.nameid value: u64)
     valSubs: (IdMapV zast.nameid value: u64)
     fallbackArg: u64
 } out ztypes.tid is {
+    # the label's HEAD is the template's own DECLARED name, never the spelling
+    # a caller reached it by. A type has one declaration and any number of
+    # aliases, so an alias -- `List` for `collections.ListRef`, or a user's
+    # own -- must not decide what the mono is called, and which mint site wins
+    # the trie must not decide it either. Callers pass only the argument
+    # suffix, which is theirs to compose.
+    mn8: "\{st.reg.nameOf tid: templateId}\{sfx}"
     tk8: declOfTypeId :st tid: templateId
     pnames8: st.reg.genericParamNamesOf tdecl: tk8
     # An elided leading type argument stages under the empty name; rebind it
@@ -17557,16 +17562,16 @@ getOrMintSpec: function {
         # a generic-param arg makes the spec PARTIAL: a trie-only entry that
         # is never emitted or name-registered; the clone-side respecialize
         # completes it with concrete args per instance.
-        pnmP8: "\{name}__partial"
+        pnmP8: "\{mn8}__partial"
         mid8 = st.reg.newType name: pnmP8.stringview typetype: ztypes.ztypetype.genericParam
         st.reg.setGenericOrigin typeId: mid8 value: templateId
     } else {
-        mid8 = st.reg.newType :name typetype: (templateTypetypeOf :st :templateId)
+        mid8 = st.reg.newType name: mn8.stringview typetype: (templateTypetypeOf :st :templateId)
     }
     if trieOk8 when mid8 > 0 then {
         (registerSpecOnTrie
             :st
-            :name
+            name: mn8.stringview
             :templateId
             :mid8
             :keys8
@@ -17583,7 +17588,7 @@ getOrMintSpec: function {
         :st
         :unitDecl
         :frame
-        :name
+        name: mn8.stringview
         :templateId
         :mid8
         :subs
@@ -18253,7 +18258,6 @@ inferGenericConstruction: function {
         return (ztypes.tid.create from: 0)
     }
     if sfx.length == 0 then return (ztypes.tid.create from: 0)
-    mname: "\{tname}\{sfx}"
     vsD: (IdMapV zast.nameid value: u64)
     mid: (getOrMintSpec
         :st
@@ -18261,7 +18265,7 @@ inferGenericConstruction: function {
         :ast
 
         :unitDecl
-        name: mname.stringview
+        sfx: sfx.stringview
         templateId: (ztypes.tid.create from: tplId.u64)
         :subs
         valSubs: vsD
@@ -18565,14 +18569,13 @@ genericTypeConstruction: function {
     if anyMiss then return (ztypes.tid.create from: 0)
     firstA: firstOut.get i: 0
     if sfx.length == 0 then return (ztypes.tid.create from: 0)
-    mname: "\{tname}\{sfx}"
     mid: (getOrMintSpec
         :st
         frame: st.curFrame
         :ast
 
         :unitDecl
-        name: mname.stringview
+        sfx: sfx.stringview
         templateId: (ztypes.tid.create from: tplId.u64)
         :subs
         valSubs: valueSubs
@@ -20825,7 +20828,7 @@ checkDataBlockMember: function {
                         match (
                             ato
                         ) case some then {
-                            amn: "array_\{den}_\{ecnt}"
+                            amn: "_\{den}_\{ecnt}"
                             asubs: (IdMapV zast.nameid value: u64)
                             sv0: elo
                             asubs.set key: (nameIdOf :ast name: "of") value: sv0
@@ -20837,7 +20840,7 @@ checkDataBlockMember: function {
                                 :ast
 
                                 :unitDecl
-                                name: amn.stringview
+                                sfx: amn.stringview
                                 templateId: (ztypes.tid.create from: ato.u64)
                                 subs: asubs
                                 valSubs: vsE
@@ -23447,7 +23450,7 @@ checkDo: function {
                 optionSubs: (IdMapV zast.nameid value: u64)
                 ov0: payloadTid
                 optionSubs.set key: (nameIdOf :ast name: "t") value: ov0
-                omn0: "\{wrapBase}_\{vtn0}"
+                omn0: "_\{vtn0}"
                 vsF: (IdMapV zast.nameid value: u64)
                 omid0: (getOrMintSpec
                     :st
@@ -23455,7 +23458,7 @@ checkDo: function {
                     :ast
 
                     :unitDecl
-                    name: omn0.stringview
+                    sfx: omn0.stringview
                     templateId: (ztypes.tid.create from: ovo0.u64)
                     subs: optionSubs
                     valSubs: vsF
@@ -23916,7 +23919,6 @@ forComprehensionTid: function {
                 lv: elemT
                 lsubs.set key: (nameIdOf :ast name: "of") value: lv
                 lsfx: "_\{en}"
-                lmn: "\{ltn}\{lsfx}"
                 vsG: (IdMapV zast.nameid value: u64)
                 lmid: (getOrMintSpec
                     :st
@@ -23924,7 +23926,7 @@ forComprehensionTid: function {
                     :ast
 
                     :unitDecl
-                    name: lmn.stringview
+                    sfx: lsfx.stringview
                     templateId: (ztypes.tid.create from: lto.u64)
                     subs: lsubs
                     valSubs: vsG
@@ -27184,7 +27186,7 @@ checkBoxConstruction: function {
     vt: boxArgumentTid :st :unitDecl :ast :call
     if vt.isZero then return (ztypes.tid.create from: 0)
     tn: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
-    mname: "Box_\{tn}"
+    mname: "_\{tn}"
     subs: (IdMapV zast.nameid value: u64)
     sv: vt
     subs.set key: (nameIdOf :ast name: "t") value: sv
@@ -27195,7 +27197,7 @@ checkBoxConstruction: function {
         :ast
 
         :unitDecl
-        name: mname.stringview
+        sfx: mname.stringview
         templateId: (ztypes.tid.create from: tplId.u64)
         :subs
         valSubs: vsJ
@@ -28153,9 +28155,8 @@ mintSumArmInstance: function {
     isNullPay: bool
     pn0: StringView
 } out callleg is {
-        tn2: st.reg.nameOf tid: (ztypes.tid.create from: dtp.u64)
         an2: st.reg.nameOf tid: (ztypes.tid.create from: subT.u64)
-        monoName: "\{tn2}_\{an2}"
+        monoName: "_\{an2}"
         subs2: (IdMapV zast.nameid value: u64)
         if (isNullPay) == false then {
             pv2: subT
@@ -28171,7 +28172,7 @@ mintSumArmInstance: function {
             :ast
 
             :unitDecl
-            name: monoName.stringview
+            sfx: monoName.stringview
             templateId: (ztypes.tid.create from: dtp.u64)
             subs: subs2
             valSubs: vsH
@@ -29697,6 +29698,7 @@ checkGenericCall: function {
     )
     mname: st.reg.nameOf tid: funcId
     if mname.length == 0 then return (ztypes.tid.create from: 0)
+    gsfx4: String
     allOk: true
     gtk4: declOfTypeId :st tid: funcId
     genericParamIter: gparams.iterate
@@ -29720,8 +29722,8 @@ checkGenericCall: function {
                 :ast
                 tid: (ztypes.tid.create from: ggot.u64)
             )
-            mname.append s: "_"
-            mname.append s: an4
+            gsfx4.append s: "_"
+            gsfx4.append s: an4
         } case none then {
             allOk = false
         }
@@ -29735,7 +29737,7 @@ checkGenericCall: function {
         :ast
 
         :unitDecl
-        name: mname.stringview
+        sfx: gsfx4.stringview
         templateId: funcId
         :subs
         valSubs: vsI
@@ -29758,7 +29760,7 @@ checkGenericCall: function {
         match (
             dvo
         ) case some then {
-            csname: "function:\{mname}"
+            csname: "function:\{mname}\{gsfx4}"
             cm2: st.pushBlock name: csname.stringview
             if dvo then st.markUnreachable
             st.popTo marker: cm2
