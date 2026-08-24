@@ -95,9 +95,10 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
 
-# ZLSCOPE -- what the zl *linter* checks: the tool + compiler sources and the relocated
-# front-end. The stdlib proper (io/os/collections/system/cli/core) is not linted (it carries
-# pre-existing first-arg-elision labels that were never enforced).
+# ZLSCOPE -- what the zl *linter* checks: the tool + compiler sources, and every unit
+# under lib/system -- which is the stdlib proper (io/os/collections/system/cli/core) as
+# well as the relocated front-end, because they share that directory. What it does NOT
+# reach is examples/ and tests/fixtures/; a rule that must hold there needs its own guard.
 ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z tests/unit/*.z
 # FMTSCOPE -- what the zl *formatter* checks: fmt applies only whitespace/colon fixes (no
 # elide-label issue), so it covers the whole codebase, keeping every .z consistently formatted.

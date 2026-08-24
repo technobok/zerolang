@@ -434,6 +434,82 @@ casingClash: function {s: StringView} out bool is {
     return (zlexer.islookupReserved sv: s)
 }
 
+# ---- L023 generic-param-casing helpers (parse tier) ----
+
+# genericBoundBase -- the bound's base identifier as WRITTEN in a generic
+# parameter declaration: `AnyRef` out of `AnyRef.generic`, and out of the
+# parenthesised `(Any.generic default: null)` form. "" when the leaf is
+# `.valtype` or `.reftype`, which name a kind rather than a type and so carry
+# no case to compare -- a shape the parser accepts and the typechecker rejects
+# (`Unknown type 'reftype'`), so the arm is defensive, not reachable from a
+# program that compiles. It unwraps the same expression and call wrappers
+# `zast.isGenericParamOp` does, and must keep doing so: a reader that unwrapped
+# fewer would report the shapes it never looked at as conformant, and the
+# parenthesised form is the one parameter in the tree that would go unseen.
+genericBoundBase: function {ast: Ast.view opId: u32} out String is {
+    if opId == 0 then return "".string
+    n: ast.nodes.get i: opId.u64
+    match (
+        n
+    ) case expression then {
+        return (genericBoundBase :ast opId: n.expression)
+    } case call then {
+        return (genericBoundBase :ast opId: n.callable)
+    } case dottedpath then {
+        c: ast.nodes.get i: n.child.u64
+        isGen: false
+        match (
+            c
+        ) case atomid then {
+            if (zast.nameTextEq :ast ref: c.name s: "generic") then isGen = true
+        } case labelvalue then {
+            if (zast.nameTextEq :ast ref: c.name s: "generic") then isGen = true
+        } else null
+        if (isGen) == false then return "".string
+        return (atomName :ast n: (ast.nodes.get i: n.parent.u64))
+    } else {
+        return "".string
+    }
+}
+
+# byteIsUpper -- true when an optional source byte is an ASCII capital.
+byteIsUpper: function {b: (optionval u8)} out bool is {
+    match (
+        b
+    ) case some then {
+        if b >= 65 when (b <= 90) then return true
+        return false
+    } case none then {
+        return false
+    }
+}
+
+# flipFirstCase -- `s` with its first ASCII letter's case inverted, which is the
+# spelling the case rule asks for. A name that starts with neither case comes
+# back unchanged.
+flipFirstCase: function {s: StringView} out String is {
+    buf: String
+    n: s.length
+    i: u64
+    for i < n loop {
+        bo: s.byteAt :i
+        match (
+            bo
+        ) case some then {
+            c: bo
+            if i == 0 then {
+                d: c
+                if c >= 65 when (c <= 90) then d = c + 32
+                if c >= 97 when (c <= 122) then d = c - 32
+                c = d
+            }
+            buf.appendByte b: c
+        } case none then null
+        i = i + 1
+    }
+    return buf
+}
+
 # casingMessage -- the L009 diagnostic text: a direct rename when the lowerCamelCase form is
 # usable, or a role-suffixed alternative when it clashes with a keyword/reserved word.
 casingMessage: function {orig: StringView sug: StringView} out String is {
@@ -1297,6 +1373,61 @@ Analysis: class {
                 width: nm.length.u32.orPanic
             )
         }
+    }
+
+    # walkGenericParamCasingProgram -- L023 (default-on): a generic parameter's
+    # case matches the case of its bound's name, so a reader sees the ownership
+    # family at the point of use (styleguide Naming). A linear sweep of the node
+    # table rather than a descent: a parameter sits in an objectdef's as-block,
+    # a functiondef's as-block or a unit body, and a walk taught only some of
+    # those carriers would pass the rest in silence.
+    walkGenericParamCasingProgram: function {:this prog: Node.view} is {
+        match (
+            prog
+        ) case program then {
+            gi: u64
+            gn: prog.ast.nodes.length
+            for gi < gn loop {
+                gm: prog.ast.nodes.get i: gi
+                match (
+                    gm
+                ) case namedoperation then {
+                    if (zast.isGenericParamOp ast: prog.ast opId: gm.operation) then {
+                        (this.checkGenericParamCasing
+                            ast: prog.ast
+                            nameRef: gm.name
+                            opId: gm.operation
+                            line: gm.lineno
+                            col: gm.colno
+                        )
+                    }
+                } else null
+                gi = gi + 1
+            }
+        } else null
+    }
+
+    # checkGenericParamCasing -- flag a generic parameter whose first character's
+    # case differs from its bound's. A bound with no base name is skipped rather
+    # than guessed at: answering for a shape the reader could not read would be
+    # reporting a check that never ran.
+    checkGenericParamCasing: function {:this ast: Ast.view nameRef: zast.nameid opId: u32 line: u32 col: u32} is {
+        bnd: genericBoundBase :ast :opId
+        if bnd.length == 0 then return
+        nm: zast.nameTextAt :ast ref: nameRef
+        if nm.length == 0 then return
+        nUp: byteIsUpper b: (nm.stringview.byteAt i: 0)
+        bUp: byteIsUpper b: (bnd.stringview.byteAt i: 0)
+        if nUp == bUp then return
+        want: flipFirstCase s: nm.stringview
+        msg: "generic parameter '\{nm}' should be '\{want}' -- a parameter's case matches the case of its bound, and the bound is '\{bnd}'"
+        (this.info
+            code: "L023"
+            :msg
+            :line
+            :col
+            width: nm.length.u32.orPanic
+        )
     }
 
     walkCasingProgram: function {:this prog: Node.view} is {
@@ -4596,6 +4727,7 @@ analyzeSource: function {source: String.take path: String.take opts: lintopts} o
     )
     a.runFastChecks n: root
     a.walkTypeCasingProgram prog: root
+    a.walkGenericParamCasingProgram prog: root
     if opts.casing then a.walkCasingProgram prog: root
     anyDocs: opts.docs
     if opts.docParams then anyDocs = true
@@ -4685,6 +4817,7 @@ analyzeFileFull: function {
         )
         a.runFastChecks n: root
         a.walkTypeCasingProgram prog: root
+        a.walkGenericParamCasingProgram prog: root
         anyDocs: opts.docs
         if opts.docParams then anyDocs = true
         if opts.docFields then anyDocs = true
