@@ -80,8 +80,8 @@ operation can fail for reasons the caller needs to handle
   [#*: #> to=string: #b:"String" -- #~"String: class is native" (mutable, owned, heap-allocated)]
   [#*: #> to=stringview: #b:"StringView" -- #~"StringView: class is native" (readonly view with a #~".borrow" on its source)]
   [#*: #> to=string-iterators: #b:"CpIter" -- #~"call: function out (optionval t: u32)"]
-  [#*: #> to=string-iterators: #b:"Splitter" -- #~"call: function out (Option t: StringView)"]
-  [#*: #> to=string-iterators: #b:"LinesIter" -- #~"call: function out (Option t: StringView)"]
+  [#*: #> to=string-iterators: #b:"Splitter" -- #~"call: function out (Option T: StringView)"]
+  [#*: #> to=string-iterators: #b:"LinesIter" -- #~"call: function out (Option T: StringView)"]
   [#*: #> to=text-and-stringlike: #b:"Text" -- #~"protocol { stringview: function {:this} out StringView }"]
   [#*: #> to=text-and-stringlike: #b:"StringLike" -- #~"union { :StringView :Text }"]
 
@@ -543,8 +543,8 @@ destroys.
       trim:              function {:this} out StringView
       trimStart:        function {:this} out StringView
       trimEnd:          function {:this} out StringView
-      stripPrefix:      function as { T: StringLike.generic } in {:this p: T} out (Option t: StringView)
-      stripSuffix:      function as { T: StringLike.generic } in {:this s: T} out (Option t: StringView)
+      stripPrefix:      function as { T: StringLike.generic } in {:this p: T} out (Option T: StringView)
+      stripSuffix:      function as { T: StringLike.generic } in {:this s: T} out (Option T: StringView)
 
       # iteration
       split:             function as { T: StringLike.generic } in {:this sep: T} out Splitter
@@ -565,9 +565,9 @@ destroys.
       count:             function {:this} out u64
 
       # numeric parse
-      parseI64:         function {:this} out (Result t: i64 e: parseerror)
-      parseU64:         function {:this} out (Result t: u64 e: parseerror)
-      parseF64:         function {:this} out (Result t: f64 e: parseerror)
+      parseI64:         function {:this} out (Result T: i64 E: parseerror)
+      parseU64:         function {:this} out (Result T: u64 E: parseerror)
+      parseF64:         function {:this} out (Result T: f64 E: parseerror)
 
       # hashing
       hash:              function {:this} out u64
@@ -674,8 +674,8 @@ generic accept a plain view.
 
 #code language=zerolang: """
   cpiter:    class is native as { call: function {:this} out (optionval t: u32) }
-  splitter:  class is native as { call: function {:this} out (Option t: StringView) }
-  linesiter: class is native as { call: function {:this} out (Option t: StringView) }
+  splitter:  class is native as { call: function {:this} out (Option T: StringView) }
+  linesiter: class is native as { call: function {:this} out (Option T: StringView) }
 """
 
 Iterator classes built by #~"StringView.codepoints", #~".split",
@@ -818,10 +818,10 @@ Two-armed union for operations that can fail. The #~"ok" arm
 carries the success value; the #~"err" arm carries the error.
 Both type parameters are #~"AnyRef.generic" -- a union holds
 reftypes. A #b:"valtype" success value is spelled with a
-#> to=box: Box argument -- #~"(Result (Box u64) e: IoError)" --
+#> to=box: Box argument -- #~"(Result (Box u64) E: IoError)" --
 which collapses onto the payload cell: the match arm binds the
 bare #~"u64", and nothing is stored double-indirected. A
-payload-less success is #~"(Result null e: ...)" -- #~"null"
+payload-less success is #~"(Result null E: ...)" -- #~"null"
 satisfies either family bound. The all-valtype counterpart is
 #~"resultval" (a variant, inline storage, with #~"or" /
 #~"orPanic" helpers); numeric conversions and parses return it.
@@ -829,12 +829,12 @@ satisfies either family bound. The all-valtype counterpart is
 #b:"Canonical uses."
 
 #ul:
-  [#*: #~"(Result t: File e: IoError)" -- #~"io.open" return]
-  [#*: #~"(Result t: String e: IoError)" -- #~"io.readText",
+  [#*: #~"(Result T: File E: IoError)" -- #~"io.open" return]
+  [#*: #~"(Result T: String E: IoError)" -- #~"io.readText",
     #~"os.cwd"]
-  [#*: #~"(Result t: null e: IoError)" -- side-effectful I/O:
+  [#*: #~"(Result T: null E: IoError)" -- side-effectful I/O:
     #~"io.writeText", #~"io.remove", #~"os.setEnv"]
-  [#*: #~"(Result (Box u64) e: IoError)" -- byte-count returns:
+  [#*: #~"(Result (Box u64) E: IoError)" -- byte-count returns:
     #~"File.read" / #~"write", #~"Conn.read" / #~"write"]
   [#*: #~"(resultval t: i64 e: parseerror)" -- numeric parse from
     #~"StringView.parseI64" (a variant: both arms valtypes)]
@@ -877,13 +877,13 @@ allocation:
 
 #code language=zerolang: """
   Bytes:    class { val: (ListVal u8).typedef }
-  ByteView: class { val: (ListViewVal of: u8).typedef }
+  ByteView: class { val: (ListViewVal t: u8).typedef }
 """
 
 Two typedef classes for binary data: #~"Bytes" is an owned,
 growable buffer; #~"ByteView" is a readonly borrowed view into
 one. The underlying storage is #~"(ListVal u8)" / #~"(ListViewVal
-of: u8)" -- bytes are valtypes, so the valtype list family
+t: u8)" -- bytes are valtypes, so the valtype list family
 backs them; the typedef wrapping gives binary-data signatures a
 distinct name and a namespace for bytes-specific methods.
 
@@ -943,7 +943,7 @@ arm child IS the element, construction takes the bare value,
 match arms bind the bare element, and the emitted C is exactly
 the heap cell a union arm always uses. The same collapse applies
 when a union is instantiated with a Box type argument
-(#~"(Result (Box u64) e: IoError)").
+(#~"(Result (Box u64) E: IoError)").
 
 #code language=zerolang: """
   r: i64

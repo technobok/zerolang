@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -145,7 +145,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
+ci: style-lint warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -1841,6 +1841,28 @@ native-guard:
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known)"
+
+# generic-param-guard -- L023 (a generic parameter's case follows its bound's)
+# over the trees the linter is not pointed at. ZLSCOPE covers src/ and
+# lib/system/, where L023 is a WARNING and `make check` already pins it at zero;
+# examples/ and tests/fixtures/ are outside every lint gate, so a parameter
+# renamed back there would regress in silence. This runs the SAME rule rather
+# than restating it in grep -- one implementation, one place it can be wrong --
+# and greps for the code because those trees carry other, pre-existing findings
+# (32 L003s in examples/ alone) that would swamp an exit-status test.
+# tests/fixtures/lsp_ws/lintgeneric is excluded BY DESIGN: it is L023's own
+# fixture and has to contain violations for the rule to be pinned firing.
+generic-param-guard: bin/zl
+	@n=$$(bin/zl lint examples/*.z tests/fixtures/emitc_corpus/*.z \
+	        tests/fixtures/errors/*.z 2>&1 | grep -c 'L023' || true); \
+	if [ "$$n" -gt 0 ]; then \
+	  echo "generic-param-guard FAIL: $$n generic parameter(s) whose case does not match their bound:"; \
+	  bin/zl lint examples/*.z tests/fixtures/emitc_corpus/*.z \
+	    tests/fixtures/errors/*.z 2>&1 | grep -A1 'L023' | sed 's/^/    /'; \
+	  echo "  A parameter's case matches its bound's: see docs/styleguide.pdoc Generic Parameters."; \
+	  exit 1; \
+	fi; \
+	echo "generic-param-guard OK: examples + corpus + error fixtures clean (baseline 0)"
 
 # natives-tbl-guard -- src/runtime/natives.tbl answers "which implementation"
 # for every operator the system units declare `is native`, keyed by qualified
