@@ -2902,6 +2902,63 @@ collectMonoRefArgs: function {
 }
 
 
+# validateMonoRefLabels -- reject a label that names no generic parameter of the
+# template, at a TYPE REFERENCE rather than a construction. The construction
+# path has validateGenericTypeArgs; a field type, a return type, a parameter
+# type and a nested type argument reach a mono through here instead, and an
+# unlabelled fallback there is not harmless: collectMonoRefArgs keys the
+# substitution by whatever the label says, so a wrong one mints a SECOND mono
+# that prints under the same name as the right one -- the "expected X, got X"
+# mismatch. Shares reportBadGenericArgLabel so there is one message and one set
+# of exemptions. Silent while the template has no registered parameters: this
+# runs on the shell path too, before registration has necessarily happened.
+validateMonoRefLabels: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    arguments: (ListVal u32).view
+    tplId: ztypes.tid
+} is {
+    tk: declOfTypeId :st tid: tplId
+    pnames: st.reg.genericParamNamesOf tdecl: tk
+    if pnames.length == 0 then return
+    tname: st.reg.nameOf tid: tplId
+    if tname.length == 0 then return
+    childNames: (ListVal zast.nameid)
+    {
+        mrN: (ListVal u64)
+        mrT: (ListVal u64)
+        st.typing.declChildRows ownerTid: tplId names: mrN tids: mrT
+        mri: u64
+        mrn: mrN.length
+        for mri < mrn loop {
+            mrnid: mrN.get i: mri
+            mri = mri + 1
+            childNames.append (zast.nameid.create from: mrnid.u32.orPanic)
+        }
+    }
+    aiterV: arguments.iterate
+    for argVId: aiterV loop {
+        arg: argRefAt :ast nid: (zast.nodeid.create from: argVId.u32)
+        if (arg.nid.isZero) == false then {
+            pk: arg.name
+            if (pk.isZero) == false then {
+                if (st.reg.isGenericParamOf tdecl: tk name: pk) == false then {
+                    (reportBadGenericArgLabel
+                        :ast
+                        :st
+                        :arg
+                        :tplId
+                        :pk
+                        :childNames
+                        tname: tname.stringview
+                        :tk
+                    )
+                }
+            }
+        }
+    }
+}
+
 # resolveMonoRefParts -- resolveMonoRefInline's call-shaped core, taking the
 # callable and argument list directly so narrowed call subjects can feed it.
 resolveMonoRefParts: function {
@@ -2973,6 +3030,7 @@ resolveMonoRefParts: function {
             }
         }
         if tplId.isZero then return 0
+        validateMonoRefLabels :ast :st :arguments :tplId
         # generator wrapper collapse: the synth `.call` return's Option over a
         # VALTYPE element is optionval (ownership is a physical no-op there);
         # a REFTYPE element is Option (the yielded value is owned — it must
@@ -3361,7 +3419,7 @@ returnParamTid: function {
 }
 
 # returnWrapperBaseNameId -- the Ast.names pool id of the base atom of a declared
-# return typeref (`(Option of: value)` -> the id of `Option`), peeling expression
+# return typeref (`(Option String)` -> the id of `Option`), peeling expression
 # wrappers and `.borrow`-style strip markers; 0 for any other shape. Reads the
 # declaration only: it resolves nothing and mints nothing, unlike partialTyperefTid
 # below.
