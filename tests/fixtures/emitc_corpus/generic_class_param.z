@@ -1,0 +1,59 @@
+# generic_class_param.z -- a USER generic class or record MONO passed to a
+# function. Nothing in the corpus did this before: every other use of a user
+# generic type is a local binding, and the only parameterised container
+# parameters are stdlib ones, which are `is native` and whose C layout the
+# runtime owns rather than the emitter.
+#
+# The mono's C struct is written anonymously (`typedef struct { ... } X_t;`)
+# unless something forward-declared it first, and a mono is forward-declared
+# only when it needs a destructor or is a container. So the two sides below are
+# emitted by DIFFERENT shapes and both have to work: `Slot i64` has no
+# destructor and takes the anonymous shape, while `RefSlot String` has one and
+# takes the tagged shape. A by-value parameter and a return exercise the same
+# function-pointer typedef path that reads those shapes.
+Slot: class {
+    val: t
+} as { t: anyval.generic }
+
+RefSlot: class {
+    val: t
+} as { t: AnyRef.generic }
+
+Pt: record {
+    val: t
+} as { t: anyval.generic }
+
+peekSlot: function {w: (Slot i64).view} out i64 is {
+    return w.val
+}
+
+peekSlotVal: function {w: (Slot i64)} out i64 is {
+    return w.val
+}
+
+peekRef: function {w: (RefSlot String).view} out u64 is {
+    return w.val.length
+}
+
+peekPt: function {p: (Pt i64).view} out i64 is {
+    return p.val
+}
+
+makeSlot: function {n: i64} out (Slot i64) is {
+    s: Slot val: n
+    return s
+}
+
+main: function is {
+    a: Slot val: 42
+    print "view=\{peekSlot w: a} byval=\{peekSlotVal w: a}"
+
+    r: RefSlot val: "hello".string
+    print "ref=\{peekRef w: r}"
+
+    p: Pt val: 5
+    print "rec=\{peekPt :p}"
+
+    m: makeSlot n: 7
+    print "ret=\{m.val}"
+}

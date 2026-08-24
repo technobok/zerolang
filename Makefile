@@ -144,7 +144,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint warn-check shadow-guard emitter-guard native-guard alias-label-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
+ci: style-lint warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -1235,6 +1235,51 @@ alias-label-guard: bin/zc
 	  exit 1; \
 	fi; \
 	echo "alias-label-guard OK: no mono carries an alias head (both modes, examples + corpus)"
+
+# fwd-shape-guard -- a struct type is emitted in ONE of two shapes, and which
+# one is decided by whether something forward-declared it first: a tagged body
+# `struct X_t { ... };` when it did, an ANONYMOUS `typedef struct { ... } X_t;`
+# when it did not. A forward declaration written AFTER an anonymous body names
+# a struct tag that does not exist, so the two must never both happen to one
+# type.
+#
+# They did, for a user generic class or record mono passed to a function:
+# emitMainFwdDecls forward-declares a mono only when it needs a destructor or
+# is a container, so `Slot i64` took the anonymous shape -- and ensureFwdStruct
+# then forward-declared it for the function-pointer typedef, having asked only
+# whether a forward existed and never whether the BODY was already out. zc
+# emitted that C and exited 0; the C compiler rejected it.
+#
+# The scan pairs each `typedef struct {` with the FIRST following line that
+# starts with `}`. Resetting on any such line is the load-bearing part: a state
+# machine that stays open past its own block mis-reads the next TAGGED block's
+# closing line and invents collisions that are not there.
+fwd-shape-guard: bin/zc
+	@d=$$(mktemp -d); bad=""; \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	  b=$$(basename $$f .z); \
+	  for m in "" "--eager"; do \
+	    bin/zc emit $$f $$m -o $$d/x.c >/dev/null 2>&1 || continue; \
+	    awk '/^typedef struct \{$$/ { inb=1; next } \
+	         inb == 1 && substr($$0,1,1) == "}" { \
+	           inb=0; \
+	           if ($$0 ~ /^\} z_t[0-9]+_t;$$/) { s=$$0; sub(/^\} /,"",s); sub(/;$$/,"",s); print s } \
+	           next }' $$d/x.c | LC_ALL=C sort -u > $$d/untagged; \
+	    grep -oE '^typedef struct z_t[0-9]+_t z_t[0-9]+_t;' $$d/x.c 2>/dev/null \
+	      | sed -e 's/^typedef struct //' -e 's/ .*//' | LC_ALL=C sort -u > $$d/fwd; \
+	    both=$$(LC_ALL=C comm -12 $$d/untagged $$d/fwd); \
+	    if [ -n "$$both" ]; then bad="$$bad $$b$$m"; fi; \
+	  done; \
+	done; \
+	rm -rf $$d; \
+	if [ -n "$$bad" ]; then \
+	  echo "fwd-shape-guard FAIL: a type is emitted UNTAGGED and forward-declared:$$bad"; \
+	  echo "  An anonymous 'typedef struct { ... } X_t;' has no tag, so a later"; \
+	  echo "  'typedef struct X_t X_t;' names nothing. Whoever writes the forward"; \
+	  echo "  must first ask whether the body is already out (typeStructEmitted)."; \
+	  exit 1; \
+	fi; \
+	echo "fwd-shape-guard OK: no type is both emitted untagged and forward-declared (both modes, examples + corpus)"
 
 # EAGER_KNOWN -- the programs still bad under `--eager`. Empty, and a name
 # added here needs the cause written beside it.
