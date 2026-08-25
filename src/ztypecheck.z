@@ -2344,6 +2344,28 @@ registerGenericParamOne: function {
                 mx = constraintNumericMax cv: cf9x.stringView
             }
             st.reg.addGenericParam :tdecl paramName: m.name kind: k numericMax: mx
+            # the BOUND names a real declaration -- `anyval`, a protocol -- but
+            # everything above reads it as TEXT and maps it to a constraint kind,
+            # because that is all the compiler needs from it. Nothing then stamps
+            # the atom that SPELLS it, so an editor asking what `anyval` is in
+            # `t: anyval.generic` had no answer while the same name in a return
+            # type had one. Recorded here and resolved at the end, for TOOLING
+            # only: this must not resolve as a type-ref, or a retired bound would
+            # start reporting an unknown type and the stamp would reach emission.
+            bnid9: u64
+            {
+                op9: ast.nodes.get i: m.operation.u64
+                match (
+                    op9
+                ) case dottedpath then {
+                    pn9: ast.nodes.get i: op9.parent.u64
+                    bnid9 = (nodeId n: pn9).u64
+                } else null
+            }
+            if bnid9 > 0 then {
+                st.typing.genericBoundName.set key: bnid9 value: (nameIdOf :ast name: cb.stringView)
+                st.typing.genericBoundFrame.set key: bnid9 value: tdecl
+            }
         }
     } else null
 }
@@ -10291,6 +10313,52 @@ resolveAliasKey: function {
     # where the alias itself resolves.
     constFoldDecl :st :ast :declId
     return r
+}
+
+# stampGenericBounds -- resolve each recorded generic BOUND and record the
+# declaration it names on the atom that spells it.
+#
+# Into toolRefDecl, not refDecl: the emitter reads the latter in five places,
+# and an entry added there for an editor moved the emitted C. And silence on a
+# miss, because a bound that names
+# nothing resolvable is already the constraint machinery's business -- reporting
+# it here would make a retired bound raise a second, different error.
+stampGenericBounds: function {st: zenv.ZSymbolTable ast: Ast} is {
+    keys9: (ListVal u64)
+    with bit: st.typing.genericBoundName.iterateItems do for e: bit loop keys9.append e.key
+    with kit: keys9.iterate do for k9: kit loop {
+        nm9: zast.nameid
+        fr9: ztypes.declid
+        {
+            no9: st.typing.genericBoundName.get key: k9
+            match (
+                no9
+            ) case some then {
+                nm9 = no9
+            } case none then null
+            fo9: st.typing.genericBoundFrame.get key: k9
+            match (
+                fo9
+            ) case some then {
+                fr9 = fo9
+            } case none then null
+        }
+        if (nm9.isZero) == false then {
+            ud9: unitRootOfDecl :st declId: fr9
+            # the READ-ONLY twin: a resolver that may MINT would materialise
+            # types the program never asked for, and the frozen A/B says so --
+            # a probe cannot mint.
+            bo9: walkLookupTyperefByIdRo :ast :st unitDecl: ud9 frame: fr9 baseId: nm9
+            match (
+                bo9
+            ) case some then {
+                td9: declOfTypeId :st tid: (ztypes.tid.create from: bo9.u64)
+                if (td9.isZero) == false then {
+                    st.typing.toolRefDecl.set key: k9 value: td9
+                }
+            } case none then null
+        }
+    }
 }
 
 # stampAliasValues -- record, for every alias that resolved, the declaration its
@@ -39824,6 +39892,7 @@ typecheck: function {
         )
         checkAnyBounds ast: program.ast :st
         stampAliasValues :st ast: program.ast
+        stampGenericBounds :st ast: program.ast
     } else null
     return st
 }
