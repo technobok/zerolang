@@ -11791,12 +11791,13 @@ emitDottedUnitRead: function {
                     return "".string
                 }
             }
-            dpOk: isEmittableFileUnit name: dpUb.stringView
-            if (dpOk) == false then {
-                # runtime-backed units: only a bodied+demanded free fn
-                # earns the id-cname reference/auto-call route here
-                dpOk = stdFnRefEmittable :ast :symtab fid: (ztypes.tid.create from: dpUfo.u64)
-            }
+            # only a bodied + demanded non-native fn earns the id-cname
+            # reference / auto-call route here, whichever unit declares it
+            dpOk: (stdFnRefEmittable
+                :ast
+                :symtab
+                fid: (ztypes.tid.create from: dpUfo.u64)
+            )
             if dpOk when (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dpUfo.u64)) == ztypes.ztypetype.functionType then {
                 dpUfc: ctxCname :ctx tid: (ztypes.tid.create from: dpUfo.u64)
                 # a node stamped FUNCTION is a fn REFERENCE (a .take peel
@@ -21415,19 +21416,6 @@ scanNeeds: function {
 
 # emitFns -- the main unit's function declarations then definitions
 # (two-phase index walk so the body list is free during emission).
-# isEmittableFileUnit -- a user FILE unit (main or a dependency) whose defs are
-# emitted as zerolang C; system library units (their types ride the registry
-# sweeps, their fns are native fragments) are skipped.
-isEmittableFileUnit: function {name: StringView} out bool is {
-    if name == "system" then return false
-    if name == "core" then return false
-    if name == "collections" then return false
-    if name == "io" then return false
-    if name == "os" then return false
-    if name == "cli" then return false
-    return true
-}
-
 # stdFnUndemanded -- a bodied free fn the program never referenced: its def was
 # not resolved, so its body carries no stamps and emitting it renders the
 # signature as `z_t0(void)` over unbound parameter names. Skip it everywhere
@@ -26142,13 +26130,32 @@ collectLateMonosKind: function {
     }
 }
 
+# fnDeclScopeTid -- the scope a FUNCTION is declared in, as a type id: the
+# owning object type for a method, the namespace / subunit type for a nested
+# fn, and 0 for a free function at file-unit scope, whose demand is recorded
+# under the unit-root key instead. Read from the FUNCTION's own declaration
+# parent, never from a member row: a fn-pointer FIELD's type IS the free
+# function's type, so a member-row map answers "owned by the struct holding the
+# field", which is not where that function's demand lives.
+fnDeclScopeTid: function {symtab: zenv.ZSymbolTable.view fid: ztypes.tid} out ztypes.tid is {
+    d: ztypecheck.declOfTypeId st: symtab tid: fid
+    if d.isZero then return ztypes.tid
+    p: ztypecheck.declParentIdOf st: symtab declId: d
+    if p.isZero then return ztypes.tid
+    ur: ztypecheck.unitDeclOfTid st: symtab tid: fid
+    if p == ur then return ztypes.tid
+    return (ztypecheck.declTypeIdOf st: symtab declId: p)
+}
+
 # fnptrTypedefEligible -- a FUNCTION type worth a `_ft` typedef: a real spec /
-# free function / method defined in an emittable unit. Synthetic create/==/!=
+# free function / method whose C this emitter writes. Synthetic create/==/!=
 # carry no declaration; generic templates and monos are skipped.
-# stdFnRefEmittable -- a FUNCTION worth a reference cname / _ft typedef:
-# emittable-unit fns always; a runtime-backed unit's fn only when it is a
-# BODIED (non-native), DEMANDED free fn (natives keep routing through the
-# declaration-driven call emitter and have no id-cname definition).
+# stdFnRefEmittable -- a FUNCTION worth a reference cname / _ft typedef: one
+# this emitter DEFINES. A native routes through the declaration-driven call
+# emitter and has no id-cname definition, and an undemanded body carries no
+# stamps. Both are facts about the DECLARATION. This used to answer `true`
+# outright when the declaring unit was not on a six-name list, which made an
+# ordinary user record's C depend on whether its file was called `cli.z`.
 stdFnRefEmittable: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -26158,7 +26165,6 @@ stdFnRefEmittable: function {
     match (
         duo
     ) case some then {
-        if (isEmittableFileUnit name: duo.stringView) then return true
         if (fnIsNativeId :symtab :fid) then return false
         # demand is recorded under the composed "unit.fn" key; read the fn
         # name off the id-keyed registry entry to compose it
@@ -26169,7 +26175,7 @@ stdFnRefEmittable: function {
             :symtab
             unitName: duo.stringView
             fnName: fnm.stringView
-            ownerTid: ztypes.tid
+            ownerTid: (fnDeclScopeTid :symtab :fid)
             wantWalked: false
         ) == false
     } case none then {
