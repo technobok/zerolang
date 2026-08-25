@@ -11081,41 +11081,55 @@ emitUserTypeMemberRead: function {
         )
         if sm.length > 0 then return sm
     }
+    isFN: false
+    if mn2 == "close" then isFN = true
+    if mn2 == "flush" then isFN = true
+    if mn2 == "readLine" then isFN = true
+    if mn2 == "accept" then isFN = true
     isFile: false
     isNetU: false
-    fduo: definedInUnitOf :symtab tid: bstamp
-    match (
-        fduo
-    ) case some then {
-        if fduo.stringView == "io" then isFile = true
-        if fduo.stringView == "os" then isFile = true
-        if fduo.stringView == "cli" then isFile = true
-        if fduo.stringView == "net" then {
-            isFile = true
-            isNetU = true
-        }
-    } case none then null
+    if isFN then {
+        # the member's OWN DECLARATION decides. A native member has no body to
+        # emit, which is exactly what makes the read a fragment call; the
+        # unit's name admitted every type declared in it instead, so a user
+        # unit spelled `cli`, `os` or `net` handed its own bodied methods to a
+        # fragment that never defined them -- `z_t13_close` was called and
+        # never emitted, at exit 0. Being declared native also subsumes the
+        # receiver test `accept` used to need.
+        mcoF: (symtab.typing.declChildOf
+            pool: ast.names
+            parentTypeId: bstamp
+            name: mn2
+        )
+        match (
+            mcoF
+        ) case some then {
+            if (fnIsNativeId
+                :symtab
+                fid: (ztypes.tid.create from: mcoF.u64)
+            ) then isFile = true
+        } case none then null
+    }
     if isFile then {
-        isFN: false
-        if mn2 == "close" then isFN = true
-        if mn2 == "flush" then isFN = true
-        if mn2 == "readLine" then isFN = true
-        if mn2 == "accept" when isNetU then isFN = true
-        if isFN then {
-            ffc: ctxCname :ctx tid: bstamp
-            ffcc: ioCanonCname :ast :symtab :ctx canon: fbtn.stringView
-            if ffcc.length > 0 then ffc = ffcc
-            if isNetU then {
-                needsAddM :ctx uname: "net" memb: "@unit"
-            } else {
-                needsAddM :ctx uname: "io" memb: "@unit"
-                ffm: "file_\{mn2}"
-                needsAddM :ctx uname: "io" memb: ffm.stringView
-            }
-            frecv: "&\{bn2}"
-            if (isPtrVid :ctx vid: bn2v) then frecv = "\{bn2}"
-            return "\{ffc}_\{mn2}(\{frecv})"
+        fduo: definedInUnitOf :symtab tid: bstamp
+        match (
+            fduo
+        ) case some then {
+            if fduo.stringView == "net" then isNetU = true
+        } case none then null
+        ffc: ctxCname :ctx tid: bstamp
+        ffcc: ioCanonCname :ast :symtab :ctx canon: fbtn.stringView
+        if ffcc.length > 0 then ffc = ffcc
+        if isNetU then {
+            needsAddM :ctx uname: "net" memb: "@unit"
+        } else {
+            needsAddM :ctx uname: "io" memb: "@unit"
+            ffm: "file_\{mn2}"
+            needsAddM :ctx uname: "io" memb: ffm.stringView
         }
+        frecv: "&\{bn2}"
+        if (isPtrVid :ctx vid: bn2v) then frecv = "\{bn2}"
+        return "\{ffc}_\{mn2}(\{frecv})"
     }
     mco: (symtab.typing.declChildOf
         pool: ast.names
