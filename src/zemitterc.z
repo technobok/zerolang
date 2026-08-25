@@ -27660,6 +27660,46 @@ emitOneProtocol: function {
     buf.append l2
 }
 
+# implMethodCname -- the C name a conformance wrapper calls for the impl's
+# `mname`. A fragment-backed stdlib impl's methods carry canon-named C symbols
+# regardless of which unit is being emitted: the per-unit emission pass rebinds
+# mainName, which defeats the nonmain test on its own.
+implMethodCname: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    implTid: ztypes.tid
+    mnameId: zast.nameid
+    mname: StringView
+    implBase: StringView
+} out String is {
+    implFrag: false
+    {
+        fduW: definedInUnitOf :symtab tid: (ztypes.tid.create from: implTid.u64)
+        match (
+            fduW
+        ) case some then {
+            if fduW.stringView == "io" then implFrag = true
+            if fduW.stringView == "os" then implFrag = true
+            if fduW.stringView == "cli" then implFrag = true
+            if fduW.stringView == "net" then implFrag = true
+        } case none then null
+    }
+    if implFrag then return "\{implBase}_\{mname}"
+    if (definedInNonMain
+        :symtab
+        :ctx
+        tid: (ztypes.tid.create from: implTid.u64)
+    ) then return "\{implBase}_\{mname}"
+    implMid: ztypes.tid
+    imo: symtab.typing.declChildOfId parentTypeId: implTid nameId: mnameId
+    match (
+        imo
+    ) case some then {
+        implMid = ztypes.tid.create from: (imo)
+    } case none then null
+    return (ctxCname :ctx tid: (ztypes.tid.create from: implMid.u64))
+}
+
 # emitProtocolImpl -- the per-(impl,label) conformance helpers: one wrapper per
 # spec method (casts void* -> impl, calls the impl method), the static vtable
 # instance, the borrowed create (data=val, no destroy), and the owned
@@ -27760,38 +27800,14 @@ emitProtocolImpl: function {
             }
             pi = pi + 1
         }
-        implMid: ztypes.tid
-        imo: symtab.typing.declChildOfId parentTypeId: implTid nameId: mnameId
-        match (
-            imo
-        ) case some then {
-            implMid = ztypes.tid.create from: (imo)
-        } case none then null
-        implMc: String
-        # a fragment-backed stdlib impl's methods carry canon-named C
-        # symbols regardless of which unit is being emitted (the per-unit
-        # emission pass rebinds mainName, defeating the nonmain test)
-        implFrag: false
-        {
-            fduW: definedInUnitOf :symtab tid: (ztypes.tid.create from: implTid.u64)
-            match (
-                fduW
-            ) case some then {
-                if fduW.stringView == "io" then implFrag = true
-                if fduW.stringView == "os" then implFrag = true
-                if fduW.stringView == "cli" then implFrag = true
-                if fduW.stringView == "net" then implFrag = true
-            } case none then null
-        }
-        if implFrag then {
-            implMc = "\{implBase}_\{mname}"
-        } else {
-            if (definedInNonMain :symtab :ctx tid: (ztypes.tid.create from: implTid.u64)) then {
-                implMc = "\{implBase}_\{mname}"
-            } else {
-                implMc = (ctxCname :ctx tid: (ztypes.tid.create from: implMid.u64))
-            }
-        }
+        implMc: (implMethodCname
+            :symtab
+            :ctx
+            :implTid
+            :mnameId
+            mname: mname.stringView
+            implBase: implBase.stringView
+        )
         retkw: "return ".string
         if ret.stringView == "void" then retkw = "".string
         wslot: cSlotName name: mname.stringView
@@ -27935,38 +27951,14 @@ emitFacetImpl: function {
             }
             pi = pi + 1
         }
-        implMid: ztypes.tid
-        imo: symtab.typing.declChildOfId parentTypeId: implTid nameId: mnameId
-        match (
-            imo
-        ) case some then {
-            implMid = ztypes.tid.create from: (imo)
-        } case none then null
-        implMc: String
-        # a fragment-backed stdlib impl's methods carry canon-named C
-        # symbols regardless of which unit is being emitted (the per-unit
-        # emission pass rebinds mainName, defeating the nonmain test)
-        implFrag: false
-        {
-            fduW: definedInUnitOf :symtab tid: (ztypes.tid.create from: implTid.u64)
-            match (
-                fduW
-            ) case some then {
-                if fduW.stringView == "io" then implFrag = true
-                if fduW.stringView == "os" then implFrag = true
-                if fduW.stringView == "cli" then implFrag = true
-                if fduW.stringView == "net" then implFrag = true
-            } case none then null
-        }
-        if implFrag then {
-            implMc = "\{implBase}_\{mname}"
-        } else {
-            if (definedInNonMain :symtab :ctx tid: (ztypes.tid.create from: implTid.u64)) then {
-                implMc = "\{implBase}_\{mname}"
-            } else {
-                implMc = (ctxCname :ctx tid: (ztypes.tid.create from: implMid.u64))
-            }
-        }
+        implMc: (implMethodCname
+            :symtab
+            :ctx
+            :implTid
+            :mnameId
+            mname: mname.stringView
+            implBase: implBase.stringView
+        )
         retkw: "return ".string
         if ret.stringView == "void" then retkw = "".string
         wslot: cSlotName name: mname.stringView
