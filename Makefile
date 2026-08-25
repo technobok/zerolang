@@ -1402,7 +1402,7 @@ VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:M
   z_IdSet.c.tmpl=@@NAME@@:IdSet,@@IDSETITER@@:IdSetIter
 VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get getMut:ListRef.getMut,ListView.getMut \
   contains:ListRef.contains \
-  listview:ListRef.listview sort:ListRef.sort iterate:ListRef.iterate \
+  listView:ListRef.listView sort:ListRef.sort iterate:ListRef.iterate \
   call:ListIter.call,ListIterVal.call \
   iterateMut:ListRef.iterateMut getv:MapRR.get eq:- extendView:- destroy:- \
   hasv:MapRR.has,SetRef.has deletev:SetRef.delete
@@ -1413,7 +1413,7 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   SetRef.destroy SetRef.grow SetRef.find \
   IdMapR.destroy IdMapR.grow IdMapR.find IdMapR.slot IdMapR.entries_cap \
   IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap
-VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
+VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   StringView.asString:inline \
   ListVal.append:ListRef.append ListVal.insert:ListRef.insert \
   ListVal.extend:ListRef.extend ListVal.get:ListRef.get ListVal.set:ListRef.set \
@@ -1421,7 +1421,7 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   ListVal.getMut:ListRef.getMut \
   ListViewVal.get:ListView.get ListViewVal.getMut:ListView.getMut \
   ListViewVal.length:inline \
-  ListVal.sort:ListRef.sort ListVal.listview:ListRef.listview \
+  ListVal.sort:ListRef.sort ListVal.listView:ListRef.listView \
   ListVal.iterate:ListRef.iterate ListVal.iterateMut:ListRef.iterateMut \
   ListVal.length:inline ListVal.capacity:inline \
   SetVal.add:SetRef.add SetVal.has:SetRef.has SetVal.delete:SetRef.delete \
@@ -1456,7 +1456,7 @@ VIEW_GUARD_INLINE := Bytes.byteview:unemitted \
   IdSet.length:inline IdSet.capacity:inline \
   IdMapV.iterateItems:IdMapR.iterateItems IdMapV.getMut:IdMapR.getMut \
   IdMapItemIterV.call:IdMapItemIterR.call \
-  String.length:inline String.capacity:inline String.stringview:inline \
+  String.length:inline String.capacity:inline String.stringView:inline \
   StringView.length:inline StringView.string:byvalue \
   String.contains:StringView.contains String.startsWith:StringView.startsWith \
   String.endsWith:StringView.endsWith String.count:StringView.count \
