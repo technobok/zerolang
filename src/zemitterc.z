@@ -25190,30 +25190,6 @@ isHeapPtrCollection: function {
     return false
 }
 
-# cliClassIsComposite -- a cli class holding any List/Map/Set field; such a
-# class must be emitted after the collection monos it embeds (Spec/Parsed),
-# while leaf classes (FlagDef/OptionDef/PositionalDef) emit before them.
-cliClassIsComposite: function {
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    tid: ztypes.tid
-} out bool is {
-    fids: (ListVal u64)
-    fidsNm: (ListVal u64)
-    recFieldIds :symtab :tid ids: fids nameIds: fidsNm
-    fi: u64
-    fn0: fids.length
-    for fi < fn0 loop {
-        fid: fids.get i: fi
-        cm: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
-        if (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: cm.u64)) then return true
-        if (isMapOriginOf :symtab :ctx tid: (ztypes.tid.create from: cm.u64)) then return true
-        if (isSetOriginOf :symtab :ctx tid: (ztypes.tid.create from: cm.u64)) then return true
-        fi = fi + 1
-    }
-    return false
-}
-
 # bindFragTypeTids -- resolve each row's `uses_<Type>` demand to a type id.
 # Runs after buildDefUnitIndex so the defining unit is an id question too; a
 # name that resolves to nothing leaves 0, and the row keeps its member path.
@@ -26778,10 +26754,7 @@ emitUserStructsOrdered: function {
 MonoWork: class {
     wStr: (ListVal u64)
     wBox: (ListVal u64)
-    wIoUnion: (ListVal u64)
-    wCliLeaf: (ListVal u64)
     wSysVar: (ListVal u64)
-    wSysRec: (ListVal u64)
     wValMono: (ListVal u64)
     wOptRes: (ListVal u64)
     wUgUnion: (ListVal u64)
@@ -26906,46 +26879,16 @@ classifyMonos: function {
         oOrig: originTidOf :symtab tid: tcl
         gen: isGenericType :symtab tid: tcl
         isMono: oOrig > 0
-        inIo: false
-        inCli: false
-        {
-            duo: definedInUnitOf :symtab tid: tcl
-            match (
-                duo
-            ) case some then {
-                if duo.stringView == "io" then inIo = true
-                if duo.stringView == "os" then inIo = true
-                if duo.stringView == "cli" then {
-                    inIo = true
-                    inCli = true
-                }
-            } case none then null
-        }
         if (originIsTid
             :symtab
             tid: tcl
             originTid: (ctx.origins.get i: ogStr)
         ) then work.wStr.append tv
         if (isBoxTid :symtab tid: tcl) then work.wBox.append tv
-        if tt == ztypes.ztypetype.unionType then {
-            if isMono == false when gen == false when inIo then work.wIoUnion.append tv
-        }
-        if tt == ztypes.ztypetype.classType then {
-            if isMono == false when gen == false then {
-                if inCli when (cliClassIsComposite
-                    :symtab
-                    :ctx
-                    tid: tcl
-                ) == false then work.wCliLeaf.append tv
-            }
-        }
         if tt == ztypes.ztypetype.variantType then {
             if isMono == false when gen == false then {
                 if (definedInNonMain :symtab :ctx tid: tcl) then work.wSysVar.append tv
             }
-        }
-        if tt == ztypes.ztypetype.recordType then {
-            if isMono == false when gen == false when inIo then work.wSysRec.append tv
         }
         isValMono: false
         if (originIsTid
@@ -27188,10 +27131,7 @@ emitMonos: function {
     work: (MonoWork
         wStr: (ListVal u64)
         wBox: (ListVal u64)
-        wIoUnion: (ListVal u64)
-        wCliLeaf: (ListVal u64)
         wSysVar: (ListVal u64)
-        wSysRec: (ListVal u64)
         wValMono: (ListVal u64)
         wOptRes: (ListVal u64)
         wUgUnion: (ListVal u64)
@@ -27228,24 +27168,8 @@ emitMonos: function {
         emitBoxMono :ast :symtab :ctx monoId: (ztypes.tid.create from: boxId.u64) :buf
         tbox = tbox + 1
     }
-    # reachable non-mono system UNIONs (IoError) -- the error payload of the
-    # Result monos; emit before them so the mono destructors can call IoError's.
-    tsu: u64
-    for tsu < work.wIoUnion.length loop {
-        iuId: work.wIoUnion.get i: tsu
-        emitUnionMono :ast :symtab :ctx tid: (ztypes.tid.create from: iuId.u64) :buf
-        tsu = tsu + 1
-    }
     emitIoFileClass :ctx :buf
     emitNetClasses :ctx :buf
-    # reachable cli LEAF classes (FlagDef/OptionDef/PositionalDef) -- pure-string
-    # classes the List monos below embed; emitted before those monos.
-    tclf: u64
-    for tclf < work.wCliLeaf.length loop {
-        clfId: work.wCliLeaf.get i: tclf
-        emitOneRecord :ast :symtab :ctx tid: (ztypes.tid.create from: clfId.u64) :buf
-        tclf = tclf + 1
-    }
     # reachable non-mono system VARIANTs (parseerror, seekorigin, ...) --
     # payloads of the variant monos / used directly.
     tsv: u64
@@ -27253,14 +27177,6 @@ emitMonos: function {
         svId: work.wSysVar.get i: tsv
         emitOneVariant :ast :symtab :ctx tid: (ztypes.tid.create from: svId.u64) :buf
         tsv = tsv + 1
-    }
-    # reachable non-mono system RECORDs (filestat) -- the ok payload of a Result
-    # mono; after its filekind variant, before the Result monos that box it.
-    tsr: u64
-    for tsr < work.wSysRec.length loop {
-        srId: work.wSysRec.get i: tsr
-        emitOneRecord :ast :symtab :ctx tid: (ztypes.tid.create from: srId.u64) :buf
-        tsr = tsr + 1
     }
     (emitOptionMonos
         :ast
