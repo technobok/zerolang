@@ -10274,7 +10274,39 @@ resolveAliasKey: function {
     # id and never asks again, so the value has to be materialised the once,
     # where the alias itself resolves.
     constFoldDecl :st :ast :declId
+    stampAliasValue :st :ast :declId tid: r
     return r
+}
+
+# stampAliasValue -- an alias's VALUE node references the target's declaration.
+#
+# An alias is resolved off the Decl tree -- the target is read as a name-id pair
+# straight from the def node -- and is never walked as a type-ref, so nothing
+# else records that edge. The nodes are in the tree and the tooling finds them,
+# but they carry no stamp, which is why `zast.Node` answered nothing on the RHS
+# of `Node: zast.Node` while the same path in a parameter type answered fine:
+# there the type-ref walk stamps it. Recorded here, where the alias's canonical
+# id is already in hand.
+stampAliasValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    declId: ztypes.declid
+    tid: u64
+} is {
+    if tid == 0 then return
+    td: declOfTypeId :st tid: (ztypes.tid.create from: tid.u64)
+    if td.isZero then return
+    # the value node under the alias's `name: value` pair. Both alias forms
+    # land one node: the dotted form's path node -- which is the id the member
+    # selector is keyed by, not the child atom's -- and the bare form's atom.
+    opNid: u64
+    {
+        d: st.typing.decls.get i: declId.u64
+        n: ast.nodes.get i: d.node.u64
+        if n.namedoperation then opNid = n.operation.u64
+    }
+    if opNid == 0 then return
+    stampRefDecl :st nid: opNid declId: td
 }
 # aliasTargetTid -- the type a re-export alias stands for, when neither the nested-
 # unit scope nor the file-unit index answered. It may be reached through the
