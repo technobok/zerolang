@@ -20784,6 +20784,39 @@ checkLoadedNatives: function {program: Node.view ctx: Ctx} is {
     } else null
 }
 
+# checkNativeMembers -- the `is native` members of one of a type's two blocks
+# must each name a row. Split out because both blocks are read and the walk is
+# the same for either.
+checkNativeMembers: function {
+    ast: Ast.view
+    ctx: Ctx
+    items: (ListVal u32).view
+    unitName: StringView
+    typeName: StringView
+} is {
+    with aiter: items.iterate do for am: aiter loop {
+        amn: ast.nodes.get i: am.u64
+        if amn.namedoperation then {
+            mn: zast.nameTextAt :ast ref: amn.name
+            mo: ast.nodes.get i: amn.operation.u64
+            match (
+                mo
+            ) case functiondef then {
+                if mo.isNative then {
+                    mk: "\{unitName}.\{typeName}.\{mn}"
+                    if (nativeHasRow :ctx path: mk.stringview) == false then {
+                        (emitFail
+                            :ctx
+                            what: "no native implementation for '\{mk}'"
+                            line: mo.lineno
+                        )
+                    }
+                }
+            } else null
+        }
+    }
+}
+
 # checkNativesResolve -- every `is native` declaration in a loaded unit must
 # name a row in natives.tbl. `is native` says the compiler supplies the body, and
 # this is where that claim is checked: at the declaration, whether or not anyone
@@ -20821,27 +20854,26 @@ checkNativesResolve: function {
                     }
                 }
             } case objectdef then {
-                with aiter: op.asItems.iterate do for am: aiter loop {
-                    amn: ast.nodes.get i: am.u64
-                    if amn.namedoperation then {
-                        mn: zast.nameTextAt :ast ref: amn.name
-                        mo: ast.nodes.get i: amn.operation.u64
-                        match (
-                            mo
-                        ) case functiondef then {
-                            if mo.isNative then {
-                                mk: "\{unitName}.\{nm}.\{mn}"
-                                if (nativeHasRow :ctx path: mk.stringview) == false then {
-                                    (emitFail
-                                        :ctx
-                                        what: "no native implementation for '\{mk}'"
-                                        line: mo.lineno
-                                    )
-                                }
-                            }
-                        } else null
-                    }
-                }
+                # BOTH blocks. A native method may be written in either, and
+                # which one carries it is a fact about the type rather than
+                # about the method: the containers declare theirs in `as`,
+                # io.File declares its five in the class body and keeps `as`
+                # for the protocols it conforms to. Reading only `as` left
+                # File.read and its four siblings checked by nothing.
+                (checkNativeMembers
+                    :ast
+                    :ctx
+                    items: op.isItems
+                    :unitName
+                    typeName: nm.stringview
+                )
+                (checkNativeMembers
+                    :ast
+                    :ctx
+                    items: op.asItems
+                    :unitName
+                    typeName: nm.stringview
+                )
             } case unitdef then {
                 # a SUBUNIT -- lib/system/system/wideint.z and its siblings are
                 # this shape. Its declarations are not in the program's unit

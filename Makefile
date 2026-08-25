@@ -1809,19 +1809,6 @@ NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.poll
 # emitter loads by hand (argv globals first).
 CONVENTION_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.args
 
-# TABLE_TODO -- natives that do not yet resolve through natives.tbl. Empty: as
-# of the io/net wiring every `is native` declaration in lib/system has a row, so
-# the guard below is the static half of the check at the declaration.
-#
-# THE STATIC HALF IS NOT REDUNDANT, and this leg was going to be retired on the
-# assumption that it is. The compiler's own check reads every unit a program
-# LOADS, so it covers a declaration only if something compiles the unit holding
-# it -- and `net` (9 natives), `cli` (9) and `tcc` (2) are loaded by nothing in
-# this tree: no example, no corpus program, and not the compiler's own source.
-# Retiring this leg would have left those twenty declarations with no check at
-# all, which is the silence the declaration check exists to end. It stays until
-# something compiles those three units; then it can go.
-TABLE_TODO :=
 native-guard:
 	@fail=0; conv=""; \
 	for u in io os cli net tcc; do \
@@ -1904,6 +1891,15 @@ generic-param-guard: bin/zl
 # LC_ALL=C throughout: the default collation ignores punctuation, so `sort -u`
 # silently folds `.+`, `.-`, `.*` and `./` into one entry and the guard then
 # compares 148 paths believing it compared 208.
+#
+# A fourth leg read every lib/system file and required a row for each `is
+# native` it found. The compiler does that itself now, at the declaration and
+# for every unit a program loads -- measured, not assumed: instrumented to
+# report each path it checks, the corpus and the three drivers between them
+# cover all 874, the same set this leg derived from the files. The one hole
+# that measurement found was the check reading only a type's `as` block, so
+# io.File's five natives -- declared in the class body -- were checked by this
+# leg and by nothing else. It reads both blocks now.
 natives-tbl-guard: bin/zc
 	@fail=0; d=$$(mktemp -d); \
 	for f in lib/system/system.z lib/system/system/*.z; do \
@@ -1975,25 +1971,4 @@ natives-tbl-guard: bin/zc
 	done < $$d3/fr; \
 	nf=$$(wc -l < $$d3/fr); rm -rf $$d3; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "natives-tbl-guard OK: $$nf fragment-backed rows, every named fragment on disk"; \
-	d4=$$(mktemp -d); fail=0; \
-	for f in lib/system/*.z lib/system/*/*.z; do u=$$(basename $$f .z); \
-	  case $$f in lib/system/*/*) u=$$(basename $$(dirname $$f));; esac; \
-	  awk -v U=$$u '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class|facet|protocol)( |$$)/ {o=$$1; sub(/:$$/,"",o); pend=""; next} \
-	    /^[A-Za-z_][A-Za-z0-9_]*: function/ {o=""; n=$$1; sub(/:$$/,"",n); pend=U"."n} \
-	    o != "" && /^    [^ ]+: function/ {n=$$1; sub(/:$$/,"",n); pend=U"."o"."n} \
-	    pend != "" && /is native/ {print pend; pend=""} \
-	    pend != "" && /is \{/ {pend=""}' $$f; \
-	done | LC_ALL=C sort -u > $$d4/decls; \
-	grep -oE "^\[[^]  ]+" src/runtime/natives.tbl | sed "s/^\[//" | LC_ALL=C sort -u > $$d4/rows; \
-	for d in $$(LC_ALL=C comm -23 $$d4/decls $$d4/rows); do \
-	  case " $(TABLE_TODO) " in *" $$d "*) continue;; esac; \
-	  echo "natives-tbl-guard FAIL: $$d is declared is-native but has no row"; fail=1; \
-	done; \
-	nd=$$(wc -l < $$d4/decls); ng=$$(LC_ALL=C comm -23 $$d4/decls $$d4/rows | wc -l); rm -rf $$d4; \
-	if [ $$fail -ne 0 ]; then \
-	  echo "  Every native resolves through natives.tbl. A declaration with no row"; \
-	  echo "  cannot be emitted, and the corpus only catches the ones it calls."; \
-	  exit 1; \
-	fi; \
-	echo "natives-tbl-guard OK: $$nd native declarations, $$ng still on the TODO list"
+	echo "natives-tbl-guard OK: $$nf fragment-backed rows, every named fragment on disk"
