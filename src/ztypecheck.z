@@ -10274,8 +10274,45 @@ resolveAliasKey: function {
     # id and never asks again, so the value has to be materialised the once,
     # where the alias itself resolves.
     constFoldDecl :st :ast :declId
-    stampAliasValue :st :ast :declId tid: r
     return r
+}
+
+# stampAliasValues -- record, for every alias that resolved, the declaration its
+# VALUE node refers to.
+#
+# A pass rather than a hook, because the two routes an alias resolves by do not
+# agree on when its type is known. The eager tier reaches a DOTTED re-export
+# through resolveAliasKey and a BARE one through resolveDef -- deliberately, a
+# bare target names a sibling of the same unit and resolveDef is what folds it --
+# and on that leg the Decl still carries no type when the leg ends. Asking once,
+# afterwards, is the only place both are answerable, and it does not care which
+# route ran.
+#
+# An alias that never resolved carries no type and is skipped: there is nothing
+# it refers to yet. That is the ordinary demand-mode case for a definition
+# nothing reaches.
+stampAliasValues: function {st: zenv.ZSymbolTable ast: Ast.view} is {
+    units: programUnitDecls :st
+    with uit: units.iterate do for u9: uit loop {
+        ud9: ztypes.declid.create from: u9
+        cnt9: st.typing.declChildSlots declId: ud9
+        ci9: u64
+        for ci9 < cnt9 loop {
+            cd9: st.typing.declChildAt declId: ud9 index: ci9
+            ci9 = ci9 + 1
+            if (cd9.isZero) == false then {
+                isRx9: false
+                {
+                    d9: st.typing.decls.get i: cd9.u64
+                    if d9.kind.reexportDecl then isRx9 = true
+                }
+                if isRx9 then {
+                    t9: (declTypeIdOf :st declId: cd9).u64
+                    stampAliasValue :st :ast declId: cd9 tid: t9
+                }
+            }
+        }
+    }
 }
 
 # stampAliasValue -- an alias's VALUE node references the target's declaration.
@@ -13502,6 +13539,15 @@ resolveUnitMembers: function {
                                 defName: mName.stringview
                                 defnId: (zast.nodeid.create from: bmNode.operation.u32)
                             )
+                        }
+                        # the eager tier reaches a BARE re-export through
+                        # resolveDef, not resolveAliasKey, so the value node's
+                        # reference edge is recorded here as well. Both legs, one
+                        # call: which of the two resolved it is not something the
+                        # editor's answer should depend on.
+                        if isRx then {
+                            rxTid: (declTypeIdOf :st declId: md).u64
+                            stampAliasValue :st :ast declId: md tid: rxTid
                         }
                         if (md.isZero) == false when (speculative) == false then {
                             st.typing.declSetDefined declId: md
@@ -39761,6 +39807,7 @@ typecheck: function {
             unitDecl: canonUd9
         )
         checkAnyBounds ast: program.ast :st
+        stampAliasValues :st ast: program.ast
     } else null
     return st
 }
