@@ -5365,8 +5365,8 @@ typedef enum {
     Z_SEEKORIGIN_TAG_START,
     Z_SEEKORIGIN_TAG_CURRENT,
     Z_SEEKORIGIN_TAG_END,
-} z_t1751_tag_t;
-typedef uint8_t z_t1751_t;
+} z_t1757_tag_t;
+typedef uint8_t z_t1757_t;
 typedef enum {
     Z_NODEKIND_TAG_DIR,
     Z_NODEKIND_TAG_FILE,
@@ -9700,15 +9700,15 @@ static void z_t1709_destroy(z_t1709_t* proto) {
 typedef struct {
     z_t1738_t (*write)(void*, z_t1723_t*);
     z_t1682_t (*flush)(void*);
-} z_t1756_vtable_t;
+} z_t1743_vtable_t;
 
 typedef struct {
     void* data;
-    z_t1756_vtable_t* vtable;
+    z_t1743_vtable_t* vtable;
     void (*destroy)(void*);
-} z_t1756_t;
+} z_t1743_t;
 
-static void z_t1756_destroy(z_t1756_t* proto) {
+static void z_t1743_destroy(z_t1743_t* proto) {
     if (!proto) return;
     if (proto->destroy) proto->destroy(proto->data);
     proto->destroy = NULL;
@@ -9716,15 +9716,15 @@ static void z_t1756_destroy(z_t1756_t* proto) {
 
 typedef struct {
     z_t1682_t (*close)(void*);
-} z_t1761_vtable_t;
+} z_t1751_vtable_t;
 
 typedef struct {
     void* data;
-    z_t1761_vtable_t* vtable;
+    z_t1751_vtable_t* vtable;
     void (*destroy)(void*);
-} z_t1761_t;
+} z_t1751_t;
 
-static void z_t1761_destroy(z_t1761_t* proto) {
+static void z_t1751_destroy(z_t1751_t* proto) {
     if (!proto) return;
     if (proto->destroy) proto->destroy(proto->data);
     proto->destroy = NULL;
@@ -9732,15 +9732,15 @@ static void z_t1761_destroy(z_t1761_t* proto) {
 
 typedef struct {
     z_t1738_t (*seek)(void*, int64_t, uint8_t);
-} z_t1765_vtable_t;
+} z_t1755_vtable_t;
 
 typedef struct {
     void* data;
-    z_t1765_vtable_t* vtable;
+    z_t1755_vtable_t* vtable;
     void (*destroy)(void*);
-} z_t1765_t;
+} z_t1755_t;
 
-static void z_t1765_destroy(z_t1765_t* proto) {
+static void z_t1755_destroy(z_t1755_t* proto) {
     if (!proto) return;
     if (proto->destroy) proto->destroy(proto->data);
     proto->destroy = NULL;
@@ -27014,10 +27014,10 @@ static z_t1738_t z_t1708_read(
    matching POSIX whence constant. Returns the new absolute
    position measured from the start of the file. */
 static z_t1738_t z_t1708_seek(
-    z_t1708_t* f, int64_t off, z_t1751_t origin
+    z_t1708_t* f, int64_t off, z_t1757_t origin
 );
 static z_t1738_t z_t1708_seek(
-    z_t1708_t* f, int64_t off, z_t1751_t origin
+    z_t1708_t* f, int64_t off, z_t1757_t origin
 ) {
     int whence;
     switch (origin) {
@@ -27087,13 +27087,13 @@ static z_t1682_t z_t1708_Writer_flush_wrapper(void* _data) {
     return z_t1708_flush(_self);
 }
 
-static z_t1756_vtable_t z_t1708_Writer_vtable = {
+static z_t1743_vtable_t z_t1708_Writer_vtable = {
     .write = z_t1708_Writer_write_wrapper,
     .flush = z_t1708_Writer_flush_wrapper,
 };
 
-static z_t1756_t z_t1708_Writer_create(z_t1708_t* val) {
-    z_t1756_t proto = {0};
+static z_t1743_t z_t1708_Writer_create(z_t1708_t* val) {
+    z_t1743_t proto = {0};
     proto.data = val;
     proto.vtable = &z_t1708_Writer_vtable;
     proto.destroy = NULL;
@@ -27105,8 +27105,8 @@ static void z_t1708_Writer_owned_destroy(void* p) {
     free(p);
 }
 
-static z_t1756_t z_t1708_Writer_create_owned(z_t1708_t* val) {
-    z_t1756_t proto = {0};
+static z_t1743_t z_t1708_Writer_create_owned(z_t1708_t* val) {
+    z_t1743_t proto = {0};
     z_t1708_t* boxed = (z_t1708_t*)z_xmalloc(sizeof(z_t1708_t));
     *boxed = *val;
     proto.data = boxed;
@@ -27120,12 +27120,12 @@ static z_t1682_t z_t1708_Closer_close_wrapper(void* _data) {
     return z_t1708_close(_self);
 }
 
-static z_t1761_vtable_t z_t1708_Closer_vtable = {
+static z_t1751_vtable_t z_t1708_Closer_vtable = {
     .close = z_t1708_Closer_close_wrapper,
 };
 
-static z_t1761_t z_t1708_Closer_create(z_t1708_t* val) {
-    z_t1761_t proto = {0};
+static z_t1751_t z_t1708_Closer_create(z_t1708_t* val) {
+    z_t1751_t proto = {0};
     proto.data = val;
     proto.vtable = &z_t1708_Closer_vtable;
     proto.destroy = NULL;
@@ -27137,8 +27137,8 @@ static void z_t1708_Closer_owned_destroy(void* p) {
     free(p);
 }
 
-static z_t1761_t z_t1708_Closer_create_owned(z_t1708_t* val) {
-    z_t1761_t proto = {0};
+static z_t1751_t z_t1708_Closer_create_owned(z_t1708_t* val) {
+    z_t1751_t proto = {0};
     z_t1708_t* boxed = (z_t1708_t*)z_xmalloc(sizeof(z_t1708_t));
     *boxed = *val;
     proto.data = boxed;
@@ -27152,12 +27152,12 @@ static z_t1738_t z_t1708_Seeker_seek_wrapper(void* _data, int64_t to, uint8_t fr
     return z_t1708_seek(_self, to, from);
 }
 
-static z_t1765_vtable_t z_t1708_Seeker_vtable = {
+static z_t1755_vtable_t z_t1708_Seeker_vtable = {
     .seek = z_t1708_Seeker_seek_wrapper,
 };
 
-static z_t1765_t z_t1708_Seeker_create(z_t1708_t* val) {
-    z_t1765_t proto = {0};
+static z_t1755_t z_t1708_Seeker_create(z_t1708_t* val) {
+    z_t1755_t proto = {0};
     proto.data = val;
     proto.vtable = &z_t1708_Seeker_vtable;
     proto.destroy = NULL;
@@ -27169,8 +27169,8 @@ static void z_t1708_Seeker_owned_destroy(void* p) {
     free(p);
 }
 
-static z_t1765_t z_t1708_Seeker_create_owned(z_t1708_t* val) {
-    z_t1765_t proto = {0};
+static z_t1755_t z_t1708_Seeker_create_owned(z_t1708_t* val) {
+    z_t1755_t proto = {0};
     z_t1708_t* boxed = (z_t1708_t*)z_xmalloc(sizeof(z_t1708_t));
     *boxed = *val;
     proto.data = boxed;
