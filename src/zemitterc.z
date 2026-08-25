@@ -5788,22 +5788,26 @@ emitInstanceMethodCall: function {
             tid: (ztypes.tid.create from: rtid.u64)
         ) == false then return "".string
     }
-    # system natives (String/StringView/io/cli/os) have dedicated dispatchers.
-    rdu: definedInUnitOf :symtab tid: (ztypes.tid.create from: rtid.u64)
-    match (
-        rdu
-    ) case some then {
-        if rdu.stringView == "system" then return "".string
-        if rdu.stringView == "collections" then return "".string
-        if rdu.stringView == "io" then return "".string
-        if rdu.stringView == "cli" then return "".string
-        if rdu.stringView == "os" then return "".string
-    } case none then null
     mco: (symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: (ztypes.tid.create from: rtid.u64)
         name: mn.stringView
     )
+    # a NATIVE member is the dedicated dispatchers' to emit -- the String and
+    # StringView emitters, the collection ones, the io/cli/os fragment call --
+    # and there is no body here to call anyway. Asking which unit declared the
+    # RECEIVER relinquished every method of every type in those units, so a
+    # user unit spelled `cli` or `os` had its own bodied methods handed to a
+    # dispatcher that did not want them either, and the call fell through to
+    # `unhandled callee`.
+    match (
+        mco
+    ) case some then {
+        if (fnIsNativeId
+            :symtab
+            fid: (ztypes.tid.create from: mco.u64)
+        ) then return "".string
+    } case none then null
     match (
         mco
     ) case some then {
@@ -27661,9 +27665,9 @@ emitOneProtocol: function {
 }
 
 # implMethodCname -- the C name a conformance wrapper calls for the impl's
-# `mname`. A fragment-backed stdlib impl's methods carry canon-named C symbols
-# regardless of which unit is being emitted: the per-unit emission pass rebinds
-# mainName, which defeats the nonmain test on its own.
+# `mname`. A NATIVE member's symbol is the canon-named one a fragment defines,
+# whichever unit is being emitted; the per-unit emission pass rebinds mainName,
+# so the nonmain test below cannot answer that half on its own.
 implMethodCname: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
@@ -27672,24 +27676,6 @@ implMethodCname: function {
     mname: StringView
     implBase: StringView
 } out String is {
-    implFrag: false
-    {
-        fduW: definedInUnitOf :symtab tid: (ztypes.tid.create from: implTid.u64)
-        match (
-            fduW
-        ) case some then {
-            if fduW.stringView == "io" then implFrag = true
-            if fduW.stringView == "os" then implFrag = true
-            if fduW.stringView == "cli" then implFrag = true
-            if fduW.stringView == "net" then implFrag = true
-        } case none then null
-    }
-    if implFrag then return "\{implBase}_\{mname}"
-    if (definedInNonMain
-        :symtab
-        :ctx
-        tid: (ztypes.tid.create from: implTid.u64)
-    ) then return "\{implBase}_\{mname}"
     implMid: ztypes.tid
     imo: symtab.typing.declChildOfId parentTypeId: implTid nameId: mnameId
     match (
@@ -27697,6 +27683,12 @@ implMethodCname: function {
     ) case some then {
         implMid = ztypes.tid.create from: (imo)
     } case none then null
+    if (fnIsNativeId :symtab fid: implMid) then return "\{implBase}_\{mname}"
+    if (definedInNonMain
+        :symtab
+        :ctx
+        tid: (ztypes.tid.create from: implTid.u64)
+    ) then return "\{implBase}_\{mname}"
     return (ctxCname :ctx tid: (ztypes.tid.create from: implMid.u64))
 }
 
@@ -28109,24 +28101,35 @@ conformanceLabelFor: function {
 
 # emitProtocolDispatch -- a method call on a protocol-typed receiver routes
 # through the vtable: `r.read b: 5` -> `r.vtable->read(r.data, 5)`.
-# fileTypeIdOf -- the io File class type id if `nid` stamps as File, else 0.
-fileTypeIdOf: function {symtab: zenv.ZSymbolTable.view nid: u64} out u64 is {
+# fileTypeIdOf -- the class type id `nid` stamps to when that class supplies
+# `mname` as a NATIVE member, else 0. A native member has no body to emit,
+# which is what makes the call a fragment call; the defining unit's name used
+# to stand in for that and admitted every type declared in the unit, so a user
+# unit spelled `cli` or `os` had its own bodied methods called as fragments.
+fileTypeIdOf: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    nid: u64
+    mname: StringView
+} out u64 is {
     tid: stampIdOf :symtab :nid
     if tid.isZero then return 0
     if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return 0
     fileOrig: originTidOf :symtab :tid
     if fileOrig > 0 then return 0
-    duo: definedInUnitOf :symtab :tid
-    isIoT: false
+    mo: (symtab.typing.declChildOf
+        pool: ast.names
+        parentTypeId: tid
+        name: mname
+    )
     match (
-        duo
+        mo
     ) case some then {
-        if duo.stringView == "io" then isIoT = true
-        if duo.stringView == "os" then isIoT = true
-        if duo.stringView == "cli" then isIoT = true
-        if duo.stringView == "net" then isIoT = true
+        if (fnIsNativeId
+            :symtab
+            fid: (ztypes.tid.create from: mo.u64)
+        ) then return tid
     } case none then null
-    if isIoT then return tid
     return 0
 }
 
@@ -28197,7 +28200,7 @@ emitFileMethodCall: function {
     if mn.stringView == "accept" then isFM = true
     if (isFM) == false then return "".string
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
-    fid: fileTypeIdOf :symtab nid: bnid
+    fid: fileTypeIdOf :ast :symtab nid: bnid mname: mn.stringView
     if fid == 0 then return "".string
     fc: ctxCname :ctx tid: (ztypes.tid.create from: fid.u64)
     {
@@ -28918,7 +28921,7 @@ emitParsedMethodCall: function {
     if mn.stringView == "positional" then isPM = true
     if (isPM) == false then return "".string
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
-    pid: fileTypeIdOf :symtab nid: bnid
+    pid: fileTypeIdOf :ast :symtab nid: bnid mname: mn.stringView
     if pid == 0 then return "".string
     pcn: regNameOf :symtab tid: (ztypes.tid.create from: pid.u64)
     if pcn.stringView != "Parsed" then return "".string
