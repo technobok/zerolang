@@ -155,6 +155,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-08-22 | 2f83d269 | [...and so does an empty copy](#r-a47a444c) | 0.44s | 0.54s | 93MB / 81MB | 101 / 177 / 168 (total 447, medians of 5) | 5,621,131 | 345MB | 35.0s (1120 cases, load ~2.0) | 105,830 |
 | 2026-08-23 | e2c867af | [member names, the row accessors and the tokenizer's trivia](#r-e2c867af) | 0.43s | 0.50s | 91MB / 78MB | 113 / 172 / 162 (total 447, medians of 5) | 4,820,294 | 306MB | 35.9s (1124 cases, load ~5.6) | 106,213 |
 | 2026-08-24 | 48e5f08d | [the type-alias mechanism](#r-48e5f08d) | 0.45s | -- | 92MB / -- | 134 / 182 / 166 (total 482, medians of 5) | 4,863,437 | 310MB | -- | 107,829 |
+| 2026-08-25 | a04609b7 | [the `fold` natives arc](#r-a04609b7) | 0.45s | -- | 93MB / -- | 93 / 198 / 170 (total 461, medians of 5) | 4,899,755 | 312MB | -- | 108,433 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -1835,3 +1836,59 @@ twenty-four name-comparing call sites (`missingCtorFields` 52,672, `emitUserFnCa
 
 **`make test` is at load ~5.6 here** (other users on the machine); compare the 35.9s column with
 `2f83d269`'s 35.0s only with that in mind.
+
+<a id="r-a04609b7"></a>
+### The `fold` natives arc
+
+**2026-08-25 · `288abea5`..`a04609b7`**
+
+Platform's five values became zero-argument `is native` functions answered from
+`natives.tbl` `fold` rows, and the declaration check that every native names a
+row stopped being main-unit-only.
+
+**It costs +0.10% instructions**, measured the way the header asks: both
+binaries on identical input (the frozen tree at `58b06e4e`), interleaved,
+`perf stat -r 7`. base 5,541,498,132 / 5,542,036,204; HEAD 5,548,604,514 /
+5,545,999,755. Both spreads are tight (0.010% and 0.047%), so a +0.10% delta is
+above the noise and is a real, small regression rather than a reading.
+
+The self-compile allocation column moved 4,883,704 -> 4,899,755, +0.33%, on
++361 lines of source. Per line it did not move at all: **45.19 allocations per
+line before and after**, so the column tracks the compiler having more source
+to compile rather than the compiler having got worse at it.
+
+The part that is a genuine new cost is FIXED per compile, so the self-compile
+hides it and a small program does not. On `examples/hello.z`: 68,636 -> 72,847
+allocations, **+6.1% on a minimal input**. Attributed by ablation rather than by
+reading, since finding where it went was the whole point:
+
+| ablated | allocs | attributes |
+|---|---|---|
+| base | 68,636 | -- |
+| `foldNativePaths` returns before reading | 68,992 | the wider declaration check: **+356** |
+| file read, never scanned | 69,003 | reading natives.tbl: **+367 allocs, +394KB** |
+| lines walked, no `contains`, empty body | 70,265 | `.lines` over 1,240 lines: **+1,262** |
+| shipped | 70,818 | the `contains` prefilter: **+553** |
+| before the prefilter | 72,847 | splitting all 917 row heads: **+2,029** |
+
+The prefilter is the fix that came out of it, and it is one condition: the table
+is read whole to find five rows, so ask whether the line spells `fold` before
+splitting its head and materialising its path. 912 of the 917 rows now answer no
+without allocating. A row that merely contains the letters still gets the full
+parse, which is what decides -- pinned by decoy rows named `platform.unfolded`
+and `platform.foldy`, neither of which folds.
+
+What is left is the read itself plus the stdlib's per-line cost, and both are
+inherent rather than this arc's: `.lines` allocates about one block per line and
+`contains` about 0.6 per call at the call site. On a self-compile the whole
+fixed cost is 0.04% and invisible; where it is worth remembering is `zls`, which
+re-reads the 95KB table on every document change.
+
+**Standing worklist, unchanged by this arc:** `zl lint --full` reports **90
+L022** findings -- an owned String from `.copy` / `.string` / `nameTextCopy`
+that nothing ever writes, where a borrowed view would serve. 73 are in
+`ztypecheck.z`, spread thinly across ~40 functions rather than pooled in a
+hotspot, so it is a sweep and not a one-liner. dhat on a `hello.z` compile puts
+`String.from_view` at 22,562 blocks averaging 7.6 bytes and `String.copy` at
+12,068 averaging 16.9 -- name copies, which is what that lint names. Each site
+needs its own write-analysis: a binding that is REASSIGNED must keep the copy.
