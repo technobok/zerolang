@@ -5797,29 +5797,6 @@ isFunctionDefOp: function {op: Node.view} out bool is {
     }
 }
 
-# isInterfaceDefOp -- a facet or protocol definition. These resolve EAGERLY
-# because another definition's conformance marker (`m: sizer`) is resolved by
-# markerTargetId, which requires its target to be registered already, and
-# nothing else demands an interface: a program may conform to a facet and
-# never construct one. Without this the marker reports "Unknown type".
-isInterfaceDefOp: function {op: Node.view} out bool is {
-    match (
-        op
-    ) case objectdef then {
-        match (
-            op.kind
-        ) case facetDef then {
-            return true
-        } case protocolDef then {
-            return true
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
-}
-
 # resolveSpecFn -- resolve one facet/protocol is-block spec method (a namedoperation
 # whose operation is a functiondef) into a qualified `{type}.{spec}` FUNCTION. Like
 # resolveMethodFn but drops the `:this` receiver: a facet/protocol `this` resolves to
@@ -13544,22 +13521,22 @@ resolveUnitMembers: function {
                     k: zast.unitkind.template
                 )
                 isUnit: isUnitOp op: (ast.nodes.get i: bmNode.operation.u64)
-                isIface: (isInterfaceDefOp
-                    op: (ast.nodes.get i: bmNode.operation.u64)
-                )
                 eager: true
-                # a scope declaration (a unit, a template) and an INTERFACE are
-                # properties of the DECLARATION, not bodies: a constraint
-                # facet's only reference may be the as-block marker naming it,
-                # and a nested namespace's template is reached through the
-                # scope or not at all. Both stay whatever the restriction.
-                if speculative when (isUnit) == false when (isIface) == false then {
+                # a scope declaration -- a unit or a template -- is a property
+                # of the DECLARATION, not a body: a nested namespace's template
+                # is reached through the scope or not at all, so it stays
+                # whatever the restriction. An INTERFACE was exempt here too,
+                # because a constraint facet's only reference may be the
+                # as-block marker naming it and markerTargetId merely PROBED for
+                # its target. It resolves that target now, so the marker demands
+                # the interface the way any other reference does.
+                if speculative when (isUnit) == false then {
                     if (isFunctionDefOp
                         op: (ast.nodes.get i: bmNode.operation.u64)
                     ) == false then eager = false
                 }
                 if rootOnly when mName.stringView != "main" then {
-                    if (isUnit) == false when (isIface) == false then eager = false
+                    if (isUnit) == false then eager = false
                 }
                 if st.typing.eagerAll then eager = true
                 if eager then {
