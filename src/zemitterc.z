@@ -4328,7 +4328,7 @@ svArgAddr: function {
         return a2l
     } case dottedpath then {
         dpm: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if dpm.stringview == "stringview" then {
+        if (ztypecheck.isStringViewMember name: dpm.stringview) then {
             pe: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
             pIsStr: (stampIsStr
                 :symtab
@@ -6862,7 +6862,7 @@ emitInterpArgExpr: function {
             dpp: ast.nodes.get i: n.parent.u64
             return (emitInterpArgExpr :ast :symtab :ctx n: dpp)
         }
-        if cm.stringview == "stringview" then return (emitInterpArgExpr
+        if (ztypecheck.isStringViewMember name: cm.stringview) then return (emitInterpArgExpr
             :ast
             :symtab
             :ctx
@@ -6907,7 +6907,7 @@ emitInterpStmtValue: function {
             dpr: ast.nodes.get i: n.parent.u64
             return (emitInterpStmtValue :ast :symtab :ctx n: dpr :ind :tmp :buf)
         }
-        if cm.stringview == "stringview" then {
+        if (ztypecheck.isStringViewMember name: cm.stringview) then {
             dpr: ast.nodes.get i: n.parent.u64
             return (emitInterpStmtValue :ast :symtab :ctx n: dpr :ind :tmp :buf)
         }
@@ -10257,7 +10257,12 @@ emitStringMethod: function {
         if recvIsPtr then return "\{recv}->capacity"
         return "\{recv}.capacity"
     }
-    if mn == "stringview" then return (svValueForm :ctx expr: recv isStr: true vid: recvVid)
+    if (ztypecheck.isStringViewMember name: mn) then return (svValueForm
+        :ctx
+        expr: recv
+        isStr: true
+        vid: recvVid
+    )
     if mn == "shrink" then {
         if recvIsPtr then return "\{ctx.strC}_shrink(\{recv})"
         return "\{ctx.strC}_shrink(&\{recv})"
@@ -10653,7 +10658,7 @@ emitNestedStringViewBase: function {
     n: zast.DottedPathData.view
     mn2: StringView
 } out String is {
-    if mn2 == "stringview" then {
+    if (ztypecheck.isStringViewMember name: mn2) then {
         ppid: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
         parentStampTid: stampIdOf :symtab nid: ppid
         if parentStampTid == ctx.strTid then {
@@ -10691,7 +10696,7 @@ emitNestedCollectionBase: function {
         if mn2 == "length" then return "\{baseAtom}.len"
         if mn2 == "size" then return "\{nstrcb}_size"
         if mn2 == "string" then return "\{nstrcb}_string(\{baseAtom})"
-        if mn2 == "stringview" then {
+        if (ztypecheck.isStringViewMember name: mn2) then {
             return "(\{ctx.svC}_t){ .data = \{baseAtom}.data, .size = \{baseAtom}.len }"
         }
     }
@@ -10700,7 +10705,7 @@ emitNestedCollectionBase: function {
         recvB: colRecvRef :ctx bn: baseAtom vid: bs9vid
         if mn2 == "pop" then return "\{nlcb}_pop(\{recvB})"
         if mn2 == "sort" then return "\{nlcb}_sort(\{recvB})"
-        if mn2 == "listview" then return "\{nlcb}_listview(\{recvB})"
+        if (ztypecheck.isListViewMember name: mn2) then return "\{nlcb}_listview(\{recvB})"
         if mn2 == "iterate" then return "\{nlcb}_iterate(\{recvB})"
         if mn2 == "iterateMut" then return "\{nlcb}_iterateMut(\{recvB})"
     }
@@ -11283,7 +11288,7 @@ emitCollectionMemberRead: function {
             estr: "\{scba}_string(\{bn2})"
             return estr
         }
-        if mn2 == "stringview" then {
+        if (ztypecheck.isStringViewMember name: mn2) then {
             esvw: "(\{ctx.svC}_t){ .data = \{bn2}\{accB2}data, .size = \{bn2}\{accB2}len }"
             return esvw
         }
@@ -11306,7 +11311,7 @@ emitCollectionMemberRead: function {
             ep1: "\{lcb2}_sort(\{recvB2})"
             return ep1
         }
-        if mn2 == "listview" then {
+        if (ztypecheck.isListViewMember name: mn2) then {
             ep2: "\{lcb2}_listview(\{recvB2})"
             return ep2
         }
@@ -13421,6 +13426,11 @@ emitPrintArg: function {
                 return
             }
             svco: symtab.typing.declChildOfId parentTypeId: argTid nameId: zast.wkStringview
+            # either spelling while the camelCase rename lands: a compiler built
+            # before it has to find the member in source written after it
+            if svco.none then {
+                svco = symtab.typing.declChildOfId parentTypeId: argTid nameId: zast.wkStringViewC
+            }
             match (
                 svco
             ) case some then {
@@ -13522,7 +13532,7 @@ stringviewOfBaseNid: function {
         return (stringviewOfBaseNid :ast :symtab n: (ast.nodes.get i: n.expression.u64))
     } case dottedpath then {
         mn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if mn.stringview == "stringview" then {
+        if (ztypecheck.isStringViewMember name: mn.stringview) then {
             bnid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
             sid: stampIdOf :symtab nid: bnid
             if sid.u64 == (builtinTid :ast :symtab base: "String") then return bnid
@@ -23666,6 +23676,8 @@ listviewMethods: function {
     ect: StringView
 } out String is {
     lo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkListview
+    # see the stringView lookup: either spelling while the rename lands
+    if lo.none then lo = symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkListViewC
     match (
         lo
     ) case some then {
