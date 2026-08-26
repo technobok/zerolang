@@ -1322,33 +1322,40 @@ eager-guard: bin/zc
 	echo "eager-guard OK: examples + corpus emit AND compile under --eager ($(words $(EAGER_KNOWN)) known)"
 
 # member-guard -- ratchet against declaration-bypassing member special-cases in
-# the type checker. The sanctioned string-keyed markers are, exhaustively, the 18
-# the baseline counts: ownership (lock / borrow / take / view / hold / takex),
-# definition keywords (typedef / return / create / error / panic), and the
-# `Iterator` protocol marker. A rising count means a new hardcoded string-keyed
-# member/marker special-case -- resolve members through their declared childOf
+# the type checker. TWO spellings carry them and the guard counts both:
+# `cn.stringView == "..."` where the name is an owned String (18 sites), and
+# `cn == "..."` where it is already a view (16) -- 34 in all.
+#
+# The sanctioned markers are, exhaustively, what the baseline counts: ownership
+# (lock / borrow / take / view / hold / takex / release), access (private /
+# public), the conversions (copy / str), the container markers (tag / array /
+# index), the definition keywords (typedef / return / create / error / panic),
+# and the `Iterator` protocol marker. A rising count means a new hardcoded
+# string-keyed special-case -- resolve members through their declared childOf
 # edges instead (the system units are the source of truth). Bump the baseline
 # here only for a genuinely-sanctioned marker.
 #
-# The baseline was 37 against an actual 18 for long enough that nobody noticed:
-# a ratchet loose by nineteen is not a ratchet. It only descends, so it is set to
-# what the tree actually holds, and the marker list above is the tree's, not a
-# remembered one -- release / private / public / copy / tag / array / index and
-# the .stringview / .str conversions had all already gone.
+# TWICE now this ratchet has been loose with nobody noticing. It was 37 against
+# an actual 18. Then `3fae8cdb lib+src: the view conversions are camelCase`
+# renamed .stringview to .stringView, the pattern here still spelled it
+# lowercase, and from that commit until this one it matched NOTHING -- counting
+# zero against a baseline of 18 and printing OK every run, because the
+# under-baseline branch only advises. A guard that names a spelling dies when
+# the spelling moves, and it dies silently.
 member-guard:
-	@m1=$$(grep -c 'cn.stringview ==' src/ztypecheck.z); \
-	if [ "$$m1" -gt 18 ]; then \
-	  echo "member-guard FAIL: 'cn.stringview ==' = $$m1 (baseline 18)"; \
+	@m1=$$(grep -cE '[a-z]*cn\.stringView ==|[a-z]*cn == "' src/ztypecheck.z); \
+	if [ "$$m1" -gt 34 ]; then \
+	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 34)"; \
 	  echo "  A new hardcoded string-keyed member/marker special-case was added to the"; \
 	  echo "  type checker. Resolve members through their declared childOf edges (the"; \
 	  echo "  system units are the source of truth); bump the baseline only for a"; \
 	  echo "  genuinely-sanctioned marker."; \
 	  exit 1; \
 	fi; \
-	if [ "$$m1" -lt 18 ]; then \
-	  echo "member-guard: cn.stringview == = $$m1 < baseline 18 -- lower the baseline here"; \
+	if [ "$$m1" -lt 34 ]; then \
+	  echo "member-guard: string-keyed member compares = $$m1 < baseline 34 -- lower the baseline here"; \
 	fi; \
-	echo "member-guard OK: cn.stringview == = $$m1 (<=18)"
+	echo "member-guard OK: string-keyed member compares = $$m1 (<=34)"
 
 # view-guard -- a native receiver marked `.view` asserts that the C never writes
 # through it, and the compiler cannot check that: there is no body. So the C
