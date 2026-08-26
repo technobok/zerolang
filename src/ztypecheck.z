@@ -1751,6 +1751,7 @@ resolveNamedType: function {
     frame: ztypes.declid
     name: StringView
     thisName: StringView
+    nid: 0.u64
 } out u64 is {
     if name == "null" then {
         return (declareCanonicalType
@@ -1805,6 +1806,7 @@ resolveNamedType: function {
         etk7: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: thisName)
         gpn7: nameIdOf :ast :name
         if (st.reg.isGenericParamOf tdecl: etk7 name: gpn7) then {
+            recordGenericParamRef :st :nid frame: etk7 name: gpn7
             pgo7: st.reg.genericParamTidOf tdecl: etk7 paramName: gpn7
             match (
                 pgo7
@@ -1893,6 +1895,7 @@ resolveAtomType: function {
     frame: ztypes.declid
     nm: StringView
     thisName: StringView
+    nid: 0.u64
 } out u64 is {
     if nm == "this" then {
         # the receiver's name is both the name and the receiver: the second
@@ -1920,7 +1923,7 @@ resolveAtomType: function {
             )
         }
     }
-    return (resolveNamedType :st :frame :ast :unitDecl name: nm :thisName)
+    return (resolveNamedType :st :frame :ast :unitDecl name: nm :thisName :nid)
 }
 
 # parseDecimalU64 -- a decimal digit string as a u64 value; none when empty
@@ -2324,6 +2327,24 @@ declOfFnDef: function {
     )
 }
 
+# recordGenericParamRef -- note that node `nid` spells the generic parameter
+# `name` of the template `frame`, for stampGenericParams to resolve once at the
+# end. Recording only: a generic parameter lives outside the name-resolution
+# table, so making one a real type-ref here would bind a user type that merely
+# shares its name, and the stamp would reach emission.
+recordGenericParamRef: function {
+    st: zenv.ZSymbolTable
+    nid: u64
+    frame: ztypes.declid
+    name: zast.nameid
+} is {
+    if nid == 0 then return
+    if frame.isZero then return
+    if name.isZero then return
+    st.typing.genericParamName.set key: nid value: name
+    st.typing.genericParamFrame.set key: nid value: frame
+}
+
 # registerGenericParams -- record a type's generic-param names (keyed by
 # the template's DeclId) so method-param resolution can drop params typed by them.
 # registerGenericParamOne -- record one member's generic-param declaration.
@@ -2369,6 +2390,9 @@ registerGenericParamOne: function {
                 st.typing.genericBoundName.set key: bnid9 value: (nameIdOf :ast name: cb.stringView)
                 st.typing.genericBoundFrame.set key: bnid9 value: tdecl
             }
+            # and the parameter itself, keyed to the OPERATION node -- what
+            # Spans keys a declaration's own row to.
+            recordGenericParamRef :st nid: m.operation.u64 frame: tdecl name: m.name
         }
     } else null
 }
@@ -2759,6 +2783,12 @@ monoRefArgTid: function {
                 tdecl: enclDecl
                 name: (nameIdOf :ast name: anc.stringView)
             ) then {
+                (recordGenericParamRef
+                    :st
+                    nid: arg.operation.u64
+                    frame: enclDecl
+                    name: (nameIdOf :ast name: anc.stringView)
+                )
                 epo: (st.reg.genericParamTidOf
                     tdecl: enclDecl
                     paramName: (nameIdOf :ast name: anc.stringView)
@@ -3391,6 +3421,12 @@ returnParamTid: function {
     # base name through the peeled parent.
     if bn.length == 0 then bn = markerPeeledBase :ast n: o
     if (st.reg.isGenericParamOf tdecl: enclDecl name: (nameIdOf :ast name: bn.stringView)) then {
+        (recordGenericParamRef
+            :st
+            nid: oId.u64
+            frame: enclDecl
+            name: (nameIdOf :ast name: bn.stringView)
+        )
         po: st.reg.genericParamTidOf tdecl: enclDecl paramName: (nameIdOf :ast name: bn.stringView)
         match (
             po
@@ -3871,6 +3907,7 @@ resolveTyperefAtomShell: function {
     nameId: zast.nameid
     thisName: StringView
     demand: bool
+    nid: 0.u64
 } out u64 is {
     # an owned copy: the resolution below lends ast
     teR: zast.nameTextCopy :ast ref: nameId
@@ -3890,6 +3927,7 @@ resolveTyperefAtomShell: function {
         :unitDecl
         nm: teR.stringView
         :thisName
+        :nid
     )
 }
 
@@ -3938,6 +3976,7 @@ resolveTyperefShell: function {
         :nameId
         :thisName
         demand: true
+        nid: nid.u64
     )
     if arm == 2 then return (resolveTyperefAtomShell
         :st
@@ -3947,6 +3986,7 @@ resolveTyperefShell: function {
         :nameId
         :thisName
         demand: false
+        nid: nid.u64
     )
     if arm == 3 then return (resolveTyperefShell :st :frame :ast :unitDecl nid: innerId :thisName)
     if arm == 4 then return (resolveTyperefCallShell
@@ -4760,6 +4800,16 @@ registerGenericOrReceiverParam: function {
         :fnParam
         :pm
     )
+    # the parameter's type IS a generic parameter -- the function's own
+    # (fnParam) or the enclosing type's (genParam). Neither leg records a
+    # type-ref, and the fn leg writes no node stamp either, so this is the only
+    # point at which the node that spells it is known.
+    gpFrame9: ztypes.declid
+    if fnParam then gpFrame9 = fnDecl
+    if genParam then gpFrame9 = receiverEnclDecl
+    if (gpFrame9.isZero) == false then {
+        recordGenericParamRef :st nid: pm.operation.u64 frame: gpFrame9 name: ptn
+    }
     if genParam then {
         # the unit's own param: stamp the param node with the
         # canonical per-(enclosing,param) tid (get-or-mint). No
@@ -10337,6 +10387,72 @@ stampGenericBounds: function {st: zenv.ZSymbolTable ast: Ast} is {
                     st.typing.toolRefDecl.set key: k9 value: td9
                 }
             } case none then null
+        }
+    }
+}
+
+# stampGenericParams -- resolve each recorded generic PARAMETER and record the
+# declaration it names on the node that spells it.
+#
+# A USE goes into toolRefDecl, the channel refDeclOf already falls back to. The
+# DECLARATION cannot share it. Spans keys a declaration's row to the node of the
+# thing declared, which for `t: anyval.generic` is the dotted path -- and that is
+# the very node the `.generic` member row is keyed to. Anything refDeclOf can see
+# there answers at both, so go-to-definition on the word `generic` would start
+# jumping to the parameter. The declaration's answer goes in genericParamDecl,
+# which the editor consults only for a declaration row.
+#
+# declFindChild, never declOfTypeId: `newType ... genericParam` leaves ZType.def
+# zero, so a parameter's type id cannot name its own declaration. Silent on a
+# miss, and nothing here reaches the emitter.
+stampGenericParams: function {st: zenv.ZSymbolTable ast: Ast} is {
+    keys9: (ListVal u64)
+    with bit: st.typing.genericParamName.iterateItems do for e: bit loop keys9.append e.key
+    with kit: keys9.iterate do for k9: kit loop {
+        nm9: zast.nameid
+        fr9: ztypes.declid
+        {
+            no9: st.typing.genericParamName.get key: k9
+            match (
+                no9
+            ) case some then {
+                nm9 = no9
+            } case none then null
+            fo9: st.typing.genericParamFrame.get key: k9
+            match (
+                fo9
+            ) case some then {
+                fr9 = fo9
+            } case none then null
+        }
+        if (nm9.isZero) == false then {
+            d9: st.typing.declFindChild parentDeclId: fr9 nameId: nm9
+            if (d9.isZero) == false then {
+                st.typing.genericParamDecl.set key: k9 value: d9
+                # the Decl points at the `t: anyval.generic` arm: its operation
+                # is the dotted path, and that path's parent atom spells the
+                # bound the hover card reads.
+                opn9: u64
+                bnd9: u64
+                {
+                    dn9: st.typing.decls.get i: d9.u64
+                    an9: ast.nodes.get i: dn9.node.u64
+                    match (
+                        an9
+                    ) case namedoperation then {
+                        opn9 = an9.operation.u64
+                        po9: ast.nodes.get i: opn9
+                        match (
+                            po9
+                        ) case dottedpath then {
+                            pb9: ast.nodes.get i: po9.parent.u64
+                            bnd9 = (nodeId n: pb9).u64
+                        } else null
+                    } else null
+                }
+                if bnd9 > 0 then st.typing.genericParamBound.set key: k9 value: bnd9
+                if k9 != opn9 then st.typing.toolRefDecl.set key: k9 value: d9
+            }
         }
     }
 }
@@ -39956,6 +40072,7 @@ typecheck: function {
         checkAnyBounds ast: program.ast :st
         stampAliasValues :st ast: program.ast
         stampGenericBounds :st ast: program.ast
+        stampGenericParams :st ast: program.ast
     } else null
     return st
 }

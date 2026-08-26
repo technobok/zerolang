@@ -1475,6 +1475,51 @@ refDeclOf: function {o: (Option zenv.ZSymbolTable).view nid: u64} out ztypes.dec
     }
 }
 
+# the generic parameter declared or referenced at node `nid`, or 0.
+#
+# Deliberately NOT reached through refDeclOf. A parameter's declaration shares
+# its node id with the `.generic` member row beside it -- Spans keys a
+# declaration's row to the node of the thing declared, and for
+# `t: anyval.generic` that is the dotted path the member row is keyed to as
+# well -- so an answer refDeclOf could see would answer on the word `generic`
+# too. navAnswer consults this only when the hit IS a declaration row.
+genericParamDeclOf: function {o: (Option zenv.ZSymbolTable).view nid: u64} out ztypes.declid is {
+    match (
+        o
+    ) case some then {
+        g: o.typing.genericParamDecl.get key: nid
+        match (
+            g
+        ) case some then {
+            return g
+        } case none then {
+            return (ztypes.declid.create from: 0)
+        }
+    } case none then {
+        return (ztypes.declid.create from: 0)
+    }
+}
+
+# the node that spells a generic parameter's BOUND at node `nid`, or 0. Its own
+# declaration is already in toolRefDecl, so the bound's name and doc come from
+# the machinery that answers for the bound itself.
+genericParamBoundOf: function {o: (Option zenv.ZSymbolTable).view nid: u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        g: o.typing.genericParamBound.get key: nid
+        match (
+            g
+        ) case some then {
+            return g
+        } case none then {
+            return 0
+        }
+    } case none then {
+        return 0
+    }
+}
+
 # a declaration's defining AST node id, or 0.
 declNodeOf: function {o: (Option zenv.ZSymbolTable).view declId: ztypes.declid} out u64 is {
     if declId.isZero then return 0
@@ -2813,6 +2858,11 @@ navAnswer: function {
     # own Decl); fills the type id for hits only the Decl layer knows
     # (public-interface entries)
     refDeclId: refDeclOf o: snap.st nid: hnid
+    # a generic parameter's own declaration: its table, not toolRefDecl, so the
+    # `.generic` member row sharing this node id keeps answering nothing
+    if bestKind == 6 when refDeclId.isZero then {
+        refDeclId = genericParamDeclOf o: snap.st nid: hnid
+    }
     if refVid.isZero when refTid == 0 when refOwner == 0 then {
         if refDeclId > 0 then refTid = declTypeIdOf o: snap.st declId: refDeclId
     }
