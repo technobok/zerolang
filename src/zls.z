@@ -194,8 +194,19 @@ resolveRoots: function {
                 sw = "rootUri itself (no src/ + lib/system/ pair under it)".string
             }
         } else {
-            sd = ".".string
-            sw = "cwd (the client sent no rootUri)".string
+            # the literal "." cannot work: relPathOf tests a "./" prefix
+            # against the document's absolute path and never matches, so every
+            # document would fall outside every root.
+            cw: os.cwd
+            match (
+                cw
+            ) case ok then {
+                sd = cw.copy
+                sw = "cwd (the client sent no rootUri)".string
+            } case err then {
+                sd = ".".string
+                sw = "cwd unreadable (the client sent no rootUri)".string
+            }
         }
     }
     if syd.length == 0 then {
@@ -715,6 +726,20 @@ Server: class {
                     srcDir: this.srcDir.stringView
                     systemDir: this.systemDir.stringView
                 )
+                if rel.length == 0 then {
+                    # Outside both roots -- every .z file in examples/ or a
+                    # scratch directory, whenever srcDir is a project's src/.
+                    # An empty relpath kept the buffer out of the overlay AND
+                    # made pathMatches reject every row, so the file got lint
+                    # squiggles and no compiler diagnostics at all: a clean
+                    # compile it never had. Serve it from its own buffer
+                    # instead, under the name the parser will look the unit up
+                    # by, so the overlay that shadows disk is the one the main
+                    # unit resolves to.
+                    un9: zsource.unitNameOf path: pth.stringView
+                    rel = "\{un9}.z"
+                    io.eprintln "zls: \{pth} is outside srcDir and systemDir; serving it from its open buffer"
+                }
                 d: (Document uri: uo.copy path: pth relpath: rel text: to.copy version: ver)
                 key: uo.copy
                 this.docs.set :key value: d
