@@ -21215,10 +21215,10 @@ checkArrayIndexMember: function {
     }
     return (callleg handled: false tid: (ztypes.tid.create from: 0))
 }
-# checkReleaseMarkerVar -- `.release` on a name in scope. Answers true when the
-# release is blocked (and the error is already reported), so the caller leaves
-# the ownership transfer unrecorded.
-checkReleaseMarkerVar: function {
+# checkDropMarkerVar -- `.drop` on a name in scope. Answers true when the drop
+# is blocked (and the error is already reported), so the caller leaves the
+# ownership transfer unrecorded.
+checkDropMarkerVar: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     dp: dpref
@@ -21227,7 +21227,7 @@ checkReleaseMarkerVar: function {
     blocked: bool
 } out bool is {
     relBlocked: blocked
-    if cn == "release" then {
+    if cn == "drop" then {
         rpath: (ListVal zast.nameid)
         rpath.append (nameIdOf :ast name: mkRoot)
         elh: st.findExclusiveLock path: rpath
@@ -21270,7 +21270,7 @@ checkReleaseMarkerVar: function {
                 rhn = st.formatLockHolder pool: ast.names holder: rlhh
             } case none then null
             lsn: zenv.zlockstateNameLower t: rlk
-            mrel: "Cannot release '\{mkRoot}': \{lsn} lock held by '\{rhn}'"
+            mrel: "Cannot drop '\{mkRoot}': \{lsn} lock held by '\{rhn}'"
             (addError
                 :st
                 nodeid: dp.nid
@@ -21631,7 +21631,7 @@ isNativeFnTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is
     return false
 }
 
-# checkTransferMarker -- `.take` / `.release` are ownership transfer markers, not
+# checkTransferMarker -- `.take` / `.drop` are ownership transfer markers, not
 # members. The path carries the base's type; a bare-name source releases its held
 # locks and invalidates (the taken overlay propagates out of popped scopes).
 checkTransferMarker: function {
@@ -21642,12 +21642,12 @@ checkTransferMarker: function {
     bt: ztypes.tid
     cn: StringView
 } out callleg is {
-    # `.take` / `.release`: ownership transfer markers, not members. The path
+    # `.take` / `.drop`: ownership transfer markers, not members. The path
     # carries the base's type; a bare-name source releases its held locks and
     # invalidates (the taken overlay propagates out of popped scopes).
     isXferMarker: false
     if (isMoveMarker name: cn) then isXferMarker = true
-    if cn == "release" then isXferMarker = true
+    if cn == "drop" then isXferMarker = true
     if isXferMarker then {
         # a native has no reference form. The compiler supplies the body, and an
         # inlined one -- a binop, a conversion -- has no C function whose address
@@ -21672,8 +21672,8 @@ checkTransferMarker: function {
             return (callleg handled: true tid: bt)
         }
         mkRootId: bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64)
-        if cn == "release" when mkRootId.isZero then {
-            mrv: "'.release' can only be applied to a variable name".string
+        if cn == "drop" when mkRootId.isZero then {
+            mrv: "'.drop' can only be applied to a variable name".string
             (addError
                 :st
                 nodeid: dp.nid
@@ -21697,7 +21697,7 @@ checkTransferMarker: function {
                     mkRoot: mkRoot.stringView
                     :mvo
                 )
-                relBlocked = (checkReleaseMarkerVar
+                relBlocked = (checkDropMarkerVar
                     :st
                     :ast
                     :dp
@@ -21711,7 +21711,7 @@ checkTransferMarker: function {
                     st.invalidate nameId: mkRootId loc: takenHere
                 }
             } case none then {
-                if cn == "release" then {
+                if cn == "drop" then {
                     dfo: (walkLookupTyperefById
                         :st
                         frame: st.curFrame
@@ -21723,7 +21723,7 @@ checkTransferMarker: function {
                         dfo
                     ) case some then {
                         mkRoot: zast.nameTextAt :ast ref: mkRootId
-                        mtl: "Cannot release top-level definition '\{mkRoot}'"
+                        mtl: "Cannot drop top-level definition '\{mkRoot}'"
                         (addError
                             :st
                             nodeid: dp.nid
@@ -25946,7 +25946,7 @@ armPayloadReadonly: function {
 # pinnedMoveError -- a move out of a binding ANOTHER holder has locked is
 # refused: the holder reads or writes through that value, and a move frees it
 # out from under them (a StringView over a moved String reads freed memory).
-# `.release` has refused this for a while; the move sites never asked. Reports
+# `.drop` has refused this for a while; the move sites never asked. Reports
 # and returns true when it fires, so the caller skips its remaining legs.
 pinnedMoveError: function {
     st: zenv.ZSymbolTable
