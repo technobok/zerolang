@@ -719,7 +719,7 @@ isContainerReaderCall: function {
 }
 
 # typesCompatible -- compare two type ids: identity, never (divergent) actual,
-# generic-param pairs, literal/numeric coercion (literal_int/float -> concrete
+# generic-param pairs, literal/numeric coercion (intliteral/floatliteral -> concrete
 # numerics), and an asymmetric typedef-base walk on `a`.
 typesCompatible: function {
     ast: Ast
@@ -20426,8 +20426,9 @@ reportUnknownMember: function {
             if stillMiss then {
                 baseNum: false
                 if (isNumericTypeName name: btnMm0.stringView) then baseNum = true
-                if btnMm0.stringView == "literal_int" then baseNum = true
-                if btnMm0.stringView == "literal_float" then baseNum = true
+                # the literal types by ID: the tid is in hand here, and their
+                # spellings now name declared types like any other
+                if (isLiteralTypeId :st tid: bt) then baseNum = true
                 if (isNumericTypeName name: cn) when baseNum then stillMiss = false
             }
             if stillMiss then {
@@ -21942,6 +21943,76 @@ checkTransferMarker: function {
 # checkNumericSuffixCast -- `1.u8` / `(2.5).f32`: when the child names a non-
 # function type and the parent is a numeric literal, the path is a typed-literal
 # cast -- the parent atom coerces to the suffix type and the path carries it.
+# checkLiteralFits -- does literal `lit` fit `target`? A literal conversion is
+# settled at COMPILE time: it either fits, or it is an error here. A
+# declaration can say which conversions exist but not that 300 is too big for a
+# u8, so this stays even though dispatch moved to the declared surface.
+#
+# Shared by the two places a suffixed literal is resolved -- inside a body and
+# at unit level -- because a constant that skipped the check emitted a
+# truncated value and only gcc's -Woverflow noticed.
+checkLiteralFits: function {
+    st: zenv.ZSymbolTable
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    lit: StringView
+    target: StringView
+} is {
+    if (isNumericTypeName name: target) == false then return
+    # a character literal carries no numeric lexeme to parse
+    if lit.startsWith "0c" then return
+    nk9c: ztypes.numkindByName name: target
+    pn9c: ztypes.parseNumberAs numstr: lit k: nk9c.kind
+    if pn9c.err.length > 0 then {
+        addError :st :nodeid :lineno :colno e: zast.err.typeError msg: pn9c.err
+        return
+    }
+    if (ztypes.isFloatKind k: pn9c.kind) == false then return
+    exact9c: true
+    if lit.contains "." then {
+        exact9c = ztypes.floatFitsFloat value: pn9c.fval k: pn9c.kind
+    } else {
+        ivp9c: ztypes.parseNumber numstr: lit
+        ivr9c: ivp9c.ival.i64
+        match (
+            ivr9c
+        ) case ok then {
+            exact9c = ztypes.intFitsFloat value: ivr9c k: pn9c.kind
+        } case err then {
+            exact9c = false
+        }
+    }
+    if (exact9c) == false then {
+        em9c: "Value \{lit} not exactly representable as \{target}"
+        addError :st :nodeid :lineno :colno e: zast.err.typeError msg: em9c
+    }
+}
+
+# literalConvTarget -- the type a literal's declared conversion `nameId`
+# produces, or none when the literal type does not declare it. The declaration
+# holds the surface (`intliteral.u8` is `function {:this} out u8`), so the
+# target is that method's return type; nothing here knows the sixteen names.
+literalConvTarget: function {
+    st: zenv.ZSymbolTable
+    tid: ztypes.tid
+    nameId: zast.nameid
+} out optionval u64 is {
+    if nameId.isZero then return (optionval.none u64)
+    co: st.typing.declChildOfId parentTypeId: tid :nameId
+    match (
+        co
+    ) case some then {
+        rt: methodReturnOf :st mid: (ztypes.tid.create from: co.u64)
+        match (
+            rt
+        ) case some then {
+            return (optionval.some rt.u64)
+        } case none then null
+    } case none then null
+    return (optionval.none u64)
+}
+
 checkNumericSuffixCast: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -21963,7 +22034,25 @@ checkNumericSuffixCast: function {
     if (isNumericLiteralNameAt :ast ref: castBaseNm) then {
         castBase: zast.nameTextCopy :ast ref: castBaseNm
         castChildId: atomNameId :ast n: (ast.nodes.get i: dp.child.u64)
-        castOpt: walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: castChildId
+        # WHICH conversions a literal offers is a question for its DECLARATION:
+        # `intliteral` names the sixteen it can reach and `floatliteral` only
+        # the four float ones, so `3.5.u8` is a member miss rather than a rule
+        # written here. A miss falls through -- `5.iterate` and `1.0.scaleB`
+        # reach their member on the materialised receiver instead.
+        litTid: st.reg.literalIntTid
+        if (isFloatLiteralName name: castBase.stringView) then litTid = st.reg.literalFloatTid
+        castOpt: literalConvTarget :st tid: litTid nameId: castChildId
+        # RESIDUAL: the child may still name a scalar TYPEDEF (`1.nameid`),
+        # which no literal type declares. Deleted with the typedef-suffix path.
+        if castOpt.none then {
+            castOpt = (walkLookupTyperefById
+                :st
+                frame: st.curFrame
+                :ast
+                :unitDecl
+                baseId: castChildId
+            )
+        }
         match (
             castOpt
         ) case some then {
@@ -21973,52 +22062,14 @@ checkNumericSuffixCast: function {
                 # lossy literal cast is an error (300.u8, 3.5.u8, an int beyond
                 # a float's mantissa). Parse the base against the target kind
                 # for range/float checks; add the int->float exact-mantissa check.
-                if (isNumericTypeName name: castChild.stringView) then {
-                    isChar9c: castBase.stringView.startsWith "0c"
-                    if (isChar9c) == false then {
-                        nk9c: ztypes.numkindByName name: castChild.stringView
-                        pn9c: ztypes.parseNumberAs numstr: castBase.stringView k: nk9c.kind
-                        if pn9c.err.length > 0 then {
-                            (addError
-                                :st
-                                nodeid: dp.nid
-                                lineno: dp.lineno
-                                colno: dp.colno
-                                e: zast.err.typeError
-                                msg: pn9c.err
-                            )
-                        } else {
-                            if (ztypes.isFloatKind k: pn9c.kind) then {
-                                baseDot9c: castBase.contains "."
-                                exact9c: true
-                                if baseDot9c then {
-                                    exact9c = ztypes.floatFitsFloat value: pn9c.fval k: pn9c.kind
-                                } else {
-                                    ivp9c: ztypes.parseNumber numstr: castBase.stringView
-                                    ivr9c: ivp9c.ival.i64
-                                    match (
-                                        ivr9c
-                                    ) case ok then {
-                                        exact9c = ztypes.intFitsFloat value: ivr9c k: pn9c.kind
-                                    } case err then {
-                                        exact9c = false
-                                    }
-                                }
-                                if (exact9c) == false then {
-                                    em9c: "Value \{castBase.stringView} not exactly representable as \{castChild.stringView}"
-                                    (addError
-                                        :st
-                                        nodeid: dp.nid
-                                        lineno: dp.lineno
-                                        colno: dp.colno
-                                        e: zast.err.typeError
-                                        msg: em9c
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+                (checkLiteralFits
+                    :st
+                    nodeid: dp.nid
+                    lineno: dp.lineno
+                    colno: dp.colno
+                    lit: castBase.stringView
+                    target: castChild.stringView
+                )
                 setcp: castOpt
                 stampGate :st nid: dp.parent.u64 tid: (ztypes.tid.create from: setcp.u64)
                 setcd: castOpt
@@ -34492,7 +34543,7 @@ stampOneUnitMono: function {
 
 # foldLiteralStamps -- replace literal-typed node stamps with their concrete
 # defaults (i64 / f64) after the body walk: the unregistered pseudo ids and the
-# data blocks' registered literal_int/literal_float element shells. Symbol-table
+# data blocks' registered intliteral/floatliteral element shells. Symbol-table
 # entries keep their literal ids.
 foldLiteralStamps: function {st: zenv.ZSymbolTable frame: ztypes.declid program: Node} is {
     match (
@@ -36908,6 +36959,18 @@ resolveDottedConstantDef: function {
         }
     }
     if (isNumericLiteralName name: sfLit) then {
+        # THE SAME FIT CHECK A BODY PERFORMS. Without it `big: 300.u8` at unit
+        # level was accepted, emitted `uint8_t z_v1 = 300;` and printed 44 --
+        # gcc's -Woverflow was the only thing that noticed, and warn-check
+        # covers only the four emitted drivers.
+        (checkLiteralFits
+            :st
+            nodeid: defn.nid
+            lineno: defn.lineno
+            colno: defn.colno
+            lit: sfLit
+            target: sfTy
+        )
         # `wkFirst: 1.nid` NAMES its type, so asking for the constant
         # is asking for that type: descend for it rather than only
         # looking it up, or a typedef nothing else references is
@@ -39609,8 +39672,8 @@ walkLookupTyperefFrom: function {
 shellScalarName: function {name: StringView} out bool is {
     if (isNumericTypeName :name) then return true
     if name == "bool" then return true
-    if name == "literal_int" then return true
-    return name == "literal_float"
+    if name == "intliteral" then return true
+    return name == "floatliteral"
 }
 
 # shellResolveByName -- the emitter's shell resolution order for `name` seen
