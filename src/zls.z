@@ -1336,6 +1336,22 @@ Spans: class {
         } case assignment then {
             anmL: zast.poolTextAt pool: ast.names ref: n.name
             this.addRow id: n.nodeid line: n.lineno col: n.colno name: anmL.stringView kind: 3
+        } case namedoperation then {
+            # the DECLARATION's own name. A definition's name lives on the
+            # namedoperation arm that holds it -- FunctionData and
+            # ObjectDefData carry none -- and nothing rowed it, so every
+            # top-level def, field, method, arm name and parameter answered
+            # null while references to them answered fine. A file that is
+            # mostly declarations, which every lib/system unit is, therefore
+            # read as though navigation were dead. Kind 6 is ranked last in
+            # navAnswer so it can only fill an answer, never displace one.
+            if (n.name.isZero) == false then {
+                nmD: zast.nameTextAt :ast ref: n.name
+                # keyed by the OPERATION node, not the arm: the arm carries
+                # the name and the position, the operation carries the
+                # definition's stamps. Same split memberRow makes.
+                this.addRow id: n.operation line: n.lineno col: n.colno name: nmD.stringView kind: 6
+            }
         } else null
         this.walkIds :ast ids: kids
     }
@@ -2754,6 +2770,10 @@ navAnswer: function {
                     shouldTake: false
                     if bestIdx < 0 then shouldTake = true
                     if row.kind == 2 when bestKind != 2 then shouldTake = true
+                    # a declaration row is the last resort: it fills an answer
+                    # nothing else claimed, and never displaces a reference row
+                    if bestIdx >= 0 when row.kind == 6 then shouldTake = false
+                    if bestKind == 6 when row.kind != 6 then shouldTake = true
                     if shouldTake then {
                         bestIdx = ri.i64.orPanic
                         bestKind = row.kind
@@ -2784,6 +2804,11 @@ navAnswer: function {
         if refOwner == 0 then refTid = useUnitDef o: snap.st nid: hnid
     }
     if bestKind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
+    if bestKind == 6 then {
+        refTid = nodeTypeAt o: snap.st nid: hnid
+        if refTid == 0 then refTid = useUnitDef o: snap.st nid: hnid
+        if refTid == 0 then refVid = defVarIdOf o: snap.st nid: hnid
+    }
     # the Decl the reference resolved to (surface: a re-export keeps its
     # own Decl); fills the type id for hits only the Decl layer knows
     # (public-interface entries)
