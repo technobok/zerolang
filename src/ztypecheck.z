@@ -21994,11 +21994,16 @@ checkLiteralFits: function {
 # holds the surface (`intliteral.u8` is `function {:this} out u8`), so the
 # target is that method's return type; nothing here knows the sixteen names.
 literalConvTarget: function {
+    ast: Ast
     st: zenv.ZSymbolTable
     tid: ztypes.tid
     nameId: zast.nameid
 } out optionval u64 is {
     if nameId.isZero then return (optionval.none u64)
+    # DEMAND IT FIRST. Members materialise when something asks for them, so a
+    # bare declChildOfId on a type nothing has reached yet answers none -- and
+    # the literal types are reached by literals, not by name.
+    (forceMemberOf :st frame: st.curFrame :ast parentTypeId: tid :nameId)
     co: st.typing.declChildOfId parentTypeId: tid :nameId
     match (
         co
@@ -22015,7 +22020,6 @@ literalConvTarget: function {
 
 checkNumericSuffixCast: function {
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     ast: Ast
     dp: dpref
 } out callleg is {
@@ -22036,22 +22040,35 @@ checkNumericSuffixCast: function {
         castChildId: atomNameId :ast n: (ast.nodes.get i: dp.child.u64)
         # WHICH conversions a literal offers is a question for its DECLARATION:
         # `intliteral` names the sixteen it can reach and `floatliteral` only
-        # the four float ones, so `3.5.u8` is a member miss rather than a rule
-        # written here. A miss falls through -- `5.iterate` and `1.0.scaleB`
-        # reach their member on the materialised receiver instead.
+        # the four float ones. The declared surface is EXHAUSTIVE for a numeric
+        # suffix, so a numeric target the literal type does not declare is an
+        # error here rather than a fall-through -- otherwise `3.5.u8` would
+        # materialise to f64 and quietly become f64's runtime-checked `u8`.
+        # A NON-numeric child does fall through: that is how `5.iterate` and
+        # `1.0.scaleB` reach their member on the materialised receiver.
         litTid: st.reg.literalIntTid
         if (isFloatLiteralName name: castBase.stringView) then litTid = st.reg.literalFloatTid
-        castOpt: literalConvTarget :st tid: litTid nameId: castChildId
-        # RESIDUAL: the child may still name a scalar TYPEDEF (`1.nameid`),
-        # which no literal type declares. Deleted with the typedef-suffix path.
+        castOpt: literalConvTarget :ast :st tid: litTid nameId: castChildId
         if castOpt.none then {
-            castOpt = (walkLookupTyperefById
-                :st
-                frame: st.curFrame
-                :ast
-                :unitDecl
-                baseId: castChildId
-            )
+            missChild: zast.nameTextAt :ast ref: castChildId
+            if (isNumericTypeName name: missChild.stringView) then {
+                ltn: st.reg.nameOf tid: litTid
+                cm9: "'\{ltn}' has no conversion to '\{missChild}'"
+                ch9: "a literal with a decimal point is a float: convert it to a float type, or write the value without a point".string
+                cn9: String
+                (addErrorH
+                    :st
+                    nodeid: dp.nid
+                    lineno: dp.lineno
+                    colno: dp.colno
+                    e: zast.err.typeError
+                    msg: cm9
+                    note: cn9
+                    hint: ch9
+                    width: missChild.length.u32.orPanic
+                )
+                return (callleg handled: true tid: (ztypes.tid.create from: 0))
+            }
         }
         match (
             castOpt
@@ -22159,7 +22176,7 @@ checkDotted: function {
     dp: dpref
     coerce: bool
 } out ztypes.tid is {
-    nsc: checkNumericSuffixCast :st :unitDecl :ast :dp
+    nsc: checkNumericSuffixCast :st :ast :dp
     if nsc.handled then return nsc.tid
     bt: dottedBaseTid :st :unitDecl :ast :dp
     if bt.isZero then return (ztypes.tid.create from: 0)
@@ -36971,16 +36988,37 @@ resolveDottedConstantDef: function {
             lit: sfLit
             target: sfTy
         )
-        # `wkFirst: 1.nid` NAMES its type, so asking for the constant
-        # is asking for that type: descend for it rather than only
-        # looking it up, or a typedef nothing else references is
-        # unresolved at the moment the constant needs it and the
-        # value's own i64 registers in its place.
-        sfT: walkLookupTyperef :st :frame :ast :unitDecl base: sfTy
-        if sfT.none then {
-            sfD: descendNamed :st :frame :ast :unitDecl name: sfTy
-            if sfD > 0 then sfT = optionval.some sfD.u64
+        # The suffix must name a conversion the literal type declares, and
+        # those are exactly the sixteen scalars. Tested by SPELLING rather than
+        # by asking the declaration: a unit constant resolves after the demand
+        # walk, so the literal type's members are not necessarily materialised
+        # yet -- `--eager` reaches this before they are -- and an unsatisfiable
+        # demand is not the same answer as "no such conversion".
+        #
+        # This used to accept any type name that happened to resolve, with a
+        # `descendNamed` fallback to reach a typedef nothing else referenced.
+        # That is what made a typedef a literal suffix at all.
+        if (isNumericTypeName name: sfTy) == false then {
+            sfLitTid: st.reg.literalIntTid
+            if (isFloatLiteralName name: sfLit) then sfLitTid = st.reg.literalFloatTid
+            sfn: st.reg.nameOf tid: sfLitTid
+            sm9: "'\{sfn}' has no conversion to '\{sfTy}'"
+            sh9: "a literal's suffix names one of the numeric types it converts to".string
+            sn9: String
+            (addErrorH
+                :st
+                nodeid: defn.nid
+                lineno: defn.lineno
+                colno: defn.colno
+                e: zast.err.typeError
+                msg: sm9
+                note: sn9
+                hint: sh9
+                width: sfTy.length.u32.orPanic
+            )
+            return
         }
+        sfT: walkLookupTyperef :st :frame :ast :unitDecl base: sfTy
         match (
             sfT
         ) case some then {

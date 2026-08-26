@@ -8270,7 +8270,7 @@ argSlotList: function {
 # constSuffixForTid -- the C literal suffix a constant of type `tid` needs:
 # `u32` wants U, `u64` wants ULL, and a scalar typedef wants whatever its base
 # wants (`nameid` -> u32 ->
-# U). The name-based half of this is literalSuffixBase's, which answers the
+# U). The name-based half of this is cTypeOf's, which answers the
 # same question starting from a suffix NAME rather than from a type.
 constSuffixForTid: function {
     ast: Ast.view
@@ -11387,9 +11387,6 @@ emitCollectionMemberRead: function {
 # the suffix and whose base text is the C literal. `0cA` is decoded first --
 # the 0c lexeme is not a C token.
 dottedAtomNumericBase: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
     bn2: StringView
     mn2: StringView
 } out String is {
@@ -11399,7 +11396,11 @@ dottedAtomNumericBase: function {
     ) case some then {
         if b1 >= 48 then {
             if b1 <= 57 then {
-                cTypeLk3: literalSuffixBase :ast :symtab :ctx name: mn2
+                # A LITERAL SUFFIX NAMES A BUILTIN SCALAR, always: it is a
+                # conversion the literal type declares, and the literal types
+                # declare only the sixteen. This used to chase a scalar typedef
+                # to its base as well (`1.nameid` -> "u32").
+                cTypeLk3: cTypeOf name: mn2
                 if cTypeLk3.length > 0 then {
                     bv1: bn2
                     bc1: bv1.string
@@ -11634,7 +11635,7 @@ emitDottedAtomBase: function {
     bn2v: ztypes.vid
     baseAtomVid: ztypes.vid
 } out String is {
-    eNum: dottedAtomNumericBase :ast :symtab :ctx :bn2 :mn2
+    eNum: dottedAtomNumericBase :bn2 :mn2
     if eNum.length > 0 then return eNum
     bnid2: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
     eCc: dottedAtomConstCloneBase :ast :symtab :ctx :bn2 :mn2
@@ -20736,54 +20737,6 @@ unitConstTextOf: function {
             }
         }
     }
-    return "".string
-}
-
-# literalSuffixBase -- the builtin scalar name a numeric literal's suffix
-# spells: the suffix itself when it already names a builtin scalar, or the
-# base a scalar typedef chases to (`1.nameid` -> "u32"). "" when it names
-# neither, which is what keeps a non-scalar suffix out of the constant fold.
-# The suffix's type comes from the canonical child of the unit ctx is bound
-# to -- a constant definition's own nodes carry no stamp to read, and the
-# emitter must not re-resolve the name.
-literalSuffixBase: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    name: StringView
-} out String is {
-    sc: cTypeOf :name
-    if sc.length > 0 then return name.string
-    ut: (ztypecheck.declTypeIdOf
-        st: symtab
-        declId: (symtab.typing.declFindChild
-            parentDeclId: symtab.typing.programRoot
-            nameId: (zast.poolFind pool: ast.names text: ctx.mainName.stringView)
-        )
-    )
-    if ut.isZero then return "".string
-    co: (symtab.typing.declChildOfId
-        parentTypeId: ut
-        nameId: (zast.poolFind pool: ast.names text: name)
-    )
-    st: ztypes.tid
-    match (
-        co
-    ) case some then {
-        st = (ztypes.tid.create from: co)
-    } case none then {
-        return "".string
-    }
-    bo: symtab.typing.typedefBaseName.get key: st
-    match (
-        bo
-    ) case some then {
-        boId: zast.nameid
-        boId = bo
-        bn: zast.poolTextAt pool: ast.names ref: boId
-        bc: cTypeOf name: bn.stringView
-        if bc.length > 0 then return bn.copy
-    } case none then null
     return "".string
 }
 
