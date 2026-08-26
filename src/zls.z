@@ -110,6 +110,98 @@ relPathOf: function {path: StringView srcDir: StringView} out String is {
     return "".string
 }
 
+# ResolvedRoots -- the two directories zls checks against, each with the
+# channel that decided it. The path alone cannot say WHY it was chosen, and a
+# misconfigured session looks identical to a correct one from the outside: the
+# only way to tell a `$ZEROLANG_SYSTEM` pointing at another checkout from the
+# auto-detected one is to ask the server which channel it used.
+ResolvedRoots: class {
+    srcDir: String
+    systemDir: String
+    srcWhy: String
+    systemWhy: String
+}
+
+# resolveRoots -- the one workspace-discovery resolution, shared by
+# `initialize` and `--print-roots` so the report cannot drift from what the
+# server actually checks against. Precedence: CLI flags > initializationOptions
+# > rootUri auto-detect (the zerolang repo layout) > cwd.
+resolveRoots: function {
+    srcFlag: StringView
+    sysFlag: StringView
+    optSrc: StringView
+    optSys: StringView
+    rootPath: StringView
+} out ResolvedRoots is {
+    sd: String
+    syd: String
+    sw: String
+    yw: String
+    if srcFlag.length > 0 then {
+        sd = srcFlag.string
+        sw = "--src flag".string
+    }
+    if sysFlag.length > 0 then {
+        syd = sysFlag.string
+        yw = "--system flag".string
+    }
+    if sd.length == 0 when optSrc.length > 0 then {
+        sd = optSrc.string
+        sw = "initializationOptions.srcDir".string
+    }
+    if syd.length == 0 when optSys.length > 0 then {
+        syd = optSys.string
+        yw = "initializationOptions.systemDir".string
+    }
+    if sd.length == 0 then {
+        if rootPath.length > 0 then {
+            candSys: zcheck.joinPath a: rootPath b: "lib/system"
+            candSrc: zcheck.joinPath a: rootPath b: "src"
+            hasSys: io.exists path: candSys
+            hasSrc: io.exists path: candSrc
+            if hasSys when hasSrc then {
+                sd = candSrc.copy
+                sw = "rootUri auto-detect (root holds src/ and lib/system/)".string
+                if syd.length == 0 then {
+                    syd = candSys.copy
+                    yw = "rootUri auto-detect (root holds src/ and lib/system/)".string
+                }
+            } else {
+                sd = rootPath.string
+                sw = "rootUri itself (no src/ + lib/system/ pair under it)".string
+            }
+        } else {
+            sd = ".".string
+            sw = "cwd (the client sent no rootUri)".string
+        }
+    }
+    if syd.length == 0 then {
+        # resolveSystemDir stays the one resolver; the label below only mirrors
+        # the order it already applies, so the report names the channel without
+        # a second copy of the path-building.
+        syd = zcheck.resolveSystemDir flagVal: ""
+        yw = "the lib/system beside the zls executable".string
+        rv: os.env key: "ZEROLANG_ROOT"
+        match (
+            rv
+        ) case some then {
+            yw = "$ZEROLANG_ROOT/lib/system".string
+        } case none then null
+        ev: os.env key: "ZEROLANG_SYSTEM"
+        match (
+            ev
+        ) case some then {
+            yw = "$ZEROLANG_SYSTEM".string
+        } case none then null
+    }
+    return (ResolvedRoots
+        srcDir: sd.take
+        systemDir: syd.take
+        srcWhy: sw.take
+        systemWhy: yw.take
+    )
+}
+
 # absRelPath -- absolute path for a provider-relative file: the srcDir
 # join when it exists on disk, else the systemDir join when that does,
 # else the srcDir join (unsaved new files).
@@ -507,41 +599,36 @@ Server: class {
         ) case some then {
             rootPath = uriToPath uri: ro.stringView
         } case none then null
-        sd: String
-        syd: String
-        if this.srcFlag.length > 0 then sd = this.srcFlag.copy
-        if this.sysFlag.length > 0 then syd = this.sysFlag.copy
+        optSrc: String
         io1: json.textAt v: msg path: "params/initializationOptions/srcDir"
         match (
             io1
         ) case some then {
-            if sd.length == 0 then sd = io1.copy
+            optSrc = io1.copy
         } case none then null
+        optSys: String
         io2: json.textAt v: msg path: "params/initializationOptions/systemDir"
         match (
             io2
         ) case some then {
-            if syd.length == 0 then syd = io2.copy
+            optSys = io2.copy
         } case none then null
-        if sd.length == 0 then {
-            if rootPath.length > 0 then {
-                candSys: zcheck.joinPath a: rootPath.stringView b: "lib/system"
-                candSrc: zcheck.joinPath a: rootPath.stringView b: "src"
-                hasSys: io.exists path: candSys
-                hasSrc: io.exists path: candSrc
-                if hasSys when hasSrc then {
-                    sd = candSrc.copy
-                    if syd.length == 0 then syd = candSys.copy
-                } else {
-                    sd = rootPath.copy
-                }
-            } else {
-                sd = ".".string
-            }
-        }
-        if syd.length == 0 then syd = zcheck.resolveSystemDir flagVal: ""
-        this.srcDir = sd
-        this.systemDir = syd
+        rr: (resolveRoots
+            srcFlag: this.srcFlag.stringView
+            sysFlag: this.sysFlag.stringView
+            optSrc: optSrc.stringView
+            optSys: optSys.stringView
+            rootPath: rootPath.stringView
+        )
+        # The roots decide whether this server can answer anything at all, and
+        # a wrong one looks exactly like a right one from the editor. Say what
+        # was resolved and which channel decided it, every session, on STDERR:
+        # stdout is the protocol channel, and an editor keeps server stderr in
+        # its LSP log (`:LspLog` in nvim).
+        io.eprintln "zls: srcDir=\{rr.srcDir} [\{rr.srcWhy}]"
+        io.eprintln "zls: systemDir=\{rr.systemDir} [\{rr.systemWhy}]"
+        this.srcDir = rr.srcDir.copy
+        this.systemDir = rr.systemDir.copy
         # response
         caps: newObj
         caps.set key: "textDocumentSync".string value: (Value.intval 1)
@@ -4770,6 +4857,7 @@ printUsage: function is {
     io.eprintln "usage: zls [--stdio] [--replay <file>] [--listen <port>]"
     io.eprintln "           [--src <dir>] [--system <dir>]"
 }
+
 
 # language-server entry point: dispatch on the transport flag
 # (--stdio / --replay / --listen) and serve LSP requests.
