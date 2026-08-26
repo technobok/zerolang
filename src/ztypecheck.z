@@ -7469,6 +7469,15 @@ attachRecordField: function {
             nid: fm.operation
             thisName: defName
         )
+        (refuseNullTyped
+            :st
+            tid: cid
+            nodeid: fm.nid
+            lineno: fm.lineno
+            colno: fm.colno
+            what: "field"
+            name: fname
+        )
         (st.typing.setMemberType
             parentTypeId: (ztypes.tid.create from: rid.u64)
             nameId: fm.name
@@ -11152,6 +11161,40 @@ resolveDottedDef: function {
         )
     }
 }
+# refuseEmptyObjectDef -- AN EMPTY OBJECT DEFINITION IS AN ERROR. With no
+# fields and no members there is nothing to hold and nothing to call: the
+# emitter writes no struct for one (an empty struct is not C), so every use of
+# it as a value produced C the compiler rejected while zc exited 0.
+#
+# `is native` is the exception, and the only one: the runtime owns those
+# layouts, and the markers the compiler declares this way -- `null`, `never`,
+# `anyval`, `Any` -- are deliberately empty. `null` and `never` parse as empty
+# records, which is why the marker and not the shape has to be the test.
+refuseEmptyObjectDef: function {
+    st: zenv.ZSymbolTable
+    defName: StringView
+    defn: objref
+} out bool is {
+    if defn.nis > 0 then return false
+    if defn.nas > 0 then return false
+    if defn.isNative then return false
+    em9o: "'\{defName}' is an empty object definition — it declares no fields and no members"
+    eh9o: "give it a field, give it a member, or mark it `is native` when the runtime owns its layout".string
+    en9o: String
+    (addErrorH
+        :st
+        nodeid: defn.nid
+        lineno: defn.lineno
+        colno: defn.colno
+        e: zast.err.typeError
+        msg: em9o
+        note: en9o
+        hint: eh9o
+        width: defName.length.u32.orPanic
+    )
+    return true
+}
+
 # resolveObjectDef -- a record / class / union / variant / facet / protocol / unit
 # definition, routed to its family's resolver. A generic one resolves its
 # constraint bounds first: a bound names a type the body then relies on.
@@ -11163,6 +11206,7 @@ resolveObjectDef: function {
     defName: StringView
     defn: objref
 } is {
+    if (refuseEmptyObjectDef :st :defName :defn) then return
     match (
         defn.kind
     ) case recordDef then {
@@ -33081,6 +33125,39 @@ lockReadonlyParam: function {
 # itself), its locks, and the readonly and privacy gates its type expression
 # carries. A template's own bare param has no stamp, so it binds the canonical
 # param tid off the FUNCTION child instead.
+# refuseNullTyped -- `null` is NOT a runtime value: it spells "no value" in a
+# sum type's arm and undefines a member (`create: null`, `==: null`), and that
+# is all. A parameter or field typed by it would be a slot holding something
+# that does not exist, and the emitter has no C for it -- it wrote an undeclared
+# `null` into the call and only the C compiler complained.
+refuseNullTyped: function {
+    st: zenv.ZSymbolTable
+    tid: ztypes.tid
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    what: StringView
+    name: StringView
+} out bool is {
+    if tid.isZero then return false
+    if (st.reg.typetypeOf typeId: tid) != ztypes.ztypetype.nullType then return false
+    mn9: "'null' cannot be the type of \{what} '\{name}' — null is not a runtime value"
+    hn9: "null spells an arm that carries nothing (`none: null`) or undefines a member (`create: null`); for an optional value use a union or variant".string
+    nn9: String
+    (addErrorH
+        :st
+        :nodeid
+        :lineno
+        :colno
+        e: zast.err.typeError
+        msg: mn9
+        note: nn9
+        hint: hn9
+        width: name.length.u32.orPanic
+    )
+    return true
+}
+
 bindFunctionParam: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -33125,6 +33202,18 @@ bindFunctionParam: function {
                 }
             } case none then null
         } case none then null
+    }
+    if ptid > 0 then {
+        pnm9: zast.nameTextCopy :ast ref: pm.name
+        (refuseNullTyped
+            :st
+            tid: (ztypes.tid.create from: ptid.u64)
+            nodeid: pm.nid
+            lineno: pm.lineno
+            colno: pm.colno
+            what: "parameter"
+            name: pnm9.stringView
+        )
     }
     if ptid > 0 then {
         noSt: optBoolOr o: (st.typing.noStampNode.get key: pnid.u64) d: false
