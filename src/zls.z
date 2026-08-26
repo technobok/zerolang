@@ -1520,6 +1520,75 @@ genericParamBoundOf: function {o: (Option zenv.ZSymbolTable).view nid: u64} out 
     }
 }
 
+# genericParamCard -- a generic parameter rendered as it was declared,
+# `t: anyval.generic`. "" when `nid` does not spell one.
+#
+# A parameter's Decl carries no type id -- nothing links one -- and its node no
+# stamp, so every signature and type-kind fallback hover has answers nothing for
+# it. The name it was declared under and the bound beside it are what there is.
+genericParamCard: function {
+    o: (Option zenv.ZSymbolTable).view
+    prog: zast.Node.view
+    nid: u64
+} out String is {
+    gpd: genericParamDeclOf :o :nid
+    if gpd.isZero then return "".string
+    # the bound answers through the channel that already resolves it
+    bnm: String
+    {
+        btid: useUnitDef :o nid: (genericParamBoundOf :o :nid)
+        if btid > 0 then bnm = displayTypeNameOfOpt :o tid: (ztypes.tid.create from: btid.u64)
+    }
+    card: String
+    match (
+        prog
+    ) case program then {
+        pnm: String
+        match (
+            o
+        ) case some then {
+            pnm = declNameText ast: prog.ast st: o declId: gpd
+        } case none then null
+        if pnm.length == 0 then return "".string
+        card.append pnm.stringView
+        if bnm.length > 0 then {
+            card.append ": "
+            card.append bnm.stringView
+            card.append ".generic"
+        }
+    } else null
+    return card
+}
+
+# genericParamOwner -- the name of the head that declares the generic parameter
+# at `nid`, or "". The parameter's Decl is a child of the template's.
+genericParamOwner: function {
+    o: (Option zenv.ZSymbolTable).view
+    prog: zast.Node.view
+    nid: u64
+} out String is {
+    gpd: genericParamDeclOf :o :nid
+    if gpd.isZero then return "".string
+    own: String
+    match (
+        prog
+    ) case program then {
+        match (
+            o
+        ) case some then {
+            par: ztypes.declid
+            {
+                d: o.typing.decls.get i: gpd.u64
+                par = d.parent
+            }
+            if (par.isZero) == false then {
+                own = declNameText ast: prog.ast st: o declId: par
+            }
+        } case none then null
+    } else null
+    return own
+}
+
 # a declaration's defining AST node id, or 0.
 declNodeOf: function {o: (Option zenv.ZSymbolTable).view declId: ztypes.declid} out u64 is {
     if declId.isZero then return 0
@@ -2902,6 +2971,24 @@ navAnswer: function {
             name: hname.stringView
         )
         if body.length == 0 then {
+            # a generic parameter answers nothing through any fallback below --
+            # its Decl has no type id and its node no stamp -- so it gets its
+            # own card. Never for a member row: the `.generic` selector shares
+            # the declaration's node id, and a card there would sit on a word
+            # that is not the parameter.
+            if bestKind != 2 then {
+                gcard: genericParamCard o: snap.st prog: snap.prog nid: hnid
+                if gcard.length > 0 then {
+                    gdoc: String
+                    gown: genericParamOwner o: snap.st prog: snap.prog nid: hnid
+                    if gown.length > 0 then {
+                        gdoc.append "generic parameter of `"
+                        gdoc.append gown.stringView
+                        gdoc.appendByte b: 96
+                    }
+                    return (hoverMarkdown code: gcard.stringView doc: gdoc.stringView)
+                }
+            }
             tk: typeKindTextOpt o: snap.st tid: (ztypes.tid.create from: refTid.u64)
             if tk.length > 0 then {
                 body = displayTypeNameOfOpt o: snap.st tid: (ztypes.tid.create from: refTid.u64)
