@@ -9861,7 +9861,9 @@ resolveFacet: function {
 # resolveProtocol -- resolve a protocol ObjectDef into a PROTOCOL reftype: a child
 # per is-block spec method (the `:this` receiver dropped), then synth `create` +
 # `borrow` FUNCTION shells, then an unconditional destructor (a protocol wraps heap
-# data). Reference type (is_valtype false), no `==`/`!=`. Generic protocols arrive later.
+# data). Reference type (is_valtype false), no `==`/`!=`. A generic protocol
+# registers its parameters -- they sit in the IS block, not an `as` block -- so a
+# spec member typed by one resolves as the parameter.
 resolveProtocol: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -9894,7 +9896,22 @@ resolveProtocol: function {
             isgen = hasGenericParam :ast items: onIsgen.isItems
         } else null
     }
-    if isgen then st.reg.setGeneric typeId: (ztypes.tid.create from: pid.u64) value: true
+    if isgen then {
+        st.reg.setGeneric typeId: (ztypes.tid.create from: pid.u64) value: true
+        # a generic protocol declares its parameters in the IS block, beside the
+        # spec methods, where every other declaring kind uses `as`. Nothing
+        # registered them, so isGenericParamOf answered false for a protocol and
+        # a spec member typed by one was resolved as an ordinary value.
+        tdeclP: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
+        {
+            onRgP: ast.nodes.get i: fnode.nid.u64
+            match (
+                onRgP
+            ) case objectdef then {
+                registerGenericParams :st :ast tdecl: tdeclP items: onRgP.isItems
+            } else null
+        }
+    }
     # A protocol spec receiver is normally dropped (resolves to nothing). The reference
     # resolves Text NESTED inside String's `:Text` marker, so Text's spec `:this` binds
     # to the enclosing String -- mirror that for the system Text protocol.
