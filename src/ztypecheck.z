@@ -528,6 +528,9 @@ checkBareTypeValueAt: function {
         bareCtorError :st :nodeid :lineno :colno :width msg: mn0 hint: hn0
         return
     }
+    # the zero-argument spelling of self-construction: a bare type name (or
+    # `T.create` with no arguments) in value position inside T's own create.
+    if (ctorSelfRecursionAt :st :nodeid :lineno :colno :width ctorTid: tid) then return
     prov: (List String)
     misN: (List String)
     misI: (ListVal u64)
@@ -25192,6 +25195,57 @@ reportSelfTypedDispatch: function {
     )
 }
 
+# ctorSelfRecursionAt -- refuse a construction of the enclosing type from
+# inside that type's own `create`: the constructor calls itself, without bound,
+# and the program that results compiles clean and dies on a stack overflow.
+# Both halves are id compares, and the second asks the RESOLVED member's own
+# declaration rather than testing that the enclosing function is SPELLED
+# `create`: a `create` a class declares in its body block is not that class's
+# registered constructor, never runs as one, and a body reaching it is not
+# recursing. E0300 because it is a call that cannot be made. The hint is the
+# spec's own (docs/spec.pdoc "Constructor"): inside a create body, `meta.create`
+# is what produces the instance.
+ctorSelfRecursionAt: function {
+    st: zenv.ZSymbolTable
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    width: u32
+    ctorTid: ztypes.tid
+} out bool is {
+    if ctorTid.isZero then return false
+    tt: st.typing.currentThisTid
+    if tt.isZero then return false
+    if (ctorTid == tt) == false then return false
+    ft: st.typing.currentFnTid
+    if ft.isZero then return false
+    cro: st.typing.declChildOfId parentTypeId: tt nameId: zast.wkCreate
+    crid: ztypes.tid
+    match (
+        cro
+    ) case some then {
+        crid = ztypes.tid.create from: (cro)
+    } case none then null
+    if crid.isZero then return false
+    if (ft == crid) == false then return false
+    tnm: st.reg.nameOf tid: tt
+    ms: "'\{tnm}' constructs itself from inside its own 'create'"
+    hs: "use 'meta.create' to produce the instance".string
+    en: String
+    (addErrorH
+        :st
+        :nodeid
+        :lineno
+        :colno
+        e: zast.err.callError
+        msg: ms
+        note: en
+        hint: hs
+        :width
+    )
+    return true
+}
+
 positionalParamName: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -28263,6 +28317,24 @@ checkResolvedMethodCall: function {
             tdcid = bdcb
             isBorrowForm = true
         } case none then null
+        # `T.create ...` from inside T's own create -- the explicit spelling
+        # of the same recursion the bare-name leg refuses. The dotted base's
+        # stamped type is the type being constructed, the same move the
+        # synthesized-create leg below makes. The borrow form (`T.borrow`)
+        # shares `tdcid` and is not a construction.
+        if tdcid > 0 when (isBorrowForm) == false then {
+            sctid: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: tdcid.u64
+            if sctid > 0 then {
+                (ctorSelfRecursionAt
+                    :st
+                    nodeid: call.nid
+                    lineno: call.lineno
+                    colno: call.colno
+                    width: 1
+                    ctorTid: (ztypes.tid.create from: sctid)
+                )
+            }
+        }
         if tdcid > 0 then {
             dleg: (checkTypedefOrProjectionCall
                 :st
@@ -29203,6 +29275,17 @@ checkUserFnCall: function {
     checkMissingCallArgs :ast :st :call :funcId :isCtor
     st.popTo marker: cm
     if isCtor then {
+        # bare-name `T args...` inside T's own create. Reported, not returned
+        # on: the walk finishes as it would have, so one offending construction
+        # raises exactly one diagnostic.
+        (ctorSelfRecursionAt
+            :st
+            nodeid: call.nid
+            lineno: call.lineno
+            colno: call.colno
+            width: 1
+            ctorTid: funcId
+        )
         # a type in callable position constructs: the call's value is
         # the type itself.
         ctk: funcId
@@ -32882,6 +32965,8 @@ checkFunctionBody: function {
             }
             setSynthOwnerLabel :st :unitDecl :ast :defName :thisName
             st.typing.currentThisTid = thisTid
+            prevFn: st.typing.currentFnTid
+            st.typing.currentFnTid = fnTid
             prevRet: st.typing.currentReturnTypeId
             fitid: (optU64Or o: rgot d: 0)
             crt: ztypes.tid
@@ -32898,6 +32983,7 @@ checkFunctionBody: function {
             walkBodyAt :st :unitDecl :ast bodyId: fn.body
             st.typing.currentReturnTypeId = prevRet
             st.typing.currentReturnsBorrow = prevRb
+            st.typing.currentFnTid = prevFn
             (coerceImplicitReturn
                 :st
                 :ast
