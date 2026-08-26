@@ -6318,12 +6318,109 @@ dataOutTypeName: function {ast: Ast.view oId: zast.nodeid} out String is {
     return (atomName :ast n: (ast.nodes.get i: oId.u64))
 }
 
-# resolveData -- resolve a data-block definition into a DATA type: one `literal_int`
-# child per element (the element's own label when present, else its ordinal) plus a
-# `tag` child typed `tag__{element-type}` -- the `out T` width when declared, else
-# i64 -- mark it a non-valtype, then record its defining unit + `{unit}.{name}` view.
-# Elements stay literal_int (coerced per use); typed / float elements arrive with the
-# examples that exercise them.
+# dataelem -- one data-block element dissected into the nodes carrying its
+# lexeme and its per-element type tag (`cNul: 0.u8` gives the `0` node and the
+# `u8` node). `tagId` is 0 for a bare element, which is what lets the block's
+# type be unified from the tags that ARE written.
+dataelem: record {
+    litId: zast.nodeid
+    tagId: zast.nodeid
+    ok: bool
+}
+
+# dataElemParts -- dissect a data element's value. A bare literal is its own
+# lexeme with no tag; a tagged one (`0.u8`) is a dotted path over the literal,
+# so the parent carries the lexeme and the child names the type.
+dataElemParts: function {ast: Ast.view opId: zast.nodeid} out dataelem is {
+    zt: zast.nodeid
+    miss: (dataelem litId: zt tagId: zt ok: false)
+    if opId.isZero then return miss
+    n: ast.nodes.get i: opId.u64
+    match (
+        n
+    ) case expression then {
+        return (dataElemParts :ast opId: n.expression)
+    } case dottedpath then {
+        pt: atomName :ast n: (ast.nodes.get i: n.parent.u64)
+        if (isNumericLiteralName name: pt.stringView) == false then return miss
+        return (dataelem litId: n.parent tagId: n.child ok: true)
+    } case atomid then {
+        at: zast.nameTextCopy :ast ref: n.name
+        if (isNumericLiteralName name: at.stringView) == false then return miss
+        return (dataelem litId: opId tagId: zt ok: true)
+    } else null
+    return miss
+}
+
+# dataElemTypeName -- the ONE type name a data block's elements carry: the
+# `out T` clause when written, else the type the elements' own tags agree on,
+# else i64 -- f64 when every element is a bare float literal. Tags that
+# disagree are reported here, at the declaration, because a block that means
+# two widths at once has no honest emission.
+dataElemTypeName: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    dnode: dataref
+    outName: StringView
+} out zast.nameid is {
+    pick: zast.nameid
+    if outName.length > 0 then pick = ast.internString text: outName
+    allFloat: true
+    kU: u64
+    for kU < dnode.nelems loop {
+        elId: (zast.dataElemAt :ast nid: dnode.nid i: kU).u32
+        kU = kU + 1
+        opRef: zast.nodeid
+        {
+            el: ast.nodes.get i: elId.u64
+            match (
+                el
+            ) case namedoperation then {
+                opRef = el.operation
+            } else null
+        }
+        de: dataElemParts :ast opId: opRef
+        if (de.ok) == false then allFloat = false
+        if de.ok then {
+            lx: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: de.litId.u64))
+            cv: constLiteralValue name: lx.stringView
+            if (cv.kind.fvalKind) == false then allFloat = false
+            if (de.tagId.isZero) == false then {
+                tgId: atomNameId :ast n: (ast.nodes.get i: de.tagId.u64)
+                if pick.isZero then pick = tgId
+                if (tgId == pick) == false then {
+                    pn: zast.nameTextCopy :ast ref: pick
+                    tn: zast.nameTextCopy :ast ref: tgId
+                    dm: "data element types disagree: '\{pn.stringView}' and '\{tn.stringView}'"
+                    dh: "a data block has one element type: write it once, as `out T`".string
+                    en: String
+                    (addErrorH
+                        :st
+                        nodeid: dnode.nid
+                        lineno: dnode.lineno
+                        colno: dnode.colno
+                        e: zast.err.typeError
+                        msg: dm
+                        note: en
+                        hint: dh
+                        width: 4
+                    )
+                }
+            }
+        }
+    }
+    if (pick.isZero) == false then return pick
+    if allFloat when dnode.nelems > 0 then return (ast.internString text: "f64")
+    return (ast.internString text: "i64")
+}
+
+# resolveData -- resolve a data-block definition into a DATA type: one child per
+# element (the element's own label when present, else its ordinal), all of the
+# block's single element type, plus a `tag` child typed `tag__{element-type}`.
+# Mark it a non-valtype, then record its defining unit + `{unit}.{name}` view.
+# The element type is settled and RANGE-CHECKED here, at the declaration: a
+# value the declared width cannot hold is an error where it is written, not a
+# silent truncation at every read.
 resolveData: function {ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -6343,6 +6440,22 @@ resolveData: function {ast: Ast
     )
     st.reg.setValtype typeId: (ztypes.tid.create from: did.u64) value: false
     litId: st.reg.literalIntTid
+    etn: dataOutTypeName :ast oId: dnode.outType
+    etId: dataElemTypeName :ast :st :dnode outName: etn.stringView
+    etName: zast.nameTextCopy :ast ref: etId
+    elemTid: litId
+    {
+        lk: walkLookupTyperef :st :frame :ast :unitDecl base: etName.stringView
+        match (
+            lk
+        ) case some then {
+            elemTid = ztypes.tid.create from: lk.u64
+        } case none then {
+            dn: descendNamed :st :frame :ast :unitDecl name: etName.stringView
+            if (dn.isZero) == false then elemTid = dn
+        }
+    }
+    ek: ztypes.numkindByName name: etName.stringView
     ordinal: u64
     kE: u64
     for kE < dnode.nelems loop {
@@ -6350,7 +6463,7 @@ resolveData: function {ast: Ast
         kE = kE + 1
         nmRef: zast.nameid
         isNo: false
-        opRef: u32
+        opRef: zast.nodeid
         {
             el: ast.nodes.get i: elId.u64
             match (
@@ -6367,18 +6480,51 @@ resolveData: function {ast: Ast
                 ord: "\{ordinal}"
                 memberIdAt = ast.internString text: ord.stringView
             }
+            # the block's own discriminator is synthesised below under this
+            # name, so an element claiming it would shadow the tag and leave
+            # the tagged type reading an element as its discriminator.
+            if memberIdAt == zast.wkTag then {
+                tm: "a data element may not be named 'tag'".string
+                th: "`tag` is the block's own discriminator: rename the element".string
+                en: String
+                (addErrorH
+                    :st
+                    nodeid: dnode.nid
+                    lineno: dnode.lineno
+                    colno: dnode.colno
+                    e: zast.err.typeError
+                    msg: tm
+                    note: en
+                    hint: th
+                    width: 4
+                )
+            }
             (st.typing.setMemberType
                 parentTypeId: (ztypes.tid.create from: did.u64)
                 nameId: memberIdAt
-                childTypeId: litId
+                childTypeId: elemTid
             )
             # The element's VALUE, recorded here rather than folded on demand:
             # it is the discriminator a tagged type using this block will be
             # emitted with, and a backend reading it has no unit to fold under.
             # A non-literal element records nothing and keeps its position.
-            if opRef > 0 then {
-                lt: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: opRef.u64))
+            de: dataElemParts :ast opId: opRef
+            if de.ok then {
+                lt: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: de.litId.u64))
                 if lt.length > 0 then {
+                    if ek.has then {
+                        pn: ztypes.parseNumberAs numstr: lt.stringView k: ek.kind
+                        if pn.err.length > 0 then {
+                            (addError
+                                :st
+                                nodeid: dnode.nid
+                                lineno: (nodeLine n: (ast.nodes.get i: de.litId.u64))
+                                colno: (nodeCol n: (ast.nodes.get i: de.litId.u64))
+                                e: zast.err.typeError
+                                msg: pn.err
+                            )
+                        }
+                    }
                     cv: constLiteralValue name: lt.stringView
                     if cv.kind.ivalKind then {
                         (st.typing.setMemberConst
@@ -6395,6 +6541,8 @@ resolveData: function {ast: Ast
     # `length` is a constant of the block: every element is known here, so the
     # read folds like a labelled element rather than reaching a runtime array.
     # An element labelled `length` has already claimed the name and keeps it.
+    # It stays a literal: a COUNT is not an element, and pinning it to a narrow
+    # element type would make `for i < xs.length` compare across widths.
     lgot: (st.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: did.u64)
         nameId: zast.wkLength
@@ -6413,9 +6561,7 @@ resolveData: function {ast: Ast
             value: (ztypes.makeIntConst ordinal.i64.orPanic)
         )
     }
-    etn: dataOutTypeName :ast oId: dnode.outType
-    tagName: "tag__i64".string
-    if etn.length != 0 then tagName = "tag__\{etn.stringView}"
+    tagName: "tag__\{etName.stringView}"
     tagId: (declareCanonicalType
         :st
         :frame
@@ -6436,6 +6582,7 @@ resolveData: function {ast: Ast
         nameId: zast.wkTag
         childTypeId: tagId
     )
+    st.reg.setDataElemType typeId: (ztypes.tid.create from: did.u64) value: elemTid.u64
 }
 
 # isTypedefField -- true when a type-expr Node is an `X.typedef` dottedpath (the

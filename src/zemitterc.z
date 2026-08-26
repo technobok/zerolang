@@ -5076,7 +5076,25 @@ emitStringArgMethod: function {
 # rvalue (a call/cast result, e.g. `String_from_view(...)`) so `&expr` is invalid
 # C and the arg must be hoisted to a named temp first. A deref projection
 # `(*__borrow_x)` IS an lvalue, so it is excluded.
+#
+# A NUMERIC LITERAL is not an lvalue either. A folded constant -- a data
+# element or a unit constant -- reaches an emitter site as its bare value, and
+# a receiver typed by a record method then asked for `&10`, which C rejects.
 isNonLvalueArg: function {s: StringView} out bool is {
+    b0: s.byteAt 0.u64
+    match (
+        b0
+    ) case some then {
+        if b0 >= 48 when b0 <= 57 then return true
+        if b0 == 45 then {
+            b1: s.byteAt 1.u64
+            match (
+                b1
+            ) case some then {
+                if b1 >= 48 when b1 <= 57 then return true
+            } case none then null
+        }
+    } case none then null
     if (s.contains needle: "(") == false then return false
     if (s.startsWith prefix: "(*") then return false
     return true
@@ -29561,10 +29579,17 @@ emitDataBlock: function {
         }
         if ri then {
             ect: "int64_t".string
-            rbn: dataElemBaseName :ast oId: op.outType
-            if rbn.length > 0 then {
-                rc: cTypeOf name: rbn.stringView
-                if rc.length > 0 then ect = rc
+            # the element type the CHECKER settled -- `out T`, the elements'
+            # own tags, or the i64/f64 default -- not the `out` clause's name:
+            # a block typed by its tags emits the same array as one typed by
+            # the clause. scalarCTypeFor re-checks the tid for a user shadow.
+            etd: symtab.reg.dataElemTypeOf tid: ridtid
+            if (etd.isZero) == false then {
+                rbn: regNameOf :symtab tid: etd
+                if rbn.length > 0 then {
+                    rc: scalarCTypeFor :symtab name: rbn.stringView tid: etd
+                    if rc.length > 0 then ect = rc
+                }
             }
             elems: String
             cnt: u64

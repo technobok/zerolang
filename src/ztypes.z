@@ -582,6 +582,11 @@ ZType: class {
     isBox: bool
     isNative: bool
     runtimeIndexed: bool
+    # a data block's single element type. The checker settles it from `out T`
+    # or the elements' own tags; the emitter reads it for the static array's C
+    # element type rather than re-deriving one from a name. 0 for every other
+    # kind of type.
+    dataElemTypeId: (optionval tid)
     # the declaration (ztyping DeclId) that minted this type; 0 until the
     # declaration layer links it
     def: declid
@@ -698,6 +703,7 @@ holeType: function {} out ZType is {
     isBox: false
     isNative: false
     runtimeIndexed: false
+    dataElemTypeId: (optionval.none tid)
     def: declid
     ownerTid: tid)
 }
@@ -778,6 +784,7 @@ ZTypeRegistry: class {
         isBox: false
         isNative: false
         runtimeIndexed: false
+        dataElemTypeId: (optionval.none tid)
         def: declid
         ownerTid: ow)
         this.typeById.append t
@@ -1149,6 +1156,29 @@ ZTypeRegistry: class {
         got: this.typeById.get i: tid
         return got.runtimeIndexed
         return false
+    }
+
+    # dataElemTypeOf -- the element type the checker settled on for a data
+    # block, or 0 when the type is not a data block. The emitter asks this
+    # rather than reading the `out T` name, so a block typed by its elements'
+    # own tags emits the same C array as one typed by the clause.
+    dataElemTypeOf: function {t: this.view tid: tid} out tid is {
+        if tid >= t.typeById.length then return (tid from: 0)
+        got: t.typeById.get i: tid
+        de: got.dataElemTypeId
+        match (
+            de
+        ) case some then {
+            return de
+        } case none then null
+        return (tid from: 0)
+    }
+
+    setDataElemType: function {:this typeId: tid value: u64} is {
+        if typeId >= this.typeById.length then return
+        got: this.typeById.getMut i: typeId
+        vc: (tid from: value)
+        got.dataElemTypeId = (optionval.some vc)
     }
 
     # genericOriginOf -- the template a mono was instantiated from, or 0 when

@@ -1,8 +1,13 @@
 # typed_data.z -- data blocks with explicit element type via `out T`.
 #
-# Two forms exist for declaring data blocks:
-#   - Untyped:  `data { ... }`            element type defaults to i64
-#   - Typed:    `data { ... } out T`      every element pinned to T
+# A data block has ONE element type, settled where it is written:
+#   - `data { ... } out T`      the clause names it
+#   - `data { 1.u8 2 3 }`       the elements' own tags name it, and must agree
+#   - `data { ... }`            neither: i64, or f64 when every element is a
+#                               bare float literal
+#
+# A value the chosen type cannot hold is an error at the declaration, not a
+# truncation at each read.
 #
 # When the block is a constant lookup table of bytes / small ints,
 # `out u8` keeps the C-level array narrow (one byte per slot
@@ -16,10 +21,12 @@ bytemask: data {
     HIGH: 250
 } out u8
 
-# Untyped: element type defaults to i64. Literals coerce at use
-# sites — `primes.0` flows into whatever numeric slot the caller
-# expects.
+# No clause and no tags: the elements are i64.
 primes: data { 2 3 5 7 11 }
+
+# Tagged elements: `1.u8` types the whole block, so this is `out u8`
+# written the other way round, down to the C array.
+masked: data { 1.u8 2 0x07 }
 
 take_u8: function {b: u8} out u8 is { return b + 1 }
 
@@ -29,7 +36,9 @@ main: function is {
     print "low: \{take_u8 b: bytemask.LOW}"
     print "high: \{take_u8 b: bytemask.HIGH}"
 
-    # Untyped block + literal coercion: the i64 default value
-    # coerces at the call-site boundary.
+    # No clause and no tags: `primes.0` is an i64.
     print "first prime: \{primes.0}"
+
+    # Tagged block: its elements are u8, so they reach `take_u8` directly.
+    print "masked: \{take_u8 b: masked.0}"
 }

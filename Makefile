@@ -720,7 +720,7 @@ shadow-guard:
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "shadow-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "shadow-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "'cTypeOf name:'" "$$n1" 10; \
+	chk "'cTypeOf name:'" "$$n1" 9; \
 	chk "'cTypeForName symtab:'" "$$n2" 0; \
 	chk "'isStdlibUnitName'" "$$n3" 0; \
 	chk "'isStdlibUnitName (any src)'" "$$n4" 0; \
@@ -741,7 +741,7 @@ shadow-guard:
 	  echo "  (If a site was legitimately removed, lower the baseline here instead.)"; \
 	  exit 1; \
 	fi; \
-	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=10)  cTypeForName symtab:=$$n2 (<=0)  isStdlibUnitName=$$n3/$$n4 (<=0)  demand set=$$n5 (<=0)"
+	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=9)  cTypeForName symtab:=$$n2 (<=0)  isStdlibUnitName=$$n3/$$n4 (<=0)  demand set=$$n5 (<=0)"
 
 # emitter-guard -- ratchet against name-resolution creep in the C emitter: the
 # emitter reads typechecker stamps and canonical ids, and every remaining
@@ -776,7 +776,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 21; \
 	chk "userFnId" "$$e4" 32; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 95; \
+	chk "regNameOf" "$$e6" 96; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 4; \
 	chk "monoOriginName" "$$e9" 8; \

@@ -3583,13 +3583,20 @@ type tag (#~"name: 0.T"). All explicit tags must agree; conflicts are a
 type error. When no explicit tag appears anywhere, the block defaults to
 #~"i64" (or #~"f64" if every element is a bare float literal).
 
-A bare numeric element (#~"cNul: 0") is treated as an untyped numeric
-literal at compile-time access (#~"mydata.cNul") — it has no specific
-type until forced by location, then coerces to whatever the target slot
-expects (with range-checking). This mirrors the behaviour of top-level
-untyped literals. A typed element (#~"cNul: 0.u8") carries that specific
-type at every access; coercion to a different numeric type is rejected
-(same as a typed numeric literal anywhere else).
+Every element carries that one type, whether or not it wrote a tag of its
+own: #~"mydata.cNul" reads at the block's type at every access, and
+coercion to a different numeric type is rejected exactly as it is for a
+typed numeric literal anywhere else.
+
+A value the chosen type cannot hold — #~"data { 300 } out u8", or a
+negative element in an unsigned block — is an error at the #~"data"
+declaration, reported against the element that does not fit. The check
+happens where the value is written rather than where it is read, because
+a data block has no other place that sees every element at once.
+
+An element may not be named #~"tag": that name is the block's own
+synthesised discriminator, and an element claiming it would leave a
+tagged type reading an element as its tag.
 
 The block's element type also determines the C-level array element
 type when the data block is emitted as a runtime array (variable
@@ -3625,10 +3632,11 @@ family (#~"ListVal") except that it is readonly.
       tag: mydata_key.tag
   }
 
-  # bare elements are untyped literals: coerce to whatever the
-  # destination expects (with range-checking)
+  # elements read at the block's own type, so a block whose values are
+  # bytes says so once and reaches a u8 parameter directly
+  mydata_byte: data { FIRST: 1 SECOND: 2 } out u8
   take_u8: function {b: u8} out u8 is { return b }
-  result: take_u8 b: mydata_key.FIRST   # FIRST is 1, coerces to u8
+  result: take_u8 b: mydata_byte.FIRST
 
   # can also use elements as constants in top level or in code:
   One: mydata_key.FIRST   # same as..
