@@ -2064,6 +2064,15 @@ isMoveMarker: function {name: StringView} out bool is {
     return false
 }
 
+# isDropMarker -- the early-lifetime marker. A statement-only sibling of the
+# move markers: it ends a lifetime and hands back nothing, where `.take` moves
+# the value on. One predicate so the spelling lives in one place -- four
+# hardcoded compares is how member-guard came to be watching a spelling that had
+# moved.
+isDropMarker: function {name: StringView} out bool is {
+    return name == "drop"
+}
+
 # valueIsHold -- true when a bound value carries the `.hold` marker, through any
 # `expression` wrapper. `hold` is owned and readonly, so the binding both moves
 # the source away and freezes itself.
@@ -21227,7 +21236,7 @@ checkDropMarkerVar: function {
     blocked: bool
 } out bool is {
     relBlocked: blocked
-    if cn == "drop" then {
+    if (isDropMarker name: cn) then {
         rpath: (ListVal zast.nameid)
         rpath.append (nameIdOf :ast name: mkRoot)
         elh: st.findExclusiveLock path: rpath
@@ -21647,7 +21656,7 @@ checkTransferMarker: function {
     # invalidates (the taken overlay propagates out of popped scopes).
     isXferMarker: false
     if (isMoveMarker name: cn) then isXferMarker = true
-    if cn == "drop" then isXferMarker = true
+    if (isDropMarker name: cn) then isXferMarker = true
     if isXferMarker then {
         # a native has no reference form. The compiler supplies the body, and an
         # inlined one -- a binop, a conversion -- has no C function whose address
@@ -21671,8 +21680,22 @@ checkTransferMarker: function {
             stampGate :st nid: dp.nid.u64 tid: bt
             return (callleg handled: true tid: bt)
         }
+        # `.drop` is a statement, not a value: it ends a lifetime and hands
+        # back nothing, so a binding, an argument or an operand has nothing to
+        # take from it. Legal only on the node that IS the statement.
+        if (isDropMarker name: cn) when dp.nid.u64 != st.typing.stmtExprNid then {
+            mvs: "'.drop' is a statement, not a value -- it ends a lifetime and produces nothing; use '.take' to move the value into a new name".string
+            (addError
+                :st
+                nodeid: dp.nid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.ownerError
+                msg: mvs
+            )
+        }
         mkRootId: bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64)
-        if cn == "drop" when mkRootId.isZero then {
+        if (isDropMarker name: cn) when mkRootId.isZero then {
             mrv: "'.drop' can only be applied to a variable name".string
             (addError
                 :st
@@ -21711,7 +21734,7 @@ checkTransferMarker: function {
                     st.invalidate nameId: mkRootId loc: takenHere
                 }
             } case none then {
-                if cn == "drop" then {
+                if (isDropMarker name: cn) then {
                     dfo: (walkLookupTyperefById
                         :st
                         frame: st.curFrame
@@ -32006,7 +32029,12 @@ checkStmtExpression: function {
     wrap: exprref
 } out bool is {
     errE0: st.typing.errors.length
+    # a `.drop` is legal on this node and nowhere else; saved and restored
+    # because a statement's expression can contain nested statement blocks
+    outerStmt0: st.typing.stmtExprNid
+    st.typing.stmtExprNid = wrap.expression.u64
     et0: checkValueAt :st :unitDecl :ast nid: wrap.expression
+    st.typing.stmtExprNid = outerStmt0
     if et0 > 0 then stampGate :st nid: wrap.nid.u64 tid: et0
     ckOpt0: st.typing.callKind.get key: wrap.expression.u64
     isR0: isReturnCallKind o: ckOpt0
