@@ -110,6 +110,29 @@ relPathOf: function {path: StringView srcDir: StringView} out String is {
     return "".string
 }
 
+# relPathBest -- the document's path relative to the provider root that OWNS
+# it: the most specific of the two, not the first that matches. srcDir and
+# systemDir need not be disjoint -- a srcDir of the repo root has lib/system
+# nested inside it -- and there srcDir matches a system file first and yields
+# `lib/system/io.z`, while the system provider names that same file `io.z`.
+# Nothing matches it after that, so every span row for the file is filtered
+# out and hover, definition, references and completion all answer null on
+# every position, including declarations in the file being edited.
+relPathBest: function {
+    path: StringView
+    srcDir: StringView
+    systemDir: StringView
+} out String is {
+    a: relPathOf :path :srcDir
+    b: relPathOf :path srcDir: systemDir
+    if a.length == 0 then return b
+    if b.length == 0 then return a
+    # both roots contain the file, so the deeper one owns it -- and the deeper
+    # root is the one that leaves the shorter path behind.
+    if b.length < a.length then return b
+    return a
+}
+
 # ResolvedRoots -- the two directories zls checks against, each with the
 # channel that decided it. The path alone cannot say WHY it was chosen, and a
 # misconfigured session looks identical to a correct one from the outside: the
@@ -687,10 +710,11 @@ Server: class {
                 to
             ) case some then {
                 pth: uriToPath uri: uo.stringView
-                rel: relPathOf path: pth.stringView srcDir: this.srcDir.stringView
-                if rel.length == 0 then {
-                    rel = relPathOf path: pth.stringView srcDir: this.systemDir.stringView
-                }
+                rel: (relPathBest
+                    path: pth.stringView
+                    srcDir: this.srcDir.stringView
+                    systemDir: this.systemDir.stringView
+                )
                 d: (Document uri: uo.copy path: pth relpath: rel text: to.copy version: ver)
                 key: uo.copy
                 this.docs.set :key value: d
