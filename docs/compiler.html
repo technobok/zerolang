@@ -485,12 +485,19 @@ For reftypes, <code>.borrow</code> means a reference (source not invalidated).
 pass-by-value so identity-based locking is meaningless. Generic type
 parameters are exempt because they may monomorphize to a reftype.</p>
 <h3 id="numeric-literal-coercion"><a href="#numeric-literal-coercion">7.6. Numeric Literal Coercion</a></h3>
-<p>Bare numeric literals are typed as one of two compiler-internal
-singletons during typecheck: <code>literalInt</code> or <code>literalFloat</code>
-(both flagged <code>isLiteral</code> on <code>ZType</code>). Constant expressions
+<p>Bare numeric literals are typed as one of two DECLARED types during
+typecheck: <code>intliteral</code> or <code>floatliteral</code>, declared <code>is native</code>
+in <code>lib/system/system.z</code> beside the sixteen scalars and minted as the
+registry's first two rows, which the declaration then attaches to. Each
+declares exactly the conversions it can reach -- sixteen for the integer
+literal, the four float targets for the float one -- so which suffixes a
+literal accepts is a question for its declaration rather than for the
+checker. They are compile-time only: <code>create: null</code> says a program
+cannot construct one, and <code>core</code> does not re-export the names, so a
+program cannot write one as a type either. Constant expressions
 built from them stay literal-typed too &#x2014; the binop folder operates at
 unbounded integer precision when both operands are literal, with no
-intermediate range check. A <code>literalInt</code> only becomes a concrete numeric
+intermediate range check. An <code>intliteral</code> only becomes a concrete numeric
 when one of the following fires:</p>
 <ul>
 <li><em><strong>Typed-location coercion</strong></em> via the literal-coercion helpers
@@ -509,19 +516,28 @@ literal-typed RHS never escapes into long-lived storage
 generic-arg inference (<code>inferGenericConstruction</code>,
 <code>checkBoxConstruction</code>) so the monomorphization key is keyed
 on the concrete default (e.g. <code>id_i64</code>, not
-<code>id_literal_int</code>).</li>
+<code>id_intliteral</code>).</li>
 <li><em><strong>Default-resolution late pass</strong></em> -- a final walk invoked from
 the module-level <code>typecheck</code> entry point after resolution
 returns. Walks <code>ZTyping.nodeType</code> and blindly replaces any
 remaining literal-typed entry with its concrete default
-(<code>i64</code> for <code>literalInt</code>, <code>f64</code> for <code>literalFloat</code>). No
+(<code>i64</code> for <code>intliteral</code>, <code>f64</code> for <code>floatliteral</code>). No
 range check fires here &#x2014; that is the coercion sites' job.
 Guarantees the emitter never sees a literal pseudo-type.</li>
 </ul>
-<p>Method dispatch on literal-typed receivers (e.g. <code>5.iterate</code>)
-follows the existing <code>typedefBaseId</code> walk. An early pass points
-<code>literalInt.typedefBaseId</code> at <code>i64</code> and
-<code>literalFloat.typedefBaseId</code> at <code>f64</code>, so the operator-method
+<p>A suffix the literal type DECLARES (<code>65.u8</code>) is dispatched through
+that declaration: the child resolves to the declared method and the
+target is that method's return type, which is the BARE type and never a
+<code>resultval</code> -- a literal's fit is settled at compile time, so it
+either fits or it is an error. The range and exactness checks stay in
+<code>checkLiteralFits</code>, shared by the in-body and unit-level paths,
+because a declaration can say which conversions exist but not that 300
+does not fit a <code>u8</code>.</p>
+<p>A suffix the literal type does NOT declare falls through, and method
+dispatch on literal-typed receivers (e.g. <code>5.iterate</code>) then follows
+the existing <code>typedefBaseId</code> walk. An early pass points
+<code>intliteral.typedefBaseId</code> at <code>i64</code> and
+<code>floatliteral.typedefBaseId</code> at <code>f64</code>, so the operator-method
 lookup in <code>checkBinop</code> and child-name lookups elsewhere resolve
 through the concrete type without per-site <code>isLiteral</code> guards.</p>
 <p><code>typesCompatible</code> treats literal-vs-concrete-numeric as

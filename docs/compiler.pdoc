@@ -435,12 +435,19 @@ parameters are exempt because they may monomorphize to a reftype.
 
 #---: Numeric Literal Coercion
 
-Bare numeric literals are typed as one of two compiler-internal
-singletons during typecheck: #~"literalInt" or #~"literalFloat"
-(both flagged #~"isLiteral" on #~"ZType"). Constant expressions
+Bare numeric literals are typed as one of two DECLARED types during
+typecheck: #~"intliteral" or #~"floatliteral", declared #~"is native"
+in #~"lib/system/system.z" beside the sixteen scalars and minted as the
+registry's first two rows, which the declaration then attaches to. Each
+declares exactly the conversions it can reach -- sixteen for the integer
+literal, the four float targets for the float one -- so which suffixes a
+literal accepts is a question for its declaration rather than for the
+checker. They are compile-time only: #~"create: null" says a program
+cannot construct one, and #~"core" does not re-export the names, so a
+program cannot write one as a type either. Constant expressions
 built from them stay literal-typed too — the binop folder operates at
 unbounded integer precision when both operands are literal, with no
-intermediate range check. A #~"literalInt" only becomes a concrete numeric
+intermediate range check. An #~"intliteral" only becomes a concrete numeric
 when one of the following fires:
 
 #ul:
@@ -460,19 +467,29 @@ when one of the following fires:
     generic-arg inference (#~"inferGenericConstruction",
     #~"checkBoxConstruction") so the monomorphization key is keyed
     on the concrete default (e.g. #~"id_i64", not
-    #~"id_literal_int").]
+    #~"id_intliteral").]
   [#*: #_*"Default-resolution late pass" -- a final walk invoked from
     the module-level #~"typecheck" entry point after resolution
     returns. Walks #~"ZTyping.nodeType" and blindly replaces any
     remaining literal-typed entry with its concrete default
-    (#~"i64" for #~"literalInt", #~"f64" for #~"literalFloat"). No
+    (#~"i64" for #~"intliteral", #~"f64" for #~"floatliteral"). No
     range check fires here — that is the coercion sites' job.
     Guarantees the emitter never sees a literal pseudo-type.]
 
-Method dispatch on literal-typed receivers (e.g. #~"5.iterate")
-follows the existing #~"typedefBaseId" walk. An early pass points
-#~"literalInt.typedefBaseId" at #~"i64" and
-#~"literalFloat.typedefBaseId" at #~"f64", so the operator-method
+A suffix the literal type DECLARES (#~"65.u8") is dispatched through
+that declaration: the child resolves to the declared method and the
+target is that method's return type, which is the BARE type and never a
+#~"resultval" -- a literal's fit is settled at compile time, so it
+either fits or it is an error. The range and exactness checks stay in
+#~"checkLiteralFits", shared by the in-body and unit-level paths,
+because a declaration can say which conversions exist but not that 300
+does not fit a #~"u8".
+
+A suffix the literal type does NOT declare falls through, and method
+dispatch on literal-typed receivers (e.g. #~"5.iterate") then follows
+the existing #~"typedefBaseId" walk. An early pass points
+#~"intliteral.typedefBaseId" at #~"i64" and
+#~"floatliteral.typedefBaseId" at #~"f64", so the operator-method
 lookup in #~"checkBinop" and child-name lookups elsewhere resolve
 through the concrete type without per-site #~"isLiteral" guards.
 

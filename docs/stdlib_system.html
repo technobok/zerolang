@@ -87,6 +87,8 @@ Table of Contents</div>
 </li>
 <li><a href="#numeric-types">Numeric types</a>
 </li>
+<li><a href="#literal-types">literal types</a>
+</li>
 <li><a href="#bool">bool</a>
 </li>
 <li><a href="#null">null</a>
@@ -170,6 +172,7 @@ operation can fail for reasons the caller needs to handle
 <li><a href="#bool"><strong>bool</strong> -- <code>variant { false: null  true: null }</code></a></li>
 <li><a href="#null"><strong>null</strong> -- <code>null: record is native</code></a></li>
 <li><a href="#never"><strong>never</strong> -- <code>never: record is native</code></a></li>
+<li><a href="#literal-types"><strong>intliteral</strong> / <strong>floatliteral</strong> -- the compile-time types of a numeric literal (not re-exported by <code>core</code>)</a></li>
 <li><a href="#any"><strong>Any</strong> -- <code>Any: union is native</code> (system-internal; not user-reachable)</a></li>
 </ul>
 <p><strong>String types</strong></p>
@@ -250,9 +253,11 @@ of letting the C compiler reject a type the program never wrote. The
 subunits are private to <code>system</code>, which re-exports the four types
 under their own names, and <code>core</code> re-exports them like the rest, so
 <code>1.5.f128</code> and <code>x.i128</code> read no differently.</p>
-<p><strong>Literals.</strong> Integer literals default to <code>i64</code>; float literals
-default to <code>f64</code>. Use the dotted suffix form to choose a different
-type: <code>65.u8</code>, <code>1.5.f32</code>, <code>0xff.u32</code>. Do <strong>not</strong> write
+<p><strong>Literals.</strong> A numeric literal has a type of its own before context
+pins it -- <a href="#literal-types"><code>intliteral</code> or <code>floatliteral</code> --</a>
+and the dotted suffix form is a DECLARED method on that type:
+<code>65.u8</code>, <code>1.5.f32</code>, <code>0xff.u32</code>. Unpinned, an integer literal
+falls to <code>i64</code> and a float literal to <code>f64</code>. Do <strong>not</strong> write
 <code>65u8</code> (non-dotted form is reserved syntax).</p>
 <p><strong>Arithmetic.</strong> Every type declares <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>,
 <code>%</code> (modulo) as native methods taking a same-type rhs; on the
@@ -369,7 +374,25 @@ a program using
 them fails at type-check with its own message instead of inside the C
 compiler. Width on platforms without native 128-bit support is
 determined at C compile time.</p>
-<h2 id="bool"><a href="#bool">4. bool</a></h2>
+<h2 id="literal-types"><a href="#literal-types">4. literal types</a></h2>
+<pre><code class="language-zerolang">  intliteral:   record is native as { i8: ... c32: ...  create: null }
+  floatliteral: record is native as { f16: f32: f64: f128:  create: null }</code></pre>
+<p>The type a numeric literal wears before context pins it. <code>intliteral</code>
+declares a conversion to each of the sixteen scalars; <code>floatliteral</code>
+declares only the four float ones, which is what makes <code>3.5.u8</code> a
+missing member rather than a rule written by hand.</p>
+<p>Their conversions return the <strong>bare</strong> target type, never a
+<code>resultval</code>. On a scalar a lossy conversion can fail at run time and
+so must be checked; on a literal the value is known at compile time, so
+it either fits -- and <code>65.u8</code> is simply a <code>u8</code> -- or it does not and
+the program is rejected where the literal is written.</p>
+<p>Neither type reaches emission: the programmer converts explicitly, or
+context coerces, or the literal falls to <code>i64</code> / <code>f64</code>.
+<code>create: null</code> says a program cannot construct one, and <code>core</code> does
+not re-export either name, so a program cannot name one as a type
+either -- these are what the checker gives a lexeme, not a surface a
+program writes.</p>
+<h2 id="bool"><a href="#bool">5. bool</a></h2>
 <pre><code class="language-zerolang">  bool: variant { false: null  true: null } as {
       tag: u8.tag
       ==  / != / &lt; / &lt;= / &gt; / &gt;=   # native, same-type rhs, out bool
@@ -404,7 +427,7 @@ on the primitive.</p>
 <p>No bitwise <code>and</code> / <code>or</code> / <code>not</code> methods on <code>bool</code> yet
 -- short-circuit <code>&amp;&amp;</code> / <code>||</code> lives at the expression
 level; see <a href="./grammar.html">grammar.</a></p>
-<h2 id="null"><a href="#null">5. null</a></h2>
+<h2 id="null"><a href="#null">6. null</a></h2>
 <pre><code class="language-zerolang">  null: record is native</code></pre>
 <p>The unit type. Exactly one value, also spelled <code>null</code>. Used as
 the payload in variant / union arms that carry no data
@@ -413,7 +436,7 @@ type of functions that don't return a value.</p>
 <p>Not the same as C's <code>NULL</code> -- zerolang pointers are
 non-nullable at the language level; <code>Option</code> handles the
 "maybe-absent" case.</p>
-<h2 id="never"><a href="#never">6. never</a></h2>
+<h2 id="never"><a href="#never">7. never</a></h2>
 <pre><code class="language-zerolang">  never: record is native</code></pre>
 <p>The bottom type: the empty type, with no values. Used as the
 return type of functions that never return normally (<code>error</code>,
@@ -423,7 +446,7 @@ position.</p>
 <p>Control-flow analysis tracks <code>never</code>-returning expressions to
 determine unreachable-code errors and branch exhaustiveness. See
 <a href="./spec.html">./spec.html</a>spec, the never type.</p>
-<h2 id="any"><a href="#any">7. any</a></h2>
+<h2 id="any"><a href="#any">8. any</a></h2>
 <pre><code class="language-zerolang">  Any: union is native</code></pre>
 <p>The universal supertype: the union of all types -- and <strong>not a
 user-reachable name</strong>. <code>Any</code> is retired from the user surface: it
@@ -451,7 +474,7 @@ two types that deliberately span both families (<code>Iterator</code>,
 <code>OptionView</code> -- a borrowed view of a valtype is still a
 reference). Assigning into a bare <code>Any</code> is not supported --
 zerolang does not do runtime type tagging at that level.</p>
-<h2 id="string"><a href="#string">8. string</a></h2>
+<h2 id="string"><a href="#string">9. string</a></h2>
 <pre><code class="language-zerolang">  String: class is native as {
       :Text
       ==  / != / &lt;  / &lt;= / &gt;  / &gt;=: function {:this rhs: String} out bool
@@ -528,7 +551,7 @@ longer string that shares its prefix. Not locale-aware.</p>
 <p><strong>Destruction.</strong> Scope exit frees the heap buffer. Moved values
 (<code>.take</code>) are invalidated at the source; the destination
 destroys.</p>
-<h2 id="stringview"><a href="#stringview">9. stringView</a></h2>
+<h2 id="stringview"><a href="#stringview">10. stringView</a></h2>
 <pre><code class="language-zerolang">  StringView: class is native as {
       length / == / != / &lt; / &lt;= / &gt; / &gt;= / compare  ...
       string:            function {:this} out String
@@ -651,7 +674,7 @@ not a content hash.</p>
 implementor of the <code>Text</code> protocol -- its <code>.stringView</code>
 method returns itself. This lets any <code>Text</code>-constrained
 generic accept a plain view.</p>
-<h2 id="string-iterators"><a href="#string-iterators">10. String iterators</a></h2>
+<h2 id="string-iterators"><a href="#string-iterators">11. String iterators</a></h2>
 <pre><code class="language-zerolang">  cpiter:    class is native as { call: function {:this} out (optionval t: u32) }
   splitter:  class is native as { call: function {:this} out (Option T: StringView) }
   linesiter: class is native as { call: function {:this} out (Option T: StringView) }</code></pre>
@@ -676,7 +699,7 @@ usual form.</p>
   for piece: s.split ",".stringView loop {
       print piece
   }</code></pre>
-<h2 id="text-and-stringlike"><a href="#text-and-stringlike">11. text and StringLike</a></h2>
+<h2 id="text-and-stringlike"><a href="#text-and-stringlike">12. text and StringLike</a></h2>
 <pre><code class="language-zerolang">  Text: protocol {
       stringView: function {:this} out StringView
   }
@@ -696,7 +719,7 @@ or declares <code>:Text</code> conformance (dispatches through the
 method). Matched in declaration order; see
 <a href="./spec.html">./spec.html</a>spec for the
 full rule.</p>
-<h2 id="option"><a href="#option">12. option</a></h2>
+<h2 id="option"><a href="#option">13. option</a></h2>
 <pre><code class="language-zerolang">  Option: union {
       none: null
       some: t
@@ -730,7 +753,7 @@ why its bound stays <code>Any.generic</code>.</p>
 the payload type: access fields as <code>Result.string</code> (the t
 field name narrows as the arm label, not as <code>Result.some</code>; see
 the saved feedback on match narrowing).</p>
-<h2 id="optionval"><a href="#optionval">13. optionval</a></h2>
+<h2 id="optionval"><a href="#optionval">14. optionval</a></h2>
 <pre><code class="language-zerolang">  optionval: variant {
       none: null
       some: t
@@ -742,7 +765,7 @@ for the wrapper). Use when the contained <code>t</code> is a valtype --
 <p>The stringView numeric-query methods (<code>indexOf</code>,
 <code>lastIndexOf</code>, <code>byteAt</code>) and <code>StringView.splitOnce</code>
 return <code>optionval(u64)</code> / <code>optionval(u8)</code>.</p>
-<h2 id="result"><a href="#result">14. result</a></h2>
+<h2 id="result"><a href="#result">15. result</a></h2>
 <pre><code class="language-zerolang">  Result: union {
       err: e
       ok:  t
@@ -778,7 +801,7 @@ narrow the subject.</p>
 <pre><code class="language-zerolang">  match (io.readText path: "a.txt".string)
   case ok  then print ok
   case err then io.eprintln "failed".stringView</code></pre>
-<h2 id="parseerror"><a href="#parseerror">15. parseerror</a></h2>
+<h2 id="parseerror"><a href="#parseerror">16. parseerror</a></h2>
 <pre><code class="language-zerolang">  parseerror: variant {
       empty:         null
       invalidDigit: null
@@ -796,7 +819,7 @@ the leading sign on signed parses, or the decimal point on
 <code>parseF64</code>)</li>
 <li><code>overflow</code> -- magnitude exceeds the target type's range</li>
 </ul>
-<h2 id="bytes-and-byteview"><a href="#bytes-and-byteview">16. bytes and byteView</a></h2>
+<h2 id="bytes-and-byteview"><a href="#bytes-and-byteview">17. bytes and byteView</a></h2>
 <pre><code class="language-zerolang">  Bytes:    class { val: (ListVal u8).typedef }
   ByteView: class { val: (ListViewVal t: u8).typedef }</code></pre>
 <p>Two typedef classes for binary data: <code>Bytes</code> is an owned,
@@ -819,7 +842,7 @@ as a non-owned parameter.</p>
   b.append from: 72.u8
   b.append from: 105.u8
   v: ByteView.borrow from: b.listView</code></pre>
-<h2 id="path-and-pathview"><a href="#path-and-pathview">17. path and pathview</a></h2>
+<h2 id="path-and-pathview"><a href="#path-and-pathview">18. path and pathview</a></h2>
 <pre><code class="language-zerolang">  path:     class { val: String.typedef }
   pathview: class { val: StringView.typedef }</code></pre>
 <p>Typedef classes over <code>String</code> / <code>StringView</code> for filesystem
@@ -829,7 +852,7 @@ extension / normalize) as they land. Until then, string
 operations flow through via the typedef rule.</p>
 <p><strong>View lifetime.</strong> Same as <code>StringView</code> / <code>ByteView</code> -- a
 <code>PathView</code> locks its source <code>Path</code>.</p>
-<h2 id="box"><a href="#box">18. box</a></h2>
+<h2 id="box"><a href="#box">19. box</a></h2>
 <pre><code class="language-zerolang">  Box: class {} as { t: anyval.generic }</code></pre>
 <p>Generic reftype wrapper over a <strong>valtype</strong> (the bound rejects
 reftypes -- they are already references). Converts a valtype
@@ -848,7 +871,7 @@ when a union is instantiated with a Box type argument
 <p>Construction is routed through the unified call dispatch; see
 <a href="./compiler.html">compiler. Destruction frees the heap copy</a>
 on scope exit.</p>
-<h2 id="typedef"><a href="#typedef">19. typedef</a></h2>
+<h2 id="typedef"><a href="#typedef">20. typedef</a></h2>
 <pre><code class="language-zerolang">  typedef: record is native as { from: Any.generic }</code></pre>
 <p>Zero-overhead wrapper type. Parameterised by the wrapped type.
 Users don't instantiate <code>typedef</code> directly -- they define a
@@ -858,7 +881,7 @@ recognises as a typedef marker:</p>
 <p>This declares <code>Path</code> as a typedef over <code>String</code>: a distinct
 type in signatures but with full backward compatibility to
 <code>String</code>'s operations. See <a href="./spec.html">./spec.html</a>spec.</p>
-<h2 id="tag"><a href="#tag">20. tag</a></h2>
+<h2 id="tag"><a href="#tag">21. tag</a></h2>
 <pre><code class="language-zerolang">  tag: record is native as { t: anyval.generic }</code></pre>
 <p>Generic record that carries a variant / union discriminator's
 storage type. The <code>tag: tag</code> field in numeric records and user
@@ -866,7 +889,7 @@ variants tells the compiler how wide the discriminator is.
 Parameterised by <code>t</code>: <code>tag of: u8</code> / <code>tag of: u16</code> / etc.
 Rarely referenced by user code directly -- the compiler emits
 the tag field and accesses it internally.</p>
-<h2 id="error"><a href="#error">21. error</a></h2>
+<h2 id="error"><a href="#error">22. error</a></h2>
 <pre><code class="language-zerolang">  error: function {msg: String} out never is native</code></pre>
 <p>Compile-time error. Invoking <code>error msg: ...</code> at type-check
 time emits the message as a compile error and aborts
@@ -878,7 +901,7 @@ that must be statically dead; the <code>never</code> return type lets
           error msg: "never-valued T".string
       }
   }</code></pre>
-<h2 id="panic"><a href="#panic">22. panic</a></h2>
+<h2 id="panic"><a href="#panic">23. panic</a></h2>
 <pre><code class="language-zerolang">  panic: function {msg: String} out never is native</code></pre>
 <p>Runtime terminal error. <code>panic msg: ...</code> prints
 <code>zpanic: &lt;msg&gt;</code> to stderr and exits the process with status
@@ -903,7 +926,7 @@ numeric cast overflow, stringView bounds) also funnel through
 <p>Panics are terminal: there is no <code>recover</code> mechanism. The
 <code>never</code> return type ensures any code after a <code>panic</code> is
 statically unreachable.</p>
-<h2 id="return"><a href="#return">23. return</a></h2>
+<h2 id="return"><a href="#return">24. return</a></h2>
 <pre><code class="language-zerolang">  return: function as { t: Any.generic } in { result: t } out never is native</code></pre>
 <p>Return from the enclosing function. Spelled as a function for
 uniformity with the control-flow dispatch model -- <code>return x</code>
@@ -917,7 +940,7 @@ applies.</p>
 <p>Return ownership semantics are tied to the function's declared
 return-ownership annotation; see <a href="./ownership.html">ownership for <code>.borrow</code> / <code>.view</code> interactions and the
 lock-escape rules for view returns.</a></p>
-<h2 id="break"><a href="#break">24. break</a></h2>
+<h2 id="break"><a href="#break">25. break</a></h2>
 <p>Compiler-intrinsic. Breaks out of the enclosing <code>for</code> / <code>do</code>
 loop. Takes no argument. The <code>never</code> return type propagates
 through the enclosing block.</p>
@@ -928,7 +951,7 @@ through the enclosing block.</p>
 definition in <code>system.z</code>; it's registered directly by the
 compiler via its <code>ControlKind</code> dispatcher and re-exported by
 <code>core</code> under the <code>system.</code> namespace.</p>
-<h2 id="continue"><a href="#continue">25. continue</a></h2>
+<h2 id="continue"><a href="#continue">26. continue</a></h2>
 <p>Compiler-intrinsic. Skips to the next iteration of the enclosing
 <code>for</code> / <code>do</code> loop. Takes no argument.</p>
 <pre><code class="language-zerolang">  for i: 0.u64 to: 100.u64 loop {

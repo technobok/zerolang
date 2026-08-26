@@ -72,6 +72,7 @@ operation can fail for reasons the caller needs to handle
   [#*: #> to=bool: #b:"bool" -- #~"variant { false: null  true: null }"]
   [#*: #> to=null: #b:"null" -- #~"null: record is native"]
   [#*: #> to=never: #b:"never" -- #~"never: record is native"]
+  [#*: #> to=literal-types: #b:"intliteral" / #b:"floatliteral" -- the compile-time types of a numeric literal (not re-exported by #~"core")]
   [#*: #> to=any: #b:"Any" -- #~"Any: union is native" (system-internal; not user-reachable)]
 
 #p: #b:"String types"
@@ -164,9 +165,11 @@ subunits are private to #~"system", which re-exports the four types
 under their own names, and #~"core" re-exports them like the rest, so
 #~"1.5.f128" and #~"x.i128" read no differently.
 
-#b:"Literals." Integer literals default to #~"i64"; float literals
-default to #~"f64". Use the dotted suffix form to choose a different
-type: #~"65.u8", #~"1.5.f32", #~"0xff.u32". Do #b:"not" write
+#b:"Literals." A numeric literal has a type of its own before context
+pins it -- #> to=literal-types: #~"intliteral" or #~"floatliteral" --
+and the dotted suffix form is a DECLARED method on that type:
+#~"65.u8", #~"1.5.f32", #~"0xff.u32". Unpinned, an integer literal
+falls to #~"i64" and a float literal to #~"f64". Do #b:"not" write
 #~"65u8" (non-dotted form is reserved syntax).
 
 #b:"Arithmetic." Every type declares #~"+", #~"-", #~"*", #~"/",
@@ -308,6 +311,31 @@ them fails at type-check with its own message instead of inside the C
 compiler. Width on platforms without native 128-bit support is
 determined at C compile time.
 
+
+#--: literal types
+
+#code language=zerolang: """
+  intliteral:   record is native as { i8: ... c32: ...  create: null }
+  floatliteral: record is native as { f16: f32: f64: f128:  create: null }
+"""
+
+The type a numeric literal wears before context pins it. #~"intliteral"
+declares a conversion to each of the sixteen scalars; #~"floatliteral"
+declares only the four float ones, which is what makes #~"3.5.u8" a
+missing member rather than a rule written by hand.
+
+Their conversions return the #b:"bare" target type, never a
+#~"resultval". On a scalar a lossy conversion can fail at run time and
+so must be checked; on a literal the value is known at compile time, so
+it either fits -- and #~"65.u8" is simply a #~"u8" -- or it does not and
+the program is rejected where the literal is written.
+
+Neither type reaches emission: the programmer converts explicitly, or
+context coerces, or the literal falls to #~"i64" / #~"f64".
+#~"create: null" says a program cannot construct one, and #~"core" does
+not re-export either name, so a program cannot name one as a type
+either -- these are what the checker gives a lexeme, not a surface a
+program writes.
 
 #--: bool
 
