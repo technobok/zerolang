@@ -24012,29 +24012,35 @@ blockHasBreak: function {ast: Ast.view n: Node.view} out bool is {
 # checkDo -- walk a do-block: push the `block` scope, define break (an entry
 # position placeholder with an unregistered type id, so it never joins the dump),
 # walk the statements, then pop. The do resolves to its last statement's value type.
-checkDo: function {
+# wrapDoBreakValue -- the value type of a do-block that can BREAK: an early
+# exit means there may be no value, so the block's type wraps in `optionval`
+# (or `Option`, when the payload is a reftype and must be boxed). Returns the
+# payload type unchanged when there is nothing to wrap.
+#
+# A break-carrying do-block's value wraps in optionval (early exit =
+# none). A REFTYPE block value wraps in Option instead (boxed payload).
+#
+# MATERIALISE THE PAYLOAD FIRST. The wrap mints a monomorphization keyed on
+# the payload type, and a literal one would key it on `intliteral` -- which
+# is how the literal type reached the emitter at all, as the payload field
+# of `optionval_intliteral` in `x: { if c then break  42 }`. Generic-arg
+# inference already keys on the concrete default everywhere else; this is
+# the same rule, at the one site that did not apply it.
+wrapDoBreakValue: function {
+    ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast
     donode: doref
-} out ztypes.tid is {
-    doMarker: st.pushBlock name: "block"
-    dbk: st.reg.ctlPlaceholder
-    (st.define
-        nameId: zast.names.wkBreak
-        ztypeId: (ztypes.tid.create from: dbk.u64)
-    )
-    drainPendingBorrow :st
-    checkStatement :st :unitDecl :ast blockId: donode.statement
-    result: lastStmtType :st :ast block: (ast.nodes.get i: donode.statement.u64)
-    st.popTo marker: doMarker
-    # A break-carrying do-block's value wraps in optionval (early exit =
-    # none). A literal-typed value needs no special case: it is a registered
-    # row like any other, so its name and its payload id read straight off it.
-    # A REFTYPE block value wraps in Option instead (boxed payload).
-    if result > 0 when (blockHasBreak :ast n: (ast.nodes.get i: donode.statement.u64)) then {
-        vtn0: st.reg.nameOf tid: (ztypes.tid.create from: result.u64)
-        payloadTid: result
+    result: u64
+} out u64 is {
+    # `result` is a borrowed parameter; the wrap replaces the type, so the
+    # rebinding happens in a local.
+    res: result
+    if res > 0 when (blockHasBreak :ast n: (ast.nodes.get i: donode.statement.u64)) then {
+        mres0: materialiseLiteral :ast :st :unitDecl t: res
+        res = mres0.u64
+        vtn0: st.reg.nameOf tid: (ztypes.tid.create from: res.u64)
+        payloadTid: res
         if vtn0.length > 0 then {
             wrapBase: "optionval"
             if (typeIsReftype
@@ -24079,10 +24085,30 @@ checkDo: function {
                     valSubs: vsF
                     fallbackArg: 0
                 )
-                if omid0 > 0 then result = omid0
+                if omid0 > 0 then res = omid0
             } case none then null
         }
     }
+    return res
+}
+
+checkDo: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    donode: doref
+} out ztypes.tid is {
+    doMarker: st.pushBlock name: "block"
+    dbk: st.reg.ctlPlaceholder
+    (st.define
+        nameId: zast.names.wkBreak
+        ztypeId: (ztypes.tid.create from: dbk.u64)
+    )
+    drainPendingBorrow :st
+    checkStatement :st :unitDecl :ast blockId: donode.statement
+    result: lastStmtType :st :ast block: (ast.nodes.get i: donode.statement.u64)
+    st.popTo marker: doMarker
+    result = wrapDoBreakValue :ast :st :unitDecl :donode :result
     if result > 0 then {
         setk: result
         stampGate :st nid: donode.nid.u64 tid: (ztypes.tid.create from: setk.u64)
@@ -39706,12 +39732,11 @@ walkLookupTyperefFrom: function {
 # rebinding them would change shadow semantics. The set is the numeric
 # scalars the emitter spells, plus `bool` -- which cTypeOf does not spell
 # (its C form comes from the bool declaration) but which is a shell name on
-# the same footing -- and the two literal widths.
+# the same footing. The two literal types are NOT here: they never reach the
+# emitter, so there is no spelling of them to protect.
 shellScalarName: function {name: StringView} out bool is {
     if (isNumericTypeName :name) then return true
-    if name == "bool" then return true
-    if name == "intliteral" then return true
-    return name == "floatliteral"
+    return name == "bool"
 }
 
 # shellResolveByName -- the emitter's shell resolution order for `name` seen
