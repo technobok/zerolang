@@ -4129,6 +4129,49 @@ typeofSourceType: function {ast: Ast
     }
 }
 
+# refuseLiteralTyperef -- a literal type names what a lexeme wears until context
+# pins it; it is COMPILE-TIME ONLY and has no C representation, so written as a
+# declared type it produced C that does not compile (`z_t1_t` is never defined).
+# A unit-level ALIAS may still name one -- that binds the type, it does not
+# declare a value of it, and an alias never resolves through this path.
+refuseLiteralTyperef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    tid: ztypes.tid
+} is {
+    if (isLiteralTypeId :st :tid) == false then return
+    ltn: st.reg.nameOf :tid
+    # only where the NAME was written. A literal type's own conversions take an
+    # elided `:this`, whose type legitimately IS the literal type -- there is no
+    # written name there to refuse, and refusing it breaks system.z itself.
+    wn9: paramTypeBaseNameId :ast op: (ast.nodes.get i: nid.u64)
+    if wn9.isZero then return
+    written9: false
+    {
+        wt9: zast.nameTextAt :ast ref: wn9
+        written9 = wt9.stringView == ltn.stringView
+    }
+    if written9 == false then return
+    dflt: "i64"
+    if tid == st.reg.literalFloatTid then dflt = "f64"
+    lm9: "'\{ltn}' is a compile-time type and cannot be written as a declared type"
+    ln9: "a numeric literal wears it until context pins one; it never reaches emission".string
+    lh9: "name the type the value should have, such as `\{dflt}`"
+    pos: zast.posOf n: (ast.nodes.get i: nid.u64)
+    (addErrorH
+        :st
+        nodeid: nid
+        lineno: pos.line
+        colno: pos.col
+        e: zast.err.typeError
+        msg: lm9
+        note: ln9
+        hint: lh9
+        width: ltn.length.u32.orPanic
+    )
+}
+
 # resolveTyperefShellMarked -- resolveTyperefShell plus the typeof handling:
 # a generator-promoted local's field type is a `typeof <first-rhs>` node.
 # When the source resolves from signatures alone the field types directly
@@ -4182,6 +4225,7 @@ resolveTyperefShellMarked: function {
         tv: nid
         st.typing.typeofShell.set key: tk value: tv
     }
+    refuseLiteralTyperef :st :ast :nid tid: (ztypes.tid.create from: cid)
     return (ztypes.tid.create from: cid)
 }
 
@@ -4639,6 +4683,7 @@ registerValueParam: function {
         nid: pm.operation
         :thisName
     )
+    refuseLiteralTyperef :st :ast nid: pm.operation tid: (ztypes.tid.create from: cid.u64)
     (st.typing.setMemberType
         parentTypeId: (ztypes.tid.create from: fid.u64)
         nameId: pm.name
@@ -15742,6 +15787,12 @@ stampOnePendingTyperef: function {
             (ztyping.nodeTypeSet
                 tbl: st.typing.nodeType
                 :nid
+                tid: (ztypes.tid.create from: r.u64)
+            )
+            (refuseLiteralTyperef
+                :st
+                :ast
+                nid: (zast.nodeid.create from: nid)
                 tid: (ztypes.tid.create from: r.u64)
             )
             # every resolved type reference records the declaration it
