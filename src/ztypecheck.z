@@ -32,6 +32,8 @@ public: unit {
     :isMoveMarker
     :isStringViewMember
     :isNumericTypeName
+    :isNumericLiteralName
+    :isFloatLiteralName
     :armSuffixSide
     :metaCreateBaseId
     :methodReturnOf
@@ -41,6 +43,7 @@ public: unit {
     :optU64Or
     :paramIsThisReceiverId
     :declOfTypeId
+    :surfaceDeclOfTypeId
     :declTypeIdOf
     :publicNsOf
     :declParentIdOf
@@ -22135,6 +22138,7 @@ checkNumericSuffixCast: function {
                 stampGate :st nid: dp.parent.u64 tid: (ztypes.tid.create from: setcp.u64)
                 setcd: castOpt
                 stampGate :st nid: dp.nid.u64 tid: (ztypes.tid.create from: setcd.u64)
+                recordSuffixDecl :st nid: dp.nid.u64 tid: litTid nameId: castChildId
                 return (callleg handled: true tid: (ztypes.tid.create from: castOpt))
             }
         } case none then null
@@ -34673,6 +34677,37 @@ stampOneUnitMono: function {
     st.pop
 }
 
+# recordLiteralDecl -- name the literal type a node WORE, for tooling, in the
+# last moment it is knowable: the fold below overwrites the stamp with i64/f64
+# and nothing afterwards can tell an unpinned literal from a plain integer.
+# toolRefDecl, never refDecl -- the emitter reads the latter in five places and
+# an entry added there for an editor moved the emitted C.
+recordLiteralDecl: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: u64
+    tid: ztypes.tid
+} is {
+    sd: surfaceDeclOfTypeId :st :ast :tid
+    if sd.isZero then return
+    st.typing.toolRefDecl.set key: nid value: sd
+}
+
+# recordSuffixDecl -- name the conversion member a numeric suffix selects. The
+# suffix leg returns before member resolution, so nothing else stamps the dotted
+# node and an editor asking what `u8` in `65.u8` refers to has no answer at all.
+# Same table as recordLiteralDecl, for the same reason.
+recordSuffixDecl: function {
+    st: zenv.ZSymbolTable
+    nid: u64
+    tid: ztypes.tid
+    nameId: zast.nameid
+} is {
+    cdl: st.typing.declFindChild parentDeclId: (declOfTypeId :st :tid) :nameId
+    if cdl.isZero then return
+    st.typing.toolRefDecl.set key: nid value: cdl
+}
+
 # foldLiteralStamps -- replace literal-typed node stamps with their concrete
 # defaults (i64 / f64) after the body walk: the unregistered pseudo ids and the
 # data blocks' registered intliteral/floatliteral element shells. Symbol-table
@@ -34722,6 +34757,7 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable frame: ztypes.declid program:
                 isInt: fv == st.reg.literalIntTid
                 isFloat: fv == st.reg.literalFloatTid
                 if isInt when intId > 0 then {
+                    recordLiteralDecl :st ast: program.ast nid: ni tid: fv
                     (ztyping.nodeTypeSet
                         tbl: st.typing.nodeType
                         nid: ni
@@ -34729,6 +34765,7 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable frame: ztypes.declid program:
                     )
                 }
                 if isFloat when floatId > 0 then {
+                    recordLiteralDecl :st ast: program.ast nid: ni tid: fv
                     (ztyping.nodeTypeSet
                         tbl: st.typing.nodeType
                         nid: ni
@@ -38890,6 +38927,32 @@ declOfTypeId: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.d
         cur = ztypes.tid.create from: (next)
     }
     return (ztypes.declid.create from: 0)
+}
+
+# surfaceDeclOfTypeId -- the Decl a READER means by a type's name. Writing `u8`
+# navigates to core's re-export line, not to the record in `system.z` that
+# declOfTypeId returns, so a navigation driven by a TYPE ID has to make the same
+# jump or the two routes to one type disagree. A type core does not re-export
+# answers with its own declaration.
+surfaceDeclOfTypeId: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tid: ztypes.tid
+} out ztypes.declid is {
+    own: declOfTypeId :st :tid
+    if own.isZero then return own
+    if st.typing.coreUnitRoot.isZero then return own
+    tn: st.reg.nameOf :tid
+    nameId: zast.poolFind pool: ast.names text: tn.stringView
+    if nameId.isZero then return own
+    cx: st.typing.declFindChild parentDeclId: st.typing.coreUnitRoot :nameId
+    if cx.isZero then return own
+    # the re-export has to name THIS type's own unit: a user type may be named
+    # `u8`, and the spelling alone would hand it core's `u8`. Unit identity is
+    # the Decl id, never the name.
+    dk: reexportTargetIdsOf :st :ast declId: cx
+    if (unitDeclOfName :st nameId: dk.unitName) == (unitDeclOfTid :st :tid) then return cx
+    return own
 }
 
 # unitDeclOfTid -- the top-level unit root Decl that owns type `tid`'s

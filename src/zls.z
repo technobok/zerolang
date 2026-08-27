@@ -1671,6 +1671,59 @@ nodeTypeAt: function {o: (Option zenv.ZSymbolTable).view nid: u64} out u64 is {
     }
 }
 
+# surfaceDeclOfType -- the Decl a reader means by type `tid`, over the LSP's
+# optional snapshot. Writing a type's name navigates to core's re-export line,
+# so a hit resolved through a TYPE ID has to land in the same place.
+surfaceDeclOfType: function {
+    o: (Option zenv.ZSymbolTable).view
+    prog: zast.Node.view
+    tid: u64
+} out ztypes.declid is {
+    if tid == 0 then return (ztypes.declid.create from: 0)
+    match (
+        o
+    ) case some then {
+        match (
+            prog
+        ) case program then {
+            return (ztypecheck.surfaceDeclOfTypeId
+                st: o
+                ast: prog.ast
+                tid: (ztypes.tid.create from: tid)
+            )
+        } else null
+    } case none then null
+    return (ztypes.declid.create from: 0)
+}
+
+# literalNote -- what a numeric literal BECOMES, which is the one thing about it
+# a reader cannot get from the source. Unpinned it falls to the default type;
+# pinned, it already wears the type that pinned it. "" for anything else.
+literalNote: function {
+    o: (Option zenv.ZSymbolTable).view
+    name: StringView
+    refTid: u64
+    nodeTid: u64
+} out String is {
+    if (ztypecheck.isNumericLiteralName :name) == false then return "".string
+    match (
+        o
+    ) case some then {
+        if refTid == o.reg.literalIntTid then return "falls to `i64` here".string
+        if refTid == o.reg.literalFloatTid then return "falls to `f64` here".string
+        if nodeTid > 0 then {
+            tn: displayTypeNameSt st: o tid: (ztypes.tid.create from: nodeTid.u64)
+            if tn.length > 0 then {
+                kind: "an integer literal"
+                if (ztypecheck.isFloatLiteralName :name) then kind = "a float literal"
+                note: "\{kind} pinned to `\{tn}` here"
+                return note
+            }
+        }
+    } case none then null
+    return "".string
+}
+
 # varDefNode -- the binding node that declared variable `vid`.
 varDefNode: function {o: (Option zenv.ZSymbolTable).view vid: ztypes.vid} out u64 is {
     match (
@@ -2932,6 +2985,18 @@ navAnswer: function {
     if bestKind == 6 when refDeclId.isZero then {
         refDeclId = genericParamDeclOf o: snap.st nid: hnid
     }
+    # a PINNED literal -- `65` at a u8 parameter, or the base of `65.u8` -- was
+    # stamped with the type that pinned it and never wore a literal one, so the
+    # fold pass had nothing to record. Its lexeme is the only tell left.
+    if bestKind == 1 when refDeclId.isZero then {
+        if (ztypecheck.isNumericLiteralName name: hname.stringView) then {
+            refDeclId = (surfaceDeclOfType
+                o: snap.st
+                prog: snap.prog
+                tid: (nodeTypeAt o: snap.st nid: hnid)
+            )
+        }
+    }
     if refVid.isZero when refTid == 0 when refOwner == 0 then {
         if refDeclId > 0 then refTid = declTypeIdOf o: snap.st declId: refDeclId
     }
@@ -3103,6 +3168,19 @@ navAnswer: function {
                     docBody.append dn9x
                 }
             }
+        }
+        ln9: (literalNote
+            o: snap.st
+            name: hname.stringView
+            :refTid
+            nodeTid: (nodeTypeAt o: snap.st nid: hnid)
+        )
+        if ln9.length > 0 then {
+            if docBody.length > 0 then {
+                docBody.appendByte b: 10
+                docBody.appendByte b: 10
+            }
+            docBody.append ln9
         }
         return (hoverMarkdown code: body.stringView doc: docBody.stringView)
     }
