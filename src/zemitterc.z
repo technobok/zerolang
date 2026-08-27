@@ -26731,13 +26731,37 @@ fnptrRetTypeC: function {
     if rtid.isZero then rtid = fnRegReturnId :symtab :tid
     if rtid.isZero then return "void".string
     rn: regNameOf :symtab tid: (ztypes.tid.create from: rtid.u64)
-    if rtid == ctx.strTid then return "\{ctx.strC}_t"
-    if rtid == ctx.svTid then return "\{ctx.svC}_t"
-    rc: scalarCTypeFor :symtab name: rn.stringView tid: (ztypes.tid.create from: rtid.u64)
-    if rc.length > 0 then return rc
-    rr: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: rtid.u64) thisTid: ztypes.tid
-    if rr.length > 0 then return rr
-    return "int64_t".string
+    base9: String
+    if rtid == ctx.strTid then base9 = "\{ctx.strC}_t"
+    if base9.length == 0 when rtid == ctx.svTid then base9 = "\{ctx.svC}_t"
+    if base9.length == 0 then {
+        rc: scalarCTypeFor :symtab name: rn.stringView tid: (ztypes.tid.create from: rtid.u64)
+        if rc.length > 0 then base9 = rc
+    }
+    if base9.length == 0 then {
+        rr: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: rtid.u64) thisTid: ztypes.tid
+        if rr.length > 0 then base9 = rr
+    }
+    if base9.length == 0 then base9 = "int64_t".string
+    # the typedef names the SIGNATURE, so it takes the same two promotions
+    # fnSignature applies: a Map/Set return is a heap pointer, and a
+    # reference-returning one hands back an address. They are mutually
+    # exclusive -- fnReturnsRefBorrow declines a heap-pointer collection.
+    if (isHeapPtrCollection :symtab :ctx tid: rtid) then {
+        bs9: "\{base9}*"
+        base9 = bs9
+    }
+    if (fnReturnsRefBorrow
+        :ast
+        :symtab
+        :ctx
+        fid: tid
+        retTid: rtid
+    ) then {
+        bs9b: "\{base9}*"
+        base9 = bs9b
+    }
+    return base9
 }
 
 # fnptrParamTypeC -- C type for one param of a FUNCTION's `_ft` typedef, applying
