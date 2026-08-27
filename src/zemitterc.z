@@ -7678,6 +7678,11 @@ emitVariantCtorCall: function {
     vtid: userFnId :ast :symtab :ctx name: bn.stringView
     if vtid.isZero then return "".string
     if (symtab.reg.typetypeOf typeId: vtid) != ztypes.ztypetype.variantType then return "".string
+    # a generic variant's arm is WRITTEN against the template (`Slot.full`), so
+    # the name resolves to the template and its cname and tags name a struct no
+    # instance has. The mono the binding holds is on the call node's stamp; an
+    # id compare against the template is what says the stamp is its instance.
+    if (genericOriginTid :symtab tid: smid) == vtid then vtid = smid
     return (emitInlineVariantCtor :ast :symtab :ctx :call tid: vtid arm: mn.stringView)
 }
 
@@ -27133,11 +27138,10 @@ emitUserStructsOrdered: function {
     emitEarlyUserStructs :ast :symtab :ctx :userList :lateSet :buf
     emitLateGroupOrdered :ast :symtab :ctx :runtimeDir :lateGroup :lateSet :buf
 }
-# MonoWork -- the nineteen mono worklists that one classification sweep fills
-# and the emitters drain. They were nineteen parameters threaded through five
-# functions, which is what made those signatures unreadable. The categories stay
-# NAMED rather than becoming rows of an indexed table: the emission order is
-# made of them, and a nested generic container is not available anyway.
+# MonoWork -- the mono worklists that one classification sweep fills and the
+# emitters drain. The categories stay NAMED rather than becoming rows of an
+# indexed table: the emission order is made of them, and a nested generic
+# container is not available anyway.
 MonoWork: class {
     wStr: (ListVal u64)
     wBox: (ListVal u64)
@@ -27154,6 +27158,7 @@ MonoWork: class {
     wIdSet: (ListVal u64)
     wIdMap: (ListVal u64)
     wProto: (ListVal u64)
+    wUgVar: (ListVal u64)
     wUgRec: (ListVal u64)
 }
 
@@ -27335,6 +27340,17 @@ classifyMonos: function {
             ) then ugr = false
             if ugr when (isBoxTid :symtab tid: tcl) then ugr = false
             if ugr then work.wUgRec.append tv
+            # a user generic VARIANT mono. optionval/resultval monos are
+            # variantType and isMono too and drain from wValMono in their own
+            # dependency position, so isValMono is what separates the families.
+            ugv: false
+            if tt == ztypes.ztypetype.variantType then ugv = true
+            if ugv when isValMono then ugv = false
+            if ugv when (isCollectionOriginTid
+                :ctx
+                originTid: (originTidOf :symtab tid: tcl)
+            ) then ugv = false
+            if ugv then work.wUgVar.append tv
         }
         tcl = ztypes.tid.create from: (tcl + 1)
     }
@@ -27444,6 +27460,15 @@ emitCollectionMonos: function {
         )
         tsp = tsp + 1
     }
+    # user generic VARIANT monos (e.g. Slot<i64>): tag enum + tagged struct via
+    # emitOneVariant, the same emitter the system variant monos use. Valtypes a
+    # user record can embed by value, so ahead of wUgRec.
+    tugv: u64
+    for tugv < work.wUgVar.length loop {
+        ugvId: work.wUgVar.get i: tugv
+        emitOneVariant :ast :symtab :ctx tid: (ztypes.tid.create from: ugvId.u64) :buf
+        tugv = tugv + 1
+    }
     # user generic class/record monos (e.g. Box<i64>): RECORD/CLASS monos whose
     # origin is a user generic type. The collection / array / str / option / box
     # monos are handled by their own worklists; emit the rest via emitOneRecord.
@@ -27531,6 +27556,7 @@ emitMonos: function {
         wIdSet: (ListVal u64)
         wIdMap: (ListVal u64)
         wProto: (ListVal u64)
+        wUgVar: (ListVal u64)
         wUgRec: (ListVal u64)
     )
     (classifyMonos
