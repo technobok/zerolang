@@ -8166,6 +8166,45 @@ synthVariantEqHash: function {
 # attachVariantMethods -- a variant's asItems are its methods. A name that collides
 # with one of its ARM names is rejected here: an arm read and a method call spell
 # the same at the use site.
+# sumMethodNameRejected -- a variant or union as-block method whose name cannot
+# become a member: it collides with an ordinal arm of the same name, or it is
+# the reserved discriminator name. True when it was rejected and reported.
+sumMethodNameRejected: function {
+    st: zenv.ZSymbolTable
+    am: argref
+    mname: StringView
+    defName: StringView
+    ordinalArmNames: (IdSet u64).view
+} out bool is {
+    if (ordinalArmNames.has item: am.name.u64) then {
+        mc: "'\{mname}' collides with the '\{defName}' arm of the same name"
+        (addResolveErrorH
+            :st
+            nodeid: am.nid
+            lineno: am.lineno
+            colno: am.colno
+            e: zast.err.duplicateDef
+            msg: mc
+            width: mname.length.u32.orPanic
+        )
+        return true
+    }
+    if mname == "tag" then {
+        mr: "'tag' is a reserved member name".string
+        (addResolveErrorH
+            :st
+            nodeid: am.nid
+            lineno: am.lineno
+            colno: am.colno
+            e: zast.err.reservedMember
+            msg: mr
+            width: 3
+        )
+        return true
+    }
+    return false
+}
+
 attachVariantMethods: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -8201,33 +8240,23 @@ attachVariantMethods: function {
             match (
                 mido
             ) case some then {
-                if (ordinalArmNames.has item: am.name.u64) then {
-                    mc: "'\{mname}' collides with the '\{defName}' arm of the same name"
-                    (addResolveErrorH
-                        :st
-                        nodeid: am.nid
-                        lineno: am.lineno
-                        colno: am.colno
-                        e: zast.err.duplicateDef
-                        msg: mc
-                        width: mname.length.u32.orPanic
-                    )
-                } else if mname.stringView == "tag" then {
-                    mr: "'tag' is a reserved member name".string
-                    (addResolveErrorH
-                        :st
-                        nodeid: am.nid
-                        lineno: am.lineno
-                        colno: am.colno
-                        e: zast.err.reservedMember
-                        msg: mr
-                        width: 3
-                    )
-                } else {
+                if (sumMethodNameRejected
+                    :st
+                    :am
+                    mname: mname.stringView
+                    :defName
+                    :ordinalArmNames
+                ) == false then {
                     (st.typing.setMemberType
                         parentTypeId: (ztypes.tid.create from: vid.u64)
                         nameId: am.name
                         childTypeId: mido
+                    )
+                    (markGenericMethod
+                        :st
+                        op: (ast.nodes.get i: am.operation.u64)
+                        mid: mido
+                        :isgen
                     )
                 }
             } else {
@@ -9047,33 +9076,23 @@ attachUnionMethods: function {
             match (
                 mido
             ) case some then {
-                if (ordinalArmNames.has item: am.name.u64) then {
-                    mc: "'\{mname}' collides with the '\{defName}' arm of the same name"
-                    (addResolveErrorH
-                        :st
-                        nodeid: am.nid
-                        lineno: am.lineno
-                        colno: am.colno
-                        e: zast.err.duplicateDef
-                        msg: mc
-                        width: mname.length.u32.orPanic
-                    )
-                } else if mname.stringView == "tag" then {
-                    mr: "'tag' is a reserved member name".string
-                    (addResolveErrorH
-                        :st
-                        nodeid: am.nid
-                        lineno: am.lineno
-                        colno: am.colno
-                        e: zast.err.reservedMember
-                        msg: mr
-                        width: 3
-                    )
-                } else {
+                if (sumMethodNameRejected
+                    :st
+                    :am
+                    mname: mname.stringView
+                    :defName
+                    :ordinalArmNames
+                ) == false then {
                     (st.typing.setMemberType
                         parentTypeId: (ztypes.tid.create from: uid.u64)
                         nameId: am.name
                         childTypeId: mido
+                    )
+                    (markGenericMethod
+                        :st
+                        op: (ast.nodes.get i: am.operation.u64)
+                        mid: mido
+                        :isgen
                     )
                 }
             } else {
