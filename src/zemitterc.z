@@ -11259,6 +11259,22 @@ emitDottedNestedBase: function {
     if eMo.length > 0 then return eMo
     # a Map/Set-typed base is a heap pointer regardless of how it was
     # reached (a field path fails pathIsPointer's lock-field test)
+    nsumT: symtab.reg.typetypeOf typeId: nlid
+    isSum9: false
+    if nsumT == ztypes.ztypetype.variantType then isSum9 = true
+    if nsumT == ztypes.ztypetype.unionType then isSum9 = true
+    if isSum9 then {
+        eSmN: (sumMemberMethodRead
+            :ast
+            :symtab
+            :ctx
+            :mn2
+            bn2: baseAtom.stringView
+            bn2v: bs9vid
+            bstamp: nlid
+        )
+        if eSmN.length > 0 then return eSmN
+    }
     nstPtr: pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
     if nstPtr == false then nstPtr = isHeapPtrCollection :symtab :ctx tid: nlid
     mnNbP: memberCPrefix name: mn2
@@ -11416,6 +11432,49 @@ emitResolvedMemberRead: function {
 # emitUserTypeMemberRead -- a field or no-arg method read on a user record or
 # class receiver: the field access itself, an auto-called no-arg method, and the
 # defaults a method's unwritten parameters carry.
+# sumMemberMethodRead -- a sum type's dotted read where the member is a declared
+# METHOD rather than an arm. An arm and a method can never share a name (E0003
+# rejects it), so the DECLARATION answers which one a bare read is; the payload
+# read below applies only when it answers nothing, or names something with no
+# body to read. The declared arms are children too, hence the FUNCTION test.
+# fbtn names the enclosing type for a read whose base is a TYPE rather than a
+# value; a sum value's base is always a variable, and the type-name form is
+# taken by dottedAtomTaggedBase before this leg is reached.
+sumMemberMethodRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    mn2: StringView
+    bn2: StringView
+    bn2v: ztypes.vid
+    bstamp: ztypes.tid
+} out String is {
+    mco: (symtab.typing.declChildOf
+        pool: ast.names
+        parentTypeId: bstamp
+        name: mn2
+    )
+    match (
+        mco
+    ) case some then {
+        if (symtab.reg.typetypeOf
+            typeId: (ztypes.tid.create from: mco.u64)
+        ) != ztypes.ztypetype.functionType then return "".string
+        return (emitResolvedMemberRead
+            :ast
+            :symtab
+            :ctx
+            :mn2
+            :bn2
+            :bn2v
+            :bstamp
+            :mco
+            fbtn: ""
+        )
+    } case none then null
+    return "".string
+}
+
 emitUserTypeMemberRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -12033,7 +12092,15 @@ emitDottedAtomBase: function {
     }
     eRc: dottedAtomRecClsBase :ast :symtab :ctx :bn2 :mn2 :bn2v :bstamp :rtt
     if eRc.length > 0 then return eRc
+    # a UNION reads its payload through legs further down, but the question of
+    # whether the member is a METHOD at all is the same one the variant leg asks
+    if rtt == ztypes.ztypetype.unionType then {
+        eSmU: sumMemberMethodRead :ast :symtab :ctx :mn2 :bn2 :bn2v :bstamp
+        if eSmU.length > 0 then return eSmU
+    }
     if rtt == ztypes.ztypetype.variantType then {
+        eSm: sumMemberMethodRead :ast :symtab :ctx :mn2 :bn2 :bn2v :bstamp
+        if eSm.length > 0 then return eSm
         armDaP: memberCPrefix name: mn2
         e: "\{bn2}.data.\{armDaP}\{mn2}"
         return e
