@@ -21767,6 +21767,39 @@ checkResolvedMember: function {
         :coerce
         result0: result
     )
+    # The THIRD value position for a bare function reference. checkUnitMemberValue
+    # owns `unit.member` and typeOfBareName the bare atom; the instance-method path
+    # declined to auto-call and reported nothing, so `y: r.add` kept a FUNCTION
+    # stamp and the emitter called it with the receiver alone -- one argument into
+    # a two-parameter C function, at exit 0.
+    #
+    # Two legitimate FUNCTION stamps have to survive: a `.take` peel, which sets
+    # suppressFnAutoCall, and a for-header, which sets allowBareFnRef. A
+    # fn-pointer FIELD is excluded because checkMemberProjections above already
+    # reports it in its own words.
+    if coerce when (st.typing.suppressFnAutoCall) == false then {
+        if (st.typing.allowBareFnRef) == false then {
+            if (st.reg.typetypeOf typeId: result) == ztypes.ztypetype.functionType then {
+                if (st.typing.declIsFnptrField
+                    pool: ast.names
+                    parentTypeId: bt
+                    name: cn
+                ) == false then {
+                    bfl: nodeLine n: (ast.nodes.get i: dp.child.u64)
+                    bfc: nodeCol n: (ast.nodes.get i: dp.child.u64)
+                    (bareFnRefError
+                        :ast
+                        :st
+                        nodeid: dp.nid
+                        lineno: bfl
+                        colno: bfc
+                        width: cn.length.u32.orPanic
+                        fid: result
+                    )
+                }
+            }
+        }
+    }
     reportPrivateMember :st :ast :dp :bt :cn :aliasViaX
     stampGate :st nid: dp.nid.u64 tid: result
     return result
@@ -24571,6 +24604,15 @@ checkForCondition: function {
     facId: forFactoryTid :st :unitDecl :ast fbn: fbn.stringView
     vt: ztypes.tid
     errC: st.typing.errors.length
+    # A for-header names an ITERATOR, not a call. `for x: 5.iterate loop`
+    # lowers to a counted C loop and emits no call at all, so a member that
+    # keeps its FUNCTION stamp here is legitimate and its arity never
+    # matters. fnAutoCallable answers false for that AND for a bare
+    # `r.add` in value position, so it cannot separate them -- this flag
+    # does. It does NOT suppress the auto-call: `for x: counter loop` over
+    # a 0-arg generator still has to be invoked.
+    bfrFor: st.typing.allowBareFnRef
+    st.typing.allowBareFnRef = true
     if facId > 0 then {
         # the factory's lazy walks (its body + the iterator class's
         # methods via return-first transitivity) fire before the
@@ -24587,6 +24629,7 @@ checkForCondition: function {
     } else {
         vt = checkValueAt :st :unitDecl :ast nid: cond.operation
     }
+    st.typing.allowBareFnRef = bfrFor
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name -- the same rule the binding and operand sites
     # follow. Without it the emitter writes the bare name into the C.
