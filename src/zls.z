@@ -3887,6 +3887,9 @@ addTypeMembers: function {
     o: (Option zenv.ZSymbolTable).view
     tid: ztypes.tid
     sink: (MapRV String v: u8)
+    # drop members named for a numeric type: after a literal, the ones its
+    # literal type does not declare are compile errors, not completions
+    skipNumeric: bool
 } is {
     match (
         o
@@ -3894,7 +3897,7 @@ addTypeMembers: function {
         match (
             prog
         ) case program then {
-            addTypeMembersIn :prog :o :tid :sink
+            addTypeMembersIn :prog :o :tid :sink :skipNumeric
         } else null
     } case none then null
 }
@@ -3944,6 +3947,7 @@ addTypeMembersIn: function {
     o: zenv.ZSymbolTable.view
     tid: ztypes.tid
     sink: (MapRV String v: u8)
+    skipNumeric: bool
 } is {
     # a unit's children are its definitions, not members: addUnitMembers
     # handles those, and declMemberList excludes them by design
@@ -3956,9 +3960,15 @@ addTypeMembersIn: function {
     mn8: pn8.length
     for mk8 < mn8 loop {
         cn: pn8.get i: mk8
-        k: 5.u8
-        if (o.reg.typetypeOf typeId: (ztypes.tid.create from: (pt8.get i: mk8))) == ztypes.ztypetype.functionType then k = 2
-        addCand :sink name: cn.stringView kind: k
+        skip8: false
+        if skipNumeric then {
+            if (ztypecheck.isNumericTypeName name: cn.stringView) then skip8 = true
+        }
+        if skip8 == false then {
+            k: 5.u8
+            if (o.reg.typetypeOf typeId: (ztypes.tid.create from: (pt8.get i: mk8))) == ztypes.ztypetype.functionType then k = 2
+            addCand :sink name: cn.stringView kind: k
+        }
         mk8 = mk8 + 1
     }
 }
@@ -4031,6 +4041,173 @@ baseTypeInScope: function {
         ri = ri + 1
     }
     return result
+}
+
+# parenOpenOf -- index of the `(` matching the `)` at `close`, by a backward
+# paren-depth scan of one line; `close` itself when nothing matches.
+parenOpenOf: function {ltv: StringView close: u64} out u64 is {
+    depth: u64
+    i: close + 1
+    for i > 0 loop {
+        i = i - 1
+        b: ltv.byteAt :i
+        match (
+            b
+        ) case some then {
+            if b == 41 then depth = depth + 1
+            if b == 40 then {
+                if depth == 0 then return close
+                depth = depth - 1
+                if depth == 0 then return i
+            }
+        } case none then null
+    }
+    return close
+}
+
+# baserange -- a member base's [lo, hi) byte range on the completion line.
+baserange: record {
+    lo: u64
+    hi: u64
+}
+
+# memberBaseOf -- the base expression before the `.` at `dot`. Identifier bytes
+# and dots walk back as one run; when a `)` sits there instead the base is
+# parenthesised (`(2.5).`) and the run is its interior, which the plain scan
+# reads as empty.
+memberBaseOf: function {ltv: StringView dot: u64} out baserange is {
+    bs: dot
+    for bs > 0 loop {
+        bb: ltv.byteAt i: bs - 1
+        match (
+            bb
+        ) case some then {
+            if (isIdentByte b: bb) == false when bb != 46 then break
+        } case none then {
+            break
+        }
+        bs = bs - 1
+    }
+    if bs < dot then return (baserange lo: bs hi: dot)
+    if dot == 0 then return (baserange lo: dot hi: dot)
+    cb: ltv.byteAt i: dot - 1
+    match (
+        cb
+    ) case some then {
+        if cb == 41 then {
+            close: dot - 1
+            op: parenOpenOf :ltv :close
+            if (op + 1) < close then return (baserange lo: op + 1 hi: close)
+        }
+    } case none then null
+    return (baserange lo: dot hi: dot)
+}
+
+# numberEnd -- the length of the numeric literal `base` opens with, or 0 when it
+# does not open with one. The parser's rule decides where it ends: a dot
+# CONTINUES the number only when a digit follows, so `2.5` is one lexeme while
+# the second dot in `2.5.f32` is a member selector.
+numberEnd: function {base: StringView} out u64 is {
+    if (ztypecheck.isNumericLiteralName name: base) == false then return 0
+    n: base.length
+    i: u64
+    for i < n loop {
+        b: base.byteAt :i
+        stop: false
+        match (
+            b
+        ) case some then {
+            if b == 46 then {
+                nb: base.byteAt i: i + 1
+                match (
+                    nb
+                ) case some then {
+                    isD: false
+                    if nb >= 48 when nb <= 57 then isD = true
+                    if isD == false then stop = true
+                } case none then {
+                    stop = true
+                }
+            }
+        } case none then {
+            stop = true
+        }
+        if stop then return i
+        i = i + 1
+    }
+    return n
+}
+
+# literalTidOf -- the literal type a numeric lexeme wears: floatliteral when it
+# carries a decimal point, intliteral otherwise.
+literalTidOf: function {o: (Option zenv.ZSymbolTable).view name: StringView} out u64 is {
+    match (
+        o
+    ) case some then {
+        if (ztypecheck.isFloatLiteralName :name) then return o.reg.literalFloatTid.u64
+        return o.reg.literalIntTid.u64
+    } case none then null
+    return 0
+}
+
+# literalConvTid -- the type a literal's declared conversion `name` produces.
+# Every member of a literal type is a conversion, and `65.u8` IS a u8 -- a pin,
+# not a call -- so the segment after a literal head resolves to the RETURN type
+# where an ordinary member access would stop at the method.
+literalConvTid: function {
+    prog: zast.Node.view
+    o: (Option zenv.ZSymbolTable).view
+    litTid: u64
+    name: StringView
+} out u64 is {
+    m: childOfIn :prog :o parent: litTid :name
+    if m == 0 then return 0
+    match (
+        o
+    ) case some then {
+        r: ztypecheck.methodReturnOf st: o mid: (ztypes.tid.create from: m.u64)
+        match (
+            r
+        ) case some then {
+            return r.u64
+        } case none then null
+    } case none then null
+    return 0
+}
+
+# literalDefaultTid -- the concrete type an unpinned literal falls to, asked of
+# the literal type's own declaration rather than spelled here twice.
+literalDefaultTid: function {
+    prog: zast.Node.view
+    o: (Option zenv.ZSymbolTable).view
+    litTid: u64
+} out u64 is {
+    isF: false
+    match (
+        o
+    ) case some then {
+        if litTid == o.reg.literalFloatTid then isF = true
+    } case none then null
+    if isF then return (literalConvTid :prog :o :litTid name: "f64")
+    return (literalConvTid :prog :o :litTid name: "i64")
+}
+
+# addLiteralMembers -- a numeric literal's completion surface: the conversions
+# its literal type declares, plus the default type's OTHER members. The filter
+# is the checker's own rule -- a numeric target the literal type does not
+# declare is an error (`2.5.u8`), while a non-numeric child falls through to the
+# materialised receiver (`5.iterate`, `1.0.scaleB`). Unfiltered, a float literal
+# would be offered twelve conversions that do not compile.
+addLiteralMembers: function {
+    prog: zast.Node.view
+    o: (Option zenv.ZSymbolTable).view
+    litTid: u64
+    sink: (MapRV String v: u8)
+} is {
+    addTypeMembers :prog :o tid: (ztypes.tid.create from: litTid.u64) :sink skipNumeric: false
+    dflt: literalDefaultTid :prog :o :litTid
+    if dflt == 0 then return
+    addTypeMembers :prog :o tid: (ztypes.tid.create from: dflt.u64) :sink skipNumeric: true
 }
 
 # dotFrom -- index of the first `.` at or after `start` in base, or
@@ -4117,6 +4294,73 @@ childOfIn: function {
 # at a time -- a `unit.Type` head via the compiler's descendNamed (declaring on
 # demand), a scope value via baseTypeInScope, each further segment via `childOf`
 # -- and the final type's fields/methods are listed.
+# descendSegments -- resolve the dot-separated segments of `base` from byte
+# `start`, each a member of the running type; 0 when one does not resolve.
+descendSegments: function {
+    snap: zcheck.CheckResult
+    base: StringView
+    start: u64
+    tid0: u64
+} out u64 is {
+    n: base.length
+    cur: tid0
+    pos: start
+    for pos <= n loop {
+        de: dotFrom :base start: pos
+        seg: (base.substring from: pos to: de)
+        if seg.length > 0 then {
+            cur = childOfIn prog: snap.prog o: snap.st parent: cur name: seg
+            if cur == 0 then return 0
+        }
+        pos = de + 1
+    }
+    return cur
+}
+
+# addLiteralHead -- completions for a base opening with a numeric literal. The
+# whole base is the number (`65.`, `2.5.`) -> the literal's own surface; a
+# suffix follows (`65.u8.`) -> that conversion's type, then the ordinary member
+# descent from there.
+addLiteralHead: function {
+    snap: zcheck.CheckResult
+    base: StringView
+    numEnd: u64
+    sink: (MapRV String v: u8)
+} is {
+    # an owned copy: `base` is lent again below, and two live views of one
+    # source conflict
+    lit: (base.substring from: 0 to: numEnd).string
+    ltid: literalTidOf o: snap.st name: lit.stringView
+    if ltid == 0 then return
+    n: base.length
+    if numEnd >= n then {
+        addLiteralMembers prog: snap.prog o: snap.st litTid: ltid :sink
+        return
+    }
+    s0: numEnd + 1
+    de: dotFrom :base start: s0
+    seg: (base.substring from: s0 to: de).string
+    cur: literalConvTid prog: snap.prog o: snap.st litTid: ltid name: seg.stringView
+    if cur == 0 then {
+        # a NON-numeric child falls through to the materialised receiver, the
+        # rule that keeps `5.iterate` and `1.0.scaleB` working
+        dflt: literalDefaultTid prog: snap.prog o: snap.st litTid: ltid
+        if dflt == 0 then return
+        cur = childOfIn prog: snap.prog o: snap.st parent: dflt name: seg.stringView
+    }
+    if cur == 0 then return
+    s1: de + 1
+    cur = descendSegments :snap :base start: s1 tid0: cur
+    if cur == 0 then return
+    (addTypeMembers
+        prog: snap.prog
+        o: snap.st
+        tid: (ztypes.tid.create from: cur.u64)
+        :sink
+        skipNumeric: false
+    )
+}
+
 addMemberCompletions: function {
     snap: zcheck.CheckResult
     docRel: StringView
@@ -4126,6 +4370,14 @@ addMemberCompletions: function {
     sink: (MapRV String v: u8)
 } is {
     n: base.length
+    # a numeric head resolves by its TYPE, never by name: baseTypeInScope matches
+    # a span row by SPELLING, so `65.` would otherwise complete off whatever a
+    # same-spelled literal elsewhere in the enclosing def happens to be.
+    numEnd: numberEnd :base
+    if numEnd > 0 then {
+        addLiteralHead :snap :base :numEnd :sink
+        return
+    }
     dotPos: dotFrom :base start: 0
     if dotPos >= n then {
         if (unitFsnoByName :snap name: base) > 0 then {
@@ -4145,6 +4397,7 @@ addMemberCompletions: function {
                 o: snap.st
                 tid: (ztypes.tid.create from: bt.u64)
                 :sink
+                skipNumeric: false
             )
         }
         return
@@ -4170,17 +4423,15 @@ addMemberCompletions: function {
         cur = baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u base: firstSeg.stringView
     }
     if cur == 0 then return
-    pos: startSeg
-    for pos <= n loop {
-        de: dotFrom :base start: pos
-        seg: (base.substring from: pos to: de)
-        if seg.length > 0 then {
-            cur = childOfIn prog: snap.prog o: snap.st parent: cur name: seg
-            if cur == 0 then return
-        }
-        pos = de + 1
-    }
-    addTypeMembers prog: snap.prog o: snap.st tid: (ztypes.tid.create from: cur.u64) :sink
+    cur = descendSegments :snap :base start: startSeg tid0: cur
+    if cur == 0 then return
+    (addTypeMembers
+        prog: snap.prog
+        o: snap.st
+        tid: (ztypes.tid.create from: cur.u64)
+        :sink
+        skipNumeric: false
+    )
 }
 
 # completionItem -- a completion item object (label + kind, optional detail).
@@ -5021,19 +5272,8 @@ completionAnswer: function {
             if pb == 46 then {
                 memberMode = true
                 be: ps - 1
-                bs: be
-                for bs > 0 loop {
-                    bb: ltv.byteAt i: bs - 1
-                    match (
-                        bb
-                    ) case some then {
-                        if (isIdentByte b: bb) == false when bb != 46 then break
-                    } case none then {
-                        break
-                    }
-                    bs = bs - 1
-                }
-                base: (ltv.substring from: bs to: be)
+                br: memberBaseOf :ltv dot: be
+                base: (ltv.substring from: br.lo to: br.hi)
                 (addMemberCompletions
                     :snap
                     :docRel
