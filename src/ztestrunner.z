@@ -670,37 +670,9 @@ runArchCases: function {r: Runner} is {
     statuses: (ListVal i32)
     failSteps: (ListVal i64)
     runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
-    # baseline rows: `<code> <file> <count>`
     baseKeys: (List String)
     baseCounts: (ListVal u64)
-    bC: slurp path: basePath.stringView
-    with blit: bC.stringView.lines do for bl: blit loop {
-        if bl.length > 0 when (bl.startsWith prefix: "#") == false then {
-            k0: String
-            k1: String
-            cnt: u64
-            idx: u64
-            with pit: (bl.split sep: " ") do for pc: pit loop {
-                if pc.length > 0 then {
-                    if idx == 0 then k0 = pc.string
-                    if idx == 1 then k1 = pc.string
-                    if idx == 2 then {
-                        pv: pc.parseI64
-                        match (
-                            pv
-                        ) case ok then {
-                            cnt = pv.u64.orPanic
-                        } case err then null
-                    }
-                    idx = idx + 1
-                }
-            }
-            if idx >= 3 then {
-                baseKeys.append from: "\{k0.stringView} \{k1.stringView}"
-                baseCounts.append from: cnt
-            }
-        }
-    }
+    readRatchetBaseline path: basePath.stringView keys: baseKeys counts: baseCounts
     anyFail: false
     ji: u64
     for ji < pool.length loop {
@@ -759,6 +731,147 @@ archUnitFiles: function {root: StringView sub: StringView into: List String} is 
             if (e.stringView.endsWith suffix: ".z") then into.append from: "\{sub}/\{e.stringView}"
         }
     } case err then null
+}
+
+# readRatchetBaseline -- parse a ratchet baseline into parallel key / count lists, a key
+# being "<code> <file>". Comment lines and short rows are skipped. Both ratchets, arch
+# and docs, read the same three-column format, so they read it through here.
+readRatchetBaseline: function {path: StringView keys: (List String) counts: (ListVal u64)} is {
+    bC: slurp :path
+    with blit: bC.stringView.lines do for bl: blit loop {
+        if bl.length > 0 when (bl.startsWith prefix: "#") == false then {
+            k0: String
+            k1: String
+            cnt: u64
+            idx: u64
+            with pit: (bl.split sep: " ") do for pc: pit loop {
+                if pc.length > 0 then {
+                    if idx == 0 then k0 = pc.string
+                    if idx == 1 then k1 = pc.string
+                    if idx == 2 then {
+                        pv: pc.parseI64
+                        match (
+                            pv
+                        ) case ok then {
+                            cnt = pv.u64.orPanic
+                        } case err then null
+                    }
+                    idx = idx + 1
+                }
+            }
+            if idx >= 3 then {
+                keys.append from: "\{k0.stringView} \{k1.stringView}"
+                counts.append from: cnt
+            }
+        }
+    }
+}
+
+# docRatchetCode -- true for the five codes the documentation ratchet counts. A run with
+# the doc flags also reports every default-on rule, and those have their own gates; only
+# these five belong to this baseline. One membership string rather than a compare chain:
+# a table of literal compares is the shape A001 exists to discourage.
+docRatchetCode: function {code: StringView} out bool is {
+    known: " L016 L017 L018 L024 L025 "
+    probe: " \{code} "
+    return (known.contains needle: probe)
+}
+
+# runDocCases -- the documentation ratchet. `zl lint --docs-all` over every compiler,
+# stdlib and front-end unit, counted per (rule, file) and compared with
+# tests/fixtures/doc_baseline.txt: a count above its baseline is a newly undocumented
+# member -- or a new doc that only re-says its declaration -- and fails; a count below is
+# progress and asks for the baseline to be lowered. Heavy: it is a full-corpus lint pass,
+# so it runs in `make ci` and not in the fast gate. Unlike the arch kind this does NOT
+# walk tests/unit: a test driver is not the corpus a reader learns the language from.
+runDocCases: function {r: Runner} is {
+    if r.heavy == false then return
+    basePath: "\{r.root.stringView}/tests/fixtures/doc_baseline.txt"
+    if (io.exists path: basePath) == false then {
+        r.skip = r.skip + 1
+        return
+    }
+    zl: "\{r.root.stringView}/bin/zl"
+    srcs: (List String)
+    archUnitFiles root: r.root.stringView sub: "src" into: srcs
+    archUnitFiles root: r.root.stringView sub: "lib/system" into: srcs
+    archUnitFiles root: r.root.stringView sub: "lib/system/system" into: srcs
+    srcs.sort
+    pool: (List PoolJob)
+    with sit: srcs.iterate do for f: sit loop {
+        argv: (List String)
+        argv.append from: zl.copy
+        argv.append from: "lint".string
+        argv.append from: "--docs-all".string
+        argv.append from: "--src".string
+        argv.append from: "\{r.root.stringView}/src"
+        argv.append from: "--system".string
+        argv.append from: r.sys.copy
+        argv.append from: "\{r.root.stringView}/\{f.stringView}"
+        oname: f.stringView.replace needle: "/" replacement: "_"
+        opath: "\{r.tmp.stringView}/D_\{oname}.out"
+        steps: (List PoolStep)
+        # diagnostics go to zl's stderr
+        steps.append (mkStep
+            :argv
+            cwd: ""
+            outPath: "/dev/null"
+            errPath: opath.stringView
+            timeoutSecs: r.timeoutSecs
+            allowFail: true
+            zlinkFrom: ""
+        )
+        pool.append (mkJob name: f.stringView :steps)
+    }
+    statuses: (ListVal i32)
+    failSteps: (ListVal i64)
+    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    baseKeys: (List String)
+    baseCounts: (ListVal u64)
+    readRatchetBaseline path: basePath.stringView keys: baseKeys counts: baseCounts
+    anyFail: false
+    ji: u64
+    for ji < pool.length loop {
+        job: pool.get i: ji
+        fnm: job.name.stringView
+        oname2: fnm.replace needle: "/" replacement: "_"
+        opath2: "\{r.tmp.stringView}/D_\{oname2}.out"
+        outC: slurp path: opath2.stringView
+        codes: (List String)
+        counts: (ListVal u64)
+        with olit: outC.stringView.lines do for ol: olit loop {
+            if (ol.startsWith prefix: "warning[L") then {
+                dc: ol.substring from: 8 to: 12
+                if (docRatchetCode code: dc) then archCount :codes :counts code: dc
+            }
+        }
+        ci: u64
+        for ci < codes.length loop {
+            code: codes.get i: ci
+            c: counts.get i: ci
+            key: "\{code.stringView} \{fnm}"
+            base: u64
+            bi: u64
+            for bi < baseKeys.length loop {
+                bk: baseKeys.get i: bi
+                if bk.stringView == key.stringView then base = baseCounts.get i: bi
+                bi = bi + 1
+            }
+            if c > base then {
+                print "FAIL(docs) \{key}: \{c} findings, baseline \{base} -- a new undocumented member, or a doc that only re-says its declaration; write the doc or justify the baseline"
+                anyFail = true
+            } else if c < base then {
+                print "docs: \{key}: \{c} < baseline \{base} -- lower the baseline"
+            }
+            ci = ci + 1
+        }
+        ji = ji + 1
+    }
+    if anyFail then {
+        r.fails = r.fails + 1
+    } else {
+        r.passN = r.passN + 1
+    }
 }
 
 # archCount -- bump the count of `code` in the parallel code / count lists.
@@ -2370,6 +2483,7 @@ main: function is {
     runSelfhostAsan :r
     runFixpoint :r
     runArchCases :r
+    runDocCases :r
 
     # ---------------- summary ----------------
     if r.saveTemps then {
