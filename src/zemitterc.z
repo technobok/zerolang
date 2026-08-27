@@ -5766,6 +5766,96 @@ emitInstanceMethodBody: function {
 }
 
 
+# isOperatorName -- a member whose name is punctuation rather than an
+# identifier. Not opCnameOf: that table names twelve spellings and has never
+# carried `| ^ << >>`, which the bitwise arc added.
+isOperatorName: function {name: StringView} out bool is {
+    b0: name.byteAt 0.u64
+    match (
+        b0
+    ) case some then {
+        if b0 >= 97 when b0 <= 122 then return false
+        if b0 >= 65 when b0 <= 90 then return false
+        if b0 == 95 then return false
+        return true
+    } case none then null
+    return false
+}
+
+# emitOperatorCallForm -- `a.+ rhs: b` through the same emitter the infix form
+# uses. "" when this is not a one-argument operator call, which leaves the
+# caller on its ordinary legs. The operands are prepared exactly as the binop
+# arm prepares them, an atom box dereferenced alike, because from here down the
+# two forms are one.
+emitOperatorCallForm: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.CallData.view
+} out String is {
+    mnO: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    if mnO.length == 0 then return "".string
+    if (isOperatorName name: mnO.stringView) == false then return "".string
+    if call.arguments.length != 1 then return "".string
+    rt0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
+    rtc: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rt0.u64)
+    owner: methodOwnerId :ast :symtab rtid: (ztypes.tid.create from: rtc.u64) mn: mnO.stringView
+    if owner == 0 then return "".string
+    method: ztypes.tid
+    {
+        mo9: (symtab.typing.declChildOf
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: owner.u64)
+            name: mnO.stringView
+        )
+        match (
+            mo9
+        ) case some then {
+            method = ztypes.tid.create from: mo9.u64
+        } case none then null
+    }
+    if method.isZero then return "".string
+    lhsNid: u64
+    {
+        cb: ast.nodes.get i: call.callable.u64
+        match (
+            cb
+        ) case dottedpath then {
+            lhsNid = cb.parent.u64
+        } else null
+    }
+    if lhsNid == 0 then return "".string
+    rhsNid: u64
+    {
+        a0: ast.nodes.get i: (call.arguments.get i: 0).u64
+        match (
+            a0
+        ) case namedoperation then {
+            rhsNid = a0.operation.u64
+        } else null
+    }
+    if rhsNid == 0 then return "".string
+    l: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)
+    r: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: rhsNid)
+    if (nodeIsAtomBox :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then l = "(*\{l})"
+    if (nodeIsAtomBox :ast :symtab :ctx n: (ast.nodes.get i: rhsNid)) then r = "(*\{r})"
+    oid9: zast.poolFind pool: ast.names text: mnO.stringView
+    return (emitOperatorAt
+        :ast
+        :symtab
+        :ctx
+        lineno: call.lineno
+        opId: oid9
+        owner: (ztypes.tid.create from: owner.u64)
+        :method
+        :lhsNid
+        :rhsNid
+        :l
+        :r
+        op: mnO.stringView
+    )
+}
+
 # emit a call to an instance method.
 emitInstanceMethodCall: function {
     ast: Ast.view
@@ -10011,6 +10101,14 @@ emitNamedCalleeChain: function {
         cnVid: cnV
     )
     if fplc.length > 0 then return fplc
+    # AN OPERATOR IS THE SAME METHOD IN EITHER FORM. `a + b` and `a.+ rhs: b`
+    # resolve to one declaration, and the infix form has emitted through the
+    # natives.tbl leg since the single-source arc. A user-declared operator
+    # already worked both ways -- its body is an ordinary method the dotted-call
+    # legs above reach -- but a NATIVE one is nobody's dispatcher to emit, so
+    # the call form arrived here.
+    opc: emitOperatorCallForm :ast :symtab :ctx :call
+    if opc.length > 0 then return opc
     emitFail :ctx what: "unhandled callee \{cn0}" line: call.lineno
     m8: "/* zemitterc: unhandled callee \{cn0} */0"
     return m8
@@ -12521,13 +12619,48 @@ emitBinop: function {
     r: String
     op: StringView
 } out String is {
-    owner: binopOwnerAt :symtab :ctx nid: binop.nodeid.u64
+    ow9: binopOwnerAt :symtab :ctx nid: binop.nodeid.u64
+    mt9: binopMethodAt :symtab :ctx nid: binop.nodeid.u64
+    oi9: atomNameIdOf :ast n: (ast.nodes.get i: binop.operator.u64)
+    return (emitOperatorAt
+        :ast
+        :symtab
+        :ctx
+        lineno: binop.lineno
+        opId: oi9
+        owner: ow9
+        method: mt9
+        lhsNid: binop.lhs.u64
+        rhsNid: binop.rhs.u64
+        :l
+        :r
+        :op
+    )
+}
+
+# emitOperatorAt -- emitBinop's body, driven by ids rather than by a BinOpData.
+# The infix form and the call form (`a.+ rhs: b`) are the SAME one-argument
+# method, so they emit through here alike; only the node ids differ.
+emitOperatorAt: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    lineno: u32
+    opId: zast.nameid
+    owner: ztypes.tid
+    method: ztypes.tid
+    lhsNid: u64
+    rhsNid: u64
+    l: String
+    r: String
+    op: StringView
+} out String is {
     if owner.isZero then {
-        emitFail :ctx what: "operator '\{op}' resolved no declaring type" line: binop.lineno
+        emitFail :ctx what: "operator '\{op}' resolved no declaring type" line: lineno
         return "/* zemitterc: unresolved operator */0".string
     }
-    opId: atomNameIdOf :ast n: (ast.nodes.get i: binop.operator.u64)
-    call: binopMethodAt :symtab :ctx nid: binop.nodeid.u64
+    # a local: the derived-inequality leg below reassigns it
+    call: method
     callName: opId
     neg: false
     if call.isZero then {
@@ -12563,7 +12696,7 @@ emitBinop: function {
                 :ast
                 :symtab
                 :ctx
-                :binop
+                :lhsNid
                 :owner
                 :callName
                 lhs: l.stringView
@@ -12579,7 +12712,7 @@ emitBinop: function {
                 :ast
                 :symtab
                 :ctx
-                n: (ast.nodes.get i: binop.lhs.u64)
+                n: (ast.nodes.get i: lhsNid)
             ) == false then {
                 # `&` needs an LVALUE, and a receiver that is itself a call is
                 # not one -- `&f(x)` is rejected by C. Bind it to a temp the
@@ -12612,7 +12745,7 @@ emitBinop: function {
     key: binopKeyOf :ast :symtab :owner isNative: isNat :op
     body: nativeImplOf :ctx path: key.stringView
     if body.length == 0 then {
-        emitFail :ctx what: "no native implementation for '\{key}'" line: binop.lineno
+        emitFail :ctx what: "no native implementation for '\{key}'" line: lineno
         return "/* zemitterc: no native implementation */0".string
     }
     # A CONSTANT ARGUMENT MAY SELECT A DIFFERENT ROW. The table says which
@@ -12622,7 +12755,7 @@ emitBinop: function {
     # the stamp is asked FIRST: it is a plain id lookup, where reaching the
     # table means building a key from a view. Most operands are not constants,
     # and those never touch the table at all.
-    if (symtab.typing.nodeConst.has key: binop.rhs.u64) then {
+    if (symtab.typing.nodeConst.has key: rhsNid) then {
         cbody: nativeConstImplOf :ctx path: key.stringView
         if cbody.length > 0 then {
             cpos: nativeConstPosOf :ctx path: key.stringView
@@ -12636,14 +12769,14 @@ emitBinop: function {
     lf: l.copy
     rf: r.copy
     if (isStringyTid :ctx tid: owner) then {
-        lt: stampNameDeep :ast :symtab n: (ast.nodes.get i: binop.lhs.u64)
-        rt: stampNameDeep :ast :symtab n: (ast.nodes.get i: binop.rhs.u64)
+        lt: stampNameDeep :ast :symtab n: (ast.nodes.get i: lhsNid)
+        rt: stampNameDeep :ast :symtab n: (ast.nodes.get i: rhsNid)
         if (nativePtrArgsOf :ctx path: key.stringView) then {
             lf = (stringViewBinopOperand
                 :ast
                 :symtab
                 :ctx
-                n: (ast.nodes.get i: binop.lhs.u64)
+                n: (ast.nodes.get i: lhsNid)
                 expr: l.stringView
                 tname: lt.stringView
             )
@@ -12651,7 +12784,7 @@ emitBinop: function {
                 :ast
                 :symtab
                 :ctx
-                n: (ast.nodes.get i: binop.rhs.u64)
+                n: (ast.nodes.get i: rhsNid)
                 expr: r.stringView
                 tname: rt.stringView
             )
@@ -12660,14 +12793,14 @@ emitBinop: function {
                 :ast
                 :symtab
                 :ctx
-                n: (ast.nodes.get i: binop.lhs.u64)
+                n: (ast.nodes.get i: lhsNid)
                 text: l.stringView
             )
             rq: (atomVidIfPlain
                 :ast
                 :symtab
                 :ctx
-                n: (ast.nodes.get i: binop.rhs.u64)
+                n: (ast.nodes.get i: rhsNid)
                 text: r.stringView
             )
             lf = svValueForm :ctx expr: l.stringView isStr: (lt.stringView == "String") vid: lq
@@ -29086,7 +29219,7 @@ emitBinopVtableCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    binop: zast.BinOpData.view
+    lhsNid: u64
     owner: ztypes.tid
     callName: zast.nameid
     lhs: StringView
@@ -29097,7 +29230,7 @@ emitBinopVtableCall: function {
     isFacet: (symtab.reg.typetypeOf typeId: owner) == ztypes.ztypetype.facetType
     acc: ".".string
     recvText: lhs.string
-    if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: binop.lhs.u64)) then {
+    if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then {
         acc = "->".string
     } else {
         needsTemp: isNonLvalueArg s: lhs
