@@ -3057,6 +3057,26 @@ isPtrVid: function {ctx: Ctx.view vid: ztypes.vid} out bool is {
     return (ctx.ptrVids.contains item: vid)
 }
 
+# needsValueDeref -- a pointer-valued expression standing where a VALUE is
+# wanted: a return, a binding's initialiser, a match subject. An as-block
+# method's receiver is a C pointer in EVERY family, so a read of it in one of
+# those positions has to load the pointee; ~50 other sites ask pathIsPointer to
+# choose `->` over `.` or to drop an `&`, and none of them wants the load.
+# A user CLASS is the exception and the gate is not caution: it is the one
+# family passed BY REFERENCE, so its pointer already IS the value, and loading
+# one would copy a struct whose destructor the source still owns -- a double
+# free, where leaving it alone is a C type error the compiler still catches.
+needsValueDeref: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: Node.view
+    tid: ztypes.tid
+} out bool is {
+    if (pathIsPointer :ast :symtab :ctx :n) == false then return false
+    return (isReftypeParam :ast :symtab :ctx :tid) == false
+}
+
 # pathIsPointer -- does the expression evaluate to a C pointer? A ptrVar atom
 # (pointer receiver / lock param) or a dotted read of a `.lock` field both do,
 # so field access on them chains with `->`.
@@ -12336,7 +12356,19 @@ emitDottedConversionRead: function {
                 } case none then null
             }
             if cvval when (symtab.reg.needsDestructor typeId: cvp) == false then {
-                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+                cvpe: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+                # the value itself -- but a POINTER receiver is not one yet
+                if (needsValueDeref
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: n.parent.u64)
+                    tid: cvp
+                ) then {
+                    cvd: "(*\{cvpe})"
+                    return cvd
+                }
+                return cvpe
             }
         }
         cvres: false
@@ -14735,7 +14767,15 @@ emitTypedBind: function {
                 ctx.ptrVids.append nameVid
             }
         }
-        la: "\{ind}\{ctB8} \{nm} = \{rv};\n"
+        rvB8: "\{rv}"
+        if (ctB8.stringView == ct) when (needsValueDeref
+            :ast
+            :symtab
+            :ctx
+            n: avn
+            tid: ltid
+        ) then rvB8 = "(*\{rv})"
+        la: "\{ind}\{ctB8} \{nm} = \{rvB8};\n"
         buf.append la
         emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
         ftFn: false
@@ -16515,7 +16555,15 @@ emitMatchStmt: function {
     }
     vc: ctxCname :ctx tid: (ztypes.tid.create from: vtid.u64)
     mN: tmp.next
-    l0: "\{ind}\{vc}_t _m\{mN} = \{sx};\n"
+    sxM: "\{sx}"
+    if (needsValueDeref
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: m.subject.u64)
+        tid: (ztypes.tid.create from: vtid.u64)
+    ) then sxM = "(*\{sx})"
+    l0: "\{ind}\{vc}_t _m\{mN} = \{sxM};\n"
     buf.append l0
     accM: ".tag".string
     if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: vtid.u64)) then accM = "".string
@@ -19362,6 +19410,13 @@ emitReturnOfNode: function {
                 # struct; without the `&` the caller writes through a temporary
                 rvOut: "\{rv}"
                 if ctx.refBorrowRet then rvOut = "&\{rv}"
+                if (ctx.refBorrowRet) == false when (needsValueDeref
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: vid.u64)
+                    tid: (stampIdOf :symtab nid: vid.u64)
+                ) then rvOut = "(*\{rv})"
                 lr: "\{ind}return \{rvOut};\n"
                 buf.append lr
             }
