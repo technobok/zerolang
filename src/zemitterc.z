@@ -3073,8 +3073,21 @@ needsValueDeref: function {
     n: Node.view
     tid: ztypes.tid
 } out bool is {
+    if (nodeIsBareAtom :ast :n) == false then return false
     if (pathIsPointer :ast :symtab :ctx :n) == false then return false
     return (isReftypeParam :ast :symtab :ctx :tid) == false
+}
+
+nodeIsBareAtom: function {ast: Ast.view n: Node.view} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (nodeIsBareAtom :ast n: (ast.nodes.get i: n.expression.u64))
+    } case atomid then {
+        return true
+    } else {
+        return false
+    }
 }
 
 # pathIsPointer -- does the expression evaluate to a C pointer? A ptrVar atom
@@ -12356,8 +12369,10 @@ emitDottedConversionRead: function {
                 } case none then null
             }
             if cvval when (symtab.reg.needsDestructor typeId: cvp) == false then {
-                cvpe: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-                # the value itself -- but a POINTER receiver is not one yet
+                # the value itself -- but a POINTER receiver is not one yet.
+                # Asked BEFORE the expression is built so the common path keeps
+                # handing emitExpr's result straight back: binding it to a local
+                # first costs a String on every `.copy` in the program.
                 if (needsValueDeref
                     :ast
                     :symtab
@@ -12365,10 +12380,10 @@ emitDottedConversionRead: function {
                     n: (ast.nodes.get i: n.parent.u64)
                     tid: cvp
                 ) then {
-                    cvd: "(*\{cvpe})"
+                    cvd: "(*\{emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)})"
                     return cvd
                 }
-                return cvpe
+                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
             }
         }
         cvres: false
