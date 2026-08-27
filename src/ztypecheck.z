@@ -20839,8 +20839,15 @@ checkMemberProjections: function {
     ) then {
         # bare name = call: a value-position read of an args-bearing
         # fn-pointer field is a call missing its arguments; `.take` is
-        # the reference form (peeled before this leg)
+        # the reference form.
+        #
+        # AND THE HINT HAS TO BE FOLLOWABLE. `.take` is NOT peeled before this
+        # leg -- dottedBaseTid walks the base with suppressFnAutoCall set and
+        # this leg never asked -- so `p.op.take` was refused by the very
+        # diagnostic telling it to use `.take`. Asking the flag is what the
+        # comment above always claimed was happening.
         natE3: st.typing.inAssignTarget
+        if st.typing.suppressFnAutoCall then natE3 = true
         {
             isNative9v: st.reg.isNativeOf tid: (ztypes.tid.create from: mo.u64)
                 if isNative9v then natE3 = true
@@ -21985,6 +21992,55 @@ checkTransferMarker: function {
             )
             stampGate :st nid: dp.nid.u64 tid: bt
             return (callleg handled: true tid: bt)
+        }
+        # A BOUND METHOD HAS NO REFERENCE FORM EITHER. A method reference is a
+        # plain C function pointer, and a pointer has nowhere to carry the
+        # receiver -- `r.add.take` emitted the identical C to the bare `r.add`,
+        # which called the method with the receiver and none of its arguments.
+        # Take it off the TYPE instead and pass the receiver explicitly.
+        #
+        # Scoped by methodHasThisReceiver, which is what separates a method from
+        # a callable FIELD: a function-pointer field read (`p.op.take`) declares
+        # no receiver and stays legal, as fnptr_field_bare_read instructs. The
+        # base must also be a VALUE -- `point.add.take` names the type, and that
+        # is the unbound form this error points at.
+        if (isMoveMarker name: cn) when (methodHasThisReceiver :st mid: bt) then {
+            rootNm: dottedRootName :ast n: (ast.nodes.get i: dp.parent.u64)
+            baseIsValue: false
+            if rootNm.length > 0 then {
+                rvo: st.lookupVarId nameId: (nameIdOf :ast name: rootNm.stringView)
+                match (
+                    rvo
+                ) case some then baseIsValue = true case none then null
+            }
+            if baseIsValue then {
+                mNm: dottedChildName :ast n: (ast.nodes.get i: dp.parent.u64)
+                # composed with append, not interpolation: a dotted path built
+                # inline reads to A002 as a composed table key
+                bound: rootNm.copy
+                bound.append "."
+                bound.append mNm
+                unb: st.reg.nameOf tid: (st.reg.ownerTidOf tid: bt)
+                unb.append "."
+                unb.append mNm
+                unb.append ".take"
+                bmm: "'\{bound.stringView}' is a bound method: a reference has nowhere to carry the receiver"
+                bmn: "a method reference is a plain function pointer".string
+                bmh: "take it off the type -- '\{unb.stringView}' -- and pass the receiver explicitly"
+                (addErrorH
+                    :st
+                    nodeid: dp.nid
+                    lineno: dp.lineno
+                    colno: dp.colno
+                    e: zast.err.callError
+                    msg: bmm
+                    note: bmn
+                    hint: bmh
+                    width: cn.length.u32.orPanic
+                )
+                stampGate :st nid: dp.nid.u64 tid: bt
+                return (callleg handled: true tid: bt)
+            }
         }
         # `.drop` is a statement, not a value: it ends a lifetime and hands
         # back nothing, so a binding, an argument or an operand has nothing to

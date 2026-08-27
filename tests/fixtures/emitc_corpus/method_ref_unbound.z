@@ -1,0 +1,49 @@
+# `.take` ON A TYPE YIELDS THE UNBOUND FUNCTION. A method reference is just a C
+# function pointer, so it cannot carry a receiver -- but taken off the TYPE there
+# is no receiver to carry, and the pointer's `_ft` typedef already spells the
+# receiver as its first parameter. `point.add.take` used to emit `z_..._add()`:
+# a receiver-taking function called with nothing at all, at exit 0.
+#
+# Calling through such a local also has to pass the receiver BY POINTER, which
+# is what the slot's own parameter list says; the bare local-call leg emitted
+# every argument raw and handed a `point` where a `point*` was wanted.
+#
+# Both receiver spellings appear on purpose: `:this` declares a member named
+# `this` while `self: this` records a receiver NAME, and a predicate that asks
+# only one of them emits a reference for one spelling and a call for the other.
+
+point: record {
+    x: i64
+} as {
+    add: function {:this rhs: i64} out i64 is { return this.x + rhs }
+    mul: function {self: this rhs: i64} out i64 is { return self.x * rhs }
+}
+
+# a free function reference: no receiver, and it has always worked
+inc: function {v: u64} out u64 is {
+    return v + 1
+}
+
+# a function-pointer FIELD is a field read, not a bound method, so `.take` on
+# one stays legal -- errors/fnptr_field_bare_read.z pins the other half of this
+Proc: class {
+    op: inc
+}
+
+main: function is {
+    a: point x: 10
+
+    # the unbound method, both spellings, called with an explicit receiver
+    f: point.add.take
+    g: point.mul.take
+    print "unbound \{f this: a rhs: 5} \{g self: a rhs: 5}"
+    print "direct   \{a.add rhs: 5} \{a.mul rhs: 5}"
+
+    # the free function reference, stored in a record slot and called
+    p: (Proc op: inc.take)
+    print "field \{p.op v: 41}"
+
+    # the reference taken off the field itself
+    h: p.op.take
+    print "fieldref \{h v: 41}"
+}

@@ -7760,7 +7760,17 @@ renderDefault: function {
 
 # fnTypeTakesThis -- a FUNCTION type whose signature carries a `this` receiver
 # (a method-ref slot auto-calls through itself with the receiver).
+#
+# TWO SPELLINGS, ONE QUESTION. The long form (`self: this`) records the
+# receiver's NAME, which hasThisParamName answers; the elided form (`:this`)
+# declares a member literally named `this` and records no param name, so
+# hasThisParamName answers false for a method that plainly has a receiver.
+# Asking only the second half made `point.add.take` emit a call for `:this`
+# methods and a reference for `self: this` ones -- the same declaration
+# spelled two ways, emitting two different things. This mirrors the checker's
+# methodHasThisReceiver, which has always asked both.
 fnTypeTakesThis: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if (symtab.typing.declHasMemberId parentTypeId: tid nameId: zast.names.wkThis) then return true
     return (symtab.reg.hasThisParamName :tid)
 }
 
@@ -9783,6 +9793,15 @@ emitFnptrLocalCall: function {
     stn: regNameOf :symtab tid: cTid
     if stn.stringView == cn0 then return "".string
     fcm: varCName :ctx vid: cnVid name: cn0
+    # THE SLOT'S OWN PARAMETER LIST DECIDES HOW EACH ARGUMENT IS PASSED, the
+    # same question emitFnptrFieldCall asks of a fn-pointer FIELD. It matters
+    # here as soon as an unbound METHOD reference can reach a local: a receiver
+    # parameter is a pointer in both type families, so `f this: a rhs: 5`
+    # emitted `z_v4(z_v3, 5)` and passed the receiver by value into a `z_t12_t*`.
+    pNames: (List String)
+    pIds: (ListVal u64)
+    pNmIds: (ListVal u64)
+    recFieldLists :ast :symtab tid: cTid names: pNames ids: pIds nameIds: pNmIds
     args: String
     ai: u64
     aiter: call.arguments.iterate
@@ -9792,7 +9811,36 @@ emitFnptrLocalCall: function {
             a
         ) case namedoperation then {
             av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
+            addr: false
+            {
+                anm: zast.nameTextAt :ast ref: a.name
+                pj: u64
+                pjn: pNames.length
+                for pj < pjn loop {
+                    pnm: pNames.get i: pj
+                    if pnm.stringView == anm.stringView then {
+                        if (paramTypeIsPointer
+                            :ast
+                            :symtab
+                            :ctx
+                            fid: cTid
+                            pname: anm.stringView
+                            pid: (ztypes.tid.create from: (pIds.get i: pj))
+                        ) then addr = true
+                    }
+                    pj = pj + 1
+                }
+            }
+            # an argument that already holds a pointer must not be addressed
+            # again -- the same guard the field-call sweep uses
+            if addr when (pathIsPointer
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: a.operation.u64)
+            ) then addr = false
             if ai > 0 then args.append ", "
+            if addr then args.append "&"
             args.append av
             ai = ai + 1
         } else null
@@ -11184,6 +11232,19 @@ emitResolvedMemberRead: function {
         # (--readable-names keeps source names, so the text
         # alone cannot discriminate; a local base has a vid)
         if bn2v.isZero when bn2 == fbtn then {
+            # A RECEIVER-TAKING METHOD READ OFF THE TYPE NAME IS A REFERENCE,
+            # and there is nothing else it can be: calling it needs a receiver
+            # this leg has not got, and the call form (`T.f self: t rhs: 2`)
+            # never arrives here. So `point.add.take` is the bare cname -- the
+            # unbound function pointer, whose `_ft` typedef already pointerizes
+            # the receiver. It used to emit `z_..._add()`, a receiver-taking
+            # function called with nothing at all.
+            #
+            # A true zero-arg static declares no receiver and keeps its call.
+            if (fnTypeTakesThis
+                :symtab
+                tid: (ztypes.tid.create from: mco.u64)
+            ) then return mc2
             sda: (renderedMethodDefaultArgs
                 :ast
                 :symtab
