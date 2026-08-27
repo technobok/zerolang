@@ -33,6 +33,7 @@ lintopts: record {
     docParams: bool
     docFields: bool
     docsPrivate: bool
+    docsQuality: bool
     arch: bool
 }
 
@@ -46,6 +47,7 @@ defaultOpts: function {} out lintopts is {
         docParams: false
         docFields: false
         docsPrivate: false
+        docsQuality: false
         arch: false
     )
 }
@@ -440,6 +442,187 @@ casingClash: function {s: StringView} out bool is {
     kr: zlexer.kwlookup sv: s
     if kr.found then return true
     return (zlexer.islookupReserved sv: s)
+}
+
+# ---- L024/L025 doc-quality helpers (parse tier) ----
+
+# docByteAt -- the byte at `i`, 0 past the end. The rules below index bytes constantly
+# and none of them can act on an absent one.
+docByteAt: function {s: StringView i: u64} out u8 is {
+    bo: s.byteAt :i
+    match (
+        bo
+    ) case some then {
+        c: bo
+        return c
+    } case none then null
+    return 0
+}
+
+# docByteIsWord -- true for the ASCII letters and digits a word is made of. Everything
+# else -- punctuation, backticks, the `--` dash, path separators -- is a boundary.
+docByteIsWord: function {b: u8} out bool is {
+    if b >= 97 when (b <= 122) then return true
+    if b >= 65 when (b <= 90) then return true
+    if b >= 48 when (b <= 57) then return true
+    return false
+}
+
+# docIsStopword -- true for a function word every doc shares, which therefore says
+# nothing about what this one adds. One space-delimited string tested by substring
+# rather than a compare chain: a table of literal compares is the shape A001 exists to
+# discourage, and this needs no ids because a stopword IS its spelling.
+docIsStopword: function {w: StringView} out bool is {
+    if w.length == 0 then return true
+    sw: " a an and any are as at be but by can for from has have if in into is it its may no not of on once one only or other over own same so than that the their them then there these they this those to up when where which while with without "
+    probe: " \{w} "
+    return (sw.contains needle: probe.stringView)
+}
+
+# docWordsInto -- append the lowercase alphanumeric runs of `s` to `into`.
+docWordsInto: function {s: StringView into: (List String)} is {
+    run: String
+    i: u64
+    n: s.length
+    for i < n loop {
+        c: docByteAt :s :i
+        if (docByteIsWord b: c) then {
+            if c >= 65 when (c <= 90) then c = c + 32
+            run.appendByte b: c
+        } else {
+            if run.length > 0 then {
+                into.append from: run.copy
+                run = "".string
+            }
+        }
+        i = i + 1
+    }
+    if run.length > 0 then into.append from: run.copy
+}
+
+# docAddRun -- one alphanumeric run of a declaration: the run lowercased, then each of
+# its camel-case segments, so `ZSymbolTable` also offers `symbol` and `table` and a doc
+# reading "the symbol table" is recognised as saying what the type already says.
+docAddRun: function {run: StringView into: (List String)} is {
+    whole: String
+    seg: String
+    i: u64
+    n: run.length
+    for i < n loop {
+        c: docByteAt s: run :i
+        isUp: false
+        if c >= 65 when (c <= 90) then isUp = true
+        if isUp when (seg.length > 0) then {
+            into.append from: seg.copy
+            seg = "".string
+        }
+        if isUp then c = c + 32
+        seg.appendByte b: c
+        whole.appendByte b: c
+        i = i + 1
+    }
+    if seg.length > 0 then into.append from: seg.copy
+    if whole.length > 0 then into.append from: whole.copy
+}
+
+# docVocabInto -- the vocabulary a declaration line offers a reader: every alphanumeric
+# run in it and every camel-case segment of those runs. A doc built only from these adds
+# nothing the name and the type cannot, which is the bar a comment has to clear.
+docVocabInto: function {s: StringView into: (List String)} is {
+    run: String
+    i: u64
+    n: s.length
+    for i < n loop {
+        c: docByteAt :s :i
+        if (docByteIsWord b: c) then {
+            run.appendByte b: c
+        } else {
+            if run.length > 0 then {
+                docAddRun run: run.stringView :into
+                run = "".string
+            }
+        }
+        i = i + 1
+    }
+    if run.length > 0 then docAddRun run: run.stringView :into
+}
+
+# docHasWord -- membership by spelling. The list is a handful of words from one source
+# line, so a scan beats building a set for it.
+docHasWord: function {xs: (List String).view w: StringView} out bool is {
+    found: false
+    with it: xs.iterate do for e: it loop {
+        if e.stringView == w then found = true
+    }
+    return found
+}
+
+# docJoinWords -- the words joined by single spaces: the normalised key two doc bodies
+# are the same under. Case, punctuation and wrapping all wash out here, so a comment
+# re-wrapped at a different width still matches its twin.
+docJoinWords: function {xs: (List String).view} out String is {
+    buf: String
+    with it: xs.iterate do for w: it loop {
+        if buf.length > 0 then buf.appendByte b: 32
+        buf.append s: w.stringView
+    }
+    return buf
+}
+
+# docStripComment -- the declaration text of a source line, its trailing `#` comment
+# removed. The comment is what is being judged, so it cannot also be the evidence.
+docStripComment: function {ln: StringView} out StringView is {
+    i: u64
+    n: ln.length
+    for i < n loop {
+        c: docByteAt s: ln :i
+        if c == 35 then return (ln.substring from: 0 to: i)
+        i = i + 1
+    }
+    return ln
+}
+
+# docTrailingComment -- the text after a line's `#`, "" when it has none. A member may
+# be documented by a trailing comment instead of a block above, and both forms are read
+# by hover, so both are judged.
+docTrailingComment: function {ln: StringView} out String is {
+    i: u64
+    n: ln.length
+    for i < n loop {
+        c: docByteAt s: ln :i
+        if c == 35 then {
+            t: ln.substring from: (i + 1) to: n
+            return t.trim.string
+        }
+        i = i + 1
+    }
+    return "".string
+}
+
+# docStartsLine -- true when column `col` is the first non-space character of its line,
+# so the declaration standing there owns the doc block above it. A parameter sharing the
+# function's head line does not: the block above is the FUNCTION's doc, and a trailing
+# comment belongs to whichever declaration on the line comes last.
+docStartsLine: function {ln: StringView col: u32} out bool is {
+    if col < 1 then return false
+    n: (col - 1).u64
+    if n > ln.length then return false
+    i: u64
+    for i < n loop {
+        c: docByteAt s: ln :i
+        isSpace: false
+        if c == 32 then isSpace = true
+        if c == 9 then isSpace = true
+        if isSpace == false then return false
+        i = i + 1
+    }
+    return true
+}
+
+# docLineIsComment -- true when the line's first non-space character is `#`.
+docLineIsComment: function {ln: StringView} out bool is {
+    t: ln.trim
+    return (t.startsWith "#")
 }
 
 # ---- L023 generic-param-casing helpers (parse tier) ----
@@ -1794,8 +1977,159 @@ Analysis: class {
                         width: nm.length.u32.orPanic
                     )
                 }
+                if documented when this.opts.docsQuality then {
+                    (this.reportDocEcho
+                        :ast
+                        nameRef: member.name
+                        line: member.lineno
+                        col: member.colno
+                    )
+                }
             }
         } else null
+    }
+
+    # docBlockAbove -- the contiguous `#` block directly above `line1`, markers dropped
+    # and lines joined by spaces; "" when there is none. This is the same block hover
+    # renders, so a rule reading it judges what a reader actually sees.
+    docBlockAbove: function {:this line1: u32} out String is {
+        buf: String
+        if line1 < 2 then return buf
+        lo: (line1 - 2).u64
+        if lo >= this.lines.length then return buf
+        last: this.lines.get i: lo
+        if (docLineIsComment ln: last.stringView) == false then return buf
+        top: lo
+        more: true
+        for more loop {
+            if top == 0 then {
+                more = false
+            } else {
+                prev: this.lines.get i: (top - 1)
+                if (docLineIsComment ln: prev.stringView) then {
+                    top = top - 1
+                } else more = false
+            }
+        }
+        i: top
+        for i <= lo loop {
+            ln: this.lines.get :i
+            t: ln.stringView.trim
+            body: t.substring from: 1 to: t.length
+            if buf.length > 0 then buf.appendByte b: 32
+            buf.append s: body.trim
+            i = i + 1
+        }
+        return buf
+    }
+
+    # reportDocEcho -- L024: every content word of the doc already appears in the
+    # declaration it sits above, so the doc restates the name and the type instead of
+    # saying why the thing exists. That is the bar a comment has to clear, made
+    # mechanical, and it is also the cheapest way to satisfy a coverage ratchet -- the
+    # corpus writes these without one, so the ratchet ships paired with this.
+    reportDocEcho: function {:this ast: Ast.view nameRef: zast.nameid line: u32 col: u32} is {
+        li: (line - 1).u64
+        if li >= this.lines.length then return
+        doc: this.docBlockAbove line1: line
+        # own the line: a live view into this.lines would hold a shared lock across the
+        # warn below, which needs the receiver exclusively.
+        decl: (this.lines.get i: li).copy
+        if (docStartsLine ln: decl.stringView :col) == false then return
+        if doc.length == 0 then doc = docTrailingComment ln: decl.stringView
+        if doc.length == 0 then return
+        vocab: (List String)
+        docVocabInto s: (docStripComment ln: decl.stringView) into: vocab
+        words: (List String)
+        docWordsInto s: doc.stringView into: words
+        novel: u64
+        with wit: words.iterate do for w: wit loop {
+            if (docIsStopword w: w.stringView) == false then {
+                if (docHasWord xs: vocab w: w.stringView) == false then novel = novel + 1
+            }
+        }
+        if novel > 0 then return
+        nm: zast.nameTextAt :ast ref: nameRef
+        (this.warn
+            code: "L024"
+            msg: "this doc only re-says the declaration below it; say why it exists, or rename it so no comment is needed".string
+            :line
+            :col
+            width: nm.length.u32.orPanic
+        )
+    }
+
+    # reportDuplicateDocs -- L025: the same doc body on more than two definitions in one
+    # file. A real invariant stated at forty sites is one invariant and thirty-nine
+    # copies: state it once, in the unit header, and leave the sites bare. Blocks under
+    # four words are section markers and separators, not docs, and are not counted.
+    reportDuplicateDocs: function {:this} is {
+        keys: (List String)
+        starts: (ListVal u64)
+        counts: (MapRV String v: u64)
+        i: u64
+        n: this.lines.length
+        for i < n loop {
+            head: this.lines.get :i
+            if (docLineIsComment ln: head.stringView) == false then {
+                i = i + 1
+            } else {
+                st: i
+                buf: String
+                more: true
+                for more loop {
+                    if i >= n then {
+                        more = false
+                    } else {
+                        ln: this.lines.get :i
+                        t: ln.stringView.trim
+                        if t.startsWith "#" then {
+                            body: t.substring from: 1 to: t.length
+                            if buf.length > 0 then buf.appendByte b: 32
+                            buf.append s: body.trim
+                            i = i + 1
+                        } else more = false
+                    }
+                }
+                ws: (List String)
+                docWordsInto s: buf.stringView into: ws
+                if ws.length >= 4 then {
+                    key: docJoinWords xs: ws
+                    c: u64
+                    cur: counts.get :key
+                    match (
+                        cur
+                    ) case some then {
+                        c = cur
+                    } case none then null
+                    counts.set key: key.copy value: (c + 1)
+                    keys.append from: key.copy
+                    starts.append from: st
+                }
+            }
+        }
+        j: u64
+        for j < keys.length loop {
+            k: keys.get i: j
+            c2: u64
+            cur2: counts.get key: k
+            match (
+                cur2
+            ) case some then {
+                c2 = cur2
+            } case none then null
+            if c2 > 2 then {
+                s2: starts.get i: j
+                (this.warn
+                    code: "L025"
+                    msg: "this doc body appears \{c2} times in this file; state it once, in the unit header, and leave the sites bare"
+                    line: (s2 + 1).u32.orPanic
+                    col: 1
+                    width: 1
+                )
+            }
+            j = j + 1
+        }
     }
 
     # walkDocsAsItem -- one as-block member. A generic parameter is a MEMBER a reader
@@ -1916,6 +2250,12 @@ Analysis: class {
                 op
             ) case functiondef then {
                 if docs then this.reportUndocDef :ast nameRef: n.name line: n.lineno col: n.colno
+                if this.opts.docsQuality then (this.reportDocEcho
+                    :ast
+                    nameRef: n.name
+                    line: n.lineno
+                    col: n.colno
+                )
                 if docParams then {
                     pit: op.parameters.iterate
                     for pmId: pit loop {
@@ -1939,6 +2279,12 @@ Analysis: class {
                 }
             } case objectdef then {
                 if docs then this.reportUndocDef :ast nameRef: n.name line: n.lineno col: n.colno
+                if this.opts.docsQuality then (this.reportDocEcho
+                    :ast
+                    nameRef: n.name
+                    line: n.lineno
+                    col: n.colno
+                )
                 isRC: false
                 if op.kind == zast.objectkind.recordDef then isRC = true
                 if op.kind == zast.objectkind.classDef then isRC = true
@@ -4815,6 +5161,8 @@ analyzeSource: function {source: String.take path: String.take opts: lintopts} o
     anyDocs: opts.docs
     if opts.docParams then anyDocs = true
     if opts.docFields then anyDocs = true
+    if opts.docsQuality then anyDocs = true
+    if opts.docsQuality then a.reportDuplicateDocs
     if anyDocs then (a.walkDocsProgram
         prog: root
         docs: opts.docs
@@ -4904,6 +5252,8 @@ analyzeFileFull: function {
         anyDocs: opts.docs
         if opts.docParams then anyDocs = true
         if opts.docFields then anyDocs = true
+        if opts.docsQuality then anyDocs = true
+        if opts.docsQuality then a.reportDuplicateDocs
         if anyDocs then (a.walkDocsProgram
             prog: root
             docs: opts.docs
