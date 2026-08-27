@@ -32,6 +32,7 @@ lintopts: record {
     docs: bool
     docParams: bool
     docFields: bool
+    docsPrivate: bool
     arch: bool
 }
 
@@ -44,6 +45,7 @@ defaultOpts: function {} out lintopts is {
         docs: false
         docParams: false
         docFields: false
+        docsPrivate: false
         arch: false
     )
 }
@@ -1796,6 +1798,36 @@ Analysis: class {
         } else null
     }
 
+    # walkDocsAsItem -- one as-block member. A generic parameter is a MEMBER a reader
+    # hovers, so it reports L018 like a field or an arm; everything else in an as-block
+    # is a nested definition to descend into. Both carriers of an as-block, a type's
+    # and a function's, hand their members here.
+    walkDocsAsItem: function {
+        :this
+        ast: Ast.view
+        m: Node.view
+        docs: bool
+        docParams: bool
+        docFields: bool
+    } is {
+        isGP: false
+        match (
+            m
+        ) case namedoperation then {
+            if (zast.isGenericParamOp :ast opId: m.operation) then isGP = true
+        } else null
+        if isGP then {
+            if docFields then (this.checkDocsMember
+                :ast
+                member: m
+                code: "L018"
+                kind: "generic parameter"
+            )
+            return
+        }
+        this.walkDocs :ast n: m :docs :docParams :docFields
+    }
+
     # walkDocs -- opt-in doc-coverage pass. L016 flags a type/function/method with
     # no leading `#` block; L017 an undocumented parameter; L018 an undocumented
     # record/class field. Each tier is gated by its own flag.
@@ -1844,6 +1876,11 @@ Analysis: class {
                     }
                 } else null
             }
+            # --docs-private measures the whole unit: a unit with a `public:` block
+            # has no public surface to filter BY, so every member is walked. The
+            # compiler's units export a handful of names each -- zemitterc.z exports 2
+            # of 741 -- so without this the pass reports 0 and means nothing.
+            if this.opts.docsPrivate then hasPub = false
             with bit: n.body.iterate do for bId: bit loop {
                 member: ast.nodes.get i: bId.u64
                 keep: true
@@ -1892,9 +1929,9 @@ Analysis: class {
                 }
                 ait: op.asItems.iterate
                 for amId: ait loop {
-                    (this.walkDocs
+                    (this.walkDocsAsItem
                         :ast
-                        n: (ast.nodes.get i: amId.u64)
+                        m: (ast.nodes.get i: amId.u64)
                         :docs
                         :docParams
                         :docFields
@@ -1905,6 +1942,12 @@ Analysis: class {
                 isRC: false
                 if op.kind == zast.objectkind.recordDef then isRC = true
                 if op.kind == zast.objectkind.classDef then isRC = true
+                isVU: false
+                if op.kind == zast.objectkind.variantDef then isVU = true
+                if op.kind == zast.objectkind.unionDef then isVU = true
+                isPF: false
+                if op.kind == zast.objectkind.protocolDef then isPF = true
+                if op.kind == zast.objectkind.facetDef then isPF = true
                 if docFields when isRC then {
                     fit: op.isItems.iterate
                     for fId: fit loop {
@@ -1916,11 +1959,39 @@ Analysis: class {
                         )
                     }
                 }
+                # an arm reaches a reader the same way a field does -- hovered, one line
+                # of prose -- so it is the same code with its own noun.
+                if docFields when isVU then {
+                    vit: op.isItems.iterate
+                    for vId: vit loop {
+                        (this.checkDocsMember
+                            :ast
+                            member: (ast.nodes.get i: vId.u64)
+                            code: "L018"
+                            kind: "arm"
+                        )
+                    }
+                }
+                # a protocol's and a facet's members are METHOD DECLARATIONS, which sit
+                # in the is-block where a record keeps its fields. They are definitions,
+                # so they descend to L016 rather than reporting as members.
+                if isPF then {
+                    pit9: op.isItems.iterate
+                    for pfId: pit9 loop {
+                        (this.walkDocs
+                            :ast
+                            n: (ast.nodes.get i: pfId.u64)
+                            :docs
+                            :docParams
+                            :docFields
+                        )
+                    }
+                }
                 amit: op.asItems.iterate
                 for oamId: amit loop {
-                    (this.walkDocs
+                    (this.walkDocsAsItem
                         :ast
-                        n: (ast.nodes.get i: oamId.u64)
+                        m: (ast.nodes.get i: oamId.u64)
                         :docs
                         :docParams
                         :docFields
