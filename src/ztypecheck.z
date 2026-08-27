@@ -2424,8 +2424,8 @@ genericConstraintKind: function {ast: Ast.view n: Node.view} out String is {
         return (genericConstraintKind :ast n: (ast.nodes.get i: n.expression.u64))
     } case dottedpath then {
         nameCount: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
-        if nameCount.stringView == "valtype" then return nameCount
-        if nameCount.stringView == "reftype" then return nameCount
+        if nameCount.stringView == "valtype" then return nameCount.copy
+        if nameCount.stringView == "reftype" then return nameCount.copy
         return "".string
     } else {
         return "".string
@@ -28715,6 +28715,32 @@ checkControlBuiltinCall: function {
                     match (
                         rvv
                     ) case some then {
+                        # a BORROWED source returned as an owned result aliases
+                        # storage the caller still frees -- both bindings destroy
+                        # it. Parameters borrow by default and a receiver is
+                        # always borrowed, so the bare name is the whole tell.
+                        # A DESTRUCTOR is what makes it a double free: a
+                        # StringView is a reftype too, but it is a fat pointer
+                        # with no owned interior, and copying one frees nothing.
+                        ownsRb: st.reg.needsDestructor typeId: argT
+                        if ownsRb when (st.typing.currentReturnsBorrow) == false when (isBorrowedVar
+                            :st
+                            vid: rvv
+                        ) then {
+                            rbNm: zast.nameTextAt :ast ref: rbnId
+                            mbr: "Cannot return borrowed variable '\{rbNm}' as an owned result — the caller still owns it; return '\{rbNm}.copy' (duplicate), declare the source '.take' (transfer ownership in), or declare the return '.borrow'"
+                            rbid: nodeId n: (ast.nodes.get i: arg.operation.u64)
+                            rbln: nodeLine n: (ast.nodes.get i: arg.operation.u64)
+                            rbcl: nodeCol n: (ast.nodes.get i: arg.operation.u64)
+                            (addError
+                                :st
+                                nodeid: rbid
+                                lineno: rbln
+                                colno: rbcl
+                                e: zast.err.ownerError
+                                msg: mbr
+                            )
+                        }
                         st.typing.variableMoved.add item: rvv
                     } case none then null
                 }
