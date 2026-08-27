@@ -6052,7 +6052,7 @@ emitInstanceMethodCall: function {
     if (isUserObj) == false then return "".string
     monoOrigin: originTidOf :symtab tid: (ztypes.tid.create from: rtid.u64)
     if monoOrigin > 0 then {
-        if (isUserClassMonoTid
+        if (isUserGenericMonoTid
             :symtab
             :ctx
             tid: (ztypes.tid.create from: rtid.u64)
@@ -19800,29 +19800,39 @@ fnReturnTypeId: function {ast: Ast.view symtab: zenv.ZSymbolTable.view op: Node.
 # function param that is a CLASS or UNION, not a collection mono (List/Map/Set),
 # and not a value-native (String/StringView live in the system/collections
 # units). Records/variants/facets (valtypes) and natives stay by value.
-# isUserClassMonoTid -- a specialization of a non-native user CLASS template
-# (its instances behave like ordinary classes: pointer receivers, method
-# children cloned per spec).
-isUserClassMonoTid: function {
+# isUserGenericMonoTid -- a specialization of a non-native USER generic type, as
+# opposed to a collection mono or a runtime-owned one. Every family whose method
+# bodies this emitter writes qualifies: a record, a variant and a facet carry
+# the same method surface as a class, only by value.
+isUserGenericMonoTid: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
     og4: genericOriginTid :symtab :tid
-    if og4 > 0 then {
-        if (symtab.reg.typetypeOf typeId: og4) == ztypes.ztypetype.classType then {
-            if (isCollectionOriginTid :ctx originTid: og4) == false then {
-                hit4: false
-                nat4: false
-                {
-                    isNative9v: symtab.reg.isNativeOf tid: og4
-                        hit4 = true
-                        if isNative9v then nat4 = true
-                }
-                if hit4 then return (nat4 == false)
-            }
-        }
-    }
+    if og4.isZero then return false
+    if (isCollectionOriginTid :ctx originTid: og4) then return false
+    if (symtab.reg.isNativeOf tid: og4) then return false
+    ott: symtab.reg.typetypeOf typeId: og4
+    if ott == ztypes.ztypetype.classType then return true
+    if ott == ztypes.ztypetype.recordType then return true
+    if ott == ztypes.ztypetype.variantType then return true
+    if ott == ztypes.ztypetype.facetType then return true
+    return false
+}
+
+# isUserClassMonoTid -- the CLASS subset of the above. Its instances behave like
+# ordinary classes -- pointer receivers -- which a valtype mono does not, so the
+# by-reference parameter rule asks this one and the method emitter asks the
+# family-wide one.
+isUserClassMonoTid: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out bool is {
+    if (isUserGenericMonoTid :symtab :ctx :tid) == false then return false
+    ott4: symtab.reg.typetypeOf typeId: (genericOriginTid :symtab :tid)
+    if ott4 == ztypes.ztypetype.classType then return true
     return false
 }
 

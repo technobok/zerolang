@@ -5898,6 +5898,22 @@ functiondefIsNative: function {op: Node.view} out bool is {
     }
 }
 
+# markGenericMethod -- a generic template's as-block method is a per-instance
+# clone candidate: mintMono's clone loop is gated on isgeneric and substitutes
+# the signature for each instance. A NATIVE method has nothing to substitute --
+# the runtime owns its layout and the sized-record arms replace its member in
+# place -- so only the non-native ones are marked.
+markGenericMethod: function {
+    st: zenv.ZSymbolTable
+    op: Node.view
+    mid: u64
+    isgen: bool
+} is {
+    if (isgen) == false then return
+    if (functiondefIsNative :op) then return
+    st.reg.setGeneric typeId: (ztypes.tid.create from: mid.u64) value: true
+}
+
 # isFunctionDefOp -- true when an is-block item's operation is a functiondef (a
 # method), false for a field type-ref. Gates generic-class method production without
 # resolving the function: a generic class never gets a method FUNCTION type of its
@@ -6161,6 +6177,12 @@ attachMethods: function {
                     parentTypeId: parentId
                     nameId: am.name
                     childTypeId: mido
+                )
+                (markGenericMethod
+                    :st
+                    op: (ast.nodes.get i: am.operation.u64)
+                    mid: mido
+                    isgen: agen
                 )
             } case none then {
                 cn: (zast.nameTextAt
