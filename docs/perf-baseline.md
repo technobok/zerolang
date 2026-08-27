@@ -156,6 +156,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-08-23 | e2c867af | [member names, the row accessors and the tokenizer's trivia](#r-e2c867af) | 0.43s | 0.50s | 91MB / 78MB | 113 / 172 / 162 (total 447, medians of 5) | 4,820,294 | 306MB | 35.9s (1124 cases, load ~5.6) | 106,213 |
 | 2026-08-24 | 48e5f08d | [the type-alias mechanism](#r-48e5f08d) | 0.45s | -- | 92MB / -- | 134 / 182 / 166 (total 482, medians of 5) | 4,863,437 | 310MB | -- | 107,829 |
 | 2026-08-25 | a04609b7 | [the `fold` natives arc](#r-a04609b7) | 0.45s | -- | 93MB / -- | 93 / 198 / 170 (total 461, medians of 5) | 4,899,755 | 312MB | -- | 108,433 |
+| 2026-08-28 | 33e4e5fa | [generic families, then four pre-existing defects](#r-33e4e5fa) | 0.45s | -- | 93MB / -- | 108 / 190 / 174 (total 469, medians of 5) | 4,912,311 | 315MB | -- | 110,984 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -1892,3 +1893,49 @@ hotspot, so it is a sweep and not a one-liner. dhat on a `hello.z` compile puts
 `String.from_view` at 22,562 blocks averaging 7.6 bytes and `String.copy` at
 12,068 averaging 16.9 -- name copies, which is what that lint names. Each site
 needs its own write-analysis: a binding that is REASSIGNED must keep the copy.
+
+<a id="r-33e4e5fa"></a>
+### Generic families, then four pre-existing defects
+
+**2026-08-28 · `35294f1c`..`33e4e5fa`**
+
+Two correctness arcs, no perf work in either. The first closed four
+generic-family gaps (a user generic variant mono reaching an emitter; a record's,
+variant's and union's as-block methods marked and emitted; a self-typed return
+substituting). The second closed the four pre-existing defects that arc
+surfaced: a sum type's dotted read asking what the member is, a borrowed reftype
+returned bare as owned refused, a pointer receiver in value position
+dereferenced, and a fnptr typedef taking the signature's return promotions.
+
+**Instructions are at parity, but only after fixing a regression the first
+reading found.** Measured the way the header asks: both binaries on identical
+input -- the `69680fd0` tree with only the borrow escape the arc itself fixes
+patched in, so both compilers accept it -- `perf stat -r 7`, emitted C
+byte-identical both ways.
+
+| | instructions | vs base |
+|---|---|---|
+| base `69680fd0` | 5,686,366,798 | -- |
+| arc as first landed | 5,701,303,536 | **+14,936,738 (+0.263%)** |
+| after `b1a4dd5d` | 5,684,653,731 | −1,713,067 (−0.030%) |
+
+Both spreads are ±0.03–0.04%, so +0.26% was above the noise and readable.
+Ablation put **95% of it in one predicate**: `needsValueDeref` ran
+`pathIsPointer` at every return, typed binding and match subject, and that
+function's call and dotted legs walk stamps, names and canonical ids to answer a
+question only a bare name can answer yes to. Narrowing it to a bare atom, and
+asking it before `.copy` builds its expression rather than after, returned the
+arc to parity.
+
+**The other three fixes cost ZERO allocations**, each confirmed by disabling it
+and checking the disable took (the new E0200 stops firing). What is left is
++21,551 allocations on that fixed input (4,882,079 → 4,903,630, +0.44%), of
+which only +5,752 is attributable to anything nameable; the rest did not respond
+to ablation. Two things say it is not a fixed cost: on `examples/hello.z` the
+new compiler allocates **fewer** -- 71,646 → 71,590 -- and per line of source
+the self-compile column **fell from 45.19 to 44.26 allocations**. The column
+rose because there are 2,551 more lines to compile, not because the compiler got
+worse at compiling them.
+
+`genericConstraintKind` returning a borrow rather than a copy was tried as a
+candidate for the residual and moved nothing, so it was not kept.
