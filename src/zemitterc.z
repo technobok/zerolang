@@ -4727,6 +4727,72 @@ emitSvNativeInfix: function {
     return (svNativeCall :ctx m: op recv: recvS.stringView args: aargs.stringView)
 }
 
+# emitScalarIterateCall -- the VALUE form of a numeric `iterate` / `each`.
+#
+# These are Rule 3 generator functions: `{:this from: type} out (optionval type)`,
+# re-invoked once per iteration, and a for-header is free to lower them to a
+# counted loop instead -- which emitIntRangeFor does, emitting no call at all.
+# That left the value form with no emitter at all: `v: 5.iterate from: 2`
+# type-checks, mints its optionval mono, and then reported `unhandled callee`
+# for a member the compiler supplies. natives.tbl carries an EMPTY row for each
+# of them precisely to say the compiler supplies it, so an absent leg here is
+# the compiler not keeping its own word.
+#
+# One step of the range: the element at `from` when the range has not ended,
+# `none` when it has. Both operands are bound first -- either may be a call.
+emitScalarIterateCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.CallData.view
+} out String is {
+    mnI: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    if mnI.length == 0 then return "".string
+    nmIdI: zast.poolFind pool: ast.names text: mnI.stringView
+    isRangeI: false
+    if nmIdI == zast.names.wkIterate then isRangeI = true
+    if nmIdI == zast.names.wkEach then isRangeI = true
+    if (isRangeI) == false then return "".string
+    # the call's own stamp names the optionval mono the checker minted; a
+    # container's `iterate` returns an ITERATOR and never reaches this test
+    ovidI: stampIdOf :symtab nid: call.nodeid.u64
+    if ovidI.isZero then return "".string
+    if (originIsTid
+        :symtab
+        tid: ovidI
+        originTid: (ctx.origins.get i: ogOptionval)
+    ) == false then return "".string
+    recvI: (emitDottedReceiver
+        :ast
+        :symtab
+        :ctx
+        callable: (ast.nodes.get i: call.callable.u64)
+    )
+    if recvI.length == 0 then return "".string
+    # `from:` is the only argument, and it defaults to 0 exactly as the
+    # for-header's rangeFromExpr defaults it
+    fromI: "0".string
+    with aitI: call.arguments.iterate do for aIdI: aitI loop {
+        aI: ast.nodes.get i: aIdI.u64
+        match (
+            aI
+        ) case namedoperation then {
+            axI: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: aI.operation.u64)
+            if axI.length > 0 then fromI = axI.copy
+        } else null
+    }
+    ovcI: ctxCname :ctx tid: ovidI
+    someI: variantTag :symtab tid: ovidI arm: "some"
+    noneI: variantTag :symtab tid: ovidI arm: "none"
+    payI: armPayloadC :ast :symtab :ctx tid: ovidI arm: "some"
+    if payI.length == 0 then return "".string
+    r0I: "({ \{payI} _rf = (\{fromI}); \{payI} _rl = (\{recvI}); "
+    r1I: "(_rf < _rl) ? ((\{ovcI}_t){ .tag = \{someI}, .data.some = _rf }) "
+    r2I: ": ((\{ovcI}_t){ .tag = \{noneI} }); })"
+    outI: "\{r0I}\{r1I}\{r2I}"
+    return outI
+}
+
 # emitDottedCall -- a method call on a stamped String/StringView base:
 # the simple native set emits {svC}_{member}(&base, &args...).
 emitDottedCall: function {
@@ -10258,6 +10324,9 @@ emitNamedCalleeChain: function {
     # the call form arrived here.
     opc: emitOperatorCallForm :ast :symtab :ctx :call
     if opc.length > 0 then return opc
+    # a numeric range asked for as a VALUE rather than driven by a for-header
+    sic: emitScalarIterateCall :ast :symtab :ctx :call
+    if sic.length > 0 then return sic
     emitFail :ctx what: "unhandled callee \{cn0}" line: call.lineno
     m8: "/* zemitterc: unhandled callee \{cn0} */0"
     return m8
