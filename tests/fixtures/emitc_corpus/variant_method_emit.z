@@ -1,0 +1,49 @@
+# A VARIANT'S as-block METHODS ARE EMITTED. emitDefMethods had a leg for a
+# record def and a leg for a class def and NONE for a variant, so no user method
+# on a variant was ever emitted -- named or operator -- while every call site
+# emitted a call to it. Such a program was accepted at exit 0 and rejected by
+# the C compiler for an implicit declaration, which is why this is pinned by a
+# program that RUNS rather than by a compile.
+#
+# The declared `==` is the case that surfaced it: a variant writing its own
+# equality got a call to a comparison function nobody wrote. It disagrees with
+# structural equality on purpose -- these two values differ in both tag and
+# payload, so a structural answer would print 0.
+
+Opt: variant {
+    hit: i64
+    miss: u64
+} as {
+    ==: function {:this rhs: Opt} out bool is { return true }
+    # a NAMED method, which was equally absent
+    describe: function {:this rhs: i64} out i64 is { return rhs + 1 }
+    # a user OPERATOR that is not a comparison
+    +: function {:this rhs: Opt} out Opt is { return (Opt.hit 9) }
+}
+
+# a variant declaring only `!=`: `==` is its negation, and the shape that used
+# to have its declared operator overwritten by the synthesised shell
+Flag: variant {
+    lit: null
+    dark: null
+} as {
+    !=: function {:this rhs: Flag} out bool is { return false }
+}
+
+main: function is {
+    a: Opt.hit 1
+    b: Opt.miss 2
+
+    # the declared `==` runs, and `!=` is ITS negation
+    print "eq \{a == b} \{a != b} \{(a.== rhs: b)} \{(a.!= rhs: b)}"
+
+    # a named method and a non-comparison operator, both forms
+    print "named \{a describe 41} \{(a.describe rhs: 41)}"
+    c: a + b
+    d: a.+ rhs: b
+    print "plus \{c.hit} \{d.hit}"
+
+    f1: Flag.lit
+    f2: Flag.dark
+    print "flag \{f1 == f2} \{f1 != f2} \{(f1.== rhs: f2)} \{(f1.!= rhs: f2)}"
+}

@@ -5918,6 +5918,45 @@ emitOperatorCallForm: function {
     )
 }
 
+# emitSynthOperatorCallForm -- the call form of a SYNTHESISED operator.
+#
+# A synth `==`/`!=` is a real member with a real signature, which is what makes
+# `a.== rhs: b` type-check at all -- but it has no BODY, and no C function is
+# ever written for it. The structural comparison is emitted per TYPE
+# (`<cname>_eq`) and reached through the natives.tbl `@record.==` / `@variant.==`
+# rows, which only the operator emitter consults. Left to the ordinary by-decl
+# leg, the call form emitted a call to a symbol nobody defines.
+#
+# A DECLARED operator is deliberately NOT routed here: it has a body, and the
+# by-decl leg is what emits the call to it.
+emitSynthOperatorCallForm: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.CallData.view
+} out String is {
+    mnS: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    if mnS.length == 0 then return "".string
+    if (isOperatorName name: mnS.stringView) == false then return "".string
+    if call.arguments.length != 1 then return "".string
+    rt0S: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
+    rtcS: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rt0S.u64)
+    ownerS: (methodOwnerId
+        :ast
+        :symtab
+        rtid: (ztypes.tid.create from: rtcS.u64)
+        mn: mnS.stringView
+    )
+    if ownerS == 0 then return "".string
+    nidS: zast.poolFind pool: ast.names text: mnS.stringView
+    if nidS.isZero then return "".string
+    if (symtab.typing.declMemberIsSynth
+        parentTypeId: (ztypes.tid.create from: ownerS.u64)
+        nameId: nidS
+    ) == false then return "".string
+    return (emitOperatorCallForm :ast :symtab :ctx :call)
+}
+
 # emit a call to an instance method.
 emitInstanceMethodCall: function {
     ast: Ast.view
@@ -10420,6 +10459,10 @@ emitCallValue: function {
             if pch.length > 0 then return pch
         }
     } case none then null
+    # A SYNTHESISED OPERATOR HAS NO BODY TO CALL, so it must reach the
+    # structural emitter before the by-decl leg claims it as an ordinary method.
+    sopc: emitSynthOperatorCallForm :ast :symtab :ctx :call
+    if sopc.length > 0 then return sopc
     cbd: emitCallByDecl :ast :symtab :ctx :call
     if cbd.length > 0 then return cbd
     # a construction by bare type name: the call's type is the type built
@@ -12782,20 +12825,36 @@ emitOperatorAt: function {
         emitFail :ctx what: "operator '\{op}' resolved no declaring type" line: lineno
         return "/* zemitterc: unresolved operator */0".string
     }
-    # a local: the derived-inequality leg below reassigns it
+    # a local: the derived-comparison leg below reassigns it
     call: method
     callName: opId
     neg: false
-    if call.isZero then {
-        # an inequality the checker derived: the type declares equality and
-        # says nothing about its negation, so the negation is emitted here
-        eqo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkOpEq
+    # A DECLARED COMPARISON BEATS A SYNTHESISED ONE, IN EITHER DIRECTION. The
+    # pair is generated per name now, so a type writing only `==` HAS a synth
+    # `!=` member -- and taking it would silently give the STRUCTURAL answer
+    # while `==` said something else. `!=` therefore prefers a declared `==`
+    # and negates it, `==` prefers a declared `!=` and negates that, and only
+    # when neither is written does the structural row answer. This also covers
+    # `call.isZero`, the case where the member does not exist at all.
+    mineSyn: true
+    if (call.isZero) == false then {
+        mineSyn = (symtab.typing.declMemberIsSynth parentTypeId: owner nameId: opId)
+    }
+    if mineSyn then {
+        otherId: zast.names.wkOpEq
+        if opId == zast.names.wkOpEq then otherId = zast.names.wkOpNe
+        oo9: symtab.typing.declChildOfId parentTypeId: owner nameId: otherId
         match (
-            eqo
+            oo9
         ) case some then {
-            call = ztypes.tid.create from: eqo.u64
-            callName = zast.names.wkOpEq
-            neg = true
+            if (symtab.typing.declMemberIsSynth
+                parentTypeId: owner
+                nameId: otherId
+            ) == false then {
+                call = ztypes.tid.create from: oo9.u64
+                callName = otherId
+                neg = true
+            }
         } case none then null
     }
     isNat: false
@@ -27523,7 +27582,21 @@ emitDefMethods: function {
     match (
         bm
     ) case namedoperation then {
-        if (isRecordDef n: (ast.nodes.get i: bm.operation.u64)) then {
+        # A VARIANT'S as-block METHODS ARE METHODS. Only a record leg and a
+        # class leg existed, so NO user method on a variant was ever emitted --
+        # named or operator -- while the call site emitted a call to it. Every
+        # such program was accepted at exit 0 and rejected by the C compiler
+        # for an implicit declaration.
+        #
+        # All three families take their receiver and emit alike, which is why
+        # they share emitRecordMethods -- and why the name resolves ONCE here
+        # rather than once per family.
+        opn9: ast.nodes.get i: bm.operation.u64
+        hasMethods: false
+        if (isRecordDef n: opn9) then hasMethods = true
+        if (isClassDef n: opn9) then hasMethods = true
+        if (isVariantDef n: opn9) then hasMethods = true
+        if hasMethods then {
             nm: zast.nameTextAt :ast ref: bm.name
             rid: userFnId :ast :symtab :ctx name: nm.stringView
             if rid > 0 then (emitRecordMethods
@@ -27531,25 +27604,10 @@ emitDefMethods: function {
                 :symtab
                 :ctx
                 tid: (ztypes.tid.create from: rid.u64)
-                op: (ast.nodes.get i: bm.operation.u64)
+                op: opn9
                 :declOnly
                 :buf
             )
-        }
-        if (isClassDef n: (ast.nodes.get i: bm.operation.u64)) then {
-            nmc: zast.nameTextAt :ast ref: bm.name
-            cid: userFnId :ast :symtab :ctx name: nmc.stringView
-            if cid > 0 then {
-                (emitRecordMethods
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: (ztypes.tid.create from: cid.u64)
-                    op: (ast.nodes.get i: bm.operation.u64)
-                    :declOnly
-                    :buf
-                )
-            }
         }
     } else null
 }
@@ -30062,6 +30120,21 @@ isRecordDef: function {n: Node.view} out bool is {
         n
     ) case objectdef then {
         if n.kind == zast.objectkind.recordDef then {
+            return true
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+# true when `n` is a variant definition.
+isVariantDef: function {n: Node.view} out bool is {
+    match (
+        n
+    ) case objectdef then {
+        if n.kind == zast.objectkind.variantDef then {
             return true
         } else {
             return false

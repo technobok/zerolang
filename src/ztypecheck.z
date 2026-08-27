@@ -6007,15 +6007,18 @@ markerTargetId: function {
 # the type resolves no method and is a hard error.
 # memberNullOptOut -- true when a type's `as {}` block defines `member` as
 # `null`, the language's way of striking a compiler-provided member off a type.
-# asDeclaresMember -- the as-block declares `member` as a real definition (not
-# the `member: null` opt-out shell). The synthesised valtype defaults must
-# YIELD to it: `hasEqIs` is computed from the IS-block alone, so without this a
-# record whose `==` lives in its `as` block would get a synthesised `==` minted
-# on top of the author's, and the emitter would pick the synthesised one.
-asDeclaresMember: function {
+# asDeclaresMemberId -- the as-block declares the member named by `nameId` as a
+# real definition (not the `member: null` opt-out shell). Read from the SOURCE
+# because the synthesised defaults must yield to it, and the decl tree does not
+# carry the author's as-block members yet at that point.
+#
+# Keyed by NAME ID, not by spelling: `==`, `!=` and `hash` all have well-known
+# pool ids, so this compares what the pool already interned rather than the
+# text it interned from.
+asDeclaresMemberId: function {
     ast: Ast.view
     asItems: (ListVal u32).view
-    member: StringView
+    nameId: zast.nameid
 } out bool is {
     result: false
     with aiter: asItems.iterate do for amId: aiter loop {
@@ -6023,8 +6026,7 @@ asDeclaresMember: function {
         match (
             am
         ) case namedoperation then {
-            mn: zast.nameTextAt :ast ref: am.name
-            if mn.stringView == member then {
+            if am.name == nameId then {
                 vn: (zast.nameTextAt
                     :ast
                     ref: (atomNameId :ast n: (ast.nodes.get i: am.operation.u64))
@@ -7627,7 +7629,11 @@ synthRecordHash: function {
         match (
             onHshAsR
         ) case objectdef then {
-            hshAsR = asDeclaresMember :ast asItems: onHshAsR.asItems member: "hash"
+            hshAsR = (asDeclaresMemberId
+                :ast
+                asItems: onHshAsR.asItems
+                nameId: zast.names.wkHash
+            )
         } else null
     }
     if (isgen) == false when hshOptR == false when hshAsR == false then {
@@ -7645,6 +7651,96 @@ synthRecordHash: function {
     }
 }
 
+# synthComparisonMember -- ONE structural comparison member (`==` or `!=`) as a
+# REAL member of `ownerTid`: a receiver, an `rhs` of the owner's type, and
+# `out bool`. Parameters ARE members of the function type, the same shape
+# materializeCreateParams gives a synthesized `create`.
+#
+# A synth comparison used to be minted with no parameters and no return type at
+# all. `a == b` worked anyway, because the binop path never asks the member for
+# a signature -- but `a.== rhs: b`, the SAME method spelled as a call, typed to
+# nothing and died in the emitter as an unhandled binding. That divergence is
+# the whole reason a synthesized method has to be a real record on the type
+# rather than something inserted at the binop check.
+#
+# Yields to an author's own member: the presence test here, and
+# declSynthMemberTyped's again underneath, so neither half can overwrite it.
+synthComparisonMember: function {
+    st: zenv.ZSymbolTable
+    ownerTid: u64
+    nameId: zast.nameid
+    opName: StringView
+    declared: bool
+} is {
+    # `declared` is read from the SOURCE, not from the decl tree: the as-block
+    # and is-block members are not registered yet when this runs, so the decl
+    # tree answers "absent" for a member the author plainly wrote. Trusting it
+    # alone synthesised a `==` on top of f128's native one and the `library:`
+    # fold in quadfloat's require block then had a second definition to walk.
+    # The decl-tree test below still runs, for the members that ARE registered.
+    if declared then return
+    ot: ztypes.tid.create from: ownerTid.u64
+    have: st.typing.declChildOfId parentTypeId: ot :nameId
+    if have.some then return
+    fid: (st.reg.newType
+        name: opName
+        :ownerTid
+        typetype: ztypes.ztypetype.functionType
+    )
+    (st.typing.declSynthMemberTyped
+        parentTypeId: ot
+        :nameId
+        kind: ztyping.declkind.methodDecl
+        childTypeId: fid
+    )
+    ft: ztypes.tid.create from: fid.u64
+    (st.typing.setMemberType
+        parentTypeId: ft
+        nameId: zast.names.wkThis
+        childTypeId: ownerTid
+    )
+    (st.typing.setMemberType
+        parentTypeId: ft
+        nameId: zast.names.wkRhs
+        childTypeId: ownerTid
+    )
+    # NO RETURN TYPE HERE. Resolving `bool` at this point means MINTING it --
+    # builtinTidTc resolves as a side effect -- and minting during every record
+    # and variant resolution pulled `bool` ahead of the demand order, leaving
+    # quadfloat's `library:` fold with a definition it could not evaluate and
+    # rejecting three unrelated programs under --eager. The tid is recorded
+    # instead, and methodReturnOf answers `bool` for it once bool is known.
+    st.typing.synthCmpTids.add item: fid
+}
+
+# synthComparisonPair -- `==` and `!=` together, each yielding independently.
+# THE GATE USED TO ASK ABOUT `==` ALONE and then synthesise BOTH, so a type
+# declaring only `!=` had its own operator overwritten by the synth shell --
+# and a type declaring only `==` got no `!=` MEMBER at all, only the emitter's
+# derived negation, so `a != b` worked and `a.!= rhs: b` was "no member '!='".
+# Either declaration now suppresses exactly itself and generates its partner.
+synthComparisonPair: function {
+    st: zenv.ZSymbolTable
+    ownerTid: u64
+    eqDecl: bool
+    neDecl: bool
+} is {
+    (synthComparisonMember
+        :st
+        :ownerTid
+        nameId: zast.names.wkOpEq
+        opName: "=="
+        declared: eqDecl
+    )
+    (synthComparisonMember
+        :st
+        :ownerTid
+        nameId: zast.names.wkOpNe
+        opName: "!="
+        declared: neDecl
+    )
+}
+
 synthRecordMembers: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -7653,8 +7749,8 @@ synthRecordMembers: function {
     istd: bool
     isgen: bool
     eqOptR: bool
-    eqAsR: bool
-    hasEqIs: bool
+    eqDeclR: bool
+    neDeclR: bool
 } is {
     if istd then {
         borrowId: (st.reg.newType
@@ -7674,36 +7770,16 @@ synthRecordMembers: function {
         )
     } else {
         if (isgen) == false then {
-            if (hasEqIs) == false when (eqOptR) == false when (eqAsR) == false then {
-                eqId: (st.reg.newType
-                    name: "=="
+            # only the `==: null` opt-out suppresses the PAIR -- it says the
+            # type has no equality at all. A DECLARED operator suppresses just
+            # ITSELF, which synthComparisonMember decides per name by asking
+            # the decl tree, where the author's member already is.
+            if (eqOptR) == false then {
+                (synthComparisonPair
+                    :st
                     ownerTid: rid
-                    typetype: ztypes.ztypetype.functionType
-                )
-                (st.typing.declSynthMember
-                    parentTypeId: (ztypes.tid.create from: rid.u64)
-                    nameId: zast.names.wkOpEq
-                    kind: ztyping.declkind.methodDecl
-                )
-                (st.typing.setMemberType
-                    parentTypeId: (ztypes.tid.create from: rid.u64)
-                    nameId: zast.names.wkOpEq
-                    childTypeId: eqId
-                )
-                neqId: (st.reg.newType
-                    name: "!="
-                    ownerTid: rid
-                    typetype: ztypes.ztypetype.functionType
-                )
-                (st.typing.declSynthMember
-                    parentTypeId: (ztypes.tid.create from: rid.u64)
-                    nameId: zast.names.wkOpNe
-                    kind: ztyping.declkind.methodDecl
-                )
-                (st.typing.setMemberType
-                    parentTypeId: (ztypes.tid.create from: rid.u64)
-                    nameId: zast.names.wkOpNe
-                    childTypeId: neqId
+                    eqDecl: eqDeclR
+                    neDecl: neDeclR
                 )
             }
         }
@@ -7783,13 +7859,27 @@ resolveRecord: function {
             eqOptR = eqNullOptOut :ast asItems: onEqOptR.asItems
         } else null
     }
+    # BOTH NAMES, INDEPENDENTLY. The old gate asked about `==` alone and then
+    # synthesised the pair, so a type writing only `!=` had its own operator
+    # replaced by the synth shell -- and one writing only `==` got no `!=`
+    # MEMBER at all, only the emitter's derived negation.
     eqAsR: false
+    neAsR: false
     {
         onEqAsR: ast.nodes.get i: rnode.nid.u64
         match (
             onEqAsR
         ) case objectdef then {
-            eqAsR = asDeclaresMember :ast asItems: onEqAsR.asItems member: "=="
+            eqAsR = (asDeclaresMemberId
+                :ast
+                asItems: onEqAsR.asItems
+                nameId: zast.names.wkOpEq
+            )
+            neAsR = (asDeclaresMemberId
+                :ast
+                asItems: onEqAsR.asItems
+                nameId: zast.names.wkOpNe
+            )
         } else null
     }
     # `copy: null` strikes the default byte copy off this type. It is recorded
@@ -7832,6 +7922,7 @@ resolveRecord: function {
     if istd then recordTypedefBase :st :frame :ast :unitDecl :rnode :rid
     hasCreateIs: false
     hasEqIs: false
+    hasNeIs: false
     if (istd) == false then {
         kFiter: u64
         for kFiter < rnode.nis loop {
@@ -7858,7 +7949,8 @@ resolveRecord: function {
                     mido
                 ) case some then {
                     if fname.stringView == "create" then hasCreateIs = true
-                    if fname.stringView == "==" then hasEqIs = true
+                    if fm.name == zast.names.wkOpEq then hasEqIs = true
+                    if fm.name == zast.names.wkOpNe then hasNeIs = true
                     (st.typing.setMemberType
                         parentTypeId: (ztypes.tid.create from: rid.u64)
                         nameId: fm.name
@@ -7917,6 +8009,16 @@ resolveRecord: function {
         )
         materializeCreateParams :st :frame :ast typeTid: rid :createId
     }
+    # resolved BEFORE the call: ast is lent for the whole argument list, and
+    # the synth path only reads it, so the minting lookup has to happen here
+    # a member the SOURCE declares, by either block: the decl tree does not
+    # carry them yet at this point
+    eqDeclR: false
+    if eqAsR then eqDeclR = true
+    if hasEqIs then eqDeclR = true
+    neDeclR: false
+    if neAsR then neDeclR = true
+    if hasNeIs then neDeclR = true
     (synthRecordMembers
         :st
         :ast
@@ -7925,8 +8027,8 @@ resolveRecord: function {
         :istd
         :isgen
         :eqOptR
-        :eqAsR
-        :hasEqIs
+        :eqDeclR
+        :neDeclR
     )
     if pvExcl_rrid.length > 0 then st.typing.privacySeen = true
     applyGrantsPrivate :st parentId: rrid grants: pvGrants_rrid
@@ -7984,12 +8086,11 @@ detectTagAccessor: function {
     st.typing.tagAccessorName.set key: ownerId value: am.name
     st.typing.tagAccessorTid.set key: (ztypes.tid.create from: ownerId.u64) value: nid
 }
-# synthVariantEqHash -- a variant that writes its own `==` keeps it: the synthesised
-# pair is the DEFAULT, and a default yields to a declaration, exactly as
-# resolveRecord yields through eqAsR. Without this the synthesised marker
-# overwrites the declared method's type, and the registry then answers that
-# `bool`'s native `==` is a structural compare no runtime supplies. `hash` is on
-# the same terms.
+# synthVariantEqHash -- a variant that writes its own `==` or `!=` keeps it: the
+# synthesised pair is the DEFAULT, and a default yields to a declaration, per
+# name. Without that the synthesised marker overwrites the declared method's
+# type, and the registry then answers that `bool`'s native `==` is a structural
+# compare no runtime supplies. `hash` is on the same terms.
 synthVariantEqHash: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -7997,36 +8098,18 @@ synthVariantEqHash: function {
     vid: u64
     isgen: bool
     eqOptV: bool
-    eqAsV: bool
+    eqDeclV: bool
+    neDeclV: bool
 } is {
-    # a variant that writes its own `==` keeps it: the synthesised pair is the
-    # DEFAULT, and a default yields to a declaration, exactly as resolveRecord
-    # yields through eqAsR and as `hash` yields three lines below. Without
-    # this the synthesised marker overwrites the declared method's type, and
-    # the registry then answers that `bool`'s native `==` is a structural
-    # compare that no runtime supplies.
-    if (isgen) == false when (eqOptV) == false when (eqAsV) == false then {
-        eqId: st.reg.newType name: "==" ownerTid: vid typetype: ztypes.ztypetype.functionType
-        (st.typing.declSynthMember
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.names.wkOpEq
-            kind: ztyping.declkind.methodDecl
-        )
-        (st.typing.setMemberType
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.names.wkOpEq
-            childTypeId: eqId
-        )
-        neqId: st.reg.newType name: "!=" ownerTid: vid typetype: ztypes.ztypetype.functionType
-        (st.typing.declSynthMember
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.names.wkOpNe
-            kind: ztyping.declkind.methodDecl
-        )
-        (st.typing.setMemberType
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.names.wkOpNe
-            childTypeId: neqId
+    # the `==: null` opt-out is the only thing that suppresses the PAIR; a
+    # declared `==` or `!=` suppresses just itself, decided per name against
+    # the decl tree. `hash` yields on the same terms three lines below.
+    if (isgen) == false when (eqOptV) == false then {
+        (synthComparisonPair
+            :st
+            ownerTid: vid
+            eqDecl: eqDeclV
+            neDecl: neDeclV
         )
     }
     # `hash` on the same terms as `==` above (see resolveRecord).
@@ -8045,7 +8128,11 @@ synthVariantEqHash: function {
         match (
             onHshAsV
         ) case objectdef then {
-            hshAsV = asDeclaresMember :ast asItems: onHshAsV.asItems member: "hash"
+            hshAsV = (asDeclaresMemberId
+                :ast
+                asItems: onHshAsV.asItems
+                nameId: zast.names.wkHash
+            )
         } else null
     }
     if (isgen) == false when hshOptV == false when hshAsV == false then {
@@ -8261,12 +8348,22 @@ resolveVariant: function {
         } else null
     }
     eqAsV: false
+    neAsV: false
     {
         onEqAsV: ast.nodes.get i: vnode.nid.u64
         match (
             onEqAsV
         ) case objectdef then {
-            eqAsV = asDeclaresMember :ast asItems: onEqAsV.asItems member: "=="
+            eqAsV = (asDeclaresMemberId
+                :ast
+                asItems: onEqAsV.asItems
+                nameId: zast.names.wkOpEq
+            )
+            neAsV = (asDeclaresMemberId
+                :ast
+                asItems: onEqAsV.asItems
+                nameId: zast.names.wkOpNe
+            )
         } else null
     }
     hasMemberNullOptOut30: false
@@ -8404,7 +8501,8 @@ resolveVariant: function {
         :vid
         :isgen
         :eqOptV
-        :eqAsV
+        eqDeclV: eqAsV
+        neDeclV: neAsV
     )
     if pvExcl_vvid.length > 0 then st.typing.privacySeen = true
     applyGrantsPrivate :st parentId: vvid grants: pvGrants_vvid
@@ -15604,6 +15702,10 @@ builtinTidT: function {
     }
     if r.isZero then return r
     if bk > 0 then st.typing.builtinTidMemo.set key: bk.u64 value: r
+    # cached for the readers that hold no ast to look it up with -- a synth
+    # comparison's return type is answered from here. Asked by pool id: `bk` is
+    # already the id `base` interned to, so nothing compares a spelling.
+    if bk == zast.names.wkBool then st.typing.boolTid = r
     return r
 }
 
@@ -19472,6 +19574,13 @@ validateGenericTypeArgs: function {
 methodReturnOf: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out optionval ztypes.tid is {
     rto: st.reg.returnTypeOf tid: mid
     if rto > 0 then return (optionval.some rto)
+    # A SYNTHESISED COMPARISON RETURNS BOOL. It cannot be given that return type
+    # where it is minted (see synthComparisonMember), and the eager tier never
+    # calls forceMemberDecl on it, so this -- the one place both tiers read a
+    # method's return type -- is where the answer belongs.
+    if (st.typing.synthCmpTids.has item: mid.u64) then {
+        if (st.typing.boolTid.isZero) == false then return (optionval.some st.typing.boolTid)
+    }
     rn: st.typing.funcReturnNode.get key: mid
     match (
         rn

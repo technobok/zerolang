@@ -1,0 +1,73 @@
+# A SYNTHESISED OPERATOR IS A REAL MEMBER ON THE TYPE. Inserting one at the
+# binop check is what made the two syntaxes diverge: `a == b` worked while
+# `a.== rhs: b` -- the same method spelled as a call -- typed to nothing,
+# because the synth member was minted with no parameters and no return type.
+#
+# All four declaration shapes, in BOTH syntaxes:
+#   neither  -- both generated, structural
+#   == only  -- `==` declared, `!=` its negation
+#   != only  -- `!=` declared, `==` its negation  (this shape was a hard error:
+#              the gate asked about `==` alone and then synthesised BOTH, so a
+#              declared `!=` had its signature replaced by the synth shell)
+#   both     -- both declared, neither generated
+#
+# A DECLARED comparison must beat a SYNTHESISED one in either direction, which
+# is why each declaring type below disagrees with structural equality on
+# purpose: `wide` calls everything equal, `narrow` calls everything different.
+# A structural answer would show up as the opposite result.
+
+plain: record {
+    x: i64
+}
+
+wide: record {
+    x: i64
+} as {
+    ==: function {:this rhs: wide} out bool is { return true }
+}
+
+narrow: record {
+    x: i64
+} as {
+    !=: function {:this rhs: narrow} out bool is { return true }
+}
+
+both: record {
+    x: i64
+} as {
+    ==: function {:this rhs: both} out bool is { return true }
+    !=: function {:this rhs: both} out bool is { return true }
+}
+
+main: function is {
+    p1: plain x: 1
+    p2: plain x: 2
+    w1: wide x: 1
+    w2: wide x: 2
+    n1: narrow x: 1
+    n2: narrow x: 2
+    b1: both x: 1
+    b2: both x: 2
+
+    # neither declared: structural, and the call form agrees with infix
+    print "plain  \{p1 == p2} \{p1 != p2} \{(p1.== rhs: p2)} \{(p1.!= rhs: p2)}"
+
+    # `==` declared true: `!=` is ITS negation, not a structural compare
+    print "wide   \{w1 == w2} \{w1 != w2} \{(w1.== rhs: w2)} \{(w1.!= rhs: w2)}"
+
+    # `!=` declared true: `==` is ITS negation
+    print "narrow \{n1 == n2} \{n1 != n2} \{(n1.== rhs: n2)} \{(n1.!= rhs: n2)}"
+
+    # both declared: both are the author's, and both say true
+    print "both   \{b1 == b2} \{b1 != b2} \{(b1.== rhs: b2)} \{(b1.!= rhs: b2)}"
+
+    # the generated member is real enough to key a Map: a valtype key is
+    # hashed and compared through the members the type carries
+    m: (MapVV plain v: u64)
+    m.set key: p1 value: 7
+    m.set key: p2 value: 9
+    got: m.get key: p1
+    match (
+        got
+    ) case some then print "mapkey \{m.length} \{got}" case none then print "mapkey MISS"
+}

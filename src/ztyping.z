@@ -363,6 +363,13 @@ ZTyping: class {
     suppressParamStamps: bool
     suppressBareCtor: bool
     suppressFnAutoCall: bool
+    # the FUNCTION tids of synthesised `==` / `!=`, and `bool` cached the first
+    # time it resolves. A synth comparison cannot be given its return type where
+    # it is minted -- resolving `bool` there MINTS it, and minting during type
+    # resolution pulls it ahead of the demand order -- so methodReturnOf answers
+    # from these instead, on the one path both the lazy and the eager tiers take.
+    synthCmpTids: (IdSet u64)
+    boolTid: ztypes.tid
     # a FUNCTION stamp that survives here is legitimate, so a bare method
     # reference must not be reported. Distinct from suppressFnAutoCall,
     # which also stops the coercion: a for-header still NEEDS the 0-arg
@@ -1352,11 +1359,50 @@ ZTyping: class {
         return id
     }
 
+    # declSynthMemberTyped -- synthesise a member AND its type as ONE decision.
+    #
+    # declSynthMember below already yields to an author's own member, but the
+    # setMemberType every caller pairs with it did NOT: it finds the author's
+    # decl and stamps the synth shell straight over its typeId. A type writing
+    # its own `!=` therefore had its real signature replaced by a parameterless,
+    # returnless one, and forceMemberDecl's `if have > 0 then return` guarantees
+    # the shell is never repaired -- so the signature never resolved, the body's
+    # parameters were never stamped, and a binop INSIDE that body reported that
+    # the operator resolved no declaring type. The decl kept the author's node,
+    # so declMemberIsSynth still answered `false` and nothing downstream could
+    # see that the type had been swapped. Only the pair is safe; either half
+    # alone is not.
+    declSynthMemberTyped: function {
+        :this
+        parentTypeId: ztypes.tid
+        nameId: zast.nameid
+        kind: declkind
+        childTypeId: u64
+    } is {
+        od: this.declIdOfType typeId: parentTypeId
+        if od.isZero then return
+        if (this.declFindChild parentDeclId: od :nameId) > 0 then return
+        node: u32
+        {
+            oo: this.decls.get i: od.u64
+            node = oo.node
+        }
+        kk: kind
+        this.declNew name: nameId parent: od kind: kk :node
+        (this.declSetMemberType
+            :parentTypeId
+            :nameId
+            typeId: (ztypes.tid.create from: childTypeId.u64)
+        )
+    }
+
     # declSynthMember -- mint the declaration of a member the checker
     # synthesises (create, borrow, ==, !=, tag) under the type that minted
     # `parentTypeId`, appended in member order. A no-op
     # when that type has no declaration of its own, or when the member is
     # already declared (a type writing its own `create` in an is-block).
+    # Pair it with a type via declSynthMemberTyped -- a bare setMemberType
+    # after it overwrites the very member this yielded to.
     declSynthMember: function {:this parentTypeId: ztypes.tid nameId: zast.nameid kind: declkind} is {
         od: this.declIdOfType typeId: parentTypeId
         if od.isZero then return
@@ -2227,6 +2273,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         suppressParamStamps: false
         suppressBareCtor: false
         suppressFnAutoCall: false
+        synthCmpTids: (IdSet u64)
+        boolTid: ztypes.tid
         allowBareFnRef: false
         typedefBaseName: (IdMapV u64 v: zast.nameid)
         typedefBaseTid: (IdMapV ztypes.tid v: ztypes.tid)
