@@ -1,0 +1,59 @@
+# CALL FORM AND BINOP FORM ARE THE SAME METHOD. The grammar picks between them
+# by path-count parity and holds no operator set at all, so `a add b` and
+# `a.add rhs: b` reach one declaration -- and must produce one answer. Each pair
+# below is printed side by side; the two columns are the same method spelled two
+# ways, and any divergence shows up as differing output rather than as a crash.
+#
+# The receiver is spelled three ways on purpose. A parameter is the receiver iff
+# its TYPE EXPRESSION is `this` -- never its name -- so `self: this`, `me: this`
+# and the elided `:this` are one thing, and the receiver can also be passed by
+# name (`point.a1 self: t rhs: 2`).
+
+point: record {
+    x: i64
+} as {
+    a1: function {self: this rhs: i64} out i64 is { return self.x + rhs }
+    a2: function {me: this rhs: i64} out i64 is { return me.x + rhs }
+    a3: function {:this rhs: i64} out i64 is { return this.x + rhs }
+    +: function {:this rhs: point} out point is {
+        return (point x: (this.x + rhs.x))
+    }
+}
+
+main: function is {
+    t: point x: 10
+    p: point x: 1
+    q: point x: 2
+    s: "hello"
+    o: "hello".string
+    x: 4.i64
+
+    # a user NAMED method, every receiver spelling, both syntaxes
+    print "a1 \{t a1 2} \{t.a1 rhs: 2}"
+    print "a2 \{t a2 2} \{t.a2 rhs: 2}"
+    print "a3 \{t a3 2} \{t.a3 rhs: 2}"
+
+    # the receiver passed by name rather than through the dot
+    print "byname \{point.a1 self: t rhs: 2} \{point.a3 this: t rhs: 2}"
+
+    # a user OPERATOR, both syntaxes
+    print "userop \{(p + q).x} \{(p.+ rhs: q).x}"
+
+    # a NATIVE operator, both syntaxes
+    print "natop \{x + 2} \{(x.+ rhs: 2)}"
+
+    # a NATIVE NAMED method, both syntaxes -- infix used to report
+    # `no native implementation` for a member that is implemented
+    print "sv \{s startsWith "he"} \{(s.startsWith prefix: "he")}"
+    print "sv \{s endsWith "lo"} \{(s.endsWith suffix: "lo")}"
+    print "sv \{s contains "ell"} \{(s.contains needle: "ell")}"
+
+    # the same natives on an OWNED String receiver, which projects to a view
+    print "str \{o startsWith "he"} \{(o.startsWith prefix: "he")}"
+    print "str \{o contains "ell"} \{(o.contains needle: "ell")}"
+
+    # a non-literal argument: the operand is not const-folded, and the two
+    # forms emit byte-identical C
+    pre: "he"
+    print "var \{s startsWith pre} \{(s.startsWith prefix: pre)}"
+}

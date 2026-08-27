@@ -4665,6 +4665,68 @@ emitSvSimpleCall: function {
 }
 
 
+# emitSvNativeInfix -- a NATIVE NAMED method reached INFIX. `s startsWith "he"`
+# and `s.startsWith prefix: "he"` are the same one-argument method, so they must
+# emit the same C. The call form has always routed through emitDottedCall's
+# native legs; the infix form reached emitOperatorAt, which asks natives.tbl for
+# an inline body -- and a fragment-backed native like startsWith has no inline
+# body, only a real C function. The lookup missed and reported "no native
+# implementation" for a member that is implemented perfectly well.
+#
+# Scope is the simple view natives, the ones that take a single argument and
+# return a plain value: startsWith, endsWith, contains, concat, repeated. The
+# optionval-returning set (indexOf, byteAt, ...) keeps its dedicated call-form
+# leg. "" means "not mine", and the caller falls through to the table.
+emitSvNativeInfix: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    owner: ztypes.tid
+    lhsNid: u64
+    rhsNid: u64
+    l: StringView
+    r: StringView
+    op: StringView
+} out String is {
+    if (isStringyTid :ctx tid: owner) == false then return "".string
+    if (isSvSimpleNative name: op) == false then return "".string
+    needsAddM :ctx uname: "system" memb: op
+    # a String receiver projects to a view value; a StringView already is one
+    recvS: l.string
+    if owner == ctx.strTid then {
+        lv: atomVid :symtab nid: lhsNid
+        bfs: svValueForm :ctx expr: l isStr: true vid: lv
+        recvS = bfs.copy
+    }
+    # ASK THE CONSTANT FIRST. The binop leg emits its operands before it knows
+    # what the operator resolved to, so a literal argument has ALREADY been
+    # folded to a `_zcsN` static by the time this runs. Recomputing the argument
+    # from the node would mint the pooled literal instead and leave that static
+    # referenced by nothing -- a `defined but not used` warning, which
+    # warn-check reads as a failure. The folded static is a StringView; its
+    # address is exactly what the native wants.
+    afrag: String
+    {
+        cg: symtab.typing.nodeConst.get key: rhsNid
+        match (
+            cg
+        ) case some then {
+            if cg.kind.svalKind then afrag = "&\{r}"
+        } case none then null
+    }
+    if afrag.length == 0 then {
+        afrag = (svNativeArgFrag
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: rhsNid)
+            addrAlways: false
+        )
+    }
+    aargs: ", \{afrag}"
+    return (svNativeCall :ctx m: op recv: recvS.stringView args: aargs.stringView)
+}
+
 # emitDottedCall -- a method call on a stamped String/StringView base:
 # the simple native set emits {svC}_{member}(&base, &args...).
 emitDottedCall: function {
@@ -12741,6 +12803,25 @@ emitOperatorAt: function {
             u2: "\{cn}(\{recvText}, \{r})"
             return u2
         }
+    }
+    # A NATIVE NAMED METHOD IS NOT AN OPERATOR. The table holds inline bodies
+    # for operators; a fragment-backed native like `startsWith` has none, so
+    # asking for one reports "no native implementation" about a member that is
+    # implemented. Emit the ordinary method call instead -- the mirror of
+    # emitOperatorCallForm, which routes the other direction.
+    if call > 0 when isNat then {
+        eNi: (emitSvNativeInfix
+            :ast
+            :symtab
+            :ctx
+            :owner
+            :lhsNid
+            :rhsNid
+            l: l.stringView
+            r: r.stringView
+            :op
+        )
+        if eNi.length > 0 then return eNi
     }
     key: binopKeyOf :ast :symtab :owner isNative: isNat :op
     body: nativeImplOf :ctx path: key.stringView
