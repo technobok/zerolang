@@ -159,8 +159,6 @@ atomNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     }
 }
 
-# addError -- append a typecheck diagnostic to the typing's error list,
-# deduped by node position so a spec resolved more than once reports once.
 # addResolveError -- a diagnostic raised from the resolution core, which
 # holds no source node: location-free, deduped by message.
 addResolveError: function {st: zenv.ZSymbolTable e: zast.err msg: String} is {
@@ -311,7 +309,8 @@ addResolveErrorH: function {
     }
 }
 
-# record a diagnostic into the typing tables.
+# addError -- append a typecheck diagnostic to the typing's error list,
+# deduped by node position so a spec resolved more than once reports once.
 addError: function {
     st: zenv.ZSymbolTable
     nodeid: zast.nodeid
@@ -1964,7 +1963,6 @@ parseDecimalU64: function {text: StringView} out optionval u64 is {
     return (optionval.none u64)
 }
 
-# isNumericTypeName -- the name of a builtin numeric scalar type.
 # aliasedContainerTwin -- the DECLARATION name behind a container alias
 # (`List` is declared `ListRef`), "" when the name is not one. The alias and
 # its declaration share one canonical tid, so a lookup that missed under the
@@ -1976,6 +1974,7 @@ aliasedContainerTwin: function {name: StringView} out StringView is {
     return ""
 }
 
+# isNumericTypeName -- the name of a builtin numeric scalar type.
 isNumericTypeName: function {name: StringView} out bool is {
     if name == "i8" then return true
     if name == "i16" then return true
@@ -2362,8 +2361,6 @@ recordGenericParamRef: function {
     st.typing.genericParamFrame.set key: nid value: frame
 }
 
-# registerGenericParams -- record a type's generic-param names (keyed by
-# the template's DeclId) so method-param resolution can drop params typed by them.
 # registerGenericParamOne -- record one member's generic-param declaration.
 registerGenericParamOne: function {
     ast: Ast.view
@@ -2455,7 +2452,8 @@ hasGenericParam: function {ast: Ast.view items: (ListVal u32).view} out bool is 
     return (zast.itemsHaveGenericParam :ast :items)
 }
 
-# register a template's generic parameters, classifying each constraint.
+# registerGenericParams -- record a type's generic-param names (keyed by
+# the template's DeclId) so method-param resolution can drop params typed by them.
 registerGenericParams: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -2569,8 +2567,6 @@ recordNodeName: function {
     }
 }
 
-# recordResolvedName -- record (nid -> name) for post-demand resolution; the `this` and
-# `type` self-keywords record as the enclosing type (thisName).
 # stampNestedTyperef -- a qualified type reference into a NESTED unit
 # (`out sub.T`) names a member exactly as a cross-unit reference does, but it
 # cannot be recorded as a pending typeref: that carries a (unit NAME, member
@@ -2607,6 +2603,8 @@ stampNestedTyperef: function {
     ztyping.nodeTypeSet tbl: st.typing.nodeType nid: nid.u64 tid: mt
 }
 
+# recordResolvedName -- record (nid -> name) for post-demand resolution; the `this` and
+# `type` self-keywords record as the enclosing type (thisName).
 recordResolvedName: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -3268,11 +3266,6 @@ recordDottedTyperef: function {
 }
 
 
-# recordTyperef -- record a signature type-ref node (param / field / arm / return) for
-# post-demand stamping. resolveTyperefShell yields only a NULL-unit shell and the real
-# type may be unresolved here (system / forward refs), so the base name is resolved to its
-# real type later by stampTyperefs. Recurses parameterized args and strip-marker dotted
-# paths; `this`/`type` record as the enclosing type (thisName).
 # recordTyperefArgs -- a parameterized type `(T arg: U ...)`: the outer node
 # resolves to a NULL-defined mono (filtered out); record each argument's
 # inner TYPE-ref (e.g. the `u32` in `(optionval t: u32)`), but skip
@@ -3332,6 +3325,11 @@ recordTyperefArgs: function {
     recordTyperef :st :frame :ast :unitDecl :thisName nid: callableId
 }
 
+# recordTyperef -- record a signature type-ref node (param / field / arm / return) for
+# post-demand stamping. resolveTyperefShell yields only a NULL-unit shell and the real
+# type may be unresolved here (system / forward refs), so the base name is resolved to its
+# real type later by stampTyperefs. Recurses parameterized args and strip-marker dotted
+# paths; `this`/`type` record as the enclosing type (thisName).
 recordTyperef: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -4462,11 +4460,6 @@ demandReturnType: function {
 
 }
 
-# resolveFunction -- resolve a function definition signature into a FUNCTION
-# type: a child per parameter (param name -> type-ref shell, `this` params bound
-# to thisName), its defining unit (source-types filter), and a `{unit}.{name}`
-# entry in the resolved name-view. Returns the FUNCTION type id (a record method
-# binds it as a child; a free function discards it).
 # fnHasLockParam -- does any parameter (including a marked receiver) carry a
 # non-owned marker? A `.borrow` return must borrow from a non-owned parameter
 # so the returned view has a pinned parent to live in (docs/ownership.pdoc).
@@ -5211,7 +5204,11 @@ fnSignatureFrame: function {
 }
 
 
-# resolve a function definition: its parameters, return type, and body.
+# resolveFunction -- resolve a function definition signature into a FUNCTION
+# type: a child per parameter (param name -> type-ref shell, `this` params bound
+# to thisName), its defining unit (source-types filter), and a `{unit}.{name}`
+# entry in the resolved name-view. Returns the FUNCTION type id (a record method
+# binds it as a child; a free function discards it).
 resolveFunction: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -6022,12 +6019,6 @@ markerTargetId: function {
     }
 }
 
-# eqNullOptOut -- true when a type's `as {}` block opts out of equality by
-# declaring `==: null` or `!=: null` (mirrors the `create: null` opt-out): the
-# record / variant synthetic `==` / `!=` is then suppressed, so a comparison on
-# the type resolves no method and is a hard error.
-# memberNullOptOut -- true when a type's `as {}` block defines `member` as
-# `null`, the language's way of striking a compiler-provided member off a type.
 # asDeclaresMemberId -- the as-block declares the member named by `nameId` as a
 # real definition (not the `member: null` opt-out shell). Read from the SOURCE
 # because the synthesised defaults must yield to it, and the decl tree does not
@@ -6083,6 +6074,12 @@ memberNullOptOut: function {
     return result
 }
 
+# eqNullOptOut -- true when a type's `as {}` block opts out of equality by
+# declaring `==: null` or `!=: null` (mirrors the `create: null` opt-out): the
+# record / variant synthetic `==` / `!=` is then suppressed, so a comparison on
+# the type resolves no method and is a hard error.
+# memberNullOptOut -- true when a type's `as {}` block defines `member` as
+# `null`, the language's way of striking a compiler-provided member off a type.
 eqNullOptOut: function {ast: Ast.view asItems: (ListVal u32).view} out bool is {
     result: false
     with aiter: asItems.iterate do for amId: aiter loop {
@@ -6222,10 +6219,6 @@ attachMethods: function {
     return hasCreate
 }
 
-# attachMarkers -- resolve an as-block's facet/protocol conformance markers
-# (`m: measurable` / `myreader: Reader`) as children of `parentId`, run AFTER the
-# methods so markers take later positions. Returns whether any marker target owns a
-# destructor (a protocol), so a class holder keeps its own.
 # recordConformance -- record an impl-satisfies-spec conformance, but only when the
 # spec resolves to a FACET or PROTOCOL (a RECORD marker like a numeric's `tag: tag` is a
 # discriminator child, NOT a conformance). The helper C names (vtable/create/destroy/
@@ -6260,7 +6253,10 @@ recordConformance: function {
     }
 }
 
-# attach the ownership/lock markers stamped during resolution to a definition.
+# attachMarkers -- resolve an as-block's facet/protocol conformance markers
+# (`m: measurable` / `myreader: Reader`) as children of `parentId`, run AFTER the
+# methods so markers take later positions. Returns whether any marker target owns a
+# destructor (a protocol), so a class holder keeps its own.
 attachMarkers: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -6797,11 +6793,6 @@ objectTypedefBaseTid: function {
     return 0
 }
 
-# resolveRecord -- resolve a record ObjectDef into a RECORD valtype. A normal
-# record: a child per field (field name -> type-ref shell), a child per as-block
-# method, then synthesized `create`/`==`/`!=`. A typedef record (single
-# `X.typedef` field): no field child, the methods, then `create`+`borrow`. Synth
-# children are shallow FUNCTION shells (JOIN-only). Generics arrive later.
 # fnFieldFlaggableName -- an is-block FUNCTION member that should become a struct
 # fnptr slot (a spec field / method / method-ref), excluding the constructor and
 # comparison synthetics so they stay free functions / ctors.
@@ -7626,12 +7617,6 @@ attachRecordField: function {
         }
     }
 }
-# synthRecordMembers -- the members a record gets without declaring them: a typedef
-# wrapper's `borrow` projection, or the byte-wise `==` and `hash` a plain record
-# carries. `hash` is INDEPENDENT of whether `==` was synthesised -- a type that
-# declares its own `==` (every numeric does) still hashes by its bytes -- and a
-# heap-owning value has no byte range to hash, so it gets none and is not
-# Hashable.
 # synthRecordHash -- `hash` is INDEPENDENT of whether `==` was synthesised -- a
 # type that declares its own `==` (every numeric does) still hashes by its
 # bytes. It exists unless the author struck it off with a null shell or wrote
@@ -7767,6 +7752,12 @@ synthComparisonPair: function {
     )
 }
 
+# synthRecordMembers -- the members a record gets without declaring them: a typedef
+# wrapper's `borrow` projection, or the byte-wise `==` and `hash` a plain record
+# carries. `hash` is INDEPENDENT of whether `==` was synthesised -- a type that
+# declares its own `==` (every numeric does) still hashes by its bytes -- and a
+# heap-owning value has no byte range to hash, so it gets none and is not
+# Hashable.
 synthRecordMembers: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -7835,7 +7826,11 @@ recordTypedefBase: function {
 }
 
 
-# resolve a record definition: its fields and methods.
+# resolveRecord -- resolve a record ObjectDef into a RECORD valtype. A normal
+# record: a child per field (field name -> type-ref shell), a child per as-block
+# method, then synthesized `create`/`==`/`!=`. A typedef record (single
+# `X.typedef` field): no field child, the methods, then `create`+`borrow`. Synth
+# children are shallow FUNCTION shells (JOIN-only). Generics arrive later.
 resolveRecord: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -8052,11 +8047,6 @@ resolveRecord: function {
     applyGrantsPrivate :st parentId: rrid grants: pvGrants_rrid
 }
 
-# resolveVariant -- resolve a variant ObjectDef into a VARIANT valtype: a child per
-# arm (arm name -> payload type-ref shell; a `null` arm -> the `null` shell), a
-# synthesized `tag` child (the `{name}:tag:data` discriminator wrapper), any as-block
-# methods, then synthesized `==`/`!=`. Variants have no `create` (bare construction is
-# disabled). Custom-DATA tags + generics arrive later.
 # detectTagAccessor -- a non-function variant/union as-item of the form
 # `name: <numeric>.tag` declares the read-only tag accessor: instances
 # expose the discriminator ordinal as the numeric type under that name.
@@ -8163,9 +8153,6 @@ synthVariantEqHash: function {
         )
     }
 }
-# attachVariantMethods -- a variant's asItems are its methods. A name that collides
-# with one of its ARM names is rejected here: an arm read and a method call spell
-# the same at the use site.
 # sumMethodNameRejected -- a variant or union as-block method whose name cannot
 # become a member: it collides with an ordinal arm of the same name, or it is
 # the reserved discriminator name. True when it was rejected and reported.
@@ -8205,6 +8192,9 @@ sumMethodNameRejected: function {
     return false
 }
 
+# attachVariantMethods -- a variant's asItems are its methods. A name that collides
+# with one of its ARM names is rejected here: an arm read and a method call spell
+# the same at the use site.
 attachVariantMethods: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -8347,7 +8337,11 @@ attachVariantTag: function {
 }
 
 
-# resolve a variant definition: its arms and methods.
+# resolveVariant -- resolve a variant ObjectDef into a VARIANT valtype: a child per
+# arm (arm name -> payload type-ref shell; a `null` arm -> the `null` shell), a
+# synthesized `tag` child (the `{name}:tag:data` discriminator wrapper), any as-block
+# methods, then synthesized `==`/`!=`. Variants have no `create` (bare construction is
+# disabled). Custom-DATA tags + generics arrive later.
 resolveVariant: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -8554,21 +8548,6 @@ resolveVariant: function {
     applyGrantsPrivate :st parentId: vvid grants: pvGrants_vvid
 }
 
-# dottedParentName -- the parent atom name of a `parent.child` dottedpath Node, ""
-# for anything else. Matching the Node param narrows it cleanly.
-# variantTagIsOrdinalPlain -- the discriminator's VALUES are the arm ordinals
-# 0, 1, 2 ... stored in a byte, which is what lets a backend treat the value as
-# the ordinal itself. True when the type declares no tag -- the spec's default
-# is u8, sequential from 0 -- or declares a numeric tag whose storage is u8.
-#
-# False for a `data`-sourced tag, whose constants are whatever the data block
-# says: `data { LOW: 0  HIGH: 10 }` has two arms and is NOT two ordinals. False
-# too for a wider declared numeric, where the author asked for that width. And
-# false when the tag base does not resolve, because an unverified shape is not
-# one to optimise on.
-#
-# Found by the `.tag` SUFFIX rather than the member's label: the spec makes the
-# label convention only ("commonly tag, but any name is valid").
 # variantTagBaseTid -- the NUMERIC type a tagged type's discriminator is stored
 # in: the base of a declared `tag: X.tag`, or u8 when none is declared, which is
 # the spec's default (§tag: "If no tag is specified, the compiler uses u8 by
@@ -8709,6 +8688,21 @@ variantTagIsOrdinalPlain: function {
     return result
 }
 
+# dottedParentName -- the parent atom name of a `parent.child` dottedpath Node, ""
+# for anything else. Matching the Node param narrows it cleanly.
+# variantTagIsOrdinalPlain -- the discriminator's VALUES are the arm ordinals
+# 0, 1, 2 ... stored in a byte, which is what lets a backend treat the value as
+# the ordinal itself. True when the type declares no tag -- the spec's default
+# is u8, sequential from 0 -- or declares a numeric tag whose storage is u8.
+#
+# False for a `data`-sourced tag, whose constants are whatever the data block
+# says: `data { LOW: 0  HIGH: 10 }` has two arms and is NOT two ordinals. False
+# too for a wider declared numeric, where the author asked for that width. And
+# false when the tag base does not resolve, because an unverified shape is not
+# one to optimise on.
+#
+# Found by the `.tag` SUFFIX rather than the member's label: the spec makes the
+# label convention only ("commonly tag, but any name is valid").
 dottedParentName: function {ast: Ast.view n: Node.view} out String is {
     match (
         n
@@ -8752,9 +8746,6 @@ dottedTyperefId: function {ast: Ast.view st: zenv.ZSymbolTable op: Node.view} ou
     }
 }
 
-# unionCustomTagId -- a union's custom DATA tag, if any: an `as { tag: <data>.tag }`
-# item whose `<data>` resolves to an in-unit DATA type. Returns that DATA's type id;
-# none when absent or not a DATA (the union then synthesizes its own tag wrapper).
 # unionCustomTagOfArm -- one as-item of a union: a `tag` member naming a data
 # block answers that block's type; a tag whose base resolves later records the
 # demand and a pending fixup; anything else answers none.
@@ -8832,6 +8823,9 @@ unionCustomTagOfArm: function {
     return (optionval.none u64)
 }
 
+# unionCustomTagId -- a union's custom DATA tag, if any: an `as { tag: <data>.tag }`
+# item whose `<data>` resolves to an in-unit DATA type. Returns that DATA's type id;
+# none when absent or not a DATA (the union then synthesizes its own tag wrapper).
 unionCustomTagId: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -9947,14 +9941,6 @@ resolveClassTypedefBase: function {
     return needsDtor
 }
 
-# resolveClass -- resolve a class ObjectDef into a CLASS reference type: a child per
-# field (field name -> type-ref shell), a child per as-block method, then a synthesized
-# `create` child (LAST). Classes are reference types (is_valtype false); they get
-# `create` but NO `==`/`!=` (unlike records). A class keeps a destructor when any field
-# owns heap data (fieldTypeNeedsCleanup), else none. A typedef class (single
-# `X.typedef` field) gets no field child, synth `create`+`borrow`, and inherits
-# needs_destructor from the wrapped base (List -> yes, ListView -> no). Custom /
-# `null` create, generics + protocols come later.
 # finishClassDef -- the class walk's tail: the as-block methods, the create
 # path (which may require a destructor), the destructor flag, and the privacy
 # exclusions and grants.
@@ -9994,6 +9980,14 @@ finishClassDef: function {
     applyGrantsPrivate :st parentId: ccid grants: pvGrants
 }
 
+# resolveClass -- resolve a class ObjectDef into a CLASS reference type: a child per
+# field (field name -> type-ref shell), a child per as-block method, then a synthesized
+# `create` child (LAST). Classes are reference types (is_valtype false); they get
+# `create` but NO `==`/`!=` (unlike records). A class keeps a destructor when any field
+# owns heap data (fieldTypeNeedsCleanup), else none. A typedef class (single
+# `X.typedef` field) gets no field child, synth `create`+`borrow`, and inherits
+# needs_destructor from the wrapped base (List -> yes, ListView -> no). Custom /
+# `null` create, generics + protocols come later.
 resolveClass: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -13117,7 +13111,6 @@ callableUnitName: function {ast: Ast.view op: Node.view} out String is {
 }
 
 
-# declParentIdOf -- a declaration's enclosing declaration (0 at the program root).
 # declNameIdOf -- a declaration's own name id, or 0.
 declNameIdOf: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out zast.nameid is {
     decl: st.typing.decls.get i: declId.u64
@@ -13142,6 +13135,7 @@ unitRootOfDecl: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out 
     return (ztypes.declid.create from: 0)
 }
 
+# declParentIdOf -- a declaration's enclosing declaration (0 at the program root).
 declParentIdOf: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out ztypes.declid is {
     r: ztypes.declid
     decl: st.typing.decls.get i: declId.u64
@@ -13243,8 +13237,6 @@ declTypeIdOf: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out zt
     return r
 }
 
-# collectMainInstantiations -- scan a unit body for generic-unit instantiation bindings
-# and append the mono name ({template}_{arg}) + template name to the parallel lists.
 # InstReq -- one generic-unit instantiation binding (intmath: (mathops t: i64)):
 # the names the mint needs plus the binding's node ids for the instantiation stamps.
 InstReq: class {
@@ -13343,7 +13335,8 @@ fillUnitArgs: function {ast: Ast.view r: InstReq op: Node.view} is {
     } else null
 }
 
-# collect the generic instantiation requests reachable from main.
+# collectMainInstantiations -- scan a unit body for generic-unit instantiation bindings
+# and append the mono name ({template}_{arg}) + template name to the parallel lists.
 collectMainInstantiations: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
@@ -13496,10 +13489,6 @@ attachMonoUnitFuncs: function {
     }
 }
 
-# resolveUnitMono -- create a mono UNIT (mangled name, defined_in_unit=the instantiating
-# unit) with JOIN-only function-shell children from the template's body, then seed
-# return/never demand (the template functions have bodies). Skips when already resolved
-# or the template unit is not found.
 # isIteratorCall -- true when a type-expr is a call to `Iterator` (a generator's
 # `out (Iterator gives: T)` return), peeling an expression wrapper.
 isIteratorCall: function {ast: Ast.view op: Node.view} out bool is {
@@ -13675,10 +13664,6 @@ addPromotedLocalsBlk: function {
     }
 }
 
-# synthGeneratorIterClass -- synthesize the `<fn>_iter` CLASS a generator lowers
-# to: a `state: i64` field, a `create` method (param `state: i64`), and a `call`
-# method (receiver `this`, BORROW), all defined in the generator's unit; seeds the
-# return/never demand (the lowered methods have bodies).
 # addResumeInput -- for a bidirectional generator (`accepts: U` in the Iterator
 # return), add the `_resume_input: U` field to the iter class and a `value: U` param
 # (with the annotated ownership) to its `call` method.
@@ -13878,7 +13863,10 @@ synthGeneratorForMethod: function {
     }
 }
 
-# synthesise the iterator class that lowers a generator function.
+# synthGeneratorIterClass -- synthesize the `<fn>_iter` CLASS a generator lowers
+# to: a `state: i64` field, a `create` method (param `state: i64`), and a `call`
+# method (receiver `this`, BORROW), all defined in the generator's unit; seeds the
+# return/never demand (the lowered methods have bodies).
 synthGeneratorIterClass: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -14371,11 +14359,6 @@ fnReturnBaseNameOf: function {ast: Ast.view op: Node.view} out String is {
     }
 }
 
-# buildUnitMono -- unit-mono completion: substituted method
-# children ({mono}.{fn} FUNCTION types whose generic-param-named child types
-# and return are replaced by the instantiation arg). Bodies are walked once,
-# per instance, over the template's AST (stampUnitMonoTemplates). One build
-# per mono.
 # registerMonoFnParams -- register a mono unit fn's generic-param-typed params
 # (a: t -> a: argId) on the mono FUNCTION type, sourced from the template fn's
 # AST. The template fn stays childless -- only the instance carries substituted
@@ -14625,7 +14608,11 @@ buildUnitMonoMember: function {
 }
 
 
-# build a monomorphised instance of a generic unit.
+# buildUnitMono -- unit-mono completion: substituted method
+# children ({mono}.{fn} FUNCTION types whose generic-param-named child types
+# and return are replaced by the instantiation arg). Bodies are walked once,
+# per instance, over the template's AST (stampUnitMonoTemplates). One build
+# per mono.
 buildUnitMono: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
@@ -15776,10 +15763,6 @@ builtinTidTcRo: function {
     return (builtinTidTRo :st frame: st.curFrame :ast :base)
 }
 
-# stampTyperefs -- post-demand pass: stamp every recorded type-ref node with its real
-# resolved type. Runs after the demand descent, so system + forward refs are present
-# in childOf. pendingTyperef is a sibling field of nodeType (no lock
-# conflict). The widened typed_nodes differential reads the resulting nodeType rows.
 # nameClaimedByScope -- the probe core shared by the negative-proof chains
 # (unknown-reference at value/callable sites, unknown-type at stampTyperefs):
 # does a unit-level namespace claim the name -- the unit-name space, the
@@ -15831,7 +15814,10 @@ nameClaimedByScope: function {
     return false
 }
 
-# stamp resolved type ids onto every type reference in the program.
+# stampTyperefs -- post-demand pass: stamp every recorded type-ref node with its real
+# resolved type. Runs after the demand descent, so system + forward refs are present
+# in childOf. pendingTyperef is a sibling field of nodeType (no lock
+# conflict). The widened typed_nodes differential reads the resulting nodeType rows.
 stampTyperefs: function {st: zenv.ZSymbolTable program: Node} is {
     match (
         program
@@ -16449,8 +16435,6 @@ cloneMethodReturn: function {
     }
 }
 
-# checkAtomid -- type a name-atom in value position: a local variable resolves
-# via the symbol table. (Numeric literals + unit-def atoms land in later slices.)
 # cloneMethodInto -- specialize one template method for an instance: a fresh
 # FUNCTION type named {spec}.{m} whose param children and return substitute
 # the template parameters (id-first, then re-specialization). genericOriginId
@@ -17456,19 +17440,6 @@ specLookup: function {
     return cur
 }
 
-# getOrMintSpec -- the id-keyed specialization tree front door: derive the
-# definition-order argument keys from the name-keyed subs (fallbackArg fills a
-# single missing parameter), walk the generic-child edges, and return the existing
-# spec on a full-path hit. A parameter absent from subs with no fallback (a
-# numeric value parameter -- str/array's `to`) skips the tree entirely, so
-# nothing dedups it. On a miss the leaf materializes via mintMono; multi-level
-# paths mint intermediate nodes (genericOriginId = template, genericArgs =
-# the key prefix) that cache partial paths without being emitted.
-# checkConstraintSat -- a specialization argument against its parameter's
-# declared constraint. Any (and numeric bounds, which never reach the tree)
-# pass; value-kind constraints check typeIsValtype/typeIsReftype; StringLike
-# checks membership. GENERIC_PARAM args skip -- partial specs re-check on
-# completion. Location-free (the spec front door holds no source node).
 # constraintKindFor -- classify a constraint's declared text into a tag once,
 # at registration; the checks then compare the tag, not the string.
 constraintKindFor: function {text: StringView} out ztypes.constraintkind is {
@@ -18135,7 +18106,19 @@ buildSpecIdSubs: function {
 }
 
 
-# get, or mint on first use, the specialisation for a generic instantiation.
+# getOrMintSpec -- the id-keyed specialization tree front door: derive the
+# definition-order argument keys from the name-keyed subs (fallbackArg fills a
+# single missing parameter), walk the generic-child edges, and return the existing
+# spec on a full-path hit. A parameter absent from subs with no fallback (a
+# numeric value parameter -- str/array's `to`) skips the tree entirely, so
+# nothing dedups it. On a miss the leaf materializes via mintMono; multi-level
+# paths mint intermediate nodes (genericOriginId = template, genericArgs =
+# the key prefix) that cache partial paths without being emitted.
+# checkConstraintSat -- a specialization argument against its parameter's
+# declared constraint. Any (and numeric bounds, which never reach the tree)
+# pass; value-kind constraints check typeIsValtype/typeIsReftype; StringLike
+# checks membership. GENERIC_PARAM args skip -- partial specs re-check on
+# completion. Location-free (the spec front door holds no source node).
 getOrMintSpec: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -18286,14 +18269,6 @@ getOrMintSpec: function {
     st.reg.specWasFresh = true
     return (ztypes.tid.create from: mid8)
 }
-# mintCollectionChildren -- the per-instance collection children the
-# produced templates cannot express: length/capacity u64 value children,
-# the create child (except List and Map, which have their own create
-# paths), the Map get/remove value-kind wrapper returns, MapEntry's
-# key/value accessors, and the sized str/array member tables. Method
-# signatures and composite returns come from the cloned template methods
-# (healed by respecialize). No-op for other templates or when the
-# instance already has children (re-mint dedup).
 # monoValName -- the value-type name component of a get-wrapper mono name. A type
 # SHADOWING a builtin -- its name resolves through the prelude to a DIFFERENT
 # canonical id -- appends its own id, so its wrapper mono is distinct from the
@@ -18476,10 +18451,6 @@ templateIsCollection: function {
     iterOut.append isIter
     return isColl
 }
-# mintCollectionCounters -- the members a collection instance needs that its
-# template's own methods do not supply: the length/capacity counters (the
-# canonical u64) and the `create` child. Every other member is produced and
-# cloned from the template, its composite returns healed by respecialize.
 # mintCounterFields -- stamp a collection mono's `length`, and for the forms
 # that have one its `capacity`, with the canonical u64. Every collection family
 # below wants the same pair, so the pair is written once.
@@ -18503,6 +18474,10 @@ mintCounterFields: function {
     }
 }
 
+# mintCollectionCounters -- the members a collection instance needs that its
+# template's own methods do not supply: the length/capacity counters (the
+# canonical u64) and the `create` child. Every other member is produced and
+# cloned from the template, its composite returns healed by respecialize.
 mintCollectionCounters: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -18584,7 +18559,14 @@ mintCollectionCounters: function {
 }
 
 
-# mint the per-instantiation member edges of a collection type.
+# mintCollectionChildren -- the per-instance collection children the
+# produced templates cannot express: length/capacity u64 value children,
+# the create child (except List and Map, which have their own create
+# paths), the Map get/remove value-kind wrapper returns, MapEntry's
+# key/value accessors, and the sized str/array member tables. Method
+# signatures and composite returns come from the cloned template methods
+# (healed by respecialize). No-op for other templates or when the
+# instance already has children (re-mint dedup).
 mintCollectionChildren: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -20478,10 +20460,6 @@ dataElemTypeOf: function {
     return (ztypes.tid.create from: 0)
 }
 
-# checkDotted -- a dotted method reference in a body: type the base, look the
-# member up on the base's type, and stamp the dotted node -- with the method's
-# return when the method takes no user parameters beyond the receiver (the
-# auto-call coercion), else with the method FUNCTION type itself.
 # baseIsPrivateCapable -- may a private member be read through this base? True
 # when the base is the type's own `this`/same-type receiver (self, inside its
 # methods), a `.private` projection, or a read of a `.private`-typed friend
@@ -22270,9 +22248,6 @@ checkTransferMarker: function {
     }
     return (callleg handled: false tid: (ztypes.tid.create from: 0))
 }
-# checkNumericSuffixCast -- `1.u8` / `(2.5).f32`: when the child names a non-
-# function type and the parent is a numeric literal, the path is a typed-literal
-# cast -- the parent atom coerces to the suffix type and the path carries it.
 # checkLiteralFits -- does literal `lit` fit `target`? A literal conversion is
 # settled at COMPILE time: it either fits, or it is an error here. A
 # declaration can say which conversions exist but not that 300 is too big for a
@@ -22348,6 +22323,9 @@ literalConvTarget: function {
     return (optionval.none u64)
 }
 
+# checkNumericSuffixCast -- `1.u8` / `(2.5).f32`: when the child names a non-
+# function type and the parent is a numeric literal, the path is a typed-literal
+# cast -- the parent atom coerces to the suffix type and the path carries it.
 checkNumericSuffixCast: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -22500,6 +22478,10 @@ dottedBaseTid: function {
 }
 
 
+# checkDotted -- a dotted method reference in a body: type the base, look the
+# member up on the base's type, and stamp the dotted node -- with the method's
+# return when the method takes no user parameters beyond the receiver (the
+# auto-call coercion), else with the method FUNCTION type itself.
 checkDotted: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -22994,9 +22976,6 @@ isComparisonOp: function {name: StringView} out bool is {
     return false
 }
 
-# ArmPredFact -- one bare arm predicate recognized in an if condition: the
-# subject variable, the arm, the sum type, and whether the condition form
-# is negated (`(x.a) == false` / trailing `.false`).
 # stampTruthyCond -- record which arm a bare 2-arm-sum condition HOLDS when it
 # is true: the second one, the type's non-falsy arm. Every reader then treats
 # `if x` as `if x.<that arm>`. Stamped rather than derived, because a generic
@@ -23014,6 +22993,9 @@ stampTruthyCond: function {
     st.typing.truthyCondArm.set key: nid.u64 value: ta
 }
 
+# ArmPredFact -- one bare arm predicate recognized in an if condition: the
+# subject variable, the arm, the sum type, and whether the condition form
+# is negated (`(x.a) == false` / trailing `.false`).
 ArmPredFact: class {
     subject: zast.nameid
     armName: zast.nameid
@@ -23078,9 +23060,6 @@ predDottedFact: function {ast: Ast.view
     }
 }
 
-# predFactOf -- recognize an if-condition operation as an arm predicate:
-# bare `x.a`, trailing-bool `x.a.true` / `x.a.false`, or the comparison
-# `(x.a) == true` / `(x.a) == false`. none otherwise.
 # armSuffixSide -- the `.true` / `.false` suffix on a dotted arm predicate,
 # read by arm identity. See ztyping.armSuffixSideOf.
 armSuffixSide: function {
@@ -23112,6 +23091,9 @@ truthyCondArmOf: function {st: zenv.ZSymbolTable.view nid: u64} out u64 is {
     }
 }
 
+# predFactOf -- recognize an if-condition operation as an arm predicate:
+# bare `x.a`, trailing-bool `x.a.true` / `x.a.false`, or the comparison
+# `(x.a) == true` / `(x.a) == false`. none otherwise.
 predFactOf: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -24340,9 +24322,6 @@ blockHasBreak: function {ast: Ast.view n: Node.view} out bool is {
     }
 }
 
-# checkDo -- walk a do-block: push the `block` scope, define break (an entry
-# position placeholder with an unregistered type id, so it never joins the dump),
-# walk the statements, then pop. The do resolves to its last statement's value type.
 # wrapDoBreakValue -- the value type of a do-block that can BREAK: an early
 # exit means there may be no value, so the block's type wraps in `optionval`
 # (or `Option`, when the payload is a reftype and must be boxed). Returns the
@@ -24423,6 +24402,9 @@ wrapDoBreakValue: function {
     return res
 }
 
+# checkDo -- walk a do-block: push the `block` scope, define break (an entry
+# position placeholder with an unregistered type id, so it never joins the dump),
+# walk the statements, then pop. The do resolves to its last statement's value type.
 checkDo: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -25022,9 +25004,6 @@ checkFor: function {
     return (forComprehensionTid :st :unitDecl :ast :fornode :elemT)
 }
 
-# checkIf -- walk an if: push the `if` scope, then a `if_branch` scope per clause
-# and an `if_else` scope for the else; when every branch diverges (returns) the
-# if resolves to never and marks the enclosing scope unreachable.
 # restoreTakenArm -- after a NON-diverging if arm, undo any takes of outer-scope
 # owned vars (clearTaken) so the next arm + the restore see them live, recording
 # them in `taken` for a single post-if invalidate. Without this a take in one arm
@@ -25180,7 +25159,9 @@ checkIfClauses: function {
 }
 
 
-# typecheck an if-expression, narrowing types across its arms.
+# checkIf -- walk an if: push the `if` scope, then a `if_branch` scope per clause
+# and an `if_else` scope for the else; when every branch diverges (returns) the
+# if resolves to never and marks the enclosing scope unreachable.
 checkIf: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -25705,11 +25686,6 @@ argIsTrivial: function {ast: Ast.view op: Node.view} out bool is {
     }
 }
 
-# hoistArg -- hoist a non-trivial call argument into a fresh `_tN` synth temp:
-# define the temp (OWNED, synth origin anf) in the open CALL scope and record
-# the synth Assignment / value-Expression / AtomId rows + their type stamps for
-# the dump. The parsed argument keeps its own stamps; only the dump rows are
-# synthesised (no AST mutation).
 # typeIsReftype -- a registered type whose isValtype flag is explicitly false
 # (classes, unions, protocols, heap natives like String). Unset or unregistered
 # ids are not reftypes.
@@ -25779,8 +25755,6 @@ taggedRecvIsValue: function {ast: Ast.view st: zenv.ZSymbolTable.view n: Node.vi
     }
 }
 
-# bareAtomName -- the (expression-unwrapped) bare atom name of a value node,
-# or "" when the value is any other shape.
 # bareAtomNameId -- the interned name id of an expression-unwrapped bare atom,
 # 0 for any other shape. The id twin of bareAtomName.
 bareAtomNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
@@ -25795,6 +25769,8 @@ bareAtomNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     }
 }
 
+# bareAtomName -- the (expression-unwrapped) bare atom name of a value node,
+# or "" when the value is any other shape.
 bareAtomName: function {ast: Ast.view n: Node.view} out String is {
     match (
         n
@@ -25844,11 +25820,6 @@ dottedParentNodeId: function {ast: Ast.view n: Node.view} out zast.nodeid is {
     }
 }
 
-# positionalParamName -- the funcId's parameter name at `idx` (declaration
-# order), "" when absent. Positional call args map to it. With
-# skipRecv, receiver rows (`this` or the fn's thisParamName) are excluded
-# from the count: a dotted method call supplies the receiver implicitly, so
-# its positional args map onto the remaining params.
 # memberIsSelfTyped -- a member of `ifaceTid` with a parameter of the
 # INTERFACE'S OWN type, the receiver excluded. `type` inside an interface means
 # the interface, so `near: function {:this rhs: type}` asks for a
@@ -26011,6 +25982,11 @@ ctorSelfRecursionAt: function {
     return true
 }
 
+# positionalParamName -- the funcId's parameter name at `idx` (declaration
+# order), "" when absent. Positional call args map to it. With
+# skipRecv, receiver rows (`this` or the fn's thisParamName) are excluded
+# from the count: a dotted method call supplies the receiver implicitly, so
+# its positional args map onto the remaining params.
 positionalParamName: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -26763,7 +26739,11 @@ isLiteralTypeId: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool 
     return tid == st.reg.literalFloatTid
 }
 
-# hoist a call argument into a temporary, recording its ownership.
+# hoistArg -- hoist a non-trivial call argument into a fresh `_tN` synth temp:
+# define the temp (OWNED, synth origin anf) in the open CALL scope and record
+# the synth Assignment / value-Expression / AtomId rows + their type stamps for
+# the dump. The parsed argument keeps its own stamps; only the dump rows are
+# synthesised (no AST mutation).
 hoistArg: function {ast: Ast
     st: zenv.ZSymbolTable
     argId: zast.nodeid
@@ -28379,10 +28359,6 @@ returnedBareFieldName: function {
     }
 }
 
-# unresolvedBareCallable -- the bare-atom callable name of a call-shaped
-# value that resolves to NOTHING (no local, no own-unit function, no system
-# name, no walkable type): the checker's silent args-walked fallthrough
-# otherwise leaves the binding untyped and the emitter prints a marker.
 # unresolvedBareName -- prove a bare name resolves NOWHERE in value
 # position: not a local, not a unit member, not a typeref, not a system
 # child. The name when unresolvable; "" when anything claims it.
@@ -28457,7 +28433,10 @@ isDottedValue: function {ast: Ast.view n: Node.view} out bool is {
     }
 }
 
-# report an unresolved bare callee (E0023).
+# unresolvedBareCallable -- the bare-atom callable name of a call-shaped
+# value that resolves to NOTHING (no local, no own-unit function, no system
+# name, no walkable type): the checker's silent args-walked fallthrough
+# otherwise leaves the binding untyped and the emitter prints a marker.
 unresolvedBareCallable: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -33445,11 +33424,6 @@ lockReadonlyParam: function {
 }
 
 
-# bindFunctionParam -- bind one declared parameter into the body's scope: its type,
-# its ownership (a receiver may be `borrow` or `view` only -- an object cannot own
-# itself), its locks, and the readonly and privacy gates its type expression
-# carries. A template's own bare param has no stamp, so it binds the canonical
-# param tid off the FUNCTION child instead.
 # refuseNullTyped -- `null` is NOT a runtime value: it spells "no value" in a
 # sum type's arm and undefines a member (`create: null`, `==: null`), and that
 # is all. A parameter or field typed by it would be a slot holding something
@@ -33483,6 +33457,11 @@ refuseNullTyped: function {
     return true
 }
 
+# bindFunctionParam -- bind one declared parameter into the body's scope: its type,
+# its ownership (a receiver may be `borrow` or `view` only -- an object cannot own
+# itself), its locks, and the readonly and privacy gates its type expression
+# carries. A template's own bare param has no stamp, so it binds the canonical
+# param tid off the FUNCTION child instead.
 bindFunctionParam: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -33840,7 +33819,6 @@ checkFunctionBody: function {
 }
 
 
-# checkUnitBodies -- walk every function definition with a body in one unit.
 # walkUnitTemplateBodies -- body-walk a generic unit template's functions with
 # the generic param UNBOUND (no st.define of the arg), so a `match t` subject
 # resolves to 0 and checkCase stamps it as a genericParam (against the bare unit
@@ -34053,6 +34031,7 @@ checkNamespaceBodies: function {
     }
 }
 
+# checkUnitBodies -- walk every function definition with a body in one unit.
 checkUnitBodies: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -34227,15 +34206,6 @@ checkBodies: function {st: zenv.ZSymbolTable frame: ztypes.declid program: Node}
     } else null
 }
 
-# walkLateResolvedOwners -- complete the demand walk. A type can resolve AFTER
-# its unit's walk has already run -- zvfs.ZVfs and DentryTable do it in astdemo,
-# and a typedef constant does it in its own unit -- and nothing re-walks that
-# unit, so its methods would be emitted with nothing stamped (E0500, "unhandled
-# binding type"). The walk is what stamps a body, so the completion pass is not
-# optional; it is the price of walking a unit once rather than to a fixpoint.
-# A type NOTHING reached is not checked here: a definition the program cannot
-# reach is not the compiler's to spend time on, and reporting on it is a LINT
-# concern. So the keep test is `resolved` alone.
 # walkOwedNamespaceBodies -- walk the member bodies of every namespace or
 # hidden subunit the demand path resolved. The main unit's own namespaces are
 # walked by checkUnitBodies; a DEPENDENCY's are reached only here, and without
@@ -34269,6 +34239,15 @@ walkOwedNamespaceBodies: function {st: zenv.ZSymbolTable frame: ztypes.declid as
     }
 }
 
+# walkLateResolvedOwners -- complete the demand walk. A type can resolve AFTER
+# its unit's walk has already run -- zvfs.ZVfs and DentryTable do it in astdemo,
+# and a typedef constant does it in its own unit -- and nothing re-walks that
+# unit, so its methods would be emitted with nothing stamped (E0500, "unhandled
+# binding type"). The walk is what stamps a body, so the completion pass is not
+# optional; it is the price of walking a unit once rather than to a fixpoint.
+# A type NOTHING reached is not checked here: a definition the program cannot
+# reach is not the compiler's to spend time on, and reporting on it is a LINT
+# concern. So the keep test is `resolved` alone.
 # the target unit's own owners is gone, which is the whole of the dead-code job.
 #
 # Template owners are skipped: their bodies check per instantiation.
@@ -34672,14 +34651,6 @@ stampOneClassMono: function {
     st.pop
 }
 
-# stampUnitMonoTemplates -- post-sweep: re-walk each generic-unit template's
-# method bodies once per monomorphised instance, instance type args bound in
-# scope, every stamp routed into the mono side table (stampGate's
-# curMonoStamp mode, flat param->arg substitution via monoParamSubst). The
-# emitter's per-instance template re-walk reads the table (monoStampIdOf)
-# where the global table is param-suppressed. Runs under suppressParamStamps
-# so its scopes/entries stay out of the dump log; skipped when diagnostics
-# exist (nothing will be emitted).
 # stampUnitMonoMembers -- the generic templates a unit's body declares, at any
 # depth. A unit is a scope, and a scope nests: a template declared inside a
 # plain unit inside another one is still a template, so a non-generic member
@@ -34800,6 +34771,14 @@ stampUnitMonoMembers: function {
     }
 }
 
+# stampUnitMonoTemplates -- post-sweep: re-walk each generic-unit template's
+# method bodies once per monomorphised instance, instance type args bound in
+# scope, every stamp routed into the mono side table (stampGate's
+# curMonoStamp mode, flat param->arg substitution via monoParamSubst). The
+# emitter's per-instance template re-walk reads the table (monoStampIdOf)
+# where the global table is param-suppressed. Runs under suppressParamStamps
+# so its scopes/entries stay out of the dump log; skipped when diagnostics
+# exist (nothing will be emitted).
 stampUnitMonoTemplates: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
@@ -35293,10 +35272,6 @@ constantCompareType: function {
     return bres
 }
 
-# constantBranchWalk -- walk one unit-level-if branch block: each statement's
-# expression types through the constant walk; literal results materialise to
-# their defaults (i64/f64) on the statement, its expression wrapper, and the
-# atom. Returns the (materialised) last-statement type.
 # constantLineType -- one statement line of a unit-level-if branch: the
 # expression's constant type, stamped on the line, its expression wrapper
 # and its atom; a literal result materialises to its default (i64/f64).
@@ -35359,6 +35334,10 @@ constantLineType: function {
     return 0
 }
 
+# constantBranchWalk -- walk one unit-level-if branch block: each statement's
+# expression types through the constant walk; literal results materialise to
+# their defaults (i64/f64) on the statement, its expression wrapper, and the
+# atom. Returns the (materialised) last-statement type.
 constantBranchWalk: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -36141,11 +36120,6 @@ constBlockValue: function {
     return r
 }
 
-# foldIfBranch -- which clause of an `if` the constant fold selects, stamped on
-# the If so every consumer reads ONE answer instead of recomputing its own.
-# Every condition of a clause must fold and be true for that clause to win; the
-# first winner takes it and the else clause is the fallback. `known` false means
-# a condition did not fold: this is a runtime `if` and nothing may be elided.
 # foldIfCond -- one condition of a folding `if`: 1 = a plain guard that
 # folds true, 2 = folds false, 0 = undecided (a labelled condition other
 # than `when`, or a guard whose value is not a known truth arm), 3 = not a
@@ -36196,6 +36170,11 @@ foldIfCond: function {
     return 0
 }
 
+# foldIfBranch -- which clause of an `if` the constant fold selects, stamped on
+# the If so every consumer reads ONE answer instead of recomputing its own.
+# Every condition of a clause must fold and be true for that clause to win; the
+# first winner takes it and the else clause is the fallback. `known` false means
+# a condition did not fold: this is a runtime `if` and nothing may be elided.
 foldIfBranch: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -36562,9 +36541,6 @@ constStringMethod: function {
     }
     return (constUnsupportedMethod :st :name :nodeid :lineno :colno)
 }
-# constOfBinop -- fold a binary operator over two constant operands. Two tags
-# compare by ARM IDENTITY (owning type plus name-pool id), never by rendered
-# text, and only equality is defined -- arms have no order.
 # constOfBinopFold -- the folded value of `lv <op> rv`: two tags compare by
 # ARM IDENTITY, two strings by interned text (and `+` joins), integers and
 # floats by value. noConst for anything else.
@@ -36637,6 +36613,9 @@ constOfBinopFold: function {
     return ztypes.noConst
 }
 
+# constOfBinop -- fold a binary operator over two constant operands. Two tags
+# compare by ARM IDENTITY (owning type plus name-pool id), never by rendered
+# text, and only equality is defined -- arms have no order.
 constOfBinop: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
@@ -36675,10 +36654,6 @@ constOfBinop: function {
     if opNode.length == 0 then return ztypes.noConst
     return (constOfBinopFold :st :frame :ast :lv :rv op: opNode.stringView :nid :ln :co)
 }
-# constOfCall -- a call in constant position. `error "..."` is the program
-# asserting: only the WINNING branch of a fold is ever evaluated, so an `error`
-# in a dead one is never visited, which is why it lives here and not in a tree
-# walk. A static method on a string constant folds here too.
 # constOfStringMethodCall -- a static method on a string constant
 # (`"abcd".length`) is a CALL whose callable is a dotted path: the receiver
 # folds to a string and the child names the method. noConst when the call
@@ -36727,6 +36702,10 @@ constOfStringMethodCall: function {
     )
 }
 
+# constOfCall -- a call in constant position. `error "..."` is the program
+# asserting: only the WINNING branch of a fold is ever evaluated, so an `error`
+# in a dead one is never visited, which is why it lives here and not in a tree
+# walk. A static method on a string constant folds here too.
 constOfCall: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
@@ -36921,13 +36900,6 @@ constOfNamedBase: function {
 }
 
 
-# evalConstNode -- the compile-time value of a node, or `none` when the node is
-# not a constant shape. Numeric shapes only for now: bool and variant arms,
-# strings and static string methods arrive with the paths that render them.
-# Silence is deliberate here -- a shape with no value is not automatically an
-# error, because this walk also runs over definitions that are not constants at
-# all. The E0600s below are the cases where a value was genuinely required and
-# the operands were there.
 # constplan -- what evaluating one row needs once its view is gone: the arm
 # (1 expression, 2 atomid, 3 atomstring, 4 dottedpath, 5 binop, 6 call,
 # 7 ifexpr, 0 anything else) and the ids and scalars that arm reads.
@@ -37152,6 +37124,13 @@ evalConstDotted: function {
     return ztypes.noConst
 }
 
+# evalConstNode -- the compile-time value of a node, or `none` when the node is
+# not a constant shape. Numeric shapes only for now: bool and variant arms,
+# strings and static string methods arrive with the paths that render them.
+# Silence is deliberate here -- a shape with no value is not automatically an
+# error, because this walk also runs over definitions that are not constants at
+# all. The E0600s below are the cases where a value was genuinely required and
+# the operands were there.
 evalConstNode: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -37565,12 +37544,6 @@ resolveBinopConstantDef: function {
         }
     }
 }
-# resolveCalledConstantDef -- a unit-level constant whose value is a CALL. A
-# construction is not a literal, but the parenthesised form is the generic-unit
-# instantiation (`intmath: (genmath t: i64)`) and stays legal -- its callee names
-# a UNIT, which is the test here. A unit declared in THIS file has no registry
-# entry yet and a generic-unit binding is no file unit at all, so the Decl tree
-# answers both.
 # resolveInstantiatedAlias -- `Strs: (List String)`: a unit-level definition
 # whose value INSTANTIATES a generic template NAMES the resulting mono, exactly
 # as the bare (`Same: Holder`) and dotted (`Nd: zast.Node`) forms name a type.
@@ -37615,6 +37588,12 @@ resolveInstantiatedAlias: function {
     return true
 }
 
+# resolveCalledConstantDef -- a unit-level constant whose value is a CALL. A
+# construction is not a literal, but the parenthesised form is the generic-unit
+# instantiation (`intmath: (genmath t: i64)`) and stays legal -- its callee names
+# a UNIT, which is the test here. A unit declared in THIS file has no registry
+# entry yet and a generic-unit binding is no file unit at all, so the Decl tree
+# answers both.
 resolveCalledConstantDef: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -39688,9 +39667,6 @@ programUnitDecls: function {st: zenv.ZSymbolTable.view} out (ListVal u64) is {
     return result
 }
 
-# isUnitNameDecl -- does `nameId` name a FILE unit: a child of the program root
-# whose declared type is a unit? The Decl-tree answer to what the unit-name
-# index was asked.
 # nameDenotesUnit -- does `nameId` name a unit HERE: a FILE unit, or a
 # generic-unit BINDING in scope (`intmath: (mathops t: i64)`) whose Decl
 # carries the instantiated unit's type. The second leg is what a bare-name
@@ -39719,6 +39695,9 @@ nameDenotesUnit: function {
     return (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.unitType
 }
 
+# isUnitNameDecl -- does `nameId` name a FILE unit: a child of the program root
+# whose declared type is a unit? The Decl-tree answer to what the unit-name
+# index was asked.
 isUnitNameDecl: function {
     st: zenv.ZSymbolTable.view
     nameId: zast.nameid
@@ -40212,9 +40191,6 @@ shellScalarName: function {name: StringView} out bool is {
     return name == "bool"
 }
 
-# shellResolveByName -- the emitter's shell resolution order for `name` seen
-# from `unit`: the unit-local key, the system key, the walk list, then the
-# registry-wide cross-unit scan. 0 when nothing resolves.
 # canonShellTid -- the canonical id for a SHELL stamp value, 0 to leave
 # the stamp alone. Mirrors canonicalizeShellChildren's shell detection
 # (no defining unit, not a generic param / scalar shell / as-const clone
@@ -40476,7 +40452,9 @@ canonicalizeShellNodeStamps: function {
     }
 }
 
-# resolve a type name to its shell type id (before member resolution).
+# shellResolveByName -- the emitter's shell resolution order for `name` seen
+# from `unit`: the unit-local key, the system key, the walk list, then the
+# registry-wide cross-unit scan. 0 when nothing resolves.
 shellResolveByName: function {
     ast: Ast
     st: zenv.ZSymbolTable
