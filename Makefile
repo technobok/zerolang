@@ -1323,16 +1323,22 @@ eager-guard: bin/zc
 
 # member-guard -- ratchet against declaration-bypassing member special-cases in
 # the type checker. TWO spellings carry them and the guard counts both:
-# `cn.stringView == "..."` where the name is an owned String (18 sites), and
-# `cn == "..."` where it is already a view (12) -- 30 in all. The `.drop` marker
-# used to add four of the second kind; they now route through isDropMarker, so
-# its spelling lives in one place.
+# `cn.stringView == "..."` where the name is an owned String, and `cn == "..."`
+# where it is already a view -- 24 in all. The `.drop` marker used to add four
+# of the second kind; they now route through isDropMarker, so its spelling
+# lives in one place.
 #
-# The sanctioned markers are, exhaustively, what the baseline counts: ownership
-# (lock / borrow / take / view / hold / takex), access (private /
-# public), the conversions (copy / str), the container markers (tag / array /
-# index), the definition keywords (typedef / return / create / error / panic),
-# and the `Iterator` protocol marker. A rising count means a new hardcoded
+# THE OWNERSHIP VOCABULARY IS NO LONGER HERE. lock / borrow / take / view /
+# hold / takex are interned as well-known ids (zast.names) and compared as ids
+# in pathOwnership, so this guard no longer catches a new marker word. What
+# catches one instead is the type system: zparamownership is matched
+# EXHAUSTIVELY in four places, so a new arm is a compile error rather than a
+# silent miss.
+#
+# The sanctioned markers are, exhaustively, what the baseline still counts:
+# access (private / public), the conversions (copy / str), the container
+# markers (tag / array / index), the definition keywords (typedef / return /
+# create / error / panic), and the `Iterator` protocol marker. A rising count means a new hardcoded
 # string-keyed special-case -- resolve members through their declared childOf
 # edges instead (the system units are the source of truth). Bump the baseline
 # here only for a genuinely-sanctioned marker.
@@ -1346,18 +1352,18 @@ eager-guard: bin/zc
 # the spelling moves, and it dies silently.
 member-guard:
 	@m1=$$(grep -cE '[a-z]*cn\.stringView ==|[a-z]*cn == "' src/ztypecheck.z); \
-	if [ "$$m1" -gt 30 ]; then \
-	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 30)"; \
+	if [ "$$m1" -gt 24 ]; then \
+	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 24)"; \
 	  echo "  A new hardcoded string-keyed member/marker special-case was added to the"; \
 	  echo "  type checker. Resolve members through their declared childOf edges (the"; \
 	  echo "  system units are the source of truth); bump the baseline only for a"; \
 	  echo "  genuinely-sanctioned marker."; \
 	  exit 1; \
 	fi; \
-	if [ "$$m1" -lt 30 ]; then \
-	  echo "member-guard: string-keyed member compares = $$m1 < baseline 30 -- lower the baseline here"; \
+	if [ "$$m1" -lt 24 ]; then \
+	  echo "member-guard: string-keyed member compares = $$m1 < baseline 24 -- lower the baseline here"; \
 	fi; \
-	echo "member-guard OK: string-keyed member compares = $$m1 (<=30)"
+	echo "member-guard OK: string-keyed member compares = $$m1 (<=24)"
 
 # view-guard -- a native receiver marked `.view` asserts that the C never writes
 # through it, and the compiler cannot check that: there is no body. So the C
