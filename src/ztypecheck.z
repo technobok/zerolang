@@ -556,6 +556,7 @@ checkBareTypeValueAt: function {
         isCtor: true
         provided: prov
         posCount: 0
+        recvImplicit: true
         missingNames: misN
         missingIds: misI
     )
@@ -20333,6 +20334,7 @@ bareFnRefError: function {
         isCtor: false
         provided: prov
         posCount: 0
+        recvImplicit: true
         missingNames: misN
         missingIds: misI
     )
@@ -26987,9 +26989,8 @@ dataFieldNames: function {
 
 # missingCtorFields -- collect each required field/param (no default) of
 # `funcId` that the provided labels / positional count do not cover, into
-# missingNames/missingIds. The method receiver is implicitly bound; a
-# construction's body-carrying FUNCTION-typed (fnptr) fields are auto-bound;
-# native types have no required fields.
+# missingNames/missingIds. A construction's body-carrying FUNCTION-typed
+# (fnptr) fields are auto-bound; native types have no required fields.
 missingCtorFields: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -26997,6 +26998,10 @@ missingCtorFields: function {
     isCtor: bool
     provided: (List String).view
     posCount: u64
+    # whether the receiver arrived some other way than as an argument. Only a
+    # dotted call on a VALUE binds it that way; a type-qualified call leaves it
+    # to the arguments, where it is required and counted like any other
+    recvImplicit: bool
     missingNames: List String
     missingIds: ListVal u64
 } is {
@@ -27052,7 +27057,14 @@ missingCtorFields: function {
         isRecv: false
         if pnameId == zast.names.wkThis.u64 then isRecv = true
         if thisPn.length > 0 when thisPn.stringView == pname.stringView then isRecv = true
-        if (isRecv) == false then {
+        # THE RECEIVER IS REQUIRED WHENEVER NOTHING ELSE SUPPLIED IT, and it is
+        # the first declared parameter, so it also takes positional slot 0.
+        # Skipping it unconditionally credited that slot to the NEXT parameter,
+        # which is how `point.sub p` -- receiver given, `a` omitted -- ran with
+        # `a` at zero instead of being reported.
+        skipRecv9: false
+        if isRecv when recvImplicit then skipRecv9 = true
+        if (skipRecv9) == false then {
             posI: vpos
             vpos = vpos + 1
             need: true
@@ -27095,6 +27107,9 @@ checkMissingCallArgs: function {ast: Ast
     call: callref
     funcId: ztypes.tid
     isCtor: bool
+    # whether the call's own shape already supplied the receiver -- a dotted
+    # call on a value does, a type-qualified call does not
+    recvImplicit: bool
 } is {
     mcb0: metaCreateBaseId :ast n: (ast.nodes.get i: call.callable.u64)
     match (
@@ -27119,7 +27134,17 @@ checkMissingCallArgs: function {ast: Ast
     }
     missingNames: (List String)
     missingIds: (ListVal u64)
-    missingCtorFields :ast :st :funcId :isCtor :provided :posCount :missingNames :missingIds
+    (missingCtorFields
+        :ast
+        :st
+        :funcId
+        :isCtor
+        :provided
+        :posCount
+        :recvImplicit
+        :missingNames
+        :missingIds
+    )
     mi: u64
     mn: missingNames.length
     for mi < mn loop {
@@ -27237,6 +27262,29 @@ checkUntypedArgLabel: function {
                 boundArgIds.append dcnU.u64
             }
         }
+}
+# receiverSuppliedBy -- how a call ALREADY supplied its receiver, phrased the way
+# a diagnostic names it, or "" when it did not. A dotted call on a value passes it
+# through the dot; a type-qualified call passes it as the one unlabelled argument,
+# of which a call carries at most one and it comes first.
+receiverSuppliedBy: function {ast: Ast.view call: callref recvImplicit: bool} out String is {
+    if recvImplicit then {
+        rr: methodReceiverRoot :ast n: (ast.nodes.get i: call.callable.u64)
+        byDot: "'\{rr}.'"
+        return byDot
+    }
+    ki: u64
+    for ki < call.nargs loop {
+        aid: (zast.callArgAt :ast nid: call.nid i: ki).u32
+        ki = ki + 1
+        an: ast.nodes.get i: aid.u64
+        match (
+            an
+        ) case namedoperation then {
+            if an.name.isZero then return "the unlabelled argument".string
+        } else null
+    }
+    return "".string
 }
 # lockBorrowedArgPath -- a reftype argument passed to a locking parameter has
 # its whole value path locked for the call, not just its root: a write through
@@ -27994,6 +28042,29 @@ walkOneCallArg: function {
 } out zast.nameid is {
     lockRoot: lockRootIn
     arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
+    # THE RECEIVER IS SUPPLIED ONCE. An argument that names the receiver
+    # parameter when the call already supplied it supplies it twice, and
+    # emission binds one and drops the other -- a wrong answer taken from an
+    # object the reader can plainly see being handed over.
+    if (isCtor) == false when funcId > 0 when (arg.name.isZero) == false then {
+        rNm9: st.reg.thisParamNameIdOf tid: funcId
+        if rNm9.isZero then rNm9 = zast.names.wkThis
+        if arg.name == rNm9 then {
+            by9: receiverSuppliedBy :ast :call :recvImplicit
+            if by9.length > 0 then {
+                lb9: zast.nameTextCopy :ast ref: arg.name
+                m9: "the receiver is supplied twice: by \{by9} and by '\{lb9}:'"
+                (addError
+                    :st
+                    nodeid: arg.nid
+                    lineno: arg.lineno
+                    colno: arg.colno
+                    e: zast.err.callError
+                    msg: m9
+                )
+            }
+        }
+    }
     if (arg.nid.isZero) == false then {
         # a FUNCTION-typed field takes a method REFERENCE: its ctor
         # argument walks without the value-position auto-call coercion.
@@ -29146,18 +29217,43 @@ checkResolvedMethodCall: function {
             if dleg.handled then return dleg.tid
         }
         mcm: st.pushCall
-        # Dotted on a value in scope = the receiver is implicit;
-        # dotted on the type (`Counter.increment c`) passes the
-        # receiver as an ordinary positional arg.
-        recvVal: false
+        # A DOTTED BASE THAT NAMES A TYPE leaves the receiver to the
+        # arguments (`Counter.increment c`); every other base passes it
+        # through the dot. Only a bare NAME can name a type, so a base that
+        # is a call result or a nested path is a value by construction --
+        # reading an ABSENT name as "not a value" made `(mk n: 2).plus n: 3`
+        # demand a receiver the dot had already handed over.
+        recvVal: true
         rrnId: rootNameIdOf :ast n: (ast.nodes.get i: call.callable.u64)
         if (rrnId.isZero) == false then {
             rlo: st.lookup nameId: rrnId
             match (
                 rlo
-            ) case some then {
-                recvVal = true
-            } case none then null
+            ) case some then null case none then {
+                recvVal = false
+            }
+        }
+        # Calling THROUGH a function-pointer field is a field READ, not a
+        # method dispatch: the dot reaches the slot, so the receiver the
+        # slot's signature names is passed as an ordinary argument.
+        if recvVal then {
+            bp9: u64
+            {
+                cq9: ast.nodes.get i: call.callable.u64
+                match (
+                    cq9
+                ) case dottedpath then {
+                    bp9 = cq9.parent.u64
+                } else null
+            }
+            cn9: dottedChildNameId :ast n: (ast.nodes.get i: call.callable.u64)
+            if bp9 > 0 when (cn9.isZero) == false then {
+                bt9: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: bp9
+                if bt9 > 0 when (st.typing.declIsFnptrFieldId
+                    parentTypeId: (ztypes.tid.create from: bt9.u64)
+                    nameId: cn9
+                ) then recvVal = false
+            }
         }
         mlr: (walkCallArgsHoist
             :st
@@ -29169,7 +29265,7 @@ checkResolvedMethodCall: function {
             reportUnknown: false
             recvImplicit: recvVal
         )
-        checkMissingCallArgs :ast :st :call funcId: dro isCtor: false
+        checkMissingCallArgs :ast :st :call funcId: dro isCtor: false recvImplicit: recvVal
         # The receiver locks for the call's duration too, after
         # the args.
         rro: methodReceiverRoot :ast n: (ast.nodes.get i: call.callable.u64)
@@ -29834,7 +29930,14 @@ checkResolvedValueCall: function {
                         reportUnknown: false
                         recvImplicit: false
                     )
-                    checkMissingCallArgs :ast :st :call funcId: dro isCtor: true
+                    (checkMissingCallArgs
+                        :ast
+                        :st
+                        :call
+                        funcId: dro
+                        isCtor: true
+                        recvImplicit: true
+                    )
                     (st.typing.callKind.set
                         key: call.nid.u64
                         value: zast.callkind.recordCreate
@@ -29918,6 +30021,7 @@ checkBareGenericCall: function {
                 :call
                 funcId: (ztypes.tid.create from: gmid.u64)
                 isCtor: true
+                recvImplicit: false
             )
             st.popTo marker: cm
             ctk: gmid
@@ -30070,7 +30174,7 @@ checkUserFnCall: function {
         reportUnknown: true
         recvImplicit: false
     )
-    checkMissingCallArgs :ast :st :call :funcId :isCtor
+    checkMissingCallArgs :ast :st :call :funcId :isCtor recvImplicit: false
     st.popTo marker: cm
     if isCtor then {
         # bare-name `T args...` inside T's own create. Reported, not returned
@@ -30202,7 +30306,14 @@ checkWrappedCall: function {
                 reportUnknown: false
                 recvImplicit: false
             )
-            checkMissingCallArgs :ast :st :call funcId: wcv isCtor: true
+            (checkMissingCallArgs
+                :ast
+                :st
+                :call
+                funcId: wcv
+                isCtor: true
+                recvImplicit: false
+            )
             st.popTo marker: wcm
             wck: wcv
             wcvv: true
@@ -30314,6 +30425,7 @@ checkMetaCreateCall: function {
             :call
             funcId: (ztypes.tid.create from: mtid.u64)
             isCtor: true
+            recvImplicit: false
         )
         st.popTo marker: mcm
         setmc: mtid
