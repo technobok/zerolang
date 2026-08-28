@@ -127,6 +127,8 @@ sanEnvKey: function {bounds: bool} out String is {
     return "ASAN_OPTIONS".string
 }
 
+# the sanitizer options string for a run: the two families do not measure
+# the same thing, so the value travels with the verdict
 sanEnvValue: function {bounds: bool} out String is {
     if bounds then return "1".string
     return "detect_leaks=1".string
@@ -345,11 +347,18 @@ binArgv: function {bin: StringView argsFile: StringView} out List String is {
 # nonzero exit without ending the job (a run step's exit code is data,
 # compared against the golden -- only zc/cc steps are hard gates).
 PoolStep: class {
+    # the command and its arguments; argv[0] is the program
     argv: (List String)
+    # the directory it runs in; empty keeps the runner's own
     cwd: String
+    # where stdout goes; /dev/null discards it
     outPath: String
+    # where stderr goes -- the diagnostics a case is judged on usually land here
     errPath: String
+    # seconds before the step is killed; 0 waits forever
     timeoutSecs: i32
+    # whether a non-zero exit is expected. A lint step that FINDS something
+    # exits non-zero, so failure is not always failure
     allowFail: bool
     # the emitted C whose declared link libraries this step must add, resolved
     # when the step runs because an earlier step in the pipeline writes it
@@ -392,7 +401,10 @@ stepArgv: function {step: PoolStep.view} out List String is {
 # pool's mutable per-job state lives in runJobs-local parallel arrays,
 # since a list `get` hands back a non-owning shallow copy).
 PoolJob: class {
+    # the case's name, which is what a FAIL line reports
     name: String
+    # the steps in order; the job stops at the first that fails without
+    # allowFail
     steps: (List PoolStep)
 }
 
@@ -594,32 +606,63 @@ deframeLsp: function {raw: StringView} out String is {
 # Runner -- the gate's configuration, the fixture paths and the counters every
 # case kind reads and advances. One per run; the kinds take it by reference.
 Runner: class {
+    # the repository root every other path is derived from
     root: String
+    # the compiler under test
     zc: String
+    # the C compiler its output is built with
     cc: String
+    # flags passed to that C compiler
     ccflags: String
+    # flags forwarded THROUGH zc to the C compiler, which is not the same list
     ccFwd: String
+    # the stdlib directory
     sys: String
+    # the scratch directory; kept when saveTemps is set, removed otherwise
     tmp: String
+    # how many jobs run at once. It comes from the machine rather than a typed
+    # number, a default of 1 being silently serial on a many-core box
     jobsMax: u64
+    # the per-step timeout every job inherits
     timeoutSecs: i32
+    # whether the heavy kinds run: the self-host ASan pass, the byte-identity
+    # fixpoint and the doc ratchet
     heavy: bool
+    # exit 0 whatever happened, for a run that is gathering numbers rather than
+    # gating
     report: bool
+    # keep the scratch directory, so a failure can be inspected after the run
     saveTemps: bool
+    # the error-case directory
     errors: String
+    # where the RUN cases' expected output lives
     rungold: String
+    # the RUN case list
     runcases: String
+    # the examples directory
     examplesDir: String
+    # the emitc corpus directory
     corpusDir: String
+    # the SQL-dump case list
     dumpcases: String
+    # where the dump cases' expected output lives
     dumpgold: String
+    # the compiler's own source, which the arch and doc ratchets walk
     srcDir: String
+    # the unit-test directory
     unitDir: String
+    # how many cases passed
     passN: u64
+    # how many ran clean under a sanitizer
     leakclean: u64
+    # how many leaked but were expected to, per tests/known-leaks.txt
     xleak: u64
+    # how many failed but were expected to
     xfail: u64
+    # how many were skipped, usually because a fixture or a toolchain was absent
     skip: u64
+    # how many failed unexpectedly. This is the only counter that decides the
+    # exit status
     fails: u64
 }
 
@@ -2339,6 +2382,8 @@ runFixpoint: function {r: Runner} is {
     }
 }
 
+# parse the flags, build a Runner, and run every case kind in turn. The exit
+# status is `fails`, nothing else
 main: function is {
     argv: os.args
     n: argv.length

@@ -177,6 +177,8 @@ optBoolSql: function {o: optionval bool} out String is {
     }
 }
 
+# an optional string as a SQL literal, or NULL. Quoting is the caller's only
+# defence here, so it happens in one place
 optStrSql: function {o: (Option String).view} out String is {
     match (
         o
@@ -253,6 +255,8 @@ argAtomName: function {ast: Ast.view id: u64} out String is {
 
 # the SQL-dump builder: accumulates INSERT rows for every compiler table.
 ZDumper: class {
+    # the SQL being built. One string rather than a list of rows: the dump is
+    # written once and never indexed
     acc: String
 } as {
     # emit -- one ast_nodes row. token_id and file_id are NULL (the AST
@@ -335,12 +339,14 @@ ZDumper: class {
         }
     }
 
+    # emit rows for a list of child nodes in order
     walkIds: function {:this ast: Ast.view ids: (ListVal u32).view nameSql: StringView} is {
         with it: ids.iterate do for c: it loop {
             this.walkNode :ast node: (ast.nodes.get i: c.u64) :nameSql
         }
     }
 
+    # the same, unwrapping each child's expression wrapper first
     walkUnwrappedIds: function {:this ast: Ast.view ids: (ListVal u32).view nameSql: StringView} is {
         with it: ids.iterate do for c: it loop {
             this.walkUnwrapped :ast wrapper: (ast.nodes.get i: c.u64) :nameSql
@@ -371,6 +377,7 @@ ZDumper: class {
         } else null
     }
 
+    # emit the rows for one member of a unit body
     appendBodyMember: function {:this ast: Ast.view member: Node.view uname: StringView} is {
         match (
             member
@@ -386,6 +393,7 @@ ZDumper: class {
         } else null
     }
 
+    # emit the node table: every node of the tree, one row each
     appendNodes: function {:this program: Node.view} is {
         match (
             program
@@ -400,6 +408,7 @@ ZDumper: class {
         } else null
     }
 
+    # emit a unit's rows, reached through the namedoperation that names it
     appendUnitFromNamedOp: function {:this ast: Ast.view unitNamedOpId: u32} is {
         unitNamedOp: ast.nodes.get i: unitNamedOpId.u64
         if unitNamedOp.namedoperation then {
@@ -431,6 +440,7 @@ ZDumper: class {
         } else null
     }
 
+    # emit one unit row
     appendUnitRow: function {
         :this
         ast: Ast.view
@@ -788,6 +798,8 @@ ZDumper: class {
         }
     }
 
+    # emit the units in CANONICAL order, so two dumps of the same program
+    # compare equal whatever order the walk found them in
     appendUnitsCanon: function {:this program: Node.view} is {
         rows: (List String)
         match (
@@ -866,6 +878,7 @@ ZDumper: class {
         }
     }
 
+    # emit each template's instantiations, canonically ordered
     appendGenericChildrenCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
         rows: (List String)
         n: st.reg.nextTypeId
@@ -925,6 +938,7 @@ ZDumper: class {
         this.emitSection title: "generic_child" :rows
     }
 
+    # emit each instantiation's type arguments, canonically ordered
     appendGenericArgsCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
         rows: (List String)
         n: st.reg.nextTypeId
@@ -979,6 +993,7 @@ ZDumper: class {
         this.emitSection title: "generic_arg" :rows
     }
 
+    # emit the type table, canonically ordered
     appendTypesCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
         rows: (List String)
         n: st.reg.nextTypeId
@@ -1062,6 +1077,7 @@ ZDumper: class {
         this.emitSection title: "decl_child" :rows
     }
 
+    # emit the conformances, canonically ordered
     appendConformanceCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
         rows: (List String)
         citer: st.typing.conformance.iterate
@@ -1212,6 +1228,7 @@ ZDumper: class {
         this.emitSection title: "narrowed_subtype" rows: narrowedRows
     }
 
+    # emit what each call argument's ownership resolved to
     appendArgDispositionCanon: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
         rows: (List String)
         with adit: st.typing.argDisposition.iterateItems do for ad: adit loop {
@@ -1225,6 +1242,7 @@ ZDumper: class {
         this.emitSection title: "arg_disposition" :rows
     }
 
+    # emit which type argument each call bound a generic parameter to
     appendCallGenericBindingCanon: function {:this program: Node.view st: zenv.ZSymbolTable} is {
         rows: (List String)
         match (

@@ -242,24 +242,43 @@ formatAliasConflict: function {
 # frame has declared nothing), the frame it hangs under, the overlay index
 # where its rows begin, and how many locals it has defined (a row's defSeq).
 openframe: record {
+    # the frame's own declaration
     id: ztypes.declid
+    # the frame it was opened inside
     parent: ztypes.declid
+    # the entry index the frame began at, which is what popping restores to
     start: u64
+    # how many definitions it has taken so far
     defs: u64
 }
 
+# one scope entry, flattened for the SQL dump. It is a snapshot: entries are
+# popped as scopes close, so the dump keeps its own copy rather than reading
+# the live table
 ZEntryDumpRow: class {
+    # the scope the entry belonged to
     scopeId: u64
+    # where it sat in that scope, which shadowing resolves by
     position: u64
+    # the entry's own id
     entryId: u64
+    # its name, as a pool id
     name: u32
+    # its type at the moment of the snapshot, narrowing included
     ztypeId: ztypes.tid
+    # whether it defines the name or merely refers to it
     isDefinition: bool
+    # the runtime variable behind it, where there is one
     varId: (optionval ztypes.vid)
+    # the type before narrowing, so the dump shows both
     originalZtypeId: (optionval ztypes.tid)
+    # whether ownership had moved out by then
     isTaken: bool
+    # where it was taken, so the dump can point at the transfer
     takenAt: (optionval ztypes.zsrcpos)
+    # the arm it was narrowed to, 0 for none
     narrowedSubtype: zast.nameid
+    # the arms ruled out by diverging guards
     excludedSubtypes: (ListVal u32)
 }
 
@@ -291,15 +310,24 @@ ZSymbolTable: class {
     # pushCall): it is transparent to every lookup, so the nearest enclosing
     # frame that does exist answers for it. 0 outside every walk.
     curFrame: ztypes.declid
+    # the scope stack as one flat list; a scope is a RANGE of it, which is why
+    # popping is an index and not a structure
     entries: (List ZEntry)
+    # frames the walk proved unreachable, so nothing inside one is reported
+    # twice
     unreachableFrames: (IdSet u64)
     # dump scaffolding: a frame's label ("function:x", "if_branch", ...), the
     # frames a diagnostics-only template walk opened (kept out of the dump),
     # and the rows snapshotted when a frame closed
     frameLabel: (IdMapR u64 V: String)
+    # frames hidden from lookup, which is how a nested unit stops leaking its
+    # names outward
     frameHidden: (IdSet u64)
+    # the snapshot rows, appended as entries are popped rather than read live
     entryDump: (List ZEntryDumpRow)
+    # the type registry this table resolves against
     reg: ztypes.ZTypeRegistry
+    # the stamp container everything checked here is recorded into
     typing: ZTyping
 } as {
     # --- frames ---
@@ -372,6 +400,8 @@ ZSymbolTable: class {
         return marker
     }
 
+    # open a call scope and answer the marker that closes it. A call scope
+    # exists so a borrow taken for the call ends with it
     pushCall: function {:this} out u64 is {
         marker: this.open.length
         this.pushLazyFrame label: ""
@@ -450,6 +480,7 @@ ZSymbolTable: class {
         this.curFrame = this.innermostFrame
     }
 
+    # close every scope back to `marker`, dumping the entries as they go
     popTo: function {:this marker: u64} is {
         for this.open.length > marker loop this.pop
     }
@@ -481,6 +512,7 @@ ZSymbolTable: class {
         return (d.isZero) == false
     }
 
+    # bind a name in the innermost scope
     defineLocal: function {:this nameId: zast.nameid ztypeId: ztypes.tid varId: ztypes.vid} is {
         n: this.open.length
         if n == 0 then return
@@ -605,6 +637,8 @@ ZSymbolTable: class {
 
     # --- invalidation (take) ---
 
+    # mark a name unusable after an ownership transfer, so a later use is an
+    # error rather than a use-after-move
     invalidate: function {:this nameId: zast.nameid loc: optionval ztypes.zsrcpos} out bool is {
         d: this.findLocal :nameId
         if d.isZero then return false
@@ -629,6 +663,7 @@ ZSymbolTable: class {
         return (this.typing.declLocalTypeOf :declId)
     }
 
+    # whether a declaration's value has been moved out
     isTakenDecl: function {this: this.view declId: ztypes.declid} out bool is {
         ro: this.rowOf :declId
         match (
@@ -639,6 +674,8 @@ ZSymbolTable: class {
         return false
     }
 
+    # where it was taken, so the error points at the transfer and not only at
+    # the use
     getTakenLocation: function {
         this: this.view
         nameId: zast.nameid
@@ -654,6 +691,7 @@ ZSymbolTable: class {
         return (optionval.none ztypes.zsrcpos)
     }
 
+    # whether a name's value has been moved out
     isTakenName: function {this: this.view nameId: zast.nameid} out bool is {
         return (this.isTakenDecl declId: (this.findLocal :nameId))
     }
@@ -722,6 +760,7 @@ ZSymbolTable: class {
         }
     }
 
+    # record where a take happened
     setTakenLocation: function {:this nameId: zast.nameid loc: ztypes.zsrcpos} is {
         kOpt: this.takenIndex :nameId
         match (
@@ -762,6 +801,8 @@ ZSymbolTable: class {
         return 0
     }
 
+    # render what holds a lock, so a conflict names the holder rather than only
+    # the conflict
     formatLockHolder: function {
         this: this.view
         pool: zast.StringPool.view
@@ -782,6 +823,8 @@ ZSymbolTable: class {
         panic msg: "unreachable lock holder kind"
     }
 
+    # render the conflict itself: what was wanted, what stands in the way, and
+    # where that came from
     formatLockConflict: function {
         this: this.view
         pool: zast.StringPool.view
@@ -927,6 +970,7 @@ ZSymbolTable: class {
         return ok
     }
 
+    # the outstanding lock on a name, if any
     findLock: function {this: this.view nameId: zast.nameid} out optionval ztypes.zlockstate is {
         d: this.findLocal :nameId
         if d.isZero then return (optionval.none ztypes.zlockstate)
@@ -1200,6 +1244,8 @@ ZSymbolTable: class {
         this.appendRow row: re declId: d
     }
 
+    # whether an arm has been ruled out for a name, which is what lets a later
+    # match need fewer arms
     isExcluded: function {
         this: this.view
         nameId: zast.nameid
@@ -1261,6 +1307,7 @@ ZSymbolTable: class {
         }
     }
 
+    # the arm a name is currently narrowed to
     getSubtypeName: function {this: this.view nameId: zast.nameid} out zast.nameid is {
         ro: this.rowOf declId: (this.findLocal :nameId)
         match (
@@ -1273,12 +1320,14 @@ ZSymbolTable: class {
         }
     }
 
+    # mark the current frame unreachable, after a statement that diverges
     markUnreachable: function {:this} is {
         this.materialiseTop
         f: this.curFrame
         if (f.isZero) == false then this.unreachableFrames.add item: f.u64
     }
 
+    # whether the walk is in unreachable code, where a diagnostic would be noise
     isUnreachable: function {this: this.view} out bool is {
         # the mark is the innermost open frame's own; one that has no row
         # yet cannot carry it
