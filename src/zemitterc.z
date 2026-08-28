@@ -17,16 +17,24 @@ Ast: zast.Ast
 
 # TmpCtr -- per-function temp name counter.
 TmpCtr: class {
+    # the next temp number, so two temps in one function never collide
     n: u64
+    # plain destructor calls owed at the end of the current block
     frees: (List String)
+    # collection destructor calls owed at block end, kept apart because they are
+    # emitted in the other order
     listFrees: (List String)
+    # the variable each listFrees entry destroys, parallel to it
     listFreeVars: (List String)
     # the VARIABLE of each cleanup entry, beside its emitted identifier: the
     # alias table is keyed by variable, so only this can probe it. 0 for a
     # synthesized temp, which is never a binding and so never aliased.
     freeRaw: (ListVal ztypes.vid)
+    # the variable id behind each, 0 for a temp no binding owns
     listFreeRaw: (ListVal ztypes.vid)
 } as {
+    # the next temp number, taken and consumed. Numbers are per FUNCTION, not
+    # per block, so a temp in one block cannot collide with one in a sibling
     next: function {:this} out u64 is {
         v: this.n
         this.n = this.n + 1
@@ -2026,6 +2034,8 @@ stampIsStr: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: u64} out
     return (stampIdOf :symtab :nid) == ctx.strTid
 }
 
+# whether a node's stamped type is StringView, which decides the whole
+# string emit path
 stampIsSv: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: u64} out bool is {
     return (stampIdOf :symtab :nid) == ctx.svTid
 }
@@ -2078,6 +2088,8 @@ binopOwnerAt: function {
     }
 }
 
+# the method a binary operator resolved to, read from the stamp rather than
+# re-resolved
 binopMethodAt: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
@@ -2551,12 +2563,17 @@ originIsTid: function {
 # widened to u64 so the key has no padding for the container's byte hash to
 # read (the callslot / constslot shape).
 dataconstkey: record {
+    # the data block's type
     owner: u64
+    # the constant's name. The pair keys the emitted constant
     name: u64
 }
 
+# which element of which data block, as one key
 dataslotkey: record {
+    # the data block's type
     owner: u64
+    # which element. The pair keys the emitted slot
     slot: u64
 }
 # The builtin templates the emitter keys on by ORIGIN tid, one constant per
@@ -2659,6 +2676,7 @@ mnPut: function {acc: List String at: u64 name: StringView} is {
     acc.append name.string
 }
 
+# the member names a dispatch table needs, collected in one pass
 memberDispatchNames: function {acc: List String} is {
     mnPut :acc at: mnOrPanic name: "orPanic"
     mnPut :acc at: mnCopy name: "copy"
@@ -2797,18 +2815,27 @@ buildOriginTids: function {
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
 Ctx: class {
+    # the main unit's name as the C sees it
     mainName: String
     # the namespace unit whose functions are being emitted, 0 while emitting
     # the file unit's own. A name written inside a namespace resolves against
     # IT first: `deep.mul` in mymod/helper.z names helper's subunit, not one of
     # mymod's, and ctx.mainName can only ever name the file.
     nsTid: ztypes.tid
+    # the real entry point's name, which differs when a wrapper stands in front
+    # of it
     realMain: String
+    # the C name of the String runtime type, looked up once because everything
+    # touching strings needs it
     strC: String
+    # the C name of the StringView runtime type
     svC: String
     # type id -> C name base, composed once at emit start; "" for a hole
     cnames: (List String)
+    # the literal pool's ids in emission order
     litIds: (ListVal u64)
+    # which literals were actually referenced, so the unused ones are not
+    # emitted
     usedLits: (IdSet u64)
     # the FOLDED-string pool, beside the AST-literal one. A folded value has no
     # literal to point at -- a concatenation and a selected branch were never
@@ -2822,73 +2849,126 @@ Ctx: class {
     # to name the fragment. A member of `@unit` is the unit ITSELF being
     # demanded.
     needUnits: (List String)
+    # members some fragment needs declared before it can be emitted
     needMembs: (List String)
+    # each data block's element text, by type
     dataElems: (IdMapR ztypes.tid V: String)
+    # each data constant's emitted text, keyed by owner and name
     dataConst: (MapVR dataconstkey V: String)
+    # each data slot's emitted text, keyed by owner and slot
     dataSlot: (MapVR dataslotkey V: String)
     # the current class method body's pointer-receiver params, by variable id
     ptrVids: (ListVal ztypes.vid)
     # the enclosing function hands back a REFERENCE to a user reftype, so its
     # `return` yields an address. Per-function, set by emitFnBody like ptrVids.
     refBorrowRet: bool
+    # variables that are aliases of another's storage, so a write through one is
+    # a write through both
     aliases: (List VidVal)
+    # the box a narrowed variable projects out of
     narrowBox: (List VidVal)
+    # the type a variable is currently narrowed to
     narrowTid: (List VidTid)
+    # the arms ruled out for a variable, which lets a switch omit them
     exclArms: (List VidVal)
+    # the types behind those exclusions
     exclTids: (List VidTid)
+    # whether a generator body is being emitted, which changes what a return
+    # means
     genActive: bool
     # the emitted C name of the generator receiver, for the state-machine
     # prologue: it is a renamed parameter, not the literal `this`
     genRecvC: String
     # and the emitted name of its resume-value parameter
     genValC: String
+    # how many yields the generator has, so the state machine knows its arms
     genYieldCount: u64
+    # the next yield's number as the body is walked
     genYieldNext: u64
+    # the wrapper type the generator's `.call` returns
     genWrap: String
+    # that wrapper's some tag
     genSomeTag: String
+    # the wrapper's none tag, which the generator returns once it is exhausted
     genNoneTag: String
+    # the payload's C type
     genPayC: String
+    # whether the generator yields a value at all, as against yielding only to
+    # suspend
     genHasValue: bool
+    # the receiver type being emitted into, which decides what a bare member
+    # resolves against
     curThisTid: ztypes.tid
+    # use the fast hash rather than the seeded one, which makes a build
+    # reproducible
     fastHash: bool
+    # emit source-derived C names instead of id-based ones, for reading the
+    # output rather than shipping it
     readableNames: bool
     # under --readable-names, the variables that may be spelled by their source
     # name alone: the first binding of a name in a function. Empty under the
     # default scheme, which asks no such question -- an id is unique already.
     rnBareVids: (IdSet ztypes.vid)
+    # whether the statement being emitted is in tail position, where a return
+    # needs no jump
     tailRetActive: bool
+    # which unit each definition came from
     defUnitId: (IdMapV u64 v: u64)
     # the four stdlib units the emitter names outright, resolved once
     ioUnitDecl: u64
+    # the os unit's declaration, cached because the native routing asks
+    # constantly
     osUnitDecl: u64
+    # the cli unit's declaration, cached for the same reason
     cliUnitDecl: u64
+    # the net unit's declaration, cached for the same reason
     netUnitDecl: u64
     # the three fixed (unit, class) hooks, resolved once through the unit
     ioFileTid: u64
+    # net.Listener's type, needed to route its natives
     netListenerTid: u64
+    # net.Conn's type, needed to route its natives
     netConnTid: u64
+    # the unit types, parallel to unitKeysC
     unitTidsC: (ListVal ztypes.tid)
+    # their C keys, built once and reused
     unitKeysC: (List String)
+    # whether those two are built yet
     unitCacheBuilt: bool
     # the member names this program interned, indexed by the mnXxx constants
     mnames: (ListVal zast.nameid)
     # name-id -> resolved tid (misses cached as 0): the typed model is
     # frozen during emission, so resolution per name id is emit-stable
     resolveByNameC: (IdMapV u64 v: u64)
+    # the main unit's declaration, which every demand walk starts from
     mainUnitId: ztypes.declid
+    # how deep in nested conditions the emit is, which decides whether a temp
+    # can be hoisted out
     condDepth: u64
+    # the constructs the emitter could not handle, collected rather than thrown
+    # so one run reports all of them
     emitErrors: (List String)
+    # the user types whose struct is already out, so a second demand does not
+    # emit it twice
     emittedUserTypes: (IdSet u64)
+    # each sum's tag stem, so its arms' tags agree
     tagStems: (MapRV String v: u64)
+    # the types already forward-declared. Asking whether a FORWARD exists is not
+    # the same as asking whether the body is out, and conflating them emits
+    # invalid C
     fwdDeclaredTypes: (IdSet u64)
+    # runtime templates already substituted, keyed by their instantiation
     tmplCache: (Map String V: String)
+    # each io canonical stem's C name
     ioCanonC: (Map String V: String)
     # natives.tbl, read once at emit start: qualified path -> the C body, plus
     # the two row attributes. Parsed eagerly rather than on first lookup
     # because the lookup site is inside emitExpr, which holds a Ctx but not the
     # runtime dir; emitC has both.
     nativeTbl: (Map String V: String)
+    # what each native fragment needs declared before it
     nativeNeed: (Map String V: String)
+    # which natives take their arguments by pointer
     nativePtrArgs: (MapRV String v: bool)
     # a row that answers only when named ARGUMENTS are compile-time constants,
     # kept beside the ordinary body rather than in it: `nativeTbl` is keyed by
@@ -2897,6 +2977,7 @@ Ctx: class {
     # requires are two maps rather than one composed key for the same reason
     # the rest of this table is: the path IS the key.
     nativeConstBody: (Map String V: String)
+    # which argument position of a native must be a constant
     nativeConstPos: (Map String V: String)
     # the conversion rows, split so the two questions stay separate: is this
     # member a CONVERSION at all (a type that converts, and a member every
@@ -2913,6 +2994,7 @@ Ctx: class {
     # the paths a FRAGMENT implements: a native whose C the runtime supplies
     # under the `z_<unit>_<name>` convention, whoever declares it
     nativeFragPaths: (MapRV String v: bool)
+    # which natives are conversion members, whose routing differs
     nativeConvMemb: (MapRV String v: bool)
     # the member NAMES of rows that take ARGUMENTS -- the cheap filter that
     # nativeConvMemb is for the receiver-only rows. A call asks this before it
@@ -2923,47 +3005,76 @@ Ctx: class {
     # plus the fragments it needs. Parallel lists because the demand is a pair
     # and stays one: nothing here joins the halves, and nothing splits them.
     fragUnits: (List String)
+    # the members fragments were emitted for
     fragMembs: (List String)
+    # their names, parallel to fragMembs
     fragNames: (List String)
     # a row whose demand is `uses_<Type>` is reached by that TYPE being
     # constructed rather than by a member being called. The name the table
     # spells, and the id it resolves to once the registry is built; 0 on every
     # member-demanded row, which is nearly all of them.
     fragTypeNames: (List String)
+    # their owning types, parallel again
     fragTypeTids: (ListVal u64)
     # the type ids those rows gate, and the ones the program actually built
     demandGatedTids: (IdSet u64)
+    # the types something actually referenced, which is what decides emission
     usedTypeIds: (IdSet u64)
     # conformance rows whose helper set is already in the buffer, by row index
     emittedConformance: (IdSet u64)
     # the units the table orders, in that order. A unit with rows that is not
     # named here runs after those that are.
     unitOrder: (List String)
+    # the `_ah` temp names awaiting declaration
     argHoistNames: (List String)
+    # their initialisers, parallel to the names
     argHoistVals: (List String)
+    # their C types, parallel again
     argHoistTypes: (List String)
+    # the destructor each needs at block end, empty when it needs none
     argHoistDtors: (List String)
+    # raw declarations a fragment asked to be emitted alongside
     argHoistRaw: (List String)
+    # the next `_ah` number
     argHoistCtr: u64
+    # the enclosing loops' break labels, innermost last
     breakLabels: (ListVal u64)
+    # whether each is a do-while, whose continue target differs
     breakLabelIsDo: (ListVal bool)
+    # which continue labels were actually jumped to, so an unused one is not
+    # emitted
     contLabelUsed: (IdMapV u64 v: bool)
+    # the next label number
     breakLabelCtr: u64
+    # which break labels were actually used
     breakLabelUsed: (IdMapV u64 v: bool)
+    # the frees mark at each loop's entry, so a break frees exactly the body's
+    # locals
     breakFreesMarks: (ListVal u64)
+    # the same for collection frees
     breakListMarks: (ListVal u64)
+    # the cleanup a break must run before jumping
     breakLabelCleanup: (List String)
+    # the variable each cleanup entry destroys
     breakLabelCleanupVar: (List String)
     # variables for breakLabelCleanupVar, for the same reason as TmpCtr's
     breakLabelCleanupRaw: (ListVal ztypes.vid)
+    # variables that borrow rather than own, so scope exit frees nothing for
+    # them
     borrowedVars: (IdMapV u64 v: bool)
+    # whether a collection `get` is being emitted from code rather than from a
+    # fragment, which changes the borrow it takes
     colGetFromCode: bool
+    # String's type id
     strTid: ztypes.tid
+    # StringView's type id
     svTid: ztypes.tid
     # converror's canonical id. The numeric-conversion rule is ABOUT converror --
     # natives.tbl's conversion rows name its arms -- so the emitter has to know
     # which type that is to spell the error assignment for its representation.
     converrorTid: ztypes.tid
+    # the well-known generic origins -- Option, Result, List and the rest --
+    # looked up once and compared by id after
     origins: (ListVal ztypes.tid)
 }
 
@@ -3079,6 +3190,8 @@ needsValueDeref: function {
     return (isReftypeParam :ast :symtab :ctx :tid) == false
 }
 
+# whether a node is a bare atom, which is what decides whether a name can be
+# used directly or needs an expression
 nodeIsBareAtom: function {ast: Ast.view n: Node.view} out bool is {
     match (
         n
@@ -3167,12 +3280,19 @@ nodeIsRefBorrowResult: function {
 # entry. A handful of entries at most, so a linear probe beats a map's per-probe
 # owned-key allocation and hash.
 VidVal: class {
+    # the variable
     vid: ztypes.vid
+    # the text recorded for it
     val: String
 }
 
+# a variable paired with a type, for the side lists that record what a
+# variable was narrowed or excluded to. A pair rather than a map: the lists
+# are short and scanned, never indexed
 VidTid: class {
+    # the variable
     vid: ztypes.vid
+    # the type recorded for it
     tid: ztypes.tid
 }
 
@@ -3960,6 +4080,8 @@ conformanceRowMark: function {ctx: Ctx row: u64} is {
     ctx.emittedConformance.add item: row
 }
 
+# whether a conformance's row is already out, so a second demand does not
+# repeat it
 conformanceRowEmitted: function {ctx: Ctx.view row: u64} out bool is {
     return (ctx.emittedConformance.has item: row)
 }
@@ -4028,6 +4150,8 @@ dottedBaseAtomId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     }
 }
 
+# the base atom of a dotted path, which is the sanctioned discriminator the
+# shadow guard allows
 dottedBaseAtom: function {ast: Ast.view n: Node.view} out String is {
     match (
         n
@@ -5515,18 +5639,28 @@ stringViewBinopOperand: function {
 # appended to the caller's buffer; these four ride back beside it, `posIdx`
 # because a positional argument advances a cursor the next parameter reads.
 instargval: record {
+    # the argument is borrowed rather than taken
     avBor: bool
+    # the argument used an interpolation, which had to be built before the call
     usedInterp: bool
+    # the variable behind it, 0 when it is not a bare name
     avq: ztypes.vid
+    # its position, for the natives that map labels onto a positional C
+    # signature
     posIdx: u64
 }
 
 # instargptr -- how a declared parameter takes its argument: by pointer, as a
 # borrowed String, moved in, and whether THIS argument needs an `&`.
 instargptr: record {
+    # the argument is passed by pointer
     ptra: bool
+    # it is a borrowed String, which the callee must not free
     isStrBorrow: bool
+    # the parameter takes ownership
     pTake: bool
+    # the parameter is by-reference, so a non-lvalue has to be hoisted to have
+    # an address
     byref: bool
 }
 
@@ -6885,6 +7019,8 @@ mapKeyIsString: function {
     return (keyHashKind :symtab :ctx tid: (ztypes.tid.create from: kt.u64)) == 1
 }
 
+# whether a set's element is a String, which decides the hash and the
+# compare the mono gets
 setElemIsString: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
@@ -16474,7 +16610,9 @@ matchGenericRoute: function {
 # matchelse -- the residual narrowing an else arm inherits: when exactly ONE arm
 # is uncovered, the else branch KNOWS the subject is that arm.
 matchelse: record {
+    # the else arm's type
     meT: ztypes.tid
+    # whether that type was seeded rather than inferred
     meSeed: bool
 }
 
@@ -17492,7 +17630,9 @@ isForIterCall: function {ast: Ast.view n: Node.view} out bool is {
 # generator function to call for it when the iterable was a bare fn name.
 # A zero itid means the iterable names no iterator at all.
 objitertids: record {
+    # the iterator's type
     itid: ztypes.tid
+    # the bare `.call` function behind it
     bareFnId: ztypes.tid
 }
 
@@ -18557,6 +18697,8 @@ truthyCondText: function {
     return "((\{raw})\{accessOp}tag == \{tg})"
 }
 
+# seed a condition's operator so the branch emit can read it without re-
+# resolving
 seedCondOp: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -19078,6 +19220,7 @@ condInParens: function {cond: StringView} out String is {
     return "(\{cond})"
 }
 
+# emit one if or else-if clause: its conditions, then the body they guard
 emitIfClause: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -21530,6 +21673,8 @@ checkNativesResolve: function {
     }
 }
 
+# fill the data-element cache for the whole program, once, before anything
+# reads it
 fillDataElems: function {program: Node.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     match (
         program
@@ -23292,8 +23437,12 @@ emitCHeader: function {
 # StringView, and the C-error record. They are resolved by ID out of the system
 # unit, never by the C names the fragments use.
 runtimetids: record {
+    # String's type id
     str: ztypes.tid
+    # StringView's type id
     sv: ztypes.tid
+    # converror's type id. The three are fetched together because every emit
+    # path needs at least one
     cerr: ztypes.tid
 }
 # resolveRuntimeTids -- resolve those three, or leave a tid 0 where the program
@@ -25636,6 +25785,7 @@ ioCanonCname: function {
     return r
 }
 
+# the type behind an io canonical stem, whatever kind it turns out to be
 ioCanonTidAny: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -27405,22 +27555,39 @@ emitUserStructsOrdered: function {
 # indexed table: the emission order is made of them, and a nested generic
 # container is not available anyway.
 MonoWork: class {
+    # the strings still owed emission
     wStr: (ListVal u64)
+    # the boxes still owed emission
     wBox: (ListVal u64)
+    # the system variants still owed emission
     wSysVar: (ListVal u64)
+    # the valtype monos still owed emission
     wValMono: (ListVal u64)
+    # the Option and Result instances still owed emission
     wOptRes: (ListVal u64)
+    # the user generic unions still owed emission
     wUgUnion: (ListVal u64)
+    # the OptionView instances still owed emission
     wOptView: (ListVal u64)
+    # the arrays still owed emission
     wArr: (ListVal u64)
+    # the list views still owed emission
     wListView: (ListVal u64)
+    # the lists still owed emission
     wList: (ListVal u64)
+    # the sets still owed emission
     wSet: (ListVal u64)
+    # the maps still owed emission
     wMap: (ListVal u64)
+    # the IdSets still owed emission
     wIdSet: (ListVal u64)
+    # the IdMaps still owed emission
     wIdMap: (ListVal u64)
+    # the protocols still owed emission
     wProto: (ListVal u64)
+    # the user generic variants still owed emission
     wUgVar: (ListVal u64)
+    # the user generic records still owed emission
     wUgRec: (ListVal u64)
 }
 
@@ -28945,6 +29112,8 @@ argBaseAtom: function {ast: Ast.view n: Node.view} out String is {
     return (atomTextOf :ast :n)
 }
 
+# the node an argument's value ultimately comes from, unwrapping the
+# wrappers between
 argBaseNodeId: function {ast: Ast.view n: Node.view} out u32 is {
     i: dottedBaseNodeId :ast :n
     if i > 0 then return i.u32.orPanic
@@ -30496,6 +30665,8 @@ isVariantDef: function {n: Node.view} out bool is {
     }
 }
 
+# whether a node defines a union, which decides whether its arms may carry
+# reftypes
 isUnionDef: function {n: Node.view} out bool is {
     match (
         n
@@ -31649,7 +31820,8 @@ emitMethodParams: function {
 }
 
 
-# emit one method.
+# emit one method of a type: its signature, its body, and the receiver
+# parameter the C form needs but the source does not write
 emitOneMethod: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable

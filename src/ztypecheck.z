@@ -135,6 +135,8 @@ nodeLine: function {n: Node.view} out u32 is {
     return (zast.posOf :n).line
 }
 
+# a node's column, whatever arm it is. Every carrier holds one and the union
+# has no common accessor, so the match lives here once
 nodeCol: function {n: Node.view} out u32 is {
     return (zast.posOf :n).col
 }
@@ -1525,7 +1527,9 @@ defTypetypeOf: function {
 # defsite -- where a name is defined: the unit to look it up in, and the
 # re-export Decl that binds it when one does. Zero unit on a miss.
 defsite: record {
+    # the unit the definition was written in, which is the frame it resolves in
     defUnit: ztypes.declid
+    # the alias that brought it into view, when one did
     aliasDecl: ztypes.declid
 }
 
@@ -2557,6 +2561,8 @@ fieldHeadName: function {ast: Ast.view n: Node.view} out String is {
     return (genericApplHead :ast :n)
 }
 
+# stamp the name a node resolved to, so nothing downstream has to resolve it
+# again
 recordNodeName: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
@@ -4316,6 +4322,8 @@ returnHasViewMarkerNode: function {ast: Ast.view n: Node.view} out bool is {
     }
 }
 
+# whether a return type carries `.view`, which makes the result a non-owning
+# readonly reference
 returnHasViewMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
     if oId.isZero then return false
     o: ast.nodes.get i: oId.u64
@@ -4343,6 +4351,8 @@ returnHasTakexMarkerNode: function {ast: Ast.view n: Node.view} out bool is {
     }
 }
 
+# whether a return type carries `.takex`, which pins the sources the result
+# borrows from for as long as it lives
 returnHasTakexMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
     if oId.isZero then return false
     o: ast.nodes.get i: oId.u64
@@ -6055,6 +6065,8 @@ asDeclaresMemberId: function {
     return result
 }
 
+# whether an as-block opts a member OUT with `null`, which is how a type
+# declines a member its family would otherwise synthesise
 memberNullOptOut: function {
     ast: Ast.view
     asItems: (ListVal u32).view
@@ -6400,8 +6412,12 @@ dataOutTypeName: function {ast: Ast.view oId: zast.nodeid} out String is {
 # `u8` node). `tagId` is 0 for a bare element, which is what lets the block's
 # type be unified from the tags that ARE written.
 dataelem: record {
+    # the element's literal constant
     litId: zast.nodeid
+    # its tag, when the element is a sum arm
     tagId: zast.nodeid
+    # whether the element resolved at all; the two above mean nothing when it
+    # did not
     ok: bool
 }
 
@@ -8625,6 +8641,8 @@ variantTagBaseTid: function {
     return declared
 }
 
+# whether a variant's tag is the plain ordinal one rather than an author-
+# declared `data` tag. The truthiness rules only apply to the plain kind
 variantTagIsOrdinalPlain: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -10965,6 +10983,8 @@ aliasTargetTid: function {
 }
 
 
+# chase an alias to the declaration it finally names, so callers compare one
+# key rather than a chain
 resolveAliasKeyIn: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
@@ -11115,6 +11135,8 @@ ensureDefGenericParams: function {
     }
 }
 
+# resolve a dotted name one segment at a time from `frame`, answering the
+# type it lands on
 descendNamed: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -12863,6 +12885,8 @@ scanCallsInNode: function {
     }
 }
 
+# walk a list of children looking only for calls, which is what seeds the
+# demands a lazy walk then satisfies
 scanCallsIn: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
@@ -13007,6 +13031,8 @@ demandReturnNever: function {st: zenv.ZSymbolTable ast: Ast.view} is {
     demandUnitMember :st unitNameId: sysId nameId: (zast.poolFind pool: ast.names text: "never")
 }
 
+# seed the demand set from `main`: the walk resolves only what a reference
+# reaches, so something has to name the first thing
 seedBodyWalkDemands: function {st: zenv.ZSymbolTable frame: ztypes.declid program: Node.view} is {
     match (
         program
@@ -13233,7 +13259,9 @@ InstReq: class {
     # it, and reading them off the main unit is why a generic unit worked only
     # there.
     declUnit: ztypes.declid
+    # the binding that named it
     bindId: zast.nameid
+    # the template's node
     tmplId: zast.nameid
     # the template's own id, the unitdef node that declares it, and the unit
     # whose AST that node lives in -- all resolved at COLLECTION, through the
@@ -13241,21 +13269,31 @@ InstReq: class {
     # binding of the instantiating unit; an id reaches a dotted or
     # namespace-nested template too.
     tmplTid: ztypes.tid
+    # the template's declaration
     tmplDeclId: ztypes.declid
+    # the template's operation node
     tmplOpId: u64
+    # the unit the template was declared in, which is the frame its body
+    # resolves in and NOT the caller's
     tmplUnit: ztypes.declid
     # the Decl the instantiation was written under: the unit root, or the
     # namespace when it is nested. Where the binding's own name belongs.
     scopeDeclId: ztypes.declid
+    # the type arguments' labels, in order
     argLabels: (ListVal zast.nameid)
+    # their spellings
     argNames: (List String)
+    # their name ids
     argAtomIds: (ListVal u64)
     # every argument's operation node, whatever its shape: a bare atom names
     # its type (argNames); a call-shaped argument -- itself a specialisation,
     # `(Box t: i64)` -- has no name and resolves from this node
     argNodeIds: (ListVal u64)
+    # the expression wrapper the request was written inside, when there is one
     exprId: u64
+    # the call node that requested the instantiation
     callId: u64
+    # that call's callable, which is the template being named
     calId: u64
 }
 
@@ -22976,9 +23014,13 @@ stampTruthyCond: function {
 # subject variable, the arm, the sum type, and whether the condition form
 # is negated (`(x.a) == false` / trailing `.false`).
 ArmPredFact: class {
+    # the name the predicate tests
     subject: zast.nameid
+    # the arm it tests for
     armName: zast.nameid
+    # the subject's type before narrowing, so it can be restored
     fullTid: ztypes.tid
+    # whether the test was inverted, which swaps which branch narrows
     negated: bool
 }
 
@@ -27670,11 +27712,18 @@ checkNamedArgParam: function {
     }
 }
 
+# what one call argument's parameter asks of it -- taken, locked, viewed --
+# resolved once and read by everything downstream
 argownership: record {
+    # the parameter takes ownership, so the caller's binding is spent
     isTake: bool
+    # the parameter locks its argument for the call
     isLockish: bool
+    # the lock is declared rather than implied by a borrow
     isDeclLock: bool
+    # the parameter is `.view`, so the argument stays readable across the call
     isViewArg: bool
+    # the parameter's type, which the argument is coerced to
     pt: u64
 }
 # argOwnershipOf -- what the call does to this argument's source, read off the
@@ -28734,8 +28783,12 @@ checkControlBuiltinCall: function {
     } case none then null
     return result
 }
+# one call-checking leg's answer: whether it handled the call at all, and
+# what the call yields if it did
 callleg: record {
+    # whether this leg answered at all; `tid` means nothing when it did not
     handled: bool
+    # what the call yields, when the leg answered
     tid: ztypes.tid
 }
 # checkTypedefOrProjectionCall -- a dotted `create` or `borrow` on a typedef or
@@ -31039,8 +31092,13 @@ caseGenericSubjectTid: function {
 }
 
 
+# what an arm turned out to be: whether it binds nothing, and whether every
+# path out of it diverges
 casearmfacts: record {
+    # the arm binds nothing
     empty: bool
+    # every path out of the arm diverges, which is what lets the REST of the
+    # scope narrow
     diverges: bool
 }
 # narrowCaseArmSubject -- inside an arm, the subject IS the arm's payload: narrow
@@ -31729,27 +31787,49 @@ checkCase: function {
 # rowarm -- which arm a value or statement row holds: the dispatch tag that
 # checkValueAt and checkStmtInner read without keeping the row view.
 rowarm: variant {
+    # the row holds a call
     call: null
+    # the row holds a binop
     binop: null
+    # the row holds an atomid
     atomid: null
+    # the row holds an atomstring
     atomstring: null
+    # the row holds a dottedpath
     dottedpath: null
+    # the row holds a caseexpr
     caseexpr: null
+    # the row holds an ifexpr
     ifexpr: null
+    # the row holds a forexpr
     forexpr: null
+    # the row holds a labelvalue
     labelvalue: null
+    # the row holds a yieldexpr
     yieldexpr: null
+    # the row holds a doexpr
     doexpr: null
+    # the row holds a withexpr
     withexpr: null
+    # the row holds a reassignment
     reassignment: null
+    # the row holds a swapstmt
     swapstmt: null
+    # the row holds an expression
     expression: null
+    # the row holds an assignment
     assignment: null
+    # the row holds a stringchunk
     stringchunk: null
+    # the row holds a functiondef
     functiondef: null
+    # the row holds an objectdef
     objectdef: null
+    # the row holds a datablock
     datablock: null
+    # the row holds an unitdef
     unitdef: null
+    # the row holds an other
     other: null
 }
 
@@ -31809,10 +31889,15 @@ rowArmAt: function {ast: Ast.view nid: zast.nodeid} out rowarm is {
 # swapref -- what the swap walk reads of its row: the operand ids and the
 # position, as plain values.
 swapref: record {
+    # the swap node this was read from
     nid: zast.nodeid
+    # one side of the swap
     lhs: zast.nodeid
+    # the other side
     rhs: zast.nodeid
+    # the line to report this swap against
     lineno: u32
+    # the column to report this swap against
     colno: u32
 }
 
@@ -31831,11 +31916,17 @@ swapRefAt: function {ast: Ast.view nid: zast.nodeid} out swapref is {
 # withref -- what the with walk reads of its row: the bound name, the value
 # and body ids and the position, as plain values.
 withref: record {
+    # the with node this was read from
     nid: zast.nodeid
+    # the name bound for the block
     name: zast.nameid
+    # what it is bound to
     value: zast.nodeid
+    # the block the binding lives for
     body: zast.nodeid
+    # the line to report this with against
     lineno: u32
+    # the column to report this with against
     colno: u32
 }
 
@@ -31862,9 +31953,13 @@ withRefAt: function {ast: Ast.view nid: zast.nodeid} out withref is {
 # doref -- what the do walk reads of its row: the statement id and the
 # position, as plain values.
 doref: record {
+    # the do node this was read from
     nid: zast.nodeid
+    # the block whose value the do takes
     statement: zast.nodeid
+    # the line to report this do against
     lineno: u32
+    # the column to report this do against
     colno: u32
 }
 
@@ -31883,10 +31978,15 @@ doRefAt: function {ast: Ast.view nid: zast.nodeid} out doref is {
 # argref -- what an argument or member walk reads of a namedoperation row:
 # the label, the operation id and the position, as plain values.
 argref: record {
+    # the argument node this was read from
     nid: zast.nodeid
+    # the argument's label
     name: zast.nameid
+    # the value it labels
     operation: zast.nodeid
+    # the line to report this argument against
     lineno: u32
+    # the column to report this argument against
     colno: u32
 }
 
@@ -31907,10 +32007,15 @@ argRefAt: function {ast: Ast.view nid: zast.nodeid} out argref is {
 # reasgref -- what the reassignment walk reads of its row: the target and
 # value ids and the position, as plain values.
 reasgref: record {
+    # the reassignment node this was read from
     nid: zast.nodeid
+    # the path written to
     topath: zast.nodeid
+    # the new value
     value: zast.nodeid
+    # the line to report this reassignment against
     lineno: u32
+    # the column to report this reassignment against
     colno: u32
 }
 
@@ -31955,9 +32060,13 @@ reportUnknownNameAt: function {
 # exprref -- what a walk reads of an expression wrapper row: the wrapped
 # value id and the position, as plain values.
 exprref: record {
+    # the parenthesised expression node this was read from
     nid: zast.nodeid
+    # what the parentheses wrap
     expression: zast.nodeid
+    # the line to report this parenthesised expression against
     lineno: u32
+    # the column to report this parenthesised expression against
     colno: u32
 }
 
@@ -31977,10 +32086,15 @@ exprRefAt: function {ast: Ast.view nid: zast.nodeid} out exprref is {
 # asgnref -- what the binding walk reads of its row: the bound name, the
 # value id and the position, as plain values.
 asgnref: record {
+    # the binding node this was read from
     nid: zast.nodeid
+    # the name declared
     name: zast.nameid
+    # the value bound to it
     value: zast.nodeid
+    # the line to report this binding against
     lineno: u32
+    # the column to report this binding against
     colno: u32
 }
 
@@ -32001,10 +32115,16 @@ asgnRefAt: function {ast: Ast.view nid: zast.nodeid} out asgnref is {
 # ifclauseref -- what the if-clause walk reads of its row: the condition
 # count, the statement id and the position, as plain values.
 ifclauseref: record {
+    # the if clause node this was read from
     nid: zast.nodeid
+    # how many conditions the clause chains, counted so the view can be dropped
+    # before they are walked
     nconds: u64
+    # the body the conditions guard
     statement: zast.nodeid
+    # the line to report this if clause against
     lineno: u32
+    # the column to report this if clause against
     colno: u32
 }
 
@@ -32030,11 +32150,17 @@ ifClauseRefAt: function {ast: Ast.view nid: zast.nodeid} out ifclauseref is {
 # caseclauseref -- what the match-arm walk reads of its row: the binding
 # name, the matched arm id, the statement id and the position.
 caseclauseref: record {
+    # the match arm node this was read from
     nid: zast.nodeid
+    # the arm matched
     name: zast.nameid
+    # the binding the payload narrows into, 0 for a payload-less arm
     matcharm: zast.nodeid
+    # the arm's body
     statement: zast.nodeid
+    # the line to report this match arm against
     lineno: u32
+    # the column to report this match arm against
     colno: u32
 }
 
@@ -32062,11 +32188,17 @@ caseClauseRefAt: function {ast: Ast.view nid: zast.nodeid} out caseclauseref is 
 # binref -- what the binary-operator walk reads of its row: the operand and
 # operator ids and the position, as plain values.
 binref: record {
+    # the binop node this was read from
     nid: zast.nodeid
+    # the left operand
     lhs: zast.nodeid
+    # the operator node
     operator: zast.nodeid
+    # the right operand
     rhs: zast.nodeid
+    # the line to report this binop against
     lineno: u32
+    # the column to report this binop against
     colno: u32
 }
 
@@ -32092,9 +32224,13 @@ binRefAt: function {ast: Ast.view nid: zast.nodeid} out binref is {
 # atomref -- what the bare-name walk reads of its row: the name id and the
 # position, as plain values.
 atomref: record {
+    # the atom node this was read from
     nid: zast.nodeid
+    # the name the atom spells
     name: zast.nameid
+    # the line to report this atom against
     lineno: u32
+    # the column to report this atom against
     colno: u32
 }
 
@@ -32115,9 +32251,14 @@ atomRefAt: function {ast: Ast.view nid: zast.nodeid} out atomref is {
 # strref -- what the string-literal walk reads of its row: the part count and
 # the position, as plain values.
 strref: record {
+    # the interpolated string node this was read from
     nid: zast.nodeid
+    # how many chunks the literal has, counted so the view can be dropped before
+    # they are walked
     nparts: u64
+    # the line to report this interpolated string against
     lineno: u32
+    # the column to report this interpolated string against
     colno: u32
 }
 
@@ -32137,10 +32278,15 @@ strRefAt: function {ast: Ast.view nid: zast.nodeid} out strref is {
 # dpref -- what the dotted-path walk reads of its row: the parent and child
 # ids and the position, as plain values.
 dpref: record {
+    # the dotted path node this was read from
     nid: zast.nodeid
+    # the left of the dot
     parent: zast.nodeid
+    # the right of it
     child: zast.nodeid
+    # the line to report this dotted path against
     lineno: u32
+    # the column to report this dotted path against
     colno: u32
 }
 
@@ -32172,10 +32318,15 @@ dpRefAt: function {ast: Ast.view nid: zast.nodeid} out dpref is {
 # argument count and the position, as plain values. The arguments are read
 # by index through zast.callArgAt.
 callref: record {
+    # the call node this was read from
     nid: zast.nodeid
+    # what is being called
     callable: zast.nodeid
+    # how many arguments it has
     nargs: u64
+    # the line to report this call against
     lineno: u32
+    # the column to report this call against
     colno: u32
 }
 
@@ -32206,12 +32357,19 @@ callRefAt: function {ast: Ast.view nid: zast.nodeid} out callref is {
 # id, the parameter count, the body id, the native flag and the position, as
 # plain values. Parameters are read by index through zast.fnParamAt.
 fnref: record {
+    # the function definition node this was read from
     nid: zast.nodeid
+    # the declared `out` type, 0 when there is none
     returntype: zast.nodeid
+    # how many parameters it declares
     nparams: u64
+    # the body, 0 for a native
     body: zast.nodeid
+    # whether the runtime provides it, so there is nothing here to walk
     isNative: bool
+    # the line to report this function definition against
     lineno: u32
+    # the column to report this function definition against
     colno: u32
 }
 
@@ -32253,12 +32411,19 @@ fnRefAt: function {ast: Ast.view nid: zast.nodeid} out fnref is {
 # kind, the is/as item counts, the native flag and the position, as plain
 # values. Items are read by index through zast.objIsItemAt / objAsItemAt.
 objref: record {
+    # the type definition node this was read from
     nid: zast.nodeid
+    # which of the six object definitions it is
     kind: zast.objectkind
+    # how many is-block members it has
     nis: u64
+    # how many as-block members
     nas: u64
+    # whether the runtime owns the layout
     isNative: bool
+    # the line to report this type definition against
     lineno: u32
+    # the column to report this type definition against
     colno: u32
 }
 
@@ -32300,11 +32465,17 @@ objRefAt: function {ast: Ast.view nid: zast.nodeid} out objref is {
 # count, the else id and the position, as plain values. Clauses are read by
 # index through zast.caseClauseAt.
 caseref: record {
+    # the match node this was read from
     nid: zast.nodeid
+    # what is matched
     subject: zast.nodeid
+    # how many arms it has
     nclauses: u64
+    # the trailing else, 0 when the arms are exhaustive
     elseclause: zast.nodeid
+    # the line to report this match against
     lineno: u32
+    # the column to report this match against
     colno: u32
 }
 
@@ -32331,10 +32502,15 @@ caseRefAt: function {ast: Ast.view nid: zast.nodeid} out caseref is {
 # and the position, as plain values. Clauses are read by index through
 # zast.ifClauseAt.
 ifref: record {
+    # the if node this was read from
     nid: zast.nodeid
+    # how many if and else-if clauses
     nclauses: u64
+    # the trailing else, 0 for none
     elseclause: zast.nodeid
+    # the line to report this if against
     lineno: u32
+    # the column to report this if against
     colno: u32
 }
 
@@ -32361,11 +32537,17 @@ ifRefAt: function {ast: Ast.view nid: zast.nodeid} out ifref is {
 # Conditions and postconditions are read by index through zast.forCondAt /
 # forPostAt.
 forref: record {
+    # the for node this was read from
     nid: zast.nodeid
+    # how many leading conditions
     nconds: u64
+    # the loop body
     body: zast.nodeid
+    # how many trailing conditions, which is what makes it a do-while
     nposts: u64
+    # the line to report this for against
     lineno: u32
+    # the column to report this for against
     colno: u32
 }
 
@@ -32405,9 +32587,13 @@ labelRefAt: function {ast: Ast.view nid: zast.nodeid} out atomref is {
 # yieldref -- what the yield walk reads of its row: the yielded value id and
 # the position, as plain values.
 yieldref: record {
+    # the yield node this was read from
     nid: zast.nodeid
+    # the value yielded
     expr: zast.nodeid
+    # the line to report this yield against
     lineno: u32
+    # the column to report this yield against
     colno: u32
 }
 
@@ -32496,10 +32682,15 @@ checkYieldAt: function {
 # the out-type id and the position, as plain values. Elements are read by
 # index through zast.dataElemAt.
 dataref: record {
+    # the data block node this was read from
     nid: zast.nodeid
+    # how many elements
     nelems: u64
+    # the declared element type, 0 when it is inferred
     outType: zast.nodeid
+    # the line to report this data block against
     lineno: u32
+    # the column to report this data block against
     colno: u32
 }
 
@@ -35651,7 +35842,9 @@ constFloatOf: function {v: ztypes.cval} out ffoldval is {
 
 # a float operand of a folded binop; `has` false = not a numeric value.
 ffoldval: record {
+    # whether the fold reached a value
     has: bool
+    # the value it reached
     val: f64
 }
 
@@ -35768,6 +35961,7 @@ boolConst: function {
     return (ztypes.makeArmConst armTid: bt armName: (zast.nameid.create from: nmNode.u32.orPanic))
 }
 
+# fold a comparison of two integer constants
 constCompareInt: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -35785,6 +35979,7 @@ constCompareInt: function {
     return ztypes.noConst
 }
 
+# fold a comparison of two float constants
 constCompareFloat: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -35802,6 +35997,8 @@ constCompareFloat: function {
     return ztypes.noConst
 }
 
+# fold arithmetic on two float constants. Floats fold in f64 whatever the
+# target width, the narrowing being the materialiser's business
 constArithFloat: function {op: StringView a: f64 b: f64} out ztypes.cval is {
     if op == "+" then return (ztypes.makeFloatConst (a + b))
     if op == "-" then return (ztypes.makeFloatConst (a - b))
@@ -36863,13 +37060,21 @@ constOfNamedBase: function {
 # (1 expression, 2 atomid, 3 atomstring, 4 dottedpath, 5 binop, 6 call,
 # 7 ifexpr, 0 anything else) and the ids and scalars that arm reads.
 constplan: record {
+    # the arm the constant names, when it names one
     arm: u32
+    # the inner node the plan folds
     innerId: zast.nodeid
+    # the name being folded
     nameId: zast.nameid
+    # how many pieces the expression has
     parts: u64
+    # the parent half of a dotted constant
     parentId: zast.nodeid
+    # the child half
     childId: zast.nodeid
+    # the line to report against
     ln: u32
+    # the column to report against
     co: u32
 }
 
@@ -38253,6 +38458,7 @@ targetOsName: function {triple: StringView} out String is {
     return (oneNameOf names: osn.stringView)
 }
 
+# the architecture half of a target triple, as written text
 targetArchName: function {triple: StringView} out String is {
     if triple.length == 0 then return "".string
     arn: tripleArchNames :triple
@@ -38271,6 +38477,8 @@ targetOrHostOs: function {triple: StringView} out String is {
     return os.hostOsName
 }
 
+# the target's architecture, falling back to the host's when no triple was
+# given
 targetOrHostArch: function {triple: StringView} out String is {
     a9r: targetArchName :triple
     if a9r.length > 0 then return a9r
@@ -39404,6 +39612,8 @@ unitNameIdOf: function {
     return (zast.nameid.create from: (st.typing.declNameOf declId: unitDecl))
 }
 
+# a unit's name as text, for the diagnostics that must spell it. Everything
+# else compares the id
 unitNameTextOf: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
@@ -39588,7 +39798,9 @@ envLookup: function {
 # zdefhit -- an envLookup hit: the child DeclId and the frame (its root
 # DeclId) it was found in. Both zero on a miss.
 zdefhit: record {
+    # the declaration found
     declId: ztypes.declid
+    # the frame it was found in, which decides what else is visible from it
     frame: ztypes.declid
 }
 
@@ -40032,6 +40244,8 @@ resolvedByIdsMember: function {
     return (optionval.none u64)
 }
 
+# resolve one name inside a unit, which is the single step every dotted path
+# is built from
 resolveUnitChild: function {
     ast: Ast
     st: zenv.ZSymbolTable
