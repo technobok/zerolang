@@ -1117,7 +1117,7 @@ main: function is {
 <h3 id="operations"><a href="#operations">4.5. Operations</a></h3>
 <h3 id="flow-control-expressions"><a href="#flow-control-expressions">4.6. Flow Control Expressions</a></h3>
 <p>There are four flow control related constructs/expressions: <a href="#with">with</a> for a
-sequence within a new scope, <a href="#if">if</a> for conditional executtion, <a href="#match">match</a> for
+sequence within a new scope, <a href="#if">if</a> for conditional execution, <a href="#match">match</a> for
 conditional dissection of variables and <a href="#for">for</a> for iteration.</p>
 <h4 id="with"><a href="#with">4.6.1. with</a></h4>
 <p>Execute a single expression in a new scope with a single new binding.
@@ -1639,7 +1639,7 @@ available under all five dispatch rules.</p>
 <p>To obtain a function reference value (rather than calling the function), use
 the <code>.take</code> dotted operator on the function name. This is consistent with
 the existing <code>.take</code> semantics for value types.</p>
-<pre><code class="language-zerolang">myfunc: function {a: i64} to i64 is { return a }
+<pre><code class="language-zerolang">myfunc: function {a: i64} out i64 is { return a }
 
 # obtain a function reference without calling the function
 ref: myfunc.take</code></pre>
@@ -2191,24 +2191,24 @@ myrec: record {
 
     x: t   # always A or B
 
-    mymethod: function {:this p: t } out int is {
-        # generic field... test is done at compile time...
-        if this.x.A {
+    mymethod: function {:this p: t } out i64 is {
+        # generic field -- the test is a compile-time one
+        if this.x.A then {
             # ...
-        } when this.x.B {
+        } else if this.x.B then {
             # ...
         }
 
-        # generic parameter... test is done at compile time...
-        if p.A {
+        # generic parameter -- likewise
+        if p.A then {
             # ...
-        } if p.B {
+        } else if p.B then {
             # ...
         }
     }
 }</code></pre>
 <p>Example generic function accepting an instance that implements a protocol:</p>
-<pre><code class="language-zerolang">myfunc: function {t: myprotocol.generic arg: t} is: {
+<pre><code class="language-zerolang">myfunc: function {t: myprotocol.generic arg: t} is {
   # ...
 }
 
@@ -3608,7 +3608,7 @@ returns no value. It only has side-effects.</p>
 <p>The <code>in</code>  argument takes a brace delimited block of parameter definitions
 of the form <code>name: typereference</code>. See <a href="#declarations-and-references">Declarations and References</a> for
 details. A parameter <em><strong>must not</strong></em> be private (<code>_</code>) but may have ownership
-attributes (<code>type.take</code>, <code>type.borrow</code>, <code>type.borrow</code>) or it may have a
+attributes (<code>type.take</code>, <code>type.borrow</code>, <code>type.view</code>, <code>type.hold</code>) or it may have a
 default constant numeric value or a default function reference value. Parameters
 may reference generic types declared in the <code>as</code> clause. Declaring generic
 parameters directly in <code>in</code> (e.g. <code>t: AnyRef.generic</code>) is a compile error.</p>
@@ -4208,44 +4208,14 @@ MyObject: class {
     }
 }</code></pre>
 <h4 id="finalizer"><a href="#finalizer">5.13.9. Finalizer</a></h4>
-<p>TODO: change this section. No Destructors, only finalizers. Only reftypes can
-have finalizers (valtypes are copy by value so don't want finalizer to run on
-every instance???? Maybe have finalizers on all objects anyway but warn about
-finalize on copies and possible performance implications in documentation?)</p>
-<p>TODO: finalizer must be called <code>finalize</code>, must be a method and must take no
-arguments. Objects can call this themselves... but not good style? <code>finalize</code>
-can be private (good style to make finalize private) but compiler will still
-call it when the object goes out of scope.</p>
-<p>Destructors are methods, placed within the object definition namespace. The
-name of the destructor can be user defined but each object can only have one
-destructor (why?).</p>
-<p>Destructors are the only methods that retain type <code>this</code>. They may take any
-other arguments as necessary. They may also return any type (except <code>this</code>),
-including subcomponents of <code>this</code> because it has taken ownership of it. They
-are called implicitly when the holding variable falls out of scope. They can
-only be called explicitly from the namespace of the parent (not an existing
-object). They can only be explicitly called by the owner. The compiler will
-destroy the memory of any subcomponent remaining (and not returned) and the
-parent object after the destructor returns.</p>
-<p>The identifier holding this item in the caller will no longer be available for
-use after the destructor returns (as occurs with any call that retains a passed
-argument).</p>
-<p>The <code>this</code> argument that is passed in may be in an inconsistent state within
-the destructor so it <em><strong>cannot</strong></em> be passed to any method and no methods
-defined on it can be called within the destructor. Only the subcomponents of
-<code>this</code> can be written to / removed.</p>
-<p>TODO: how to prove that you do not leave the object in a broken state part way
-through destruction? Can no methods be called during destruction?
-Is there any point in having destructors?</p>
-<pre><code class="language-zerolang">MyRefType: class {
-    destroy: function {s: this.take} out subreftype is {
-        s.subreftype   # return a sub ref type. Can only do this in destructor
-    }
-}
-
-# destroys the instance and returns the subcomponent which the caller now owns
-# myreftypeinstance is invalid after this call
-mysubtype: MyRefType.destroy s: myreftypeinstance</code></pre>
+<p>Whether zerolang has user-named destructors or a single compiler-called
+<code>finalize</code> is not decided, and the two models differ in more than
+spelling -- whether valtypes may have one, whether it may be private, and
+whether it may hand a subcomponent back to the caller. The question and the
+material that went with it are in <code>Design-OPEN.pdoc</code>.</p>
+<p>What the compiler does today: a type whose fields need cleaning up gets a
+destructor the compiler generates and calls when the owning binding leaves
+scope. Nothing in the surface language names it.</p>
 <h4 id="function-references"><a href="#function-references">5.13.10. Function References</a></h4>
 <p>A function reference is a variable that stores a pointer to a function. It may
 be called with the same syntax as used when calling a standard function. It may
@@ -4264,8 +4234,8 @@ declarations are immutable).</p>
 <li>function return values</li>
 </ul>
 <p>For local variable function references, declare and assign using <code>.take</code>:</p>
-<pre><code class="language-zerolang">myspec: function {a: i64 b: i64} to i64
-add: function {a: i64 b: i64} to i64 is { return a + b }
+<pre><code class="language-zerolang">myspec: function {a: i64 b: i64} out i64
+add: function {a: i64 b: i64} out i64 is { return a + b }
 
 main: function is {
   ref: add.take                # local function reference
@@ -4342,7 +4312,7 @@ normal methods, but all will receive their base instance from this constructor.<
 myrec: record {
     a: u32
     b: u8
-    _c: "a"_c32
+    _c: 0ca.c32
 }
 
 # with constructor:
@@ -4353,7 +4323,7 @@ myrec: record {
 
     # TODO: don't do this? See constructors above, rust style...
     create: function {a: u32 b: u8} out this is {
-        this.c = "a"_c32
+        this.c = 0ca.c32
         return this
     }
 }</code></pre>

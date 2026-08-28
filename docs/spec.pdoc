@@ -1120,7 +1120,7 @@ TODO: generic type specifier. With and without arguments passed down
 #---: Flow Control Expressions
 
 There are four flow control related constructs/expressions: #>"with" for a
-sequence within a new scope, #>"if" for conditional executtion, #>"match" for
+sequence within a new scope, #>"if" for conditional execution, #>"match" for
 conditional dissection of variables and #>"for" for iteration.
 
 #----: with
@@ -1686,7 +1686,7 @@ the #~".take" dotted operator on the function name. This is consistent with
 the existing #~".take" semantics for value types.
 
 #code language=zerolang: """
-  myfunc: function {a: i64} to i64 is { return a }
+  myfunc: function {a: i64} out i64 is { return a }
 
   # obtain a function reference without calling the function
   ref: myfunc.take
@@ -2374,18 +2374,18 @@ Example generic record based on an enum generic parameter:
 
       x: t   # always A or B
 
-      mymethod: function {:this p: t } out int is {
-          # generic field... test is done at compile time...
-          if this.x.A {
+      mymethod: function {:this p: t } out i64 is {
+          # generic field -- the test is a compile-time one
+          if this.x.A then {
               # ...
-          } when this.x.B {
+          } else if this.x.B then {
               # ...
           }
 
-          # generic parameter... test is done at compile time...
-          if p.A {
+          # generic parameter -- likewise
+          if p.A then {
               # ...
-          } if p.B {
+          } else if p.B then {
               # ...
           }
       }
@@ -2395,7 +2395,7 @@ Example generic record based on an enum generic parameter:
 Example generic function accepting an instance that implements a protocol:
 
 #code language=zerolang: """
-  myfunc: function {t: myprotocol.generic arg: t} is: {
+  myfunc: function {t: myprotocol.generic arg: t} is {
     # ...
   }
 
@@ -4108,7 +4108,7 @@ returns no value. It only has side-effects.
 The #~"in"  argument takes a brace delimited block of parameter definitions
 of the form #~"name: typereference". See #>"declarations-and-references" for
 details. A parameter #_*"must not" be private (#~"_") but may have ownership
-attributes (#~"type.take", #~"type.borrow", #~"type.borrow") or it may have a
+attributes (#~"type.take", #~"type.borrow", #~"type.view", #~"type.hold") or it may have a
 default constant numeric value or a default function reference value. Parameters
 may reference generic types declared in the #~"as" clause. Declaring generic
 parameters directly in #~"in" (e.g. #~"t: AnyRef.generic") is a compile error.
@@ -4804,53 +4804,15 @@ A 'copy constructor' style method can be created in two different ways:
 
 #----: Finalizer
 
-TODO: change this section. No Destructors, only finalizers. Only reftypes can
-have finalizers (valtypes are copy by value so don't want finalizer to run on
-every instance???? Maybe have finalizers on all objects anyway but warn about
-finalize on copies and possible performance implications in documentation?)
+Whether zerolang has user-named #_+"destructors" or a single compiler-called
+#~"finalize" is #_+"not decided", and the two models differ in more than
+spelling -- whether valtypes may have one, whether it may be private, and
+whether it may hand a subcomponent back to the caller. The question and the
+material that went with it are in #~"Design-OPEN.pdoc".
 
-TODO: finalizer must be called #~"finalize", must be a method and must take no
-arguments. Objects can call this themselves... but not good style? #~"finalize"
-can be private (good style to make finalize private) but compiler will still
-call it when the object goes out of scope.
-
-Destructors are methods, placed within the object definition namespace. The
-name of the destructor can be user defined but each object can only have one
-destructor (why?).
-
-Destructors are the only methods that retain type #~"this". They may take any
-other arguments as necessary. They may also return any type (except #~"this"),
-including subcomponents of #~"this" because it has taken ownership of it. They
-are called implicitly when the holding variable falls out of scope. They can
-only be called explicitly from the namespace of the parent (not an existing
-object). They can only be explicitly called by the owner. The compiler will
-destroy the memory of any subcomponent remaining (and not returned) and the
-parent object after the destructor returns.
-
-The identifier holding this item in the caller will no longer be available for
-use after the destructor returns (as occurs with any call that retains a passed
-argument).
-
-The #~"this" argument that is passed in may be in an inconsistent state within
-the destructor so it #_*"cannot" be passed to any method and no methods
-defined on it can be called within the destructor. Only the subcomponents of
-#~"this" can be written to / removed.
-
-TODO: how to prove that you do not leave the object in a broken state part way
-through destruction? Can no methods be called during destruction?
-Is there any point in having destructors?
-
-#code language=zerolang: """
-  MyRefType: class {
-      destroy: function {s: this.take} out subreftype is {
-          s.subreftype   # return a sub ref type. Can only do this in destructor
-      }
-  }
-
-  # destroys the instance and returns the subcomponent which the caller now owns
-  # myreftypeinstance is invalid after this call
-  mysubtype: MyRefType.destroy s: myreftypeinstance
-  """
+What the compiler does today: a type whose fields need cleaning up gets a
+destructor the compiler generates and calls when the owning binding leaves
+scope. Nothing in the surface language names it.
 
 #----: Function References
 
@@ -4877,8 +4839,8 @@ Function references can be used as:
 For local variable function references, declare and assign using #~".take":
 
 #code language=zerolang: """
-  myspec: function {a: i64 b: i64} to i64
-  add: function {a: i64 b: i64} to i64 is { return a + b }
+  myspec: function {a: i64 b: i64} out i64
+  add: function {a: i64 b: i64} out i64 is { return a + b }
 
   main: function is {
     ref: add.take                # local function reference
@@ -4964,7 +4926,7 @@ normal methods, but all will receive their base instance from this constructor.
   myrec: record {
       a: u32
       b: u8
-      _c: "a"_c32
+      _c: 0ca.c32
   }
 
   # with constructor:
@@ -4975,7 +4937,7 @@ normal methods, but all will receive their base instance from this constructor.
 
       # TODO: don't do this? See constructors above, rust style...
       create: function {a: u32 b: u8} out this is {
-          this.c = "a"_c32
+          this.c = 0ca.c32
           return this
       }
   }
