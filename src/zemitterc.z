@@ -12715,14 +12715,23 @@ emitDottedTagRead: function {
     dap: dottedArmPredicateTid :symtab nid: n.nodeid.u64
     if dap > 0 then {
         recvP: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+        # an ordinal's discriminator IS its value, so a receiver reached through a
+        # pointer is LOADED before it is tested. The struct-shaped families read a
+        # `tag` FIELD instead and chain with `->`, which is what accP is for.
+        ptrP: (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+        valP: recvP.copy
+        if ptrP then {
+            dP: "(*\{recvP})"
+            valP = dP
+        }
         if (isOrdinalPair :symtab tid: (ztypes.tid.create from: dap.u64)) then {
             fa: (ordinalPairFirstArmId
                 :symtab
                 tid: (ztypes.tid.create from: dap.u64)
             )
             # the arm NAME resolved through any alias, as an id
-            if fa > 0 when mnc0Id.u64 == fa then return "(!(\{recvP}))"
-            return "(\{recvP})"
+            if fa > 0 when mnc0Id.u64 == fa then return "(!(\{valP}))"
+            return "(\{valP})"
         }
         accP: ".".string
         rootP: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
@@ -12736,7 +12745,7 @@ emitDottedTagRead: function {
         if (isOrdinalVariant
             :symtab
             tid: (ztypes.tid.create from: dap.u64)
-        ) then return "((\{recvP}) == \{tgP})"
+        ) then return "((\{valP}) == \{tgP})"
         eP: "((\{recvP})\{accP}tag == \{tgP})"
         return eP
     }
@@ -12763,7 +12772,13 @@ emitDottedTagRead: function {
         if (isOrdinalVariant
             :symtab
             tid: (ztypes.tid.create from: dtr.u64)
-        ) then return "((\{castT})(\{recvT}))"
+        ) then {
+            if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)) then {
+                dT: "((\{castT})(*\{recvT}))"
+                return dT
+            }
+            return "((\{castT})(\{recvT}))"
+        }
         accT: ".".string
         rootT: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
         if rootT.length > 0 then {
