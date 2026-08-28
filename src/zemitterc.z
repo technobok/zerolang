@@ -195,12 +195,9 @@ atomVidIfPlain: function {
     }
 }
 
-# paramVidByNameId -- the variable behind parameter `nameId` of the function
-# node `op`, or 0. The type checker mints a parameter's variable while walking
-# the AST parameter list and stamps it on the node the parameter WRAPS, so read
-# it back the same way. The declaration tree cannot supply it: a generic clone
-# shares its template's declaration, so a member lookup there answers with one
-# node for every parameter alike.
+# paramVidIn -- paramVidByNameId against a parameter list the caller already
+# holds, rather than one reached through a function node. 0 when no parameter
+# carries that name.
 paramVidIn: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -223,7 +220,12 @@ paramVidIn: function {
     return (ztypes.vid.create from: 0)
 }
 
-# paramVidByNameId -- paramVidIn reached through the function node.
+# paramVidByNameId -- the variable behind parameter `nameId` of the function
+# node `op`, or 0. The type checker mints a parameter's variable while walking
+# the AST parameter list and stamps it on the node the parameter WRAPS, so read
+# it back the same way. The declaration tree cannot supply it: a generic clone
+# shares its template's declaration, so a member lookup there answers with one
+# node for every parameter alike.
 paramVidByNameId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -1774,7 +1776,7 @@ loadFragment: function {
     }
 }
 
-# chunkText -- a stringchunk's text ("" for any other shape).
+# stringChunkText -- a stringchunk's text ("" for any other shape).
 stringChunkText: function {n: Node.view} out String is {
     match (
         n
@@ -2542,8 +2544,6 @@ originIsTid: function {
     return ot.u64 == originTid
 }
 
-# Ctx -- the per-program emission context (anchor cnames, main unit name,
-# the literal pool, and the resolved-name map access).
 # dataconstkey / dataslotkey -- which element of which data block. A data
 # element is reached two ways -- `primes.first` by LABEL and `primes.0` by
 # ORDINAL -- and a nameid and an ordinal are two id spaces, so they are two
@@ -3302,8 +3302,8 @@ takeSourceResolve: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out
     return (emitLocalAtomName :ctx :name :vid)
 }
 
-# takeAliasBase -- the base atom of a `<x>.take` over a user record/class (an
-# ownership-transfer alias: the binding reuses the source storage), else "".
+# takeAliasBaseNid -- takeAliasBase as an interned name id, for a caller that
+# compares the base rather than printing it.
 takeAliasBaseNid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.view} out u64 is {
     match (
         n
@@ -3330,6 +3330,8 @@ takeAliasBaseNid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node
     }
 }
 
+# takeAliasBase -- the base atom of a `<x>.take` over a user record/class (an
+# ownership-transfer alias: the binding reuses the source storage), else "".
 # takeAliasBase -- that base atom's text, derived from the node above so the
 # name and the id can never describe different atoms.
 takeAliasBase: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.view} out String is {
@@ -3652,11 +3654,9 @@ paramIsHold: function {
     )
 }
 
-# emitCallTakeInvalidations -- zero the source local of each ownership-moved arg
-# of a call so its scope-exit destructor is a no-op (the move transferred
-# ownership). An explicit `<atom>.take` uses takeStringSource; a bare owning-
-# reftype local moved into a TAKE param is an implicit move (the needsDestructor
-# gate excludes borrow/lock views and scalars, which carry no destructor).
+# isCtorOwnerCall -- the call CONSTRUCTS its result rather than handing back
+# someone else's: a meta.create, an Option or Result construction, or a user
+# union-arm construction.
 isCtorOwnerCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -3713,7 +3713,11 @@ isCtorOwnerCall: function {
     return false
 }
 
-# emit the zeroing that invalidates arguments moved into a call.
+# emitCallTakeInvalidations -- zero the source local of each ownership-moved arg
+# of a call so its scope-exit destructor is a no-op (the move transferred
+# ownership). An explicit `<atom>.take` uses takeStringSource; a bare owning-
+# reftype local moved into a TAKE param is an implicit move (the needsDestructor
+# gate excludes borrow/lock views and scalars, which carry no destructor).
 emitCallTakeInvalidations: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -4071,7 +4075,7 @@ aliasChildName: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.v
     }
 }
 
-# stmtFormName -- the statement form a DOTTED callee resolves to ("print",
+# stmtFormNameId -- the statement form a DOTTED callee resolves to ("print",
 # "panic", "error", "return"), else "". Those four are core aliases onto natives
 # in `io` and `system`, and the dispatch below reads the ATOM, so a program that
 # spelled one qualified reached the generic native path instead: `io.print`
@@ -4225,9 +4229,9 @@ isSvParseNative: function {name: StringView} out bool is {
     return false
 }
 
-# svNativeName -- the simple StringView-native set C2b supports (the
-# pointer-arg predicates and trims; indexOf/byteAt wait on optionval
-# struct emission).
+# isSvSimpleNative -- the simple StringView natives: the pointer-arg predicates
+# and the trims. indexOf and byteAt are not among them -- they return an
+# optionval, which waits on that struct's emission.
 isSvSimpleNative: function {name: StringView} out bool is {
     if name == "isEmpty" then return true
     if name == "isAscii" then return true
@@ -6181,14 +6185,8 @@ collectionValueCallRhs: function {
     }
 }
 
-# bindingRhsIsBorrow -- the binding RHS yields a non-owning borrow, so the bound
-# String local must NOT be freed at scope exit (its owner -- the list or the
-# struct -- frees it; a premature free is a use-after-free / double-free). Two
-# shapes: a `<list>.get i:` over a List/ListView (a shallow element view), and a
-# plain field access `<base>.<field>` (the field's String is owned by `<base>`).
-# A no-arg method call (the child resolves to a FUNCTION) returns an owned value
-# and is NOT a borrow. (Map.get returns an owned Option, handled elsewhere;
-# `.copy` / `.string` / `.take` are owned and handled before this check.)
+# funcBorrowFlag -- does the function type `tid` return a BORROW? A zero tid and
+# a miss both answer false: a type that was never stamped is lending nothing.
 funcBorrowFlag: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
     g: symtab.typing.funcReturnsBorrow.get key: tid
@@ -6454,7 +6452,14 @@ refBorrowCalleeFid: function {
     }
 }
 
-# true when a binding's right-hand side is a borrow.
+# bindingRhsIsBorrow -- the binding RHS yields a non-owning borrow, so the bound
+# String local must NOT be freed at scope exit (its owner -- the list or the
+# struct -- frees it; a premature free is a use-after-free / double-free). Two
+# shapes: a `<list>.get i:` over a List/ListView (a shallow element view), and a
+# plain field access `<base>.<field>` (the field's String is owned by `<base>`).
+# A no-arg method call (the child resolves to a FUNCTION) returns an owned value
+# and is NOT a borrow. (Map.get returns an owned Option, handled elsewhere;
+# `.copy` / `.string` / `.take` are owned and handled before this check.)
 bindingRhsIsBorrow: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -7392,8 +7397,8 @@ listArg: function {
     return "0".string
 }
 
-# listTakeArgBase -- the base atom of a `x.take` list argument (the
-# extend source); the bare atom text otherwise.
+# listTakeArgBaseNid -- listTakeArgBase as an interned name id, for a caller
+# that compares the base rather than printing it.
 listTakeArgBaseNid: function {
     ast: Ast.view
     call: zast.CallData.view
@@ -7415,7 +7420,8 @@ listTakeArgBaseNid: function {
     return 0
 }
 
-# listTakeArgBase -- that base atom's text, derived from the node above.
+# listTakeArgBase -- the base atom of a `x.take` list argument (the
+# extend source); the bare atom text otherwise.
 listTakeArgBase: function {
     ast: Ast.view
     call: zast.CallData.view
@@ -8383,9 +8389,9 @@ argIsPointerByLabel: function {
     return false
 }
 
-# ctorArgByPosition -- the idx-th POSITIONAL (unlabeled) argument's C text, for a
-# method call passing args positionally (`this.formatLockHolder holder`) rather
-# than by label; "" when there is no such arg.
+# ctorArgNodeByPosition -- ctorArgByPosition's node id rather than its C text,
+# for a caller that must look the argument up again instead of printing it.
+# 0 when there is no positional argument at that index.
 ctorArgNodeByPosition: function {ast: Ast.view call: zast.CallData.view idx: u64} out u64 is {
     seen: u64
     aiter: call.arguments.iterate
@@ -8404,6 +8410,9 @@ ctorArgNodeByPosition: function {ast: Ast.view call: zast.CallData.view idx: u64
     return 0
 }
 
+# ctorArgByPosition -- the idx-th POSITIONAL (unlabeled) argument's C text, for a
+# method call passing args positionally (`this.formatLockHolder holder`) rather
+# than by label; "" when there is no such arg.
 # ctorArgByPosition -- that argument's emitted text, selected through the node
 # above so a caller can ask about the same argument by node.
 ctorArgByPosition: function {
@@ -8865,11 +8874,9 @@ emitMetaCreateCall: function {
     }
 }
 
-# emitCrossUnitFnCall -- a cross-unit free-function call `unit.fn args`
-# (e.g. zparser calling a zast/zlexer helper). The callee is a dottedpath whose
-# base is a unit name; the function's shared id lives in resolved["{unit}.{fn}"],
-# so emit z_t{id}_{fn}(args) with the same reftype-by-ref arg handling as a bare
-# free-function call. "" when the callee is not a cross-unit function.
+# emitByrefArg -- an argument passed BY REFERENCE. A non-lvalue has no address
+# to take, so it is hoisted into a numbered `_ah` temp of the parameter's own C
+# type and the temp's address goes to the call instead.
 emitByrefArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -9315,7 +9322,11 @@ dottedMemberTidOf: function {
     return ztypes.tid
 }
 
-# emit a call to a function in another unit.
+# emitCrossUnitFnCall -- a cross-unit free-function call `unit.fn args`
+# (e.g. zparser calling a zast/zlexer helper). The callee is a dottedpath whose
+# base is a unit name; the function's shared id lives in resolved["{unit}.{fn}"],
+# so emit z_t{id}_{fn}(args) with the same reftype-by-ref arg handling as a bare
+# free-function call. "" when the callee is not a cross-unit function.
 emitCrossUnitFnCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -14061,8 +14072,8 @@ bindLitIndex: function {
     }
 }
 
-# stringviewOfBase -- the base name of `X.stringView` over a String local
-# ("" otherwise).
+# stringviewOfBaseNid -- stringviewOfBase as an interned name id, for a caller
+# that compares the base rather than printing it.
 stringviewOfBaseNid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -14085,6 +14096,8 @@ stringviewOfBaseNid: function {
     }
 }
 
+# stringviewOfBase -- the base name of `X.stringView` over a String local
+# ("" otherwise).
 # stringviewOfBase -- that base atom's text. Derived from the node above rather
 # than re-walked, so the name and the id can never describe different atoms.
 stringviewOfBase: function {
@@ -16200,14 +16213,9 @@ emitReassignLvalue: function {
     return (emitExpr :ast :symtab :ctx :n)
 }
 
-# emitMatchStmt -- a variant-subject match as a tag switch over a temp;
-# payload arms shadow the subject name with the payload value.
-# emitGenericDissect -- compile-time `match` on a generic parameter. The concrete
-# type bound to the parameter for the current mono instance (ctx.curThisTid) is
-# resolved through the registry's generic-argument trie; the arm whose label
-# names that type is emitted
-# inline and every other arm is dropped (no runtime switch). No matching arm and
-# no `else` emits nothing (the caller-level no-match check is a compile error).
+# genericOwnerKey -- the declaration of a generic's ORIGIN template, keyed from
+# any of its instantiations, so every mono of one template answers the same id.
+# 0 when the type is not a generic instance.
 genericOwnerKey: function {
     symtab: zenv.ZSymbolTable.view
     ownerTid: ztypes.tid
@@ -16497,7 +16505,14 @@ matchElseNarrowing: function {
 }
 
 
-# emit a match as a C switch.
+# emitMatchStmt -- a variant-subject match as a tag switch over a temp;
+# payload arms shadow the subject name with the payload value.
+# emitGenericDissect -- compile-time `match` on a generic parameter. The concrete
+# type bound to the parameter for the current mono instance (ctx.curThisTid) is
+# resolved through the registry's generic-argument trie; the arm whose label
+# names that type is emitted
+# inline and every other arm is dropped (no runtime switch). No matching arm and
+# no `else` emits nothing (the caller-level no-match check is a compile error).
 emitMatchStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -16697,9 +16712,11 @@ emitScalarMatch: function {
     buf.append l
 }
 
-# emitBoolMatch -- a match over a bool subject. `case true`/`case false` become
-# an if (subj) / else if (!subj) chain (a bool is a primitive C bool, not a
-# tagged variant), the optional else arm a trailing `else`. assignTo writes the
+# emitOrdinalPairMatch -- a match over a TWO-ARM ORDINAL sum, emitted as an
+# if (subj) / else if (!subj) chain on the subject itself rather than a tag
+# switch, with the optional else arm a trailing `else`. The arm whose
+# DISCRIMINATOR is 0 takes the negated condition, which is what makes a bool
+# subject an instance of this rather than a form of its own. assignTo writes the
 # arm value in each branch.
 emitOrdinalPairMatch: function {
     ast: Ast.view
@@ -23731,8 +23748,9 @@ ctypeOrI64: function {s: StringView} out String is {
     }
 }
 
-# emitListMono -- substitute z_List.c.tmpl for a List instance + the
-# linear-scan contains companion (scalar element equality).
+# emitArrayMono -- the array instance's runtime substitution, emitListMono's
+# twin: the element mono supplies both the C element type and the `==` companion
+# a linear scan needs.
 emitArrayMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -23867,7 +23885,8 @@ emitBoxMono: function {
     buf.append "}\n\n"
 }
 
-# emit the monomorphised C for a List instantiation.
+# emitListMono -- substitute z_List.c.tmpl for a List instance + the
+# linear-scan contains companion (scalar element equality).
 emitListMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -24835,11 +24854,9 @@ emitMapIters: function {
     }
 }
 
-# emitMapMono -- substitute z_Map.c.tmpl for a Map instance (compact-dict +
-# set/get/has/delete). The value's optionval mono (get's return) supplies the
-# value type and the OPTIONVAL placeholders; the key name is the remainder.
-# mapValType -- the canonical Map value type id, off the "set" method's "value"
-# param (mirrors listElemType). 0 when absent.
+# mapKeyType -- a Map mono's KEY type, read off its `set` member's `key`
+# parameter rather than off the mono's name: the name is composed text, the
+# parameter is the declaration.
 mapKeyType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out u64 is {
     so: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkSet
     match (
@@ -24896,7 +24913,11 @@ mapValType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out zty
     return (ztypes.tid.create from: 0)
 }
 
-# emit the monomorphised C for a Map instantiation.
+# emitMapMono -- substitute z_Map.c.tmpl for a Map instance (compact-dict +
+# set/get/has/delete). The value's optionval mono (get's return) supplies the
+# value type and the OPTIONVAL placeholders; the key name is the remainder.
+# mapValType -- the canonical Map value type id, off the "set" method's "value"
+# param (mirrors listElemType). 0 when absent.
 emitMapMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -25529,10 +25550,6 @@ ioCanonCname: function {
     return r
 }
 
-# ioCanonCnameUncached -- the id-based cname for an io canonical stem (the part
-# after `z_` in a runtime fragment): a mono (Result_*/List_u8/...) via its spec
-# trie, else a named system type (IoError/File/filestat/Reader/...) by registry
-# name. "" when the type is not in the (demand-driven) registry for this program.
 ioCanonTidAny: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -25578,6 +25595,10 @@ ioCanonTidAny: function {
     return found
 }
 
+# ioCanonCnameUncached -- the id-based cname for an io canonical stem (the part
+# after `z_` in a runtime fragment): a mono (Result_*/List_u8/...) via its spec
+# trie, else a named system type (IoError/File/filestat/Reader/...) by registry
+# name. "" when the type is not in the (demand-driven) registry for this program.
 ioCanonCnameUncached: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view

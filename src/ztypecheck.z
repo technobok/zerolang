@@ -2557,12 +2557,6 @@ fieldHeadName: function {ast: Ast.view n: Node.view} out String is {
     return (genericApplHead :ast :n)
 }
 
-# resolveTyperefShell -- register a SHALLOW named shell for a referenced type
-# (e.g. the `i64` in `n: i64`), routing atom names through resolveAtomType so
-# `this`/numeric-default atoms resolve correctly. A parenthesized parameterized
-# type `(T arg: N)` (an expression wrapping a call) mangles to a `T_N` shell.
-# Source-type rows never include these shells (they fall outside `defined_in_unit`),
-# but a `type_children` row joins to the shell's name. Returns the shell's type id.
 recordNodeName: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
@@ -3956,6 +3950,12 @@ resolveTyperefAtomShell: function {
     )
 }
 
+# resolveTyperefShell -- register a SHALLOW named shell for a referenced type
+# (e.g. the `i64` in `n: i64`), routing atom names through resolveAtomType so
+# `this`/numeric-default atoms resolve correctly. A parenthesized parameterized
+# type `(T arg: N)` (an expression wrapping a call) mangles to a `T_N` shell.
+# Source-type rows never include these shells (they fall outside `defined_in_unit`),
+# but a `type_children` row joins to the shell's name. Returns the shell's type id.
 resolveTyperefShell: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -4273,9 +4273,6 @@ nameIsInUnitReftype: function {
     }
 }
 
-# paramTypeBaseName -- the base type name of a (possibly parameterized) param type
-# expression: an atom name directly, or the callable of a parenthesized
-# `(List of: i64)` form (an expression wrapping a call). "" for anything else.
 # returnHasBorrowMarkerNode / returnHasBorrowMarker -- the function's return
 # type carries a REFERENCE marker: `out T.borrow` hands back a mutable
 # reference into the receiver, `out T.view` a readonly one. Both pin the
@@ -6697,7 +6694,7 @@ recordIsTypedef: function {ast: Ast.view rnode: objref} out bool is {
     return false
 }
 
-# typedefFieldBaseName -- the base type name of an `X.typedef` field's `X`
+# typedefFieldBaseNameId -- the base type name of an `X.typedef` field's `X`
 # (e.g. `(List of: u8).typedef` -> "List"). Borrows the Node, never binds it (a
 # bare bind would move the type-expr out of the shared AST).
 typedefFieldBaseNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
@@ -6710,7 +6707,7 @@ typedefFieldBaseNameId: function {ast: Ast.view n: Node.view} out zast.nameid is
     }
 }
 
-# objectTypedefBase -- the base type name of an objectdef's single `X.typedef`
+# objectTypedefBaseId -- the base type name of an objectdef's single `X.typedef`
 # field (the typedef wrapper base), or "" when the object is not a typedef.
 objectTypedefBaseId: function {ast: Ast.view onode: objref} out zast.nameid is {
     kFiter: u64
@@ -15639,11 +15636,10 @@ scanTemplateBodyDemands: function {
     )
 }
 
-# typecheck -- entry point. Registers a UNIT type per unit and resolves the main
-# unit's definition signatures, then demand-resolves the cross-unit types those
-# signatures referenced. The registry is supplied by the caller, read by the dumper.
-# builtinTidTc -- the canonical registry id of a stdlib builtin by base name
-# (unitDecl "" so a user type of the same name never shadows it). 0 when absent.
+# builtinTidT -- a builtin type name to its tid, memoized on the interned name
+# id because the lookup below walks the frame chain. A miss retries the renamed
+# container form: an internal lookup may still say the aliased name while the
+# declaration carries the family one.
 builtinTidT: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -19714,8 +19710,8 @@ createDottedBaseId: function {ast: Ast.view n: Node.view} out optionval u32 is {
     return (optionval.none u32)
 }
 
-# rootNameOf -- a value path's root atom name (unwrapping expressions and
-# dotted segments), or "".
+# rootNameIdOf -- rootNameOf as an interned name id, for a caller that compares
+# the root rather than printing it.
 rootNameIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
     match (
         n
@@ -19730,6 +19726,8 @@ rootNameIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
     }
 }
 
+# rootNameOf -- a value path's root atom name (unwrapping expressions and
+# dotted segments), or "".
 rootNameOf: function {ast: Ast.view n: Node.view} out String is {
     match (
         n
@@ -26000,9 +25998,9 @@ positionalParamName: function {
     return result
 }
 
-# lockCallArg -- the call-scoped EXCLUSIVE lock a lock/borrow parameter takes
-# on its argument's root for the call's duration (the symtab appends the lock
-# overlay entry in the open call scope; it vanishes when the scope pops).
+# markVarMutated -- record that `nameId`'s variable is written somewhere, which
+# is what the unmutated-parameter and viewable-local rules read. A name with no
+# variable behind it is silently ignored: not every name in a body is a binding.
 markVarMutated: function {st: zenv.ZSymbolTable nameId: zast.nameid} is {
     if nameId.isZero then return
     vo: st.lookupVarId :nameId
@@ -26014,6 +26012,9 @@ markVarMutated: function {st: zenv.ZSymbolTable nameId: zast.nameid} is {
     } case none then null
 }
 
+# lockCallArg -- the call-scoped EXCLUSIVE lock a lock/borrow parameter takes
+# on its argument's root for the call's duration (the symtab appends the lock
+# overlay entry in the open call scope; it vanishes when the scope pops).
 lockCallArg: function {
     st: zenv.ZSymbolTable
     pool: zast.StringPool.view
@@ -27666,11 +27667,6 @@ checkNamedArgParam: function {
     }
 }
 
-# checkTypedCallArg -- everything one typed argument goes through: the parameter
-# it binds to, coercion to that parameter's type, the ownership the call takes
-# on it, and the lock a borrowed argument places on its source. Answers the
-# lock root, which the call as a whole reports.
-# what a call does to one argument's source, read off the parameter it binds to.
 argownership: record {
     isTake: bool
     isLockish: bool
@@ -27776,6 +27772,11 @@ reportPositionalNotAllowed: function {
 }
 
 
+# checkTypedCallArg -- everything one typed argument goes through: the parameter
+# it binds to, coercion to that parameter's type, the ownership the call takes
+# on it, and the lock a borrowed argument places on its source. Answers the
+# lock root, which the call as a whole reports.
+# what a call does to one argument's source, read off the parameter it binds to.
 checkTypedCallArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -28730,11 +28731,6 @@ checkControlBuiltinCall: function {
     } case none then null
     return result
 }
-# checkResolvedMethodCall -- the callable resolved through the dotted walk to a
-# METHOD: check its arguments against that method's parameters, and answer what
-# the call yields. The typedef and projection constructor forms answer here
-# too, since they reach the walk the same way.
-# a leg's answer: whether it fully handled the call, and the type it yields.
 callleg: record {
     handled: bool
     tid: ztypes.tid
@@ -29037,6 +29033,11 @@ pinMethodTakexReturn: function {
     }
 }
 
+# checkResolvedMethodCall -- the callable resolved through the dotted walk to a
+# METHOD: check its arguments against that method's parameters, and answer what
+# the call yields. The typedef and projection constructor forms answer here
+# too, since they reach the walk the same way.
+# a leg's answer: whether it fully handled the call, and the type it yields.
 checkResolvedMethodCall: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -31035,14 +31036,6 @@ caseGenericSubjectTid: function {
 }
 
 
-# checkCase -- walk a match: push the `match` scope, type the subject, push
-# `match_body` (resetting the bare-name subject's narrowing), then per arm an
-# `arm:{name}` scope with a shadow-narrowing overlay (the subject resolves to
-# the arm payload in the body), tracking diverging arms; an else arm excludes
-# the covered subtypes. After popping, an exhaustive all-diverging match
-# resolves to `never` (a completing-arm result type lands with a value-match
-# example) and each diverging arm's subtype is excluded from the subject in
-# the enclosing scope (all-excluded marks it unreachable).
 casearmfacts: record {
     empty: bool
     diverges: bool
@@ -31648,6 +31641,14 @@ monoDissectionHandled: function {
 }
 
 
+# checkCase -- walk a match: push the `match` scope, type the subject, push
+# `match_body` (resetting the bare-name subject's narrowing), then per arm an
+# `arm:{name}` scope with a shadow-narrowing overlay (the subject resolves to
+# the arm payload in the body), tracking diverging arms; an else arm excludes
+# the covered subtypes. After popping, an exhaustive all-diverging match
+# resolves to `never` (a completing-arm result type lands with a value-match
+# example) and each diverging arm's subtype is excluded from the subject in
+# the enclosing scope (all-excluded marks it unreachable).
 checkCase: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -40664,6 +40665,11 @@ publicAliasInternalNames: function {
     return result
 }
 
+# typecheck -- entry point. Registers a UNIT type per unit and resolves the main
+# unit's definition signatures, then demand-resolves the cross-unit types those
+# signatures referenced. The registry is supplied by the caller, read by the dumper.
+# builtinTidTc -- the canonical registry id of a stdlib builtin by base name
+# (unitDecl "" so a user type of the same name never shadows it). 0 when absent.
 # typecheck -- the entry point: index every unit's declarations, resolve from
 # the program's `main` outward (or every definition under `eager`), walk the
 # bodies, and return the walk state whose `typing` and `reg` hold the result.
