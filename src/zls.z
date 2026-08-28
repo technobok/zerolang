@@ -1392,6 +1392,27 @@ Spans: class {
         } case labelvalue then {
             nLb: zast.nameTextAt :ast ref: n.name
             this.addRow id: n.nodeid line: n.lineno col: n.colno name: nLb.stringView kind: 1
+        } case binop then {
+            # the OPERATOR is a row of its own, carrying the BINOP's node id
+            # rather than its own: the method it resolved to is stamped against
+            # the binop, so a row keyed by the operator atom resolves to nothing.
+            this.walk :ast n: (ast.nodes.get i: n.lhs.u64)
+            this.walk :ast n: (ast.nodes.get i: n.rhs.u64)
+            bnid: n.nodeid
+            opn: ast.nodes.get i: n.operator.u64
+            match (
+                opn
+            ) case atomid then {
+                opNm: zast.nameTextAt :ast ref: opn.name
+                (this.addRow
+                    id: bnid
+                    line: opn.lineno
+                    col: opn.colno
+                    name: opNm.stringView
+                    kind: 7
+                )
+            } else null
+            return
         } case dottedpath then {
             # the member selector is a row of its own, not a node walk
             this.walk :ast n: (ast.nodes.get i: n.parent.u64)
@@ -1523,6 +1544,23 @@ useVarId: function {o: (Option zenv.ZSymbolTable).view nid: u64} out ztypes.vid 
     } case none then {
         return (ztypes.vid.create from: 0)
     }
+}
+
+# the METHOD a binop's operator resolved to, by the BINOP's node id -- which is
+# what stampBinopOp keys on. An operator is a method here, so this is the only
+# thing a hover over `+` can resolve to; the operand's type is not it.
+binopMethodOf: function {o: (Option zenv.ZSymbolTable).view nid: u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        g: o.typing.binopMethod.get key: nid
+        match (
+            g
+        ) case some then {
+            return g.u64
+        } case none then null
+    } case none then null
+    return 0
 }
 
 # the unit-definition type id referenced at node `nid` (the referenced
@@ -3077,6 +3115,18 @@ navAnswer: function {
     # own Decl); fills the type id for hits only the Decl layer knows
     # (public-interface entries)
     refDeclId: refDeclOf o: snap.st nid: hnid
+    # an OPERATOR: the method the checker bound is what carries the doc, and
+    # surfaceDeclOfType finds the declaration that declares it
+    if bestKind == 7 then {
+        refTid = binopMethodOf o: snap.st nid: hnid
+        if refTid > 0 then {
+            refDeclId = (surfaceDeclOfType
+                o: snap.st
+                prog: snap.prog
+                tid: (ztypes.tid.create from: refTid)
+            )
+        }
+    }
     # a generic parameter's own declaration: its table, not toolRefDecl, so the
     # `.generic` member row sharing this node id keeps answering nothing
     if bestKind == 6 when refDeclId.isZero then {
@@ -3132,6 +3182,9 @@ navAnswer: function {
         # a hit only the Decl layer resolves (a public-interface entry)
         # carries no node stamps; its Decl's type is the signature
         if sigTid == 0 then sigTid = refTid
+        # an operator's node stamp is the binop's RESULT type; the signature
+        # worth showing is the method it resolved to
+        if bestKind == 7 then sigTid = refTid
         body: (fnSigTextOpt
             vfs: snap.vfs
             prog: snap.prog
