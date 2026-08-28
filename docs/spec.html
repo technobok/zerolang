@@ -2349,9 +2349,10 @@ parses to <code>.borrow</code> so existing sources keep their meaning; do not wr
 it in new code.</li>
 </ul>
 <h5 id="ownership-methods-on-instances">Ownership Methods on Instances</h5>
-<p><code>.take</code>, <code>.borrow</code>, <code>.hold</code> and <code>.view</code> can also be used as
-compiler-generated methods on
-runtime instances:</p>
+<p><code>.take</code>, <code>.borrow</code> and <code>.hold</code> can also be used as compiler-generated
+methods on runtime instances. <code>.view</code> cannot -- it is a type marker
+only, and <code>x.view</code> is an error (<code>'.view' marks a parameter type readonly;
+a value cannot be viewed</code>):</p>
 <ul>
 <li><code>x.take</code> - takes ownership from the variable <code>x</code>. The name <code>x</code> is
 invalid after the call. Calling <code>.take</code> on an expression that is not used
@@ -2360,15 +2361,14 @@ invalid after the call. Calling <code>.take</code> on an expression that is not 
 reference to <code>x</code> and exclusively pins <code>x</code> for the lifetime of the
 borrowed reference. For valtypes, returns a copy of <code>x</code> without locking
 (valtypes have no identity to lock).</li>
-<li><code>x.view</code> - the readonly counterpart of <code>.borrow</code>: a SHARED pin,
-so several views may be live at once and the source stays readable;
-nothing may be written through a view.</li>
 <li><code>x.hold</code> - owned and readonly: ownership transfers but only
 reading members may be called on the binding.</li>
 <li><code>x.copy</code> - a duplicate. Valtypes copy by default; a reftype has no
 default <code>.copy</code> -- its author declares one in the <code>as</code> block (or
 strikes a valtype's default with <code>copy: null</code>).</li>
-<li><code>x.drop</code> - drops a non-owned field's reference early.</li>
+<li><code>x.drop</code> - ends the variable's lifetime early: it releases every lock
+the variable holds, then destroys the value if the variable owns it. See
+<a href="#drop-method">drop</a>.</li>
 </ul>
 <h5 id="non-owned-fields-on-classes">Non-Owned Fields on Classes</h5>
 <p>A class may declare a field non-owned (<code>.borrow</code> or <code>.view</code>). The field stores
@@ -3172,24 +3172,69 @@ to function parameters (parameters are borrowed by default).</p>
 the value and the source name is exclusively locked while the new name is in
 scope.</p>
 <p>See also the <code>ownership.pdoc</code>.</p>
-<h4 id="lock-method"><a href="#lock-method">5.5.3. lock (method)</a></h4>
-<p><code>lock</code> is retired as a method spelling as well -- see the
-<a href="#lock">lock</a> attribute note. The return-pin it used to state is
-<code>.takex</code>.</p>
-<h4 id="drop-method"><a href="#drop-method">5.5.4. drop (method)</a></h4>
+<h4 id="view-type-marker"><a href="#view-type-marker">5.5.3. view (type marker)</a></h4>
+<p><code>.view</code> is a type marker, not an instance method: it is written on a
+parameter, field or return type, and <code>x.view</code> on a value is an error.</p>
+<p>It is the readonly counterpart of <code>.borrow</code>, and the difference between
+them is what may be called, not only what may be assigned. A <code>.borrow</code>
+is not owned but still mutable, so a mutating method may be called through
+it; a <code>.view</code> admits only the receiver's <code>.view</code> methods, and nothing may
+be written through it.</p>
+<pre><code class="language-zerolang">viaBorrow: function {c: C.borrow} is { c.bump }   # mutating method: allowed
+viaView:   function {c: C.view}   is { c.bump }   # refused -- 'c' is readonly</code></pre>
+<p>The pin a view takes is shared, so several views of one source may be live
+at once and the source stays readable. It is valid on valtypes as well as
+reftypes: the freeze is a lock on the name, which a record has as much as a
+class does.</p>
+<p>See also the <code>ownership.pdoc</code>.</p>
+<h4 id="hold-method"><a href="#hold-method">5.5.4. hold (method)</a></h4>
+<p><code>hold</code> is a compiler-generated method predefined on all variable names.
+It is owned and readonly: ownership moves out of the source exactly as
+<code>.take</code> does, and the destination is then frozen -- only <code>.view</code> methods may
+be called on it, and nothing may be written through it.</p>
+<p>This is what separates <code>.hold</code> from <code>.view</code>. A view does not own, so it
+cannot outlive its source; a hold owns, carries its own destructor, and is
+readonly because it was declared so rather than because it points at someone
+else's value.</p>
+<p>Rebinding a hold binding requires another owned value (<code>h = y.hold</code>); a plain
+<code>h = y</code> is an error.</p>
+<p>See also the <code>ownership.pdoc</code>.</p>
+<h4 id="copy-method"><a href="#copy-method">5.5.5. copy (method)</a></h4>
+<p><code>copy</code> is a duplicate of the receiver, owned by the caller. Valtypes have a
+default <code>.copy</code>; a reftype has none unless its author declares one in the
+<code>as</code> block, and a valtype's default is struck with <code>copy: null</code>.</p>
+<p><code>.copy</code> is the way to keep a value a call is about to take, and the way to
+return a payload narrowed out of a matched sum type, which is otherwise a
+borrowed view into the subject.</p>
+<p><code>.copy</code> takes no arguments.</p>
+<h4 id="lock-method"><a href="#lock-method">5.5.6. lock (method)</a></h4>
+<p><code>lock</code> parses as a spelling of <code>.borrow</code>. Do not write it in new code; the
+return-pin it once stated is <code>.takex</code>.</p>
+<h4 id="drop-method"><a href="#drop-method">5.5.7. drop (method)</a></h4>
 <p><code>drop</code> is a compiler-generated method predefined on all variable names. It
 ends the variable's lifetime immediately, as if it fell out of scope. The name
 is invalidated after the call and any subsequent use is a compile error.</p>
-<p>For owned reftypes, the destructor runs. For borrowed variables, the borrow ends
-and any held locks are released. For owned valtypes, the name is simply
-invalidated (no runtime effect).</p>
+<p>It does two things, in this order:</p>
+<ol>
+<li>every lock the variable holds is released -- the pins a
+<code>.takex</code> or <code>.holdx</code> result took on the sources it was built from, and
+the locks a <code>.borrow</code> or <code>.view</code> binding holds on what it reads. Those
+sources become writable again at once, rather than at the end of the
+enclosing scope.</li>
+<li>then, if the variable owns its value, the value is destroyed --
+the destructor runs for an owned reftype. An owned valtype has nothing to
+run, so the name is simply invalidated.</li>
+</ol>
+<p>The first half is why <code>.drop</code> is useful on a binding that owns nothing: a
+<code>.view</code> of a container released early lets the container be written again
+without waiting for the block to end.</p>
 <p><code>.drop</code> is always a statement. It cannot be used as a value expression:
 <code>y: x.drop</code> is a compile error. Use <code>.take</code> to transfer ownership to a
 new name.</p>
 <p>Error conditions: cannot drop a variable that is currently locked by another
 variable, and cannot drop a top-level definition.</p>
 <p>See also the <code>ownership.pdoc</code>.</p>
-<h4 id="private-method"><a href="#private-method">5.5.5. private (method)</a></h4>
+<h4 id="private-method"><a href="#private-method">5.5.8. private (method)</a></h4>
 <p><code>private</code> is the compiler-generated friend-access intrinsic.
 <code>&lt;receiver&gt;.private</code> yields the receiver at the same type but with the
 type's private members (those whose names start with an underscore
@@ -3206,7 +3251,7 @@ adjustment. Subsequent suffixes such as <code>.borrow</code> / <code>.view</code
 their usual lock semantics to the projected reference.</p>
 <p>See <code>examples/ListIter.z</code> for the canonical iterator-friend pattern
 built on <code>.private</code>.</p>
-<h4 id="generic-method"><a href="#generic-method">5.5.6. generic (method)</a></h4>
+<h4 id="generic-method"><a href="#generic-method">5.5.9. generic (method)</a></h4>
 <p><code>generic</code> is a 'class method' predefined on all union, variant, protocol, facet
 and numeric types. It explicitly converts the receiver type to a generic
 argument. This makes it obvious at the call site that a generic argument is
@@ -3219,9 +3264,9 @@ always pass a type to a generic receiver.</p>
 arguments.</p>
 <p>See also the built-in <a href="#generic">generic type</a> or a description of
 <a href="#generic-types">generic types</a> in general.</p>
-<h4 id="tag-method"><a href="#tag-method">5.5.7. tag (method)</a></h4>
+<h4 id="tag-method"><a href="#tag-method">5.5.10. tag (method)</a></h4>
 <p>TODO:</p>
-<h4 id="typedef-method"><a href="#typedef-method">5.5.8. typedef (method)</a></h4>
+<h4 id="typedef-method"><a href="#typedef-method">5.5.11. typedef (method)</a></h4>
 <p>The <code>.typedef</code> accessor is a synthetic member available on all types. It is
 used exclusively in type definitions to mark that the enclosing type is a
 typedef wrapping the accessed type. See the typedef section above for full

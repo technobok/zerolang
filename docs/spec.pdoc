@@ -2562,9 +2562,10 @@ type paths:
 
 #-----: Ownership Methods on Instances
 
-#~".take", #~".borrow", #~".hold" and #~".view" can also be used as
-compiler-generated methods on
-runtime instances:
+#~".take", #~".borrow" and #~".hold" can also be used as compiler-generated
+methods on runtime instances. #~".view" #_+"cannot" -- it is a type marker
+only, and #~"x.view" is an error (#~"'.view' marks a parameter type readonly;
+a value cannot be viewed"):
 
 #ul:
   [#*: #~"x.take" - takes ownership from the variable #~"x". The name #~"x" is
@@ -2574,15 +2575,14 @@ runtime instances:
     reference to #~"x" and exclusively pins #~"x" for the lifetime of the
     borrowed reference. For valtypes, returns a copy of #~"x" without locking
     (valtypes have no identity to lock).]
-  [#*: #~"x.view" - the readonly counterpart of #~".borrow": a SHARED pin,
-    so several views may be live at once and the source stays readable;
-    nothing may be written through a view.]
   [#*: #~"x.hold" - owned and readonly: ownership transfers but only
     reading members may be called on the binding.]
   [#*: #~"x.copy" - a duplicate. Valtypes copy by default; a reftype has no
     default #~".copy" -- its author declares one in the #~"as" block (or
     strikes a valtype's default with #~"copy: null").]
-  [#*: #~"x.drop" - drops a non-owned field's reference early.]
+  [#*: #~"x.drop" - ends the variable's lifetime early: it releases every lock
+    the variable holds, then destroys the value if the variable owns it. See
+    [#> to=drop-method: drop].]
 
 #-----: Non-Owned Fields on Classes
 
@@ -3573,12 +3573,62 @@ scope.
 
 See also the #~"ownership.pdoc".
 
+#----: view (type marker)
+
+#~".view" is a #_+"type" marker, not an instance method: it is written on a
+parameter, field or return type, and #~"x.view" on a value is an error.
+
+It is the #_+"readonly" counterpart of #~".borrow", and the difference between
+them is what may be #_+"called", not only what may be assigned. A #~".borrow"
+is not owned but still #_+"mutable", so a mutating method may be called through
+it; a #~".view" admits only the receiver's #~".view" methods, and nothing may
+be written through it.
+
+#code language=zerolang: """
+  viaBorrow: function {c: C.borrow} is { c.bump }   # mutating method: allowed
+  viaView:   function {c: C.view}   is { c.bump }   # refused -- 'c' is readonly
+  """
+
+The pin a view takes is #_+"shared", so several views of one source may be live
+at once and the source stays readable. It is valid on valtypes as well as
+reftypes: the freeze is a lock on the name, which a record has as much as a
+class does.
+
+See also the #~"ownership.pdoc".
+
+#----: hold (method)
+
+#~"hold" is a compiler-generated method predefined on all variable names.
+It is #_+"owned and readonly": ownership moves out of the source exactly as
+#~".take" does, and the destination is then frozen -- only #~".view" methods may
+be called on it, and nothing may be written through it.
+
+This is what separates #~".hold" from #~".view". A view does not own, so it
+cannot outlive its source; a hold owns, carries its own destructor, and is
+readonly because it was declared so rather than because it points at someone
+else's value.
+
+Rebinding a hold binding requires another owned value (#~"h = y.hold"); a plain
+#~"h = y" is an error.
+
+See also the #~"ownership.pdoc".
+
+#----: copy (method)
+
+#~"copy" is a duplicate of the receiver, owned by the caller. Valtypes have a
+default #~".copy"; a reftype has none unless its author declares one in the
+#~"as" block, and a valtype's default is struck with #~"copy: null".
+
+#~".copy" is the way to keep a value a call is about to take, and the way to
+return a payload narrowed out of a matched sum type, which is otherwise a
+borrowed view into the subject.
+
+#~".copy" takes no arguments.
+
 #----: lock (method)
 
-#~"lock" is retired as a method spelling as well -- see the
-[#> to=lock: lock] attribute note. The return-pin it used to state is
-#~".takex".
-
+#~"lock" parses as a spelling of #~".borrow". Do not write it in new code; the
+return-pin it once stated is #~".takex".
 
 #----: drop (method)
 
@@ -3586,9 +3636,21 @@ See also the #~"ownership.pdoc".
 ends the variable's lifetime immediately, as if it fell out of scope. The name
 is invalidated after the call and any subsequent use is a compile error.
 
-For owned reftypes, the destructor runs. For borrowed variables, the borrow ends
-and any held locks are released. For owned valtypes, the name is simply
-invalidated (no runtime effect).
+It does two things, in this order:
+
+#ol:
+  [#*: #_+"every lock the variable holds is released" -- the pins a
+    #~".takex" or #~".holdx" result took on the sources it was built from, and
+    the locks a #~".borrow" or #~".view" binding holds on what it reads. Those
+    sources become writable again at once, rather than at the end of the
+    enclosing scope.]
+  [#*: #_+"then, if the variable owns its value, the value is destroyed" --
+    the destructor runs for an owned reftype. An owned valtype has nothing to
+    run, so the name is simply invalidated.]
+
+The first half is why #~".drop" is useful on a binding that owns nothing: a
+#~".view" of a container released early lets the container be written again
+without waiting for the block to end.
 
 #~".drop" is always a statement. It cannot be used as a value expression:
 #~"y: x.drop" is a compile error. Use #~".take" to transfer ownership to a
