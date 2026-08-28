@@ -12,34 +12,57 @@
 
 # a fixed-length inline array of `t` values, length `to`.
 array: record is native as {
+    # the VALUE element type of array. Lowercase says valtype, so a binding of
+    # it COPIES
     t: anyval.generic
+    # the element count this array was created for
     to: u64.generic
 
+    # the element at `i`, unchecked -- the raw array is the runtime's backing
+    # and does no bound test
     get: function {:this i: i64} out t is native
+    # write the element at `i`, unchecked, for the same reason `get` is
     set: function {:this i: i64 item: t} out t is native
+    # how many elements the raw array holds
     length: function {:this} out i64 is native
+    # a raw array of `to` elements, zeroed
     create: function {} out type is native
 }
 
 # a fixed-capacity inline UTF-8 string value, capacity `to`.
 str: record is native as {
     :Text
+    # the byte capacity this raw str was created for
     to: u64.generic
+    # the byte count the raw str currently holds
     length: function {:this} out u64 is native
+    # the raw str's allocated byte capacity, which `length` may be below
     size: function {:this} out u64 is native
+    # an owned String over the raw str's bytes
     string: function {:this} out String is native
+    # a borrowed view over the raw str's bytes
     stringView: function {t: this.view} out StringView.takex is native
+    # a borrowed view over the raw str's bytes in [from, to)
     substring: function {t: this.view from: u64 to: u64} out StringView.takex is native
+    # a raw str with room for `to` bytes
     create: function out type is native
 }
 
 # a growable, heap-backed sequence of reference `T` elements. `List` in
 # core is this template's alias.
 ListRef: class is native as {
+    # the REFERENCE element type of ListRef. Uppercase says reftype, so a
+    # binding of it MOVES
     T: AnyRef.generic
 
+    # append one element to a ListRef; it is TAKEN, so the list owns it and the
+    # caller's binding is spent
     append: function {:this from: T.take} is native
+    # insert one element into a ListRef at `at`, shifting the tail up; it is
+    # TAKEN, so the list owns it and the caller's binding is spent
     insert: function {:this from: T.take at: u64} is native
+    # append every element of another ListRef, which is taken whole rather than
+    # element by element
     extend: function {:this from: type.take} is native
     # the readonly element reference: several may be live at once and none of
     # them can be written through. `getMut` is the mutable twin.
@@ -48,12 +71,23 @@ ListRef: class is native as {
     # excludes every other reference to the container. `get` is the readonly
     # twin (see iterate/iterateMut).
     getMut: function {t: this.borrow i: u64} out T.borrow is native
+    # replace element `i` of a ListRef, handing back the one displaced so its
+    # ownership has somewhere to go
     set: function {:this i: u64 val: T.take} out T is native
+    # remove the last element of a ListRef and hand back its ownership
     pop: function {:this} out T is native
+    # a LINEAR scan of the ListRef for an equal element. A list is ordered, not
+    # hashed, so this walks it -- a Set is the hashed one
     contains: function {t: this.view item: T.view} out bool is native
+    # sort a ListRef in place, ascending by the element type's own ordering
     sort: function {:this} is native
+    # how many elements the ListRef holds
     length: function {t: this.view} out u64 is native
+    # how many elements fit before the ListRef grows again; `create` takes an
+    # initial one
     capacity: function {t: this.view} out u64 is native
+    # a borrowed readonly view over the whole ListRef. It pins the list, so it
+    # must not outlive it
     listView: function {t: this.borrow} out (ListView T).takex is native
     # the readonly walk: a SHARED receiver, so several may run at once and the
     # container stays readable throughout -- and the elements it yields are
@@ -62,6 +96,7 @@ ListRef: class is native as {
     # the mutable walk: an exclusive receiver, so the elements it yields may
     # be written through. `iterate` is the readonly twin (see getMut/get).
     iterateMut: function {t: this.borrow} out (ListIter :T).takex is native
+    # an empty ListRef, reserving `capacity` elements up front when one is given
     create: function {capacity: 0.u64} out type is native
 }
 
@@ -74,10 +109,18 @@ ListRef: class is native as {
 # is still a reference, because a COMPOUND valtype's children are mutated in
 # place through it; whole-element replacement is `set`.
 ListVal: class is native as {
+    # the VALUE element type of ListVal. Lowercase says valtype, so a binding of
+    # it COPIES
     t: anyval.generic
 
+    # append one element to a ListVal; it is COPIED in -- a valtype has no
+    # ownership to transfer
     append: function {:this from: t} is native
+    # insert one element into a ListVal at `at`, shifting the tail up; it is
+    # COPIED in -- a valtype has no ownership to transfer
     insert: function {:this from: t at: u64} is native
+    # append every element of another ListVal, which is taken whole rather than
+    # element by element
     extend: function {:this from: type.take} is native
     # a COPY of the element -- cheap, and it cannot alias. The RECEIVER still
     # says `borrow` because this shares `ListRef.get`'s emitted C, and two
@@ -87,15 +130,32 @@ ListVal: class is native as {
     # the mutable element reference: a COMPOUND valtype's children are mutated
     # in place through it. Whole-element replacement is `set`.
     getMut: function {t: this.borrow i: u64} out t.borrow is native
+    # replace element `i` of a ListVal, handing back the one displaced so its
+    # ownership has somewhere to go
     set: function {:this i: u64 val: t} out t is native
+    # remove the last element of a ListVal and hand back its ownership
     pop: function {:this} out t is native
+    # a LINEAR scan of the ListVal for an equal element. A list is ordered, not
+    # hashed, so this walks it -- a Set is the hashed one
     contains: function {t: this.view item: t} out bool is native
+    # sort a ListVal in place, ascending by the element type's own ordering
     sort: function {:this} is native
+    # how many elements the ListVal holds
     length: function {t: this.view} out u64 is native
+    # how many elements fit before the ListVal grows again; `create` takes an
+    # initial one
     capacity: function {t: this.view} out u64 is native
+    # a borrowed readonly view over the whole ListVal. It pins the list, so it
+    # must not outlive it
     listView: function {t: this.borrow} out (ListViewVal t).takex is native
+    # the readonly walk over a ListVal: a shared receiver, so several may run at
+    # once and the container stays readable throughout. Elements come out BY
+    # VALUE
     iterate: function {t: this.view} out (ListIterVal :t).takex is native
+    # the mutable walk over a ListVal: an exclusive receiver, so a COMPOUND
+    # element's children may be written in place through it
     iterateMut: function {t: this.borrow} out (ListIterVal :t).takex is native
+    # an empty ListVal, reserving `capacity` elements up front when one is given
     create: function {capacity: 0.u64} out type is native
 }
 
@@ -104,7 +164,11 @@ ListVal: class is native as {
 # pointing into the list's storage, or optionview.none when exhausted.
 # See for-loop dispatch (rule 1) and the iterators chapter in the spec.
 ListIter: class is native as {
+    # the REFERENCE element type of ListIter. Uppercase says reftype, so a
+    # binding of it MOVES
     T: AnyRef.generic
+    # the ListIter step: the next item, or none once the walk is exhausted. A
+    # `for` header drives it
     call: function {:this} out (OptionView T) is native
 }
 
@@ -115,16 +179,27 @@ ListIter: class is native as {
 # type therefore emit two structs under ONE name, with different bodies --
 # which typechecks and then fails at gcc with `invalid initializer`.
 ListIterVal: class is native as {
+    # the VALUE element type of ListIterVal. Lowercase says valtype, so a
+    # binding of it COPIES
     t: anyval.generic
+    # the ListIterVal step: the next item, or none once the walk is exhausted. A
+    # `for` header drives it
     call: function {:this} out (OptionView t) is native
 }
 
 # a borrowed window over a List's elements (no ownership).
 ListView: class is native as {
+    # the REFERENCE element type of ListView. Uppercase says reftype, so a
+    # binding of it MOVES
     T: AnyRef.generic
 
+    # the element at `i`, readonly. A ListView borrows its storage and never
+    # owns it
     get: function {t: this.borrow i: u64} out T.view is native
+    # the mutable element reference, which excludes every other reference to the
+    # viewed container
     getMut: function {t: this.borrow i: u64} out T.borrow is native
+    # how many elements the ListView spans
     length: function {t: this.view} out u64 is native
 }
 
@@ -133,10 +208,17 @@ ListView: class is native as {
 # alias -- while `getMut` is a reference, because a COMPOUND valtype's children
 # are mutated in place through it.
 ListViewVal: class is native as {
+    # the VALUE element type of ListViewVal. Lowercase says valtype, so a
+    # binding of it COPIES
     t: anyval.generic
 
+    # the element at `i`, readonly. A ListViewVal borrows its storage and never
+    # owns it
     get: function {t: this.borrow i: u64} out t is native
+    # the mutable element reference, which excludes every other reference to the
+    # viewed container
     getMut: function {t: this.borrow i: u64} out t.borrow is native
+    # how many elements the ListViewVal spans
     length: function {t: this.view} out u64 is native
 }
 
@@ -157,19 +239,35 @@ ByteView: class { val: (ListViewVal u8).typedef }
 
 # a hash map from `K` to `V`.
 MapRR: class is native as {
+    # the REFERENCE key type of MapRR, bounded to RefHashable: a reference key
+    # must define hash and == itself, since hashing the handle would key on
+    # IDENTITY
     K: RefHashable.generic
+    # the REFERENCE value type of MapRR. Uppercase says reftype, so a binding of
+    # it MOVES
     V: AnyRef.generic
 
+    # the value for `key` as a borrowed OptionView into the entry, so it PINS
+    # the MapRR until the view dies
     get: function {:this key: K.view} out (OptionView V) is native
+    # insert or overwrite the entry for `key` in a MapRR; the key is TAKEN
     set: function {:this key: K.take value: V.take} is native
+    # whether `key` has an entry in the MapRR, without producing the value or
+    # taking any lock
     has: function {t: this.view key: K.view} out bool is native
+    # take the entry out of the MapRR and hand back what it held
     remove: function {:this key: K.view} out (Option V) is native
+    # how many live entries the MapRR holds
     length: function {t: this.view} out u64 is native
+    # how many entries fit before the MapRR grows again
     capacity: function {t: this.view} out u64 is native
     # readonly, and with no mutable twin by design: a key is hashed, so writing
     # through one in place would put the entry in the wrong bucket.
     iterate: function {t: this.view} out (MapKeyIter :K :V).takex is native
+    # the key-and-value walk over a MapRR, in insertion order, yielding an entry
+    # with .key and .value
     iterateItems: function {t: this.borrow} out (MapItemIter :K :V).takex is native
+    # an empty MapRR, reserving `capacity` entries up front when one is given
     create: function {capacity: 0.u64} out type is native
 }
 
@@ -182,51 +280,105 @@ MapRR: class is native as {
 # storage and must pin it. `remove` returns an owned `Option` on the reference
 # side and the same `optionval` on the value side.
 MapRV: class is native as {
+    # the REFERENCE key type of MapRV, bounded to RefHashable: a reference key
+    # must define hash and == itself, since hashing the handle would key on
+    # IDENTITY
     K: RefHashable.generic
+    # the VALUE value type of MapRV. Lowercase says valtype, so a binding of it
+    # COPIES
     v: anyval.generic
 
+    # the value for `key` as an optionval -- a COPY, so it takes no lock on the
+    # MapRV at all
     get: function {:this key: K.view} out (optionval v) is native
+    # insert or overwrite the entry for `key` in a MapRV; the key is TAKEN
     set: function {:this key: K.take value: v} is native
+    # whether `key` has an entry in the MapRV, without producing the value or
+    # taking any lock
     has: function {t: this.view key: K.view} out bool is native
+    # take the entry out of the MapRV and hand back what it held
     remove: function {:this key: K.view} out (optionval v) is native
+    # how many live entries the MapRV holds
     length: function {t: this.view} out u64 is native
+    # how many entries fit before the MapRV grows again
     capacity: function {t: this.view} out u64 is native
+    # the KEY walk over a MapRV, in INSERTION order. Readonly with no mutable
+    # twin by design: a key is hashed, so writing through one would strand its
+    # entry in the wrong bucket
     iterate: function {t: this.view} out (MapKeyIterRV :K :v).takex is native
+    # the key-and-value walk over a MapRV, in insertion order, yielding an entry
+    # with .key and .value
     iterateItems: function {t: this.borrow} out (MapItemIterRV :K :v).takex is native
+    # an empty MapRV, reserving `capacity` entries up front when one is given
     create: function {capacity: 0.u64} out type is native
 }
 
 # a hash map from a VALUE-TYPE key to a reference value. There is no `getv`:
 # it exists to look a String key up by view, and a valtype key is never one.
 MapVR: class is native as {
+    # the VALUE key type of MapVR, bounded to valhashable: a valtype IS its
+    # bytes, so the hash can be synthesised from them
     k: valhashable.generic
+    # the REFERENCE value type of MapVR. Uppercase says reftype, so a binding of
+    # it MOVES
     V: AnyRef.generic
 
+    # the value for `key` as a borrowed OptionView into the entry, so it PINS
+    # the MapVR until the view dies
     get: function {:this key: k} out (OptionView V) is native
+    # insert or overwrite the entry for `key` in a MapVR; the key is copied in,
+    # being a valtype
     set: function {:this key: k value: V.take} is native
+    # whether `key` has an entry in the MapVR, without producing the value or
+    # taking any lock
     has: function {t: this.view key: k} out bool is native
+    # take the entry out of the MapVR and hand back what it held
     remove: function {:this key: k} out (Option V) is native
+    # how many live entries the MapVR holds
     length: function {t: this.view} out u64 is native
+    # how many entries fit before the MapVR grows again
     capacity: function {t: this.view} out u64 is native
+    # the KEY walk over a MapVR, in insertion order. Readonly for the reason
+    # MapRV's is -- a key that changed would belong in another bucket
     iterate: function {t: this.view} out (MapKeyIterVR :k :V).takex is native
+    # the key-and-value walk over a MapVR, in insertion order, yielding an entry
+    # with .key and .value
     iterateItems: function {t: this.borrow} out (MapItemIterVR :k :V).takex is native
+    # an empty MapVR, reserving `capacity` entries up front when one is given
     create: function {capacity: 0.u64} out type is native
 }
 
 # a hash map from a VALUE-TYPE key to a VALUE-TYPE value. Nothing here is
 # taken, viewed or locked: both halves are copies.
 MapVV: class is native as {
+    # the VALUE key type of MapVV, bounded to valhashable: a valtype IS its
+    # bytes, so the hash can be synthesised from them
     k: valhashable.generic
+    # the VALUE value type of MapVV. Lowercase says valtype, so a binding of it
+    # COPIES
     v: anyval.generic
 
+    # the value for `key` as an optionval -- a COPY, so it takes no lock on the
+    # MapVV at all
     get: function {:this key: k} out (optionval v) is native
+    # insert or overwrite the entry for `key` in a MapVV; the key is copied in,
+    # being a valtype
     set: function {:this key: k value: v} is native
+    # whether `key` has an entry in the MapVV, without producing the value or
+    # taking any lock
     has: function {t: this.view key: k} out bool is native
+    # take the entry out of the MapVV and hand back what it held
     remove: function {:this key: k} out (optionval v) is native
+    # how many live entries the MapVV holds
     length: function {t: this.view} out u64 is native
+    # how many entries fit before the MapVV grows again
     capacity: function {t: this.view} out u64 is native
+    # the KEY walk over a MapVV, in insertion order, yielding each key by value
     iterate: function {t: this.view} out (MapKeyIterVV :k :v).takex is native
+    # the key-and-value walk over a MapVV, in insertion order, yielding an entry
+    # with .key and .value
     iterateItems: function {t: this.borrow} out (MapItemIterVV :k :v).takex is native
+    # an empty MapVV, reserving `capacity` entries up front when one is given
     create: function {capacity: 0.u64} out type is native
 }
 
@@ -237,8 +389,15 @@ MapVV: class is native as {
 # by resize (tombstones are skipped, then reclaimed). Pair with .iterateItems
 # for paired key+value views via mapentry.
 MapKeyIter: class is native as {
+    # the REFERENCE key type of MapKeyIter, bounded to RefHashable: a reference
+    # key must define hash and == itself, since hashing the handle would key on
+    # IDENTITY
     K: AnyRef.generic
+    # the REFERENCE value type of MapKeyIter. Uppercase says reftype, so a
+    # binding of it MOVES
     V: AnyRef.generic
+    # the MapKeyIter step: the next item, or none once the walk is exhausted. A
+    # `for` header drives it
     call: function {:this} out (OptionView K) is native
 }
 
@@ -249,35 +408,68 @@ MapKeyIter: class is native as {
 # plain name, as the `Map` alias does for `MapRR`. The value parameter never appears in a
 # signature; it keeps the mono name unique per Map mono.
 MapKeyIterRV: class is native as {
+    # the REFERENCE key type of MapKeyIterRV, bounded to RefHashable: a
+    # reference key must define hash and == itself, since hashing the handle
+    # would key on IDENTITY
     K: AnyRef.generic
+    # the VALUE value type of MapKeyIterRV. Lowercase says valtype, so a binding
+    # of it COPIES
     v: anyval.generic
+    # the MapKeyIterRV step: the next item, or none once the walk is exhausted.
+    # A `for` header drives it
     call: function {:this} out (OptionView K) is native
 }
 
+# the key iterator over a MapVR -- a value key beside a reference value. See
+# MapKeyIterRV for why the family has four forms rather than one
 MapKeyIterVR: class is native as {
+    # the VALUE key type of MapKeyIterVR, bounded to valhashable: a valtype IS
+    # its bytes, so the hash can be synthesised from them
     k: anyval.generic
+    # the REFERENCE value type of MapKeyIterVR. Uppercase says reftype, so a
+    # binding of it MOVES
     V: AnyRef.generic
+    # the MapKeyIterVR step: the next item, or none once the walk is exhausted.
+    # A `for` header drives it
     call: function {:this} out (OptionView k) is native
 }
 
+# the key iterator over a MapVV, both halves value types. See MapKeyIterRV
+# for why the family has four forms
 MapKeyIterVV: class is native as {
+    # the VALUE key type of MapKeyIterVV, bounded to valhashable: a valtype IS
+    # its bytes, so the hash can be synthesised from them
     k: anyval.generic
+    # the VALUE value type of MapKeyIterVV. Lowercase says valtype, so a binding
+    # of it COPIES
     v: anyval.generic
+    # the MapKeyIterVV step: the next item, or none once the walk is exhausted.
+    # A `for` header drives it
     call: function {:this} out (OptionView k) is native
 }
 
 # a hash set of unique reference `K` elements. `Set` in core is this
 # template's alias.
 SetRef: class is native as {
+    # the REFERENCE element type of SetRef. Uppercase says reftype, so a binding
+    # of it MOVES
     K: RefHashable.generic
 
+    # add one element to a SetRef; it is TAKEN, and adding one already present
+    # changes nothing
     add: function {:this item: K.take} out bool is native
+    # membership in the SetRef, by hash rather than by scan
     has: function {t: this.view item: K.view} out bool is native
+    # remove one element from a SetRef; removing one that is absent changes
+    # nothing
     delete: function {:this item: K.view} out bool is native
+    # how many elements the SetRef holds
     length: function {t: this.view} out u64 is native
+    # how many elements fit before the SetRef grows again
     capacity: function {t: this.view} out u64 is native
     # readonly, and with no mutable twin: an item IS the key here (see Map).
     iterate: function {t: this.view} out (SetIter :K).takex is native
+    # an empty SetRef, reserving `capacity` elements up front when one is given
     create: function {capacity: 0.u64} out type is native
 }
 
@@ -289,14 +481,26 @@ SetRef: class is native as {
 # to point at. Element membership is otherwise identical -- both families hash
 # the element and compare it, and both share one emitted C.
 SetVal: class is native as {
+    # the VALUE element type of SetVal. Lowercase says valtype, so a binding of
+    # it COPIES
     k: valhashable.generic
 
+    # add one element to a SetVal; it is copied in, being a valtype, and adding
+    # one already present changes nothing
     add: function {:this item: k} out bool is native
+    # membership in the SetVal, by hash rather than by scan
     has: function {t: this.view item: k} out bool is native
+    # remove one element from a SetVal; removing one that is absent changes
+    # nothing
     delete: function {:this item: k} out bool is native
+    # how many elements the SetVal holds
     length: function {t: this.view} out u64 is native
+    # how many elements fit before the SetVal grows again
     capacity: function {t: this.view} out u64 is native
+    # the walk over a SetVal, in INSERTION order -- stable across runs whatever
+    # the hash seed
     iterate: function {t: this.view} out (SetIterVal :k).takex is native
+    # an empty SetVal, reserving `capacity` elements up front when one is given
     create: function {capacity: 0.u64} out type is native
 }
 
@@ -305,7 +509,12 @@ SetVal: class is native as {
 # INSERTION-order guarantee as MapKeyIter (a set is a map without the value
 # column).
 SetIter: class is native as {
+    # the REFERENCE key type of SetIter, bounded to RefHashable: a reference key
+    # must define hash and == itself, since hashing the handle would key on
+    # IDENTITY
     K: AnyRef.generic
+    # the SetIter step: the next item, or none once the walk is exhausted. A
+    # `for` header drives it
     call: function {:this} out (OptionView K) is native
 }
 
@@ -316,7 +525,11 @@ SetIter: class is native as {
 # structs under ONE name with different bodies -- which typechecks and then
 # fails at gcc with `invalid initializer`.
 SetIterVal: class is native as {
+    # the VALUE key type of SetIterVal, bounded to valhashable: a valtype IS its
+    # bytes, so the hash can be synthesised from them
     k: anyval.generic
+    # the SetIterVal step: the next item, or none once the walk is exhausted. A
+    # `for` header drives it
     call: function {:this} out (OptionView k) is native
 }
 
@@ -324,28 +537,57 @@ SetIterVal: class is native as {
 # live entry, in INSERTION order (see MapKeyIter); the entry presents .key and
 # .value as borrowed views via the mapentry projection.
 MapItemIter: class is native as {
+    # the REFERENCE key type of MapItemIter, bounded to RefHashable: a reference
+    # key must define hash and == itself, since hashing the handle would key on
+    # IDENTITY
     K: AnyRef.generic
+    # the REFERENCE value type of MapItemIter. Uppercase says reftype, so a
+    # binding of it MOVES
     V: AnyRef.generic
+    # the MapItemIter step: the next item, or none once the walk is exhausted. A
+    # `for` header drives it
     call: function {:this} out (OptionView (MapEntry :K :V)) is native
 }
 
 # The family forms of the item iterator: each yields entries of its own
 # MapEntry form (see MapKeyIterRV for why the forms exist at all).
 MapItemIterRV: class is native as {
+    # the REFERENCE key type of MapItemIterRV, bounded to RefHashable: a
+    # reference key must define hash and == itself, since hashing the handle
+    # would key on IDENTITY
     K: AnyRef.generic
+    # the VALUE value type of MapItemIterRV. Lowercase says valtype, so a
+    # binding of it COPIES
     v: anyval.generic
+    # the MapItemIterRV step: the next item, or none once the walk is exhausted.
+    # A `for` header drives it
     call: function {:this} out (OptionView (MapEntryRV :K :v)) is native
 }
 
+# the item iterator over a MapVR, yielding MapEntryVR (see MapKeyIterRV for
+# why the forms exist at all)
 MapItemIterVR: class is native as {
+    # the VALUE key type of MapItemIterVR, bounded to valhashable: a valtype IS
+    # its bytes, so the hash can be synthesised from them
     k: anyval.generic
+    # the REFERENCE value type of MapItemIterVR. Uppercase says reftype, so a
+    # binding of it MOVES
     V: AnyRef.generic
+    # the MapItemIterVR step: the next item, or none once the walk is exhausted.
+    # A `for` header drives it
     call: function {:this} out (OptionView (MapEntryVR :k :V)) is native
 }
 
+# the item iterator over a MapVV, yielding MapEntryVV
 MapItemIterVV: class is native as {
+    # the VALUE key type of MapItemIterVV, bounded to valhashable: a valtype IS
+    # its bytes, so the hash can be synthesised from them
     k: anyval.generic
+    # the VALUE value type of MapItemIterVV. Lowercase says valtype, so a
+    # binding of it COPIES
     v: anyval.generic
+    # the MapItemIterVV step: the next item, or none once the walk is exhausted.
+    # A `for` header drives it
     call: function {:this} out (OptionView (MapEntryVV :k :v)) is native
 }
 
@@ -354,35 +596,65 @@ MapItemIterVV: class is native as {
 # pointer at known offsets. The entry''s liveness and hash fields are physically
 # present but not addressable from zerolang.
 MapEntry: class is native as {
+    # the REFERENCE key type of MapEntry, bounded to RefHashable: a reference
+    # key must define hash and == itself, since hashing the handle would key on
+    # IDENTITY
     K: AnyRef.generic
+    # the REFERENCE value type of MapEntry. Uppercase says reftype, so a binding
+    # of it MOVES
     V: AnyRef.generic
 
+    # the entry's key, as MapEntry presents it to a walk
     key: function {t: this.view} out K.view is native
+    # the entry's value, as MapEntry presents it to a walk
     value: function {t: this.view} out V.view is native
 }
 
 # The family forms of the entry projection (see MapKeyIterRV for why).
 MapEntryRV: class is native as {
+    # the REFERENCE key type of MapEntryRV, bounded to RefHashable: a reference
+    # key must define hash and == itself, since hashing the handle would key on
+    # IDENTITY
     K: AnyRef.generic
+    # the VALUE value type of MapEntryRV. Lowercase says valtype, so a binding
+    # of it COPIES
     v: anyval.generic
 
+    # the entry's key, as MapEntryRV presents it to a walk
     key: function {t: this.view} out K.view is native
+    # the entry's value, as MapEntryRV presents it to a walk
     value: function {t: this.view} out v is native
 }
 
+# the entry projection of a MapVR: a value key beside a borrowed reference
+# value
 MapEntryVR: class is native as {
+    # the VALUE key type of MapEntryVR, bounded to valhashable: a valtype IS its
+    # bytes, so the hash can be synthesised from them
     k: anyval.generic
+    # the REFERENCE value type of MapEntryVR. Uppercase says reftype, so a
+    # binding of it MOVES
     V: AnyRef.generic
 
+    # the entry's key, as MapEntryVR presents it to a walk
     key: function {t: this.view} out k is native
+    # the entry's value, as MapEntryVR presents it to a walk
     value: function {t: this.view} out V.view is native
 }
 
+# the entry projection of a MapVV, where both halves are copies and neither
+# pins the map
 MapEntryVV: class is native as {
+    # the VALUE key type of MapEntryVV, bounded to valhashable: a valtype IS its
+    # bytes, so the hash can be synthesised from them
     k: anyval.generic
+    # the VALUE value type of MapEntryVV. Lowercase says valtype, so a binding
+    # of it COPIES
     v: anyval.generic
 
+    # the entry's key, as MapEntryVV presents it to a walk
     key: function {t: this.view} out k is native
+    # the entry's value, as MapEntryVV presents it to a walk
     value: function {t: this.view} out v is native
 }
 
@@ -406,10 +678,16 @@ MapEntryVV: class is native as {
 
 # an IdMap from an unsigned scalar id to a REFERENCE value.
 IdMapR: class is native as {
+    # the key type, bounded to `idkey`: an unsigned scalar, because only those
+    # bits ARE an index. That bound is what IdMapR trades a hash for
     k: idkey.generic
+    # the REFERENCE value type of IdMapR. Uppercase says reftype, so a binding
+    # of it MOVES
     V: AnyRef.generic
 
+    # the value for `key` as a borrowed OptionView, pinning the IdMapR
     get: function {t: this.view key: k} out (OptionView V) is native
+    # insert or overwrite the entry for the scalar `key` in an IdMapR
     set: function {:this key: k value: V.take} is native
     # the mutable twin of `get`, and the reason a Map has none: a Map's slot
     # depends on a hash OF the key, so writing through a view would strand the
@@ -418,6 +696,7 @@ IdMapR: class is native as {
     # family: `get` there copies out, so an update needs `set`; through this
     # the entry is written in place.
     getMut: function {t: this.borrow key: k} out (OptionView V) is native
+    # whether the scalar `key` has an entry in the IdMapR
     has: function {t: this.view key: k} out bool is native
     # positional reads over the dense, insertion-ordered entries. Position is a
     # coordinate here in a way it is not in a Map, and an ordered walk whose
@@ -425,20 +704,35 @@ IdMapR: class is native as {
     # itself. `keyAt` answers a bare id (0 past the end) because the `idkey`
     # bound makes a key a scalar; `valueAt` answers what `get` answers.
     keyAt: function {t: this.view i: u64} out k is native
+    # the value at POSITION `i`, answering what `get` answers. Positional
+    # because an ordered walk whose body must reach the container's owner cannot
+    # hold an iterator across itself
     valueAt: function {t: this.view i: u64} out (OptionView V) is native
+    # how many live entries the IdMapR holds
     length: function {t: this.view} out u64 is native
+    # how many entries fit before the IdMapR grows again
     capacity: function {t: this.view} out u64 is native
+    # the entry walk over an IdMapR, in insertion order over the dense entry
+    # array
     iterateItems: function {t: this.view} out (IdMapItemIterR :k :V).takex is native
+    # an empty IdMapR. The struct lives on the stack, so an empty one costs no
+    # allocation at all
     create: function {capacity: 0.u64} out type is native
 }
 
 # an IdMap from an unsigned scalar id to a VALUE-TYPE value. Nothing here is
 # taken, viewed or locked: the key is a scalar and the value is a copy.
 IdMapV: class is native as {
+    # the key type, bounded to `idkey`: an unsigned scalar, because only those
+    # bits ARE an index. That bound is what IdMapV trades a hash for
     k: idkey.generic
+    # the VALUE value type of IdMapV. Lowercase says valtype, so a binding of it
+    # COPIES
     v: anyval.generic
 
+    # the value for `key` as an optionval -- a copy, so nothing is pinned
     get: function {t: this.view key: k} out (optionval v) is native
+    # insert or overwrite the entry for the scalar `key` in an IdMapV
     set: function {:this key: k value: v} is native
     # the mutable twin of `get`, and the reason a Map has none: a Map's slot
     # depends on a hash OF the key, so writing through a view would strand the
@@ -447,30 +741,46 @@ IdMapV: class is native as {
     # family: `get` there copies out, so an update needs `set`; through this
     # the entry is written in place.
     getMut: function {t: this.borrow key: k} out (OptionView v) is native
+    # whether the scalar `key` has an entry in the IdMapV
     has: function {t: this.view key: k} out bool is native
     # the positional pair, as IdMapR declares them; only `valueAt`'s return
     # differs, exactly as `get`'s does.
     keyAt: function {t: this.view i: u64} out k is native
+    # the value at POSITION `i` as an optionval, so an IdMapV walk pins nothing
+    # while its body runs
     valueAt: function {t: this.view i: u64} out (optionval v) is native
+    # how many live entries the IdMapV holds
     length: function {t: this.view} out u64 is native
+    # how many entries fit before the IdMapV grows again
     capacity: function {t: this.view} out u64 is native
+    # the entry walk over an IdMapV, in insertion order over the dense entry
+    # array
     iterateItems: function {t: this.view} out (IdMapItemIterV :k :v).takex is native
+    # an empty IdMapV. The struct lives on the stack, so an empty one costs no
+    # allocation at all
     create: function {capacity: 0.u64} out type is native
 }
 
 # a set of unique unsigned scalar ids. One form only: an id is a valtype, so
 # the reference/value split the Set family carries has nothing to divide here.
 IdSet: class is native as {
+    # the key type, bounded to `idkey`: an unsigned scalar, because only those
+    # bits ARE an index. That bound is what IdSet trades a hash for
     k: idkey.generic
 
+    # add one scalar id to an IdSet; adding one already present changes nothing
     add: function {:this item: k} out bool is native
+    # membership in the IdSet, indexed by the id's own bits
     has: function {t: this.view item: k} out bool is native
+    # how many ids the IdSet holds
     length: function {t: this.view} out u64 is native
+    # how many ids fit before the IdSet grows again
     capacity: function {t: this.view} out u64 is native
     # readonly, and with no mutable twin: an item IS the key here (see Map).
     # INSERTION order, and unlike a Map's this one cannot be perforated --
     # nothing is ever removed, so the dense array IS the iteration.
     iterate: function {t: this.view} out (IdSetIter :k).takex is native
+    # an empty IdSet, costing no allocation until something is added
     create: function {capacity: 0.u64} out type is native
 }
 
@@ -480,30 +790,60 @@ IdSet: class is native as {
 # `anyval` and not `idkey` for the reason IdSetIter's is -- the container has
 # already satisfied it, and asserting it twice reports one mistake as two.
 IdMapItemIterR: class is native as {
+    # the key type, bounded to `idkey`: an unsigned scalar, because only those
+    # bits ARE an index. That bound is what IdMapItemIterR trades a hash for
     k: anyval.generic
+    # the REFERENCE value type of IdMapItemIterR. Uppercase says reftype, so a
+    # binding of it MOVES
     V: AnyRef.generic
+    # the IdMapItemIterR step: the next item, or none once the walk is
+    # exhausted. A `for` header drives it
     call: function {:this} out (OptionView (IdMapEntryR :k :V)) is native
 }
 
+# the item iterator over an IdMapV, yielding IdMapEntryV -- the value-side
+# form of the two IdMapItemIterR describes
 IdMapItemIterV: class is native as {
+    # the key type, bounded to `idkey`: an unsigned scalar, because only those
+    # bits ARE an index. That bound is what IdMapItemIterV trades a hash for
     k: anyval.generic
+    # the VALUE value type of IdMapItemIterV. Lowercase says valtype, so a
+    # binding of it COPIES
     v: anyval.generic
+    # the IdMapItemIterV step: the next item, or none once the walk is
+    # exhausted. A `for` header drives it
     call: function {:this} out (OptionView (IdMapEntryV :k :v)) is native
 }
 
+# the entry an IdMapR walk projects: the scalar id beside a borrowed view of
+# the value
 IdMapEntryR: class is native as {
+    # the key type, bounded to `idkey`: an unsigned scalar, because only those
+    # bits ARE an index. That bound is what IdMapEntryR trades a hash for
     k: anyval.generic
+    # the REFERENCE value type of IdMapEntryR. Uppercase says reftype, so a
+    # binding of it MOVES
     V: AnyRef.generic
 
+    # the entry's key, as IdMapEntryR presents it to a walk
     key: function {t: this.view} out k is native
+    # the entry's value, as IdMapEntryR presents it to a walk
     value: function {t: this.view} out V.view is native
 }
 
+# the entry an IdMapV walk projects: the scalar id beside a copy of the
+# value, so it pins nothing
 IdMapEntryV: class is native as {
+    # the key type, bounded to `idkey`: an unsigned scalar, because only those
+    # bits ARE an index. That bound is what IdMapEntryV trades a hash for
     k: anyval.generic
+    # the VALUE value type of IdMapEntryV. Lowercase says valtype, so a binding
+    # of it COPIES
     v: anyval.generic
 
+    # the entry's key, as IdMapEntryV presents it to a walk
     key: function {t: this.view} out k is native
+    # the entry's value, as IdMapEntryV presents it to a walk
     value: function {t: this.view} out v is native
 }
 
@@ -512,7 +852,11 @@ IdMapEntryV: class is native as {
 # struct after `iterate`'s DECLARED return, so two containers declaring one
 # iterator type emit two bodies under a single name.
 IdSetIter: class is native as {
+    # the VALUE key type of IdSetIter, bounded to valhashable: a valtype IS its
+    # bytes, so the hash can be synthesised from them
     k: anyval.generic
+    # the IdSetIter step: the next item, or none once the walk is exhausted. A
+    # `for` header drives it
     call: function {:this} out (OptionView k) is native
 }
 
@@ -531,6 +875,10 @@ IdSetIter: class is native as {
 # and zerolang does not yet support monomorphization-specific
 # methods. Re-exported by core.z as `stringJoin`.
 stringJoin: function as { T: StringLike.generic } in {
+    # the strings joined, in order; an empty list gives an empty result and one
+    # element gives itself
     parts: (ListRef String)
+    # placed BETWEEN elements, so n of them take n-1 separators and none is
+    # added at either end
     sep: T
 } out String is native
