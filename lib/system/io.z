@@ -1,7 +1,7 @@
 # io
 
-# ioerror -- union covering the failure cases an I/O operation may
-# return. Returned via `result.create from: T, e: ioerror` from any
+# IoError -- union covering the failure cases an I/O operation may
+# return. Returned via `result.create from: T, e: IoError` from any
 # fallible io function. Constructed by the compiler runtime from the
 # underlying syscall errno; user code typically pattern-matches the
 # specific variant it cares about and treats the rest as `other`.
@@ -36,8 +36,8 @@ print: function as { T: StringLike.generic } in { msg: T } is native
 # error-reporting writes.
 eprintln: function as { T: StringLike.generic } in {msg: T} is native
 
-# read_text -- read an entire file at `path` into a heap-allocated
-# UTF-8 string. Returns the content on success, or an ioerror describing
+# readText -- read an entire file at `path` into a heap-allocated
+# UTF-8 string. Returns the content on success, or an IoError describing
 # the failure (file missing, permission denied, I/O error, etc.).
 #
 # Content is read as bytes; no encoding validation is performed in
@@ -48,8 +48,8 @@ readText: function as { T: StringLike.generic } in {path: T} out (Result
     E: IoError
 ) is native
 
-# write_text -- create (or truncate) the file at `path` and write
-# `content`. Returns `ok null` on success or `err ioerror` on failure
+# writeText -- create (or truncate) the file at `path` and write
+# `content`. Returns `ok null` on success or `err IoError` on failure
 # (permission denied, out of space, etc.). Creates intermediate
 # directories: NO — the parent directory must already exist.
 writeText: function as { T: StringLike.generic U: StringLike.generic } in {
@@ -57,7 +57,7 @@ writeText: function as { T: StringLike.generic U: StringLike.generic } in {
     content: U
 } out (Result null E: IoError) is native
 
-# append_text -- open (or create) the file at `path` and append
+# appendText -- open (or create) the file at `path` and append
 # `content` to the end. Atomicity is not guaranteed across multiple
 # processes; use OS-level locks for that.
 appendText: function as { T: StringLike.generic U: StringLike.generic } in {
@@ -66,25 +66,25 @@ appendText: function as { T: StringLike.generic U: StringLike.generic } in {
 } out (Result null E: IoError) is native
 
 # exists -- returns true if something exists at `path` (file, directory,
-# anything the OS can `stat`). No ioerror: a permission-denied on the
+# anything the OS can `stat`). No IoError: a permission-denied on the
 # parent also surfaces as false. If you need to distinguish missing
 # from permission-denied, use `stat`.
 exists: function as { T: StringLike.generic } in {path: T} out bool is native
 
 # mkdir -- create a directory at `path` with default permissions (0755).
-# Fails with ioerror.exists if the target already exists, and with
-# ioerror.notfound if the parent directory is missing. To create
+# Fails with IoError.exists if the target already exists, and with
+# IoError.notfound if the parent directory is missing. To create
 # intermediates (mkdir -p), use io.mkdirp below.
 mkdir: function as { T: StringLike.generic } in {path: T} out (Result null E: IoError) is native
 
 # mkdirp -- create `path` and every missing parent directory along
 # the way (like `mkdir -p`). Permissions 0755 on each new directory.
 # Succeeds silently if `path` already exists as a directory; fails
-# with ioerror.exists if it exists as a file.
+# with IoError.exists if it exists as a file.
 mkdirp: function as { T: StringLike.generic } in {path: T} out (Result null E: IoError) is native
 
 # remove -- delete a file or an empty directory at `path`. For
-# non-empty directories this fails with ioerror.other (ENOTEMPTY).
+# non-empty directories this fails with IoError.other (ENOTEMPTY).
 remove: function as { T: StringLike.generic } in {path: T} out (Result null E: IoError) is native
 
 # removeTree -- best-effort recursive delete of the tree at `path`.
@@ -116,7 +116,7 @@ removeTree: function {path: StringView} is {
 
 # rename -- move the entity at `from` to `to`. If `to` already exists,
 # POSIX replaces it (file overwrites file, directory overwrites empty
-# directory, otherwise ioerror). Atomic on the same filesystem.
+# directory, otherwise IoError). Atomic on the same filesystem.
 rename: function as { T: StringLike.generic U: StringLike.generic } in {
     from: T
     to: U
@@ -157,14 +157,14 @@ filestat: record {
 
 # stat -- return metadata for `path`. Follows symlinks; use
 # `io.lstat` to inspect the link itself. Errors surface in the
-# standard ioerror shape (notfound, permissiondenied, ...).
+# standard IoError shape (notfound, permissiondenied, ...).
 stat: function as { T: StringLike.generic } in {path: T} out (Result
     (Box filestat)
     E: IoError
 ) is native
 
 # lstat -- like `stat`, but does not follow symlinks. On a symbolic
-# link, `kind` is `symlink` and `size` / `mtime_seconds` / `mode`
+# link, `kind` is `symlink` and `size` / `mtimeSeconds` / `mode`
 # describe the link itself rather than its target.
 lstat: function as { T: StringLike.generic } in {path: T} out (Result
     (Box filestat)
@@ -189,10 +189,10 @@ symlink: function as { T: StringLike.generic U: StringLike.generic } in {
     link: U
 } out (Result null E: IoError) is native
 
-# list_dir -- enumerate the entries of directory `path`. Returns the
+# listDir -- enumerate the entries of directory `path`. Returns the
 # bare entry names (not full paths), excluding `.` and `..`, in the
 # order `readdir(2)` produces them (filesystem order; no sort).
-# Errors surface in the standard ioerror shape: `notfound` when the
+# Errors surface in the standard IoError shape: `notfound` when the
 # path doesn't exist, `notdir` when it exists but isn't a directory,
 # `permissiondenied` when the process can't read it, etc.
 listDir: function as { T: StringLike.generic } in {path: T} out (Result
@@ -214,14 +214,14 @@ seekorigin: variant {
 #
 # `reader.read into: buf max: n`
 #   Reads up to `n` bytes into `buf`. Returns the number of bytes
-#   actually read (0 indicates EOF) or an ioerror.
+#   actually read (0 indicates EOF) or an IoError.
 Reader: protocol {
     read: function {:this into: Bytes max: u64} out (Result (Box u64) E: IoError)
 }
 
 # `writer.write from: bv`
 #   Writes the byteView's bytes. Returns count actually written
-#   (may be less than the input length) or an ioerror.
+#   (may be less than the input length) or an IoError.
 # `writer.flush`
 #   Forces buffered output to its final destination.
 Writer: protocol {
@@ -240,7 +240,7 @@ Closer: protocol {
 
 # `seeker.seek to: offset from: origin`
 #   Reposition the read/write head. Returns the new absolute position
-#   from the start of the resource, or an ioerror.
+#   from the start of the resource, or an IoError.
 Seeker: protocol {
     seek: function {:this to: i64 from: seekorigin} out (Result (Box u64) E: IoError)
 }
@@ -364,7 +364,7 @@ BufReader: class {
 
 # `textwriter` -- string-oriented adapter over a `bufwriter`. Writes
 # go through the buffered sink so callers benefit from batched
-# syscalls. `write` emits the stringView's bytes; `write_line`
+# syscalls. `write` emits the stringView's bytes; `writeLine`
 # appends a `\n` (LF) after the stringView. UTF-8 is the assumed
 # encoding -- the wrapper does not validate on write (input
 # stringviews are already known-good UTF-8 from the zerolang string
@@ -395,13 +395,13 @@ TextWriter: class {
 # are pulled through the buffered source; line boundaries are tracked
 # by scanning the accumulated `buf` for LF (`\n`). UTF-8 validation
 # runs on each complete line before it is surfaced as a `string`;
-# invalid sequences surface as `ioerror.badencoding`.
+# invalid sequences surface as `IoError.badencoding`.
 #
 # Holds a borrow on `source` via `bufreader.lock`, so the buffered
 # wrapper cannot be read, mutated, or re-borrowed while the
 # textreader is alive.
 #
-# `read_line` semantics:
+# `readLine` semantics:
 #
 #   - ok(s)       -- one line read; the trailing LF is stripped.
 #                    An empty `s` corresponds to a bare LF in the
@@ -419,9 +419,9 @@ TextReader: class {
     readLine: function {:this} out (Result String E: IoError) is native
     # `call` makes textreader directly iterable: `for line: tr loop { ... }`
     # yields each line (LF stripped) until the stream drains. Every
-    # non-ok `read_line` result -- including `badencoding` and any I/O
+    # non-ok `readLine` result -- including `badencoding` and any I/O
     # failure -- collapses to `option.none` and terminates the loop
     # silently; callers who need to distinguish the error cause must
-    # call `read_line` directly rather than iterate.
+    # call `readLine` directly rather than iterate.
     call: function {:this} out (Option String) is native
 }

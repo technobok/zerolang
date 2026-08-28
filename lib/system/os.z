@@ -1,7 +1,7 @@
 # os -- process-level primitives. Paired with `io` for file/stream
-# operations; where `io` surfaces failures as `result(T, ioerror)`,
+# operations; where `io` surfaces failures as `result(T, IoError)`,
 # `os` primitives are either infallible (exit) or use `optionval`
-# when the value may simply be absent (get_env).
+# when the value may simply be absent (env).
 
 # args -- program argument vector as passed to `main`. Position 0 is
 # the program name (as the kernel / shell provided it); subsequent
@@ -10,29 +10,29 @@
 # inside, so scope exit frees both.
 args: function out (List String) is native
 
-# get_env -- look up environment variable `key`. Returns
+# env -- look up environment variable `key`. Returns
 # `optionval.some value` when the variable is set (even to the empty
 # string); `optionval.none` when the variable is not present in the
-# current environment. Missing-env is not modeled as an ioerror
+# current environment. Missing-env is not modeled as an IoError
 # because it's an expected everyday condition, not a failure.
 env: function {key: StringView} out (Option String) is native
 
-# set_env -- insert or overwrite an environment variable in the
-# current process. Returns `ok null` on success; `err ioerror` when
+# setEnv -- insert or overwrite an environment variable in the
+# current process. Returns `ok null` on success; `err IoError` when
 # libc refuses the call (invalid name, out of memory). Reuses the
-# `io.ioerror` surface because the underlying errno domain is the
+# `io.IoError` surface because the underlying errno domain is the
 # same and callers often interleave env mutation with file I/O.
 setEnv: function {key: StringView value: StringView} out (Result null E: IoError) is native
 
-# unset_env -- remove `key` from the environment. Succeeds (`ok null`)
+# unsetEnv -- remove `key` from the environment. Succeeds (`ok null`)
 # whether or not `key` was previously set; errors only on an invalid
-# key name (EINVAL surfaces as `ioerror.other`).
+# key name (EINVAL surfaces as `IoError.other`).
 unsetEnv: function {key: StringView} out (Result null E: IoError) is native
 
-# env_names -- snapshot of every environment variable name in the
+# envNames -- snapshot of every environment variable name in the
 # current process, in `environ` order. The returned list and each of
 # its entries are freshly-allocated; scope exit frees both. Callers
-# typically iterate and use `get_env` to fetch each value; omitting
+# typically iterate and use `env` to fetch each value; omitting
 # values from the snapshot avoids an O(n) string copy for callers
 # that filter first.
 envNames: function out (List String) is native
@@ -47,12 +47,12 @@ cwd: function out (Result String E: IoError) is native
 # locate its own install tree. Errors only if reading the link fails.
 exePath: function out (Result String E: IoError) is native
 
-# set_cwd -- chdir to `path`. Affects subsequent relative-path io
-# calls. Fails with the usual ioerror variants (notfound, notdir,
+# setCwd -- chdir to `path`. Affects subsequent relative-path io
+# calls. Fails with the usual IoError variants (notfound, notdir,
 # permissiondenied).
 setCwd: function {path: StringView} out (Result null E: IoError) is native
 
-# cpu_count -- online processors. For sizing a worker pool: a harness that
+# cpuCount -- online processors. For sizing a worker pool: a harness that
 # hardcodes a width is right on one machine and wrong everywhere else. Never
 # returns less than 1, so a caller can divide by it; a host that cannot answer
 # reads as 1, which means "run serially" rather than "run zero jobs".
@@ -71,14 +71,14 @@ monotonicMillis: function out i64 is native
 
 # spawn -- fork/exec `argv` as a child process; `argv[0]` is resolved
 # via PATH (execvp). The child's stdin is /dev/null; its stdout goes to
-# `out_path` and stderr to `err_path` (each opened O_WRONLY|O_CREAT|
+# `outPath` and stderr to `errPath` (each opened O_WRONLY|O_CREAT|
 # O_TRUNC -- pass "/dev/null" to discard a stream). A non-empty `cwd`
 # chdirs the child. The redirection files are opened in the parent
 # before fork, so the child's chdir cannot change their resolution.
 # Returns the child's exit status; 127 if exec or any setup step failed;
-# 124 if it timed out. `timeout_secs` > 0 kills the child (SIGKILL) after
+# 124 if it timed out. `timeoutSecs` > 0 kills the child (SIGKILL) after
 # that many seconds; 0 waits indefinitely. Read captured output back with
-# `io.read_text`; set the child's environment via `os.set_env` beforehand
+# `io.readText`; set the child's environment via `os.setEnv` beforehand
 # (it is inherited).
 spawn: function {
     argv: (List String)
@@ -117,13 +117,13 @@ kill: function {pid: i32} is native
 # sleepMillis -- suspend the calling process for `ms` milliseconds.
 sleepMillis: function {ms: i64} is native
 
-# user_name -- login name of the effective user, resolved via the
+# userName -- login name of the effective user, resolved via the
 # passwd database (getpwuid_r(geteuid())). Errors when the uid has
 # no passwd entry or the database is unreadable.
 userName: function out (Result String E: IoError) is native
 
-# home_dir -- the effective user's home directory. Reads $HOME from
-# the environment; errors with `ioerror.other` when it is unset.
+# homeDir -- the effective user's home directory. Reads $HOME from
+# the environment; errors with `IoError.other` when it is unset.
 # Does not fall back to the passwd database — set $HOME explicitly
 # if you need portable behavior across stripped environments.
 homeDir: function out (Result String E: IoError) is native
