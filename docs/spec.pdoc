@@ -919,35 +919,70 @@ rejected for the same reason. Remediations are #~".copy" (clone),
 #~"out T.borrow" + a non-owned parameter (return a borrow tied to a
 pinned source). See #~"ownership.pdoc" for details.
 
-In a call, the 'primary' parameter is the first parameter listed in the #~"in"
-parameter list of the [#> to=function: function definition]. In a type specifier, the
-'primary' is the first generic argument. If that is also the first argument
-supplied in a call or type specifier, then the parameter name #_*"may" be
-omitted in some cases. When either:
+A call carries #_*"at most one" unlabelled argument, and it must come first.
+Every other argument names the parameter it binds to, and named arguments may
+be written in any order. The grammar enforces the first half: a call is a term,
+an optional folded binop argument, then labelled arguments only — see
+#~"grammar.pdoc".
+
+Which parameter the unlabelled argument binds to is settled by two questions,
+both answered from the #_*"environment" rather than from the shape of the call:
 
 #ul:
-  [#*: it is a normal argument (non-take and non-generic)]
-  [#*: it is a #~".take" parameter #_*"and" the supplied argument is anonymous
-    (i.e. the result of a function call)]
-  [#*: it is a generic parameter #_*"but" a concrete arg is being provided (i.e.
-    not a generic arg)]
+  [#*: does the callee declare a #_*"receiver" — a parameter whose type
+    expression is #~"this"?]
+  [#*: does the dotted base resolve to a #_*"value", or to a #_*"type"?]
 
-In all other cases, the parameter name #_*"must" be supplied in the call or
-type specifier argument. e.g:
+#table cols="2 2 3":
+  Callee has a receiver|Base resolves to   |The unlabelled argument is
+  no                   |anything, or absent|the first declared parameter
+  yes                  |a value            |the first declared parameter after the receiver
+  yes                  |a type             |the receiver
 
-#ul:
-  #*: all arguments after the first argument, of any type
-  #*: all #~".take" arguments taking their value from a named variable
+Nothing here reads the spelling of a name or counts the segments of a path.
+#~"io.open \"f\" mode: READ" needs no special case: #~"open" declares no
+receiver, so the first question settles it and the base — a unit — never has to
+be classified at all. A local binding that shadows a type name is settled by the
+second: the name resolves to a value, so the call is a method call on it.
 
-The argument name rules above are designed to:
+In a type specifier the same rule applies with no receiver in play: the
+unlabelled argument is the first generic parameter, as in #~"(List u8)". A
+construction reads its fields the same way, as in #~"point 5 y: 2".
+
+The rules above are designed to:
 
 #ul:
   [#*: unambiguously document the arguments to a call or type specifier]
   [#*: allow arguments in any order at the call site]
-  [#*: clearly show when local variable ownership is being given away to a call (by
-    requiring the parameter name to be specified for #~".take" parameters)]
-  [#*: not overburden calls with names for the 'primary' (or only) argument. The
-    'primary' argument is often redundant following the name of the function/type]
+  [#*: not overburden a call with a name for the one argument whose meaning the
+    function's or type's own name already carries]
+
+#-----: Supplying the receiver
+
+A method's receiver is supplied in one of two ways, and #_*"exactly one" of
+them:
+
+#ul:
+  [#*: as the call's unlabelled argument, which is what the function-style form
+    is for]
+  [#*: by its #_*"declared parameter name" — #~"t:" for a receiver declared
+    #~"t: this", and #~"this:" for the #~":this" shorthand, which declares a
+    parameter literally named #~"this" — in any position among the other
+    labelled arguments]
+
+Supplying it twice is an error, and so is supplying it not at all. Because the
+receiver answers to its declared name, that name is part of the call surface:
+renaming it breaks callers that use the label, even though the name is #_*"not"
+part of the signature a protocol is satisfied by (see #>"this"). #~"this:" is
+not a universal alias — a receiver declared #~"t: this" is named #~"t:".
+
+#-----: Three paths are an operation
+
+A second unlabelled argument is not refused so much as read as something else.
+An #_*"odd" number of paths is the operator form — receiver, operator, argument
+— so #~"plain 10 3" asks for the method named #~"10" on #~"plain" rather than
+passing two arguments. An operator is an identifier and a numeric literal names
+no method, so that is reported as what it is.
 
 Argument evaluations are also subject to ownership locking. See #>"ownership".
 
@@ -975,10 +1010,18 @@ Using named parameters:
   result: f a: arg1 b: arg2
 
 Via a parent (unit, record, class) namespace. #~"parenttype" is the parent type,
-#~"parent" is an instance of #~"parenttype" (#_*"function call syntax"):
+#~"parent" is an instance of #~"parenttype" (#_*"function call syntax"). The
+base resolves to a type, so the unlabelled argument is the receiver:
 
 #code language=zerolang:
-  result: parenttype.f this: parent a: arg1 b: arg2
+  result: parenttype.f parent a: arg1 b: arg2
+
+Or with the receiver under its declared name, which frees it to be written in
+any position. #~"f" declares its receiver #~"r: this" here:
+
+#code language=zerolang:
+  result: parenttype.f r: parent a: arg1 b: arg2
+  result: parenttype.f a: arg1 r: parent b: arg2
 
 Or, #_*"method call syntax" (#~"parent" will be passed as the first #~"this"
 argument):
@@ -993,10 +1036,21 @@ the operator names.
 #code language=zerolang:
   result: f methodname arg1
 
-An error; cannot mix functional style and method style syntax:
+An error; the dot already supplied the receiver, so naming it as well supplies
+it twice:
 
 #code language=zerolang: """
-  #result: parent.f s: parent a: arg1 b: arg2  # ERROR
+  result: parent.f r: parent a: arg1 b: arg2
+  # error[E0300]: the receiver is supplied twice: by 'parent.' and by 'r:'
+  """
+
+An error for the same reason, from the other side — the unlabelled argument of
+a function-style call #_*"is" the receiver:
+
+#code language=zerolang: """
+  result: parenttype.f parent r: parent a: arg1
+  # error[E0300]: the receiver is supplied twice: by the unlabelled argument
+  #               and by 'r:'
   """
 
 Resolving as a child of the argument type:
@@ -1024,11 +1078,18 @@ Resolving as a child of the argument type:
   fh: open "MyFile.txt" mode: io.mode.READ
   """
 
-Always need parameter name even when calling with a single #~".take"
-argument from a named variable:
+A #~".take" argument needs no parameter name of its own: the unlabelled slot
+takes an argument whatever its ownership. The move is tracked either way, so a
+later use of the source is rejected:
 
-#code language=zerolang:
-  result: parent.f from: MyRefType
+#code language=zerolang: """
+  taker m          # moves m
+  print m          # error[E0200]: cannot use 'm' after ownership transfer
+  """
+
+Write #~".take" at the call site when you want the transfer visible there —
+#~"taker m.take" — since a parameter name alone cannot show it: #~"taker arg: m"
+and #~"borrower v: m" read exactly alike.
 
 When a function parameter has a default value (numeric constant or function
 reference), the caller may omit that argument. The default value is used in
@@ -3375,7 +3436,15 @@ purposes or ease of use.
 
 The name of the #~"this" parameter is not considered as part of the method
 signature for satisfying protocols. #~"this" can also be specified using the
-shortened prepended colon syntax.
+shortened prepended colon syntax, which declares a parameter literally named
+#~"this".
+
+The name is not part of the signature, but it #_*"is" part of the call surface:
+a receiver may be supplied by its declared name rather than through the
+unlabelled slot (see #>"call-arguments"), so renaming a receiver breaks callers
+that use the label even where it leaves protocol satisfaction untouched. The
+two are deliberately separate — a protocol matches on types, and a call site
+names parameters — but the consequence is worth knowing before renaming one.
 
 #code language=zerolang: """
   # define a method of the 'Parent' object
@@ -4054,12 +4123,13 @@ as usual. This allows the same notation to be used for generic container types
 regardless of the type of subcomponents being stored (eg. for Lists). In all
 other cases, it is an error to pass valtypes to #~".take" parameters.
 
-#~".take" arguments from a named variable cannot be specified without the
-parameter name at the call site even if they are the first argument. This is
-to make it obvious that ownership is given up at the call site. #~".take"
-arguments from an anonymous value (eg. from the result of a direct function
-call) can be specified without the parameter name since the value would be
-inaccessible/destroyed after the call in any case.
+A #~".take" argument is written like any other: the unlabelled slot takes an
+argument whatever its ownership, and a parameter name is not required to give
+one away. Nothing is lost by that, because a name could not show the transfer
+in the first place — #~"taker arg: m" and #~"borrower v: m" read alike — and
+the move is tracked regardless, so using the source afterwards is an error.
+Write #~".take" at the call site (#~"taker m.take") when you want the transfer
+visible where it happens.
 
 #code language=zerolang: """
   taker: function {arg: reftype.take} is {

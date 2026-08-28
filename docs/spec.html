@@ -968,33 +968,70 @@ rejected for the same reason. Remediations are <code>.copy</code> (clone),
 <code>.take</code> on the parameter (transfer ownership in), or
 <code>out T.borrow</code> + a non-owned parameter (return a borrow tied to a
 pinned source). See <code>ownership.pdoc</code> for details.</p>
-<p>In a call, the 'primary' parameter is the first parameter listed in the <code>in</code>
-parameter list of the <a href="#function">function definition</a>. In a type specifier, the
-'primary' is the first generic argument. If that is also the first argument
-supplied in a call or type specifier, then the parameter name <em><strong>may</strong></em> be
-omitted in some cases. When either:</p>
+<p>A call carries <em><strong>at most one</strong></em> unlabelled argument, and it must come first.
+Every other argument names the parameter it binds to, and named arguments may
+be written in any order. The grammar enforces the first half: a call is a term,
+an optional folded binop argument, then labelled arguments only &#x2014; see
+<code>grammar.pdoc</code>.</p>
+<p>Which parameter the unlabelled argument binds to is settled by two questions,
+both answered from the <em><strong>environment</strong></em> rather than from the shape of the call:</p>
 <ul>
-<li>it is a normal argument (non-take and non-generic)</li>
-<li>it is a <code>.take</code> parameter <em><strong>and</strong></em> the supplied argument is anonymous
-    (i.e. the result of a function call)</li>
-<li>it is a generic parameter <em><strong>but</strong></em> a concrete arg is being provided (i.e.
-    not a generic arg)</li>
+<li>does the callee declare a <em><strong>receiver</strong></em> &#x2014; a parameter whose type
+    expression is <code>this</code>?</li>
+<li>does the dotted base resolve to a <em><strong>value</strong></em>, or to a <em><strong>type</strong></em>?</li>
 </ul>
-<p>In all other cases, the parameter name <em><strong>must</strong></em> be supplied in the call or
-type specifier argument. e.g:</p>
-<ul>
-<li>all arguments after the first argument, of any type</li>
-<li>all <code>.take</code> arguments taking their value from a named variable</li>
-</ul>
-<p>The argument name rules above are designed to:</p>
+<table>
+<colgroup>
+<col style="width: 28%">
+<col style="width: 28%">
+<col style="width: 42%">
+</colgroup>
+<thead>
+<tr><th style="text-align: left">Callee has a receiver</th><th style="text-align: left">Base resolves to</th><th style="text-align: left">The unlabelled argument is</th></tr>
+</thead>
+<tbody>
+<tr><td>no</td><td>anything, or absent</td><td>the first declared parameter</td></tr>
+<tr><td>yes</td><td>a value</td><td>the first declared parameter after the receiver</td></tr>
+<tr><td>yes</td><td>a type</td><td>the receiver</td></tr>
+</tbody>
+</table>
+<p>Nothing here reads the spelling of a name or counts the segments of a path.
+<code>io.open "f" mode: READ</code> needs no special case: <code>open</code> declares no
+receiver, so the first question settles it and the base &#x2014; a unit &#x2014; never has to
+be classified at all. A local binding that shadows a type name is settled by the
+second: the name resolves to a value, so the call is a method call on it.</p>
+<p>In a type specifier the same rule applies with no receiver in play: the
+unlabelled argument is the first generic parameter, as in <code>(List u8)</code>. A
+construction reads its fields the same way, as in <code>point 5 y: 2</code>.</p>
+<p>The rules above are designed to:</p>
 <ul>
 <li>unambiguously document the arguments to a call or type specifier</li>
 <li>allow arguments in any order at the call site</li>
-<li>clearly show when local variable ownership is being given away to a call (by
-    requiring the parameter name to be specified for <code>.take</code> parameters)</li>
-<li>not overburden calls with names for the 'primary' (or only) argument. The
-    'primary' argument is often redundant following the name of the function/type</li>
+<li>not overburden a call with a name for the one argument whose meaning the
+    function's or type's own name already carries</li>
 </ul>
+<h5 id="supplying-the-receiver">Supplying the receiver</h5>
+<p>A method's receiver is supplied in one of two ways, and <em><strong>exactly one</strong></em> of
+them:</p>
+<ul>
+<li>as the call's unlabelled argument, which is what the function-style form
+    is for</li>
+<li>by its <em><strong>declared parameter name</strong></em> &#x2014; <code>t:</code> for a receiver declared
+    <code>t: this</code>, and <code>this:</code> for the <code>:this</code> shorthand, which declares a
+    parameter literally named <code>this</code> &#x2014; in any position among the other
+    labelled arguments</li>
+</ul>
+<p>Supplying it twice is an error, and so is supplying it not at all. Because the
+receiver answers to its declared name, that name is part of the call surface:
+renaming it breaks callers that use the label, even though the name is <em><strong>not</strong></em>
+part of the signature a protocol is satisfied by (see <a href="#this">this</a>). <code>this:</code> is
+not a universal alias &#x2014; a receiver declared <code>t: this</code> is named <code>t:</code>.</p>
+<h5 id="three-paths-are-an-operation">Three paths are an operation</h5>
+<p>A second unlabelled argument is not refused so much as read as something else.
+An <em><strong>odd</strong></em> number of paths is the operator form &#x2014; receiver, operator, argument
+&#x2014; so <code>plain 10 3</code> asks for the method named <code>10</code> on <code>plain</code> rather than
+passing two arguments. An operator is an identifier and a numeric literal names
+no method, so that is reported as what it is.</p>
 <p>Argument evaluations are also subject to ownership locking. See <a href="#ownership">Ownership</a>.</p>
 <p>The expression for an argument value is first evaluated in the current scope.
 If the value is a single identifier (undotted) and it does not resolve up to
@@ -1009,8 +1046,13 @@ there is no local definition of that same identifier).</p>
 <p>Using named parameters:</p>
 <pre><code class="language-zerolang">result: f a: arg1 b: arg2</code></pre>
 <p>Via a parent (unit, record, class) namespace. <code>parenttype</code> is the parent type,
-<code>parent</code> is an instance of <code>parenttype</code> (<em><strong>function call syntax</strong></em>):</p>
-<pre><code class="language-zerolang">result: parenttype.f this: parent a: arg1 b: arg2</code></pre>
+<code>parent</code> is an instance of <code>parenttype</code> (<em><strong>function call syntax</strong></em>). The
+base resolves to a type, so the unlabelled argument is the receiver:</p>
+<pre><code class="language-zerolang">result: parenttype.f parent a: arg1 b: arg2</code></pre>
+<p>Or with the receiver under its declared name, which frees it to be written in
+any position. <code>f</code> declares its receiver <code>r: this</code> here:</p>
+<pre><code class="language-zerolang">result: parenttype.f r: parent a: arg1 b: arg2
+result: parenttype.f a: arg1 r: parent b: arg2</code></pre>
 <p>Or, <em><strong>method call syntax</strong></em> (<code>parent</code> will be passed as the first <code>this</code>
 argument):</p>
 <pre><code class="language-zerolang">result: parent.f a: arg1 b: arg2</code></pre>
@@ -1018,8 +1060,15 @@ argument):</p>
 (the receiver and one argument). The methodname would tend to usually be one of
 the operator names.</p>
 <pre><code class="language-zerolang">result: f methodname arg1</code></pre>
-<p>An error; cannot mix functional style and method style syntax:</p>
-<pre><code class="language-zerolang">#result: parent.f s: parent a: arg1 b: arg2  # ERROR</code></pre>
+<p>An error; the dot already supplied the receiver, so naming it as well supplies
+it twice:</p>
+<pre><code class="language-zerolang">result: parent.f r: parent a: arg1 b: arg2
+# error[E0300]: the receiver is supplied twice: by 'parent.' and by 'r:'</code></pre>
+<p>An error for the same reason, from the other side &#x2014; the unlabelled argument of
+a function-style call <em><strong>is</strong></em> the receiver:</p>
+<pre><code class="language-zerolang">result: parenttype.f parent r: parent a: arg1
+# error[E0300]: the receiver is supplied twice: by the unlabelled argument
+#               and by 'r:'</code></pre>
 <p>Resolving as a child of the argument type:</p>
 <pre><code class="language-zerolang"># ----- in unit file "io"
 
@@ -1041,9 +1090,14 @@ mode: io.mode
 fh: open "MyFile.txt" mode: mode.READ
 # or, fully qualified
 fh: open "MyFile.txt" mode: io.mode.READ</code></pre>
-<p>Always need parameter name even when calling with a single <code>.take</code>
-argument from a named variable:</p>
-<pre><code class="language-zerolang">result: parent.f from: MyRefType</code></pre>
+<p>A <code>.take</code> argument needs no parameter name of its own: the unlabelled slot
+takes an argument whatever its ownership. The move is tracked either way, so a
+later use of the source is rejected:</p>
+<pre><code class="language-zerolang">taker m          # moves m
+print m          # error[E0200]: cannot use 'm' after ownership transfer</code></pre>
+<p>Write <code>.take</code> at the call site when you want the transfer visible there &#x2014;
+<code>taker m.take</code> &#x2014; since a parameter name alone cannot show it: <code>taker arg: m</code>
+and <code>borrower v: m</code> read exactly alike.</p>
 <p>When a function parameter has a default value (numeric constant or function
 reference), the caller may omit that argument. The default value is used in
 place of the missing argument. Bare numeric defaults follow the literal
@@ -3011,7 +3065,14 @@ method. It may optionally be declared with a new name for documentation
 purposes or ease of use.</p>
 <p>The name of the <code>this</code> parameter is not considered as part of the method
 signature for satisfying protocols. <code>this</code> can also be specified using the
-shortened prepended colon syntax.</p>
+shortened prepended colon syntax, which declares a parameter literally named
+<code>this</code>.</p>
+<p>The name is not part of the signature, but it <em><strong>is</strong></em> part of the call surface:
+a receiver may be supplied by its declared name rather than through the
+unlabelled slot (see <a href="#call-arguments">Call Arguments</a>), so renaming a receiver breaks callers
+that use the label even where it leaves protocol satisfaction untouched. The
+two are deliberately separate &#x2014; a protocol matches on types, and a call site
+names parameters &#x2014; but the consequence is worth knowing before renaming one.</p>
 <pre><code class="language-zerolang"># define a method of the 'Parent' object
 Parent: class {
     method: function {t: this arg: i32} out i32 is {
@@ -3567,12 +3628,13 @@ returned, destroyed). The caller's variable name is invalid after the call.</p>
 as usual. This allows the same notation to be used for generic container types
 regardless of the type of subcomponents being stored (eg. for Lists). In all
 other cases, it is an error to pass valtypes to <code>.take</code> parameters.</p>
-<p><code>.take</code> arguments from a named variable cannot be specified without the
-parameter name at the call site even if they are the first argument. This is
-to make it obvious that ownership is given up at the call site. <code>.take</code>
-arguments from an anonymous value (eg. from the result of a direct function
-call) can be specified without the parameter name since the value would be
-inaccessible/destroyed after the call in any case.</p>
+<p>A <code>.take</code> argument is written like any other: the unlabelled slot takes an
+argument whatever its ownership, and a parameter name is not required to give
+one away. Nothing is lost by that, because a name could not show the transfer
+in the first place &#x2014; <code>taker arg: m</code> and <code>borrower v: m</code> read alike &#x2014; and
+the move is tracked regardless, so using the source afterwards is an error.
+Write <code>.take</code> at the call site (<code>taker m.take</code>) when you want the transfer
+visible where it happens.</p>
 <pre><code class="language-zerolang">taker: function {arg: reftype.take} is {
     # arg is owned in this scope
 }
