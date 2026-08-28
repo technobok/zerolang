@@ -17961,10 +17961,19 @@ emitIntRangeFor: function {
         lh: "\{ind}for (int64_t \{lbl} = \{fromx}; \{lbl} < (int64_t)(\{bound}); \{lbl}++) {\n"
         buf.append lh
         ind2: "\{ind}    "
+        # the body is a BLOCK: whatever it registers -- an argument hoisted to an
+        # `_ah` temp, an owned local -- is declared per iteration and has to be
+        # freed per iteration. Without the mark those frees stayed pending and
+        # landed after the loop, naming a temp that had left C scope.
+        fLR: tmp.frees.length
+        lLR: tmp.listFrees.length
+        dvR: false
         if m.body > 0 then {
             bodyNode: ast.nodes.get i: m.body.u64
             emitBodyNode :ast :symtab :ctx n: bodyNode ind: ind2.stringView :tmp :buf
+            dvR = blockDiverges :ast :symtab :ctx n: bodyNode
         }
+        flushBlockFrees :ctx :tmp fL: fLR lL: lLR diverged: dvR :buf
         emitContLabel :ctx id: lidR ind: ind2.stringView :buf
         lc: "\{ind}}\n"
         buf.append lc
@@ -17973,6 +17982,18 @@ emitIntRangeFor: function {
     } else {
         return false
     }
+}
+
+# isIntScalarName -- one of the twelve INTEGER scalar names. The lean `for x: N`
+# form below counts in an int64 induction variable, so a float bound would
+# truncate silently and a bool one is meaningless -- cTypeOf answers for both, so
+# it cannot be the test. Membership through one string rather than a compare
+# chain, which is the shape A001 exists to discourage.
+isIntScalarName: function {name: StringView} out bool is {
+    if name.length == 0 then return false
+    known: " i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 c8 c32 "
+    probe: " \{name} "
+    return (known.contains needle: probe)
 }
 
 # isRangeMemberId -- `iterate` or its synonym `each`, by INTERNED ID. Both legs
@@ -17994,6 +18015,17 @@ rangeBoundExpr: function {
     ctx: Ctx
     n: Node.view
 } out String is {
+    # THE LEAN FORM, tested once for every arm below: `for x: N loop` is sugar for
+    # `for x: N.iterate loop` (spec.pdoc, Iteration), so an integer-typed operand
+    # IS its own bound and `from` is 0. It is asked here rather than in each arm
+    # because a `case` arm narrows the subject to its payload and no longer holds
+    # the whole node, and the shape varies: a bare literal is an atom, a
+    # width-suffixed one (`3.u8`) a DOTTED PATH, and `xs.length` a dotted path too.
+    # Without it the documented sugar found no bound at all, fell through to the
+    # iterator protocol, and looped forever on its own receiver.
+    isLean: false
+    btnL: stampNameDeep :ast :symtab :n
+    if (isIntScalarName name: btnL.stringView) then isLean = true
     match (
         n
     ) case expression then {
@@ -18002,6 +18034,7 @@ rangeBoundExpr: function {
         callableNode: ast.nodes.get i: n.callable.u64
         mnId: dottedChildNameIdOf :ast n: callableNode
         if (isRangeMemberId id: mnId) then return (rangeReceiver :ast :symtab :ctx n: callableNode)
+        if isLean then return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
         return "".string
     } case dottedpath then {
         cmnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
@@ -18014,8 +18047,10 @@ rangeBoundExpr: function {
                 return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
             }
         }
+        if isLean then return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
         return "".string
     } else {
+        if isLean then return (emitExpr :ast :symtab :ctx :n)
         return "".string
     }
 }
