@@ -17975,8 +17975,19 @@ emitIntRangeFor: function {
     }
 }
 
-# rangeBoundExpr -- the upper bound of an `N.iterate` range (the dotted
-# receiver N); "" when the operation is not an iterate call.
+# isRangeMemberId -- `iterate` or its synonym `each`, by INTERNED ID. Both legs
+# of the range emit ask through here: emitRangeStep once accepted `each` while
+# rangeBoundExpr compared the spelling "iterate" alone, so `for x: N.each loop`
+# missed the counted-loop path, fell through to the iterator protocol, and never
+# advanced -- a loop that printed the receiver forever.
+isRangeMemberId: function {id: zast.nameid} out bool is {
+    if id == zast.names.wkIterate then return true
+    if id == zast.names.wkEach then return true
+    return false
+}
+
+# rangeBoundExpr -- the upper bound of an `N.iterate` / `N.each` range (the
+# dotted receiver N); "" when the operation is not one of those calls.
 rangeBoundExpr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -17988,13 +17999,13 @@ rangeBoundExpr: function {
     ) case expression then {
         return (rangeBoundExpr :ast :symtab :ctx n: (ast.nodes.get i: n.expression.u64))
     } case call then {
-        mn: dottedChildText :ast n: (ast.nodes.get i: n.callable.u64)
         callableNode: ast.nodes.get i: n.callable.u64
-        if mn.stringView == "iterate" then return (rangeReceiver :ast :symtab :ctx n: callableNode)
+        mnId: dottedChildNameIdOf :ast n: callableNode
+        if (isRangeMemberId id: mnId) then return (rangeReceiver :ast :symtab :ctx n: callableNode)
         return "".string
     } case dottedpath then {
-        cmn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if cmn.stringView == "iterate" then {
+        cmnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
+        if (isRangeMemberId id: cmnId) then {
             # the receiver may be a dotted-path itself (squares.length.iterate)
             # -- stampNameDeep resolves its scalar type either way.
             btn: stampNameDeep :ast :symtab n: (ast.nodes.get i: n.parent.u64)
