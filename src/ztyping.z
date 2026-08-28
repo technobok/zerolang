@@ -49,7 +49,11 @@ Node: zast.Node
 # with `stmt` 0 means every condition was false and there was no else clause,
 # so nothing is emitted at all.
 foldedbranch: record {
+    # whether the fold reached an answer at all; the branch below means nothing
+    # when it did not
     known: bool
+    # the one branch that survives, when the condition folded. The others are
+    # not emitted
     stmt: zast.nodeid
 }
 
@@ -57,8 +61,11 @@ foldedbranch: record {
 # body walk (call-arg hoist temps) that the parsed-program walk cannot reach.
 # One member-type write held while its owner had no declaration to land on.
 pendwrite: record {
+    # the type whose member is being written
     parent: ztypes.tid
+    # the member, interned
     name: zast.nameid
+    # the type being written into it, held until the parent finishes resolving
     type: ztypes.tid
 }
 
@@ -67,12 +74,20 @@ pendwrite: record {
 # rule -- so a caller that loops slots and skips the rows it says no to is
 # running the same walk the list form runs, not a restatement of it.
 declrow: record {
+    # the declaration's name, interned
     name: u64
+    # the type it resolved to
     tid: u64
+    # whether the row survives the pass that built it, which is how a
+    # speculative registration is undone without a second table
     keep: bool
 }
 
+# a node the checker made rather than the parser: it has no source position
+# of its own, so it borrows the one that prompted it and records which
+# definition it belongs to
 SynthNode: class {
+    # the synthesised node's id in the tree
     nodeid: u32
     # the row's shape name, always a literal the emitter of the row spells --
     # a view over program memory, which outlives every row
@@ -81,8 +96,11 @@ SynthNode: class {
     # already carries: three rows are synthesised per hoist, and ids keep each
     # from owning a copy of the same composed text
     ownerUnit: ztypes.declid
+    # the definition it was synthesised for, interned
     ownerName: zast.nameid
+    # the line to report it at, borrowed from whatever prompted it
     lineno: u32
+    # the column to report it at
     colno: u32
 }
 
@@ -95,16 +113,29 @@ SynthNode: class {
 declkind: variant {
     # the sentinel row 0 of ZTyping.decls: no declaration
     noneDecl: null
+    # a unit, which is a declaration like any other -- a subunit and a
+    # template are ordinary members because of it
     unitDecl: null
+    # a free function
     funcDecl: null
+    # a type definition
     typeDecl: null
+    # a compile-time constant
     constDecl: null
+    # a data block
     dataDecl: null
+    # a parameter, which is a member of its function's type
     paramDecl: null
+    # a record or class field
     fieldDecl: null
+    # a method, which is a member of the type it is declared on
     methodDecl: null
+    # a variant or union arm
     armDecl: null
+    # a name a unit re-exports rather than declares
     reexportDecl: null
+    # the `public:` block, which is itself a declaration because it is itself a
+    # unit
     publicNs: null
     # a body frame: a function's body, or a block, arm, loop or call bracket
     # inside one -- the environment frame the locals written there hang under
@@ -158,20 +189,27 @@ declkindName: function {k: declkind} out String is {
 # two fields; both are widened to u64 so the key has no padding for the
 # container's byte hash to read.
 callslot: record {
+    # the call node
     call: u64
+    # which parameter of it, by position. The pair keys a per-argument stamp
     param: u64
 }
 
 # constslot -- which member of which type, for the compile-time value channel.
 constslot: record {
+    # the type the constant is declared on
     owner: u64
+    # the constant's name. The pair keys memberConst
     name: u64
 }
 
 # monostamp -- which node of which monomorphisation. One template node carries
 # a different answer per instance, so the instance id is part of the key.
 monostamp: record {
+    # the instantiated type
     mono: u64
+    # the node inside it. The pair keys a stamp that differs per instantiation,
+    # which a node id alone could not
     node: u64
 }
 
@@ -180,7 +218,9 @@ monostamp: record {
 # walked at the top-level drain, because a body walk inside a resolver runs in
 # a grey window.
 nsbody: record {
+    # the unit whose body is pending, interned
     unitName: zast.nameid
+    # its unitdef node
     unitOp: zast.nodeid
 }
 
@@ -188,9 +228,13 @@ nsbody: record {
 # nodeid (re-emitted verbatim); `function`/`arm` carry the target DeclId; `none`
 # means no default.
 defaultval: variant {
+    # the parameter has no default
     none: null
+    # a literal default, as a constant-pool index
     literal: u32
+    # a default that calls a function
     func: ztypes.declid
+    # a default that names a sum arm
     arm: ztypes.declid
 } as { tag: u8.tag }
 
@@ -203,10 +247,16 @@ defaultval: variant {
 # MEMBER declaration `typeId` is the member's own type (what the tid-keyed
 # child index records), not one it minted.
 Decl: class {
+    # the declaration's name, as a shared Ast.names pool id
     name: u32
+    # the declaration this one is a member of. The parent chain IS the member
+    # index -- there is no separate table
     parent: ztypes.declid
+    # what kind of declaration it is
     kind: declkind
+    # the AST node that declared it
     node: u32
+    # the type it resolved to, 0 until resolution reaches it
     typeId: ztypes.tid
     # ownership -- a param member's binding mode (noneMode when unset); where a
     # param's lock status lives.
@@ -220,6 +270,8 @@ Decl: class {
     # done mark. On the declaration itself, so the walk that finds the
     # definition also finds its state.
     resolving: bool
+    # whether the body has been walked, which is what keeps a demand-driven walk
+    # from walking one twice
     defined: bool
     # pending -- a reference found this definition and queued it for
     # resolution (the demand mark); cleared when its turn comes.
@@ -268,14 +320,20 @@ ZTyping: class {
     # typecheck-synthesised AST rows, the per-run `_t` temp-name counter,
     # and the current `unit.def` dump label the body walk maintains.
     synthNodes: (List SynthNode)
+    # the next synthesised name's number, so two temps never collide
     nextTempId: u64
+    # the label the current synthesis is running under, for diagnostics about a
+    # node no one wrote
     synthLabel: String
     # the same (unit, definition) pair synthLabel SPELLS, carried as ids. The
     # label is a dump row; the pair is what checkCase resolves a bare
     # `match t` subject against, and a spelled pair had to be split back apart
     # and re-resolved by name to get here.
     synthOwnerUnit: ztypes.declid
+    # the definition the current synthesis belongs to
     synthOwnerName: zast.nameid
+    # the receiver type in scope, which is what `this` and a bare member name
+    # resolve against
     currentThisTid: ztypes.tid
     # the tid of the FUNCTION whose body is being walked, beside the receiver
     # type above. Together they answer "which member of which type am I in",
@@ -283,6 +341,7 @@ ZTyping: class {
     # Zero for a generic mono instance walk, which has no declaration of its
     # own to name.
     currentFnTid: ztypes.tid
+    # the root the last lock parameter locked, so a conflict can name it
     lastLockParamRoot: zast.nameid
 
     # a generic template's syntactic body divergence (its last statement is a
@@ -327,6 +386,8 @@ ZTyping: class {
     # ops already walked -- a subunit of the MAIN unit is walked by the main
     # tree walk and must not be walked twice.
     nsBodiesOwed: (ListVal nsbody)
+    # the unit bodies already walked, so a demand-driven walk does not repeat
+    # one
     nsBodiesWalked: (IdSet u64)
     # the unit ops whose constant definitions have been materialised, so a
     # namespace reached twice -- once as a demanded definition, once as an
@@ -335,8 +396,13 @@ ZTyping: class {
     # the generic template ops whose method bodies have been scanned for
     # demands from the template's own frame (once per template)
     templateBodiesScanned: (IdSet u64)
+    # the generic parameter to type-argument substitution in force for the
+    # instantiation being walked
     monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
+    # the instantiation being walked, which is half of every monostamp key
+    # minted under it
     curMonoStamp: u64
+    # the function type being walked inside that instantiation
     curMonoFnTid: ztypes.tid
 
     # child-name id minting (ztyping-local id space)
@@ -348,9 +414,16 @@ ZTyping: class {
     renameSeen: bool
     # true once any member has been marked private (gates cross-unit checks)
     privacySeen: bool
+    # nodes cloned for a constant evaluation, so the clone is not mistaken for
+    # the original
     asConstClone: (IdMapV u64 v: bool)
+    # types synthesised to carry a generator's state
     generatorWrapper: (IdMapV u64 v: bool)
+    # the shallow shell a `typeof` minted, which resolves later than the
+    # expression it was taken from
     typeofShell: (IdMapV u64 v: u32)
+    # nodes deliberately left unstamped, so a later pass does not read absence
+    # as an error
     noStampNode: (IdMapV u64 v: bool)
     # FUNCTION tid -> the definition carries a body (a bodyless spec is false)
     fnHasBody: (IdMapV u64 v: bool)
@@ -359,9 +432,16 @@ ZTyping: class {
     # the generic template (its DeclId) whose signature is being
     # registered: its param names are not unit typerefs
     sigGenericDecl: ztypes.declid
+    # whether the walk is inside a containment check, which is what stops a
+    # valtype cycle from recursing forever
     inContainmentEdge: bool
+    # stop stamping parameters, for the walks that re-visit a signature without
+    # re-binding it
     suppressParamStamps: bool
+    # stop reading a bare type name as a construction
     suppressBareCtor: bool
+    # stop reading a bare function reference as a zero-argument call, which is
+    # what `.take` needs
     suppressFnAutoCall: bool
     # the FUNCTION tids of synthesised `==` / `!=`, and `bool` cached the first
     # time it resolves. A synth comparison cannot be given its return type where
@@ -369,35 +449,58 @@ ZTyping: class {
     # resolution pulls it ahead of the demand order -- so methodReturnOf answers
     # from these instead, on the one path both the lazy and the eager tiers take.
     synthCmpTids: (IdSet u64)
+    # bool's type, cached because the truthiness checks ask for it constantly
     boolTid: ztypes.tid
     # a FUNCTION stamp that survives here is legitimate, so a bare method
     # reference must not be reported. Distinct from suppressFnAutoCall,
     # which also stops the coercion: a for-header still NEEDS the 0-arg
     # auto-call (`for x: counter loop`) and only wants the error silenced.
     allowBareFnRef: bool
+    # a scalar typedef's base name, keyed by tid so the answer does not depend
+    # on which unit the read happens in
     typedefBaseName: (IdMapV u64 v: zast.nameid)
     # a typedef wrapper's base type id, resolved structurally at declaration
     # (a parameterized base rides the spec trie, a bare atom the unit ladder)
     typedefBaseTid: (IdMapV ztypes.tid v: ztypes.tid)
+    # whether a main-unit definition is a reftype, which the emitter needs
+    # before it has walked it
     mainDefIsReftype: (IdMapV u64 v: bool)
+    # the sum type a dotted path reads an arm of
     dpTaggedParent: (IdMapV u64 v: ztypes.tid)
+    # the dotted paths that are `value.arm` PREDICATES rather than reads --
+    # always a bool, which is the whole of the narrowing surface
     dpArmPredicate: (IdMapV u64 v: ztypes.tid)
+    # the dotted paths that read a tag rather than test one
     dpTagRead: (IdMapV u64 v: ztypes.tid)
+    # the accessor a custom tag is read through, interned
     tagAccessorName: (IdMapV u64 v: zast.nameid)
+    # that accessor's type, keyed by the sum's own tid
     tagAccessorTid: (IdMapV ztypes.tid v: ztypes.tid)
+    # the name a diverging guard narrowed, which narrows the REST of the scope
+    # and not just an arm
     postGuardName: (IdMapV u64 v: zast.nameid)
     # the subject's variable, beside its name: the emitter asks whether the
     # subject is a pointer receiver, and a name cannot answer that once locals
     # are named by id
     postGuardVarId: (IdMapV u64 v: ztypes.vid)
+    # the type it narrowed to
     postGuardTid: (IdMapV u64 v: ztypes.tid)
+    # the arm it narrowed to
     postGuardArm: (IdMapV u64 v: zast.nameid)
+    # a custom tag named before the type declaring it has resolved
     pendingCustomTag: (IdMapV u64 v: zast.nameid)
+    # the node that named it, so the eventual error can point somewhere
     pendingCustomTagNode: (IdMapV u64 v: u64)
+    # the type owning a default not yet resolvable
     pendingDefaultOwner: (IdMapV u64 v: u64)
+    # that default's declaration
     pendingDefaultId: (IdMapV u64 v: u64)
+    # its name, interned
     pendingDefaultName: (IdMapV u64 v: zast.nameid)
+    # types some site actually constructs, which is what makes construction a
+    # DEMAND the emitter must satisfy
     constructedTypes: (IdMapV u64 v: bool)
+    # collections whose child types have been minted, so minting runs once
     collectionChildrenBuilt: (IdSet u64)
     # per-call-argument disposition (take/lock/borrow); absent = valtype/none.
     # tooling-only; the emitter never reads it.
@@ -411,6 +514,8 @@ ZTyping: class {
     # back to structural equality; binopOwner is the presence test, and it is
     # never 0. Keyed by nodeid.
     binopOwner: (IdMapV u64 v: ztypes.tid)
+    # the method a binary operator resolved to. An operator IS a method here, so
+    # the emitter reads this rather than a table of operators
     binopMethod: (IdMapV u64 v: ztypes.tid)
     # the same two facts from the per-instance walk, in their own tables
     # because their key is a different thing -- a monostamp, as monoNodeType
@@ -419,12 +524,19 @@ ZTyping: class {
     # slot -- and they cannot share a TABLE with the nodeid-keyed pair either,
     # or the key would mean one thing or the other depending on who wrote it.
     monoBinopOwner: (MapVV monostamp v: ztypes.tid)
+    # the same, per instantiation, because one template's operator resolves
+    # differently in each
     monoBinopMethod: (MapVV monostamp v: ztypes.tid)
 
     # per-node single-valued stamps, indexed by nodeid - 1 (node ids are
     # minted dense 1..N, so the stamp IS the slot); 0 means unstamped
     nodeType: (ListVal ztypes.tid)
+    # what each call actually is -- a construction, a reference, a control
+    # transfer -- classified once so the emitter branches on an arm rather than
+    # re-deciding
     callKind: (IdMapV u64 v: zast.callkind)
+    # the variable a bare name resolved to. The emitter reads this stamp INSTEAD
+    # of resolving by name, which is the whole point of stamping
     atomVariableId: (IdMapV u64 v: ztypes.vid)
     # variable ids the body MUTATES. Recorded at the two ENFORCEMENT points --
     # `lockCallArg` whenever it takes a non-shared lock, and `checkWriteLock` --
@@ -437,8 +549,12 @@ ZTyping: class {
     variableMoved: (IdSet ztypes.vid)
     # dotted-path nodeid -> the internal member name a public alias resolved to
     aliasInternalName: (IdMapR u64 V: String)
+    # calls that construct without naming a constructor
     implicitCreate: (IdMapV u64 v: u64)
+    # the node a function's return type came from, for the diagnostic that has
+    # to point at it
     funcReturnNode: (IdMapV u64 v: u64)
+    # the variable a definition owns, where it owns one
     defVariableId: (IdMapV u64 v: ztypes.vid)
 
     # --- compile-time constant values ---
@@ -449,6 +565,7 @@ ZTyping: class {
     # dozen nodes out of a couple hundred thousand -- so a map, not the dense
     # ListVal nodeType uses.
     nodeConst: (IdMapV u64 v: ztypes.cval)
+    # each type's compile-time constant members, keyed by owner and name
     memberConst: (MapVV constslot v: ztypes.cval)
     # evaluation state per memberConst key: 0 unvisited, 1 evaluating, 2 done.
     # Constants are not written in dependency order, so the evaluator pulls
@@ -485,7 +602,11 @@ ZTyping: class {
     # ccPath is the RESOLVED compiler path (--cc > <target>-gcc > $CC > cc),
     # targetTriple the --target as given ("" for a native build).
     ccPath: String
+    # how the C compiler is reached, folded during TYPE CHECKING so a require:
+    # guard decides before anything is emitted
     ccMode: String
+    # the target as written text, folded at the same time and for the same
+    # reason
     targetTriple: String
     # the qualified paths natives.tbl marks `fold` -- the compile-time values
     # this compiler answers itself. Read by the driver and handed in for the
@@ -499,6 +620,8 @@ ZTyping: class {
     # type-ref -- and resolved once at the end, for TOOLING only: an unresolved
     # one is silent, and nothing here reaches the emitter.
     genericBoundName: (IdMapV u64 v: zast.nameid)
+    # the frame a generic bound resolves in, which is where it was WRITTEN and
+    # not where it is used
     genericBoundFrame: (IdMapV u64 v: ztypes.declid)
     # what a reference resolved to, recorded for TOOLING and read by nothing
     # else. refDecl is the emitter's -- it reads it in five places and adding an
@@ -512,12 +635,14 @@ ZTyping: class {
     # `newType ... genericParam` leaves ZType.def zero -- the tid cannot answer
     # for its declaration either. Resolved once at the end, for TOOLING only.
     genericParamName: (IdMapV u64 v: zast.nameid)
+    # the frame a generic parameter belongs to
     genericParamFrame: (IdMapV u64 v: ztypes.declid)
     # what the end pass made of those: the parameter's own Decl, and the node of
     # the bound it was declared with. The Decl entry is also the MARKER -- a
     # generic parameter and an ordinary field are both fieldDecl, so a Decl
     # alone cannot say which of the two a node is.
     genericParamDecl: (IdMapV u64 v: ztypes.declid)
+    # each generic parameter's bound
     genericParamBound: (IdMapV u64 v: u64)
     # the node id of the expression that IS the statement being checked, or 0.
     # `.drop` ends a lifetime and produces nothing, so it is legal only there --
@@ -554,6 +679,8 @@ ZTyping: class {
     # and forcing one at emission time demands members the program never asked
     # for -- which segfaults a demand-driven compile.
     sumPairFirstArm: (IdMapV u64 v: u64)
+    # the other arm of a two-arm sum, which is what a truthiness test needs once
+    # it knows the falsy one
     sumPairSecondArm: (IdMapV u64 v: u64)
     # truthyCondArm -- for a condition node whose type is a 2-arm sum rather
     # than a bool, the name id of the arm the condition HOLDS: the second one,
@@ -576,6 +703,8 @@ ZTyping: class {
     # two other units the checker names outright. An identity gate compares
     # these, never a spelling: two units may share a name.
     mainUnitRoot: ztypes.declid
+    # the collections unit's declaration, cached because the container checks
+    # reach for it constantly
     collectionsUnitRoot: ztypes.declid
     # the prelude's root DeclId (`core`), the outermost frame of every bare
     # definition lookup, resolved once the def index exists
@@ -593,6 +722,7 @@ ZTyping: class {
     # the environment frame the type-ref was written in (curFrame at record
     # time), so the post-demand stamp resolves it where it was written
     pendingTyperefFrame: (IdMapV u64 v: ztypes.declid)
+    # each unit's own type. A unit IS a type, so it has one
     unitTypesById: (IdMapV u64 v: ztypes.tid)
     # --- declaration tree ---
     # every Decl row, indexed by its DeclId: row 0 is the sentinel and ids are
@@ -620,6 +750,8 @@ ZTyping: class {
     # resolves its `require:` first; membership here is therefore also the
     # answer to "did the program reach this unit".
     requireSeen: (IdSet u64)
+    # the require: units some reference actually reached, which is what decides
+    # whether one is compiled at all
     requireDemanded: (ListVal ztypes.declid)
     # the platform facts a `require:` block guards on are seeded before the
     # first block folds, which is earlier than the main pass would
@@ -629,6 +761,8 @@ ZTyping: class {
     # how many pendingTyperef entries stampPendingTyperefs has processed (its
     # cursor), and whether the post-demand pass has run at all
     typerefsStamped: u64
+    # whether the type-reference pass has run, since what is legal to ask
+    # changes after it
     typerefPassRan: bool
     # type-ref nodes a stamp pass could not stamp because their declaration
     # had not resolved yet; the next pass takes them first
@@ -641,8 +775,12 @@ ZTyping: class {
     # the rest of the run. Keyed by (parent, name), last write wins, a handful
     # of entries.
     pendWrites: (ListVal pendwrite)
+    # whether anything failed, so a caller can stop before reading results that
+    # were never produced
     isError: bool
+    # every diagnostic, in the order found
     errors: (List zast.ErrorData)
+    # the return type in scope, which is what a bare `return` is checked against
     currentReturnTypeId: ztypes.tid
 } as {
     # --- declaration tree ---
@@ -772,6 +910,8 @@ ZTyping: class {
         return r
     }
 
+    # move a declaration's row count by `delta`. Negative undoes a speculative
+    # registration without a second table to undo it from
     declRowsAdd: function {:this declId: ztypes.declid delta: i64} is {
         decl: this.decls.getMut i: declId.u64
         if delta > 0 then {
@@ -781,6 +921,7 @@ ZTyping: class {
         }
     }
 
+    # the variable a declaration owns, where it owns one
     declLocalVarOf: function {t: this.view declId: ztypes.declid} out ztypes.vid is {
         r: ztypes.vid
         decl: t.decls.get i: declId.u64
@@ -835,6 +976,7 @@ ZTyping: class {
         return r
     }
 
+    # a declaration's name as a pool id. Compare these, never the text
     declNameOf: function {t: this.view declId: ztypes.declid} out u32 is {
         r: u32
         decl: t.decls.get i: declId.u64
@@ -859,6 +1001,7 @@ ZTyping: class {
         decl.pending = mark
     }
 
+    # whether the declaration is registered but not yet resolved
     declIsPending: function {this: this.view declId: ztypes.declid} out bool is {
         decl: this.decls.get i: declId.u64
         return decl.pending
@@ -870,6 +1013,8 @@ ZTyping: class {
         decl.walked = true
     }
 
+    # whether its body has been walked, which is what keeps a demand-driven walk
+    # from walking one twice
     declIsWalked: function {t: this.view declId: ztypes.declid} out bool is {
         decl: t.decls.get i: declId.u64
         return decl.walked
@@ -881,6 +1026,8 @@ ZTyping: class {
         decl.resolving = mark
     }
 
+    # the DFS grey mark: true while resolution is inside this declaration, which
+    # is how a cycle is caught rather than followed
     declIsResolving: function {this: this.view declId: ztypes.declid} out bool is {
         decl: this.decls.get i: declId.u64
         return decl.resolving
@@ -892,6 +1039,8 @@ ZTyping: class {
         decl.defined = true
     }
 
+    # whether the declaration has a definition at all, as against a reference
+    # that mentioned it
     declIsDefined: function {this: this.view declId: ztypes.declid} out bool is {
         decl: this.decls.get i: declId.u64
         return decl.defined
@@ -904,6 +1053,7 @@ ZTyping: class {
         if decl.conformerName == 0 then decl.conformerName = nameId
     }
 
+    # the type recorded as conforming, for a declaration that is a conformance
     declConformerOf: function {this: this.view declId: ztypes.declid} out u32 is {
         decl: this.decls.get i: declId.u64
         return decl.conformerName
@@ -1083,6 +1233,8 @@ ZTyping: class {
         return (this.declChildOfId :parentTypeId nameId: nid)
     }
 
+    # a member of `parentTypeId` by name id. The Decl tree IS the member index,
+    # so this is the lookup everything else is built from
     declChildOfId: function {
         t: this.view
         parentTypeId: ztypes.tid
@@ -1118,6 +1270,8 @@ ZTyping: class {
         return (this.declIsLockFieldId :parentTypeId nameId: nid)
     }
 
+    # whether the named member is a lock field, which decides whether a write
+    # through it takes the container exclusively
     declIsLockFieldId: function {
         this: this.view
         parentTypeId: ztypes.tid
@@ -1244,6 +1398,8 @@ ZTyping: class {
         return (this.declIsFnptrFieldId :parentTypeId nameId: nid)
     }
 
+    # whether the named member holds a function pointer, which the emitter calls
+    # through differently from a method
     declIsFnptrFieldId: function {
         this: this.view
         parentTypeId: ztypes.tid
@@ -1776,6 +1932,7 @@ ZTyping: class {
         this.aliasInternalName.set key: nodeid.u64 value: v
     }
 
+    # the internal name an alias resolved to, for the node that wrote the alias
     aliasInternalNameOf: function {this: this.view nodeid: zast.nodeid} out String is {
         r: this.aliasInternalName.get key: nodeid.u64
         match (
@@ -1797,12 +1954,15 @@ ZTyping: class {
         }
     }
 
+    # mark a type as a clone made for a constant evaluation, so nothing
+    # downstream mistakes it for the original
     markAsConstClone: function {:this typeId: ztypes.tid} is {
         tk: typeId
         mv2: true
         this.asConstClone.set key: tk value: mv2
     }
 
+    # whether the type is such a clone
     isAsConstClone: function {this: this.view typeId: ztypes.tid} out bool is {
         tk2: typeId
         r: this.asConstClone.get key: tk2
@@ -1815,6 +1975,7 @@ ZTyping: class {
         }
     }
 
+    # record that a member is a lock field
     setChildLockField: function {:this pool: zast.StringPool.view parentTypeId: ztypes.tid name: StringView} is {
         nid8: pool.find s: name
         if nid8 > 0 then {
@@ -1829,6 +1990,7 @@ ZTyping: class {
         }
     }
 
+    # record that a member holds a function pointer
     setChildFnptrField: function {:this pool: zast.StringPool.view parentTypeId: ztypes.tid name: StringView} is {
         nid8: pool.find s: name
         if nid8 > 0 then {
@@ -1917,6 +2079,8 @@ ZTyping: class {
 
     # --- member ownership ---
 
+    # record a member's ownership annotation, which is what a later call site
+    # checks its argument against
     setChildOwnership: function {:this pool: zast.StringPool.view parentTypeId: ztypes.tid name: StringView ownership: ztypes.zparamownership} is {
         nid8: pool.find s: name
         if nid8 > 0 then {
@@ -1966,8 +2130,12 @@ ZTyping: class {
 # anything else is not that shape at all. Falsy arm first, as the convention
 # the record states the order for asks.
 armside: variant {
+    # neither side: the value is not a two-arm sum, so it has no truthiness
     none: null
+    # the arm whose DISCRIMINATOR is 0 -- falsy is a property of the value,
+    # never of the arm's position
     falsy: null
+    # the other arm
     truthy: null
 }
 
