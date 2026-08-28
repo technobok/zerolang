@@ -25,8 +25,12 @@ Ast: zast.Ast
 # come from here: a synthesised node reserves its own table slot with
 # zast.tableReserve.
 NameCtr: class {
+    # the next `_iterN` number. Node ids do NOT come from here -- a synthesised
+    # node reserves its own table slot
     next: u32
 } as {
+    # take the next number and reserve a table slot for the node that will use
+    # it
     bump: function {:this} out zast.nodeid is {
         id: this.next
         this.next = this.next + 1
@@ -39,9 +43,17 @@ NameCtr: class {
 # `.call` return wrapper-EXPRESSION's nodeid (the pendingMono key; the
 # typechecker collapses that wrapper to optionval for valtype elements).
 GenLowered: class {
+    # the function that replaces the original definition: calling it builds the
+    # state machine rather than running the body
     factory: Node
+    # the class carrying the generator's suspended state, appended to the unit
+    # body
     synthClass: Node
+    # the synth `.call` return wrapper's node, which keys the pending mono. The
+    # checker collapses it to an optionval for a valtype element
     wrapperNodeId: u32
+    # nodes deliberately left unstamped, so a later pass does not read the
+    # absence as a failure
     noStamp: (ListVal u32)
 }
 
@@ -429,8 +441,13 @@ clonePathUnsupported: function {ast: Ast myId: zast.nodeid} out Node is {
 # ownership leaf, accepts path CLONE or none). The base clone feeds the
 # synth wrapper; leaf "take" selects Option, else OptionView.
 GivesParts: class {
+    # a CLONE of the gives path, which feeds the synth wrapper. A clone because
+    # the original stays in the tree
     base: (Option Node)
+    # the ownership leaf. "take" selects Option and anything else selects
+    # OptionView, which is the whole of the choice
     leaf: String
+    # a clone of the accepts path, when the iterator declares one
     acceptsTy: (Option Node)
 }
 
@@ -895,10 +912,19 @@ isYieldValue: function {ast: Ast.view n: Node.view} out bool is {
 # whether any reference sits inside a yielding loop (next iteration
 # resumes past the suspension, so reuse crosses implicitly).
 GenCross: class {
+    # how many yields the walk has passed, which is the clock every other field
+    # is measured against
     yieldCount: u64
+    # each local's first-definition yield count
     firstDef: (MapRV String v: u64)
+    # each local's last-use yield count. A local whose use count exceeds its
+    # definition count CROSSES a suspension and must live in the state class
     maxUse: (MapRV String v: u64)
+    # whether any reference sits inside a yielding loop. It crosses implicitly
+    # there, the next iteration resuming past the suspension
     inLoop: (MapRV String v: bool)
+    # which names are parameters, since a parameter crosses whatever the counts
+    # say
     params: (MapRV String v: bool)
     # `name: yield E` resume-input bindings: per-call borrowed aliases into
     # the caller's storage -- NEVER promoted (a stored pointer would dangle
@@ -988,6 +1014,10 @@ crossWalk: function {ast: Ast.view gc: GenCross n: Node.view inYieldLoop: bool} 
     }
 }
 
+# crossWalkIds -- walk a list of children carrying the crossing state through
+# them in order. `inYieldLoop` stays set once entered, because a reference
+# inside a yielding loop crosses a suspension implicitly: the next iteration
+# resumes past it.
 crossWalkIds: function {ast: Ast.view gc: GenCross ids: (ListVal u32).view inYieldLoop: bool} is {
     with it: ids.iterate do for c: it loop {
         crossWalk :ast :gc n: (ast.nodes.get i: c.u64) :inYieldLoop
@@ -1508,11 +1538,19 @@ ensureExpr: function {
 # none, 1 = atomid, 2 = labelvalue, 3 = assignment; promotedName says the
 # special arm names a promoted local (nameId, at ln:co).
 rwplan: record {
+    # how the row is rewritten: 0 copies it whole, 1 rewrites every child, 2 is
+    # a dottedpath whose child is a field label, 3 a binop whose operator
+    # clones, 4 a caseclause whose arm pattern clones
     mode: u32
+    # which special arm it is: 0 none, 1 atomid, 2 labelvalue, 3 assignment
     special: u32
+    # whether that special arm names a local promoted into the state class
     promotedName: bool
+    # the promoted local's name, when it names one
     nameId: zast.nameid
+    # the line to report it at
     ln: u32
+    # the column to report it at
     co: u32
 }
 

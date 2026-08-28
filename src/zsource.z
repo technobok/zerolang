@@ -26,14 +26,26 @@ Ast: zast.Ast
 # the command line to every rule, so a new rule is a field here, not a
 # parameter added to every layer between them.
 lintopts: record {
+    # run the typecheck-tier rules too, which needs the project's src and system
+    # directories
     full: bool
+    # the column width to wrap at, and to report W005 against; 0 turns both off
     lineLength: u32
+    # run L009, the variant/union member casing rule
     casing: bool
+    # run L016, undocumented definitions
     docs: bool
+    # run L017, undocumented parameters
     docParams: bool
+    # run L018, undocumented members
     docFields: bool
+    # measure a unit's WHOLE surface rather than only its `public:` block.
+    # Without it a unit exporting a handful of names reports almost nothing
     docsPrivate: bool
+    # run L024 and L025, which judge the docs that exist rather than counting
+    # the ones missing
     docsQuality: bool
+    # run the A-codes, which are advisory and ratcheted rather than gating
     arch: bool
 }
 
@@ -760,20 +772,41 @@ endsWithNewline: function {src: StringView} out bool is {
 # its line table, the collected diagnostics and fix edits, and the raw
 # token stream shared across the checks.
 Analysis: class {
+    # the file being analysed, for the diagnostics to name
     path: String
+    # its full text, owned for the analysis's life
     source: String
+    # the text split into lines, which the doc and wrap rules read directly
+    # rather than through the tree
     lines: (List String)
+    # each line's byte offset, so a token's position converts to an offset
+    # without rescanning
     lineStart: (ListVal u64)
+    # the findings, in the order they were made
     diags: (List zdiag.Diagnostic)
+    # the byte-range replacements a fix would apply
     edits: (List zfix.Edit)
+    # the width wrapping targets; 0 disables it
     wrapWidth: u32
+    # a byte offset before which nothing is wrapped
     wrapSkip: u64
+    # whether this pass wrapped anything. Only the FIRST over-long construct per
+    # pass is wrapped, and the fixpoint handles the rest
     wrapFound: bool
+    # the line the current wrap began on, so the same one is not wrapped twice
     wrapStart: u64
+    # each opening delimiter's matching close, so a signature's `}` is found by
+    # the map rather than by line end
     delimClose: (IdMapV u64 v: u64)
+    # the token stream, for the rules that need tokens and not a tree
     fastToks: (List tokenize.Token)
+    # how deep in nested functions the walk is
     funcDepth: u64
+    # the argument groups a wrap has already decided about
     wrapGroups: (ListVal u64)
+    # which optional rules this run enables. One value threads from the command
+    # line to every rule, so a new rule is a field here and not a parameter on
+    # every layer between
     opts: lintopts
 } as {
     # parseErrorCount -- how many collected diagnostics are hard (ERROR) -- i.e.
@@ -1484,6 +1517,8 @@ Analysis: class {
         } else null
     }
 
+    # the id-taking entry to the type-casing walk, so the caller can lend the
+    # tree without holding a node view
     walkTypeCasingAt: function {:this ast: Ast.view nId: zast.nodeid} is {
         n: ast.nodes.get i: nId.u64
         match (
@@ -1622,6 +1657,7 @@ Analysis: class {
         )
     }
 
+    # the root entry to the member-casing walk
     walkCasingProgram: function {:this prog: Node.view} is {
         match (
             prog
@@ -1714,6 +1750,7 @@ Analysis: class {
         this.walkIds :ast ids: (zast.childIds :ast :n)
     }
 
+    # walk a list of child nodes in order
     walkIds: function {:this ast: Ast.view ids: (ListVal u32).view} is {
         with it: ids.iterate do for c: it loop this.walk :ast n: (ast.nodes.get i: c.u64)
     }
@@ -1732,6 +1769,8 @@ Analysis: class {
         this.literalCompareSide :ast id: rhsId
     }
 
+    # one side of a comparison, answering whether it is a string literal --
+    # which is what A001 reports
     literalCompareSide: function {:this ast: Ast.view id: zast.nodeid} is {
         n: ast.nodes.get i: id.u64
         txt: plainLiteralText :ast :n
@@ -3428,6 +3467,7 @@ Analysis: class {
         this.walkSufIds :ast ids: (zast.childIds :ast :n) :uname :st :funcretId
     }
 
+    # walk a list of children for the numeric-suffix rule
     walkSufIds: function {:this ast: Ast.view ids: (ListVal u32).view uname: StringView st: zenv.ZSymbolTable funcretId: zast.nodeid} is {
         with it: ids.iterate do for c: it loop {
             this.walkSuf :ast n: (ast.nodes.get i: c.u64) :uname :st :funcretId
@@ -3639,6 +3679,8 @@ Analysis: class {
         }
     }
 
+    # a named argument whose value is a literal, which the composed-key rule
+    # reads
     archNamedLiteral: function {:this ast: Ast.view id: zast.nodeid namedIds: (IdSet u64).view} is {
         n: ast.nodes.get i: id.u64
         txt: plainLiteralText :ast :n
@@ -4554,8 +4596,12 @@ Analysis: class {
 
 # nodeinfo -- a node's synthetic id and source position.
 nodeinfo: record {
+    # the node
     id: u32
+    # the source line, which is what a diagnostic reports rather than the
+    # byte offset the wrap rules work in
     line: u32
+    # the source column, paired with line
     col: u32
 }
 
@@ -4623,8 +4669,11 @@ literalFitsBase: function {numstr: StringView} out bool is {
 # SufRec -- a candidate suffix: the suffix type name ("" when not a candidate) and the
 # position of the suffix's type token.
 SufRec: class {
+    # the type name the suffix spelled
     tname: String
+    # the line the suffix is on
     line: u32
+    # the column it starts at
     col: u32
 }
 
