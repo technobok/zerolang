@@ -33,6 +33,13 @@
 
 #--: Overview
 
+The declarations themselves live in #~"lib/system/io.z", which is the one
+place they are written. Every definition, field, arm, generic parameter and
+own-line parameter there carries its own doc comment, and #~"zls" surfaces
+each on hover; the corpus runner ratchets that coverage under #~"make ci".
+This page is the prose and the worked examples -- read it for how the unit
+is meant to be used, and the source for the exact surface.
+
 The #~"io" unit provides input / output: stream protocols, file
 handles, filesystem operations, buffered readers / writers, and
 the standard streams. Most entry points return #~"Result t: T e:
@@ -147,21 +154,6 @@ the core types (#~"Reader", #~"Writer", #~"File", #~"openmode",
 
 #--: ioerror
 
-#code language=zerolang: """
-  ioerror: union {
-      notfound:         null
-      permissiondenied: null
-      interrupted:      null
-      invalidpath:      String
-      eof:              null
-      badencoding:      null
-      exists:           null
-      isdir:            null
-      notdir:           null
-      nospace:          null
-      other:            String
-  }
-"""
 
 The failure arm of every fallible I/O operation. A union (not a
 variant) because two arms -- #~"invalidpath" and #~"other" --
@@ -201,14 +193,6 @@ arms it cares about and treats the rest as #~"other":
 
 #--: filekind
 
-#code language=zerolang: """
-  filekind: variant {
-      file:    null
-      dir:     null
-      symlink: null
-      other:   null
-  }
-"""
 
 Coarse classification reported by #~"io.stat" / #~"io.lstat" in
 #~"filestat.kind". Under #~"io.stat" symlinks are always
@@ -217,19 +201,6 @@ followed so #~"symlink" only surfaces from #~"io.lstat".
 
 #--: filestat
 
-#code language=zerolang: """
-  filestat: record {
-      kind:          filekind
-      size:          u64
-      mtimeSeconds: u64
-      atimeSeconds: u64
-      ctimeSeconds: u64
-      mode:          u32
-      device:        u64
-      inode:         u64
-      nlink:         u64
-  }
-"""
 
 Metadata returned by #~"io.stat" and #~"io.lstat". A record
 valtype: copied on assignment.
@@ -258,13 +229,6 @@ valtype: copied on assignment.
 
 #--: seekorigin
 
-#code language=zerolang: """
-  seekorigin: variant {
-      start:   null
-      current: null
-      end:     null
-  }
-"""
 
 Origin for #~"Seeker.seek to:" offsets. #~"start" is the byte-0
 reference; #~"current" uses the current head; #~"end" is the
@@ -274,13 +238,6 @@ backwards).
 
 #--: openmode
 
-#code language=zerolang: """
-  openmode: variant {
-      read:   null
-      write:  null
-      append: null
-  }
-"""
 
 Passed to #~"io.open" to choose how the fd is acquired:
 
@@ -295,11 +252,6 @@ Passed to #~"io.open" to choose how the fd is acquired:
 
 #--: reader
 
-#code language=zerolang: """
-  reader: protocol {
-      read: function {:this into: Bytes max: u64} out (Result (Box u64) E: IoError)
-  }
-"""
 
 Byte-oriented readable stream. Implementors fill #~"into" with
 up to #~"max" bytes and return the count actually read; #~"0"
@@ -313,12 +265,6 @@ sees the new bytes after return.
 
 #--: writer
 
-#code language=zerolang: """
-  writer: protocol {
-      write: function {:this from: ByteView} out (Result (Box u64) E: IoError)
-      flush: function {:this} out (Result T: null E: IoError)
-  }
-"""
 
 Byte-oriented writable stream. #~"write from: bv" emits the
 view's bytes; the return value is the count actually written
@@ -333,11 +279,6 @@ not auto-flush on scope exit.
 
 #--: closer
 
-#code language=zerolang: """
-  closer: protocol {
-      close: function {:this} out (Result T: null E: IoError)
-  }
-"""
 
 Explicit resource release. Errors here typically indicate a
 delayed write failure (kernel-buffered data couldn't be
@@ -349,11 +290,6 @@ Implementors: #~"File".
 
 #--: seeker
 
-#code language=zerolang: """
-  seeker: protocol {
-      seek: function {:this to: i64 from: seekorigin} out (Result (Box u64) E: IoError)
-  }
-"""
 
 Reposition the read / write head. Returns the new absolute
 position measured from the start.
@@ -363,22 +299,6 @@ Implementors: #~"File".
 
 #--: file
 
-#code language=zerolang: """
-  file: class {
-      fd:     i32
-      closed: bool
-      close:  function {:this} out (Result T: null E: IoError) is native
-      read:   function {:this into: Bytes max: u64} out (Result (Box u64) E: IoError) is native
-      write:  function {:this from: ByteView} out (Result (Box u64) E: IoError) is native
-      flush:  function {:this} out (Result T: null E: IoError) is native
-      seek:   function {:this to: i64 from: seekorigin} out (Result (Box u64) E: IoError) is native
-  } as {
-      :Reader
-      :Writer
-      :Closer
-      :Seeker
-  }
-"""
 
 An open OS file handle. Wraps a POSIX file descriptor.
 Single-owner: scope exit runs the destructor, which closes the
@@ -417,9 +337,6 @@ Or make the close error surface explicit:
 
 #--: open
 
-#code language=zerolang: """
-  open: function as { T: StringLike.generic } in {path: T mode: openmode} out (Result T: File E: IoError) is native
-"""
 
 Acquire a #~"File" handle at #~"Path" in the requested mode.
 The returned file owns its fd.
@@ -436,11 +353,6 @@ The returned file owns its fd.
 
 #--: Standard streams
 
-#code language=zerolang: """
-  stdin:  function out Reader  is native
-  stdout: function out Writer  is native
-  stderr: function out Writer  is native
-"""
 
 Borrowed protocol handles over the three static POSIX fds (0 /
 1 / 2). Each call returns a fresh handle but the underlying fd
@@ -459,9 +371,6 @@ Most text output goes through #~"print", which wraps
 
 #--: print
 
-#code language=zerolang: """
-  print: function as { T: StringLike.generic } in { msg: T } is native
-"""
 
 Write #~"msg" to stdout, followed by a newline.
 
@@ -485,9 +394,6 @@ without #~"io.".
 
 #--: eprintln
 
-#code language=zerolang: """
-  eprintln: function as { T: StringLike.generic } in {msg: T} is native
-"""
 
 Write #~"msg" to stderr followed by a newline. Void return --
 intentionally never fails; if the underlying write errors, the
@@ -497,9 +403,6 @@ API for error-reporting writes that need to surface failures.
 
 #--: read_text
 
-#code language=zerolang: """
-  readText: function as { T: StringLike.generic } in {path: T} out (Result T: String E: IoError) is native
-"""
 
 Read the entire file at #~"Path" into a newly-allocated heap
 UTF-8 string. No encoding validation in this phase -- bytes are
@@ -509,9 +412,6 @@ a text reader validates UTF-8 during iteration.
 
 #--: write_text
 
-#code language=zerolang: """
-  writeText: function as { T: StringLike.generic U: StringLike.generic } in {path: T content: U} out (Result T: null E: IoError) is native
-"""
 
 Create (or truncate) the file at #~"Path" and write #~"content".
 Intermediate directories are NOT created -- the parent directory
@@ -520,9 +420,6 @@ must already exist. Use #~"io.mkdirp" first if needed.
 
 #--: append_text
 
-#code language=zerolang: """
-  appendText: function as { T: StringLike.generic U: StringLike.generic } in {path: T content: U} out (Result T: null E: IoError) is native
-"""
 
 Open (or create) the file at #~"Path" and append #~"content" to
 the end. Atomicity is not guaranteed across multiple processes;
@@ -531,9 +428,6 @@ use OS-level locks for that.
 
 #--: exists
 
-#code language=zerolang: """
-  exists: function as { T: StringLike.generic } in {path: T} out bool is native
-"""
 
 Returns true if anything (file, directory, symlink, ...) exists
 at #~"Path". A permission-denied on the parent directory also
@@ -543,9 +437,6 @@ permission-denied, use #~"stat".
 
 #--: stat
 
-#code language=zerolang: """
-  stat: function as { T: StringLike.generic } in {path: T} out (Result (Box filestat) E: IoError) is native
-"""
 
 Return metadata for #~"Path". Follows symlinks -- use
 #~"io.lstat" to inspect the link itself. Errors surface in the
@@ -554,9 +445,6 @@ standard ioerror shape.
 
 #--: lstat
 
-#code language=zerolang: """
-  lstat: function as { T: StringLike.generic } in {path: T} out (Result (Box filestat) E: IoError) is native
-"""
 
 Like #~"stat" but does not follow symlinks. On a symbolic link,
 #~"kind" is #~"symlink" and #~"size", #~"mtimeSeconds",
@@ -565,9 +453,6 @@ Like #~"stat" but does not follow symlinks. On a symbolic link,
 
 #--: readlink
 
-#code language=zerolang: """
-  readlink: function as { T: StringLike.generic } in {path: T} out (Result T: String E: IoError) is native
-"""
 
 Return the target path a symbolic link points at. Does not
 follow the link. Errors: #~"notfound" when #~"Path" does not
@@ -577,9 +462,6 @@ usual permission / I/O arms otherwise.
 
 #--: list_dir
 
-#code language=zerolang: """
-  listDir: function as { T: StringLike.generic } in {path: T} out (Result T: (List T: String) E: IoError) is native
-"""
 
 Enumerate the entries of directory #~"Path". Returns bare entry
 names (not full paths), excluding #~"." and #~"..", in the order
@@ -593,9 +475,6 @@ the process can't read it.
 
 #--: mkdir
 
-#code language=zerolang: """
-  mkdir: function as { T: StringLike.generic } in {path: T} out (Result T: null E: IoError) is native
-"""
 
 Create a directory at #~"Path" with default permissions
 (#~"0755"). Fails with #~"IoError.exists" if the target already
@@ -605,9 +484,6 @@ is missing. Use #~"io.mkdirp" to create intermediate parents.
 
 #--: mkdirp
 
-#code language=zerolang: """
-  mkdirp: function as { T: StringLike.generic } in {path: T} out (Result T: null E: IoError) is native
-"""
 
 Create #~"Path" and every missing parent directory along the
 way (like #~"mkdir -p"). Permissions #~"0755" on each new
@@ -618,9 +494,6 @@ file.
 
 #--: remove
 
-#code language=zerolang: """
-  remove: function as { T: StringLike.generic } in {path: T} out (Result T: null E: IoError) is native
-"""
 
 Delete a file or an empty directory. Non-empty directories
 fail with #~"IoError.other" (ENOTEMPTY).
@@ -628,9 +501,6 @@ fail with #~"IoError.other" (ENOTEMPTY).
 
 #--: remove_tree
 
-#code language=zerolang: """
-  removeTree: function {path: StringView}
-  """
 
 Best-effort recursive delete of the tree at #~"path". Entries are
 #~"lstat"-ed, so symbolic links are removed as links and never
@@ -643,9 +513,6 @@ runtime-backed #~"io" unit -- see the compiler doc's
 
 #--: rename
 
-#code language=zerolang: """
-  rename: function as { T: StringLike.generic U: StringLike.generic } in {from: T to: U} out (Result T: null E: IoError) is native
-"""
 
 Move the entity at #~"from" to #~"to". If #~"to" already
 exists, POSIX replaces it (file overwrites file; directory
@@ -655,9 +522,6 @@ the same filesystem.
 
 #--: symlink
 
-#code language=zerolang: """
-  symlink: function as { T: StringLike.generic U: StringLike.generic } in {target: T link: U} out (Result T: null E: IoError) is native
-"""
 
 Create a symbolic link at #~"link" pointing at #~"target". The
 target is stored verbatim -- not resolved, not validated, not
@@ -667,18 +531,6 @@ to anything.
 
 #--: bufwriter
 
-#code language=zerolang: """
-  bufwriter: class {
-      sink: Writer.borrow
-      buf:  Bytes
-      cap:  u64
-  } as {
-      :Writer
-      create: function {to: Writer.borrow capacity: u64} out this is native
-      write:  function {:this from: ByteView} out (Result (Box u64) E: IoError) is native
-      flush:  function {:this} out (Result T: null E: IoError) is native
-  }
-"""
 
 Buffered adapter over any #~"Writer". Accumulates up to #~"cap"
 bytes in #~"buf", flushing to the underlying sink when the
@@ -703,18 +555,6 @@ rejects such access at the source.
 
 #--: bufreader
 
-#code language=zerolang: """
-  bufreader: class {
-      source: Reader.borrow
-      buf:    Bytes
-      head:   u64
-      cap:    u64
-  } as {
-      :Reader
-      create: function {from: Reader.borrow capacity: u64} out this is native
-      read:   function {:this into: Bytes max: u64} out (Result (Box u64) E: IoError) is native
-  }
-"""
 
 Buffered adapter over any #~"Reader". Issues exactly one source
 #~"read" per #~"capacity" bytes of data, regardless of how many
@@ -733,16 +573,6 @@ and the next #~"read" call refills it from the source.
 
 #--: textwriter
 
-#code language=zerolang: """
-  textwriter: class {
-      sink: BufWriter.borrow
-  } as {
-      create:     function {to: BufWriter.borrow} out this is native
-      write:      function as { T: StringLike.generic } in {:this from: T} out (Result (Box u64) E: IoError) is native
-      writeLine: function as { T: StringLike.generic } in {:this from: T} out (Result (Box u64) E: IoError) is native
-      flush:      function {:this} out (Result T: null E: IoError) is native
-  }
-"""
 
 String-oriented adapter over a #~"BufWriter". Writes go through
 the buffered sink so callers benefit from batched syscalls.
@@ -763,16 +593,6 @@ bufwriter locks the underlying writer. As with bufwriter,
 
 #--: textreader
 
-#code language=zerolang: """
-  textreader: class {
-      source: BufReader.borrow
-      buf:    Bytes
-  } as {
-      create:    function {from: BufReader.borrow} out this is native
-      readLine: function {:this} out (Result T: String E: IoError) is native
-      call:      function {:this} out (Option T: String) is native
-  }
-"""
 
 String-oriented adapter over a #~"BufReader". Reads flow
 through the buffered source; line boundaries are found by

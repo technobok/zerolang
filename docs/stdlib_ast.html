@@ -104,6 +104,12 @@ Table of Contents</div>
 </nav>
 <main id="content">
 <h2 id="overview"><a href="#overview">1. Overview</a></h2>
+<p>The declarations themselves live in <code>lib/system/ast.z</code>, which is the one
+place they are written. Every definition, field, arm, generic parameter and
+own-line parameter there carries its own doc comment, and <code>zls</code> surfaces
+each on hover; the corpus runner ratchets that coverage under <code>make ci</code>.
+This page is the prose and the worked examples -- read it for how the unit
+is meant to be used, and the source for the exact surface.</p>
 <p>The <code>ast</code> unit exposes the compiler's parser and syntax-tree
 types as a public API -- the analogue of Python's <code>ast</code> module.
 <code>ast.parseSource</code> turns a source string into a <code>Node</code> tree,
@@ -144,7 +150,6 @@ syntactic and does not resolve names or types.</p>
 <li><a href="#errors"><strong>errCode</strong> -- <code>function {c: err} out u32</code></a></li>
 </ul>
 <h2 id="parsesource"><a href="#parsesource">3. parsesource</a></h2>
-<pre><code class="language-zerolang">  parseSource: function {source: String.take} out Node</code></pre>
 <p>Parse a single source string into a <code>Node</code> tree, in memory --
 no <code>ZVfs</code>, no filesystem, no type checking. The result is a
 <code>Node.program</code> carrying the tree's <code>Ast</code> (the master node table
@@ -156,10 +161,6 @@ the <code>error</code> arms to find them.</p>
 <pre><code class="language-zerolang">  root: ast.parseSource source: src.copy
   match (root) case program then { print "parsed" } else {}</code></pre>
 <h2 id="parser"><a href="#parser">4. parser</a></h2>
-<pre><code class="language-zerolang">  Parser: class as {
-      create: function out this
-      parse:  function {:this vfs: zvfs.ZVfs rootid: u32 mainUnitName: String} out Node
-  }</code></pre>
 <p>The full parser. <code>parse</code> loads <code>mainUnitName</code> and every unit
 it references from the <code>vfs</code> and returns a <code>Node.program</code>
 spanning them all -- the entry point the compiler itself uses.
@@ -189,24 +190,6 @@ node space -- a <code>nodeid</code> indexes <code>Ast.nodes</code> directly, and
 same-space only and read their sentinel with <code>isZero</code>; a container
 never carries either, so a <code>(ListVal u32)</code> of child ids mints at the
 read.</p>
-<pre><code class="language-zerolang">  Ast: class {
-      nodes: (List Node)     # the master node table; a nodeid indexes it
-      names: StringPool      # interned identifier text
-      ...                    # unit roots, file segments
-  }
-
-  StringPool: class as {
-      set:      function {:this s: StringView} out nameid   # intern; copies on first sight
-      setOwned: function {:this s: String.take} out nameid  # intern a donated String
-      find:     function {t: this.view s: StringView} out nameid  # 0 when absent
-      get:      function {:this id: nameid} out String       # owned copy; panics out of range
-      eq:       function {:this id: nameid s: StringView} out bool
-      length:   function {:this} out u64                     # row count, sentinel included
-  }
-
-  nameTextEq:   function {ast: Ast ref: nameid s: StringView} out bool
-  nameTextCopy: function {ast: Ast ref: nameid} out String
-  nameTextAt:   function {ast: Ast.view ref: nameid} out String.borrow</code></pre>
 <p>The <code>program</code> node carries the tree's <code>Ast</code>. Identifier text is
 <strong>interned</strong>: <code>atomid</code> / <code>labelvalue</code> arms hold a <code>nameid</code>
 pool id in <code>name</code> (the id indexes the pool; <code>0</code> is a sentinel row
@@ -231,19 +214,12 @@ source for the scope.</p>
 seed, so ids must never be persisted or compared across two parses
 -- serialize the text instead.</p>
 <h2 id="pos"><a href="#pos">7. pos</a></h2>
-<pre><code class="language-zerolang">  nodepos: record { line: u32  col: u32 }
-  posOf:   function {n: Node} out nodepos</code></pre>
 <p><code>posOf</code> returns the source position of an <strong>operand-position</strong>
 node (the arms that appear inside expressions). Definition,
 statement, and clause arms are not operand-position and return
 <code>(0, 0)</code> -- read their <code>lineno</code> / <code>colno</code> fields directly
 instead.</p>
 <h2 id="errors"><a href="#errors">8. errors</a></h2>
-<pre><code class="language-zerolang">  ErrorData: class {
-      nodeid: nodeid  lineno: u32  colno: u32  width: u32
-      err: err  msg: String  fsno: zvfs.fsno  note: String  hint: String
-  }
-  errCode: function {c: err} out u32</code></pre>
 <p>The payload of a <code>Node.error</code> arm. <code>msg</code> is the human
 message; <code>err</code> is the classifying <code>variant</code> and <code>errCode</code>
 maps it to its numeric <code>E####</code> code (parser/syntax errors are

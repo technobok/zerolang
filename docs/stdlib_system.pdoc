@@ -33,6 +33,13 @@
 
 #--: Overview
 
+The declarations themselves live in #~"lib/system/system.z", which is the one
+place they are written. Every definition, field, arm, generic parameter and
+own-line parameter there carries its own doc comment, and #~"zls" surfaces
+each on hover; the corpus runner ratchets that coverage under #~"make ci".
+This page is the prose and the worked examples -- read it for how the unit
+is meant to be used, and the source for the exact surface.
+
 The #~"system" unit holds the types that are part of the language
 fabric: numeric primitives, booleans, strings, option / result
 containers, typedefs, and the control-flow natives. Everything in
@@ -123,24 +130,6 @@ operation can fail for reasons the caller needs to handle
 
 #--: Numeric types
 
-#code language=zerolang: """
-  i8:   record { ... } as { tag: tag }
-  i16:  record { ... } as { tag: tag }
-  i32:  record { ... } as { tag: tag }
-  i64:  record { ... } as { tag: tag }
-  i128: record { ... } as { tag: tag }   # in the wideint subunit
-  u8:   record { ... } as { tag: tag }
-  u16:  record { ... } as { tag: tag }
-  u32:  record { ... } as { tag: tag }
-  u64:  record { ... } as { tag: tag }
-  u128: record { ... } as { tag: tag }   # in the wideint subunit
-  f16:  record { ... } as { tag: tag }   # in the halffloat subunit
-  f32:  record { ... } as { tag: tag }
-  f64:  record { ... } as { tag: tag }
-  f128: record { ... } as { tag: tag }   # in the quadfloat subunit
-  c8:   record { ... } as { tag: tag }
-  c32:  record { ... } as { tag: tag }
-"""
 
 Sixteen numeric record types: five signed integers, five unsigned
 integers, four IEEE 754 floats (#~"f16" half precision, #~"f32",
@@ -314,10 +303,6 @@ determined at C compile time.
 
 #--: literal types
 
-#code language=zerolang: """
-  intliteral:   record is native as { i8: ... c32: ...  create: null }
-  floatliteral: record is native as { f16: f32: f64: f128:  create: null }
-"""
 
 The type a numeric literal wears before context pins it. #~"intliteral"
 declares a conversion to each of the sixteen scalars; #~"floatliteral"
@@ -345,14 +330,6 @@ prelude entirely.
 
 #--: bool
 
-#code language=zerolang: """
-  bool: variant { false: null  true: null } as {
-      tag: u8.tag
-      ==  / != / < / <= / > / >=   # native, same-type rhs, out bool
-  }
-  false: bool.false
-  true:  bool.true
-"""
 
 Two-state valtype declared as a variant with null-payload arms
 and a u8 tag. It declares the six comparison operators
@@ -393,9 +370,6 @@ level; see #> to=./grammar.html: grammar.
 
 #--: null
 
-#code language=zerolang: """
-  null: record is native
-"""
 
 The unit type. Exactly one value, also spelled #~"null". Used as
 the payload in variant / union arms that carry no data
@@ -409,9 +383,6 @@ non-nullable at the language level; #~"Option" handles the
 
 #--: never
 
-#code language=zerolang: """
-  never: record is native
-"""
 
 The bottom type: the empty type, with no values. Used as the
 return type of functions that never return normally (#~"error",
@@ -426,9 +397,6 @@ determine unreachable-code errors and branch exhaustiveness. See
 
 #--: any
 
-#code language=zerolang: """
-  Any: union is native
-"""
 
 The universal supertype: the union of all types -- and #b:"not a
 user-reachable name". #~"Any" is retired from the user surface: it
@@ -461,24 +429,6 @@ zerolang does not do runtime type tagging at that level.
 
 #--: string
 
-#code language=zerolang: """
-  String: class is native as {
-      :Text
-      ==  / != / <  / <= / >  / >=: function {:this rhs: String} out bool
-      compare:    function {:this rhs: String} out i32
-      +:          function as { T: StringLike.generic } in {:this rhs: T} out String
-      stringView: function {:this} out StringView
-      substring:  function {:this from: u64 to: u64} out StringView
-      length:     function {:this} out u64
-      capacity:   function {:this} out u64
-      append:     function as { T: StringLike.generic } in {:this s: T}
-      reserve:    function {:this n: u64}
-      shrink:     function {:this}
-      copy:       function {:this} out String
-      hash:       function {:this} out u64
-      create:     function {} out type
-  }
-"""
 
 #~"create" (zero arguments) is the empty string; the bare type name
 constructs it implicitly (#~"buf: String"), as does each numeric
@@ -557,56 +507,6 @@ destroys.
 
 #--: stringView
 
-#code language=zerolang: """
-  StringView: class is native as {
-      length / == / != / < / <= / > / >= / compare  ...
-      string:            function {:this} out String
-
-      # non-allocating queries
-      isEmpty:          function {:this} out bool
-      isAscii:          function {:this} out bool
-      startsWith:       function as { T: StringLike.generic } in {:this prefix: T} out bool
-      endsWith:         function as { T: StringLike.generic } in {:this suffix: T} out bool
-      contains:          function as { T: StringLike.generic } in {:this needle: T} out bool
-      indexOf:          function as { T: StringLike.generic } in {:this needle: T} out (optionval t: u64)
-      lastIndexOf:     function as { T: StringLike.generic } in {:this needle: T} out (optionval t: u64)
-      byteAt:           function {:this i: u64} out (optionval t: u8)
-
-      # view-returning slicing
-      substring:        function {:this from: u64 to: u64} out StringView
-      trim:              function {:this} out StringView
-      trimStart:        function {:this} out StringView
-      trimEnd:          function {:this} out StringView
-      stripPrefix:      function as { T: StringLike.generic } in {:this p: T} out (Option T: StringView)
-      stripSuffix:      function as { T: StringLike.generic } in {:this s: T} out (Option T: StringView)
-
-      # iteration
-      split:             function as { T: StringLike.generic } in {:this sep: T} out Splitter
-      splitOnce:        function as { T: StringLike.generic } in {:this sep: T} out (optionval t: u64)
-      lines:             function {:this} out LinesIter
-      codepoints:        function {:this} out CpIter
-
-      # allocating transforms
-      toLowerAscii:    function {:this} out String
-      toUpperAscii:    function {:this} out String
-      replace:           function as { T: StringLike.generic U: StringLike.generic } in {:this needle: T replacement: U} out String
-      replaceFirst:     function as { T: StringLike.generic U: StringLike.generic } in {:this needle: T replacement: U} out String
-      repeated:          function {:this n: u64} out String
-      concat:            function as { T: StringLike.generic } in {:this other: T} out String
-      +:                 function as { T: StringLike.generic } in {:this rhs: T} out String
-
-      # counts
-      count:             function {:this} out u64
-
-      # numeric parse
-      parseI64:         function {:this} out (Result T: i64 E: parseerror)
-      parseU64:         function {:this} out (Result T: u64 E: parseerror)
-      parseF64:         function {:this} out (Result T: f64 E: parseerror)
-
-      # hashing
-      hash:              function {:this} out u64
-  }
-"""
 
 Readonly borrowed view over UTF-8 text. A 16-byte
 #~"(pointer, length)" pair that can point into a #~"String"'s
@@ -706,11 +606,6 @@ generic accept a plain view.
 
 #--: String iterators
 
-#code language=zerolang: """
-  cpiter:    class is native as { call: function {:this} out (optionval t: u32) }
-  splitter:  class is native as { call: function {:this} out (Option T: StringView) }
-  linesiter: class is native as { call: function {:this} out (Option T: StringView) }
-"""
 
 Iterator classes built by #~"StringView.codepoints", #~".split",
 and #~".lines". Opaque to user code -- only the #~".call" method
@@ -741,13 +636,6 @@ usual form.
 
 #--: text and StringLike
 
-#code language=zerolang: """
-  Text: protocol {
-      stringView: function {:this} out StringView
-  }
-
-  StringLike: union { :StringView :Text }
-"""
 
 The #~"Text" protocol is a minimal conformance: any type with a
 #~"stringView: function {:this} out StringView" method can
@@ -768,17 +656,6 @@ full rule.
 
 #--: option
 
-#code language=zerolang: """
-  Option: union {
-      none: null
-      some: t
-  } as { t: AnyRef.generic }
-
-  OptionView: union {
-      none: null
-      some: t.borrow
-  } as { t: Any.generic }
-"""
 
 Discriminated union for optional #b:"reftype" values. Two arms:
 #~"some" holds a #~"t"; #~"none" holds #~"null". Use #~"Option"
@@ -819,12 +696,6 @@ the saved feedback on match narrowing).
 
 #--: optionval
 
-#code language=zerolang: """
-  optionval: variant {
-      none: null
-      some: t
-  } as { t: anyval.generic }
-"""
 
 Variant (valtype-payload) counterpart to #~"Option". Same
 semantics, but the payload is stored inline (no heap allocation
@@ -838,15 +709,6 @@ return #~"optionval(u64)" / #~"optionval(u8)".
 
 #--: result
 
-#code language=zerolang: """
-  Result: union {
-      err: e
-      ok:  t
-  } as {
-      t: AnyRef.generic
-      e: AnyRef.generic
-  }
-"""
 
 Two-armed union for operations that can fail. The #~"ok" arm
 carries the success value; the #~"err" arm carries the error.
@@ -885,13 +747,6 @@ narrow the subject.
 
 #--: parseerror
 
-#code language=zerolang: """
-  parseerror: variant {
-      empty:         null
-      invalidDigit: null
-      overflow:      null
-  }
-"""
 
 Error variants for the numeric-parse methods on #~"StringView"
 (#~"parseI64" / #~"parseU64" / #~"parseF64"). All arms are
@@ -909,10 +764,6 @@ allocation:
 
 #--: bytes and byteView
 
-#code language=zerolang: """
-  Bytes:    class { val: (ListVal u8).typedef }
-  ByteView: class { val: (ListViewVal t: u8).typedef }
-"""
 
 Two typedef classes for binary data: #~"Bytes" is an owned,
 growable buffer; #~"ByteView" is a readonly borrowed view into
@@ -944,10 +795,6 @@ as a non-owned parameter.
 
 #--: path and pathview
 
-#code language=zerolang: """
-  path:     class { val: String.typedef }
-  pathview: class { val: StringView.typedef }
-"""
 
 Typedef classes over #~"String" / #~"StringView" for filesystem
 paths. The wrapping gives I/O signatures a distinct path name and
@@ -961,9 +808,6 @@ operations flow through via the typedef rule.
 
 #--: box
 
-#code language=zerolang: """
-  Box: class {} as { t: anyval.generic }
-"""
 
 Generic reftype wrapper over a #b:"valtype" (the bound rejects
 reftypes -- they are already references). Converts a valtype
@@ -991,9 +835,6 @@ on scope exit.
 
 #--: typedef
 
-#code language=zerolang: """
-  typedef: record is native as { from: Any.generic }
-"""
 
 Zero-overhead wrapper type. Parameterised by the wrapped type.
 Users don't instantiate #~"typedef" directly -- they define a
@@ -1011,9 +852,6 @@ type in signatures but with full backward compatibility to
 
 #--: tag
 
-#code language=zerolang: """
-  tag: record is native as { t: anyval.generic }
-"""
 
 Generic record that carries a variant / union discriminator's
 storage type. The #~"tag: tag" field in numeric records and user
@@ -1025,9 +863,6 @@ the tag field and accesses it internally.
 
 #--: error
 
-#code language=zerolang: """
-  error: function {msg: String} out never is native
-"""
 
 Compile-time error. Invoking #~"error msg: ..." at type-check
 time emits the message as a compile error and aborts
@@ -1046,9 +881,6 @@ that must be statically dead; the #~"never" return type lets
 
 #--: panic
 
-#code language=zerolang: """
-  panic: function {msg: String} out never is native
-"""
 
 Runtime terminal error. #~"panic msg: ..." prints
 #~"zpanic: <msg>" to stderr and exits the process with status
@@ -1082,9 +914,6 @@ statically unreachable.
 
 #--: return
 
-#code language=zerolang: """
-  return: function as { t: Any.generic } in { result: t } out never is native
-"""
 
 Return from the enclosing function. Spelled as a function for
 uniformity with the control-flow dispatch model -- #~"return x"

@@ -128,6 +128,12 @@ Table of Contents</div>
 </nav>
 <main id="content">
 <h2 id="overview"><a href="#overview">1. Overview</a></h2>
+<p>The declarations themselves live in <code>lib/system/json.z</code>, which is the one
+place they are written. Every definition, field, arm, generic parameter and
+own-line parameter there carries its own doc comment, and <code>zls</code> surfaces
+each on hover; the corpus runner ratchets that coverage under <code>make ci</code>.
+This page is the prose and the worked examples -- read it for how the unit
+is meant to be used, and the source for the exact surface.</p>
 <p>The <code>json</code> unit is a JSON (RFC 8259) value tree, parser, and
 serializer. The tree is a reftype tagged sum (<code>Value</code>)
 mirroring the AST's union-of-carriers shape: scalars ride in the
@@ -184,15 +190,6 @@ matching on the tree at the use site.</p>
 <li><a href="#found-missing"><strong>json.foundMissing</strong> -- <code>function out Found</code></a></li>
 </ul>
 <h2 id="value"><a href="#value">3. value</a></h2>
-<pre><code class="language-zerolang">  Value: union {
-      nul:      null
-      boolean:  (Box bool)
-      intval:   (Box i64)
-      floatval: (Box f64)
-      text:     String
-      array:    Arr
-      object:   Obj
-  }</code></pre>
 <p>A JSON value: a tagged sum of null / bool / int / float / string
 / array / object. The scalar arms follow the <code>(Box T)</code> arm
 rule (a union holds reftypes; the Box argument collapses to its
@@ -218,9 +215,6 @@ the bare scalar for the collapsed arms, the carrier class for
   case nul    then print "null"
   else print "something else"</code></pre>
 <h2 id="arr"><a href="#arr">4. arr</a></h2>
-<pre><code class="language-zerolang">  Arr: class {
-      items: (List Value)
-  }</code></pre>
 <p>A JSON array -- an ordered list of <code>Value</code>s. The <code>items</code>
 field is public: append, index and iterate it directly with the
 <a href="./stdlib_collections.html">./stdlib_collections.html</a><code>List</code> surface.</p>
@@ -229,13 +223,6 @@ field is public: append, index and iterate it directly with the
   a.items.append (json.Value.intval 2)
   v: (json.Value.array a)</code></pre>
 <h2 id="obj"><a href="#obj">5. obj</a></h2>
-<pre><code class="language-zerolang">  Obj: class {
-      entries: (Map String V: Value)
-      keys:    (List String)
-  } as {
-      set: function {:this key: String.take value: Value.take}
-      has: function {:this key: StringView} out bool
-  }</code></pre>
 <p>A JSON object -- string-keyed <code>Value</code>s kept in insertion
 order. <code>entries</code> gives O(1) lookup; <code>keys</code> remembers first
 insertion order, which is the order <a href="#serialize"><code>serialize</code></a>
@@ -253,10 +240,6 @@ view</li>
   root: (json.Value.object o)
   print (json.serialize v: root)   # {"answer":42,"label":"hi"}</code></pre>
 <h2 id="jsonerror"><a href="#jsonerror">6. jsonerror</a></h2>
-<pre><code class="language-zerolang">  JsonError: class {
-      at:  u64
-      msg: String
-  }</code></pre>
 <p>A parse failure: <code>at</code> is the byte offset into the input where
 the parser stopped; <code>msg</code> is a short description
 (<code>unexpected character</code>, <code>expected ',' or '}'</code>,
@@ -264,38 +247,16 @@ the parser stopped; <code>msg</code> is a short description
 <code>bad number</code>, <code>nesting too deep</code>, <code>trailing data</code>, ...).
 Only the first failure is recorded.</p>
 <h2 id="parseresult"><a href="#parseresult">7. parseresult</a></h2>
-<pre><code class="language-zerolang">  ParseResult: union {
-      err: JsonError
-      ok:  Value
-  }</code></pre>
 <p>The outcome of parsing JSON text: <code>ok</code> carries the root
 <code>Value</code>, <code>err</code> a <a href="#jsonerror"><code>JsonError</code>. A dedicated</a>
 union rather than a <code>Result</code> instantiation, matched the same
 way (falsy arm first).</p>
 <h2 id="foundkind"><a href="#foundkind">8. foundkind</a></h2>
-<pre><code class="language-zerolang">  foundkind: variant {
-      missing:  null
-      nul:      null
-      boolean:  null
-      intval:   null
-      floatval: null
-      text:     null
-      array:    null
-      object:   null
-  }</code></pre>
 <p>Which value kind a path lookup landed on, or <code>missing</code> when
 the path does not resolve. One arm per <code>Value</code> arm plus
 <code>missing</code>; all payloads are <code>null</code>, so a <code>foundkind</code> is a
 plain inline discriminator.</p>
 <h2 id="found"><a href="#found">9. found</a></h2>
-<pre><code class="language-zerolang">  Found: class {
-      kind: foundkind
-      b:    bool
-      i:    i64
-      f:    f64
-      s:    String
-      n:    u64
-  }</code></pre>
 <p>A scalar path-lookup result: the <code>kind</code> plus the matching
 payload slot. Only the slot named by <code>kind</code> is meaningful --
 <code>b</code> for <code>boolean</code>, <code>i</code> for <code>intval</code>, <code>f</code> for
@@ -308,7 +269,6 @@ gives the caller an unencumbered value. Structure is reported by
 kind and length only -- navigate an array or object in place by
 matching on the tree.</p>
 <h2 id="parse"><a href="#parse">10. parse</a></h2>
-<pre><code class="language-zerolang">  parse: function {source: StringView} out ParseResult</code></pre>
 <p>Whole-input parse of <code>source</code>; trailing non-whitespace after
 the root value is an error. Any JSON value may be the root -- an
 object, array, string, number, boolean, or <code>null</code>.</p>
@@ -335,7 +295,6 @@ replaces the earlier one, at the key's original position</li>
   }
   case err then print "parse error at byte \{pr.at}: \{pr.msg}"</code></pre>
 <h2 id="serialize"><a href="#serialize">11. serialize</a></h2>
-<pre><code class="language-zerolang">  serialize: function {v: Value.view} out String</code></pre>
 <p>Serialize <code>v</code> to compact JSON text: no whitespace, object keys
 in insertion order, strings escaped per RFC 8259 (<code>"</code>,
 <code>\</code>, backspace, form feed, newline, carriage return and tab
@@ -346,7 +305,6 @@ UTF-8 passed through verbatim). Returns a fresh owned
 <code>serialize</code> round-trips a document key-for-key, and building
 the same tree twice serializes to identical text.</p>
 <h2 id="at"><a href="#at">12. at</a></h2>
-<pre><code class="language-zerolang">  at: function {v: Value.view path: StringView} out Found</code></pre>
 <p>Walk <code>path</code> from <code>v</code> and describe the terminal: a
 <code>/</code>-separated sequence of segments, where a segment names an
 object key and a numeric segment indexes an array
@@ -364,12 +322,10 @@ structure was expected).</p>
 <code>at</code> itself when you need the kind, or a length without
 matching on the tree.</p>
 <h2 id="describe-value"><a href="#describe-value">13. describe_value</a></h2>
-<pre><code class="language-zerolang">  describeValue: function {v: Value.view} out Found</code></pre>
 <p>One <code>Value</code> as a <a href="#found"><code>Found</code>, with no path step:</a>
 the kind arm plus the matching payload slot (string copied out;
 array / object reported as kind plus length in <code>n</code>).</p>
 <h2 id="text-at"><a href="#text-at">14. text_at</a></h2>
-<pre><code class="language-zerolang">  textAt: function {v: Value.view path: StringView} out (Option String)</code></pre>
 <p>The terminal string at <code>path</code>, as an owned copy. <code>none</code> when
 the path does not resolve or the terminal is not a string.</p>
 <pre><code class="language-zerolang">  nm: json.textAt v: root path: "name"
@@ -377,25 +333,20 @@ the path does not resolve or the terminal is not a string.</p>
   case some then print "name: \{nm}"
   case none then print "name missing"</code></pre>
 <h2 id="int-at"><a href="#int-at">15. int_at</a></h2>
-<pre><code class="language-zerolang">  intAt: function {v: Value.view path: StringView} out (optionval i64)</code></pre>
 <p>The terminal integer at <code>path</code>. <code>none</code> when the path does
 not resolve or the terminal is not an <code>intval</code> (a float is not
 silently truncated).</p>
 <h2 id="bool-at"><a href="#bool-at">16. bool_at</a></h2>
-<pre><code class="language-zerolang">  boolAt: function {v: Value.view path: StringView} out (optionval bool)</code></pre>
 <p>The terminal boolean at <code>path</code>. <code>none</code> when the path does
 not resolve or the terminal is not a <code>boolean</code>.</p>
 <h2 id="has-at"><a href="#has-at">17. has_at</a></h2>
-<pre><code class="language-zerolang">  hasAt: function {v: Value.view path: StringView} out bool</code></pre>
 <p>Whether <code>path</code> resolves to any value at all -- of any kind,
 including <code>null</code>.</p>
 <h2 id="array-length"><a href="#array-length">18. array_length</a></h2>
-<pre><code class="language-zerolang">  arrayLength: function {v: Value.view} out u64</code></pre>
 <p>Element count of <code>v</code>, or <code>0</code> when <code>v</code> is not an array.
 Takes the value itself, not a path -- combine with a <code>match</code>
 on an <code>array</code> arm, or use <a href="#at"><code>at</code> and read <code>n</code>.</a></p>
 <h2 id="found-missing"><a href="#found-missing">19. found_missing</a></h2>
-<pre><code class="language-zerolang">  foundMissing: function out Found</code></pre>
 <p>A <code>Found</code> marking "no such path": kind <code>missing</code>, every
 payload slot at its zero value. This is what <code>at</code> returns for
 an unresolved path; useful as a default when building your own

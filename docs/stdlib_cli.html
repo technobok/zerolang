@@ -114,6 +114,12 @@ Table of Contents</div>
 </nav>
 <main id="content">
 <h2 id="overview"><a href="#overview">1. Overview</a></h2>
+<p>The declarations themselves live in <code>lib/system/cli.z</code>, which is the one
+place they are written. Every definition, field, arm, generic parameter and
+own-line parameter there carries its own doc comment, and <code>zls</code> surfaces
+each on hover; the corpus runner ratchets that coverage under <code>make ci</code>.
+This page is the prose and the worked examples -- read it for how the unit
+is meant to be used, and the source for the exact surface.</p>
 <p>The <code>cli</code> unit is a small argv parser. Users declare a
 <code>Spec</code> (flags, options, positional arguments, each with help
 text), hand it to <code>cli.parse</code> with the argv list, and get back
@@ -181,43 +187,18 @@ usage never drifts from the registered behaviour</li>
 <li><a href="#help-text"><strong>cli.helpText</strong> -- <code>function {Spec: Spec.borrow} out String</code></a></li>
 </ul>
 <h2 id="flagdef"><a href="#flagdef">3. flagdef</a></h2>
-<pre><code class="language-zerolang">  flagdef: class {
-      name:       String     # "--verbose"
-      shortName: String     # "-v"
-      help:       String
-  }</code></pre>
 <p>One registered long flag plus optional short alias. Class
 because <code>String</code> fields are reftypes and valtypes cannot hold
 reftypes.</p>
 <p>Users rarely construct <code>FlagDef</code> directly -- the
 <code>cli.addFlag</code> helper does it for you.</p>
 <h2 id="optiondef"><a href="#optiondef">4. optiondef</a></h2>
-<pre><code class="language-zerolang">  optiondef: class {
-      name:       String
-      shortName: String
-      help:       String
-      required:   bool
-  }</code></pre>
 <p>One registered option (long + optional short alias), with a
 required-presence flag. Constructed via <code>cli.addOption</code>.</p>
 <h2 id="positionaldef"><a href="#positionaldef">5. positionaldef</a></h2>
-<pre><code class="language-zerolang">  positionaldef: class {
-      name:     String
-      help:     String
-      required: bool
-  }</code></pre>
 <p>One registered positional slot, named for lookup. Constructed
 via <code>cli.addPositional</code>.</p>
 <h2 id="spec"><a href="#spec">6. spec</a></h2>
-<pre><code class="language-zerolang">  spec: class {
-      programName: String
-      summary:      String
-      flags:        (List T: FlagDef)
-      options:      (List T: OptionDef)
-      positionals:  (List T: PositionalDef)
-  } as {
-      create: function {programName: String.take summary: String.take} out this is native
-  }</code></pre>
 <p>Parser registration state. Built incrementally via
 <code>cli.Spec.create</code> then the <code>cli.add_*</code> helpers. All string
 fields are owned; list fields hold the registered defs in
@@ -225,16 +206,6 @@ insertion order (which is also help-text output order).</p>
 <pre><code class="language-zerolang">  sp: cli.Spec.create programName: "zgrep".string summary: "...".string</code></pre>
 <p>The three list fields are initialised empty.</p>
 <h2 id="parsed"><a href="#parsed">7. parsed</a></h2>
-<pre><code class="language-zerolang">  parsed: class {
-      flagSet:          (List T: String)
-      optionValues:     (Map K: String V: String)
-      positionalValues: (Map K: String V: String)
-      extraArgs:        (List T: String)
-  } as {
-      hasFlag:       function {:this name: StringView} out bool           is native
-      option:     function {:this name: StringView} out (Option T: String) is native
-      positional: function {:this name: StringView} out (Option T: String) is native
-  }</code></pre>
 <p>Successful parse result. Opaque; inspect via the accessor
 methods.</p>
 <p><strong>Accessors.</strong></p>
@@ -253,13 +224,6 @@ accessor -- read the field directly.</p>
 <p><strong>Ownership.</strong> <code>Option</code> / <code>positional</code> each return a
 fresh <code>Option(String)</code> -- scope-exit frees the boxed string.</p>
 <h2 id="clierror"><a href="#clierror">8. clierror</a></h2>
-<pre><code class="language-zerolang">  clierror: union {
-      unknownFlag:          String
-      missingValue:         String
-      missingRequired:      String
-      unexpectedPositional: String
-      unexpectedArg:        String
-  }</code></pre>
 <p>Parse-time failures. Each arm carries a descriptive <code>String</code>
 so callers can compose diagnostics or print the offending token
 directly. Union (not variant) because every arm carries a
@@ -280,26 +244,22 @@ the registered set. Payload is the token</li>
 rejected. Payload is the token</li>
 </ul>
 <h2 id="add-flag"><a href="#add-flag">9. add_flag</a></h2>
-<pre><code class="language-zerolang">  addFlag: function {spec: Spec.borrow name: String.take shortName: String.take help: String.take} is native</code></pre>
 <p>Register a flag on <code>Spec</code>. The spec is borrowed so mutations
 propagate to the caller's spec. Name conventions: pass the full
 long form (<code>--verbose</code>) and optional short alias
 (<code>-v</code>); help text is free-form.</p>
 <pre><code class="language-zerolang">  cli.addFlag spec: sp name: "--verbose".string shortName: "-v".string help: "verbose output".string</code></pre>
 <h2 id="add-option"><a href="#add-option">10. add_option</a></h2>
-<pre><code class="language-zerolang">  addOption: function {spec: Spec.borrow name: String.take shortName: String.take help: String.take required: bool} is native</code></pre>
 <p>Register a value-carrying option on <code>Spec</code>. <code>required: true</code>
 causes a <code>missingRequired</code> error from <code>parse</code> when the
 option is absent.</p>
 <pre><code class="language-zerolang">  cli.addOption spec: sp name: "--output".string shortName: "-o".string help: "out file".string required: false</code></pre>
 <h2 id="add-positional"><a href="#add-positional">11. add_positional</a></h2>
-<pre><code class="language-zerolang">  addPositional: function {spec: Spec.borrow name: String.take help: String.take required: bool} is native</code></pre>
 <p>Register a positional slot on <code>Spec</code>. Positionals are
 consumed in registration order as argv tokens arrive.</p>
 <pre><code class="language-zerolang">  cli.addPositional spec: sp name: "pattern".string help: "regex".string required: true
   cli.addPositional spec: sp name: "file".string    help: "input".string required: true</code></pre>
 <h2 id="parse"><a href="#parse">12. parse</a></h2>
-<pre><code class="language-zerolang">  parse: function {spec: Spec.borrow args: (List T: String).take} out (Result T: Parsed E: CliError) is native</code></pre>
 <p>Parse <code>args</code> against the registered <code>Spec</code>. Typical call
 site:</p>
 <pre><code class="language-zerolang">  match (cli.parse spec: sp args: os.args)
@@ -318,7 +278,6 @@ may be freed during parsing). Callers who need to retain the
 argv vector should pass a copy. <code>Spec</code> is borrowed, not
 consumed -- the same spec can parse multiple argv vectors.</p>
 <h2 id="help-text"><a href="#help-text">13. help_text</a></h2>
-<pre><code class="language-zerolang">  helpText: function {spec: Spec.borrow} out String is native</code></pre>
 <p>Render the usage + help block from the spec. Returns a
 freshly-allocated <code>String</code>.</p>
 <pre><code class="language-text">  usage: zgrep [options] &lt;pattern&gt; &lt;file&gt;

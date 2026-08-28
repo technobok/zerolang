@@ -33,6 +33,13 @@
 
 #--: Overview
 
+The declarations themselves live in #~"lib/system/collections.z", which is the one
+place they are written. Every definition, field, arm, generic parameter and
+own-line parameter there carries its own doc comment, and #~"zls" surfaces
+each on hover; the corpus runner ratchets that coverage under #~"make ci".
+This page is the prose and the worked examples -- read it for how the unit
+is meant to be used, and the source for the exact surface.
+
 The #~"collections" unit provides the generic containers:
 #~"array" (fixed-length valtype), #~"str" (bounded stack string
 valtype), the #~"List" / #~"Set" / #~"Map" container families
@@ -156,17 +163,6 @@ non-owned parameter; see
 
 #--: array
 
-#code language=zerolang: """
-  array: record is native as {
-      t: anyval.generic
-      to: u64.generic
-
-      get:    function {:this i: i64} out t      is native
-      set:    function {:this i: i64 item: t} out t is native
-      length: function {:this} out i64            is native
-      create: function {} out type                is native
-  }
-"""
 
 Fixed-length, mutable, homogeneous valtype block. Generic over
 element type (#~"t") and length (#~"to"). Different
@@ -212,18 +208,6 @@ passed by default (TAKE) to functions.
 
 #--: str
 
-#code language=zerolang: """
-  str: record is native as {
-      :Text
-      to: u64.generic
-      length:     function {:this} out u64     is native
-      size:       function {:this} out u64     is native
-      string:     function {:this} out String  is native
-      stringView: function {t: this.borrow} out StringView.borrow is native
-      substring:  function {t: this.borrow from: u64 to: u64} out StringView.borrow is native
-      create:     function out type            is native
-  }
-"""
 
 Fixed-capacity, owned, valtype string buffer. Stack-allocated
 with compile-time capacity #~"to:". Uses the smallest fixed-width
@@ -246,27 +230,6 @@ copy is a plain byte copy of the inline buffer.
 
 #--: The List family
 
-#code language=zerolang: """
-  ListRef: class is native as {
-      T: AnyRef.generic
-
-      append:     function {:this from: T.take}         is native
-      insert:     function {:this from: T.take at: u64} is native
-      extend:     function {:this from: type.take}       is native
-      get:        function {t: this.borrow i: u64} out T.view is native
-      getMut:     function {t: this.borrow i: u64} out T.borrow is native
-      set:        function {:this i: u64 val: T.take} out T is native
-      pop:        function {:this} out T                is native
-      contains:   function {t: this.view item: T.view} out bool is native
-      sort:       function {:this}                       is native
-      length:     function {t: this.view} out u64        is native
-      capacity:   function {t: this.view} out u64        is native
-      listView:   function {t: this.borrow} out (ListView :T).borrow is native
-      iterate:    function {t: this.view} out (ListIter :T).borrow is native
-      iterateMut: function {t: this.borrow} out (ListIter :T).borrow is native
-      create:     function {capacity: 0.u64} out type    is native
-  }
-"""
 
 Growable, heap-allocated, homogeneous sequence. #~"ListRef"
 holds reference elements; #~"List" is its #~"core" alias, so
@@ -282,27 +245,6 @@ family shows -- a valtype has no ownership to transfer and no
 interior to alias, so element parameters pass by value and
 #~"get" copies:
 
-#code language=zerolang: """
-  ListVal: class is native as {
-      t: anyval.generic
-
-      append:     function {:this from: t}            is native
-      insert:     function {:this from: t at: u64}    is native
-      extend:     function {:this from: type.take}     is native
-      get:        function {t: this.borrow i: u64} out t is native
-      getMut:     function {t: this.borrow i: u64} out t.borrow is native
-      set:        function {:this i: u64 val: t} out t is native
-      pop:        function {:this} out t              is native
-      contains:   function {t: this.view item: t} out bool is native
-      sort:       function {:this}                     is native
-      length:     function {t: this.view} out u64      is native
-      capacity:   function {t: this.view} out u64      is native
-      listView:   function {t: this.borrow} out (ListViewVal :t).borrow is native
-      iterate:    function {t: this.view} out (ListIterVal :t).borrow is native
-      iterateMut: function {t: this.borrow} out (ListIterVal :t).borrow is native
-      create:     function {capacity: 0.u64} out type  is native
-  }
-"""
 
 Note #~"ListVal.getMut" still returns #~"t.borrow": borrowing a
 #_+"compound" valtype element permits mutating its children in
@@ -344,23 +286,6 @@ including other #~"iterate" walks, stay legal while it runs.
 
 #--: The list views
 
-#code language=zerolang: """
-  ListView: class is native as {
-      T: AnyRef.generic
-
-      get:    function {t: this.borrow i: u64} out T.view is native
-      getMut: function {t: this.borrow i: u64} out T.borrow is native
-      length: function {t: this.view} out u64 is native
-  }
-
-  ListViewVal: class is native as {
-      t: anyval.generic
-
-      get:    function {t: this.borrow i: u64} out t is native
-      getMut: function {t: this.borrow i: u64} out t.borrow is native
-      length: function {t: this.view} out u64 is native
-  }
-"""
 
 A window over a list's elements, produced by #~"listView" on the
 matching list form (#~"ListRef.listView" returns a #~"ListView";
@@ -400,22 +325,6 @@ requires #~"hash" and #~"==":
   [#*: #b:"MapVR" -- valtype key, reftype value]
   [#*: #b:"MapVV" -- valtype key, valtype value]
 
-#code language=zerolang: """
-  MapRR: class is native as {
-      K: RefHashable.generic
-      V: AnyRef.generic
-
-      get:          function {:this key: K.view} out (OptionView V) is native
-      set:          function {:this key: K.take value: V.take} is native
-      has:          function {t: this.view key: K.view} out bool is native
-      remove:       function {:this key: K.view} out (Option V) is native
-      length:       function {t: this.view} out u64 is native
-      capacity:     function {t: this.view} out u64 is native
-      iterate:      function {t: this.view} out (MapKeyIter :K :V).borrow is native
-      iterateItems: function {t: this.borrow} out (MapItemIter :K :V).borrow is native
-      create:       function {capacity: 0.u64} out type is native
-  }
-"""
 
 The three siblings declare the same members; the signatures
 differ exactly where the family shows:
@@ -466,31 +375,6 @@ put the entry in the wrong bucket.
 
 #--: The Set family
 
-#code language=zerolang: """
-  SetRef: class is native as {
-      K: RefHashable.generic
-
-      add:      function {:this item: K.take} out bool is native
-      has:      function {t: this.view item: K.view} out bool is native
-      delete:   function {:this item: K.view} out bool is native
-      length:   function {t: this.view} out u64 is native
-      capacity: function {t: this.view} out u64 is native
-      iterate:  function {t: this.view} out (SetIter :K).borrow is native
-      create:   function {capacity: 0.u64} out type is native
-  }
-
-  SetVal: class is native as {
-      k: valhashable.generic
-
-      add:      function {:this item: k} out bool is native
-      has:      function {t: this.view item: k} out bool is native
-      delete:   function {:this item: k} out bool is native
-      length:   function {t: this.view} out u64 is native
-      capacity: function {t: this.view} out u64 is native
-      iterate:  function {t: this.view} out (SetIterVal :k).borrow is native
-      create:   function {capacity: 0.u64} out type is native
-  }
-"""
 
 A hash set of unique elements. An item IS the key here, so the
 element bound is the hashability interface of its family:
@@ -529,12 +413,6 @@ borrowed projections into the map's entry storage.
 
 #--: string_join
 
-#code language=zerolang: """
-  stringJoin: function as { T: StringLike.generic } in {
-      parts: (ListRef String)
-      sep: T
-  } out String is native
-"""
 
 Concatenate every string in #~"parts" with #~"sep" between each.
 Returns a fresh owned #~"String". One allocation, bulk memcpy
