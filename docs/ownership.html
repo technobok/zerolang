@@ -129,6 +129,8 @@ Table of Contents</div>
 </li>
 <li><a href="#takex">.takex</a>
 </li>
+<li><a href="#holdx">.holdx</a>
+</li>
 <li><a href="#copy">.copy</a>
 </li>
 <li><a href="#drop">.drop</a>
@@ -443,10 +445,12 @@ read.</li>
 <p>Mutable is the default. An unmarked reftype parameter behaves as
 <code>.borrow</code>. Readonly is opt-in, which is what makes <code>.view</code> worth writing.</p>
 <p>There are no compound specifiers -- a marker names one cell and nothing else.</p>
-<p>Returns take <code>.take</code>, <code>.takex</code>, <code>.hold</code>, <code>.borrow</code> or <code>.view</code>.
-<code>.borrow</code> and <code>.view</code> hand back a reference into the receiver;
-<code>.takex</code> hands back an owned value that pins its non-owned sources for
-its own lifetime. <code>.borrowx</code> and <code>.viewx</code> do not exist.</p>
+<p>Returns take <code>.take</code>, <code>.takex</code>, <code>.hold</code>, <code>.holdx</code>, <code>.borrow</code> or
+<code>.view</code>. <code>.borrow</code> and <code>.view</code> hand back a reference into the receiver;
+<code>.takex</code> and <code>.holdx</code> hand back an owned value that pins its non-owned
+sources for its own lifetime, <code>.holdx</code> adding the freeze <code>.hold</code> carries.
+<code>.borrowx</code> and <code>.viewx</code> do not exist: a reference return already pins its
+source, so the suffix would say nothing.</p>
 <p>A receiver is #~.borrow" or #~".view", and nothing else." An object cannot
 own itself, so <code>.take</code> and <code>.hold</code> are meaningless there. A bare <code>:this</code>
 receiver is <code>.borrow</code>; marking one requires an alias, as in
@@ -557,9 +561,23 @@ such as <code>BufWriter.create to: Writer.borrow ... out this.takex</code> hands
 owned value whose <code>sink</code> field is a reference into its argument, so the
 argument must outlive the result. Without the marker nothing pins it and the
 field dangles the moment the caller drops the source.</p>
-<p><code>.hold</code> has no <code>x</code> twin: <code>.holdx</code> does not exist, because no construction
-has yet needed a pinned readonly owned return.</p>
-<h3 id="copy"><a href="#copy">6.6. .copy</a></h3>
+<h3 id="holdx"><a href="#holdx">6.6. .holdx</a></h3>
+<p>A return marker, and <code>.takex</code> with the freeze <code>.hold</code> carries: the
+result is owned, the caller may only read it, and the non-owned
+sources it was built from stay pinned for as long as it lives.</p>
+<p>It is the cell the other three markers cannot reach. <code>.takex</code> pins but hands
+back something writable; <code>.hold</code> freezes but pins nothing, so whatever the
+result reads through is free to change under it; <code>.view</code> freezes and pins but
+does not own, so the result cannot outlive its source. A constructor handing
+back an immutable wrapper over a borrowed source needs all three at once.</p>
+<pre><code class="language-zerolang">: mk: function {from: Src.view} out W.holdx is {
+:     return (W s: from)
+: }</code></pre>
+<p>The result may be read through <code>.view</code> methods, exactly as any frozen binding
+may; writing to it, or calling a mutating method on it, is refused. Writing the
+source while the result is live is refused too, and becomes possible again when
+the result's scope ends.</p>
+<h3 id="copy"><a href="#copy">6.7. .copy</a></h3>
 <p>An inline method only (not a parameter or return attribute). <code>x.copy</code>
 produces a fresh, independently-owned duplicate of <code>x</code>. The new value
 shares no heap data with <code>x</code>; mutating one does not affect the other,
@@ -575,7 +593,7 @@ constructor field, a list/map insert) but only have a borrowed source:</p>
 <p>Compare with <code>.take</code> (transfer the source's ownership to the
 destination, invalidating the source) and inline <code>.borrow</code> (alias the
 source via a lock, no allocation).</p>
-<h4 id="which-types-have-a-copy"><a href="#which-types-have-a-copy">6.6.1. Which types have a .copy</a></h4>
+<h4 id="which-types-have-a-copy"><a href="#which-types-have-a-copy">6.7.1. Which types have a .copy</a></h4>
 <p>Whether <code>x.copy</code> exists depends on the type's family, and it is a
 deliberate split -- not a gap waiting to be filled.</p>
 <ul>
@@ -624,7 +642,7 @@ never be duplicated silently wants:</p>
 }</code></pre>
 <p><code>StringView</code> is a view, not an owner: it is copied by assignment, and
 <code>.string</code> is what allocates an owned <code>String</code> from it.</p>
-<h3 id="drop"><a href="#drop">6.7. .drop</a></h3>
+<h3 id="drop"><a href="#drop">6.8. .drop</a></h3>
 <p>An inline method only (not a parameter or return attribute). <code>x.drop</code> ends
 the lifetime of variable <code>x</code> immediately, as if it fell out of scope at that
 point. The name <code>x</code> is invalidated and any subsequent use is a compile error.</p>

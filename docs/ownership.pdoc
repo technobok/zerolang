@@ -280,10 +280,12 @@ parameter, field and local sits in exactly one cell.
 
 There are no compound specifiers -- a marker names one cell and nothing else.
 
-#_+"Returns" take #~".take", #~".takex", #~".hold", #~".borrow" or #~".view".
-#~".borrow" and #~".view" hand back a reference into the receiver;
-#~".takex" hands back an owned value that #_+"pins" its non-owned sources for
-its own lifetime. #~".borrowx" and #~".viewx" do not exist.
+#_+"Returns" take #~".take", #~".takex", #~".hold", #~".holdx", #~".borrow" or
+#~".view". #~".borrow" and #~".view" hand back a reference into the receiver;
+#~".takex" and #~".holdx" hand back an owned value that #_+"pins" its non-owned
+sources for its own lifetime, #~".holdx" adding the freeze #~".hold" carries.
+#~".borrowx" and #~".viewx" do not exist: a reference return already pins its
+source, so the suffix would say nothing.
 
 #_+"A receiver is #~".borrow" or #~".view", and nothing else." An object cannot
 own itself, so #~".take" and #~".hold" are meaningless there. A bare #~":this"
@@ -432,8 +434,27 @@ owned value whose #~"sink" field is a reference #_+"into" its argument, so the
 argument must outlive the result. Without the marker nothing pins it and the
 field dangles the moment the caller drops the source.
 
-#~".hold" has no #~"x" twin: #~".holdx" does not exist, because no construction
-has yet needed a pinned #_+"readonly" owned return.
+#---: .holdx
+
+A #_+"return" marker, and #~".takex" with the freeze #~".hold" carries: the
+result is #_+"owned", the caller may only #_+"read" it, and the non-owned
+sources it was built from stay #_+"pinned" for as long as it lives.
+
+It is the cell the other three markers cannot reach. #~".takex" pins but hands
+back something writable; #~".hold" freezes but pins nothing, so whatever the
+result reads through is free to change under it; #~".view" freezes and pins but
+does not own, so the result cannot outlive its source. A constructor handing
+back an immutable wrapper over a borrowed source needs all three at once.
+
+#code language=zerolang:
+  : mk: function {from: Src.view} out W.holdx is {
+  :     return (W s: from)
+  : }
+
+The result may be read through #~".view" methods, exactly as any frozen binding
+may; writing to it, or calling a mutating method on it, is refused. Writing the
+source while the result is live is refused too, and becomes possible again when
+the result's scope ends.
 
 #---: .copy
 
