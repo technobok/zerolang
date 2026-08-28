@@ -8568,12 +8568,15 @@ argSlotList: function {
     return result
 }
 
-# constSuffixForTid -- the C literal suffix a constant of type `tid` needs:
-# `u32` wants U, `u64` wants ULL, and a scalar typedef wants whatever its base
-# wants (`nameid` -> u32 ->
-# U). The name-based half of this is cTypeOf's, which answers the
-# same question starting from a suffix NAME rather than from a type.
-constSuffixForTid: function {
+# constScalarNameForTid -- the BUILTIN SCALAR NAME a constant of type `tid` is
+# rendered as: `u32` for u32, and for a scalar typedef the base it spells
+# (`nameid` -> u32). "" when the type is not a scalar at all.
+#
+# It answers a name rather than a suffix because the two things a literal needs
+# from its type -- how wide it is and what suffix C wants -- are both read off
+# that name, and resolving the tid twice to ask them separately is a second
+# name-resolution site in the emitter for one question.
+constScalarNameForTid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
@@ -8584,9 +8587,7 @@ constSuffixForTid: function {
     # scalarCTypeFor rather than cTypeOf: it re-checks the tid for a user
     # shadow, so a user type named `u32` cannot pick up u32's C suffix. The
     # name lookup it needs is the shape shadow-guard sanctions.
-    if (scalarCTypeFor :symtab name: tn.stringView :tid).length > 0 then {
-        return (numLitSuffix name: tn.stringView)
-    }
+    if (scalarCTypeFor :symtab name: tn.stringView :tid).length > 0 then return tn
     # a scalar TYPEDEF chases to the builtin it spells, keyed by tid so the
     # answer does not depend on which unit the read happens in. numLitSuffix
     # yields "" for a name that is not a builtin, so no second scalar test is
@@ -8598,9 +8599,45 @@ constSuffixForTid: function {
         boId: zast.nameid
         boId = bo
         bn: zast.poolTextAt pool: ast.names ref: boId
-        return (numLitSuffix name: bn.stringView)
+        return bn
     } case none then null
     return "".string
+}
+
+# narrowConstToName -- a folded i64 reduced to what the named integer type can
+# actually hold, the way the runtime operator does it. The evaluator works in i64
+# and a cval carries no type by design, so the narrowing is the MATERIALISER's --
+# and an inline use (an interpolation, a nested operator) has no assignment to
+# truncate it the way a binding's C initializer does. `200.u8 * 2.u8` rendered
+# 400 inline and 144 bound. Membership strings rather than a compare chain, which
+# is the shape A001 exists to discourage.
+narrowConstToName: function {v: i64 name: StringView} out i64 is {
+    probe: " \{name} "
+    mu8: " u8 c8 "
+    if (mu8.contains needle: probe) then return (v & 255)
+    mu16: " u16 "
+    if (mu16.contains needle: probe) then return (v & 65535)
+    mu32: " u32 c32 "
+    if (mu32.contains needle: probe) then return (v & 4294967295)
+    mi8: " i8 "
+    if (mi8.contains needle: probe) then {
+        t8: v & 255
+        if t8 > 127 then return (t8 - 256)
+        return t8
+    }
+    mi16: " i16 "
+    if (mi16.contains needle: probe) then {
+        t16: v & 65535
+        if t16 > 32767 then return (t16 - 65536)
+        return t16
+    }
+    mi32: " i32 "
+    if (mi32.contains needle: probe) then {
+        t32: v & 4294967295
+        if t32 > 2147483647 then return (t32 - 4294967296)
+        return t32
+    }
+    return v
 }
 
 # cvalText -- the C literal for a compile-time value the typechecker folded.
@@ -8614,7 +8651,8 @@ cvalText: function {
     v: ztypes.cval
 } out String is {
     if v.kind.ivalKind then {
-        iv: v.ival
+        tnN: constScalarNameForTid :ast :symtab :tid
+        iv: narrowConstToName v: v.ival name: tnN.stringView
         # C HAS NO NEGATIVE LITERALS. A leading `-` is an operator applied to a
         # POSITIVE constant, and the magnitude of the most negative i64 is one
         # past what a signed constant can hold -- so `-9223372036854775808`
@@ -8623,7 +8661,7 @@ cvalText: function {
         # subtracting from the one below it, and so does this.
         if iv == ((0 - 9223372036854775807) - 1) then return "(-9223372036854775807LL - 1)".string
         r: "\{iv}"
-        r.append (constSuffixForTid :ast :symtab :tid)
+        r.append (numLitSuffix name: tnN.stringView)
         return r
     }
     if v.kind.fvalKind then {
