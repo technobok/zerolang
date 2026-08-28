@@ -52,10 +52,17 @@ syn match zerolangKeyword /\<\%(match\|case\|swap\)\>/
 " (=, ==, !=, <, <=, >, >=, +, -, *, /, &, |, ?, etc.) highlight
 " as a single token instead of splitting per character.
 syn match zerolangOperator /\<[-!$%&'*+\/<=>?@\\^|~]\+\>/
+" ...except a lone `=`, which is the assignment KEYWORD (zlexer.z lexes it as
+" equalsTok and the spec lists it under Keywords). Defined after the operator
+" rule so it wins at the same position; `==` has no word boundary before its
+" second character, so a run is never broken up.
+syn match zerolangKeyword /\<=\>/
 
-" Reserved words (highlighted as errors)
+" Reserved words (highlighted as errors). Exactly islookupReserved in
+" lib/system/zlexer.z. `view` is NOT here -- it is an ownership marker and a
+" predeclared identifier (below); it was listed in both, and reserved wins.
 syn match zerolangReserved /\<\%(macro\|goto\|repeat\|until\|flag\|cell\)\>/
-syn match zerolangReserved /\<\%(pragma\|enum\|view\|unsafe\|switch\)\>/
+syn match zerolangReserved /\<\%(pragma\|enum\|unsafe\|switch\)\>/
 
 " Predeclared identifiers: everything defined in lib/system/core.z
 " (grep '^name:' lib/system/core.z), split by role, plus the context
@@ -66,18 +73,20 @@ syn match zerolangReserved /\<\%(pragma\|enum\|view\|unsafe\|switch\)\>/
 syn match zerolangBuiltinType /\<\%(u8\|u16\|u32\|u64\|u128\)\>/
 syn match zerolangBuiltinType /\<\%(i8\|i16\|i32\|i64\|i128\)\>/
 syn match zerolangBuiltinType /\<\%(f16\|f32\|f64\|f128\|c8\|c32\|bool\)\>/
-syn match zerolangBuiltinType /\<\%(String\|StringView\|Text\|StringLike\|AnyRef\|anyval\|RefHashable\|valhashable\)\>/
+syn match zerolangBuiltinType /\<\%(String\|StringView\|Text\|StringLike\|Any\|AnyRef\|anyval\|RefHashable\|valhashable\)\>/
 syn match zerolangBuiltinType /\<\%(Option\|optionval\|OptionView\|Result\|resultval\|converror\|Box\|Iterator\)\>/
 syn match zerolangBuiltinType /\<\%(array\|str\|List\|ListRef\|ListVal\|ListView\|ListViewVal\|ListIter\|ListIterVal\|Set\|SetRef\|SetVal\|SetIter\|SetIterVal\|Bytes\|ByteView\)\>/
 syn match zerolangBuiltinType /\<\%(Map\|MapRR\|MapRV\|MapVR\|MapVV\|MapKeyIter\|MapItemIter\|MapEntry\|MapKeyIterRV\|MapKeyIterVR\|MapKeyIterVV\|MapItemIterRV\|MapItemIterVR\|MapItemIterVV\|MapEntryRV\|MapEntryVR\|MapEntryVV\)\>/
 syn match zerolangBuiltinType /\<\%(Path\|PathView\|IoError\|Reader\|Writer\|Closer\|Seeker\|seekorigin\|File\|openmode\)\>/
+syn match zerolangBuiltinType /\<\%(IdMapR\|IdMapV\|IdMapEntryR\|IdMapEntryV\|IdMapItemIterR\|IdMapItemIterV\|IdSet\|IdSetIter\)\>/
+syn match zerolangBuiltinType /\<\%(CpIter\|LinesIter\|Splitter\|TextReader\|intliteral\|floatliteral\|idkey\|parseerror\)\>/
 " Constants / literal values
 syn match zerolangBuiltinConst /\<\%(null\|never\|true\|false\|_\)\>/
 " Predeclared functions, streams, and context words
 syn match zerolangBuiltin /\<\%(print\|stringJoin\|error\|panic\|stdin\|stdout\|stderr\)\>/
 syn match zerolangBuiltin /\<\%(return\|break\|continue\|yield\)\>/
 syn match zerolangBuiltin /\<\%(public\|private\|this\|meta\|typedef\|tag\|iterator\)\>/
-syn match zerolangBuiltin /\<\%(take\|borrow\|view\|hold\|takex\|generic\)\>/
+syn match zerolangBuiltin /\<\%(take\|borrow\|view\|hold\|takex\|lock\|copy\|drop\|generic\)\>/
 
 " Labels: word: and :word (defined after keywords — longer match wins)
 exe 'syn match zerolangLabel /' . s:W . '\+:/'

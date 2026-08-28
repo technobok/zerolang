@@ -22,21 +22,31 @@
     var ID_CHAR = "[-!$%&'*+\\/<=>?@\\\\^_|~a-zA-Z0-9]";
     var WORD    = ID_CHAR + '+';
 
-    // Keywords: exactly the docs/spec.pdoc "Keywords" list (plus `=`,
-    // handled as its own token below). return/break/continue/yield are
-    // NOT keywords -- they are predeclared functions (see builtins).
+    // An identifier built only from operator characters is an OPERATOR -- in
+    // zerolang `==` and `+` are ordinary method names, so they lex as words.
+    // A lone `=` is the assignment keyword instead (zlexer.z, equalsTok).
+    var OP_ONLY = /^[-!$%&'*+\/<=>?@\\^|~]+$/;
+
+    // Keywords: exactly the docs/spec.pdoc "Keywords" list, `=` included --
+    // it is one (zlexer.z lexes it as equalsTok). Tested BEFORE the operator
+    // rule, so `=` is a keyword while `==` stays a method name.
+    // return/break/continue/yield are NOT keywords -- they are predeclared
+    // functions (see builtins).
     var keywords = [
         'unit', 'record', 'class', 'variant', 'union', 'facet', 'protocol', 'data',
         'function', 'in', 'out', 'is', 'as',
         'if', 'when', 'then', 'else',
         'for', 'while', 'loop', 'with', 'do', 'on',
         'match', 'case', 'swap',
-        'native'
+        'native', '='
     ];
 
+    // Exactly islookupReserved in lib/system/zlexer.z. `view` is NOT here --
+    // it is an ownership marker and a predeclared identifier (see builtins);
+    // listing it made every `.view` in the docs render as an error.
     var reserved = [
         'macro', 'goto', 'repeat', 'until', 'flag', 'cell',
-        'pragma', 'enum', 'view', 'unsafe', 'switch'
+        'pragma', 'enum', 'unsafe', 'switch'
     ];
 
     // Predeclared identifiers: everything defined in lib/system/core.z
@@ -48,15 +58,17 @@
         'u8', 'u16', 'u32', 'u64', 'u128',
         'i8', 'i16', 'i32', 'i64', 'i128',
         'f16', 'f32', 'f64', 'f128', 'c8', 'c32', 'bool',
-        'String', 'StringView', 'Text', 'StringLike', 'AnyRef', 'anyval', 'RefHashable', 'valhashable',
+        'String', 'StringView', 'Text', 'StringLike', 'Any', 'AnyRef', 'anyval', 'RefHashable', 'valhashable',
         'Option', 'optionval', 'OptionView', 'Result', 'resultval', 'converror', 'Box', 'Iterator',
         'array', 'str', 'List', 'ListRef', 'ListVal', 'ListView', 'ListViewVal', 'ListIter', 'ListIterVal', 'Set', 'SetRef', 'SetVal', 'SetIter', 'SetIterVal', 'Bytes', 'ByteView',
+        'IdMapR', 'IdMapV', 'IdMapEntryR', 'IdMapEntryV', 'IdMapItemIterR', 'IdMapItemIterV', 'IdSet', 'IdSetIter',
+        'CpIter', 'LinesIter', 'Splitter', 'TextReader', 'intliteral', 'floatliteral', 'idkey', 'parseerror',
         'Map', 'MapRR', 'MapRV', 'MapVR', 'MapVV', 'MapKeyIter', 'MapItemIter', 'MapEntry', 'MapKeyIterRV', 'MapKeyIterVR', 'MapKeyIterVV', 'MapItemIterRV', 'MapItemIterVR', 'MapItemIterVV', 'MapEntryRV', 'MapEntryVR', 'MapEntryVV',
         'Path', 'PathView', 'IoError', 'Reader', 'Writer', 'Closer', 'Seeker', 'seekorigin', 'File', 'openmode',
         'print', 'stringJoin', 'error', 'panic', 'stdin', 'stdout', 'stderr',
         'return', 'break', 'continue', 'yield',
         'public', 'private', 'this', 'meta', 'typedef', 'tag', 'iterator',
-        'take', 'borrow', 'view', 'hold', 'takex', 'generic'
+        'take', 'borrow', 'view', 'hold', 'takex', 'lock', 'copy', 'drop', 'generic'
     ];
 
     // Build a regex that matches a full WORD token and classifies it.
@@ -130,11 +142,6 @@
 
         'punctuation': /[(){}."]/,
 
-        // The = keyword (must come after punctuation to avoid conflicts)
-        'keyword': {
-            pattern: /=/
-        },
-
         // General word tokens — classified by a hook below
         'word': {
             pattern: new RegExp(WORD),
@@ -170,6 +177,8 @@
 
                     if (kwSet[content]) {
                         token.type = 'keyword';
+                    } else if (OP_ONLY.test(content)) {
+                        token.type = 'operator';
                     } else if (reservedSet[content]) {
                         token.type = 'error';
                     } else if (builtinSet[content]) {
