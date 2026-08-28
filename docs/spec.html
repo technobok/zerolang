@@ -967,7 +967,7 @@ borrowed parameter into an aggregate field (<code>Box label: borrowed_s</code>) 
 rejected for the same reason. Remediations are <code>.copy</code> (clone),
 <code>.take</code> on the parameter (transfer ownership in), or
 <code>out T.borrow</code> + a non-owned parameter (return a borrow tied to a
-pinned source). See <code>ownership.pdoc</code> for details.</p>
+pinned source). See <a href="./ownership.html">ownership for details.</a></p>
 <p>A call carries <em><strong>at most one</strong></em> unlabelled argument, and it must come first.
 Every other argument names the parameter it binds to, and named arguments may
 be written in any order. The grammar enforces the first half: a call is a term,
@@ -1162,7 +1162,7 @@ with v: p.first do print v
 with iter: (bag.iterate b: b) do for x: iter loop { print x }</code></pre>
 <p>When the RHS is a plain path reference the compiler may emit the
 binding as an alias for the source -- no stack slot is allocated. See
-the "Binding Aliases" section in <code>docs/ownership.pdoc</code> for the exact
+the "Binding Aliases" section of <a href="./ownership.html">ownership for the exact</a>
 eligibility rules.</p>
 <h4 id="do"><a href="#do">4.6.2. do</a></h4>
 <p>Execute a sequence of expressions in a new scope.</p>
@@ -1339,7 +1339,7 @@ arms are mutually exclusive and the subject is evaluated once. This means
 <p>If <code>.take</code> is used on the subject in any arm, the subject variable is
 invalidated after the match and cannot be used in subsequent code. Arms that do
 not explicitly take ownership will have the subject automatically destroyed
-after the match completes (in C: a <code>NULL</code> check and conditional destroy).</p>
+after the match completes.</p>
 <pre><code class="language-zerolang">u: MyUnion.ok 42
 match (u) case ok then {
     x: u.take               # takes ownership
@@ -1841,9 +1841,8 @@ borrowed reference, no runtime cleanup is required and the compiler emits no
 destructor for the union. For mixed unions, the emitted destructor's
 <code>switch</code> only contains <code>case</code> clauses for arms that need cleanup.</p>
 <h5 id="type-narrowing">Type Narrowing</h5>
-<p>The compiler keeps track of the type of every expression at every point in the
-program source via a flow-typing system (TypeState). This tracking is
-intra-function only and does not cross function call boundaries.</p>
+<p>The type of every expression is tracked at every point in the program, and the
+tracking is intra-function only: it does not cross a call boundary.</p>
 <p><a href="#sum-types">Sum types</a> can be 'narrowed' back to their specific child types
 by using <a href="#match">match</a> expressions, by <a href="#sum-types">arm predicates</a> in <a href="#if">if</a>
 conditions, or by assignment to a specific subtype.</p>
@@ -2144,9 +2143,9 @@ at runtime. Nesting options is legal but inadvisable; wrap in a class if needed.
 generic parameter <code>t</code> of type <code>anyval.generic</code> and a <code>from:</code> argument;
 a reference-type argument is rejected by the bound -- a class instance is
 already a heap pointer, so a box around one would be a pointer to a pointer.</p>
-<p><code>Box from:</code> heap-allocates a copy of the value. The resulting variable is
-a reference type whose C representation is a bare pointer to the element.
-Access to the boxed value is transparent: operators and fields work as if
+<p><code>Box from:</code> heap-allocates a copy of the value. The resulting variable is a
+reference type. Access to the boxed value is transparent: operators and fields
+work as if
 the value were unboxed. Destruction of a boxed value frees the allocated
 memory.</p>
 <p>Example: <code>b: Box from: 42</code> heap-allocates the integer; <code>r: b + 8</code> uses
@@ -2277,7 +2276,7 @@ fields and methods of that instance are accessible.</p>
 Each instance has exactly one owner at most. When the owning variable falls out
 of scope, the object is destroyed. Top level objects (ie. <code>data</code>) never fall
 out of scope.</p>
-<p>See <code>docs/ownership.pdoc</code> for the full ownership and locking model.</p>
+<p>See <a href="./ownership.html">ownership for the full model.</a></p>
 <p>Ownership states:</p>
 <ul>
 <li>Owned - the instance is owned at this location. All instances have exactly
@@ -2394,7 +2393,7 @@ compiler performs escape analysis: every non-owned field of the returned
 instance must trace back to a <code>.borrow</code> parameter. The locks transfer
 from those parameters to the caller's variable holding the result, keeping
 the source locked for the returned instance's lifetime.</p>
-<p>See <code>docs/ownership.pdoc</code> for the full design and worked examples.</p>
+<p>See <a href="./ownership.html">ownership for the full design and worked examples.</a></p>
 <h4 id="locking"><a href="#locking">5.1.10. Locking</a></h4>
 <p>Locking is an orthogonal attribute tracked alongside ownership. It prevents
 aliasing and data races at compile time. Locking is purely a compile-time
@@ -2417,41 +2416,22 @@ source's lock over the non-owned parameter (<code>.borrow</code> or <code>.view<
 the returned object lives,
 until the borrowed object falls out of scope.</p>
 <h5 id="locking-algorithm">Locking Algorithm</h5>
-<p>During a call, locks are taken/checked/assigned on all arguments and return
-values:</p>
-<ol>
-<li>Each argument is processed left to right as specified in the call.</li>
-<li>If the argument is a top level (<code>data</code>) item, no lock is taken
-    (immutable, freely shared).</li>
-<li>Otherwise, a lock matching the parameter's marker is taken on the
-    argument -- exclusive for the default borrow, shared for <code>.view</code>.</li>
-<li>If the argument is a dotted chain, a shared lock is taken on each parent
-    and grandparent in that chain.</li>
-<li>Additional shared locks on already shared-locked parents are permitted.</li>
-<li>If there is already an exclusive or shared lock on the argument being
-    passed, it is an error (prevents aliasing).</li>
-<li>If the argument is a sub-call, locking is applied recursively; after that
-    call, sub-call argument locks are cleared or assigned to the sub-call result.</li>
-<li>After all arguments are processed, the receiver is locked (exclusive lock
-    on each component of the receiver chain).</li>
-<li>The call is made.</li>
-<li>After the call, for any <code>.borrow</code> parameters, their exclusive locks (plus
-    shared locks on parent items) are assigned to the returned value. All other
-    argument locks are freed.</li>
-</ol>
+<p>A call takes a lock on each argument matching that parameter's marker --
+exclusive for the default borrow, shared for <code>.view</code> -- plus a shared lock on
+every prefix of a dotted argument, and an exclusive lock on the receiver chain.
+Passing something already locked is an aliasing error. When the call returns,
+the locks a <code>.borrow</code> parameter took transfer to the returned value and the
+rest are freed.</p>
+<p>The step-by-step order, including sub-calls, is in
+<a href="./ownership.html">./ownership.html</a>Call-scoped Locking Algorithm.</p>
 <p><code>for</code> loops over a reftype iteration target take the lock the iterator's
 receiver declares: <code>iterate</code> runs on a <code>.view</code> receiver (SHARED -- the
 container stays readable), while <code>iterateMut</code> / <code>iterateItems</code> run on
 <code>.borrow</code> (EXCLUSIVE, preventing all other access during iteration). Per-
 iteration locks on the iterator (and on any non-owned fields it carries)
 flow through the per-iteration method dispatch.</p>
-<p><code>match</code> does <em><strong>not</strong></em> lock its subject. Match arms are mutually exclusive
-and the subject is evaluated once, so there is no aliasing concern. <code>match</code>
-may <code>.take</code> its subject, in which case the subject is owned with the
-narrowed type in the arm bodies.</p>
-<p><code>if</code> and <code>with</code> do not lock their condition or target -- expression
-evaluation and assignment semantics handle lock lifetimes without additional
-scope-level locking.</p>
+<p><code>match</code>, <code>if</code> and <code>with</code> take no lock of their own -- see
+<a href="#match">match</a> for why a match subject needs none.</p>
 <p>When an instance falls out of scope, all of its locks are freed. If the
 variable is borrowed, the borrow is dropped. If the variable is owned, it is
 destroyed.</p>
@@ -2479,7 +2459,7 @@ to a type reference (of the form <code>name: typereference</code>).</p>
     is declared in the <code>as</code> section.</li>
 <li>a type followed by <code>.take</code>, <code>.borrow</code>, <code>.view</code> or <code>.hold</code> in
     function parameter definitions to specify ownership and locking
-    semantics. See <code>ownership.pdoc</code>.</li>
+    semantics. See <a href="./ownership.html">ownership.</a></li>
 </ul>
 <h3 id="unit-types"><a href="#unit-types">5.2. Unit Types</a></h3>
 <p>Programs are constructed from one or more units.</p>
@@ -2753,7 +2733,7 @@ argument.</p>
 <h4 id="take"><a href="#take">5.4.7. take</a></h4>
 <p><code>take</code> is a predefined type attribute on all types. When used as a dotted
 path on a type in function parameter or return type declarations, it specifies
-ownership transfer semantics. See <code>ownership.pdoc</code> for full
+ownership transfer semantics. See <a href="./ownership.html">ownership for full</a>
 details. <code>.take</code> must be explicitly written on parameters -- it is not the
 default for any type family.</p>
 <p>As a type attribute on function parameters (<code>type.take</code>): ownership is taken
@@ -3037,7 +3017,7 @@ any other reference. Combined with <code>.borrow</code> (<code>&lt;type&gt;.priv
 becomes a friend reference whose lock is held for the lifetime of the
 containing variable -- this is how class iterators access their container's
 internal state.</p>
-<p>See <code>docs/ownership.pdoc</code> for the full ownership and locking model.</p>
+<p>See <a href="./ownership.html">ownership for the full model.</a></p>
 <h4 id="numeric-types"><a href="#numeric-types">5.4.18. Numeric Types</a></h4>
 <p>Predefined numeric type identifiers:</p>
 <pre><code class="language-zerolang">u8 u16 u32 u64 u128
@@ -3127,7 +3107,7 @@ variant. Each is overridden by writing the member in the <code>as</code> block,
 and struck off the type by defining it as <code>null</code>. A reftype has
   no default copy: what a duplicate means is the author's to say, so
 <code>.copy</code> on a class or union exists only when the author writes it.
-See ownership.pdoc for the full rule.</li>
+See <a href="./ownership.html">ownership for the full rule.</a></li>
 <li>Native methods declared in <code>lib/system/*.z</code> with the
 <code>is native</code> form. <code>String.copy</code>, <code>.byteView</code>,
 <code>.listView</code>, <code>.stringView</code>, <code>.iterate</code>, <code>.each</code>,
@@ -3151,7 +3131,7 @@ type system only. Use of the <code>.take</code> method is optional when passing 
 <p><code>.take</code> can be used for defining local variables -- the new variable takes the
 value and the old name becomes undefined. Calling <code>.take</code> as an expression
 that is not used (not assigned or passed) destroys the instance.</p>
-<p>See also the <code>ownership.pdoc</code>.</p>
+<p>See also <a href="./ownership.html">ownership.</a></p>
 <h4 id="borrow-method"><a href="#borrow-method">5.5.2. borrow (method)</a></h4>
 <p><code>borrow</code> is a compiler-generated method predefined on variable names that
 refer to a reftype (class, union) or a generic type parameter. It returns a
@@ -3165,7 +3145,7 @@ to function parameters (parameters are borrowed by default).</p>
 <p><code>.borrow</code> can be used for defining local variables -- the new variable borrows
 the value and the source name is exclusively locked while the new name is in
 scope.</p>
-<p>See also the <code>ownership.pdoc</code>.</p>
+<p>See also <a href="./ownership.html">ownership.</a></p>
 <h4 id="view-type-marker"><a href="#view-type-marker">5.5.3. view (type marker)</a></h4>
 <p><code>.view</code> is a type marker, not an instance method: it is written on a
 parameter, field or return type, and <code>x.view</code> on a value is an error.</p>
@@ -3180,7 +3160,7 @@ viaView:   function {c: C.view}   is { c.bump }   # refused -- 'c' is readonly</
 at once and the source stays readable. It is valid on valtypes as well as
 reftypes: the freeze is a lock on the name, which a record has as much as a
 class does.</p>
-<p>See also the <code>ownership.pdoc</code>.</p>
+<p>See also <a href="./ownership.html">ownership.</a></p>
 <h4 id="hold-method"><a href="#hold-method">5.5.4. hold (method)</a></h4>
 <p><code>hold</code> is a compiler-generated method predefined on all variable names.
 It is owned and readonly: ownership moves out of the source exactly as
@@ -3192,7 +3172,7 @@ readonly because it was declared so rather than because it points at someone
 else's value.</p>
 <p>Rebinding a hold binding requires another owned value (<code>h = y.hold</code>); a plain
 <code>h = y</code> is an error.</p>
-<p>See also the <code>ownership.pdoc</code>.</p>
+<p>See also <a href="./ownership.html">ownership.</a></p>
 <h4 id="copy-method"><a href="#copy-method">5.5.5. copy (method)</a></h4>
 <p><code>copy</code> is a duplicate of the receiver, owned by the caller. Valtypes have a
 default <code>.copy</code>; a reftype has none unless its author declares one in the
@@ -3227,7 +3207,7 @@ without waiting for the block to end.</p>
 new name.</p>
 <p>Error conditions: cannot drop a variable that is currently locked by another
 variable, and cannot drop a top-level definition.</p>
-<p>See also the <code>ownership.pdoc</code>.</p>
+<p>See also <a href="./ownership.html">ownership.</a></p>
 <h4 id="private-method"><a href="#private-method">5.5.8. private (method)</a></h4>
 <p><code>private</code> is the compiler-generated friend-access intrinsic.
 <code>&lt;receiver&gt;.private</code> yields the receiver at the same type but with the
@@ -3296,11 +3276,10 @@ a data block has no other place that sees every element at once.</p>
 <p>An element may not be named <code>tag</code>: that name is the block's own
 synthesised discriminator, and an element claiming it would leave a
 tagged type reading an element as its tag.</p>
-<p>The block's element type also determines the C-level array element
-type when the data block is emitted as a runtime array (variable
-indexing, iteration). With <code>out u8</code> the array becomes
-<code>static const uint8_t[]</code>; with no <code>out</code> and no typed elements, it
-defaults to <code>static const int64_t[]</code>.</p>
+<p>The block's element type also determines the element width of the runtime array
+a data block is emitted as, when it is indexed by a variable or iterated. With
+no <code>out</code> and no typed elements it defaults to <code>i64</code>; see
+<a href="./representation_of_types.html">representation_of_types for the layout.</a></p>
 <p>String literal fragments are built on top of a u8 data sequence.</p>
 <p>The data when used at runtime has exactly the same API as the valtype list
 family (<code>ListVal</code>) except that it is readonly.</p>
@@ -3410,9 +3389,7 @@ are tracked for scope cleanup and support <code>.take</code> for ownership trans
 The list struct itself lives on the stack; only its element data buffer is
 heap-allocated.</p>
 <p>The constructor is <code>(List T: &lt;type&gt;)</code> for an empty list, or
-<code>(List T: &lt;type&gt;) capacity: &lt;u64&gt;</code> to pre-allocate storage. The C
-representation is a struct with <code>length</code> (u64), a typed <code>data</code>
-pointer to the heap buffer, and <code>capacity</code> (u64).</p>
+<code>(List T: &lt;type&gt;) capacity: &lt;u64&gt;</code> to pre-allocate storage.</p>
 <pre><code class="language-zerolang"># create an empty list (i64 is a valtype, so the valtype family)
 nums: (ListVal i64)
 
@@ -3499,19 +3476,13 @@ key is destroyed. <code>get</code> differs by value family: on the reference-val
 forms (<code>MapRR</code> / <code>MapVR</code>) it returns <code>(OptionView value)</code>, a borrowed
 view that pins the map; on the value-valued forms (<code>MapRV</code> / <code>MapVV</code>)
 it returns <code>(optionval value)</code>, a copy, with no pin.</p>
-<p>The table grows when the load factor exceeds 2/3. Capacity is always a power
-of two, starting at 8 and doubling on resize. Removed entries leave tombstones
-that are reclaimed during resize. Different key/value type combinations produce
-different monomorphized types.</p>
-<p>Bucket dispatch hashes <code>String</code> / <code>StringView</code> keys through SipHash-1-3
-with a per-process random seed (initialised once at program start) and numeric
-keys through the splitmix64 finalizer &#x2014; see <code>String.hash</code> for the user-facing
-native that shares the same primitive. The random seed moves entries between
-<em><strong>buckets</strong></em> from run to run, but it does <em><strong>not</strong></em> affect iteration order: a map
-is a compact dict &#x2014; a dense entry array plus a separate index table &#x2014; and
-iteration walks the entry array, so it is in <em><strong>insertion order</strong></em> and is stable
-across runs. Resize preserves that order (tombstones are compacted out, the
-survivors keep their relative order).</p>
+<p>Different key/value type combinations produce different monomorphized types.</p>
+<p>Iteration is in insertion order, and stable across runs. Hashing is seeded
+per process, which moves entries between buckets from run to run, but iteration
+does not walk the buckets, so the order a program sees does not change. Deleting
+and resizing both preserve the relative order of the survivors. The table's
+layout and hash functions are in
+<a href="./representation_of_types.html">representation_of_types.</a></p>
 <h3 id="set"><a href="#set">5.11. set</a></h3>
 <p><code>Set</code> is a hash-table reftype, generic over element type. It is the
 everyday alias of <code>SetRef</code> (<code>of: RefHashable.generic</code>); the valtype
@@ -3547,12 +3518,10 @@ for <code>SetRef</code>, <code>valhashable</code> for <code>SetVal</code> -- it 
 The set takes ownership of items on <code>add</code>; on a
 duplicate-add the caller's copy is destroyed so the take-on-add contract
 holds. On <code>delete</code> the stored item is destroyed.</p>
-<p>Iteration is in <em><strong>insertion order</strong></em> and stable across runs: like <code>Map</code>, a
-set is a compact dict and iteration walks its dense entry array, not the hash
-table, so the per-process SipHash seed does not reach it. The table grows when
-the load factor exceeds 2/3; capacity starts at 8 and doubles on resize.
-Tombstones from <code>delete</code> are skipped by iteration and reclaimed during resize,
-which preserves the relative order of the survivors.</p>
+<p>Iteration is in insertion order and stable across runs, on the same
+guarantee <code>Map</code> gives: iteration does not walk the hash table, so the
+per-process seed does not reach it, and deleting preserves the relative order of
+the survivors.</p>
 <h3 id="string"><a href="#string">5.12. string</a></h3>
 <p><code>String</code> is an owned, mutable reference type and <code>StringView</code> is a
 non-owning view over one. Their members are documented in
@@ -3824,7 +3793,7 @@ mutating one; the iterator falls out of scope at the end of the <code>for</code>
 body and the pin on the container is released. Classes are
 single-owner (cannot be copied), which is what makes the non-owned field safe.
 See <code>examples/ListIter.z</code> for the canonical pattern and
-<code>docs/ownership.pdoc</code> for the lock-lifecycle walkthrough.</p>
+<a href="./ownership.html">ownership for the lock-lifecycle walkthrough.</a></p>
 <h4 id="generator-functions"><a href="#generator-functions">5.13.6. Generator functions</a></h4>
 <p>A <strong>generator function</strong> is one whose body contains at least one
 <code>yield</code> expression. Its declared return type must be
@@ -4067,7 +4036,7 @@ level by passing a generic variable at the call site into the constructor.</p>
 that the non-owned fields are initialised from <code>.borrow</code> parameters of
 the constructor (escape analysis). See
 <a href="#non-owned-fields-on-classes">Non-Owned Fields on Classes</a>
-and <code>docs/ownership.pdoc</code>.</p>
+and <a href="./ownership.html">ownership.</a></p>
 <p>Note that constructors are not executed for value types that are copied as
 those values are a clone of the original. Contructors for value types are only
 run when the value type is created explicitly.</p>
@@ -4346,7 +4315,7 @@ dictelement2: record {
 carry a non-owned field. Types that need to hold a locked reference to
 external data are <em><strong>classes</strong></em> -- see
 <a href="#non-owned-fields-on-classes">Non-Owned Fields on Classes</a>
-and <code>docs/ownership.pdoc</code>.</p>
+and <a href="./ownership.html">ownership.</a></p>
 <pre><code class="language-zerolang">BagIter: class {
     pos: i64
     target: bag.private.borrow

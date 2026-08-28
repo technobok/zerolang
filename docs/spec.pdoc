@@ -917,7 +917,7 @@ borrowed parameter into an aggregate field (#~"Box label: borrowed_s") is
 rejected for the same reason. Remediations are #~".copy" (clone),
 #~".take" on the parameter (transfer ownership in), or
 #~"out T.borrow" + a non-owned parameter (return a borrow tied to a
-pinned source). See #~"ownership.pdoc" for details.
+pinned source). See #> to=./ownership.html: ownership for details.
 
 A call carries #_*"at most one" unlabelled argument, and it must come first.
 Every other argument names the parameter it binds to, and named arguments may
@@ -1164,7 +1164,7 @@ with iter: (bag.iterate b: b) do for x: iter loop { print x }
 
 When the RHS is a plain path reference the compiler may emit the
 binding as an alias for the source -- no stack slot is allocated. See
-the "Binding Aliases" section in #~"docs/ownership.pdoc" for the exact
+the "Binding Aliases" section of #> to=./ownership.html: ownership for the exact
 eligibility rules.
 
 #----: do
@@ -1355,7 +1355,7 @@ arms are mutually exclusive and the subject is evaluated once. This means
 If #~".take" is used on the subject in any arm, the subject variable is
 invalidated after the match and cannot be used in subsequent code. Arms that do
 not explicitly take ownership will have the subject automatically destroyed
-after the match completes (in C: a #~"NULL" check and conditional destroy).
+after the match completes.
 
 #code language=zerolang: """
   u: MyUnion.ok 42
@@ -1946,9 +1946,8 @@ destructor for the union. For mixed unions, the emitted destructor's
 
 #-----: Type Narrowing
 
-The compiler keeps track of the type of every expression at every point in the
-program source via a flow-typing system (TypeState). This tracking is
-intra-function only and does not cross function call boundaries.
+The type of every expression is tracked at every point in the program, and the
+tracking is intra-function only: it does not cross a call boundary.
 
 [#> to=sum-types: Sum types] can be 'narrowed' back to their specific child types
 by using #>"match" expressions, by [#> to=sum-types: arm predicates] in #>"if"
@@ -2314,9 +2313,9 @@ generic parameter #~"t" of type #~"anyval.generic" and a #~"from:" argument;
 a reference-type argument is rejected by the bound -- a class instance is
 already a heap pointer, so a box around one would be a pointer to a pointer.
 
-#~"Box from:" heap-allocates a copy of the value. The resulting variable is
-a reference type whose C representation is a bare pointer to the element.
-Access to the boxed value is transparent: operators and fields work as if
+#~"Box from:" heap-allocates a copy of the value. The resulting variable is a
+reference type. Access to the boxed value is transparent: operators and fields
+work as if
 the value were unboxed. Destruction of a boxed value frees the allocated
 memory.
 
@@ -2480,7 +2479,7 @@ Each instance has exactly one owner at most. When the owning variable falls out
 of scope, the object is destroyed. Top level objects (ie. #~"data") never fall
 out of scope.
 
-See #~"docs/ownership.pdoc" for the full ownership and locking model.
+See #> to=./ownership.html: ownership for the full model.
 
 Ownership states:
 
@@ -2615,7 +2614,7 @@ instance must trace back to a #~".borrow" parameter. The locks transfer
 from those parameters to the caller's variable holding the result, keeping
 the source locked for the returned instance's lifetime.
 
-See #~"docs/ownership.pdoc" for the full design and worked examples.
+See #> to=./ownership.html: ownership for the full design and worked examples.
 
 #----: Locking
 
@@ -2646,28 +2645,15 @@ until the borrowed object falls out of scope.
 
 #-----: Locking Algorithm
 
-During a call, locks are taken/checked/assigned on all arguments and return
-values:
+A call takes a lock on each argument matching that parameter's marker --
+exclusive for the default borrow, shared for #~".view" -- plus a shared lock on
+every prefix of a dotted argument, and an exclusive lock on the receiver chain.
+Passing something already locked is an aliasing error. When the call returns,
+the locks a #~".borrow" parameter took transfer to the returned value and the
+rest are freed.
 
-#ol:
-  [#*: Each argument is processed left to right as specified in the call.]
-  [#*: If the argument is a top level (#~"data") item, no lock is taken
-    (immutable, freely shared).]
-  [#*: Otherwise, a lock matching the parameter's marker is taken on the
-    argument -- exclusive for the default borrow, shared for #~".view".]
-  [#*: If the argument is a dotted chain, a shared lock is taken on each parent
-    and grandparent in that chain.]
-  [#*: Additional shared locks on already shared-locked parents are permitted.]
-  [#*: If there is already an exclusive or shared lock on the argument being
-    passed, it is an error (prevents aliasing).]
-  [#*: If the argument is a sub-call, locking is applied recursively; after that
-    call, sub-call argument locks are cleared or assigned to the sub-call result.]
-  [#*: After all arguments are processed, the receiver is locked (exclusive lock
-    on each component of the receiver chain).]
-  [#*: The call is made.]
-  [#*: After the call, for any #~".borrow" parameters, their exclusive locks (plus
-    shared locks on parent items) are assigned to the returned value. All other
-    argument locks are freed.]
+The step-by-step order, including sub-calls, is in
+#> to=./ownership.html#call-scoped-locking-algorithm: Call-scoped Locking Algorithm.
 
 #~"for" loops over a reftype iteration target take the lock the iterator's
 receiver declares: #~"iterate" runs on a #~".view" receiver (SHARED -- the
@@ -2676,14 +2662,8 @@ container stays readable), while #~"iterateMut" / #~"iterateItems" run on
 iteration locks on the iterator (and on any non-owned fields it carries)
 flow through the per-iteration method dispatch.
 
-#~"match" does #_*"not" lock its subject. Match arms are mutually exclusive
-and the subject is evaluated once, so there is no aliasing concern. #~"match"
-may #~".take" its subject, in which case the subject is owned with the
-narrowed type in the arm bodies.
-
-#~"if" and #~"with" do not lock their condition or target -- expression
-evaluation and assignment semantics handle lock lifetimes without additional
-scope-level locking.
+#~"match", #~"if" and #~"with" take no lock of their own -- see
+[#> to=match: match] for why a match subject needs none.
 
 When an instance falls out of scope, all of its locks are freed. If the
 variable is borrowed, the borrow is dropped. If the variable is owned, it is
@@ -2719,7 +2699,7 @@ The declaration typereference follows the name. It is:
     is declared in the #~"as" section.]
   [#*: a type followed by #~".take", #~".borrow", #~".view" or #~".hold" in
     function parameter definitions to specify ownership and locking
-    semantics. See #~"ownership.pdoc".]
+    semantics. See #> to=./ownership.html: ownership.]
 
 
 #---: Unit Types
@@ -3069,7 +3049,7 @@ argument.
 
 #~"take" is a predefined type attribute on all types. When used as a dotted
 path on a type in function parameter or return type declarations, it specifies
-ownership transfer semantics. See #~"ownership.pdoc" for full
+ownership transfer semantics. See #> to=./ownership.html: ownership for full
 details. #~".take" must be explicitly written on parameters -- it is not the
 default for any type family.
 
@@ -3392,7 +3372,7 @@ becomes a friend reference whose lock is held for the lifetime of the
 containing variable -- this is how class iterators access their container's
 internal state.
 
-See #~"docs/ownership.pdoc" for the full ownership and locking model.
+See #> to=./ownership.html: ownership for the full model.
 
 
 #----: Numeric Types
@@ -3514,7 +3494,7 @@ The compiler provides two tiers of pre-existing methods on types:
   and struck off the type by defining it as #~"null". A #_+"reftype has
   no default copy": what a duplicate means is the author's to say, so
   #~".copy" on a class or union exists only when the author writes it.
-  See #_+"ownership.pdoc" for the full rule.]
+  See #> to=./ownership.html: ownership for the full rule.]
   [#*: #_+"Native methods" declared in #~"lib/system/*.z" with the
   #~"is native" form. #~"String.copy", #~".byteView",
   #~".listView", #~".stringView", #~".iterate", #~".each",
@@ -3544,7 +3524,7 @@ type system only. Use of the #~".take" method is optional when passing to
 value and the old name becomes undefined. Calling #~".take" as an expression
 that is not used (not assigned or passed) destroys the instance.
 
-See also the #~"ownership.pdoc".
+See also #> to=./ownership.html: ownership.
 
 #----: borrow (method)
 
@@ -3564,7 +3544,7 @@ to function parameters (parameters are borrowed by default).
 the value and the source name is exclusively locked while the new name is in
 scope.
 
-See also the #~"ownership.pdoc".
+See also #> to=./ownership.html: ownership.
 
 #----: view (type marker)
 
@@ -3587,7 +3567,7 @@ at once and the source stays readable. It is valid on valtypes as well as
 reftypes: the freeze is a lock on the name, which a record has as much as a
 class does.
 
-See also the #~"ownership.pdoc".
+See also #> to=./ownership.html: ownership.
 
 #----: hold (method)
 
@@ -3604,7 +3584,7 @@ else's value.
 Rebinding a hold binding requires another owned value (#~"h = y.hold"); a plain
 #~"h = y" is an error.
 
-See also the #~"ownership.pdoc".
+See also #> to=./ownership.html: ownership.
 
 #----: copy (method)
 
@@ -3652,7 +3632,7 @@ new name.
 Error conditions: cannot drop a variable that is currently locked by another
 variable, and cannot drop a top-level definition.
 
-See also the #~"ownership.pdoc".
+See also #> to=./ownership.html: ownership.
 
 #----: private (method)
 
@@ -3745,11 +3725,10 @@ An element may not be named #~"tag": that name is the block's own
 synthesised discriminator, and an element claiming it would leave a
 tagged type reading an element as its tag.
 
-The block's element type also determines the C-level array element
-type when the data block is emitted as a runtime array (variable
-indexing, iteration). With #~"out u8" the array becomes
-#~"static const uint8_t[]"; with no #~"out" and no typed elements, it
-defaults to #~"static const int64_t[]".
+The block's element type also determines the element width of the runtime array
+a data block is emitted as, when it is indexed by a variable or iterated. With
+no #~"out" and no typed elements it defaults to #~"i64"; see
+#> to=./representation_of_types.html: representation_of_types for the layout.
 
 String literal fragments are built on top of a u8 data sequence.
 
@@ -3881,9 +3860,7 @@ The list struct itself lives on the stack; only its element data buffer is
 heap-allocated.
 
 The constructor is #~"(List T: <type>)" for an empty list, or
-#~"(List T: <type>) capacity: <u64>" to pre-allocate storage. The C
-representation is a struct with #~"length" (u64), a typed #~"data"
-pointer to the heap buffer, and #~"capacity" (u64).
+#~"(List T: <type>) capacity: <u64>" to pre-allocate storage.
 
 #code language=zerolang: """
   # create an empty list (i64 is a valtype, so the valtype family)
@@ -3982,20 +3959,14 @@ forms (#~"MapRR" / #~"MapVR") it returns #~"(OptionView value)", a borrowed
 view that pins the map; on the value-valued forms (#~"MapRV" / #~"MapVV")
 it returns #~"(optionval value)", a copy, with no pin.
 
-The table grows when the load factor exceeds 2/3. Capacity is always a power
-of two, starting at 8 and doubling on resize. Removed entries leave tombstones
-that are reclaimed during resize. Different key/value type combinations produce
-different monomorphized types.
+Different key/value type combinations produce different monomorphized types.
 
-Bucket dispatch hashes #~"String" / #~"StringView" keys through SipHash-1-3
-with a per-process random seed (initialised once at program start) and numeric
-keys through the splitmix64 finalizer — see #~"String.hash" for the user-facing
-native that shares the same primitive. The random seed moves entries between
-#_*"buckets" from run to run, but it does #_*"not" affect iteration order: a map
-is a compact dict — a dense entry array plus a separate index table — and
-iteration walks the entry array, so it is in #_*"insertion order" and is stable
-across runs. Resize preserves that order (tombstones are compacted out, the
-survivors keep their relative order).
+#_+"Iteration is in insertion order", and stable across runs. Hashing is seeded
+per process, which moves entries between buckets from run to run, but iteration
+does not walk the buckets, so the order a program sees does not change. Deleting
+and resizing both preserve the relative order of the survivors. The table's
+layout and hash functions are in
+#> to=./representation_of_types.html: representation_of_types.
 
 #---: set
 
@@ -4039,12 +4010,10 @@ The set takes ownership of items on #~"add"; on a
 duplicate-add the caller's copy is destroyed so the take-on-add contract
 holds. On #~"delete" the stored item is destroyed.
 
-Iteration is in #_*"insertion order" and stable across runs: like #~"Map", a
-set is a compact dict and iteration walks its dense entry array, not the hash
-table, so the per-process SipHash seed does not reach it. The table grows when
-the load factor exceeds 2/3; capacity starts at 8 and doubles on resize.
-Tombstones from #~"delete" are skipped by iteration and reclaimed during resize,
-which preserves the relative order of the survivors.
+#_+"Iteration is in insertion order" and stable across runs, on the same
+guarantee #~"Map" gives: iteration does not walk the hash table, so the
+per-process seed does not reach it, and deleting preserves the relative order of
+the survivors.
 
 #---: string
 
@@ -4376,7 +4345,7 @@ mutating one; the iterator falls out of scope at the end of the #~"for"
 body and the pin on the container is released. Classes are
 single-owner (cannot be copied), which is what makes the non-owned field safe.
 See #~"examples/ListIter.z" for the canonical pattern and
-#~"docs/ownership.pdoc" for the lock-lifecycle walkthrough.
+#> to=./ownership.html: ownership for the lock-lifecycle walkthrough.
 
 #----: Generator functions
 
@@ -4631,7 +4600,7 @@ Class constructors whose type carries non-owned fields simply return
 that the non-owned fields are initialised from #~".borrow" parameters of
 the constructor (escape analysis). See
 #> to=non-owned-fields-on-classes: Non-Owned Fields on Classes
-and #~"docs/ownership.pdoc".
+and #> to=./ownership.html: ownership.
 
 Note that constructors are not executed for value types that are copied as
 those values are a clone of the original. Contructors for value types are only
@@ -4967,7 +4936,7 @@ Record fields are pure value data. A record cannot contain #~"String",
 carry a non-owned field. Types that need to hold a locked reference to
 external data are #_*"classes" -- see
 #> to=non-owned-fields-on-classes: Non-Owned Fields on Classes
-and #~"docs/ownership.pdoc".
+and #> to=./ownership.html: ownership.
 
 #code language=zerolang: """
   BagIter: class {
