@@ -31,6 +31,8 @@ public: unit {
 # cannot cross with the other numeric id spaces; equality is same-space
 # only, and sentinel checks read the base explicitly (f.u32 == 0).
 fsno: record { val: u32.typedef } as {
+    # identity by index: two fsnos name the same entry when their indices match,
+    # there being nothing else to an fsno
     ==: function {:this rhs: fsno} out bool is {
         return this.u32 == rhs.u32
     }
@@ -38,44 +40,70 @@ fsno: record { val: u32.typedef } as {
 
 # the kind of a resolved VFS node: dir, file, or notfound.
 nodekind: variant {
+    # a directory, which a walk may descend into
     dir: null
+    # a regular file, which open may read
     file: null
+    # nothing there. A RESOLVED absence, cached like any other answer rather
+    # than re-walked each time
     notfound: null
 }
 
 # how a mount overlays its parent: instead / before / after.
 bindkind: variant {
+    # the new root REPLACES the old one, and the mount carries no second arm at
+    # all
     instead: null
+    # the new root is searched FIRST, the old one kept as the mount's second arm
     before: null
+    # the old root is searched first and the new one after it, the old kept as
+    # the mount's FIRST arm
     after: null
 }
 
 # a resolved-but-absent VFS entry: parent, provider, and node ids.
 notfounddata: record {
+    # the directory entry this absence hangs under
     parentid: fsno
+    # which registered provider owns this absence
     providerid: u32
+    # the provider's OWN id for this absence, which only that provider can
+    # interpret
     nodeid: u32
 }
 
 # a VFS file entry: parent, provider, and node ids.
 filedata: record {
+    # the directory entry this file hangs under
     parentid: fsno
+    # which registered provider owns this file
     providerid: u32
+    # the provider's OWN id for this file, which only that provider can
+    # interpret
     nodeid: u32
 }
 
 # a VFS directory entry: parent, provider, and node ids.
 dirdata: record {
+    # the directory entry this directory hangs under
     parentid: fsno
+    # which registered provider owns this directory
     providerid: u32
+    # the provider's OWN id for this directory, which only that provider can
+    # interpret
     nodeid: u32
 }
 
 # a VFS mount overlaying up to two child subtrees (`first`/`second`).
 mountdata: record {
+    # the entry this mount hangs under
     parentid: fsno
+    # the root searched first
     first: fsno
+    # the root searched after `first`; meaningful only when has_second
     second: fsno
+    # whether `second` holds a root at all. An `instead` bind leaves it unset,
+    # which is the whole difference between it and the other two
     has_second: bool
 }
 
@@ -84,25 +112,40 @@ mountdata: record {
 # arms. `is_mount` distinguishes the mount-vs-non-mount case at the
 # helper boundary; the rest mirrors mountdata.
 mountinfo: record {
+    # whether the entry asked about is a mount. The three below mean nothing
+    # when this is false
     is_mount: bool
+    # the mount's first root, copied out for a caller that must not hold the
+    # table
     first: fsno
+    # the mount's second root, when it has one
     second: fsno
+    # whether `second` is meaningful, mirroring the mountdata field it was
+    # copied from
     has_second: bool
 }
 
 # a VFS directory entry -- one of root / notfound / file / directory / mount.
 dentry: variant {
+    # the root entry: no parent, and belonging to no provider
     root: null
+    # a resolved absence -- the walk reached here and found nothing
     notfound: notfounddata
+    # a file entry
     file: filedata
+    # a directory entry
     directory: dirdata
+    # a mount point, where one root overlays another
     mount: mountdata
 }
 
 # the id-indexed table of all VFS dentries.
 DentryTable: class {
+    # every entry, indexed by fsno. An fsno IS the index, which is what lets it
+    # be a plain integer
     entries: (ListVal dentry)
 } as {
+    # add an entry and answer its fsno, which is simply where it landed
     append: function {:this entry: dentry.take} out fsno is {
         idx: fsno.create from: this.entries.length.u32.orPanic
         this.entries.append entry
@@ -116,18 +159,27 @@ OpenResult: union {
     # become a TextReader once a Provider implementation needs
     # stream semantics.
     ok: String
+    # why the open failed
     err: IoError
 }
 
-# ZVfsProvider -- the four-method abstract protocol every provider
-# implementation satisfies.
-# is the conventional "NOTFOUND"
-# sentinel returned by walk when no walk is possible.
+# ZVfsProvider -- the five-method abstract protocol every provider
+# implementation satisfies. A provider owns its own id space: the `u32` these
+# methods pass is the PROVIDER's node id and means nothing to any other one,
+# and 0 is the conventional NOTFOUND sentinel walk answers when no walk is
+# possible.
 ZVfsProvider: protocol {
+    # resolve one path component `name` under `parent`, answering this
+    # provider's own node id, or 0 for NOTFOUND
     walk: function {:this name: StringView parent: u32} out u32
+    # read the item's contents, or say why it could not be read
     open: function {t: this.view item: u32} out OpenResult
+    # what the item is, without reading it
     stat: function {t: this.view item: u32} out nodekind
+    # the item's path as this provider spells it, for diagnostics
     path: function {t: this.view item: u32} out String
+    # add a file to this provider. Only the writable providers do anything with
+    # it
     addFile: function {:this fpath: String.take content: String.take}
 }
 
@@ -137,27 +189,34 @@ ZVfsProvider: protocol {
 # marker. `_unused: bool` is a placeholder field so the class is not
 # zero-field.
 NullProvider: class {
+    # a placeholder so the class is not zero-field; nothing reads it
     _unused: bool
 } as {
     :ZVfsProvider
+    # always NOTFOUND: the null provider resolves nothing
     walk: function {:this name: StringView parent: u32} out u32 is {
         name
         parent
         return 1
     }
+    # always an error: there is nothing here to read
     open: function {t: this.view item: u32} out OpenResult is {
         item
         e: IoError.other "NullProvider cannot open for read".string
         return (OpenResult.err e.take)
     }
+    # dir for the root item and notfound for everything else, so a walk can
+    # start and then get nowhere
     stat: function {t: this.view item: u32} out nodekind is {
         if item == 0 then return nodekind.dir
         return nodekind.notfound
     }
+    # the static [NULL] marker, so a diagnostic naming it is recognisable
     path: function {t: this.view item: u32} out String is {
         item
         return "[NULL]".string
     }
+    # discards it: the null provider stores nothing
     addFile: function {:this fpath: String.take content: String.take} is {
         fpath
         content
@@ -170,6 +229,8 @@ NullProvider: class {
 # <Protocol>) directly is untested in the tree; (List of:
 # <Class>) is known-good. ~5 LOC of overhead, lossless.
 ProviderBox: class {
+    # the boxed provider. Boxing is what lets one list hold implementations of
+    # different types behind the protocol
     p: ZVfsProvider
 }
 
@@ -178,8 +239,10 @@ ProviderBox: class {
 # assigned id. get returns a borrow of the provider at id, scoped
 # to the caller's expression.
 ProviderTable: class {
+    # the registered providers, indexed by the id the dentries carry
     providers: (List ProviderBox)
 } as {
+    # register a NullProvider and answer its id
     registerNull: function {:this} out u32 is {
         np: NullProvider _unused: false
         prov: ZVfsProvider.create from: np.take
@@ -188,6 +251,7 @@ ProviderTable: class {
         this.providers.append box.take
         return idx
     }
+    # register an in-memory StringProvider and answer its id
     registerString: function {:this} out u32 is {
         sp: StringProvider nodes: (List StringNode) children: (MapRV String v: u32)
         root: StringNode path: "".string kind: nodekind.dir content: "".string
@@ -240,8 +304,11 @@ ProviderTable: class {
 # file / dir / notfound; `content` is empty for dir / notfound.
 #py:719.
 StringNode: class {
+    # the full path this node is registered under
     path: String
+    # whether it is a file or a directory
     kind: nodekind
+    # the file's bytes; empty for a directory
     content: String
 }
 
@@ -249,7 +316,10 @@ StringNode: class {
 # table (NodeID = list index); `children` maps "<parentid>:<name>"
 # to the child NodeID.
 StringProvider: class {
+    # every registered node, indexed by this provider's own node id
     nodes: (List StringNode)
+    # the child lookup, keyed by parent id and name joined, so a walk is one map
+    # hit rather than a scan
     children: (MapRV String v: u32)
 } as {
     :ZVfsProvider
@@ -269,6 +339,8 @@ StringProvider: class {
         this.children.set key: key.take value: childid
     }
 
+    # resolve `name` under `parent` through the children map -- no filesystem is
+    # touched
     walk: function {:this name: StringView parent: u32} out u32 is {
         key: "\{parent}:\{name}"
         r: this.children.get key: key.copy
@@ -286,6 +358,7 @@ StringProvider: class {
         }
     }
 
+    # the stored contents, which are already in memory
     open: function {t: this.view item: u32} out OpenResult is {
         n: t.nodes.get i: item.u64
         match (
@@ -302,11 +375,13 @@ StringProvider: class {
         }
     }
 
+    # the stored kind, with no syscall
     stat: function {t: this.view item: u32} out nodekind is {
         n: t.nodes.get i: item.u64
         return n.kind
     }
 
+    # the path the node was registered under
     path: function {t: this.view item: u32} out String is {
         n: t.nodes.get i: item.u64
         return n.path.copy
@@ -362,7 +437,9 @@ StringProvider: class {
 # discriminates file / dir / notfound.
 # tuple.
 FSNode: class {
+    # the real path this node stands for
     path: String
+    # what stat found it to be
     kind: nodekind
 }
 
@@ -373,8 +450,12 @@ FSNode: class {
 # repeat walks are O(1). addFile panics: FSProvider is read-only from
 # the VFS view.
 FSProvider: class {
+    # the real directory this provider is rooted at; every path it answers is
+    # under it
     rootpath: String
+    # the nodes seen so far, indexed by this provider's own node id
     pathtable: (List FSNode)
+    # path to node id, so a path walked twice costs one syscall rather than two
     pathcache: (MapRV String v: u32)
 } as {
     :ZVfsProvider
@@ -387,6 +468,8 @@ FSProvider: class {
         return idx
     }
 
+    # resolve `name` under `parent` against the real filesystem, caching the
+    # answer so the syscall happens once
     walk: function {:this name: StringView parent: u32} out u32 is {
         rel: joinPath parent: (this.pathtable.get i: parent.u64).path.stringView :name
         # Cache lookup first; repeat walks short-circuit here.
@@ -422,6 +505,7 @@ FSProvider: class {
         }
     }
 
+    # read the file from disk
     open: function {t: this.view item: u32} out OpenResult is {
         n: t.pathtable.get i: item.u64
         match (
@@ -445,16 +529,19 @@ FSProvider: class {
         }
     }
 
+    # what the real filesystem says the entry is
     stat: function {t: this.view item: u32} out nodekind is {
         n: t.pathtable.get i: item.u64
         return n.kind
     }
 
+    # the real path, which is what a diagnostic should name
     path: function {t: this.view item: u32} out String is {
         n: t.pathtable.get i: item.u64
         return n.path.copy
     }
 
+    # write the file to disk under this provider's root
     addFile: function {:this fpath: String.take content: String.take} is {
         fpath
         content
@@ -467,11 +554,17 @@ FSProvider: class {
 # table, a per-id name side-table indexed by dentry id (entry ids are
 # dense u32), and a walk cache keyed by "<parentid>:<name>".
 ZVfs: class {
+    # the registered providers, indexed by the id every dentry carries
     providers: (List ProviderBox)
+    # each provider's root path, kept beside the provider rather than inside it
     providerRoot: (IdMapR u32 V: String)
+    # the dentries, which is where resolution actually caches its answers
     entrytable: DentryTable
+    # the file names seen, so a name can be reported without re-deriving it
     file_names: (List String)
+    # resolved path to fsno. A path walked twice does not descend twice
     walk_cache: (MapRV String v: fsno)
+    # the entry every absolute walk starts from
     rootid: fsno
 } as {
     # registerNull -- append a NullProvider to the provider list and
