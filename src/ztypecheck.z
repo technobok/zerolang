@@ -25622,6 +25622,35 @@ checkBinop: function {
     binop: binref
 } out ztypes.tid is {
     result: ztypes.tid
+    # AN OPERATOR IS AN IDENTIFIER, and a numeric literal names no method and
+    # never can. It reaches this slot from the shape a call takes when a second
+    # argument is written without its name: `f 10 3` is three paths, and three
+    # paths are the operator form -- receiver `f`, operator `10`, argument `3`
+    # -- not two arguments. Asked BEFORE the operands are walked, because
+    # walking the lhs reports `f` as a bare function reference first and buries
+    # the mistake that produced it.
+    {
+        opLit: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: binop.operator.u64))
+        if opLit.length > 0 when (isNumericLiteralName name: opLit.stringView) then {
+            mLit: "'\{opLit}' is not an operator: an operator is an identifier"
+            hLit: "a call takes at most one unlabelled argument -- give every later argument its parameter name".string
+            nLit: String
+            opLn: nodeLine n: (ast.nodes.get i: binop.operator.u64)
+            opCl: nodeCol n: (ast.nodes.get i: binop.operator.u64)
+            (addErrorH
+                :st
+                nodeid: binop.operator
+                lineno: opLn
+                colno: opCl
+                e: zast.err.callError
+                msg: mLit
+                note: nLit
+                hint: hLit
+                width: opLit.length.u32.orPanic
+            )
+            return (ztypes.tid.create from: 0)
+        }
+    }
     # an operand that typed to nothing and raised nothing is an unresolvable
     # name: report it here, where the operand is consumed. Without it the 0
     # silently disables the dispatch's own checks and the emitter writes the
