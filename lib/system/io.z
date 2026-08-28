@@ -10,16 +10,33 @@
 # `other`) carry a `string` payload, which is a reftype and so cannot
 # appear in a variant.
 IoError: union {
+    # the path does not exist
     notfound: null
+    # the path exists but the process may not use it this way
     permissiondenied: null
+    # a signal cut the call short; the operation is worth retrying, which is the
+    # one arm here that usually means retry
     interrupted: null
+    # the path itself is malformed -- it carries the text so the caller can say
+    # which
     invalidpath: String
+    # the end of the stream was reached where more was required. A short READ
+    # reports 0 bytes instead; this is for the callers that cannot accept one
     eof: null
+    # the bytes are not valid UTF-8, raised by the TEXT layer only -- the byte
+    # layer has no opinion about encoding
     badencoding: null
+    # the path is already there and the operation required that it not be
     exists: null
+    # a directory was found where a file was required
     isdir: null
+    # a file was found where a directory was required, or a path component is
+    # not one
     notdir: null
+    # the filesystem is full
     nospace: null
+    # anything the arms above do not name, carrying the underlying message so
+    # nothing is lost in translation
     other: String
 }
 
@@ -53,7 +70,9 @@ readText: function as { T: StringLike.generic } in {path: T} out (Result
 # (permission denied, out of space, etc.). Creates intermediate
 # directories: NO — the parent directory must already exist.
 writeText: function as { T: StringLike.generic U: StringLike.generic } in {
+    # the file written, created when absent and TRUNCATED when present
     path: T
+    # the text written; it replaces whatever the file held
     content: U
 } out (Result null E: IoError) is native
 
@@ -61,7 +80,9 @@ writeText: function as { T: StringLike.generic U: StringLike.generic } in {
 # `content` to the end. Atomicity is not guaranteed across multiple
 # processes; use OS-level locks for that.
 appendText: function as { T: StringLike.generic U: StringLike.generic } in {
+    # the file appended to, created when absent
     path: T
+    # the text added at the end, leaving what is already there
     content: U
 } out (Result null E: IoError) is native
 
@@ -118,7 +139,10 @@ removeTree: function {path: StringView} is {
 # POSIX replaces it (file overwrites file, directory overwrites empty
 # directory, otherwise IoError). Atomic on the same filesystem.
 rename: function as { T: StringLike.generic U: StringLike.generic } in {
+    # the existing path
     from: T
+    # the new path. Atomic on the same filesystem, and it REPLACES an existing
+    # file there rather than refusing
     to: U
 } out (Result null E: IoError) is native
 
@@ -127,9 +151,13 @@ rename: function as { T: StringLike.generic U: StringLike.generic } in {
 # today `stat` follows symlinks, so `symlink` is reserved for a
 # future `io.lstat`.
 filekind: variant {
+    # a regular file
     file: null
+    # a directory
     dir: null
+    # a symbolic link, reported only by the call that does NOT follow links
     symlink: null
+    # a socket, device, fifo or anything else the kind arms do not name
     other: null
 }
 
@@ -144,14 +172,30 @@ filekind: variant {
 # child's `..`, so a directory with N entries typically has
 # `nlink == 2 + (subdir count)`).
 filestat: record {
+    # what the entry is; test this before trusting size or mode to mean what you
+    # expect
     kind: filekind
+    # the byte length for a file. For a directory it is the filesystem's own
+    # bookkeeping and not a count of anything
     size: u64
+    # last MODIFICATION, in whole seconds since the Unix epoch -- the one to
+    # compare when asking whether contents changed
     mtimeSeconds: u64
+    # last ACCESS, in seconds since the epoch. Many filesystems are mounted so
+    # this barely moves, so it is weak evidence
     atimeSeconds: u64
+    # last INODE change in seconds -- metadata, not contents, so a permission
+    # change moves this and not mtime
     ctimeSeconds: u64
+    # the POSIX permission and type bits, raw
     mode: u32
+    # the device the entry lives on; with `inode` it identifies a file uniquely,
+    # which a path does not
     device: u64
+    # the inode number, unique only within `device`
     inode: u64
+    # how many directory entries point at this inode; above 1 means a hard link
+    # exists
     nlink: u64
 }
 
@@ -185,7 +229,9 @@ readlink: function as { T: StringLike.generic } in {path: T} out (Result
 # validated, or made absolute. Fails with `exists` if `link` already
 # refers to anything (file, directory, or another symlink).
 symlink: function as { T: StringLike.generic U: StringLike.generic } in {
+    # what the link points at
     target: T
+    # where the link itself is created
     link: U
 } out (Result null E: IoError) is native
 
@@ -204,8 +250,11 @@ listDir: function as { T: StringLike.generic } in {path: T} out (Result
 # `start`: from byte 0. `current`: from current position. `end`: from
 # the end (typically with a negative offset to seek backwards).
 seekorigin: variant {
+    # offsets count from the beginning, so the offset IS the absolute position
     start: null
+    # offsets count from the head where it stands, and may be negative
     current: null
+    # offsets count back from the end; 0 seeks to the end itself
     end: null
 }
 
@@ -216,6 +265,9 @@ seekorigin: variant {
 #   Reads up to `n` bytes into `buf`. Returns the number of bytes
 #   actually read (0 indicates EOF) or an IoError.
 Reader: protocol {
+    # read up to `max` bytes into `into`, answering how many actually arrived. A
+    # count of 0 is EOF rather than an error, so a caller loops until it sees
+    # one
     read: function {:this into: Bytes max: u64} out (Result (Box u64) E: IoError)
 }
 
@@ -225,7 +277,11 @@ Reader: protocol {
 # `writer.flush`
 #   Forces buffered output to its final destination.
 Writer: protocol {
+    # write the view's bytes, answering how many actually went. It may be FEWER
+    # than the view holds, so a caller loops rather than assuming
     write: function {:this from: ByteView} out (Result (Box u64) E: IoError)
+    # force buffered output to its destination. Until this returns, a write that
+    # reached a buffer has not necessarily reached the resource
     flush: function {:this} out (Result null E: IoError)
 }
 
@@ -235,6 +291,9 @@ Writer: protocol {
 #   data couldn't be flushed). Calling close more than once is a
 #   compile-time error per the standard ownership rules.
 Closer: protocol {
+    # release the underlying resource. An error here is usually a DELAYED write
+    # failure -- the kernel buffered data whose write fails only at close -- so
+    # a caller that ignores it can lose the last of its output
     close: function {:this} out (Result null E: IoError)
 }
 
@@ -242,6 +301,8 @@ Closer: protocol {
 #   Reposition the read/write head. Returns the new absolute position
 #   from the start of the resource, or an IoError.
 Seeker: protocol {
+    # move the read/write head to `to`, measured from `from`, answering the new
+    # absolute position counted from the start
     seek: function {:this to: i64 from: seekorigin} out (Result (Box u64) E: IoError)
 }
 
@@ -260,13 +321,20 @@ Seeker: protocol {
 # error: the second call returns `ok null` because the destructor
 # observes `closed = true` and does nothing.
 File: class {
+    # the POSIX file descriptor. It is the whole of the handle -- a File owns
+    # exactly this
     fd: i32
+    # whether close has already run. It is what makes the destructor idempotent
+    # across an explicit close earlier in the scope
     closed: bool
 } as {
     :Reader
     :Writer
     :Closer
     :Seeker
+    # release the fd, answering a result so a delayed write error can be
+    # surfaced. Calling it twice is not an error: the second answers ok null,
+    # the destructor having seen `closed`
     close: function {:this} out (Result null E: IoError) is native
     # read up to `max` bytes, appending them to `buf`. Returns the
     # actual count read; 0 indicates EOF. The caller owns `buf` and
@@ -291,8 +359,11 @@ File: class {
 # `write`   -- O_WRONLY | O_CREAT | O_TRUNC, mode 0644.
 # `append`  -- O_WRONLY | O_CREAT | O_APPEND, mode 0644.
 openmode: variant {
+    # open for reading; the file must exist
     read: null
+    # open for writing, truncating an existing file to empty
     write: null
+    # open for writing at the end, keeping what is already there
     append: null
 }
 
@@ -301,7 +372,10 @@ openmode: variant {
 # scope exit, or explicitly via `file.close` to surface a delayed
 # write error.
 open: function as { T: StringLike.generic } in {
+    # the file to open
     path: T
+    # how it is opened, which decides whether it must already exist and whether
+    # its contents survive
     mode: openmode
 } out (Result File E: IoError) is native
 
@@ -328,13 +402,23 @@ stderr: function out Writer is native
 # alive, the original writer cannot be mutated, borrowed again, or
 # locked -- path-scoped locking rejects such access at the source.
 BufWriter: class {
+    # the writer this buffers for. Borrowed, so the BufWriter must not outlive
+    # it
     sink: Writer.borrow
+    # the pending bytes, handed to the sink when they reach `cap` or a flush
+    # asks
     buf: Bytes
+    # the byte count that triggers a flush to the sink
     cap: u64
 } as {
     :Writer
+    # a BufWriter over `to`, buffering `capacity` bytes before it writes through
     create: function {to: Writer.borrow capacity: u64} out this.takex is native
+    # buffer the view's bytes, writing through to the sink whenever the buffer
+    # fills
     write: function {:this from: ByteView} out (Result (Box u64) E: IoError) is native
+    # hand the buffered bytes to the sink now. A BufWriter that is dropped
+    # unflushed loses them
     flush: function {:this} out (Result null E: IoError) is native
 }
 
@@ -352,13 +436,22 @@ BufWriter: class {
 # Holds a borrow on `source` via `reader.lock` so the original reader
 # is locked for the wrapper's lifetime.
 BufReader: class {
+    # the reader this buffers from. Borrowed, so the BufReader must not outlive
+    # it
     source: Reader.borrow
+    # the bytes read ahead but not yet handed out
     buf: Bytes
+    # how far into `buf` the caller has consumed; the unread part is what
+    # remains after it
     head: u64
+    # how many bytes to read ahead at a time
     cap: u64
 } as {
     :Reader
+    # a BufReader over `from`, reading ahead `capacity` bytes at a time
     create: function {from: Reader.borrow capacity: u64} out this.takex is native
+    # serve up to `max` bytes from the buffer, refilling from the source when it
+    # runs dry. 0 still means EOF
     read: function {:this into: Bytes max: u64} out (Result (Box u64) E: IoError) is native
 }
 
@@ -377,17 +470,25 @@ BufReader: class {
 # need a delayed-write error surfaced, or rely on the underlying
 # bufwriter's own flush once the textwriter has been dropped.
 TextWriter: class {
+    # the BufWriter this encodes into. Borrowed, so the TextWriter must not
+    # outlive it
     sink: BufWriter.borrow
 } as {
+    # a TextWriter over `to`; it adds UTF-8 encoding and line handling to the
+    # byte layer beneath
     create: function {to: BufWriter.borrow} out this.takex is native
+    # write a string's bytes with no terminator added
     write: function as { T: StringLike.generic } in {:this from: T} out (Result
         (Box u64)
         E: IoError
     ) is native
+    # write a string's bytes followed by a newline -- the only difference from
+    # `write`
     writeLine: function as { T: StringLike.generic } in {:this from: T} out (Result
         (Box u64)
         E: IoError
     ) is native
+    # flush through to the underlying BufWriter, and so to its sink
     flush: function {:this} out (Result null E: IoError) is native
 }
 
@@ -412,10 +513,18 @@ TextWriter: class {
 #   - err(badencoding) -- the completed line was not valid UTF-8.
 #   - err(other)  -- underlying reader surfaced an I/O failure.
 TextReader: class {
+    # the BufReader this decodes from. Borrowed, so the TextReader must not
+    # outlive it
     source: BufReader.borrow
+    # the partial line carried between reads, since a line rarely ends where a
+    # buffer does
     buf: Bytes
 } as {
+    # a TextReader over `from`, adding UTF-8 decoding and line splitting to the
+    # bytes beneath
     create: function {from: BufReader.borrow} out this.takex is native
+    # the next line WITHOUT its terminator. Invalid UTF-8 surfaces as
+    # badencoding, and the end of input as eof
     readLine: function {:this} out (Result String E: IoError) is native
     # `call` makes textreader directly iterable: `for line: tr loop { ... }`
     # yields each line (LF stripped) until the stream drains. Every

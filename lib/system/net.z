@@ -7,10 +7,16 @@
 
 # Listener -- a bound, listening TCP socket on 127.0.0.1.
 Listener: class {
+    # the POSIX socket descriptor. It is the whole of the handle
     fd: i32
+    # whether close has run, which makes the destructor idempotent across an
+    # explicit one
     closed: bool
 } as {
+    # block until a peer connects, answering the connection. Each call answers a
+    # DIFFERENT one; the listener stays open
     accept: function {:this} out (Result Conn E: IoError) is native
+    # stop listening and release the socket. Calling it twice answers ok null
     close: function {:this} out (Result null E: IoError) is native
 }
 
@@ -18,14 +24,23 @@ Listener: class {
 # bytes (0 read = the peer closed); `write` loops until every byte is
 # out.
 Conn: class {
+    # the POSIX socket descriptor for this connection
     fd: i32
+    # whether close has run, which makes the destructor idempotent
     closed: bool
 } as {
     :Reader
     :Writer
+    # read up to `max` bytes into `into`, answering how many arrived. 0 means
+    # the peer closed its end, which is this stream's EOF
     read: function {:this into: Bytes max: u64} out (Result (Box u64) E: IoError) is native
+    # write the view's bytes, answering how many actually went -- it may be
+    # fewer, so a caller loops
     write: function {:this from: ByteView} out (Result (Box u64) E: IoError) is native
+    # push anything buffered to the peer
     flush: function {:this} out (Result null E: IoError) is native
+    # shut the connection and release the socket. Calling it twice answers ok
+    # null
     close: function {:this} out (Result null E: IoError) is native
 }
 

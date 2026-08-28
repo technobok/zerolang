@@ -8,23 +8,37 @@
 
 # a JSON value: a tagged sum of null / bool / int / float / string / array / object.
 Value: union {
+    # JSON's null, which is a VALUE and not an absence -- `missing` is the
+    # absence
     nul: null
+    # true or false, boxed because a union arm holds a reftype
     boolean: (Box bool)
+    # a number with no fraction or exponent, kept exact as i64 rather than
+    # folded into a double
     intval: (Box i64)
+    # a number that had a fraction or an exponent, so it could not stay integral
     floatval: (Box f64)
+    # a string, already unescaped -- the escapes are resolved at parse rather
+    # than on every read
     text: String
+    # an ordered list of values
     array: Arr
+    # a set of key/value pairs, keys kept in DOCUMENT order
     object: Obj
 }
 
 # a JSON array -- an ordered list of Values.
 Arr: class {
+    # the elements in document order
     items: (List Value)
 }
 
 # a JSON object -- string-keyed Values kept in insertion order.
 Obj: class {
+    # the key-to-value map, which answers lookups
     entries: (Map String V: Value)
+    # the same keys in DOCUMENT order, which the map cannot give and a re-
+    # serialise needs
     keys: (List String)
 } as {
     # set -- insert or replace `key`. First insertion records the key
@@ -34,6 +48,7 @@ Obj: class {
         this.entries.set :key :value
     }
 
+    # whether the object carries `key`, without producing its value
     has: function {:this key: StringView} out bool is {
         return (this.entries.has key: key.asString)
     }
@@ -41,13 +56,18 @@ Obj: class {
 
 # Parse failure: byte offset into the input plus a message.
 JsonError: class {
+    # the BYTE offset the parse stopped at, not a line and column -- the caller
+    # has the source and can convert
     at: u64
+    # what was expected there
     msg: String
 }
 
 # the outcome of parsing JSON text: `ok` a Value, or `err` a JsonError.
 ParseResult: union {
+    # why the parse stopped, and where
     err: JsonError
+    # the parsed document
     ok: Value
 }
 
@@ -63,23 +83,38 @@ ParseResult: union {
 
 # which value kind a path lookup landed on, or `missing`.
 foundkind: variant {
+    # nothing at that path. Distinct from `nul`, which is a value that IS there
     missing: null
+    # the path holds JSON null
     nul: null
+    # the path holds true or false; read `b`
     boolean: null
+    # the path holds an integral number; read `i`
     intval: null
+    # the path holds a fractional number; read `f`
     floatval: null
+    # the path holds a string; read `s`
     text: null
+    # the path holds an array; `n` is its length
     array: null
+    # the path holds an object; `n` is its entry count
     object: null
 }
 
 # a scalar path-lookup result: the `kind` plus the matching payload slot.
 Found: class {
+    # which of the slots below is meaningful. Read this first; the rest are zero
+    # unless the kind names them
     kind: foundkind
+    # the boolean, when kind is boolean
     b: bool
+    # the integer, when kind is intval
     i: i64
+    # the float, when kind is floatval
     f: f64
+    # the string, when kind is text
     s: String
+    # the element or entry count, when kind is array or object
     n: u64
 }
 
@@ -398,13 +433,24 @@ appendCodepoint: function {buf: String cp: u32} is {
 
 # the JSON parser's scan state: input, position, nesting depth, and error info.
 Cursor: class {
+    # the document being parsed; the cursor borrows nothing and owns this for
+    # its life
     src: String
+    # the byte offset the parse has reached
     pos: u64
+    # how deep the nesting is, bounded so a pathological document cannot exhaust
+    # the stack
     depth: u32
+    # set once, and every step after it is a no-op -- the parse unwinds by
+    # CHECKING rather than by throwing
     failed: bool
+    # where the first failure was, kept because `pos` keeps moving after it
     errPos: u64
+    # what the first failure expected
     errMsg: String
 } as {
+    # record the first failure and stop. Later calls do not overwrite it, so the
+    # message names the ORIGINAL problem rather than its consequences
     fail: function {:this msg: StringView} is {
         if this.failed == false then {
             this.failed = true
@@ -413,6 +459,8 @@ Cursor: class {
         }
     }
 
+    # the byte at the cursor without consuming it; 0 past the end, which no
+    # valid JSON byte is
     peek: function {:this} out u8 is {
         sv: this.src.stringView
         b: sv.byteAt this.pos
@@ -425,14 +473,17 @@ Cursor: class {
         }
     }
 
+    # step one byte forward
     advance: function {:this} is {
         this.pos = this.pos + 1
     }
 
+    # step past spaces, tabs and newlines to the next meaningful byte
     skipWs: function {:this} is {
         for (isWs b: this.peek) loop this.advance
     }
 
+    # one value of any kind, dispatched on the first byte
     parseValue: function {:this} out Value is {
         this.skipWs
         if this.failed then return Value.nul
@@ -491,6 +542,7 @@ Cursor: class {
         return v
     }
 
+    # a `{...}` object, keeping the keys in document order beside the map
     parseObject: function {:this} out Value is {
         this.advance
         o: (Obj entries: (Map String V: Value) keys: (List String))
@@ -531,6 +583,7 @@ Cursor: class {
         }
     }
 
+    # a `[...]` array, element by element, with the nesting depth bounded
     parseArray: function {:this} out Value is {
         this.advance
         a: (Arr items: (List Value))
@@ -557,6 +610,8 @@ Cursor: class {
         }
     }
 
+    # a quoted string with its escapes RESOLVED, so no reader has to unescape
+    # later
     parseString: function {:this} out String is {
         this.advance
         buf: String
@@ -660,6 +715,8 @@ Cursor: class {
         return v
     }
 
+    # a number, answering intval when it has no fraction or exponent and
+    # floatval when it has
     parseNumber: function {:this} out Value is {
         start: this.pos
         isFloat: false
