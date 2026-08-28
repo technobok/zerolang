@@ -1317,7 +1317,7 @@ There can only be at most one labelled expression in a <code>match</code>.</p>
 <p>If an assignment expression is not specified, all <code>case</code> clauses must specify
 the target variable and the subitem id as a single dottedid. All <code>case</code> clauses
 must specify the same target variable.</p>
-<p>Multiple <code>case</code> clauses may be specified before a related <code>then</code>.  (???)</p>
+<p>Each <code>case</code> clause takes its own <code>then</code>; two clauses may not share one.</p>
 <p>A <code>then</code> clause must be specified after each group of <code>case</code> clauses. This
 clause will execute if the preceding <code>case</code> clauses match the subtype of the
 target variable. Within the <code>then</code> clause, the type of the target variable will
@@ -2343,10 +2343,8 @@ reference return already pins its source.</li>
 <li><code>.takex</code> and <code>.holdx</code> are return markers only. A parameter or
 field carrying one is an error: they describe what a result does with its
 sources, and a parameter has no sources to pin.</li>
-<li><code>type.lock</code> - retired. It was a second name for <code>.borrow</code>,
-plus the pin that <code>.takex</code> now states on the return. The word still
-parses to <code>.borrow</code> so existing sources keep their meaning; do not write
-it in new code.</li>
+<li><code>type.lock</code> - parses as a spelling of <code>.borrow</code>. Do not write it in
+new code; the return-pin it once carried is <code>.takex</code>.</li>
 </ul>
 <h5 id="ownership-methods-on-instances">Ownership Methods on Instances</h5>
 <p><code>.take</code>, <code>.borrow</code> and <code>.hold</code> can also be used as compiler-generated
@@ -2683,10 +2681,9 @@ values. The <code>never</code> type is ignored when determining the type of the 
 expression.</p>
 <p>Any statements following a <code>never</code> typed expression in the same scope is dead
 code and is raised as a compiler error during the type checking phase.</p>
-<p>TODO: <code>for loop {}</code> is of type <code>never</code> (as is any loop where the conditions can
-be determined to always be true at compile time). Provided there is no <code>break</code>???</p>
-<p>TODO: can a function return type be specified as <code>never</code>???? (for infinite
-loops etc). Yes.</p>
+<p>A <code>for loop {}</code> that cannot be left is of type <code>never</code>, as is any loop
+whose conditions are always true at compile time. A function may declare
+<code>out never</code> -- an infinite server loop is the usual reason.</p>
 <pre><code class="language-zerolang">x: makesomething
 match x case err then return  # return is of type 'never'
 # the type of x is narrowed from this point to exclude the possibility of 'err'
@@ -2778,11 +2775,8 @@ reftypes, returns a borrowed reference and exclusively locks the receiver.
 For valtypes, returns a copy without locking. See
 <a href="#borrow-method">borrow (method)</a>.</p>
 <h4 id="lock"><a href="#lock">5.4.9. lock</a></h4>
-<p><code>lock</code> is retired. It was a second name for <code>.borrow</code> plus, on a
-parameter, the pin that <code>.takex</code> now states on the return (a
-<code>create</code>-style method returning <code>this.takex</code> pins its non-owned
-arguments to the returned instance). The word still parses and is treated
-as <code>.borrow</code> while old sources migrate.</p>
+<p><code>lock</code> parses as a spelling of <code>.borrow</code>. Do not write it in new code; the
+return-pin it once carried is <code>.takex</code>.</p>
 <h4 id="typedef"><a href="#typedef">5.4.10. typedef</a></h4>
 <p>A typedef wraps an underlying type to provide a new type. The new type has no
 run-time overhead beyond the underlying type, it is simply a compile time
@@ -3265,7 +3259,9 @@ arguments.</p>
 <p>See also the built-in <a href="#generic">generic type</a> or a description of
 <a href="#generic-types">generic types</a> in general.</p>
 <h4 id="tag-method"><a href="#tag-method">5.5.10. tag (method)</a></h4>
-<p>TODO:</p>
+<p><code>.tag</code> is a synthetic member on every <code>data</code> type and every numeric type,
+naming that type as the discriminator source for a union or variant. It is
+written in the <code>as</code> block and nowhere else -- see <a href="#tag">tag</a>.</p>
 <h4 id="typedef-method"><a href="#typedef-method">5.5.11. typedef (method)</a></h4>
 <p>The <code>.typedef</code> accessor is a synthetic member available on all types. It is
 used exclusively in type definitions to mark that the enclosing type is a
@@ -3558,8 +3554,9 @@ the load factor exceeds 2/3; capacity starts at 8 and doubles on resize.
 Tombstones from <code>delete</code> are skipped by iteration and reclaimed during resize,
 which preserves the relative order of the survivors.</p>
 <h3 id="string"><a href="#string">5.12. string</a></h3>
-<p>TODO:
-A string is an immutable refcounted reference type. (???) NOPE</p>
+<p><code>String</code> is an owned, mutable reference type and <code>StringView</code> is a
+non-owning view over one. Their members are documented in
+<a href="./stdlib_system.html">stdlib_system</a>.</p>
 <h3 id="function"><a href="#function">5.13. function</a></h3>
 <p>The function keyword defines a:</p>
 <p>- standard function: a signature with a body defined at unit level or within an
@@ -3935,10 +3932,8 @@ the first reachable yield must be statement form (<code>yield v</code>). The
 for-loop only drives generators whose <code>accepts</code> is <code>null</code>; applying
 <code>for</code> to a bidirectional generator is a compile error pointing at
 the manual <code>with</code>/<code>.call value:</code> pattern.</p>
-<p>The <code>accepts:</code> slot was previously named <code>takes:</code>; the rename
-removes the collision with the <code>.take</code> ownership method. The
-compiler emits a targeted rename-hint error when it sees the old
-name on an iterator return type.</p>
+<p>The compiler emits a targeted hint when it sees <code>takes:</code> on an iterator
+return type, which is the older spelling of <code>accepts:</code>.</p>
 <p>The form of <code>accepts:</code> determines how the resumed value is held
 across the body's yield window:</p>
 <table>
@@ -4327,8 +4322,8 @@ myrec: record {
         return this
     }
 }</code></pre>
-<p>Can inline (including other records) but not take references to anything else
-(must be fully self contained). ???</p>
+<p>A record may inline other valtypes, including other records, but may never
+hold a reftype directly or indirectly -- a valtype is self-contained.</p>
 <p>Generic types can also be used in records:</p>
 <pre><code class="language-zerolang"># k and v can be anything (seperately)
 dictelement: record {
@@ -4385,7 +4380,7 @@ implement that protocol.</p>
     right &amp;Node
 }
 
-# like this???
+# the zerolang equivalent
 mynode: class {
     t: generic any
     val: t
@@ -4875,7 +4870,9 @@ always as large as its largest containing type plus the descriminator.</p>
 mirror image of a union's reference-only arms; construction, matching and
 tag selection otherwise follow the union rules.</p>
 <h4 id="enumerated-types"><a href="#enumerated-types">5.22.1. Enumerated Types</a></h4>
-<p>TODO: enums are also variants/unions... Fix this section.... Move it within union and variant</p>
+<p>An enumerated type is not a separate kind: it is a variant or union whose arms
+carry no data. Whether zerolang should gain a distinct <code>enum</code> is an open
+question, recorded in <code>Design-OPEN.pdoc</code>.</p>
 <p>A variant or union without additional data on each variation creates an
 enumerated type based on an underlying numeric type. To specify that there is
 no additional data on each arm, <code>null</code> can be specified as the type, or better,
