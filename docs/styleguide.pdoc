@@ -697,16 +697,39 @@ Zerolang line comments begin with #~"#". Comments document #_+"why", not
 what; do not paraphrase code that names itself. Place comments on the line
 above the item they describe, not trailing the code.
 
-Reach for a comment when the reader needs context the code cannot give:
-non-obvious invariants, lock ordering, ownership intent on exported APIs,
-references to specifications.
+#_*"The bar for any comment is that it adds something the name and the type
+cannot." A doc that restates its declaration is worse than none: it costs a
+reader the time to read it and teaches the eye to skip #~"#" blocks, which is
+how the one comment that mattered gets skipped too. If nothing can be added,
+that is a signal to rename the thing rather than to write filler.
 
-#---: Native Declaration Doc Blocks
+Inside a body, default to writing no comment at all. A statement-level comment
+earns its place only where the reader needs context the code cannot give:
+a non-obvious invariant, a lock ordering, the failure a guard exists to
+prevent. State such a thing #_+"once" — an invariant repeated at every site it
+holds is one invariant and N-1 copies, and #b:"L025" reports it.
 
-For #~"native" declarations in standard library units, precede the
-declaration with a short doc block. The first line is the declared
-identifier, two dashes, and a one-sentence description. Further lines
-describe parameter and return semantics.
+#---: What zls Reads
+
+Every declaration doc reaches the reader through #~"textDocument/hover", so
+the forms below are not conventions but the shapes the language server
+actually looks for:
+
+#ul:
+  [#*: a #~"#" block on the lines directly above a definition]
+  [#*: a #~"#" block above a parameter that starts its own source line]
+  [#*: a trailing #~"#" on a parameter's or a field's own line]
+  [#*: the block at the top of a file, which documents the unit]
+
+#_*"A doc block must sit flush against its declaration." The reader stops at
+the first blank line, so a blank between the block and what it describes
+silently detaches it.
+
+#---: Declaration Docs
+
+The first line of a definition's block is the declared identifier, two dashes,
+and a one-sentence gloss; further lines carry the contract a caller cannot see
+— ownership, locking, failure modes.
 
 #code language=zerolang: """
   # env -- look up environment variable `key`. Returns Option.none if
@@ -714,10 +737,52 @@ describe parameter and return semantics.
   env: function {key: StringView} out (Option T: String) is native
   """
 
-The language server (#~"zls") surfaces this block on #~"textDocument/hover",
-below the declaration's signature, so the same convention documents every
-declaration — not only #~"native" ones.
+A #_+"field or arm" takes one line above the declaration, flush against it: a
+lowercase noun phrase, no #~"name --" prefix, no trailing period. Say the thing
+the name and type cannot — the units, the sentinel's meaning, the invariant,
+who writes it.
 
+#code language=zerolang: """
+  # the svalKind payload pool; cval.strId indexes it 1-based (0 = none)
+  # the root of the path a borrowed variable borrows from (0 when none)
+  """
+
+A #_+"parameter" takes one line above it, and the parameter must start its own
+source line to carry one. Explode a single-line parameter list to multi-line
+only when at least one parameter needs explaining; otherwise cover the
+parameters in the function's own block. Note that #~"zl fmt --line-length"
+explodes a list for #_+"width" as well, and a list exploded that way is not a
+request for documentation.
+
+#---: Do Not Duplicate the .pdoc Pages
+
+#~"docs/compiler.pdoc" owns the pipeline and the cross-cutting semantic rules;
+#~"docs/typechecker.pdoc" owns the core data structures. A source comment
+carries the #_+"local" invariant and the failure the code guards against, not a
+restatement of either page. Where a back-link helps, cite the document and
+section #_*"by name — never by line number", which rots.
+
+#---: The Rules That Enforce This
+
+#ul:
+  [#*: #b:"L016" #b:"L017" #b:"L018" report an undocumented definition,
+    parameter or member. All three are opt-in: #~"zl lint --docs --docs-params
+    --docs-fields".]
+  [#*: #b:"--docs-private" measures a unit's whole surface rather than only the
+    names its #~"public:" block exports. Without it a unit that exports a
+    handful of names reports almost nothing.]
+  [#*: #b:"L024" reports a doc whose every content word already appears in the
+    declaration below it, and #b:"L025" a doc body repeated more than twice in
+    one file. Both are opt-in via #~"--docs-quality"; #~"--docs-all" turns on
+    every doc flag at once.]
+  [#*: the corpus runner ratchets all five against
+    #~"tests/fixtures/doc_baseline.txt" under #~"make ci". A count may only go
+    down.]
+
+The target is zero for every row in #~"lib/system/" and for L016, L018, L024
+and L025 in #~"src/". #b:"L017 in src/ is not a zero target": those parameter
+lists were exploded for width, and the row comes down as files are worked
+rather than being driven to nothing.
 
 #--: Errors and Panics
 
