@@ -4360,6 +4360,35 @@ returnHasTakexMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
     return (returnHasTakexMarkerNode :ast n: o)
 }
 
+# returnHasFrozenMarkerNode / returnHasFrozenMarker -- `out T.hold`: the result
+# is OWNED and READONLY. It is not a reference return -- the binding keeps its
+# destructor -- so it is kept apart from returnHasViewMarker, which freezes a
+# binding because the binding IS the reference the callee handed back.
+returnHasFrozenMarkerNode: function {ast: Ast.view n: Node.view} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (returnHasFrozenMarkerNode :ast n: (ast.nodes.get i: n.expression.u64))
+    } else {
+        rfo: pathOwnership :ast :n
+        match (
+            rfo
+        ) case some then {
+            return rfo == ztypes.zparamownership.holdMode
+        } case none then {
+            return false
+        }
+    }
+}
+
+# whether a return type carries `.hold`, which hands back an owned value the
+# caller may only read
+returnHasFrozenMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
+    if oId.isZero then return false
+    o: ast.nodes.get i: oId.u64
+    return (returnHasFrozenMarkerNode :ast n: o)
+}
+
 # true when operation `oId`'s return type carries a `.borrow` marker.
 returnHasBorrowMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
     if oId.isZero then return false
@@ -5071,6 +5100,11 @@ recordFunctionReturn: function {
         fxk: fid
         fxv: true
         st.typing.funcReturnsTakex.set key: fxk value: fxv
+    }
+    if (returnHasFrozenMarker :ast oId: fnode.returntype) then {
+        ffk: fid
+        ffv: true
+        st.typing.funcReturnsFrozen.set key: ffk value: ffv
     }
 }
 # finishFunctionSignature -- close a function's signature once its parameters
@@ -16513,6 +16547,9 @@ cloneMethodInto: function {
     if (optBoolOr o: (st.typing.funcReturnsTakex.get key: tplFnId) d: false) then {
         st.typing.funcReturnsTakex.set key: fid5 value: true
     }
+    if (optBoolOr o: (st.typing.funcReturnsFrozen.get key: tplFnId) d: false) then {
+        st.typing.funcReturnsFrozen.set key: fid5 value: true
+    }
     if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: tplFnId) d: false) then {
         st.typing.funcReturnsBorrow.set key: fid5 value: true
     }
@@ -20903,6 +20940,11 @@ checkMemberAutoCall: function {
                     }
                     st.typing.pendingBorrowOwned = true
                 }
+                # `hold`: owned and READONLY, with no pin -- so it is set
+                # after the drain above rather than inside the pin block.
+                if (optBoolOr o: (st.typing.funcReturnsFrozen.get key: mo) d: false) then {
+                    st.typing.pendingBorrowFrozen = true
+                }
             }
         } case none then {
             # A no-`out` METHOD auto-call resolves to null (the
@@ -23710,7 +23752,13 @@ checkAssignment: function {
         # reftype binding that the borrow actually flowed into.
         roRef: false
         if own == ztypes.zownership.borrowed then roRef = st.typing.pendingBorrowReadonly
+        # An `out T.hold` result is readonly for a different reason: it is
+        # OWNED, so it can never satisfy the borrowed gate above, and the
+        # freeze is a property of the value rather than of a reference into
+        # someone else's. Both end at the same self-lock below.
+        if st.typing.pendingBorrowFrozen then roRef = true
         st.typing.pendingBorrowReadonly = false
+        st.typing.pendingBorrowFrozen = false
         if (st.frameBindsHere nameId: asgn.name) then {
             dnm: zast.poolTextAt pool: ast.names ref: asgn.name
             dlm: "duplicate definition of '\{dnm}': this block already binds that name -- rebinding it here is a redefinition, and only a NESTED block shadows"
@@ -26289,6 +26337,7 @@ drainPendingBorrow: function {st: zenv.ZSymbolTable} is {
     st.typing.pendingBorrowShared = false
     st.typing.pendingBorrowReadonly = false
     st.typing.pendingBorrowOwned = false
+    st.typing.pendingBorrowFrozen = false
 }
 
 # drain the pending-borrow markers accumulated during argument hoisting.
@@ -26297,10 +26346,12 @@ takePendingBorrow: function {st: zenv.ZSymbolTable dst: ListVal zast.nameid} is 
     sh: st.typing.pendingBorrowShared
     ro: st.typing.pendingBorrowReadonly
     ow: st.typing.pendingBorrowOwned
+    fz: st.typing.pendingBorrowFrozen
     drainPendingBorrow :st
     st.typing.pendingBorrowShared = sh
     st.typing.pendingBorrowReadonly = ro
     st.typing.pendingBorrowOwned = ow
+    st.typing.pendingBorrowFrozen = fz
 }
 
 # installBorrowLocks -- SHARED on every path prefix, EXCLUSIVE on the leaf
@@ -29370,6 +29421,11 @@ checkResolvedMethodCall: function {
                 }
             }
         }
+        # `hold`: owned and READONLY with no pin, so it is set after every
+        # drain this leg performs -- an earlier set would not survive them.
+        if (optBoolOr o: (st.typing.funcReturnsFrozen.get key: dro) d: false) then {
+            st.typing.pendingBorrowFrozen = true
+        }
         st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
         return (ztypes.tid.create from: mres)
 }
@@ -30286,6 +30342,11 @@ checkUserFnCall: function {
                 st.typing.pendingBorrowShared = true
                 st.typing.pendingBorrowReadonly = true
             }
+        }
+        # `hold`: owned and READONLY with no pin, so it is set last -- every
+        # drain in this block has run by here and would otherwise clear it.
+        if (optBoolOr o: (st.typing.funcReturnsFrozen.get key: funcId) d: false) then {
+            st.typing.pendingBorrowFrozen = true
         }
     }
     return result

@@ -358,6 +358,11 @@ ZTyping: class {
     # its non-owned sources for the binding's life. Not a borrow -- the binding
     # keeps its destructor -- so it is tracked apart from funcReturnsBorrow.
     funcReturnsTakex: (IdMapV u64 v: bool)
+    # function types whose return carries `.hold`: an OWNED result the caller
+    # may only READ. Not a reference return -- the binding keeps its destructor
+    # -- so it is tracked apart from funcReturnsView, which freezes a binding
+    # only because that binding IS the reference handed back.
+    funcReturnsFrozen: (IdMapV u64 v: bool)
     # the fn whose body is being walked declares a `.borrow` return: bare
     # field returns are its contract (the lock/borrow source outlives).
     currentReturnsBorrow: bool
@@ -376,6 +381,11 @@ ZTyping: class {
     # destructor and may be moved. Without this the pin would demote it to a
     # borrow, which is what `borrow`/`view` mean and `takex` does not.
     pendingBorrowOwned: bool
+    # the pending result came from a `.hold`-marked return, so the binding it
+    # lands on is READONLY while staying OWNED. Orthogonal to
+    # pendingBorrowReadonly, which applies only to a binding that came out
+    # BORROWED and so can never describe this one.
+    pendingBorrowFrozen: bool
     # per-mono template stamps, written by the post-sweep instance walk when
     # curMonoStamp is set; the emitter's mono re-walks read these where the
     # global table is param-suppressed.
@@ -2434,11 +2444,13 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         funcReturnsBorrow: (IdMapV u64 v: bool)
         funcReturnsView: (IdMapV u64 v: bool)
         funcReturnsTakex: (IdMapV u64 v: bool)
+        funcReturnsFrozen: (IdMapV u64 v: bool)
         currentReturnsBorrow: false
         pendingBorrowPath: (ListVal zast.nameid)
         pendingBorrowShared: false
         pendingBorrowReadonly: false
         pendingBorrowOwned: false
+        pendingBorrowFrozen: false
             monoNodeType: (MapVV monostamp v: ztypes.tid)
             nsBodiesOwed: (ListVal nsbody)
             nsBodiesWalked: (IdSet u64)

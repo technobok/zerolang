@@ -1,0 +1,38 @@
+# `out T.hold` HANDS BACK AN OWNED VALUE THE CALLER MAY ONLY READ. It is the
+# owned half of the readonly pair: `view` borrows and cannot outlive its
+# source, `hold` owns and carries its own destructor.
+#
+# The line that matters is the last one. A `hold` return pins NOTHING, so the
+# argument it was built from stays writable while the result is still live --
+# that is the whole observable difference from `takex`, whose sources are
+# locked for the result's lifetime. The refusals live in the error fixtures.
+Box9: class {
+    n: i64
+}
+
+point: record {
+    x: i64
+}
+
+mk: function {src: Box9.borrow} out Box9.hold is {
+    return (Box9 n: src.n + 1)
+}
+
+mkval: function {v: i64} out point.hold is {
+    return (point x: v)
+}
+
+main: function is {
+    a: Box9 n: 5
+    h: mk src: a
+    print "class \{h.n}"
+
+    # the source is not pinned: writable while `h` lives, and `h` unaffected
+    a.n = 99
+    print "unpinned \{a.n} \{h.n}"
+
+    # a valtype freezes the same way -- the freeze is a lock on the binding's
+    # own name, which a record has just as much as a class does
+    v: mkval v: 7
+    print "record \{v.x}"
+}
