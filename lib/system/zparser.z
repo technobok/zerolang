@@ -267,6 +267,8 @@ Parser: class {
     # the real child in).
     ast: Ast
 } as {
+    # a parser with an empty tree: the node table holds only its sentinel row,
+    # and the name pool only the empty text
     create: function {} out this is {
         return (meta.create
             nextNodeId: 1
@@ -304,6 +306,8 @@ Parser: class {
         return (zlexer.islookupReserved :sv)
     }
 
+    # an error node carrying `tok`'s position, so a parse can keep going and
+    # still report exactly where it broke
     mkError: function {:this tok: zlexer.Token.view code: zast.err msg: String.take} out Node is {
         pos: (zlexer.tokpos
             fsno: tok.fsno
@@ -444,7 +448,8 @@ Parser: class {
         }
     }
 
-    # parseAtomId -> id
+    # a bare identifier as an atom. The parser's smallest leaf: everything that
+    # resolves to a name starts here
     parseAtomId: function {:this lex: zlexer.Lexer} out Node is {
         r: lex.accept tt: zlexer.toktype.refIdTok
         match r case some then {
@@ -852,6 +857,9 @@ Parser: class {
         )
     }
 
+    # a call node over an already-built callable and argument list. The
+    # arguments arrive reversed off the parse stack and are put back in order
+    # here
     mkCall: function {:this callable: Node.take arguments: (List Node).take line: u32 col: u32} out Node is {
         rev: (List Node)
         for arguments.length > 0 loop rev.append arguments.pop
@@ -866,6 +874,8 @@ Parser: class {
         )
     }
 
+    # a namedoperation: the node that binds a label to whatever it names, which
+    # is how every argument, field and parameter is carried
     mkNamedOp: function {:this name: u32 operation: Node.take line: u32 col: u32} out Node is {
         return (Node.namedoperation (zast.NamedOperationData
             nodeid: this.nextId
@@ -876,6 +886,8 @@ Parser: class {
         )
     }
 
+    # a labelvalue for the `:name` shorthand, where the label and the value it
+    # stands for are the same word
     mkLabelValue: function {:this line: u32 col: u32 name: String.take} out Node is {
         return (Node.labelvalue (zast.LabelValueData
             nodeid: this.nextId
@@ -910,6 +922,9 @@ Parser: class {
         return (this.foldBinopTail :stack :acc line: sp.line col: sp.col :lex)
     }
 
+    # collapse the operand/operator stack into a left-nested binop chain. Binops
+    # have NO precedence here, so the fold is purely left to right and the shape
+    # is exactly what was written
     foldBinopTail: function {:this stack: (List Node).take acc: Node.take line: u32 col: u32 lex: zlexer.Lexer.view} out Node is {
         if stack.length == 0 then return acc
         op: stack.pop
@@ -3095,6 +3110,8 @@ Parser: class {
         )
     }
 
+    # an expression, required: a failure here yields an error node rather than
+    # nothing, so the caller always has a node to hang position on
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
         tPos: lex.peekPos
         match lex.peekType case ifTok then {
@@ -3165,6 +3182,8 @@ Parser: class {
         }
     }
 
+    # an expression if one starts here, and nothing if not. The `accept` half of
+    # the parser's accept/parse pair -- `parse` requires, `accept` offers
     acceptExpression: function {:this lex: zlexer.Lexer} out Option Node is {
         la: this.exprLookahead :lex
         if la then {
@@ -3476,9 +3495,14 @@ Parser: class {
 # Record `name` as an extern unless it is bound, not a valid unit name, or
 # already recorded.
 ewEmit: function {
+    # the tree the name was read from
     ast: Ast.view
+    # the accumulating extern list; a name already in it is not added twice
     externs: ListVal u32
+    # the names bound so far. A name in scope is not an extern
     scope: (ListVal u32).view
+    # the candidate. It is kept unless PROVABLY bound: a spurious extern fails
+    # to resolve to a file and is harmless, while a missed one would drop a unit
     nameId: zast.nameid
 } is {
     inScope: scope.contains item: nameId
@@ -3533,9 +3557,14 @@ ewTruncate: function {scope: ListVal u32 n: u64} is {
 # Walk an optional child node if present.
 # ewWalkOptAt -- the id-taking entry (0 = absent).
 ewWalkOptAt: function {
+    # the tree walked
     ast: Ast.view
+    # the extern list this walk adds to
     externs: (ListVal u32)
+    # the names bound at this point
     scope: (ListVal u32)
+    # the optional child, 0 when there is none -- which is the whole reason for
+    # the `At` twin
     oId: zast.nodeid
 } is {
     if oId.isZero then return
@@ -3545,9 +3574,13 @@ ewWalkOptAt: function {
 
 # Walk every node of an id list.
 ewWalkIds: function {
+    # the tree walked
     ast: Ast.view
+    # the extern list the children's walks add to
     externs: (ListVal u32)
+    # the names bound at this point
     scope: (ListVal u32)
+    # the children walked in order
     items: (ListVal u32).view
 } is {
     wi: u64
@@ -3563,9 +3596,14 @@ ewWalkIds: function {
 # variable for the body after its iterable is walked; an unnamed arm
 # (a `while` / leading condition) is just walked.
 ewWalkForCond: function {
+    # the tree walked
     ast: Ast.view
+    # the extern list the header's walk adds to
     externs: (ListVal u32)
+    # the names bound at this point; a for header BINDS its loop name, so the
+    # body sees it
     scope: (ListVal u32)
+    # the for header's condition, which may introduce that binding
     cond: Node.view
 } is {
     match (

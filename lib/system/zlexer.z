@@ -64,55 +64,113 @@ ascii: data {
 # token. Uppercase member names to prevent collision with the
 # language keywords most arm names share.
 toktype: variant {
+    # beginning of file: a synthetic token, so a lookbehind always has a left
+    # neighbour
     bofTok: null
+    # end of file, also synthetic, so a walk terminates on a token rather than
+    # on an index
     eofTok: null
+    # the bytes here made no token at all; it carries what was seen so the
+    # parser can report it
     errTok: null
+    # a run of spaces or tabs, kept rather than dropped because the formatter
+    # reads them
     wsTok: null
+    # end of line, which is a STATEMENT boundary here and not mere whitespace
     eolTok: null
+    # a `#` comment through to the line end, kept because the doc tooling reads
+    # it
     commentTok: null
+    # `:`, which binds a name to what follows it
     colonTok: null
+    # `;`, which ends a statement where a newline would otherwise be needed
     semicolonTok: null
+    # `(`, which overrides the EOL statement boundary
     parenOpenTok: null
+    # `)`, closing the parentheses that suspended the EOL boundary
     parenCloseTok: null
+    # `{`, opening a block or a parameter list
     braceOpenTok: null
+    # `}`, closing a block. A continuation keyword must follow it on the SAME
+    # line, which is why the lexer's EOL filtering matters here
     braceCloseTok: null
+    # `.`, the path separator and the suffix marker both
     dotTok: null
+    # an identifier
     refIdTok: null
+    # an identifier followed by `:` -- a label, which is how every argument and
+    # field is named
     labelTok: null
+    # the `:name` shorthand, where the label and its value are the same word
     labelPreTok: null
+    # `=`, which REASSIGNS -- a binding is spelled with `:` instead
     equalsTok: null
+    # the `function` keyword
     functionTok: null
+    # the `if` keyword
     ifTok: null
+    # the `when` keyword
     whenTok: null
+    # the `then` keyword
     thenTok: null
+    # the `else` keyword
     elseTok: null
+    # the `for` keyword
     forTok: null
+    # the `loop` keyword
     loopTok: null
+    # the `while` keyword
     whileTok: null
+    # the `do` keyword
     doTok: null
+    # the `case` keyword
     caseTok: null
+    # the `match` keyword
     matchTok: null
+    # the `on` keyword
     onTok: null
+    # the `out` keyword
     outTok: null
+    # the `in` keyword
     inTok: null
+    # the `swap` keyword
     swapTok: null
+    # the `unit` keyword
     unitTok: null
+    # the `record` keyword
     recordTok: null
+    # the `class` keyword
     classTok: null
+    # the `union` keyword
     unionTok: null
+    # the `variant` keyword
     variantTok: null
+    # the `protocol` keyword
     protocolTok: null
+    # the `data` keyword
     dataTok: null
+    # the `is` keyword
     isTok: null
+    # the `as` keyword
     asTok: null
+    # the `with` keyword
     withTok: null
+    # the `facet` keyword
     facetTok: null
+    # the `native` keyword
     nativeTok: null
+    # the `yield` keyword
     yieldTok: null
+    # the opening quote of a string literal
     strBegTok: null
+    # literal bytes inside a string, between the quote and any interpolation
     strMidTok: null
+    # one decoded character inside a string, which is how an escape arrives
     strChrTok: null
+    # the closing quote of a string literal
     strEndTok: null
+    # the `\{` that opens an interpolation, after which the lexer is reading
+    # CODE rather than text
     strExprBegTok: null
 } as { tag: u8.tag }
 
@@ -122,20 +180,33 @@ toktype: variant {
 # init push.  STRINGRAW carries the opening delim length as its u8
 # payload so the inner scanner can match the closer.
 tokstatetype: variant {
+    # lexing ordinary source
     file: null
+    # inside a string literal, reading text
     string: null
+    # inside an interpolation, reading code
     stringexpr: null
+    # inside a brace nested within an interpolation, so the closing one does not
+    # end the interpolation early
     stringexprbrace: null
+    # inside a raw string, where escapes are not decoded; the byte is the
+    # delimiter being matched
     stringraw: u8
 } as { tag: u8.tag }
 
 # one lexer token: its kind, source text, and file/line/column position.
 Token: class {
+    # which kind of token this is
     toktype: toktype
+    # the source text it was made from, kept verbatim
     tokstr: String
+    # the file it came from
     fsno: zvfs.fsno
+    # the line it starts on
     lineno: u32
+    # the column it starts at
     colno: u32
+    # its position in the token stream, which is what a span is expressed in
     tokenid: u64
 }
 
@@ -143,9 +214,13 @@ Token: class {
 # reader that needs only the span pays no allocation -- `width` is the token
 # text's byte count, which is all a diagnostic needs from the text.
 tokpos: record {
+    # the file the span is in
     fsno: zvfs.fsno
+    # the line it starts on
     lineno: u32
+    # the column it starts at
     colno: u32
+    # how many columns to underline, which is the token text's byte count
     width: u32
 }
 
@@ -300,17 +375,25 @@ utf8_encode_append: function {cp: u64 dst: String} is {
 
 # the raw scanner: walks a source buffer and emits Tokens, whitespace and comments retained.
 Tokenizer: class {
+    # the whole file, owned for the tokenizer's life
     source: String
+    # the byte offset reached so far
     pos: u64
     # source index of the byte in .atchar (== source.length at EOF);
     # token spans are [tokpos-at-start, tokpos-after) slices of source
     tokpos: u64
+    # the byte at `pos`, kept beside it so the hot loop does not re-index
     atchar: u8
+    # the file being tokenized, stamped onto every token it makes
     fsno: zvfs.fsno
+    # the line `pos` is on
     lineno: u32
+    # the column `pos` is at
     colno: u32
     # Single-slot lookahead as a typed Token field.
     hasnext: bool
+    # the token already made but not yet handed out, which is what makes one
+    # token of lookahead possible
     nexttok: Token
     # Mode stack for string + interpolation contexts. Empty means the
     # implicit FILE state (see `statecurrent`).
@@ -323,6 +406,7 @@ Tokenizer: class {
     # String owns no buffer, so a token that skips its text costs nothing.
     keepTrivia: bool
 } as {
+    # a tokenizer over `source`, positioned before the first byte
     create: function {source: String.take fsno: zvfs.fsno} out this is {
         return (meta.create
             :source
@@ -353,10 +437,12 @@ Tokenizer: class {
         this.statestack.append s
     }
 
+    # leave the innermost lexing state and return to the one that opened it
     statepop: function {:this} is {
         if this.statestack.length > 0 then this.statestack.pop
     }
 
+    # the innermost lexing state, which decides how the next byte is read
     statecurrent: function {:this} out tokstatetype is {
         n: this.statestack.length
         if n == 0 then return tokstatetype.file
@@ -745,6 +831,7 @@ Tokenizer: class {
         return ((sv.substring from: s to: e).string)
     }
 
+    # the next token, advancing past it
     token: function {:this} out Token is {
         # Drain the lookahead slot first if a token is staged.
         # Inlined fields make this straightforward: copy out the
@@ -1263,10 +1350,15 @@ Tokenizer: class {
 # The buffered token is never copied out: peekType / peekPos read it into
 # scalars, peekText views it, and accept / acceptAny move its text out.
 Lexer: class {
+    # the tokenizer underneath; the Lexer adds lookahead and filtering to it
     lexer: Tokenizer
+    # the token the Lexer is currently on
     thistoken: Token
+    # whether end-of-line tokens are hidden from the parser, which they are
+    # wherever a construct spans lines
     filterEol: bool
 } as {
+    # a Lexer over `lexer`, taking it
     create: function {lexer: Tokenizer.take} out this is {
         # advance drops ws and comment tokens unconditionally, so their text
         # is read by nobody on this path and is the tokenizer largest
@@ -1356,6 +1448,8 @@ Lexer: class {
         }
     }
 
+    # whether EOL is currently filtered, which the parser flips around the
+    # constructs that may span lines
     filterEolState: function {:this} out bool is {
         return this.filterEol
     }
