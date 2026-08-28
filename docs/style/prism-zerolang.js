@@ -27,6 +27,11 @@
     // A lone `=` is the assignment keyword instead (zlexer.z, equalsTok).
     var OP_ONLY = /^[-!$%&'*+\/<=>?@\\^|~]+$/;
 
+    // A numeric literal is an identifier that STARTS with a digit (or a minus
+    // then a digit) -- the same rule the checker's isNumericLiteralName uses.
+    // `42`, `0x1F`, `3.14` and the dotted-suffix form `100.u8` all land here.
+    var NUMERIC = /^-?[0-9]/;
+
     // Keywords: exactly the docs/spec.pdoc "Keywords" list, `=` included --
     // it is one (zlexer.z lexes it as equalsTok). Tested BEFORE the operator
     // rule, so `=` is a keyword while `==` stays a method name.
@@ -177,6 +182,8 @@
 
                     if (kwSet[content]) {
                         token.type = 'keyword';
+                    } else if (NUMERIC.test(content)) {
+                        token.type = 'number';
                     } else if (OP_ONLY.test(content)) {
                         token.type = 'operator';
                     } else if (reservedSet[content]) {

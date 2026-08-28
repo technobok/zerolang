@@ -99,22 +99,66 @@ syn match zerolangError /[[\],;`]/
 " Note: " is NOT included — it is handled by string regions
 syn match zerolangPunctuation /[(){}.]/
 
-" Highlight linking
-hi def link zerolangComment    Comment
-hi def link zerolangString     String
-hi def link zerolangRawString  String
+" Highlight linking.
+"
+" The groups above are the definitions -- they draw distinctions the web
+" highlighter does not, and a colourscheme may restyle any of them. The COLOURS
+" come from docs/style/zerolang.css, so a snippet reads the same in the
+" documentation and in the editor: keywords purple, predeclared identifiers
+" blue, strings green, labels red, errors black on red. The two palettes are
+" One Light and One Dark, chosen by &background.
+"
+" Set g:zerolang_no_colors to skip these and inherit the colourscheme through
+" the standard groups instead.
+if get(g:, 'zerolang_no_colors', 0)
+  hi def link zerolangKeyword      Keyword
+  hi def link zerolangOperator     Operator
+  hi def link zerolangBuiltinType  Type
+  hi def link zerolangBuiltinConst Constant
+  hi def link zerolangBuiltin      Special
+  hi def link zerolangLabel        Identifier
+  hi def link zerolangString       String
+  hi def link zerolangComment      Comment
+elseif &background ==# 'dark'
+  hi def zerolangKeyword      guifg=#C678DD ctermfg=176
+  hi def zerolangOperator     guifg=#546d78 ctermfg=66
+  hi def zerolangBuiltinType  guifg=#61AFEF ctermfg=75
+  hi def zerolangBuiltinConst guifg=#61AFEF ctermfg=75
+  hi def zerolangBuiltin      guifg=#61AFEF ctermfg=75
+  hi def zerolangLabel        guifg=#E06C75 ctermfg=168
+  hi def zerolangString       guifg=#98C379 ctermfg=114
+  hi def zerolangComment      guifg=#5C6370 ctermfg=59 gui=italic cterm=italic
+else
+  hi def zerolangKeyword      guifg=#A626A4 ctermfg=127
+  hi def zerolangOperator     guifg=#546d78 ctermfg=66
+  hi def zerolangBuiltinType  guifg=#4078F2 ctermfg=33
+  hi def zerolangBuiltinConst guifg=#4078F2 ctermfg=33
+  hi def zerolangBuiltin      guifg=#4078F2 ctermfg=33
+  hi def zerolangLabel        guifg=#E45649 ctermfg=167
+  hi def zerolangString       guifg=#50A14F ctermfg=71
+  hi def zerolangComment      guifg=#A0A1A7 ctermfg=145 gui=italic cterm=italic
+endif
+
+" The web renders an illegal character and a reserved word identically: black
+" on #f44747, the loudest style in the sheet.
+hi def zerolangReserved   guifg=#000000 guibg=#f44747 ctermfg=0 ctermbg=203
+hi def zerolangError      guifg=#000000 guibg=#f44747 ctermfg=0 ctermbg=203
+hi def zerolangEscapeError guifg=#000000 guibg=#f44747 ctermfg=0 ctermbg=203
+
+hi def link zerolangRawString  zerolangString
 hi def link zerolangEscape     SpecialChar
-hi def link zerolangEscapeError Error
 hi def link zerolangInterpolation Normal
 hi def link zerolangInterpolationDelim Delimiter
-hi def link zerolangKeyword    Keyword
-hi def link zerolangOperator   Operator
-hi def link zerolangReserved   Error
-hi def link zerolangBuiltinType  Type
-hi def link zerolangBuiltinConst Constant
-hi def link zerolangBuiltin      Special
-hi def link zerolangLabel      Identifier
-hi def link zerolangError      Error
 hi def link zerolangPunctuation Delimiter
+
+" Treesitter-first colourschemes style the modern captures rather than the
+" legacy groups, so name both.
+hi def link @keyword.zerolang          zerolangKeyword
+hi def link @type.builtin.zerolang     zerolangBuiltinType
+hi def link @constant.builtin.zerolang zerolangBuiltinConst
+hi def link @function.builtin.zerolang zerolangBuiltin
+hi def link @operator.zerolang         zerolangOperator
+hi def link @string.zerolang           zerolangString
+hi def link @comment.zerolang          zerolangComment
 
 let b:current_syntax = "zerolang"
