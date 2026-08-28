@@ -63,40 +63,66 @@ public: unit {
 # the top-level classification a ZType carries: record / class / variant
 # / union / protocol / facet, plus function, numeric, and generic-param.
 ztypetype: variant {
+    # the null type, which has one value and carries nothing
     nullType: null
+    # a generic parameter's own type, minted per parameter during resolution
     genericParam: null
+    # a unit. A unit IS a type here, which is what lets a subunit and a template
+    # be ordinary members
     unitType: null
+    # a function or method signature
     functionType: null
+    # a record: a valtype with named fields
     recordType: null
+    # a class: a reftype with named fields
     classType: null
+    # a variant: a valtype tagged sum
     variantType: null
+    # a union: a reftype tagged sum
     unionType: null
+    # a protocol: a reftype interface with a vtable
     protocolType: null
+    # a facet: a valtype interface carrying its vtable beside the value
     facetType: null
+    # a data block's element type
     dataType: null
+    # a tag: the discriminator type a sum is `as`-declared over
     tagType: null
+    # the type of an expression that does not return, so nothing downstream of
+    # it is reachable
     neverType: null
 } as { tag: u8.tag }
 
 # the kind of a built-in control primitive (if / for / match / with / do).
 zcontrolkind: variant {
+    # no control transfer: the statement falls through to the next
     none: null
+    # a return, which leaves the function
     returnKind: null
+    # a break, which leaves the innermost loop
     breakKind: null
+    # a continue, which starts the innermost loop's next iteration
     continueKind: null
+    # a raised error
     errorKind: null
+    # a panic, which unwinds nothing and ends the process
     panicKind: null
 } as { tag: u8.tag }
 
 # a value's ownership mode at a binding (owned vs the borrowed forms).
 zownership: variant {
+    # the binding owns the value and is responsible for destroying it
     owned: null
+    # the binding refers to a value something else owns, so it destroys nothing
     borrowed: null
 } as { tag: u8.tag }
 
 # the lock held on a path: none, shared, or exclusive.
 zlockstate: variant {
+    # nothing else may read OR write the locked path while this stands
     exclusive: null
+    # other readers are admitted, writers are not. A borrow takes exclusive on
+    # the leaf and shared on every prefix above it
     shared: null
 } as { tag: u8.tag }
 
@@ -104,7 +130,10 @@ zlockstate: variant {
 # its path -- or is bookkeeping on a prefix so that leaf can be taken. A SHARED
 # target is a live read of its subtree; a SHARED intent is not.
 zlockscope: variant {
+    # the lock on the path actually named
     target: null
+    # the lock on a prefix of it, which is what keeps a parent from being
+    # replaced while a child is held
     intent: null
 } as { tag: u8.tag }
 
@@ -114,18 +143,30 @@ zlockscope: variant {
 # result whose non-owned sources stay pinned for its life). `lock` parses as a
 # spelling of borrowMode; integer slot 2 is unassigned so dumps stay comparable.
 zparamownership: variant {
+    # no annotation: the default, which borrows
     noneMode: null
+    # `.take` -- ownership moves in, and the caller's binding is spent
     takeMode: null
+    # `.borrow` -- not owned, and writable. `lock` parses as a spelling of this
     borrowMode: null
+    # `.view` -- not owned and READONLY, so the argument stays readable across
+    # the call
     viewMode: null
+    # `.hold` -- owned and readonly: moved in, then frozen
     holdMode: null
+    # `.takex` -- an owned result whose non-owned sources stay pinned for as
+    # long as it lives
     takexMode: null
 } as { tag: u8.tag }
 
 # what is holding a lock -- a binding, a view, or an iterator.
 zlockholderkind: variant {
+    # a binding holds it
     varKind: null
+    # a call holds it, for the call's duration
     callKind: null
+    # an iterator holds it, which is why it lasts to the end of the enclosing
+    # scope
     forKind: null
 } as { tag: u8.tag }
 
@@ -135,10 +176,17 @@ zlockholderkind: variant {
 # answer `.true` / `.false`, which is the one thing a folded value should
 # never need to do.
 zconstkind: variant {
+    # not a constant: the value is only known at runtime
     none: null
+    # an integer, in `ival`
     ivalKind: null
+    # a float, in `fval`
     fvalKind: null
+    # a string, in `strId` -- an index into the constant pool, 1-based so 0 can
+    # mean none
     svalKind: null
+    # a sum arm, identified by `armTid` and `armName`. A truth value is one of
+    # these over bool's type, bool being a variant like any other
     armKind: null
 } as { tag: u8.tag }
 
@@ -152,13 +200,23 @@ zconstkind: variant {
 # The kind is an ARM, not rendered text: the renderer owns the wording, so the
 # message can change without every recording site knowing it.
 constfailkind: variant {
+    # no failure; the evaluation produced a value
     none: null
+    # an interpolation, which cannot be folded because it builds at runtime
     interp: null
+    # the arithmetic left the range the evaluator works in
     overflow: null
+    # a division by zero, caught HERE rather than trapping at runtime as the
+    # emitted form would
     divZero: null
+    # the constant depends on itself, directly or through others
     cycle: null
+    # the fold reached a node that had already failed to parse or check
     reachedError: null
+    # a method the evaluator does not implement, which is a gap rather than a
+    # program error
     unsupportedMethod: null
+    # a substring whose bounds fall outside the string
     substringRange: null
 } as { tag: u8.tag }
 
@@ -168,11 +226,17 @@ constfailkind: variant {
 # ZTyping.constStrings and reached through strId, which indexes it; 0 reads
 # the sentinel row and means "none".
 constfail: record {
+    # which failure it was
     kind: constfailkind
+    # the node that failed, so the renderer can find it again
     nodeid: zast.nodeid
+    # the line to report
     lineno: u32
+    # the column to report
     colno: u32
+    # how many columns to underline
     width: u32
+    # the offending text when the failure carries one, as a constant-pool index
     strId: u32
 }
 
@@ -180,21 +244,37 @@ constfail: record {
 # u64; the 128-bit kinds carry the classification but a magnitude above
 # u64 is out of range.
 numkind: variant {
+    # the i8 numeric type
     i8Type: null
+    # the i16 numeric type
     i16Type: null
+    # the i32 numeric type
     i32Type: null
+    # the i64 numeric type
     i64Type: null
+    # the i128 numeric type
     i128Type: null
+    # the u8 numeric type
     u8Type: null
+    # the u16 numeric type
     u16Type: null
+    # the u32 numeric type
     u32Type: null
+    # the u64 numeric type
     u64Type: null
+    # the u128 numeric type
     u128Type: null
+    # the c8 numeric type
     c8Type: null
+    # the c32 numeric type
     c32Type: null
+    # the f16 numeric type
     f16Type: null
+    # the f32 numeric type
     f32Type: null
+    # the f64 numeric type
     f64Type: null
+    # the f128 numeric type
     f128Type: null
 } as { tag: u8.tag }
 
@@ -204,7 +284,10 @@ numkind: variant {
 # deftarget -- the (unit, definition) pair an alias or re-export names. Absent
 # is a zero `unit`; the producers never fill one half alone.
 deftarget: record {
+    # the unit half of a definition's name, interned
     unitName: zast.nameid
+    # the definition half, interned. The pair is what a cross-unit reference
+    # resolves against
     defName: zast.nameid
 }
 
@@ -213,6 +296,8 @@ noDefTarget: function {} out deftarget is {
     return (deftarget unitName: (zast.nameid.create from: 0) defName: (zast.nameid.create from: 0))
 }
 
+# the family's name as text, for diagnostics and dumps. The registry
+# compares the ARM; this is only for rendering
 ztypetypeName: function {t: ztypetype} out String is {
     match (
         t
@@ -399,9 +484,11 @@ numkindName: function {k: numkind} out String is {
 # vid -- a symbol-table variable id (locals emit as z_v{vid}); 0 is "no
 # variable". Same-space equality; sentinels read isZero.
 vid: record { val: u64.typedef } as {
+    # identity by id. Two vids name the same variable when their numbers match
     ==: function {this: this.view rhs: vid} out bool is {
         return this.u64 == rhs.u64
     }
+    # the sentinel: 0 is no variable, never the first one
     isZero: function {this: this.view} out bool is {
         return this.u64 == 0
     }
@@ -414,12 +501,17 @@ vid: record { val: u64.typedef } as {
 # INHERITED arithmetic on a typedef yields the base -- `t + 1` is a u64 --
 # so walking the id space needs a method to stay in the space.
 tid: record { val: u64.typedef } as {
+    # identity by id, which IS type equality here -- two types are the same type
+    # exactly when their tids match
     ==: function {this: this.view rhs: tid} out bool is {
         return this.u64 == rhs.u64
     }
+    # the sentinel: 0 is no type, never the first one
     isZero: function {this: this.view} out bool is {
         return this.u64 == 0
     }
+    # the next id in sequence, which is how a caller mints without keeping a
+    # counter of its own
     next: function {this: this.view} out tid is {
         n: this.u64 + 1
         return (tid from: n)
@@ -430,9 +522,12 @@ tid: record { val: u64.typedef } as {
 # decl". A typedef so a decl id cannot cross with the other numeric id
 # spaces; equality is same-space only, sentinels read .u64.
 declid: record { val: u64.typedef } as {
+    # identity by id. Two declids name the same declaration when their numbers
+    # match
     ==: function {this: this.view rhs: declid} out bool is {
         return this.u64 == rhs.u64
     }
+    # the sentinel: 0 is no declaration, never the first one
     isZero: function {this: this.view} out bool is {
         return this.u64 == 0
     }
@@ -441,8 +536,12 @@ declid: record { val: u64.typedef } as {
 # Source position triple (file, line, column) for take-location
 # tracking on a scope entry.
 zsrcpos: record {
+    # the file
     fsno: zvfs.fsno
+    # the line
     lineno: u32
+    # the column. The triple is a position with no width, for the places that
+    # record WHERE something happened rather than what to underline
     colno: u32
 }
 
@@ -450,15 +549,20 @@ zsrcpos: record {
 # id-space per `kind` (variable id or call nodeid; the forKind arm is
 # declared for the loop-holder shape but nothing constructs one today).
 zlockholder: record {
+    # what is holding the lock
     kind: zlockholderkind
+    # which one: a variable id, a call id or a loop id, read according to `kind`
     id: u64
 }
 
 # Suffix-detection result: the kind named by an inline suffix (if any)
 # and the suffix's byte length.
 suffixinfo: record {
+    # whether a suffix was present at all
     has: bool
+    # which numeric type it named
     kind: numkind
+    # how many bytes it occupied, so the mantissa can be re-read without it
     len: u64
 }
 
@@ -466,17 +570,26 @@ suffixinfo: record {
 # the coercion boundary's concern, not this function's). `ok` is false
 # only for an unparseable lexeme.
 parsedval: record {
+    # whether the text parsed at all
     ok: bool
+    # which of the two value slots below is meaningful
     isFloat: bool
+    # the integer magnitude, accumulated in u64 so the range check can be made
+    # once at the end
     ival: u64
+    # the float value
     fval: f64
 }
 
 # Integer/float lower bound for a numeric type. `has` is false for the
 # kinds that are not range-checked (128-bit and float).
 NumRange: class {
+    # whether a range is known; a type with no bound leaves this false
     has: bool
+    # the low bound as TEXT, because the most negative i64's magnitude is one
+    # past what i64 can hold
     loText: String
+    # the high bound, which fits u64 for every type that has one
     hi: u64
 }
 
@@ -496,21 +609,31 @@ NumRange: class {
 # its name-pool id, not by an ordinal: the emitter's one arm-to-tag helper
 # takes a name, and an ordinal would rot the first time an arm was inserted.
 cval: record {
+    # which of the payloads below is meaningful. Read it first; the rest are
+    # zero unless it names them
     kind: zconstkind
+    # the integer value
     ival: i64
+    # the float value
     fval: f64
+    # the string, as a 1-based index into the constant pool so 0 means none
     strId: u32
+    # the arm's OWNING type, half of an arm's identity
     armTid: tid
+    # the arm's name-pool id, the other half. Not an ordinal: an ordinal would
+    # rot the first time an arm was inserted
     armName: zast.nameid
 }
 
-# Per-binding ownership info, attached to a scope entry for named
-# runtime bindings.
-# how a runtime variable came to be: a parameter, a local binding, or a
-# variable the checker synthesised (a hoisted temp, an alias) that is neither
+# how a runtime variable came to be: a parameter, a local binding, or one the
+# checker synthesised -- a hoisted temp, an alias -- which is neither of those.
 zvarorigin: variant {
+    # the checker made it -- a hoisted temp, an alias -- and no source line
+    # declares it
     synth: null
+    # a binding written in a body
     local: null
+    # a function parameter
     param: null
 } as { tag: u8.tag }
 
@@ -518,12 +641,19 @@ zvarorigin: variant {
 # The C identifier is the emitter's business -- a variable is known here by
 # its id alone.
 ZVariable: class {
+    # the variable's type
     ztypeId: tid
+    # whether it owns its value or borrows one
     ownership: zownership
+    # whether it may reach private members, which a `this` receiver may and an
+    # outside binding may not
     isPrivateAccess: bool
     # the root of the path a borrowed variable borrows from (0 when none)
     borrowOrigin: zast.nameid
+    # what the checker synthesised it FOR, when it synthesised it; none for a
+    # written binding
     synthOrigin: (Option String)
+    # how it came to be: a parameter, a local, or synthesised
     origin: zvarorigin
 }
 
@@ -532,24 +662,36 @@ ZVariable: class {
 # Integer magnitudes accumulate in u64; a literal above u64 is out of
 # range.
 ParsedNumber: class {
+    # the numeric type resolved for the literal
     kind: numkind
+    # which value slot below is meaningful
     isFloat: bool
+    # the integer magnitude in u64; a literal above u64 is out of range and says
+    # so in `err`
     ival: u64
+    # the float value
     fval: f64
+    # why the parse failed, empty when it did not
     err: String
 }
 
 # A protocol/facet conformance: an impl type satisfying a spec type
 # under a label. Helper C names are pre-composed here.
 ZConformance: class {
+    # the type that conforms
     implTypeId: u64
+    # the protocol or facet it conforms to
     specTypeId: u64
+    # the conformance's written label
     label: String
     # the pool id of `label`, so a reader that only needs to know WHICH
     # member the marker names compares an id instead of the spelling. 0
     # when the row was built from a literal with no pool behind it.
     labelNameId: u64
+    # whether the spec is a facet rather than a protocol, which decides how the
+    # value carries its vtable
     isFacet: bool
+    # this conformance's own id
     conformanceId: u64
 }
 
@@ -557,14 +699,24 @@ ZConformance: class {
 # fields and methods, are the type's declaration children (the Decl tree);
 # per-member metadata lives on the member's own Decl.
 ZType: class {
+    # the type's own id, which is its index in typeById
     typeId: tid
+    # its written name, for diagnostics and for the emitted C
     name: String
+    # which family it belongs to
     typetype: ztypetype
+    # a function type's return; none for every other family
     returnTypeId: (optionval tid)
+    # a method's receiver name, interned
     thisParamNameId: zast.nameid
+    # whether this is a template rather than an instance
     isgeneric: bool
+    # whether it passes by value. An optionval because it is not known until the
+    # type resolves
     isValtype: (optionval bool)
+    # the template this was instantiated from; none when it is not an instance
     genericOriginId: (optionval tid)
+    # whether it is the origin of a tag generic, which the emitter treats apart
     isTagGenericOrigin: bool
     # id-keyed specialization tree: one level per generic parameter in
     # definition order -- argument type-id (or numeric value at a numeric
@@ -573,14 +725,21 @@ ZType: class {
     # An IdMap rather than a pair of parallel lists: the key IS an id, an edge
     # is only ever added, and an empty one allocates nothing.
     genericChildren: (IdMapV u64 v: tid)
+    # the type arguments this instance was minted with, in order
     genericArgs: (ListVal u64)
     # parallel to genericArgs: true when the ordinal is a numeric VALUE
     # (a sized record's `to:`), false when it is a type id
     genericArgIsValue: (ListVal bool)
+    # whether a value of this type must be destroyed, which decides whether a
+    # scope exit emits anything
     needsDestructor: bool
+    # whether its storage is on the heap rather than in the binding
     isHeapAllocated: bool
+    # whether it is a box: a valtype wrapped so a reftype slot can hold it
     isBox: bool
+    # whether the runtime owns the layout, so no struct is emitted for it
     isNative: bool
+    # whether the runtime addresses it by index rather than by name
     runtimeIndexed: bool
     # a data block's single element type. The checker settles it from `out T`
     # or the elements' own tags; the emitter reads it for the static array's C
@@ -609,19 +768,36 @@ ZType: class {
 # presents (a narrowing changes it; originalZtypeId keeps the declared one);
 # defSeq orders the row among the frame's locals for the dump.
 ZEntry: class {
+    # the entry's own id
     entryId: u64
+    # the declaration this entry is for
     declId: declid
+    # where it fell in declaration order, which shadowing resolves by
     defSeq: u64
+    # the entry's current type, which narrowing may have changed
     ztypeId: tid
+    # whether a lock is outstanding on it
     hasLock: bool
+    # exclusive or shared
     lockType: zlockstate
+    # whether the lock is on the path named or on a prefix of it
     lockScope: zlockscope
+    # what took it, so the diagnostic can name the holder rather than just the
+    # conflict
     lockHolder: zlockholder
+    # the path locked, as interned segments
     lockPath: (ListVal zast.nameid)
+    # the arm a match narrowed the entry to, 0 when it is not narrowed
     narrowedSubtype: zast.nameid
+    # the arms ruled OUT by diverging guards, which is what lets a later match
+    # need fewer arms
     excludedSubtypes: (IdSet zast.nameid)
+    # the type before narrowing, so it can be restored when the narrowing ends
     originalZtypeId: (optionval tid)
+    # whether ownership has moved out, which makes any later use an error
     isTaken: bool
+    # where it was taken, so the error can point at the transfer and not just
+    # the use
     takenAt: (optionval zsrcpos)
 }
 
@@ -634,22 +810,35 @@ ZEntry: class {
 # so the checks compare a tag rather than the text. numericMax carries the
 # integer bound for NUMERIC; it is none for every other kind.
 constraintkind: variant {
+    # no bound at all
     none: null
+    # any type, value or reference
     any: null
+    # a valtype only: a record, a variant or a facet
     valType: null
+    # a reftype only: a class, a union or a protocol
     refType: null
+    # anything that presents bytes as a string
     stringLike: null
+    # a numeric type, with numericMax bounding it
     numeric: null
+    # a named bound the kinds above do not classify
     other: null
+    # a valtype that can key a Map or Set, its hash synthesised from its bytes
     valHashable: null
+    # a reftype that can key a Map or Set, which must define hash and == itself
     refHashable: null
+    # an unsigned scalar usable as a dense index, which is what an IdMap key
+    # must be
     idKey: null
 } as { tag: u8.tag }
 
 # a generic parameter's constraint: its kind plus, for a numeric-bound
 # parameter, the maximum value it admits.
 constraintdesc: record {
+    # which family the bound admits
     kind: constraintkind
+    # the integer bound for a NUMERIC constraint; none for every other kind
     numericMax: (optionval u64)
 }
 
@@ -658,13 +847,19 @@ constraintdesc: record {
 # GENERIC_PARAM type id minted for it during resolution (0 until then).
 # ParamDesc is a class because it holds a String.
 ParamDesc: class {
+    # the parameter's name, interned
     name: zast.nameid
+    # the bound, classified once at registration
     constraint: constraintdesc
+    # the canonical GENERIC_PARAM type minted for it during resolution; 0 until
+    # then
     paramTid: tid
 }
 
 # a template's generic parameters in declaration order.
 ParamList: class {
+    # the parameters in DECLARATION order, which is the order type arguments
+    # bind in
     params: (List ParamDesc)
 }
 
@@ -708,9 +903,15 @@ holeType: function {} out ZType is {
     ownerTid: tid)
 }
 
+# the type model: every ZType by tid, every ZVariable by vid, and each
+# template's generic parameters. Ids are dense and never reused, so an id IS
+# an index and every lookup here is one
 ZTypeRegistry: class {
+    # the next type id to mint; ids are dense and never reused
     nextTypeId: u64
+    # the next entry id to mint
     nextEntryId: u64
+    # the next conformance id to mint
     nextConformanceId: u64
     # the shared unregistered id worn by every `break` / `continue` entry
     # (see ctlPlaceholder); 0 until first use
@@ -721,11 +922,15 @@ ZTypeRegistry: class {
     # pins a concrete type; foldLiteralStamps rewrites the survivors to
     # i64 / f64. Data-block elements wear literalIntTid too.
     literalIntTid: tid
+    # the type an unsuffixed float literal starts as
     literalFloatTid: tid
+    # every type, indexed by tid. A tid IS the index
     typeById: (List ZType)
     # every runtime variable, by vid (row 0 is the sentinel)
     variableById: (List ZVariable)
+    # the main unit's name
     regMainUnit: String
+    # its id, so the hot checks compare integers
     regMainUnitId: u64
     # generic-template metadata, keyed by the TEMPLATE's DeclId
     genericParams: (IdMapR declid V: ParamList)
@@ -805,61 +1010,77 @@ ZTypeRegistry: class {
         return id
     }
 
+    # whether `id` names a variable at all, which the accessors below assume
     hasVariable: function {t: this.view id: vid} out bool is {
         if id.isZero then return false
         return id < t.variableById.length
     }
 
+    # the variable's type
     variableTypeOf: function {t: this.view id: vid} out tid is {
         got: t.variableById.get i: id
         return got.ztypeId
     }
 
+    # whether it owns its value or borrows one
     variableOwnershipOf: function {t: this.view id: vid} out zownership is {
         got: t.variableById.get i: id
         return got.ownership
     }
 
+    # whether it may reach private members
     variableIsPrivate: function {t: this.view id: vid} out bool is {
         got: t.variableById.get i: id
         return got.isPrivateAccess
     }
 
+    # the root of the path it borrows from, 0 when it borrows nothing
     variableBorrowOriginOf: function {t: this.view id: vid} out zast.nameid is {
         got: t.variableById.get i: id
         return got.borrowOrigin
     }
 
+    # what the checker synthesised it for; none for a written binding
     variableSynthOriginOf: function {t: this.view id: vid} out Option String is {
         got: t.variableById.get i: id
         return (optStringCopy o: got.synthOrigin)
     }
 
+    # how it came to be: a parameter, a local, or synthesised
     variableOriginOf: function {t: this.view id: vid} out zvarorigin is {
         got: t.variableById.get i: id
         return got.origin
     }
 
+    # record the root a borrow came from, so a conflict can name the source and
+    # not just the borrow
     setVariableBorrowOrigin: function {:this id: vid origin: zast.nameid} is {
         got: this.variableById.getMut i: id
         got.borrowOrigin = origin
     }
 
+    # record what the variable was synthesised for, which is all a diagnostic
+    # can say about a name no one wrote
     setVariableSynthOrigin: function {:this id: vid origin: String.take} is {
         got: this.variableById.getMut i: id
         got.synthOrigin = (Option.some origin)
     }
 
+    # mark it able to reach private members, which a `this` receiver is and an
+    # outside binding is not
     setVariablePrivate: function {:this id: vid} is {
         got: this.variableById.getMut i: id
         got.isPrivateAccess = true
     }
 
+    # record how the variable came to be
     setVariableOrigin: function {:this id: vid origin: zvarorigin} is {
         got: this.variableById.getMut i: id
         got.origin = origin
     }
 
+    # mint a scope entry for `ztypeId` and answer it. An entry is where
+    # narrowing, locks and ownership are tracked -- the type alone is not enough
     newEntry: function {:this ztypeId: tid} out ZEntry is {
         id: this.nextEntryId
         this.nextEntryId = this.nextEntryId + 1
@@ -880,12 +1101,20 @@ ZTypeRegistry: class {
             takenAt: (optionval.none zsrcpos))
     }
 
+    # record that one type satisfies a protocol or facet, and answer the
+    # conformance
     newConformance: function {
         this: this
+        # the type that conforms
         implTypeId: u64
+        # the protocol or facet it conforms to
         specTypeId: u64
+        # the conformance's written label
         label: StringView
+        # that label interned, which is what the comparisons use
         labelNameId: u64
+        # whether the spec is a facet rather than a protocol, which decides how the
+        # value carries its vtable
         isFacet: bool
     } out ZConformance is {
         id: this.nextConformanceId
@@ -906,12 +1135,15 @@ ZTypeRegistry: class {
         return (this.typeValid tid: typeId)
     }
 
+    # the family `typeId` belongs to
     typetypeOf: function {t: this.view typeId: tid} out ztypetype is {
         if typeId >= t.typeById.length then return ztypetype.nullType
         got: t.typeById.get i: typeId
         return got.typetype
     }
 
+    # whether the type is the origin of a tag generic, which the emitter lays
+    # out apart
     isTagGenericOriginOf: function {this: this.view typeId: tid} out bool is {
         if typeId >= this.typeById.length then return false
         got: this.typeById.get i: typeId
@@ -934,18 +1166,21 @@ ZTypeRegistry: class {
         got.needsDestructor = true
     }
 
+    # mark it a box: a valtype wrapped so a reftype slot can hold it
     setIsBox: function {:this typeId: tid} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
         got.isBox = true
     }
 
+    # mark its storage as living on the heap rather than in the binding
     setIsHeapAllocated: function {:this typeId: tid} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
         got.isHeapAllocated = true
     }
 
+    # mark it the origin of a tag generic
     setTagGenericOrigin: function {:this typeId: tid} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
@@ -959,18 +1194,22 @@ ZTypeRegistry: class {
         return got.ownerTid
     }
 
+    # record whether it passes by value, which also decides whether it may hold
+    # a reftype at all
     setValtype: function {:this typeId: tid value: bool} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
         got.isValtype = (optionval.some value)
     }
 
+    # record whether it is a template rather than an instance
     setGeneric: function {:this typeId: tid value: bool} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
         got.isgeneric = value
     }
 
+    # record that the runtime owns its layout, so no struct is emitted for it
     setNative: function {:this typeId: tid value: bool} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
@@ -978,18 +1217,23 @@ ZTypeRegistry: class {
     }
 
 
+    # file an instantiation under its template, keyed by its argument trie --
+    # which is what makes the same arguments find the same mono instead of
+    # minting a twin
     setGenericChild: function {:this parentId: u64 key: u64 child: u64} is {
         if parentId >= this.typeById.length then return
         got: this.typeById.getMut i: parentId
         got.genericChildren.set :key value: (tid from: child)
     }
 
+    # the instantiation already minted for these arguments, if there is one
     getGenericChild: function {this: this.view parentId: u64 key: u64} out optionval tid is {
         if parentId >= this.typeById.length then return (optionval.none tid)
         got: this.typeById.get i: parentId
         return (got.genericChildren.get :key)
     }
 
+    # append one type argument to an instance, in declaration order
     appendGenericArg: function {:this specId: tid arg: u64} is {
         if specId >= this.typeById.length then return
         got: this.typeById.getMut i: specId
@@ -1006,6 +1250,7 @@ ZTypeRegistry: class {
         got.genericArgIsValue.append true
     }
 
+    # how many type arguments the instance was minted with
     genericArgCount: function {this: this.view specId: tid} out u64 is {
         if specId >= this.typeById.length then return 0
         got: this.typeById.get i: specId
@@ -1013,6 +1258,7 @@ ZTypeRegistry: class {
         return 0
     }
 
+    # the argument at `ordinal`, counting from 0
     genericArgAt: function {this: this.view specId: tid ordinal: u64} out u64 is {
         if specId >= this.typeById.length then return 0
         got: this.typeById.get i: specId
@@ -1020,6 +1266,8 @@ ZTypeRegistry: class {
         return 0
     }
 
+    # whether that argument was a value type, which decides whether the instance
+    # copies or moves it
     genericArgIsValueAt: function {this: this.view specId: tid ordinal: u64} out bool is {
         if specId >= this.typeById.length then return false
         got: this.typeById.get i: specId
@@ -1174,6 +1422,7 @@ ZTypeRegistry: class {
         return (tid from: 0)
     }
 
+    # record a data block's element type
     setDataElemType: function {:this typeId: tid value: u64} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
@@ -1195,6 +1444,7 @@ ZTypeRegistry: class {
         return (tid from: 0)
     }
 
+    # record the template an instance came from
     setGenericOrigin: function {:this typeId: tid value: u64} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
@@ -1202,6 +1452,7 @@ ZTypeRegistry: class {
         got.genericOriginId = (optionval.some vc)
     }
 
+    # record a function type's return
     setReturnType: function {:this typeId: tid value: u64} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
@@ -1216,6 +1467,7 @@ ZTypeRegistry: class {
         got.def = declId
     }
 
+    # record a method's receiver name
     setThisParamName: function {:this typeId: tid nameId: zast.nameid} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.getMut i: typeId
@@ -1237,7 +1489,9 @@ ZTypeRegistry: class {
     # paramOrdinalOf -- a parameter's declaration ordinal, or none.
     paramOrdinalOf: function {
         this: this.view
+        # the template the parameter belongs to
         tdecl: declid
+        # the parameter's name, interned
         paramName: zast.nameid
     } out optionval u64 is {
         plo: this.genericParams.get key: tdecl
@@ -1260,7 +1514,9 @@ ZTypeRegistry: class {
     # lives on the parameter's own row; 0 means not yet minted.
     genericParamTidOf: function {
         this: this.view
+        # the template asked about
         tdecl: declid
+        # the parameter name asked about
         paramName: zast.nameid
     } out optionval u64 is {
         po: this.paramOrdinalOf :tdecl :paramName
@@ -1278,10 +1534,15 @@ ZTypeRegistry: class {
         return (optionval.none u64)
     }
 
+    # record the canonical GENERIC_PARAM type minted for a parameter, which
+    # stays 0 until resolution reaches it
     setGenericParamTid: function {
         this: this.view
+        # the template the parameter belongs to
         tdecl: declid
+        # the parameter whose type is being recorded
         paramName: zast.nameid
+        # the canonical GENERIC_PARAM type minted for it
         tid: tid
     } is {
         po: this.paramOrdinalOf :tdecl :paramName
@@ -1299,6 +1560,8 @@ ZTypeRegistry: class {
         } case none then null
     }
 
+    # declare one generic parameter on a template, with its constraint
+    # classified now so later checks compare an arm
     addGenericParam: function {:this tdecl: declid paramName: zast.nameid kind: constraintkind numericMax: (optionval u64)} is {
         found: false
         {
@@ -1335,6 +1598,7 @@ ZTypeRegistry: class {
         }
     }
 
+    # whether `name` is one of `tdecl`'s generic parameters
     isGenericParamOf: function {this: this.view tdecl: declid name: zast.nameid} out bool is {
         plo: this.genericParams.get key: tdecl
         match (
@@ -1355,7 +1619,9 @@ ZTypeRegistry: class {
     # parameter, or a NONE-kind descriptor when the parameter is unknown.
     genericParamConstraintOf: function {
         this: this.view
+        # the template asked about
         tdecl: declid
+        # the parameter name asked about
         paramName: zast.nameid
     } out constraintdesc is {
         plo: this.genericParams.get key: tdecl
