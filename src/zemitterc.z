@@ -5986,9 +5986,17 @@ emitInstanceMethodBody: function {
     call: zast.CallData.view
     mco: ztypes.tid
     recvExpr: StringView
+    # whether recvExpr is ALREADY a C pointer, so the receiver slot takes it as
+    # it stands rather than through emitByrefArg. The two call forms read this
+    # from different places -- a dotted base from the path it was reached by, a
+    # receiver passed as an argument from the expression it was written as -- so
+    # the caller answers it and this stays one emission for both
+    recvIsPtr: bool
+    # where the positional cursor starts for the NON-receiver parameters. A
+    # dotted receiver consumes no argument and leaves it at 0; a receiver
+    # supplied as the call's one unlabelled argument has already taken slot 0
+    posStart: u64
 } out String is {
-    callableNode: ast.nodes.get i: call.callable.u64
-    rptr: dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode
     mcn: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
     pnames: (List String)
     pids: (ListVal u64)
@@ -6014,7 +6022,7 @@ emitInstanceMethodBody: function {
         if tpnm.length > 0 then recvNm = tpnm
     }
     args: String
-    positionalIdx: u64
+    positionalIdx: posStart
     pi: u64
     pn: pnames.length
     for pi < pn loop {
@@ -6022,7 +6030,7 @@ emitInstanceMethodBody: function {
         posParamId: pids.get i: pi
         if pi > 0 then args.append ", "
         if posParamName.stringView == recvNm.stringView then {
-            if rptr then {
+            if recvIsPtr then {
                 args.append recvExpr
             } else {
                 # same rule as the auto-call base: a receiver that IS a call
@@ -6250,6 +6258,7 @@ emitInstanceMethodCall: function {
         mco
     ) case some then {
         if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)) == ztypes.ztypetype.functionType then {
+            rIsPtr: dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode
             return (emitInstanceMethodBody
                 :ast
                 :symtab
@@ -6257,6 +6266,8 @@ emitInstanceMethodCall: function {
                 :call
                 mco: (ztypes.tid.create from: mco.u64)
                 recvExpr: recvExpr.stringView
+                recvIsPtr: rIsPtr
+                posStart: 0
             )
         }
     } case none then null
@@ -7869,13 +7880,38 @@ emitTypeQualCall: function {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if bn.length == 0 then return "".string
+    # A DOTTED BASE IS RESOLVED IN THE ENVIRONMENT, NEVER BY ITS SPELLING. A base
+    # atom carrying a stamped variable id is a VALUE, so the receiver comes
+    # through the dot and the call belongs to emitInstanceMethodCall -- the same
+    # precedence emitNamedCalleeChain keeps for a bare callee, where the name
+    # route would otherwise call the function a local shadows. The name route
+    # below reads the FILE unit's members and so finds the type either way,
+    # which is how a local named for its own type emitted a call with the
+    # receiver slot never filled.
+    {
+        cnQ: ast.nodes.get i: call.callable.u64
+        match (
+            cnQ
+        ) case dottedpath then {
+            bnidQ: atomNodeId n: (ast.nodes.get i: cnQ.parent.u64)
+            if bnidQ > 0 when (symtab.typing.atomVariableId.has key: bnidQ) then return "".string
+        } else null
+    }
     btid: userFnId :ast :symtab :ctx name: bn.stringView
     if btid.isZero then return "".string
     bttq: symtab.reg.typetypeOf typeId: btid
-    isStructQ: false
-    if bttq == ztypes.ztypetype.recordType then isStructQ = true
-    if bttq == ztypes.ztypetype.classType then isStructQ = true
-    if (isStructQ) == false then return "".string
+    # a receiver's family decides how it is CARRIED, never how the call is
+    # written, so every family that can declare a method is claimed here. A
+    # variant or union left out reached emitInstanceMethodCall instead, which
+    # takes its receiver from the dotted base -- and that base is the type name,
+    # so the emitted C named a variable that does not exist.
+    isUserObjQ: false
+    if bttq == ztypes.ztypetype.recordType then isUserObjQ = true
+    if bttq == ztypes.ztypetype.classType then isUserObjQ = true
+    if bttq == ztypes.ztypetype.variantType then isUserObjQ = true
+    if bttq == ztypes.ztypetype.unionType then isUserObjQ = true
+    if bttq == ztypes.ztypetype.facetType then isUserObjQ = true
+    if (isUserObjQ) == false then return "".string
     mco: symtab.typing.declChildOf pool: ast.names parentTypeId: btid name: mn.stringView
     match (
         mco
@@ -7908,9 +7944,9 @@ emitTypeQualCall: function {
                 return (emitRecordCtor :ast :symtab :ctx :call tid: btid)
             }
             pn: pnames.length
-            args: String
             if mn.stringView == "create" then {
                 # user create: args by the create's own param labels
+                args: String
                 pi: u64
                 for pi < pn loop {
                     pname: pnames.get i: pi
@@ -7919,48 +7955,63 @@ emitTypeQualCall: function {
                     args.append av
                     pi = pi + 1
                 }
-            } else {
-                # a method: positional args; a CLASS receiver passes by address
-                ai: u64
-                with aiterQ: call.arguments.iterate do for aQId: aiterQ loop {
-                    aQ: ast.nodes.get i: aQId.u64
-                    match (
-                        aQ
-                    ) case namedoperation then {
-                        avq: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: aQ.operation.u64)
-                        # the receiver passes by address in BOTH families, and
-                        # is identified by its PARAMETER name -- keying on the
-                        # type would also catch a same-typed sibling
-                        byRef: false
-                        if ai < pn then {
-                            ppnm: pnames.get i: ai
-                            if (paramIsReceiverName
-                                :ast
-                                :symtab
-                                fid: (ztypes.tid.create from: mco.u64)
-                                pname: ppnm.stringView
-                            ) then byRef = true
-                        }
-                        if (pathIsPointer
-                            :ast
-                            :symtab
-                            :ctx
-                            n: (ast.nodes.get i: aQ.operation.u64)
-                        ) then byRef = false
-                        if ai > 0 then args.append ", "
-                        if byRef then {
-                            argq: "&\{avq}"
-                            args.append argq
-                        } else {
-                            args.append avq
-                        }
-                        ai = ai + 1
-                    } else null
+                mc3: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
+                e7: "\{mc3}(\{args})"
+                return e7
+            }
+            # THE RECEIVER IS AMONG THE ARGUMENTS HERE, not reached through a
+            # dot: it is the call's one unlabelled argument, or it carries the
+            # receiver parameter's own declared name. Everything past that is
+            # the ordinary method emission, so the two call forms share ONE
+            # argument-placement rule and a label binds by name in both. This
+            # leg used to walk the call's arguments in WRITTEN order, which
+            # silently swapped a pair of reordered labels.
+            recvNmQ: "this".string
+            {
+                tpq: (zast.poolTextCopy
+                    pool: ast.names
+                    ref: (symtab.reg.thisParamNameIdOf tid: (ztypes.tid.create from: mco.u64))
+                )
+                if tpq.length > 0 then recvNmQ = tpq
+            }
+            recvExQ: String
+            recvPtrQ: false
+            posStartQ: u64
+            if (fnTypeTakesThis :symtab tid: (ztypes.tid.create from: mco.u64)) then {
+                recvNdQ: u64
+                if (ctorHasLabel :ast :call label: recvNmQ.stringView) then {
+                    recvExQ = ctorArgByLabel :ast :symtab :ctx :call label: recvNmQ.stringView
+                    recvNdQ = ctorArgNodeByLabel :ast :call label: recvNmQ.stringView
+                } else {
+                    recvExQ = ctorArgByPosition :ast :symtab :ctx :call idx: 0
+                    recvNdQ = ctorArgNodeByPosition :ast :call idx: 0
+                    posStartQ = 1
+                }
+                # a receiver already held as a pointer passes as it stands
+                if recvNdQ > 0 then {
+                    recvPtrQ = (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ))
+                }
+                # NO RECEIVER SUPPLIED AT ALL. Declining here would hand the
+                # call to the dotted leg, which reads its receiver from the
+                # base -- and the base is the type, so it hoists a zeroed temp
+                # and the program runs with a receiver nobody passed. An
+                # emission that cannot be made is recorded as one.
+                if recvExQ.length == 0 then {
+                    fmQ: "no receiver for method '\{mn}' of '\{bn}': '\{recvNmQ}' is required"
+                    emitFail :ctx what: fmQ line: call.lineno
+                    return "".string
                 }
             }
-            mc3: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
-            e7: "\{mc3}(\{args})"
-            return e7
+            return (emitInstanceMethodBody
+                :ast
+                :symtab
+                :ctx
+                :call
+                mco: (ztypes.tid.create from: mco.u64)
+                recvExpr: recvExQ.stringView
+                recvIsPtr: recvPtrQ
+                posStart: posStartQ
+            )
         }
     } case none then null
     return "".string
