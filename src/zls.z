@@ -24,8 +24,11 @@ Ast: zast.Ast
 # owns this union, so the accepted Conn / open File has exactly one owner and
 # both the reader and writer reach it through short-lived borrows.
 Transport: union {
+    # the ordinary editor connection: framed messages over stdin and stdout
     stdio: null
+    # a recorded session read from a file, which is what the LSP goldens drive
     replay: io.File
+    # a socket connection, for an editor that attaches over one
     tcp: net.Conn
 }
 
@@ -139,9 +142,15 @@ relPathBest: function {
 # only way to tell a `$ZEROLANG_SYSTEM` pointing at another checkout from the
 # auto-detected one is to ask the server which channel it used.
 ResolvedRoots: class {
+    # the project's src directory as resolved
     srcDir: String
+    # the stdlib directory as resolved
     systemDir: String
+    # HOW srcDir was chosen -- a flag, an environment variable, a guess from the
+    # workspace. A wrong root is the most common reason an editor sees errors a
+    # build does not, so the answer has to be reportable
     srcWhy: String
+    # how systemDir was chosen, for the same reason
     systemWhy: String
 }
 
@@ -322,7 +331,9 @@ transportFd: function {tp: Transport.view} out i32 is {
 # `this.snapshots`, so sending stays legal while those fields are locked
 # (e.g. publishAll sends inside a docs iteration).
 
-# write all of `s` to transport `tp`.
+# write every byte of `s`, looping until the transport has taken them all: a
+# single write may take fewer than it was offered, and a partial LSP frame is
+# a protocol error rather than a short message.
 writeAll: function {s: StringView tp: Transport} is {
     b: Bytes
     i: u64
@@ -433,27 +444,53 @@ parseContentLength: function {line: StringView} out u64 is {
 
 # one open text document: its uri, version, and current text.
 Document: class {
+    # the editor's identifier for the file, which is what every request names it
+    # by
     uri: String
+    # the same file as a filesystem path
     path: String
+    # its path relative to the project root, which is what diagnostics report
     relpath: String
+    # the buffer's CURRENT contents, which may differ from what is on disk --
+    # that difference is the whole reason the server keeps documents
     text: String
+    # the editor's version counter, so a stale response can be recognised as
+    # stale
     version: i64
 }
 
 # the language-server state: open documents, the project dirs, and the check cache.
 Server: class {
+    # the open buffers by uri
     docs: (Map String V: Document)
+    # the resolved src root
     srcDir: String
+    # the resolved stdlib root
     systemDir: String
+    # the src root as given on the command line, kept apart from the resolved
+    # one so the resolution can be explained
     srcFlag: String
+    # the stdlib root as given on the command line
     sysFlag: String
+    # whether the client negotiated UTF-32 positions. LSP counts in UTF-16 by
+    # default and the compiler counts bytes, so this decides which conversion
+    # every position goes through
     encUtf32: bool
+    # whether `initialize` has completed; a request before it is a protocol
+    # error
     initialized: bool
+    # whether `shutdown` has been received, after which only `exit` is legal
     shutdownReq: bool
+    # whether the message loop should continue
     running: bool
+    # what to exit with, which the protocol makes depend on whether shutdown
+    # came first
     exitCode: i32
+    # bytes read but not yet consumed; a frame rarely arrives in one read
     inbuf: Bytes
+    # how far into inbuf the parse has reached
     inpos: u64
+    # where messages come from and go to
     transport: Transport
     # true for stdio/tcp (coalesce an edit burst before rechecking); false
     # for replay so every sync message publishes inline (goldens stay stable)
@@ -466,6 +503,8 @@ Server: class {
 } as {
     # ---- framed reader over the BufReader ----
 
+    # one byte from the transport, refilling the buffer when it runs dry. none
+    # means the connection ended
     needByte: function {:this} out (optionval u8) is {
         for this.inpos >= this.inbuf.length loop {
             fresh: Bytes
@@ -485,6 +524,8 @@ Server: class {
         return (optionval.some b)
     }
 
+    # one LSP header line, up to its CRLF. none when the connection ended mid-
+    # header
     readHeaderLine: function {:this} out (Option String) is {
         line: String
         for true loop {
@@ -515,6 +556,8 @@ Server: class {
         }
     }
 
+    # exactly `n` bytes of message body, which Content-Length has already told
+    # us to expect
     readBody: function {:this n: u64} out (Option String) is {
         body: String
         body.reserve :n
@@ -558,6 +601,8 @@ Server: class {
 
     # ---- dispatch ----
 
+    # dispatch one decoded message to its handler, and answer it where the
+    # protocol requires an answer
     handleMessage: function {:this msg: Value.view} is {
         mo: json.textAt v: msg path: "method"
         hasId: json.hasAt v: msg path: "id"
@@ -606,6 +651,8 @@ Server: class {
         }
     }
 
+    # the handshake: resolve the project roots, negotiate position encoding, and
+    # report what this server can do
     handleInitialize: function {:this msg: Value.view} is {
         # position encoding: utf-32 when the client offers it
         i: u64
@@ -704,6 +751,7 @@ Server: class {
 
     # ---- document sync (full text) ----
 
+    # the editor opened a buffer; record its text and check it
     handleDidOpen: function {:this msg: Value.view} is {
         uo: json.textAt v: msg path: "params/textDocument/uri"
         to: json.textAt v: msg path: "params/textDocument/text"
@@ -748,6 +796,8 @@ Server: class {
         } case none then null
     }
 
+    # the editor edited a buffer; replace the text and mark it dirty rather than
+    # re-checking immediately
     handleDidChange: function {:this msg: Value.view} is {
         uo: json.textAt v: msg path: "params/textDocument/uri"
         to: json.textAt v: msg path: "params/contentChanges/0/text"
@@ -779,6 +829,8 @@ Server: class {
         } case none then null
     }
 
+    # the editor closed a buffer; drop it, since the file on disk is
+    # authoritative again
     handleDidClose: function {:this msg: Value.view} is {
         uo: json.textAt v: msg path: "params/textDocument/uri"
         match (
@@ -808,14 +860,18 @@ Server: class {
     # rooted at `uri`'s unit, and publish per-file diagnostics.
     # ---- debounce ----
 
+    # bring one document's analysis up to date with its current text
     syncDoc: function {:this uri: StringView} is {
         if this.debounce then this.markDirty :uri else this.recomputeFor :uri
     }
 
+    # note that a document changed. Checking is deferred so a burst of
+    # keystrokes costs one analysis rather than one each
     markDirty: function {:this uri: StringView} is {
         this.dirty.set key: uri.string value: true
     }
 
+    # whether any document is waiting to be re-checked
     hasDirty: function {:this} out bool is {
         return (this.dirty.length > 0)
     }
@@ -851,6 +907,7 @@ Server: class {
         }
     }
 
+    # re-analyse one document and publish its diagnostics
     recomputeFor: function {:this uri: StringView} is {
         if this.initialized == false then return
         ov: (Map String V: String)
@@ -972,6 +1029,8 @@ Server: class {
 
     # ---- formatting ----
 
+    # answer a format request with the edits `zl fmt` would make, as byte ranges
+    # the editor can apply
     handleFormatting: function {:this msg: Value.view} is {
         idv: idValueOf :msg
         uo: json.textAt v: msg path: "params/textDocument/uri"
@@ -1100,6 +1159,8 @@ Server: class {
         if answered == false then sendResult id: idv result: Value.nul tp: this.transport
     }
 
+    # answer a document-symbol request with the file's definitions, which is
+    # what an outline view shows
     handleDocSymbol: function {:this msg: Value.view} is {
         if this.debounce when this.hasDirty then this.flushDirty
         idv: idValueOf :msg
@@ -1194,10 +1255,17 @@ codeOf: function {n: u32} out String is {
 
 # one hit-testable span: a source range mapped to a resolvable reference.
 spanrow: record {
+    # the node this span belongs to
     nodeid: u32
+    # the source line the span sits on, in the compiler's own numbering. The
+    # conversion to what LSP wants happens at the protocol boundary, not here
     line: u32
+    # the first column it covers
     colLo: u32
+    # one past the last, so the pair is a half-open range
     colHi: u32
+    # what sort of thing it is, which decides whether a hover or a goto answers
+    # from it
     kind: u8
 }
 
@@ -1205,20 +1273,33 @@ spanrow: record {
 # 4 = call, 5 = caseexpr. endPos is the last descendant's start (a subtree
 # extent good enough to find the node enclosing a cursor).
 rangerow: record {
+    # the node this range belongs to
     nodeid: u32
+    # the byte offset it starts at
     startPos: u64
+    # one past the byte it ends at
     endPos: u64
+    # what sort of thing it is
     kind: u8
 }
 
 # the per-file table of hit-testable spans built for goto-def / hover / references.
 Spans: class {
+    # the line/column spans, which is what a position lookup searches
     rows: (ListVal spanrow)
+    # the names those rows refer to, kept beside them so a row stays a fixed-
+    # size value
     names: (List String)
+    # node id to its position, for the lookups that go the other way
     pos: (IdMapV u64 v: u64)
+    # the byte-offset ranges, which a formatting or a rename edit needs
     ranges: (ListVal rangerow)
+    # the last position recorded, so an append can tell whether it is moving
+    # forward
     lastPos: u64
 } as {
+    # record a node's position without a name, for the nodes a lookup finds but
+    # never renders
     note: function {:this id: u32 line: u32 col: u32} is {
         if id > 0 then {
             v: (line.u64 * 1048576) + col.u64
@@ -1227,12 +1308,15 @@ Spans: class {
         }
     }
 
+    # record a node's span and the name to show for it
     addRow: function {:this id: u32 line: u32 col: u32 name: StringView kind: u8} is {
         w: name.count
         this.rows.append (spanrow nodeid: id :line colLo: col colHi: col + w.u32.orPanic :kind)
         this.names.append name.string
     }
 
+    # record the span of a dotted path's MEMBER half, so hovering `a.b` answers
+    # about `b` and not about `a`
     memberRow: function {:this ast: Ast.view dpid: u32 c: zast.Node.view} is {
         match (
             c
@@ -1356,6 +1440,7 @@ Spans: class {
         this.walkIds :ast ids: kids
     }
 
+    # record spans for a list of child nodes in order
     walkIds: function {:this ast: Ast.view ids: (ListVal u32).view} is {
         with it: ids.iterate do for c: it loop this.walk :ast n: (ast.nodes.get i: c.u64)
     }
@@ -4086,7 +4171,9 @@ parenOpenOf: function {ltv: StringView close: u64} out u64 is {
 
 # baserange -- a member base's [lo, hi) byte range on the completion line.
 baserange: record {
+    # the first byte of the base expression
     lo: u64
+    # one past its last byte
     hi: u64
 }
 
