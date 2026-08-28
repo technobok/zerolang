@@ -1,0 +1,44 @@
+# `holdx` -- the OWNED, READONLY return that pins its non-owned sources. It is
+# `takex` with the freeze `hold` adds, and it fills the last cell of the grid:
+#
+#              mutable methods      view methods only, immutable
+#   owned      .take / .takex       .hold / .holdx
+#   not owned  .borrow              .view
+#
+# The two halves are both visible below. The PIN is the contrast with
+# `hold_return.z`, where the source stays writable while the result lives; here
+# it does not, until the result's scope ends. The FREEZE is the contrast with
+# `takex_marker.z`, whose result may be written through; here only view methods
+# reach it, and the refusals live in the error fixtures beside this one.
+Src: class {
+    n: i64
+    label: String
+}
+
+W: class {
+    s: Src.view
+    label: String
+} as {
+    peek: function {t: this.view} out i64 is {
+        return t.s.n
+    }
+}
+
+mk: function {from: Src.view} out W.holdx is {
+    return (W s: from label: "owned-by-result".string)
+}
+
+main: function is {
+    a: Src n: 1 label: "source".string
+    {
+        w: mk from: a
+        # owned: the result carries its own String and its own destructor
+        print "result owns: \{w.label}"
+        # readable through a view method, which is all a frozen binding allows
+        print "reads source: \{w.peek}"
+    }
+    # the pin died with `w`, so the source is writable again
+    a.n = 5
+    print "source writable after: \{a.n}"
+    print "source intact: \{a.label}"
+}
