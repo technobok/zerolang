@@ -6210,6 +6210,9 @@ emitInstanceMethodCall: function {
     callableNode: ast.nodes.get i: call.callable.u64
     recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode
     if recvExpr.length == 0 then return "".string
+    # the other side of the same stamp: a receiver the checker said comes from
+    # the arguments is not reached through the dot, whatever the base emits to
+    if (symtab.typing.callRecvFromArgs.has item: call.nodeid.u64) then return "".string
     rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
     rtidc: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rtid0.u64)
     rtid: methodOwnerId :ast :symtab rtid: (ztypes.tid.create from: rtidc.u64) mn: mn.stringView
@@ -7880,23 +7883,6 @@ emitTypeQualCall: function {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if bn.length == 0 then return "".string
-    # A DOTTED BASE IS RESOLVED IN THE ENVIRONMENT, NEVER BY ITS SPELLING. A base
-    # atom carrying a stamped variable id is a VALUE, so the receiver comes
-    # through the dot and the call belongs to emitInstanceMethodCall -- the same
-    # precedence emitNamedCalleeChain keeps for a bare callee, where the name
-    # route would otherwise call the function a local shadows. The name route
-    # below reads the FILE unit's members and so finds the type either way,
-    # which is how a local named for its own type emitted a call with the
-    # receiver slot never filled.
-    {
-        cnQ: ast.nodes.get i: call.callable.u64
-        match (
-            cnQ
-        ) case dottedpath then {
-            bnidQ: atomNodeId n: (ast.nodes.get i: cnQ.parent.u64)
-            if bnidQ > 0 when (symtab.typing.atomVariableId.has key: bnidQ) then return "".string
-        } else null
-    }
     btid: userFnId :ast :symtab :ctx name: bn.stringView
     if btid.isZero then return "".string
     bttq: symtab.reg.typetypeOf typeId: btid
@@ -7966,6 +7952,16 @@ emitTypeQualCall: function {
             # argument-placement rule and a label binds by name in both. This
             # leg used to walk the call's arguments in WRITTEN order, which
             # silently swapped a pair of reordered labels.
+            # THE CHECKER ANSWERED THIS, and this reads the answer. A call
+            # reaches here only when the walk stamped its receiver as coming
+            # from the ARGUMENTS; otherwise the dot supplies it and the call is
+            # emitInstanceMethodCall's. Deriving it a second time -- off the
+            # base atom's variable id, or off the name -- is what let the two
+            # sides disagree and emit a call with the receiver slot never
+            # filled. A construction asks no such question and returns above.
+            if (symtab.typing.callRecvFromArgs.has item: call.nodeid.u64) == false then {
+                return "".string
+            }
             recvNmQ: "this".string
             {
                 tpq: (zast.poolTextCopy
@@ -7991,16 +7987,11 @@ emitTypeQualCall: function {
                 if recvNdQ > 0 then {
                     recvPtrQ = (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ))
                 }
-                # NO RECEIVER SUPPLIED AT ALL. Declining here would hand the
-                # call to the dotted leg, which reads its receiver from the
-                # base -- and the base is the type, so it hoists a zeroed temp
-                # and the program runs with a receiver nobody passed. An
-                # emission that cannot be made is recorded as one.
-                if recvExQ.length == 0 then {
-                    fmQ: "no receiver for method '\{mn}' of '\{bn}': '\{recvNmQ}' is required"
-                    emitFail :ctx what: fmQ line: call.lineno
-                    return "".string
-                }
+                # no receiver supplied at all: the checker reports the missing
+                # argument, and the stamp keeps the dotted leg from claiming
+                # this call, so declining reports an unhandled callee rather
+                # than hoisting a zeroed temp nobody passed
+                if recvExQ.length == 0 then return "".string
             }
             return (emitInstanceMethodBody
                 :ast
