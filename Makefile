@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -145,7 +145,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
+ci: style-lint warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -1364,6 +1364,81 @@ member-guard:
 	  echo "member-guard: string-keyed member compares = $$m1 < baseline 24 -- lower the baseline here"; \
 	fi; \
 	echo "member-guard OK: string-keyed member compares = $$m1 (<=24)"
+
+# highlight-guard -- the two syntax highlighters must carry the language's
+# actual vocabulary. THE LANGUAGE IS THE SOURCE OF TRUTH, never the lists:
+# predeclared names come from lib/system/core.z, keywords and reserved words
+# from zlexer.z's kwlookup and islookupReserved.
+#
+# Three renames in a row missed these files -- `.release` -> `.drop`, the
+# camelCase view rename, and the arc that added `drop` -- because nothing
+# checked. The visible result was `view` listed as BOTH reserved and
+# predeclared, reserved winning, and every `.view` in the documentation
+# rendering black on red.
+define HIGHLIGHT_GUARD_SH
+set -e
+LC_ALL=C; export LC_ALL
+D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT
+
+# what a highlighter may carry that core.z does not define: the ownership and
+# access markers, the context words, and `Any`, which is real and reachable
+# without a core.z re-export.
+CONTEXT="Any _ borrow copy drop generic hold holdx iterator lock meta private public tag take takex this view yield"
+
+sed -n 's|^syn match \([A-Za-z]*\) /\(.*\)/$$|\1 \2|p' editor/nvim/syntax/zerolang.vim > "$$D/vim.raw"
+vimset() {
+  awk -v g="$$1" '$$1 == g { $$1=""; print }' "$$D/vim.raw" \
+    | sed 's/\\<//g; s/\\>//g; s/\\%(//g; s/)$$//' | tr '|' '\n' | sed 's/\\//g' \
+    | grep -v '^ *$$' | tr -d ' ' | sort -u
+}
+jsset() {
+  python3 -c "
+import re,sys
+s=open('docs/style/prism-zerolang.js').read()
+m=re.search(r'var '+sys.argv[1]+r' = \[(.*?)\];',s,re.S)
+print('\n'.join(sorted(set(re.findall(r\"'([^']*)'\",m.group(1))))))" "$$1"
+}
+
+grep -oE '^[A-Za-z_][A-Za-z0-9_]*:' lib/system/core.z | sed 's/:$$//' | sort -u > "$$D/core"
+sed -n '/^kwlookup: function/,/^}/p' lib/system/zlexer.z \
+  | grep -oE 'sv == "[^"]+"' | sed 's/sv == //; s/"//g' | sort -u > "$$D/lexkw.all"
+# `yield` is lexed as a keyword but is a compiler-provided FUNCTION like
+# `return`, which carries no token at all. Removing the token means retiring
+# the yieldexpr AST node, so it is its own change; until then the highlighters
+# are right and the lexer is the odd one out. Delete this line with that fix.
+grep -v '^yield$$' "$$D/lexkw.all" > "$$D/lexkw"
+sed -n '/^islookupReserved: function/,/^}/p' lib/system/zlexer.z \
+  | grep -oE 'sv == "[^"]+"' | sed 's/sv == //; s/"//g' | sort -u > "$$D/lexres"
+
+jsset keywords > "$$D/pkw"; jsset reserved > "$$D/pres"; jsset builtins > "$$D/pbi"
+vimset zerolangKeyword > "$$D/vkw"; vimset zerolangReserved > "$$D/vres"
+{ vimset zerolangBuiltinType; vimset zerolangBuiltinConst; vimset zerolangBuiltin; } | sort -u > "$$D/vbi"
+echo "$$CONTEXT" | tr ' ' '\n' | grep -v '^$$' | sort -u > "$$D/ctx"
+
+fail=0
+cmp_set() {
+  if ! cmp -s "$$2" "$$3"; then
+    echo "highlight-guard FAIL: $$1"
+    comm -23 "$$2" "$$3" | sed 's/^/    missing: /'
+    comm -13 "$$2" "$$3" | sed 's/^/    stale:   /'
+    fail=1
+  fi
+}
+cmp_set "prism keywords vs zlexer kwlookup"         "$$D/lexkw"  "$$D/pkw"
+cmp_set "nvim keywords vs zlexer kwlookup"          "$$D/lexkw"  "$$D/vkw"
+cmp_set "prism reserved vs zlexer islookupReserved" "$$D/lexres" "$$D/pres"
+cmp_set "nvim reserved vs zlexer islookupReserved"  "$$D/lexres" "$$D/vres"
+cmp_set "prism builtins vs nvim builtins"           "$$D/pbi"    "$$D/vbi"
+sort -u "$$D/core" "$$D/ctx" > "$$D/want_bi"
+cmp_set "builtins vs lib/system/core.z + context words" "$$D/want_bi" "$$D/pbi"
+
+[ "$$fail" = 0 ] || { echo "  The language moved and a highlighter did not. Fix the word list."; exit 1; }
+echo "highlight-guard OK: $$(wc -l < "$$D/core") core.z names, $$(wc -l < "$$D/lexkw") keywords, $$(wc -l < "$$D/lexres") reserved -- both highlighters agree"
+endef
+export HIGHLIGHT_GUARD_SH
+
+highlight-guard:
+	@sh -c "$$HIGHLIGHT_GUARD_SH"
 
 # view-guard -- a native receiver marked `.view` asserts that the C never writes
 # through it, and the compiler cannot check that: there is no body. So the C
