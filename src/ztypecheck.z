@@ -13647,39 +13647,6 @@ unitDefHeadNameId: function {
     return (zast.nameid.create from: 0)
 }
 
-# reportYieldOutsideGenerator -- a FREE function whose body SUSPENDS but whose
-# declared return does not reach the Iterator protocol. Nothing lowers it, so
-# the yield node survives into the emitter, which writes a state assignment
-# against a receiver that is not there -- C that does not compile. Reported at
-# candidacy because that is where the fact is known: `checkYieldAt` cannot tell
-# the case apart, since an out-only generator legitimately binds no `value`.
-#
-# Only the free-function leg reports. The method leg walks each object's
-# members, and by then the pass has appended the SYNTH iterator classes to the
-# same unit body -- a synth `.call` suspends by construction and returns the
-# option wrapper, not the protocol, so reporting there would fire on the
-# lowering's own output. A yielding METHOD with a wrong return still reaches
-# the emitter; scoping `yield` closes that leg by construction.
-reportYieldOutsideGenerator: function {
-    # the symbol table the diagnostic is appended to
-    st: zenv.ZSymbolTable
-    # the tree the function's position is read from
-    ast: Ast.view
-    # the offending functiondef; the error points at the DECLARATION rather
-    # than the yield, because the return type is what has to change
-    fnId: zast.nodeid
-} is {
-    fr: fnRefAt :ast nid: fnId
-    if fr.nid.isZero then return
-    (addError
-        :st
-        nodeid: fnId
-        lineno: fr.lineno
-        colno: fr.colno
-        e: zast.err.badFunction
-        msg: "a function that yields is not a generator\n\nIts body suspends, but its declared return type does not reach the Iterator protocol, so there is no suspension machinery to yield into. Declare the return as `out (Iterator Gives: T)`, or remove the yield.".string
-    )
-}
 
 # returnHeadTidIn -- the RESOLVED id of a function's declared return-type head,
 # asked in the scope the head is WRITTEN in. 0 when the return declares no head,
@@ -13792,8 +13759,13 @@ isGeneratorReturn: function {
 subtreeHasYield: function {ast: Ast.view node: Node.view} out bool is {
     match (
         node
-    ) case yieldexpr then {
-        return true
+    ) case call then {
+        if (zast.isYieldCalleeAt :ast callableId: node.callable) then return true
+        aiterY: node.arguments.iterate
+        for aY: aiterY loop {
+            if (subtreeHasYield :ast node: (ast.nodes.get i: aY.u64)) then return true
+        }
+        return false
     } case statement then {
         siter: node.statements.iterate
         for stId: siter loop {
@@ -20291,6 +20263,12 @@ reportUnresolvedCastArg: function {
     um: "Unknown reference '\{ub}'"
     en: String
     eh: String
+    # `yield` resolves like any other name, so an ordinary function gets the
+    # ordinary miss -- which on its own says nothing about why. Name the rule.
+    if (atomNameId :ast n: (ast.nodes.get i: argId.u64)) == zast.names.wkYield then {
+        en = "`yield` is defined only inside a generator body".string
+        eh = "declare the enclosing function `out (Iterator Gives: T)`, or remove the yield".string
+    }
     (addErrorH
         :st
         nodeid: argId
@@ -30517,13 +30495,25 @@ checkNonUserCall: function {
             ubcn: unresolvedBareCallable :ast :st :unitDecl nid: call.nid
             if ubcn.length > 0 then {
                 ubm0: "Unknown reference '\{ubcn}'"
-                (addError
+                # `yield` resolves like any other name, so a yield in an
+                # ordinary function gets the ordinary miss -- which on its own
+                # says nothing about why. Name the rule instead.
+                ubn0: String
+                ubh0: String
+                if cnId == zast.names.wkYield then {
+                    ubn0 = "`yield` is defined only inside a generator body".string
+                    ubh0 = "declare the enclosing function `out (Iterator Gives: T)`, or remove the yield".string
+                }
+                (addErrorH
                     :st
                     nodeid: call.nid
                     lineno: call.lineno
                     colno: call.colno
                     e: zast.err.badReference
                     msg: ubm0
+                    note: ubn0
+                    hint: ubh0
+                    width: ubcn.length.u32.orPanic
                 )
             }
         }
@@ -32320,8 +32310,6 @@ rowarm: variant {
     forexpr: null
     # the row holds a labelvalue
     labelvalue: null
-    # the row holds a yieldexpr
-    yieldexpr: null
     # the row holds a doexpr
     doexpr: null
     # the row holds a withexpr
@@ -32372,8 +32360,6 @@ rowArmAt: function {ast: Ast.view nid: zast.nodeid} out rowarm is {
         return rowarm.forexpr
     } case labelvalue then {
         return rowarm.labelvalue
-    } case yieldexpr then {
-        return rowarm.yieldexpr
     } case doexpr then {
         return rowarm.doexpr
     } case withexpr then {
@@ -33099,30 +33085,6 @@ labelRefAt: function {ast: Ast.view nid: zast.nodeid} out atomref is {
     return (atomref nid: zn name: zm lineno: 0 colno: 0)
 }
 
-# yieldref -- what the yield walk reads of its row: the yielded value id and
-# the position, as plain values.
-yieldref: record {
-    # the yield node this was read from
-    nid: zast.nodeid
-    # the value yielded
-    expr: zast.nodeid
-    # the line to report this yield against
-    lineno: u32
-    # the column to report this yield against
-    colno: u32
-}
-
-# yieldRefAt -- the yield row `nid` as plain values (all zero for any other arm).
-yieldRefAt: function {ast: Ast.view nid: zast.nodeid} out yieldref is {
-    n: ast.nodes.get i: nid.u64
-    match (
-        n
-    ) case yieldexpr then {
-        return (yieldref :nid expr: n.expr lineno: n.lineno colno: n.colno)
-    } else null
-    zn: zast.nodeid
-    return (yieldref nid: zn expr: zn lineno: 0 colno: 0)
-}
 
 # checkLabelValueAt -- the `:x` shorthand in value position reads the local x
 # -- and only a local: it resolves through no other scope, so a miss is
@@ -33162,33 +33124,6 @@ checkLabelValueAt: function {
             hint: lvh
             width: lvNm.length.u32.orPanic
         )
-        return (ztypes.tid.create from: 0)
-    }
-}
-
-# checkYieldAt -- a suspension point: the yielded value walks for diagnostics.
-# A bidirectional generator's yield carries the resumed value -- the synth
-# `.call`'s `value` parameter's type (the node itself stays unstamped; the
-# expression wrapper takes the type). A reftype resume value is a borrow into
-# the caller's argument: the surrounding binding becomes BORROWED origin value.
-checkYieldAt: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    yr: yieldref
-} out ztypes.tid is {
-    checkValueAt :st :unitDecl :ast nid: yr.expr
-    yvn: nameIdOf :ast name: "value"
-    yvo: st.lookup nameId: yvn
-    match (
-        yvo
-    ) case some then {
-        if (typeIsReftype :st tid: (ztypes.tid.create from: yvo.u64)) then {
-            drainPendingBorrow :st
-            st.typing.pendingBorrowPath.append yvn
-        }
-        return (ztypes.tid.create from: yvo)
-    } case none then {
         return (ztypes.tid.create from: 0)
     }
 }
@@ -33297,9 +33232,6 @@ checkValueArmAt: function {
     } case labelvalue then {
         lvr: labelRefAt :ast :nid
         return (checkLabelValueAt :st :ast lv: lvr)
-    } case yieldexpr then {
-        yr: yieldRefAt :ast :nid
-        return (checkYieldAt :st :unitDecl :ast :yr)
     } case expression then {
         wrap: exprRefAt :ast :nid
         t: checkValueAt :st :unitDecl :ast nid: wrap.expression
@@ -39658,12 +39590,6 @@ lowerGeneratorsInUnit: function {
                             n: (ast.nodes.get i: bm.operation.u64)
                             hasReceiver: false
                         ) then isCand = true
-                    } else {
-                        if itTid > 0 then (reportYieldOutsideGenerator
-                            :st
-                            :ast
-                            fnId: bm.operation
-                        )
                     }
                 }
             } else null

@@ -1402,11 +1402,7 @@ print('\n'.join(sorted(set(re.findall(r\"'([^']*)'\",m.group(1))))))" "$$1"
 grep -oE '^[A-Za-z_][A-Za-z0-9_]*:' lib/system/core.z | sed 's/:$$//' | sort -u > "$$D/core"
 sed -n '/^kwlookup: function/,/^}/p' lib/system/zlexer.z \
   | grep -oE 'sv == "[^"]+"' | sed 's/sv == //; s/"//g' | sort -u > "$$D/lexkw.all"
-# `yield` is lexed as a keyword but is a compiler-provided FUNCTION like
-# `return`, which carries no token at all. Removing the token means retiring
-# the yieldexpr AST node, so it is its own change; until then the highlighters
-# are right and the lexer is the odd one out. Delete this line with that fix.
-grep -v '^yield$$' "$$D/lexkw.all" > "$$D/lexkw"
+cp "$$D/lexkw.all" "$$D/lexkw"
 sed -n '/^islookupReserved: function/,/^}/p' lib/system/zlexer.z \
   | grep -oE 'sv == "[^"]+"' | sed 's/sv == //; s/"//g' | sort -u > "$$D/lexres"
 

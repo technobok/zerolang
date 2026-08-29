@@ -263,8 +263,6 @@ isValidUnitName: function {name: StringView} out bool is {
 Parser: class {
     # Monotonic source-node id, assigned in parse order.
     nextNodeId: u32
-    # Nesting depth of function bodies (reserved for later slices).
-    functionBodyDepth: u32
     # Master node table: one slot per minted id (a reserved slot holds
     # the payload-less placeholder arm until a converted parent moves
     # the real child in).
@@ -275,7 +273,6 @@ Parser: class {
     create: function {} out this is {
         return (meta.create
             nextNodeId: 1
-            functionBodyDepth: 0
             ast: Ast.create
         )
     }
@@ -1170,8 +1167,6 @@ Parser: class {
         } case withTok then {
             return true
         } case braceOpenTok then {
-            return true
-        } case yieldTok then {
             return true
         } else {
             return (this.atomLookahead :lex)
@@ -2158,49 +2153,6 @@ Parser: class {
         }
     }
 
-    # yield-expression -> "yield" expression. Valid only directly inside a
-    # function body (depth 1); rejected at top level (0) or in a nested
-    # function literal (>1). Whether the function is a generator is checked
-    # later by the typechecker.
-    acceptYieldExpression: function {:this lex: zlexer.Lexer} out Node is {
-        startPos: lex.peekPos
-        yOpt: lex.accept tt: zlexer.toktype.yieldTok
-        match yOpt case none then {
-            return (this.mkErrorAt
-                pos: startPos
-                code: zast.err.badExpression
-                msg: "Expected yield".string
-            )
-        } case some then {
-            depth: this.functionBodyDepth
-            atTop: depth == 0
-            if atTop then {
-                return (this.mkErrorAt
-                    pos: startPos
-                    code: zast.err.badStatement
-                    msg: "yield is only valid inside a function body".string
-                )
-            }
-            nested: depth > 1
-            if nested then {
-                return (this.mkErrorAt
-                    pos: startPos
-                    code: zast.err.badStatement
-                    msg: "yield is not allowed inside a nested function literal".string
-                )
-            }
-            body: this.parseExpression :lex
-            bErr: this.isError node: body
-            if bErr then return body
-            return (Node.yieldexpr (zast.YieldExprData
-                nodeid: this.nextId
-                lineno: startPos.lineno
-                colno: startPos.colno
-                expr: (this.intern n: body))
-            )
-        }
-    }
-
     # Build a reassignment from an already-parsed LHS path list (the `=`
     # is consumed). The LHS must be a single path; the RHS is a full
     # expression (so `x = if c then a else b` parses).
@@ -2595,16 +2547,18 @@ Parser: class {
     }
 
     # Parse a function definition whose `function` keyword the caller has
-    # already peeked (startPos spans it); this consumes it. Bumps
-    # functionBodyDepth around the whole definition (incl. the `as` block)
-    # so the yield gate sees nested function literals, and restores it on
-    # the single funneled return. Returns a bare functiondef Node.
+    # already peeked (startPos spans it); this consumes it. Returns a bare
+    # functiondef Node. Nested function literals no longer need counting: a
+    # literal pushes its own scope, and `yield` is in scope only for the body
+    # generator lowering put it in, so a yield inside a literal simply does
+    # not resolve.
     parseFunctionDefinition: function {:this lex: zlexer.Lexer startPos: zlexer.tokpos} out Node is {
         lex.advance
-        this.functionBodyDepth = this.functionBodyDepth + 1
-        inner: this.functionDefinitionInner :lex startLine: startPos.lineno startCol: startPos.colno
-        this.functionBodyDepth = this.functionBodyDepth - 1
-        return inner
+        return (this.functionDefinitionInner
+            :lex
+            startLine: startPos.lineno
+            startCol: startPos.colno
+        )
     }
 
     # function-definition -> "function" [in-block] {out|is|as|in}*. The
@@ -3199,11 +3153,6 @@ Parser: class {
             bErr: this.isError node: blk
             if bErr then return blk
             return (this.wrapExpression inner: blk)
-        } case yieldTok then {
-            yn: this.acceptYieldExpression :lex
-            yErr: this.isError node: yn
-            if yErr then return yn
-            return (this.wrapExpression inner: yn)
         } else {
             op: this.parseOperation :lex
             oErr: this.isError node: op

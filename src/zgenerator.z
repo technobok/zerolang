@@ -98,9 +98,7 @@ paramOpId: function {ast: Ast.view n: Node.view} out zast.nodeid is {
 bodyContainsYield: function {ast: Ast.view n: Node.view} out bool is {
     match (
         n
-    ) case yieldexpr then {
-        return true
-    } case functiondef then {
+    ) case functiondef then {
         return false
     } case statement then {
         siter: n.statements.iterate
@@ -156,6 +154,7 @@ bodyContainsYield: function {ast: Ast.view n: Node.view} out bool is {
     } case namedoperation then {
         return (bodyContainsYield :ast n: (ast.nodes.get i: n.operation.u64))
     } case call then {
+        if (zast.isYieldCalleeAt :ast callableId: n.callable) then return true
         if (bodyContainsYield :ast n: (ast.nodes.get i: n.callable.u64)) then return true
         aiter: n.arguments.iterate
         for a0: aiter loop {
@@ -956,8 +955,8 @@ isYieldValue: function {ast: Ast.view n: Node.view} out bool is {
         n
     ) case expression then {
         return (isYieldValue :ast n: (ast.nodes.get i: n.expression.u64))
-    } case yieldexpr then {
-        return true
+    } case call then {
+        return (zast.isYieldCalleeAt :ast callableId: n.callable)
     } else {
         return false
     }
@@ -992,10 +991,7 @@ GenCross: class {
 crossWalk: function {ast: Ast.view gc: GenCross n: Node.view inYieldLoop: bool} is {
     match (
         n
-    ) case functiondef then null case yieldexpr then {
-        crossWalk :ast :gc n: (ast.nodes.get i: n.expr.u64) :inYieldLoop
-        gc.yieldCount = gc.yieldCount + 1
-    } case assignment then {
+    ) case functiondef then null case assignment then {
         av: ast.nodes.get i: n.value.u64
         crossWalk :ast :gc n: av :inYieldLoop
         anvC: zast.poolTextAt pool: ast.names ref: n.name
@@ -1058,6 +1054,10 @@ crossWalk: function {ast: Ast.view gc: GenCross n: Node.view inYieldLoop: bool} 
     } case call then {
         # the callee name is not a use of a local
         crossWalkIds :ast :gc ids: n.arguments :inYieldLoop
+        # a suspension point advances the clock every other field is read
+        # against. The operand is walked FIRST, so a local used in the yielded
+        # value is recorded against the count before this yield moves it.
+        if (zast.isYieldCalleeAt :ast callableId: n.callable) then gc.yieldCount = gc.yieldCount + 1
     } case binop then {
         # the operator atom is not a use of a local
         crossWalk :ast :gc n: (ast.nodes.get i: n.lhs.u64) :inYieldLoop
@@ -1907,13 +1907,6 @@ rewriteArm: function {
             name: n.name
             matcharm: (zast.nodeid.create from: (cloned.get i: 0))
             statement: (zast.nodeid.create from: (cloned.get i: 1)))
-        )
-    } case yieldexpr then {
-        return (Node.yieldexpr (zast.YieldExprData
-            nodeid: myId
-            lineno: n.lineno
-            colno: n.colno
-            expr: (zast.nodeid.create from: (cloned.get i: 0)))
         )
     } case atomstring then {
         return (Node.atomstring (zast.AtomStringData

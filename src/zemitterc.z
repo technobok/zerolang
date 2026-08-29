@@ -1878,8 +1878,6 @@ collectLiterals: function {ast: Ast.view n: Node.view ids: ListVal u64 texts: Li
         collectLiterals :ast n: (ast.nodes.get i: n.body.u64) :ids :texts
     } case doexpr then {
         collectLiterals :ast n: (ast.nodes.get i: n.statement.u64) :ids :texts
-    } case yieldexpr then {
-        collectLiterals :ast n: (ast.nodes.get i: n.expr.u64) :ids :texts
     } case forexpr then {
         fiter: n.conditions.iterate
         for f: fiter loop collectLiterals :ast n: (ast.nodes.get i: f.u64) :ids :texts
@@ -16171,6 +16169,13 @@ emitStmt: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    # a suspension point is a CALL now, so it is intercepted before the match
+    # rather than owning an arm -- adding a `call` arm here would re-route
+    # every ordinary call away from the tail leg that handles them.
+    if ctx.genActive when (isYieldNode :ast :n) then {
+        emitYieldStmt :ast :symtab :ctx callId: (zast.nodeIdOf :n) :ind :buf
+        return
+    }
     match (
         n
     ) case statementline then {
@@ -16201,8 +16206,6 @@ emitStmt: function {
         emitWithStmt :ast :symtab :ctx :n :ind :tmp :buf
     } case forexpr then {
         emitForStmt :ast :symtab :ctx :n :ind :tmp :buf
-    } case yieldexpr then {
-        emitYieldStmt :ast :symtab :ctx yd: n :ind :buf
     } else {
         emitReturnStmt :ast :symtab :ctx :n :ind :tmp :buf
     }
@@ -31379,8 +31382,9 @@ emitRecordMethods: function {
 nodeYieldCount: function {ast: Ast.view n: Node.view} out u64 is {
     match (
         n
-    ) case yieldexpr then {
-        return 1
+    ) case call then {
+        if (zast.isYieldCalleeAt :ast callableId: n.callable) then return 1
+        return 0
     } case statement then {
         c: u64
         siter: n.statements.iterate
@@ -31535,8 +31539,8 @@ isYieldNode: function {ast: Ast.view n: Node.view} out bool is {
         n
     ) case expression then {
         return (isYieldNode :ast n: (ast.nodes.get i: n.expression.u64))
-    } case yieldexpr then {
-        return true
+    } case call then {
+        return (zast.isYieldCalleeAt :ast callableId: n.callable)
     } else {
         return false
     }
@@ -31558,8 +31562,8 @@ emitYieldFromNode: function {
     ) case expression then {
         iexF: ast.nodes.get i: n.expression.u64
         emitYieldFromNode :ast :symtab :ctx n: iexF :ind :tmp :buf
-    } case yieldexpr then {
-        emitYieldStmt :ast :symtab :ctx yd: n :ind :buf
+    } case call then {
+        emitYieldStmt :ast :symtab :ctx callId: n.nodeid :ind :buf
     } else null
 }
 
@@ -31606,7 +31610,9 @@ emitYieldStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    yd: zast.YieldExprData.view
+    # the yield CALL's node id. The suspension reads its one unlabelled
+    # argument; the checker has already refused a labelled one
+    callId: zast.nodeid
     ind: StringView
     buf: String.borrow
 } is {
@@ -31614,7 +31620,8 @@ emitYieldStmt: function {
     ctx.genYieldNext = k + 1
     # an interpolated yield value builds via a self-contained statement
     # expression (emitExpr :ast cannot emit the chain)
-    yx: ast.nodes.get i: yd.expr.u64
+    yopId: zast.yieldCallOperandAt :ast nid: callId
+    yx: ast.nodes.get i: yopId.u64
     ve: emitInterpArgExpr :ast :symtab :ctx n: yx
     if ve.length == 0 then ve = emitExpr :ast :symtab :ctx n: yx
     ls: "\{ind}\{ctx.genRecvC}->state = \{k};\n"

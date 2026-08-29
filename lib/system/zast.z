@@ -40,7 +40,6 @@ public: unit {
     :TypeOfExprData
     :UnitData
     :WithData
-    :YieldExprData
     :callkind
     :callkindname
     :err
@@ -58,6 +57,10 @@ public: unit {
     :ifCondAt
     :stringPartAt
     :callArgAt
+    :isYieldCallAt
+    :yieldCallIdAt
+    :isYieldCalleeAt
+    :yieldCallOperandAt
     :fnParamAt
     :objIsItemAt
     :objAsItemAt
@@ -307,8 +310,6 @@ Node: union {
     namedoperation: NamedOperationData
     # a literal sequence of elements
     datablock: DataBlockData
-    # a value yielded from a generator
-    yieldexpr: YieldExprData
     # a block of statements
     statement: StatementData
     # one statement, wrapped because EOL is a statement boundary
@@ -1105,19 +1106,6 @@ DataBlockData: class {
     outType: nodeid
 }
 
-# Yield payload: the expression whose value is yielded out of a
-# generator function at this suspension point.
-YieldExprData: class {
-    # this yield's own row in the node table
-    nodeid: nodeid
-    # the line this yield starts on
-    lineno: u32
-    # the column this yield starts at
-    colno: u32
-    # the value yielded
-    expr: nodeid
-}
-
 # Statement payload: an ordered list of StatementLine nodes — the
 # lines of a brace-delimited code block.
 StatementData: class {
@@ -1634,8 +1622,6 @@ posOf: function {n: Node.view} out nodepos is {
         return (nodepos line: n.lineno col: n.colno)
     } case datablock then {
         return (nodepos line: n.lineno col: n.colno)
-    } case yieldexpr then {
-        return (nodepos line: n.lineno col: n.colno)
     } case stringchunk then {
         return (nodepos line: n.lineno col: n.colno)
     } case statement then {
@@ -1774,9 +1760,6 @@ printNode: function {ast: Ast.view n: Node.view} is {
         for elId: eiter loop printNode :ast n: (ast.nodes.get i: elId.u64)
         print "  outType:"
         printOptChildAt :ast id: n.outType
-    } case yieldexpr then {
-        print "\{n.nodeid}: yieldexpr @\{n.lineno}:\{n.colno}"
-        printNode :ast n: (ast.nodes.get i: n.expr.u64)
     } case statement then {
         print "\{n.nodeid}: statement @\{n.lineno}:\{n.colno} statements=\{n.statements.length}"
         siter: n.statements.iterate
@@ -1935,9 +1918,6 @@ printNodeCanonical: function {ast: Ast.view n: Node.view} is {
         for elId: eiter loop printNodeCanonical :ast n: (ast.nodes.get i: elId.u64)
         print "  outType:"
         printOptChildCanonicalAt :ast id: n.outType
-    } case yieldexpr then {
-        print "yieldexpr @\{n.lineno}:\{n.colno}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.expr.u64)
     } case statement then {
         print "statement @\{n.lineno}:\{n.colno} statements=\{n.statements.length}"
         siter: n.statements.iterate
@@ -2110,8 +2090,6 @@ childIds: function {ast: Ast.view n: Node.view} out (ListVal u32) is {
     } case datablock then {
         appendIds :acc ids: n.elements
         appendOptId :acc id: n.outType
-    } case yieldexpr then {
-        acc.append from: n.expr.u32
     } case statement then {
         appendIds :acc ids: n.statements
     } case statementline then {
@@ -2306,6 +2284,78 @@ fnParamAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     return zn
 }
 
+# isYieldCalleeAt -- the callable `callableId` is the single name `yield`.
+#
+# Syntactic, and deliberately so. Generator LOWERING runs before anything is
+# resolved, so it cannot ask what the callee resolves to -- but it only ever
+# asks INSIDE a body already established to be a generator's, which the
+# declared return type decided. That is the same bargain `break` and
+# `continue` strike: the SCOPE decides legality, the name id does the naming.
+# Passes that run after the checker read the `yieldCall` stamp instead.
+isYieldCalleeAt: function {ast: Ast.view callableId: nodeid} out bool is {
+    if callableId.isZero then return false
+    cal: ast.nodes.get i: callableId.u64
+    match (
+        cal
+    ) case atomid then {
+        return cal.name == names.wkYield
+    } else {
+        return false
+    }
+}
+
+# yieldCallIdAt -- the id of the yield CALL at `nid`, peeling the expression
+# wrappers a statement position puts around it; 0 when there is no yield call
+# there. Callers hold the wrapper, not the call, so the peel belongs here
+# rather than at each of them.
+yieldCallIdAt: function {ast: Ast.view nid: nodeid} out nodeid is {
+    if nid.isZero then return (nodeid.create from: 0)
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case expression then {
+        return (yieldCallIdAt :ast nid: n.expression)
+    } case statementline then {
+        return (yieldCallIdAt :ast nid: n.statementline)
+    } case call then {
+        if (isYieldCalleeAt :ast callableId: n.callable) then return nid
+        return (nodeid.create from: 0)
+    } else {
+        return (nodeid.create from: 0)
+    }
+}
+
+# isYieldCallAt -- there is a yield call at `nid`, through any wrapper.
+isYieldCallAt: function {ast: Ast.view nid: nodeid} out bool is {
+    return ((yieldCallIdAt :ast :nid).isZero) == false
+}
+
+# yieldCallOperandAt -- the value a yield call yields: its one unlabelled
+# argument. 0 when `nid` is not a yield call, or carries no such argument -- a
+# labelled `yield x: 1` binds the label to yield itself, which the checker
+# reports rather than silently reading as the yielded value.
+yieldCallOperandAt: function {ast: Ast.view nid: nodeid} out nodeid is {
+    cid: yieldCallIdAt :ast :nid
+    if cid.isZero then return (nodeid.create from: 0)
+    n: ast.nodes.get i: cid.u64
+    match (
+        n
+    ) case call then {
+        if n.arguments.length != 1 then return (nodeid.create from: 0)
+        a0: ast.nodes.get i: (n.arguments.get i: 0).u64
+        match (
+            a0
+        ) case namedoperation then {
+            if (a0.name.isZero) == false then return (nodeid.create from: 0)
+            return a0.operation
+        } else {
+            return (nodeid.create from: 0)
+        }
+    } else {
+        return (nodeid.create from: 0)
+    }
+}
+
 # callArgAt -- the id of argument `i` of call `nid` (0 for any other arm).
 callArgAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
@@ -2372,8 +2422,6 @@ nodeIdOf: function {n: Node.view} out nodeid is {
     } case namedoperation then {
         return n.nodeid
     } case datablock then {
-        return n.nodeid
-    } case yieldexpr then {
         return n.nodeid
     } case statement then {
         return n.nodeid
@@ -2460,8 +2508,6 @@ armName: function {n: Node.view} out StringView is {
         return "namedoperation"
     } case datablock then {
         return "datablock"
-    } case yieldexpr then {
-        return "yieldexpr"
     } case statement then {
         return "statement"
     } case statementline then {
