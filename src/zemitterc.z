@@ -18053,11 +18053,10 @@ emitObjIterRecv: function {
     # captured params. Registered BEFORE the loop label so break /
     # continue inside the loop never free the live instance.
     if ownGit then {
-        if (symtab.reg.needsDestructor typeId: itid) when (structDestroyNontrivial
-            :symtab
-            :ctx
-            tid: itid
-        ) then {
+        # gated on structDestroyNontrivial ALONE: the destructor is now emitted
+        # for anything it answers true for, and the stamped flag misses a synth
+        # iterator whose only owned field is a promoted local
+        if (structDestroyNontrivial :symtab :ctx tid: itid) then {
             gdt: "    \{itCb}_destroy(&_git\{mN});\n"
             tmp.listFrees.append gdt
             gdn: "_git\{mN}"
@@ -31344,7 +31343,17 @@ emitOneRecord: function {
     }
     buf.append "}\n\n"
     }
-    if (symtab.reg.needsDestructor typeId: tid) then {
+    # `needsDestructor` is a flag STAMPED at check time; for a generator's synth
+    # iterator class it is computed from the parameters alone, so a class whose
+    # only owned field is a promoted LOCAL carries false and its local was never
+    # freed. structDestroyNontrivial reads the REAL field types here at emit
+    # time, so it is the accurate authority -- ask it too.
+    wantDtor: false
+    if (symtab.reg.needsDestructor typeId: tid) then wantDtor = true
+    if (wantDtor) == false then {
+        if (structDestroyNontrivial :symtab :ctx :tid) then wantDtor = true
+    }
+    if wantDtor then {
         emitStructDestructor :ast :symtab :ctx :tid :fnames :fids :buf
     }
 }
