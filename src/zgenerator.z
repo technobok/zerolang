@@ -1000,6 +1000,19 @@ yieldSlotsOpt: function {ast: Ast.view o: (Option Node).view} out u64 is {
     }
 }
 
+# forCounterSlotsOpt -- how many loop-counter fields the state class needs: one
+# per label-bound `for` whose body suspends. Counted by the SAME function the
+# emitter draws its counters from. Reads through a view, like yieldSlotsOpt.
+forCounterSlotsOpt: function {ast: Ast.view o: (Option Node).view} out u64 is {
+    match (
+        o
+    ) case some then {
+        return (zast.suspendingForCountOf :ast n: o)
+    } case none then {
+        return 0
+    }
+}
+
 # recurse a node, recording locals that cross a yield-loop boundary.
 crossWalk: function {ast: Ast.view gc: GenCross n: Node.view inYieldLoop: bool} is {
     match (
@@ -2479,6 +2492,14 @@ lowerOne: function {
             # one resume SLOT per suspension point, counted by the SAME
             # function the emitter numbers its resume labels with
             yieldSlots: yieldSlotsOpt :ast o: pBody
+            # one COUNTER field per label-bound `for` whose body suspends. A
+            # `for` counter lives only in the C header, and `goto L_resume_k`
+            # jumps in past the init clause, so it has to be a field like
+            # everything else that is live across a suspension. It cannot come
+            # from the crossing analysis: a `for` label is a nameid on the
+            # header's namedoperation, not an assignment, so crossWalk never
+            # sees it and rewriteToThis has no shape to rewrite it into.
+            forSlots: forCounterSlotsOpt :ast o: pBody
             crossing: (List String)
             crossingLocals :gc dst: crossing
             promoted: (MapRV String v: bool)
@@ -2647,6 +2668,27 @@ lowerOne: function {
                         isItems.append (zast.tableAdd :ast n: nf4)
                     } case none then null
                     li3 = li3 + 1
+                }
+                # the loop counters, OUTSIDE the accepts-gated block below: an
+                # out-only generator has no resume slots at all and still has
+                # `for` loops. Typed with the `state` recipe above rather than
+                # a typeof of a first assignment -- a counter has no assignment
+                # to read a type from, and it is an i64 by construction.
+                fci: u64
+                for fci < forSlots loop {
+                    fci = fci + 1
+                    fcSys: mkAtom :ast :line :col name: "system"
+                    fcLeaf: mkAtom :ast :line :col name: "i64"
+                    fcTy: (Node.dottedpath (zast.DottedPathData
+                        nodeid: (zast.tableReserve :ast)
+                        lineno: line
+                        colno: col
+                        parent: (zast.tableAdd :ast n: fcSys)
+                        child: (zast.tableAdd :ast n: fcLeaf))
+                    )
+                    fcNm: "_fc_\{fci}"
+                    fcF: mkNamedOp :ast :line :col name: fcNm.stringView op: fcTy
+                    isItems.append (zast.tableAdd :ast n: fcF)
                 }
                 rfg: resumeField.take
                 match (

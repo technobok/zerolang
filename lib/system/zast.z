@@ -61,6 +61,8 @@ public: unit {
     :yieldCallIdAt
     :yieldCountIn
     :yieldCountOf
+    :suspendingForCountIn
+    :suspendingForCountOf
     :isYieldCalleeAt
     :yieldCallOperandAt
     :fnParamAt
@@ -2396,6 +2398,56 @@ yieldCountIn: function {ast: Ast.view nid: nodeid} out u64 is {
     if nid.isZero then return 0
     n: ast.nodes.get i: nid.u64
     return (yieldCountOf :ast :n)
+}
+
+# suspendingForCountOf / suspendingForCountIn -- how many LABEL-BOUND `for`
+# loops in a body have a suspension somewhere inside them.
+#
+# ONE definition, for the same reason `yieldCountOf` is one: generator LOWERING
+# sizes the state class's loop-counter fields by this, and the EMITTER draws a
+# counter from that pool for each such loop it writes. A body counted
+# differently in those two places gives a header naming a field that is not
+# there.
+#
+# Order does NOT have to agree, only the total: every counter field is an i64
+# and any distinct one will do, exactly as for the resume slots. So this
+# deliberately OVER-counts -- it says `for x: E loop`, while the emitter claims
+# a counter only for the ones that turn out to be an integer RANGE. Telling the
+# two apart needs the checker's stamps, which this walk does not have, and a
+# spare i64 field costs nothing.
+#
+# The NODE form is primary for the same reason `yieldCountOf`'s is: lowering
+# asks about a body it has just minted and not yet placed in the table.
+suspendingForCountOf: function {ast: Ast.view n: Node.view} out u64 is {
+    match (
+        n
+    ) case functiondef then {
+        return 0
+    } else null
+    c: u64
+    match (
+        n
+    ) case forexpr then {
+        if n.conditions.length == 1 when (yieldCountIn :ast nid: n.body) > 0 then {
+            c0: ast.nodes.get i: (n.conditions.get i: 0).u64
+            match (
+                c0
+            ) case namedoperation then {
+                if (nameTextAt :ast ref: c0.name).length > 0 then c = 1
+            } else null
+        }
+    } else null
+    kids: childIds :ast :n
+    kiter: kids.iterate
+    for k0: kiter loop c = c + (suspendingForCountIn :ast nid: (nodeid.create from: k0))
+    return c
+}
+
+# suspendingForCountIn -- suspendingForCountOf for a node already in the table.
+suspendingForCountIn: function {ast: Ast.view nid: nodeid} out u64 is {
+    if nid.isZero then return 0
+    n: ast.nodes.get i: nid.u64
+    return (suspendingForCountOf :ast :n)
 }
 
 # callArgAt -- the id of argument `i` of call `nid` (0 for any other arm).

@@ -2883,6 +2883,15 @@ Ctx: class {
     genYieldCount: u64
     # the next yield's number as the body is walked
     genYieldNext: u64
+    # the last `_fc_<k>` loop-counter field handed to a counted `for` whose
+    # body suspends. Which field a loop gets does not matter, only that each
+    # gets its own: they are all i64, and the lowering allocated at least this
+    # many by the same walk
+    genForNext: u64
+    # the counted `for` loops currently open around the statement being
+    # emitted, innermost last. Every suspension spills all of them and every
+    # resume label reloads them
+    genForSpills: (List ForSpill)
     # the yield number of each yield HOISTED out of expression position, by
     # call node id. The suspension runs as its own statement and the resume
     # value lands in `_yv_<k>`; the expression emitter then renders that yield
@@ -3277,6 +3286,20 @@ nodeIsRefBorrowResult: function {
     if f == 0 then return false
     r: stampIdOf :symtab nid: (interpPartNodeId :n)
     return (fnReturnsRefBorrow :ast :symtab :ctx fid: (ztypes.tid.create from: f.u64) retTid: r)
+}
+
+# ForSpill -- one counted `for` open around the statement being emitted, and
+# the state field its counter is saved to across a suspension. Keyed by C NAME
+# rather than variable id because a `for` label has neither: it is a nameid on
+# the header's namedoperation, and the checker binds it with `define` rather
+# than `defineVar`, so no node carries a variable id to look up. The C name is
+# the right key anyway -- the spill and the reload are both plain C
+# assignments, written in the loop's own scope.
+ForSpill: class {
+    # which `_fc_<slot>` field on the state class holds this counter
+    slot: u64
+    # the counter's emitted C name, as the for-header declared it
+    cname: String
 }
 
 # VidVal / VidTid -- assoc-list entries for the per-function narrowing and alias
@@ -18364,6 +18387,24 @@ emitIntRangeFor: function {
         if bound.length == 0 then return false
         fromx: rangeFromExpr :ast :symtab :ctx n: (ast.nodes.get i: c0.operation.u64)
         lidR: pushLoopLabel :ctx :tmp isDo: false
+        # A suspension inside the body RETURNS from `.call`, and the resume
+        # `goto` lands inside the loop, PAST the C for-init -- so the counter,
+        # which lives only in the header, is indeterminate on the next call and
+        # the loop yields once and reports itself exhausted. It cannot be
+        # promoted the way a local is: a `for` label is a nameid on the header's
+        # namedoperation, so crossWalk never records it and it carries no
+        # variable id to alias a field to either. Instead the counter keeps its
+        # C local -- so the header, `continue` and the increment are all
+        # untouched -- and is SPILLED to a state field across each suspension.
+        pushed: false
+        if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
+            ctx.genForNext = ctx.genForNext + 1
+            (ctx.genForSpills.append (ForSpill
+                slot: ctx.genForNext
+                cname: lbl.copy
+            ))
+            pushed = true
+        }
         lh: "\{ind}for (int64_t \{lbl} = \{fromx}; \{lbl} < (int64_t)(\{bound}); \{lbl}++) {\n"
         buf.append lh
         ind2: "\{ind}    "
@@ -18384,6 +18425,9 @@ emitIntRangeFor: function {
         lc: "\{ind}}\n"
         buf.append lc
         popLoopLabel :ctx id: lidR :ind :buf
+        # the counter leaves C scope with the loop, so a suspension after it
+        # must not spill it
+        if pushed then ctx.genForSpills.pop
         return true
     } else {
         return false
@@ -24109,6 +24153,8 @@ emitC: function {
         genValC: "value".string
         genYieldCount: 0
         genYieldNext: 0
+        genForNext: 0
+        genForSpills: (List ForSpill)
         yieldTempK: (IdMapV u64 v: u64)
         genWrap: "".string
         genSomeTag: "".string
@@ -31703,6 +31749,8 @@ setupGenCtx: function {
     ctx.genActive = true
     ctx.genYieldCount = gyc
     ctx.genYieldNext = 1
+    ctx.genForNext = 0
+    for ctx.genForSpills.length > 0 loop ctx.genForSpills.pop
     ctx.genWrap = "\{rc}_t"
     ctx.genSomeTag = "Z_\{ru}_TAG_SOME"
     ctx.genNoneTag = "Z_\{ru}_TAG_NONE"
@@ -32062,10 +32110,21 @@ emitYieldStmt: function {
             buf.append lzv
         }
     }
+    # a counted `for` keeps its counter in the C for-header, which this
+    # `return` destroys and the resume `goto` re-enters past. Spill each open
+    # one to its state field here and reload it at the label
+    with sit: ctx.genForSpills.iterate do for sp: sit loop {
+        lsv: "\{ind}\{ctx.genRecvC}->_fc_\{sp.slot} = \{sp.cname};\n"
+        buf.append lsv
+    }
     lr: "\{ind}return _ry_\{k};\n"
     buf.append lr
     ll: "L_resume_\{k}:;\n"
     buf.append ll
+    with rit: ctx.genForSpills.iterate do for sp: rit loop {
+        lrv: "\{ind}\{sp.cname} = \{ctx.genRecvC}->_fc_\{sp.slot};\n"
+        buf.append lrv
+    }
 }
 # methodReturnC -- a method's C return type. The registry knows it for a plain
 # return; a generic-mono return (optionval/Option/resultval) carries no
