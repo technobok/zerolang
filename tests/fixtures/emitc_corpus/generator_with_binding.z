@@ -1,0 +1,67 @@
+# generator_with_binding.z -- a `with` binding whose block suspends.
+#
+# `with s: E do { .. }` emits `T s = E;` ahead of the block, and the resume
+# `goto` re-enters PAST that line -- so a read after a suspension saw
+# indeterminate garbage. The name cannot be promoted where it stands: like a
+# `for` label it is a nameid on the `with` row, so `crossWalk` never records it
+# and `rewriteToThis` has no shape to turn it into `this.s`.
+#
+# So the header binds a fresh name and the user's name is re-bound as the
+# block's first statement, which IS an ordinary assignment -- promoted, typed
+# and rewritten by the machinery that already exists. The `with` keeps its
+# value, its scope and its locks; only the header's name changes.
+#
+# `lit` and `made` are the two owned shapes (a literal and a call). A ZERO-ARG
+# call is deliberately NOT covered: `(mk)` parses as a bare atom, and the gate
+# answers "borrowed" for an atom because deciding otherwise needs the symbol
+# table lowering does not have -- so that shape keeps today's behaviour rather
+# than being half-fixed. An OWNED HEAP value is not covered either, and for a
+# different reason: it works, but a promoted owned local whose field type came
+# from a typeof SHELL gets no instance destructor and leaks, which predates this
+# and happens with no `with` in sight. `nested`
+# proves a `with` inside a `with` works, and `rebound` proves a body that
+# already binds off the with name -- which the rewrite turns into a chain of
+# promoted locals -- still types.
+
+lit: function out (Iterator Gives: u64) is {
+    with s: "hello" do {
+        yield 1.u64
+        yield s.length
+    }
+}
+
+mkn: function {n: u64} out u64 is {
+    return n + 1.u64
+}
+
+made: function out (Iterator Gives: u64) is {
+    with s: (mkn n: 3.u64) do {
+        yield 2.u64
+        yield s
+    }
+}
+
+nested: function out (Iterator Gives: u64) is {
+    with a: "xy" do {
+        with b: "zzz" do {
+            yield 3.u64
+            yield a.length + b.length
+        }
+    }
+}
+
+rebound: function out (Iterator Gives: u64) is {
+    with s: "hello" do {
+        t: s
+        yield 4.u64
+        yield t.length
+    }
+}
+
+main: function is {
+    for v: (lit) loop print "v: \{v}"
+    for w: (made) loop print "w: \{w}"
+    for n: (nested) loop print "n: \{n}"
+    for r: (rebound) loop print "r: \{r}"
+    print "done"
+}

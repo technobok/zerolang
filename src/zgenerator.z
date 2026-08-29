@@ -1364,6 +1364,9 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} 
             lnQ = n.lineno
             coQ = n.colno
             isFor = lineIsFor :ast n: (ast.nodes.get i: n.statementline.u64)
+            if (isFor) == false then {
+                isFor = lineIsWith :ast n: (ast.nodes.get i: n.statementline.u64)
+            }
         } else null
     }
     if isFor then {
@@ -1380,6 +1383,295 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} 
         nc: rewriteToThisAt :ast :nid promoted: empty
         dst.append (zast.tableAdd :ast n: nc)
     }
+}
+
+# true when node `n` is a with-statement line.
+lineIsWith: function {ast: Ast.view n: Node.view} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (lineIsWith :ast n: (ast.nodes.get i: n.expression.u64))
+    } case withexpr then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# withValueIsOwned -- true when a `with` value is OWNED by shape alone.
+#
+# A conservative mirror of the checker's `withValueOwnership`: that one answers
+# BORROWED for a bare name bound to a runtime variable and for a plain dotted
+# path, OWNED for everything else. The runtime-variable half is a symbol-table
+# question and lowering has no symbol table, so both name-shaped arms answer
+# false here. Being wrong in that direction only leaves a binding unpromoted;
+# being wrong the other way would rebind a borrow, which the checker refuses.
+withValueIsOwned: function {ast: Ast.view n: Node.view} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (withValueIsOwned :ast n: (ast.nodes.get i: n.expression.u64))
+    } case atomid then {
+        return false
+    } case labelvalue then {
+        return false
+    } case dottedpath then {
+        return false
+    } else {
+        return true
+    }
+}
+
+# prependIntoBlock -- a statement block with `name: src` inserted as its first
+# line; 0 when the node is not a block.
+prependIntoBlock: function {
+    # the tree the block is read from, and where the synth nodes are minted
+    ast: Ast
+    # the block to prepend to
+    bodyId: u32
+    # the name the new binding introduces
+    name: zast.nameid
+    # the name it is bound to, which the header now carries
+    src: StringView
+    # the line the synth binding is reported at
+    line: u32
+    # the column the synth binding is reported at
+    col: u32
+} out u32 is {
+    lnB: u32
+    coB: u32
+    lineIds: (ListVal u32)
+    isStmt: false
+    {
+        b: ast.nodes.get i: bodyId.u64
+        match (
+            b
+        ) case statement then {
+            isStmt = true
+            lnB = b.lineno
+            coB = b.colno
+            with bit: b.statements.iterate do for s: bit loop lineIds.append from: s
+        } else null
+    }
+    if (isStmt) == false then return 0
+    sa2: mkAtom :ast :line :col name: src
+    ba2: (Node.assignment (zast.AssignmentData
+        nodeid: (zast.tableReserve :ast)
+        lineno: line
+        colno: col
+        :name
+        value: (zast.tableAdd :ast n: sa2))
+    )
+    bl2: (Node.statementline (zast.StatementLineData
+        nodeid: (zast.tableReserve :ast)
+        lineno: line
+        colno: col
+        statementline: (zast.tableAdd :ast n: ba2))
+    )
+    newLines: (ListVal u32)
+    newLines.append (zast.tableAdd :ast n: bl2)
+    with nit: lineIds.iterate do for s2: nit loop newLines.append from: s2
+    nb2: (Node.statement (zast.StatementData
+        nodeid: (zast.tableReserve :ast)
+        lineno: lnB
+        colno: coB
+        statements: newLines)
+    )
+    return (zast.tableAdd :ast n: nb2)
+}
+
+# prependBindLine -- prependIntoBlock through the `expression` and `doexpr`
+# wrappers a `with` body sits under, rebuilding them around the result.
+prependBindLine: function {
+    # the tree the body is read from, and where the synth nodes are minted
+    ast: Ast
+    # the already-promoted body to prepend to
+    bodyId: u32
+    # the name the new binding introduces
+    name: zast.nameid
+    # the name it is bound to, which the header now carries
+    src: StringView
+    # the line the synth binding is reported at
+    line: u32
+    # the column the synth binding is reported at
+    col: u32
+} out u32 is {
+    direct: prependIntoBlock :ast :bodyId :name :src :line :col
+    if direct > 0 then return direct
+    isE2: false
+    isD2: false
+    inner2: zast.nodeid
+    lnE2: u32
+    coE2: u32
+    {
+        b2: ast.nodes.get i: bodyId.u64
+        match (
+            b2
+        ) case expression then {
+            isE2 = true
+            inner2 = b2.expression
+            lnE2 = b2.lineno
+            coE2 = b2.colno
+        } case doexpr then {
+            isD2 = true
+            inner2 = b2.statement
+            lnE2 = b2.lineno
+            coE2 = b2.colno
+        } else null
+    }
+    if (isE2) == false when (isD2) == false then return bodyId
+    deep: prependBindLine :ast bodyId: inner2.u32 :name :src :line :col
+    if deep == inner2.u32 then return bodyId
+    if isD2 then {
+        rdo: (Node.doexpr (zast.DoData
+            nodeid: (zast.tableReserve :ast)
+            lineno: lnE2
+            colno: coE2
+            statement: (zast.nodeid.create from: deep))
+        )
+        return (zast.tableAdd :ast n: rdo)
+    }
+    rew: (Node.expression (zast.ExpressionData
+        nodeid: (zast.tableReserve :ast)
+        lineno: lnE2
+        colno: coE2
+        expression: (zast.nodeid.create from: deep))
+    )
+    return (zast.tableAdd :ast n: rew)
+}
+
+# promoteWrappedBody -- promote a body that may sit under `expression`
+# wrappers, rebuilding them around the result.
+#
+# A `for` body is a bare statement block, but a `with` body is wrapped, and
+# `promoteIterables` answers `clonePathAt` for anything that is not a
+# `statement` -- which clones PATH shapes only and silently drops a block's
+# contents. Unwrap first, promote, then put the wrappers back.
+promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is {
+    if oId.isZero then return 0
+    isExpr: false
+    innerId: zast.nodeid
+    lnY: u32
+    coY: u32
+    {
+        n: ast.nodes.get i: oId.u64
+        match (
+            n
+        ) case expression then {
+            isExpr = true
+            innerId = n.expression
+            lnY = n.lineno
+            coY = n.colno
+        } else null
+    }
+    isDo: false
+    {
+        n: ast.nodes.get i: oId.u64
+        match (
+            n
+        ) case doexpr then {
+            isDo = true
+            innerId = n.statement
+            lnY = n.lineno
+            coY = n.colno
+        } else null
+    }
+    if (isExpr) == false when (isDo) == false then return (promoteIterablesIdAt :ast :ctr :oId)
+    innerNew: promoteWrappedBody :ast :ctr oId: innerId
+    if innerNew == 0 then return 0
+    if isDo then {
+        redo: (Node.doexpr (zast.DoData
+            nodeid: (zast.tableReserve :ast)
+            lineno: lnY
+            colno: coY
+            statement: (zast.nodeid.create from: innerNew))
+        )
+        return (zast.tableAdd :ast n: redo)
+    }
+    wrapped: (Node.expression (zast.ExpressionData
+        nodeid: (zast.tableReserve :ast)
+        lineno: lnY
+        colno: coY
+        expression: (zast.nodeid.create from: innerNew))
+    )
+    return (zast.tableAdd :ast n: wrapped)
+}
+
+# promoteWith -- a `with` whose body suspends: re-bind the user's name inside
+# the body so the crossing analysis can see it.
+#
+# `with s: E do { .. }` emits `T s = E;` ahead of the block, and the resume
+# `goto` re-enters past that line -- so a suspending body read indeterminate
+# garbage. The name cannot be promoted where it stands: it is a nameid on the
+# `with` row, so `crossWalk` never records it and `rewriteToThis` has no shape
+# to turn it into `this.s`. Binding a fresh name in the header and re-binding
+# the user's name as the block's first statement makes it an ordinary
+# assignment, which the existing pipeline promotes and types.
+#
+# The `with` keeps its value, its scope and therefore its locks; only the
+# header's NAME changes, and the block gains one statement ahead of the rest.
+promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out Node is {
+    isWith: false
+    lnW: u32
+    coW: u32
+    nameW: zast.nameid
+    valW: zast.nodeid
+    bodyW: zast.nodeid
+    {
+        n: ast.nodes.get i: nid.u64
+        match (
+            n
+        ) case withexpr then {
+            isWith = true
+            lnW = n.lineno
+            coW = n.colno
+            nameW = n.name
+            valW = n.value
+            bodyW = n.body
+        } else null
+    }
+    if (isWith) == false then {
+        empty9: (MapRV String v: bool)
+        return (rewriteToThisAt :ast :nid promoted: empty9)
+    }
+    # the body is promoted first, so a nested suspending loop or `with` has
+    # already had its own rewrite applied. The suspension test reads the
+    # ORIGINAL body, which is in the table and so needs no wrapper peeling.
+    suspW: false
+    if (zast.yieldCountIn :ast nid: bodyW) > 0 then suspW = true
+    nbodyId: promoteWrappedBody :ast :ctr oId: bodyW
+    doRebind: false
+    if nbodyId > 0 when suspW then {
+        if (zast.nameTextAt :ast ref: nameW).length > 0 then {
+            vW: ast.nodes.get i: valW.u64
+            if (withValueIsOwned :ast n: vW) then doRebind = true
+        }
+    }
+    emptyA: (MapRV String v: bool)
+    nval: rewriteToThisAt :ast nid: valW promoted: emptyA
+    nvalId: zast.tableAdd :ast n: nval
+    nName: nameW
+    if doRebind then {
+        synthW: "_wb\{ctr.bump}"
+        swv: synthW.stringView
+        nName = zast.poolSet pool: ast.names text: swv
+        nbodyId = (prependBindLine
+            :ast
+            bodyId: nbodyId
+            name: nameW
+            src: swv
+            line: lnW
+            col: coW
+        )
+    }
+    return (Node.withexpr (zast.WithData
+        nodeid: (zast.tableReserve :ast)
+        lineno: lnW
+        colno: coW
+        name: nName
+        value: (zast.nodeid.create from: nvalId)
+        body: (zast.nodeid.create from: nbodyId))
+    )
 }
 
 # true when node `n` is a for-statement line.
@@ -1417,7 +1709,19 @@ promoteInExpr: function {
             coR = n.colno
         } else null
     }
-    if (isExpr) == false then return (promoteFor :ast :ctr :nid :dst)
+    if (isExpr) == false then {
+        isW: false
+        {
+            n9: ast.nodes.get i: nid.u64
+            match (
+                n9
+            ) case withexpr then {
+                isW = true
+            } else null
+        }
+        if isW then return (promoteWith :ast :ctr :nid)
+        return (promoteFor :ast :ctr :nid :dst)
+    }
     ni: promoteInExpr :ast :ctr nid: innerId :dst
     return (Node.expression (zast.ExpressionData
         nodeid: (zast.tableReserve :ast)
