@@ -1427,6 +1427,92 @@ promoteInExpr: function {
     )
 }
 
+# promoteForInit -- hoist a C-STYLE for-binding out of its header, so the
+# crossing analysis can see it.
+#
+# `for i: 0 while i < n loop` initialises `i` once and tests it per iteration;
+# the binding lives only in the emitted `int64_t i = 0;` ahead of the `while`,
+# and `goto L_resume_k` re-enters the loop past it, so a suspending body read
+# indeterminate garbage and the loop yielded once. Rewriting it to `i: 0`
+# followed by `for while i < n loop` is the same program -- and `i` is then an
+# ordinary assignment, which `crossWalk` records and `crossingLocals` promotes
+# to a state field, typed by the shell-and-swap the other promoted locals use.
+#
+# Only the BINDING moves; the condition it shared the header with stays put.
+promoteForInit: function {
+    # the tree the condition is read from, and where the synth nodes are minted
+    ast: Ast
+    # the binding condition being hoisted
+    c0Id: u32
+    # the statement list ahead of the loop, which the new assignment joins
+    dst: ListVal u32
+} is {
+    # read through a view scoped to this block: the mint below lends ast
+    opId: zast.nodeid
+    cnId: zast.nameid
+    hl1: u32
+    hc1: u32
+    {
+        c0: ast.nodes.get i: c0Id.u64
+        match (
+            c0
+        ) case namedoperation then {
+            hp1: zast.posOf n: (ast.nodes.get i: c0.operation.u64)
+            hl1 = hp1.line
+            hc1 = hp1.col
+            opId = c0.operation
+            cnId = c0.name
+        } else null
+    }
+    if opId.isZero then return
+    empty8: (MapRV String v: bool)
+    rhs1: rewriteToThisAt :ast nid: opId promoted: empty8
+    rhsE1: ensureExpr :ast line: hl1 col: hc1 n: rhs1
+    sa1: (Node.assignment (zast.AssignmentData
+        nodeid: (zast.tableReserve :ast)
+        lineno: hl1
+        colno: hc1
+        name: cnId
+        value: (zast.tableAdd :ast n: rhsE1))
+    )
+    sl1: (Node.statementline (zast.StatementLineData
+        nodeid: (zast.tableReserve :ast)
+        lineno: hl1
+        colno: hc1
+        statementline: (zast.tableAdd :ast n: sa1))
+    )
+    dst.append (zast.tableAdd :ast n: sl1)
+}
+
+# forInitIdx -- the 1-based index of a C-STYLE for-binding among `condIds`, or 0
+# when the header has none.
+#
+# The discriminator is the emitter's own dispatch, mirrored: `emitObjIterFor`
+# and `emitIntRangeFor` both bail unless there is EXACTLY ONE condition, so a
+# header carrying a binding AND a further condition is already emitted as an
+# init line ahead of a `while`. More than one condition, exactly one of them
+# named, is therefore precisely the C-style form.
+forInitIdx: function {ast: Ast.view condIds: (ListVal u32).view} out u64 is {
+    if condIds.length < 2 then return 0
+    found: u64
+    ci: u64
+    for ci < condIds.length loop {
+        c0: ast.nodes.get i: (condIds.get i: ci).u64
+        ci = ci + 1
+        match (
+            c0
+        ) case namedoperation then {
+            if (zast.nameTextAt :ast ref: c0.name).length > 0 then {
+                # a second binding is not this shape; the parser forbids it,
+                # so answer 0 rather than guessing which one to hoist
+                if found > 0 then return 0
+                found = ci
+            }
+        } else null
+    }
+    return found
+}
+
 # promoteForCond -- one condition of a for-loop being promoted: a
 # suspending loop's non-trivial named iterable moves into a synthetic
 # `_iterN` binding (appended to `dst`, ahead of the loop) and the condition
@@ -1541,8 +1627,20 @@ promoteFor: function {
         suspends = bodyContainsYield :ast n: nb
     }
     nconds: (ListVal u32)
-    citer: condIds.iterate
-    for c0Id: citer loop promoteForCond :ast :ctr :c0Id :suspends :dst :nconds
+    # a C-style binding in a suspending loop is hoisted to its own statement
+    # instead of being rewritten in place; every other condition is unchanged
+    initIdx: u64
+    if suspends then initIdx = forInitIdx :ast :condIds
+    ci9: u64
+    for ci9 < condIds.length loop {
+        c0Id: condIds.get i: ci9
+        ci9 = ci9 + 1
+        if ci9 == initIdx then {
+            promoteForInit :ast :c0Id :dst
+        } else {
+            promoteForCond :ast :ctr :c0Id :suspends :dst :nconds
+        }
+    }
     nposts: (ListVal u32)
     piter: postIds.iterate
     for p0Id: piter loop {

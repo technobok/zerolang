@@ -1,0 +1,57 @@
+# generator_cstyle_for.z -- a C-STYLE `for` binding whose loop body suspends.
+#
+# `for i: 0 while i < n loop` initialises `i` once and tests it per iteration,
+# so the emitter writes `int64_t i = 0;` ahead of a `while`. The resume `goto`
+# re-enters the loop PAST that line, leaving `i` indeterminate on the second
+# `.call`: the loop yielded 0 once and then reported itself exhausted -- a wrong
+# answer with no diagnostic, in the idiom `examples/forbind.z`, `factorial.z`
+# and `fibonacci.z` all use. `generator_intrange.z` escaped it only by writing
+# `i: lo` as a separate STATEMENT, which the crossing analysis does see.
+#
+# The binding is now hoisted to exactly that statement form, so it promotes to a
+# state field like any other local. `u64s` proves the field is typed from the
+# binding rather than assumed to be i64; `twice` proves two sibling loops may
+# share a name; `nest` proves an inner suspending loop still works.
+
+count: function {n: i64} out (Iterator Gives: i64) is {
+    for i: 0 while i < n loop {
+        yield i
+        i = i + 1
+    }
+}
+
+u64s: function {n: u64} out (Iterator Gives: u64) is {
+    for i: 0.u64 while i < n loop {
+        yield i
+        i = i + 1.u64
+    }
+}
+
+twice: function {n: i64} out (Iterator Gives: i64) is {
+    for i: 0 while i < n loop {
+        yield i
+        i = i + 1
+    }
+    for i: 0 while i < n loop {
+        yield i + 100
+        i = i + 1
+    }
+}
+
+nest: function {n: i64} out (Iterator Gives: i64) is {
+    for a: 0 while a < n loop {
+        for b: 0 while b < n loop {
+            yield (a * 10) + b
+            b = b + 1
+        }
+        a = a + 1
+    }
+}
+
+main: function is {
+    for c: (count n: 4) loop print "c: \{c}"
+    for u: (u64s n: 3.u64) loop print "u: \{u}"
+    for t: (twice n: 2) loop print "t: \{t}"
+    for g: (nest n: 3) loop print "g: \{g}"
+    print "done"
+}
