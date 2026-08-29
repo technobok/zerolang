@@ -1361,33 +1361,83 @@ Parser: class {
         )
     }
 
-    # clause-body -> primary-expression, with a bare `null` body desugared
-    # to an empty block: `then null` / `else null` declare an empty body.
-    # Loop bodies do not take this form.
-    acceptClauseBody: function {:this lex: zlexer.Lexer} out Node is {
-        bodyPos: lex.peekPos
-        bLine: bodyPos.lineno
-        bCol: bodyPos.colno
-        body: this.acceptPrimaryExpression :lex
-        bErr: this.isError node: body
-        if bErr then return body
+    # a bare `null` body is an EMPTY BLOCK, not the value null: `then null` /
+    # `else null` declare a body that does nothing. Shared by both clause-body
+    # forms so `then` and `else` desugar identically.
+    nullBodyDesugar: function {:this body: Node.take line: u32 col: u32} out Node is {
         if (isBareNullBody ast: this.ast :body) then {
             stmts: (ListVal u32)
             return (Node.statement (zast.StatementData
                 nodeid: this.nextId
-                lineno: bLine
-                colno: bCol
+                lineno: line
+                colno: col
                 statements: stmts)
             )
         }
         return body
     }
 
-    # primary-expression -> block | operation. Control-flow bodies
-    # (if/match then/else). A block parses directly to a Statement; a bare
-    # expression is wrapped Statement(StatementLine(Expression)) so the
-    # clause statement field has a uniform shape.
+    # clause-body -> primary-expression. The body of a `then` or a `case`,
+    # where the enclosing construct is still open and a bare `if`/`match`
+    # would leave a following `else` with two owners. Loop bodies do not take
+    # this form; they take an expression-body.
+    acceptClauseBody: function {:this lex: zlexer.Lexer} out Node is {
+        bodyPos: lex.peekPos
+        body: this.acceptPrimaryExpression :lex
+        bErr: this.isError node: body
+        if bErr then return body
+        return (this.nullBodyDesugar :body line: bodyPos.lineno col: bodyPos.colno)
+    }
+
+    # else-body -> expression. The enclosing `if` or `match` has just taken its
+    # own `else` and can never take another, so every form is unambiguous here
+    # -- including a bare `if`, which is what `else if` is.
+    acceptElseBody: function {:this lex: zlexer.Lexer} out Node is {
+        bodyPos: lex.peekPos
+        body: this.acceptExpressionBody :lex
+        bErr: this.isError node: body
+        if bErr then return body
+        return (this.nullBodyDesugar :body line: bodyPos.lineno col: bodyPos.colno)
+    }
+
+    # primary-expression -> an expression MINUS `if` and `match`. The body of a
+    # `then` or a `case`, where the enclosing construct is still OPEN.
+    #
+    # Those two are excluded and nothing else is, because those two are exactly
+    # what can absorb an `else`: ifClausesTail and caseClausesTail are the only
+    # readers of an `else` token in the parser. Written bare in a body whose own
+    # construct has not closed, a following `else` has two candidate owners and
+    # binds silently to the inner one. In an `else` body the enclosing `if` has
+    # already taken its `else` and can never take another, so there is exactly
+    # one candidate -- which is why `else if` needs no braces and is not an
+    # exception but the general rule holding. `for`, `with` and `data` read no
+    # `else`, so they stay legal here and need no braces.
     acceptPrimaryExpression: function {:this lex: zlexer.Lexer} out Node is {
+        tPos: lex.peekPos
+        tt: lex.peekType
+        if tt == zlexer.toktype.ifTok then {
+            return (this.mkErrorAt
+                pos: tPos
+                code: zast.err.badThen
+                msg: "a bare `if` here needs braces\n\nA `then` or `case` body is a primary-expression, and the two forms it excludes are exactly the two that can consume an `else`. Written bare, a following `else` would have two candidate owners -- this `if` and the enclosing one -- and would bind silently to the inner. Write `then { if ... }`. An `else` body carries no such ambiguity and takes an `if` bare, which is what `else if` is.".string
+            )
+        }
+        if tt == zlexer.toktype.matchTok then {
+            return (this.mkErrorAt
+                pos: tPos
+                code: zast.err.badThen
+                msg: "a bare `match` here needs braces\n\nA `then` or `case` body is a primary-expression, and the two forms it excludes are exactly the two that can consume an `else`. Written bare, a following `else` would bind to this `match` rather than to the enclosing construct, silently. Write `then { match ... }`.".string
+            )
+        }
+        return (this.acceptExpressionBody :lex)
+    }
+
+    # expression-body -> block | expression. A loop body and an `else` body:
+    # both sit where no construct is left open, so the full expression grammar
+    # is unambiguous there. A block parses directly to a Statement; a bare
+    # expression is wrapped Statement(StatementLine(Expression)) so the body
+    # field has a uniform shape either way.
+    acceptExpressionBody: function {:this lex: zlexer.Lexer} out Node is {
         tPos: lex.peekPos
         sLine: tPos.lineno
         sCol: tPos.colno
@@ -1415,7 +1465,7 @@ Parser: class {
             return (this.mkErrorAt
                 pos: tPos
                 code: zast.err.expectedStatement
-                msg: "Expected primary-expression".string
+                msg: "Expected an expression".string
             )
         }
     }
@@ -1491,7 +1541,7 @@ Parser: class {
         }
         if tt == zlexer.toktype.elseTok then {
             lex.advance
-            estmt: this.acceptClauseBody :lex
+            estmt: this.acceptElseBody :lex
             eErr: this.isError node: estmt
             if eErr then return estmt
             return (Node.ifexpr (zast.IfData
@@ -1615,7 +1665,7 @@ Parser: class {
         }
         elseOpt: lex.accept tt: zlexer.toktype.elseTok
         match elseOpt case some then {
-            estmt: this.acceptClauseBody :lex
+            estmt: this.acceptElseBody :lex
             eErr: this.isError node: estmt
             if eErr then return estmt
             return (Node.caseexpr (zast.CaseData
@@ -1785,7 +1835,7 @@ Parser: class {
                 return (this.mkError tok: bad code: zast.err.badFor msg: "Duplicate loop".string)
             }
             lex.advance
-            stmt: this.acceptPrimaryExpression :lex
+            stmt: this.acceptExpressionBody :lex
             sErr: this.isError node: stmt
             if sErr then return stmt
             return (this.forClausesTail
@@ -3119,7 +3169,6 @@ Parser: class {
     # an expression, required: a failure here yields an error node rather than
     # nothing, so the caller always has a node to hang position on
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
-        tPos: lex.peekPos
         match lex.peekType case ifTok then {
             ifn: this.acceptIfExpression :lex
             iErr: this.isError node: ifn
@@ -3156,34 +3205,53 @@ Parser: class {
             if yErr then return yn
             return (this.wrapExpression inner: yn)
         } else {
-            paths: this.operationPaths :lex
-            n: paths.length
-            if n == 0 then {
-                return (this.mkErrorAt
-                    pos: tPos
-                    code: zast.err.badExpression
-                    msg: "Expected an expression".string
+            op: this.parseOperation :lex
+            oErr: this.isError node: op
+            if oErr then return op
+            return (this.wrapExpression inner: op)
+        }
+    }
+
+    # operation -> binop | ( term binop ) | ( term "=" expression )
+    #            | ( term "swap" term ).
+    #
+    # Reassignment and swap live HERE, not beside `expression`'s compound
+    # forms, which is what lets a clause body be `block | operation` without
+    # rejecting `then x = 1`. Nothing becomes ambiguous by the move: `=` and
+    # `swap` are keyword tokens, and a binop operator must be an atomid
+    # (foldBinopTail requires it), so after the first term the alternative is
+    # chosen deterministically and binop greediness is untouched -- it already
+    # stopped at a non-atomid.
+    parseOperation: function {:this lex: zlexer.Lexer} out Node is {
+        tPos: lex.peekPos
+        paths: this.operationPaths :lex
+        n: paths.length
+        if n == 0 then {
+            return (this.mkErrorAt
+                pos: tPos
+                code: zast.err.badExpression
+                msg: "Expected an expression".string
+            )
+        }
+        eqOpt: lex.accept tt: zlexer.toktype.equalsTok
+        match eqOpt case some then {
+            return (this.buildReassignment
+                :paths
+                :lex
+                startLine: tPos.lineno
+                startCol: tPos.colno
+            )
+        } case none then {
+            swOpt: lex.accept tt: zlexer.toktype.swapTok
+            match swOpt case some then {
+                return (this.buildSwap
+                    :paths
+                    :lex
+                    startLine: tPos.lineno
+                    startCol: tPos.colno
                 )
-            }
-            eqOpt: lex.accept tt: zlexer.toktype.equalsTok
-            match eqOpt case some then {
-                ra: this.buildReassignment :paths :lex startLine: tPos.lineno startCol: tPos.colno
-                raErr: this.isError node: ra
-                if raErr then return ra
-                return (this.wrapExpression inner: ra)
             } case none then {
-                swOpt: lex.accept tt: zlexer.toktype.swapTok
-                match swOpt case some then {
-                    sw: this.buildSwap :paths :lex startLine: tPos.lineno startCol: tPos.colno
-                    swErr: this.isError node: sw
-                    if swErr then return sw
-                    return (this.wrapExpression inner: sw)
-                } case none then {
-                    inner: this.operationOrCallFromPaths :paths :lex
-                    ierr: this.isError node: inner
-                    if ierr then return inner
-                    return (this.wrapExpression :inner)
-                }
+                return (this.operationOrCallFromPaths :paths :lex)
             }
         }
     }

@@ -205,7 +205,7 @@ statement can be used immediately before the #~"if".
     { "when" #>"operation" }
     "then" #>"primary-expression"
   }
-  \[ "else" #>"primary-expression" \]
+  \[ "else" #>"expression" \]
 
 #---: match_expression
 
@@ -257,7 +257,7 @@ constant or an intermediate value (definition) to a constant.
     "case" #>"id"
     "then" #>"primary-expression"
   }
-  \[ "else" #>"primary-expression" \]
+  \[ "else" #>"expression" \]
 
 #---: function_definition
 
@@ -449,10 +449,34 @@ agree with the declared type. See spec for the full unification rule.
 
 #---: primary_expression
 
-A low level 'atomic' expression (includes #>"operation") that can be used bare
-(without containing parens or curly braces) ie. bare labels are #**"NOT" allowed
-here. Particularly, no #>"if-expression" and no #>"match-expression" to
-prevent ambiguity in those productions.
+A low level 'atomic' expression that can be used bare (without containing parens
+or curly braces) ie. bare labels are #**"NOT" allowed here.
+
+This is the body of a #~"then" or a #~"case", and the restriction on it is the
+#_*"dangling else" rule.
+
+A primary-expression is an #>"expression" #_*"minus" #>"if-expression" and
+#>"match-expression", and those two are excluded because those two are exactly
+what can consume an #~"else". In a body whose own construct is still
+#_*"open" a following #~"else" would have two candidate owners -- the inner
+form and the enclosing one -- and would bind silently to the inner. Braces
+settle it: #~"then { if a then x else y }". #>"for-expression",
+#>"with-expression" and #>"data-definition" read no #~"else", so they need no
+braces here.
+
+An #~"else" body carries no such ambiguity and takes a full #>"expression". By
+the time one is reached the enclosing #~"if" or #~"match" has already taken its
+own #~"else" and can never take another, so exactly one candidate owner
+remains. That is why #~"else if" needs no braces: it is not an exception to the
+rule, it is the rule holding.
+
+Reassignment and swap are listed #_*"here" rather than beside #~"if" and
+#~"match" in #>"expression", so that #~"then x = 1" is an ordinary clause body.
+They are #_*"not" folded into #>"operation", which is also the type-expression
+production (see #~"in"/#~"out" under #>"function-definition") -- a type is
+never a reassignment. Nothing becomes ambiguous by listing them: #~"=" and
+#~"swap" are keyword tokens and a binop operator must be a single #>"id", so
+the alternative is settled after the first #>"term" without lookahead.
 
 #~"block": Returns the result (last expression) in a block.
 
@@ -462,6 +486,12 @@ of this expression must be a constant.
 #code:
   : #>"block"
   | #>"operation"
+  | #>"call"
+  | ( #>"term" "=" #>"expression" )
+  | ( #>"term" "swap" #>"term" )
+  | #>"for-expression"
+  | #>"with-expression"
+  | #>"data-definition"
 
 #---: block
 
@@ -583,7 +613,7 @@ statement can be used immediately before the #~"for".
   { "while" #>"operation" }          \# precondition(s)
   \[ #>"label" #>"operation" \]            \# binding to operation/call
   { "while" #>"operation" }          \# precondition(s)
-  \[ "loop" #>"primary-expression" \]
+  \[ "loop" #>"expression" \]
   { "while" #>"operation" }          \# postcondition(s)
 
 #---: with_expression
@@ -633,16 +663,9 @@ not pass the typechecker.
 LHS of reassignment and both sides of swap must be to an addressable location.
 
 #code:
-  : #>"for-expression"
-  | #>"with-expression"
+  : #>"primary-expression"
   | #>"if-expression"
   | #>"match-expression"
-  | #>"data-definition"
-  | #>"block"
-  | ( #>"term" "=" #>"expression" )
-  | ( #>"term" "swap" #>"term" )
-  | #>"call"
-  | #>"binop"
 
 
 #---: call

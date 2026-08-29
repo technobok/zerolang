@@ -284,7 +284,7 @@ statement can be used immediately before the <code>if</code>.</p>
   { "when" <a href="#operation">operation</a> }
   "then" <a href="#primary-expression">primary_expression</a>
 }
-[ "else" <a href="#primary-expression">primary_expression</a> ]</code></pre>
+[ "else" <a href="#expression">expression</a> ]</code></pre>
 <h3 id="match-expression"><a href="#match-expression">2.9. match_expression</a></h3>
 <p><code>match</code> is used to dissect a union, variant or generic field type into
 its child types. The initial operation (the target) must return one of these
@@ -323,7 +323,7 @@ constant or an intermediate value (definition) to a constant.</p>
   "case" <a href="#id">id</a>
   "then" <a href="#primary-expression">primary_expression</a>
 }
-[ "else" <a href="#primary-expression">primary_expression</a> ]</code></pre>
+[ "else" <a href="#expression">expression</a> ]</code></pre>
 <h3 id="function-definition"><a href="#function-definition">2.10. function_definition</a></h3>
 <p>Function definition.</p>
 <p>Can take maximum one each of the arguments in any order.</p>
@@ -476,15 +476,41 @@ agree with the declared type. See spec for the full unification rule.</p>
 "}"
 [ "out" <a href="#operation">operation</a> ]</code></pre>
 <h3 id="primary-expression"><a href="#primary-expression">2.14. primary_expression</a></h3>
-<p>A low level 'atomic' expression (includes <a href="#operation">operation</a>) that can be used bare
-(without containing parens or curly braces) ie. bare labels are <strong>NOT</strong> allowed
-here. Particularly, no <a href="#if-expression">if_expression</a> and no <a href="#match-expression">match_expression</a> to
-prevent ambiguity in those productions.</p>
+<p>A low level 'atomic' expression that can be used bare (without containing parens
+or curly braces) ie. bare labels are <strong>NOT</strong> allowed here.</p>
+<p>This is the body of a <code>then</code> or a <code>case</code>, and the restriction on it is the
+<em><strong>dangling else</strong></em> rule.</p>
+<p>A primary-expression is an <a href="#expression">expression</a> <em><strong>minus</strong></em> <a href="#if-expression">if_expression</a> and
+<a href="#match-expression">match_expression</a>, and those two are excluded because those two are exactly
+what can consume an <code>else</code>. In a body whose own construct is still
+<em><strong>open</strong></em> a following <code>else</code> would have two candidate owners -- the inner
+form and the enclosing one -- and would bind silently to the inner. Braces
+settle it: <code>then { if a then x else y }</code>. <a href="#for-expression">for_expression</a>,
+<a href="#with-expression">with_expression</a> and <a href="#data-definition">data_definition</a> read no <code>else</code>, so they need no
+braces here.</p>
+<p>An <code>else</code> body carries no such ambiguity and takes a full <a href="#expression">expression</a>. By
+the time one is reached the enclosing <code>if</code> or <code>match</code> has already taken its
+own <code>else</code> and can never take another, so exactly one candidate owner
+remains. That is why <code>else if</code> needs no braces: it is not an exception to the
+rule, it is the rule holding.</p>
+<p>Reassignment and swap are listed <em><strong>here</strong></em> rather than beside <code>if</code> and
+<code>match</code> in <a href="#expression">expression</a>, so that <code>then x = 1</code> is an ordinary clause body.
+They are <em><strong>not</strong></em> folded into <a href="#operation">operation</a>, which is also the type-expression
+production (see <code>in</code>/<code>out</code> under <a href="#function-definition">function_definition</a>) -- a type is
+never a reassignment. Nothing becomes ambiguous by listing them: <code>=</code> and
+<code>swap</code> are keyword tokens and a binop operator must be a single <a href="#id">id</a>, so
+the alternative is settled after the first <a href="#term">term</a> without lookahead.</p>
 <p><code>block</code>: Returns the result (last expression) in a block.</p>
 <p>When used within a <a href="#constant-expression">constant_expression</a> (eg. at the unit level), each part
 of this expression must be a constant.</p>
 <pre><code>: <a href="#block">block</a>
-| <a href="#operation">operation</a></code></pre>
+| <a href="#operation">operation</a>
+| <a href="#call">call</a>
+| ( <a href="#term">term</a> "=" <a href="#expression">expression</a> )
+| ( <a href="#term">term</a> "swap" <a href="#term">term</a> )
+| <a href="#for-expression">for_expression</a>
+| <a href="#with-expression">with_expression</a>
+| <a href="#data-definition">data_definition</a></code></pre>
 <h3 id="block"><a href="#block">2.15. block</a></h3>
 <p>A series of <a href="#blockline">blockline</a>s in braces. Can be used anywhere a
 <a href="#primary-expression">primary_expression</a> is allowed. The value of a block is the value of the
@@ -573,7 +599,7 @@ statement can be used immediately before the <code>for</code>.</p>
 { "while" <a href="#operation">operation</a> }          # precondition(s)
 [ <a href="#label">label</a> <a href="#operation">operation</a> ]            # binding to operation/call
 { "while" <a href="#operation">operation</a> }          # precondition(s)
-[ "loop" <a href="#primary-expression">primary_expression</a> ]
+[ "loop" <a href="#expression">expression</a> ]
 { "while" <a href="#operation">operation</a> }          # postcondition(s)</code></pre>
 <h3 id="with-expression"><a href="#with-expression">2.20. with_expression</a></h3>
 <p>An expression executed in a new scope with a single new declaration.</p>
@@ -605,16 +631,9 @@ when entering a <code>for</code> scope.</p>
 some expressions may be syntactically valid (eg <code>return return 1</code>), they will
 not pass the typechecker.</p>
 <p>LHS of reassignment and both sides of swap must be to an addressable location.</p>
-<pre><code>: <a href="#for-expression">for_expression</a>
-| <a href="#with-expression">with_expression</a>
+<pre><code>: <a href="#primary-expression">primary_expression</a>
 | <a href="#if-expression">if_expression</a>
-| <a href="#match-expression">match_expression</a>
-| <a href="#data-definition">data_definition</a>
-| <a href="#block">block</a>
-| ( <a href="#term">term</a> "=" <a href="#expression">expression</a> )
-| ( <a href="#term">term</a> "swap" <a href="#term">term</a> )
-| <a href="#call">call</a>
-| <a href="#binop">binop</a></code></pre>
+| <a href="#match-expression">match_expression</a></code></pre>
 <h3 id="call"><a href="#call">2.22. call</a></h3>
 <p>A term or a function call. A call carries <em><strong>at most one</strong></em> unlabelled argument
 and it must come first; every other argument names the parameter it binds to.
