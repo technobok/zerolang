@@ -1406,6 +1406,21 @@ cp "$$D/lexkw.all" "$$D/lexkw"
 sed -n '/^islookupReserved: function/,/^}/p' lib/system/zlexer.z \
   | grep -oE 'sv == "[^"]+"' | sed 's/sv == //; s/"//g' | sort -u > "$$D/lexres"
 
+# the SPEC's two tables. Nothing gated them against the lexer, which is how
+# `yield` sat in kwlookup while the spec called it a builtin function and both
+# highlighters listed it as a predeclared identifier -- three sources agreeing
+# and the implementation the odd one out, for as long as nobody looked.
+specset() {
+  awk -v h="$$1" '
+    $$0 == "#---: " h { inh=1; next }
+    inh && /^#---: / { exit }
+    inh && /^#code/ { incode=1; next }
+    inh && incode && /^$$/ { incode=0 }
+    inh && incode { print }
+  ' docs/spec.pdoc | tr -s ' ' '\n' | grep -v '^$$' | sort -u
+}
+specset Keywords > "$$D/speckw"; specset "Reserved Words" > "$$D/specres"
+
 jsset keywords > "$$D/pkw"; jsset reserved > "$$D/pres"; jsset builtins > "$$D/pbi"
 vimset zerolangKeyword > "$$D/vkw"; vimset zerolangReserved > "$$D/vres"
 { vimset zerolangBuiltinType; vimset zerolangBuiltinConst; vimset zerolangBuiltin; } | sort -u > "$$D/vbi"
@@ -1424,12 +1439,14 @@ cmp_set "prism keywords vs zlexer kwlookup"         "$$D/lexkw"  "$$D/pkw"
 cmp_set "nvim keywords vs zlexer kwlookup"          "$$D/lexkw"  "$$D/vkw"
 cmp_set "prism reserved vs zlexer islookupReserved" "$$D/lexres" "$$D/pres"
 cmp_set "nvim reserved vs zlexer islookupReserved"  "$$D/lexres" "$$D/vres"
+cmp_set "spec Keywords vs zlexer kwlookup"          "$$D/lexkw"  "$$D/speckw"
+cmp_set "spec Reserved Words vs zlexer islookupReserved" "$$D/lexres" "$$D/specres"
 cmp_set "prism builtins vs nvim builtins"           "$$D/pbi"    "$$D/vbi"
 sort -u "$$D/core" "$$D/ctx" > "$$D/want_bi"
 cmp_set "builtins vs lib/system/core.z + context words" "$$D/want_bi" "$$D/pbi"
 
 [ "$$fail" = 0 ] || { echo "  The language moved and a highlighter did not. Fix the word list."; exit 1; }
-echo "highlight-guard OK: $$(wc -l < "$$D/core") core.z names, $$(wc -l < "$$D/lexkw") keywords, $$(wc -l < "$$D/lexres") reserved -- both highlighters agree"
+echo "highlight-guard OK: $$(wc -l < "$$D/core") core.z names, $$(wc -l < "$$D/lexkw") keywords, $$(wc -l < "$$D/lexres") reserved -- spec and both highlighters agree"
 endef
 export HIGHLIGHT_GUARD_SH
 

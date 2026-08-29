@@ -91,6 +91,8 @@ Table of Contents</div>
 </li>
 <li><a href="#label-shorthand">label_shorthand</a>
 </li>
+<li><a href="#keywords">keywords</a>
+</li>
 <li><a href="#id">id</a>
 </li>
 <li><a href="#id-float">id_float</a>
@@ -108,6 +110,8 @@ Table of Contents</div>
 <li><a href="#unit-definition">unit_definition</a>
 </li>
 <li><a href="#item-definition">item_definition</a>
+</li>
+<li><a href="#item-body-member">item_body_member</a>
 </li>
 <li><a href="#data-definition">data_definition</a>
 </li>
@@ -193,16 +197,28 @@ be constant.</p>
 <p>A definition whose name and value are the same identifier: <code>:x</code> is
 <em><strong>almost</strong></em> equivalent to <code>x: x</code>, except the definition will not bind to
 itself. The leading colon distinguishes it from a plain reference. Used
-in labelled-list contexts (item bodies, unit bodies, function parameter
-lists, blocks) wherever a <a href="#label">label</a> plus value would be accepted.</p>
+in labelled-list contexts wherever a <a href="#label">label</a> plus value would be accepted:
+item bodies, unit bodies, function parameter lists, blocks, <em><strong>call
+arguments</strong></em> and <em><strong>data elements</strong></em>.</p>
 <p>No intervening whitespace is allowed after the colon.</p>
 <pre><code>: ":" <a href="#id">id</a></code></pre>
-<h3 id="id"><a href="#id">2.4. id</a></h3>
+<h3 id="keywords"><a href="#keywords">2.4. keywords</a></h3>
+<p>Some otherwise valid identifiers are <em><strong>keywords</strong></em> and cannot be used as names;
+a further set is <em><strong>reserved</strong></em> and is rejected by the lexer with a dedicated
+diagnostic rather than being parsed as a name.</p>
+<p>Both lists live in <code>spec.pdoc</code> (Keywords, Reserved Words) and are <em><strong>not</strong></em>
+repeated here -- a second copy is a second thing to drift. <code>make ci</code>'s
+<code>highlight-guard</code> checks those tables against <code>zlexer.z</code> and against both
+editor highlighters, so all four agree by construction.</p>
+<p>Note that <code>return</code>, <code>break</code>, <code>continue</code> and <code>yield</code> are <em><strong>not</strong></em> in
+either list: they are ordinary identifiers the compiler defines into scope (see
+<a href="#expression">expression</a>).</p>
+<h3 id="id"><a href="#id">2.5. id</a></h3>
 <p>Identifier. Some otherwise valid identifiers are marked as keywords. Numeric
 literals themselves are also identifiers.</p>
 <pre><code>: <a href="#id-float">id_float</a>
 | ( <a href="#id-char">id_char</a> { <a href="#id-char">id_char</a> } )</code></pre>
-<h3 id="id-float"><a href="#id-float">2.5. id_float</a></h3>
+<h3 id="id-float"><a href="#id-float">2.6. id_float</a></h3>
 <p><code>dot</code> (".") has special limitations. It may only be used once and only in
 floating point style numeric literals.</p>
 <p>Floats optionally start with a sign, then a numeric digit must follow. After
@@ -211,7 +227,7 @@ the dot a numeric digit is also required.</p>
 parentheses can be used to force the call (and prevent the compiler from
 interpreting as a single float identifier): <code>(123).456</code></p>
 <pre><code>: [ "+" | "-" ] ( "0" . "9" ) { <a href="#id-char">id_char</a> } "." ( "0" . "9" ) { <a href="#id-char">id_char</a> }</code></pre>
-<h3 id="id-char"><a href="#id-char">2.6. id_char</a></h3>
+<h3 id="id-char"><a href="#id-char">2.7. id_char</a></h3>
 <p>Allowable characters in an identifier. The set below is the full inclusion
 list. Any character that is not in this list, including the structural
 delimiters <code>.</code> <code>,</code> <code>;</code> <code>{</code> <code>}</code> <code>(</code> <code>)</code> <code>[</code> <code>]</code> and whitespace, terminates the
@@ -220,11 +236,13 @@ elsewhere it begins a dotted path.</p>
 <pre><code>: "a" . "z" | "A" . "Z" | "0" . "9"
 | "!" | "$" | "%" | "&amp;" | "'" | "*" | "+" | "-" | "/" | "&lt;"
 | "=" | "&gt;" | "?" | "@" | "\" | "^" | "_" | "|" | "~"</code></pre>
-<h3 id="constant-expression"><a href="#constant-expression">2.7. constant_expression</a></h3>
+<h3 id="constant-expression"><a href="#constant-expression">2.8. constant_expression</a></h3>
 <p>A simple expression - bare labels are NOT allowed (cf. <a href="#expression">expression</a>). Used
 for top level definitions in units and items.</p>
 <ul>
-<li>an <a href="#if-expression">if</a> or <a href="#match-expression">match</a> expression.</li>
+<li>an <a href="#if-expression">if</a> or <a href="#match-expression">match</a>
+    expression, which must be <em><strong>parenthesized</strong></em> here -- written bare after a
+    label it is rejected (<code>K: (if c then 1 else 2)</code>, not <code>K: if ...</code>).</li>
 <li>a <a href="#function-definition">function_definition</a> (function value). Definition is uplifted to unit
 level and the result of this definition will be a function reference. The
 definition <em><strong>must</strong></em> only have static references and parameter references
@@ -237,7 +255,8 @@ within it (ie. it is not a closure).</li>
 <li><a href="#data-definition">data_definition</a> (a data value). Returns a read-only block of data.
 Usually done at the unit level. If done within code, the data is uplifted to
 the unit level and a reference to that data is returned.</li>
-<li>a <a href="#primary-expression">primary_expression</a> - must be a constant.</li>
+<li>a <a href="#primary-expression">primary_expression</a> - must be a constant, and <em><strong>not</strong></em> a
+    <a href="#block">block</a>: a block cannot be parsed at unit level.</li>
 </ul>
 <pre><code>: <a href="#if-expression">if_expression</a>
 | <a href="#match-expression">match_expression</a>
@@ -246,7 +265,7 @@ the unit level and a reference to that data is returned.</li>
 | <a href="#item-definition">item_definition</a>
 | <a href="#data-definition">data_definition</a>
 | <a href="#primary-expression">primary_expression</a></code></pre>
-<h3 id="if-expression"><a href="#if-expression">2.8. if_expression</a></h3>
+<h3 id="if-expression"><a href="#if-expression">2.9. if_expression</a></h3>
 <p>Conditional.</p>
 <p>Arguments named <code>when</code> are conditions -- a <code>bool</code>, or any other 2-arm sum
 type. <code>when</code> is the default argument:
@@ -270,22 +289,20 @@ from type unification.</p>
     optional: the expression's type becomes <code>optional(T)</code>, with <code>null</code>
     on any uncovered path.</li>
 </ul>
-<p>If there is no <code>then</code> clause supplied (ie. <code>if operation else return it</code>)
-then the value of the expression if true is the unwrapped result of
-<code>operation</code> and the unwrapped false value is available as <code>it</code> in the
-<code>else</code> clause.</p>
+<p>A <code>then</code> clause is required. So is a condition: <code>if then ...</code> is rejected
+with <em><strong>Expected operation (condition) for 'if'</strong></em>.</p>
 <p>For top level <code>if</code>, test and result <em><strong>must</strong></em> be constants. <code>then</code> and <code>else</code>
 blocks may return different types.</p>
 <p>If a variable needs to be created for the <code>if</code>, a <a href="#with-expression">with_expression</a>
 statement can be used immediately before the <code>if</code>.</p>
 <pre><code>: "if"
-[ <a href="#operation">operation</a> ]
+<a href="#operation">operation</a>
 {
   { "when" <a href="#operation">operation</a> }
   "then" <a href="#primary-expression">primary_expression</a>
 }
 [ "else" <a href="#expression">expression</a> ]</code></pre>
-<h3 id="match-expression"><a href="#match-expression">2.9. match_expression</a></h3>
+<h3 id="match-expression"><a href="#match-expression">2.10. match_expression</a></h3>
 <p><code>match</code> is used to dissect a union, variant or generic field type into
 its child types. The initial operation (the target) must return one of these
 types. Enum-style types are not a distinct form &#x2014; they are a union or
@@ -304,11 +321,11 @@ subtype within the arm is a compile error. For this reason, it is not useful to
 exclude that type <em><strong>after</strong></em> the <code>match</code> completes until the end of scope.</p>
 <p>If the target is not addressable (ie. is a complex expression rather than a
 simple variable name), no type narrowing is applied.</p>
-<p>The target's ownership and existance must be consistent after the <code>match</code>.
+<p>The target's ownership and existence must be consistent after the <code>match</code>.
 If the narrowed type is 'taken' within any <code>then</code> clause, then the compiler
 will enforce a 'take' after all <code>then</code> clauses. The parent variable will not
 exist after the <code>match</code> regardless of which path was actually taken.</p>
-<p>Must be at lease one <code>case</code> before each <code>then</code>. Must be at lease one
+<p>Must be at least one <code>case</code> before each <code>then</code>. Must be at least one
 <code>case</code>/<code>then</code> before an <code>else</code>.</p>
 <p>The <code>match</code> <em><strong>must</strong></em> be exhaustive.</p>
 <p>When used as an expression (eg. assigned to a variable or as an implicit return
@@ -324,7 +341,7 @@ constant or an intermediate value (definition) to a constant.</p>
   "then" <a href="#primary-expression">primary_expression</a>
 }
 [ "else" <a href="#expression">expression</a> ]</code></pre>
-<h3 id="function-definition"><a href="#function-definition">2.10. function_definition</a></h3>
+<h3 id="function-definition"><a href="#function-definition">2.11. function_definition</a></h3>
 <p>Function definition.</p>
 <p>Can take maximum one each of the arguments in any order.</p>
 <ul>
@@ -398,7 +415,7 @@ expression value is discarded.</p>
   | ( "is" ( <a href="#block">block</a> | "native" ) )
   | ( "as" "{" { ( <a href="#label">label</a> <a href="#operation">operation</a> ) | <a href="#label-shorthand">label_shorthand</a> } "}" )
 }</code></pre>
-<h3 id="unit-definition"><a href="#unit-definition">2.11. unit_definition</a></h3>
+<h3 id="unit-definition"><a href="#unit-definition">2.12. unit_definition</a></h3>
 <p>An inline unit (subunit).</p>
 <p>Note that <code>unit</code> only has an <code>as</code> clause. There is no <code>is</code> because there is no
 instances of a <code>unit</code>, only specialisations (if generic).</p>
@@ -417,7 +434,7 @@ tells them apart is the kind, not the label -- the label is read once, where
 the definition is parsed. The compiler layers a schema over a <code>require:</code>
 block's contents (see the Toolchain Requirements section of the language
 spec).</p>
-<h3 id="item-definition"><a href="#item-definition">2.12. item_definition</a></h3>
+<h3 id="item-definition"><a href="#item-definition">2.13. item_definition</a></h3>
 <p>Definition of an "item". A record, class, variant, union, facet or protocol.</p>
 <p>Can take maximum one each of the arguments in any order.</p>
 <ul>
@@ -439,11 +456,21 @@ zero-overhead and may carry its own methods via an <code>as</code> clause.</p>
     "facet" | "protocol"
 )
 [ "is" ] (
-    "{" { ( <a href="#label">label</a> <a href="#constant-expression">constant_expression</a> ) | <a href="#label-shorthand">label_shorthand</a> } "}"
+    "{" { ( <a href="#label">label</a> <a href="#item-body-member">item_body_member</a> ) | <a href="#label-shorthand">label_shorthand</a> } "}"
     | "native"
   )
-[ "as" "{" { ( <a href="#label">label</a> <a href="#constant-expression">constant_expression</a> ) | <a href="#label-shorthand">label_shorthand</a> } "}" ]</code></pre>
-<h3 id="data-definition"><a href="#data-definition">2.13. data_definition</a></h3>
+[ "as" "{" { ( <a href="#label">label</a> <a href="#item-body-member">item_body_member</a> ) | <a href="#label-shorthand">label_shorthand</a> } "}" ]</code></pre>
+<h3 id="item-body-member"><a href="#item-body-member">2.14. item_body_member</a></h3>
+<p>What an item's <code>is</code> or <code>as</code> block may bind a name to. <em><strong>Narrower than a
+#&gt;</strong></em>constant-expression"": an inline <code>record</code>/<code>class</code>/<code>variant</code>/<code>union</code>/
+<code>facet</code>/<code>protocol</code>/<code>data</code> is refused by name -- <em><strong>Inline type
+definition is not allowed here; define it at unit level and reference it by
+name</strong></em> -- and an <code>if</code> or <code>match</code> is refused as <em><strong>Expected a function or
+expression for item</strong></em>.</p>
+<pre><code>: <a href="#function-definition">function_definition</a>
+| <a href="#unit-definition">unit_definition</a>
+| <a href="#operation">operation</a></code></pre>
+<h3 id="data-definition"><a href="#data-definition">2.15. data_definition</a></h3>
 <p>Create a constant array of data. A reftype. A homogenous block of numeric
 valtype items only (no records). Value and length is known at compile time.
 Length is stored within data by the compiler.</p>
@@ -475,7 +502,7 @@ agree with the declared type. See spec for the full unification rule.</p>
     { ( [ <a href="#label">label</a> ] <a href="#term">term</a> ) | <a href="#label-shorthand">label_shorthand</a> }
 "}"
 [ "out" <a href="#operation">operation</a> ]</code></pre>
-<h3 id="primary-expression"><a href="#primary-expression">2.14. primary_expression</a></h3>
+<h3 id="primary-expression"><a href="#primary-expression">2.16. primary_expression</a></h3>
 <p>A low level 'atomic' expression that can be used bare (without containing parens
 or curly braces) ie. bare labels are <strong>NOT</strong> allowed here.</p>
 <p>This is the body of a <code>then</code> or a <code>case</code>, and the restriction on it is the
@@ -501,6 +528,9 @@ never a reassignment. Nothing becomes ambiguous by listing them: <code>=</code> 
 <code>swap</code> are keyword tokens and a binop operator must be a single <a href="#id">id</a>, so
 the alternative is settled after the first <a href="#term">term</a> without lookahead.</p>
 <p><code>block</code>: Returns the result (last expression) in a block.</p>
+<p>A bare <code>null</code> body is an <em><strong>empty block</strong></em>, not the value <code>null</code>:
+<code>then null</code> and <code>else null</code> declare a clause that does nothing, and both
+desugar to a statement with no statements in it.</p>
 <p>When used within a <a href="#constant-expression">constant_expression</a> (eg. at the unit level), each part
 of this expression must be a constant.</p>
 <pre><code>: <a href="#block">block</a>
@@ -511,7 +541,7 @@ of this expression must be a constant.</p>
 | <a href="#for-expression">for_expression</a>
 | <a href="#with-expression">with_expression</a>
 | <a href="#data-definition">data_definition</a></code></pre>
-<h3 id="block"><a href="#block">2.15. block</a></h3>
+<h3 id="block"><a href="#block">2.17. block</a></h3>
 <p>A series of <a href="#blockline">blockline</a>s in braces. Can be used anywhere a
 <a href="#primary-expression">primary_expression</a> is allowed. The value of a block is the value of the
 final expression in it. Usually creates a new scope. When a block is the body
@@ -523,11 +553,11 @@ and must be specifically handled in the grammar.</p>
     [ <a href="#blockline">blockline</a> ]
     { ( <a href="#eol">eol</a> | ";" ) [ <a href="#blockline">blockline</a> ] }
 "}"</code></pre>
-<h3 id="blockline"><a href="#blockline">2.16. blockline</a></h3>
+<h3 id="blockline"><a href="#blockline">2.18. blockline</a></h3>
 <p>An assignment or a bare expression.</p>
 <pre><code>: ( [ <a href="#label">label</a> { <a href="#eol">eol</a> } ] <a href="#expression">expression</a> )
 | <a href="#label-shorthand">label_shorthand</a></code></pre>
-<h3 id="operation"><a href="#operation">2.17. operation</a></h3>
+<h3 id="operation"><a href="#operation">2.19. operation</a></h3>
 <p>Operation and binop are greedy. <em><strong>Must</strong></em> use every <a href="#term">term</a> (which includes
 <a href="#id">id</a>).</p>
 <p>One of:</p>
@@ -543,6 +573,11 @@ and must be specifically handled in the grammar.</p>
 <p>Note that operations do not have any labels or keywords that are bare (ie. not
 in within parens). That enables them to be unambiguously used directly within a
 call or control flow production, for example.</p>
+<p><em><strong>An operator must be surrounded by whitespace.</strong></em> An operator is an ordinary
+<a href="#id">id</a>, so it is separated from its operands by the same rule every identifier
+follows -- whitespace, a delimiter or a separator. <code>a + b</code> is a binop;
+<code>a+b</code> is a single identifier. This is the rule most easily tripped over, and
+it lives here because it is lexical rather than semantic.</p>
 <p>There is <em><strong>no operator precedence</strong></em>. Binary operations are evaluated strictly
 left-to-right: <code>a + b * c</code> is <code>((a + b) * c)</code>, not <code>(a + (b * c))</code>.
 Parentheses are the only way to bump precedence - write <code>a + (b * c)</code> when
@@ -551,14 +586,14 @@ right-first evaluation is desired. This applies uniformly to every operator
 form).</p>
 <pre><code>: <a href="#binop">binop</a>
 | ( <a href="#term">term</a> <a href="#binop">binop</a> )</code></pre>
-<h3 id="binop"><a href="#binop">2.18. binop</a></h3>
+<h3 id="binop"><a href="#binop">2.20. binop</a></h3>
 <p>Binary operation. Can be chained. Evaluated strictly left-to-right with
 no precedence between operators (see <a href="#operation">operation</a>).</p>
 <p>binop MUST be greedy (use every term/id up to
 label/eol/closingparen/closingbrace) or fail and consume nothing. (Because it
 may otherwise be a call with a binop argument)</p>
 <pre><code>: <a href="#term">term</a> { <a href="#id">id</a> <a href="#term">term</a> }</code></pre>
-<h3 id="for-expression"><a href="#for-expression">2.19. for_expression</a></h3>
+<h3 id="for-expression"><a href="#for-expression">2.21. for_expression</a></h3>
 <p>Iteration.</p>
 <p><code>while</code> operations (conditions) must evaluate to a <code>bool</code> or to any other
 2-arm sum type. They can be pre- or post- conditions.</p>
@@ -601,7 +636,10 @@ statement can be used immediately before the <code>for</code>.</p>
 { "while" <a href="#operation">operation</a> }          # precondition(s)
 [ "loop" <a href="#expression">expression</a> ]
 { "while" <a href="#operation">operation</a> }          # postcondition(s)</code></pre>
-<h3 id="with-expression"><a href="#with-expression">2.20. with_expression</a></h3>
+<p>Every part is optional individually, but not all at once: a <code>for</code> with
+neither a condition nor a <code>loop</code> is refused with <em><strong>Require at least one
+condition or a loop for for</strong></em>.</p>
+<h3 id="with-expression"><a href="#with-expression">2.22. with_expression</a></h3>
 <p>An expression executed in a new scope with a single new declaration.</p>
 <p>A single new definition must be specified. Then a <code>do</code> expression.</p>
 <p>The definition will be scoped to the <code>with</code> as they would be as if they were
@@ -616,7 +654,7 @@ enclosing scope.</p>
 <p><code>with</code> is useful to inline a definition in a new scope before being used in a
 flow control expression (<code>if</code>, <code>for</code>).</p>
 <pre><code>: "with" <a href="#label">label</a> <a href="#operation">operation</a> "do" <a href="#expression">expression</a></code></pre>
-<h3 id="expression"><a href="#expression">2.21. expression</a></h3>
+<h3 id="expression"><a href="#expression">2.23. expression</a></h3>
 <p>An expression - bare labels are allowed.</p>
 <p>Note that <a href="#call">call</a> and <a href="#operation">operation</a> may not be able to be discerned
 with a single lookahead (two <a href="#term">term</a>s in a row can be a call with an
@@ -637,7 +675,7 @@ not pass the typechecker.</p>
 <pre><code>: <a href="#primary-expression">primary_expression</a>
 | <a href="#if-expression">if_expression</a>
 | <a href="#match-expression">match_expression</a></code></pre>
-<h3 id="call"><a href="#call">2.22. call</a></h3>
+<h3 id="call"><a href="#call">2.24. call</a></h3>
 <p>A term or a function call. A call carries <em><strong>at most one</strong></em> unlabelled argument
 and it must come first; every other argument names the parameter it binds to.
 The production says so directly &#x2014; one optional binop, then labels only &#x2014; so the
@@ -654,7 +692,7 @@ argument is not rejected here but read as an operator.</p>
     ( <a href="#label">label</a> <a href="#operation">operation</a> )
     | <a href="#label-shorthand">label_shorthand</a>
 }</code></pre>
-<h3 id="term"><a href="#term">2.23. term</a></h3>
+<h3 id="term"><a href="#term">2.25. term</a></h3>
 <p>A single, self-contained item.</p>
 <p>The grammar ignores <a href="#eol">EOL</a>s when immediately within parentheses (treated
 as whitespace / token separator only). The expression can be free form and
@@ -665,17 +703,17 @@ cannot be line delimitered (ie. all sub-calls must also have parens).</p>
 | <a href="#string">string</a>
 | <a href="#stringraw">stringraw</a>
 | ( <a href="#term">term</a> { "." <a href="#id">id</a> } )</code></pre>
-<h3 id="string"><a href="#string">2.24. string</a></h3>
+<h3 id="string"><a href="#string">2.26. string</a></h3>
 <p>Interpolated string. Delimitered by double quotes.</p>
 <p>For top level strings, all parts of the string <em><strong>must</strong></em> be constant.
 <a href="#stringexpr">stringexpr</a> is allowed, but each component part must also be constant.</p>
 <pre><code>: "\"" { <a href="#stringmid">stringmid</a> | <a href="#eol">eol</a> | <a href="#stringescape">stringescape</a> | <a href="#stringexpr">stringexpr</a> } "\""</code></pre>
-<h3 id="stringmid"><a href="#stringmid">2.25. stringmid</a></h3>
+<h3 id="stringmid"><a href="#stringmid">2.27. stringmid</a></h3>
 <p>Any literal chunk of a string excluding eol.</p>
 <p>In a <a href="#string">string</a> this will not include escaped sequences and escaped code blocks
 as these are handled with separate syntax. In a <a href="#stringraw">stringraw</a>, <strong><em>all</em></strong> text
 that is not a EOL will be included in <a href="#stringmid">stringmid</a>.</p>
-<h3 id="stringescape"><a href="#stringescape">2.26. stringescape</a></h3>
+<h3 id="stringescape"><a href="#stringescape">2.28. stringescape</a></h3>
 <p>Escaped string value that is inserted in a string.</p>
 <pre><code>: "\n"
 | "\t"
@@ -684,14 +722,15 @@ that is not a EOL will be included in <a href="#stringmid">stringmid</a>.</p>
 | "\""
 | "\x" <a href="#hexdigit">hexdigit</a> <a href="#hexdigit">hexdigit</a>
 | "\u" <a href="#hexdigit">hexdigit</a> <a href="#hexdigit">hexdigit</a> <a href="#hexdigit">hexdigit</a> <a href="#hexdigit">hexdigit</a> <a href="#hexdigit">hexdigit</a> <a href="#hexdigit">hexdigit</a></code></pre>
-<h3 id="stringexpr"><a href="#stringexpr">2.27. stringexpr</a></h3>
-<p>An embedded string executable block eg. "\{&lt;block&gt;}"</p>
-<pre><code>: <a href="#stringexprbeg">stringexprbeg</a> <a href="#block">block</a></code></pre>
-<h3 id="stringraw"><a href="#stringraw">2.28. stringraw</a></h3>
+<h3 id="stringexpr"><a href="#stringexpr">2.29. stringexpr</a></h3>
+<p>An embedded expression, eg. <code>"v=\{a + 1}"</code>. It takes <em><strong>one
+#&gt;</strong></em>expression"", not a <a href="#block">block</a>.</p>
+<pre><code>: <a href="#stringexprbeg">stringexprbeg</a> "{" <a href="#expression">expression</a> "}"</code></pre>
+<h3 id="stringraw"><a href="#stringraw">2.30. stringraw</a></h3>
 <p>Raw string. Delimitered by 3 or more double quotes. Number of ending and
 starting quotes must be the same.</p>
 <pre><code>: """"" { """ } { <a href="#stringmid">stringmid</a> | <a href="#eol">eol</a> } """"" { """ }</code></pre>
-<h3 id="eol"><a href="#eol">2.29. eol</a></h3>
+<h3 id="eol"><a href="#eol">2.31. eol</a></h3>
 <p>End of line. Context-sensitive:</p>
 <ul>
 <li>at unit level - filtered (token separator only).</li>
@@ -699,28 +738,31 @@ starting quotes must be the same.</p>
 <li>inside parentheses - filtered.</li>
 <li>inside a string literal - a literal eol.</li>
 </ul>
-<pre><code>: "\n"</code></pre>
-<h3 id="whitespace"><a href="#whitespace">2.30. whitespace</a></h3>
+<p>A carriage return is an EOL, <em><strong>not</strong></em> whitespace: the lexer emits an eol for
+<code>\r</code> and swallows an immediately following <code>\n</code>, so a CRLF file lexes as
+one end-of-line per line rather than two.</p>
+<pre><code>: ( "\n" | "\r" [ "\n" ] )</code></pre>
+<h3 id="whitespace"><a href="#whitespace">2.32. whitespace</a></h3>
 <p>Always filtered. Separator only - not listed as part of grammar rules.</p>
-<pre><code>: { " " | "\t" | "\r" }</code></pre>
-<h3 id="comment"><a href="#comment">2.31. comment</a></h3>
+<pre><code>: { " " | "\t" }</code></pre>
+<h3 id="comment"><a href="#comment">2.33. comment</a></h3>
 <p>Always filtered. Separator only - not listed as part of grammar rules.</p>
 <pre><code>: "#" { ? any UTF8 character except NUL, "\n" or <a href="#eof">eof</a> ? }</code></pre>
-<h3 id="stringexprbeg"><a href="#stringexprbeg">2.32. stringexprbeg</a></h3>
+<h3 id="stringexprbeg"><a href="#stringexprbeg">2.34. stringexprbeg</a></h3>
 <p>A backslash. Only within a string literal to mark the beginning of a string
 expression (must be followed by a open curly brace).</p>
 <pre><code>: "\"</code></pre>
-<h3 id="hexdigit"><a href="#hexdigit">2.33. hexdigit</a></h3>
+<h3 id="hexdigit"><a href="#hexdigit">2.35. hexdigit</a></h3>
 <p>Not a token, this definition is used within other tokens.</p>
 <pre><code>: "0" . "9" | "a" . "f" | "A" . "F"</code></pre>
-<h3 id="eof"><a href="#eof">2.34. eof</a></h3>
-<p>End-of-file marker. A synthetic token created by the parser as the final token
-of a file.</p>
+<h3 id="eof"><a href="#eof">2.36. eof</a></h3>
+<p>End-of-file marker. A synthetic token created by the <em><strong>lexer</strong></em> as the final
+token of a file; the parser only accepts it.</p>
 </main>
 <footer>
 <p>Version 0.1 2026-02-27</p>
 
-<p>Last updated:</p>
+<p>Last updated: 2026-08-29</p>
 </footer>
 </body>
 </html>

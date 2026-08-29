@@ -79,14 +79,30 @@ Definition identifier. No intervening whitespace is allowed before the colon.
 A definition whose name and value are the same identifier: #~":x" is
 #_*"almost" equivalent to #~"x: x", except the definition will not bind to
 itself. The leading colon distinguishes it from a plain reference. Used
-in labelled-list contexts (item bodies, unit bodies, function parameter
-lists, blocks) wherever a #>"label" plus value would be accepted.
+in labelled-list contexts wherever a #>"label" plus value would be accepted:
+item bodies, unit bodies, function parameter lists, blocks, #_*"call
+arguments" and #_*"data elements".
 
 No intervening whitespace is allowed after the colon.
 
 #code:
   : ":" #>"id"
 
+
+#---: keywords
+
+Some otherwise valid identifiers are #_*"keywords" and cannot be used as names;
+a further set is #_*"reserved" and is rejected by the lexer with a dedicated
+diagnostic rather than being parsed as a name.
+
+Both lists live in #~"spec.pdoc" (Keywords, Reserved Words) and are #_*"not"
+repeated here -- a second copy is a second thing to drift. #~"make ci"'s
+#~"highlight-guard" checks those tables against #~"zlexer.z" and against both
+editor highlighters, so all four agree by construction.
+
+Note that #~"return", #~"break", #~"continue" and #~"yield" are #_*"not" in
+either list: they are ordinary identifiers the compiler defines into scope (see
+#>"expression").
 
 #---: id
 
@@ -131,7 +147,9 @@ A simple expression - bare labels are NOT allowed (cf. #>"expression"). Used
 for top level definitions in units and items.
 
 #ul:
-  [#*: an [#> to=if-expression "if"] or [#> to=match-expression "match"] expression.]
+  [#*: an [#> to=if-expression "if"] or [#> to=match-expression "match"]
+    expression, which must be #_*"parenthesized" here -- written bare after a
+    label it is rejected (#~"K: (if c then 1 else 2)", not #~"K: if ...").]
   [#*:
     a #>"function-definition" (function value). Definition is uplifted to unit
     level and the result of this definition will be a function reference. The
@@ -145,7 +163,8 @@ for top level definitions in units and items.
   [#*: #>"data-definition" (a data value). Returns a read-only block of data.
     Usually done at the unit level. If done within code, the data is uplifted to
     the unit level and a reference to that data is returned.]
-  [#*: a #>"primary-expression" - must be a constant.]
+  [#*: a #>"primary-expression" - must be a constant, and #_*"not" a
+    #>"block": a block cannot be parsed at unit level.]
 
 #code:
   : #>"if-expression"
@@ -187,10 +206,8 @@ from type unification.
     optional: the expression's type becomes #~"optional(T)", with #~"null"
     on any uncovered path.]
 
-If there is no #~"then" clause supplied (ie. #~"if operation else return it")
-then the value of the expression if true is the unwrapped result of
-#~"operation" and the unwrapped false value is available as #~"it" in the
-#~"else" clause.
+A #~"then" clause is required. So is a condition: #~"if then ..." is rejected
+with #_*"Expected operation (condition) for 'if'".
 
 For top level #~"if", test and result #_*"must" be constants. #~"then" and #~"else"
 blocks may return different types.
@@ -200,7 +217,7 @@ statement can be used immediately before the #~"if".
 
 #code:
   : "if"
-  \[ #>"operation" \]
+  #>"operation"
   {
     { "when" #>"operation" }
     "then" #>"primary-expression"
@@ -232,12 +249,12 @@ exclude that type #_*"after" the #~"match" completes until the end of scope.
 If the target is not addressable (ie. is a complex expression rather than a
 simple variable name), no type narrowing is applied.
 
-The target's ownership and existance must be consistent after the #~"match".
+The target's ownership and existence must be consistent after the #~"match".
 If the narrowed type is 'taken' within any #~"then" clause, then the compiler
 will enforce a 'take' after all #~"then" clauses. The parent variable will not
 exist after the #~"match" regardless of which path was actually taken.
 
-Must be at lease one #~"case" before each #~"then". Must be at lease one
+Must be at least one #~"case" before each #~"then". Must be at least one
 #~"case"/#~"then" before an #~"else".
 
 The #~"match" #_*"must" be exhaustive.
@@ -399,10 +416,24 @@ zero-overhead and may carry its own methods via an #~"as" clause.
       "facet" | "protocol"
   )
   \[ "is" \] (
-      "{" { ( #>"label" #>"constant-expression" ) | #>"label-shorthand" } "}"
+      "{" { ( #>"label" #>"item-body-member" ) | #>"label-shorthand" } "}"
       | "native"
     )
-  \[ "as" "{" { ( #>"label" #>"constant-expression" ) | #>"label-shorthand" } "}" \]
+  \[ "as" "{" { ( #>"label" #>"item-body-member" ) | #>"label-shorthand" } "}" \]
+
+#---: item_body_member
+
+What an item's #~"is" or #~"as" block may bind a name to. #_*"Narrower than a
+#>"constant-expression"": an inline #~"record"/#~"class"/#~"variant"/#~"union"/
+#~"facet"/#~"protocol"/#~"data" is refused by name -- #_*"Inline type
+definition is not allowed here; define it at unit level and reference it by
+name" -- and an #~"if" or #~"match" is refused as #_*"Expected a function or
+expression for item".
+
+#code:
+  : #>"function-definition"
+  | #>"unit-definition"
+  | #>"operation"
 
 #---: data_definition
 
@@ -480,6 +511,10 @@ the alternative is settled after the first #>"term" without lookahead.
 
 #~"block": Returns the result (last expression) in a block.
 
+A bare #~"null" body is an #_*"empty block", not the value #~"null":
+#~"then null" and #~"else null" declare a clause that does nothing, and both
+desugar to a statement with no statements in it.
+
 When used within a #>"constant-expression" (eg. at the unit level), each part
 of this expression must be a constant.
 
@@ -538,6 +573,12 @@ For binary op:
 Note that operations do not have any labels or keywords that are bare (ie. not
 in within parens). That enables them to be unambiguously used directly within a
 call or control flow production, for example.
+
+#_*"An operator must be surrounded by whitespace." An operator is an ordinary
+#>"id", so it is separated from its operands by the same rule every identifier
+follows -- whitespace, a delimiter or a separator. #~"a + b" is a binop;
+#~"a+b" is a single identifier. This is the rule most easily tripped over, and
+it lives here because it is lexical rather than semantic.
 
 There is #_*"no operator precedence". Binary operations are evaluated strictly
 left-to-right: #~"a + b * c" is #~"((a + b) * c)", not #~"(a + (b * c))".
@@ -615,6 +656,10 @@ statement can be used immediately before the #~"for".
   { "while" #>"operation" }          \# precondition(s)
   \[ "loop" #>"expression" \]
   { "while" #>"operation" }          \# postcondition(s)
+
+Every part is optional individually, but not all at once: a #~"for" with
+neither a condition nor a #~"loop" is refused with #_*"Require at least one
+condition or a loop for for".
 
 #---: with_expression
 
@@ -747,10 +792,11 @@ Escaped string value that is inserted in a string.
 
 #---: stringexpr
 
-An embedded string executable block eg. "\\{<block>}"
+An embedded expression, eg. #~"\"v=\\{a + 1}\"". It takes #_*"one
+#>"expression"", not a #>"block".
 
 #code:
-  : #>"stringexprbeg" #>"block"
+  : #>"stringexprbeg" "{" #>"expression" "}"
 
 #---: stringraw
 
@@ -770,15 +816,19 @@ End of line. Context-sensitive:
   #*: inside parentheses - filtered.
   #*: inside a string literal - a literal eol.
 
+A carriage return is an EOL, #_*"not" whitespace: the lexer emits an eol for
+#~"\\r" and swallows an immediately following #~"\\n", so a CRLF file lexes as
+one end-of-line per line rather than two.
+
 #code:
-  : "\\n"
+  : ( "\\n" | "\\r" \[ "\\n" \] )
 
 #---: whitespace
 
 Always filtered. Separator only - not listed as part of grammar rules.
 
 #code:
-  : { " " | "\\t" | "\\r" }
+  : { " " | "\\t" }
 
 
 #---: comment
@@ -805,9 +855,9 @@ Not a token, this definition is used within other tokens.
 
 #---: eof
 
-End-of-file marker. A synthetic token created by the parser as the final token
-of a file.
+End-of-file marker. A synthetic token created by the #_*"lexer" as the final
+token of a file; the parser only accepts it.
 
 #footer:
   #p: Version 0.1 2026-02-27
-  #p: Last updated:
+  #p: Last updated: 2026-08-29
