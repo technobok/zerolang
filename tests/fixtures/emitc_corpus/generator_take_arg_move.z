@@ -1,0 +1,33 @@
+# generator_take_arg_move.z -- a `.take` argument moved into a generator must be
+# zeroed in the CALLER.
+#
+# `for r: (g s: src) loop` with a `String.take` parameter left `src` live: the
+# enclosing scope freed it and the iterator's destructor freed the same pointer
+# again -- `free(): double free detected in tcache 2`. The zeroing every other
+# call position emits (`src = (String){0};`) was simply not emitted here,
+# because the for-iterable path never ran the take-invalidation step.
+#
+# It is position-specific, not callee-specific: the SAME generator bound in a
+# plain binding position (`it: (g s: src)`) already zeroed correctly, which is
+# what made it possible to point at the position rather than the ownership.
+#
+# `named` is the shape that crashed. `temp` passes a temporary instead, which
+# was always clean and is all `generator_local_cleanup.z` ever passes -- which
+# is exactly why the corpus never caught this. `twice` drives two generators
+# off two sources so a single stray zeroing cannot pass.
+
+g: function {s: String.take} out (Iterator Gives: u64) is {
+    yield 1.u64
+    yield s.length
+}
+
+main: function is {
+    src: "hello".string
+    for r: (g s: src) loop print "named: \{r}"
+    for t: (g s: "ab".string) loop print "temp: \{t}"
+    a: "xyz".string
+    b: "wxyz".string
+    for p: (g s: a) loop print "p: \{p}"
+    for q: (g s: b) loop print "q: \{q}"
+    print "done"
+}
