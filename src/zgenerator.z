@@ -14,7 +14,9 @@ public: unit {
     :fnBodyHasYield
     :lowerOne
     :mkNamedOp
+    :returnHeadIdOf
     :returnHeadName
+    :returnHeadNameId
 }
 
 Node: zast.Node
@@ -226,6 +228,57 @@ returnHeadOf: function {ast: Ast.view n: Node.view} out String is {
         return "".string
     }
 }
+# leafAtomNameId -- an atom's name id; 0 for other shapes. The id twin of
+# leafAtomName: a resolved compare needs the pool id, never the text.
+leafAtomNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    ast
+    match (
+        n
+    ) case atomid then {
+        return n.name
+    } else {
+        return (zast.nameid.create from: 0)
+    }
+}
+
+# returnHeadNameId -- the name id of the callable head of a return type
+# (`out (Iterator gives: i64)` -> the id of `Iterator`); 0 for other shapes.
+# A BARE head is a head too: `out Ints`, where `Ints` aliases an applied
+# protocol, names the same declaration a parenthesized call does, so the
+# atomid arm is not a special case but the same question asked of a shorter
+# shape.
+returnHeadNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    match (
+        n
+    ) case functiondef then {
+        return (returnHeadIdOpt :ast oId: n.returntype)
+    } else {
+        return (zast.nameid.create from: 0)
+    }
+}
+
+# the return-type head name id of optional operation `oId` (or 0).
+returnHeadIdOpt: function {ast: Ast.view oId: zast.nodeid} out zast.nameid is {
+    if oId.isZero then return (zast.nameid.create from: 0)
+    o: ast.nodes.get i: oId.u64
+    return (returnHeadIdOf :ast n: o)
+}
+
+# the return-type head name id of operation `n`.
+returnHeadIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    match (
+        n
+    ) case expression then {
+        return (returnHeadIdOf :ast n: (ast.nodes.get i: n.expression.u64))
+    } case call then {
+        return (leafAtomNameId :ast n: (ast.nodes.get i: n.callable.u64))
+    } case atomid then {
+        return n.name
+    } else {
+        return (zast.nameid.create from: 0)
+    }
+}
+
 # isNonOwnedLeaf -- a path leaf naming a NON-OWNED marker. `lock` and `borrow`
 # mean the same thing here (not owned, mutable), and the generator desugarer has
 # to accept both while `.lock` retires: the recognisers below keyed on the

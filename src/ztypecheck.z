@@ -11572,7 +11572,7 @@ resolveDef: function {
             nid: defnId.u64
             tid: (ztypes.tid.create from: fid.u64)
         )
-        if (isGeneratorReturn :ast oId: fr.returntype) then {
+        if (isGeneratorReturn :st :ast :unitDecl oId: fr.returntype) then {
             (synthGeneratorIterClass
                 :st
                 frame: rf
@@ -13592,28 +13592,200 @@ attachMonoUnitFuncs: function {
     }
 }
 
-# isIteratorCall -- true when a type-expr is a call to `Iterator` (a generator's
-# `out (Iterator gives: T)` return), peeling an expression wrapper.
-isIteratorCall: function {ast: Ast.view op: Node.view} out bool is {
-    match (
-        op
-    ) case expression then {
-        return (isIteratorCall :ast op: (ast.nodes.get i: op.expression.u64))
-    } case call then {
-        cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: op.callable.u64))
-        return (cn.stringView == "Iterator")
-    } else {
-        return false
+# iteratorTidOf -- the resolved id of the stdlib `Iterator` protocol, resolved
+# once and cached on the registry. THE ONE PLACE the compiler spells `Iterator`:
+# the protocol is an ordinary shadowable name, so every consumer asks this id
+# instead, and a user type that merely shares the spelling answers its own.
+# 0 while `system.Iterator` is not resolvable yet, which re-asks on the next
+# call rather than caching a wrong answer.
+iteratorTidOf: function {st: zenv.ZSymbolTable ast: Ast.view} out u64 is {
+    if st.reg.iteratorTid > 0 then return st.reg.iteratorTid
+    sysU: nameIdOf :ast name: "system"
+    sysI: zast.poolFind pool: ast.names text: "Iterator"
+    # the unit decl is taken FIRST: `st` cannot be passed to a nested call
+    # while the enclosing call already holds it
+    sysDecl: unitDeclOfName :st nameId: sysU
+    t: (optU64Or
+        o: (resolvedByIds
+            :st
+            :ast
+            unitDecl: sysDecl
+            name: sysI
+        )
+        d: 0
+    )
+    st.reg.iteratorTid = t
+    return t
+}
+
+# unitDefHeadNameId -- the head name id of the TYPE EXPRESSION a unit's own
+# definition `nameId` is declared as (`Iter2: Iterator` -> the id of
+# `Iterator`); 0 when the unit declares no such name, or declares it as
+# something with no head -- an object definition, a function, a value.
+unitDefHeadNameId: function {
+    # the tree the unit body is read from
+    ast: Ast.view
+    # the unitdef whose top-level definitions are searched
+    unitdefId: zast.nodeid
+    # the definition to find, by name id -- never by spelling, so a shadow is
+    # a different definition rather than the same one
+    nameId: zast.nameid
+} out zast.nameid is {
+    if nameId.isZero then return (zast.nameid.create from: 0)
+    bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
+    biter: bodyIds.iterate
+    for bm: biter loop {
+        bmNode: argRefAt :ast nid: (zast.nodeid.create from: bm.u32)
+        if (bmNode.nid.isZero) == false when (bmNode.name.isZero) == false then {
+            if bmNode.name == nameId then {
+                if bmNode.operation.isZero then return (zast.nameid.create from: 0)
+                opv: ast.nodes.get i: bmNode.operation.u64
+                return (zgenerator.returnHeadIdOf :ast n: opv)
+            }
+        }
     }
+    return (zast.nameid.create from: 0)
+}
+
+# reportYieldOutsideGenerator -- a FREE function whose body SUSPENDS but whose
+# declared return does not reach the Iterator protocol. Nothing lowers it, so
+# the yield node survives into the emitter, which writes a state assignment
+# against a receiver that is not there -- C that does not compile. Reported at
+# candidacy because that is where the fact is known: `checkYieldAt` cannot tell
+# the case apart, since an out-only generator legitimately binds no `value`.
+#
+# Only the free-function leg reports. The method leg walks each object's
+# members, and by then the pass has appended the SYNTH iterator classes to the
+# same unit body -- a synth `.call` suspends by construction and returns the
+# option wrapper, not the protocol, so reporting there would fire on the
+# lowering's own output. A yielding METHOD with a wrong return still reaches
+# the emitter; scoping `yield` closes that leg by construction.
+reportYieldOutsideGenerator: function {
+    # the symbol table the diagnostic is appended to
+    st: zenv.ZSymbolTable
+    # the tree the function's position is read from
+    ast: Ast.view
+    # the offending functiondef; the error points at the DECLARATION rather
+    # than the yield, because the return type is what has to change
+    fnId: zast.nodeid
+} is {
+    fr: fnRefAt :ast nid: fnId
+    if fr.nid.isZero then return
+    (addError
+        :st
+        nodeid: fnId
+        lineno: fr.lineno
+        colno: fr.colno
+        e: zast.err.badFunction
+        msg: "a function that yields is not a generator\n\nIts body suspends, but its declared return type does not reach the Iterator protocol, so there is no suspension machinery to yield into. Declare the return as `out (Iterator Gives: T)`, or remove the yield.".string
+    )
+}
+
+# returnHeadTidIn -- the RESOLVED id of a function's declared return-type head,
+# asked in the scope the head is WRITTEN in. 0 when the return declares no head,
+# or when the head does not resolve.
+#
+# This is the generator discriminator, and it is a SCOPE question, never a
+# spelling one. A head the unit does not declare comes from the prelude, where
+# `core` is the only root. A head the unit DOES declare is followed through its
+# own type expression -- so `Iter2: Iterator` reaches the protocol and answers
+# its id, while a user `Iterator: record { .. }` has no head to follow and
+# answers its own id, which is not the protocol's.
+#
+# The walk is an AST read, not a resolve: this pass runs before the demand
+# machinery, and resolving a definition here would mint under a live element
+# view of the very body being walked.
+returnHeadTidIn: function {
+    # the declarations a head is looked up in, and where `core`'s root is read
+    st: zenv.ZSymbolTable
+    # the tree the return type is read from
+    ast: Ast.view
+    # the unit the function is WRITTEN in: the scope a head that the unit
+    # declares itself resolves in
+    unitDecl: ztypes.declid
+    # that unit's definition body, walked to follow a head the unit declares
+    unitdefId: zast.nodeid
+    # the functiondef whose declared return head is being asked about
+    fnId: zast.nodeid
+} out u64 is {
+    hid: zast.nameid
+    {
+        fnv: ast.nodes.get i: fnId.u64
+        hid = zgenerator.returnHeadNameId :ast n: fnv
+    }
+    # an alias chain is followed, not assumed one hop deep; the bound is what
+    # keeps a cyclic declaration from spinning here rather than being reported
+    hops: u32
+    for hops < 8 loop {
+        hops = hops + 1
+        if hid.isZero then return 0
+        own: declOfUnitDefIds :st :unitDecl nameId: hid
+        if own.isZero then {
+            cRoot: st.typing.coreUnitRoot
+            return (optU64Or
+                o: (resolvedByIds :st :ast unitDecl: cRoot name: hid)
+                d: 0
+            )
+        }
+        nxt: unitDefHeadNameId :ast :unitdefId nameId: hid
+        if nxt.isZero then {
+            return (optU64Or
+                o: (resolvedByIds :st :ast :unitDecl name: hid)
+                d: 0
+            )
+        }
+        if nxt == hid then {
+            return (optU64Or
+                o: (resolvedByIds :st :ast :unitDecl name: hid)
+                d: 0
+            )
+        }
+        hid = nxt
+    }
+    return 0
+}
+
+# isIteratorCall -- true when a type-expr names the Iterator protocol (a
+# generator's `out (Iterator gives: T)` return), peeling an expression wrapper.
+# Compares RESOLVED ids: an alias reaching the protocol answers true, a user
+# type spelled `Iterator` answers false.
+isIteratorCall: function {
+    # carries the cached protocol id this compares against
+    st: zenv.ZSymbolTable
+    # the tree the type expression is read from
+    ast: Ast.view
+    # the unit the type expression is written in, which is the scope its head
+    # resolves in
+    unitDecl: ztypes.declid
+    # the type expression to test, an expression wrapper or a call
+    op: Node.view
+} out bool is {
+    it: iteratorTidOf :st :ast
+    if it == 0 then return false
+    hid: zgenerator.returnHeadIdOf :ast n: op
+    if hid.isZero then return false
+    return (optU64Or
+        o: (resolvedByIds :st :ast :unitDecl name: hid)
+        d: 0
+    ) == it
 }
 
 # isGeneratorReturn -- true when a function's return type is the Iterator protocol
 # (i.e. the function is a generator that lowers to a synth iterator class).
-isGeneratorReturn: function {ast: Ast.view oId: zast.nodeid} out bool is {
+isGeneratorReturn: function {
+    # passed through to the head comparison below; nothing is read here
+    st: zenv.ZSymbolTable
+    # the tree the return type is read from
+    ast: Ast.view
+    # the unit the function is written in, which is the scope its return head
+    # resolves in
+    unitDecl: ztypes.declid
+    # the function's optional return type; 0 when it declares none
+    oId: zast.nodeid
+} out bool is {
     if oId.isZero then return false
     o: ast.nodes.get i: oId.u64
-    return (isIteratorCall :ast op: o)
-
+    return (isIteratorCall :st :ast :unitDecl op: o)
 }
 
 # subtreeHasYield -- true if a node subtree contains a yield expression.
@@ -13960,7 +14132,7 @@ synthGeneratorForMethod: function {
 } is {
     fr: fnRefAt :ast nid: opId
     if fr.nid.isZero then return
-    if (isGeneratorReturn :ast oId: fr.returntype) then {
+    if (isGeneratorReturn :st :ast :unitDecl oId: fr.returntype) then {
         synthGeneratorIterClass :st :frame :ast :unitDecl :fnName :thisName fnode: fr
     }
 }
@@ -32930,6 +33102,7 @@ checkYieldAt: function {
     }
 }
 
+
 # dataref -- what the data-block walk reads of its row: the element count,
 # the out-type id and the position, as plain values. Elements are read by
 # index through zast.dataElemAt.
@@ -39223,18 +39396,7 @@ lowerGenerators: function {
                 )
             }
         }
-        sysU: nameIdOf ast: program.ast name: "system"
-        sysI: zast.poolFind pool: program.ast.names text: "Iterator"
-        unitDecl912: (unitDeclOfName :st nameId: sysU)
-        iterTid: (optU64Or
-            o: (resolvedByIds
-                :st
-                ast: program.ast
-                unitDecl: unitDecl912
-                name: sysI
-            )
-            d: 0
-        )
+        iterTid: iteratorTidOf :st ast: program.ast
         if iterTid == 0 then return
         ui: u64
         un: program.ast.units.length
@@ -39352,6 +39514,10 @@ lowerGeneratorsInUnit: function {
     unitNameId: zast.nameid
     unitdefId: zast.nodeid
 } is {
+    # the unit a candidate's return-type head resolves FROM, and the protocol
+    # id it must reach. Both are asked once per unit rather than per member.
+    unitDecl: unitDeclOfName :st nameId: unitNameId
+    itTid: iteratorTidOf :st :ast
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
     {
         cIdx: (ListVal u64)
@@ -39368,13 +39534,25 @@ lowerGeneratorsInUnit: function {
                     :ast
                     n: (ast.nodes.get i: bm.operation.u64)
                 ) then {
-                    hd: zgenerator.returnHeadName :ast n: (ast.nodes.get i: bm.operation.u64)
-                    if hd.stringView == "Iterator" then {
+                    hTid: (returnHeadTidIn
+                        :st
+                        :ast
+                        :unitDecl
+                        :unitdefId
+                        fnId: bm.operation
+                    )
+                    if itTid > 0 when hTid == itTid then {
                         if (zgenerator.canLowerNow
                             :ast
                             n: (ast.nodes.get i: bm.operation.u64)
                             hasReceiver: false
                         ) then isCand = true
+                    } else {
+                        if itTid > 0 then (reportYieldOutsideGenerator
+                            :st
+                            :ast
+                            fnId: bm.operation
+                        )
                     }
                 }
             } else null
@@ -39413,6 +39591,8 @@ lowerGeneratorsInUnit: function {
                     (lowerGeneratorMethods
                         :st
                         :ast
+                        :unitDecl
+                        :unitdefId
                         typeName: tnm.stringView
                         defnId: (zast.nodeid.create from: oel.operation.u32)
                         dst: pendingCls
@@ -39476,25 +39656,54 @@ lowerGeneratorsInUnit: function {
 lowerGeneratorMethods: function {
     ast: Ast
     st: zenv.ZSymbolTable
+    # the unit the object is written in, which is the scope a method's return
+    # head resolves in
+    unitDecl: ztypes.declid
+    # the enclosing unit's body, carried through for the head resolution
+    unitdefId: zast.nodeid
     typeName: StringView
     defnId: zast.nodeid
     dst: List Node
 } is {
     orf: objRefAt :ast nid: defnId
     if orf.nid.isZero then return
-    lowerGeneratorItems :st :ast :typeName objId: defnId asBlock: true :dst
-    lowerGeneratorItems :st :ast :typeName objId: defnId asBlock: false :dst
+    (lowerGeneratorItems
+        :st
+        :ast
+        :unitDecl
+        :unitdefId
+        :typeName
+        objId: defnId
+        asBlock: true
+        :dst
+    )
+    (lowerGeneratorItems
+        :st
+        :ast
+        :unitDecl
+        :unitdefId
+        :typeName
+        objId: defnId
+        asBlock: false
+        :dst
+    )
 }
 
 # lower every generator function in a unit to its iterator class.
 lowerGeneratorItems: function {
     ast: Ast
     st: zenv.ZSymbolTable
+    # the unit the object is written in, which is the scope a method's return
+    # head resolves in
+    unitDecl: ztypes.declid
+    # the enclosing unit's body, needed to follow a method's aliased return head
+    unitdefId: zast.nodeid
     typeName: StringView
     objId: zast.nodeid
     asBlock: bool
     dst: List Node
 } is {
+    itTid: iteratorTidOf :st :ast
     orf: objRefAt :ast nid: objId
     bi: u64
     bn: orf.nis
@@ -39520,8 +39729,14 @@ lowerGeneratorItems: function {
                     :ast
                     n: (ast.nodes.get i: bm.operation.u64)
                 ) then {
-                    hd: zgenerator.returnHeadName :ast n: (ast.nodes.get i: bm.operation.u64)
-                    if hd.stringView == "Iterator" then {
+                    hTid: (returnHeadTidIn
+                        :st
+                        :ast
+                        :unitDecl
+                        :unitdefId
+                        fnId: bm.operation
+                    )
+                    if itTid > 0 when hTid == itTid then {
                         if (zgenerator.canLowerNow
                             :ast
                             n: (ast.nodes.get i: bm.operation.u64)
