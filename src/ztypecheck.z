@@ -28986,6 +28986,95 @@ monoMemberOf: function {
         return templateFnTid
     }
 }
+# yieldIsInScope -- `yield` here names the binding a generator body's scope
+# defines, and not a user name that happens to be spelled that way. The name is
+# looked up like any other; wearing the control placeholder -- the same
+# unregistered id `break` and `continue` wear -- is what marks it as the
+# compiler's. A user binding resolves to a real type and is an ordinary call.
+yieldIsInScope: function {st: zenv.ZSymbolTable.view} out bool is {
+    if st.reg.ctlPlaceholderTid == 0 then return false
+    yo: st.lookup nameId: zast.names.wkYield
+    match (
+        yo
+    ) case some then {
+        return yo.u64 == st.reg.ctlPlaceholderTid
+    } case none then {
+        return false
+    }
+}
+
+# checkYieldCall -- a suspension point, checked as the call it is. The call's
+# own type is the value the caller sends back on resumption, which the synth
+# `.call` carries as its `value` parameter; an out-only generator declares none
+# and a yield there has no value to bind.
+checkYieldCall: function {
+    # carries the scope the resumed `value` is read from, and takes the stamp
+    st: zenv.ZSymbolTable
+    # the unit the yielded value is walked in
+    unitDecl: ztypes.declid
+    # the tree the call's arguments are read from
+    ast: Ast
+    # the yield call itself, as plain values
+    call: callref
+} out ztypes.tid is {
+    st.typing.callKind.set key: call.nid.u64 value: zast.callkind.yieldCall
+    # `yield` is itself a call, so a LABELLED argument binds to YIELD and not
+    # to the value being yielded -- the same trap `return` carries, and it
+    # earns the same sentence rather than a complaint about the bare callee.
+    yLbl: false
+    {
+        kY: u64
+        for kY < call.nargs loop {
+            yArgId: (zast.callArgAt :ast nid: call.nid i: kY).u32
+            kY = kY + 1
+            yArg: argRefAt :ast nid: (zast.nodeid.create from: yArgId.u32)
+            if (yArg.nid.isZero) == false then {
+                if (yArg.name.isZero) == false when (yLbl) == false then {
+                    yLbl = true
+                    yNm: zast.poolTextAt pool: ast.names ref: yArg.name
+                    (addErrorH
+                        :st
+                        nodeid: yArg.nid
+                        lineno: yArg.lineno
+                        colno: yArg.colno
+                        e: zast.err.callError
+                        msg: "'yield' has no argument '\{yNm}'"
+                        note: "'yield' is itself a call, so a labelled argument binds to it".string
+                        hint: "wrap the yielded call in parentheses so '\{yNm}:' binds to it"
+                        width: yNm.length.u32.orPanic
+                    )
+                }
+            }
+        }
+    }
+    if (yLbl) == false then {
+        kYa: u64
+        for kYa < call.nargs loop {
+            yaId: (zast.callArgAt :ast nid: call.nid i: kYa).u32
+            kYa = kYa + 1
+            ya: argRefAt :ast nid: (zast.nodeid.create from: yaId.u32)
+            if (ya.nid.isZero) == false then {
+                checkValueAt :st :unitDecl :ast nid: ya.operation
+            }
+        }
+    }
+    # the resumed value. A reftype resume value is a borrow into the caller's
+    # argument, so the surrounding binding becomes a BORROWED origin value.
+    yvn: nameIdOf :ast name: "value"
+    yvo: st.lookup nameId: yvn
+    match (
+        yvo
+    ) case some then {
+        if (typeIsReftype :st tid: (ztypes.tid.create from: yvo.u64)) then {
+            drainPendingBorrow :st
+            st.typing.pendingBorrowPath.append yvn
+        }
+        return (ztypes.tid.create from: yvo)
+    } case none then {
+        return (ztypes.tid.create from: 0)
+    }
+}
+
 # checkControlBuiltinCall -- `return`, and the control builtins that share its
 # shape: check the value against what the enclosing function declares, and
 # stamp the call with the type it yields.
@@ -30825,6 +30914,8 @@ checkCall: function {
     cnId: atomNameId :ast n: (ast.nodes.get i: call.callable.u64)
     if cnId == zast.names.wkReturn then {
         result = checkControlBuiltinCall :st :unitDecl :ast :call
+    } else if cnId == zast.names.wkYield when (yieldIsInScope :st) then {
+        result = checkYieldCall :st :unitDecl :ast :call
     } else {
         # A regular call. A dotted callable resolves through the dotted-path
         # walk first; an unresolved member bails with the args unwalked. A
@@ -34387,6 +34478,19 @@ checkFunctionBody: function {
                 o: (st.typing.funcReturnsBorrow.get key: fitid)
                 d: false
             )
+            # `yield` enters scope for a generator's synth `.call` body and
+            # nowhere else, the way `break`/`continue` enter a `for`. Legality
+            # stops being a syntactic depth count and becomes a resolution
+            # fact: a `yield` in an ordinary function does not resolve, and one
+            # inside a nested function literal never sees this scope because
+            # the literal pushes its own.
+            if (st.typing.generatorCallBodies.has item: fn.nid.u64) then {
+                ykp: st.reg.ctlPlaceholder
+                (st.define
+                    nameId: zast.names.wkYield
+                    ztypeId: (ztypes.tid.create from: ykp.u64)
+                )
+            }
             walkBodyAt :st :unitDecl :ast bodyId: fn.body
             st.typing.currentReturnTypeId = prevRet
             st.typing.currentReturnsBorrow = prevRb
@@ -39468,6 +39572,11 @@ lowerFreeGenerators: function {
                 wfid: lowOpt.wrapperNodeId
                 wfv: true
                 st.typing.generatorWrapper.set key: wfid.u64 value: wfv
+                # `yield` is in scope for exactly this body, and the pass that
+                # moved the body here is what knows which body that is
+                if lowOpt.callBodyId > 0 then (st.typing.generatorCallBodies.add
+                    item: lowOpt.callBodyId.u64
+                )
                 # the create-param and field-path clones must not stamp:
                 # those nodes are shared with the factory, and each ref
                 # carries exactly one stamp.
@@ -39784,6 +39893,11 @@ lowerGeneratorItems: function {
                     wfid: lowOpt.wrapperNodeId
                     wfv: true
                     st.typing.generatorWrapper.set key: wfid.u64 value: wfv
+                    # `yield` is in scope for exactly this body, and the pass that
+                    # moved the body here is what knows which body that is
+                    if lowOpt.callBodyId > 0 then (st.typing.generatorCallBodies.add
+                        item: lowOpt.callBodyId.u64
+                    )
                     nsi: u64
                     nsn: lowOpt.noStamp.length
                     for nsi < nsn loop {
