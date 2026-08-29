@@ -987,6 +987,19 @@ GenCross: class {
     yieldBound: (MapRV String v: bool)
 }
 
+# yieldSlotsOpt -- the suspension count of an optional body, which is how many
+# resume slots the state class needs. Reads through a view: the body is still
+# needed afterwards.
+yieldSlotsOpt: function {ast: Ast.view o: (Option Node).view} out u64 is {
+    match (
+        o
+    ) case some then {
+        return (zast.yieldCountOf :ast n: o)
+    } case none then {
+        return 0
+    }
+}
+
 # recurse a node, recording locals that cross a yield-loop boundary.
 crossWalk: function {ast: Ast.view gc: GenCross n: Node.view inYieldLoop: bool} is {
     match (
@@ -2463,6 +2476,9 @@ lowerOne: function {
                 gi = gi + 1
             }
             crossWalkOpt :ast :gc o: pBody inYieldLoop: false
+            # one resume SLOT per suspension point, counted by the SAME
+            # function the emitter numbers its resume labels with
+            yieldSlots: yieldSlotsOpt :ast o: pBody
             crossing: (List String)
             crossingLocals :gc dst: crossing
             promoted: (MapRV String v: bool)
@@ -2636,6 +2652,21 @@ lowerOne: function {
                 match (
                     rfg
                 ) case some then {
+                    # A yield hoisted out of expression position leaves its
+                    # resumed value in one of these, not in a C local: the
+                    # suspension RETURNS from `.call`, so a local does not
+                    # survive a later suspension in the same statement. That is
+                    # the same reason the yield-crossing locals above became
+                    # fields, and these are the temps the emitter invents that
+                    # the crossing walk cannot see by name.
+                    yvi: u64
+                    for yvi < yieldSlots loop {
+                        yvi = yvi + 1
+                        yvT: clonePath :ast n: rfg
+                        yvNm: "_yv_\{yvi}"
+                        yvF: mkNamedOp :ast :line :col name: yvNm.stringView op: yvT
+                        isItems.append (zast.tableAdd :ast n: yvF)
+                    }
                     rfn: mkNamedOp :ast :line :col name: "_resume_input" op: rfg.take
                     if rfRootStamp then {
                         rfd: paramOpId :ast n: rfn

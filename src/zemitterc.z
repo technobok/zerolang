@@ -10591,7 +10591,7 @@ emitNamedCalleeChain: function {
     match (
         yk
     ) case some then {
-        ytn: "_yv_\{yk}"
+        ytn: "\{ctx.genRecvC}->_yv_\{yk}"
         return ytn
     } case none then null
     # a yield the hoist declined -- a second one in the same expression, or one
@@ -16199,17 +16199,14 @@ emitStmt: function {
         ycs: zast.yieldCallIdAt :ast nid: (zast.nodeIdOf :n)
         # this yield's OPERAND may itself contain yields, and they evaluate
         # before it does -- so they suspend first
-        {
-            yopn: zast.yieldCallOperandAt :ast nid: ycs
-            if (hoistableCount :ast nid: yopn) < 2 then (hoistExprYields
-                :ast
-                :symtab
-                :ctx
-                nid: yopn
-                :ind
-                :buf
-            )
-        }
+        (hoistExprYields
+            :ast
+            :symtab
+            :ctx
+            nid: (zast.yieldCallOperandAt :ast nid: ycs)
+            :ind
+            :buf
+        )
         emitYieldStmt :ast :symtab :ctx callId: ycs :ind :buf
         return
     }
@@ -16218,7 +16215,7 @@ emitStmt: function {
     # first and leave a temp behind for the expression emitter to read.
     if ctx.genActive then {
         hnid: zast.nodeIdOf :n
-        if (hoistableCount :ast nid: hnid) < 2 then (hoistExprYields
+        (hoistExprYields
             :ast
             :symtab
             :ctx
@@ -31432,26 +31429,7 @@ emitRecordMethods: function {
 # not nest). Used to detect a generator `call` body and size its resume-state
 # switch.
 nodeYieldCount: function {ast: Ast.view n: Node.view} out u64 is {
-    # a nested function's yields belong to that function, not to this one
-    match (
-        n
-    ) case functiondef then {
-        return 0
-    } else null
-    c: u64
-    match (
-        n
-    ) case call then {
-        if (zast.isYieldCalleeAt :ast callableId: n.callable) then c = 1
-    } else null
-    # every child, through every shape. The count sizes the resume switch, so
-    # it has to match what the emitter actually suspends -- including a yield
-    # nested inside another expression, which the shape-by-shape version this
-    # replaced could not reach and which then fell off the end of the switch.
-    kids: zast.childIds :ast :n
-    kiter: kids.iterate
-    for k0: kiter loop c = c + (nodeYieldCount :ast n: (ast.nodes.get i: k0.u64))
-    return c
+    return (zast.yieldCountOf :ast :n)
 }
 
 # fnYieldCount -- yields in a functiondef body (0 for a non-generator).
@@ -31637,7 +31615,7 @@ emitExprFormYield: function {
         match (
             ykq
         ) case some then {
-            srcC = "_yv_\{ykq}"
+            srcC = "\{ctx.genRecvC}->_yv_\{ykq}"
         } case none then {
             emitYieldFromNode :ast :symtab :ctx n: value :ind :tmp :buf
         }
@@ -31657,8 +31635,27 @@ emitExprFormYield: function {
         atomVarId: "(*__borrow_\{nm})"
         vvSet xs: ctx.aliases vid: nmVid val: atomVarId.stringView
     } else {
-        lp2: "\{ind}\{cTypeText} \{nm} = \{srcC};\n"
-        buf.append lp2
+        # bind the name TO ITS SLOT rather than copying it into a C local.
+        # `a: yield 1` used after a later suspension read a dead local before
+        # this -- silently, and long before expression-position yield existed:
+        # crossingLocals excludes every `name: yield E` binding from promotion
+        # (a REFTYPE resume value is an alias into the caller's storage and a
+        # stored pointer would dangle), and for a valtype that left the value
+        # in a local the next `return` threw away. The slot is a field, so it
+        # survives, and the reftype path above is untouched.
+        slotted: false
+        {
+            ycid2: zast.yieldCallIdAt :ast nid: (zast.nodeIdOf n: value)
+            if (ctx.yieldTempK.has key: ycid2.u64) then slotted = true
+        }
+        if slotted then {
+            lp3: "\{ind}/* alias: \{nm} => \{srcC} */\n"
+            buf.append lp3
+            vvSet xs: ctx.aliases vid: nmVid val: srcC.stringView
+        } else {
+            lp2: "\{ind}\{cTypeText} \{nm} = \{srcC};\n"
+            buf.append lp2
+        }
     }
 }
 
@@ -31695,32 +31692,6 @@ hoistStopsHere: function {n: Node.view} out bool is {
     } else {
         return false
     }
-}
-
-# hoistableCount -- how many yields the hoist would lift out of `nid`, under
-# the same descent rules it uses.
-#
-# ONE is the limit, and the limit is C's. A hoisted temp is an ordinary local,
-# and a suspension RETURNS from the function -- so a temp does not survive a
-# later suspension in the same statement, it comes back as garbage. With a
-# single hoist the temp is read immediately after its own resume label and
-# nothing intervenes. Two would need the value promoted to a field of the state
-# object, which is the lowering's crossing-locals machinery and knows only
-# about NAMED locals, not about temps the emitter invents.
-hoistableCount: function {ast: Ast.view nid: zast.nodeid} out u64 is {
-    if nid.isZero then return 0
-    c: u64
-    n: ast.nodes.get i: nid.u64
-    if (hoistStopsHere :n) then return 0
-    kids: zast.childIds :ast :n
-    kiter: kids.iterate
-    for k0: kiter loop c = c + (hoistableCount :ast nid: (zast.nodeid.create from: k0))
-    if (zast.isYieldCallAt :ast :nid) then {
-        # the wrapper and the call under it both answer yes; count the call
-        cid9: zast.yieldCallIdAt :ast :nid
-        if cid9 == nid then c = c + 1
-    }
-    return c
 }
 
 # hoistExprYields -- emit, as their own statements, the suspensions for every
@@ -31813,11 +31784,12 @@ hoistExprYields: function {
         if ttk == ztypes.ztypetype.classType then return
         if ttk == ztypes.ztypetype.unionType then return
     }
-    cty: typeRefC :ast :symtab :ctx tid: ltid thisTid: ztypes.tid
-    if cty.length == 0 then return
     kNum: ctx.genYieldNext
     emitYieldStmt :ast :symtab :ctx callId: cid :ind :buf
-    lrv: "\{ind}\{cty} _yv_\{kNum} = \{ctx.genRecvC}->_resume_input;\n"
+    # into the state object's slot, NOT a C local: the suspension above
+    # returned, so a local declared here would be gone by the next one. The
+    # lowering allocated one slot per suspension point for exactly this.
+    lrv: "\{ind}\{ctx.genRecvC}->_yv_\{kNum} = \{ctx.genRecvC}->_resume_input;\n"
     buf.append lrv
     kv: kNum
     ctx.yieldTempK.set key: cid.u64 value: kv

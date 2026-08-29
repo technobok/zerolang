@@ -1,0 +1,32 @@
+# generator_resume_binding_crosses.z -- a `name: yield E` binding read AFTER a
+# later suspension.
+#
+# This read garbage, silently, for as long as bidirectional generators have
+# existed -- and needs no expression-position yield to provoke, just two
+# suspensions and a use after the second. `crossingLocals` excludes every
+# yield-bound name from promotion, because a REFTYPE resume value is an alias
+# into the caller's storage and a stored pointer would dangle; for a valtype
+# that left the value in a C local, and the next `return` threw it away.
+#
+# The name is bound to its resume SLOT now, which is a field and survives. The
+# reftype path is untouched and still takes its borrow alias.
+
+gen: function out (Iterator Gives: i64 Accepts: i64) is {
+    a: yield 1
+    b: yield 2
+    yield a
+    yield b
+    yield a + b
+}
+
+main: function is {
+    with g: (gen) do {
+        k: 0
+        for k < 7 loop {
+            r: g.call value: k * 10
+            match r case some then print "r: \{r}" case none then print "(none)"
+            k = k + 1
+        }
+    }
+    print "done"
+}

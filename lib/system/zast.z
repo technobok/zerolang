@@ -59,6 +59,8 @@ public: unit {
     :callArgAt
     :isYieldCallAt
     :yieldCallIdAt
+    :yieldCountIn
+    :yieldCountOf
     :isYieldCalleeAt
     :yieldCallOperandAt
     :fnParamAt
@@ -2354,6 +2356,46 @@ yieldCallOperandAt: function {ast: Ast.view nid: nodeid} out nodeid is {
     } else {
         return (nodeid.create from: 0)
     }
+}
+
+# yieldCountOf / yieldCountIn -- how many suspension points a body holds.
+#
+# ONE definition, because two consumers have to agree exactly: generator
+# LOWERING sizes the state class's resume slots by this, and the EMITTER
+# numbers its resume labels by it. A body counted differently in those two
+# places gives a switch arm with no slot behind it.
+#
+# The NODE form is the primary one. Lowering asks about a body it has just
+# minted and not yet placed in the table, so an id would read the reserved
+# placeholder and answer 0 -- which is exactly the silent undercount this pair
+# exists to prevent. Children are in the table and are reached by id.
+#
+# A nested function's yields belong to that function, so the walk stops there.
+# Everything else is reached through childIds, which is what lets it see a
+# yield nested inside another expression.
+yieldCountOf: function {ast: Ast.view n: Node.view} out u64 is {
+    match (
+        n
+    ) case functiondef then {
+        return 0
+    } else null
+    c: u64
+    match (
+        n
+    ) case call then {
+        if (isYieldCalleeAt :ast callableId: n.callable) then c = 1
+    } else null
+    kids: childIds :ast :n
+    kiter: kids.iterate
+    for k0: kiter loop c = c + (yieldCountIn :ast nid: (nodeid.create from: k0))
+    return c
+}
+
+# yieldCountIn -- yieldCountOf for a node already in the table.
+yieldCountIn: function {ast: Ast.view nid: nodeid} out u64 is {
+    if nid.isZero then return 0
+    n: ast.nodes.get i: nid.u64
+    return (yieldCountOf :ast :n)
 }
 
 # callArgAt -- the id of argument `i` of call `nid` (0 for any other arm).
