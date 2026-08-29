@@ -15848,68 +15848,33 @@ emitForStmt: function {
     }
     # do-while: no pre-conditions, a post-condition (`for loop {...} while C`).
     if n.conditions.length == 0 when n.postconditions.length > 0 then {
-        lidDW: pushLoopLabel :ctx :tmp isDo: false
-        ldw: "\{ind}do {\n"
-        buf.append ldw
-        ind2d: "\{ind}    "
-        fLd: tmp.frees.length
-        lLd: tmp.listFrees.length
-        dvG: false
-        if n.body > 0 then {
-            fbd: ast.nodes.get i: n.body.u64
-            emitBodyNode :ast :symtab :ctx n: fbd ind: ind2d.stringView :tmp :buf
-            dvG = blockDiverges :ast :symtab :ctx n: fbd
-        }
-        flushBlockFrees :ctx :tmp fL: fLd lL: lLd diverged: dvG :buf
-        pcond: String
-        pkiter: n.postconditions.iterate
-        for pk: pkiter loop {
-            pkn: ast.nodes.get i: pk.u64
-            # the checker stamps the OPERATION node, so unwrap the same way
-            pkop: pk
-            match (
-                pkn
-            ) case namedoperation then {
-                pkop = pkn.operation
-            } else null
-            pcv: emitExpr :ast :symtab :ctx n: pkn
-            tw8: (truthyCondText
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: pkop.u64)
-                raw: pcv.stringView
-            )
-            if pcond.length > 0 then pcond.append " && "
-            if tw8.length > 0 then {
-                pcond.append tw8
-            } else {
-                pcond.append pcv
-            }
-        }
-        if pcond.length == 0 then pcond.append "0"
-        emitContLabel :ctx id: lidDW ind: ind2d.stringView :buf
-        cwP: condInParens cond: pcond.stringView
-        lpw: "\{ind}} while \{cwP};\n"
-        buf.append lpw
-        popLoopLabel :ctx id: lidDW :ind :buf
+        emitDoWhileFor :ast :symtab :ctx :n :ind :tmp :buf
         ctx.condDepth = ctx.condDepth - 1
         return
     }
-    cond: String
-    kiter: n.conditions.iterate
-    for kId: kiter loop {
-        k9r: ast.nodes.get i: kId.u64
-        emitForCond :ast :symtab :ctx n: k9r :cond :ind :buf
-    }
-    # `for loop { ... }` -- no conditions, no postconditions: an
-    # unconditional loop that exits via break/return.
-    if cond.length == 0 then cond.append "1"
+    # a SUSPENDING condition cannot be written in the `while (...)` header: the
+    # suspension has to land on a statement, and it has to run once per
+    # iteration, not once before the loop. `while (1) { <suspend>; if (!c)
+    # break; ... }` is the same loop with the condition moved to where both
+    # hold -- which is exactly how the condition would be hand-written to make
+    # this work, and it is why a `goto` back into the loop body still lands
+    # correctly on resume.
+    suspCond: forCondSuspends :ast :ctx :n
     lidW: pushLoopLabel :ctx :tmp isDo: false
-    cwW: condInParens cond: cond.stringView
-    lw: "\{ind}while \{cwW} {\n"
-    buf.append lw
     ind2: "\{ind}    "
+    if suspCond then {
+        (emitSuspendingWhileHead
+            :ast
+            :symtab
+            :ctx
+            :n
+            :ind
+            ind2: ind2.stringView
+            :buf
+        )
+    } else {
+        emitPlainWhileHead :ast :symtab :ctx :n :ind :buf
+    }
     fLw: tmp.frees.length
     lLw: tmp.listFrees.length
     dvG: false
@@ -15925,6 +15890,158 @@ emitForStmt: function {
     popLoopLabel :ctx id: lidW :ind :buf
     ctx.condDepth = ctx.condDepth - 1
 }
+# emitDoWhileFor -- `for loop { .. } while C`: no pre-conditions and at
+# least one post-condition, which is a do-while.
+emitDoWhileFor: function {
+    # the tree the body and conditions are read from
+    ast: Ast.view
+    # the stamps the condition text is built against
+    symtab: zenv.ZSymbolTable
+    # the emit context, which carries the loop labels
+    ctx: Ctx
+    # the for node being emitted
+    n: zast.ForData.view
+    # the indent the loop is written at
+    ind: StringView
+    # the temp counter the body's frees are registered against
+    tmp: TmpCtr
+    # the do-while opening, its body and its trailing test all append here
+    buf: String.borrow
+} is {
+    lidDW: pushLoopLabel :ctx :tmp isDo: false
+    ldw: "\{ind}do {\n"
+    buf.append ldw
+    ind2d: "\{ind}    "
+    fLd: tmp.frees.length
+    lLd: tmp.listFrees.length
+    dvG: false
+    if n.body > 0 then {
+        fbd: ast.nodes.get i: n.body.u64
+        emitBodyNode :ast :symtab :ctx n: fbd ind: ind2d.stringView :tmp :buf
+        dvG = blockDiverges :ast :symtab :ctx n: fbd
+    }
+    flushBlockFrees :ctx :tmp fL: fLd lL: lLd diverged: dvG :buf
+    pcond: String
+    pkiter: n.postconditions.iterate
+    for pk: pkiter loop {
+        pkn: ast.nodes.get i: pk.u64
+        # the checker stamps the OPERATION node, so unwrap the same way
+        pkop: pk
+        match (
+            pkn
+        ) case namedoperation then {
+            pkop = pkn.operation
+        } else null
+        pcv: emitExpr :ast :symtab :ctx n: pkn
+        tw8: (truthyCondText
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: pkop.u64)
+            raw: pcv.stringView
+        )
+        if pcond.length > 0 then pcond.append " && "
+        if tw8.length > 0 then {
+            pcond.append tw8
+        } else {
+            pcond.append pcv
+        }
+    }
+    if pcond.length == 0 then pcond.append "0"
+    emitContLabel :ctx id: lidDW ind: ind2d.stringView :buf
+    cwP: condInParens cond: pcond.stringView
+    lpw: "\{ind}} while \{cwP};\n"
+    buf.append lpw
+    popLoopLabel :ctx id: lidDW :ind :buf
+}
+# emitPlainWhileHead -- the ordinary `while (c) {` opening, where no condition
+# suspends and the test can stay in the header.
+emitPlainWhileHead: function {
+    # the tree the conditions are read from
+    ast: Ast.view
+    # the stamps the condition text is built against
+    symtab: zenv.ZSymbolTable
+    # the emit context the condition text is built in
+    ctx: Ctx
+    # the for node whose conditions these are
+    n: zast.ForData.view
+    # the indent the loop is written at
+    ind: StringView
+    # the `while (c) {` line appends here
+    buf: String.borrow
+} is {
+    cond: String
+    kiter: n.conditions.iterate
+    for kId: kiter loop {
+        k9r: ast.nodes.get i: kId.u64
+        emitForCond :ast :symtab :ctx n: k9r :cond :ind :buf
+    }
+    # `for loop { ... }` -- no conditions, no postconditions: an unconditional
+    # loop that exits via break/return.
+    if cond.length == 0 then cond.append "1"
+    cwW: condInParens cond: cond.stringView
+    lw: "\{ind}while \{cwW} {\n"
+    buf.append lw
+}
+
+# forCondSuspends -- one of a loop's conditions holds a suspension point, so
+# the header has to be written as a body test instead.
+forCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.ForData.view} out bool is {
+    if (ctx.genActive) == false then return false
+    kyIter: n.conditions.iterate
+    for kyId: kyIter loop {
+        if (zast.yieldCountIn :ast nid: (zast.nodeid.create from: kyId)) > 0 then return true
+    }
+    return false
+}
+
+# emitSuspendingWhileHead -- the opening of a loop whose CONDITION suspends:
+# `while (1) {`, the condition's suspensions, then `if (!c) break;`.
+#
+# A suspension has to land on a statement, so it cannot be written inside the
+# `while (...)` header; and it has to run once per iteration, so it cannot be
+# hoisted above the loop either. Moving the test into the body satisfies both,
+# and is the same loop -- it is what the condition would be hand-written as to
+# make this work.
+emitSuspendingWhileHead: function {
+    # the tree the conditions are read from
+    ast: Ast.view
+    # read for each suspension's resume type
+    symtab: zenv.ZSymbolTable
+    # carries the state-machine cursor and the resume slots
+    ctx: Ctx
+    # the for node whose conditions these are
+    n: zast.ForData.view
+    # the indent the loop itself is written at
+    ind: StringView
+    # the indent inside it, where the suspensions and the test go
+    ind2: StringView
+    # the loop opening, the suspensions and the break test all append here
+    buf: String.borrow
+} is {
+    buf.append "\{ind}while (1) {\n"
+    kcIter: n.conditions.iterate
+    for kcId: kcIter loop {
+        (hoistExprYields
+            :ast
+            :symtab
+            :ctx
+            nid: (zast.nodeid.create from: kcId)
+            ind: ind2
+            :buf
+        )
+    }
+    condS: String
+    ksIter: n.conditions.iterate
+    for ksId: ksIter loop {
+        k9s: ast.nodes.get i: ksId.u64
+        emitForCond :ast :symtab :ctx n: k9s cond: condS ind: ind2 :buf
+    }
+    if condS.length == 0 then condS.append "1"
+    cwS: condInParens cond: condS.stringView
+    buf.append "\{ind2}if (!\{cwS}) break;\n"
+}
+
 # emitIfStmt -- an `if` in statement position. A chain whose conditions all fold
 # emits only the live branch: spec.pdoc promises the false branch is not emitted,
 # and that promise is not limited to expression position.
