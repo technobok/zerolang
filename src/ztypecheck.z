@@ -23044,6 +23044,11 @@ typeOfBareName: function {
 # reportMissingReturnValue -- a bare `return` in a function that declares a
 # value: reported at the atom.
 reportMissingReturnValue: function {st: zenv.ZSymbolTable node: atomref} is {
+    # inside a generator a bare `return` TERMINATES the iteration -- the
+    # emitter already jumps it to the terminal state. What the body declares as
+    # its return type there is the synthesised `.call` wrapper, which the
+    # program never writes and must not be asked for.
+    if (yieldIsInScope :st) then return
     mrt: st.typing.currentReturnTypeId
     if mrt > 0 then {
         mtt: st.reg.typetypeOf typeId: mrt
@@ -29196,16 +29201,31 @@ checkControlBuiltinCall: function {
                         en: st.reg.nameOf tid: expR
                         an: st.reg.nameOf tid: argT
                         m4: "return type mismatch: function expects \{en}, got \{an}"
+                        n4: String
+                        h4: String
+                        # in a generator the declared return is the synthesised
+                        # `.call` wrapper -- a type the program never wrote and
+                        # cannot satisfy. Naming it blames the compiler's own
+                        # machinery for the user's mistake, which is that a
+                        # generator produces values by yielding them.
+                        if (yieldIsInScope :st) then {
+                            m4 = "a generator returns no value".string
+                            n4 = "the values a generator produces come from `yield`; its declared `out` type is the Iterator protocol, not the type of this expression".string
+                            h4 = "yield the value instead, or use a bare `return` to end the iteration".string
+                        }
                         rvid: nodeId n: (ast.nodes.get i: arg.operation.u64)
                         rvln: nodeLine n: (ast.nodes.get i: arg.operation.u64)
                         rvcl: nodeCol n: (ast.nodes.get i: arg.operation.u64)
-                        (addError
+                        (addErrorH
                             :st
                             nodeid: rvid
                             lineno: rvln
                             colno: rvcl
                             e: zast.err.typeError
                             msg: m4
+                            note: n4
+                            hint: h4
+                            width: 1
                         )
                     }
                 }

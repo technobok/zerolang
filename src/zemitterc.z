@@ -31555,6 +31555,17 @@ emitGenPrologue: function {ctx: Ctx.view buf: String.borrow} is {
 
 # emitGenEpilogue -- the terminal landing: mark done and return the NONE wrapper.
 emitGenEpilogue: function {ctx: Ctx.view buf: String.borrow} is {
+    # a yield the body counted but never emitted -- one made unreachable by a
+    # bare `return` before it -- still has a `case` in the resume switch, and a
+    # switch arm jumping to a label that was never written is C that does not
+    # compile. Land those on the terminal state: an unreachable yield can never
+    # be the state the machine suspended at, so resuming into it is done.
+    kd: ctx.genYieldNext
+    for kd <= ctx.genYieldCount loop {
+        ld: "L_resume_\{kd}:;\n"
+        buf.append ld
+        kd = kd + 1
+    }
     buf.append "L_done:;\n"
     lge: "    \{ctx.genRecvC}->state = -1;\n"
     buf.append lge
