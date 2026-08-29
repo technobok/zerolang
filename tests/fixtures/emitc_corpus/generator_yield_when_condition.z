@@ -1,0 +1,41 @@
+# generator_yield_when_condition.z -- `yield` in a `when` condition.
+#
+# `when` short-circuits: the second condition runs only if the first held. So
+# its suspension cannot be hoisted above the `if` -- that would suspend on a
+# path never taken -- and it cannot stay in the header either, because a
+# suspension has to land on a statement.
+#
+# Both hold if the conditions are computed into a GUARD first:
+#
+#     g = 0; if (a) { <suspend>; g = (b); }   and the header tests g
+#
+# which is C's own short-circuit written out. The second drive below is the one
+# that matters: with the first condition false the `when` is never evaluated,
+# so the generator does NOT suspend there and goes straight to the else.
+
+gen: function out (Iterator Gives: i64 Accepts: i64) is {
+    a: yield 1
+    if a > 0 when (yield a) > 5 then yield 100 else yield 200
+    yield 9
+}
+
+drive: function {label: StringView first: i64 second: i64} is {
+    print "-- \{label} --"
+    with g: (gen) do {
+        k: 0
+        for k < 5 loop {
+            send: first
+            if k > 0 then send = second
+            r: g.call value: send
+            match r case some then print "r: \{r}" case none then print "(none)"
+            k = k + 1
+        }
+    }
+}
+
+main: function is {
+    drive label: "when runs, resumed above the threshold" first: 10 second: 8
+    drive label: "when runs, resumed below it" first: 10 second: 1
+    drive label: "first condition false: when never runs" first: 0 second: 0
+    print "done"
+}

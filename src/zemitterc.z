@@ -3040,6 +3040,9 @@ Ctx: class {
     argHoistRaw: (List String)
     # the next `_ah` number
     argHoistCtr: u64
+    # the next `_wc` number: the guard a suspending `when` condition computes
+    # into, since its value has to outlive the `if` that computes it
+    whenGuardCtr: u64
     # the enclosing loops' break labels, innermost last
     breakLabels: (ListVal u64)
     # whether each is a do-while, whose continue target differs
@@ -15957,9 +15960,9 @@ emitDoWhileFor: function {
 # emitPlainWhileHead -- the ordinary `while (c) {` opening, where no condition
 # suspends and the test can stay in the header.
 emitPlainWhileHead: function {
-    # the tree the conditions are read from
+    # the tree this loop's conditions are read from
     ast: Ast.view
-    # the stamps the condition text is built against
+    # the stamps the header text is built against
     symtab: zenv.ZSymbolTable
     # the emit context the condition text is built in
     ctx: Ctx
@@ -16004,9 +16007,9 @@ forCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.ForData.view} out
 # and is the same loop -- it is what the condition would be hand-written as to
 # make this work.
 emitSuspendingWhileHead: function {
-    # the tree the conditions are read from
+    # the tree this loop's conditions are read from
     ast: Ast.view
-    # read for each suspension's resume type
+    # read for the resume type of each suspension in the condition
     symtab: zenv.ZSymbolTable
     # carries the state-machine cursor and the resume slots
     ctx: Ctx
@@ -19445,6 +19448,115 @@ condInParens: function {cond: StringView} out String is {
     return "(\{cond})"
 }
 
+# appendCondText -- render one condition into the `&&` chain being built.
+appendCondText: function {
+    # the tree this one condition is read from
+    ast: Ast.view
+    # the stamps this condition's truthiness is judged against
+    symtab: zenv.ZSymbolTable
+    # the emit context the condition text is built in
+    ctx: Ctx
+    # the condition's namedoperation node id
+    kId: u32
+    # the chain so far; a `&&` is inserted when it is not empty
+    cond: String.borrow
+} is {
+    k: ast.nodes.get i: kId.u64
+    match (
+        k
+    ) case namedoperation then {
+        cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: k.operation.u64)
+        tw: (truthyCondText
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: k.operation.u64)
+            raw: cv.stringView
+        )
+        if cond.length > 0 then cond.append " && "
+        if tw.length > 0 then {
+            cond.append tw
+        } else {
+            cond.append cv
+        }
+    } else null
+}
+
+# whenCondSuspends -- a `when` condition of this clause holds a suspension.
+#
+# The FIRST condition is not asked about: it runs unconditionally, so the
+# ordinary statement-level hoist already reaches it. Every condition after it
+# is guarded by the ones before -- `when` short-circuits -- so its suspension
+# cannot be lifted above the `if` without running on a path never taken.
+whenCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.IfClauseData.view} out bool is {
+    if (ctx.genActive) == false then return false
+    wi: 1.u64
+    for wi < n.conditions.length loop {
+        cwi: n.conditions.get i: wi
+        wi = wi + 1
+        if (zast.yieldCountIn :ast nid: (zast.nodeid.create from: cwi)) > 0 then return true
+    }
+    return false
+}
+
+# emitGuardedWhenCond -- compute a clause's conditions into a GUARD when one of
+# the `when` parts suspends, and answer the guard's name for the header to test.
+#
+# `if a when b then` becomes `g = 0; if (a) { <suspend>; g = (b); }` and the
+# header tests `g`. That is C's own short-circuit written out: `b` still runs
+# only when `a` held, and the suspension now sits on a statement inside that
+# guard rather than inside an expression that cannot hold one.
+emitGuardedWhenCond: function {
+    # the tree this clause's conditions are read from
+    ast: Ast.view
+    # read for the resume type of each suspension in a `when`
+    symtab: zenv.ZSymbolTable
+    # carries the guard counter and the resume slots
+    ctx: Ctx
+    # the clause whose conditions these are
+    n: zast.IfClauseData.view
+    # the indent the guard and its `if` are written at
+    ind: StringView
+    # the guard declaration and its computation append here
+    buf: String.borrow
+} out String is {
+    gnum: ctx.whenGuardCtr
+    ctx.whenGuardCtr = gnum + 1
+    gvar: "_wc\{gnum}"
+    c0: String
+    appendCondText :ast :symtab :ctx kId: (n.conditions.get i: 0) cond: c0
+    if c0.length == 0 then c0.append "1"
+    buf.append "\{ind}uint8_t \{gvar} = 0;\n"
+    cw0: condInParens cond: c0.stringView
+    buf.append "\{ind}if \{cw0} {\n"
+    ind2: "\{ind}    "
+    wi: 1.u64
+    for wi < n.conditions.length loop {
+        cwi: n.conditions.get i: wi
+        wi = wi + 1
+        (hoistExprYields
+            :ast
+            :symtab
+            :ctx
+            nid: (zast.nodeid.create from: cwi)
+            ind: ind2.stringView
+            :buf
+        )
+    }
+    rest: String
+    ri9: 1.u64
+    for ri9 < n.conditions.length loop {
+        cri: n.conditions.get i: ri9
+        ri9 = ri9 + 1
+        appendCondText :ast :symtab :ctx kId: cri cond: rest
+    }
+    if rest.length == 0 then rest.append "1"
+    cwR: condInParens cond: rest.stringView
+    buf.append "\{ind2}\{gvar} = \{cwR} ? 1 : 0;\n"
+    buf.append "\{ind}}\n"
+    return gvar
+}
+
 # emit one if or else-if clause: its conditions, then the body they guard
 emitIfClause: function {
     ast: Ast.view
@@ -19460,30 +19572,25 @@ emitIfClause: function {
     match (
         n
     ) case ifclause then {
+        # a suspending `when` cannot be built into the header text: rendering it
+        # there would put the suspension inside an expression. Compute the
+        # conditions into a guard first and let the header test that. Only the
+        # FIRST clause takes this path -- a later clause's header is
+        # `} else if (..) {`, which has nowhere to put the statements.
+        guarded: false
+        if isFirst when (whenCondSuspends :ast :ctx :n) then guarded = true
         cond: String
-        with kiter: n.conditions.iterate do for kId: kiter loop {
-            k: ast.nodes.get i: kId.u64
-            match (
-                k
-            ) case namedoperation then {
-                cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: k.operation.u64)
-                tw: (truthyCondText
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: k.operation.u64)
-                    raw: cv.stringView
-                )
-                if cond.length > 0 then cond.append " && "
-                if tw.length > 0 then {
-                    cond.append tw
-                } else {
-                    cond.append cv
-                }
-            } else null
+        if guarded then {
+            flushArgHoists :ctx :ind :tmp :buf
+            gv: emitGuardedWhenCond :ast :symtab :ctx :n :ind :buf
+            cond.append gv
+        } else {
+            with kiter: n.conditions.iterate do for kId: kiter loop {
+                appendCondText :ast :symtab :ctx :kId :cond
+            }
         }
         if isFirst then {
-            flushArgHoists :ctx :ind :tmp :buf
+            if (guarded) == false then flushArgHoists :ctx :ind :tmp :buf
             cw: condInParens cond: cond.stringView
             lf: "\{ind}if \{cw} {\n"
             buf.append lf
@@ -24039,6 +24146,7 @@ emitC: function {
         argHoistDtors: (List String)
         argHoistRaw: (List String)
         argHoistCtr: 0
+        whenGuardCtr: 0
         breakLabels: (ListVal u64)
         breakLabelIsDo: (ListVal bool)
         contLabelUsed: (IdMapV u64 v: bool)
