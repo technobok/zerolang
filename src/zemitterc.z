@@ -31752,6 +31752,31 @@ hoistExprYields: function {
     if nid.isZero then return
     {
         n: ast.nodes.get i: nid.u64
+        # an `if`'s FIRST clause's FIRST condition is the one part of it that
+        # runs unconditionally and exactly once, so it hoists like any other
+        # expression. Every later condition is guarded by the ones before it
+        # (`when` short-circuits) and every body is guarded by all of them, so
+        # the descent goes no further.
+        match (
+            n
+        ) case ifexpr then {
+            if n.clauses.length > 0 then {
+                c0: ast.nodes.get i: (n.clauses.get i: 0).u64
+                match (
+                    c0
+                ) case ifclause then {
+                    if c0.conditions.length > 0 then (hoistExprYields
+                        :ast
+                        :symtab
+                        :ctx
+                        nid: (zast.nodeid.create from: (c0.conditions.get i: 0))
+                        :ind
+                        :buf
+                    )
+                } else null
+            }
+            return
+        } else null
         if (hoistStopsHere :n) then return
         kids: zast.childIds :ast :n
         kiter: kids.iterate

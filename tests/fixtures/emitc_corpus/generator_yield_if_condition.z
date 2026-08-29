@@ -1,0 +1,37 @@
+# generator_yield_if_condition.z -- `yield` in an `if` CONDITION.
+#
+# A suspension has to land at a statement boundary, so a yield written inside
+# an expression is hoisted to its own statement first. For an `if` that is only
+# sound where the condition runs unconditionally and exactly once, which is
+# true of the FIRST clause's FIRST condition and of nothing else in the
+# construct: every later `when` condition is guarded by the ones before it, and
+# every body is guarded by all of them. Hoisting from those would suspend on a
+# path that was never taken, so the descent stops there and says so.
+#
+# Both branches are driven, from the same generator, by resuming the condition
+# with a value above and below the threshold.
+
+decide: function {mark: i64} out (Iterator Gives: i64 Accepts: i64) is {
+    a: yield mark
+    if (yield a) > 5 then yield 100 else yield 200
+    yield 9
+}
+
+drive: function {mark: i64 resumeWith: i64} is {
+    with g: (decide :mark) do {
+        k: 0
+        for k < 5 loop {
+            r: g.call value: resumeWith
+            match r case some then print "r: \{r}" case none then print "(none)"
+            k = k + 1
+        }
+    }
+}
+
+main: function is {
+    print "-- then branch --"
+    drive mark: 1 resumeWith: 8
+    print "-- else branch --"
+    drive mark: 2 resumeWith: 3
+    print "done"
+}
