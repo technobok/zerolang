@@ -1,0 +1,42 @@
+# generator_yield_expression.z -- `yield` used in EXPRESSION position.
+#
+# A yield SUSPENDS the function: everything before it must already have run,
+# and what follows resumes at a label, so it cannot sit in the middle of a C
+# expression. The emitter splits the statement around it -- the yield is
+# hoisted to its own suspension, its resume value bound to a temp, and the
+# expression then reads that temp.
+#
+# Three positions, which used to emit nothing at all and then, once `yield`
+# became a call, a hard `unhandled callee`: a binop operand, a call argument,
+# and an interpolation. A statement-form yield hoists its own operand first,
+# because the operand evaluates before the yield does.
+#
+# ONE hoist per statement is the limit, and the limit is C's: the temp is an
+# ordinary local and a suspension returns from the function, so a temp does not
+# survive a LATER suspension in the same statement. Two yields in one
+# expression, and a yield inside a condition, are refused with a message
+# naming the `v: yield e` form instead of being mis-emitted.
+
+add1: function {v: i64} out i64 is {
+    return v + 1
+}
+
+gen: function out (Iterator Gives: i64 Accepts: i64) is {
+    a: yield 1
+    b: (yield a) + 1
+    c: add1 v: (yield b)
+    print "interp: \{yield c}"
+    yield (yield b) + 1
+}
+
+main: function is {
+    with g: (gen) do {
+        i: 0
+        for i < 7 loop {
+            r: g.call value: i * 10
+            match r case some then print "r: \{r}" case none then print "(none)"
+            i = i + 1
+        }
+    }
+    print "done"
+}

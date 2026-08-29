@@ -2883,6 +2883,11 @@ Ctx: class {
     genYieldCount: u64
     # the next yield's number as the body is walked
     genYieldNext: u64
+    # the yield number of each yield HOISTED out of expression position, by
+    # call node id. The suspension runs as its own statement and the resume
+    # value lands in `_yv_<k>`; the expression emitter then renders that yield
+    # as a plain read of it
+    yieldTempK: (IdMapV u64 v: u64)
     # the wrapper type the generator's `.call` returns
     genWrap: String
     # that wrapper's some tag
@@ -10579,8 +10584,26 @@ emitNamedCalleeChain: function {
     # a numeric range asked for as a VALUE rather than driven by a for-header
     sic: emitScalarIterateCall :ast :symtab :ctx :call
     if sic.length > 0 then return sic
-    emitFail :ctx what: "unhandled callee \{cn0}" line: call.lineno
-    m8: "/* zemitterc: unhandled callee \{cn0} */0"
+    # a yield hoisted out of expression position: the suspension has already
+    # run as its own statement and left the resume value in a temp, so what is
+    # left here is a plain read
+    yk: ctx.yieldTempK.get key: call.nodeid.u64
+    match (
+        yk
+    ) case some then {
+        ytn: "_yv_\{yk}"
+        return ytn
+    } case none then null
+    # a yield the hoist declined -- a second one in the same expression, or one
+    # inside a condition, where lifting the suspension would either lose the
+    # temp across a return or run it on a path not taken. It is the same
+    # fallback leg, so it says which construct rather than blaming the callee.
+    what8: "unhandled callee \{cn0}"
+    if (zast.isYieldCalleeAt :ast callableId: call.callable) then {
+        what8 = "this `yield` is not split out of its expression; bind it first (`v: yield e`) and use `v`".string
+    }
+    emitFail :ctx what: what8 line: call.lineno
+    m8: "/* zemitterc: \{what8} */0"
     return m8
 }
 
@@ -16173,8 +16196,36 @@ emitStmt: function {
     # rather than owning an arm -- adding a `call` arm here would re-route
     # every ordinary call away from the tail leg that handles them.
     if ctx.genActive when (isYieldNode :ast :n) then {
-        emitYieldStmt :ast :symtab :ctx callId: (zast.nodeIdOf :n) :ind :buf
+        ycs: zast.yieldCallIdAt :ast nid: (zast.nodeIdOf :n)
+        # this yield's OPERAND may itself contain yields, and they evaluate
+        # before it does -- so they suspend first
+        {
+            yopn: zast.yieldCallOperandAt :ast nid: ycs
+            if (hoistableCount :ast nid: yopn) < 2 then (hoistExprYields
+                :ast
+                :symtab
+                :ctx
+                nid: yopn
+                :ind
+                :buf
+            )
+        }
+        emitYieldStmt :ast :symtab :ctx callId: ycs :ind :buf
         return
+    }
+    # a yield written in EXPRESSION position suspends the function, so it
+    # cannot stay inside the C expression: hoist each one to its own statement
+    # first and leave a temp behind for the expression emitter to read.
+    if ctx.genActive then {
+        hnid: zast.nodeIdOf :n
+        if (hoistableCount :ast nid: hnid) < 2 then (hoistExprYields
+            :ast
+            :symtab
+            :ctx
+            nid: hnid
+            :ind
+            :buf
+        )
     }
     match (
         n
@@ -23837,6 +23888,7 @@ emitC: function {
         genValC: "value".string
         genYieldCount: 0
         genYieldNext: 0
+        yieldTempK: (IdMapV u64 v: u64)
         genWrap: "".string
         genSomeTag: "".string
         genNoneTag: "".string
@@ -31380,46 +31432,26 @@ emitRecordMethods: function {
 # not nest). Used to detect a generator `call` body and size its resume-state
 # switch.
 nodeYieldCount: function {ast: Ast.view n: Node.view} out u64 is {
+    # a nested function's yields belong to that function, not to this one
+    match (
+        n
+    ) case functiondef then {
+        return 0
+    } else null
+    c: u64
     match (
         n
     ) case call then {
-        if (zast.isYieldCalleeAt :ast callableId: n.callable) then return 1
-        return 0
-    } case statement then {
-        c: u64
-        siter: n.statements.iterate
-        for stId: siter loop {
-            st: ast.nodes.get i: stId.u64
-            c = c + (nodeYieldCount :ast n: st)
-        }
-        return c
-    } case statementline then {
-        sln: ast.nodes.get i: n.statementline.u64
-        return (nodeYieldCount :ast n: sln)
-    } case expression then {
-        return (nodeYieldCount :ast n: (ast.nodes.get i: n.expression.u64))
-    } case assignment then {
-        return (nodeYieldCount :ast n: (ast.nodes.get i: n.value.u64))
-    } case forexpr then {
-        if n.body.isZero then return 0
-        return (nodeYieldCount :ast n: (ast.nodes.get i: n.body.u64))
-    } case ifexpr then {
-        c2: u64
-        cliter: n.clauses.iterate
-        for clId: cliter loop {
-            cl9r: ast.nodes.get i: clId.u64
-            c2 = c2 + (nodeYieldCount :ast n: cl9r)
-        }
-        if n.elseclause > 0 then {
-            ec: ast.nodes.get i: n.elseclause.u64
-            c2 = c2 + (nodeYieldCount :ast n: ec)
-        }
-        return c2
-    } case ifclause then {
-        return (nodeYieldCount :ast n: (ast.nodes.get i: n.statement.u64))
-    } else {
-        return 0
-    }
+        if (zast.isYieldCalleeAt :ast callableId: n.callable) then c = 1
+    } else null
+    # every child, through every shape. The count sizes the resume switch, so
+    # it has to match what the emitter actually suspends -- including a yield
+    # nested inside another expression, which the shape-by-shape version this
+    # replaced could not reach and which then fell off the end of the switch.
+    kids: zast.childIds :ast :n
+    kiter: kids.iterate
+    for k0: kiter loop c = c + (nodeYieldCount :ast n: (ast.nodes.get i: k0.u64))
+    return c
 }
 
 # fnYieldCount -- yields in a functiondef body (0 for a non-generator).
@@ -31539,6 +31571,8 @@ isYieldNode: function {ast: Ast.view n: Node.view} out bool is {
         n
     ) case expression then {
         return (isYieldNode :ast n: (ast.nodes.get i: n.expression.u64))
+    } case statementline then {
+        return (isYieldNode :ast n: (ast.nodes.get i: n.statementline.u64))
     } case call then {
         return (zast.isYieldCalleeAt :ast callableId: n.callable)
     } else {
@@ -31582,7 +31616,21 @@ emitExprFormYield: function {
     tmp: TmpCtr.view
     buf: String.borrow
 } is {
-    emitYieldFromNode :ast :symtab :ctx n: value :ind :tmp :buf
+    # the hoist has already suspended this yield and left the resume value in
+    # a temp; only a yield it declined (no resume type it could name) still
+    # needs suspending here
+    srcC: "\{ctx.genRecvC}->_resume_input"
+    {
+        ycid: zast.yieldCallIdAt :ast nid: (zast.nodeIdOf n: value)
+        ykq: ctx.yieldTempK.get key: ycid.u64
+        match (
+            ykq
+        ) case some then {
+            srcC = "_yv_\{ykq}"
+        } case none then {
+            emitYieldFromNode :ast :symtab :ctx n: value :ind :tmp :buf
+        }
+    }
     ltid: stampIdOf :symtab nid: aid
     cTypeText: typeRefC :ast :symtab :ctx tid: ltid thisTid: ztypes.tid
     if cTypeText.length == 0 then cTypeText = "int64_t".string
@@ -31591,16 +31639,152 @@ emitExprFormYield: function {
     if tt == ztypes.ztypetype.classType then isRef = true
     if tt == ztypes.ztypetype.unionType then isRef = true
     if isRef then {
-        lp0: "\{ind}\{cTypeText}* __borrow_\{nm} = \{ctx.genRecvC}->_resume_input;\n"
+        lp0: "\{ind}\{cTypeText}* __borrow_\{nm} = \{srcC};\n"
         buf.append lp0
         lp1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
         buf.append lp1
         atomVarId: "(*__borrow_\{nm})"
         vvSet xs: ctx.aliases vid: nmVid val: atomVarId.stringView
     } else {
-        lp2: "\{ind}\{cTypeText} \{nm} = \{ctx.genRecvC}->_resume_input;\n"
+        lp2: "\{ind}\{cTypeText} \{nm} = \{srcC};\n"
         buf.append lp2
     }
+}
+
+# hoistStopsHere -- descent for the expression-yield hoist stops at anything
+# whose evaluation is CONDITIONAL or REPEATED: a clause body, a loop, a `with`
+# body, a nested definition. A yield there is a statement in its own right and
+# emitStmt reaches it on that path; hoisting it would run the suspension
+# whether or not the branch is taken.
+hoistStopsHere: function {n: Node.view} out bool is {
+    match (
+        n
+    ) case statement then {
+        return true
+    } case ifexpr then {
+        return true
+    } case ifclause then {
+        return true
+    } case forexpr then {
+        return true
+    } case caseexpr then {
+        return true
+    } case caseclause then {
+        return true
+    } case withexpr then {
+        return true
+    } case doexpr then {
+        return true
+    } case functiondef then {
+        return true
+    } case objectdef then {
+        return true
+    } case unitdef then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# hoistableCount -- how many yields the hoist would lift out of `nid`, under
+# the same descent rules it uses.
+#
+# ONE is the limit, and the limit is C's. A hoisted temp is an ordinary local,
+# and a suspension RETURNS from the function -- so a temp does not survive a
+# later suspension in the same statement, it comes back as garbage. With a
+# single hoist the temp is read immediately after its own resume label and
+# nothing intervenes. Two would need the value promoted to a field of the state
+# object, which is the lowering's crossing-locals machinery and knows only
+# about NAMED locals, not about temps the emitter invents.
+hoistableCount: function {ast: Ast.view nid: zast.nodeid} out u64 is {
+    if nid.isZero then return 0
+    c: u64
+    n: ast.nodes.get i: nid.u64
+    if (hoistStopsHere :n) then return 0
+    kids: zast.childIds :ast :n
+    kiter: kids.iterate
+    for k0: kiter loop c = c + (hoistableCount :ast nid: (zast.nodeid.create from: k0))
+    if (zast.isYieldCallAt :ast :nid) then {
+        # the wrapper and the call under it both answer yes; count the call
+        cid9: zast.yieldCallIdAt :ast :nid
+        if cid9 == nid then c = c + 1
+    }
+    return c
+}
+
+# hoistExprYields -- emit, as their own statements, the suspensions for every
+# yield written in EXPRESSION position inside `nid`, binding each resume value
+# to a temp the expression emitter then reads.
+#
+# A yield SUSPENDS the function: everything before it must already have run,
+# and what follows resumes at a label. It cannot sit in the middle of a C
+# expression, so the statement is split around it -- `b: (yield a) + 1` becomes
+# the suspension, then `b = _yv_k + 1`.
+#
+# Operands are hoisted before the yield that contains them (post-order), which
+# is the order they evaluate in, so `yield (yield a)` suspends innermost-first.
+hoistExprYields: function {
+    # the tree the statement's shape is walked from
+    ast: Ast.view
+    # read for each yield's resume TYPE, which the temp is declared with
+    symtab: zenv.ZSymbolTable.view
+    # carries the state-machine cursor, and takes the temp each hoist records
+    ctx: Ctx
+    # the statement, or the sub-expression of one, to lift yields out of
+    nid: zast.nodeid
+    # the indent the hoisted statements are written at
+    ind: StringView
+    # the function body being built; the suspensions append here, ahead of the
+    # statement whose expression they were lifted from
+    buf: String.borrow
+} is {
+    if nid.isZero then return
+    {
+        n: ast.nodes.get i: nid.u64
+        if (hoistStopsHere :n) then return
+        kids: zast.childIds :ast :n
+        kiter: kids.iterate
+        for k0: kiter loop {
+            (hoistExprYields
+                :ast
+                :symtab
+                :ctx
+                nid: (zast.nodeid.create from: k0)
+                :ind
+                :buf
+            )
+        }
+    }
+    # canonicalise to the CALL's own id. The walk reaches a yield twice -- once
+    # as the expression wrapper around it, once as the call -- and both must
+    # answer the same key, or the suspension is emitted twice and every later
+    # state number shifts.
+    cid: zast.yieldCallIdAt :ast :nid
+    if cid.isZero then return
+    # already hoisted: emitStmt runs this over the statement and then over the
+    # nodes inside it, so the walk has to be idempotent
+    if (ctx.yieldTempK.has key: cid.u64) then return
+    # the resume type. An out-only generator binds no `value`, so its yields
+    # carry nothing and stay on the statement leg
+    ltid: stampIdOf :symtab nid: cid.u64
+    if ltid.isZero then return
+    # a REFTYPE resume value is held as a pointer into the caller's argument,
+    # and a temp for it would have to carry the borrow alias the binding leg
+    # sets up. That leg still owns those; reftype `accepts` is deferred polish
+    # either way, so the hoist declines rather than guessing at the C.
+    {
+        ttk: symtab.reg.typetypeOf typeId: ltid
+        if ttk == ztypes.ztypetype.classType then return
+        if ttk == ztypes.ztypetype.unionType then return
+    }
+    cty: typeRefC :ast :symtab :ctx tid: ltid thisTid: ztypes.tid
+    if cty.length == 0 then return
+    kNum: ctx.genYieldNext
+    emitYieldStmt :ast :symtab :ctx callId: cid :ind :buf
+    lrv: "\{ind}\{cty} _yv_\{kNum} = \{ctx.genRecvC}->_resume_input;\n"
+    buf.append lrv
+    kv: kNum
+    ctx.yieldTempK.set key: cid.u64 value: kv
 }
 
 # emitYieldStmt -- one `yield E` suspension: set the resume state, return the
