@@ -30625,6 +30625,24 @@ checkUserFnCall: function {
         if ctt == ztypes.ztypetype.unionType then {
             st.typing.callKind.set key: call.nid.u64 value: zast.callkind.unionCreate
         }
+        # a construction pins its sources exactly as a direct call of the same
+        # `create` does. `out this.takex` is a statement about what the RESULT
+        # holds -- a reference into an argument -- so which spelling reached the
+        # create, the bare type name or `T.create`, cannot change it. The
+        # binding stays owned; only the source is pinned.
+        cxO: st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate
+        match (
+            cxO
+        ) case some then {
+            if (optBoolOr
+                o: (st.typing.funcReturnsTakex.get key: cxO)
+                d: false
+            ) when (lockRoot.isZero) == false then {
+                drainPendingBorrow :st
+                st.typing.pendingBorrowPath.append lockRoot
+                st.typing.pendingBorrowOwned = true
+            }
+        } case none then null
     } else {
         st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
         rnOpt: st.typing.funcReturnNode.get key: funcId
