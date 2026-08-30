@@ -1,0 +1,45 @@
+# A `create` reached by CONSTRUCTION passes its arguments the way the create's
+# own parameters ask for, exactly as a direct call of it does. A non-`take` user
+# class parameter is a `T*`, so a bare local has to be addressed -- and both
+# construction spellings, the bare type name and the explicit `.create`, go
+# through the create's parameter list to decide that.
+#
+# Neither spelling did. Both emitted the argument BY VALUE into a pointer
+# parameter, which is not a zerolang-level error at all: the program typechecks,
+# and the C compiler rejects the generated file with "incompatible type for
+# argument 1". The two spellings reach two different emitters, so both are
+# driven here -- fixing one leaves the other emitting the same bad C.
+#
+# The shape is unremarkable in itself: any class that holds a borrowed reference
+# and is built from a local reaches it. It went unseen because the classes in
+# the tree that hold one are built from a parameter or a `.private` projection,
+# and both of those are ALREADY pointers, so the missing address-of never showed.
+Bag: class {
+    a: i64
+}
+
+Peeker: class {
+    target: Bag.borrow
+    tag: i64
+} as {
+    create: function {target: Bag.borrow tag: i64} out this.takex is {
+        return (meta.create :target :tag)
+    }
+    look: function {it: this} out i64 is {
+        return it.target.a + it.tag
+    }
+}
+
+# a plain function taking the same parameter has always addressed its argument;
+# it runs alongside so the two answers are compared in one program
+peekfn: function {b: Bag.borrow} out i64 is {
+    return b.a
+}
+
+main: function is {
+    g: Bag a: 42
+    print "fn: \{(peekfn b: g)}"
+    with p: (Peeker target: g tag: 1) do print "bare: \{p.look}"
+    with q: (Peeker.create target: g tag: 2) do print "create: \{q.look}"
+    print "source intact: \{g.a}"
+}

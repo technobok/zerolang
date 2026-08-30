@@ -7965,7 +7965,22 @@ emitTypeQualCall: function {
                 pi: u64
                 for pi < pn loop {
                     pname: pnames.get i: pi
-                    av: ctorArgByLabel :ast :symtab :ctx :call label: pname.stringView
+                    # the create's parameters decide how each argument is
+                    # passed, as they do for any other call of it: a non-`take`
+                    # user class is a `T*`, so a bare local has to be addressed.
+                    aNid: ctorArgNodeByLabel :ast :call label: pname.stringView
+                    av: "0".string
+                    if aNid > 0 then {
+                        av = (userFnArgText
+                            :ast
+                            :symtab
+                            :ctx
+                            fid: (ztypes.tid.create from: mco.u64)
+                            pinId: (pids.get i: pi)
+                            pinNm: pname.stringView
+                            argOpNode: (ast.nodes.get i: aNid)
+                        )
+                    }
                     if pi > 0 then args.append ", "
                     args.append av
                     pi = pi + 1
@@ -8381,33 +8396,47 @@ emitRecordCtor: function {
                 for ci < ccn loop {
                     cpname: cpn.get i: ci
                     cpnameId: cpiNm.get i: ci
-                    cav: ctorArgByLabel :ast :symtab :ctx :call label: cpname.stringView
-                    if (ctorHasLabel :ast :call label: cpname.stringView) == false then {
-                        cposUsed: false
-                        cpv: ctorArgByPosition :ast :symtab :ctx :call idx: cposIdx
-                        if cpv.length > 0 then {
-                            cav = cpv
-                            cposUsed = true
-                        }
+                    cpid0: cpi.get i: ci
+                    # the create's own parameters decide how each argument is
+                    # passed, exactly as they do for any other call of it: a
+                    # non-`take` user class is a `T*`, so a bare local has to be
+                    # addressed. userFnArgText is the same answer the direct-call
+                    # path uses -- asking it here is what keeps a `create`
+                    # reached by construction agreeing with one reached by name.
+                    cav: "0".string
+                    caNid: u64
+                    if (ctorHasLabel :ast :call label: cpname.stringView) then {
+                        caNid = ctorArgNodeByLabel :ast :call label: cpname.stringView
+                    } else {
+                        caNid = ctorArgNodeByPosition :ast :call idx: cposIdx
                         cposIdx = cposIdx + 1
-                        if (cposUsed) == false then {
-                            if (symtab.typing.declHasDefaultId
+                    }
+                    if caNid > 0 then {
+                        cav = (userFnArgText
+                            :ast
+                            :symtab
+                            :ctx
+                            fid: (ztypes.tid.create from: cco.u64)
+                            pinId: cpid0
+                            pinNm: cpname.stringView
+                            argOpNode: (ast.nodes.get i: caNid)
+                        )
+                    } else {
+                        if (symtab.typing.declHasDefaultId
+                            parentTypeId: tid
+                            nameId: (zast.nameid.create from: cpnameId.u32.orPanic)
+                        ) then {
+                            cdt0: (symtab.typing.declDefaultOfId
                                 parentTypeId: tid
                                 nameId: (zast.nameid.create from: cpnameId.u32.orPanic)
-                            ) then {
-                                cdt0: (symtab.typing.declDefaultOfId
-                                    parentTypeId: tid
-                                    nameId: (zast.nameid.create from: cpnameId.u32.orPanic)
-                                )
-                                cpid0: cpi.get i: ci
-                                cav = (renderDefault
-                                    :ast
-                                    :symtab
-                                    :ctx
-                                    dv: cdt0
-                                    targetTid: (ztypes.tid.create from: cpid0.u64)
-                                )
-                            }
+                            )
+                            cav = (renderDefault
+                                :ast
+                                :symtab
+                                :ctx
+                                dv: cdt0
+                                targetTid: (ztypes.tid.create from: cpid0.u64)
+                            )
                         }
                     }
                     if ci > 0 then cargs.append ", "
