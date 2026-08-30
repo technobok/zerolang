@@ -39654,6 +39654,99 @@ lowerFreeGenerators: function {
 }
 
 
+# validateGeneratorDef -- the shape rules of the declared form, checked BEFORE
+# the lowering runs: it appends a generated `create` and injects `call`'s
+# receiver, so afterwards a user-written `create` is indistinguishable from the
+# generated one and the input parameter has moved to second place.
+#
+# Each of these was accepted in silence and failed as C the compiler rejected,
+# or -- worse -- as nothing at all.
+validateGeneratorDef: function {
+    # where the diagnostics are recorded
+    st: zenv.ZSymbolTable
+    # the tree the definition is read from
+    ast: Ast.view
+    # the generator's own name, which every message here names
+    defName: StringView
+    # the generator definition to check
+    objId: zast.nodeid
+} is {
+    obn: ast.nodes.get i: objId.u64
+    match (
+        obn
+    ) case objectdef then {
+        nCall: u64
+        callId: zast.nodeid
+        with aiter: obn.asItems.iterate do for amId: aiter loop {
+            am: ast.nodes.get i: amId.u64
+            match (
+                am
+            ) case namedoperation then {
+                if am.name == zast.names.wkCall then {
+                    nCall = nCall + 1
+                    callId = am.operation
+                }
+                if am.name == zast.names.wkCreate then {
+                    mc: "'\{defName}' declares its own `create` -- a generator's construction is generated from its `is` fields"
+                    hc: "delete the `create`; the `is` fields already name its parameters, in order".string
+                    nc: String
+                    (addErrorH
+                        :st
+                        nodeid: am.nodeid
+                        lineno: am.lineno
+                        colno: am.colno
+                        e: zast.err.typeError
+                        msg: mc
+                        note: nc
+                        hint: hc
+                        width: 6
+                    )
+                }
+            } else null
+        }
+        if nCall == 0 then {
+            m0: "'\{defName}' declares no `call` -- a generator's body is its `call` member"
+            h0: "add `call: function out <element type> is { ... yield ... }` to the `as` block".string
+            n0: String
+            (addErrorH
+                :st
+                nodeid: obn.nodeid
+                lineno: obn.lineno
+                colno: obn.colno
+                e: zast.err.typeError
+                msg: m0
+                note: n0
+                hint: h0
+                width: defName.length.u32.orPanic
+            )
+        }
+        if (callId.isZero) == false then {
+            cf: ast.nodes.get i: callId.u64
+            match (
+                cf
+            ) case functiondef then {
+                np: cf.parameters.length
+                if np > 1 then {
+                    m1: "'\{defName}' declares \{np} parameters on `call` -- a generator receives at most one value per call"
+                    h1: "keep the one the call sites hand it; read it as `yield`'s own value, not as a binding".string
+                    n1: String
+                    (addErrorH
+                        :st
+                        nodeid: cf.nodeid
+                        lineno: cf.lineno
+                        colno: cf.colno
+                        e: zast.err.typeError
+                        msg: m1
+                        note: n1
+                        hint: h1
+                        width: 4
+                    )
+                }
+            } else null
+        }
+    } else null
+}
+
 # lowerDeclaredGeneratorsInUnit -- prepare every `generator` definition in the
 # unit for the ordinary class walk. Unlike the function form there is nothing to
 # move: the definition stays where the author wrote it and keeps its name, so
@@ -39667,6 +39760,7 @@ lowerDeclaredGeneratorsInUnit: function {
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
     with bit: bodyIds.iterate do for bmId: bit loop {
         opId: zast.nodeid
+        gnm: String
         {
             bm: ast.nodes.get i: bmId.u64
             match (
@@ -39676,12 +39770,20 @@ lowerDeclaredGeneratorsInUnit: function {
                 match (
                     bo
                 ) case objectdef then {
-                    if bo.kind == zast.objectkind.generatorDef then opId = bm.operation
+                    if bo.kind == zast.objectkind.generatorDef then {
+                        opId = bm.operation
+                        gnm = zast.nameTextCopy :ast ref: bm.name
+                    }
                 } else null
             } else null
         }
         if opId > 0 then {
-            gd: (zgenerator.GenDeclared callFnId: 0 wrapperNodeId: 0)
+            validateGeneratorDef :st :ast defName: gnm.stringView objId: opId
+            gd: (zgenerator.GenDeclared
+                callFnId: 0
+                wrapperNodeId: 0
+                readsAbsentInput: false
+            )
             zgenerator.lowerDeclared :ast objId: opId dst: gd
             # `yield` is in scope for exactly this body, and the pass that
             # prepared the body is what knows which body that is
@@ -39694,6 +39796,22 @@ lowerDeclaredGeneratorsInUnit: function {
                 gwk: gd.wrapperNodeId.u64
                 gwv: true
                 st.typing.generatorWrapper.set key: gwk value: gwv
+            }
+            if gd.readsAbsentInput then {
+                my: "'\{gnm}' reads `yield`'s value, but `call` declares no input to receive"
+                hy: "give `call` a parameter -- its type, its ownership and the label the call sites read -- or drop the binding and yield for effect".string
+                ny: String
+                (addErrorH
+                    :st
+                    nodeid: opId
+                    lineno: 0
+                    colno: 0
+                    e: zast.err.typeError
+                    msg: my
+                    note: ny
+                    hint: hy
+                    width: 1
+                )
             }
         }
     }
