@@ -26,6 +26,7 @@ module Rouge
           facet
           protocol
           data
+          generator
 
           function
           in
@@ -70,57 +71,27 @@ module Rouge
 
       def self.builtins   # predeclared
         @builtins ||= %w(
-          null
-          never
-          _
-          typedef
-          tag
-
-          u8 
-          u16 
-          u32 
-          u64 
-          u128
-
-          i8 
-          i16 
-          i32 
-          i64 
-          i128
-
-          f16 
-          f32 
-          f64 
-          f128
-
-          c8
-          c32
-          String
-
-          true
-          false
-
-          public
-          private
-
-          this
-          meta
-
-          error
-
-          iterator
-
-          take
-          borrow
-          view
-          hold
-          takex
-          generic
-
-          return
-          break
-          continue
-          yield
+          Any AnyRef Box ByteView Bytes Closer
+          CpIter File IdMapEntryR IdMapEntryV IdMapItemIterR IdMapItemIterV
+          IdMapR IdMapV IdSet IdSetIter IoError Iterator
+          LinesIter List ListIter ListIterVal ListRef ListVal
+          ListView ListViewVal Map MapEntry MapEntryRV MapEntryVR
+          MapEntryVV MapItemIter MapItemIterRV MapItemIterVR MapItemIterVV MapKeyIter
+          MapKeyIterRV MapKeyIterVR MapKeyIterVV MapRR MapRV MapVR
+          MapVV Option OptionView Path PathView Reader
+          RefHashable Result Seeker Set SetIter SetIterVal
+          SetRef SetVal Splitter String StringLike StringView
+          Text TextReader Writer _ anyval array
+          bool borrow break c32 c8 continue
+          converror copy drop error f128 f16
+          f32 f64 false floatliteral generic hold
+          holdx i128 i16 i32 i64 i8
+          idkey intliteral iterator lock meta never
+          null openmode optionval panic parseerror print
+          private public resultval return seekorigin stderr
+          stdin stdout str stringJoin tag take
+          takex this true typedef u128 u16
+          u32 u64 u8 valhashable view yield
         )
       end
 

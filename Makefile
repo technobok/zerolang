@@ -1398,6 +1398,13 @@ s=open('docs/style/prism-zerolang.js').read()
 m=re.search(r'var '+sys.argv[1]+r' = \[(.*?)\];',s,re.S)
 print('\n'.join(sorted(set(re.findall(r\"'([^']*)'\",m.group(1))))))" "$$1"
 }
+rbset() {
+  python3 -c "
+import re,sys
+s=open('editor/rouge/zerolang.rb').read()
+m=re.search(r'def self\.'+sys.argv[1]+r'\b.*?%w\((.*?)\)',s,re.S)
+print('\n'.join(sorted(set(m.group(1).split()))))" "$$1"
+}
 
 grep -oE '^[A-Za-z_][A-Za-z0-9_]*:' lib/system/core.z | sed 's/:$$//' | sort -u > "$$D/core"
 sed -n '/^kwlookup: function/,/^}/p' lib/system/zlexer.z \
@@ -1422,6 +1429,7 @@ specset() {
 specset Keywords > "$$D/speckw"; specset "Reserved Words" > "$$D/specres"
 
 jsset keywords > "$$D/pkw"; jsset reserved > "$$D/pres"; jsset builtins > "$$D/pbi"
+rbset keywords > "$$D/rkw"; rbset reserved > "$$D/rres"; rbset builtins > "$$D/rbi"
 vimset zerolangKeyword > "$$D/vkw"; vimset zerolangReserved > "$$D/vres"
 { vimset zerolangBuiltinType; vimset zerolangBuiltinConst; vimset zerolangBuiltin; } | sort -u > "$$D/vbi"
 echo "$$CONTEXT" | tr ' ' '\n' | grep -v '^$$' | sort -u > "$$D/ctx"
@@ -1441,12 +1449,15 @@ cmp_set "prism reserved vs zlexer islookupReserved" "$$D/lexres" "$$D/pres"
 cmp_set "nvim reserved vs zlexer islookupReserved"  "$$D/lexres" "$$D/vres"
 cmp_set "spec Keywords vs zlexer kwlookup"          "$$D/lexkw"  "$$D/speckw"
 cmp_set "spec Reserved Words vs zlexer islookupReserved" "$$D/lexres" "$$D/specres"
+cmp_set "rouge keywords vs zlexer kwlookup"          "$$D/lexkw"  "$$D/rkw"
+cmp_set "rouge reserved vs zlexer islookupReserved" "$$D/lexres" "$$D/rres"
 cmp_set "prism builtins vs nvim builtins"           "$$D/pbi"    "$$D/vbi"
+cmp_set "rouge builtins vs prism builtins"          "$$D/pbi"    "$$D/rbi"
 sort -u "$$D/core" "$$D/ctx" > "$$D/want_bi"
 cmp_set "builtins vs lib/system/core.z + context words" "$$D/want_bi" "$$D/pbi"
 
 [ "$$fail" = 0 ] || { echo "  The language moved and a highlighter did not. Fix the word list."; exit 1; }
-echo "highlight-guard OK: $$(wc -l < "$$D/core") core.z names, $$(wc -l < "$$D/lexkw") keywords, $$(wc -l < "$$D/lexres") reserved -- spec and both highlighters agree"
+echo "highlight-guard OK: $$(wc -l < "$$D/core") core.z names, $$(wc -l < "$$D/lexkw") keywords, $$(wc -l < "$$D/lexres") reserved -- spec and all three highlighters agree"
 endef
 export HIGHLIGHT_GUARD_SH
 
