@@ -1,0 +1,60 @@
+# `.borrow` on a VALUE is an ownership marker, not a member: it names the
+# default a parameter already has, and on a binding it aliases the source. The
+# checker has always accepted it -- checkMarkerMember carries the base's own
+# type through -- but two consumers had only ever learned its retired spelling,
+# `.lock`, and each failed in its own way.
+#
+# THE EMITTER wrote the marker through as a C field access: `z_v1.borrow`, and
+# gcc answered "z_t89_t has no member named borrow". The `.lock` leg beside it
+# had emitted the base all along; `.borrow` simply was not in the table.
+#
+# THE BINDING FREED IT TWICE. A `<name>.borrow` binding is a dotted path whose
+# member lookup MISSES -- no type declares a `borrow` field -- and a miss was
+# read as "an owned value", so the alias was freed alongside the source it
+# aliases. That half was never `.borrow`-specific: `.lock` bindings reached the
+# same miss and double-freed silently, with no compile error in front of it.
+#
+# The String matters: a class of scalars survives a double free unnoticed, so
+# the heap buffer is what makes the second free fatal, and the corpus leak pass
+# is what proves the fix did not simply stop freeing.
+Bag: class {
+    a: i64
+}
+
+takesString: function {s: String.borrow} out u64 is {
+    return s.count
+}
+
+takesBag: function {b: Bag.borrow} out i64 is {
+    return b.a
+}
+
+Holder: class {
+    target: Bag.borrow
+} as {
+    create: function {target: Bag.borrow} out this.takex is {
+        return (meta.create :target)
+    }
+    look: function {it: this} out i64 is {
+        return it.target.a
+    }
+}
+
+main: function is {
+    # argument position: the marker names the parameter's own default
+    m: "hello".string
+    print "arg str: \{(takesString s: m.borrow)}"
+    print "source intact: \{m}"
+
+    g: Bag a: 42
+    print "arg cls: \{(takesBag b: g.borrow)}"
+
+    # construction argument, both spellings of the construction
+    with h: (Holder target: g.borrow) do print "ctor bare: \{h.look}"
+    with k: (Holder.create target: g.borrow) do print "ctor create: \{k.look}"
+
+    # binding position: the binding ALIASES, so only `m` owns the buffer
+    b: m.borrow
+    print "bound: \{b}"
+    print "still owned: \{m}"
+}

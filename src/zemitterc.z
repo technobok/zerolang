@@ -2651,6 +2651,7 @@ mnHas: 17.u64
 mnDelete: 18.u64
 mnKeyAt: 19.u64
 mnValueAt: 20.u64
+mnBorrow: 21.u64
 
 # ogPut -- place one row AT its own constant. Writing the index and the name
 # together is what keeps the two halves of the table in step; a row that drifts
@@ -2697,6 +2698,7 @@ memberDispatchNames: function {acc: List String} is {
     mnPut :acc at: mnDelete name: "delete"
     mnPut :acc at: mnKeyAt name: "keyAt"
     mnPut :acc at: mnValueAt name: "valueAt"
+    mnPut :acc at: mnBorrow name: "borrow"
 }
 
 # mnIs -- is `id` the dispatch name at index `at`? TWO zeros meet here and they
@@ -6695,6 +6697,15 @@ bindingRhsIsBorrow: function {
             }
             return true
         } case none then {
+            # `.borrow` / `.lock` on a value is the ownership marker, not a
+            # member -- no type declares one, which is exactly why the lookup
+            # missed. The binding ALIASES its source, so the source's owner
+            # frees the buffer and the binding must not free it again. A
+            # protocol or facet declaring a real `borrow` projection resolves
+            # above and never reaches here.
+            chId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
+            if (mnIs :ctx id: chId at: mnBorrow) then return true
+            if (mnIs :ctx id: chId at: mnLock) then return true
             return false
         }
     } else {
@@ -12957,6 +12968,25 @@ emitDottedNativeMarker: function {
     # field); emit the base, which the borrow param then addresses.
     if (mnIs :ctx id: mn2Id at: mnLock) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+    }
+    # `.borrow` is the same marker under its current spelling, and the checker
+    # accepts it as one. A protocol or facet declares a real `borrow`
+    # projection, so the split is drawn here off the base type exactly as
+    # checkBorrowLeg draws it -- one discriminator, so the two cannot disagree.
+    if (mnIs :ctx id: mn2Id at: mnBorrow) then {
+        bmk: true
+        bttB: symtab.reg.typetypeOf typeId: dpbT
+        if bttB == ztypes.ztypetype.protocolType then bmk = false
+        if bttB == ztypes.ztypetype.facetType then bmk = false
+        if bmk then {
+            bcoB: symtab.typing.declChildOfId parentTypeId: dpbT nameId: zast.names.wkBorrow
+            match (
+                bcoB
+            ) case some then {
+                if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: bcoB.u64)) == ztypes.ztypetype.functionType then bmk = false
+            } case none then null
+        }
+        if bmk then return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
     # `.take` on a heap reftype (String / union / by-value class) is an
     # ownership MOVE: emit the base value. The statement-level emitter zeroes
