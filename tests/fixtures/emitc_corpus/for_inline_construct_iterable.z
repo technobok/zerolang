@@ -1,0 +1,38 @@
+# A construction used directly as a `for` subject is hoisted to a temp the loop
+# owns, exactly as a call already is. Written as a BARE TYPE NAME it is an atom
+# in the AST and a call in the emitted C, so the shape test read it as an lvalue
+# and the loop asked for `&<T>_create(...)` -- gcc: "lvalue required as unary &
+# operand".
+#
+# Neither the zerolang gates nor a run golden can see that on its own: the
+# program typechecks and the failure is the C compiler refusing the generated
+# file. This fixture runs, so the corpus gate catches it either way.
+#
+# ONLY THE ZERO-ARGUMENT SPELLING WAS BROKEN. `(Counter pos: 0)` is a call node
+# and was always hoisted; binding first and `with` both worked too. The bare
+# name is the one spelling that reaches the emitter looking like an lvalue, and
+# nothing in the tree used it -- iterators were built by a factory or bound
+# first.
+Counter: class {
+    pos: 0
+    step: 1
+} as {
+    call: function {it: this} out (optionval t: i64) is {
+        if it.pos < 3 then {
+            it.pos = it.pos + it.step
+            return (optionval.some it.pos)
+        }
+        return (optionval.none i64)
+    }
+}
+
+main: function is {
+    # the two spellings that emitted invalid C
+    for x: Counter loop print "bare: \{x}"
+    for y: (Counter) loop print "paren: \{y}"
+    # the three that always worked, alongside so the four agree in one program
+    for z: (Counter pos: 0 step: 1) loop print "args: \{z}"
+    c: Counter
+    for v: c loop print "bound: \{v}"
+    with w: Counter do for u: w loop print "with: \{u}"
+}
