@@ -1,35 +1,37 @@
-# generator_chain.z -- composing generators via sequential
-# for-loops in a single body.
+# generator_chain.z -- composing generators by driving one from
+# inside another.
 #
-# Two intrange iterators are concatenated by an outer generator
-# `chained` that drives each in turn. The inline form
-# `for x: (intrange ...) loop { yield x }` works because the
-# desugarer auto-extracts a non-trivial for-loop iterable into a
-# synthetic local before the loop -- the local crosses the
-# enclosing generator's suspensions (yielding-loop rule) so it
-# gets promoted to a field of `chained_iter` and persists across
-# `.call` invocations.
+# Two `IntRange` iterators are concatenated by an outer generator
+# `Chained` that drives each in turn. The inline form
+# `for x: (IntRange ...) loop { yield x }` works because a for-loop
+# iterable that is a construction is hoisted to a temp before the
+# loop -- and that temp crosses the enclosing generator's
+# suspensions, so it is promoted to a field of `Chained` and
+# persists across `.call` invocations.
 #
 # Equivalent explicit-binding form:
-#   inner1: (intrange lo: a_lo hi: a_hi)
+#   inner1: (IntRange lo: this.a_lo hi: this.a_hi)
 #   for x: inner1 loop { yield x }
-# (named local, same desugar outcome; the spec lists both forms.)
+# (named local, same outcome; the spec lists both forms.)
 
-intrange: function {lo: i64 hi: i64} out (Iterator Gives: i64) is {
-    i: lo
-    for i < hi loop {
-        yield i
-        i = i + 1
+IntRange: generator { lo: i64  hi: i64 } as {
+    call: function out i64 is {
+        i: this.lo
+        for i < this.hi loop {
+            yield i
+            i = i + 1
+        }
     }
 }
 
-chained: function {a_lo: i64 a_hi: i64 b_lo: i64 b_hi: i64}
-                 out (Iterator Gives: i64) is {
-    for x: (intrange lo: a_lo hi: a_hi) loop yield x
-    for x: (intrange lo: b_lo hi: b_hi) loop yield x
+Chained: generator { a_lo: i64  a_hi: i64  b_lo: i64  b_hi: i64 } as {
+    call: function out i64 is {
+        for x: (IntRange lo: this.a_lo hi: this.a_hi) loop yield x
+        for x: (IntRange lo: this.b_lo hi: this.b_hi) loop yield x
+    }
 }
 
 main: function is {
-    for v: (chained a_lo: 10 a_hi: 13 b_lo: 100 b_hi: 102) loop print "v: \{v}"
+    for v: (Chained a_lo: 10 a_hi: 13 b_lo: 100 b_hi: 102) loop print "v: \{v}"
     print "done"
 }

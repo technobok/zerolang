@@ -1,19 +1,18 @@
 # generator_owned_local_dtor.z -- an OWNED local promoted to a generator's state
-# class must be freed when the iterator instance is.
+# class must be freed when the instance is.
 #
-# `needsDestructor` is a flag stamped at CHECK time, and for a synth iterator
-# class it was computed from the generator's PARAMETERS alone: a class whose
-# only owned field is a promoted LOCAL carried false, so no destructor was
-# emitted for it and the local was never freed. `structDestroyNontrivial` reads
-# the real field types at EMIT time and is the accurate authority, so it is
-# asked too -- both for emitting the destructor and for registering the
-# instance destroy.
+# `needsDestructor` is a flag stamped at CHECK time, and for a generator class
+# it was computed from the captured state alone: a class whose only owned field
+# is a promoted LOCAL carried false, so no destructor was emitted for it and the
+# local was never freed. `structDestroyNontrivial` reads the real field types at
+# EMIT time and is the accurate authority, so it is asked too -- both for
+# emitting the destructor and for registering the instance destroy.
 #
 # The corpus missed this because `generator_local_cleanup.z` gives every
-# generator a `String.take` parameter, and an owned PARAM already forced the
-# flag on -- the promoted locals were being freed by a destructor they had not
-# earned. Every generator here is parameterless or takes only scalars, so the
-# local is the sole owner.
+# generator an owned String field, and an owned field already forced the flag on
+# -- the promoted locals were being freed by a destructor they had not earned.
+# Every generator here has no fields or only scalar ones, so the local is the
+# sole owner.
 #
 # These are leak-checked by the corpus runner, which is the whole point: each
 # yields correct values either way, and only the leak distinguishes them.
@@ -23,29 +22,35 @@ mk: function {n: u64} out String is {
     return "ab".string
 }
 
-held: function out (Iterator Gives: u64) is {
-    s: (mk n: 9.u64)
-    yield 1.u64
-    yield s.length
-}
-
-withval: function out (Iterator Gives: u64) is {
-    with s: (mk n: 9.u64) do {
-        yield 2.u64
+Held: generator as {
+    call: function out u64 is {
+        s: (mk n: 9.u64)
+        yield 1.u64
         yield s.length
     }
 }
 
-pair: function out (Iterator Gives: u64) is {
-    a: (mk n: 9.u64)
-    b: (mk n: 1.u64)
-    yield 3.u64
-    yield a.length + b.length
+WithVal: generator as {
+    call: function out u64 is {
+        with s: (mk n: 9.u64) do {
+            yield 2.u64
+            yield s.length
+        }
+    }
+}
+
+Pair: generator as {
+    call: function out u64 is {
+        a: (mk n: 9.u64)
+        b: (mk n: 1.u64)
+        yield 3.u64
+        yield a.length + b.length
+    }
 }
 
 main: function is {
-    for x: (held) loop print "x: \{x}"
-    for y: (withval) loop print "y: \{y}"
-    for z: (pair) loop print "z: \{z}"
+    for x: (Held) loop print "x: \{x}"
+    for y: (WithVal) loop print "y: \{y}"
+    for z: (Pair) loop print "z: \{z}"
     print "done"
 }

@@ -1,24 +1,26 @@
-# zgenerator.z -- generator-function lowering. A generator is a function
-# whose body yields and whose declared return is the Iterator protocol (the
-# caller decides which). Lowering turns it into a synthesized iterator class
-# -- a `state` cursor plus the captured parameters and yield-crossing locals,
-# a `create` forwarding to meta.create, and a `call` method holding the
-# original body with its yields intact (the state machine is the emitter's
-# job) -- and rebinds the original function to a factory returning the class.
+# zgenerator.z -- preparing a declared `generator` for the ordinary class walk.
+#
+# A generator is a DECLARATION: its `is` block is the state it is constructed
+# with, and its `call` member is a body that suspends. The class is the
+# author's, so this unit synthesises nothing the author already wrote -- it
+# adds `call`'s implicit receiver and the option wrapper around its element
+# type, generates the `create` the `is` fields describe, and appends the fields
+# the suspension transform needs: a `state` cursor, the yield-crossing locals,
+# the loop counters, and the resume slots. The state machine itself is the
+# emitter's job; what happens here is that the class arrives at it complete.
+#
+# Nothing here infers ownership. A field's marker is what the author declared,
+# and the generated `create`'s parameter follows from it -- which is the whole
+# reason the form exists.
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
 public: unit {
-    :canLowerNow
-    :clonePath
     :fnBodyHasYield
     :GenDeclared
     :lowerDeclared
-    :lowerOne
     :mkNamedOp
     :returnHeadIdOf
-    :returnHeadName
-    :returnHeadNameId
 }
 
 Node: zast.Node
@@ -39,59 +41,6 @@ NameCtr: class {
         id: this.next
         this.next = this.next + 1
         return (zast.nodeid.create from: id)
-    }
-}
-
-# One lowered generator: the factory that replaces the original function
-# definition, the synth class to append to the unit body, and the synth
-# `.call` return wrapper-EXPRESSION's nodeid (the pendingMono key; the
-# typechecker collapses that wrapper to optionval for valtype elements).
-GenLowered: class {
-    # the function that replaces the original definition: calling it builds the
-    # state machine rather than running the body
-    factory: Node
-    # the class carrying the generator's suspended state, appended to the unit
-    # body
-    synthClass: Node
-    # the synth `.call` return wrapper's node, which keys the pending mono. The
-    # checker collapses it to an optionval for a valtype element
-    wrapperNodeId: u32
-    # nodes deliberately left unstamped, so a later pass does not read the
-    # absence as a failure
-    noStamp: (ListVal u32)
-    # the synth `.call` functiondef's node id. The caller records it so the
-    # checker can put `yield` in scope for exactly that body
-    callBodyId: u32
-}
-
-# topNodeId -- a cloned type-path's top node id (the typeref-stamp key the
-# resolution records); 0 for unhandled shapes.
-topNodeId: function {n: Node.view} out zast.nodeid is {
-    match (
-        n
-    ) case atomid then {
-        return n.nodeid
-    } case labelvalue then {
-        return n.nodeid
-    } case dottedpath then {
-        return n.nodeid
-    } case expression then {
-        return n.nodeid
-    } case call then {
-        return n.nodeid
-    } else {
-        return (zast.nodeid.create from: 0)
-    }
-}
-
-# the operation node id of parameter node `n`.
-paramOpId: function {ast: Ast.view n: Node.view} out zast.nodeid is {
-    match (
-        n
-    ) case namedoperation then {
-        return (topNodeId n: (ast.nodes.get i: n.operation.u64))
-    } else {
-        return (zast.nodeid.create from: 0)
     }
 }
 
@@ -200,38 +149,6 @@ leafAtomName: function {ast: Ast.view n: Node.view} out String is {
     }
 }
 
-# returnHeadName -- the callable head atom of a parenthesized return-type
-# call (`out (Iterator gives: i64)` -> "Iterator"); "" for other shapes.
-returnHeadName: function {ast: Ast.view n: Node.view} out String is {
-    match (
-        n
-    ) case functiondef then {
-        return (returnHeadOpt :ast oId: n.returntype)
-    } else {
-        return "".string
-    }
-}
-
-# the return-type head name of optional operation `oId` (or "").
-returnHeadOpt: function {ast: Ast.view oId: zast.nodeid} out String is {
-    if oId.isZero then return "".string
-    o: ast.nodes.get i: oId.u64
-    return (returnHeadOf :ast n: o)
-
-}
-
-# the return-type head name of operation `n`.
-returnHeadOf: function {ast: Ast.view n: Node.view} out String is {
-    match (
-        n
-    ) case expression then {
-        return (returnHeadOf :ast n: (ast.nodes.get i: n.expression.u64))
-    } case call then {
-        return (leafAtomName :ast n: (ast.nodes.get i: n.callable.u64))
-    } else {
-        return "".string
-    }
-}
 # leafAtomNameId -- an atom's name id; 0 for other shapes. The id twin of
 # leafAtomName: a resolved compare needs the pool id, never the text.
 leafAtomNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
@@ -243,29 +160,6 @@ leafAtomNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     } else {
         return (zast.nameid.create from: 0)
     }
-}
-
-# returnHeadNameId -- the name id of the callable head of a return type
-# (`out (Iterator gives: i64)` -> the id of `Iterator`); 0 for other shapes.
-# A BARE head is a head too: `out Ints`, where `Ints` aliases an applied
-# protocol, names the same declaration a parenthesized call does, so the
-# atomid arm is not a special case but the same question asked of a shorter
-# shape.
-returnHeadNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
-    match (
-        n
-    ) case functiondef then {
-        return (returnHeadIdOpt :ast oId: n.returntype)
-    } else {
-        return (zast.nameid.create from: 0)
-    }
-}
-
-# the return-type head name id of optional operation `oId` (or 0).
-returnHeadIdOpt: function {ast: Ast.view oId: zast.nodeid} out zast.nameid is {
-    if oId.isZero then return (zast.nameid.create from: 0)
-    o: ast.nodes.get i: oId.u64
-    return (returnHeadIdOf :ast n: o)
 }
 
 # the return-type head name id of operation `n`.
@@ -282,17 +176,6 @@ returnHeadIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
         return (zast.nameid.create from: 0)
     }
 }
-
-# isNonOwnedLeaf -- a path leaf naming a NON-OWNED marker. `lock` and `borrow`
-# mean the same thing here (not owned, mutable), and the generator desugarer has
-# to accept both while `.lock` retires: the recognisers below keyed on the
-# literal `lock`, so a receiver spelled `.borrow` was silently not a receiver and
-# the factory came back with the wrong result type.
-isNonOwnedLeaf: function {name: StringView} out bool is {
-    if name == "lock" then return true
-    return name == "borrow"
-}
-
 
 # pathLeafName -- the take/lock/borrow ownership leaf on a dotted path,
 # "" when none.
@@ -498,70 +381,12 @@ clonePathUnsupported: function {ast: Ast myId: zast.nodeid} out Node is {
 # ownership leaf, accepts path CLONE or none). The base clone feeds the
 # synth wrapper; leaf "take" selects Option, else OptionView.
 GivesParts: class {
-    # a CLONE of the gives path, which feeds the synth wrapper. A clone because
-    # the original stays in the tree
+    # a CLONE of the element path, which feeds the option wrapper. A clone
+    # because the original stays in the tree
     base: (Option Node)
     # the ownership leaf. "take" selects Option and anything else selects
     # OptionView, which is the whole of the choice
     leaf: String
-    # a clone of the accepts path, when the iterator declares one
-    acceptsTy: (Option Node)
-}
-
-# the per-iteration gives/accepts shape derived from generator node `n`.
-givesParts: function {ast: Ast n: Node.view} out GivesParts is {
-    result: (GivesParts base: (Option.none Node) leaf: "".string acceptsTy: (Option.none Node))
-    match (
-        n
-    ) case functiondef then {
-        givesPartsOpt :ast oId: n.returntype dst: result
-    } else null
-    return result
-}
-
-# fill `dst` with the gives/accepts shape of optional node `oId`.
-givesPartsOpt: function {ast: Ast oId: zast.nodeid dst: GivesParts} is {
-    if oId.isZero then return
-    givesPartsOf :ast nid: oId :dst
-}
-
-# fill `dst` with the gives/accepts shape of node `n`.
-givesPartsOf: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
-    innerId: zast.nodeid
-    argIds: (ListVal u32)
-    {
-        n: ast.nodes.get i: nid.u64
-        match (
-            n
-        ) case expression then {
-            innerId = n.expression
-        } case call then {
-            with ait: n.arguments.iterate do for a: ait loop argIds.append from: a
-        } else null
-    }
-    if (innerId.isZero) == false then {
-        givesPartsOf :ast nid: innerId :dst
-        return
-    }
-    with it: argIds.iterate do for a0Id: it loop {
-        # the argument row is read through a view scoped to this block: the
-        # gives/accepts readers clone, which lends ast exclusively
-        kind: u32
-        opId: zast.nodeid
-        {
-            a0: ast.nodes.get i: a0Id.u64
-            match (
-                a0
-            ) case namedoperation then {
-                an: zast.nameTextAt :ast ref: a0.name
-                if an.stringView == "Gives" then kind = 1
-                if an.stringView == "Accepts" then kind = 2
-                opId = a0.operation
-            } else null
-        }
-        if kind == 1 then givesFromOp :ast nid: opId :dst
-        if kind == 2 then acceptsFromOp :ast nid: opId :dst
-    }
 }
 
 # read the `gives` type from operation `n` into `dst`.
@@ -595,61 +420,6 @@ givesFromOp: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
     } else {
         bc2: clonePathAt :ast :nid
         dst.base = (Option.some bc2)
-    }
-}
-
-# read the `accepts` type from operation `n` into `dst`.
-acceptsFromOp: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
-    nm0: String
-    {
-        n: ast.nodes.get i: nid.u64
-        nm0 = leafAtomName :ast :n
-    }
-    if nm0.stringView != "null" then {
-        ac: clonePathAt :ast :nid
-        dst.acceptsTy = (Option.some ac)
-    }
-}
-
-# resumeBaseId -- pathBaseAtomId over an optional path.
-resumeBaseId: function {ast: Ast.view o: (Option Node).view} out zast.nodeid is {
-    match (
-        o
-    ) case some then {
-        return (pathBaseAtomId :ast n: o)
-    } case none then {
-        return (zast.nodeid.create from: 0)
-    }
-}
-
-# pathBaseAtomId -- the head atom's node id of a (possibly dotted /
-# wrapped) type path; 0 for other shapes.
-pathBaseAtomId: function {ast: Ast.view n: Node.view} out zast.nodeid is {
-    match (
-        n
-    ) case atomid then {
-        return n.nodeid
-    } case labelvalue then {
-        return n.nodeid
-    } case dottedpath then {
-        return (pathBaseAtomId :ast n: (ast.nodes.get i: n.parent.u64))
-    } case expression then {
-        return (pathBaseAtomId :ast n: (ast.nodes.get i: n.expression.u64))
-    } else {
-        return (zast.nodeid.create from: 0)
-    }
-}
-
-# cloneDottedParent -- a clone of a dotted path's parent (the ownership
-# leaf stripped); none for non-dotted shapes.
-cloneDottedParent: function {ast: Ast n: Node.view} out Option Node is {
-    match (
-        n
-    ) case dottedpath then {
-        c: clonePathAt :ast nid: n.parent
-        return (Option.some c)
-    } else {
-        return (Option.none Node)
     }
 }
 
@@ -824,39 +594,6 @@ buildCreateMethod: function {
     )
 }
 
-# buildCallMethod -- the iterator protocol implementation: `call: function
-# {this: this} out (<wrapper> t: <gives>) is <original body>`. Yields stay
-# in place; promoted-name rewriting lands with the parameterized examples.
-buildCallMethod: function {
-    ast: Ast
-    line: u32
-    col: u32
-    body: Node.take
-    wrapExprId: zast.nodeid
-    valueParam: (Option Node).take
-} out Node is {
-    thisP: mkAtom :ast :line :col name: "this"
-    thisParam: mkNamedOp :ast :line :col name: "this" op: thisP
-    params: (ListVal u32)
-    params.append (zast.tableAdd :ast n: thisParam)
-    vp: valueParam.take
-    match (
-        vp
-    ) case some then {
-        vparam: mkNamedOp :ast :line :col name: "value" op: vp.take
-        params.append (zast.tableAdd :ast n: vparam)
-    } case none then null
-    return (Node.functiondef (zast.FunctionData
-        nodeid: (zast.tableReserve :ast)
-        lineno: line
-        colno: col
-        returntype: wrapExprId
-        parameters: params
-        body: (zast.tableAdd :ast n: body)
-        isNative: false
-        asItems: (ListVal u32))
-    )
-}
 
 # buildWrapper -- the synth `.call` return `(Option|OptionView <base>)`; leaf
 # "take" selects Option, anything else OptionView. The type argument is written
@@ -886,82 +623,6 @@ buildWrapper: function {
     )
 }
 
-# buildFactory -- the replacement for the original function: return type =
-# the synth class, body = `return (<synth_name> p1: p1 ...)` forwarding
-# each captured parameter by name.
-buildFactory: function {
-    ast: Ast
-    line: u32
-    col: u32
-    synthName: StringView
-    params: (ListVal u32).take
-    fwdNames: (List String).view
-    privNames: (MapRV String v: bool)
-} out Node is {
-    synthAtom: mkAtom :ast :line :col name: synthName
-    fargs: (ListVal u32)
-    fi: u64
-    fn: fwdNames.length
-    for fi < fn loop {
-        f0: fwdNames.get i: fi
-        f0v: f0.stringView
-        va0: mkAtom :ast :line :col name: f0v
-        # a private-lock receiver forwards through `.private`: the synth
-        # class's field needs friend access, while the factory's own
-        # public `this.lock` parameter stays callable from outside.
-        f0o: f0v
-        isPriv: boolOrDefault o: (privNames.get key: f0o.asString) d: false
-        if isPriv then {
-            pa0: mkAtom :ast :line :col name: "private"
-            vp0: (Node.dottedpath (zast.DottedPathData
-                nodeid: (zast.tableReserve :ast)
-                lineno: line
-                colno: col
-                parent: (zast.tableAdd :ast n: va0)
-                child: (zast.tableAdd :ast n: pa0))
-            )
-            fa1: mkNamedOp :ast :line :col name: f0v op: vp0
-            fargs.append (zast.tableAdd :ast n: fa1)
-        } else {
-            fa0: mkNamedOp :ast :line :col name: f0v op: va0
-            fargs.append (zast.tableAdd :ast n: fa0)
-        }
-        fi = fi + 1
-    }
-    icall: (Node.call (zast.CallData
-        nodeid: (zast.tableReserve :ast)
-        lineno: line
-        colno: col
-        callable: (zast.tableAdd :ast n: synthAtom)
-        arguments: fargs)
-    )
-    body: mkReturnBody :ast :line :col inner: icall
-    # `out <synth>.takex`, not a bare name: the class handed back captures the
-    # factory's parameters, and a captured NON-OWNED one is a reference into
-    # the caller that has to stay pinned for the iterator's lifetime. The
-    # marker is what carries that pin across the factory boundary to the
-    # caller's variable; the synth create wears it for the same reason.
-    retAtom: mkAtom :ast :line :col name: synthName
-    takexRet: mkAtom :ast :line :col name: "takex"
-    retPath: (Node.dottedpath (zast.DottedPathData
-        nodeid: (zast.tableReserve :ast)
-        lineno: line
-        colno: col
-        parent: (zast.tableAdd :ast n: retAtom)
-        child: (zast.tableAdd :ast n: takexRet))
-    )
-    retAtomId: zast.tableAdd :ast n: retPath
-    return (Node.functiondef (zast.FunctionData
-        nodeid: (zast.tableReserve :ast)
-        lineno: line
-        colno: col
-        returntype: retAtomId
-        parameters: params
-        body: (zast.tableAdd :ast n: body)
-        isNative: false
-        asItems: (ListVal u32))
-    )
-}
 
 # isYieldValue -- the assignment RHS is a yield expression (through
 # expression wrappers): the expression-form `name: yield E`.
@@ -1339,17 +1000,6 @@ promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out Node is 
     )
 }
 
-# promoteIterablesOptAt -- the id-taking entry (0 = absent); the promoted
-# clone comes back owned.
-promoteIterablesOptAt: function {
-    ast: Ast
-    ctr: NameCtr
-    oId: zast.nodeid
-} out Option Node is {
-    if oId.isZero then return (Option.none Node)
-    r: promoteIterables :ast :ctr nid: oId
-    return (Option.some r)
-}
 
 # promoteIterablesIdAt -- promote and intern a loop body (0 = absent).
 promoteIterablesIdAt: function {
@@ -2465,339 +2115,6 @@ mkThisDotted: function {
     )
 }
 
-# cloneWithThisHead -- clone a type path replacing its `this` head atom
-# with the named receiver type (`this.private.lock` -> `Bag.private.lock`).
-# The rewritten spine carries the supplied position (the function's start).
-cloneWithThisHead: function {
-    ast: Ast
-    nid: zast.nodeid
-    receiverType: StringView
-    line: u32
-    col: u32
-} out Node is {
-    # 1 = the atom `this`, 2 = another atom, 3 = the label `this`, 4 = another
-    # label, 5 = a dotted path, 6 = an expression, 0 = any other shape (a
-    # plain clone)
-    shape: u32
-    nameId: zast.nameid
-    headId: zast.nodeid
-    childId: zast.nodeid
-    {
-        n: ast.nodes.get i: nid.u64
-        match (
-            n
-        ) case atomid then {
-            nameId = n.name
-            if n.name.u32 == zast.names.wkThis then {
-                shape = 1
-            } else {
-                shape = 2
-            }
-        } case labelvalue then {
-            nameId = n.name
-            if n.name.u32 == zast.names.wkThis then {
-                shape = 3
-            } else {
-                shape = 4
-            }
-        } case dottedpath then {
-            shape = 5
-            headId = n.parent
-            childId = n.child
-        } case expression then {
-            shape = 6
-            headId = n.expression
-        } else null
-    }
-    if shape == 1 then return (mkAtom :ast :line :col name: receiverType)
-    if shape == 2 then {
-        return (Node.atomid (zast.AtomIdData
-            nodeid: (zast.tableReserve :ast)
-            lineno: line
-            colno: col
-            name: nameId)
-        )
-    }
-    if shape == 3 then return (mkAtom :ast :line :col name: receiverType)
-    if shape == 4 then {
-        return (Node.labelvalue (zast.LabelValueData
-            nodeid: (zast.tableReserve :ast)
-            lineno: line
-            colno: col
-            name: nameId)
-        )
-    }
-    if shape == 5 then {
-        np: cloneWithThisHead :ast nid: headId :receiverType :line :col
-        nc: clonePathAt :ast nid: childId
-        return (Node.dottedpath (zast.DottedPathData
-            nodeid: (zast.tableReserve :ast)
-            lineno: line
-            colno: col
-            parent: (zast.tableAdd :ast n: np)
-            child: (zast.tableAdd :ast n: nc))
-        )
-    }
-    if shape == 6 then {
-        ne: cloneWithThisHead :ast nid: headId :receiverType :line :col
-        return (Node.expression (zast.ExpressionData
-            nodeid: (zast.tableReserve :ast)
-            lineno: line
-            colno: col
-            expression: (zast.tableAdd :ast n: ne))
-        )
-    }
-    return (clonePathAt :ast :nid)
-}
-
-# isThisPrivateLock -- the `this.private.lock` friend-access receiver form.
-isThisPrivateLock: function {ast: Ast.view n: Node.view} out bool is {
-    match (
-        n
-    ) case dottedpath then {
-        ln: leafAtomName :ast n: (ast.nodes.get i: n.child.u64)
-        if (isNonOwnedLeaf name: ln.stringView) then {
-            return (isThisPrivate :ast n: (ast.nodes.get i: n.parent.u64))
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
-}
-
-# true when node `n` reads a private `this` member.
-isThisPrivate: function {ast: Ast.view n: Node.view} out bool is {
-    match (
-        n
-    ) case dottedpath then {
-        pn: leafAtomName :ast n: (ast.nodes.get i: n.child.u64)
-        if pn.stringView == "private" then {
-            return (pathHeadIsThis :ast n: (ast.nodes.get i: n.parent.u64))
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
-}
-
-# paramFieldPath -- the synth class's field type for one captured
-# parameter: a take-leaf strips (fields hold owned values), lock keeps
-# its suffix, bare passes through. Receiver (`this`-headed) params
-# capture as receiver-type lock fields.
-paramFieldPath: function {
-    ast: Ast
-    nid: zast.nodeid
-    receiverType: StringView
-} out Node is {
-    headIsThis: false
-    fl0: u32
-    fc0: u32
-    takeParentId: zast.nodeid
-    {
-        n: ast.nodes.get i: nid.u64
-        if receiverType.length > 0 then {
-            headIsThis = pathHeadIsThis :ast :n
-            if headIsThis then {
-                fp0: zast.posOf :n
-                fl0 = fp0.line
-                fc0 = fp0.col
-            }
-        }
-        if (headIsThis) == false then {
-            lf: pathLeafName :ast :n
-            if lf.stringView == "take" then {
-                match (
-                    n
-                ) case dottedpath then {
-                    takeParentId = n.parent
-                } else null
-            }
-        }
-    }
-    if headIsThis then return (cloneWithThisHead :ast :nid :receiverType line: fl0 col: fc0)
-    if (takeParentId.isZero) == false then return (clonePathAt :ast nid: takeParentId)
-    return (clonePathAt :ast :nid)
-}
-
-# cloneCreateParam -- the synth create's parameter: a clone with any
-# `this` head rewritten to the receiver type (inside the synth class,
-# `this` is the iterator, not the original receiver).
-cloneCreateParam: function {
-    ast: Ast
-    nid: zast.nodeid
-    receiverType: StringView
-    fnLine: u32
-    fnCol: u32
-} out Node is {
-    isNamed: false
-    ln0: u32
-    co0: u32
-    nnm: zast.nameid
-    opId: zast.nodeid
-    isTh0: false
-    {
-        n: ast.nodes.get i: nid.u64
-        match (
-            n
-        ) case namedoperation then {
-            isNamed = true
-            ln0 = n.lineno
-            co0 = n.colno
-            nnm = n.name
-            opId = n.operation
-            if receiverType.length > 0 then {
-                isTh0 = pathHeadIsThis :ast n: (ast.nodes.get i: n.operation.u64)
-            }
-        } else null
-    }
-    if (isNamed) == false then return (clonePathAt :ast :nid)
-    nop: Node.placeholder
-    if isTh0 then {
-        nop = cloneWithThisHead :ast nid: opId :receiverType line: fnLine col: fnCol
-    } else {
-        nop = clonePathAt :ast nid: opId
-    }
-    return (Node.namedoperation (zast.NamedOperationData
-        nodeid: (zast.tableReserve :ast)
-        lineno: ln0
-        colno: co0
-        name: nnm
-        operation: (zast.tableAdd :ast n: nop))
-    )
-}
-
-# cloneFactoryParam -- the factory's parameter: `this.private.lock`
-# exposes publicly as `this.lock` (the body projects `.private` when
-# forwarding); everything else clones as-is.
-cloneFactoryParam: function {
-    ast: Ast
-    nid: zast.nodeid
-    fnLine: u32
-    fnCol: u32
-} out Node is {
-    isNamed: false
-    ln0: u32
-    co0: u32
-    nnm: zast.nameid
-    opId: zast.nodeid
-    isPriv: false
-    {
-        n: ast.nodes.get i: nid.u64
-        match (
-            n
-        ) case namedoperation then {
-            isNamed = true
-            ln0 = n.lineno
-            co0 = n.colno
-            nnm = n.name
-            opId = n.operation
-            isPriv = isThisPrivateLock :ast n: (ast.nodes.get i: n.operation.u64)
-        } else null
-    }
-    if (isNamed) == false then return (clonePathAt :ast :nid)
-    if isPriv then {
-        # the public this.lock replacement carries the function's start
-        ta0: mkAtom :ast line: fnLine col: fnCol name: "this"
-        la0: mkAtom :ast line: fnLine col: fnCol name: "borrow"
-        nop2: (Node.dottedpath (zast.DottedPathData
-            nodeid: (zast.tableReserve :ast)
-            lineno: fnLine
-            colno: fnCol
-            parent: (zast.tableAdd :ast n: ta0)
-            child: (zast.tableAdd :ast n: la0))
-        )
-        return (Node.namedoperation (zast.NamedOperationData
-            nodeid: (zast.tableReserve :ast)
-            lineno: ln0
-            colno: co0
-            name: nnm
-            operation: (zast.tableAdd :ast n: nop2))
-        )
-    }
-    nop: clonePathAt :ast nid: opId
-    return (Node.namedoperation (zast.NamedOperationData
-        nodeid: (zast.tableReserve :ast)
-        lineno: ln0
-        colno: co0
-        name: nnm
-        operation: (zast.tableAdd :ast n: nop))
-    )
-}
-
-# canLowerNow -- pre-surgery shape gate on the borrowed definition: a
-# parenthesized gives, a real body, and no receiver (`this`-headed)
-# parameter types (method generators are not lowered).
-canLowerNow: function {ast: Ast.view n: Node.view hasReceiver: bool} out bool is {
-    match (
-        n
-    ) case functiondef then {
-        piter: n.parameters.iterate
-        for p0Id: piter loop {
-            p0: ast.nodes.get i: p0Id.u64
-            if (paramHeadIsThis :ast n: p0) then {
-                if hasReceiver then {
-                    if (paramIsThisLock :ast n: p0) == false then return false
-                } else {
-                    return false
-                }
-            }
-        }
-        hd: returnHeadOpt :ast oId: n.returntype
-        if hd.length == 0 then return false
-
-        return n.body > 0
-    } else {
-        return false
-    }
-}
-
-# true when parameter `n`'s path head is `this`.
-paramHeadIsThis: function {ast: Ast.view n: Node.view} out bool is {
-    match (
-        n
-    ) case namedoperation then {
-        return (pathHeadIsThis :ast n: (ast.nodes.get i: n.operation.u64))
-    } else {
-        return false
-    }
-}
-
-# paramIsThisLock -- the receiver parameter forms a generator method may
-# carry: `this.lock` or `this.private.lock`.
-paramIsThisLock: function {ast: Ast.view n: Node.view} out bool is {
-    match (
-        n
-    ) case namedoperation then {
-        lf: pathLeafName :ast n: (ast.nodes.get i: n.operation.u64)
-        if (isNonOwnedLeaf name: lf.stringView) then {
-            return true
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
-}
-
-# true when path `n`'s head is `this`.
-pathHeadIsThis: function {ast: Ast.view n: Node.view} out bool is {
-    match (
-        n
-    ) case atomid then {
-        return n.name.u32 == zast.names.wkThis
-    } case labelvalue then {
-        return n.name.u32 == zast.names.wkThis
-    } case dottedpath then {
-        return (pathHeadIsThis :ast n: (ast.nodes.get i: n.parent.u64))
-    } case expression then {
-        return (pathHeadIsThis :ast n: (ast.nodes.get i: n.expression.u64))
-    } else {
-        return false
-    }
-}
-
 # i64TypePath -- the `system.i64` type path the state cursor and the loop
 # counters are declared with. Minted fresh per field: a type path is a node, and
 # two fields may not share one.
@@ -2847,7 +2164,6 @@ wrapDeclaredCallReturn: function {
     gp: (GivesParts
         base: (Option.none Node)
         leaf: "".string
-        acceptsTy: (Option.none Node)
     )
     givesFromOp :ast nid: retId dst: gp
     gb: gp.base.take
@@ -3149,7 +2465,6 @@ appendCrossingFields: function {
         rhsCar: (GivesParts
             base: (Option.none Node)
             leaf: "".string
-            acceptsTy: (Option.none Node)
         )
         firstRhsOfOpt :ast o: pBody name: l3v dst: rhsCar
         rc3: rhsCar.base.take
@@ -3424,378 +2739,3 @@ lowerDeclared: function {
     dst.callFnId = callFnId.u32
 }
 
-# lowerOne -- lower one generator: collect the captured parameters and
-# yield-crossing locals, deep-clone the body with promoted names
-# rewritten through `this`, and assemble the synth class (state +
-# captured fields + create + call) plus the forwarding factory.
-lowerOne: function {
-    ast: Ast
-    fn: Node.take
-    synthName: StringView
-    receiverType: StringView
-} out Option GenLowered is {
-    gp: givesParts :ast n: fn
-    match (
-        fn
-    ) case functiondef then {
-        line: fn.lineno
-        col: fn.colno
-        gbase: gp.base.take
-        match (
-            gbase
-        ) case some then {
-            wrapper: buildWrapper :ast :line :col base: gbase.take leaf: gp.leaf.stringView
-            # the EXPRESSION wrapper keys the valtype collapse the
-            # typechecker applies to the `.call` return, and interning is
-            # what settles its id -- so key on what it carries afterwards
-            wrapExpr: (Node.expression (zast.ExpressionData
-                nodeid: (zast.tableReserve :ast)
-                lineno: line
-                colno: col
-                expression: (zast.tableAdd :ast n: wrapper))
-            )
-            wid: zast.tableAdd :ast n: wrapExpr
-            # captured parameters: names, field paths, create/factory clones
-            pNames: (List String)
-            pFields: (List Node)
-            createParams: (ListVal u32)
-            factoryParams: (ListVal u32)
-            noStamp: (ListVal u32)
-            thisFlags: (ListVal bool)
-            privNames: (MapRV String v: bool)
-            piter: fn.parameters.iterate
-            for p0Id: piter loop {
-                # the parameter row is read through a view scoped to this
-                # block: the clones below mint
-                p0Nid: zast.nodeid.create from: p0Id
-                isNamedP: false
-                pNameId: zast.nameid
-                pOpId: zast.nodeid
-                isThP: false
-                {
-                    p0: ast.nodes.get i: p0Id.u64
-                    isThP = paramHeadIsThis :ast n: p0
-                    match (
-                        p0
-                    ) case namedoperation then {
-                        isNamedP = true
-                        pNameId = p0.name
-                        pOpId = p0.operation
-                    } else null
-                }
-                cp0: cloneCreateParam :ast nid: p0Nid :receiverType fnLine: line fnCol: col
-                cpid0: paramOpId :ast n: cp0
-                if cpid0 > 0 when isThP then {} else {
-                    if cpid0 > 0 then noStamp.append cpid0
-                }
-                fp0: cloneFactoryParam :ast nid: p0Nid fnLine: line fnCol: col
-                if isNamedP then {
-                    pn0: zast.nameTextCopy :ast ref: pNameId
-                    if pn0.length > 0 then {
-                        if (isThisPrivateLock :ast n: (ast.nodes.get i: pOpId.u64)) then {
-                            pnv1: pn0.stringView
-                            pk1: pnv1.string
-                            pv1: true
-                            privNames.set key: pk1 value: pv1
-                        }
-                        pf0: paramFieldPath :ast nid: pOpId :receiverType
-                        pFields.append pf0
-                        createParams.append (zast.tableAdd :ast n: cp0)
-                        factoryParams.append (zast.tableAdd :ast n: fp0)
-                        pNames.append pn0
-                        tf0: isThP
-                        thisFlags.append tf0
-                    }
-                }
-            }
-            # the suspending-iterable promotion runs first; the analyses and
-            # the this-rewrite read the promoted body.
-            ictr: (NameCtr next: 0)
-            pBody: promoteIterablesOptAt :ast ctr: ictr oId: fn.body
-            # promoted = parameters + yield-crossing locals
-            gc: (GenCross
-                yieldCount: 0
-                firstDef: (MapRV String v: u64)
-                maxUse: (MapRV String v: u64)
-                inLoop: (MapRV String v: bool)
-                params: (MapRV String v: bool)
-                yieldBound: (MapRV String v: bool)
-            )
-            gi: u64
-            gn: pNames.length
-            for gi < gn loop {
-                g0: pNames.get i: gi
-                g0v: g0.stringView
-                gk0: g0v.string
-                gv0: true
-                gc.params.set key: gk0 value: gv0
-                gi = gi + 1
-            }
-            crossWalkOpt :ast :gc o: pBody inYieldLoop: false
-            # one resume SLOT per suspension point, counted by the SAME
-            # function the emitter numbers its resume labels with
-            yieldSlots: yieldSlotsOpt :ast o: pBody
-            # one COUNTER field per label-bound `for` whose body suspends. A
-            # `for` counter lives only in the C header, and `goto L_resume_k`
-            # jumps in past the init clause, so it has to be a field like
-            # everything else that is live across a suspension. It cannot come
-            # from the crossing analysis: a `for` label is a nameid on the
-            # header's namedoperation, not an assignment, so crossWalk never
-            # sees it and rewriteToThis has no shape to rewrite it into.
-            forSlots: forCounterSlotsOpt :ast o: pBody
-            crossing: (List String)
-            crossingLocals :gc dst: crossing
-            promoted: (MapRV String v: bool)
-            pi2: u64
-            pn2: pNames.length
-            for pi2 < pn2 loop {
-                pe2: pNames.get i: pi2
-                pe2v: pe2.stringView
-                pk2: pe2v.string
-                pv2: true
-                promoted.set key: pk2 value: pv2
-                pi2 = pi2 + 1
-            }
-            ci2: u64
-            cn2: crossing.length
-            for ci2 < cn2 loop {
-                ce2: crossing.get i: ci2
-                ce2v: ce2.stringView
-                ck2: ce2v.string
-                cv2: true
-                promoted.set key: ck2 value: cv2
-                ci2 = ci2 + 1
-            }
-            # the call body: a deep clone with promoted names through `this`
-            newBodyOpt: rewriteOptToThis :ast o: pBody :promoted
-            match (
-                newBodyOpt
-            ) case some then {
-                # bidirectional: the accepts path becomes the call's value
-                # parameter; the _resume_input field stores the most recent
-                # resumed value (take strips to an owned field, lock keeps,
-                # bare/borrow wraps in .lock).
-                valueParam: (Option.none Node)
-                resumeField: (Option.none Node)
-                rfRootStamp: false
-                acc: gp.acceptsTy.take
-                match (
-                    acc
-                ) case some then {
-                    ap: zast.posOf n: acc
-                    al: ap.line
-                    ac: ap.col
-                    vp0: clonePath :ast n: acc
-                    valueParam = (Option.some vp0)
-                    alf: pathLeafName :ast n: acc
-                    if alf.stringView == "take" then {
-                        resumeField = cloneDottedParent :ast n: acc
-                        rfb0: resumeBaseId :ast o: resumeField
-                        if rfb0 > 0 then noStamp.append rfb0
-                    } else {
-                        if (isNonOwnedLeaf name: alf.stringView) then {
-                            rf1: clonePath :ast n: acc
-                            # the field copy shares the param's stamp in the
-                            # reference -- one stamp per ref (the recorder
-                            # keys the head atom)
-                            rfb1: pathBaseAtomId :ast n: rf1
-                            if rfb1 > 0 then noStamp.append rfb1
-                            rfRootStamp = true
-                            resumeField = (Option.some rf1)
-                        } else {
-                            base: (Option.none Node)
-                            if alf.stringView == "borrow" then {
-                                base = cloneDottedParent :ast n: acc
-                            } else {
-                                b10: clonePath :ast n: acc
-                                base = (Option.some b10)
-                            }
-                            rfb2: resumeBaseId :ast o: base
-                            if rfb2 > 0 then noStamp.append rfb2
-                            bg: base.take
-                            match (
-                                bg
-                            ) case some then {
-                                la: mkAtom :ast line: al col: ac name: "borrow"
-                                rf2: (Node.dottedpath (zast.DottedPathData
-                                    nodeid: (zast.tableReserve :ast)
-                                    lineno: al
-                                    colno: ac
-                                    parent: (zast.tableAdd :ast n: bg.take)
-                                    child: (zast.tableAdd :ast n: la))
-                                )
-                                resumeField = (Option.some rf2)
-                            } case none then null
-                        }
-                    }
-                } case none then null
-                callM: (buildCallMethod
-                    :ast
-                    :line
-                    :col
-                    body: newBodyOpt.take
-                    wrapExprId: wid
-                    :valueParam
-                )
-                # the synth `.call`'s own id, read before the node is handed to
-                # mkNamedOp: this is the body `yield` is in scope for
-                cbId9: u32
-                match (
-                    callM
-                ) case functiondef then {
-                    cbId9 = callM.nodeid.u32
-                } else null
-                createM: (buildCreateMethod
-                    :ast
-                    :line
-                    :col
-                    params: createParams
-                    fwdNames: pNames
-                )
-                # class fields: the state cursor, captured params, then
-                # typeof-typed yield-crossing locals (first-assignment order)
-                sysAtom: mkAtom :ast :line :col name: "system"
-                i64Leaf: mkAtom :ast :line :col name: "i64"
-                i64Atom: (Node.dottedpath (zast.DottedPathData
-                    nodeid: (zast.tableReserve :ast)
-                    lineno: line
-                    colno: col
-                    parent: (zast.tableAdd :ast n: sysAtom)
-                    child: (zast.tableAdd :ast n: i64Leaf))
-                )
-                stField: mkNamedOp :ast :line :col name: "state" op: i64Atom
-                isItems: (ListVal u32)
-                isItems.append (zast.tableAdd :ast n: stField)
-                fi3: u64
-                fn3: pNames.length
-                for fi3 < fn3 loop {
-                    f3: pNames.get i: fi3
-                    f3v: f3.stringView
-                    pf3: pFields.get i: fi3
-                    # field paths staged owned: List.get is a borrow, the
-                    # namedoperation stores owned -- clone out
-                    pf3o: clonePath :ast n: pf3
-                    # receiver-lock fields stamp fresh; ordinary param fields
-                    # share the factory's stamp
-                    tf3: thisFlags.get i: fi3
-                    nf3: mkNamedOp :ast :line :col name: f3v op: pf3o
-                    if (tf3) == false then {
-                        pfid3: paramOpId :ast n: nf3
-                        if pfid3 > 0 then noStamp.append pfid3
-                    }
-                    isItems.append (zast.tableAdd :ast n: nf3)
-                    fi3 = fi3 + 1
-                }
-                li3: u64
-                ln3: crossing.length
-                for li3 < ln3 loop {
-                    l3: crossing.get i: li3
-                    l3v: l3.stringView
-                    rhsCar: (GivesParts
-                        base: (Option.none Node)
-                        leaf: "".string
-                        acceptsTy: (Option.none Node)
-                    )
-                    firstRhsOfOpt :ast o: pBody name: l3v dst: rhsCar
-                    rc3: rhsCar.base.take
-                    match (
-                        rc3
-                    ) case some then {
-                        tof3: (Node.typeofexpr (zast.TypeOfExprData
-                            nodeid: (zast.tableReserve :ast)
-                            lineno: line
-                            colno: col
-                            source: (zast.tableAdd :ast n: rc3.take))
-                        )
-                        nf4: mkNamedOp :ast :line :col name: l3v op: tof3
-                        isItems.append (zast.tableAdd :ast n: nf4)
-                    } case none then null
-                    li3 = li3 + 1
-                }
-                # the loop counters, OUTSIDE the accepts-gated block below: an
-                # out-only generator has no resume slots at all and still has
-                # `for` loops. Typed with the `state` recipe above rather than
-                # a typeof of a first assignment -- a counter has no assignment
-                # to read a type from, and it is an i64 by construction.
-                fci: u64
-                for fci < forSlots loop {
-                    fci = fci + 1
-                    fcSys: mkAtom :ast :line :col name: "system"
-                    fcLeaf: mkAtom :ast :line :col name: "i64"
-                    fcTy: (Node.dottedpath (zast.DottedPathData
-                        nodeid: (zast.tableReserve :ast)
-                        lineno: line
-                        colno: col
-                        parent: (zast.tableAdd :ast n: fcSys)
-                        child: (zast.tableAdd :ast n: fcLeaf))
-                    )
-                    fcNm: "_fc_\{fci}"
-                    fcF: mkNamedOp :ast :line :col name: fcNm.stringView op: fcTy
-                    isItems.append (zast.tableAdd :ast n: fcF)
-                }
-                rfg: resumeField.take
-                match (
-                    rfg
-                ) case some then {
-                    # A yield hoisted out of expression position leaves its
-                    # resumed value in one of these, not in a C local: the
-                    # suspension RETURNS from `.call`, so a local does not
-                    # survive a later suspension in the same statement. That is
-                    # the same reason the yield-crossing locals above became
-                    # fields, and these are the temps the emitter invents that
-                    # the crossing walk cannot see by name.
-                    yvi: u64
-                    for yvi < yieldSlots loop {
-                        yvi = yvi + 1
-                        yvT: clonePath :ast n: rfg
-                        yvNm: "_yv_\{yvi}"
-                        yvF: mkNamedOp :ast :line :col name: yvNm.stringView op: yvT
-                        isItems.append (zast.tableAdd :ast n: yvF)
-                    }
-                    rfn: mkNamedOp :ast :line :col name: "_resume_input" op: rfg.take
-                    if rfRootStamp then {
-                        rfd: paramOpId :ast n: rfn
-                        if rfd > 0 then noStamp.append rfd
-                    }
-                    isItems.append (zast.tableAdd :ast n: rfn)
-                } case none then null
-                createNamed: mkNamedOp :ast :line :col name: "create" op: createM
-                callNamed: mkNamedOp :ast :line :col name: "call" op: callM
-                asItems: (ListVal u32)
-                asItems.append (zast.tableAdd :ast n: createNamed)
-                asItems.append (zast.tableAdd :ast n: callNamed)
-                synthClass: (Node.objectdef (zast.ObjectDefData
-                    nodeid: (zast.tableReserve :ast)
-                    lineno: line
-                    colno: col
-                    kind: zast.objectkind.classDef
-                    :isItems
-                    :asItems
-                    isNative: false)
-                )
-                factory: (buildFactory
-                    :ast
-                    :line
-                    :col
-                    :synthName
-                    params: factoryParams
-                    fwdNames: pNames
-                    :privNames
-                )
-                return (Option.some (GenLowered
-                    :factory
-                    :synthClass
-                    wrapperNodeId: wid
-                    :noStamp
-                    callBodyId: cbId9)
-                )
-            } case none then {
-                return (Option.none GenLowered)
-            }
-        } case none then {
-            return (Option.none GenLowered)
-        }
-    } else {
-        return (Option.none GenLowered)
-    }
-}

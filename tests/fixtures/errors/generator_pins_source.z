@@ -1,19 +1,19 @@
-# A generator captures its non-owned parameters into the iterator it hands
-# back, so the factory returns `<synth>.takex` and the source stays pinned for
-# the iterator's lifetime. Moving the source out from under a live iterator
-# leaves every later `.call` reading freed memory -- the generator's captured
-# field is a reference into `g`, not a copy of it.
+# A generator's non-owned `is` field is a reference into whatever it was built
+# with, so the generated `create` returns `this.takex` and the source stays
+# pinned for the instance's lifetime. Moving it out from under a live generator
+# leaves every later `.call` reading freed memory.
 #
-# The pin has to be on the FACTORY's return, not just the synth create's: the
-# create is called inside the factory, where the source is already a parameter,
-# so a marker there pins nothing the caller can see.
+# The pin has to reach the CALLER's variable, not just the field: before it did,
+# the same move was accepted and the second `.call` printed `0`.
 Bag: class {
     a: i64
 }
 
-walk: function {b: Bag.borrow} out (Iterator Gives: i64) is {
-    yield b.a
-    yield b.a
+Walk: generator { b: Bag.borrow } as {
+    call: function out i64 is {
+        yield this.b.a
+        yield this.b.a
+    }
 }
 
 eat: function {victim: Bag.take} is {
@@ -22,7 +22,7 @@ eat: function {victim: Bag.take} is {
 
 main: function is {
     g: Bag a: 42
-    with it: (walk b: g) do {
+    with it: (Walk b: g) do {
         p: it.call
         match (p) case some then print "1: \{p}" case none then print "1: none"
         eat victim: g.take

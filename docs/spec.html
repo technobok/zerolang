@@ -163,6 +163,20 @@ Table of Contents</div>
 </li>
 <li><a href="#function">function</a>
 </li>
+</ul>
+</li>
+<li><a href="#the-is-block">The is-block</a>
+</li>
+<li><a href="#construction">Construction</a>
+</li>
+<li><a href="#the-call-member">The call member</a>
+</li>
+<li><a href="#yield-2">yield</a>
+</li>
+<li><a href="#the-per-call-input">The per-call input</a>
+</li>
+<li><a href="#composition">Composition</a>
+<ul>
 <li><a href="#object-definitions">Object definitions</a>
 </li>
 <li><a href="#record">record</a>
@@ -3799,63 +3813,46 @@ single-owner (cannot be copied), which is what makes the non-owned field safe.
 See <code>examples/ListIter.z</code> for the canonical pattern and
 <a href="./ownership.html">ownership for the lock-lifecycle walkthrough.</a></p>
 <h4 id="generator-functions"><a href="#generator-functions">5.13.6. Generator functions</a></h4>
-<p>A <strong>generator function</strong> is one whose body contains at least one
-<code>yield</code> expression. Its declared return type must be
-<code>Iterator gives: T</code> (optionally with <code>accepts: U</code>). The compiler
-synthesises a class implementing the iterator protocol; calling the
-generator returns an instance of that class with all parameters
-captured. The body, written straight-line, is lowered into a state
-machine whose <code>.call</code> method drives one step per invocation.</p>
-<p>A function declaring <code>out (Iterator Gives: T)</code> <strong>without</strong> a <code>yield</code>
-in its body is an ordinary factory (an unsynthesised function returning
-an iterator built by hand); it is not an error.</p>
-<pre><code class="language-zerolang"># out-only generator with captured state
-intrange: function {lo: i64 hi: i64} out (Iterator Gives: i64) is {
-    i: lo
-    for while i &lt; hi loop {
-        yield i
-        i = i + 1
+<p>A <strong>generator</strong> is a declaration, not a function. Its <code>is</code> block is the
+state it is constructed with, and its <code>call</code> member is a body that
+<strong>suspends</strong>: each <code>yield</code> hands a value back to the caller and resumes
+where it left off on the next call.</p>
+<pre><code class="language-zerolang">IntRange: generator { lo: i64  hi: i64 } as {
+    call: function out i64 is {
+        i: this.lo
+        for i &lt; this.hi loop {
+            yield i
+            i = i + 1
+        }
     }
 }
 
-# call site -- the for-loop drives the synthesised .call
-for x: (intrange lo: 0 hi: 3) loop { print "\{x}" }</code></pre>
-<p>The shape of the <code>.call</code> return type is determined by the form of
-<code>gives:</code>. Like every other argument position in zerolang, a
-generic argument defaults to <code>.borrow</code>; <code>.take</code> is explicit.</p>
-<table>
-<colgroup>
-<col style="width: 22%">
-<col style="width: 22%">
-<col style="width: 22%">
-<col style="width: 33%">
-</colgroup>
-<thead>
-<tr><th style="text-align: left">gives form</th><th style="text-align: left">Reftype T</th><th style="text-align: left">Valtype T</th><th style="text-align: left">Yielded value ownership</th></tr>
-</thead>
-<tbody>
-<tr><td>bare <code>T</code></td><td><code>OptionView(T)</code></td><td><code>optionval(T)</code></td><td>Borrowed view (ref) / copy (val)</td></tr>
-<tr><td><code>T.borrow</code></td><td><code>OptionView(T)</code></td><td><code>optionval(T)</code></td><td>Same as bare</td></tr>
-<tr><td><code>T.take</code></td><td><code>Option(T)</code></td><td><code>optionval(T)</code></td><td>Owned out (ref) / copy (val)</td></tr>
-</tbody>
-</table>
-<p>For valtype <code>T</code>, ownership annotations are physical no-ops
-(<code>.borrow</code> copies, <code>.take</code> is identical), so all three forms
-collapse to <code>optionval(T)</code>. The typechecker performs the collapse
-on synth-class <code>.call</code> return types after generator desugaring;
-user-written <code>Option</code> or <code>OptionView</code> calls outside this context
-keep their normal kind constraints.</p>
-<p>For reftype <code>T</code>, bare and <code>.borrow</code> both yield <code>OptionView(T)</code>
-(consistent with the reftype <code>.borrow</code> convention -- pass a
-reference). Owned reftype yield requires explicit <code>T.take</code>.</p>
-<p>See the Ownership on Generic Arguments section of
-<a href="./ownership.html">the ownership document for the broader</a>
-rule that governs ownership specifiers on generic arguments at
-use sites.</p>
-<p>Because the synthesised iterator outlives the factory call, every
-parameter must declare ownership/locking explicitly. A bare <code>.borrow</code>
-or bare <code>:this</code> is rejected -- the borrow's lifetime would be the
-factory call, but the iterator outlives that call.</p>
+# a generator is a TYPE: this is ordinary construction
+for x: (IntRange lo: 0 hi: 3) loop { print "\{x}" }</code></pre>
+<p>A generator is a reftype and is named like one, in PascalCase. It compiles to
+an ordinary class -- its <code>is</code> fields are the class's fields, its <code>call</code> is
+a method, and it goes through the same ownership, lock and monomorphisation
+paths as any hand-written iterator. What the compiler adds is <code>call</code>'s
+implicit receiver, the option wrapper around its element type, the <code>create</code>
+its <code>is</code> fields describe, and the fields the state machine needs.</p>
+<h2 id="the-is-block"><a href="#the-is-block">6. The is-block</a></h2>
+<p>The <code>is</code> block declares the construction state: zero or more fields, with
+ownership markers and default values allowed, read in the body as <code>this.x</code>.
+It is the only kind whose is-block may be omitted entirely -- a generator that
+captures nothing has none to write -- so all three spellings below parse to the
+same thing:</p>
+<pre><code class="language-zerolang">Lits: generator { } as { call: function out i64 is { yield 1 } }
+Lits: generator as { call: function out i64 is { yield 1 } }
+Lits: generator is {} as { call: function out i64 is { yield 1 } }</code></pre>
+<h2 id="construction"><a href="#construction">7. Construction</a></h2>
+<p><code>.create</code> is <strong>generated</strong> from the <code>is</code> fields, in order, and writing one
+by hand is a compile error. Each parameter's ownership follows the field it
+fills: an owned field (unmarked, <code>.take</code> or <code>.hold</code>) takes a <code>.take</code>
+parameter, so the argument is moved in; a non-owned field (<code>.borrow</code> or
+<code>.view</code>) takes that same marker.</p>
+<p>The generated <code>create</code> returns <code>this.takex</code>, so a non-owned field <strong>pins</strong>
+whatever it points into for the instance's lifetime: while the generator is
+live, its source cannot be moved, written or reassigned. Reads stay legal.</p>
 <table>
 <colgroup>
 <col style="width: 33%">
@@ -3863,51 +3860,43 @@ factory call, but the iterator outlives that call.</p>
 <col style="width: 44%">
 </colgroup>
 <thead>
-<tr><th style="text-align: left">Parameter form</th><th style="text-align: left">Verdict</th><th style="text-align: left">Stored as</th></tr>
+<tr><th style="text-align: left">Field form</th><th style="text-align: left">Stored as</th><th style="text-align: left">Argument</th></tr>
 </thead>
 <tbody>
-<tr><td><code>arg: T.take</code> (reftype)</td><td>OK</td><td>Owned field; destroyed on iterator destruction</td></tr>
-<tr><td><code>arg: T.borrow</code> (reftype)</td><td>OK</td><td>Locked field; released on iterator destruction</td></tr>
-<tr><td>bare <code>arg: T</code> (reftype)</td><td>Compile error</td><td>(use <code>.borrow</code> or <code>.take</code>)</td></tr>
-<tr><td><code>arg: T</code> (valtype)</td><td>OK</td><td>Value field</td></tr>
-<tr><td><code>:this</code> (method)</td><td>Compile error</td><td>(use the explicit binding form below)</td></tr>
-<tr><td><code>arg: this.borrow</code>, <code>arg: this.private.borrow</code></td><td>OK</td><td>Locked receiver field</td></tr>
+<tr><td>bare <code>x: T</code></td><td>Owned field</td><td>Moved in; destroyed with the instance</td></tr>
+<tr><td><code>x: T.take</code></td><td>Owned field</td><td>Same</td></tr>
+<tr><td><code>x: T.hold</code></td><td>Owned, readonly</td><td>Moved in</td></tr>
+<tr><td><code>x: T.borrow</code></td><td>Reference</td><td>Pinned for the instance's life</td></tr>
+<tr><td><code>x: T.view</code></td><td>Reference, readonly</td><td>Pinned likewise</td></tr>
 </tbody>
 </table>
-<p>A generator method defined inside the receiver type's <code>as</code> block
-captures the receiver as a <code>Type.borrow</code> field; no <code>.private</code> needed
-(it is inside the privacy boundary). A generator function defined
-outside the receiver type may take <code>arg: this.private.borrow</code> for
-friend access, subject to the same exposure rule that governs
-hand-written iterator classes. The label-value shorthand
-(<code>:this.borrow</code>) is not parser-supported because the resulting
-parameter name <code>this</code> collides with method-receiver detection;
-write the explicit-binding form (e.g. <code>b: this.borrow</code>) instead.</p>
-<p><code>yield</code> outside a function whose <code>out</code> type is
-<code>Iterator gives: ...</code> is a compile error. <code>yield</code> inside a nested
-function literal is rejected -- <code>yield</code> only belongs to the
-lexically-enclosing generator. <code>return &lt;value&gt;</code> inside a generator is
-a compile error; bare <code>return</code> terminates the generator.</p>
-<p>After termination the synthesised class enters an absorbing terminal
-state: <code>.call</code> returns <code>.none</code> forever after, idempotently. Code
-placed after the last <code>yield</code> runs on the <code>.call</code> that crosses
-into terminal state (i.e. the call after the final value is consumed).
-It does <strong>not</strong> run when the iterator is dropped early (for-loop
-break, scope exit before exhaustion). Lock release and owned-field
-destruction happen on class destruction along both paths. Generators do
-not have an explicit cleanup block; resource cleanup is RAII -- hold
-the resource as a field of an object whose destructor handles it.</p>
-<p>When <code>accepts: U</code> is declared, callers send values back into the
-generator. Inside the body, expression-form yield (<code>x: yield v</code>)
-binds <code>x</code> to the most recent caller-supplied value on resumption.
-The first <code>.call</code> on a bidirectional generator receives no value; a
-first yield written in expression form binds the value supplied by the
-call that RESUMES it, which is the second <code>.call</code>. The
-for-loop only drives generators whose <code>accepts</code> is <code>null</code>; applying
-<code>for</code> to a bidirectional generator is a compile error pointing at
-the manual <code>with</code>/<code>.call value:</code> pattern.</p>
-<p>The form of <code>accepts:</code> determines how the resumed value is held
-across the body's yield window:</p>
+<p>A generator cannot be declared inside another type's <code>as</code> block -- an inline
+type definition is refused there, for a generator exactly as for a class.
+Declare it at unit level and, where the construction needs privileged access,
+reach it through a method whose own return wears <code>.takex</code>:</p>
+<pre><code class="language-zerolang">Bag: class { a: i64  b: i64 } as {
+    public: unit { :walk }
+    walk: function {b: this.private.borrow} out BagWalk.takex is {
+        return (BagWalk b: b)
+    }
+}
+
+BagWalk: generator { b: Bag.private.borrow } as {
+    call: function out i64 is {
+        yield this.b.a
+        yield this.b.b
+    }
+}</code></pre>
+<p>The <code>.takex</code> on <code>walk</code> is what carries the pin out to the caller's
+argument; without it the pin would stop at the method boundary.</p>
+<h2 id="the-call-member"><a href="#the-call-member">8. The call member</a></h2>
+<p><code>call</code> is required, and it is the generator's body. Its <code>out</code> type is the
+<strong>element</strong> type -- what each <code>yield</code> hands back -- not the return type: the
+compiler wraps it. Falling off the end, or a bare <code>return</code>, means exhausted;
+<code>return &lt;value&gt;</code> is a compile error.</p>
+<p>The shape of the wrapper follows the element's ownership form. Like every other
+argument position in zerolang, a generic argument defaults to <code>.borrow</code>;
+<code>.take</code> is explicit.</p>
 <table>
 <colgroup>
 <col style="width: 22%">
@@ -3916,7 +3905,63 @@ across the body's yield window:</p>
 <col style="width: 33%">
 </colgroup>
 <thead>
-<tr><th style="text-align: left">accepts form</th><th style="text-align: left">Reftype U</th><th style="text-align: left">Valtype U</th><th style="text-align: left">Resume-input ownership</th></tr>
+<tr><th style="text-align: left">out form</th><th style="text-align: left">Reftype T</th><th style="text-align: left">Valtype T</th><th style="text-align: left">Yielded value ownership</th></tr>
+</thead>
+<tbody>
+<tr><td>bare <code>T</code></td><td><code>OptionView(T)</code></td><td><code>optionval(T)</code></td><td>Borrowed view (ref) / copy (val)</td></tr>
+<tr><td><code>T.borrow</code></td><td><code>OptionView(T)</code></td><td><code>optionval(T)</code></td><td>Same as bare</td></tr>
+<tr><td><code>T.take</code></td><td><code>Option(T)</code></td><td><code>optionval(T)</code></td><td>Owned out (ref) / copy (val)</td></tr>
+</tbody>
+</table>
+<p>For valtype <code>T</code>, ownership annotations are physical no-ops (<code>.borrow</code>
+copies, <code>.take</code> is identical), so all three forms collapse to
+<code>optionval(T)</code>. For reftype <code>T</code>, bare and <code>.borrow</code> both yield
+<code>OptionView(T)</code>; an owned reftype yield requires explicit <code>T.take</code>.</p>
+<p>See the Ownership on Generic Arguments section of
+<a href="./ownership.html">the ownership document for the broader rule that</a>
+governs ownership specifiers on generic arguments at use sites.</p>
+<p><code>call</code> has an implicit <strong>receiver</strong>: the state machine writes through it, so
+it is a borrow like every other receiver, and it is why <code>is</code> fields are read
+as <code>this.x</code>. It is never written in the parameter list.</p>
+<p>Every other member of the <code>as</code> block is support for <code>call</code>.</p>
+<h2 id="yield-2"><a href="#yield-2">9. yield</a></h2>
+<p><code>yield</code> is an ordinary name that the compiler defines into a generator's
+<code>call</code> and nowhere else -- the way <code>break</code> and <code>continue</code> are defined
+into a <code>for</code>. Everywhere else the name is the program's to use, including as
+a binding. <code>yield</code> inside a nested function literal is rejected: the literal
+pushes its own scope and never sees the generator's.</p>
+<p><code>yield</code> is an <strong>expression</strong>. It hands its argument to the caller and
+evaluates to the value the next call supplies.</p>
+<p>After termination the class enters an absorbing terminal state: <code>.call</code>
+returns <code>.none</code> forever after, idempotently. Code placed after the last
+<code>yield</code> runs on the <code>.call</code> that crosses into terminal state (the call
+after the final value is consumed). It does <strong>not</strong> run when the generator is
+dropped early (for-loop break, scope exit before exhaustion). Lock release and
+owned-field destruction happen on class destruction along both paths.
+Generators have no explicit cleanup block; cleanup is RAII -- hold the resource
+as a field of an object whose destructor handles it.</p>
+<h2 id="the-per-call-input"><a href="#the-per-call-input">10. The per-call input</a></h2>
+<p><code>call</code>'s parameter list declares the <strong>per-call input</strong>: at most one, and
+what it declares is the input's type, its ownership, and the label its call
+sites read.</p>
+<p>It is <strong>not a body binding</strong>. A generator yields before it can receive, so a
+binding made on entry would name a value that does not exist yet -- the only
+way to read the input is <code>yield</code>'s own value. Reading that value in a
+generator that declares no input is a compile error. Seed a first value through
+an <code>is</code> field instead.</p>
+<p>The first <code>.call</code> supplies a value that nothing has yielded yet, so a first
+yield written in expression form binds what the call that RESUMES it supplies
+-- the second <code>.call</code>. The for-loop drives only generators that receive
+nothing; one with an input is driven by hand through <code>with</code> and <code>.call</code>.</p>
+<table>
+<colgroup>
+<col style="width: 22%">
+<col style="width: 22%">
+<col style="width: 22%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr><th style="text-align: left">input form</th><th style="text-align: left">Reftype U</th><th style="text-align: left">Valtype U</th><th style="text-align: left">Resume-input ownership</th></tr>
 </thead>
 <tbody>
 <tr><td>bare <code>U</code></td><td>non-owned field</td><td>bare value field</td><td>Borrow / by-value</td></tr>
@@ -3924,65 +3969,59 @@ across the body's yield window:</p>
 <tr><td><code>U.take</code></td><td>Owned field</td><td>Bare value field</td><td>Owned across yields</td></tr>
 </tbody>
 </table>
-<p>Borrowed forms (bare and <code>.borrow</code>) install a lock on the
-caller's <code>value:</code> argument for the duration of each <code>.call</code>.
-The body's <code>name: yield v</code> binding is a pointer alias into the
-caller's storage; accesses through <code>name</code> read the live value.
-The name is valid only for one yield window &#x2014; using it past the
-next <code>yield</code> is a compile error. To persist the resumed value
-across yields, use <code>accepts: U.take</code> (the synth class owns the
-value for the iterator's lifetime).</p>
-<pre><code class="language-zerolang"># bidirectional: caller sends a bool back after each yielded line
-grep: function {pat: String.take} out
-               (Iterator Gives: String.borrow Accepts: bool) is {
-    for line: stdin.lines loop {
-        if line contains: pat then {
-            keep: yield line
-            if keep then store_match line
+<p>Borrowed forms (bare and <code>.borrow</code>) install a lock on the caller's argument
+for the duration of each <code>.call</code>. The body's <code>name: yield v</code> binding is a
+pointer alias into the caller's storage; accesses through <code>name</code> read the
+live value. The name is valid only for one yield window -- using it past the
+next <code>yield</code> is a compile error. To persist the resumed value across yields,
+declare the input <code>.take</code>.</p>
+<pre><code class="language-zerolang"># the caller sends a bool back after each yielded line
+Grep: generator { pat: String } as {
+    call: function {keep: bool} out String.borrow is {
+        for line: stdin.lines loop {
+            if line contains: this.pat then {
+                wanted: yield line
+                if wanted then store_match line
+            }
         }
     }
 }
 
-# manual driving -- for-loop cannot supply .call value:
-with g: (grep pat: "foo") do {
+# driven by hand -- a for-loop cannot supply the input
+with g: (Grep pat: "foo".string) do {
     next: g.call
     while next is some then {
-        keep: my_check (some next)
-        next = g.call value: keep
+        k: my_check (some next)
+        next = g.call keep: k
     }
 }</code></pre>
+<h2 id="composition"><a href="#composition">11. Composition</a></h2>
 <p>Generators compose through existing constructs:</p>
 <ul>
-<li><strong>Delegation</strong> -- relay a sub-iterator through a for-loop
-inside the outer generator's body. Both forms work:
+<li><strong>Delegation</strong> -- relay a sub-generator through a for-loop inside the
+outer one's body. Both forms work:
 
 <pre><code class="language-zerolang">  # inline
-  for x: (subgen ...) loop { yield x }
+  for x: (SubGen ...) loop { yield x }
 
   # explicit binding (equivalent)
-  inner: (subgen ...)
+  inner: (SubGen ...)
   for x: inner loop { yield x }</code></pre>
 
-The desugarer auto-extracts a non-trivial for-loop iterable
-into a synthetic local, so the iterator persists across the
-enclosing generator's suspensions. Existing lock-escape
-rules apply through the synth class's captured-field
-machinery.</li>
-<li><strong>Chaining</strong> -- sequential for-loops in the same body run
-consecutively; each drains its source before the next starts
-(see <code>examples/generator_chain.z</code>).</li>
-<li><strong>Pipelining</strong> -- each stage is a generator taking another
-iterator parameter. Function composition produces the pipeline;
-each stage's synthesised class holds a <code>.borrow</code> on the previous
-stage and existing lock-escape rules keep the chain sound.</li>
+A for-loop iterable that is a construction is hoisted to a temp before
+the loop, and that temp crosses the enclosing generator's suspensions, so
+the sub-generator is promoted to a field and persists across calls.</li>
+<li><strong>Chaining</strong> -- sequential for-loops in the same body run consecutively;
+each drains its source before the next starts (see
+<code>examples/generator_chain.z</code>).</li>
+<li><strong>Pipelining</strong> -- each stage constructs the previous one as its
+iterable (see <code>examples/generator_map_filter.z</code>).</li>
 </ul>
-<p>The synthesised class is otherwise an ordinary class: visible in
-compiler error messages as <code>&lt;funcname&gt;_iter</code> (or
-<code>&lt;typename&gt;.&lt;methodname&gt;_iter</code> for methods), goes through the same
-ownership / lock / monomorphisation paths as any user-written class,
-and is indistinguishable from a hand-written iterator at the call
-site.</p>
-<h4 id="methods"><a href="#methods">5.13.7. Methods</a></h4>
+<p>Any class with a <code>call</code> method returning the right option wrapper is
+iterable; <code>Iterator</code> in the system unit states that contract for iterators
+written by hand. A generator is one way of writing such a class, not the only
+one.</p>
+<h4 id="methods"><a href="#methods">11.0.1. Methods</a></h4>
 <p>Methods are a specialised form of function. They are defined similar to a
 normal, named function call but they must be defined in the namespace of the
 receiver definition and the first argument must be of type <code>this</code>.</p>
@@ -4003,7 +4042,7 @@ type. They do not change the type itself. They must also not collide with
 existing methods on the type. This may cause a maintenance burden (changes to
 the external type may cause code that previously compiled correctly to now
 fail) so should be used with caution.</p>
-<h4 id="constructor"><a href="#constructor">5.13.8. Constructor</a></h4>
+<h4 id="constructor"><a href="#constructor">11.0.2. Constructor</a></h4>
 <p>There is only one true low-level constructor for an object and it is
 <code>meta.create</code> -- the compiler-internal raw allocator. <code>meta.create</code>
 reserves the memory for the instance and sets each member directly from
@@ -4174,7 +4213,7 @@ MyObject: class {
         # ...
     }
 }</code></pre>
-<h4 id="finalizer"><a href="#finalizer">5.13.9. Finalizer</a></h4>
+<h4 id="finalizer"><a href="#finalizer">11.0.3. Finalizer</a></h4>
 <p>Whether zerolang has user-named destructors or a single compiler-called
 <code>finalize</code> is not decided, and the two models differ in more than
 spelling -- whether valtypes may have one, whether it may be private, and
@@ -4183,7 +4222,7 @@ material that went with it are in <code>Design-OPEN.pdoc</code>.</p>
 <p>What the compiler does today: a type whose fields need cleaning up gets a
 destructor the compiler generates and calls when the owning binding leaves
 scope. Nothing in the surface language names it.</p>
-<h4 id="function-references"><a href="#function-references">5.13.10. Function References</a></h4>
+<h4 id="function-references"><a href="#function-references">11.0.4. Function References</a></h4>
 <p>A function reference is a variable that stores a pointer to a function. It may
 be called with the same syntax as used when calling a standard function. It may
 be reassigned to a reference to an equivalent function (one with the same
@@ -4240,7 +4279,7 @@ fields.</p>
 <li>method pointers cannot be function return values (they can never escape the
     object)</li>
 </ul>
-<h3 id="object-definitions"><a href="#object-definitions">5.14. Object definitions</a></h3>
+<h3 id="object-definitions"><a href="#object-definitions">11.1. Object definitions</a></h3>
 <p><code>record</code>, <code>class</code>, <code>union</code>, <code>variant</code>, <code>facet</code> and <code>protocol</code> all
 define an OBJECT. An object definition must declare something: one with neither
 an <code>is</code> member nor an <code>as</code> member is an error, because there is nothing to
@@ -4248,7 +4287,7 @@ hold and nothing to call, and no C form exists for it.</p>
 <p>The exception, and the only one, is <code>is native</code>: the runtime owns those
 layouts, and the compiler's own markers (<code>null</code>, <code>never</code>, <code>anyval</code>,
 <code>Any</code>) are declared that way precisely because they are empty.</p>
-<h3 id="record"><a href="#record">5.15. record</a></h3>
+<h3 id="record"><a href="#record">11.2. record</a></h3>
 <p>Defines a user defined, compound, value type.</p>
 <p>Arguments for <code>record</code>:</p>
 <table>
@@ -4327,7 +4366,7 @@ and <a href="./ownership.html">ownership.</a></p>
         return meta.create pos: 0 target: target
     }
 }</code></pre>
-<h3 id="class"><a href="#class">5.16. class</a></h3>
+<h3 id="class"><a href="#class">11.3. class</a></h3>
 <p>Arguments for <code>class</code>:</p>
 <table>
 <colgroup>
@@ -4359,7 +4398,7 @@ mynode: class {
     left: (this t)
     right: (this t)
 }</code></pre>
-<h3 id="is-and-as-sections"><a href="#is-and-as-sections">5.17. 'is' and 'as' Sections</a></h3>
+<h3 id="is-and-as-sections"><a href="#is-and-as-sections">11.4. 'is' and 'as' Sections</a></h3>
 <p>Records, classes, unions and variants have two sections: <code>is</code> (instance
 members) and <code>as</code> (static/shared members). Names in both sections share a
 single namespace -- the same name cannot appear in both sections.</p>
@@ -4411,7 +4450,7 @@ main: function is {
     print "\{config.buffer_size}" # prints 16384
     # config.max_val = 200      # compile error: cannot reassign static constant
 }</code></pre>
-<h3 id="default-values"><a href="#default-values">5.18. Default values</a></h3>
+<h3 id="default-values"><a href="#default-values">11.5. Default values</a></h3>
 <p>Default values may be supplied on function/method parameters and on
 fields of <code>record</code>, <code>class</code>, <code>variant</code>, and <code>union</code> types.
 Field defaults propagate to the auto-generated <code>meta.create</code>
@@ -4510,7 +4549,7 @@ list, map, user class) is not a valid default at this layer; for
 those, supply the value at construction time. Defaulting to an
 arm that carries a non-null payload is rejected for the same
 reason.</p>
-<h3 id="protocol"><a href="#protocol">5.19. protocol</a></h3>
+<h3 id="protocol"><a href="#protocol">11.6. protocol</a></h3>
 <p>A protocol is defined as a list of function specs. Each spec must include a
 <code>this</code> parameter (the receiver). Static methods can also be part of a
 protocol. A protocol cannot include constructors or destructors because they
@@ -4545,7 +4584,7 @@ Writer: protocol {
 #     read: function {:this b: buffer} out boolean
 #     write: function {:this b: buffer} out boolean
 # }</code></pre>
-<h4 id="protocol-instance-creation"><a href="#protocol-instance-creation">5.19.1. Protocol Instance Creation</a></h4>
+<h4 id="protocol-instance-creation"><a href="#protocol-instance-creation">11.6.1. Protocol Instance Creation</a></h4>
 <p>Fields, variables and parameters can be declared to be instances of a named
 protocol. Protocol instances can then be assigned to those fields, variables or
 call arguments.</p>
@@ -4630,7 +4669,7 @@ main: function is {
 
     print "\{use_reader r}"  # prints 15
 }</code></pre>
-<h3 id="facet"><a href="#facet">5.20. facet</a></h3>
+<h3 id="facet"><a href="#facet">11.7. facet</a></h3>
 <p>A facet is the value-type equivalent of a protocol. Where protocol instances
 contain a pointer to the underlying data, facet instances contain a copy of the
 data itself, making them value types.</p>
@@ -4640,7 +4679,7 @@ implement. Only value types (records, variants) can implement facets.</p>
 <pre><code class="language-zerolang">measurable: facet {
     measure: function {:this b: i64} out i64
 }</code></pre>
-<h4 id="conformance"><a href="#conformance">5.20.1. Conformance</a></h4>
+<h4 id="conformance"><a href="#conformance">11.7.1. Conformance</a></h4>
 <p>A value type declares conformance to a facet via a labeled entry in its
 <code>as</code> section, the same pattern used for protocols:</p>
 <pre><code class="language-zerolang">point: record { x: i64 } as {
@@ -4653,7 +4692,7 @@ implement. Only value types (records, variants) can implement facets.</p>
 matching signatures (parameter names, types, and return type).</p>
 <p>Only value types may implement facets. Attempting to implement a facet on
 a class or union produces a compile-time error.</p>
-<h4 id="constructors"><a href="#constructors">5.20.2. Constructors</a></h4>
+<h4 id="constructors"><a href="#constructors">11.7.2. Constructors</a></h4>
 <p>The compiler generates three constructors for non-generic facets:</p>
 <ul>
 <li><code>create</code> and <code>take</code> copy the source value into the facet
@@ -4665,7 +4704,7 @@ Signature: <code>borrow: function {from: T.borrow} out facettype.borrow</code></
 <p>Although the data is always copied, <code>borrow</code> still locks the source to
 maintain consistent ownership semantics with protocols. This is important
 when facets and protocols are used interchangeably in generic code.</p>
-<h4 id="runtime-layout"><a href="#runtime-layout">5.20.3. Runtime layout</a></h4>
+<h4 id="runtime-layout"><a href="#runtime-layout">11.7.3. Runtime layout</a></h4>
 <p>Facet instances are stack-allocated value types. The C representation is:</p>
 <ul>
 <li>A pointer to the vtable (constant offset, first field)</li>
@@ -4675,15 +4714,15 @@ when facets and protocols are used interchangeably in generic code.</p>
 the vtable, the same as protocols.</p>
 <pre><code class="language-zerolang">f: measurable.create from: p
 r: f.measure b: 10    # dispatches through vtable</code></pre>
-<h4 id="facets-as-generic-constraints"><a href="#facets-as-generic-constraints">5.20.4. Facets as generic constraints</a></h4>
+<h4 id="facets-as-generic-constraints"><a href="#facets-as-generic-constraints">11.7.4. Facets as generic constraints</a></h4>
 <p>Facets can be used as generic constraints, the same as protocols. A
 generic parameter constrained by a facet accepts any type that conforms
 to that facet.</p>
-<h4 id="facets-as-typedef-base"><a href="#facets-as-typedef-base">5.20.5. Facets as typedef base</a></h4>
+<h4 id="facets-as-typedef-base"><a href="#facets-as-typedef-base">11.7.5. Facets as typedef base</a></h4>
 <p>A record typedef can wrap a facet type, just as a class typedef can wrap
 a protocol type. Both are kind-compatible (record wraps facet because
 both are value types).</p>
-<h3 id="union"><a href="#union">5.21. union</a></h3>
+<h3 id="union"><a href="#union">11.8. union</a></h3>
 <p>For controlling the discriminator, see also the <a href="#tag">tag</a> type.</p>
 <p>Unions are sum-types that can hold exactly one of their child types at any
 given time. A discriminator (tag) is auto-generated for each subtype. A union
@@ -4731,7 +4770,7 @@ providing a name and a type.</p>
     u4: String
     u5: MyClass    # a class defined elsewhere
 }</code></pre>
-<h4 id="constructing-union-instances"><a href="#constructing-union-instances">5.21.1. Constructing union instances</a></h4>
+<h4 id="constructing-union-instances"><a href="#constructing-union-instances">11.8.1. Constructing union instances</a></h4>
 <p>After a union type has been defined, instances are constructed using a
 per-subtype constructor accessed via dot notation: <code>MyUnion.subtype expr</code>.
 Each subtype automatically gets a constructor. Null subtypes take no argument.
@@ -4749,7 +4788,7 @@ c: Outcome.none                      # null subtype: no argument
 
 # named argument form
 d: Outcome.err from: mystr.take      # explicit .take transfers ownership</code></pre>
-<h4 id="ownership-2"><a href="#ownership-2">5.21.2. Ownership</a></h4>
+<h4 id="ownership-2"><a href="#ownership-2">11.8.2. Ownership</a></h4>
 <p>Union instances are owned reference types. The same ownership rules that apply
 to classes also apply to unions:</p>
 <ul>
@@ -4762,7 +4801,7 @@ to classes also apply to unions:</p>
 <p>The compiler generates a per-union destructor that switches on the tag to
 correctly free each subtype's payload: <code>free()</code> for boxed valtypes,
 the appropriate destructor for reftype payloads, and nothing for null subtypes.</p>
-<h4 id="match-on-unions"><a href="#match-on-unions">5.21.3. Match on unions</a></h4>
+<h4 id="match-on-unions"><a href="#match-on-unions">11.8.3. Match on unions</a></h4>
 <p>The <code>match</code> statement dispatches on the union's tag. All subtypes must be
 covered by case clauses, or an <code>else</code> clause must be present. Inside a case
 clause, the payload is accessed via dotted path on the union variable.</p>
@@ -4785,7 +4824,7 @@ clause, the payload is accessed via dotted path on the union variable.</p>
 }</code></pre>
 <p>Accessing subtype data outside of a <code>match</code> clause is a compile error &#x2014;
 the union must be narrowed first.</p>
-<h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">5.21.4. Creating sum-type instances</a></h4>
+<h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">11.8.4. Creating sum-type instances</a></h4>
 <p>Creating/setting a union value:</p>
 <pre><code class="language-zerolang">MyClass: class {a: u32 b: u32}
 
@@ -4817,7 +4856,7 @@ program; <code>anyval</code> is its variant counterpart for value types. Generic
 bounds name one of them (or a hashability interface) rather than the bare
 <code>Any</code>.</p>
 <pre><code class="language-zerolang">smallint: union { i8: null u8: null }</code></pre>
-<h3 id="variant"><a href="#variant">5.22. variant</a></h3>
+<h3 id="variant"><a href="#variant">11.9. variant</a></h3>
 <p>Variants are sum-types that can contain only one of it's child types at any
 given time. A descriminator is usually generated or set for each case. A
 variant is a value type and all child types must be value types. A variant is
@@ -4841,7 +4880,7 @@ always as large as its largest containing type plus the descriminator.</p>
 (tagged storage, no heap cell) and its arms are value types only -- the
 mirror image of a union's reference-only arms; construction, matching and
 tag selection otherwise follow the union rules.</p>
-<h4 id="enumerated-types"><a href="#enumerated-types">5.22.1. Enumerated Types</a></h4>
+<h4 id="enumerated-types"><a href="#enumerated-types">11.9.1. Enumerated Types</a></h4>
 <p>An enumerated type is not a separate kind: it is a variant or union whose arms
 carry no data. Whether zerolang should gain a distinct <code>enum</code> is an open
 question, recorded in <code>Design-OPEN.pdoc</code>.</p>
@@ -4913,7 +4952,7 @@ true: bool.true</code></pre>
 <p>Nothing in the compiler treats <code>bool</code> as a special case of the shape:
 its arms are looked up on the declaration like any other sum type's, and
 a 2-arm variant of the author's own reads the same way.</p>
-<h4 id="using-sum-type-instances"><a href="#using-sum-type-instances">5.22.2. Using sum-type instances</a></h4>
+<h4 id="using-sum-type-instances"><a href="#using-sum-type-instances">11.9.2. Using sum-type instances</a></h4>
 <p>A sum type instance can be tested to see if it is a specific subtype. A
 predicate <code>method</code> is generated for each member named as the member name
 followed by a question mark. The method returns a boolean.</p>
@@ -4948,14 +4987,14 @@ if y: x.t2 then {
 if y: x.t3 then {    # ERROR: syntax error, cannot assign MyUnion.t3 to y
     # ...
 }</code></pre>
-<h3 id="operations-2"><a href="#operations-2">5.23. Operations</a></h3>
-<h4 id="constants-and-variables"><a href="#constants-and-variables">5.23.1. Constants and Variables</a></h4>
+<h3 id="operations-2"><a href="#operations-2">11.10. Operations</a></h3>
+<h4 id="constants-and-variables"><a href="#constants-and-variables">11.10.1. Constants and Variables</a></h4>
 <p>Literals
 Top level definitions</p>
 <p>Names - identifiers</p>
 <p>Declaration and Initialisation (happen at the same time, must be initialised)
 Includes functions definitions/literals.</p>
-<h4 id="binary-operations"><a href="#binary-operations">5.23.2. Binary operations</a></h4>
+<h4 id="binary-operations"><a href="#binary-operations">11.10.2. Binary operations</a></h4>
 <p>All operations are binary. There are no unary operations. Operation syntax is
 an alternate function call syntax for methods with a receiver and a single
 parameter.</p>
@@ -4963,7 +5002,7 @@ parameter.</p>
 precedence.</p>
 <p>Operator names are simply method names. Identifiers used for method names can
 include the usual mathematical operator names eg. <code>+ - / *</code></p>
-<h3 id="auto-generated-equality"><a href="#auto-generated-equality">5.24. Auto-Generated Equality</a></h3>
+<h3 id="auto-generated-equality"><a href="#auto-generated-equality">11.11. Auto-Generated Equality</a></h3>
 <p>All value types (records, variants, arrays, str) automatically receive
 <code>==</code> and <code>!=</code> operators. This is structural equality: records compare
 all fields, variants compare the discriminator tag and then the payload,
@@ -5006,7 +5045,7 @@ Attempting to compare such a type is a typecheck error:</p>
 <p><strong>Float Fields.</strong></p>
 <p>Records containing float fields (<code>f32</code>, <code>f64</code>) use IEEE 754 comparison:
 <code>NaN != NaN</code>. This matches the behaviour of C, Rust, and Go.</p>
-<h3 id="reference-type-equality"><a href="#reference-type-equality">5.25. Reference Type Equality</a></h3>
+<h3 id="reference-type-equality"><a href="#reference-type-equality">11.12. Reference Type Equality</a></h3>
 <p>Reference types (classes, unions) do not have a default <code>==</code> operator.
 Using <code>==</code> on a reference type without explicitly defining it is a compile
 error.</p>
@@ -5042,8 +5081,8 @@ bytes. Callers that need locale-aware collation build it on top.
 Cross-type comparisons (<code>String &lt; StringView</code>) are not defined;
 project explicitly with <code>.stringView</code> to bring both operands into the
 same type.</p>
-<h2 id="compile-time-operations"><a href="#compile-time-operations">6. Compile Time Operations</a></h2>
-<h3 id="constant-folding"><a href="#constant-folding">6.1. Constant Folding</a></h3>
+<h2 id="compile-time-operations"><a href="#compile-time-operations">12. Compile Time Operations</a></h2>
+<h3 id="constant-folding"><a href="#constant-folding">12.1. Constant Folding</a></h3>
 <p>Operations on compile time constants are evaluated at compile time.
 The compiler tracks a <code>const_value</code> on AST nodes during type checking.
 Numeric literals (integer and <code>f64</code>), named numeric constants, and the
@@ -5087,7 +5126,7 @@ main: function is {
     y: COMBINED * 2          # folded to 26
     z: 1.5 + 2.5            # f64 folded to 4.0
 }</code></pre>
-<h3 id="conditional-compilation"><a href="#conditional-compilation">6.2. Conditional Compilation</a></h3>
+<h3 id="conditional-compilation"><a href="#conditional-compilation">12.2. Conditional Compilation</a></h3>
 <p>Normal if expressions with constant conditions are evaluated at compile
 time. The false branch is not emitted in the generated C output. It must
 parse, but the compiler does not promise to resolve names or check types
@@ -5102,7 +5141,7 @@ braces at the unit level.</p>
 <pre><code class="language-zerolang">A: 10
 # unit-level if: selects branch at compile time
 x: if A &gt; 5 then { A } else { 0 }</code></pre>
-<h3 id="compile-time-error"><a href="#compile-time-error">6.3. Compile-Time Error</a></h3>
+<h3 id="compile-time-error"><a href="#compile-time-error">12.3. Compile-Time Error</a></h3>
 <p>The <code>error</code> builtin produces a compile-time error. When the compiler
 can prove that an <code>error</code> call is reachable, compilation fails and the
 user's message is reported as the error. This is the primary mechanism
@@ -5198,7 +5237,7 @@ This would usually be within a conditionally compiled section (otherwise
 compilation will always fail).</p>
 <pre><code class="language-zerolang">error "Constant error string"   # "stack" with lineno's and filenames will
                                 # also be shown</code></pre>
-<h3 id="identifier-metadata"><a href="#identifier-metadata">6.4. Identifier Metadata</a></h3>
+<h3 id="identifier-metadata"><a href="#identifier-metadata">12.4. Identifier Metadata</a></h3>
 <p>TODO: metadata about identifiers exposed via <code>meta</code> namespace.</p>
 <pre><code class="language-zerolang">myconstants: unit {
     FIRST: 0

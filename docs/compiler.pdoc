@@ -154,35 +154,40 @@ Pipeline placement:
   Lex -> Parse -> Typecheck (lower generators, then resolve + check) -> Emit
 """
 
-#---: Synthesised class shape
+#---: What the pass adds
 
-For a generator
-#~"F: function {p1: T1 ...} out (Iterator Gives: G Accepts: K) is { ... body ... }"
-the pass produces approximately
+A generator is a DECLARATION, so the class is the author's and the pass adds
+only what the suspension transform needs. For
+
+#~"G: generator { f1: T1 ... } as { call: function {in: K} out E is { ... } }"
+
+it produces approximately
 
 #code language=zerolang: """
-  F_iter: class {
-      state: i64               # state-machine cursor
-      p1: T1                   # captured params (with original ownership)
+  G: generator {
+      f1: T1                   # the author's fields, untouched
+      state: i64               # state-machine cursor, appended
       <crossing-locals>: ...   # locals whose live range crosses a yield
-      _resume_input: K         # only when takes is non-null
+      _fc_N: i64               # one per suspending counted `for`
+      _yv_N: K                 # one resume slot per suspension point
+      _resume_input: K         # only when `call` declares an input
   } as {
-      create: function {p1: T1 ...} out this is {
-          return meta.create state: 0 :p1 ... <local-defaults>
+      call: function {:this in: K} out (option-wrapper-for-E) is {
+          # the author's body, references to promoted names rewritten to
+          # this.<n>, with its yields intact -- the state machine is the
+          # emitter's job
       }
-      call: function {:this} out (option-wrapper-for-G) is {
-          # original body, references to promoted names rewritten to this.<n>;
-          # carries synthOrigin = "generator-call" so the emitter routes it
-          # through the state-machine codegen below.
+      create: function {f1: T1.take ...} out this.takex is {
+          return meta.create state: 0 :f1 ...
       }
   }
-
-  # original F is replaced with a factory of the same signature:
-  F: function {p1: T1 ...} out F_iter is { return F_iter :p1 ... }
 """
 
-The synthesised class name is #~"<funcname>_iter" for standalone
-generators and #~"<typename>_<methodname>_iter" for methods.
+The receiver and the wrapper are injected into the author's #~"call"; the
+#~"create" is generated from the #~"is" fields, with each parameter's ownership
+following the field it fills. The pass runs BEFORE the definitions are indexed,
+because it appends fields to a definition the author wrote and indexing binds a
+definition's members where it stands.
 Numeric suffix on collision.
 
 #---: Liveness (which locals get promoted)

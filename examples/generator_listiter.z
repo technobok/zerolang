@@ -1,36 +1,36 @@
 # generator_listiter.z -- container iterator written as a generator.
 #
 # Same shape as listiter.z's bag-with-iterator demo, but the
-# iterator is implemented as a one-line generator method instead
-# of a hand-rolled BagIter class. Observable output matches
-# listiter.z byte-for-byte (see tests/test_generator_validation.py).
+# iteration is a generator instead of a hand-rolled BagIter class.
+# Observable output matches listiter.z byte-for-byte.
 #
 # Encapsulation: `public: unit { :count :iterate }` hides the
-# private fields a/b/c; the generator method takes the receiver as
-# `b: this.private.borrow` so the synth class can read those private
-# fields. The factory's external signature is `b: this.borrow`
-# (public) -- the desugarer (P7) projects `.private` when
-# forwarding to the synth-class instance, the same trick the
-# hand-written `examples/listiter.z` uses
-# (`return BagIter target: b.private`).
+# private fields a/b/c, and `BagWalk`'s field is
+# `Bag.private.borrow` so it can read them. `Bag.iterate` stays as
+# the public way in -- a thin factory whose own return wears
+# `.takex`, which is what carries the pin from the generator's
+# borrowed field out to the caller's `b`.
 #
-# What the desugarer builds underneath:
-#   - A class `Bag_iterate_iter` with `state: i64` and a
-#     `b: Bag.private.borrow` field.
-#   - A factory function `Bag.iterate` with `b: this.borrow`
-#     externally; body projects `.private` on the forward.
-#   - The class's `.call` method implements the iterator protocol
-#     structurally via a switch/goto state machine.
+# A generator is a TYPE, so it is declared at unit level and named
+# in PascalCase like every other reftype. It cannot be nested inside
+# `Bag`'s `as` block: an inline type definition is refused there,
+# for a generator exactly as for a class.
 
 Bag: class { a: i64 b: i64 c: i64 count: i64 } as {
     public: unit { :count :iterate }
 
-    # Generator method. `b: this.private.borrow` captures the bag
-    # with private access locked for the iterator's lifetime.
-    iterate: function {b: this.private.borrow} out (Iterator Gives: i64) is {
-        yield b.a
-        yield b.b
-        yield b.c
+    # the public way in: hands back a BagWalk over this bag's
+    # privates, pinned for as long as the result lives
+    iterate: function {b: this.private.borrow} out BagWalk.takex is {
+        return (BagWalk :b)
+    }
+}
+
+BagWalk: generator { b: Bag.private.borrow } as {
+    call: function out i64 is {
+        yield this.b.a
+        yield this.b.b
+        yield this.b.c
     }
 }
 

@@ -93,7 +93,7 @@ Table of Contents</div>
 </li>
 <li><a href="#generator-desugaring">Generator Desugaring</a>
 <ul>
-<li><a href="#synthesised-class-shape">Synthesised class shape</a>
+<li><a href="#what-the-pass-adds">What the pass adds</a>
 </li>
 <li><a href="#liveness-which-locals-get-promoted">Liveness (which locals get promoted)</a>
 </li>
@@ -254,30 +254,33 @@ original function to its factory and appends the synth class to the
 unit body; frozen AST nodes are never mutated.</p>
 <p>Pipeline placement:</p>
 <pre><code>  Lex -&gt; Parse -&gt; Typecheck (lower generators, then resolve + check) -&gt; Emit</code></pre>
-<h3 id="synthesised-class-shape"><a href="#synthesised-class-shape">6.1. Synthesised class shape</a></h3>
-<p>For a generator
-<code>F: function {p1: T1 ...} out (Iterator Gives: G Accepts: K) is { ... body ... }</code>
-the pass produces approximately</p>
-<pre><code class="language-zerolang">  F_iter: class {
-      state: i64               # state-machine cursor
-      p1: T1                   # captured params (with original ownership)
+<h3 id="what-the-pass-adds"><a href="#what-the-pass-adds">6.1. What the pass adds</a></h3>
+<p>A generator is a DECLARATION, so the class is the author's and the pass adds
+only what the suspension transform needs. For</p>
+<p><code>G: generator { f1: T1 ... } as { call: function {in: K} out E is { ... } }</code></p>
+<p>it produces approximately</p>
+<pre><code class="language-zerolang">  G: generator {
+      f1: T1                   # the author's fields, untouched
+      state: i64               # state-machine cursor, appended
       &lt;crossing-locals&gt;: ...   # locals whose live range crosses a yield
-      _resume_input: K         # only when takes is non-null
+      _fc_N: i64               # one per suspending counted `for`
+      _yv_N: K                 # one resume slot per suspension point
+      _resume_input: K         # only when `call` declares an input
   } as {
-      create: function {p1: T1 ...} out this is {
-          return meta.create state: 0 :p1 ... &lt;local-defaults&gt;
+      call: function {:this in: K} out (option-wrapper-for-E) is {
+          # the author's body, references to promoted names rewritten to
+          # this.&lt;n&gt;, with its yields intact -- the state machine is the
+          # emitter's job
       }
-      call: function {:this} out (option-wrapper-for-G) is {
-          # original body, references to promoted names rewritten to this.&lt;n&gt;;
-          # carries synthOrigin = "generator-call" so the emitter routes it
-          # through the state-machine codegen below.
+      create: function {f1: T1.take ...} out this.takex is {
+          return meta.create state: 0 :f1 ...
       }
-  }
-
-  # original F is replaced with a factory of the same signature:
-  F: function {p1: T1 ...} out F_iter is { return F_iter :p1 ... }</code></pre>
-<p>The synthesised class name is <code>&lt;funcname&gt;_iter</code> for standalone
-generators and <code>&lt;typename&gt;_&lt;methodname&gt;_iter</code> for methods.
+  }</code></pre>
+<p>The receiver and the wrapper are injected into the author's <code>call</code>; the
+<code>create</code> is generated from the <code>is</code> fields, with each parameter's ownership
+following the field it fills. The pass runs BEFORE the definitions are indexed,
+because it appends fields to a definition the author wrote and indexing binds a
+definition's members where it stands.
 Numeric suffix on collision.</p>
 <h3 id="liveness-which-locals-get-promoted"><a href="#liveness-which-locals-get-promoted">6.2. Liveness (which locals get promoted)</a></h3>
 <p>A local must become a class field iff its live range crosses a yield --

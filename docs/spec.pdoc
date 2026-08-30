@@ -4353,182 +4353,226 @@ See #~"examples/ListIter.z" for the canonical pattern and
 
 #----: Generator functions
 
-A #b:"generator function" is one whose body contains at least one
-#~"yield" expression. Its declared return type must be
-#~"Iterator gives: T" (optionally with #~"accepts: U"). The compiler
-synthesises a class implementing the iterator protocol; calling the
-generator returns an instance of that class with all parameters
-captured. The body, written straight-line, is lowered into a state
-machine whose #~".call" method drives one step per invocation.
-
-A function declaring #~"out (Iterator Gives: T)" #b:"without" a #~"yield"
-in its body is an ordinary factory (an unsynthesised function returning
-an iterator built by hand); it is not an error.
+A #b:"generator" is a declaration, not a function. Its #~"is" block is the
+state it is constructed with, and its #~"call" member is a body that
+#b:"suspends": each #~"yield" hands a value back to the caller and resumes
+where it left off on the next call.
 
 #code language=zerolang: """
-  # out-only generator with captured state
-  intrange: function {lo: i64 hi: i64} out (Iterator Gives: i64) is {
-      i: lo
-      for while i < hi loop {
-          yield i
-          i = i + 1
-      }
-  }
-
-  # call site -- the for-loop drives the synthesised .call
-  for x: (intrange lo: 0 hi: 3) loop { print "\{x}" }
-  """
-
-The shape of the #~".call" return type is determined by the form of
-#~"gives:". Like every other argument position in zerolang, a
-generic argument defaults to #~".borrow"; #~".take" is explicit.
-
-#table cols="2 2 2 3":
-  gives form         |Reftype T            |Valtype T            |Yielded value ownership
-  bare #~"T"         |#~"OptionView(T)"    |#~"optionval(T)"     |Borrowed view (ref) / copy (val)
-  #~"T.borrow"       |#~"OptionView(T)"    |#~"optionval(T)"     |Same as bare
-  #~"T.take"         |#~"Option(T)"        |#~"optionval(T)"     |Owned out (ref) / copy (val)
-
-For valtype #~"T", ownership annotations are physical no-ops
-(#~".borrow" copies, #~".take" is identical), so all three forms
-collapse to #~"optionval(T)". The typechecker performs the collapse
-on synth-class #~".call" return types after generator desugaring;
-user-written #~"Option" or #~"OptionView" calls outside this context
-keep their normal kind constraints.
-
-For reftype #~"T", bare and #~".borrow" both yield #~"OptionView(T)"
-(consistent with the reftype #~".borrow" convention -- pass a
-reference). Owned reftype yield requires explicit #~"T.take".
-
-See the Ownership on Generic Arguments section of
-#> to=./ownership.html: the ownership document for the broader
-rule that governs ownership specifiers on generic arguments at
-use sites.
-
-Because the synthesised iterator outlives the factory call, every
-parameter must declare ownership/locking explicitly. A bare #~".borrow"
-or bare #~":this" is rejected -- the borrow's lifetime would be the
-factory call, but the iterator outlives that call.
-
-#table cols="3 2 4":
-  Parameter form                       |Verdict        |Stored as
-  #~"arg: T.take" (reftype)            |OK             |Owned field; destroyed on iterator destruction
-  #~"arg: T.borrow" (reftype)            |OK             |Locked field; released on iterator destruction
-  bare #~"arg: T" (reftype)            |Compile error  |(use #~".borrow" or #~".take")
-  #~"arg: T" (valtype)                 |OK             |Value field
-  #~":this" (method)                   |Compile error  |(use the explicit binding form below)
-  #~"arg: this.borrow", #~"arg: this.private.borrow" |OK   |Locked receiver field
-
-A generator method defined inside the receiver type's #~"as" block
-captures the receiver as a #~"Type.borrow" field; no #~".private" needed
-(it is inside the privacy boundary). A generator function defined
-outside the receiver type may take #~"arg: this.private.borrow" for
-friend access, subject to the same exposure rule that governs
-hand-written iterator classes. The label-value shorthand
-(#~":this.borrow") is not parser-supported because the resulting
-parameter name #~"this" collides with method-receiver detection;
-write the explicit-binding form (e.g. #~"b: this.borrow") instead.
-
-#~"yield" outside a function whose #~"out" type is
-#~"Iterator gives: ..." is a compile error. #~"yield" inside a nested
-function literal is rejected -- #~"yield" only belongs to the
-lexically-enclosing generator. #~"return <value>" inside a generator is
-a compile error; bare #~"return" terminates the generator.
-
-After termination the synthesised class enters an absorbing terminal
-state: #~".call" returns #~".none" forever after, idempotently. Code
-placed after the last #~"yield" runs on the #~".call" that crosses
-into terminal state (i.e. the call after the final value is consumed).
-It does #b:"not" run when the iterator is dropped early (for-loop
-break, scope exit before exhaustion). Lock release and owned-field
-destruction happen on class destruction along both paths. Generators do
-not have an explicit cleanup block; resource cleanup is RAII -- hold
-the resource as a field of an object whose destructor handles it.
-
-When #~"accepts: U" is declared, callers send values back into the
-generator. Inside the body, expression-form yield (#~"x: yield v")
-binds #~"x" to the most recent caller-supplied value on resumption.
-The first #~".call" on a bidirectional generator receives no value; a
-first yield written in expression form binds the value supplied by the
-call that RESUMES it, which is the second #~".call". The
-for-loop only drives generators whose #~"accepts" is #~"null"; applying
-#~"for" to a bidirectional generator is a compile error pointing at
-the manual #~"with"/#~".call value:" pattern.
-
-The form of #~"accepts:" determines how the resumed value is held
-across the body's yield window:
-
-#table cols="2 2 2 3":
-  accepts form        |Reftype U            |Valtype U            |Resume-input ownership
-  bare #~"U"          |non-owned field      |bare value field     |Borrow / by-value
-  #~"U.borrow"        |non-owned field      |bare value field     |Same as bare
-  #~"U.take"          |Owned field          |Bare value field     |Owned across yields
-
-Borrowed forms (bare and #~".borrow") install a lock on the
-caller's #~"value:" argument for the duration of each #~".call".
-The body's #~"name: yield v" binding is a pointer alias into the
-caller's storage; accesses through #~"name" read the live value.
-The name is valid only for one yield window — using it past the
-next #~"yield" is a compile error. To persist the resumed value
-across yields, use #~"accepts: U.take" (the synth class owns the
-value for the iterator's lifetime).
-
-#code language=zerolang: """
-  # bidirectional: caller sends a bool back after each yielded line
-  grep: function {pat: String.take} out
-                 (Iterator Gives: String.borrow Accepts: bool) is {
-      for line: stdin.lines loop {
-          if line contains: pat then {
-              keep: yield line
-              if keep then store_match line
+  IntRange: generator { lo: i64  hi: i64 } as {
+      call: function out i64 is {
+          i: this.lo
+          for i < this.hi loop {
+              yield i
+              i = i + 1
           }
       }
   }
 
-  # manual driving -- for-loop cannot supply .call value:
-  with g: (grep pat: "foo") do {
-      next: g.call
-      while next is some then {
-          keep: my_check (some next)
-          next = g.call value: keep
+  # a generator is a TYPE: this is ordinary construction
+  for x: (IntRange lo: 0 hi: 3) loop { print "\{x}" }
+  """
+
+A generator is a reftype and is named like one, in PascalCase. It compiles to
+an ordinary class -- its #~"is" fields are the class's fields, its #~"call" is
+a method, and it goes through the same ownership, lock and monomorphisation
+paths as any hand-written iterator. What the compiler adds is #~"call"'s
+implicit receiver, the option wrapper around its element type, the #~"create"
+its #~"is" fields describe, and the fields the state machine needs.
+
+#--: The is-block
+
+The #~"is" block declares the construction state: zero or more fields, with
+ownership markers and default values allowed, read in the body as #~"this.x".
+It is the only kind whose is-block may be omitted entirely -- a generator that
+captures nothing has none to write -- so all three spellings below parse to the
+same thing:
+
+#code language=zerolang: """
+  Lits: generator { } as { call: function out i64 is { yield 1 } }
+  Lits: generator as { call: function out i64 is { yield 1 } }
+  Lits: generator is {} as { call: function out i64 is { yield 1 } }
+  """
+
+#--: Construction
+
+#~".create" is #b:"generated" from the #~"is" fields, in order, and writing one
+by hand is a compile error. Each parameter's ownership follows the field it
+fills: an #_+"owned" field (unmarked, #~".take" or #~".hold") takes a #~".take"
+parameter, so the argument is moved in; a #_+"non-owned" field (#~".borrow" or
+#~".view") takes that same marker.
+
+The generated #~"create" returns #~"this.takex", so a non-owned field #b:"pins"
+whatever it points into for the instance's lifetime: while the generator is
+live, its source cannot be moved, written or reassigned. Reads stay legal.
+
+#table cols="3 2 4":
+  Field form                     |Stored as            |Argument
+  bare #~"x: T"                  |Owned field          |Moved in; destroyed with the instance
+  #~"x: T.take"                  |Owned field          |Same
+  #~"x: T.hold"                  |Owned, readonly      |Moved in
+  #~"x: T.borrow"                |Reference            |Pinned for the instance's life
+  #~"x: T.view"                  |Reference, readonly  |Pinned likewise
+
+A generator cannot be declared inside another type's #~"as" block -- an inline
+type definition is refused there, for a generator exactly as for a class.
+Declare it at unit level and, where the construction needs privileged access,
+reach it through a method whose own return wears #~".takex":
+
+#code language=zerolang: """
+  Bag: class { a: i64  b: i64 } as {
+      public: unit { :walk }
+      walk: function {b: this.private.borrow} out BagWalk.takex is {
+          return (BagWalk b: b)
+      }
+  }
+
+  BagWalk: generator { b: Bag.private.borrow } as {
+      call: function out i64 is {
+          yield this.b.a
+          yield this.b.b
       }
   }
   """
 
+The #~".takex" on #~"walk" is what carries the pin out to the caller's
+argument; without it the pin would stop at the method boundary.
+
+#--: The call member
+
+#~"call" is required, and it is the generator's body. Its #~"out" type is the
+#b:"element" type -- what each #~"yield" hands back -- not the return type: the
+compiler wraps it. Falling off the end, or a bare #~"return", means exhausted;
+#~"return <value>" is a compile error.
+
+The shape of the wrapper follows the element's ownership form. Like every other
+argument position in zerolang, a generic argument defaults to #~".borrow";
+#~".take" is explicit.
+
+#table cols="2 2 2 3":
+  out form           |Reftype T            |Valtype T            |Yielded value ownership
+  bare #~"T"         |#~"OptionView(T)"    |#~"optionval(T)"     |Borrowed view (ref) / copy (val)
+  #~"T.borrow"       |#~"OptionView(T)"    |#~"optionval(T)"     |Same as bare
+  #~"T.take"         |#~"Option(T)"        |#~"optionval(T)"     |Owned out (ref) / copy (val)
+
+For valtype #~"T", ownership annotations are physical no-ops (#~".borrow"
+copies, #~".take" is identical), so all three forms collapse to
+#~"optionval(T)". For reftype #~"T", bare and #~".borrow" both yield
+#~"OptionView(T)"; an owned reftype yield requires explicit #~"T.take".
+
+See the Ownership on Generic Arguments section of
+#> to=./ownership.html: the ownership document for the broader rule that
+governs ownership specifiers on generic arguments at use sites.
+
+#~"call" has an implicit #b:"receiver": the state machine writes through it, so
+it is a borrow like every other receiver, and it is why #~"is" fields are read
+as #~"this.x". It is never written in the parameter list.
+
+Every other member of the #~"as" block is support for #~"call".
+
+#--: yield
+
+#~"yield" is an ordinary name that the compiler defines into a generator's
+#~"call" and nowhere else -- the way #~"break" and #~"continue" are defined
+into a #~"for". Everywhere else the name is the program's to use, including as
+a binding. #~"yield" inside a nested function literal is rejected: the literal
+pushes its own scope and never sees the generator's.
+
+#~"yield" is an #b:"expression". It hands its argument to the caller and
+evaluates to the value the next call supplies.
+
+After termination the class enters an absorbing terminal state: #~".call"
+returns #~".none" forever after, idempotently. Code placed after the last
+#~"yield" runs on the #~".call" that crosses into terminal state (the call
+after the final value is consumed). It does #b:"not" run when the generator is
+dropped early (for-loop break, scope exit before exhaustion). Lock release and
+owned-field destruction happen on class destruction along both paths.
+Generators have no explicit cleanup block; cleanup is RAII -- hold the resource
+as a field of an object whose destructor handles it.
+
+#--: The per-call input
+
+#~"call"'s parameter list declares the #b:"per-call input": at most one, and
+what it declares is the input's type, its ownership, and the label its call
+sites read.
+
+It is #b:"not a body binding". A generator yields before it can receive, so a
+binding made on entry would name a value that does not exist yet -- the only
+way to read the input is #~"yield"'s own value. Reading that value in a
+generator that declares no input is a compile error. Seed a first value through
+an #~"is" field instead.
+
+The first #~".call" supplies a value that nothing has yielded yet, so a first
+yield written in expression form binds what the call that RESUMES it supplies
+-- the second #~".call". The for-loop drives only generators that receive
+nothing; one with an input is driven by hand through #~"with" and #~".call".
+
+#table cols="2 2 2 3":
+  input form          |Reftype U            |Valtype U            |Resume-input ownership
+  bare #~"U"          |non-owned field      |bare value field     |Borrow / by-value
+  #~"U.borrow"        |non-owned field      |bare value field     |Same as bare
+  #~"U.take"          |Owned field          |Bare value field     |Owned across yields
+
+Borrowed forms (bare and #~".borrow") install a lock on the caller's argument
+for the duration of each #~".call". The body's #~"name: yield v" binding is a
+pointer alias into the caller's storage; accesses through #~"name" read the
+live value. The name is valid only for one yield window -- using it past the
+next #~"yield" is a compile error. To persist the resumed value across yields,
+declare the input #~".take".
+
+#code language=zerolang: """
+  # the caller sends a bool back after each yielded line
+  Grep: generator { pat: String } as {
+      call: function {keep: bool} out String.borrow is {
+          for line: stdin.lines loop {
+              if line contains: this.pat then {
+                  wanted: yield line
+                  if wanted then store_match line
+              }
+          }
+      }
+  }
+
+  # driven by hand -- a for-loop cannot supply the input
+  with g: (Grep pat: "foo".string) do {
+      next: g.call
+      while next is some then {
+          k: my_check (some next)
+          next = g.call keep: k
+      }
+  }
+  """
+
+#--: Composition
+
 Generators compose through existing constructs:
 
 #ul:
-  [#*: #b:"Delegation" -- relay a sub-iterator through a for-loop
-      inside the outer generator's body. Both forms work:
+  [#*: #b:"Delegation" -- relay a sub-generator through a for-loop inside the
+      outer one's body. Both forms work:
 
       #code language=zerolang: """
         # inline
-        for x: (subgen ...) loop { yield x }
+        for x: (SubGen ...) loop { yield x }
 
         # explicit binding (equivalent)
-        inner: (subgen ...)
+        inner: (SubGen ...)
         for x: inner loop { yield x }
       """
 
-      The desugarer auto-extracts a non-trivial for-loop iterable
-      into a synthetic local, so the iterator persists across the
-      enclosing generator's suspensions. Existing lock-escape
-      rules apply through the synth class's captured-field
-      machinery.]
-  [#*: #b:"Chaining" -- sequential for-loops in the same body run
-      consecutively; each drains its source before the next starts
-      (see #~"examples/generator_chain.z").]
-  [#*: #b:"Pipelining" -- each stage is a generator taking another
-      iterator parameter. Function composition produces the pipeline;
-      each stage's synthesised class holds a #~".borrow" on the previous
-      stage and existing lock-escape rules keep the chain sound.]
+      A for-loop iterable that is a construction is hoisted to a temp before
+      the loop, and that temp crosses the enclosing generator's suspensions, so
+      the sub-generator is promoted to a field and persists across calls.]
+  [#*: #b:"Chaining" -- sequential for-loops in the same body run consecutively;
+      each drains its source before the next starts (see
+      #~"examples/generator_chain.z").]
+  [#*: #b:"Pipelining" -- each stage constructs the previous one as its
+      iterable (see #~"examples/generator_map_filter.z").]
 
-The synthesised class is otherwise an ordinary class: visible in
-compiler error messages as #~"<funcname>_iter" (or
-#~"<typename>.<methodname>_iter" for methods), goes through the same
-ownership / lock / monomorphisation paths as any user-written class,
-and is indistinguishable from a hand-written iterator at the call
-site.
+Any class with a #~"call" method returning the right option wrapper is
+iterable; #~"Iterator" in the system unit states that contract for iterators
+written by hand. A generator is one way of writing such a class, not the only
+one.
 
 #----: Methods
 

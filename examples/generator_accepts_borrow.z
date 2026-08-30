@@ -1,18 +1,22 @@
-# generator_accepts_borrow.z -- bidirectional generator with a
-# borrowed `accepts:`.
+# generator_accepts_borrow.z -- a generator whose per-call input is
+# a borrowed reftype.
 #
-# `accepts: Bag.borrow` (or `.borrow`, or bare reftype) makes each
-# `.call value: bag` deposit a borrowed pointer to the caller's
-# Bag into the synth class's `_resume_input` slot. The lock is held
-# for the duration of the call; on resumption, `name: yield v`
-# binds `name` as a pointer alias into the caller's storage, so
-# `name.x` reads the LIVE field through the lock.
+# `call: function {bag: Bag.borrow}` makes each `.call bag: b`
+# deposit a borrowed pointer to the caller's Bag into the
+# generator's resume slot. The lock is held for the duration of the
+# call; on resumption, `name: yield v` binds `name` as a pointer
+# alias into the caller's storage, so `name.x` reads the LIVE field
+# through the lock.
 #
-# Liveness rule: `name` is valid only until the NEXT yield. Using
-# it past that point would read a different .call's caller storage
-# (or stale data on a follow-up resumption). The typechecker
-# rejects such uses with a hint pointing at `.take` for the
+# Liveness rule: `name` is valid only until the NEXT yield. Using it
+# past that point would read a different `.call`'s caller storage
+# (or stale data on a follow-up resumption). The typechecker rejects
+# such uses with a hint pointing at `.take` for the
 # store-across-yields case.
+#
+# The label is the author's: `bag:` here is what the call sites
+# read, and nothing in the compiler requires it to be spelled
+# `value`.
 
 Bag: class {
     x: i64
@@ -21,22 +25,24 @@ Bag: class {
 # Three-yield generator: emits 1, then reads the resumed bag's x
 # field. `b` is used in the same window it was bound in (between
 # `b: yield 2` and the next `yield`), so the liveness check passes.
-peek: function {n: i64} out (Iterator Gives: i64 Accepts: Bag.borrow) is {
-    yield 1
-    b: yield 2
-    yield b.x
+Peek: generator { n: i64 } as {
+    call: function {bag: Bag.borrow} out i64 is {
+        yield 1
+        b: yield 2
+        yield b.x
+    }
 }
 
 main: function is {
     bag: Bag x: 42
-    with g: (peek n: 0) do {
-        a: g.call value: bag
+    with g: (Peek n: 0) do {
+        a: g.call :bag
         match (a) case some then print "a=\{a}" case none then print "(none)"
-        b: g.call value: bag
+        b: g.call :bag
         match (b) case some then print "b=\{b}" case none then print "(none)"
-        c: g.call value: bag
+        c: g.call :bag
         match (c) case some then print "c=\{c}" case none then print "(none)"
-        d: g.call value: bag
+        d: g.call :bag
         match (d) case some then print "d=\{d}" case none then print "(none)"
     }
 }

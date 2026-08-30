@@ -1,45 +1,51 @@
 # generator_chained_locals.z -- a promoted local whose first RHS is ANOTHER
 # promoted local.
 #
-# Every local in a generator body becomes a field on the synth class, typed by a
-# `typeof <first rhs>` node. When that RHS is a bare name, `typeofSourceType`
-# answers the owner's field of the same name -- but if THAT field is still an
-# unresolved shell, taking its type freezes this field on a placeholder nothing
-# will ever swap, because only the field a shell was minted for gets swapped.
-# `a: "hello"` then `b: a` across a yield reported `Unknown type ''` on the
-# generator's own signature.
+# Every local in a generator body that lives across a suspension becomes a field
+# on the class, typed by a `typeof <first rhs>` node. When that RHS is a bare
+# name, `typeofSourceType` answers the owner's field of the same name -- but if
+# THAT field is still an unresolved shell, taking its type freezes this field on
+# a placeholder nothing will ever swap, because only the field a shell was
+# minted for gets swapped. `a: "hello"` then `b: a` across a yield reported
+# `Unknown type ''` on the generator's own signature.
 #
 # A source that is itself an unresolved shell now counts as unresolved, so each
-# field mints its own shell and its own `this.b = a` write resolves it. `deep`
-# chains four levels; `mixed` proves a chain off a captured PARAMETER still
-# takes the fast path, since a param field is resolved before the locals.
+# field mints its own shell and its own `this.b = a` write resolves it. `Deep`
+# chains four levels; `Mixed` proves a chain off an `is` FIELD still takes the
+# fast path, since a declared field is resolved before the promoted locals.
 
-pair: function out (Iterator Gives: u64) is {
-    a: "hello"
-    b: a
-    yield 1.u64
-    yield b.length
+Pair: generator as {
+    call: function out u64 is {
+        a: "hello"
+        b: a
+        yield 1.u64
+        yield b.length
+    }
 }
 
-deep: function out (Iterator Gives: u64) is {
-    a: "abcd"
-    b: a
-    c: b
-    d: c
-    yield 2.u64
-    yield d.length
+Deep: generator as {
+    call: function out u64 is {
+        a: "abcd"
+        b: a
+        c: b
+        d: c
+        yield 2.u64
+        yield d.length
+    }
 }
 
-mixed: function {p: u64} out (Iterator Gives: u64) is {
-    q: p
-    r: q
-    yield 3.u64
-    yield r
+Mixed: generator { p: u64 } as {
+    call: function out u64 is {
+        q: this.p
+        r: q
+        yield 3.u64
+        yield r
+    }
 }
 
 main: function is {
-    for x: (pair) loop print "x: \{x}"
-    for y: (deep) loop print "y: \{y}"
-    for z: (mixed p: 7.u64) loop print "z: \{z}"
+    for x: (Pair) loop print "x: \{x}"
+    for y: (Deep) loop print "y: \{y}"
+    for z: (Mixed p: 7.u64) loop print "z: \{z}"
     print "done"
 }

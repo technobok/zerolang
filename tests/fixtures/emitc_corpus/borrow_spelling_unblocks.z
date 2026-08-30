@@ -1,29 +1,34 @@
-# The generator desugarer understood only the `.lock` SPELLING of "non-owned".
+# A generator that reads another type's PRIVATE fields, reached through the
+# public method that hands one out.
 #
-# A generator factory's receiver is written `{b: this.private.<marker>}` so the
-# synthesised iterator class can read the private fields. The desugarer's three
-# recognisers tested the leaf against the literal string "lock", so spelling it
-# `.borrow` -- the same thing, once `.lock` retires -- meant the parameter was
-# not recognised as a receiver at all.
+# `BagWalk`'s field is `Bag.private.borrow`, so it can read what
+# `public: unit { :count :walk }` hides -- and because the field is non-owned,
+# `Bag.walk` returns `BagWalk.takex`, which is what carries the pin out to the
+# caller's `g` rather than stopping at the method boundary.
 #
-# It failed SILENTLY. The generator still compiled and still built a class; the
-# loop variable simply came back as the ITERATOR type rather than the yielded
-# one, and the only symptom was a type error wherever the value was finally
-# used. That is why this fixture RUNS: a compile alone proves nothing here.
+# The generator is declared at unit level: it is a TYPE, and an inline type
+# definition inside `Bag`'s `as` block is refused for a generator exactly as for
+# a class. `Bag.walk` stays as the way in, so the call site is unchanged.
 #
-# The emitter's other half of the same unblocking -- a wrapper create whose
-# protocol argument is a bare name rather than a `.lock`-suffixed path -- is
-# covered by `examples/io_buffered.z` and its siblings, which migrated to the
-# bare form in the same commit and carry run goldens.
+# This fixture RUNS rather than merely compiling: the loop variable must come
+# back as the YIELDED type and not the iterator, and a compile alone cannot tell
+# the difference -- the symptom was a type error wherever the value was finally
+# used.
 Bag: class {
     a: i64
     b: i64
     count: i64
 } as {
     public: unit { :count :walk }
-    walk: function {b: this.private.borrow} out (Iterator Gives: i64) is {
-        yield b.a
-        yield b.b
+    walk: function {b: this.private.borrow} out BagWalk.takex is {
+        return (BagWalk b: b)
+    }
+}
+
+BagWalk: generator { b: Bag.private.borrow } as {
+    call: function out i64 is {
+        yield this.b.a
+        yield this.b.b
     }
 }
 
