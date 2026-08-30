@@ -1,0 +1,32 @@
+# A generator captures its non-owned parameters into the iterator it hands
+# back, so the factory returns `<synth>.takex` and the source stays pinned for
+# the iterator's lifetime. Moving the source out from under a live iterator
+# leaves every later `.call` reading freed memory -- the generator's captured
+# field is a reference into `g`, not a copy of it.
+#
+# The pin has to be on the FACTORY's return, not just the synth create's: the
+# create is called inside the factory, where the source is already a parameter,
+# so a marker there pins nothing the caller can see.
+Bag: class {
+    a: i64
+}
+
+walk: function {b: Bag.borrow} out (Iterator Gives: i64) is {
+    yield b.a
+    yield b.a
+}
+
+eat: function {victim: Bag.take} is {
+    print "ate \{victim.a}"
+}
+
+main: function is {
+    g: Bag a: 42
+    with it: (walk b: g) do {
+        p: it.call
+        match (p) case some then print "1: \{p}" case none then print "1: none"
+        eat victim: g.take
+        q: it.call
+        match (q) case some then print "2: \{q}" case none then print "2: none"
+    }
+}
