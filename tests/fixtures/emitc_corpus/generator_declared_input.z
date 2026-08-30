@@ -1,0 +1,59 @@
+# `call`'s parameter list declares the PER-CALL INPUT: at most one, and what it
+# declares is the input's type, its ownership, and the label its call sites
+# read. It is not a body binding -- a generator yields BEFORE it can receive, so
+# a binding made on entry would name a value that does not exist yet. The only
+# way to read the input is `yield`'s own value: `b: yield 2` yields 2 and
+# evaluates to whatever the NEXT `.call` was handed.
+#
+# THE LABEL IS THE AUTHOR'S. The function form always spelled it `value`, and
+# two places in the emitter matched it by that spelling -- the `.call` argument
+# and the "does this generator receive anything" test. Both now ask the
+# parameter's POSITION, which is the same question for either form: the receiver
+# is first and the input is second.
+#
+# A reftype input is a BORROW into the caller's argument, alive until the next
+# yield -- `b.x` below reads the caller's live Bag through the lock.
+Bag: class {
+    x: i64
+}
+
+# a scalar input, labelled something other than `value`
+Adder: generator as {
+    call: function {step: i64} out i64 is {
+        a: yield 1
+        b: yield (a + 10)
+        yield (b + 100)
+    }
+}
+
+# a borrowed reftype input, read in the window it was bound in
+Peek: generator { n: i64 } as {
+    call: function {bag: Bag.borrow} out i64 is {
+        yield 1
+        b: yield 2
+        yield b.x
+    }
+}
+
+main: function is {
+    with g: Adder do {
+        x: g.call step: 0
+        match (x) case some then print "add: \{x}" case none then print "add: none"
+        y: g.call step: 5
+        match (y) case some then print "add: \{y}" case none then print "add: none"
+        z: g.call step: 7
+        match (z) case some then print "add: \{z}" case none then print "add: none"
+    }
+
+    bag: Bag x: 42
+    with p: (Peek n: 0) do {
+        a: p.call bag: bag
+        match (a) case some then print "peek: \{a}" case none then print "peek: none"
+        b: p.call bag: bag
+        match (b) case some then print "peek: \{b}" case none then print "peek: none"
+        c: p.call bag: bag
+        match (c) case some then print "peek: \{c}" case none then print "peek: none"
+        d: p.call bag: bag
+        match (d) case some then print "peek: \{d}" case none then print "peek: none"
+    }
+}

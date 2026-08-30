@@ -30291,8 +30291,9 @@ emitUserIterCall: function {
             match (
                 atomVarId
             ) case namedoperation then {
-                al: zast.nameTextAt :ast ref: atomVarId.name
-                if al.stringView == "value" then {
+                # `.call` takes at most ONE argument -- the per-call input --
+                # so the first one IS it, whatever the author labelled it.
+                if (hasVal) == false then {
                     hasVal = true
                     ve: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: atomVarId.operation.u64)
                     # The resume value goes by REFERENCE when it is a reftype --
@@ -31851,19 +31852,24 @@ setupGenCtx: function {
         gp = armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: rid.u64) arm: "some"
     }
     ctx.genPayC = gp
+    # a `.call` that receives a per-call input is one with a SECOND parameter --
+    # the receiver is first. Asked by position rather than by the label, because
+    # the label belongs to the author: the function form always spelled it
+    # `value`, and a declared generator spells it whatever its call sites read.
     hasVal: false
     match (
         op
     ) case functiondef then {
+        pcnt: u64
         with piter: op.parameters.iterate do for pm9Id: piter loop {
             pm: ast.nodes.get i: pm9Id.u64
             match (
                 pm
             ) case namedoperation then {
-                pl: zast.nameTextAt :ast ref: pm.name
-                if pl.stringView == "value" then hasVal = true
+                pcnt = pcnt + 1
             } else null
         }
+        if pcnt > 1 then hasVal = true
     } else null
     ctx.genHasValue = hasVal
     return true

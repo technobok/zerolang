@@ -29007,6 +29007,34 @@ yieldIsInScope: function {st: zenv.ZSymbolTable.view} out bool is {
     }
 }
 
+# yieldInputTidOf -- the type of a generator `call`'s per-call input: its SECOND
+# parameter, the receiver being first. 0 when it declares none, which is what
+# makes reading `yield`'s value there an error rather than a silent zero.
+yieldInputTidOf: function {
+    # the scope the parameter is looked up in
+    st: zenv.ZSymbolTable
+    # the tree the parameter list is read from
+    ast: Ast
+    # the `call` whose input is wanted
+    defn: fnref
+} out ztypes.tid is {
+    if defn.nparams < 2 then return ztypes.tid
+    pmId: (zast.fnParamAt :ast nid: defn.nid i: 1).u32
+    if pmId == 0 then return ztypes.tid
+    pn: ast.nodes.get i: pmId.u64
+    match (
+        pn
+    ) case namedoperation then {
+        po: st.lookup nameId: pn.name
+        match (
+            po
+        ) case some then {
+            return (ztypes.tid.create from: po)
+        } case none then null
+    } else null
+    return ztypes.tid
+}
+
 # checkYieldCall -- a suspension point, checked as the call it is. The call's
 # own type is the value the caller sends back on resumption, which the synth
 # `.call` carries as its `value` parameter; an out-only generator declares none
@@ -29064,8 +29092,12 @@ checkYieldCall: function {
     }
     # the resumed value. A reftype resume value is a borrow into the caller's
     # argument, so the surrounding binding becomes a BORROWED origin value.
+    # the declared form stashes the input's type on entry to `call`; the
+    # function form binds it as a parameter literally named `value`, and is
+    # asked only when the stash is empty.
     yvn: nameIdOf :ast name: "value"
     yvo: st.lookup nameId: yvn
+    if st.typing.currentYieldInputTid > 0 then yvo = optionval.some st.typing.currentYieldInputTid
     match (
         yvo
     ) case some then {
@@ -34479,14 +34511,26 @@ checkFunctionBody: function {
             # fact: a `yield` in an ordinary function does not resolve, and one
             # inside a nested function literal never sees this scope because
             # the literal pushes its own.
+            prevYi: st.typing.currentYieldInputTid
+            st.typing.currentYieldInputTid = ztypes.tid
             if (st.typing.generatorCallBodies.has item: fn.nid.u64) then {
                 ykp: st.reg.ctlPlaceholder
                 (st.define
                     nameId: zast.names.wkYield
                     ztypeId: (ztypes.tid.create from: ykp.u64)
                 )
+                # what `yield` evaluates to: the per-call input, which is the
+                # SECOND parameter -- the receiver is first. Stashed rather than
+                # read off a name at the yield, because the input is not a body
+                # binding and the label it carries is the CALL SITE's.
+                st.typing.currentYieldInputTid = (yieldInputTidOf
+                    :st
+                    :ast
+                    defn: fn
+                )
             }
             walkBodyAt :st :unitDecl :ast bodyId: fn.body
+            st.typing.currentYieldInputTid = prevYi
             st.typing.currentReturnTypeId = prevRet
             st.typing.currentReturnsBorrow = prevRb
             st.typing.currentFnTid = prevFn

@@ -2992,6 +2992,79 @@ callBodyIdOf: function {
     }
 }
 
+# declaredInputTypeId -- the per-call input parameter's type node on a declared
+# `call`, 0 when it declares none. Asked BEFORE the receiver is injected, so the
+# input is the first parameter; afterwards it is the second.
+declaredInputTypeId: function {
+    # the tree holding the function
+    ast: Ast.view
+    # the `call` whose input is wanted
+    callFnId: zast.nodeid
+} out zast.nodeid is {
+    cf: ast.nodes.get i: callFnId.u64
+    match (
+        cf
+    ) case functiondef then {
+        with pit: cf.parameters.iterate do for pId: pit loop {
+            pn: ast.nodes.get i: pId.u64
+            match (
+                pn
+            ) case namedoperation then {
+                return pn.operation
+            } else null
+        }
+    } else null
+    return (zast.nodeid.create from: 0)
+}
+
+# resumeFieldPath -- the `_resume_input` field's type for a declared input. The
+# field holds the most recent resumed value: an OWNED input (`.take` / `.hold`)
+# strips to an owned field, a non-owned one (`.borrow` / `.view`) keeps its
+# marker, and an unmarked one is a reference into the caller's argument for the
+# call's duration, so it becomes a `.borrow` field. Read by NAME ID for the same
+# reason createParamPath is.
+resumeFieldPath: function {
+    # the tree the field type is minted into
+    ast: Ast
+    # the input parameter's declared type node
+    nid: zast.nodeid
+} out Node is {
+    leafId: zast.nameid
+    parentId: zast.nodeid
+    line: u32
+    col: u32
+    {
+        pp: zast.posOf n: (ast.nodes.get i: nid.u64)
+        line = pp.line
+        col = pp.col
+        bn: ast.nodes.get i: nid.u64
+        match (
+            bn
+        ) case dottedpath then {
+            parentId = bn.parent
+            leafId = leafAtomNameId :ast n: (ast.nodes.get i: bn.child.u64)
+        } else null
+    }
+    if leafId == zast.names.wkBorrow then return (clonePathAt :ast :nid)
+    if leafId == zast.names.wkView then return (clonePathAt :ast :nid)
+    isOwned: false
+    if leafId == zast.names.wkTake then isOwned = true
+    if leafId == zast.names.wkHold then isOwned = true
+    if isOwned then {
+        if (parentId.isZero) == false then return (clonePathAt :ast nid: parentId)
+        return (clonePathAt :ast :nid)
+    }
+    base: clonePathAt :ast :nid
+    bl: mkAtom :ast :line :col name: "borrow"
+    return (Node.dottedpath (zast.DottedPathData
+        nodeid: (zast.tableReserve :ast)
+        lineno: line
+        colno: col
+        parent: (zast.tableAdd :ast n: base)
+        child: (zast.tableAdd :ast n: bl))
+    )
+}
+
 # DeclParts -- what one pass over a `generator`'s definition yields: where it
 # was written, its `call`, and the fields the author declared. The `is` list is
 # read ONCE, before this pass appends its own fields, so the generated `create`
@@ -3007,6 +3080,9 @@ DeclParts: class {
     names: (List String)
     # their type nodes, in the same order
     types: (ListVal u64)
+    # the per-call input parameter's type node, 0 when `call` declares none.
+    # Read before the receiver is injected, so it is the FIRST parameter here.
+    inputTypeId: zast.nodeid
 }
 
 # readDeclaredParts -- fill `dst` from one `generator` objectdef.
@@ -3029,7 +3105,10 @@ readDeclaredParts: function {
             match (
                 am
             ) case namedoperation then {
-                if am.name == zast.names.wkCall then dst.callFnId = am.operation
+                if am.name == zast.names.wkCall then {
+                    dst.callFnId = am.operation
+                    dst.inputTypeId = declaredInputTypeId :ast callFnId: am.operation
+                }
             } else null
         }
         # the AUTHOR's fields, read before this pass appends its own: the
@@ -3052,9 +3131,9 @@ readDeclaredParts: function {
 # suspension, typed from its FIRST assignment: a promoted local has no
 # declaration to read a type from, and the first write is what gives it one.
 appendCrossingFields: function {
-    # the tree the fields are minted into
+    # the tree the typeof fields are minted into
     ast: Ast
-    # the line the fields are attributed to
+    # the line a promoted local's field is attributed to
     line: u32
     # the column likewise
     col: u32
@@ -3062,7 +3141,7 @@ appendCrossingFields: function {
     crossing: (List String).view
     # the body their first assignments are read from
     pBody: (Option Node).view
-    # the field list being built
+    # the field list the typeof fields join
     addFields: ListVal u32
 } is {
     with cit2: crossing.iterate do for l3: cit2 loop {
@@ -3086,6 +3165,83 @@ appendCrossingFields: function {
             nf4: mkNamedOp :ast :line :col name: l3v op: tof3
             addFields.append (zast.tableAdd :ast n: nf4)
         } case none then null
+    }
+}
+
+# appendResumeFields -- the resume slots and the input store, for a `call` that
+# declares a per-call input. A yield hoisted out of expression position leaves
+# its resumed value in one of these, not in a C local: the suspension RETURNS
+# from `.call`, so a local does not survive a later suspension in the same
+# statement. One slot per suspension point, numbered as the emitter numbers its
+# resume labels.
+appendResumeFields: function {
+    # the tree the counter fields are minted into
+    ast: Ast
+    # the line a counter field is attributed to
+    line: u32
+    # the column likewise
+    col: u32
+    # the input parameter's declared type node
+    inputTypeId: zast.nodeid
+    # how many suspension points the body has
+    yieldSlots: u64
+    # the field list the counters join
+    addFields: ListVal u32
+} is {
+    yvi: u64
+    for yvi < yieldSlots loop {
+        yvi = yvi + 1
+        yvT: resumeFieldPath :ast nid: inputTypeId
+        yvNm: "_yv_\{yvi}"
+        yvF: mkNamedOp :ast :line :col name: yvNm.stringView op: yvT
+        addFields.append (zast.tableAdd :ast n: yvF)
+    }
+    riT: resumeFieldPath :ast nid: inputTypeId
+    riF: mkNamedOp :ast :line :col name: "_resume_input" op: riT
+    addFields.append (zast.tableAdd :ast n: riF)
+}
+
+# appendForCounterFields -- one counter field per label-bound `for` whose body
+# suspends. A `for` counter lives only in the C header, and `goto L_resume_k`
+# jumps in past the init clause, so it has to be a field like everything else
+# live across a suspension. It cannot come from the crossing analysis: a `for`
+# label is a nameid on the header's namedoperation, not an assignment.
+appendForCounterFields: function {
+    # the tree the resume fields are minted into
+    ast: Ast
+    # the line a resume field is attributed to
+    line: u32
+    # the column likewise
+    col: u32
+    # how many suspending `for` loops the body has
+    forSlots: u64
+    # the field list the resume fields join
+    addFields: ListVal u32
+} is {
+    fci: u64
+    for fci < forSlots loop {
+        fci = fci + 1
+        fcTy: i64TypePath :ast :line :col
+        fcNm: "_fc_\{fci}"
+        fcF: mkNamedOp :ast :line :col name: fcNm.stringView op: fcTy
+        addFields.append (zast.tableAdd :ast n: fcF)
+    }
+}
+
+# promotedSet -- the crossing locals as the name set rewriteToThis rewrites
+# through `this`. A declared generator promotes ONLY these: its `is` fields are
+# already read as `this.x` because the author wrote them that way.
+promotedSet: function {
+    # the locals live across a suspension
+    crossing: (List String).view
+    # filled with one entry per name
+    dst: (MapRV String v: bool)
+} is {
+    with cit: crossing.iterate do for ce: cit loop {
+        cev: ce.stringView
+        ck: cev.string
+        cv: true
+        dst.set key: ck value: cv
     }
 }
 
@@ -3178,6 +3334,7 @@ lowerDeclared: function {
         colno: 0
         names: (List String)
         types: (ListVal u64)
+        inputTypeId: (zast.nodeid.create from: 0)
     )
     readDeclaredParts :ast :objId dst: parts
     ctr: (NameCtr next: 0)
@@ -3215,19 +3372,16 @@ lowerDeclared: function {
         yieldBound: (MapRV String v: bool)
     )
     crossWalkOpt :ast :gc o: pBody inYieldLoop: false
-    # no `_yv_k` resume slots: those hold the value a suspension is RESUMED
-    # with, and an out-only generator is never resumed with one. They arrive
-    # with the declared input parameter.
+    # one resume SLOT per suspension point, counted by the SAME function the
+    # emitter numbers its resume labels with. An out-only generator has none:
+    # the slots hold the value a suspension is RESUMED with, and nothing resumes
+    # one with a value.
+    yieldSlots: yieldSlotsOpt :ast o: pBody
     forSlots: forCounterSlotsOpt :ast o: pBody
     crossing: (List String)
     crossingLocals :gc dst: crossing
     promoted: (MapRV String v: bool)
-    with cit: crossing.iterate do for ce: cit loop {
-        cev: ce.stringView
-        ck: cev.string
-        cv: true
-        promoted.set key: ck value: cv
-    }
+    promotedSet :crossing dst: promoted
 
     # the fields the transform needs, appended to the ones the author declared
     addFields: (ListVal u32)
@@ -3249,14 +3403,15 @@ lowerDeclared: function {
             cfm4.body = (zast.nodeid.create from: nbId)
         } else null
     } case none then null
-    fci: u64
-    for fci < forSlots loop {
-        fci = fci + 1
-        fcTy: i64TypePath :ast :line :col
-        fcNm: "_fc_\{fci}"
-        fcF: mkNamedOp :ast :line :col name: fcNm.stringView op: fcTy
-        addFields.append (zast.tableAdd :ast n: fcF)
-    }
+    appendForCounterFields :ast :line :col :forSlots :addFields
+    if (parts.inputTypeId.isZero) == false then (appendResumeFields
+        :ast
+        :line
+        :col
+        inputTypeId: parts.inputTypeId
+        :yieldSlots
+        :addFields
+    )
     (buildDeclaredCreate :ast :objId :line :col authorNames: parts.names authorTypes: parts.types)
     appendDeclaredFields :ast :objId :addFields
     dst.callFnId = callFnId.u32
