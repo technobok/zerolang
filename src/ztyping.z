@@ -291,8 +291,6 @@ Decl: class {
     # is-block function member of a record or class, or an as-block member of a
     # generic class. Where it was declared, not its kind, decides this.
     fnptrField: bool
-    # lockFieldDecl -- on a TYPE decl, which member is the type's lock (0 = none).
-    lockFieldDecl: u64
     # conformerName -- on a protocol / facet decl, the name id of the first
     # type in this unit whose as-block named it (0 = none). A spec's `this`
     # binds to that type. On the DECLARATION, so the marker name is scoped by
@@ -833,7 +831,6 @@ ZTyping: class {
             grantsPrivate: false
             unitFrame: false
             fnptrField: false
-            lockFieldDecl: 0
             conformerName: 0
             varId: ztypes.vid
             rows: 0
@@ -1298,22 +1295,35 @@ ZTyping: class {
         return (this.declIsLockFieldId :parentTypeId nameId: nid)
     }
 
-    # whether the named member is a lock field, which decides whether a write
-    # through it takes the container exclusively
+    # whether the named member is a NON-OWNED field, which decides whether the
+    # destructor frees it, whether the struct holds it by pointer, and whether
+    # a write through it takes the container exclusively.
+    #
+    # Read off the MEMBER's own ownership, which is where a field's marker was
+    # already recorded. The owning type used to name a single member as "the"
+    # lock field instead -- one slot, unguarded, last writer wins -- so a type
+    # with two non-owned fields remembered only the last and freed the rest.
+    # Nothing in the tree had two until a generator could declare them.
+    #
+    # `noneMode` is NOT non-owned here: on a field it means unmarked, which is
+    # owned. The same slot means "borrows by default" on a PARAMETER, so the
+    # question is only ever asked of a member.
     declIsLockFieldId: function {
         this: this.view
         parentTypeId: ztypes.tid
         nameId: zast.nameid
     } out bool is {
-        od: this.declIdOfType typeId: parentTypeId
-        if od.isZero then return false
-        lf: u64
+        md: this.declMemberIdOf :parentTypeId :nameId
+        if md.isZero then return false
+        r: ztypes.zparamownership.noneMode
         {
-            oo: this.decls.get i: od.u64
-            lf = oo.lockFieldDecl
+            mo: this.decls.get i: md.u64
+            r = mo.ownership
         }
-        if lf == 0 then return false
-        return lf == (this.declFindChild parentDeclId: od :nameId)
+        if r == ztypes.zparamownership.borrowMode then return true
+        if r == ztypes.zparamownership.viewMode then return true
+        if r == ztypes.zparamownership.holdxMode then return true
+        return false
     }
 
     # declDefaultOfId -- member `nameId`'s recorded default value; none when
@@ -2003,20 +2013,6 @@ ZTyping: class {
         }
     }
 
-    # record that a member is a lock field
-    setChildLockField: function {:this pool: zast.StringPool.view parentTypeId: ztypes.tid name: StringView} is {
-        nid8: pool.find s: name
-        if nid8 > 0 then {
-            od8: this.declIdOfType typeId: parentTypeId
-            if (od8.isZero) == false then {
-                md8: this.declFindChild parentDeclId: od8 nameId: nid8
-                if (md8.isZero) == false then {
-                    do8: this.decls.getMut i: od8.u64
-                    do8.lockFieldDecl = md8
-                }
-            }
-        }
-    }
 
     # record that a member holds a function pointer
     setChildFnptrField: function {:this pool: zast.StringPool.view parentTypeId: ztypes.tid name: StringView} is {
@@ -2600,7 +2596,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         grantsPrivate: false
         unitFrame: false
         fnptrField: false
-        lockFieldDecl: 0
         conformerName: 0
         varId: ztypes.vid
         rows: 0

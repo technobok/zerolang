@@ -1,0 +1,49 @@
+# TWO non-owned fields on one type. The owning declaration used to name a
+# single member as "the" lock field -- one slot, written unguarded, last writer
+# wins -- so a type with two remembered only the LAST. Every earlier one read
+# back as owned, which is three wrong answers at once: the destructor freed a
+# borrowed pointer, the struct held the field by value instead of `T*`, and the
+# `_meta_create` parameter took the same wrong shape.
+#
+# Nothing in the tree had two until a generator could declare them, which is
+# why a latent single-slot record survived this long. The answer now comes from
+# the FIELD's own ownership, recorded per member, so there is no slot to lose.
+#
+# Both sources stay live and readable after the generator is done with them,
+# and the run is leak-checked: a borrowed field freed by the destructor would
+# be a double free, and an owned one wrongly kept would be a leak. `Three`
+# drives its loop directly rather than through a `with` binding, which leaks
+# an owned field for reasons that predate this and reproduce with one field.
+Bag: class {
+    a: u64
+}
+
+Two: generator { x: Bag.borrow  y: Bag.borrow } as {
+    call: function out u64 is {
+        yield this.x.a
+        yield this.y.a
+        yield this.x.a + this.y.a
+    }
+}
+
+# one borrowed, one viewed and one OWNED, in that order: the owned field must
+# still be freed while neither reference is
+Three: generator { p: Bag.borrow  q: Bag.view  owned: String } as {
+    call: function out u64 is {
+        yield this.owned.count
+        yield this.p.a
+        yield this.q.a
+    }
+}
+
+main: function is {
+    m: Bag a: 10.u64
+    n: Bag a: 20.u64
+    with it: (Two x: m y: n) do for v: it loop print "two: \{v}"
+    print "sources live: \{m.a} \{n.a}"
+
+    p: Bag a: 3.u64
+    q: Bag a: 4.u64
+    for w: (Three p: p q: q owned: "hello".string) loop print "three: \{w}"
+    print "sources live: \{p.a} \{q.a}"
+}
