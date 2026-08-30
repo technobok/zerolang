@@ -1,0 +1,69 @@
+# What the DECLARED form makes expressible. Each of these captures is a field
+# the author writes, so its ownership goes through the ordinary class-field path
+# and comes out right; the old function form INFERRED it from a parameter marker
+# and understood only take/lock/borrow, so three of the four below were refused
+# or invisible.
+#
+#   bare reftype -- refused outright as `function {b: Bag} out (Iterator ...)`,
+#     with "Cannot move borrowed variable 'b' into a taking argument". The
+#     generated `create` is what makes it work: an OWNED field takes a `.take`
+#     parameter, so the argument is moved in rather than borrowed and re-moved.
+#   `.hold`      -- refused the same way, "Cannot move readonly variable".
+#   `.view`      -- read as unmarked by the take/lock/borrow leaf reader, so it
+#     would be handed a `.take` parameter: an owned copy of a reference.
+#   `.borrow`    -- the one spelling that always worked.
+#
+# The non-owned captures are leak-checked here: a borrowed or viewed field must
+# NOT be freed by the instance destructor, and an owned one must. Only the
+# corpus leak pass sees that; the printed lines cannot.
+Bag: class {
+    a: i64
+}
+
+# owned: the field takes ownership of what it is built with
+Owned: generator { b: Bag } as {
+    call: function out i64 is {
+        yield this.b.a
+        yield 99
+    }
+}
+
+# owned and readonly
+Held: generator { b: Bag.hold } as {
+    call: function out i64 is {
+        yield this.b.a
+        yield 98
+    }
+}
+
+# a reference into the caller, mutable
+Borrowed: generator { b: Bag.borrow } as {
+    call: function out i64 is {
+        yield this.b.a
+        yield 97
+    }
+}
+
+# a reference into the caller, readonly
+Viewed: generator { b: Bag.view } as {
+    call: function out i64 is {
+        yield this.b.a
+        yield 96
+    }
+}
+
+main: function is {
+    o: Bag a: 10
+    with it: (Owned b: o.take) do for x: it loop print "owned: \{x}"
+
+    h: Bag a: 20
+    with ht: (Held b: h.take) do for x: ht loop print "held: \{x}"
+
+    b: Bag a: 30
+    with bt: (Borrowed b: b) do for x: bt loop print "borrowed: \{x}"
+    print "source still live: \{b.a}"
+
+    v: Bag a: 40
+    with vt: (Viewed b: v) do for x: vt loop print "viewed: \{x}"
+    print "source still live: \{v.a}"
+}

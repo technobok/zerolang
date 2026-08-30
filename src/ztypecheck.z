@@ -1513,6 +1513,11 @@ defTypetypeOf: function {
             return (optionval.some ztypes.ztypetype.unionType)
         } case classDef then {
             return (optionval.some ztypes.ztypetype.classType)
+        } case generatorDef then {
+            # a generator IS a class: `is` fields, a `call` method, one struct.
+            # The kind survives only on the AST node, where the checks that are
+            # particular to it read it.
+            return (optionval.some ztypes.ztypetype.classType)
         } case facetDef then {
             return (optionval.some ztypes.ztypetype.facetType)
         } case protocolDef then {
@@ -11444,9 +11449,13 @@ refuseEmptyObjectDef: function {
     return true
 }
 
-# resolveObjectDef -- a record / class / union / variant / facet / protocol / unit
-# definition, routed to its family's resolver. A generic one resolves its
-# constraint bounds first: a bound names a type the body then relies on.
+# resolveObjectDef -- a record / class / generator / union / variant / facet /
+# protocol / unit definition, routed to its family's resolver. A generic one
+# resolves its constraint bounds first: a bound names a type the body then
+# relies on. A generator routes to the CLASS resolver: its `is` fields are class
+# fields and go through resolveClassFieldEntry, which is the whole point of the
+# form -- per-field ownership comes out right because it is declared, not
+# inferred.
 resolveObjectDef: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -11493,6 +11502,8 @@ resolveObjectDef: function {
     } case unionDef then {
         resolveUnion :st frame: rf :ast :unitDecl :defName vnode: defn
     } case classDef then {
+        resolveClass :st frame: rf :ast :unitDecl :defName cnode: defn
+    } case generatorDef then {
         resolveClass :st frame: rf :ast :unitDecl :defName cnode: defn
     } case facetDef then {
         resolveFacet :st frame: rf :ast :unitDecl :defName fnode: defn
@@ -39599,6 +39610,86 @@ lowerFreeGenerators: function {
 }
 
 
+# lowerDeclaredGeneratorsInUnit -- prepare every `generator` definition in the
+# unit for the ordinary class walk. Unlike the function form there is nothing to
+# move: the definition stays where the author wrote it and keeps its name, so
+# this only hands each one to zgenerator and records which body `yield` is legal
+# in.
+lowerDeclaredGeneratorsInUnit: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitdefId: zast.nodeid
+} is {
+    bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
+    with bit: bodyIds.iterate do for bmId: bit loop {
+        opId: zast.nodeid
+        {
+            bm: ast.nodes.get i: bmId.u64
+            match (
+                bm
+            ) case namedoperation then {
+                bo: ast.nodes.get i: bm.operation.u64
+                match (
+                    bo
+                ) case objectdef then {
+                    if bo.kind == zast.objectkind.generatorDef then opId = bm.operation
+                } else null
+            } else null
+        }
+        if opId > 0 then {
+            gd: (zgenerator.GenDeclared callFnId: 0 wrapperNodeId: 0)
+            zgenerator.lowerDeclared :ast objId: opId dst: gd
+            # `yield` is in scope for exactly this body, and the pass that
+            # prepared the body is what knows which body that is
+            if gd.callFnId > 0 then (st.typing.generatorCallBodies.add
+                item: gd.callFnId.u64
+            )
+            # the wrapper collapses to `optionval` over a valtype element, and
+            # the collapse is keyed on this very node
+            if gd.wrapperNodeId > 0 then {
+                gwk: gd.wrapperNodeId.u64
+                gwv: true
+                st.typing.generatorWrapper.set key: gwk value: gwv
+            }
+        }
+    }
+}
+
+# lowerDeclaredGenerators -- prepare every `generator` definition in the program.
+#
+# RUNS BEFORE indexUnitDefs, unlike the function-form pass, and the ordering is
+# load-bearing. This one APPENDS FIELDS to a definition the author wrote, and
+# indexing binds a definition's members where it stands -- so a field added
+# after indexing is not there when the class resolves, and the state cursor and
+# the promoted locals go missing from the struct while everything else about the
+# program still typechecks. The function form appends a WHOLE NEW definition
+# instead, which resolves on demand whenever it is added, so it can run late and
+# does: it has to wait for the Iterator protocol. Nothing here needs Iterator.
+lowerDeclaredGenerators: function {st: zenv.ZSymbolTable program: Node} is {
+    match (
+        program
+    ) case program then {
+        ui: u64
+        un: program.ast.units.length
+        for ui < un loop {
+            uelId: (zast.nodeid.create from: (program.ast.units.get i: ui))
+            ui = ui + 1
+            uOpId: zast.nodeid
+            {
+                uel: program.ast.nodes.get i: uelId.u64
+                if uel.namedoperation then uOpId = uel.operation
+            }
+            if uOpId > 0 then {
+                (lowerDeclaredGeneratorsInUnit
+                    :st
+                    ast: program.ast
+                    unitdefId: uOpId
+                )
+            }
+        }
+    } else null
+}
+
 # lowerGeneratorsInUnit -- candidates collect first (indexes + names),
 # then each lowers by index: the functiondef moves out of its
 # namedoperation slot, the factory moves in, and the synth class appends
@@ -41487,6 +41578,7 @@ typecheck: function {
     # name of every unit, marked not yet typechecked -- BEFORE any resolution,
     # so a reference always finds its declaration and never mints a shell for
     # a name that has one. Generator lowering indexes what it synthesizes.
+    lowerDeclaredGenerators :st :program
     registerUnitRoots :st :program
     indexUnitDefs :st frame: ztypes.declid :program
     match (

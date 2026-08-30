@@ -1352,18 +1352,18 @@ eager-guard: bin/zc
 # the spelling moves, and it dies silently.
 member-guard:
 	@m1=$$(grep -cE '[a-z]*cn\.stringView ==|[a-z]*cn == "' src/ztypecheck.z); \
-	if [ "$$m1" -gt 24 ]; then \
-	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 24)"; \
+	if [ "$$m1" -gt 23 ]; then \
+	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 23)"; \
 	  echo "  A new hardcoded string-keyed member/marker special-case was added to the"; \
 	  echo "  type checker. Resolve members through their declared childOf edges (the"; \
 	  echo "  system units are the source of truth); bump the baseline only for a"; \
 	  echo "  genuinely-sanctioned marker."; \
 	  exit 1; \
 	fi; \
-	if [ "$$m1" -lt 24 ]; then \
-	  echo "member-guard: string-keyed member compares = $$m1 < baseline 24 -- lower the baseline here"; \
+	if [ "$$m1" -lt 23 ]; then \
+	  echo "member-guard: string-keyed member compares = $$m1 < baseline 23 -- lower the baseline here"; \
 	fi; \
-	echo "member-guard OK: string-keyed member compares = $$m1 (<=24)"
+	echo "member-guard OK: string-keyed member compares = $$m1 (<=23)"
 
 # highlight-guard -- the two syntax highlighters must carry the language's
 # actual vocabulary. THE LANGUAGE IS THE SOURCE OF TRUTH, never the lists:
