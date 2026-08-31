@@ -9614,7 +9614,7 @@ foldedFieldType: function {
     return ztypes.tid
 }
 
-# armDefaultCarriesPayload -- the arm a field defaults to carries a payload, so
+# armCarriesPayload -- the arm a field defaults to carries a payload, so
 # it cannot BE the default.
 #
 # A constant naming an arm is `armKind`, and that cval holds `armTid` and
@@ -9627,7 +9627,7 @@ foldedFieldType: function {
 # Nothing checked. `n: V.a` with `a: i64` defaulted the field to arm `a` over a
 # zero payload, and `n: U.a` with `a: String` defaulted it to a String that was
 # never constructed -- reading it SEGFAULTS.
-armDefaultCarriesPayload: function {
+armCarriesPayload: function {
     # where the arm's own declaration is read
     st: zenv.ZSymbolTable.view
     # the sum the arm belongs to
@@ -9658,7 +9658,7 @@ refuseArmDefaultPayload: function {
     # the arm's name
     armName: zast.nameid
 } out bool is {
-    if (armDefaultCarriesPayload :st :armTid :armName) == false then return false
+    if (armCarriesPayload :st :armTid :armName) == false then return false
     an: zast.nameTextAt :ast ref: armName
     ma: "field '\{fname}' defaults to arm '\{an}', which carries a payload -- a default names an arm, and cannot supply what the arm holds"
     ha: "default to an arm that carries nothing, or drop the default and let the constructor build the value".string
@@ -11019,7 +11019,58 @@ resolveAliasKey: function {
     cvA: constValueOfDecl :st :ast :declId
     if (cvA.kind.none) == false then return (declTypeIdOf :st :declId).u64
     r: resolveAliasKeyIn :st frame: aframe :ast :declId
+    (refuseArmAliasPayload :st :ast :declId tid: (ztypes.tid.create from: r))
     return r
+}
+
+# refuseArmAliasPayload -- a definition whose value NAMES AN ARM resolves to the
+# arm's own sum, and is emitted as a bare tag. That is right for an arm that
+# carries nothing and wrong for one that carries something: `k: U.a` with
+# `a: String` yields a tag over a payload no one built, and reading it
+# SEGFAULTS. The fold cannot catch this one -- a payload arm has no constant, so
+# the fold answers none and the definition falls through to here as an alias.
+refuseArmAliasPayload: function {
+    # where the refusal is recorded
+    st: zenv.ZSymbolTable
+    # the tree the definition's value is read from
+    ast: Ast.view
+    # the definition being resolved
+    declId: ztypes.declid
+    # what it resolved to: the arm's sum, when its value names an arm
+    tid: ztypes.tid
+} is {
+    if tid.isZero then return
+    tt: st.reg.typetypeOf typeId: tid
+    isSum: false
+    if tt == ztypes.ztypetype.variantType then isSum = true
+    if tt == ztypes.ztypetype.unionType then isSum = true
+    if (isSum) == false then return
+    tgt: reexportTargetIdsOf :st :ast :declId
+    if tgt.defName.isZero then return
+    if (armCarriesPayload :st armTid: tid armName: tgt.defName) == false then return
+    dn: String
+    dnode: zast.nodeid
+    {
+        dr: st.typing.decls.get i: declId.u64
+        dn = zast.nameTextCopy :ast ref: (zast.nameid.create from: dr.name)
+        dnode = zast.nodeid.create from: dr.node
+    }
+    ar: argRefAt :ast nid: dnode
+    an: zast.nameTextAt :ast ref: tgt.defName
+    mg: "'\{dn}' names arm '\{an}', which carries a payload -- naming an arm gives its tag, and cannot supply what the arm holds"
+    hg: "supply the payload at each use (`\{an} <value>`), or name an arm that carries nothing"
+    ng: String
+    (addErrorH
+        :st
+        nodeid: ar.nid
+        lineno: ar.lineno
+        colno: ar.colno
+        e: zast.err.typeError
+        msg: mg
+        note: ng
+        hint: hg
+        width: dn.length.u32.orPanic
+    )
 }
 
 # constValueOfDecl -- the value a declaration folded to, addressed by the
@@ -36682,10 +36733,9 @@ constArmRead: function {
     if ptt == ztypes.ztypetype.variantType then isSum = true
     if ptt == ztypes.ztypetype.unionType then isSum = true
     if (isSum) == false then return ztypes.noConst
-    return (ztypes.makeArmConst
-        armTid: ptid
-        armName: (zast.poolFind pool: ast.names text: armName)
-    )
+    anm: zast.poolFind pool: ast.names text: armName
+    if (armCarriesPayload :st armTid: ptid armName: anm) then return ztypes.noConst
+    return (ztypes.makeArmConst armTid: ptid armName: anm)
 }
 
 # constValEq -- do two compile-time values denote the same thing? Only defined
