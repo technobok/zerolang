@@ -9653,9 +9653,9 @@ refuseArmDefaultPayload: function {
     fname: StringView
     # the field's declaration, for the position
     fm: argref
-    # the sum the arm belongs to
+    # the sum whose arm was named
     armTid: ztypes.tid
-    # the arm's name
+    # the arm the default named
     armName: zast.nameid
 } out bool is {
     if (armCarriesPayload :st :armTid :armName) == false then return false
@@ -20964,6 +20964,82 @@ checkMemberProjections: function {
     }
     return (callleg handled: false tid: (ztypes.tid.create from: 0))
 }
+# refuseHiddenArm -- arm constructors are members, so from OUTSIDE the type an
+# unlisted arm is private (a public alias is translated before this).
+refuseHiddenArm: function {
+    # where the refusal is recorded
+    st: zenv.ZSymbolTable
+    # the tree the arm's name is read from
+    ast: Ast.view
+    # the dotted path being read
+    dp: dpref
+    # the sum the unlisted arm belongs to
+    bt: ztypes.tid
+    # the arm being reached for
+    cn: StringView
+    # whether a public alias already translated this name
+    aliasViaX: bool
+} out bool is {
+    if aliasViaX then return false
+    baseNodeC: ast.nodes.get i: dp.parent.u64
+    if (baseIsPrivateCapable :st :ast :bt baseNode: baseNodeC) then return false
+    if (declMemberIsPrivate :st tid: bt nameId: (ast.names.find s: cn)) == false then return false
+    ccnode: ast.nodes.get i: dp.child.u64
+    ccbn: st.reg.nameOf tid: bt
+    (addErrorH
+        :st
+        nodeid: (nodeId n: ccnode)
+        lineno: (nodeLine n: ccnode)
+        colno: (nodeCol n: ccnode)
+        e: zast.err.notPublic
+        msg: "'\{cn}' is not public on type '\{ccbn}'"
+        note: "".string
+        hint: "".string
+        width: cn.length.u32.orPanic
+    )
+    return true
+}
+
+# refuseBareArmPayload -- `Type.arm` READ, with no argument to fill the arm.
+# The tag is the whole value only for an arm that carries nothing; for one that
+# carries something the emitter has nothing to build and falls through to the
+# raw-name fallback, which spells the TYPE into the C (`z_v1 = U.a`). A call
+# supplies the payload, and only the callable walk knows a call is coming.
+refuseBareArmPayload: function {
+    # where the refusal is recorded, and what says this path is a callable
+    st: zenv.ZSymbolTable
+    # the tree the arm's name is read from
+    ast: Ast.view
+    # the dotted path being read
+    dp: dpref
+    # the sum the read hangs off
+    bt: ztypes.tid
+    # the arm the read named
+    cn: StringView
+} out bool is {
+    if st.typing.calleeDottedNid == dp.nid.u64 then return false
+    anId: ast.names.find s: cn
+    if anId.isZero then return false
+    if (armCarriesPayload :st armTid: bt armName: anId) == false then return false
+    btn: st.reg.nameOf tid: bt
+    cnode: ast.nodes.get i: dp.child.u64
+    mb: "arm '\{cn}' of '\{btn}' carries a payload -- naming an arm gives its tag, and cannot supply what the arm holds"
+    hb: "supply the payload after the arm name, or name an arm that carries nothing".string
+    nb: String
+    (addErrorH
+        :st
+        nodeid: (nodeId n: cnode)
+        lineno: (nodeLine n: cnode)
+        colno: (nodeCol n: cnode)
+        e: zast.err.typeError
+        msg: mb
+        note: nb
+        hint: hb
+        width: cn.length.u32.orPanic
+    )
+    return true
+}
+
 # checkTaggedMemberPath -- a subtype member named on a tagged TYPE (not a value of
 # it, not the tag, not a method) is a construction reference: the path's value IS
 # the tagged parent. A VALUE base makes the path the arm PREDICATE instead -- it
@@ -20997,36 +21073,10 @@ checkTaggedMemberPath: function {
         if isMember then {
             isVal: taggedRecvIsValue :ast :st n: (ast.nodes.get i: dp.parent.u64)
             if (isVal) == false then {
-                # arm constructors are members: from OUTSIDE the type an
-                # unlisted arm is private (a public alias translated above).
-                armHidden: false
-                if aliasViaX == false then {
-                    baseNodeC: ast.nodes.get i: dp.parent.u64
-                    if (baseIsPrivateCapable :st :ast :bt baseNode: baseNodeC) == false then {
-                        if (declMemberIsPrivate
-                            :st
-
-                            tid: bt
-                            nameId: (ast.names.find s: cn)
-                        ) then armHidden = true
-                    }
+                if (refuseHiddenArm :st :ast :dp :bt :cn :aliasViaX) then {
+                    return (callleg handled: true tid: (ztypes.tid.create from: 0))
                 }
-                if armHidden then {
-                    ccnid: nodeId n: (ast.nodes.get i: dp.child.u64)
-                    ccln: nodeLine n: (ast.nodes.get i: dp.child.u64)
-                    cccl: nodeCol n: (ast.nodes.get i: dp.child.u64)
-                    ccbn: st.reg.nameOf tid: bt
-                    (addErrorH
-                        :st
-                        nodeid: ccnid
-                        lineno: ccln
-                        colno: cccl
-                        e: zast.err.notPublic
-                        msg: "'\{cn}' is not public on type '\{ccbn}'"
-                        note: "".string
-                        hint: "".string
-                        width: cn.length.u32.orPanic
-                    )
+                if (refuseBareArmPayload :st :ast :dp :bt :cn) then {
                     return (callleg handled: true tid: (ztypes.tid.create from: 0))
                 }
                 dpk0: dp.nid.u64
@@ -28397,7 +28447,12 @@ callableDottedResultAt: function {
         arm
     ) case dottedpath then {
         dr: dpRefAt :ast :nid
+        # `Type.arm` is one path whether an argument follows or not, so the
+        # arm read is told it is a CALLABLE here -- the only place that knows
+        cdPrev: st.typing.calleeDottedNid
+        st.typing.calleeDottedNid = dr.nid.u64
         r: checkDotted :st :unitDecl :ast dp: dr coerce: false
+        st.typing.calleeDottedNid = cdPrev
         return (optionval.some r)
     } else {
         return (optionval.none ztypes.tid)
