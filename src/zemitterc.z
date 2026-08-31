@@ -3220,7 +3220,7 @@ nodeIsBareAtom: function {ast: Ast.view n: Node.view} out bool is {
 }
 
 # pathIsPointer -- does the expression evaluate to a C pointer? A ptrVar atom
-# (pointer receiver / lock param) or a dotted read of a `.lock` field both do,
+# (pointer receiver / borrow param) or a dotted read of a borrowed field both do,
 # so field access on them chains with `->`.
 pathIsPointer: function {
     ast: Ast.view
@@ -5148,7 +5148,7 @@ dottedReceiverStampId: function {
 }
 
 # dottedReceiverIsPtr -- true when a dotted method call's receiver is already a
-# C pointer (a ptrVar like `this`, or a `.lock` field), so the call passes it
+# C pointer (a ptrVar like `this`, or a borrowed field), so the call passes it
 # directly rather than taking its address.
 dottedReceiverIsPtr: function {
     ast: Ast.view
@@ -6040,7 +6040,7 @@ emitInstanceMethodBody: function {
     )
     # The receiver slot is identified by the method's receiver param name
     # (`this` for the `:this` shorthand, or the spelled name for a
-    # `b: this.lock` receiver) -- matching how the definition site names
+    # `b: this.borrow` receiver) -- matching how the definition site names
     # it. Matching the literal "this" alone drops a renamed receiver.
     recvNm: "this".string
     {
@@ -8626,7 +8626,7 @@ ctorArgByLabel: function {
 }
 
 # argIsPointerByLabel -- true when the arg at `label` already evaluates to a C
-# pointer (a reftype/List param or a `.lock` field), so a native by-pointer
+# pointer (a reftype/List param or a borrowed field), so a native by-pointer
 # parameter must pass it directly rather than re-addressing it with `&`.
 argIsPointerByLabel: function {
     ast: Ast.view
@@ -12935,7 +12935,7 @@ emitDottedTagRead: function {
 }
 # emitDottedNativeMarker -- a data block's element read, a zero-parameter native
 # that auto-calls (io.stdout, os.pid), the compile-time markers `.private` /
-# `.lock` / `.take`, and a runtime numeric conversion. The conversion is whichever
+# `.borrow` / `.take`, and a runtime numeric conversion. The conversion is whichever
 # member resolves to a row on the SOURCE type, so a user field merely NAMED `u32`
 # finds nothing and takes the member legs instead.
 emitDottedNativeMarker: function {
@@ -29638,7 +29638,7 @@ ioCreateWrapper: function {ast: Ast.view n: Node.view} out String is {
 }
 
 # argBaseAtom / argBaseNodeId -- the base of a wrapper-create argument. The
-# dotted extractors take the base of a PATH, which is what a `.lock`-suffixed
+# dotted extractors take the base of a PATH, which is what a `.borrow`-suffixed
 # argument always was; a `borrow` parameter needs no suffix, so the argument
 # arrives as a BARE atom and is its own base. Without the fallback the emitter
 # builds `z_t0__create(&)` -- an unresolved type and an empty expression -- which
@@ -29677,7 +29677,7 @@ argBaseNodeId: function {ast: Ast.view n: Node.view} out u32 is {
 }
 
 # wrapperCreateArg -- one io-wrapper create arg by the create-param type: a
-# protocol-lock param projects the `.lock` base to that protocol; a class-lock
+# protocol-borrow param projects the `.borrow` base to that protocol; a class-borrow
 # param takes the base's address; a scalar param emits the arg directly.
 wrapperCreateArg: function {
     ast: Ast.view
@@ -29740,7 +29740,7 @@ wrapperCreateArg: function {
     return "0".string
 }
 
-# emitIoWrapperCreate -- `io.BufWriter.create to: w.lock capacity: 16` ->
+# emitIoWrapperCreate -- `io.BufWriter.create to: w.borrow capacity: 16` ->
 # z_t{id}_BufWriter_create(<projected/addressed args in param order>). "" for
 # any non-io-wrapper-create callee.
 emitIoWrapperCreate: function {
@@ -30321,7 +30321,7 @@ emitParsedMethodCall: function {
 }
 
 # emitUserIterCall -- a manual `g.call value: X` on a user iterator class (a
-# generator's iter): `z_t{id}_{Fn}_iter_call(&g, X)`; a `.lock` borrow value
+# generator's iter): `z_t{id}_{Fn}_iter_call(&g, X)`; a `.borrow` value
 # passes by address. "" for any non-user-iter `.call`.
 emitUserIterCall: function {
     ast: Ast.view
@@ -30390,7 +30390,7 @@ emitUserIterCall: function {
                     # the synthesised `.call` declares that parameter as a
                     # pointer. Decided by the TYPE, never by the argument's
                     # spelling (a `borrow` parameter's bare-name argument needs
-                    # its `&` too); a `.lock`-suffixed argument reaches the same
+                    # its `&` too); a `.borrow`-suffixed argument reaches the same
                     # answer through argBaseAtom.
                     vop: ast.nodes.get i: atomVarId.operation.u64
                     vbase: argBaseAtom :ast n: vop
@@ -30687,7 +30687,7 @@ emitProtocolDispatch: function {
 }
 
 # emitProtocolCreateCall -- `Reader.create from: g.take` (owned, heap-box +
-# source invalidation) / `Provider.borrow from: m.lock` (borrowed, shares the
+# source invalidation) / `Provider.borrow from: m.borrow` (borrowed, shares the
 # source). Both route to the impl's conformance helper for the protocol.
 emitProtocolCreateCall: function {
     ast: Ast.view
@@ -31230,7 +31230,7 @@ isUnionDef: function {n: Node.view} out bool is {
 
 # structDestroyNontrivial -- the type's destructor frees at least one field.
 # Mirrors emitStructDestructor's per-field tests (String, destructible
-# aggregate, heap-ptr collection; `.lock` fields never free). Gates call-site
+# aggregate, heap-ptr collection; borrowed fields never free). Gates call-site
 # destroys for loop-owned iterator instances: an all-borrowed iterator has
 # nothing to free and keeps its emission unchanged.
 structDestroyNontrivial: function {
@@ -31288,7 +31288,7 @@ emitStructDestructor: function {
     for fi < fn0 loop {
         fname: fnames.get i: fi
         fid: fids.get i: fi
-        # a `.lock` field is a borrowed pointer -- never freed by the destructor.
+        # a borrowed field is a borrowed pointer -- never freed by the destructor.
         if (symtab.typing.declIsLockField
             pool: ast.names
             parentTypeId: tid
@@ -31330,7 +31330,7 @@ emitStructDestructor: function {
     buf.append "}\n\n"
 }
 
-# lockFieldIsReftypePtr -- a `.lock` field is stored as a pointer to its container
+# lockFieldIsReftypePtr -- a borrowed field is stored as a pointer to its container
 # only when that container is a reftype (class/union); a protocol lock is the fat
 # pointer by value, and a valtype lock (a bidirectional generator's bool resume
 # input) is stored by value.
@@ -31385,7 +31385,7 @@ emitOneRecord: function {
         fnameId: fidsNm.get i: fi
         fct: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: fid.u64) thisTid: ztypes.tid
         if fct.length == 0 then fct = "int64_t".string
-        # a `.lock` field borrows the container: protocol-typed -> fat pointer by
+        # a borrowed field borrows the container: protocol-typed -> fat pointer by
         # value; class-typed -> a pointer to the container.
         if (symtab.typing.declIsLockFieldId
             parentTypeId: tid
@@ -31423,7 +31423,7 @@ emitOneRecord: function {
         fname2Id: fidsNm.get i: fj
         fct2: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: fid2.u64) thisTid: ztypes.tid
         if fct2.length == 0 then fct2 = "int64_t".string
-        # a `.lock` field's meta_create param matches the field (protocol by value).
+        # a borrowed field's meta_create param matches the field (protocol by value).
         if (symtab.typing.declIsLockFieldId
             parentTypeId: tid
             nameId: (zast.nameid.create from: fname2Id.u32.orPanic)

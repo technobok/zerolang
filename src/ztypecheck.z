@@ -2523,9 +2523,9 @@ pathOwnership: function {ast: Ast.view n: Node.view} out optionval ztypes.zparam
     }
 }
 
-# baseTypeName -- the underlying base type name of a type expr, peeling `.lock`/
-# `.private`/etc. dotted-path markers (`Container.private.lock` -> `Container`,
-# `this.lock` -> `this`); the atom name for a bare atom; "" otherwise.
+# baseTypeName -- the underlying base type name of a type expr, peeling `.borrow`/
+# `.private`/etc. dotted-path markers (`Container.private.borrow` -> `Container`,
+# `this.borrow` -> `this`); the atom name for a bare atom; "" otherwise.
 baseTypeName: function {ast: Ast.view n: Node.view} out String is {
     match (
         n
@@ -3173,7 +3173,7 @@ recordDottedTyperef: function {
     thisName: StringView
     nid: zast.nodeid
 } is {
-    # Ownership/access strip marker (this.lock / StringView.borrow / Container.private):
+    # Ownership/access strip marker (this.borrow / StringView.borrow / Container.private):
     # record the dotted node with its peeled base AND recurse on the parent so the
     # stripped inner atom is stamped too.
     # A `.typedef` marker only recurses -- the dotted node itself resolves to a
@@ -3806,7 +3806,7 @@ typeArgSuffixName: function {
 }
 # dottedTyperefShell -- the shell a dotted type-ref names: a unit-qualified type, a
 # nested namespace's type, a member type of a type, or the parent a marker peels
-# back to (`Container.private.lock`, `direction.north`).
+# back to (`Container.private.borrow`, `direction.north`).
 dottedTyperefShell: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -3832,7 +3832,7 @@ dottedTyperefShell: function {
     # A cross-unit qualified type ref (zlexer.Token) names the MEMBER in the
     # referenced unit -- resolve the child like a bare atom. Otherwise a dotted
     # type-expr peels to its parent: an ownership/access strip marker
-    # (Container.private.lock) or a variant/union subtype default where the arm
+    # (Container.private.borrow) or a variant/union subtype default where the arm
     # is the default value and the type is the parent (direction.north).
     # owned copies: the resolutions below lend ast
     pNm: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: parentId.u64))
@@ -4393,7 +4393,7 @@ returnHasBorrowMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
 }
 
 # paramIsThisReceiver -- the parameter's type names the receiver: bare `this`
-# or a marker-suffixed `this.lock` / `this.borrow`.
+# or a marker-suffixed `this.view` / `this.borrow`.
 paramIsThisReceiver: function {ast: Ast.view op: Node.view} out bool is {
     match (
         op
@@ -4569,9 +4569,9 @@ returnNamesThis: function {ast: Ast.view oId: zast.nodeid} out bool is {
 # checkTakexHonesty -- an OWNED `out this` whose type declares a non-owned field
 # hands back a value holding a reference into something the callee was given.
 # Unless the return says `takex`, nothing pins that source and the field dangles
-# as soon as the caller drops it. This is the rule `.lock` on the parameter used
-# to enforce by accident; `takex` states it on the signature, where a reader can
-# see it.
+# as soon as the caller drops it. `takex` states the pin on the SIGNATURE, where
+# a reader can see it, rather than leaving it to what the parameters happen to
+# be marked.
 checkTakexHonesty: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -6877,8 +6877,8 @@ fnFieldFlaggableName: function {name: StringView} out bool is {
 }
 
 # typeExprHasPrivate -- does a field's type expression carry a `.private` marker
-# (`Container.private.lock`), i.e. is it a friend handle? Walks the dotted path
-# (markers nest outermost-last: `((Container.private).lock)`).
+# (`Container.private.borrow`), i.e. is it a friend handle? Walks the dotted path
+# (markers nest outermost-last: `((Container.private).borrow)`).
 typeExprHasPrivate: function {ast: Ast.view n: Node.view} out bool is {
     match (
         n
@@ -9345,7 +9345,7 @@ resolveUnion: function {
 }
 
 # fieldTypeNeedsCleanup -- true when a class field needs cleanup (so the holder keeps
-# a destructor): a `.lock` field (its borrow is released at scope exit), a native heap
+# a destructor): a borrowed field (its borrow is released at scope exit), a native heap
 # type (String/List/Map/Set), or an in-unit type that itself HAS a destructor
 # (`st.reg.needsDestructor`). A scalar field, or an owned class/union field whose type
 # has no destructor, needs none. Name check for the natives is a scaffold-stage
@@ -16014,7 +16014,7 @@ stampPendingTyperefs: function {
 }
 
 # ownershipOfParam -- a parameter's binding ownership from its path annotation:
-# an explicit .take binds OWNED, everything else (.borrow / .lock / default)
+# an explicit .take binds OWNED, everything else (.borrow / .view / default)
 # binds BORROWED.
 ownershipOfParam: function {o: optionval ztypes.zparamownership} out ztypes.zownership is {
     match (
@@ -19629,7 +19629,7 @@ isOptionViewMono: function {
 # methodHasNoUserArgs -- true when a method type has no user-visible parameters
 # beyond the implicit receiver: no children at all (synthesized collection
 # methods), or a single child that IS the receiver -- `this`, or the long-form
-# receiver recorded in thisParamName (`stringView: function {t: this.lock}`).
+# receiver recorded in thisParamName (`stringView: function {t: this.view}`).
 
 # optU64Or / optBoolOr -- the option's payload, or the given default. Collapse
 # the some/none match at get-or-default sites (match narrowing needs a
@@ -19852,7 +19852,7 @@ checkProjectionCreate: function {
                     if pvt > 0 then {
                         if borrows then {
                             # The from-path's root is the borrow origin (a
-                            # bare name or a `.lock`/`.borrow` projection) --
+                            # bare name or a `.borrow` projection) --
                             # the projection borrows, it never hoists.
                             pbr: rootNameIdOf :ast n: (ast.nodes.get i: arg.operation.u64)
                             if (pbr.isZero) == false then {
@@ -27778,7 +27778,7 @@ argownership: record {
 }
 # argOwnershipOf -- what the call does to this argument's source, read off the
 # parameter it binds to: take it, lock it, or read it through a view. A
-# constructor reads the FIELD's ownership instead, since a `.lock` field locks
+# constructor reads the FIELD's ownership instead, since a borrowed field locks
 # the caller's argument where any other reftype field takes it.
 argOwnershipOf: function {
     st: zenv.ZSymbolTable.view
@@ -27833,7 +27833,7 @@ argOwnershipOf: function {
     }
         if isCtor then {
             # Field ownership flows to the constructor param:
-            # a `.lock` field locks the caller's argument, any
+            # a borrowed field locks the caller's argument, any
             # other reftype field takes it.
             if (st.typing.declIsLockField
                 pool: ast.names
@@ -33724,13 +33724,8 @@ checkReceiverOwnership: function {
     ast: Ast.view
     pm: argref
     pnid: zast.nodeid
-    ptid: u64
     hasOwn: bool
     ownMode: ztypes.zparamownership
-    isLockP: bool
-    isGenP: bool
-    mkn: StringView
-    pnameId: zast.nameid
 } is {
     # A receiver may be `borrow` (the default) or `view` only:
     # an object cannot own itself. Family-independent -- the
@@ -33756,28 +33751,6 @@ checkReceiverOwnership: function {
             colno: orcl
             e: zast.err.ownerError
             msg: orm2
-        )
-    }
-    if isLockP when (paramIsThisReceiver
-        :ast
-        op: (ast.nodes.get i: pm.operation.u64)
-    ) == false when (typeIsValtype
-        :st
-
-        tid: (ztypes.tid.create from: ptid.u64)
-    ) when (isGenP) == false then {
-        ptn: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
-        plln: nodeLine n: (ast.nodes.get i: pm.operation.u64)
-        plcl: nodeCol n: (ast.nodes.get i: pm.operation.u64)
-        pname: zast.nameTextAt :ast ref: pnameId
-        ml: "Cannot use '.\{mkn}' on valtype parameter '\{pname}' (type '\{ptn}') — locking requires identity (use a class)"
-        (addError
-            :st
-            nodeid: pnid
-            lineno: plln
-            colno: plcl
-            e: zast.err.ownerError
-            msg: ml
         )
     }
 }
@@ -33956,21 +33929,6 @@ bindFunctionParam: function {
         } case none then null
     }
     pown: pathOwnership :ast n: (ast.nodes.get i: pm.operation.u64)
-    isLockP: false
-    mkn: "borrow".string
-    match (
-        pown
-    ) case some then {
-        # Only `.borrow` needs an identity to point at, so only
-        # `.borrow` is refused on a valtype below. `.view` and
-        # `.hold` are readonly markers, enforced by a lock on
-        # the parameter's own NAME, which a valtype has just as
-        # much as a class does.
-        if pown == ztypes.zparamownership.viewMode then mkn = "view".string
-        if pown == ztypes.zparamownership.holdMode then mkn = "hold".string
-    } case none then null
-    isGenP: false
-    if (st.reg.typetypeOf typeId: (ztypes.tid.create from: ptid.u64)) == ztypes.ztypetype.genericParam then isGenP = true
     hasOwn: false
     ownMode: ztypes.zparamownership.borrowMode
     match (
@@ -33979,19 +33937,7 @@ bindFunctionParam: function {
         hasOwn = true
         ownMode = pown
     } case none then null
-    (checkReceiverOwnership
-        :st
-        :ast
-        :pm
-        :pnid
-        :ptid
-        :hasOwn
-        :ownMode
-        :isLockP
-        :isGenP
-        mkn: mkn.stringView
-        pnameId: pm.name
-    )
+    (checkReceiverOwnership :st :ast :pm :pnid :hasOwn :ownMode)
     own: ownershipOfParam o: (pathOwnership
         :ast
         n: (ast.nodes.get i: pm.operation.u64)
