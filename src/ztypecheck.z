@@ -7562,6 +7562,7 @@ attachRecordField: function {
     fm: argref
     fname: StringView
 } is {
+    if (refuseStringFieldDefault :st :ast :fname :fm) then return
     ftnR: fieldHeadName :ast n: (ast.nodes.get i: fm.operation.u64)
     # a field's type-ref can name a SIBLING method (an fn-ptr
     # slot defaulting to it), which is a member like any other
@@ -9702,6 +9703,65 @@ recordMemberRefField: function {
     st.typing.pendingDefaultId.set key: pdk2.u64 value: pdi
 }
 
+# rootIsStringLiteral -- a value path whose ROOT is a string literal, unwrapping
+# expressions and dotted segments the way rootNameIdOf does. `"hi"`, `"hi".string`
+# and an interpolated `"a\{n}"` all answer true; a type name or a numeric literal
+# answers false.
+rootIsStringLiteral: function {ast: Ast.view n: Node.view} out bool is {
+    match (
+        n
+    ) case atomstring then {
+        return true
+    } case expression then {
+        return (rootIsStringLiteral :ast n: (ast.nodes.get i: n.expression.u64))
+    } case dottedpath then {
+        return (rootIsStringLiteral :ast n: (ast.nodes.get i: n.parent.u64))
+    } else {
+        return false
+    }
+}
+
+# refuseStringFieldDefault -- a field declared by VALUE carries a default, and a
+# default is a CONSTANT NUMERIC EXPRESSION: `defaultval.literal` holds a node the
+# emitter re-emits verbatim, which a String cannot be -- it needs a runtime
+# allocation. So a string literal in declaration position names no type and
+# leaves the field with none.
+#
+# It was accepted. Beside a field that did resolve, zc reported NOTHING and
+# emitted C naming an undeclared struct -- and wrote `Z_?_TAG_` into the output,
+# the unresolved type leaking through verbatim. Alone it surfaced as `missing
+# required arguments 'v' (type: ?)` against whoever later tried to CONSTRUCT the
+# type, which is neither the mistake nor the place it was made.
+refuseStringFieldDefault: function {
+    # where the diagnostic is recorded
+    st: zenv.ZSymbolTable
+    # the tree the declaration is read from
+    ast: Ast.view
+    # the field's own name, which the message names
+    fname: StringView
+    # the field's declaration, whose root is tested
+    fm: argref
+} out bool is {
+    fop: ast.nodes.get i: fm.operation.u64
+    if (rootIsStringLiteral :ast n: fop) == false then return false
+    fp: zast.posOf n: fop
+    md: "field '\{fname}' is declared by a string literal -- a field's default must be a constant numeric expression"
+    hd: "give the field a type (`\{fname}: String`) and let the constructor supply the text, or default it to a number"
+    nd: String
+    (addErrorH
+        :st
+        nodeid: fm.nid
+        lineno: fp.line
+        colno: fp.col
+        e: zast.err.typeError
+        msg: md
+        note: nd
+        hint: hd
+        width: 1
+    )
+    return true
+}
+
 # resolveClassFieldEntry -- resolve a class member that is not a method: a
 # reference to an already-declared member, or a field slot of its own. True
 # when owning it gives the class a destructor.
@@ -9716,6 +9776,7 @@ resolveClassFieldEntry: function {
 } out bool is {
     needsDtor: false
     fname: zast.nameTextCopy :ast ref: fm.name
+    if (refuseStringFieldDefault :st :ast fname: fname.stringView :fm) then return false
     ftn: fieldHeadName :ast n: (ast.nodes.get i: fm.operation.u64)
     # A NON-OWNED field marker (lock / borrow / view) makes the
     # slot static: it is set in the constructor, never reassigned,
