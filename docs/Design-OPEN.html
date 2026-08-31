@@ -85,6 +85,8 @@ Table of Contents</div>
 </li>
 <li><a href="#compile-time-numeric-constant-types">compile-time numeric constant types</a>
 </li>
+<li><a href="#arbitrary-precision-constant-arithmetic">arbitrary-precision constant arithmetic</a>
+</li>
 <li><a href="#single-constructor-for-unions">single  constructor for unions</a>
 </li>
 <li><a href="#meta-namespace">meta namespace</a>
@@ -193,7 +195,68 @@ it may not fit. Default (result of 'call') is c8</li>
 (supported methods: u8 i8 u16 i16 u32 i32 u64 i64 u128 i128 c8 c32). Default
 (result of 'call') is c32</li>
 </ul>
-<h2 id="single-constructor-for-unions"><a href="#single-constructor-for-unions">3. single <code>create</code> constructor for unions</a></h2>
+<h2 id="arbitrary-precision-constant-arithmetic"><a href="#arbitrary-precision-constant-arithmetic">3. arbitrary-precision constant arithmetic</a></h2>
+<p>The section above asks what TYPE a constant has. This asks what VALUE the
+compiler can hold while it works one out, which is a separate question with a
+separate answer -- and the one that blocks the other, because a per-value type
+lattice cannot name a value the evaluator cannot carry.</p>
+<p>What is true today, measured rather than assumed:</p>
+<ul>
+<li>the compile-time value of an integer constant is an <code>i64</code> -- one signed
+    slot on <code>cval</code> -- so a magnitude above <code>2^63-1</code> has nowhere to live. The
+    evaluator answers "not a constant" for it, and a definition that yields no
+    value is not one: it takes the ALIAS chase instead and is emitted as the name
+    of its own type. <code>k: 18446744073709551615</code> emits <code>i64</code> into the C.</li>
+<li>the limit is already admitted in a user-facing message -- the
+    <code>constant integer operation overflows</code> hint reads "the compile-time
+    evaluator works in i64; this result does not fit" -- but it does not always
+    fire: <code>9223372036854775807 + 1</code> folds to <code>-9223372036854775808</code> silently.</li>
+<li><code>i128</code> and <code>u128</code> are real numeric types whose literals cannot express
+their own range. <code>340282366920938463463374607431768211455.u128</code> evaluates
+to <code>18446744073709551615</code> -- truncated to u64 -- with no diagnostic.</li>
+<li><code>examples/arbprec_constants.z</code> states that constant arithmetic folds at
+unbounded precision. It does not: <code>0xffffffffffffffff + 1 - 1</code> is not
+folded at all, it survives as C arithmetic text and agrees only because
+unsigned C wraps. Bound to a local it prints <code>-1</code>. The example passes
+because the value is never observed.</li>
+</ul>
+<p>Widening the slot is not the answer. <code>i128</code> would move the wall rather than
+remove it, and the wall has to be somewhere a constant expression can reach:
+an intermediate legitimately exceeds every concrete type when the final value
+does not, which is the ergonomic the coercion rules already promise.</p>
+<h5 id="where-the-digits-would-live">where the digits would live</h5>
+<p><code>cval</code> is a valtype on purpose -- it copies out of a stamp table instead of
+handing back a borrow, so a memoised evaluator can read one entry of a table it
+is about to write, and a class would make every read hold a lock on the map.
+So the digits cannot sit inside it.</p>
+<p>The mechanism for exactly this already exists and is used by the one payload
+that already does not fit a scalar slot. A constant string is not stored in the
+<code>cval</code>; it is INTERNED, and the <code>cval</code> carries <code>strId</code>, a 1-based index
+into <code>ZTyping.constStrings</code> with the sentinel at row 0. An arbitrary-precision
+integer would be the same shape -- a <code>bigId</code> into a <code>ZTyping.constBigInts</code>
+-- which keeps the valtype, keeps the id-keyed table, and stays SQL-dumpable.</p>
+<h5 id="what-would-have-to-be-built">what would have to be built</h5>
+<p>There is no bignum in <code>lib/</code> or <code>src/</code>, so the arithmetic itself is the
+cost, and it is the part to decide before anything else:</p>
+<ul>
+<li>a full arbitrary-precision integer in the stdlib, which the compiler then
+    uses like any other user. The stdlib is not special, so a <code>BigInt</code> that is
+    good enough for the evaluator is good enough to ship -- and a compiler that
+    is its own first user is how every other stdlib type here got tested.</li>
+<li>a fixed WIDE accumulator (256 or 512 bits) private to the evaluator. Not
+    arbitrary, but it covers every concrete type the language has with room for
+    intermediates, and it is bounded work with no allocation. It moves the wall
+    far enough that nothing realistic reaches it -- while still being a wall,
+    which is the thing this section exists to stop doing.</li>
+<li>digits held as TEXT and re-read at each use. Rejected: re-deriving a value
+    from its spelling is the shape this compiler keeps removing, and it would put
+    a parse on every constant read.</li>
+</ul>
+<p>Whichever is chosen, the range check moves to ONE place -- the coercion
+boundary, where a value meets a concrete type -- and the evaluator stops
+having a range of its own. That is what makes <code>constant integer operation
+overflows</code> a message about the DESTINATION rather than about the compiler.</p>
+<h2 id="single-constructor-for-unions"><a href="#single-constructor-for-unions">4. single <code>create</code> constructor for unions</a></h2>
 <p>Could a union have a single <code>create</code> constructor that takes one argument of
 any valid subtype? It would match the first subtype whose type matches the
 argument. Would fail at compile time if more than one subtype matches the
@@ -211,7 +274,7 @@ c: Result.create "hello"  # matches err (string)
 <p>Open questions: how to handle null subtypes (no argument)? How to handle
 generic subtypes where the type may not be known? Is the convenience worth
 the potential ambiguity?</p>
-<h2 id="meta-namespace"><a href="#meta-namespace">4. meta namespace</a></h2>
+<h2 id="meta-namespace"><a href="#meta-namespace">5. meta namespace</a></h2>
 <p><code>meta.create</code> is the only part of this implemented today -- the canonical
 constructor for every object type (the one raw allocator; user constructors
 route through it). The remaining <code>meta.*</code> surfaces below are open proposals,
@@ -295,7 +358,7 @@ use defines?)</p>
 </ul>
 <p>meta.error: force a compile time error?</p>
 <p>TODO: move 'type' to 'meta.type'?</p>
-<h2 id="finalizers-or-user-named-destructors"><a href="#finalizers-or-user-named-destructors">5. finalizers, or user-named destructors?</a></h2>
+<h2 id="finalizers-or-user-named-destructors"><a href="#finalizers-or-user-named-destructors">6. finalizers, or user-named destructors?</a></h2>
 <p>Moved out of <code>spec.pdoc</code>, where it sat as a section describing one model with
 a <code>TODO</code> at the top saying the other was intended. Neither is implemented as a
 surface feature: the compiler generates and calls a destructor for any type
@@ -321,7 +384,7 @@ whose fields need cleaning up, and nothing in the language names it.</p>
         s.subreftype
     }
 }</code></pre>
-<h2 id="higher-kinded-types"><a href="#higher-kinded-types">6. higher-kinded types?</a></h2>
+<h2 id="higher-kinded-types"><a href="#higher-kinded-types">7. higher-kinded types?</a></h2>
 <p>How would this even look? A generic field that takes a generic field as an
 argument?...</p>
 <pre><code class="language-zerolang">R: class {
@@ -329,7 +392,7 @@ argument?...</p>
   j: generic # ...
 
 }</code></pre>
-<h2 id="deep-copy-for-user-defined-reftypes"><a href="#deep-copy-for-user-defined-reftypes">7. deep copy for user-defined reftypes</a></h2>
+<h2 id="deep-copy-for-user-defined-reftypes"><a href="#deep-copy-for-user-defined-reftypes">8. deep copy for user-defined reftypes</a></h2>
 <p><code>.copy</code> is implemented for strings, containers, and generic type
 parameters (where each instantiation clones its concrete payload). On a
 user-defined class or union it is a compile-time error (E0100): the
@@ -343,7 +406,7 @@ knows destroy but not copy today). Until then the idioms are
 <code>.take</code> for transfer and field-by-field construction for real
 duplication; the json unit's scalar-only accessors are an example of
 designing around the gap.</p>
-<h2 id="bare-option-result-names-as-their-falsy-arms"><a href="#bare-option-result-names-as-their-falsy-arms">8. bare Option/Result names as their falsy arms</a></h2>
+<h2 id="bare-option-result-names-as-their-falsy-arms"><a href="#bare-option-result-names-as-their-falsy-arms">9. bare Option/Result names as their falsy arms</a></h2>
 <p>The zero-value rule (spec: Implicit Construction, Zero Values) gives
 bare type names in runtime value position a zero-argument
 construction. Unions deliberately stay excluded: a bare

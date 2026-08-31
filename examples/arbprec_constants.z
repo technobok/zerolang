@@ -8,11 +8,12 @@
 # with a literal-aware diagnostic ("literal value 300 cannot be
 # losslessly stored in u8 (range 0..255)") — no runtime overflow.
 #
-# Constant arithmetic folds at unbounded Python-int precision, so
-# intermediate values are NOT range-checked against any concrete
-# numeric type — only the final value is checked at the coercion
-# boundary. So an expression whose intermediate would overflow even
-# u64 still works if the final fits the destination.
+# Constant arithmetic is NOT unbounded: the compile-time evaluator
+# works in i64, so an expression whose operands do not fit one is not
+# folded at all — it survives as runtime arithmetic and agrees with
+# the folded answer only where the target type's own wraparound makes
+# it agree. `push_u64` below is that case. See the arbitrary-precision
+# section of Design-OPEN.pdoc.
 #
 # Explicit suffixes still work; they remain the user-facing escape
 # hatch when the surrounding context does not pin the type.
@@ -47,13 +48,10 @@ main: function is {
     # u8 but the final value fits.
     push_byte b: 200 + 100 - 250
 
-    # Arbitrary-precision intermediate: `0xff...ff + 1` is `2^64`,
-    # which doesn't fit any concrete integer type — but the
-    # subsequent `- 1` brings it back to `u64::MAX`, which the call-
-    # arg coercion accepts as u64. With Wave 1 (concrete-typed
-    # operands) the binop folder would have rejected the
-    # intermediate; Wave 2 keeps the intermediate at unbounded
-    # precision.
+    # An intermediate wider than i64: `0xff...ff + 1` is `2^64`. The
+    # evaluator cannot hold it, so this is not folded -- it reaches C
+    # as arithmetic and lands on `u64::MAX` because the destination is
+    # unsigned and wraps. Bound to a local it would print -1.
     push_u64 x: 0xffffffffffffffff + 1 - 1
 
     # Reassignment coercion: bare literal coerces to a's u8 type.

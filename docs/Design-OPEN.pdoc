@@ -140,6 +140,77 @@ The constant types:
     (supported methods: u8 i8 u16 i16 u32 i32 u64 i64 u128 i128 c8 c32). Default
     (result of 'call') is c32]
 
+#--: arbitrary-precision constant arithmetic
+
+The section above asks what TYPE a constant has. This asks what VALUE the
+compiler can hold while it works one out, which is a separate question with a
+separate answer -- and the one that blocks the other, because a per-value type
+lattice cannot name a value the evaluator cannot carry.
+
+What is true today, measured rather than assumed:
+
+#ul:
+  [#*: the compile-time value of an integer constant is an #~"i64" -- one signed
+    slot on #~"cval" -- so a magnitude above #~"2^63-1" has nowhere to live. The
+    evaluator answers "not a constant" for it, and a definition that yields no
+    value is not one: it takes the ALIAS chase instead and is emitted as the name
+    of its own type. #~"k: 18446744073709551615" emits #~"i64" into the C.]
+  [#*: the limit is already admitted in a user-facing message -- the
+    #~"constant integer operation overflows" hint reads "the compile-time
+    evaluator works in i64; this result does not fit" -- but it does not always
+    fire: #~"9223372036854775807 + 1" folds to #~"-9223372036854775808" silently.]
+  [#*: #~"i128" and #~"u128" are real numeric types whose literals cannot express
+    their own range. #~"340282366920938463463374607431768211455.u128" evaluates
+    to #~"18446744073709551615" -- truncated to u64 -- with no diagnostic.]
+  [#*: #~"examples/arbprec_constants.z" states that constant arithmetic folds at
+    unbounded precision. It does not: #~"0xffffffffffffffff + 1 - 1" is not
+    folded at all, it survives as C arithmetic text and agrees only because
+    unsigned C wraps. Bound to a local it prints #~"-1". The example passes
+    because the value is never observed.]
+
+Widening the slot is not the answer. #~"i128" would move the wall rather than
+remove it, and the wall has to be somewhere a constant expression can reach:
+an intermediate legitimately exceeds every concrete type when the final value
+does not, which is the ergonomic the coercion rules already promise.
+
+#-----: where the digits would live
+
+#~"cval" is a valtype on purpose -- it copies out of a stamp table instead of
+handing back a borrow, so a memoised evaluator can read one entry of a table it
+is about to write, and a class would make every read hold a lock on the map.
+So the digits cannot sit inside it.
+
+The mechanism for exactly this already exists and is used by the one payload
+that already does not fit a scalar slot. A constant string is not stored in the
+#~"cval"; it is INTERNED, and the #~"cval" carries #~"strId", a 1-based index
+into #~"ZTyping.constStrings" with the sentinel at row 0. An arbitrary-precision
+integer would be the same shape -- a #~"bigId" into a #~"ZTyping.constBigInts"
+-- which keeps the valtype, keeps the id-keyed table, and stays SQL-dumpable.
+
+#-----: what would have to be built
+
+There is no bignum in #~"lib/" or #~"src/", so the arithmetic itself is the
+cost, and it is the part to decide before anything else:
+
+#ul:
+  [#*: a full arbitrary-precision integer in the stdlib, which the compiler then
+    uses like any other user. The stdlib is not special, so a #~"BigInt" that is
+    good enough for the evaluator is good enough to ship -- and a compiler that
+    is its own first user is how every other stdlib type here got tested.]
+  [#*: a fixed WIDE accumulator (256 or 512 bits) private to the evaluator. Not
+    arbitrary, but it covers every concrete type the language has with room for
+    intermediates, and it is bounded work with no allocation. It moves the wall
+    far enough that nothing realistic reaches it -- while still being a wall,
+    which is the thing this section exists to stop doing.]
+  [#*: digits held as TEXT and re-read at each use. Rejected: re-deriving a value
+    from its spelling is the shape this compiler keeps removing, and it would put
+    a parse on every constant read.]
+
+Whichever is chosen, the range check moves to ONE place -- the coercion
+boundary, where a value meets a concrete type -- and the evaluator stops
+having a range of its own. That is what makes #~"constant integer operation
+overflows" a message about the DESTINATION rather than about the compiler.
+
 #--: single #~"create" constructor for unions
 
 Could a union have a single #~"create" constructor that takes one argument of
