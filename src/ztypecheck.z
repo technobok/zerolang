@@ -9537,7 +9537,14 @@ recordFieldDefault: function {
                 parentTypeId: cidf
                 nameId: cArmNid
             )
-            (st.typing.setDefaultVariantArm
+            if (refuseArmDefaultPayload
+                :st
+                :ast
+                :fname
+                :fm
+                armTid: cidf
+                armName: cArmNid
+            ) == false then (st.typing.setDefaultVariantArm
                 pool: ast.names
                 parentTypeId: (ztypes.tid.create from: cid.u64)
                 name: fname
@@ -9607,6 +9614,110 @@ foldedFieldType: function {
     return ztypes.tid
 }
 
+# armDefaultCarriesPayload -- the arm a field defaults to carries a payload, so
+# it cannot BE the default.
+#
+# A constant naming an arm is `armKind`, and that cval holds `armTid` and
+# `armName` and nothing else -- there is no slot for what the arm carries. So a
+# constant can say WHICH arm and never what is in it, which is exactly why bool
+# works: its arms carry nothing, and the discriminator IS the whole value. The
+# same is true of any discriminator-only arm, including a payload-less arm of a
+# sum whose other arms do carry things.
+#
+# Nothing checked. `n: V.a` with `a: i64` defaulted the field to arm `a` over a
+# zero payload, and `n: U.a` with `a: String` defaulted it to a String that was
+# never constructed -- reading it SEGFAULTS.
+armDefaultCarriesPayload: function {
+    # where the arm's own declaration is read
+    st: zenv.ZSymbolTable.view
+    # the sum the arm belongs to
+    armTid: ztypes.tid
+    # the arm's name
+    armName: zast.nameid
+} out bool is {
+    ad: st.typing.declMemberIdOf parentTypeId: armTid nameId: armName
+    if ad.isZero then return false
+    at: declTypeIdOf :st declId: ad
+    if at.isZero then return false
+    return (st.reg.typetypeOf typeId: at) != ztypes.ztypetype.nullType
+}
+
+# refuseArmDefaultPayload -- report the arm-default above, and answer whether it
+# was refused so the caller records nothing.
+refuseArmDefaultPayload: function {
+    # where the refusal and the default are both recorded
+    st: zenv.ZSymbolTable
+    # the tree the field's name is read from
+    ast: Ast.view
+    # the field the default was written on
+    fname: StringView
+    # the field's declaration, for the position
+    fm: argref
+    # the sum the arm belongs to
+    armTid: ztypes.tid
+    # the arm's name
+    armName: zast.nameid
+} out bool is {
+    if (armDefaultCarriesPayload :st :armTid :armName) == false then return false
+    an: zast.nameTextAt :ast ref: armName
+    ma: "field '\{fname}' defaults to arm '\{an}', which carries a payload -- a default names an arm, and cannot supply what the arm holds"
+    ha: "default to an arm that carries nothing, or drop the default and let the constructor build the value".string
+    na: String
+    (addErrorH
+        :st
+        nodeid: fm.nid
+        lineno: fm.lineno
+        colno: fm.colno
+        e: zast.err.typeError
+        msg: ma
+        note: na
+        hint: ha
+        width: 1
+    )
+    return true
+}
+
+# recordFoldedArmDefault -- record the default a field's folded value names,
+# when that value is an ARM constant. This is what makes `p: false` and
+# `q: bool.false` one declaration: the same cval, so the same default.
+recordFoldedArmDefault: function {
+    # where the default and any diagnostic are recorded
+    st: zenv.ZSymbolTable
+    # the tree the field's name is read from
+    ast: Ast.view
+    # the owning type's id
+    cid: u64
+    # the field's own name
+    fname: StringView
+    # the field's declaration, for the position
+    fm: argref
+} is {
+    fdc: (st.typing.declMemberIdOf
+        parentTypeId: (ztypes.tid.create from: cid.u64)
+        nameId: fm.name
+    )
+    cvF: constValueOfDecl :st :ast declId: fdc
+    if (cvF.kind.armKind) == false then return
+    if (refuseArmDefaultPayload
+        :st
+        :ast
+        :fname
+        :fm
+        armTid: cvF.armTid
+        armName: cvF.armName
+    ) then return
+    avDecl: (st.typing.declMemberIdOf
+        parentTypeId: cvF.armTid
+        nameId: cvF.armName
+    )
+    (st.typing.setDefaultVariantArm
+        pool: ast.names
+        parentTypeId: (ztypes.tid.create from: cid.u64)
+        name: fname
+        targetDecl: avDecl
+    )
+}
+
 # resolveNamedFieldSlot -- resolve an ordinary named field: its declared type,
 # its ownership and visibility, the default it carries, and whether owning it
 # gives the class a destructor. True when it does.
@@ -9657,28 +9768,7 @@ resolveNamedFieldSlot: function {
         nameId: fm.name
         childTypeId: cidf
     )
-    # the default is the value the fold produced -- an ARM constant is recorded
-    # as the arm it names, which is what makes `p: false` and `q: bool.false`
-    # one declaration: the same cval, so the same default.
-    {
-        fdc: (st.typing.declMemberIdOf
-            parentTypeId: (ztypes.tid.create from: cid.u64)
-            nameId: fm.name
-        )
-        cvF: constValueOfDecl :st :ast declId: fdc
-        if cvF.kind.armKind then {
-            avDecl: (st.typing.declMemberIdOf
-                parentTypeId: cvF.armTid
-                nameId: cvF.armName
-            )
-            (st.typing.setDefaultVariantArm
-                pool: ast.names
-                parentTypeId: (ztypes.tid.create from: cid.u64)
-                name: fname
-                targetDecl: avDecl
-            )
-        }
-    }
+    recordFoldedArmDefault :st :ast :cid :fname :fm
     if (st.reg.typetypeOf typeId: cidf) == ztypes.ztypetype.functionType then {
         (st.typing.setChildFnptrField
             pool: ast.names
@@ -9828,7 +9918,7 @@ rootIsStringLiteral: function {ast: Ast.view n: Node.view} out bool is {
 # required arguments 'v' (type: ?)` against whoever later tried to CONSTRUCT the
 # type, which is neither the mistake nor the place it was made.
 refuseStringFieldDefault: function {
-    # where the diagnostic is recorded
+    # where the field's refusal is recorded
     st: zenv.ZSymbolTable
     # the tree the field's declaration is read from
     ast: Ast.view
@@ -9867,7 +9957,7 @@ refuseStringFieldDefault: function {
 # field declared by value carries a DEFAULT, while an arm declares a payload
 # type and has no default to carry.
 refuseStringArmPayload: function {
-    # where the diagnostic is recorded
+    # where the arm's refusal is recorded
     st: zenv.ZSymbolTable
     # the tree the arm's declaration is read from
     ast: Ast.view
