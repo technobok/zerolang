@@ -9621,6 +9621,55 @@ declNameConstArm: function {
     return ztypes.noConst
 }
 
+# foldedFieldType -- the type a field's VALUE declares, for a field declared by
+# a bare value; 0 when it declares none.
+#
+# This is the door every other constant takes: `constFoldDecl` folds the value
+# and registers the type that value carries, addressed by the declaration alone
+# -- "a constant's TYPE comes from its VALUE, so the fold is what declares it".
+# Reading the answer back is what lets `n: -1` be an i64 field holding -1,
+# rather than the declaration's first byte being consulted twice and the two
+# answers disagreeing.
+#
+# ONLY FOR A BARE DECLARATION. A dotted one carries its own type in the leaf --
+# `value: 4.u64` is a u64 field, and the suffix is the entire point of writing
+# it -- so the type-ref path answers those, and folding them would flatten them
+# to the literal's own type. A bare declaration has no leaf to read, which is
+# exactly when the value has to declare the type.
+foldedFieldType: function {
+    # where the fold is recorded
+    st: zenv.ZSymbolTable
+    # the tree the field's value is read from
+    ast: Ast
+    # the owning type's id
+    cid: u64
+    # the field's declaration
+    fm: argref
+} out ztypes.tid is {
+    bare: false
+    {
+        fop: ast.nodes.get i: fm.operation.u64
+        bare = (bareAtomNameId :ast n: fop).isZero == false
+    }
+    if (bare) == false then return ztypes.tid
+    fd: (st.typing.declMemberIdOf
+        parentTypeId: (ztypes.tid.create from: cid.u64)
+        nameId: fm.name
+    )
+    if fd.isZero then return ztypes.tid
+    constFoldDecl :ast :st declId: fd
+    fto: (st.typing.declChildOfId
+        parentTypeId: (ztypes.tid.create from: cid.u64)
+        nameId: fm.name
+    )
+    match (
+        fto
+    ) case some then {
+        return (ztypes.tid.create from: fto)
+    } case none then null
+    return ztypes.tid
+}
+
 # resolveNamedFieldSlot -- resolve an ordinary named field: its declared type,
 # its ownership and visibility, the default it carries, and whether owning it
 # gives the class a destructor. True when it does.
@@ -9650,27 +9699,24 @@ resolveNamedFieldSlot: function {
             isLock: lockField
         ) then needsDtor = true
     }
-    # A field declared by a NAME that denotes a compile-time constant takes the
-    # CONSTANT's type and the constant as its default. `n: false` is `n:
-    # bool.false` -- the same arm constant, written the way core.z binds it --
-    # and the dotted spelling has always worked, so the bare one differing was
-    # the spelling test speaking, not the language.
+    # THE VALUE DECLARES THE TYPE, when the declaration is a value. A field
+    # declared by one is a constant declaration in the same sense a unit-level
+    # `x: -1` is, so it takes the same door -- the fold -- and only a
+    # declaration that names no constant falls through to the type-ref path.
+    foldTid: foldedFieldType :st :ast :cid :fm
     cvArm: declNameConstArm :st :ast :unitDecl :frame nid: fm.operation
-    cidf: ztypes.tid
-    if cvArm.kind.armKind then {
-        cidf = cvArm.armTid
-    } else {
-        cidf = (resolveTyperefShellMarked
-            :st
-            :frame
+    cidf: foldTid
+    if cidf.isZero when cvArm.kind.armKind then cidf = cvArm.armTid
+    if cidf.isZero then cidf = (resolveTyperefShellMarked
+        :st
+        :frame
 
-            :ast
-            :unitDecl
-            ownerId: cid
-            nid: fm.operation
-            thisName: defName
-        )
-    }
+        :ast
+        :unitDecl
+        ownerId: cid
+        nid: fm.operation
+        thisName: defName
+    )
     (st.typing.setMemberType
         parentTypeId: (ztypes.tid.create from: cid.u64)
         nameId: fm.name

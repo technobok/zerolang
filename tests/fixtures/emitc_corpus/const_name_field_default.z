@@ -1,18 +1,25 @@
-# A field declared by a NAME that denotes a compile-time CONSTANT takes the
-# constant's type and the constant as its default. The question asked is what
-# the name DENOTES, not what it looks like.
+# A field declared by a VALUE is a constant declaration, and its TYPE comes
+# from that value. It goes through the same door every other constant takes --
+# `constFoldDecl`, "addressed by the DECLARATION alone" -- so the answer is
+# computed once, where it is known, instead of being re-derived from the text.
 #
-# `false` is not a type and never was: core binds it to `bool.false`, and a
-# truth value is an ARM CONSTANT over bool's type -- bool being a variant like
-# any other. So the two spellings below are one declaration, and they were only
-# ever different because the gate read the first byte of the name: a leading
-# digit meant "numeric literal", and everything else was looked up as a TYPE.
-# `false` is not a type, so it resolved to nothing and the field was left with
-# no type at all.
+# What that replaced was two spelling tests that disagreed with each other. One
+# asked whether the declaration's first byte was a digit or `-`, to decide
+# whether a default existed at all; the other asked whether the name contained
+# a "." to choose between i64 and f64. `-1` passed the first and failed the
+# second, so it was recorded as having a default and then given the type `-1`,
+# and the field emitted C naming an undeclared struct.
 #
-# The same rule gives a user-declared alias the same standing as the arm it
-# names -- `First` below -- which is what makes this a rule rather than two
-# builtins special-cased.
+# A DOTTED declaration is NOT folded: it carries its own type in the leaf.
+# `w: 4.u64` is a u64 field and the suffix is the whole point of writing it, so
+# those keep the type-ref path -- folding them would flatten them to the
+# literal's own type. `field_default_dotted_type.z` pins that half.
+#
+# `false` and `bool.false` are the same declaration because they are the same
+# value: core binds one to the other, and a truth value is an ARM CONSTANT over
+# bool's type, bool being a variant like any other. A user's own alias of an arm
+# gets the same standing, which is what makes this a rule and not two builtins
+# special-cased.
 Colour: variant {
     red: null
     green: null
@@ -20,13 +27,20 @@ Colour: variant {
 
 First: Colour.red
 
-Flags: class {
-    # the bare spelling and the dotted one, which must agree
-    a: false
-    b: bool.false
-    c: true
-    d: bool.true
-    # a user alias of an arm, resolved the same way
+Defaults: class {
+    # the value declares the type: i64, and negative is not a special case
+    a: 0
+    b: -1
+    # hex and float, likewise typed by what they ARE
+    h: 0x10
+    f: 1.5
+    # a dotted suffix still names the type: u64, not i64
+    w: 4.u64
+    # the two bool spellings, which must agree
+    p: false
+    q: bool.false
+    r: true
+    # a user alias of an arm
     e: First
 }
 
@@ -35,10 +49,11 @@ Typed: class {
     n: i64
 }
 
-show: function {f: Flags.borrow} is {
-    print "a=\{f.a} b=\{f.b} c=\{f.c} d=\{f.d}"
+show: function {d: Defaults.borrow} is {
+    print "a=\{d.a} b=\{d.b} h=\{d.h} f=\{d.f} w=\{d.w}"
+    print "p=\{d.p} q=\{d.q} r=\{d.r}"
     match (
-        f.e
+        d.e
     ) case red then {
         print "e=red"
     } case green then {
@@ -47,12 +62,12 @@ show: function {f: Flags.borrow} is {
 }
 
 main: function is {
-    d: Flags
-    show f: d
+    d: Defaults
+    show :d
 
-    # an explicit argument overrides the default, in either spelling
-    o: Flags a: true c: false
-    print "overridden a=\{o.a} c=\{o.c}"
+    # an explicit argument overrides the default, in either bool spelling
+    o: Defaults p: true r: false
+    print "overridden p=\{o.p} r=\{o.r}"
 
     t: Typed n: 7
     print "typed n=\{t.n}"
