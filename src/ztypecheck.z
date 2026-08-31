@@ -9557,6 +9557,70 @@ recordFieldDefault: function {
     }
 }
 
+# declNameConstArm -- a declaration written as a BARE NAME that denotes a
+# compile-time constant holding a sum ARM, as its `cval`; `noConst` otherwise.
+#
+# This is the type question the spelling test was reaching for. `false` is not a
+# type and never was: core.z binds it to `bool.false`, and a truth value is an
+# ARM CONSTANT over bool's type -- bool being a variant like any other, as
+# zconstkind's own comment says. Asking the CONSTANT rather than the first byte
+# of a name is what makes `n: false` and `n: bool.false` one declaration, which
+# they are: the same cval either way.
+#
+# Only the arm kind is answered. An integer or float constant would name a
+# default the emitter must re-emit from the CONSTANT rather than from the node
+# it was written as, which is a different piece of work.
+declNameConstArm: function {
+    # where the constant is resolved
+    st: zenv.ZSymbolTable
+    # the tree the declaration's root name is read from
+    ast: Ast
+    # the unit the name resolves in
+    unitDecl: ztypes.declid
+    # the frame the lookup walks from
+    frame: ztypes.declid
+    # the declaration node's id. Taken as an ID, not a node: a node read through
+    # the table holds a shared lock on `ast.nodes`, and the constant lookup below
+    # wants `ast` exclusively.
+    nid: zast.nodeid
+} out ztypes.cval is {
+    bn: zast.nameid
+    {
+        nn: ast.nodes.get i: nid.u64
+        bn = bareAtomNameId :ast n: nn
+    }
+    if bn.isZero then return ztypes.noConst
+    # a numeric literal is an atom whose NAME is its digits: it denotes no
+    # declaration, and the literal path already types it
+    if (isNumericLiteralNameAt :ast ref: bn) then return ztypes.noConst
+    cv: constValueOfMemberId :st :frame :ast :unitDecl nameId: bn
+    if cv.kind.armKind then return cv
+    # `true` and `false` live in core, and the constant owner-walk stops there
+    # deliberately -- so the one place that wants them asks core directly rather
+    # than widening a walk every other constant lookup shares. core's child of
+    # that name IS the alias: `false: bool.false`.
+    cr: st.typing.coreUnitRoot
+    if cr.isZero then return ztypes.noConst
+    cd: st.typing.declFindChild parentDeclId: cr nameId: bn
+    if cd.isZero then return ztypes.noConst
+    dn: 0
+    {
+        cdo: st.typing.decls.get i: cd.u64
+        dn = cdo.node
+    }
+    cv2: (constValueOfMemberAt
+        :st
+        :ast
+
+        :unitDecl
+        ownerDecl: cr
+        nameId: bn
+        defNodeId: dn
+    )
+    if cv2.kind.armKind then return cv2
+    return ztypes.noConst
+}
+
 # resolveNamedFieldSlot -- resolve an ordinary named field: its declared type,
 # its ownership and visibility, the default it carries, and whether owning it
 # gives the class a destructor. True when it does.
@@ -9586,21 +9650,44 @@ resolveNamedFieldSlot: function {
             isLock: lockField
         ) then needsDtor = true
     }
-    cidf: (resolveTyperefShellMarked
-        :st
-        :frame
+    # A field declared by a NAME that denotes a compile-time constant takes the
+    # CONSTANT's type and the constant as its default. `n: false` is `n:
+    # bool.false` -- the same arm constant, written the way core.z binds it --
+    # and the dotted spelling has always worked, so the bare one differing was
+    # the spelling test speaking, not the language.
+    cvArm: declNameConstArm :st :ast :unitDecl :frame nid: fm.operation
+    cidf: ztypes.tid
+    if cvArm.kind.armKind then {
+        cidf = cvArm.armTid
+    } else {
+        cidf = (resolveTyperefShellMarked
+            :st
+            :frame
 
-        :ast
-        :unitDecl
-        ownerId: cid
-        nid: fm.operation
-        thisName: defName
-    )
+            :ast
+            :unitDecl
+            ownerId: cid
+            nid: fm.operation
+            thisName: defName
+        )
+    }
     (st.typing.setMemberType
         parentTypeId: (ztypes.tid.create from: cid.u64)
         nameId: fm.name
         childTypeId: cidf
     )
+    if cvArm.kind.armKind then {
+        cvDecl: (st.typing.declMemberIdOf
+            parentTypeId: cvArm.armTid
+            nameId: cvArm.armName
+        )
+        (st.typing.setDefaultVariantArm
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: cid.u64)
+            name: fname
+            targetDecl: cvDecl
+        )
+    }
     if (st.reg.typetypeOf typeId: cidf) == ztypes.ztypetype.functionType then {
         (st.typing.setChildFnptrField
             pool: ast.names
@@ -9752,7 +9839,7 @@ rootIsStringLiteral: function {ast: Ast.view n: Node.view} out bool is {
 refuseStringFieldDefault: function {
     # where the diagnostic is recorded
     st: zenv.ZSymbolTable
-    # the tree the declaration is read from
+    # the tree the field's declaration is read from
     ast: Ast.view
     # the field's own name, which the message names
     fname: StringView
@@ -9791,7 +9878,7 @@ refuseStringFieldDefault: function {
 refuseStringArmPayload: function {
     # where the diagnostic is recorded
     st: zenv.ZSymbolTable
-    # the tree the declaration is read from
+    # the tree the arm's declaration is read from
     ast: Ast.view
     # the arm's own name, which the message names
     aname: StringView
