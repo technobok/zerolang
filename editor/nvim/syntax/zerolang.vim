@@ -86,7 +86,7 @@ syn match zerolangBuiltinConst /\<\%(null\|never\|true\|false\|_\)\>/
 syn match zerolangBuiltin /\<\%(print\|stringJoin\|error\|panic\|stdin\|stdout\|stderr\)\>/
 syn match zerolangBuiltin /\<\%(return\|break\|continue\|yield\)\>/
 syn match zerolangBuiltin /\<\%(public\|private\|this\|meta\|typedef\|tag\|iterator\)\>/
-syn match zerolangBuiltin /\<\%(take\|borrow\|view\|holdx\|hold\|takex\|lock\|copy\|drop\|generic\)\>/
+syn match zerolangBuiltin /\<\%(take\|borrow\|view\|holdx\|hold\|takex\|copy\|drop\|generic\)\>/
 
 " Labels: word: and :word (defined after keywords — longer match wins)
 exe 'syn match zerolangLabel /' . s:W . '\+:/'

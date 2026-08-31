@@ -2633,25 +2633,24 @@ ogNone: 41.u64
 mnOrPanic: 0.u64
 mnCopy: 1.u64
 mnPrivate: 2.u64
-mnLock: 3.u64
-mnMeta: 4.u64
-mnOption: 5.u64
-mnResult: 6.u64
-mnDrop: 7.u64
-mnPrint: 8.u64
-mnPanic: 9.u64
-mnError: 10.u64
-mnAppend: 11.u64
-mnInsert: 12.u64
-mnPush: 13.u64
-mnGetMut: 14.u64
-mnPop: 15.u64
-mnExtend: 16.u64
-mnHas: 17.u64
-mnDelete: 18.u64
-mnKeyAt: 19.u64
-mnValueAt: 20.u64
-mnBorrow: 21.u64
+mnMeta: 3.u64
+mnOption: 4.u64
+mnResult: 5.u64
+mnDrop: 6.u64
+mnPrint: 7.u64
+mnPanic: 8.u64
+mnError: 9.u64
+mnAppend: 10.u64
+mnInsert: 11.u64
+mnPush: 12.u64
+mnGetMut: 13.u64
+mnPop: 14.u64
+mnExtend: 15.u64
+mnHas: 16.u64
+mnDelete: 17.u64
+mnKeyAt: 18.u64
+mnValueAt: 19.u64
+mnBorrow: 20.u64
 
 # ogPut -- place one row AT its own constant. Writing the index and the name
 # together is what keeps the two halves of the table in step; a row that drifts
@@ -2680,7 +2679,6 @@ memberDispatchNames: function {acc: List String} is {
     mnPut :acc at: mnOrPanic name: "orPanic"
     mnPut :acc at: mnCopy name: "copy"
     mnPut :acc at: mnPrivate name: "private"
-    mnPut :acc at: mnLock name: "lock"
     mnPut :acc at: mnMeta name: "meta"
     mnPut :acc at: mnOption name: "Option"
     mnPut :acc at: mnResult name: "Result"
@@ -6697,15 +6695,13 @@ bindingRhsIsBorrow: function {
             }
             return true
         } case none then {
-            # `.borrow` / `.lock` on a value is the ownership marker, not a
-            # member -- no type declares one, which is exactly why the lookup
-            # missed. The binding ALIASES its source, so the source's owner
+            # `.borrow` on a value is the ownership marker, not a member --
+            # no type declares one, which is exactly why the lookup missed. The binding ALIASES its source, so the source's owner
             # frees the buffer and the binding must not free it again. A
             # protocol or facet declaring a real `borrow` projection resolves
             # above and never reaches here.
             chId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
             if (mnIs :ctx id: chId at: mnBorrow) then return true
-            if (mnIs :ctx id: chId at: mnLock) then return true
             return false
         }
     } else {
@@ -12982,15 +12978,10 @@ emitDottedNativeMarker: function {
     if (mnIs :ctx id: mn2Id at: mnPrivate) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
-    # `.lock` on a value is a borrow marker (no type has a literal `lock`
-    # field); emit the base, which the borrow param then addresses.
-    if (mnIs :ctx id: mn2Id at: mnLock) then {
-        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-    }
-    # `.borrow` is the same marker under its current spelling, and the checker
-    # accepts it as one. A protocol or facet declares a real `borrow`
-    # projection, so the split is drawn here off the base type exactly as
-    # checkBorrowLeg draws it -- one discriminator, so the two cannot disagree.
+    # `.borrow` on a value is the ownership marker, and the checker accepts it
+    # as one. A protocol or facet declares a real `borrow` projection, so the
+    # split is drawn here off the base type exactly as checkBorrowLeg draws it
+    # -- one discriminator, so the two cannot disagree.
     if (mnIs :ctx id: mn2Id at: mnBorrow) then {
         bmk: true
         bttB: symtab.reg.typetypeOf typeId: dpbT
@@ -30327,21 +30318,6 @@ emitParsedMethodCall: function {
     needsAddM :ctx uname: "cli" memb: mn.stringView
     nameArg: ctorArgByLabel :ast :symtab :ctx :call label: "name"
     return "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})"
-}
-
-# isLockArg -- the argument (through expression wrappers) is an `x.lock` borrow
-# projection; such a value passes by address to a borrow param.
-isLockArg: function {ast: Ast.view n: Node.view} out bool is {
-    match (
-        n
-    ) case expression then {
-        return (isLockArg :ast n: (ast.nodes.get i: n.expression.u64))
-    } case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        return cn.stringView == "lock"
-    } else {
-        return false
-    }
 }
 
 # emitUserIterCall -- a manual `g.call value: X` on a user iterator class (a

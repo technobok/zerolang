@@ -697,10 +697,10 @@ any-guard:
 	if [ "$$s" -gt 5 ]; then echo "any-guard FAIL: system.z Any.generic = $$s (baseline 5)"; fail=1; fi; \
 	if [ "$$c" -gt 0 ]; then echo "any-guard FAIL: collections.z Any.generic = $$c (baseline 0)"; fail=1; fi; \
 	if [ "$$fail" = "1" ]; then echo "  Lower the baseline here when a residual is legitimately removed."; exit 1; fi; \
-	m=$$(grep -lE 'Any\.generic|\.lock[^A-Za-z0-9_]' tests/fixtures/lsp_cases/*.msgs 2>/dev/null | wc -l); \
+	m=$$(grep -lE 'Any\.generic' tests/fixtures/lsp_cases/*.msgs 2>/dev/null | wc -l); \
 	if [ "$$m" -gt 0 ]; then \
-	  echo "any-guard FAIL: $$m lsp .msgs inline source(s) spell Any.generic or a .lock marker"; \
-	  grep -lE 'Any\.generic|\.lock[^A-Za-z0-9_]' tests/fixtures/lsp_cases/*.msgs; \
+	  echo "any-guard FAIL: $$m lsp .msgs inline source(s) spell Any.generic"; \
+	  grep -lE 'Any\.generic' tests/fixtures/lsp_cases/*.msgs; \
 	  echo "  didOpen inline text overrides the workspace file -- migrate the .msgs too."; \
 	  exit 1; \
 	fi; \
@@ -1352,18 +1352,18 @@ eager-guard: bin/zc
 # the spelling moves, and it dies silently.
 member-guard:
 	@m1=$$(grep -cE '[a-z]*cn\.stringView ==|[a-z]*cn == "' src/ztypecheck.z); \
-	if [ "$$m1" -gt 23 ]; then \
-	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 23)"; \
+	if [ "$$m1" -gt 22 ]; then \
+	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 22)"; \
 	  echo "  A new hardcoded string-keyed member/marker special-case was added to the"; \
 	  echo "  type checker. Resolve members through their declared childOf edges (the"; \
 	  echo "  system units are the source of truth); bump the baseline only for a"; \
 	  echo "  genuinely-sanctioned marker."; \
 	  exit 1; \
 	fi; \
-	if [ "$$m1" -lt 23 ]; then \
-	  echo "member-guard: string-keyed member compares = $$m1 < baseline 23 -- lower the baseline here"; \
+	if [ "$$m1" -lt 22 ]; then \
+	  echo "member-guard: string-keyed member compares = $$m1 < baseline 22 -- lower the baseline here"; \
 	fi; \
-	echo "member-guard OK: string-keyed member compares = $$m1 (<=23)"
+	echo "member-guard OK: string-keyed member compares = $$m1 (<=22)"
 
 # highlight-guard -- the two syntax highlighters must carry the language's
 # actual vocabulary. THE LANGUAGE IS THE SOURCE OF TRUTH, never the lists:
@@ -1383,7 +1383,7 @@ D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT
 # what a highlighter may carry that core.z does not define: the ownership and
 # access markers, the context words, and `Any`, which is real and reachable
 # without a core.z re-export.
-CONTEXT="Any _ borrow copy drop generic hold holdx iterator lock meta private public tag take takex this view yield"
+CONTEXT="Any _ borrow copy drop generic hold holdx iterator meta private public tag take takex this view yield"
 
 sed -n 's|^syn match \([A-Za-z]*\) /\(.*\)/$$|\1 \2|p' editor/nvim/syntax/zerolang.vim > "$$D/vim.raw"
 vimset() {

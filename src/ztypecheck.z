@@ -2120,10 +2120,9 @@ valueIsHold: function {ast: Ast.view n: Node.view} out bool is {
 }
 
 # isStripMarker -- true for a dotted-path leaf that is an ownership or access marker
-# (`.lock`/`.borrow`/`.take`/`.private`/`.public`); a type reference peels these to
+# (`.borrow`/`.take`/`.private`/`.public`); a type reference peels these to
 # reach the underlying base type.
 isStripMarker: function {name: StringView} out bool is {
-    if name == "lock" then return true
     if name == "borrow" then return true
     if name == "take" then return true
     if name == "view" then return true
@@ -2512,9 +2511,6 @@ pathOwnership: function {ast: Ast.view n: Node.view} out optionval ztypes.zparam
         n
     ) case dottedpath then {
         cid: atomNameId :ast n: (ast.nodes.get i: n.child.u64)
-        # `.lock` is a second spelling of `borrow`: the grid has one
-        # non-owned-and-mutable concept, and both words parse to it.
-        if cid == zast.names.wkLock then return (optionval.some ztypes.zparamownership.borrowMode)
         if cid == zast.names.wkBorrow then return (optionval.some ztypes.zparamownership.borrowMode)
         if cid == zast.names.wkTake then return (optionval.some ztypes.zparamownership.takeMode)
         if cid == zast.names.wkView then return (optionval.some ztypes.zparamownership.viewMode)
@@ -21957,7 +21953,7 @@ checkResolvedMember: function {
     return result
 }
 # checkMarkerMember -- the access and conversion markers a dotted path can name
-# instead of a member: `.private` / `.public` / `.lock` carry the base's own type,
+# instead of a member: `.private` / `.public` carry the base's own type,
 # `.stringView` and `.str` convert between the two string forms, and `.borrow` is
 # an ownership marker except on a protocol / facet / typedef-wrapper receiver,
 # where it is a projection callable.
@@ -22004,11 +22000,6 @@ checkMarkerMember: function {
     if cn == "public" then {
         setpb: bt
         stampGate :st nid: dp.nid.u64 tid: setpb
-        return (callleg handled: true tid: bt)
-    }
-    if cn == "lock" then {
-        setlk: bt
-        stampGate :st nid: dp.nid.u64 tid: setlk
         return (callleg handled: true tid: bt)
     }
     # `.stringView` on a StringView is an identity no-op and is rejected --
@@ -23876,7 +23867,7 @@ checkMethodRefTarget: function {
                 parentTypeId: (ztypes.tid.create from: tto.u64)
                 name: targetFnName.stringView
             ) then {
-                tmk: "lock".string
+                tmk: "borrow".string
                 {
                     tmo: (st.typing.declOwnershipOfId
                         parentTypeId: (ztypes.tid.create from: tto.u64)
@@ -26200,25 +26191,6 @@ lockCallPath: function {
     if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
 }
 
-# lockSuffixBase -- the bare base name of a `<atom>.lock` argument, ""
-# otherwise.
-lockSuffixBase: function {ast: Ast.view n: Node.view} out String is {
-    match (
-        n
-    ) case expression then {
-        return (lockSuffixBase :ast n: (ast.nodes.get i: n.expression.u64))
-    } case dottedpath then {
-        ln: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
-        if ln.stringView == "lock" then {
-            return (bareAtomName :ast n: (ast.nodes.get i: n.parent.u64))
-        } else {
-            return "".string
-        }
-    } else {
-        return "".string
-    }
-}
-
 # takenHere -- the location stamp an ownership-transfer overlay carries (pop
 # propagates only located takes into the enclosing scope).
 takenHere: function {} out optionval ztypes.zsrcpos is {
@@ -27377,7 +27349,6 @@ lockNonTrivialArg: function {
     pt: u64
     isTake: bool
     isLockish: bool
-    isDeclLock: bool
     isViewArg: bool
     lockRootIn: zast.nameid
     arg: argref
@@ -27388,22 +27359,6 @@ lockNonTrivialArg: function {
     # locks it there.
     consumes: false
     if isTake then consumes = true
-    # a `.lock`-suffixed argument at a lock parameter locks
-    # its base and hoists a BORROWED view of it (the synth
-    # temp's origin is the base; the base's lock row lands
-    # in the call scope via the borrow-lock install).
-    if isLockish then {
-        lsb: lockSuffixBase :ast n: (ast.nodes.get i: arg.operation.u64)
-        if lsb.length > 0 then {
-            drainPendingBorrow :st
-            st.typing.pendingBorrowPath.append (nameIdOf :ast name: lsb.stringView)
-            if lockRoot.isZero then lockRoot = nameIdOf :ast name: lsb.stringView
-            if isDeclLock then st.typing.lastLockParamRoot = (nameIdOf
-                :ast
-                name: lsb.stringView
-            )
-        }
-    }
     # a plain field-path argument behaves as its user-
     # written hoist would: seed the borrow side channel with
     # the real source tuple so the synth temp installs the
@@ -27564,7 +27519,6 @@ hoistAndLockArg: function {
             :pt
             :isTake
             :isLockish
-            :isDeclLock
             :isViewArg
             lockRootIn: lockRoot
             :arg
@@ -34003,12 +33957,12 @@ bindFunctionParam: function {
     }
     pown: pathOwnership :ast n: (ast.nodes.get i: pm.operation.u64)
     isLockP: false
-    mkn: "lock".string
+    mkn: "borrow".string
     match (
         pown
     ) case some then {
-        # Only `.lock` needs an identity to point at, so only
-        # `.lock` is refused on a valtype below. `.view` and
+        # Only `.borrow` needs an identity to point at, so only
+        # `.borrow` is refused on a valtype below. `.view` and
         # `.hold` are readonly markers, enforced by a lock on
         # the parameter's own NAME, which a valtype has just as
         # much as a class does.
