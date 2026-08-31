@@ -1,0 +1,105 @@
+# NAMING AN ARM GIVES ITS TAG, and a tag is the whole value only for an arm
+# that carries nothing. This is the permitted half of that rule: every position
+# where naming an arm IS a value, beside the constructions that supply what an
+# arm holds. The refusals are in errors/arm_default_carries_payload.z,
+# errors/arm_alias_carries_payload.z and errors/arm_bare_carries_payload.z.
+#
+# bool is not special for being bool. Its arms carry nothing, so its
+# discriminator is its whole value -- and so is any other sum's. The rule is
+# PER-ARM, not per-type: `Mixed.none` is a value on the same variant whose
+# `count` is not, and that pairing is the point of this fixture.
+#
+# This passes before those refusals as well as after, BY DESIGN. The refusals
+# are proven by the three error fixtures, each of which a pre-refusal compiler
+# accepts; this is the other half of the pair -- the guard that they stop where
+# the rule stops.
+Mixed: variant {
+    # carries an i64, so naming it alone is not a value
+    count: i64
+    # carries nothing, so naming it is the whole value
+    none: null
+}
+
+Payload: union {
+    # a reftype payload, the case that used to segfault when left unbuilt
+    text: String
+    # its payload-less sibling
+    empty: null
+}
+
+Colour: variant {
+    # a discriminator-only variant: every arm is a value
+    red: null
+    green: null
+}
+
+# a definition declared by an arm that carries nothing IS that value
+FIRST: Colour.red
+NONE: Mixed.none
+EMPTY: Payload.empty
+NO: bool.false
+
+Defaults: class {
+    # a payload-less arm of a sum that has payloads elsewhere
+    m: Mixed.none
+    u: Payload.empty
+    # a discriminator-only variant, and the bool that is one
+    c: Colour.red
+    p: false
+    q: bool.false
+}
+
+# an arm read reaches argument position too
+name: function {c: Colour} out String is {
+    match (
+        c
+    ) case red then {
+        return "red".string
+    } case green then {
+        return "green".string
+    }
+}
+
+show: function {m: Mixed} is {
+    match (
+        m
+    ) case count then {
+        print "  count=\{m}"
+    } case none then {
+        print "  none"
+    }
+}
+
+hold: function {p: Payload.borrow} is {
+    match (
+        p
+    ) case text then {
+        print "  text=[\{p}]"
+    } case empty then {
+        print "  empty"
+    }
+}
+
+main: function is {
+    # the definitions
+    print "FIRST=\{name c: FIRST} NO=\{NO}"
+    show m: NONE
+    hold p: EMPTY
+
+    # the defaults
+    d: Defaults
+    print "c=\{name c: d.c} p=\{d.p} q=\{d.q}"
+    show m: d.m
+    hold p: d.u
+
+    # a bare read, in a binding and in an argument
+    b: Colour.green
+    print "bare=\{name c: b} arg=\{name c: Colour.red}"
+    show m: Mixed.none
+
+    # supplying the payload is what makes a carrying arm a value
+    k: Mixed.count 7
+    show m: k
+    t: Payload.text "hi".string
+    hold p: t
+}

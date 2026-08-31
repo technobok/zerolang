@@ -36090,26 +36090,48 @@ reportPendingConstFail: function {st: zenv.ZSymbolTable} is {
     )
 }
 
-# constLiteralValue -- a numeric literal lexeme as a value, parsed through the
-# same parseI64 / parseF64 the emitter's fold uses so the two cannot disagree
-# about what a literal means. A magnitude outside i64 reads as "not a constant"
-# rather than as a wrapped one.
+# constLiteralValue -- a numeric literal lexeme as a value, read through the
+# same ztypes.parseNumber the emitter renders literals with, so the two cannot
+# disagree about what a literal means. A magnitude outside the literal's own
+# kind reads as "not a constant" rather than as a wrapped one.
+#
+# EVERY RADIX THE LEXER ACCEPTS MUST BE READ HERE. parseI64 knows decimal
+# alone, so `0x10`, `0b101`, `0o17` and `0ca` all answered "not a literal
+# value" -- and a definition that yields no value is not a constant, so it took
+# the ALIAS chase instead and was emitted as its own type's name (`k: 0x10`
+# emitted `i64`).
 constLiteralValue: function {name: StringView} out ztypes.cval is {
-    if (isFloatLiteralName :name) then {
-        pf: name.parseF64
-        match (
-            pf
-        ) case ok then {
-            return (ztypes.makeFloatConst pf)
-        } case err then {
-            return ztypes.noConst
-        }
+    # the sign is the lexeme's, not the parser's: parseNumber reads a
+    # MAGNITUDE, so `-1` is parsed as `1` and negated here
+    neg: name.startsWith "-"
+    mag: name
+    if neg then mag = name.substring from: 1 to: name.length
+    # read to the UNBOUNDED magnitude: the range that matters here is i64's,
+    # and the most negative i64 has a magnitude one past it
+    pv: ztypes.parseLiteralValue numstr: mag
+    if (pv.ok) == false then return ztypes.noConst
+    if pv.isFloat then {
+        fv: pv.fval
+        if neg then fv = 0.0 - fv
+        return (ztypes.makeFloatConst fv)
     }
-    pi: name.parseI64
+    # the most negative i64 cannot be read and then negated -- its magnitude
+    # does not fit the type it belongs to, so it is spelled here instead
+    iminMag: 9223372036854775807.u64
+    iminMag = iminMag + 1
+    if neg when pv.ival == iminMag then {
+        mn: 0 - 9223372036854775807
+        mn = mn - 1
+        return (ztypes.makeIntConst mn)
+    }
+    # any other magnitude outside i64 is not a constant, never a wrapped value
+    ivr: pv.ival.i64
     match (
-        pi
+        ivr
     ) case ok then {
-        return (ztypes.makeIntConst pi)
+        iv: ivr
+        if neg then iv = 0 - iv
+        return (ztypes.makeIntConst iv)
     } case err then {
         return ztypes.noConst
     }

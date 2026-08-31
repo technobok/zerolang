@@ -1,0 +1,81 @@
+# EVERY RADIX THE LEXER ACCEPTS IS A VALUE, in every position that takes one.
+#
+# A definition declared by a value is a constant, and the value declares the
+# type -- but only if the value can be READ. The reader knew decimal alone, so
+# `0x10`, `0b101`, `0o17` and `0ca` all answered "not a literal value", and a
+# definition that yields no value is not a constant: it took the ALIAS chase
+# instead and was emitted as the name of its own type. `k: 0x10` emitted `i64`
+# into the C, `k: 0ca.c32` emitted `c32`.
+#
+# The `0c` char literal fails a second way, one position over. A field default
+# is re-rendered from the literal's own lexeme, which is C text for every other
+# radix and is not one here: `0ca` reached the C compiler verbatim as an
+# invalid suffix. It is decoded to its codepoint now, the way an atom in any
+# other position already was.
+#
+# The signs and the bounds are here because the reader parses a MAGNITUDE: the
+# sign is the lexeme's, and the most negative i64 has a magnitude one past the
+# type it belongs to, so it cannot be read and then negated.
+
+# --- unit-level constants, one per radix ---
+dec: 42
+neg: -1
+hex: 0x10
+bin: 0b101
+oct: 0o17
+flt: 3.5
+negFlt: -3.5
+chr: 0ca.c32
+byte: 0ca.c8
+imin: -9223372036854775808
+imax: 9223372036854775807
+
+# --- the same values as field defaults ---
+Defaults: class {
+    # decimal, and negative is not a special case
+    a: 42
+    b: -1
+    # the radixes that are not decimal
+    h: 0x10
+    i: 0b101
+    o: 0o17
+    # the char literal, in both widths
+    c: 0ca.c32
+    d: 0ca.c8
+    # a float, which keeps its own spelling
+    f: 3.5
+}
+
+# --- and as a record's, which is a second recording path ---
+RecDefaults: record {
+    # a char literal on the record path
+    c: 0ca.c32
+    # a plain one beside it
+    n: 42
+}
+
+# --- and as a parameter default ---
+withChar: function {c: 0ca.c32} out u32 is {
+    return c.u32
+}
+
+main: function is {
+    print "dec=\{dec} neg=\{neg} hex=\{hex} bin=\{bin} oct=\{oct}"
+    print "flt=\{flt} negFlt=\{negFlt}"
+    print "chr=\{chr.u32} byte=\{byte.u8}"
+    print "imin=\{imin} imax=\{imax}"
+
+    d: Defaults
+    print "a=\{d.a} b=\{d.b} h=\{d.h} i=\{d.i} o=\{d.o}"
+    print "c=\{d.c.u32} d=\{d.d.u8} f=\{d.f}"
+
+    r: RecDefaults
+    print "rec c=\{r.c.u32} n=\{r.n}"
+
+    print "param=\{withChar}"
+    print "override=\{withChar c: 0cb.c32}"
+
+    # a local reads the same lexemes, and always could
+    l: 0ca.c32
+    print "local=\{l.u32}"
+}
