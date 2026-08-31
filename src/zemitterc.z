@@ -15195,24 +15195,16 @@ emitTypedBind: function {
         }
         # an owned class/record local with heap fields is destroyed at scope
         # exit (String/collection locals returned earlier; take-aliases too).
-        ltHasDtor: false
-        if (symtab.reg.needsDestructor typeId: ltid) then ltHasDtor = true
-        ltUorig: originTidOf :symtab tid: ltid
-        if ltUorig > 0 when (symtab.reg.typetypeOf typeId: ltid) == ztypes.ztypetype.unionType then {
-            ltHasDtor = true
-        }
-        if ltHasDtor then {
-            if (bindingRhsIsBorrow :ast :symtab :ctx n: avn) == false then {
-                ldcb: ctxCname :ctx tid: ltid
-                ldRef: "&\{nm}"
-                if (isBoxTid :symtab tid: ltid) then ldRef = "\{nm}"
-                ldf: "    \{ldcb}_destroy(\{ldRef});\n"
-                ldfs: ldf.copy
-                tmp.listFrees.append ldfs
-                tmp.listFreeVars.append nm.string
-                tmp.listFreeRaw.append nameVid
-            }
-        }
+        (registerScopeDestroy
+            :ast
+            :symtab
+            :ctx
+            tid: ltid
+            :nm
+            :nameVid
+            valueNode: avn
+            :tmp
+        )
     } else {
         emitFail :ctx what: "unhandled binding type \{tn} for \{nm}" line: n.lineno
         lb: "\{ind}/* zemitterc: unhandled binding type \{tn} for \{nm} */\n"
@@ -16217,8 +16209,60 @@ emitIfStmt: function {
     buf.append le
     ctx.condDepth = ctx.condDepth - 1
 }
+# registerScopeDestroy -- record the scope-exit cleanup a freshly bound OWNED
+# local earns: a String rides the block's String free list, and anything else
+# carrying a destructor gets its `_destroy` registered against the same block.
+# A BORROW registers nothing -- whoever owns the value frees it, and freeing it
+# here would be the second free.
+#
+# Asked by every path that binds a name to a value, so no two of them can
+# disagree about what a binding owes at scope exit. `with` did not ask at all,
+# and leaked whatever it bound.
+registerScopeDestroy: function {
+    # the tree the value was read from
+    ast: Ast.view
+    # the symbol table the type and the borrow question are asked of
+    symtab: zenv.ZSymbolTable.view
+    # the emit context, for the C name and the box test
+    ctx: Ctx
+    # the bound value's type
+    tid: ztypes.tid
+    # the binding's emitted C name
+    nm: StringView
+    # the binding's variable id, which the flush matches against
+    nameVid: ztypes.vid
+    # the value node, for the borrow question
+    valueNode: Node.view
+    # the block's pending-cleanup lists
+    tmp: TmpCtr
+} is {
+    if (bindingRhsIsBorrow :ast :symtab :ctx n: valueNode) then return
+    if tid == ctx.strTid then {
+        tmp.frees.append nm.string
+        tmp.freeRaw.append nameVid
+        return
+    }
+    hasDtor: false
+    if (symtab.reg.needsDestructor typeId: tid) then hasDtor = true
+    uorig: originTidOf :symtab :tid
+    if uorig > 0 when (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType then {
+        hasDtor = true
+    }
+    if (hasDtor) == false then return
+    dcb: ctxCname :ctx :tid
+    dref: "&\{nm}"
+    if (isBoxTid :symtab :tid) then dref = nm.string
+    df: "    \{dcb}_destroy(\{dref});\n"
+    tmp.listFrees.append df.copy
+    tmp.listFreeVars.append nm.string
+    tmp.listFreeRaw.append nameVid
+}
+
 # emitWithStmt -- `with x: <value> do <body>`: the value is bound for the body's
-# duration and freed at its end, whatever exit the body takes.
+# duration and destroyed with the block it was bound in, whatever exit the body
+# takes. The binding is emitted into the ENCLOSING C block rather than braces of
+# its own, so that block's flush is where its cleanup belongs -- and inside a
+# loop body that flush runs per iteration.
 emitWithStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -16271,6 +16315,39 @@ emitWithStmt: function {
         lwv2: "\{ind}int64_t \{wnm} = \{wv};\n"
         buf.append lwv2
     }
+    # a `with` binds a value exactly as an ordinary binding does, and owes the
+    # same two things -- neither of which it did. The value may be a call that
+    # took ownership of an argument, so the caller zeroes that source here; and
+    # an OWNED value earns its scope-exit destroy, which is what registerScopeDestroy
+    # records for every other binding.
+    #
+    # THE TWO OMISSIONS CANCELLED IN ONE SHAPE. `with b: (Bag s: src)` was clean
+    # only because the un-zeroed `src` freed the buffer the un-destroyed `b`
+    # should have, so adding the destroy alone turns that program into a double
+    # free. They belong together.
+    emitValueTakeInvalidations :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64) :ind :buf
+    # INSIDE A GENERATOR the header binds a temp and the lowering re-binds the
+    # author's name as the block's first statement, so that binding owns the
+    # value -- promoted to a field and destroyed with the instance, or an
+    # ordinary local registering its own cleanup. The temp holds nothing by the
+    # time the block starts.
+    #
+    # It could not be freed at scope exit even if it did: the free site is
+    # reachable only through a resume `goto` that jumped past the temp's
+    # declaration, so it would free an indeterminate local. That is the same
+    # rule every other name in a resumable body obeys -- a C local does not
+    # survive a suspension -- and the corpus catches it as `free(): invalid
+    # pointer` rather than as a leak.
+    if (ctx.genActive) == false then (registerScopeDestroy
+        :ast
+        :symtab
+        :ctx
+        tid: (ztypes.tid.create from: wsid.u64)
+        nm: wnm.stringView
+        nameVid: (defVid :symtab nid: n.nodeid.u64)
+        valueNode: (ast.nodes.get i: n.value.u64)
+        :tmp
+    )
     emitBodyNode :ast :symtab :ctx n: (ast.nodes.get i: n.body.u64) :ind :tmp :buf
 }
 # emitCaseStmt -- a `match` in statement position, delegated to the shared arm

@@ -1,0 +1,59 @@
+# A `with` binding owes what every other binding owes: the value it binds is
+# destroyed with the block it was bound in, and a source the value MOVED from is
+# zeroed. `emitWithStmt` did neither -- it emitted the binding and the body and
+# nothing else -- so any `with` over an owned value leaked it. Its own doc
+# comment said the value "is freed at its end".
+#
+# THE TWO OMISSIONS CANCELLED IN ONE SHAPE, which is why this was invisible
+# rather than merely uncaught: in `moved` below, the un-zeroed source freed the
+# buffer the un-destroyed binding should have, so that program was clean by
+# luck. Adding the destroy on its own turns it into a double free, so both land
+# together and this fixture drives that shape on purpose.
+#
+# The common `with` is unaffected and is here to prove it: `xs.iterate` binds a
+# BORROW, whose owner frees it, and freeing it here would be the second free.
+#
+# Leak-checked, which is the only way any of this shows -- every line below
+# prints the same thing whether or not the cleanup runs.
+Bag: class {
+    s: String
+} as {
+    look: function {it: this} out u64 is {
+        return it.s.count
+    }
+}
+
+mk: function out String is {
+    return "made".string
+}
+
+main: function is {
+    # an owned String, bound directly
+    with s: "hello".string do print "str: \{s.count}"
+
+    # an owned String from a call
+    with c: (mk) do print "call: \{c.count}"
+
+    # an owned class instance holding a heap field
+    with b: (Bag s: "owned".string) do print "cls: \{b.look}"
+
+    # the cancelling pair: the argument is MOVED into the instance, so the
+    # source must be zeroed and the instance destroyed -- one free, not none
+    # and not two
+    src: "moved".string
+    with m: (Bag s: src) do print "moved: \{m.look}"
+
+    # a BORROW: the container owns the iterator's source, so nothing is freed
+    # here
+    xs: (List String)
+    xs.append "a".string
+    xs.append "bb".string
+    with it: xs.iterate do for e: it loop print "iter: \{e.count}"
+
+    # inside a loop body, where the block flushes once per iteration
+    i: 0
+    for i < 3 loop {
+        with t: (mk) do print "loop: \{t.count}"
+        i = i + 1
+    }
+}
