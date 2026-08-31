@@ -4549,7 +4549,7 @@ typeHasNonOwnedField: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out 
         frow: st.typing.declRowAt ownerTid: tid membersOnly: true slot: i
         if frow.keep when (found) == false then {
             nid: frow.name.u32.orPanic
-            if (st.typing.declIsLockFieldId
+            if (st.typing.declIsBorrowedFieldId
                 parentTypeId: tid
                 nameId: (zast.nameid.create from: nid.u32)
             ) then found = true
@@ -9356,9 +9356,9 @@ fieldTypeNeedsCleanup: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     name: StringView
-    isLock: bool
+    isBorrowed: bool
 } out bool is {
-    if isLock then return true
+    if isBorrowed then return true
     if name == "String" then return true
     if name == "List" then return true
     if name == "ListRef" then return true
@@ -9726,11 +9726,11 @@ resolveNamedFieldSlot: function {
     cid: u64
     fname: StringView
     ftn: StringView
-    lockField: bool
+    borrowedField: bool
     fm: argref
 } out bool is {
     needsDtor: false
-    fieldLock: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
+    fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
     refuseRetOnlyMarker :st :ast pm: fm
     if fname != "_resume_input" then {
         if (fieldTypeNeedsCleanup
@@ -9740,7 +9740,7 @@ resolveNamedFieldSlot: function {
             :ast
             :unitDecl
             name: ftn
-            isLock: lockField
+            isBorrowed: borrowedField
         ) then needsDtor = true
     }
     # THE VALUE DECLARES THE TYPE, when the declaration is a value. A field
@@ -9773,13 +9773,13 @@ resolveNamedFieldSlot: function {
         )
     }
     match (
-        fieldLock
+        fieldOwn
     ) case some then {
         (st.typing.setChildOwnership
             pool: ast.names
             parentTypeId: (ztypes.tid.create from: cid.u64)
             name: fname
-            ownership: fieldLock
+            ownership: fieldOwn
         )
     } case none then null
     (recordTyperef
@@ -9807,7 +9807,7 @@ resolveClassFieldSlot: function {
     cid: u64
     fname: StringView
     ftn: StringView
-    lockField: bool
+    borrowedField: bool
     fm: argref
 } out bool is {
     needsDtor: false
@@ -9833,7 +9833,7 @@ resolveClassFieldSlot: function {
             :cid
             :fname
             :ftn
-            :lockField
+            :borrowedField
             :fm
         ) then needsDtor = true
     }
@@ -9850,7 +9850,7 @@ recordMemberRefField: function {
     mref: u64
     fm: argref
 } is {
-    fieldLock: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
+    fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
     refuseRetOnlyMarker :st :ast pm: fm
     (st.typing.setMemberType
         parentTypeId: (ztypes.tid.create from: cid.u64)
@@ -9865,13 +9865,13 @@ recordMemberRefField: function {
         )
     }
     match (
-        fieldLock
+        fieldOwn
     ) case some then {
         (st.typing.setChildOwnership
             pool: ast.names
             parentTypeId: (ztypes.tid.create from: cid.u64)
             name: fname
-            ownership: fieldLock
+            ownership: fieldOwn
         )
     } case none then null
     # a sibling-member ref default: the construction fill
@@ -10004,20 +10004,20 @@ resolveClassFieldEntry: function {
     # taking it, and the field holds no destructor. An OWNED one
     # (take / hold) is an ordinary field on all three counts --
     # `hold` freezes the contents, not the slot.
-    lockField: false
-    fieldLock: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
+    borrowedField: false
+    fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
     refuseRetOnlyMarker :st :ast pm: fm
     match (
-        fieldLock
+        fieldOwn
     ) case some then {
         # This test is INVERTED: anything not named here becomes a
-        # lock field, so a new owned mode must be listed or it is
+        # borrowed field, so a new owned mode must be listed or it is
         # silently treated as non-owned.
         fOwned: false
-        if fieldLock == ztypes.zparamownership.takeMode then fOwned = true
-        if fieldLock == ztypes.zparamownership.holdMode then fOwned = true
-        if fieldLock == ztypes.zparamownership.takexMode then fOwned = true
-        if fOwned == false then lockField = true
+        if fieldOwn == ztypes.zparamownership.takeMode then fOwned = true
+        if fieldOwn == ztypes.zparamownership.holdMode then fOwned = true
+        if fieldOwn == ztypes.zparamownership.takexMode then fOwned = true
+        if fOwned == false then borrowedField = true
     } case none then null
     hNameId: zast.poolFind pool: ast.names text: ftn.stringView
     (forceMemberOf
@@ -10049,7 +10049,7 @@ resolveClassFieldEntry: function {
             :cid
             fname: fname.stringView
             ftn: ftn.stringView
-            :lockField
+            :borrowedField
             :fm
         ) then needsDtor = true
     }
@@ -10260,7 +10260,7 @@ resolveClassTypedefBase: function {
         :ast
         :unitDecl
         name: tdbaseT.stringView
-        isLock: false
+        isBorrowed: false
     ) then needsDtor = true
     if (tdbase.isZero) == false then {
         tdk3: cid
@@ -16757,7 +16757,7 @@ copyMemberMarkers: function {
             ownership: cho
         )
     } case none then null
-    if (st.typing.declIsLockField
+    if (st.typing.declIsBorrowedField
         pool: ast.names
         parentTypeId: templateId
         name: chName
@@ -23862,7 +23862,7 @@ checkMethodRefTarget: function {
         match (
             tto
         ) case some then {
-            if (st.typing.declIsLockField
+            if (st.typing.declIsBorrowedField
                 pool: ast.names
                 parentTypeId: (ztypes.tid.create from: tto.u64)
                 name: targetFnName.stringView
@@ -27835,7 +27835,7 @@ argOwnershipOf: function {
             # Field ownership flows to the constructor param:
             # a borrowed field locks the caller's argument, any
             # other reftype field takes it.
-            if (st.typing.declIsLockField
+            if (st.typing.declIsBorrowedField
                 pool: ast.names
                 parentTypeId: funcId
                 name: pn
