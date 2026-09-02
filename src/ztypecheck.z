@@ -22923,11 +22923,12 @@ callNodeIdOf: function {ast: Ast.view n: Node.view} out zast.nodeid is {
     }
 }
 
-# rootNameTextOf -- the root name of an expression as text, "the value" when
-# it has none.
+# rootNameTextOf -- the root name of an expression as text; empty when it has
+# none (a literal, a construction, a call), so the report can say so instead
+# of naming a variable that does not exist.
 rootNameTextOf: function {ast: Ast.view n: Node.view} out String is {
     rn: exprRootNameId :ast :n
-    if rn.isZero then return "the value".string
+    if rn.isZero then return String
     return (zast.nameTextCopy :ast ref: rn)
 }
 
@@ -22959,6 +22960,9 @@ checkReturnRooting: function {
         if (okRef) == false then {
             rnm: rootNameTextOf :ast n: (ast.nodes.get i: arg.operation.u64)
             m1: "a reference return must point into a `.borrow`/`.view` parameter; '\{rnm}' is a local and dies with this call"
+            if rnm.length == 0 then {
+                m1 = "a reference return must point into a `.borrow`/`.view` parameter; this expression is not rooted at one and dies with this call".string
+            }
             (addError
                 :st
                 nodeid: arg.nid
@@ -23011,6 +23015,9 @@ checkReturnRooting: function {
                     fld: zast.nameTextCopy :ast ref: fa.name
                     src: rootNameTextOf :ast n: (ast.nodes.get i: fa.operation.u64)
                     m2: "the returned `\{tn2}` stores '\{src}' in its non-owned field '\{fld}', but '\{src}' is not a `.borrow`/`.view` parameter -- an `outx` result may only reference what its caller still owns"
+                    if src.length == 0 then {
+                        m2 = "the returned `\{tn2}` fills its non-owned field '\{fld}' from an expression that is not rooted at a `.borrow`/`.view` parameter -- an `outx` result may only reference what its caller still owns"
+                    }
                     (addError
                         :st
                         nodeid: fa.nid
