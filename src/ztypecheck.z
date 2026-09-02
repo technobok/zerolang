@@ -22946,6 +22946,168 @@ typeOfBareName: function {
 }
 
 
+# exprRootNameId -- the root name of an expression: a `:name` label-value
+# shorthand names its local directly, any other shape its path's root.
+exprRootNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    match (
+        n
+    ) case labelvalue then {
+        return n.name
+    } else {
+        return (rootNameIdOf :ast :n)
+    }
+}
+
+# rootIsBorrowedParam -- the expression is rooted at a `.borrow`/`.view`
+# parameter or the receiver: a name bound as a parameter that is BORROWED, or
+# a path through one. Such a root outlives the call; a local does not.
+rootIsBorrowedParam: function {st: zenv.ZSymbolTable.view ast: Ast.view n: Node.view} out bool is {
+    rn: exprRootNameId :ast :n
+    if rn.isZero then return false
+    vo: st.lookupVarId nameId: rn
+    match (
+        vo
+    ) case some then {
+        if (st.reg.variableOriginOf id: vo) != ztypes.zvarorigin.param then return false
+        return (st.reg.variableOwnershipOf id: vo) == ztypes.zownership.borrowed
+    } case none then {
+        return false
+    }
+}
+
+# pinsAllParamRooted -- every pending pin (a just-typed call's) is rooted at a
+# `.borrow`/`.view` parameter or the receiver; false when nothing is pending.
+pinsAllParamRooted: function {st: zenv.ZSymbolTable.view} out bool is {
+    if st.typing.pendingPins.length == 0 then return false
+    with pit: st.typing.pendingPins.iterate do for p: pit loop {
+        vo: st.lookupVarId nameId: (p.path.get i: 0)
+        match (
+            vo
+        ) case some then {
+            if (st.reg.variableOriginOf id: vo) != ztypes.zvarorigin.param then return false
+            if (st.reg.variableOwnershipOf id: vo) != ztypes.zownership.borrowed then return false
+        } case none then {
+            return false
+        }
+    }
+    return true
+}
+
+# callNodeIdOf -- the call under expression wrappers; zero for any other shape.
+callNodeIdOf: function {ast: Ast.view n: Node.view} out zast.nodeid is {
+    match (
+        n
+    ) case call then {
+        return n.nodeid
+    } case expression then {
+        return (callNodeIdOf :ast n: (ast.nodes.get i: n.expression.u64))
+    } else {
+        return zast.nodeid
+    }
+}
+
+# rootNameTextOf -- the root name of an expression as text, "the value" when
+# it has none.
+rootNameTextOf: function {ast: Ast.view n: Node.view} out String is {
+    rn: exprRootNameId :ast :n
+    if rn.isZero then return "the value".string
+    return (zast.nameTextCopy :ast ref: rn)
+}
+
+# checkReturnRooting -- what a returned value may point at. A reference return
+# (`outx T.borrow` / `outx T.view`) must be rooted at a `.borrow`/`.view`
+# parameter or the receiver -- a local dies with this call. A construction
+# returned from an `outx` function may fill a non-owned field only from such
+# a root: the result's pins are on the caller's inputs, and only what the
+# caller still owns can be referenced.
+checkReturnRooting: function {
+    # the symbol table the reports go to
+    st: zenv.ZSymbolTable
+    # the tree the returned expression is read from
+    ast: Ast.view
+    # the returned argument
+    arg: argref
+    # its type
+    argT: ztypes.tid
+} is {
+    if argT.isZero then return
+    cid: callNodeIdOf :ast n: (ast.nodes.get i: arg.operation.u64)
+    if st.typing.currentReturnsBorrow then {
+        okRef: false
+        if (cid.isZero) == false then {
+            okRef = pinsAllParamRooted :st
+        } else {
+            okRef = rootIsBorrowedParam :st :ast n: (ast.nodes.get i: arg.operation.u64)
+        }
+        if (okRef) == false then {
+            rnm: rootNameTextOf :ast n: (ast.nodes.get i: arg.operation.u64)
+            m1: "a reference return must point into a `.borrow`/`.view` parameter; '\{rnm}' is a local and dies with this call"
+            (addError
+                :st
+                nodeid: arg.nid
+                lineno: arg.lineno
+                colno: arg.colno
+                e: zast.err.ownerError
+                msg: m1
+            )
+        }
+        return
+    }
+    if (st.typing.currentFnPins) == false then return
+    if cid.isZero then return
+    cr: callRefAt :ast nid: cid
+    isCtor: false
+    cko: st.typing.callKind.get key: cid.u64
+    match (
+        cko
+    ) case some then {
+        if cko.classCreate then isCtor = true
+        if cko.unionCreate then isCtor = true
+        if cko.recordCreate then isCtor = true
+    } case none then null
+    {
+        mcb: metaCreateBaseId :ast n: (ast.nodes.get i: cr.callable.u64)
+        match (
+            mcb
+        ) case some then {
+            isCtor = true
+        } case none then null
+    }
+    if (isCtor) == false then return
+    kA: u64
+    for kA < cr.nargs loop {
+        aid: (zast.callArgAt :ast nid: cr.nid i: kA).u32
+        kA = kA + 1
+        fa: argRefAt :ast nid: (zast.nodeid.create from: aid.u32)
+        if (fa.nid.isZero) == false when (fa.name.isZero) == false then {
+            if (st.typing.declIsBorrowedFieldId parentTypeId: argT nameId: fa.name) then {
+                srcOk: false
+                fcid: callNodeIdOf :ast n: (ast.nodes.get i: fa.operation.u64)
+                if (fcid.isZero) == false then {
+                    # a call's result references what its own rules allow
+                    srcOk = true
+                } else {
+                    srcOk = rootIsBorrowedParam :st :ast n: (ast.nodes.get i: fa.operation.u64)
+                }
+                if (srcOk) == false then {
+                    tn2: st.reg.nameOf tid: argT
+                    fld: zast.nameTextCopy :ast ref: fa.name
+                    src: rootNameTextOf :ast n: (ast.nodes.get i: fa.operation.u64)
+                    m2: "the returned `\{tn2}` stores '\{src}' in its non-owned field '\{fld}', but '\{src}' is not a `.borrow`/`.view` parameter -- an `outx` result may only reference what its caller still owns"
+                    (addError
+                        :st
+                        nodeid: fa.nid
+                        lineno: fa.lineno
+                        colno: fa.colno
+                        e: zast.err.ownerError
+                        msg: m2
+                    )
+                }
+            }
+        }
+    }
+}
+
 # reportMissingReturnValue -- a bare `return` in a function that declares a
 # value: reported at the atom.
 reportMissingReturnValue: function {st: zenv.ZSymbolTable node: atomref} is {
@@ -29294,6 +29456,7 @@ checkControlBuiltinCall: function {
                         st.typing.variableMoved.add item: rvv
                     } case none then null
                 }
+                checkReturnRooting :st :ast :arg :argT
                 expR: st.typing.currentReturnTypeId
                 if expR > 0 when argT > 0 then {
                     if (typesCompatible :ast :st a: argT b: expR) == false then {
@@ -34353,6 +34516,8 @@ checkFunctionBody: function {
                 o: (st.typing.funcReturnsBorrow.get key: fitid)
                 d: false
             )
+            prevFp: st.typing.currentFnPins
+            st.typing.currentFnPins = optBoolOr o: (st.typing.funcPins.get key: fitid) d: false
             # `yield` enters scope for a generator's synth `.call` body and
             # nowhere else, the way `break`/`continue` enter a `for`. Legality
             # stops being a syntactic depth count and becomes a resolution
@@ -34381,6 +34546,7 @@ checkFunctionBody: function {
             st.typing.currentYieldInputTid = prevYi
             st.typing.currentReturnTypeId = prevRet
             st.typing.currentReturnsBorrow = prevRb
+            st.typing.currentFnPins = prevFp
             st.typing.currentFnTid = prevFn
             (coerceImplicitReturn
                 :st
