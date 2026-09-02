@@ -28797,6 +28797,8 @@ checkTypedCallArg: function {
     boundArgIds: (ListVal u64)
     vt: ztypes.tid
     pins: List ztyping.PinPath
+    # the call's result keeps its arguments' locks (walkCallArgsHoist decides)
+    calleePins: bool
     arg: argref
 } is {
     if vt.isZero then return
@@ -28870,9 +28872,6 @@ checkTypedCallArg: function {
             } case none then null
         }
     }
-    calleePins: isCtor
-    if (optBoolOr o: (st.typing.funcPins.get key: funcId) d: false) then calleePins = true
-    if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: funcId) d: false) then calleePins = true
     (hoistAndLockArg
         :st
         :ast
@@ -28965,6 +28964,8 @@ walkOneCallArg: function {
     argIdx: u64
     boundArgIds: (ListVal u64)
     pins: List ztyping.PinPath
+    # the call's result keeps its arguments' locks
+    calleePins: bool
     argId: u32
 } is {
     arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
@@ -29049,6 +29050,7 @@ walkOneCallArg: function {
             :boundArgIds
             :vt
             :pins
+            :calleePins
             :arg
         )
     }
@@ -29075,6 +29077,11 @@ walkCallArgsHoist: function {
     effId: funcId
     if isCtor then effId = (ctorEffectiveTid :st :ast :call :funcId)
     forceAllMembers :st frame: st.curFrame :ast tid: effId
+    # whether the call's result keeps its arguments' locks -- a construction,
+    # an `outx` or reference-returning callee -- is one fact for every argument
+    calleePins: isCtor
+    if (optBoolOr o: (st.typing.funcPins.get key: funcId) d: false) then calleePins = true
+    if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: funcId) d: false) then calleePins = true
     kAiter: u64
     for kAiter < call.nargs loop {
         argId: (zast.callArgAt :ast nid: call.nid i: kAiter).u32
@@ -29092,6 +29099,7 @@ walkCallArgsHoist: function {
             :argIdx
             :boundArgIds
             :pins
+            :calleePins
             :argId
         )
         argIdx = argIdx + 1

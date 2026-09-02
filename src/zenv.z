@@ -263,6 +263,9 @@ openframe: record {
     start: u64
     # how many definitions it has taken so far
     defs: u64
+    # the id the next variable minted after the frame opened took: a variable
+    # with a smaller id was bound before it, in an enclosing frame
+    firstVid: u64
 }
 
 # one scope entry, flattened for the SQL dump. It is a snapshot: entries are
@@ -361,7 +364,13 @@ ZSymbolTable: class {
     # whose body this is -- and make it current.
     pushFrame: function {:this label: StringView parent: ztypes.declid} out ztypes.declid is {
         f: this.typing.declNewFrame :parent node: 0
-        this.open.append (openframe id: f :parent start: this.entries.length defs: 0)
+        this.open.append (openframe
+            id: f
+            :parent
+            start: this.entries.length
+            defs: 0
+            firstVid: this.reg.variableCount
+        )
         if label.length > 0 then this.frameLabel.set key: f.u64 value: label.string
         if this.typing.suppressParamStamps then this.frameHidden.add item: f.u64
         this.curFrame = f
@@ -383,7 +392,13 @@ ZSymbolTable: class {
             this.pushFrame :label :parent
             return
         }
-        this.open.append (openframe id: ztypes.declid :parent start: this.entries.length defs: 0)
+        this.open.append (openframe
+            id: ztypes.declid
+            :parent
+            start: this.entries.length
+            defs: 0
+            firstVid: this.reg.variableCount
+        )
     }
 
     # materialiseTop -- give the innermost open frame its row, under the
@@ -464,7 +479,10 @@ ZSymbolTable: class {
         p3: start
         for p3 < endIdx loop {
             e: this.entries.get i: p3
-            if e.hasLock when e.lockHolder.kind.varKind then {
+            # a holder minted while this frame was open dies with it -- the
+            # common case, answered by its id; only an older holder is asked
+            # which frame binds it
+            if e.hasLock when e.lockHolder.kind.varKind when e.lockHolder.id < fr.firstVid then {
                 hf: this.frameOfVar vid: (ztypes.vid.create from: e.lockHolder.id)
                 rf: this.typing.declParentOf declId: e.declId
                 if (hf.isZero) == false when hf != top when rf != top then {
