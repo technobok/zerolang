@@ -31,6 +31,7 @@ module Rouge
           function
           in
           out
+          outx
           is
           as
           if

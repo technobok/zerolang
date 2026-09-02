@@ -2336,15 +2336,21 @@ Parser: class {
     # across a loop body (E0200), as forClausesTail does.
     # Each clause rejects a duplicate; an unmatched token terminates and
     # builds the functiondef.
-    functionClausesTail: function {:this lex: zlexer.Lexer parameters: (ListVal u32).take asItems: (ListVal u32).take returntypeId: zast.nodeid bodyId: zast.nodeid gotIn: bool hasOut: bool hasIs: bool isNative: bool hasAs: bool startLine: u32 startCol: u32} out Node is {
+    functionClausesTail: function {:this lex: zlexer.Lexer parameters: (ListVal u32).take asItems: (ListVal u32).take returntypeId: zast.nodeid bodyId: zast.nodeid gotIn: bool hasOut: bool pins: bool hasIs: bool isNative: bool hasAs: bool startLine: u32 startCol: u32} out Node is {
         tPos: lex.peekPos
         tt: lex.peekType
-        if tt == zlexer.toktype.outTok then {
+        # `out` and `outx` are one clause: a function declares exactly one of
+        # them, and `outx` is the one whose result keeps the call's borrow/view
+        # inputs locked.
+        outKind: 0
+        if tt == zlexer.toktype.outTok then outKind = 1
+        if tt == zlexer.toktype.outxTok then outKind = 2
+        if outKind > 0 then {
             if hasOut then {
                 return (this.mkErrorAt
                     pos: tPos
                     code: zast.err.badArgument
-                    msg: "Duplicate out".string
+                    msg: "a function declares one of `out` or `outx`".string
                 )
             }
             lex.advance
@@ -2361,6 +2367,7 @@ Parser: class {
                     :bodyId
                     :gotIn
                     hasOut: true
+                    pins: (outKind == 2)
                     :hasIs
                     :isNative
                     :hasAs
@@ -2369,10 +2376,12 @@ Parser: class {
                 )
             } else {
                 bad: lex.acceptAny
+                outWord: "out"
+                if outKind == 2 then outWord = "outx"
                 return (this.mkError
                     tok: bad
                     code: zast.err.badArgument
-                    msg: "Expected type reference for out".string
+                    msg: "Expected type reference for \{outWord}"
                 )
             }
         }
@@ -2395,6 +2404,7 @@ Parser: class {
                     :bodyId
                     :gotIn
                     :hasOut
+                    :pins
                     hasIs: true
                     isNative: true
                     :hasAs
@@ -2413,6 +2423,7 @@ Parser: class {
                     bodyId: (this.intern n: stmt)
                     :gotIn
                     :hasOut
+                    :pins
                     hasIs: true
                     :isNative
                     :hasAs
@@ -2447,6 +2458,7 @@ Parser: class {
                 :bodyId
                 :gotIn
                 :hasOut
+                :pins
                 :hasIs
                 :isNative
                 hasAs: true
@@ -2480,6 +2492,7 @@ Parser: class {
                 :bodyId
                 gotIn: true
                 :hasOut
+                :pins
                 :hasIs
                 :isNative
                 :hasAs
@@ -2495,6 +2508,7 @@ Parser: class {
             :parameters
             body: (zast.nodeid.create from: bodyId)
             :isNative
+            :pins
             :asItems)
         )
     }
@@ -2524,6 +2538,7 @@ Parser: class {
                 bodyId: (zast.nodeid.create from: 0)
                 gotIn: true
                 hasOut: false
+                pins: false
                 hasIs: false
                 isNative: false
                 hasAs: false
@@ -2539,6 +2554,7 @@ Parser: class {
             bodyId: (zast.nodeid.create from: 0)
             gotIn: false
             hasOut: false
+            pins: false
             hasIs: false
             isNative: false
             hasAs: false

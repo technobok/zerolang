@@ -1,0 +1,46 @@
+# `outx` -- the return keyword whose result keeps the call's borrow/view inputs
+# locked for as long as it lives.
+#
+# `out` returns a value and pins nothing. `outx` returns a value that holds a
+# lock on every borrow/view argument (and the receiver) it was built from, with
+# the strength the call took, until the result dies. The type after `outx` is
+# any of the four markers; `outx W` (take, the default) is an OWNED result --
+# it carries a destructor and may be moved -- that still pins its sources.
+#
+# Both halves are here, because either alone would be the wrong reading:
+#
+#   OWNED -- the result's `String` is freed exactly once. Only the corpus leak
+#   pass checks this; the printed lines cannot. Demoting the binding to a
+#   borrow (what a `.borrow`/`.view` return does) would leak it.
+#
+#   PINNED -- the source stays locked for the result's whole scope, and becomes
+#   writable again the moment that scope ends. `outx_pins_source.z` is the
+#   error half: through a plain `out` the write is ACCEPTED and the result's
+#   field is left dangling; `outx` refuses it.
+Src: class {
+    n: i64
+    label: String
+}
+
+W: class {
+    s: Src.borrow
+    label: String
+}
+
+mk: function {from: Src.borrow} outx W is {
+    return (W s: from label: "owned-by-result".string)
+}
+
+main: function is {
+    a: Src n: 1 label: "source".string
+    {
+        w: mk from: a
+        # the result owns its own String and reads through to the pinned source
+        print "result owns: \{w.label}"
+        print "reads source: \{w.s.n}"
+    }
+    # the pin died with `w`, so the source is writable again
+    a.n = 5
+    print "source writable after: \{a.n}"
+    print "source intact: \{a.label}"
+}

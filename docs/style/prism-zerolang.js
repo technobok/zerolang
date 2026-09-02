@@ -40,7 +40,7 @@
     var keywords = [
         'unit', 'record', 'class', 'variant', 'union', 'facet', 'protocol', 'data',
         'generator',
-        'function', 'in', 'out', 'is', 'as',
+        'function', 'in', 'out', 'outx', 'is', 'as',
         'if', 'when', 'then', 'else',
         'for', 'while', 'loop', 'with', 'do', 'on',
         'match', 'case', 'swap',

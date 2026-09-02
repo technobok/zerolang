@@ -51,6 +51,7 @@ public: unit {
     :nodeId
     :nodeLine
     :optTidOr
+    :optBoolOr
     :optU64Or
     :paramIsThisReceiverId
     :declOfTypeId
@@ -4584,6 +4585,7 @@ checkTakexHonesty: function {
     # a reference return is a different contract, checked by checkBorrowReturnLock
     if (returnHasBorrowMarker :ast oId: fnode.returntype) then return
     if (returnHasTakexMarker :ast oId: fnode.returntype) then return
+    if fnode.pins then return
     if (typeHasNonOwnedField :st tid: (ztypes.tid.create from: thisTid.u64)) == false then return
     (addResolveErrorH
         :st
@@ -5071,7 +5073,7 @@ resolveFunctionParam: function {
 }
 # recordFunctionReturn -- record what a function returns on its type: the
 # declared return, the partial specialisation a collection template declares
-# instead, and the borrow or takex marker the return carries.
+# instead, and whether the result pins (`outx`, or the `.takex`/`.holdx` leaf).
 recordFunctionReturn: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -5124,10 +5126,12 @@ recordFunctionReturn: function {
             st.typing.funcReturnsView.set key: fvk value: fvv
         }
     }
-    if (returnHasTakexMarker :ast oId: fnode.returntype) then {
+    pinsHere: fnode.pins
+    if (returnHasTakexMarker :ast oId: fnode.returntype) then pinsHere = true
+    if pinsHere then {
         fxk: fid
         fxv: true
-        st.typing.funcReturnsTakex.set key: fxk value: fxv
+        st.typing.funcPins.set key: fxk value: fxv
     }
     if (returnHasFrozenMarker :ast oId: fnode.returntype) then {
         ffk: fid
@@ -16452,8 +16456,8 @@ cloneMethodInto: function {
     if (optBoolOr o: (st.typing.funcReturnsView.get key: tplFnId) d: false) then {
         st.typing.funcReturnsView.set key: fid5 value: true
     }
-    if (optBoolOr o: (st.typing.funcReturnsTakex.get key: tplFnId) d: false) then {
-        st.typing.funcReturnsTakex.set key: fid5 value: true
+    if (optBoolOr o: (st.typing.funcPins.get key: tplFnId) d: false) then {
+        st.typing.funcPins.set key: fid5 value: true
     }
     if (optBoolOr o: (st.typing.funcReturnsFrozen.get key: tplFnId) d: false) then {
         st.typing.funcReturnsFrozen.set key: fid5 value: true
@@ -20834,7 +20838,7 @@ checkMemberAutoCall: function {
                 # consumes any receiver-evaluation borrow residue (the get
                 # in `(xs.get i).copy` must not flow to the binding).
                 drainPendingBorrow :st
-                if (optBoolOr o: (st.typing.funcReturnsTakex.get key: mo) d: false) then {
+                if (optBoolOr o: (st.typing.funcPins.get key: mo) d: false) then {
                     # `takex`: the result is OWNED but pins its source --
                     # the same receiver pin a borrow return takes, without
                     # demoting the binding (`pendingBorrowOwned`).
@@ -29268,7 +29272,7 @@ pinMethodTakexReturn: function {
     mlr: zast.nameid
 } is {
     if (optBoolOr
-        o: (st.typing.funcReturnsTakex.get key: dro)
+        o: (st.typing.funcPins.get key: dro)
         d: false
     ) then {
         # `takex`: pin the source the result was built from,
@@ -30384,7 +30388,7 @@ checkUserFnCall: function {
             cxO
         ) case some then {
             if (optBoolOr
-                o: (st.typing.funcReturnsTakex.get key: cxO)
+                o: (st.typing.funcPins.get key: cxO)
                 d: false
             ) when (lockRoot.isZero) == false then {
                 drainPendingBorrow :st
@@ -30416,7 +30420,7 @@ checkUserFnCall: function {
             st.typing.pendingBorrowPath.append xroot2
         }
         if (optBoolOr
-            o: (st.typing.funcReturnsTakex.get key: funcId)
+            o: (st.typing.funcPins.get key: funcId)
             d: false
         ) when (lockRoot.isZero) == false then {
             # `takex`: pin the source, but the binding stays OWNED
@@ -32668,6 +32672,8 @@ fnref: record {
     body: zast.nodeid
     # whether the runtime provides it, so there is nothing here to walk
     isNative: bool
+    # declared `outx`: the result keeps the call's borrow/view inputs locked
+    pins: bool
     # the line to report this function definition against
     lineno: u32
     # the column to report this function definition against
@@ -32682,6 +32688,7 @@ fnRefOf: function {fnode: zast.FunctionData.view} out fnref is {
         nparams: fnode.parameters.length
         body: fnode.body
         isNative: fnode.isNative
+        pins: fnode.pins
         lineno: fnode.lineno
         colno: fnode.colno
     )
@@ -32703,6 +32710,7 @@ fnRefAt: function {ast: Ast.view nid: zast.nodeid} out fnref is {
         nparams: 0
         body: zn
         isNative: false
+        pins: false
         lineno: 0
         colno: 0
     )
