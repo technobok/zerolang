@@ -521,16 +521,36 @@ mkReturnBody: function {
     )
 }
 
-# buildCreateMethod -- `create: function {<param-clones>} outx this is {
-# return (meta.create state: 0 p1: :p1 ...) }`: captured parameters
-# forward by label-value shorthand; promoted locals are reserved fields
-# the body's first write initialises.
+# typePathIsReference -- the field's type path ends in a `.borrow`/`.view`
+# marker: the field is a reference the instance keeps locked for its life.
+typePathIsReference: function {ast: Ast.view nid: zast.nodeid} out bool is {
+    if nid.isZero then return false
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case dottedpath then {
+        lid: leafAtomNameId :ast n: (ast.nodes.get i: n.child.u64)
+        if lid == zast.names.wkBorrow then return true
+        return lid == zast.names.wkView
+    } case expression then {
+        return (typePathIsReference :ast nid: n.expression)
+    } else {
+        return false
+    }
+}
+
+# buildCreateMethod -- `create: function {<param-clones>} out this is {
+# return (meta.create state: 0 p1: :p1 ...) }`, `outx this` when a captured
+# field is a reference: captured parameters forward by label-value shorthand;
+# promoted locals are reserved fields the body's first write initialises.
 buildCreateMethod: function {
     ast: Ast
     line: u32
     col: u32
     params: (ListVal u32).take
     fwdNames: (List String).view
+    # a captured field is a reference, so the create is `outx this`
+    pins: bool
 } out Node is {
     metaAtom: mkAtom :ast :line :col name: "meta"
     createAtom: mkAtom :ast :line :col name: "create"
@@ -568,10 +588,10 @@ buildCreateMethod: function {
         arguments: cargs)
     )
     body: mkReturnBody :ast :line :col inner: icall
-    # `outx this`, not a plain `out this`: the synth class captures its
-    # parameters, and a captured NON-OWNED one is a reference into the caller
-    # that has to stay pinned for the iterator's lifetime. When nothing
-    # non-owned is captured the pin holds nothing and costs nothing.
+    # `outx this` when the synth class captures a NON-OWNED parameter -- a
+    # reference into the caller that has to stay pinned for the iterator's
+    # lifetime; a plain `out this` when it captures nothing non-owned, since
+    # an `outx` with nothing to pin is refused.
     thisRet: mkAtom :ast :line :col name: "this"
     thisRetId: zast.tableAdd :ast n: thisRet
     return (Node.functiondef (zast.FunctionData
@@ -582,7 +602,7 @@ buildCreateMethod: function {
         parameters: params
         body: (zast.tableAdd :ast n: body)
         isNative: false
-        pins: true
+        :pins
         asItems: (ListVal u32))
     )
 }
@@ -2217,8 +2237,8 @@ injectCallReceiver: function {
 # buildDeclaredCreate -- `.create` generated from the `is` fields, in order, and
 # appended to the `as` block. The parameter's ownership follows the FIELD's: an
 # owned field takes ownership of its argument, a non-owned one borrows it, and
-# `out this.takex` pins whatever a non-owned field points into for the
-# instance's lifetime.
+# `outx this` pins whatever a non-owned field points into for the instance's
+# lifetime.
 buildDeclaredCreate: function {
     # the tree the create is minted into
     ast: Ast
@@ -2234,12 +2254,17 @@ buildDeclaredCreate: function {
     authorTypes: (ListVal u64).view
 } is {
     createParams: (ListVal u32)
+    anyRef: false
     api: u64
     apn: authorNames.length
     for api < apn loop {
         a0: authorNames.get i: api
         a0v: a0.stringView
         at0: authorTypes.get i: api
+        if (typePathIsReference
+            :ast
+            nid: (zast.nodeid.create from: at0.u32.orPanic)
+        ) then anyRef = true
         ap0: createParamPath :ast nid: (zast.nodeid.create from: at0.u32.orPanic)
         np0: mkNamedOp :ast :line :col name: a0v op: ap0
         createParams.append (zast.tableAdd :ast n: np0)
@@ -2251,6 +2276,7 @@ buildDeclaredCreate: function {
         :col
         params: createParams
         fwdNames: authorNames
+        pins: anyRef
     )
     cmN: mkNamedOp :ast :line :col name: "create" op: createM
     cmId: zast.tableAdd :ast n: cmN

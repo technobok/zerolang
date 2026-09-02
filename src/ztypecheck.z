@@ -4498,43 +4498,15 @@ demandReturnType: function {
 
 }
 
-# fnHasLockParam -- does any parameter (including a marked receiver) carry a
-# non-owned marker? A `.borrow` return must borrow from a non-owned parameter
-# so the returned view has a pinned parent to live in (docs/ownership.pdoc).
-fnHasLockParam: function {ast: Ast.view fnode: fnref} out bool is {
-    found: false
-    kP: u64
-    for kP < fnode.nparams loop {
-        pmId: (zast.fnParamAt :ast nid: fnode.nid i: kP).u32
-        kP = kP + 1
-        if (found) == false then {
-            pm: ast.nodes.get i: pmId.u64
-            match (
-                pm
-            ) case namedoperation then {
-                po: pathOwnership :ast n: (ast.nodes.get i: pm.operation.u64)
-                match (
-                    po
-                ) case some then {
-                    # Any NON-OWNED parameter is a valid source: the returned
-                    # view's parent is pinned either way, readonly for `view`
-                    # and exclusive for `lock`/`borrow`. This is L1 of the
-                    # plan's liveness rules -- the source's identity stopped
-                    # mattering once every non-owned parameter is pinned.
-                    if po == ztypes.zparamownership.borrowMode then found = true
-                    if po == ztypes.zparamownership.viewMode then found = true
-                } case none then null
-            } else null
-        }
-    }
-    return found
-}
-
 # typeHasNonOwnedField -- the type declares at least one field the instance does
 # NOT own: a `borrow`/`view` slot, i.e. a reference into something else. Such an
 # instance is only sound while whatever it points at outlives it.
 typeHasNonOwnedField: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
+    # a generator's per-call slots are non-owned fields its generated `create`
+    # never sets: the lowering declares that create honestly, so the instance
+    # is not asked
+    if (st.typing.generatorTypes.has item: tid.u64) then return false
     i: u64
     n: st.typing.declRowSlots ownerTid: tid
     found: false
@@ -4559,55 +4531,208 @@ returnNamesThis: function {ast: Ast.view oId: zast.nodeid} out bool is {
     return (rootNameIdOf :ast n: (ast.nodes.get i: oId.u64)) == zast.names.wkThis
 }
 
-# checkTakexHonesty -- an OWNED `out this` whose type declares a non-owned field
-# hands back a value holding a reference into something the callee was given.
-# Unless the return says `takex`, nothing pins that source and the field dangles
-# as soon as the caller drops it. `takex` states the pin on the SIGNATURE, where
-# a reader can see it, rather than leaving it to what the parameters happen to
-# be marked.
-checkTakexHonesty: function {
+# pinHonestyAt -- checkPinHonesty on a type whose members may not be attached
+# yet: they are attached on demand, and a return type reached only through
+# this signature has had no other reason to. Asked of the generic origin,
+# where a mono's members live.
+pinHonestyAt: function {
+    # where a refused return clause is reported
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    # the tree whose function row carries the `out`/`outx` and its marker
+    ast: Ast
+    # the frame the members are forced in
+    frame: ztypes.declid
+    # the declaration whose return clause is judged
     fnode: fnref
-    thisTid: ztypes.tid
+    # the resolved return type
+    retTid: ztypes.tid
+    # the name the refusal underlines
     defName: StringView
 } is {
-    if thisTid.isZero then return
+    probe: retTid
+    {
+        go: st.reg.genericOriginOf tid: retTid
+        if go > 0 then probe = ztypes.tid.create from: go.u64
+    }
+    # a valtype holds no reference, so only a reftype is asked -- and only
+    # one with no member attached yet is forced: forcing a system type's
+    # members demands every conversion it declares, which is how a program
+    # came to reach the wide-integer and half-float units it never named
+    if (typeIsReftype :st tid: probe) == false then return
+    if (st.typing.declRowSlots ownerTid: probe) == 0 then forceAllMembers :st :frame :ast tid: probe
+    checkPinHonesty :st :ast :fnode :retTid :defName
+}
+
+# checkMemberDeclEagerly -- the declaration rules that need no resolved types,
+# run where a type's methods are attached so a method never demanded still
+# reports: the return-pin rules and the `out this` honesty rule.
+checkMemberDeclEagerly: function {
+    # the symbol table the reports go to
+    st: zenv.ZSymbolTable
+    # the tree the declaration is read from
+    ast: Ast.view
+    # the method whose declaration is checked
+    fnode: fnref
+    # the enclosing type
+    thisTid: ztypes.tid
+    # the name to underline when the type turns out to hold a reference
+    defName: StringView
+} is {
+    checkReturnPins :st :ast :fnode fid: 0 :defName
+    checkThisPinHonesty :st :ast :fnode :thisTid :defName
+}
+
+# checkThisPinHonesty -- checkPinHonesty for an `out this`, eagerly where the
+# methods are attached: the enclosing type is the return type, and it is known
+# before any body is walked.
+checkThisPinHonesty: function {
+    # the table a member's eager refusal lands in
+    st: zenv.ZSymbolTable
+    # the tree the member's row is read from
+    ast: Ast.view
+    # the method whose declaration is checked
+    fnode: fnref
+    # the enclosing type
+    thisTid: ztypes.tid
+    # the member's name, for the report width
+    defName: StringView
+} is {
     if (returnNamesThis :ast oId: fnode.returntype) == false then return
-    # a reference return is a different contract, checked by checkBorrowReturnLock
-    if (returnHasBorrowMarker :ast oId: fnode.returntype) then return
-    if (returnHasTakexMarker :ast oId: fnode.returntype) then return
+    checkPinHonesty :st :ast :fnode retTid: thisTid :defName
+}
+
+# checkPinHonesty -- an OWNED `out T` whose type declares a non-owned field
+# hands back a value holding a reference into an input. Unless the declaration
+# says `outx`, nothing keeps that input locked and the field dangles the moment
+# the caller writes or drops it. `outx` states the pin on the SIGNATURE, where
+# a reader can see it, rather than leaving it to what the parameters happen to
+# be marked. A mono is asked through its generic origin, so `out (OptionView T)`
+# -- whose `some` arm is a borrow -- answers as OptionView does.
+checkPinHonesty: function {
+    # the table an `out this` refusal lands in
+    st: zenv.ZSymbolTable
+    # the tree whose row spells the `out this`
+    ast: Ast.view
+    # the method whose `out this` is judged
+    fnode: fnref
+    # the resolved return type
+    retTid: ztypes.tid
+    # the method's name, underlined by the report
+    defName: StringView
+} is {
+    if retTid.isZero then return
     if fnode.pins then return
-    if (typeHasNonOwnedField :st tid: (ztypes.tid.create from: thisTid.u64)) == false then return
+    if (returnHasTakexMarker :ast oId: fnode.returntype) then return
+    # a reference return is a different contract, checked by checkReturnPins
+    if (returnHasBorrowMarker :ast oId: fnode.returntype) then return
+    probe: retTid
+    {
+        go: st.reg.genericOriginOf tid: retTid
+        if go > 0 then probe = ztypes.tid.create from: go.u64
+    }
+    # a valtype holds no reference
+    if (typeIsReftype :st tid: probe) == false then return
+    if (typeHasNonOwnedField :st tid: probe) == false then return
     (addResolveErrorH
         :st
         nodeid: fnode.nid
         lineno: fnode.lineno
         colno: fnode.colno
         e: zast.err.ownerError
-        msg: "an owned `out this` whose type declares a non-owned field must be `.takex` -- the result holds a reference into a parameter, and only `takex` pins that source for the result's lifetime".string
+        msg: "an owned `out` result whose type declares a non-owned field must be `outx` -- the result holds a reference into an input, and only `outx` keeps that source locked for the result's lifetime".string
         width: defName.length.u32.orPanic
     )
 }
 
-# checkBorrowReturnLock -- a `.borrow`-returning function must borrow from a
-# non-owned parameter (a marked receiver counts), so the returned view has a
-# pinned parent (docs/ownership.pdoc). Runs at every function/method decl.
-checkBorrowReturnLock: function {
+# fnHasPinnableInput -- does any parameter (the receiver included) give the
+# result something to keep locked? A `.borrow`/`.view` marker says so; an
+# unmarked parameter is `.borrow` by default when its type is a reftype, and a
+# bare `:this` receiver always is. Asks the recorded parameter types, so it
+# runs once the signature is resolved.
+fnHasPinnableInput: function {
+    # the tree the parameter markers are read from
     ast: Ast.view
-    st: zenv.ZSymbolTable
+    # the symbol table the parameter types are recorded in
+    st: zenv.ZSymbolTable.view
+    # the function whose parameters are asked
     fnode: fnref
+    # the function's type id, whose children are its parameters
+    fid: u64
+} out bool is {
+    thisNm: st.reg.thisParamNameIdOf tid: (ztypes.tid.create from: fid.u64)
+    kP: u64
+    for kP < fnode.nparams loop {
+        pmId: (zast.fnParamAt :ast nid: fnode.nid i: kP).u32
+        kP = kP + 1
+        pm: ast.nodes.get i: pmId.u64
+        match (
+            pm
+        ) case namedoperation then {
+            po: pathOwnership :ast n: (ast.nodes.get i: pm.operation.u64)
+            match (
+                po
+            ) case some then {
+                if po == ztypes.zparamownership.borrowMode then return true
+                if po == ztypes.zparamownership.viewMode then return true
+            } case none then {
+                if (thisNm.isZero) == false when pm.name == thisNm then return true
+                pto: (st.typing.declChildOfId
+                    parentTypeId: (ztypes.tid.create from: fid.u64)
+                    nameId: pm.name
+                )
+                match (
+                    pto
+                ) case some then {
+                    if (typeIsReftype :st tid: (ztypes.tid.create from: pto.u64)) then return true
+                } case none then null
+            }
+        } else null
+    }
+    return false
+}
+
+# checkReturnPins -- what a declaration says about the locks its result keeps,
+# checked at every function/method declaration. A reference return (`.borrow`/
+# `.view`) keeps its sources locked for the result's lifetime, so it is written
+# `outx`: a plain `out` reference is refused with the fix-it. `outx` with
+# nothing pinnable -- no `.borrow`/`.view` parameter, no receiver, no reftype
+# parameter at all -- pins nothing and is refused; that half needs the
+# parameter types, so it runs where they are recorded (`fid` set).
+checkReturnPins: function {
+    # the tree the return's marker is read from (a reference return is another rule's)
+    ast: Ast.view
+    # the table the honesty refusal lands in and the registry the members are read from
+    st: zenv.ZSymbolTable
+    # the declaration whose owned return is judged
+    fnode: fnref
+    # the function's type id, zero at the eager pass before types are recorded
+    fid: u64
+    # the declared name the refusal underlines
     defName: StringView
 } is {
-    if (returnHasBorrowMarker :ast oId: fnode.returntype) then {
-        if (fnHasLockParam :ast :fnode) == false then {
+    pinsHere: fnode.pins
+    if (returnHasTakexMarker :ast oId: fnode.returntype) then pinsHere = true
+    if (returnHasBorrowMarker :ast oId: fnode.returntype) when (fnode.pins) == false then {
+        (addResolveErrorH
+            :st
+            nodeid: fnode.nid
+            lineno: fnode.lineno
+            colno: fnode.colno
+            e: zast.err.ownerError
+            msg: "a reference return keeps its sources locked for the result's lifetime -- write `outx T.borrow` / `outx T.view`, not `out`".string
+            width: defName.length.u32.orPanic
+        )
+        return
+    }
+    if pinsHere when fid > 0 then {
+        if (fnHasPinnableInput :ast :st :fnode :fid) == false then {
             (addResolveErrorH
                 :st
                 nodeid: fnode.nid
                 lineno: fnode.lineno
                 colno: fnode.colno
                 e: zast.err.ownerError
-                msg: "a `.borrow` return must borrow from a non-owned parameter -- mark the source `.view` (readonly) or `.borrow` (mutable), e.g. `t: this.view`, so the returned view has a pinned parent".string
+                msg: "`outx` pins nothing here: no parameter or receiver is `.borrow` or `.view` -- write `out`, or mark the source the result reads through (e.g. `t: this.view`)".string
                 width: defName.length.u32.orPanic
             )
         }
@@ -5175,7 +5300,20 @@ finishFunctionSignature: function {
         oId: fnode.returntype
     )
     (recordFunctionReturn :st :ast :unitDecl :rf :fid :isgen :fnDecl :receiverEnclDecl :fnode)
-    checkBorrowReturnLock :st :ast :fnode :defName
+    checkReturnPins :st :ast :fnode :fid :defName
+    # every owned return, through its resolved type: a value holding a
+    # reference into an input is declared `outx` or refused
+    # every owned return through its resolved type: a value holding a
+    # reference into an input is declared `outx` or refused. Known this early
+    # only for a registered return (a native's, a collection template's),
+    # whose type's members are attached with the unit; a user function's is
+    # asked where its body is walked, with its type's members forced first.
+    rtH: methodReturnOf :st mid: (ztypes.tid.create from: fid.u64)
+    match (
+        rtH
+    ) case some then {
+        checkPinHonesty :st :ast :fnode retTid: rtH :defName
+    } case none then null
     if (fnDecl.isZero) == false then {
         st.typing.declSetType declId: fnDecl typeId: (ztypes.tid.create from: dfid.u64)
         st.reg.setDef typeId: (ztypes.tid.create from: dfid.u64) declId: fnDecl
@@ -6205,6 +6343,9 @@ attachMethods: function {
         } else null
     }
     orf: objRefAt :ast nid: objId
+    # a generator instance carries per-call slots no constructor sets; the
+    # honesty rule on owned returns reads this set to leave them alone
+    if orf.kind == zast.objectkind.generatorDef then st.typing.generatorTypes.add item: parentId.u64
     kAiter: u64
     for kAiter < orf.nas loop {
         amId: (zast.objAsItemAt :ast nid: objId i: kAiter).u32
@@ -6218,12 +6359,10 @@ attachMethods: function {
                 match (
                     mop
                 ) case functiondef then {
-                    mr: fnRefOf fnode: mop
-                    checkBorrowReturnLock :st :ast fnode: mr defName: mname.stringView
-                    (checkTakexHonesty
+                    (checkMemberDeclEagerly
                         :st
                         :ast
-                        fnode: mr
+                        fnode: (fnRefOf fnode: mop)
                         thisTid: (ztypes.tid.create from: parentId.u64)
                         defName: mname.stringView
                     )
@@ -23702,9 +23841,13 @@ checkAssignment: function {
         own: ztypes.zownership.owned
         # An `outx` result is pinned like a borrow but OWNED like a take, so
         # the pins must not demote it. `pendingBorrowOwned` tells them apart.
+        # A view-family result (OptionView, ListView, StringView, ...) is the
+        # reference itself, whatever its declaration spells: its binding is a
+        # view of the parent, so the payload cannot be moved out of it.
         pboX: st.typing.pendingBorrowOwned
         if bpins.length > 0 when (typeIsReftype :st tid: vt) then {
             if (pboX) == false then own = ztypes.zownership.borrowed
+            if (isViewFamilyTid :ast :st tid: vt) then own = ztypes.zownership.borrowed
         }
         vid: st.reg.newVariable ztypeId: vt ownership: own
         if own == ztypes.zownership.borrowed then (st.reg.setVariableBorrowOrigin
@@ -23770,14 +23913,13 @@ checkAssignment: function {
         if pboX when bpins.length > 0 then instX = true
         st.typing.pendingBorrowOwned = false
         if instX then {
-            vfA: isViewFamilyTid :ast :st tid: vt
             (installPins
                 :st
                 pool: ast.names
                 pins: bpins
                 :vid
                 onlyRoot: zast.nameid
-                forceShared: vfA
+                forceShared: false
                 nodeid: asgn.nid
                 lineno: asgn.lineno
                 colno: asgn.colno
@@ -24193,7 +24335,7 @@ consumeReassignPins: function {
     rasgn: reasgref
     # the target's bare name, zero when the target is a path
     hbNmId: zast.nameid
-    # the assigned value's type, whose view-family-ness makes every pin SHARED
+    # the assigned value's type; nothing is consumed for an untyped value
     rvt: ztypes.tid
 } is {
     if hbNmId.isZero then return
@@ -24209,14 +24351,13 @@ consumeReassignPins: function {
             kind: ztypes.zlockholderkind.varKind
             id: tvo
         )
-        vfR: isViewFamilyTid :ast :st tid: rvt
         (installPins
             :st
             pool: ast.names
             pins: rpins
             vid: tvo
             onlyRoot: zast.nameid
-            forceShared: vfR
+            forceShared: false
             nodeid: rasgn.nid
             lineno: rasgn.lineno
             colno: rasgn.colno
@@ -24318,8 +24459,10 @@ checkWith: function {
             }
         } else {
             # A reference return makes the with-binding borrowed; an `outx`
-            # result stays OWNED (it keeps its destructor) and only pins.
+            # result stays OWNED (it keeps its destructor) and only pins. A
+            # view-family result is the reference itself, so it binds borrowed.
             if (pboW) == false then own = ztypes.zownership.borrowed
+            if (isViewFamilyTid :ast :st tid: vt) then own = ztypes.zownership.borrowed
         }
         vid: st.reg.newVariable ztypeId: vt ownership: own
         # the borrow origin, as a plain binding records it: what this alias is
@@ -24333,14 +24476,13 @@ checkWith: function {
         vid2: vid
         st.typing.defVariableId.set key: withnode.nid.u64 value: vid2
         if (typeIsReftype :st tid: vt) then {
-            vfW: isViewFamilyTid :ast :st tid: vt
             (installPins
                 :st
                 pool: ast.names
                 pins: wpins
                 :vid
                 onlyRoot: zast.nameid
-                forceShared: vfW
+                forceShared: false
                 nodeid: withnode.nid
                 lineno: withnode.lineno
                 colno: withnode.colno
@@ -24535,7 +24677,6 @@ bindForBorrowedElement: function {
     st: zenv.ZSymbolTable
     ast: Ast
     cond: argref
-    vt: ztypes.tid
     elem: u64
     nm: StringView
 } is {
@@ -24559,7 +24700,6 @@ bindForBorrowedElement: function {
     # nothing pending here -- its binding took the lock.
     fpins: (List ztyping.PinPath)
     takePendingPins :st dst: fpins
-    flf: isViewFamilyTid :ast :st tid: vt
     if fpins.length > 0 then {
         fcn: ast.nodes.get i: cond.operation.u64
         fnd: nodeId n: fcn
@@ -24571,7 +24711,7 @@ bindForBorrowedElement: function {
             pins: fpins
             :vid
             onlyRoot: zast.nameid
-            forceShared: flf
+            forceShared: false
             nodeid: fnd
             lineno: fln
             colno: fcl
@@ -24583,7 +24723,7 @@ bindForBorrowedElement: function {
     # receiver) yields READONLY elements, an exclusive one
     # yields writable ones. The binding-free form knows its
     # own strength; the `with` form has to ask its binding.
-    elr: flf
+    elr: false
     if fpins.length > 0 then {
         if (pinsAllShared pins: fpins) then elr = true
     }
@@ -24719,7 +24859,7 @@ bindForIteration: function {
     }
     if elem > 0 then {
         if isView then {
-            bindForBorrowedElement :st :ast :cond :vt :elem :nm
+            bindForBorrowedElement :st :ast :cond :elem :nm
         } else {
             (st.define
                 nameId: cond.name
@@ -29575,15 +29715,6 @@ checkResolvedMethodCall: function {
             if rvbP.none then for rtupP.length > 0 loop rtupP.pop
         }
         pinCallResult :st funcId: dro :pins recvPath: rtupP recvShared: recvShr
-        # A view-typed result (OptionView from Map.get, ...) is a borrow into
-        # the receiver even without a marker: the wrapper is synthesized, so
-        # the return TYPE is the marker. Pin the receiver SHARED so the
-        # binding goes borrowed (payload moves rejected, view lock installed).
-        if mres > 0 when rtupP.length > 0 when st.typing.pendingPins.length == 0 then {
-            if (isViewFamilyTid :ast :st tid: (ztypes.tid.create from: mres.u64)) then {
-                pinsPush :st path: rtupP shared: true
-            }
-        }
         st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
         return (ztypes.tid.create from: mres)
 }
@@ -34211,6 +34342,12 @@ checkFunctionBody: function {
                 d: ztypes.tid
             )
             st.typing.currentReturnTypeId = crt
+            # the body walk is where a user function's return type is first
+            # known: an owned result holding a reference into an input is
+            # declared `outx` or refused here
+            if crt > 0 when (st.typing.generatorCallBodies.has item: fn.nid.u64) == false then {
+                pinHonestyAt :st :ast frame: st.curFrame fnode: fn retTid: crt :defName
+            }
             prevRb: st.typing.currentReturnsBorrow
             st.typing.currentReturnsBorrow = (optBoolOr
                 o: (st.typing.funcReturnsBorrow.get key: fitid)
