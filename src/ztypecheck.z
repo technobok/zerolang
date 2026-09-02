@@ -3091,6 +3091,26 @@ resolveMonoRefParts: function {
         tn: tname.copy
         gwv: optBoolOr o: (st.typing.generatorWrapper.get key: nid.u64) d: false
         if gwv when firstA > 0 then {
+            # a `.borrow`/`.view` yield leaf asks for a VIEW into what the
+            # generator captured. Nothing implements that: the wrapper below is
+            # owned either way, and a yield of a borrowed field would be moved
+            # out as if it were owned. Refused, rather than accepted and
+            # miscompiled.
+            ovTpl: builtinTidT :st :frame :ast base: "OptionView"
+            if tplId == ovTpl when (typeIsValtype
+                :st
+                tid: (ztypes.tid.create from: firstA.u64)
+            ) == false then {
+                gwn: ast.nodes.get i: nid.u64
+                (addError
+                    :st
+                    nodeid: (zast.nodeid.create from: nid.u64)
+                    lineno: (nodeLine n: gwn)
+                    colno: (nodeCol n: gwn)
+                    e: zast.err.ownerError
+                    msg: "a generator cannot yield a reference: its `call` hands back an OWNED element, so the return is `out T` and each yield is an owned value (`.copy` what the generator captured)".string
+                )
+            }
             if (typeIsValtype :st tid: (ztypes.tid.create from: firstA.u64)) then {
                 ovd: (descendNamed
                     :st

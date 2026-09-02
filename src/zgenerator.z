@@ -379,13 +379,13 @@ clonePathUnsupported: function {ast: Ast myId: zast.nodeid} out Node is {
 
 # GivesParts -- split the iterator return into (gives base path CLONE,
 # ownership leaf, accepts path CLONE or none). The base clone feeds the
-# synth wrapper; leaf "take" selects Option, else OptionView.
+# synth wrapper; a "borrow" leaf selects OptionView, anything else Option.
 GivesParts: class {
     # a CLONE of the element path, which feeds the option wrapper. A clone
     # because the original stays in the tree
     base: (Option Node)
-    # the ownership leaf. "take" selects Option and anything else selects
-    # OptionView, which is the whole of the choice
+    # the ownership leaf. "borrow" selects OptionView and anything else
+    # selects Option, which is the whole of the choice
     leaf: String
 }
 
@@ -588,8 +588,8 @@ buildCreateMethod: function {
 }
 
 
-# buildWrapper -- the synth `.call` return `(Option|OptionView <base>)`; leaf
-# "take" selects Option, anything else OptionView. The type argument is written
+# buildWrapper -- the synth `.call` return `(Option|OptionView <base>)`: an
+# owned wrapper unless the leaf is a reference. The type argument is written
 # WITHOUT its label: this unit lowers the AST before typecheck and so has no
 # symbol table to ask a template for its parameter name, and the elided leading
 # argument is rebound to that parameter by getOrMintSpec anyway. Both wrappers
@@ -601,8 +601,12 @@ buildWrapper: function {
     base: Node.take
     leaf: StringView
 } out Node is {
-    wn: "OptionView"
-    if leaf == "take" then wn = "Option"
+    # the wrapper is owned unless the leaf asks for a view: `Option` for a
+    # plain or `.take` leaf, `OptionView` for `.borrow` -- which the checker
+    # then refuses, since nothing implements a reference yield. The checker
+    # collapses the owned wrapper further (a valtype element to optionval).
+    wn: "Option"
+    if leaf == "borrow" then wn = "OptionView"
     wAtom: mkAtom :ast :line :col name: wn
     tArg: mkBareOp :ast :line :col op: base
     wargs: (ListVal u32)
