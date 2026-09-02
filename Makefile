@@ -1329,7 +1329,7 @@ eager-guard: bin/zc
 # lives in one place.
 #
 # THE OWNERSHIP VOCABULARY IS NO LONGER HERE. lock / borrow / take / view /
-# hold / takex are interned as well-known ids (zast.names) and compared as ids
+# hold are interned as well-known ids (zast.names) and compared as ids
 # in pathOwnership, so this guard no longer catches a new marker word. What
 # catches one instead is the type system: zparamownership is matched
 # EXHAUSTIVELY in four places, so a new arm is a compile error rather than a
@@ -1383,7 +1383,7 @@ D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT
 # what a highlighter may carry that core.z does not define: the ownership and
 # access markers, the context words, and `Any`, which is real and reachable
 # without a core.z re-export.
-CONTEXT="Any _ borrow copy drop generic hold holdx iterator meta private public tag take takex this view yield"
+CONTEXT="Any _ borrow copy drop generic hold iterator meta private public tag take this view yield"
 
 sed -n 's|^syn match \([A-Za-z]*\) /\(.*\)/$$|\1 \2|p' editor/nvim/syntax/zerolang.vim > "$$D/vim.raw"
 vimset() {
@@ -1596,10 +1596,9 @@ function camel(s,   out, i, c, up) {
 # A native method declaring a receiver, on a reference type: record whether
 # the receiver carries the .view marker.
 function declEmit() {
-    # `takex` is a RETURN marker, not a receiver: without the trailing boundary
-    # `this.takex` prefix-matches `this.take` and the guard hunts for a receiver
-    # the declaration never had.
-    if ((dacc !~ /[{ ]:this[ }]/) && (dacc !~ /this\.(view|lock|borrow|take)[^a-z]/)) return
+    # the trailing boundary keeps a longer member spelt `this.take...` from
+    # prefix-matching the receiver marker
+    if ((dacc !~ /[{ ]:this[ }]/) && (dacc !~ /this\.(view|borrow|take)[^a-z]/)) return
     dm = (dacc ~ /this\.view/) ? "view" : "plain"
     if (!((dty " " dmeth) in dseen)) { dord[++dn] = dty " " dmeth; dseen[dty " " dmeth] = 1 }
     dkind[dty " " dmeth] = dm

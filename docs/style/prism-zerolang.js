@@ -74,7 +74,7 @@
         'print', 'stringJoin', 'error', 'panic', 'stdin', 'stdout', 'stderr',
         'return', 'break', 'continue', 'yield',
         'public', 'private', 'this', 'meta', 'typedef', 'tag', 'iterator',
-        'take', 'borrow', 'view', 'hold', 'takex', 'holdx', 'copy', 'drop', 'generic'
+        'take', 'borrow', 'view', 'hold', 'copy', 'drop', 'generic'
     ];
 
     // Build a regex that matches a full WORD token and classifies it.

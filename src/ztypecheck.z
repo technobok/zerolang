@@ -2063,10 +2063,6 @@ markerText: function {o: ztypes.zparamownership} out String is {
         return "view".string
     } case holdMode then {
         return "hold".string
-    } case takexMode then {
-        return "takex".string
-    } case holdxMode then {
-        return "holdx".string
     }
 }
 
@@ -2126,8 +2122,6 @@ isStripMarker: function {name: StringView} out bool is {
     if name == "take" then return true
     if name == "view" then return true
     if name == "hold" then return true
-    if name == "takex" then return true
-    if name == "holdx" then return true
     if name == "private" then return true
     if name == "public" then return true
     return false
@@ -2503,8 +2497,7 @@ unitDefIsGeneric: function {ast: Ast.view oId: zast.nodeid} out bool is {
 
 # pathOwnership -- the ownership a param/field/return type expr declares via a
 # dotted-path marker leaf, or none. Fields take the non-owned markers (which make
-# the slot static) or `take`/`hold`; params take any of the four grid markers;
-# `takex` is a RETURN marker only.
+# the slot static) or `take`/`hold`; params take any of the four grid markers.
 pathOwnership: function {ast: Ast.view n: Node.view} out optionval ztypes.zparamownership is {
     match (
         n
@@ -2514,8 +2507,6 @@ pathOwnership: function {ast: Ast.view n: Node.view} out optionval ztypes.zparam
         if cid == zast.names.wkTake then return (optionval.some ztypes.zparamownership.takeMode)
         if cid == zast.names.wkView then return (optionval.some ztypes.zparamownership.viewMode)
         if cid == zast.names.wkHold then return (optionval.some ztypes.zparamownership.holdMode)
-        if cid == zast.names.wkTakex then return (optionval.some ztypes.zparamownership.takexMode)
-        if cid == zast.names.wkHoldx then return (optionval.some ztypes.zparamownership.holdxMode)
         return (optionval.none ztypes.zparamownership)
     } else {
         return (optionval.none ztypes.zparamownership)
@@ -4317,36 +4308,6 @@ returnHasViewMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
     return (returnHasViewMarkerNode :ast n: o)
 }
 
-# returnHasTakexMarkerNode / returnHasTakexMarker -- `out T.takex`: the result is
-# OWNED, and the non-owned sources it was built from stay pinned for as long as
-# it lives. It is not a reference return, so it is kept apart from
-# returnHasBorrowMarker -- the binding keeps its destructor.
-returnHasTakexMarkerNode: function {ast: Ast.view n: Node.view} out bool is {
-    match (
-        n
-    ) case expression then {
-        return (returnHasTakexMarkerNode :ast n: (ast.nodes.get i: n.expression.u64))
-    } else {
-        rxo: pathOwnership :ast :n
-        match (
-            rxo
-        ) case some then {
-            if rxo == ztypes.zparamownership.takexMode then return true
-            return rxo == ztypes.zparamownership.holdxMode
-        } case none then {
-            return false
-        }
-    }
-}
-
-# whether a return type carries `.takex`, which pins the sources the result
-# borrows from for as long as it lives
-returnHasTakexMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
-    if oId.isZero then return false
-    o: ast.nodes.get i: oId.u64
-    return (returnHasTakexMarkerNode :ast n: o)
-}
-
 # returnHasFrozenMarkerNode / returnHasFrozenMarker -- `out T.hold`: the result
 # is OWNED and READONLY. It is not a reference return -- the binding keeps its
 # destructor -- so it is kept apart from returnHasViewMarker, which freezes a
@@ -4361,8 +4322,7 @@ returnHasFrozenMarkerNode: function {ast: Ast.view n: Node.view} out bool is {
         match (
             rfo
         ) case some then {
-            if rfo == ztypes.zparamownership.holdMode then return true
-            return rfo == ztypes.zparamownership.holdxMode
+            return rfo == ztypes.zparamownership.holdMode
         } case none then {
             return false
         }
@@ -4622,7 +4582,6 @@ checkPinHonesty: function {
 } is {
     if retTid.isZero then return
     if fnode.pins then return
-    if (returnHasTakexMarker :ast oId: fnode.returntype) then return
     # a reference return is a different contract, checked by checkReturnPins
     if (returnHasBorrowMarker :ast oId: fnode.returntype) then return
     probe: retTid
@@ -4711,7 +4670,6 @@ checkReturnPins: function {
     defName: StringView
 } is {
     pinsHere: fnode.pins
-    if (returnHasTakexMarker :ast oId: fnode.returntype) then pinsHere = true
     if (returnHasBorrowMarker :ast oId: fnode.returntype) when (fnode.pins) == false then {
         (addResolveErrorH
             :st
@@ -4821,38 +4779,6 @@ checkParamTypeShape: function {
     }
 }
 
-# refuseRetOnlyMarker -- `.takex` and `.holdx` say what a RESULT does with
-# the sources it was built from, so only a return can carry one. Both were
-# accepted on a parameter and on a field, answering plain `owned` -- `.take`
-# and `.hold` wearing a word that promised a pin nobody installed.
-refuseRetOnlyMarker: function {st: zenv.ZSymbolTable ast: Ast.view pm: argref} is {
-    own: pathOwnership :ast n: (ast.nodes.get i: pm.operation.u64)
-    match (
-        own
-    ) case some then {
-        isRet: false
-        if own == ztypes.zparamownership.takexMode then isRet = true
-        if own == ztypes.zparamownership.holdxMode then isRet = true
-        if isRet then {
-            mk: markerText o: own
-            mm: "'\{mk}' is a return marker: it says what a RESULT does with its sources, so only a return can carry it"
-            hh: "use '.take' for owned, or '.hold' for owned and readonly".string
-            nn: String
-            (addErrorH
-                :st
-                nodeid: pm.nid
-                lineno: pm.lineno
-                colno: pm.colno
-                e: zast.err.ownerError
-                msg: mm
-                note: nn
-                hint: hh
-                width: 1
-            )
-        }
-    } case none then null
-}
-
 # registerValueParam -- record an ordinary (non-generic, non-receiver) parameter
 # on its function's type: its declared type, its ownership, and the default it
 # carries.
@@ -4918,7 +4844,6 @@ registerValueParam: function {
         nid: pm.operation
     )
     pown: pathOwnership :ast n: (ast.nodes.get i: pm.operation.u64)
-    refuseRetOnlyMarker :st :ast :pm
     match (
         pown
     ) case some then {
@@ -5190,7 +5115,7 @@ resolveFunctionParam: function {
 }
 # recordFunctionReturn -- record what a function returns on its type: the
 # declared return, the partial specialisation a collection template declares
-# instead, and whether the result pins (`outx`, or the `.takex`/`.holdx` leaf).
+# instead, and whether the result pins (`outx`).
 recordFunctionReturn: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -5243,9 +5168,7 @@ recordFunctionReturn: function {
             st.typing.funcReturnsView.set key: fvk value: fvv
         }
     }
-    pinsHere: fnode.pins
-    if (returnHasTakexMarker :ast oId: fnode.returntype) then pinsHere = true
-    if pinsHere then {
+    if fnode.pins then {
         fxk: fid
         fxv: true
         st.typing.funcPins.set key: fxk value: fxv
@@ -9866,7 +9789,6 @@ resolveNamedFieldSlot: function {
 } out bool is {
     needsDtor: false
     fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
-    refuseRetOnlyMarker :st :ast pm: fm
     if fname != "_resume_input" then {
         if (fieldTypeNeedsCleanup
             :st
@@ -9986,7 +9908,6 @@ recordMemberRefField: function {
     fm: argref
 } is {
     fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
-    refuseRetOnlyMarker :st :ast pm: fm
     (st.typing.setMemberType
         parentTypeId: (ztypes.tid.create from: cid.u64)
         nameId: fm.name
@@ -10141,7 +10062,6 @@ resolveClassFieldEntry: function {
     # `hold` freezes the contents, not the slot.
     borrowedField: false
     fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
-    refuseRetOnlyMarker :st :ast pm: fm
     match (
         fieldOwn
     ) case some then {
@@ -10151,7 +10071,6 @@ resolveClassFieldEntry: function {
         fOwned: false
         if fieldOwn == ztypes.zparamownership.takeMode then fOwned = true
         if fieldOwn == ztypes.zparamownership.holdMode then fOwned = true
-        if fieldOwn == ztypes.zparamownership.takexMode then fOwned = true
         if fOwned == false then borrowedField = true
     } case none then null
     hNameId: zast.poolFind pool: ast.names text: ftn.stringView
@@ -16168,15 +16087,6 @@ ownershipOfParam: function {o: optionval ztypes.zparamownership} out ztypes.zown
             return ztypes.zownership.borrowed
         } case holdMode then {
             return ztypes.zownership.owned
-        } case takexMode then {
-            # `takex` is a RETURN marker: the result is owned, and the pin on
-            # its non-owned sources is what the marker adds. As an ownership
-            # answer it is plain `owned`, exactly like `take`.
-            return ztypes.zownership.owned
-        } case holdxMode then {
-            # and `holdx` is `takex` plus a freeze; the freeze is a lock on the
-            # binding, not an ownership answer, so this reads `owned` too
-            return ztypes.zownership.owned
         }
     } case none then {
         return ztypes.zownership.borrowed
@@ -20912,7 +20822,7 @@ reportPrivateMember: function {
 }
 # checkMemberAutoCall -- a FUNCTION member read in value position auto-calls: it
 # takes the receiver lock a reader takes, answers the method's return type, and
-# routes the borrow / view / takex return reports. Answers the path's type.
+# routes the pins its result keeps. Answers the path's type.
 checkMemberAutoCall: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -27212,8 +27122,8 @@ pinConstructionResult: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPa
     if pins.length > 0 then st.typing.pendingBorrowOwned = true
 }
 
-# pinCallResult -- what a call's result keeps locked. An `outx` result (or,
-# until the marker retires, a `.takex`/`.holdx` one) and a reference return
+# pinCallResult -- what a call's result keeps locked. An `outx` result and a
+# reference return
 # (`.borrow`/`.view`) pin the receiver and every borrow/view argument, each
 # at the strength the call took on it: SHARED for a `.view` input or a
 # whitelisted reader, EXCLUSIVE for a `.borrow` one. A reference result makes
@@ -28785,7 +28695,6 @@ argOwnershipOf: function {
             oo
         ) case some then {
             if oo == ztypes.zparamownership.takeMode then isTake = true
-            if oo == ztypes.zparamownership.takexMode then isTake = true
             if oo == ztypes.zparamownership.borrowMode then isLockish = true
             if oo == ztypes.zparamownership.viewMode then {
                 isLockish = true

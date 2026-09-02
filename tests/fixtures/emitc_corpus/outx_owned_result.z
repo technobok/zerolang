@@ -1,0 +1,47 @@
+# `outx W` -- the OWNED return that keeps its inputs locked.
+#
+# `out W` returns an owned value and pins nothing; `outx W.borrow` / `.view`
+# return a reference and pin the source for the binding's life. Neither says
+# what four stdlib constructors need: `BufWriter.create to: Writer.borrow outx
+# this` hands back an OWNED value whose `sink` field is a reference INTO the
+# argument, so the argument has to stay pinned for as long as the result
+# lives. `outx` on the DECLARATION is what expresses that.
+#
+# Both halves are here, because either alone would be the wrong reading:
+#
+#   OWNED -- the result carries a destructor, so its `String` is freed exactly
+#   once. Only the corpus leak pass checks this; the printed lines cannot.
+#   Demoting the binding to a borrow (which is what a pin does for
+#   `outx T.borrow` / `.view` returns) would leak it.
+#
+#   PINNED -- the source stays locked for the result's whole scope, and becomes
+#   writable again the moment that scope ends. `outx_pins_source.z` is the
+#   error half: through a plain `out W` the write would be ACCEPTED and the
+#   result's field left dangling, which is why `out W` is refused there.
+Src: class {
+    n: i64
+    label: String
+}
+
+W: class {
+    s: Src.borrow
+    label: String
+}
+
+mk: function {from: Src.borrow} outx W is {
+    return (W s: from label: "owned-by-result".string)
+}
+
+main: function is {
+    a: Src n: 1 label: "source".string
+    {
+        w: mk from: a
+        # the result owns its own String and reads through to the pinned source
+        print "result owns: \{w.label}"
+        print "reads source: \{w.s.n}"
+    }
+    # the pin died with `w`, so the source is writable again
+    a.n = 5
+    print "source writable after: \{a.n}"
+    print "source intact: \{a.label}"
+}
